@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/golang-jwt/jwt"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/tailscale"
@@ -114,6 +115,7 @@ type Server struct {
 
 	privateKey  key.NodePrivate
 	publicKey   key.NodePublic
+	jwtSigner   ed25519.PublicKey
 	logf        logger.Logf
 	memSys0     uint64 // runtime.MemStats.Sys at start (or early-ish)
 	meshKey     string
@@ -342,7 +344,7 @@ type Conn interface {
 
 // NewServer returns a new DERP server. It doesn't listen on its own.
 // Connections are given to it via Server.Accept.
-func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
+func NewServer(privateKey key.NodePrivate, jwtSigner ed25519.PublicKey, logf logger.Logf) *Server {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 
@@ -350,6 +352,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		debug:                envknob.Bool("DERP_DEBUG_LOGS"),
 		privateKey:           privateKey,
 		publicKey:            privateKey.Public(),
+		jwtSigner:            jwtSigner,
 		logf:                 logf,
 		limitedLogf:          logger.RateLimitedFn(logf, 30*time.Second, 5, 100),
 		packetsRecvByKind:    metrics.LabelMap{Label: "kind"},
@@ -1450,7 +1453,51 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info
 	if err := json.Unmarshal(msg, info); err != nil {
 		return zpub, nil, fmt.Errorf("msg: %v", err)
 	}
+	if info.JWT == "" {
+		fmt.Println("ZZZZ No JWT, maybe old client")
+	} else if err := s.authorizeJWT(info.JWT, clientKey); err != nil {
+		return clientKey, info, fmt.Errorf("failed to authorize JWT: %w", err)
+	}
 	return clientKey, info, nil
+}
+
+func (s *Server) authorizeJWT(tokenString string, clientKey key.NodePublic) error {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
+			return nil, fmt.Errorf("Unexpected signing method: %s", token.Header["alg"])
+		}
+		return s.jwtSigner, nil
+	})
+	if err != nil {
+		return fmt.Errorf("error verifying provided JWT: %w", err)
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return errors.New("invalid type of JWT claims provided")
+	}
+	_expires, ok := claims["expires"]
+	if !ok {
+		return errors.New("JWT missing expires")
+	}
+	expires, err := time.Parse(time.RFC3339, _expires.(string))
+	if err != nil {
+		return fmt.Errorf("failed to parse expires: %w", err)
+	}
+	if expires.Before(time.Now()) {
+		return errors.New("JWT expired")
+	}
+	pkHex, ok := claims["publicKeyHex"]
+	if !ok {
+		return errors.New("JWT missing publicKeyHex")
+	}
+	var clientKeyFromJWT key.NodePublic
+	if err := clientKeyFromJWT.UnmarshalText([]byte(pkHex.(string))); err != nil {
+		return fmt.Errorf("Failed to unmarshal publicKeyHex: %w", err)
+	}
+	if clientKey != clientKeyFromJWT {
+		return fmt.Errorf("client key in JWT does not match client's key")
+	}
+	return nil
 }
 
 func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodePublic, contents []byte, err error) {

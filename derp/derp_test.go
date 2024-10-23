@@ -7,6 +7,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/json"
@@ -23,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt"
 	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/disco"
@@ -49,17 +52,37 @@ func TestClientInfoUnmarshal(t *testing.T) {
 }
 
 func TestSendRecv(t *testing.T) {
+	signerPub, signerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	serverPrivateKey := key.NewNode()
-	s := NewServer(serverPrivateKey, t.Logf)
+	s := NewServer(serverPrivateKey, signerPub, t.Logf)
 	defer s.Close()
 
 	const numClients = 3
 	var clientPrivateKeys []key.NodePrivate
 	var clientKeys []key.NodePublic
+	var clientJWTs []string
 	for range numClients {
 		priv := key.NewNode()
 		clientPrivateKeys = append(clientPrivateKeys, priv)
 		clientKeys = append(clientKeys, priv.Public())
+		pkHex, err := priv.Public().MarshalText()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The below would typically be done by the control server
+		jt := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.MapClaims{
+			"publicKeyHex": string(pkHex),
+			"expires":      time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+		})
+		sjt, err := jt.SignedString(signerPriv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clientJWTs = append(clientJWTs, sjt)
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -96,7 +119,7 @@ func TestSendRecv(t *testing.T) {
 
 		key := clientPrivateKeys[i]
 		brw := bufio.NewReadWriter(bufio.NewReader(cout), bufio.NewWriter(cout))
-		c, err := NewClient(key, cout, brw, t.Logf)
+		c, err := NewClient(key, clientJWTs[i], cout, brw, t.Logf)
 		if err != nil {
 			t.Fatalf("client %d: %v", i, err)
 		}
@@ -269,7 +292,7 @@ func TestSendRecv(t *testing.T) {
 
 func TestSendFreeze(t *testing.T) {
 	serverPrivateKey := key.NewNode()
-	s := NewServer(serverPrivateKey, t.Logf)
+	s := NewServer(serverPrivateKey, nil, t.Logf)
 	defer s.Close()
 	s.WriteTimeout = 100 * time.Millisecond
 
@@ -287,7 +310,7 @@ func TestSendFreeze(t *testing.T) {
 		go s.Accept(ctx, c1, bufio.NewReadWriter(bufio.NewReader(c1), bufio.NewWriter(c1)), name)
 
 		brw := bufio.NewReadWriter(bufio.NewReader(c2), bufio.NewWriter(c2))
-		c, err := NewClient(k, c2, brw, t.Logf)
+		c, err := NewClient(k, "", c2, brw, t.Logf)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -511,7 +534,7 @@ func (ts *testServer) close(t *testing.T) error {
 func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	t.Helper()
 	logf := logger.WithPrefix(t.Logf, "derp-server: ")
-	s := NewServer(key.NewNode(), logf)
+	s := NewServer(key.NewNode(), nil, logf)
 	s.SetMeshKey("mesh-key")
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -576,7 +599,7 @@ func newTestClient(t *testing.T, ts *testServer, name string, newClient func(net
 func newRegularClient(t *testing.T, ts *testServer, name string) *testClient {
 	return newTestClient(t, ts, name, func(nc net.Conn, priv key.NodePrivate, logf logger.Logf) (*Client, error) {
 		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
-		c, err := NewClient(priv, nc, brw, logf)
+		c, err := NewClient(priv, "", nc, brw, logf)
 		if err != nil {
 			return nil, err
 		}
@@ -589,7 +612,7 @@ func newRegularClient(t *testing.T, ts *testServer, name string) *testClient {
 func newTestWatcher(t *testing.T, ts *testServer, name string) *testClient {
 	return newTestClient(t, ts, name, func(nc net.Conn, priv key.NodePrivate, logf logger.Logf) (*Client, error) {
 		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
-		c, err := NewClient(priv, nc, brw, logf, MeshKey("mesh-key"))
+		c, err := NewClient(priv, "", nc, brw, logf, MeshKey("mesh-key"))
 		if err != nil {
 			return nil, err
 		}
@@ -918,7 +941,7 @@ func TestMultiForwarder(t *testing.T) {
 func TestMetaCert(t *testing.T) {
 	priv := key.NewNode()
 	pub := priv.Public()
-	s := NewServer(priv, t.Logf)
+	s := NewServer(priv, nil, t.Logf)
 
 	certBytes := s.MetaCert()
 	cert, err := x509.ParseCertificate(certBytes)
@@ -1065,7 +1088,7 @@ func TestServerDupClients(t *testing.T) {
 
 	// run starts a new test case and resets clients back to their zero values.
 	run := func(name string, dupPolicy dupPolicy, f func(t *testing.T)) {
-		s = NewServer(serverPriv, t.Logf)
+		s = NewServer(serverPriv, nil, t.Logf)
 		s.dupPolicy = dupPolicy
 		c1 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c1: ")}
 		c2 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c2: ")}
@@ -1315,7 +1338,7 @@ func TestLimiter(t *testing.T) {
 // single Server instance with multiple concurrent client flows.
 func BenchmarkConcurrentStreams(b *testing.B) {
 	serverPrivateKey := key.NewNode()
-	s := NewServer(serverPrivateKey, logger.Discard)
+	s := NewServer(serverPrivateKey, nil, logger.Discard)
 	defer s.Close()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1354,7 +1377,7 @@ func BenchmarkConcurrentStreams(b *testing.B) {
 		k := key.NewNode()
 
 		brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
-		client, err := NewClient(k, connOut, brw, logger.Discard)
+		client, err := NewClient(k, "", connOut, brw, logger.Discard)
 		if err != nil {
 			b.Fatalf("client: %v", err)
 		}
@@ -1385,7 +1408,7 @@ func BenchmarkSendRecv(b *testing.B) {
 
 func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	serverPrivateKey := key.NewNode()
-	s := NewServer(serverPrivateKey, logger.Discard)
+	s := NewServer(serverPrivateKey, nil, logger.Discard)
 	defer s.Close()
 
 	k := key.NewNode()
@@ -1416,7 +1439,7 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	go s.Accept(ctx, connIn, brwServer, "test-client")
 
 	brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
-	client, err := NewClient(k, connOut, brw, logger.Discard)
+	client, err := NewClient(k, "", connOut, brw, logger.Discard)
 	if err != nil {
 		b.Fatalf("client: %v", err)
 	}

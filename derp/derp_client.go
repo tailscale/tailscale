@@ -27,6 +27,7 @@ type Client struct {
 	serverKey   key.NodePublic // of the DERP server; not a machine or node key
 	privateKey  key.NodePrivate
 	publicKey   key.NodePublic // of privateKey
+	jwt         string
 	logf        logger.Logf
 	nc          Conn
 	br          *bufio.Reader
@@ -84,7 +85,7 @@ func CanAckPings(v bool) ClientOpt {
 	return clientOptFunc(func(o *clientOpt) { o.CanAckPings = v })
 }
 
-func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
+func NewClient(privateKey key.NodePrivate, jwt string, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
 	var opt clientOpt
 	for _, o := range opts {
 		if o == nil {
@@ -92,13 +93,14 @@ func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 		}
 		o.update(&opt)
 	}
-	return newClient(privateKey, nc, brw, logf, opt)
+	return newClient(privateKey, jwt, nc, brw, logf, opt)
 }
 
-func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opt clientOpt) (*Client, error) {
+func newClient(privateKey key.NodePrivate, jwt string, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opt clientOpt) (*Client, error) {
 	c := &Client{
 		privateKey:  privateKey,
 		publicKey:   privateKey.Public(),
+		jwt:         jwt,
 		logf:        logf,
 		nc:          nc,
 		br:          brw.Reader,
@@ -177,6 +179,9 @@ type clientInfo struct {
 
 	// IsProber is whether this client is a prober.
 	IsProber bool `json:",omitempty"`
+
+	// JWT is a JSON web token with authorization grants for this client.
+	JWT string `json:",omitempty"`
 }
 
 func (c *Client) sendClientKey() error {
@@ -185,6 +190,7 @@ func (c *Client) sendClientKey() error {
 		MeshKey:     c.meshKey,
 		CanAckPings: c.canAckPings,
 		IsProber:    c.isProber,
+		JWT:         c.jwt,
 	})
 	if err != nil {
 		return err
