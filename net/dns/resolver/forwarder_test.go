@@ -27,6 +27,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
 )
 
@@ -276,6 +277,8 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 		tb.Fatal("cannot skip both UDP and TCP servers")
 	}
 
+	logf := tstest.WhileTestRunningLogger(tb)
+
 	tcpResponse := make([]byte, len(response)+2)
 	binary.BigEndian.PutUint16(tcpResponse, uint16(len(response)))
 	copy(tcpResponse[2:], response)
@@ -329,13 +332,13 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 		// Read the length header, then the buffer
 		var length uint16
 		if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
-			tb.Logf("error reading length header: %v", err)
+			logf("error reading length header: %v", err)
 			return
 		}
 		req := make([]byte, length)
 		n, err := io.ReadFull(conn, req)
 		if err != nil {
-			tb.Logf("error reading query: %v", err)
+			logf("error reading query: %v", err)
 			return
 		}
 		req = req[:n]
@@ -343,7 +346,7 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 
 		// Write response
 		if _, err := conn.Write(tcpResponse); err != nil {
-			tb.Logf("error writing response: %v", err)
+			logf("error writing response: %v", err)
 			return
 		}
 	}
@@ -367,7 +370,7 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 	handleUDP := func(addr netip.AddrPort, req []byte) {
 		onRequest(false, req)
 		if _, err := udpLn.WriteToUDPAddrPort(response, addr); err != nil {
-			tb.Logf("error writing response: %v", err)
+			logf("error writing response: %v", err)
 		}
 	}
 
@@ -390,7 +393,7 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 	tb.Cleanup(func() {
 		tcpLn.Close()
 		udpLn.Close()
-		tb.Logf("waiting for listeners to finish...")
+		logf("waiting for listeners to finish...")
 		wg.Wait()
 	})
 	return
@@ -450,7 +453,8 @@ func makeLargeResponse(tb testing.TB, domain string) (request, response []byte) 
 }
 
 func runTestQuery(tb testing.TB, request []byte, modify func(*forwarder), ports ...uint16) ([]byte, error) {
-	netMon, err := netmon.New(tb.Logf)
+	logf := tstest.WhileTestRunningLogger(tb)
+	netMon, err := netmon.New(logf)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -458,7 +462,7 @@ func runTestQuery(tb testing.TB, request []byte, modify func(*forwarder), ports 
 	var dialer tsdial.Dialer
 	dialer.SetNetMon(netMon)
 
-	fwd := newForwarder(tb.Logf, netMon, nil, &dialer, new(health.Tracker), nil)
+	fwd := newForwarder(logf, netMon, nil, &dialer, new(health.Tracker), nil)
 	if modify != nil {
 		modify(fwd)
 	}
