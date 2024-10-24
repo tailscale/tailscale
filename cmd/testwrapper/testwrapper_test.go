@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"testing"
 )
@@ -76,7 +77,10 @@ func TestFlakeRun(t *testing.T) {
 		t.Fatalf("go run . %s: %s with output:\n%s", testfile, err, out)
 	}
 
-	want := []byte("ok\t" + testfile + " [attempt=2]")
+	// Replace the unpredictable timestamp with "0.00s".
+	out = regexp.MustCompile(`\t\d+\.\d\d\ds\t`).ReplaceAll(out, []byte("\t0.00s\t"))
+
+	want := []byte("ok\t" + testfile + "\t0.00s\t[attempt=2]")
 	if !bytes.Contains(out, want) {
 		t.Fatalf("wanted output containing %q but got:\n%s", want, out)
 	}
