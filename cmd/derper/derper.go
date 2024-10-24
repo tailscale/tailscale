@@ -76,6 +76,8 @@ var (
 	tcpKeepAlive = flag.Duration("tcp-keepalive-time", 10*time.Minute, "TCP keepalive time")
 	// tcpUserTimeout is intentionally short, so that hung connections are cleaned up promptly. DERPs should be nearby users.
 	tcpUserTimeout = flag.Duration("tcp-user-timeout", 15*time.Second, "TCP user timeout")
+
+	showTailscaleSpecificAbuseInformation = flag.Bool("show-tailscale-abuse-info", false, "whether to show Tailscale-specific abuse information on home page.")
 )
 
 var (
@@ -210,22 +212,43 @@ func main() {
 	mux.HandleFunc("/bootstrap-dns", tsweb.BrowserHeaderHandlerFunc(handleBootstrapDNS))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tsweb.AddBrowserHeaders(w)
+		abuseMailto := ""
+		tailscalePolicies := ""
+		if *showTailscaleSpecificAbuseInformation {
+			abuseMailto = `
+<p>
+	If you suspect abuse, please contact <a href="mailto:security@tailscale.com">security@tailscale.com</a>.
+</p>`
+			tailscalePolicies = `
+  <li><a href="https://tailscale.com/security-policies">Tailscale Security Policies</a></li>
+  <li><a href="https://tailscale.com/tailscale-aup">Tailscale Acceptable Use Policies</a></li>
+`
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(200)
-		io.WriteString(w, `<html><body>
+		io.WriteString(w, fmt.Sprintf(`<html><body>
 <h1>DERP</h1>
 <p>
   This is a <a href="https://tailscale.com/">Tailscale</a> DERP server.
 </p>
+
+<p>
+  It provides STUN, interactive connectivity establishment, and relaying of end-to-end encrypted traffic
+  for Tailscale clients.
+</p>
+
+%s
+
 <p>
   Documentation:
 </p>
 <ul>
+  %s
   <li><a href="https://tailscale.com/kb/1232/derp-servers">About DERP</a></li>
   <li><a href="https://pkg.go.dev/tailscale.com/derp">Protocol & Go docs</a></li>
   <li><a href="https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp">How to run a DERP server</a></li>
 </ul>
-`)
+`, abuseMailto, tailscalePolicies))
 		if !*runDERP {
 			io.WriteString(w, `<p>Status: <b>disabled</b></p>`)
 		}
