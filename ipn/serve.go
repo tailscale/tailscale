@@ -136,6 +136,8 @@ type HTTPHandler struct {
 
 	Text string `json:",omitempty"` // plaintext to serve (primarily for testing)
 
+	Redirect string `json:",omitempty"` // redirect requests to this URL
+
 	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
 	// temporary ones? Error codes? Redirects?
 }
@@ -316,6 +318,43 @@ func (sc *ServeConfig) SetFunnel(host string, port uint16, setOn bool) {
 		// Clear map mostly for testing.
 		if len(sc.AllowFunnel) == 0 {
 			sc.AllowFunnel = nil
+		}
+	}
+}
+
+// SetRedirectToHTTPS configures a TCPPortHandler and HTTPHandler to redirect all
+// traffic from port 80 to HTTPS, using the provided `host` and `port` for the
+// redirect URL. If setOn is false, it removes any active redirect handlers on
+// port 80.
+func (sc *ServeConfig) SetRedirectToHTTPS(host string, port uint16, setOn bool) {
+	if sc == nil {
+		sc = new(ServeConfig)
+	}
+
+	hp := HostPort(net.JoinHostPort(host, "80"))
+	if setOn {
+		mak.Set(&sc.TCP, 80, &TCPPortHandler{HTTP: true})
+		var url string
+		if port == 443 {
+			url = fmt.Sprintf("https://%s", host)
+		} else {
+			url = fmt.Sprintf("https://%s:%d", host, port)
+		}
+		handler := &HTTPHandler{Redirect: url}
+		if _, ok := sc.Web[hp]; !ok {
+			mak.Set(&sc.Web, hp, new(WebServerConfig))
+		}
+		// Overwrite any existing handlers as we're handling all HTTP traffic.
+		sc.Web[hp].Handlers = map[string]*HTTPHandler{"/": handler}
+	} else {
+		// If we're running with HTTP to HTTPS promotion, we need to remove any
+		// existing Redirect handlers.
+		if tcph, exists := sc.TCP[80]; exists && tcph.HTTP {
+			if wh, exists := sc.Web[hp]; exists {
+				if wh.Handlers["/"].Redirect != "" {
+					delete(wh.Handlers, "/")
+				}
+			}
 		}
 	}
 }
