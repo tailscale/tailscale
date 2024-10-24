@@ -163,7 +163,6 @@ GOTOOLCHAIN=local (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "test",
-				"-trimpath",
 				"-tags=tailscale_go,osusergo,netgo",
 				"-ldflags", "-X tailscale.com/version.longStamp=1.2.3-long -X tailscale.com/version.shortStamp=1.2.3 -X tailscale.com/version.gitCommitStamp=abcd -X tailscale.com/version.extraGitCommitStamp=defg '-extldflags=-static'",
 				"-race",
