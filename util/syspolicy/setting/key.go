@@ -10,4 +10,4 @@ package setting
 type Key string
 
 // KeyPathSeparator allows logical grouping of policy settings into categories.
-const KeyPathSeparator = "/"
+const KeyPathSeparator = '/'
