@@ -756,16 +756,17 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	}
 
 	c.lastEndpointsTime = time.Now()
+	if !endpointSetsEqual(endpoints, c.lastEndpoints) {
+		changed = true
+	}
+	// lastEndpoints must be updated before onEndpointsRefreshed,
+	// as CallMyMaybe sent via this callback must observe the new endpoints.
+	c.lastEndpoints = endpoints
 	for de, fn := range c.onEndpointRefreshed {
 		go fn()
 		delete(c.onEndpointRefreshed, de)
 	}
-
-	if endpointSetsEqual(endpoints, c.lastEndpoints) {
-		return false
-	}
-	c.lastEndpoints = endpoints
-	return true
+	return changed
 }
 
 // SetStaticEndpoints sets static endpoints to the provided value and triggers
