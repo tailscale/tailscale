@@ -5729,6 +5729,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	// if the profile has not changed.
 	confj, err := b.store.ReadState(confKey)
 	if err != nil {
+		b.logf("error reading ServeConfig from tailscale state: %v, any previously set ServeConfig will be reset", err)
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
 		return
