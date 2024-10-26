@@ -104,6 +104,15 @@ func (v *MultiLabelMap[T]) String() string {
 // WritePrometheus writes v to w in Prometheus exposition format.
 // The name argument is the metric name.
 func (v *MultiLabelMap[T]) WritePrometheus(w io.Writer, name string) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	if len(v.sorted) == 0 {
+		// Do not print TYPE and HELP if we don't actually have any variables
+		// in the map.
+		return
+	}
+
 	if v.Type != "" {
 		io.WriteString(w, "# TYPE ")
 		io.WriteString(w, name)
@@ -118,8 +127,6 @@ func (v *MultiLabelMap[T]) WritePrometheus(w io.Writer, name string) {
 		io.WriteString(w, v.Help)
 		io.WriteString(w, "\n")
 	}
-	v.mu.RLock()
-	defer v.mu.RUnlock()
 
 	for _, kv := range v.sorted {
 		io.WriteString(w, name)

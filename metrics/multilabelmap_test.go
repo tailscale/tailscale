@@ -17,6 +17,15 @@ type L2 struct {
 	Bar string `prom:"bar"`
 }
 
+func checkRendered[T comparable](t *testing.T, m *MultiLabelMap[T], name, wantRendered string) {
+	t.Helper()
+	var buf bytes.Buffer
+	m.WritePrometheus(&buf, name)
+	if got := buf.String(); got != wantRendered {
+		t.Errorf("prometheus output = %q; want %q", got, wantRendered)
+	}
+}
+
 func TestMultilabelMap(t *testing.T) {
 	m := new(MultiLabelMap[L2])
 	m.Add(L2{"a", "b"}, 2)
@@ -45,19 +54,14 @@ func TestMultilabelMap(t *testing.T) {
 		t.Errorf("got %q; want %q", g, w)
 	}
 
-	var buf bytes.Buffer
-	m.WritePrometheus(&buf, "metricname")
-	const want = `metricname{foo="a",bar="a"} 1
+	checkRendered(t, m, "metricname", `metricname{foo="a",bar="a"} 1
 metricname{foo="a",bar="b"} 2
 metricname{foo="b",bar="b"} 3
 metricname{foo="b",bar="c"} 4
 metricname{foo="sf",bar="sf"} 5.5
 metricname{foo="sfunc",bar="sfunc"} 3
 metricname{foo="si",bar="si"} 5
-`
-	if got := buf.String(); got != want {
-		t.Errorf("promtheus output = %q; want %q", got, want)
-	}
+`)
 
 	m.Delete(L2{"b", "b"})
 
@@ -95,16 +99,12 @@ func TestMultiLabelMapTypes(t *testing.T) {
 	m := new(MultiLabelMap[LabelTypes])
 	m.Type = "counter"
 	m.Help = "some good stuff"
+	checkRendered(t, m, "metricname", "")
 	m.Add(LabelTypes{"a", true, -1, 2}, 3)
-	var buf bytes.Buffer
-	m.WritePrometheus(&buf, "metricname")
-	const want = `# TYPE metricname counter
+	checkRendered(t, m, "metricname", `# TYPE metricname counter
 # HELP metricname some good stuff
 metricname{s="a",b="true",i="-1",u="2"} 3
-`
-	if got := buf.String(); got != want {
-		t.Errorf("got %q; want %q", got, want)
-	}
+`)
 
 	writeAllocs := testing.AllocsPerRun(1000, func() {
 		m.WritePrometheus(io.Discard, "test")
