@@ -1236,7 +1236,7 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	// and Apple platforms.
 	if changed {
 		switch runtime.GOOS {
-		case "linux", "android", "ios", "darwin":
+		case "linux", "android", "ios", "darwin", "openbsd":
 			e.wgLock.Lock()
 			dnsCfg := e.lastDNSConfig
 			e.wgLock.Unlock()
