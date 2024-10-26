@@ -62,7 +62,6 @@ import (
 	"tailscale.com/util/osdiag"
 	"tailscale.com/util/progresstracking"
 	"tailscale.com/util/rands"
-	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -570,15 +569,9 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
-// TODO(kradalby): Remove this once we have landed on a final set of
-// metrics to export to clients and consider the metrics stable.
-var debugUsermetricsEndpoint = envknob.RegisterBool("TS_DEBUG_USER_METRICS")
-
+// serveUserMetrics returns user-facing metrics in Prometheus text
+// exposition format.
 func (h *Handler) serveUserMetrics(w http.ResponseWriter, r *http.Request) {
-	if !testenv.InTest() && !debugUsermetricsEndpoint() {
-		http.Error(w, "usermetrics debug flag not enabled", http.StatusForbidden)
-		return
-	}
 	h.b.UserMetricsRegistry().Handler(w, r)
 }
 
