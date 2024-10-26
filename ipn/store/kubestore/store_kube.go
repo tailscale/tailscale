@@ -13,19 +13,27 @@ import (
 	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/types/logger"
 )
+
+// TODO(irbekrm): should we bump this? should we have retries? See tailscale/tailscale#13024
+const timeout = 5 * time.Second
 
 // Store is an ipn.StateStore that uses a Kubernetes Secret for persistence.
 type Store struct {
 	client     kubeclient.Client
 	canPatch   bool
 	secretName string
+
+	// memory holds the latest tailscale state. Writes write state to a kube Secret and memory, Reads read from
+	// memory.
+	memory mem.Store
 }
 
-// New returns a new Store that persists to the named secret.
+// New returns a new Store that persists to the named Secret.
 func New(_ logger.Logf, secretName string) (*Store, error) {
 	c, err := kubeclient.New()
 	if err != nil {
@@ -39,11 +47,16 @@ func New(_ logger.Logf, secretName string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{
+	s := &Store{
 		client:     c,
 		canPatch:   canPatch,
 		secretName: secretName,
-	}, nil
+	}
+	// Load latest state from kube Secret if it already exists.
+	if err := s.loadState(); err != nil {
+		return nil, fmt.Errorf("error loading state from kube Secret: %w", err)
+	}
+	return s, nil
 }
 
 func (s *Store) SetDialer(d func(ctx context.Context, network, address string) (net.Conn, error)) {
@@ -54,37 +67,17 @@ func (s *Store) String() string { return "kube.Store" }
 
 // ReadState implements the StateStore interface.
 func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	secret, err := s.client.GetSecret(ctx, s.secretName)
-	if err != nil {
-		if st, ok := err.(*kubeapi.Status); ok && st.Code == 404 {
-			return nil, ipn.ErrStateNotExist
-		}
-		return nil, err
-	}
-	b, ok := secret.Data[sanitizeKey(id)]
-	if !ok {
-		return nil, ipn.ErrStateNotExist
-	}
-	return b, nil
-}
-
-func sanitizeKey(k ipn.StateKey) string {
-	// The only valid characters in a Kubernetes secret key are alphanumeric, -,
-	// _, and .
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
-			return r
-		}
-		return '_'
-	}, string(k))
+	return s.memory.ReadState(ipn.StateKey(sanitizeKey(id)))
 }
 
 // WriteState implements the StateStore interface.
-func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
+	defer func() {
+		if err == nil {
+			s.memory.WriteState(ipn.StateKey(sanitizeKey(id)), bs)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)
@@ -136,4 +129,30 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 		return err
 	}
 	return err
+}
+
+func (s *Store) loadState() error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	secret, err := s.client.GetSecret(ctx, s.secretName)
+	if err != nil {
+		if st, ok := err.(*kubeapi.Status); ok && st.Code == 404 {
+			return ipn.ErrStateNotExist
+		}
+		return err
+	}
+	s.memory.LoadFromMap(secret.Data)
+	return nil
+}
+
+func sanitizeKey(k ipn.StateKey) string {
+	// The only valid characters in a Kubernetes secret key are alphanumeric, -,
+	// _, and .
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+			return r
+		}
+		return '_'
+	}, string(k))
 }
