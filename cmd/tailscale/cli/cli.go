@@ -189,6 +189,7 @@ change in the future.
 			ipCmd,
 			dnsCmd,
 			statusCmd,
+			metricsCmd,
 			pingCmd,
 			ncCmd,
 			sshCmd,
