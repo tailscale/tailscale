@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/util/deephash"
 )
 
@@ -24,7 +23,7 @@ type Snapshot struct {
 
 // NewSnapshot returns a new [Snapshot] with the specified items and options.
 func NewSnapshot(items map[Key]RawItem, opts ...SummaryOption) *Snapshot {
-	return &Snapshot{m: xmaps.Clone(items), sig: deephash.Hash(&items), summary: SummaryWith(opts...)}
+	return &Snapshot{m: maps.Clone(items), sig: deephash.Hash(&items), summary: SummaryWith(opts...)}
 }
 
 // All returns an iterator over policy settings in s. The iteration order is not
@@ -164,7 +163,7 @@ func MergeSnapshots(snapshot1, snapshot2 *Snapshot) *Snapshot {
 		return &Snapshot{snapshot2.m, snapshot2.sig, SummaryWith(summaryOpts...)}
 	}
 	m := make(map[Key]RawItem, snapshot1.Len()+snapshot2.Len())
-	xmaps.Copy(m, snapshot1.m)
-	xmaps.Copy(m, snapshot2.m) // snapshot2 has higher precedence
+	maps.Copy(m, snapshot1.m)
+	maps.Copy(m, snapshot2.m) // snapshot2 has higher precedence
 	return &Snapshot{m, deephash.Hash(&m), SummaryWith(summaryOpts...)}
 }
