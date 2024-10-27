@@ -53,7 +53,7 @@ func New(_ logger.Logf, secretName string) (*Store, error) {
 		secretName: secretName,
 	}
 	// Load latest state from kube Secret if it already exists.
-	if err := s.loadState(); err != nil {
+	if err := s.loadState(); err != nil && err != ipn.ErrStateNotExist {
 		return nil, fmt.Errorf("error loading state from kube Secret: %w", err)
 	}
 	return s, nil
