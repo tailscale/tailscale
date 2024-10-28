@@ -69,6 +69,7 @@ type settings struct {
 	PodIPv6             string
 	HealthCheckAddrPort string
 	EgressSvcsCfgPath   string
+	EgressRange         string
 }
 
 func configFromEnv() (*settings, error) {
@@ -99,6 +100,7 @@ func configFromEnv() (*settings, error) {
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
+		EgressRange:                           defaultEnv("TS_EGRESS_RANGE", ""),
 	}
 	podIPs, ok := os.LookupEnv("POD_IPS")
 	if ok {
@@ -263,7 +265,7 @@ func isOneStepConfig(cfg *settings) bool {
 // as an L3 proxy, proxying to an endpoint provided via one of the config env
 // vars.
 func isL3Proxy(cfg *settings) bool {
-	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressSvcsCfgPath != ""
+	return cfg.EgressRange != "" || cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressSvcsCfgPath != ""
 }
 
 // hasKubeStateStore returns true if the state must be stored in a Kubernetes

@@ -410,6 +410,11 @@ func (i *iptablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
 	return table.Insert("nat", "POSTROUTING", 1, "-d", dstPrefix.String(), "-j", "SNAT", "--to-source", src.String())
 }
 
+func (i *iptablesRunner) EnsureSNATForRange(src netip.Addr, dstPrefix netip.Prefix) error {
+	table := i.getIPTByAddr(src)
+	return table.Insert("nat", "POSTROUTING", 1, "-d", dstPrefix.String(), "-j", "SNAT", "--to-source", src.String())
+}
+
 func (i *iptablesRunner) DNATNonTailscaleTraffic(tun string, dst netip.Addr) error {
 	table := i.getIPTByAddr(dst)
 	return table.Insert("nat", "PREROUTING", 1, "!", "-i", tun, "-j", "DNAT", "--to-destination", dst.String())

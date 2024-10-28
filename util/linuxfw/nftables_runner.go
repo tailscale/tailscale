@@ -239,6 +239,10 @@ func (n *nftablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
 	return n.conn.Flush()
 }
 
+func (i *nftablesRunner) EnsureSNATForRange(src netip.Addr, dst netip.Prefix) error {
+	return nil
+}
+
 // ClampMSSToPMTU ensures that all packets with TCP flags (SYN, ACK, RST) set
 // being forwarded via the given interface (tun) have MSS set to <MTU of the
 // interface> - 40 (IP and TCP headers). This can be useful if this tailscale
@@ -545,6 +549,8 @@ type NetfilterRunner interface {
 	// This is used to forward traffic destined for the local machine over
 	// the Tailscale interface, as used in the Kubernetes egress proxies.
 	EnsureSNATForDst(src, dst netip.Addr) error
+
+	EnsureSNATForRange(src netip.Addr, dstRange netip.Prefix) error
 
 	// DNATNonTailscaleTraffic adds a rule to the nat/PREROUTING chain to DNAT
 	// all traffic inbound from any interface except exemptInterface to dst.

@@ -111,6 +111,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mdlayher/arp"
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
@@ -336,6 +337,11 @@ authLoop:
 		}
 	}
 
+	if cfg.EgressRange != "" {
+		log.Printf("egress range is set")
+		go runARP(cfg.EgressRange)
+	}
+
 	// Setup for proxies that are configured to proxy to a target specified
 	// by a DNS name (TS_EXPERIMENTAL_DEST_DNS_NAME).
 	const defaultCheckPeriod = time.Minute * 10 // how often to check what IPs the DNS name resolves to
@@ -514,6 +520,30 @@ runLoop:
 				if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) != 0 {
 					log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
 					if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
+						log.Fatalf("installing egress proxy rules: %v", err)
+					}
+				}
+				if cfg.EgressRange != "" && ipsHaveChanged && len(addrs) != 0 {
+					log.Printf("Installing SNAT for %s", cfg.EgressRange)
+					dst, err := netip.ParsePrefix(cfg.EgressRange)
+					if err != nil {
+						log.Fatalf("error parsing dst range %v", err)
+					}
+					var local netip.Addr
+					for _, pfx := range addrs {
+						if !pfx.IsSingleIP() {
+							continue
+						}
+						if pfx.Addr().Is4() != dst.Addr().Is4() {
+							continue
+						}
+						local = pfx.Addr()
+						break
+					}
+					if !local.IsValid() {
+						log.Fatalf("no tailscale IP matching family of %s found in %v", dst, addrs)
+					}
+					if err := nfr.EnsureSNATForRange(local, dst); err != nil {
 						log.Fatalf("installing egress proxy rules: %v", err)
 					}
 				}
@@ -743,4 +773,57 @@ func tailscaledConfigFilePath() string {
 	}
 	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
 	return path.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
+}
+
+func runARP(r string) {
+	log.Printf("running ARP client")
+	ifs, err := net.Interfaces()
+	if err != nil {
+		log.Fatalf("error listing interfaces: %v", err)
+	}
+	advertizedRange, err := netip.ParsePrefix(r)
+	if err != nil {
+		log.Fatalf("error parsing range %s: %v", r, err)
+	}
+	if err != nil {
+		log.Fatalf("error parsing IP: %v", err)
+	}
+	var veth net.Interface
+	for _, i := range ifs {
+		log.Printf("looking at interface %s", i.Name)
+		if strings.EqualFold(i.Name, "lo") || strings.EqualFold(i.Name, "tailscale0") {
+			continue
+		}
+		log.Printf("picked interface %v", i.Name)
+		if err != nil {
+			log.Fatalf("error retrieving interface addrs: %v", err)
+		}
+		veth = i
+		break
+	}
+	client, err := arp.Dial(&veth)
+	if err != nil {
+		log.Fatalf("error creating ARP client: %v", err)
+	}
+
+	for {
+		log.Printf("Waiting for ARP packets")
+		packet, _, err := client.Read()
+		if err != nil {
+			log.Fatalf("error reading ARP packets: %v", err)
+		}
+		log.Printf("got an ARP packet for operation %v address %v from %s", packet.Operation.String(), packet.TargetIP.String(), packet.SenderIP.String())
+		if packet.Operation != arp.OperationRequest {
+			log.Printf("not an ARP request")
+			continue
+		}
+		// if !advertizedRange.Contains(packet.TargetIP) && !strings.EqualFold(packet.TargetIP.String(), ipAddr.String()) {
+		if !advertizedRange.Contains(packet.TargetIP) {
+			log.Printf("not in range")
+			continue
+		}
+		if err := client.Reply(packet, client.HardwareAddr(), packet.TargetIP); err != nil {
+			log.Printf("error replying to ARP request: %v", err)
+		}
+	}
 }

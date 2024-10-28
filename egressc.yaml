@@ -1,0 +1,129 @@
+apiVersion: apps/v1
+kind: DaemonSet 
+metadata:
+  name: ts-ds
+spec:
+  selector:
+    matchLabels:
+      app: ts-ds
+  template:
+    metadata:
+      labels:
+        app: ts-ds
+    spec:
+      serviceAccount: ts-ds
+      volumes:
+      - configMap:
+          name: ts-ds
+        name: job
+      initContainers:
+      - name: route-setup
+        image: alpine:3.19
+        command:
+        - /bin/sh
+        - -c
+        - |
+          apk add curl envsubst
+          jobSpec=$(envsubst < /manifests/job.json)
+          curl -k https://${KUBERNETES_SERVICE_HOST}/apis/batch/v1/namespaces/${POD_NAMESPACE}/jobs -H "Authorization: Bearer $(cat /run/secrets/kubernetes.io/serviceaccount/token)" -X POST -d "$(echo $jobSpec)" -H "Content-Type: application/json"
+          # TODO: wait for the Job to complete and delete it
+        volumeMounts:
+        - name: job
+          mountPath: /manifests
+        env:
+        - name: TS_EGRESS_RANGE
+          value: "100.64.0.0/10"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+      containers:
+      - env:
+        - name: TS_USERSPACE
+          value: "false"
+        - name: TS_KUBE_SECRET
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: TS_AUTH_ONCE
+          value: "true"
+        - name: TS_AUTHKEY
+          value: <insert key> 
+        - name: TS_HOSTNAME
+          value: ts-ds
+        - name: TS_ACCEPT_DNS
+          value: "true"
+        - name: TS_DEBUG_FIREWALL_MODE
+          value: "iptables"
+        - name: TS_KUBERNETES_READ_API_SERVER_ADDRESS_FROM_ENV
+          value: "true"
+        - name: TS_EGRESS_RANGE
+          value: "100.64.0.0/10"
+        image: gcr.io/csi-test-290908/proxy:v0.0.13arp # publicly available image built from this branch
+        imagePullPolicy: IfNotPresent 
+        name: tailscale
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+    name: ts-ds
+rules:
+    - apiGroups:
+        - ""
+      resources:
+        - secrets
+      verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+    - apiGroups:
+        - "batch"
+      resources:
+        - jobs 
+      verbs:
+      - create
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+    name: ts-ds
+roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: ts-ds
+subjects:
+    - kind: ServiceAccount
+      name: ts-ds
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+    name: ts-ds
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ts-ds
+data:
+  job.json: |
+    {"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"$POD_NAME","namespace":"$POD_NAMESPACE"},"spec":{"template":{"spec":{"restartPolicy":"Never","containers":[{"command":["/bin/sh","-c","ip route del $TS_EGRESS_RANGE || true\nip route add $TS_EGRESS_RANGE || true\nip route replace $TS_EGRESS_RANGE via $POD_IP\n"],"image":"alpine:3.19","imagePullPolicy":"IfNotPresent","name":"setup-route","securityContext":{"capabilities":{"add":["NET_ADMIN"]}}}],"hostNetwork":true,"nodeName":"$NODE_NAME"}}}}
