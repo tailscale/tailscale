@@ -149,7 +149,8 @@ type CapabilityVersion int
 //   - 104: 2024-08-03: SelfNodeV6MasqAddrForThisPeer now works
 //   - 105: 2024-08-05: Fixed SSH behavior on systems that use busybox (issue #12849)
 //   - 106: 2024-09-03: fix panic regression from cryptokey routing change (65fe0ba7b5)
-const CurrentCapabilityVersion CapabilityVersion = 106
+//   - 107: 2024-10-30: add App Connector to conffile (PR #13942)
+const CurrentCapabilityVersion CapabilityVersion = 107
 
 type StableID string
 
