@@ -332,12 +332,10 @@ func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http
 	}
 
 	if choice.ShouldEnable(b.Prefs().PostureChecking()) {
-		sns, err := posture.GetSerialNumbers(b.logf)
+		res.SerialNumbers, err = posture.GetSerialNumbers(b.logf)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			b.logf("c2n: GetSerialNumbers returned error: %v", err)
 		}
-		res.SerialNumbers = sns
 
 		// TODO(tailscale/corp#21371, 2024-07-10): once this has landed in a stable release
 		// and looks good in client metrics, remove this parameter and always report MAC
