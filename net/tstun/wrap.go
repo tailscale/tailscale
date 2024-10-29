@@ -213,24 +213,14 @@ type Wrapper struct {
 }
 
 type metrics struct {
-	inboundDroppedPacketsTotal  *tsmetrics.MultiLabelMap[dropPacketLabel]
-	outboundDroppedPacketsTotal *tsmetrics.MultiLabelMap[dropPacketLabel]
+	inboundDroppedPacketsTotal  *tsmetrics.MultiLabelMap[usermetric.DropLabels]
+	outboundDroppedPacketsTotal *tsmetrics.MultiLabelMap[usermetric.DropLabels]
 }
 
 func registerMetrics(reg *usermetric.Registry) *metrics {
 	return &metrics{
-		inboundDroppedPacketsTotal: usermetric.NewMultiLabelMapWithRegistry[dropPacketLabel](
-			reg,
-			"tailscaled_inbound_dropped_packets_total",
-			"counter",
-			"Counts the number of dropped packets received by the node from other peers",
-		),
-		outboundDroppedPacketsTotal: usermetric.NewMultiLabelMapWithRegistry[dropPacketLabel](
-			reg,
-			"tailscaled_outbound_dropped_packets_total",
-			"counter",
-			"Counts the number of packets dropped while being sent to other peers",
-		),
+		inboundDroppedPacketsTotal:  reg.DroppedPacketsInbound(),
+		outboundDroppedPacketsTotal: reg.DroppedPacketsOutbound(),
 	}
 }
 
@@ -886,8 +876,8 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 
 	if filt.RunOut(p, t.filterFlags) != filter.Accept {
 		metricPacketOutDropFilter.Add(1)
-		t.metrics.outboundDroppedPacketsTotal.Add(dropPacketLabel{
-			Reason: DropReasonACL,
+		t.metrics.outboundDroppedPacketsTotal.Add(usermetric.DropLabels{
+			Reason: usermetric.ReasonACL,
 		}, 1)
 		return filter.Drop, gro
 	}
@@ -1158,8 +1148,8 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 
 	if outcome != filter.Accept {
 		metricPacketInDropFilter.Add(1)
-		t.metrics.inboundDroppedPacketsTotal.Add(dropPacketLabel{
-			Reason: DropReasonACL,
+		t.metrics.inboundDroppedPacketsTotal.Add(usermetric.DropLabels{
+			Reason: usermetric.ReasonACL,
 		}, 1)
 
 		// Tell them, via TSMP, we're dropping them due to the ACL.
@@ -1239,8 +1229,8 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		t.noteActivity()
 		_, err := t.tdevWrite(buffs, offset)
 		if err != nil {
-			t.metrics.inboundDroppedPacketsTotal.Add(dropPacketLabel{
-				Reason: DropReasonError,
+			t.metrics.inboundDroppedPacketsTotal.Add(usermetric.DropLabels{
+				Reason: usermetric.ReasonError,
 			}, int64(len(buffs)))
 		}
 		return len(buffs), err
@@ -1481,20 +1471,6 @@ var (
 	metricPacketOutDropFilter    = clientmetric.NewCounter("tstun_out_to_wg_drop_filter")
 	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
 )
-
-type DropReason string
-
-const (
-	DropReasonACL   DropReason = "acl"
-	DropReasonError DropReason = "error"
-)
-
-type dropPacketLabel struct {
-	// Reason indicates what we have done with the packet, and has the following values:
-	// - acl (rejected packets because of ACL)
-	// - error (rejected packets because of an error)
-	Reason DropReason
-}
 
 func (t *Wrapper) InstallCaptureHook(cb capture.Callback) {
 	t.captureHook.Store(cb)
