@@ -649,9 +649,10 @@ func (c *Conn) runDerpReader(ctx context.Context, regionID int, dc *derphttp.Cli
 }
 
 type derpWriteRequest struct {
-	addr   netip.AddrPort
-	pubKey key.NodePublic
-	b      []byte // copied; ownership passed to receiver
+	addr    netip.AddrPort
+	pubKey  key.NodePublic
+	b       []byte // copied; ownership passed to receiver
+	isDisco bool
 }
 
 // runDerpWriter runs in a goroutine for the life of a DERP
@@ -673,7 +674,7 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 			if err != nil {
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
 				metricSendDERPError.Add(1)
-			} else {
+			} else if !wr.isDisco {
 				c.metrics.outboundPacketsDERPTotal.Add(1)
 				c.metrics.outboundBytesDERPTotal.Add(int64(len(wr.b)))
 			}
@@ -696,8 +697,6 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 			// No data read occurred. Wait for another packet.
 			continue
 		}
-		c.metrics.inboundPacketsDERPTotal.Add(1)
-		c.metrics.inboundBytesDERPTotal.Add(int64(n))
 		sizes[0] = n
 		eps[0] = ep
 		return 1, nil
@@ -737,6 +736,9 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 	if stats := c.stats.Load(); stats != nil {
 		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, dm.n)
 	}
+
+	c.metrics.inboundPacketsDERPTotal.Add(1)
+	c.metrics.inboundBytesDERPTotal.Add(int64(n))
 	return n, ep
 }
 
