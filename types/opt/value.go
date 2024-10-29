@@ -36,7 +36,7 @@ func ValueOf[T any](v T) Value[T] {
 }
 
 // String implements [fmt.Stringer].
-func (o *Value[T]) String() string {
+func (o Value[T]) String() string {
 	if !o.set {
 		return fmt.Sprintf("(empty[%T])", o.value)
 	}
