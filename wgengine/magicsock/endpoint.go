@@ -991,7 +991,7 @@ func (de *endpoint) send(buffs [][]byte) error {
 		}
 
 		if stats := de.c.stats.Load(); stats != nil {
-			stats.UpdateTxPhysical(de.nodeAddr, derpAddr, 1, txBytes)
+			stats.UpdateTxPhysical(de.nodeAddr, derpAddr, len(buffs), txBytes)
 		}
 		if allOk {
 			return nil
