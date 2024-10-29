@@ -53,6 +53,10 @@ spec:
               jsonPath: .status.isExitNode
               name: IsExitNode
               type: string
+            - description: Whether this Connector instance is an app connector.
+              jsonPath: .status.isAppConnector
+              name: IsAppConnector
+              type: string
             - description: Status of the deployed Connector resources.
               jsonPath: .status.conditions[?(@.type == "ConnectorReady")].reason
               name: Status
@@ -91,10 +95,37 @@ spec:
                             More info:
                             https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
                         properties:
+                            appConnector:
+                                description: |-
+                                    AppConnector defines whether the Connector node should act as a Tailscale app connector. A Connector that is
+                                    configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the
+                                    Connector does not act as an app connector.
+                                    Note that the Connector only creates a Tailscale device that acts as an app connector. You will need to
+                                    configure the permissions and the domains separately via the Admin panel.
+                                    It is also your responsibility to enforce a predictable egress IP for the connector, for example by enforcing
+                                    that cluster egress traffic is routed via egress NAT with a static public IP address.
+                                    Note also that the main tested and supported use case of this config option is to deploy an app connector on
+                                    Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose
+                                    cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have
+                                    tested or optimised for.
+                                    https://tailscale.com/kb/1281/app-connectors
+                                properties:
+                                    routes:
+                                        description: |-
+                                            Routes are optional preconfigured routes for the domains routed via the app connector.
+                                            If not set, routes for the domains will be discovered dynamically.
+                                            If set, the app connector will immediately be able to route traffic using the preconfigured routes, but may
+                                            also dynamically discover other routes.
+                                            https://tailscale.com/kb/1332/apps-best-practices#preconfiguration
+                                        items:
+                                            format: cidr
+                                            type: string
+                                        minItems: 1
+                                        type: array
+                                type: object
                             exitNode:
                                 description: |-
-                                    ExitNode defines whether the Connector node should act as a
-                                    Tailscale exit node. Defaults to false.
+                                    ExitNode defines whether the Connector node should act as a Tailscale exit node. Defaults to false.
                                     https://tailscale.com/kb/1103/exit-nodes
                                 type: boolean
                             hostname:
@@ -151,8 +182,10 @@ spec:
                                 type: array
                         type: object
                         x-kubernetes-validations:
-                            - message: A Connector needs to be either an exit node or a subnet router, or both.
-                              rule: has(self.subnetRouter) || self.exitNode == true
+                            - message: A Connector needs to have at least one of exit node, subnet router or app connector configured.
+                              rule: has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true) || has(self.appConnector)
+                            - message: A Connector must not be both app connector and either of exit node or subnet router.
+                              rule: '!((has(self.subnetRouter) || (has(self.exitNode)  && self.exitNode == true)) && has(self.appConnector))'
                     status:
                         description: |-
                             ConnectorStatus describes the status of the Connector. This is set
@@ -225,6 +258,9 @@ spec:
                                     If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
                                     node.
                                 type: string
+                            isAppConnector:
+                                description: IsAppConnector is set to true if the Connector acts as an app connector.
+                                type: boolean
                             isExitNode:
                                 description: IsExitNode is set to true if the Connector acts as an exit node.
                                 type: boolean

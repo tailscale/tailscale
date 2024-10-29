@@ -48,6 +48,7 @@ type configOpts struct {
 	clusterTargetDNS                               string
 	subnetRoutes                                   string
 	isExitNode                                     bool
+	isAppConnector                                 bool
 	confFileHash                                   string
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
@@ -356,6 +357,7 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		Locked:       "false",
 		AuthKey:      ptr.To("secret-authkey"),
 		AcceptRoutes: "false",
+		AppConnector: &ipn.AppConnectorPrefs{Advertise: false},
 	}
 	if opts.proxyClass != "" {
 		t.Logf("applying configuration from ProxyClass %s", opts.proxyClass)
@@ -369,6 +371,9 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 	}
 	if opts.shouldRemoveAuthKey {
 		conf.AuthKey = nil
+	}
+	if opts.isAppConnector {
+		conf.AppConnector = &ipn.AppConnectorPrefs{Advertise: true}
 	}
 	var routes []netip.Prefix
 	if opts.subnetRoutes != "" || opts.isExitNode {
@@ -384,22 +389,29 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 			routes = append(routes, prefix)
 		}
 	}
-	conf.AdvertiseRoutes = routes
-	b, err := json.Marshal(conf)
-	if err != nil {
-		t.Fatalf("error marshalling tailscaled config")
-	}
 	if opts.tailnetTargetFQDN != "" || opts.tailnetTargetIP != "" {
 		conf.NoStatefulFiltering = "true"
 	} else {
 		conf.NoStatefulFiltering = "false"
 	}
+	conf.AdvertiseRoutes = routes
+	bnn, err := json.Marshal(conf)
+	if err != nil {
+		t.Fatalf("error marshalling tailscaled config")
+	}
+	conf.AppConnector = nil
 	bn, err := json.Marshal(conf)
+	if err != nil {
+		t.Fatalf("error marshalling tailscaled config")
+	}
+	conf.NoStatefulFiltering.Clear()
+	b, err := json.Marshal(conf)
 	if err != nil {
 		t.Fatalf("error marshalling tailscaled config")
 	}
 	mak.Set(&s.StringData, "tailscaled", string(b))
 	mak.Set(&s.StringData, "cap-95.hujson", string(bn))
+	mak.Set(&s.StringData, "cap-107.hujson", string(bnn))
 	labels := map[string]string{
 		"tailscale.com/managed":              "true",
 		"tailscale.com/parent-resource":      "test",
@@ -673,6 +685,18 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 				t.Fatalf("error marshalling 'cap-95.huson' contents: %v", err)
 			}
 			mak.Set(&secret.StringData, "cap-95.hujson", string(b))
+		}
+		if len(secret.StringData["cap-107.hujson"]) != 0 {
+			conf := &ipn.ConfigVAlpha{}
+			if err := json.Unmarshal([]byte(secret.StringData["cap-107.hujson"]), conf); err != nil {
+				t.Fatalf("error umarshalling 'cap-107.hujson' contents: %v", err)
+			}
+			conf.AuthKey = nil
+			b, err := json.Marshal(conf)
+			if err != nil {
+				t.Fatalf("error marshalling 'cap-107.huson' contents: %v", err)
+			}
+			mak.Set(&secret.StringData, "cap-107.hujson", string(b))
 		}
 	}
 }

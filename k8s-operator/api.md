@@ -21,6 +21,22 @@
 
 
 
+#### AppConnector
+
+
+
+AppConnector defines a Tailscale app connector node configured via Connector.
+
+
+
+_Appears in:_
+- [ConnectorSpec](#connectorspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `routes` _[Routes](#routes)_ | Routes are optional preconfigured routes for the domains routed via the app connector.<br />If not set, routes for the domains will be discovered dynamically.<br />If set, the app connector will immediately be able to route traffic using the preconfigured routes, but may<br />also dynamically discover other routes.<br />https://tailscale.com/kb/1332/apps-best-practices#preconfiguration |  | Format: cidr <br />MinItems: 1 <br />Type: string <br /> |
+
+
 
 
 #### Connector
@@ -87,7 +103,8 @@ _Appears in:_
 | `hostname` _[Hostname](#hostname)_ | Hostname is the tailnet hostname that should be assigned to the<br />Connector node. If unset, hostname defaults to <connector<br />name>-connector. Hostname can contain lower case letters, numbers and<br />dashes, it must not start or end with a dash and must be between 2<br />and 63 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$` <br />Type: string <br /> |
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that<br />contains configuration options that should be applied to the<br />resources created for this Connector. If unset, the operator will<br />create resources with the default configuration. |  |  |
 | `subnetRouter` _[SubnetRouter](#subnetrouter)_ | SubnetRouter defines subnet routes that the Connector node should<br />expose to tailnet. If unset, none are exposed.<br />https://tailscale.com/kb/1019/subnets/ |  |  |
-| `exitNode` _boolean_ | ExitNode defines whether the Connector node should act as a<br />Tailscale exit node. Defaults to false.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
+| `appConnector` _[AppConnector](#appconnector)_ | AppConnector defines whether the Connector node should act as a Tailscale app connector. A Connector that is<br />configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the<br />Connector does not act as an app connector.<br />Note that the Connector only creates a Tailscale device that acts as an app connector. You will need to<br />configure the permissions and the domains separately via the Admin panel.<br />It is also your responsibility to enforce a predictable egress IP for the connector, for example by enforcing<br />that cluster egress traffic is routed via egress NAT with a static public IP address.<br />Note also that the main tested and supported use case of this config option is to deploy an app connector on<br />Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose<br />cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have<br />tested or optimised for.<br />https://tailscale.com/kb/1281/app-connectors |  |  |
+| `exitNode` _boolean_ | ExitNode defines whether the Connector node should act as a Tailscale exit node. Defaults to false.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
 
 
 #### ConnectorStatus
@@ -106,6 +123,7 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the Connector.<br />Known condition types are `ConnectorReady`. |  |  |
 | `subnetRoutes` _string_ | SubnetRoutes are the routes currently exposed to tailnet via this<br />Connector instance. |  |  |
 | `isExitNode` _boolean_ | IsExitNode is set to true if the Connector acts as an exit node. |  |  |
+| `isAppConnector` _boolean_ | IsAppConnector is set to true if the Connector acts as an app connector. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the Connector node. |  |  |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the Connector node.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
 
@@ -746,6 +764,7 @@ _Validation:_
 - Type: string
 
 _Appears in:_
+- [AppConnector](#appconnector)
 - [SubnetRouter](#subnetrouter)
 
 
