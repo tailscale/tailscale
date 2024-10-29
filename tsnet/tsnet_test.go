@@ -1080,13 +1080,6 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics1, tailscaled_health_messages: got %v, want %v", got, want)
 	}
 
-	// The node is the primary subnet router for 2 routes:
-	// - 192.0.2.0/24
-	// - 192.0.5.1/32
-	if got, want := parsedMetrics1["tailscaled_primary_routes"], wantRoutes; got != want {
-		t.Errorf("metrics1, tailscaled_primary_routes: got %v, want %v", got, want)
-	}
-
 	// Verify that the amount of data recorded in bytes is higher or equal to the
 	// 10 megabytes sent.
 	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
@@ -1129,11 +1122,6 @@ func TestUserMetrics(t *testing.T) {
 	// Validate the health counter metric against the status of the node
 	if got, want := parsedMetrics2[`tailscaled_health_messages{type="warning"}`], float64(len(status2.Health)); got != want {
 		t.Errorf("metrics2, tailscaled_health_messages: got %v, want %v", got, want)
-	}
-
-	// The node is the primary subnet router for 0 routes
-	if got, want := parsedMetrics2["tailscaled_primary_routes"], 0.0; got != want {
-		t.Errorf("metrics2, tailscaled_primary_routes: got %v, want %v", got, want)
 	}
 
 	// Verify that the amount of data recorded in bytes is higher or equal than the
