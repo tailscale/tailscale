@@ -718,6 +718,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	ss.Spec.Template.Spec.NodeSelector = wantsPod.NodeSelector
 	ss.Spec.Template.Spec.Affinity = wantsPod.Affinity
 	ss.Spec.Template.Spec.Tolerations = wantsPod.Tolerations
+	ss.Spec.Template.Spec.TopologySpreadConstraints = wantsPod.TopologySpreadConstraints
 
 	// Update containers.
 	updateContainer := func(overlay *tsapi.Container, base corev1.Container) corev1.Container {
