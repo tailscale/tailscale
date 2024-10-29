@@ -127,6 +127,10 @@ type metrics struct {
 	outboundBytesIPv4Total expvar.Int
 	outboundBytesIPv6Total expvar.Int
 	outboundBytesDERPTotal expvar.Int
+
+	// outboundPacketsDroppedErrors is the total number of outbound packets
+	// dropped due to errors.
+	outboundPacketsDroppedErrors expvar.Int
 }
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
@@ -605,6 +609,8 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 		"counter",
 		"Counts the number of bytes sent to other peers",
 	)
+	outboundPacketsDroppedErrors := reg.DroppedPacketsOutbound()
+
 	m := new(metrics)
 
 	// Map clientmetrics to the usermetric counters.
@@ -630,6 +636,8 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	outboundBytesTotal.Set(pathDirectV4, &m.outboundBytesIPv4Total)
 	outboundBytesTotal.Set(pathDirectV6, &m.outboundBytesIPv6Total)
 	outboundBytesTotal.Set(pathDERP, &m.outboundBytesDERPTotal)
+
+	outboundPacketsDroppedErrors.Set(usermetric.DropLabels{Reason: usermetric.ReasonError}, &m.outboundPacketsDroppedErrors)
 
 	return m
 }
@@ -1202,8 +1210,13 @@ func (c *Conn) networkDown() bool { return !c.networkUp.Load() }
 // Send implements conn.Bind.
 //
 // See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.Send
-func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) error {
+func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) (err error) {
 	n := int64(len(buffs))
+	defer func() {
+		if err != nil {
+			c.metrics.outboundPacketsDroppedErrors.Add(n)
+		}
+	}()
 	metricSendData.Add(n)
 	if c.networkDown() {
 		metricSendDataNetworkDown.Add(n)

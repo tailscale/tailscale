@@ -674,6 +674,9 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 			if err != nil {
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
 				metricSendDERPError.Add(1)
+				if !wr.isDisco {
+					c.metrics.outboundPacketsDroppedErrors.Add(1)
+				}
 			} else if !wr.isDisco {
 				c.metrics.outboundPacketsDERPTotal.Add(1)
 				c.metrics.outboundBytesDERPTotal.Add(int64(len(wr.b)))

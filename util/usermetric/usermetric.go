@@ -19,6 +19,9 @@ import (
 // Registry tracks user-facing metrics of various Tailscale subsystems.
 type Registry struct {
 	vars expvar.Map
+
+	// m contains common metrics owned by the registry.
+	m Metrics
 }
 
 // NewMultiLabelMapWithRegistry creates and register a new
