@@ -4,11 +4,14 @@
 package setting
 
 import (
+	"errors"
 	"iter"
 	"maps"
 	"slices"
 	"strings"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/util/deephash"
 )
@@ -65,6 +68,9 @@ func (s *Snapshot) GetSetting(k Key) (setting RawItem, ok bool) {
 
 // Equal reports whether s and s2 are equal.
 func (s *Snapshot) Equal(s2 *Snapshot) bool {
+	if s == s2 {
+		return true
+	}
 	if !s.EqualItems(s2) {
 		return false
 	}
@@ -133,6 +139,45 @@ func (s *Snapshot) String() string {
 		sb.WriteString(s.m[k].String())
 	}
 	return sb.String()
+}
+
+// snapshotJSON holds JSON-marshallable data for [Snapshot].
+type snapshotJSON struct {
+	Summary  Summary         `json:",omitzero"`
+	Settings map[Key]RawItem `json:",omitempty"`
+}
+
+// MarshalJSONV2 implements [jsonv2.MarshalerV2].
+func (s *Snapshot) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
+	data := &snapshotJSON{}
+	if s != nil {
+		data.Summary = s.summary
+		data.Settings = s.m
+	}
+	return jsonv2.MarshalEncode(out, data, opts)
+}
+
+// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
+func (s *Snapshot) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+	if s == nil {
+		return errors.New("s must not be nil")
+	}
+	data := &snapshotJSON{}
+	if err := jsonv2.UnmarshalDecode(in, data, opts); err != nil {
+		return err
+	}
+	*s = Snapshot{m: data.Settings, sig: deephash.Hash(&data.Settings), summary: data.Summary}
+	return nil
+}
+
+// MarshalJSON implements [json.Marshaler].
+func (s *Snapshot) MarshalJSON() ([]byte, error) {
+	return jsonv2.Marshal(s) // uses MarshalJSONV2
+}
+
+// UnmarshalJSON implements [json.Unmarshaler].
+func (s *Snapshot) UnmarshalJSON(b []byte) error {
+	return jsonv2.Unmarshal(b, s) // uses UnmarshalJSONV2
 }
 
 // MergeSnapshots returns a [Snapshot] that contains all [RawItem]s
