@@ -185,6 +185,7 @@ change in the future.
 			logoutCmd,
 			switchCmd,
 			configureCmd,
+			syspolicyCmd,
 			netcheckCmd,
 			ipCmd,
 			dnsCmd,
