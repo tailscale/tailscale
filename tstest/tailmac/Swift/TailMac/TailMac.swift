@@ -100,7 +100,10 @@ extension Tailmac {
         mutating func run() {
             let process = Process()
             let stdOutPipe = Pipe()
-            let appPath = "./Host.app/Contents/MacOS/Host"
+
+            let executablePath = CommandLine.arguments[0]
+            let executableDirectory = (executablePath as NSString).deletingLastPathComponent
+            let appPath = executableDirectory + "/Host.app/Contents/MacOS/Host"
 
             process.executableURL = URL(
                 fileURLWithPath: appPath,
@@ -109,7 +112,7 @@ extension Tailmac {
             )
 
             if !FileManager.default.fileExists(atPath: appPath) {
-                fatalError("Could not find Host.app.  This must be co-located with the tailmac utility")
+                fatalError("Could not find Host.app at \(appPath).  This must be co-located with the tailmac utility")
             }
 
             process.arguments = ["run", "--id", id]
