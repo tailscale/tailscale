@@ -40,6 +40,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/syspolicy/setting"
 )
 
 // defaultLocalClient is the default LocalClient when using the legacy
@@ -812,6 +813,33 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 		return nil, err
 	}
 	return decodeJSON[*ipn.Prefs](body)
+}
+
+// GetEffectivePolicy returns the effective policy for the specified scope.
+func (lc *LocalClient) GetEffectivePolicy(ctx context.Context, scope setting.PolicyScope) (*setting.Snapshot, error) {
+	scopeID, err := scope.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	body, err := lc.get200(ctx, "/localapi/v0/policy/"+string(scopeID))
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*setting.Snapshot](body)
+}
+
+// ReloadEffectivePolicy reloads the effective policy for the specified scope
+// by reading and merging policy settings from all applicable policy sources.
+func (lc *LocalClient) ReloadEffectivePolicy(ctx context.Context, scope setting.PolicyScope) (*setting.Snapshot, error) {
+	scopeID, err := scope.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/policy/"+string(scopeID), 200, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*setting.Snapshot](body)
 }
 
 // GetDNSOSConfig returns the system DNS configuration for the current device.
