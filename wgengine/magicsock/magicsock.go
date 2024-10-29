@@ -1356,7 +1356,7 @@ func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) 
 // An example of when they might be different: sending to an
 // IPv6 address when the local machine doesn't have IPv6 support
 // returns (false, nil); it's not an error, but nothing was sent.
-func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (sent bool, err error) {
+func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, isDisco bool) (sent bool, err error) {
 	if addr.Addr() != tailcfg.DerpMagicIPAddr {
 		return c.sendUDP(addr, b)
 	}
@@ -1379,7 +1379,7 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (s
 	case <-c.donec:
 		metricSendDERPErrorClosed.Add(1)
 		return false, errConnClosed
-	case ch <- derpWriteRequest{addr, pubKey, pkt}:
+	case ch <- derpWriteRequest{addr, pubKey, pkt, isDisco}:
 		metricSendDERPQueued.Add(1)
 		return true, nil
 	default:
@@ -1577,7 +1577,8 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 
 	box := di.sharedKey.Seal(m.AppendMarshal(nil))
 	pkt = append(pkt, box...)
-	sent, err = c.sendAddr(dst, dstKey, pkt)
+	const isDisco = true
+	sent, err = c.sendAddr(dst, dstKey, pkt, isDisco)
 	if sent {
 		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco()) {
 			node := "?"
