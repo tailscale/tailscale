@@ -14,6 +14,7 @@ class Config: Codable {
     var mac = "52:cc:cc:cc:cc:01"
     var ethermac = "52:cc:cc:cc:ce:01"
     var port: UInt32 = 51009
+    var sharedDir: String?
 
     // The virtual machines ID.  Also double as the directory name under which
     // we will store configuration, block device, etc.
