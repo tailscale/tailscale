@@ -391,10 +391,11 @@ type probePlan map[string][]probe
 // sortRegions returns the regions of dm first sorted
 // from fastest to slowest (based on the 'last' report),
 // end in regions that have no data.
-func sortRegions(dm *tailcfg.DERPMap, last *Report) (prev []*tailcfg.DERPRegion) {
+func sortRegions(dm *tailcfg.DERPMap, last *Report, preferredDERP int) (prev []*tailcfg.DERPRegion) {
 	prev = make([]*tailcfg.DERPRegion, 0, len(dm.Regions))
 	for _, reg := range dm.Regions {
-		if reg.Avoid {
+		// include an otherwise avoid region if it is the current preferred region
+		if reg.Avoid && reg.RegionID != preferredDERP {
 			continue
 		}
 		prev = append(prev, reg)
@@ -419,9 +420,19 @@ func sortRegions(dm *tailcfg.DERPMap, last *Report) (prev []*tailcfg.DERPRegion)
 // a full report, all regions are scanned.)
 const numIncrementalRegions = 3
 
-// makeProbePlan generates the probe plan for a DERPMap, given the most
-// recent report and whether IPv6 is configured on an interface.
-func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (plan probePlan) {
+// makeProbePlan generates the probe plan for a DERPMap, given the most recent
+// report and the current home DERP. preferredDERP is passed independently of
+// last (report) because last is currently nil'd to indicate a desire for a full
+// netcheck.
+//
+// TODO(raggi,jwhited): refactor the callers and this function to be more clear
+// about full vs. incremental netchecks, and remove the need for the history
+// hiding. This was avoided in an incremental change due to exactly this kind of
+// distant coupling.
+// TODO(raggi): change from "preferred DERP" from a historical report to "home
+// DERP" as in what DERP is the current home connection, this would further
+// reduce flap events.
+func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report, preferredDERP int) (plan probePlan) {
 	if last == nil || len(last.RegionLatency) == 0 {
 		return makeProbePlanInitial(dm, ifState)
 	}
@@ -432,9 +443,34 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (pl
 	had4 := len(last.RegionV4Latency) > 0
 	had6 := len(last.RegionV6Latency) > 0
 	hadBoth := have6if && had4 && had6
-	for ri, reg := range sortRegions(dm, last) {
-		if ri == numIncrementalRegions {
-			break
+	// #13969 ensure that the home region is always probed.
+	// If a netcheck has unstable latency, such as a user with large amounts of
+	// bufferbloat or a highly congested connection, there are cases where a full
+	// netcheck may observe a one-off high latency to the current home DERP. Prior
+	// to the forced inclusion of the home DERP, this would result in an
+	// incremental netcheck following such an event to cause a home DERP move, with
+	// restoration back to the home DERP on the next full netcheck ~5 minutes later
+	// - which is highly disruptive when it causes shifts in geo routed subnet
+	// routers. By always including the home DERP in the incremental netcheck, we
+	// ensure that the home DERP is always probed, even if it observed a recenet
+	// poor latency sample. This inclusion enables the latency history checks in
+	// home DERP selection to still take effect.
+	// planContainsHome indicates whether the home DERP has been added to the probePlan,
+	// if there is no prior home, then there's no home to additionally include.
+	planContainsHome := preferredDERP == 0
+	for ri, reg := range sortRegions(dm, last, preferredDERP) {
+		regIsHome := reg.RegionID == preferredDERP
+		if ri >= numIncrementalRegions {
+			// planned at least numIncrementalRegions regions and that includes the
+			// last home region (or there was none), plan complete.
+			if planContainsHome {
+				break
+			}
+			// planned at least numIncrementalRegions regions, but not the home region,
+			// check if this is the home region, if not, skip it.
+			if !regIsHome {
+				continue
+			}
 		}
 		var p4, p6 []probe
 		do4 := have4if
@@ -445,7 +481,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (pl
 		tries := 1
 		isFastestTwo := ri < 2
 
-		if isFastestTwo {
+		if isFastestTwo || regIsHome {
 			tries = 2
 		} else if hadBoth {
 			// For dual stack machines, make the 3rd & slower nodes alternate
@@ -456,14 +492,15 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (pl
 				do4, do6 = false, true
 			}
 		}
-		if !isFastestTwo && !had6 {
+		if !regIsHome && !isFastestTwo && !had6 {
 			do6 = false
 		}
 
-		if reg.RegionID == last.PreferredDERP {
+		if regIsHome {
 			// But if we already had a DERP home, try extra hard to
 			// make sure it's there so we don't flip flop around.
 			tries = 4
+			planContainsHome = true
 		}
 
 		for try := 0; try < tries; try++ {
@@ -788,9 +825,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	c.curState = rs
 	last := c.last
 
-	// Even if we're doing a non-incremental update, we may want to try our
-	// preferred DERP region for captive portal detection. Save that, if we
-	// have it.
+	// Extract preferredDERP from the last report, if available. This will be used
+	// in captive portal detection and DERP flapping suppression. Ideally this would
+	// be the current active home DERP rather than the last report preferred DERP,
+	// but only the latter is presently available.
 	var preferredDERP int
 	if last != nil {
 		preferredDERP = last.PreferredDERP
@@ -847,7 +885,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 
 	var plan probePlan
 	if opts == nil || !opts.OnlyTCP443 {
-		plan = makeProbePlan(dm, ifState, last)
+		plan = makeProbePlan(dm, ifState, last, preferredDERP)
 	}
 
 	// If we're doing a full probe, also check for a captive portal. We
