@@ -114,7 +114,7 @@ func keyToEnvVarName(key setting.Key) (string, error) {
 	isDigit := func(c byte) bool { return '0' <= c && c <= '9' }
 
 	words := make([]string, 0, 8)
-	words = append(words, "TS")
+	words = append(words, "TS_DEBUGSYSPOLICY")
 	var currentWord strings.Builder
 	for i := 0; i < len(key); i++ {
 		c := key[i]
