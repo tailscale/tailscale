@@ -4,13 +4,13 @@
 package source
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/pkg/errors"
 	"tailscale.com/util/syspolicy/setting"
 )
 
