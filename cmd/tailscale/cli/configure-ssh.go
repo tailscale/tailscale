@@ -82,10 +82,17 @@ func runConfigureSSHconfig(ctx context.Context, args []string) error {
 	}
 
 	if !sshConfigArgs.export {
-		sshConfigFile := filepath.FromSlash(h + "/.ssh/config")
-		fmt.Println(sshConfigFile)
+		sshConfigFilePath := filepath.FromSlash(h + "/.ssh/config")
+		fmt.Println(sshConfigFilePath)
 		var sshConfig []string
-		err = lineread.File(sshConfigFile, func(line []byte) error {
+
+		// Create the file if it does not exist
+		_, err = os.OpenFile(sshConfigFilePath, os.O_RDONLY|os.O_CREATE, 0644)
+		if err != nil {
+			return err
+		}
+
+		err = lineread.File(sshConfigFilePath, func(line []byte) error {
 			sshConfig = append(sshConfig, string(line))
 			return nil
 		})
@@ -105,7 +112,7 @@ func runConfigureSSHconfig(ctx context.Context, args []string) error {
 			}
 		}
 
-		sshFile, err := os.Create(sshConfigFile)
+		sshFile, err := os.Create(sshConfigFilePath)
 		if err != nil {
 			return err
 
@@ -118,7 +125,7 @@ func runConfigureSSHconfig(ctx context.Context, args []string) error {
 				return err
 			}
 		}
-		fmt.Printf("Updated %s\n", sshConfigFile)
+		fmt.Printf("Updated %s\n", sshConfigFilePath)
 	} else {
 		fmt.Println(tsSshConfig)
 	}
