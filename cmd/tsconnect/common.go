@@ -149,7 +149,11 @@ func runEsbuildServe(buildOptions esbuild.BuildOptions) {
 	if err != nil {
 		log.Fatalf("Cannot start esbuild server: %v", err)
 	}
-	log.Printf("Listening on http://%s:%d\n", result.Host, result.Port)
+	log.Printf("Listening on http://%s:%d\n  - type ctrl-c to stop the dev server.", result.Host, result.Port)
+	for true {
+		time.Sleep(time.Second) // Keep the app running or the server will stop
+	}
+
 }
 
 func runEsbuild(buildOptions esbuild.BuildOptions) esbuild.BuildResult {
