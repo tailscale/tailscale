@@ -1,6 +1,5 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,6 +24,10 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- if .Values.operatorConfig.hostNetwork.enabled }}
+      hostNetwork: true
+      dnsPolicy: {{ .Values.operatorConfig.hostNetwork.dnsPolicy }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -43,6 +46,11 @@ spec:
           {{- with .Values.operatorConfig.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.operatorConfig.port.enabled }}
+          ports:
+            - containerPort: {{ .Values.operatorConfig.port.containerPort }}
+              protocol: TCP
           {{- end }}
           {{- with .Values.operatorConfig.resources }}
           resources:
@@ -68,6 +76,10 @@ spec:
               value: /oauth/client_id
             - name: CLIENT_SECRET_FILE
               value: /oauth/client_secret
+            {{- if .Values.operatorConfig.port.enabled }}
+            - name: PORT
+              value: {{ .Values.operatorConfig.port.containerPort | quote }}
+            {{- end }}
             {{- $proxyTag := printf ":%s" ( .Values.proxyConfig.image.tag | default .Chart.AppVersion )}}
             - name: PROXY_IMAGE
               value: {{ coalesce .Values.proxyConfig.image.repo .Values.proxyConfig.image.repository }}{{- if .Values.proxyConfig.image.digest -}}{{ printf "@%s" .Values.proxyConfig.image.digest}}{{- else -}}{{ printf "%s" $proxyTag }}{{- end }}
