@@ -225,12 +225,27 @@ const (
 	browserHandler
 )
 
+func (h handlerType) String() string {
+	switch h {
+	case browserHandler:
+		return "browser"
+	case apiHandler:
+		return "api"
+	default:
+		return "unknown"
+	}
+}
+
 // checkHandlerType returns either apiHandler or browserHandler, depending on
 // whether apiPattern or browserPattern is more specific (i.e. which pattern
 // contains more pathname components). If they are equally specific, it returns
 // unknownHandler.
 func checkHandlerType(apiPattern, browserPattern string) handlerType {
-	c := cmp.Compare(strings.Count(path.Clean(apiPattern), "/"), strings.Count(path.Clean(browserPattern), "/"))
+	apiPattern, browserPattern = path.Clean(apiPattern), path.Clean(browserPattern)
+	c := cmp.Compare(strings.Count(apiPattern, "/"), strings.Count(browserPattern, "/"))
+	if apiPattern == "/" || browserPattern == "/" {
+		c = cmp.Compare(len(apiPattern), len(browserPattern))
+	}
 	switch {
 	case c > 0:
 		return apiHandler

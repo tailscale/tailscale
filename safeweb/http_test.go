@@ -527,13 +527,13 @@ func TestGetMoreSpecificPattern(t *testing.T) {
 		{
 			desc: "same prefix",
 			a:    "/foo/bar/quux",
-			b:    "/foo/bar/",
+			b:    "/foo/bar/", // path.Clean will strip the trailing slash.
 			want: apiHandler,
 		},
 		{
 			desc: "almost same prefix, but not a path component",
 			a:    "/goat/sheep/cheese",
-			b:    "/goat/sheepcheese/",
+			b:    "/goat/sheepcheese/", // path.Clean will strip the trailing slash.
 			want: apiHandler,
 		},
 		{
@@ -553,6 +553,12 @@ func TestGetMoreSpecificPattern(t *testing.T) {
 			a:    "/",
 			b:    "///////",
 			want: unknownHandler,
+		},
+		{
+			desc: "root-level",
+			a:    "/latest",
+			b:    "/", // path.Clean will NOT strip the trailing slash.
+			want: apiHandler,
 		},
 	} {
 		t.Run(tt.desc, func(t *testing.T) {
