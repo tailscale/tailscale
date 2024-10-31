@@ -130,8 +130,10 @@ func SessionRecordingClientForDialer(dialCtx context.Context, dial func(context.
 				cancel()
 			}
 		}()
+
 		return dial(perAttemptCtx, network, addr)
 	}
+
 	return &http.Client{
 		Transport: tr,
 	}, nil

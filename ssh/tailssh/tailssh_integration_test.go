@@ -35,6 +35,9 @@ import (
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	glider "tailscale.com/tempfork/gliderlabs/ssh"
@@ -659,6 +662,14 @@ func (tb *testBackend) TailscaleVarRoot() string {
 
 func (tb *testBackend) NodeKey() key.NodePublic {
 	return key.NodePublic{}
+}
+
+func (tb *testBackend) Status() *ipnstate.Status {
+	return &ipnstate.Status{}
+}
+
+func (tb *testBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.Actor, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
+	return
 }
 
 type addressFakingConn struct {

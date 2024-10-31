@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +33,10 @@ import (
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -73,6 +77,8 @@ type ipnLocalBackend interface {
 	Dialer() *tsdial.Dialer
 	TailscaleVarRoot() string
 	NodeKey() key.NodePublic
+	Status() *ipnstate.Status
+	WatchNotificationsAs(ctx context.Context, actor ipnauth.Actor, mask ipn.NotifyWatchOpt, flush func(), cb func(roNotify *ipn.Notify) (keepGoing bool))
 }
 
 type server struct {
@@ -1448,6 +1454,53 @@ func (ss *sshSession) openFileForRecording(now time.Time) (_ io.WriteCloser, err
 	return f, nil
 }
 
+// monitorRecorderStatus watches the IPNBus for any netmap updates that indicate
+// that the recorder node is now inaccessible and signals via the returned
+// channel.
+func (ss *sshSession) monitorRecorderStatus(last *tailcfg.SSHRecordingAttempt) (<-chan struct{}, error) {
+	// identify the recorder node key by its tailscale IP
+	status := ss.conn.srv.lb.Status()
+	var recorderNodeKey key.NodePublic
+	if status != nil && len(status.Peers()) > 0 {
+		for nodeID, peer := range status.Peer {
+			if slices.Contains(peer.TailscaleIPs, last.Recorder.Addr()) {
+				recorderNodeKey = nodeID
+			}
+		}
+	}
+
+	// if we can't find the recorder error out.
+	if recorderNodeKey.IsZero() {
+		ss.logf("unable to find recorder node in status peer list")
+		return nil, errors.New("recorder node not found")
+	}
+
+	// watch indefinitely for IPN updates to observe if the recorder node ever goes offline.
+	recorderOffline := make(chan struct{})
+	go func() {
+		var mask ipn.NotifyWatchOpt
+		ss.conn.srv.lb.WatchNotificationsAs(ss.ctx, nil, mask, func() {}, func(roNotify *ipn.Notify) bool {
+			var recorderPeer tailcfg.NodeView
+			for _, peer := range roNotify.NetMap.Peers {
+				if peer.Key() == recorderNodeKey {
+					recorderPeer = peer
+					break
+				}
+			}
+
+			if !recorderPeer.Valid() || !*recorderPeer.Online() {
+				ss.logf("previously selected recorder node %q at %d is now offline or invalid; terminating session", recorderNodeKey, last.Recorder.Addr())
+				close(recorderOffline)
+				return false
+			}
+
+			return true
+		})
+	}()
+
+	return recorderOffline, nil
+}
+
 // startNewRecording starts a new SSH session recording.
 // It may return a nil recording if recording is not available.
 func (ss *sshSession) startNewRecording() (_ *recording, err error) {
@@ -1517,8 +1570,22 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 			ss.logf("recording: error starting recording (failing open): %v", err)
 			return nil, nil
 		}
+
+		// watch for the recorder host going offline.
+		last := attempts[len(attempts)-1]
+		offlineRecorder, err := ss.monitorRecorderStatus(last)
+		if err != nil {
+			ss.logf("recording: error monitoring recorder status: %v", err)
+			return nil, err
+		}
+
 		go func() {
-			err := <-errChan
+			var err error
+			select {
+			case err = <-errChan:
+			case <-offlineRecorder:
+				err = errors.New("recorder went offline")
+			}
 			if err == nil {
 				// Success.
 				ss.logf("recording: finished uploading recording")

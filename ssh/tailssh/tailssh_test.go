@@ -33,7 +33,10 @@ import (
 	"time"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/tsdial"
@@ -459,6 +462,14 @@ func (ts *localState) TailscaleVarRoot() string {
 
 func (ts *localState) NodeKey() key.NodePublic {
 	return key.NewNode().Public()
+}
+
+func (ts *localState) Status() *ipnstate.Status {
+	return &ipnstate.Status{}
+}
+
+func (ts *localState) WatchNotificationsAs(ctx context.Context, actor ipnauth.Actor, mask ipn.NotifyWatchOpt, _ func(), _ func(_ *ipn.Notify) bool) {
+	return
 }
 
 func newSSHRule(action *tailcfg.SSHAction) *tailcfg.SSHRule {
