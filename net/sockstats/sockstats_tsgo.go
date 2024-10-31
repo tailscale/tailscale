@@ -279,7 +279,13 @@ func setNetMon(netMon *netmon.Monitor) {
 		if ifName == "" {
 			return
 		}
-		ifIndex := state.Interface[ifName].Index
+		// DefaultRouteInterface and Interface are gathered at different points in time.
+		// Check for existence first, to avoid a nil pointer dereference.
+		iface, ok := state.Interface[ifName]
+		if !ok {
+			return
+		}
+		ifIndex := iface.Index
 		sockStats.mu.Lock()
 		defer sockStats.mu.Unlock()
 		// Ignore changes to unknown interfaces -- it would require
