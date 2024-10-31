@@ -1388,7 +1388,7 @@ func TestTailscaledConfigfileHash(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "362360188dac62bca8013c8134929fed8efd84b1f410c00873d14a05709b5647",
+		confFileHash:    "a67b5ad3ff605531c822327e8f1a23dd0846e1075b722c13402f7d5d0ba32ba2",
 		app:             kubetypes.AppIngressProxy,
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o), nil)
@@ -1399,7 +1399,7 @@ func TestTailscaledConfigfileHash(t *testing.T) {
 		mak.Set(&svc.Annotations, AnnotationHostname, "another-test")
 	})
 	o.hostname = "another-test"
-	o.confFileHash = "20db57cfabc3fc6490f6bb1dc85994e61d255cdfa2a56abb0141736e59f263ef"
+	o.confFileHash = "888a993ebee20ad6be99623b45015339de117946850cf1252bede0b570e04293"
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, o), nil)
 }

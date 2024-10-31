@@ -32,9 +32,6 @@ type Records struct {
 // TailscaledConfigFileName returns a tailscaled config file name in
 // format expected by containerboot for the given CapVer.
 func TailscaledConfigFileName(cap tailcfg.CapabilityVersion) string {
-	if cap < 95 {
-		return "tailscaled"
-	}
 	return fmt.Sprintf("cap-%v.hujson", cap)
 }
 

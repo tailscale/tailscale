@@ -522,11 +522,6 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: proxySecret,
 		},
 		corev1.EnvVar{
-			// Old tailscaled config key is still used for backwards compatibility.
-			Name:  "EXPERIMENTAL_TS_CONFIGFILE_PATH",
-			Value: "/etc/tsconfig/tailscaled",
-		},
-		corev1.EnvVar{
 			// New style is in the form of cap-<capability-version>.hujson.
 			Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 			Value: "/etc/tsconfig",
@@ -789,15 +784,9 @@ func readAuthKey(secret *corev1.Secret, key string) (*string, error) {
 	return origConf.AuthKey, nil
 }
 
-// tailscaledConfig takes a proxy config, a newly generated auth key if
-// generated and a Secret with the previous proxy state and auth key and
-// returns tailscaled configuration and a hash of that configuration.
-//
-// As of 2024-05-09 it also returns legacy tailscaled config without the
-// later added NoStatefulFilter field to support proxies older than cap95.
-// TODO (irbekrm): remove the legacy config once we no longer need to support
-// versions older than cap94,
-// https://tailscale.com/kb/1236/kubernetes-operator#operator-and-proxies
+// tailscaledConfig takes a proxy config, a newly generated auth key if generated and a Secret with the previous proxy
+// state and auth key and returns tailscaled config files for currently supported proxy versions and a hash of that
+// configuration.
 func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
 	conf := &ipn.ConfigVAlpha{
 		Version:             "alpha0",
@@ -846,10 +835,6 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 	// AppConnector config option is only understood by clients of capver 107 and newer.
 	conf.AppConnector = nil
 	capVerConfigs[95] = *conf
-
-	// StatefulFiltering is only understood by clients of capver 95 and newer.
-	conf.NoStatefulFiltering.Clear()
-	capVerConfigs[94] = *conf
 	return capVerConfigs, nil
 }
 

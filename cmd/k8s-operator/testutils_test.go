@@ -71,7 +71,6 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			{Name: "TS_USERSPACE", Value: "false"},
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
-			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
 			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
 		},
 		SecurityContext: &corev1.SecurityContext{
@@ -230,7 +229,6 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			{Name: "TS_USERSPACE", Value: "true"},
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
-			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
 			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
 			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/serve-config"},
 			{Name: "TS_INTERNAL_APP", Value: opts.app},
@@ -404,12 +402,6 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 	if err != nil {
 		t.Fatalf("error marshalling tailscaled config")
 	}
-	conf.NoStatefulFiltering.Clear()
-	b, err := json.Marshal(conf)
-	if err != nil {
-		t.Fatalf("error marshalling tailscaled config")
-	}
-	mak.Set(&s.StringData, "tailscaled", string(b))
 	mak.Set(&s.StringData, "cap-95.hujson", string(bn))
 	mak.Set(&s.StringData, "cap-107.hujson", string(bnn))
 	labels := map[string]string{
@@ -662,18 +654,6 @@ func removeTargetPortsFromSvc(svc *corev1.Service) {
 func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 	return func(secret *corev1.Secret) {
 		t.Helper()
-		if len(secret.StringData["tailscaled"]) != 0 {
-			conf := &ipn.ConfigVAlpha{}
-			if err := json.Unmarshal([]byte(secret.StringData["tailscaled"]), conf); err != nil {
-				t.Fatalf("error unmarshalling 'tailscaled' contents: %v", err)
-			}
-			conf.AuthKey = nil
-			b, err := json.Marshal(conf)
-			if err != nil {
-				t.Fatalf("error marshalling updated 'tailscaled' config: %v", err)
-			}
-			mak.Set(&secret.StringData, "tailscaled", string(b))
-		}
 		if len(secret.StringData["cap-95.hujson"]) != 0 {
 			conf := &ipn.ConfigVAlpha{}
 			if err := json.Unmarshal([]byte(secret.StringData["cap-95.hujson"]), conf); err != nil {
