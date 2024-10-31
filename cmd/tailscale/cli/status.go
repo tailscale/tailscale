@@ -150,7 +150,7 @@ func runStatus(ctx context.Context, args []string) error {
 			}
 			return nil
 		} else {
-			return errors.New("host ssh is not managed by Tailscale")
+			return fmt.Errorf("Host %s's SSH is not managed by Tailscale", statusArgs.checkSSHHost)
 		}
 	}
 	if statusArgs.sshHostKeys {
