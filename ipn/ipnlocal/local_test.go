@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
@@ -432,16 +434,25 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func newTestLocalBackend(t testing.TB) *LocalBackend {
+	return newTestLocalBackendWithSys(t, new(tsd.System))
+}
+
+// newTestLocalBackendWithSys creates a new LocalBackend with the given tsd.System.
+// If the state store or engine are not set in sys, they will be set to a new
+// in-memory store and fake userspace engine, respectively.
+func newTestLocalBackendWithSys(t testing.TB, sys *tsd.System) *LocalBackend {
 	var logf logger.Logf = logger.Discard
-	sys := new(tsd.System)
-	store := new(mem.Store)
-	sys.Set(store)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
-	if err != nil {
-		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	if _, ok := sys.StateStore.GetOK(); !ok {
+		sys.Set(new(mem.Store))
 	}
-	t.Cleanup(eng.Close)
-	sys.Set(eng)
+	if _, ok := sys.Engine.GetOK(); !ok {
+		eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+		if err != nil {
+			t.Fatalf("NewFakeUserspaceEngine: %v", err)
+		}
+		t.Cleanup(eng.Close)
+		sys.Set(eng)
+	}
 	lb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
@@ -4421,5 +4432,37 @@ func TestLoginNotifications(t *testing.T) {
 			}
 			wg.Wait()
 		})
+	}
+}
+
+// TestConfigFileReload tests that the LocalBackend reloads its configuration
+// when the configuration file changes.
+func TestConfigFileReload(t *testing.T) {
+	cfg1 := `{"Hostname": "foo", "Version": "alpha0"}`
+	f := filepath.Join(t.TempDir(), "cfg")
+	must.Do(os.WriteFile(f, []byte(cfg1), 0600))
+	sys := new(tsd.System)
+	sys.InitialConfig = must.Get(conffile.Load(f))
+	lb := newTestLocalBackendWithSys(t, sys)
+	must.Do(lb.Start(ipn.Options{}))
+
+	lb.mu.Lock()
+	hn := lb.hostinfo.Hostname
+	lb.mu.Unlock()
+	if hn != "foo" {
+		t.Fatalf("got %q; want %q", hn, "foo")
+	}
+
+	cfg2 := `{"Hostname": "bar", "Version": "alpha0"}`
+	must.Do(os.WriteFile(f, []byte(cfg2), 0600))
+	if !must.Get(lb.ReloadConfig()) {
+		t.Fatal("reload failed")
+	}
+
+	lb.mu.Lock()
+	hn = lb.hostinfo.Hostname
+	lb.mu.Unlock()
+	if hn != "bar" {
+		t.Fatalf("got %q; want %q", hn, "bar")
 	}
 }
