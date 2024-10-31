@@ -77,6 +77,9 @@ const (
 	// SuggestedExitNodeVisibility controls the visibility of suggested exit nodes in the client GUI.
 	// When this system policy is set to 'hide', an exit node suggestion won't be presented to the user as part of the exit nodes picker.
 	SuggestedExitNodeVisibility Key = "SuggestedExitNode"
+	// OnboardingFlowVisibility controls the visibility of the onboarding flow in the client GUI.
+	// When this system policy is set to 'hide', the onboarding flow is never shown to the user.
+	OnboardingFlowVisibility Key = "OnboardingFlow"
 
 	// Keys with a string value formatted for use with time.ParseDuration().
 	KeyExpirationNoticeTime Key = "KeyExpirationNotice" // default 24 hours
@@ -166,6 +169,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(SuggestedExitNodeVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(TestMenuVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(UpdateMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(OnboardingFlowVisibility, setting.UserSetting, setting.VisibilityValue),
 }
 
 func init() {
