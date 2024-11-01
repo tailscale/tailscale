@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // ErrServerClosed is returned by the Server's Serve, ListenAndServe,
@@ -134,43 +134,95 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 		config.ServerVersion = "SSH-2.0-" + srv.Version
 	}
 	if srv.PasswordHandler != nil {
-		config.PasswordCallback = func(conn gossh.ConnMetadata, password []byte) (*gossh.Permissions, error) {
-			applyConnMetadata(ctx, conn)
-			if ok := srv.PasswordHandler(ctx, string(password)); !ok {
-				return ctx.Permissions().Permissions, fmt.Errorf("permission denied")
-			}
-			return ctx.Permissions().Permissions, nil
-		}
+		config.PasswordCallback = passwordCallback(ctx, srv.PasswordHandler)
 	}
 	if srv.PublicKeyHandler != nil {
-		config.PublicKeyCallback = func(conn gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
-			applyConnMetadata(ctx, conn)
-			if err := srv.PublicKeyHandler(ctx, key); err != nil {
-				return ctx.Permissions().Permissions, err
-			}
-			ctx.SetValue(ContextKeyPublicKey, key)
-			return ctx.Permissions().Permissions, nil
-		}
+		config.PublicKeyCallback = publicKeyCallback(ctx, srv.PublicKeyHandler)
 	}
 	if srv.KeyboardInteractiveHandler != nil {
-		config.KeyboardInteractiveCallback = func(conn gossh.ConnMetadata, challenger gossh.KeyboardInteractiveChallenge) (*gossh.Permissions, error) {
-			applyConnMetadata(ctx, conn)
-			if ok := srv.KeyboardInteractiveHandler(ctx, challenger); !ok {
-				return ctx.Permissions().Permissions, fmt.Errorf("permission denied")
-			}
-			return ctx.Permissions().Permissions, nil
-		}
+		config.KeyboardInteractiveCallback = keyboardInteractiveCallback(ctx, srv.KeyboardInteractiveHandler)
 	}
 	if srv.NoClientAuthHandler != nil {
-		config.NoClientAuthCallback = func(conn gossh.ConnMetadata) (*gossh.Permissions, error) {
-			applyConnMetadata(ctx, conn)
-			if err := srv.NoClientAuthHandler(ctx); err != nil {
-				return ctx.Permissions().Permissions, err
-			}
-			return ctx.Permissions().Permissions, nil
-		}
+		config.NoClientAuthCallback = noClientAuthCallback(ctx, srv.NoClientAuthHandler)
+	}
+	config.PreAuthConnCallback = func(pac gossh.ServerPreAuthConn) {
+		ctx.SetValue(ContextKeySendAuthBanner, pac.SendAuthBanner)
 	}
 	return config
+}
+
+func passwordCallback(ctx Context, h PasswordHandler) func(gossh.ConnMetadata, []byte) (*gossh.Permissions, error) {
+	return func(conn gossh.ConnMetadata, password []byte) (*gossh.Permissions, error) {
+		applyConnMetadata(ctx, conn)
+		if ok := h(ctx, string(password)); !ok {
+			return ctx.Permissions().Permissions, fmt.Errorf("permission denied")
+		}
+		return ctx.Permissions().Permissions, nil
+	}
+}
+
+func publicKeyCallback(ctx Context, h PublicKeyHandler) func(gossh.ConnMetadata, gossh.PublicKey) (*gossh.Permissions, error) {
+	return func(conn gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
+		applyConnMetadata(ctx, conn)
+		if err := h(ctx, key); err != nil {
+			return ctx.Permissions().Permissions, adaptPartialSuccessError(err)
+		}
+		ctx.SetValue(ContextKeyPublicKey, key)
+		return ctx.Permissions().Permissions, nil
+	}
+}
+
+func keyboardInteractiveCallback(ctx Context, h KeyboardInteractiveHandler) func(conn gossh.ConnMetadata, client gossh.KeyboardInteractiveChallenge) (*gossh.Permissions, error) {
+	return func(conn gossh.ConnMetadata, challenger gossh.KeyboardInteractiveChallenge) (*gossh.Permissions, error) {
+		applyConnMetadata(ctx, conn)
+		if ok := h(ctx, challenger); !ok {
+			return ctx.Permissions().Permissions, fmt.Errorf("permission denied")
+		}
+		return ctx.Permissions().Permissions, nil
+	}
+}
+
+func noClientAuthCallback(ctx Context, h NoClientAuthHandler) func(gossh.ConnMetadata) (*gossh.Permissions, error) {
+	return func(conn gossh.ConnMetadata) (*gossh.Permissions, error) {
+		applyConnMetadata(ctx, conn)
+		if err := h(ctx); err != nil {
+			return ctx.Permissions().Permissions, adaptPartialSuccessError(err)
+		}
+		return ctx.Permissions().Permissions, nil
+	}
+}
+
+func adaptPartialSuccessError(err error) error {
+	fmt.Printf("Adapt? error %q of type %T\n", err, err)
+	if err == nil {
+		return nil
+	}
+	pse := &PartialSuccessError{}
+	if errors.As(err, &pse) {
+		adapted := &gossh.PartialSuccessError{}
+		if pse.PasswordHandler != nil {
+			adapted.Next.PasswordCallback = passwordCallback(pse.Context, pse.PasswordHandler)
+		}
+		if pse.PublicKeyHandler != nil {
+			adapted.Next.PublicKeyCallback = publicKeyCallback(pse.Context, pse.PublicKeyHandler)
+		}
+		if pse.KeyboardInteractiveHandler != nil {
+			adapted.Next.KeyboardInteractiveCallback = keyboardInteractiveCallback(pse.Context, pse.KeyboardInteractiveHandler)
+		}
+		return adapted
+	}
+	return err
+}
+
+type PartialSuccessError struct {
+	Context                    Context
+	PasswordHandler            PasswordHandler
+	PublicKeyHandler           PublicKeyHandler
+	KeyboardInteractiveHandler KeyboardInteractiveHandler
+}
+
+func (p *PartialSuccessError) Error() string {
+	return "ssh: authenticated with partial success"
 }
 
 // Handle sets the Handler for the server.
