@@ -4,7 +4,7 @@ import (
 	"crypto/subtle"
 	"net"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 type Signal string
@@ -105,7 +105,7 @@ type Pty struct {
 	// requested by the client as part of the pty-req. These are outlined as
 	// part of https://datatracker.ietf.org/doc/html/rfc4254#section-8.
 	//
-	// The opcodes are defined as constants in github.com/tailscale/golang-x-crypto/ssh (VINTR,VQUIT,etc.).
+	// The opcodes are defined as constants in golang.org/x/crypto/ssh (VINTR,VQUIT,etc.).
 	// Boolean opcodes have values 0 or 1.
 	Modes gossh.TerminalModes
 }
