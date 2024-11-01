@@ -357,6 +357,15 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 3,
 			wantDERP:    2, // moved to d2 since d1 is gone
 		},
+		{
+			name: "preferred_derp_hysteresis_no_switch_pct",
+			steps: []step{
+				{0 * time.Second, report("d1", 34*time.Millisecond, "d2", 35*time.Millisecond)},
+				{1 * time.Second, report("d1", 34*time.Millisecond, "d2", 23*time.Millisecond)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    1, // diff is 11ms, but d2 is greater than 2/3s of d1
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
