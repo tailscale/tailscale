@@ -546,7 +546,7 @@ func (s *Server) start() (reterr error) {
 	sys.HealthTracker().SetMetricsRegistry(sys.UserMetricsRegistry())
 
 	// TODO(oxtoacart): do we need to support Taildrive on tsnet, and if so, how?
-	ns, err := netstack.Create(tsLogf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := netstack.Create(tsLogf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}

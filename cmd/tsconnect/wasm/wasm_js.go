@@ -115,7 +115,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 	}
 	sys.Set(eng)
 
-	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		log.Fatalf("netstack.Create: %v", err)
 	}

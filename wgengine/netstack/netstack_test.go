@@ -65,7 +65,7 @@ func TestInjectInboundLeak(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ns, err := Create(logf, tunWrap, eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := Create(logf, tunWrap, eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	tb.Cleanup(func() { eng.Close() })
 	sys.Set(eng)
 
-	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		tb.Fatal(err)
 	}
