@@ -4,21 +4,28 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	qrcode "github.com/skip2/go-qrcode"
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
@@ -35,6 +42,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -44,12 +52,14 @@ import (
 
 var (
 	wgListenPort = flag.Int("wg-port", 51820, "port number to listen on for WireGuard from the client")
-	qrListenAddr = flag.String("qr-listen", "127.0.0.1:8014", "HTTP address to serve a QR code for client's WireGuard configuration")
 	confDir      = flag.String("dir", filepath.Join(os.Getenv("HOME"), ".config/lopower"), "directory to store configuration in")
+	wgPubHost    = flag.String("wg-host", "0.0.0.1", "public IP address of lopower's WireGuard server")
+	qrListenAddr = flag.String("qr-listen", "127.0.0.1:8014", "HTTP address to serve a QR code for client's WireGuard configuration, or empty for none")
+	printConfig  = flag.Bool("print-config", true, "print the client's WireGuard configuration to stdout on startup")
 )
 
 type config struct {
-	PrivKey key.NodePrivate
+	PrivKey key.NodePrivate // the proxy server's key
 	Peers   []Peer
 
 	// V4 and V6 are the local IPs.
@@ -62,9 +72,9 @@ type config struct {
 }
 
 type Peer struct {
-	PubKey key.NodePublic
-	V4     netip.Addr
-	V6     netip.Addr
+	PrivKey key.NodePrivate // e.g. proxy client's
+	V4      netip.Addr
+	V6      netip.Addr
 }
 
 func (lp *lpServer) storeConfigLocked() {
@@ -85,21 +95,23 @@ func (lp *lpServer) storeConfigLocked() {
 
 func (lp *lpServer) loadConfig() {
 	path := filepath.Join(lp.dir, "config.json")
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	f, err := os.Open(path)
 	if err == nil {
 		defer f.Close()
 		var cfg *config
 		must.Do(json.NewDecoder(f).Decode(&cfg))
-		lp.mu.Lock()
-		defer lp.mu.Unlock()
-		lp.c = cfg
+		if len(cfg.Peers) > 0 { // as early version didn't set this
+			lp.mu.Lock()
+			defer lp.mu.Unlock()
+			lp.c = cfg
+		}
 		return
 	}
 	if !os.IsNotExist(err) {
 		log.Fatalf("os.OpenFile(%q): %v", path, err)
 	}
 	const defaultV4CIDR = "10.90.0.0/24"
-	const defaultV6CIDR = "fd7a:115c:a1e0:1900::/64"
+	const defaultV6CIDR = "fd7a:115c:a1e0:9909::/64" // 9909 = above QWERTY "LOPO"(wer)
 	c := &config{
 		PrivKey: key.NewNode(),
 		V4CIDR:  netip.MustParsePrefix(defaultV4CIDR),
@@ -107,6 +119,12 @@ func (lp *lpServer) loadConfig() {
 	}
 	c.V4 = c.V4CIDR.Addr().Next()
 	c.V6 = c.V6CIDR.Addr().Next()
+	c.Peers = append(c.Peers, Peer{
+		PrivKey: key.NewNode(),
+		V4:      c.V4.Next(),
+		V6:      c.V6.Next(),
+	})
+
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
 	lp.c = c
@@ -127,7 +145,7 @@ func (lp *lpServer) reconfig() {
 	}
 	for _, p := range lp.c.Peers {
 		wc.Peers = append(wc.Peers, wgcfg.Peer{
-			PublicKey: p.PubKey,
+			PublicKey: p.PrivKey.Public(),
 			AllowedIPs: []netip.Prefix{
 				netip.PrefixFrom(p.V4, 32),
 				netip.PrefixFrom(p.V6, 128),
@@ -154,11 +172,17 @@ func newLP(ctx context.Context) *lpServer {
 		closeCh: make(chan struct{}),
 		evChan:  make(chan tun.Event),
 	}
+
 	wgdev := wgcfg.NewDevice(nst, conn.NewDefaultBind(), deviceLogger)
 	defer wgdev.Close()
 	lp.d = wgdev
 	must.Do(wgdev.Up())
 	lp.reconfig()
+
+	if *printConfig {
+		log.Printf("Device Wireguard config is:\n%s", lp.wgConfigForQR())
+	}
+
 	lp.startTSNet(ctx)
 	return lp
 }
@@ -320,6 +344,63 @@ func (lp *lpServer) acceptTCP(r *tcp.ForwarderRequest) {
 	<-errc
 }
 
+func (lp *lpServer) wgConfigForQR() string {
+	var b strings.Builder
+
+	privHex, _ := lp.c.Peers[0].PrivKey.MarshalText()
+	privHex = bytes.TrimPrefix(privHex, []byte("privkey:"))
+	priv := make([]byte, 32)
+	got, err := hex.Decode(priv, privHex)
+	if err != nil || got != 32 {
+		log.Printf("marshal text was: %q", privHex)
+		log.Fatalf("bad private key: %v, % bytes", err, got)
+	}
+	privb64 := base64.StdEncoding.EncodeToString(priv)
+
+	fmt.Fprintf(&b, "[Interface]\nPrivateKey = %s\n", privb64)
+	fmt.Fprintf(&b, "Address = %v\n", lp.c.V6)
+
+	pubBin, _ := lp.c.PrivKey.Public().MarshalBinary()
+	if len(pubBin) != 34 {
+		log.Fatalf("bad pubkey length: %d", len(pubBin))
+	}
+	pubBin = pubBin[2:] // trim off "np"
+	pubb64 := base64.StdEncoding.EncodeToString(pubBin)
+
+	fmt.Fprintf(&b, "[Peer]\nPublicKey = %v\n", pubb64)
+	fmt.Fprintf(&b, "AllowedIPs = %v\n", tsaddr.TailscaleULARange())
+	fmt.Fprintf(&b, "Endpoint = %v\n", net.JoinHostPort(*wgPubHost, fmt.Sprint(*wgListenPort)))
+
+	return b.String()
+}
+
+func (lp *lpServer) serveQR() {
+	ln, err := net.Listen("tcp", *qrListenAddr)
+	if err != nil {
+		log.Fatalf("qr: %v", err)
+	}
+	log.Printf("# Serving QR code at http://%s/", ln.Addr())
+	hs := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "image/png")
+			conf := lp.wgConfigForQR()
+			v, err := qrcode.Encode(conf, qrcode.Medium, 512)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Write(v)
+		}),
+	}
+	if err := hs.Serve(ln); err != nil {
+		log.Fatalf("qr: %v", err)
+	}
+}
+
 type nsTUN struct {
 	lp      *lpServer
 	closeCh chan struct{}
@@ -398,11 +479,16 @@ func (lp *lpServer) startTSNet(ctx context.Context) {
 
 func main() {
 	flag.Parse()
+	log.Printf("lopower starting")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	lp := newLP(ctx)
-	_ = lp
+
+	if *qrListenAddr != "" {
+		go lp.serveQR()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, unix.SIGTERM, os.Interrupt)

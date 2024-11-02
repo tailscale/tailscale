@@ -90,7 +90,9 @@ func (cfg *Config) ToUAPI(logf logger.Logf, w io.Writer, prev *Config) error {
 				// See corp issue 3016.
 				logf("[unexpected] endpoint changed from %s to %s", oldPeer.WGEndpoint, p.PublicKey)
 			}
-			set("endpoint", p.PublicKey.UntypedHexString())
+			if cfg.NodeID != "" {
+				set("endpoint", p.PublicKey.UntypedHexString())
+			}
 		}
 
 		// TODO: replace_allowed_ips is expensive.
