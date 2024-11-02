@@ -39,7 +39,7 @@ import (
 )
 
 var (
-	wgListenAddr = flag.String("wg-listen", ":51820", "address to listen on for WireGuard from the client")
+	wgListenPort = flag.Int("wg-port", 51820, "port number to listen on for WireGuard from the client")
 	qrListenAddr = flag.String("qr-listen", "127.0.0.1:8014", "HTTP address to serve a QR code for client's WireGuard configuration")
 )
 
@@ -106,6 +106,7 @@ func (lp *lpServer) reconfig() {
 	wc := &wgcfg.Config{
 		Name:       "lopower0",
 		PrivateKey: lp.c.PrivKey,
+		ListenPort: uint16(*wgListenPort),
 		Addresses: []netip.Prefix{
 			netip.PrefixFrom(lp.c.V4, 32),
 			netip.PrefixFrom(lp.c.V6, 128),
