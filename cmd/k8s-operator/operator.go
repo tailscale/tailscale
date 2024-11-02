@@ -11,6 +11,7 @@ import (
 	"context"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -149,6 +150,13 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 	s := &tsnet.Server{
 		Hostname: hostname,
 		Logf:     zlog.Named("tailscaled").Debugf,
+	}
+	if p := os.Getenv("TS_PORT"); p != "" {
+		port, err := strconv.ParseUint(p, 10, 16)
+		if err != nil {
+			startlog.Fatalf("TS_PORT %q cannot be parsed as uint16: %v", p, err)
+		}
+		s.Port = uint16(port)
 	}
 	if kubeSecret != "" {
 		st, err := kubestore.New(logger.Discard, kubeSecret)
