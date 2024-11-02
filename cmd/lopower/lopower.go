@@ -35,6 +35,11 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
+var (
+	wgListenAddr = flag.String("wg-listen", ":51820", "address to listen on for WireGuard from the client")
+	qrListenAddr = flag.String("qr-listen", "127.0.0.1:8014", "HTTP address to serve a QR code for client's WireGuard configuration")
+)
+
 type config struct {
 	PrivKey key.NodePrivate
 	Peers   []Peer
