@@ -94,17 +94,16 @@ func loadConfig() *config {
 	return c
 }
 
-func reconfig(wgdev *device.Device) {
-	c := loadConfig()
+func (lp *lpServer) reconfig() {
 	wc := &wgcfg.Config{
 		Name:       "lopower0",
-		PrivateKey: c.PrivKey,
+		PrivateKey: lp.c.PrivKey,
 		Addresses: []netip.Prefix{
-			netip.PrefixFrom(c.V4, 32),
-			netip.PrefixFrom(c.V6, 128),
+			netip.PrefixFrom(lp.c.V4, 32),
+			netip.PrefixFrom(lp.c.V6, 128),
 		},
 	}
-	for _, p := range c.Peers {
+	for _, p := range lp.c.Peers {
 		wc.Peers = append(wc.Peers, wgcfg.Peer{
 			PublicKey: p.PubKey,
 			AllowedIPs: []netip.Prefix{
@@ -113,7 +112,7 @@ func reconfig(wgdev *device.Device) {
 			},
 		})
 	}
-	must.Do(wgcfg.ReconfigDevice(wgdev, wc, log.Printf))
+	must.Do(wgcfg.ReconfigDevice(lp.d, wc, log.Printf))
 }
 
 type lpServer struct {
@@ -297,7 +296,7 @@ func main() {
 	defer wgdev.Close()
 	lp.d = wgdev
 	must.Do(wgdev.Up())
-	reconfig(wgdev)
+	lp.reconfig()
 
 	// startTSNet(ctx)
 
