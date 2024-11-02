@@ -15,11 +15,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
@@ -28,6 +30,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"tailscale.com/net/packet"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -127,6 +130,10 @@ type lpServer struct {
 	linkEP *channel.Endpoint
 }
 
+// MaxPacketSize is the maximum size (in bytes)
+// of a packet that can be injected into lpServer.
+const MaxPacketSize = device.MaxContentSize
+
 func (lp *lpServer) initNetstack(ctx context.Context) error {
 	ns := stack.New(stack.Options{
 		NetworkProtocols: []stack.NetworkProtocolFactory{
@@ -210,7 +217,11 @@ func (lp *lpServer) initNetstack(ctx context.Context) error {
 				}
 				continue
 			}
-			lp.handleIPPacketFromGvisor(pkt.ToView().AsSlice())
+			size := pkt.Size()
+			if size > MaxPacketSize || size == 0 {
+				pkt.DecRef()
+				continue
+			}
 		}
 	}()
 	return nil
@@ -220,13 +231,10 @@ func (lp *lpServer) acceptTCP(*tcp.ForwarderRequest) {
 	// TODO
 }
 
-func (lp *lpServer) handleIPPacketFromGvisor(pkt []byte) {
-	// TODO
-}
-
 type nsTUN struct {
 	lp      *lpServer
 	closeCh chan struct{}
+	readCh  chan *stack.PacketBuffer
 	evChan  chan tun.Event
 }
 
@@ -241,17 +249,38 @@ func (t *nsTUN) Close() error {
 }
 
 func (t *nsTUN) Read(out [][]byte, sizes []int, offset int) (int, error) {
-	<-t.closeCh
-	return 0, io.EOF
-}
-
-func (t *nsTUN) Write(b [][]byte, n int) (int, error) {
 	select {
 	case <-t.closeCh:
-		return 0, errors.New("closed")
-	default:
+		return 0, io.EOF
+	case resPacket := <-t.readCh:
+		defer resPacket.DecRef()
+		pkt := out[0][offset:]
+		n := copy(pkt, resPacket.NetworkHeader().Slice())
+		n += copy(pkt[n:], resPacket.TransportHeader().Slice())
+		n += copy(pkt[n:], resPacket.Data().AsRange().ToSlice())
+		sizes[0] = n
+		return 1, nil
 	}
-	return 1, nil
+}
+
+// Write accepts incoming packets. The packets begin at buffs[:][offset:],
+// like wireguard-go/tun.Device.Write. Write is called per-peer via
+// wireguard-go/device.Peer.RoutineSequentialReceiver, so it MUST be
+// thread-safe.
+func (t *nsTUN) Write(buffs [][]byte, offset int) (int, error) {
+	var pkt packet.Parsed
+	for _, buff := range buffs {
+		pkt.Decode(buff[offset:])
+		packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+			Payload: buffer.MakeWithData(slices.Clone(buff[offset:])),
+		})
+		if pkt.IPVersion == 4 {
+			t.lp.linkEP.InjectInbound(ipv4.ProtocolNumber, packetBuf)
+		} else if pkt.IPVersion == 6 {
+			t.lp.linkEP.InjectInbound(ipv6.ProtocolNumber, packetBuf)
+		}
+	}
+	return len(buffs), nil
 }
 
 func (t *nsTUN) Flush() error             { return nil }
@@ -259,7 +288,6 @@ func (t *nsTUN) MTU() (int, error)        { return 1500, nil }
 func (t *nsTUN) Name() (string, error)    { return "nstun", nil }
 func (t *nsTUN) Events() <-chan tun.Event { return t.evChan }
 func (t *nsTUN) BatchSize() int           { return 1 }
-func (t *nsTUN) IsnsTUN() bool            { return true }
 
 func startTSNet(ctx context.Context) {
 	hostname, err := os.Hostname()
