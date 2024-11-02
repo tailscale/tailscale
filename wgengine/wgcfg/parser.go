@@ -124,7 +124,13 @@ func (cfg *Config) handleDeviceLine(k, value mem.RO, valueBytes []byte) error {
 		if err != nil {
 			return err
 		}
-	case k.EqualString("listen_port") || k.EqualString("fwmark"):
+	case k.EqualString("listen_port"):
+		port, err := mem.ParseUint(value, 10, 16)
+		if err != nil {
+			return fmt.Errorf("failed to parse listen_port: %w", err)
+		}
+		cfg.ListenPort = uint16(port)
+	case k.EqualString("fwmark"):
 	// ignore
 	default:
 		return fmt.Errorf("unexpected IpcGetOperation key: %q", k.StringCopy())
