@@ -42,6 +42,9 @@ func (cfg *Config) ToUAPI(logf logger.Logf, w io.Writer, prev *Config) error {
 	if !prev.PrivateKey.Equal(cfg.PrivateKey) {
 		set("private_key", cfg.PrivateKey.UntypedHexString())
 	}
+	if prev.ListenPort != cfg.ListenPort {
+		setUint16("listen_port", cfg.ListenPort)
+	}
 
 	old := make(map[key.NodePublic]Peer)
 	for _, p := range prev.Peers {

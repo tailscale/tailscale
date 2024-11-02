@@ -39,6 +39,7 @@ var _ConfigCloneNeedsRegeneration = Config(struct {
 	NodeID         tailcfg.StableNodeID
 	PrivateKey     key.NodePrivate
 	Addresses      []netip.Prefix
+	ListenPort     uint16
 	MTU            uint16
 	DNS            []netip.Addr
 	Peers          []Peer

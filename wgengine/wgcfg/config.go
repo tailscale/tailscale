@@ -21,6 +21,7 @@ type Config struct {
 	NodeID     tailcfg.StableNodeID
 	PrivateKey key.NodePrivate
 	Addresses  []netip.Prefix
+	ListenPort uint16 // not used by Tailscale's conn.Bind implementation
 	MTU        uint16
 	DNS        []netip.Addr
 	Peers      []Peer
