@@ -640,6 +640,28 @@ func (lp *lpServer) startTSNet(ctx context.Context) {
 	}
 }
 
+// filteredDNSQuery wraps the MagicDNS server response but filters out A record responses
+// for *.ts.net if IPv4 is not enabled. This is so the e.g. a phone on a CGNAT-using
+// network doesn't prefer the "A" record over AAAA when dialing and dial into the
+// the carrier's CGNAT range into of the AAAA record into the Tailscale IPv6 ULA range.
+func (lp *lpServer) filteredDNSQuery(ctx context.Context, q []byte, family string, from netip.AddrPort) ([]byte, error) {
+	m, ok := lp.tsnet.Sys().DNSManager.GetOK()
+	if !ok {
+		return nil, errors.New("DNSManager not ready")
+	}
+	res, err := m.Query(ctx, q, family, from)
+	if err != nil {
+		return nil, err
+	}
+	if *includeV4 {
+		return res, nil
+	}
+
+	// TODO(bradfitz): filter out *.ts.net A records.
+
+	return res, nil
+}
+
 // caller owns the raw memory.
 func (lp *lpServer) handleDNSUDPQuery(raw []byte) {
 	var pkt packet.Parsed
@@ -647,12 +669,8 @@ func (lp *lpServer) handleDNSUDPQuery(raw []byte) {
 	if pkt.IPProto != ipproto.UDP || pkt.Dst.Port() != 53 || !lp.c.IsLocalIP(pkt.Dst.Addr()) {
 		panic("caller error")
 	}
-	m, ok := lp.tsnet.Sys().DNSManager.GetOK()
-	if !ok {
-		log.Printf("DNSManager.Get: not ready")
-		return
-	}
-	dnsRes, err := m.Query(context.Background(), pkt.Payload(), "udp", pkt.Src)
+
+	dnsRes, err := lp.filteredDNSQuery(context.Background(), pkt.Payload(), "udp", pkt.Src)
 	if err != nil {
 		log.Printf("DNS query error: %v", err)
 		return
