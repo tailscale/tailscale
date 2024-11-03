@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -232,6 +233,24 @@ func (lp *lpServer) initNetstack(ctx context.Context) error {
 		return fmt.Errorf("CreateNIC: %v", tcpipProblem)
 	}
 	ns.SetPromiscuousMode(nicID, true)
+
+	lp.mu.Lock()
+	v4, v6 := lp.c.V4, lp.c.V6
+	lp.mu.Unlock()
+	prefix := tcpip.AddrFrom4Slice(v4.AsSlice()).WithPrefix()
+	if tcpProb := ns.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
+		Protocol:          ipv4.ProtocolNumber,
+		AddressWithPrefix: prefix,
+	}, stack.AddressProperties{}); tcpProb != nil {
+		return errors.New(tcpProb.String())
+	}
+	prefix = tcpip.AddrFrom16Slice(v6.AsSlice()).WithPrefix()
+	if tcpProb := ns.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
+		Protocol:          ipv6.ProtocolNumber,
+		AddressWithPrefix: prefix,
+	}, stack.AddressProperties{}); tcpProb != nil {
+		return errors.New(tcpProb.String())
+	}
 
 	ipv4Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 4)), tcpip.MaskFromBytes(make([]byte, 4)))
 	if err != nil {
