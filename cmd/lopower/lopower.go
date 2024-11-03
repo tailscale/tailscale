@@ -476,6 +476,12 @@ func (lp *lpServer) acceptTCP(r *tcp.ForwarderRequest) {
 	tc := gonet.NewTCPConn(&wq, ep)
 	defer tc.Close()
 	r.Complete(false)
+
+	if destPort == 53 && lp.c.IsLocalIP(destIP) {
+		// TODO(bradfitz,maisem): do TCP DNS server here.
+		// ...
+	}
+
 	errc := make(chan error, 2)
 	go func() { _, err := io.Copy(tc, c); errc <- err }()
 	go func() { _, err := io.Copy(c, tc); errc <- err }()
