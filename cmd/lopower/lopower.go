@@ -54,11 +54,13 @@ import (
 )
 
 var (
-	wgListenPort = flag.Int("wg-port", 51820, "port number to listen on for WireGuard from the client")
-	confDir      = flag.String("dir", filepath.Join(os.Getenv("HOME"), ".config/lopower"), "directory to store configuration in")
-	wgPubHost    = flag.String("wg-host", "0.0.0.1", "public IP address of lopower's WireGuard server")
-	qrListenAddr = flag.String("qr-listen", "127.0.0.1:8014", "HTTP address to serve a QR code for client's WireGuard configuration, or empty for none")
-	printConfig  = flag.Bool("print-config", true, "print the client's WireGuard configuration to stdout on startup")
+	wgListenPort   = flag.Int("wg-port", 51820, "port number to listen on for WireGuard from the client")
+	confDir        = flag.String("dir", filepath.Join(os.Getenv("HOME"), ".config/lopower"), "directory to store configuration in")
+	wgPubHost      = flag.String("wg-host", "0.0.0.1", "IP address of lopower's WireGuard server that's accessible from the client")
+	qrListenAddr   = flag.String("qr-listen", "127.0.0.1:8014", "HTTP address to serve a QR code for client's WireGuard configuration, or empty for none")
+	printConfig    = flag.Bool("print-config", true, "print the client's WireGuard configuration to stdout on startup")
+	includeV4      = flag.Bool("include-v4", true, "include IPv4 (CGNAT) in the WireGuard configuration; incompatible with some carriers. IPv6 is always included.")
+	verbosePackets = flag.Bool("verbose-packets", false, "log packet contents")
 )
 
 type config struct {
@@ -238,11 +240,13 @@ func (lp *lpServer) initNetstack(ctx context.Context) error {
 	v4, v6 := lp.c.V4, lp.c.V6
 	lp.mu.Unlock()
 	prefix := tcpip.AddrFrom4Slice(v4.AsSlice()).WithPrefix()
-	if tcpProb := ns.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
-		Protocol:          ipv4.ProtocolNumber,
-		AddressWithPrefix: prefix,
-	}, stack.AddressProperties{}); tcpProb != nil {
-		return errors.New(tcpProb.String())
+	if *includeV4 {
+		if tcpProb := ns.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
+			Protocol:          ipv4.ProtocolNumber,
+			AddressWithPrefix: prefix,
+		}, stack.AddressProperties{}); tcpProb != nil {
+			return errors.New(tcpProb.String())
+		}
 	}
 	prefix = tcpip.AddrFrom16Slice(v6.AsSlice()).WithPrefix()
 	if tcpProb := ns.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
@@ -261,13 +265,18 @@ func (lp *lpServer) initNetstack(ctx context.Context) error {
 		return fmt.Errorf("could not create IPv6 subnet: %v", err)
 	}
 
-	ns.SetRouteTable([]tcpip.Route{{
+	routes := []tcpip.Route{{
 		Destination: ipv4Subnet,
 		NIC:         nicID,
 	}, {
 		Destination: ipv6Subnet,
 		NIC:         nicID,
-	}})
+	}}
+	if !*includeV4 {
+		routes = routes[1:]
+	}
+
+	ns.SetRouteTable(routes)
 
 	const tcpReceiveBufferSize = 0 // default
 	const maxInFlightConnectionAttempts = 8192
@@ -490,8 +499,12 @@ func (lp *lpServer) wgConfigForQR() string {
 	pubBin = pubBin[2:] // trim off "np"
 	pubb64 := base64.StdEncoding.EncodeToString(pubBin)
 
-	fmt.Fprintf(&b, "[Peer]\nPublicKey = %v\n", pubb64)
-	fmt.Fprintf(&b, "AllowedIPs = %v/32,%v/128,%v,%v\n", lp.c.V4, lp.c.V6, tsaddr.TailscaleULARange(), tsaddr.CGNATRange())
+	fmt.Fprintf(&b, "\n[Peer]\nPublicKey = %v\n", pubb64)
+	if *includeV4 {
+		fmt.Fprintf(&b, "AllowedIPs = %v/32,%v/128,%v,%v\n", lp.c.V4, lp.c.V6, tsaddr.TailscaleULARange(), tsaddr.CGNATRange())
+	} else {
+		fmt.Fprintf(&b, "AllowedIPs = %v/128,%v\n", lp.c.V6, tsaddr.TailscaleULARange())
+	}
 	fmt.Fprintf(&b, "Endpoint = %v\n", net.JoinHostPort(*wgPubHost, fmt.Sprint(*wgListenPort)))
 
 	return b.String()
@@ -550,6 +563,9 @@ func (t *nsTUN) Read(out [][]byte, sizes []int, offset int) (int, error) {
 		n := copy(pkt, resPacket.NetworkHeader().Slice())
 		n += copy(pkt[n:], resPacket.TransportHeader().Slice())
 		n += copy(pkt[n:], resPacket.Data().AsRange().ToSlice())
+		if *verbosePackets {
+			log.Printf("[v] nsTUN.Read (out): % 02x", pkt[:n])
+		}
 		sizes[0] = n
 		return 1, nil
 	}
@@ -566,6 +582,9 @@ func (t *nsTUN) Write(buffs [][]byte, offset int) (int, error) {
 		packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 			Payload: buffer.MakeWithData(slices.Clone(buff[offset:])),
 		})
+		if *verbosePackets {
+			log.Printf("[v] nsTUN.Write (in): % 02x", buff[offset:])
+		}
 		if pkt.IPVersion == 4 {
 			t.lp.linkEP.InjectInbound(ipv4.ProtocolNumber, packetBuf)
 		} else if pkt.IPVersion == 6 {
