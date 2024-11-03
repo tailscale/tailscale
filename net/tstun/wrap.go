@@ -863,7 +863,22 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 			return res, gro
 		}
 	}
+	if resp := t.filtRunOut(p, pc); resp != filter.Accept {
+		return resp, gro
+	}
 
+	if t.PostFilterPacketOutboundToWireGuard != nil {
+		if res := t.PostFilterPacketOutboundToWireGuard(p, t); res.IsDrop() {
+			return res, gro
+		}
+	}
+	return filter.Accept, gro
+}
+
+// filtRunOut runs the outbound packet filter on p.
+// It uses pc to determine if the packet is to a jailed peer and should be
+// filtered with the jailed filter.
+func (t *Wrapper) filtRunOut(p *packet.Parsed, pc *peerConfigTable) filter.Response {
 	// If the outbound packet is to a jailed peer, use our jailed peer
 	// packet filter.
 	var filt *filter.Filter
@@ -873,7 +888,7 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 		filt = t.filter.Load()
 	}
 	if filt == nil {
-		return filter.Drop, gro
+		return filter.Drop
 	}
 
 	if resp, reason := filt.RunOut(p, t.filterFlags); resp != filter.Accept {
@@ -883,15 +898,9 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 				Reason: reason,
 			}, 1)
 		}
-		return filter.Drop, gro
+		return filter.Drop
 	}
-
-	if t.PostFilterPacketOutboundToWireGuard != nil {
-		if res := t.PostFilterPacketOutboundToWireGuard(p, t); res.IsDrop() {
-			return res, gro
-		}
-	}
-	return filter.Accept, gro
+	return filter.Accept
 }
 
 // noteActivity records that there was a read or write at the current time.
@@ -1069,6 +1078,11 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(pkt)
+	response, _ := t.filterPacketOutboundToWireGuard(p, pc, nil)
+	if response != filter.Accept {
+		metricPacketOutDrop.Add(1)
+		return
+	}
 
 	invertGSOChecksum(pkt, gso)
 	pc.snat(p)
