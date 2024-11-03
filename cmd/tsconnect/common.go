@@ -150,6 +150,7 @@ func runEsbuildServe(buildOptions esbuild.BuildOptions) {
 		log.Fatalf("Cannot start esbuild server: %v", err)
 	}
 	log.Printf("Listening on http://%s:%d\n", result.Host, result.Port)
+	select {}
 }
 
 func runEsbuild(buildOptions esbuild.BuildOptions) esbuild.BuildResult {
