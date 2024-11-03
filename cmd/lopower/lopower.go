@@ -623,14 +623,19 @@ func (lp *lpServer) startTSNet(ctx context.Context) {
 		log.Fatal(err)
 	}
 
-	lp.tsnet = &tsnet.Server{
+	ts := &tsnet.Server{
 		Dir:       filepath.Join(lp.dir, "tsnet"),
 		Hostname:  hostname,
 		UserLogf:  log.Printf,
 		Ephemeral: false,
 	}
+	lp.tsnet = ts
+	ts.PreStart = func() error {
+		ts.Sys().DNSManager.Get().SetForceAAAA(true)
+		return nil
+	}
 
-	if _, err := lp.tsnet.Up(ctx); err != nil {
+	if _, err := ts.Up(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

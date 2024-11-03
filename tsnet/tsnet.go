@@ -121,6 +121,11 @@ type Server struct {
 	// field at zero unless you know what you are doing.
 	Port uint16
 
+	// PreStart is an optional hook to run just before LocalBackend.Start,
+	// to reconfigure internals. If it returns an error, Server.Start
+	// will return that error, wrapper.
+	PreStart func() error
+
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	initOnce         sync.Once
@@ -616,6 +621,13 @@ func (s *Server) start() (reterr error) {
 	prefs.ControlURL = s.ControlURL
 	prefs.RunWebClient = s.RunWebClient
 	authKey := s.getAuthKey()
+
+	if f := s.PreStart; f != nil {
+		if err := f(); err != nil {
+			return fmt.Errorf("PreStart: %w", err)
+		}
+	}
+
 	err = lb.Start(ipn.Options{
 		UpdatePrefs: prefs,
 		AuthKey:     authKey,

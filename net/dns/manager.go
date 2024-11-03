@@ -63,7 +63,8 @@ type Manager struct {
 	mu sync.Mutex // guards following
 	// config is the last configuration we successfully compiled or nil if there
 	// was any failure applying the last configuration.
-	config *Config
+	config    *Config
+	forceAAAA bool // whether client wants MagicDNS AAAA even if unsure of host's IPv6 status
 }
 
 // NewManagers created a new manager from the given config.
@@ -126,6 +127,18 @@ func (m *Manager) Set(cfg Config) error {
 // GetBaseConfig returns the current base OS DNS configuration as provided by the OSConfigurator.
 func (m *Manager) GetBaseConfig() (OSConfig, error) {
 	return m.os.GetBaseConfig()
+}
+
+func (m *Manager) GetForceAAAA() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.forceAAAA
+}
+
+func (m *Manager) SetForceAAAA(v bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forceAAAA = v
 }
 
 // setLocked sets the DNS configuration.
