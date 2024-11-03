@@ -63,8 +63,9 @@ type Manager struct {
 	mu sync.Mutex // guards following
 	// config is the last configuration we successfully compiled or nil if there
 	// was any failure applying the last configuration.
-	config    *Config
-	forceAAAA bool // whether client wants MagicDNS AAAA even if unsure of host's IPv6 status
+	config                 *Config
+	forceAAAA              bool // whether client wants MagicDNS AAAA even if unsure of host's IPv6 status
+	forceFallbackResolvers []*dnstype.Resolver
 }
 
 // NewManagers created a new manager from the given config.
@@ -141,6 +142,16 @@ func (m *Manager) SetForceAAAA(v bool) {
 	m.forceAAAA = v
 }
 
+// SetForceFallbackResolvers sets the resolvers to use to override
+// the fallback resolvers if the control plane doesn't send any.
+//
+// It takes ownership of the provided slice.
+func (m *Manager) SetForceFallbackResolvers(resolvers []*dnstype.Resolver) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forceFallbackResolvers = resolvers
+}
+
 // setLocked sets the DNS configuration.
 //
 // m.mu must be held.
@@ -157,6 +168,10 @@ func (m *Manager) setLocked(cfg Config) error {
 	rcfg, ocfg, err := m.compileConfig(cfg)
 	if err != nil {
 		return err
+	}
+
+	if _, ok := rcfg.Routes["."]; !ok && len(m.forceFallbackResolvers) > 0 {
+		rcfg.Routes["."] = m.forceFallbackResolvers
 	}
 
 	m.logf("Resolvercfg: %v", logger.ArgWriter(func(w *bufio.Writer) {

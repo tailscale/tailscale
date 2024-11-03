@@ -50,6 +50,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tsnet"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -638,7 +639,22 @@ func (lp *lpServer) startTSNet(ctx context.Context) {
 	}
 	lp.tsnet = ts
 	ts.PreStart = func() error {
-		ts.Sys().DNSManager.Get().SetForceAAAA(true)
+		dnsMgr := ts.Sys().DNSManager.Get()
+		dnsMgr.SetForceAAAA(true)
+
+		// Force fallback resolvers to Google and Cloudflare as an ultimate
+		// fallback in case the Tailnet DNS servers are not set/forced. Normally
+		// tailscaled would resort to using the OS DNS resolvers, but
+		// tsnet/userspace binaries don't do that (yet?), so this is the
+		// "Opionated" part of the "LOPOWER" name. The opinion is just using
+		// big providers known to work. (Normally stock tailscaled never
+		// makes such opinions and never defaults to any big provider, unless
+		// you're already running on that big provider's network so have
+		// already indicated you're fine with them.))
+		dnsMgr.SetForceFallbackResolvers([]*dnstype.Resolver{
+			{Addr: "8.8.8.8"},
+			{Addr: "1.1.1.1"},
+		})
 		return nil
 	}
 
