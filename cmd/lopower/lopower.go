@@ -33,6 +33,7 @@ import (
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -655,17 +656,37 @@ func (lp *lpServer) filteredDNSQuery(ctx context.Context, q []byte, family strin
 	if !ok {
 		return nil, errors.New("DNSManager not ready")
 	}
-	res, err := m.Query(ctx, q, family, from)
+	origRes, err := m.Query(ctx, q, family, from)
 	if err != nil {
 		return nil, err
 	}
 	if *includeV4 {
-		return res, nil
+		return origRes, nil
 	}
 
-	// TODO(bradfitz): filter out *.ts.net A records.
+	// Filter out *.ts.net A records.
 
-	return res, nil
+	var msg dnsmessage.Message
+	if err := msg.Unpack(origRes); err != nil {
+		return nil, err
+	}
+	newAnswers := msg.Answers[:0]
+	for _, a := range msg.Answers {
+		name := a.Header.Name.String()
+		if a.Header.Type == dnsmessage.TypeA && strings.HasSuffix(name, ".ts.net.") {
+			// Drop.
+			continue
+		}
+		newAnswers = append(newAnswers, a)
+	}
+
+	if len(newAnswers) == len(msg.Answers) {
+		// Nothing was filtered. No need to reencode it.
+		return origRes, nil
+	}
+
+	msg.Answers = newAnswers
+	return msg.Pack()
 }
 
 // caller owns the raw memory.
