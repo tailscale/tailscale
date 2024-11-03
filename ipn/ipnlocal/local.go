@@ -4911,7 +4911,13 @@ func (b *LocalBackend) authReconfig() {
 	disableSubnetsIfPAC := cn.SelfHasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	userDialUseRoutes := cn.SelfHasCap(tailcfg.NodeAttrUserDialUseRoutes)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
-	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, b.logf, version.OS())
+
+	var forceAAAA bool
+	if dm, ok := b.sys.DNSManager.GetOK(); ok {
+		forceAAAA = dm.GetForceAAAA()
+	}
+	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, forceAAAA, b.logf, version.OS())
+
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
 	closing := b.shutdownCalled
@@ -5018,10 +5024,10 @@ func shouldUseOneCGNATRoute(logf logger.Logf, mon *netmon.Monitor, controlKnobs 
 	return false
 }
 
-func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
+func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired, forceAAAA bool, logf logger.Logf, versionOS string) *dns.Config {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, logf, versionOS)
+	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, forceAAAA, logf, versionOS)
 }
 
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
@@ -5029,7 +5035,7 @@ func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool,
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
+func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired, forceAAAA bool, logf logger.Logf, versionOS string) *dns.Config {
 	if nm == nil {
 		return nil
 	}
@@ -5092,7 +5098,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			// https://github.com/tailscale/tailscale/issues/1152
 			// tracks adding the right capability reporting to
 			// enable AAAA in MagicDNS.
-			if addr.Addr().Is6() && have4 {
+			if addr.Addr().Is6() && have4 && !forceAAAA {
 				continue
 			}
 			ips = append(ips, addr.Addr())

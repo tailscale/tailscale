@@ -352,7 +352,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			verOS := cmp.Or(tt.os, "linux")
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, verOS)
+			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, false, log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
