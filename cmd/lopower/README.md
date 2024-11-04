@@ -31,7 +31,7 @@ Tailscale LOPOWER is a proxy that you run nearby that bridges a low-power WireGu
 
 ## TODO
 
-* provisioning more than one low-powered device is possible, but requires manual config file edits. It should be possible to enroll multuple devices (including QR code support) easily.
+* provisioning more than one low-powered device is possible, but requires manual config file edits. It should be possible to enroll multiple devices (including QR code support) easily.
 * incoming connections (from Tailscale to `lopower`) don't yet forward to the low-powered devices. When there's only one low-powered device, the mapping policy is obvious. When there are multiple, it's not as obvious. Maybe the answer is supporting [4via6 subnet routers](https://tailscale.com/kb/1201/4via6-subnets).
 
 ## Installing
