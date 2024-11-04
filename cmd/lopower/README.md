@@ -1,6 +1,6 @@
 # Tailscale LOPOWER
 
-"Little Opionated Proxy Over Wireguard-encrypted Routes"
+"Little Opinionated Proxy Over Wireguard-encrypted Routes"
 
 **STATUS**: in-development alpha (as of 2024-11-03)
  
