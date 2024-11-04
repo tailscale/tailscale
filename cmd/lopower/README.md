@@ -22,4 +22,5 @@ Tailscale LOPOWER is a proxy that you run nearby that bridges a low-power WireGu
 ## Limitations
 
 * this runs in userspace using gVisor's netstack. That means it's portable (and doesn't require kernel/system configuration), but that does mean it doesn't operate at a packet level but rather it stitches together two separate TCP (or UDP) flows and doesn't support IP protocols such as SCTP or other things that aren't TCP or UDP.
-* the standard WireGuard configuration doesn't support specifying DNS search domains, so resolving bare names like the `go` in `http://go/foo` won't work and you need
+* the standard WireGuard configuration doesn't support specifying DNS search domains, so resolving bare names like the `go` in `http://go/foo` won't work and you need to resolve names using the fully qualified `go.your-tailnet.ts.net` names.
+* since it's based on userspace tsnet mode, it doesn't pick up your system DNS configuration (yet?) and instead resolves non-tailnet DNS names using either your "Override DNS" tailnet settings for the global DNS resolver, or else defaults to `8.8.8.8` and `1.1.1.1` (using DoH) if that isn't set.
