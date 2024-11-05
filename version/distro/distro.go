@@ -6,13 +6,12 @@ package distro
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"runtime"
 	"strconv"
 
 	"tailscale.com/types/lazy"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 )
 
 type Distro string
@@ -132,18 +131,19 @@ func DSMVersion() int {
 			return v
 		}
 		// But when run from the command line, we have to read it from the file:
-		lineread.File("/etc/VERSION", func(line []byte) error {
+		for lr := range lineiter.File("/etc/VERSION") {
+			line, err := lr.Value()
+			if err != nil {
+				break // but otherwise ignore
+			}
 			line = bytes.TrimSpace(line)
 			if string(line) == `majorversion="7"` {
-				v = 7
-				return io.EOF
+				return 7
 			}
 			if string(line) == `majorversion="6"` {
-				v = 6
-				return io.EOF
+				return 6
 			}
-			return nil
-		})
-		return v
+		}
+		return 0
 	})
 }
