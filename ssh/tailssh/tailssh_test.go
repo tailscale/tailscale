@@ -48,7 +48,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cibuild"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 	"tailscale.com/util/must"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -1123,14 +1123,11 @@ func TestSSH(t *testing.T) {
 
 func parseEnv(out []byte) map[string]string {
 	e := map[string]string{}
-	lineread.Reader(bytes.NewReader(out), func(line []byte) error {
-		i := bytes.IndexByte(line, '=')
-		if i == -1 {
-			return nil
+	for line := range lineiter.Bytes(out) {
+		if i := bytes.IndexByte(line, '='); i != -1 {
+			e[string(line[:i])] = string(line[i+1:])
 		}
-		e[string(line[:i])] = string(line[i+1:])
-		return nil
-	})
+	}
 	return e
 }
 
