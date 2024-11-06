@@ -108,6 +108,7 @@ var handler = map[string]localAPIHandler{
 	"goroutines":                  (*Handler).serveGoroutines,
 	"handle-push-message":         (*Handler).serveHandlePushMessage,
 	"id-token":                    (*Handler).serveIDToken,
+	"lameduck":                    (*Handler).lameDuck,
 	"login-interactive":           (*Handler).serveLoginInteractive,
 	"logout":                      (*Handler).serveLogout,
 	"logtap":                      (*Handler).serveLogTap,
@@ -950,6 +951,22 @@ func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	servePprofFunc(w, r)
+}
+
+// lameDuck is the handler for local API /lameduck endpoint that shuts down control client, so that node no longer
+// communicates with control. Doing this makes control consider this node inactive. This can be used before shutting
+// down a replica of HA subnet  router or app connector deployments to ensure that control tells the peers to switch
+// over to another replica whilst still maintaining th existing peer connections.
+func (h *Handler) lameDuck(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	h.b.LameDuck()
 }
 
 func (h *Handler) reloadConfig(w http.ResponseWriter, r *http.Request) {
