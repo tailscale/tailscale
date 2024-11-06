@@ -47,7 +47,7 @@ const (
 	reasonProxyGroupInvalid        = "ProxyGroupInvalid"
 )
 
-var gaugeProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupCount)
+var gaugeProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
 
 // ProxyGroupReconciler ensures cluster resources for a ProxyGroup definition.
 type ProxyGroupReconciler struct {
