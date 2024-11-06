@@ -113,6 +113,8 @@ spec:
                                     resources created for this Connector. If unset, the operator will
                                     create resources with the default configuration.
                                 type: string
+                            replicas:
+                                type: integer
                             subnetRouter:
                                 description: |-
                                     SubnetRouter defines subnet routes that the Connector node should
@@ -149,6 +151,8 @@ spec:
                                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                                     type: string
                                 type: array
+                        required:
+                            - replicas
                         type: object
                         x-kubernetes-validations:
                             - message: A Connector needs to be either an exit node or a subnet router, or both.

@@ -372,6 +372,14 @@ func (i *iptablesRunner) AddDNATRule(origDst, dst netip.Addr) error {
 	return table.Insert("nat", "PREROUTING", 1, "--destination", origDst.String(), "-j", "DNAT", "--to-destination", dst.String())
 }
 
+func (i *iptablesRunner) AddDropRule(dst netip.Addr) error {
+	table := i.getIPTByAddr(dst)
+	if err := table.Insert("filter", "OUTPUT", 1, "--destination", dst.String(), "-j", "DROP"); err != nil {
+		return err
+	}
+	return table.Insert("filter", "INPUT", 1, "--source", dst.String(), "-j", "DROP")
+}
+
 // EnsureSNATForDst sets up firewall to ensure that all traffic aimed for dst, has its source ip set to src:
 // - creates a SNAT rule if not already present
 // - ensures that any no longer valid SNAT rules for the same dst are removed

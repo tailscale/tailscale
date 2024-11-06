@@ -57,6 +57,17 @@ type ConnectorList struct {
 // ConnectorSpec describes a Tailscale node to be deployed in the cluster.
 // +kubebuilder:validation:XValidation:rule="has(self.subnetRouter) || self.exitNode == true",message="A Connector needs to be either an exit node or a subnet router, or both."
 type ConnectorSpec struct {
+	// SubnetRouter defines subnet routes that the Connector node should
+	// expose to tailnet. If unset, none are exposed.
+	// https://tailscale.com/kb/1019/subnets/
+	// +optional
+	SubnetRouter *SubnetRouter `json:"subnetRouter"`
+	// ExitNode defines whether the Connector node should act as a
+	// Tailscale exit node. Defaults to false.
+	// https://tailscale.com/kb/1103/exit-nodes
+	// +optional
+	ExitNode bool `json:"exitNode"`
+	Replicas *int `json:"replicas"`
 	// Tags that the Tailscale node will be tagged with.
 	// Defaults to [tag:k8s].
 	// To autoapprove the subnet routes or exit node defined by a Connector,
@@ -82,16 +93,6 @@ type ConnectorSpec struct {
 	// create resources with the default configuration.
 	// +optional
 	ProxyClass string `json:"proxyClass,omitempty"`
-	// SubnetRouter defines subnet routes that the Connector node should
-	// expose to tailnet. If unset, none are exposed.
-	// https://tailscale.com/kb/1019/subnets/
-	// +optional
-	SubnetRouter *SubnetRouter `json:"subnetRouter"`
-	// ExitNode defines whether the Connector node should act as a
-	// Tailscale exit node. Defaults to false.
-	// https://tailscale.com/kb/1103/exit-nodes
-	// +optional
-	ExitNode bool `json:"exitNode"`
 }
 
 // SubnetRouter defines subnet routes that should be exposed to tailnet via a

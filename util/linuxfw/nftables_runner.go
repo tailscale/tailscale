@@ -570,6 +570,8 @@ type NetfilterRunner interface {
 	// DelMagicsockPortRule removes the rule created by AddMagicsockPortRule,
 	// if it exists.
 	DelMagicsockPortRule(port uint16, network string) error
+
+	AddDropRule(dst netip.Addr) error
 }
 
 // New creates a NetfilterRunner, auto-detecting whether to use
@@ -691,6 +693,9 @@ func (n *nftablesRunner) HasIPV6NAT() bool {
 // filter table.
 func (n *nftablesRunner) HasIPV6Filter() bool {
 	return n.v6Available
+}
+func (n *nftablesRunner) AddDropRule(addr netip.Addr) error {
+	return nil
 }
 
 // findRule iterates through the rules to find the rule with matching expressions.

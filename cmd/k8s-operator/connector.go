@@ -183,6 +183,10 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 			isExitNode: cn.Spec.ExitNode,
 		},
 		ProxyClassName: proxyClass,
+		Replicas:       1,
+	}
+	if cn.Spec.Replicas != nil {
+		sts.Replicas = int32(*cn.Spec.Replicas)
 	}
 
 	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
@@ -213,21 +217,21 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		return err
 	}
 
-	_, tsHost, ips, err := a.ssr.DeviceInfo(ctx, crl)
-	if err != nil {
-		return err
-	}
+	// _, tsHost, ips, err := a.ssr.DeviceInfo(ctx, crl)
+	// if err != nil {
+	// 	return err
+	// }
 
-	if tsHost == "" {
-		logger.Debugf("no Tailscale hostname known yet, waiting for connector pod to finish auth")
-		// No hostname yet. Wait for the connector pod to auth.
-		cn.Status.TailnetIPs = nil
-		cn.Status.Hostname = ""
-		return nil
-	}
+	// if tsHost == "" {
+	// 	logger.Debugf("no Tailscale hostname known yet, waiting for connector pod to finish auth")
+	// 	// No hostname yet. Wait for the connector pod to auth.
+	// 	cn.Status.TailnetIPs = nil
+	// 	cn.Status.Hostname = ""
+	// 	return nil
+	// }
 
-	cn.Status.TailnetIPs = ips
-	cn.Status.Hostname = tsHost
+	// cn.Status.TailnetIPs = ips
+	// cn.Status.Hostname = tsHost
 
 	return nil
 }

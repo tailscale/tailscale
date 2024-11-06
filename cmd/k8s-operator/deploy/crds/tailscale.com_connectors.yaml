@@ -65,6 +65,8 @@ spec:
                 More info:
                 https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
               type: object
+              required:
+                - replicas
               properties:
                 exitNode:
                   description: |-
@@ -88,6 +90,8 @@ spec:
                     resources created for this Connector. If unset, the operator will
                     create resources with the default configuration.
                   type: string
+                replicas:
+                  type: integer
                 subnetRouter:
                   description: |-
                     SubnetRouter defines subnet routes that the Connector node should

@@ -170,11 +170,6 @@ func (s *settings) validate() error {
 	if s.EnableForwardingOptimizations && s.UserspaceMode {
 		return errors.New("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS is not supported in userspace mode")
 	}
-	if s.HealthCheckAddrPort != "" {
-		if _, err := netip.ParseAddrPort(s.HealthCheckAddrPort); err != nil {
-			return fmt.Errorf("error parsing TS_HEALTH_CHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
-		}
-	}
 	return nil
 }
 

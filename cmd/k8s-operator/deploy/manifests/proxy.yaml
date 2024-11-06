@@ -9,6 +9,7 @@ spec:
     metadata:
       deletionGracePeriodSeconds: 10
     spec:
+      terminationGracePeriodSeconds: 120
       serviceAccountName: proxies
       initContainers:
         - name: sysctler
@@ -22,6 +23,11 @@ spec:
           memory: 1Mi
       containers:
         - name: tailscale
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /terminate
+                port: 8081
           imagePullPolicy: Always
           env:
             - name: TS_USERSPACE

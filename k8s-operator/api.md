@@ -83,11 +83,12 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
+| `subnetRouter` _[SubnetRouter](#subnetrouter)_ | SubnetRouter defines subnet routes that the Connector node should<br />expose to tailnet. If unset, none are exposed.<br />https://tailscale.com/kb/1019/subnets/ |  |  |
+| `exitNode` _boolean_ | ExitNode defines whether the Connector node should act as a<br />Tailscale exit node. Defaults to false.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
+| `replicas` _integer_ |  |  |  |
 | `tags` _[Tags](#tags)_ | Tags that the Tailscale node will be tagged with.<br />Defaults to [tag:k8s].<br />To autoapprove the subnet routes or exit node defined by a Connector,<br />you can configure Tailscale ACLs to give these tags the necessary<br />permissions.<br />See https://tailscale.com/kb/1337/acl-syntax#autoapprovers.<br />If you specify custom tags here, you must also make the operator an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a Connector node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
 | `hostname` _[Hostname](#hostname)_ | Hostname is the tailnet hostname that should be assigned to the<br />Connector node. If unset, hostname defaults to <connector<br />name>-connector. Hostname can contain lower case letters, numbers and<br />dashes, it must not start or end with a dash and must be between 2<br />and 63 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$` <br />Type: string <br /> |
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that<br />contains configuration options that should be applied to the<br />resources created for this Connector. If unset, the operator will<br />create resources with the default configuration. |  |  |
-| `subnetRouter` _[SubnetRouter](#subnetrouter)_ | SubnetRouter defines subnet routes that the Connector node should<br />expose to tailnet. If unset, none are exposed.<br />https://tailscale.com/kb/1019/subnets/ |  |  |
-| `exitNode` _boolean_ | ExitNode defines whether the Connector node should act as a<br />Tailscale exit node. Defaults to false.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
 
 
 #### ConnectorStatus

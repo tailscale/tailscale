@@ -307,6 +307,12 @@ authLoop:
 	if err != nil {
 		log.Fatalf("rewatching tailscaled for updates after auth: %v", err)
 	}
+	var nfr linuxfw.NetfilterRunner
+	// for this prototype
+	nfr, err = newNetfilterRunner(log.Printf)
+	if err != nil {
+		log.Fatalf("error creating new netfilter runner: %v", err)
+	}
 
 	var (
 		startupTasksDone       = false
@@ -323,19 +329,11 @@ authLoop:
 		certDomainChanged = make(chan bool, 1)
 
 		h             = &healthz{} // http server for the healthz endpoint
-		healthzRunner = sync.OnceFunc(func() { runHealthz(cfg.HealthCheckAddrPort, h) })
+		healthzRunner = sync.OnceFunc(func() { run(cfg.HealthCheckAddrPort, h, client) })
 	)
 	if cfg.ServeConfigPath != "" {
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
 	}
-	var nfr linuxfw.NetfilterRunner
-	if isL3Proxy(cfg) {
-		nfr, err = newNetfilterRunner(log.Printf)
-		if err != nil {
-			log.Fatalf("error creating new netfilter runner: %v", err)
-		}
-	}
-
 	// Setup for proxies that are configured to proxy to a target specified
 	// by a DNS name (TS_EXPERIMENTAL_DEST_DNS_NAME).
 	const defaultCheckPeriod = time.Minute * 10 // how often to check what IPs the DNS name resolves to
@@ -743,4 +741,8 @@ func tailscaledConfigFilePath() string {
 	}
 	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
 	return path.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
+}
+
+func preStopBlockNetmapUpdates(ctx context.Context, nfr linuxfw.NetfilterRunner) {
+	// figure out if we are a subnet router in HA mode
 }
