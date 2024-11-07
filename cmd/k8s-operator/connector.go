@@ -13,7 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
+	"errors"
+
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
 	corev1 "k8s.io/api/core/v1"
@@ -111,13 +112,12 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	oldCnStatus := cn.Status.DeepCopy()
 	setStatus := func(cn *tsapi.Connector, _ tsapi.ConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetConnectorCondition(cn, tsapi.ConnectorReady, status, reason, message, cn.Generation, a.clock, logger)
+		var updateErr error
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, cn.Status) {
 			// An error encountered here should get returned by the Reconcile function.
-			if updateErr := a.Client.Status().Update(ctx, cn); updateErr != nil {
-				err = errors.Wrap(err, updateErr.Error())
-			}
+			updateErr = a.Client.Status().Update(ctx, cn)
 		}
-		return res, err
+		return res, errors.Join(err, updateErr)
 	}
 
 	if !slices.Contains(cn.Finalizers, FinalizerName) {
@@ -285,7 +285,7 @@ func (a *ConnectorReconciler) validate(cn *tsapi.Connector) error {
 	// Connector fields are already validated at apply time with CEL validation
 	// on custom resource fields. The checks here are a backup in case the
 	// CEL validation breaks without us noticing.
-	if !(cn.Spec.SubnetRouter != nil || cn.Spec.ExitNode || cn.Spec.AppConnector != nil) {
+	if cn.Spec.SubnetRouter == nil && !cn.Spec.ExitNode && cn.Spec.AppConnector == nil {
 		return errors.New("invalid spec: a Connector must be configured as at least one of subnet router, exit node or app connector")
 	}
 	if (cn.Spec.SubnetRouter != nil || cn.Spec.ExitNode) && cn.Spec.AppConnector != nil {
@@ -308,30 +308,20 @@ func validateSubnetRouter(sb *tsapi.SubnetRouter) error {
 }
 
 func validateAppConnector(ac *tsapi.AppConnector) error {
-	if len(ac.Routes) == 0 {
-		return nil
-	}
 	return validateRoutes(ac.Routes)
 }
 
 func validateRoutes(routes tsapi.Routes) error {
-	var err error
+	var errs []error
 	for _, route := range routes {
 		pfx, e := netip.ParsePrefix(string(route))
 		if e != nil {
-			err = wrapErr(err, fmt.Sprintf("route %v is invalid: %v", route, err))
+			errs = append(errs, fmt.Errorf("route %v is invalid: %v", route, e))
 			continue
 		}
 		if pfx.Masked() != pfx {
-			err = wrapErr(err, fmt.Sprintf("route %s has non-address bits set; expected %s", pfx, pfx.Masked()))
+			errs = append(errs, fmt.Errorf("route %s has non-address bits set; expected %s", pfx, pfx.Masked()))
 		}
 	}
-	return err
-}
-
-func wrapErr(err error, msg string) error {
-	if err != nil {
-		return errors.Wrap(err, msg)
-	}
-	return errors.New(msg)
+	return errors.Join(errs...)
 }

@@ -97,17 +97,19 @@ spec:
                         properties:
                             appConnector:
                                 description: |-
-                                    AppConnector defines whether the Connector node should act as a Tailscale app connector. A Connector that is
+                                    AppConnector defines whether the Connector device should act as a Tailscale app connector. A Connector that is
                                     configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the
                                     Connector does not act as an app connector.
-                                    Note that the Connector only creates a Tailscale device that acts as an app connector. You will need to
-                                    configure the permissions and the domains separately via the Admin panel.
-                                    It is also your responsibility to enforce a predictable egress IP for the connector, for example by enforcing
-                                    that cluster egress traffic is routed via egress NAT with a static public IP address.
+                                    Note that you will need to manually configure the permissions and the domains for the app connector via the
+                                    Admin panel.
                                     Note also that the main tested and supported use case of this config option is to deploy an app connector on
                                     Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose
                                     cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have
                                     tested or optimised for.
+                                    If you are using the app connector to access SaaS applications because you need a predictable egress IP that
+                                    can be whitelisted, it is also your responsibility to ensure that cluster traffic from the connector flows
+                                    via that predictable IP, for example by enforcing that cluster egress traffic is routed via an egress NAT
+                                    device with a static IP address.
                                     https://tailscale.com/kb/1281/app-connectors
                                 properties:
                                     routes:
@@ -125,7 +127,8 @@ spec:
                                 type: object
                             exitNode:
                                 description: |-
-                                    ExitNode defines whether the Connector node should act as a Tailscale exit node. Defaults to false.
+                                    ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.
+                                    This field is mutually exclusive with the appConnector field.
                                     https://tailscale.com/kb/1103/exit-nodes
                                 type: boolean
                             hostname:
@@ -146,9 +149,11 @@ spec:
                                 type: string
                             subnetRouter:
                                 description: |-
-                                    SubnetRouter defines subnet routes that the Connector node should
-                                    expose to tailnet. If unset, none are exposed.
+                                    SubnetRouter defines subnet routes that the Connector device should
+                                    expose to tailnet as a Tailscale subnet router.
                                     https://tailscale.com/kb/1019/subnets/
+                                    If this field is unset, the device does not get configured as a Tailscale subnet router.
+                                    This field is mutually exclusive with the appConnector field.
                                 properties:
                                     advertiseRoutes:
                                         description: |-
@@ -184,7 +189,7 @@ spec:
                         x-kubernetes-validations:
                             - message: A Connector needs to have at least one of exit node, subnet router or app connector configured.
                               rule: has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true) || has(self.appConnector)
-                            - message: A Connector must not be both app connector and either of exit node or subnet router.
+                            - message: The appConnector field is mutually exclusive with exitNode and subnetRouter fields.
                               rule: '!((has(self.subnetRouter) || (has(self.exitNode)  && self.exitNode == true)) && has(self.appConnector))'
                     status:
                         description: |-
