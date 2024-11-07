@@ -23,10 +23,16 @@ import (
 	"tailscale.com/version"
 )
 
+// StaticStringVar returns a new expvar.Var that always returns s.
+func StaticStringVar(s string) expvar.Var {
+	var v any = s // box s into an interface just once
+	return expvar.Func(func() any { return v })
+}
+
 func init() {
 	expvar.Publish("process_start_unix_time", expvar.Func(func() any { return timeStart.Unix() }))
-	expvar.Publish("version", expvar.Func(func() any { return version.Long() }))
-	expvar.Publish("go_version", expvar.Func(func() any { return runtime.Version() }))
+	expvar.Publish("version", StaticStringVar(version.Long()))
+	expvar.Publish("go_version", StaticStringVar(runtime.Version()))
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() any { return int64(Uptime().Seconds()) }))
 	expvar.Publish("gauge_goroutines", expvar.Func(func() any { return runtime.NumGoroutine() }))
 }
