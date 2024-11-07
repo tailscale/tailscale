@@ -69,8 +69,8 @@ func startMeshWithHost(s *derp.Server, host string) error {
 		return d.DialContext(ctx, network, addr)
 	})
 
-	add := func(m derp.PeerPresentMessage) { s.AddPacketForwarder(m.Key, c) }
-	remove := func(m derp.PeerGoneMessage) { s.RemovePacketForwarder(m.Peer, c) }
+	add := func(m derp.PeerPresentMessage) { s.AddPacketForwarder(m.Key.Handle(), c) }
+	remove := func(m derp.PeerGoneMessage) { s.RemovePacketForwarder(m.Peer.Handle(), c) }
 	go c.RunWatchConnectionLoop(context.Background(), s.PublicKey(), logf, add, remove)
 	return nil
 }
