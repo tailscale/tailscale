@@ -1327,6 +1327,17 @@ func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConf
 	return nil
 }
 
+// DisconnectControl shuts down all connections to control, thus making control consider this node inactive. This can be
+// run on HA subnet router or app connector replicas before shutting them down to ensure peers get told to switch over
+// to another replica whilst there is still some grace period for the existing connections to terminate.
+func (lc *LocalClient) DisconnectControl(ctx context.Context) error {
+	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/disconnect-control", 200, nil, nil)
+	if err != nil {
+		return fmt.Errorf("error disconnecting control: %w", err)
+	}
+	return nil
+}
+
 // NetworkLockDisable shuts down network-lock across the tailnet.
 func (lc *LocalClient) NetworkLockDisable(ctx context.Context, secret []byte) error {
 	if _, err := lc.send(ctx, "POST", "/localapi/v0/tka/disable", 200, bytes.NewReader(secret)); err != nil {

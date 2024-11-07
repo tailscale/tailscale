@@ -800,6 +800,19 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
 }
 
+// DisconnectControl shuts down control client. This can be run before node shutdown to force control to consider this ndoe
+// inactive. This can be used to ensure that nodes that are HA subnet router or app connector replicas are shutting
+// down, clients switch over to other replicas whilst the existing connections are kept alive for some period of time.
+func (b *LocalBackend) DisconnectControl() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cc := b.resetControlClientLocked()
+	if cc == nil {
+		return
+	}
+	cc.Shutdown()
+}
+
 // captivePortalDetectionInterval is the duration to wait in an unhealthy state with connectivity broken
 // before running captive portal detection.
 const captivePortalDetectionInterval = 2 * time.Second

@@ -100,6 +100,7 @@ var handler = map[string]localAPIHandler{
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"dial":                        (*Handler).serveDial,
+	"disconnect-control":          (*Handler).disconnectControl,
 	"dns-osconfig":                (*Handler).serveDNSOSConfig,
 	"dns-query":                   (*Handler).serveDNSQuery,
 	"drive/fileserver-address":    (*Handler).serveDriveServerAddr,
@@ -950,6 +951,22 @@ func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	servePprofFunc(w, r)
+}
+
+// disconnectControl is the handler for local API /disconnect-control endpoint that shuts down control client, so that
+// node no longer communicates with control. Doing this makes control consider this node inactive. This can be used
+// before shutting down a replica of HA subnet  router or app connector deployments to ensure that control tells the
+// peers to switch over to another replica whilst still maintaining th existing peer connections.
+func (h *Handler) disconnectControl(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	h.b.DisconnectControl()
 }
 
 func (h *Handler) reloadConfig(w http.ResponseWriter, r *http.Request) {
