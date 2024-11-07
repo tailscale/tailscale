@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
-	"tailscale.com/control/controlhttp"
+	"tailscale.com/control/controlhttp/controlhttpserver"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
@@ -288,7 +288,7 @@ func (s *Server) serveNoiseUpgrade(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	noisePrivate := s.noisePrivKey
 	s.mu.Unlock()
-	cc, err := controlhttp.AcceptHTTP(ctx, w, r, noisePrivate, nil)
+	cc, err := controlhttpserver.AcceptHTTP(ctx, w, r, noisePrivate, nil)
 	if err != nil {
 		log.Printf("AcceptHTTP: %v", err)
 		return

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
-	"tailscale.com/control/controlhttp"
+	"tailscale.com/control/controlhttp/controlhttpserver"
 	"tailscale.com/internal/noiseconn"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -201,7 +201,7 @@ func (up *Upgrader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 
-	cbConn, err := controlhttp.AcceptHTTP(r.Context(), w, r, up.noiseKeyPriv, earlyWriteFn)
+	cbConn, err := controlhttpserver.AcceptHTTP(r.Context(), w, r, up.noiseKeyPriv, earlyWriteFn)
 	if err != nil {
 		up.logf("controlhttp: Accept: %v", err)
 		return
