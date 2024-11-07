@@ -21,6 +21,7 @@ type DepChecker struct {
 	GOOS    string            // optional
 	GOARCH  string            // optional
 	BadDeps map[string]string // package => why
+	Tags    string            // comma-separated
 }
 
 func (c DepChecker) Check(t *testing.T) {
@@ -29,7 +30,7 @@ func (c DepChecker) Check(t *testing.T) {
 		t.Skip("skipping dep tests on windows hosts")
 	}
 	t.Helper()
-	cmd := exec.Command("go", "list", "-json", ".")
+	cmd := exec.Command("go", "list", "-json", "-tags="+c.Tags, ".")
 	var extraEnv []string
 	if c.GOOS != "" {
 		extraEnv = append(extraEnv, "GOOS="+c.GOOS)
