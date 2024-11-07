@@ -179,6 +179,11 @@ func main() {
 	}
 	defer killTailscaled()
 
+	if cfg.UserMetricsAddrPort != "" {
+		m := &metrics{lc: client}
+		runMetrics(cfg.UserMetricsAddrPort, m)
+	}
+
 	if cfg.EnableForwardingOptimizations {
 		if err := client.SetUDPGROForwarding(bootCtx); err != nil {
 			log.Printf("[unexpected] error enabling UDP GRO forwarding: %v", err)

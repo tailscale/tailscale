@@ -473,7 +473,7 @@ var proxyYaml []byte
 //go:embed deploy/manifests/userspace-proxy.yaml
 var userspaceProxyYaml []byte
 
-func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string, configs map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha) (*appsv1.StatefulSet, error) {
+func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string, _ map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
@@ -672,9 +672,11 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	if pc == nil || ss == nil {
 		return ss
 	}
-	if stsCfg != nil && pc.Spec.Metrics != nil && pc.Spec.Metrics.Enable {
-		if stsCfg.TailnetTargetFQDN == "" && stsCfg.TailnetTargetIP == "" && !stsCfg.ForwardClusterTrafficViaL7IngressProxy {
-			enableMetrics(ss, pc)
+	if pc.Spec.Metrics != nil && pc.Spec.Metrics.Enable {
+		if stsCfg == nil {
+			enableMetrics(ss)
+		} else if stsCfg.TailnetTargetFQDN == "" && stsCfg.TailnetTargetIP == "" && !stsCfg.ForwardClusterTrafficViaL7IngressProxy {
+			enableMetrics(ss)
 		} else if stsCfg.ForwardClusterTrafficViaL7IngressProxy {
 			// TODO (irbekrm): fix this
 			// For Ingress proxies that have been configured with
@@ -763,16 +765,37 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	return ss
 }
 
-func enableMetrics(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass) {
+func enableMetrics(ss *appsv1.StatefulSet) {
 	for i, c := range ss.Spec.Template.Spec.Containers {
 		if c.Name == "tailscale" {
-			// Serve metrics on on <pod-ip>:9001/debug/metrics. If
-			// we didn't specify Pod IP here, the proxy would, in
-			// some cases, also listen to its Tailscale IP- we don't
-			// want folks to start relying on this side-effect as a
-			// feature.
-			ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env, corev1.EnvVar{Name: "TS_TAILSCALED_EXTRA_ARGS", Value: "--debug=$(POD_IP):9001"})
-			ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports, corev1.ContainerPort{Name: "metrics", Protocol: "TCP", HostPort: 9001, ContainerPort: 9001})
+			ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
+				// Serve tailscaled's debug metrics on on
+				// <pod-ip>:9001/debug/metrics. If we didn't specify Pod IP
+				// here, the proxy would, in some cases, also listen to its
+				// Tailscale IP- we don't want folks to start relying on this
+				// side-effect as a feature.
+				corev1.EnvVar{
+					Name:  "TS_TAILSCALED_EXTRA_ARGS",
+					Value: "--debug=$(POD_IP):9001",
+				},
+				// Serve client usermetrics on <pod-ip>:9002/metrics.
+				corev1.EnvVar{
+					Name:  "TS_USERMETRICS_ADDR_PORT",
+					Value: "$(POD_IP):9002",
+				},
+			)
+			ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports,
+				corev1.ContainerPort{
+					Name:          "metrics",
+					Protocol:      "TCP",
+					ContainerPort: 9001,
+				},
+				corev1.ContainerPort{
+					Name:          "usermetrics",
+					Protocol:      "TCP",
+					ContainerPort: 9002,
+				},
+			)
 			break
 		}
 	}
