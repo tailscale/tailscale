@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/yaml"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/ptr"
 )
 
@@ -145,6 +146,10 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			{
 				Name:  "TS_USERSPACE",
 				Value: "false",
+			},
+			{
+				Name:  "TS_INTERNAL_APP",
+				Value: kubetypes.AppProxyGroupEgress,
 			},
 		}
 
