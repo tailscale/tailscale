@@ -71,6 +71,7 @@ package safeweb
 
 import (
 	"cmp"
+	"context"
 	crand "crypto/rand"
 	"fmt"
 	"log"
@@ -416,3 +417,7 @@ func (s *Server) ListenAndServe(addr string) error {
 func (s *Server) Close() error {
 	return s.h.Close()
 }
+
+// Shutdown gracefully shuts down the server without interrupting any active
+// connections. It has the same semantics as[http.Server.Shutdown].
+func (s *Server) Shutdown(ctx context.Context) error { return s.h.Shutdown(ctx) }
