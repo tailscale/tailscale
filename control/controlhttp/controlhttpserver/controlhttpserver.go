@@ -3,7 +3,7 @@
 
 //go:build !ios
 
-// Packet controlhttpserver contains the HTTP server side of the ts2021 control protocol.
+// Package controlhttpserver contains the HTTP server side of the ts2021 control protocol.
 package controlhttpserver
 
 import (
