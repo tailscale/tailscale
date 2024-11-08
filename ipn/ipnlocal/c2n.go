@@ -350,6 +350,8 @@ func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http
 		res.PostureDisabled = true
 	}
 
+	b.logf("c2n: posture identity disabled=%v reported %d serials %d hwaddrs", res.PostureDisabled, len(res.SerialNumbers), len(res.IfaceHardwareAddrs))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
 }
