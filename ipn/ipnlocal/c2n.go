@@ -77,6 +77,9 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 
 	// Linux netfilter.
 	req("POST /netfilter-kind"): handleC2NSetNetfilterKind,
+
+	// VIP services.
+	req("GET /vip-services"): handleC2NVIPServicesGet,
 }
 
 type c2nHandler func(*LocalBackend, http.ResponseWriter, *http.Request)
@@ -267,6 +270,12 @@ func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.R
 	b.authReconfig()
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleC2NVIPServicesGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	b.logf("c2n: GET /vip-services received")
+
+	json.NewEncoder(w).Encode(b.VIPServices())
 }
 
 func handleC2NUpdateGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {

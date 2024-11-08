@@ -66,6 +66,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"Userspace",
 		"UserspaceRouter",
 		"AppConnector",
+		"ServicesHash",
 		"Location",
 	}
 	if have := fieldsOf(reflect.TypeFor[Hostinfo]()); !reflect.DeepEqual(have, hiHandles) {
@@ -238,6 +239,16 @@ func TestHostinfoEqual(t *testing.T) {
 		{
 			&Hostinfo{AppConnector: opt.Bool("true")},
 			&Hostinfo{AppConnector: opt.Bool("false")},
+			false,
+		},
+		{
+			&Hostinfo{ServicesHash: "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"},
+			&Hostinfo{ServicesHash: "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"},
+			true,
+		},
+		{
+			&Hostinfo{ServicesHash: "084c799cd551dd1d8d5c5f9a5d593b2e931f5e36122ee5c793c1d08a19839cc0"},
+			&Hostinfo{},
 			false,
 		},
 	}

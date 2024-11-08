@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -4889,6 +4890,14 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	}
 	hi.SSH_HostKeys = sshHostKeys
 
+	services := b.vipServicesFromPrefs(prefs)
+	if len(services) > 0 {
+		buf, _ := json.Marshal(services)
+		hi.ServicesHash = fmt.Sprintf("%02x", sha256.Sum256(buf))
+	} else {
+		hi.ServicesHash = ""
+	}
+
 	// The Hostinfo.WantIngress field tells control whether this node wants to
 	// be wired up for ingress connections. If harmless if it's accidentally
 	// true; the actual policy is controlled in tailscaled by ServeConfig. But
@@ -7488,4 +7497,43 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 		username, _ = actor.Username()
 	}
 	return username
+}
+
+// VIPServices returns the list of tailnet services that this node
+// is serving as a destination for.
+// The returned memory is owned by the caller.
+func (b *LocalBackend) VIPServices() []*tailcfg.VIPService {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.vipServicesFromPrefs(b.pm.CurrentPrefs())
+}
+
+func (b *LocalBackend) vipServicesFromPrefs(prefs ipn.PrefsView) []*tailcfg.VIPService {
+	// keyed by service name
+	var services map[string]*tailcfg.VIPService
+
+	// TODO(naman): this envknob will be replaced with service-specific port
+	// information once we start storing that.
+	var allPortsServices []string
+	if env := envknob.String("TS_DEBUG_ALLPORTS_SERVICES"); env != "" {
+		allPortsServices = strings.Split(env, ",")
+	}
+
+	for _, s := range allPortsServices {
+		mak.Set(&services, s, &tailcfg.VIPService{
+			Name:  s,
+			Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+		})
+	}
+
+	for _, s := range prefs.AdvertiseServices().AsSlice() {
+		if services == nil || services[s] == nil {
+			mak.Set(&services, s, &tailcfg.VIPService{
+				Name: s,
+			})
+		}
+		services[s].Active = true
+	}
+
+	return slices.Collect(maps.Values(services))
 }
