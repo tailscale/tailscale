@@ -9,7 +9,13 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unique"
 )
+
+func (p NodePublic) kslice() []byte {
+	a := p.h.Value()
+	return a[:] // allocation is okay in a test
+}
 
 func TestNodeKey(t *testing.T) {
 	k := NewNode()
@@ -33,7 +39,7 @@ func TestNodeKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := bs, append([]byte(nodePublicBinaryPrefix), p.k[:]...); !bytes.Equal(got, want) {
+	if got, want := bs, append([]byte(nodePublicBinaryPrefix), p.kslice()...); !bytes.Equal(got, want) {
 		t.Fatalf("Binary-encoded NodePublic = %x, want %x", got, want)
 	}
 	var decoded NodePublic
@@ -70,11 +76,11 @@ func TestNodeSerialization(t *testing.T) {
 		},
 	}
 	pub := NodePublic{
-		k: [32]uint8{
+		h: unique.Make([32]uint8{
 			0x50, 0xd2, 0xb, 0x45, 0x5e, 0xcf, 0x12, 0xbc, 0x45, 0x3f, 0x83,
 			0xc2, 0xcf, 0xdb, 0x2a, 0x24, 0x92, 0x5d, 0x6, 0xcf, 0x25, 0x98,
 			0xdc, 0xaa, 0x54, 0xe9, 0x1a, 0xf8, 0x2c, 0xe9, 0xf7, 0x65,
-		},
+		}),
 	}
 
 	type keypair struct {
@@ -178,5 +184,23 @@ func TestShard(t *testing.T) {
 			rj := float64(c) - e
 			t.Logf("shard[%v] = %v (off by %v)", i, c, rj)
 		}
+	}
+}
+
+// Verify that the NodePublic zero value is the same value as the parsing the
+// zero value of the NodePublic struct.
+func TestNodePublicZeroValue(t *testing.T) {
+	var zp NodePublic
+	s := zp.String()
+	const want = "nodekey:0000000000000000000000000000000000000000000000000000000000000000"
+	if s != want {
+		t.Fatalf("got %q, want %q", s, want)
+	}
+	var back NodePublic
+	if err := back.UnmarshalText([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+	if back != zp {
+		t.Errorf("didn't round trip: %v != %v", back, zp)
 	}
 }
