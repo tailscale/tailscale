@@ -272,8 +272,8 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 						name = p.Hostinfo().Hostname()
 					}
 					addrs := make([]string, p.Addresses().Len())
-					for i := range p.Addresses().Len() {
-						addrs[i] = p.Addresses().At(i).Addr().String()
+					for i, ap := range p.Addresses().All() {
+						addrs[i] = ap.Addr().String()
 					}
 					return jsNetMapPeerNode{
 						jsNetMapNode: jsNetMapNode{
@@ -589,8 +589,8 @@ func mapSlice[T any, M any](a []T, f func(T) M) []M {
 
 func mapSliceView[T any, M any](a views.Slice[T], f func(T) M) []M {
 	n := make([]M, a.Len())
-	for i := range a.Len() {
-		n[i] = f(a.At(i))
+	for i, v := range a.All() {
+		n[i] = f(v)
 	}
 	return n
 }

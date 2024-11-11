@@ -1811,8 +1811,7 @@ func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap, lastSuggestedExitNod
 	}
 
 	for _, peer := range nm.Peers {
-		for i := range peer.Addresses().Len() {
-			addr := peer.Addresses().At(i)
+		for _, addr := range peer.Addresses().All() {
 			if !addr.IsSingleIP() || addr.Addr() != prefs.ExitNodeIP {
 				continue
 			}
@@ -4997,8 +4996,8 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	case ipn.Running:
 		var addrStrs []string
 		addrs := netMap.GetAddresses()
-		for i := range addrs.Len() {
-			addrStrs = append(addrStrs, addrs.At(i).Addr().String())
+		for _, p := range addrs.All() {
+			addrStrs = append(addrStrs, p.Addr().String())
 		}
 		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
 	case ipn.NoState:
@@ -6089,8 +6088,7 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 
 func peerAPIPorts(peer tailcfg.NodeView) (p4, p6 uint16) {
 	svcs := peer.Hostinfo().Services()
-	for i := range svcs.Len() {
-		s := svcs.At(i)
+	for _, s := range svcs.All() {
 		switch s.Proto {
 		case tailcfg.PeerAPI4:
 			p4 = s.Port
@@ -6122,8 +6120,7 @@ func peerAPIBase(nm *netmap.NetworkMap, peer tailcfg.NodeView) string {
 
 	var have4, have6 bool
 	addrs := nm.GetAddresses()
-	for i := range addrs.Len() {
-		a := addrs.At(i)
+	for _, a := range addrs.All() {
 		if !a.IsSingleIP() {
 			continue
 		}
@@ -6145,10 +6142,9 @@ func peerAPIBase(nm *netmap.NetworkMap, peer tailcfg.NodeView) string {
 }
 
 func nodeIP(n tailcfg.NodeView, pred func(netip.Addr) bool) netip.Addr {
-	for i := range n.Addresses().Len() {
-		a := n.Addresses().At(i)
-		if a.IsSingleIP() && pred(a.Addr()) {
-			return a.Addr()
+	for _, pfx := range n.Addresses().All() {
+		if pfx.IsSingleIP() && pred(pfx.Addr()) {
+			return pfx.Addr()
 		}
 	}
 	return netip.Addr{}
@@ -6378,8 +6374,8 @@ func peerCanProxyDNS(p tailcfg.NodeView) bool {
 	// If p.Cap is not populated (e.g. older control server), then do the old
 	// thing of searching through services.
 	services := p.Hostinfo().Services()
-	for i := range services.Len() {
-		if s := services.At(i); s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
+	for _, s := range services.All() {
+		if s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
 			return true
 		}
 	}

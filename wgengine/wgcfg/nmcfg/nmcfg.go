@@ -40,8 +40,7 @@ func cidrIsSubnet(node tailcfg.NodeView, cidr netip.Prefix) bool {
 	if !cidr.IsSingleIP() {
 		return true
 	}
-	for i := range node.Addresses().Len() {
-		selfCIDR := node.Addresses().At(i)
+	for _, selfCIDR := range node.Addresses().All() {
 		if cidr == selfCIDR {
 			return false
 		}
@@ -110,8 +109,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer()
 		cpeer.V6MasqAddr = peer.SelfNodeV6MasqAddrForThisPeer()
 		cpeer.IsJailed = peer.IsJailed()
-		for i := range peer.AllowedIPs().Len() {
-			allowedIP := peer.AllowedIPs().At(i)
+		for _, allowedIP := range peer.AllowedIPs().All() {
 			if allowedIP.Bits() == 0 && peer.StableID() != exitNode {
 				if didExitNodeWarn {
 					// Don't log about both the IPv4 /0 and IPv6 /0.

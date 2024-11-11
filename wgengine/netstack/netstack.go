@@ -643,13 +643,11 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	newPfx := make(map[netip.Prefix]bool)
 
 	if selfNode.Valid() {
-		for i := range selfNode.Addresses().Len() {
-			p := selfNode.Addresses().At(i)
+		for _, p := range selfNode.Addresses().All() {
 			newPfx[p] = true
 		}
 		if ns.ProcessSubnets {
-			for i := range selfNode.AllowedIPs().Len() {
-				p := selfNode.AllowedIPs().At(i)
+			for _, p := range selfNode.AllowedIPs().All() {
 				newPfx[p] = true
 			}
 		}

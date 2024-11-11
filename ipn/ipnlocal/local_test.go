@@ -3041,12 +3041,10 @@ func deterministicNodeForTest(t testing.TB, want views.Slice[tailcfg.StableNodeI
 		var ret tailcfg.NodeView
 
 		gotIDs := make([]tailcfg.StableNodeID, got.Len())
-		for i := range got.Len() {
-			nv := got.At(i)
+		for i, nv := range got.All() {
 			if !nv.Valid() {
 				t.Fatalf("invalid node at index %v", i)
 			}
-
 			gotIDs[i] = nv.StableID()
 			if nv.StableID() == use {
 				ret = nv

@@ -1120,8 +1120,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	// re-run.
 	eps = c.endpointTracker.update(time.Now(), eps)
 
-	for i := range c.staticEndpoints.Len() {
-		addAddr(c.staticEndpoints.At(i), tailcfg.EndpointExplicitConf)
+	for _, ep := range c.staticEndpoints.All() {
+		addAddr(ep, tailcfg.EndpointExplicitConf)
 	}
 
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
@@ -2360,16 +2360,14 @@ func (c *Conn) logEndpointCreated(n tailcfg.NodeView) {
 			fmt.Fprintf(w, "derp=%v%s ", regionID, code)
 		}
 
-		for i := range n.AllowedIPs().Len() {
-			a := n.AllowedIPs().At(i)
+		for _, a := range n.AllowedIPs().All() {
 			if a.IsSingleIP() {
 				fmt.Fprintf(w, "aip=%v ", a.Addr())
 			} else {
 				fmt.Fprintf(w, "aip=%v ", a)
 			}
 		}
-		for i := range n.Endpoints().Len() {
-			ep := n.Endpoints().At(i)
+		for _, ep := range n.Endpoints().All() {
 			fmt.Fprintf(w, "ep=%v ", ep)
 		}
 	}))

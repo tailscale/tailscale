@@ -207,8 +207,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	ps, found := e.getPeerStatusLite(n.Key())
 	if !found {
 		onlyZeroRoute := true // whether peerForIP returned n only because its /0 route matched
-		for i := range n.AllowedIPs().Len() {
-			r := n.AllowedIPs().At(i)
+		for _, r := range n.AllowedIPs().All() {
 			if r.Bits() != 0 && r.Contains(flow.DstAddr()) {
 				onlyZeroRoute = false
 				break
