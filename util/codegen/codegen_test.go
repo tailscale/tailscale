@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+	"unique"
 	"unsafe"
 
 	"golang.org/x/exp/constraints"
@@ -82,6 +84,16 @@ type ValueUnionParamPtr[T netip.Prefix | BasicType] struct {
 
 type PointerUnionParam[T netip.Prefix | BasicType | IntPtr] struct {
 	V T
+}
+
+type StructWithUniqueHandle struct{ _ unique.Handle[[32]byte] }
+
+type StructWithTime struct{ _ time.Time }
+
+type StructWithNetipTypes struct {
+	_ netip.Addr
+	_ netip.AddrPort
+	_ netip.Prefix
 }
 
 type Interface interface {
@@ -160,6 +172,18 @@ func TestGenericContainsPointers(t *testing.T) {
 		{
 			typ:         "PointerUnionParam",
 			wantPointer: true,
+		},
+		{
+			typ:         "StructWithUniqueHandle",
+			wantPointer: false,
+		},
+		{
+			typ:         "StructWithTime",
+			wantPointer: false,
+		},
+		{
+			typ:         "StructWithNetipTypes",
+			wantPointer: false,
 		},
 	}
 
