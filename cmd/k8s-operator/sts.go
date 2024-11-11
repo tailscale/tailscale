@@ -132,10 +132,13 @@ type tailscaleSTSConfig struct {
 }
 
 type connector struct {
-	// routes is a list of subnet routes that this Connector should expose.
+	// routes is a list of routes that this Connector should advertise either as a subnet router or as an app
+	// connector.
 	routes string
 	// isExitNode defines whether this Connector should act as an exit node.
 	isExitNode bool
+	// isAppConnector defines whether this Connector should act as an app connector.
+	isAppConnector bool
 }
 type tsnetServer interface {
 	CertDomains() []string
@@ -674,7 +677,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	}
 	if stsCfg != nil && pc.Spec.Metrics != nil && pc.Spec.Metrics.Enable {
 		if stsCfg.TailnetTargetFQDN == "" && stsCfg.TailnetTargetIP == "" && !stsCfg.ForwardClusterTrafficViaL7IngressProxy {
-			enableMetrics(ss, pc)
+			enableMetrics(ss)
 		} else if stsCfg.ForwardClusterTrafficViaL7IngressProxy {
 			// TODO (irbekrm): fix this
 			// For Ingress proxies that have been configured with
@@ -763,7 +766,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	return ss
 }
 
-func enableMetrics(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass) {
+func enableMetrics(ss *appsv1.StatefulSet) {
 	for i, c := range ss.Spec.Template.Spec.Containers {
 		if c.Name == "tailscale" {
 			// Serve metrics on on <pod-ip>:9001/debug/metrics. If
@@ -803,11 +806,13 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 		Locked:              "false",
 		Hostname:            &stsC.Hostname,
 		NoStatefulFiltering: "false",
+		AppConnector:        &ipn.AppConnectorPrefs{Advertise: false},
 	}
 
 	// For egress proxies only, we need to ensure that stateful filtering is
 	// not in place so that traffic from cluster can be forwarded via
 	// Tailscale IPs.
+	// TODO (irbekrm): set it to true always as this is now the default in core.
 	if stsC.TailnetTargetFQDN != "" || stsC.TailnetTargetIP != "" {
 		conf.NoStatefulFiltering = "true"
 	}
@@ -817,6 +822,9 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 			return nil, fmt.Errorf("error calculating routes: %w", err)
 		}
 		conf.AdvertiseRoutes = routes
+		if stsC.Connector.isAppConnector {
+			conf.AppConnector.Advertise = true
+		}
 	}
 	if shouldAcceptRoutes(stsC.ProxyClass) {
 		conf.AcceptRoutes = "true"
@@ -831,9 +839,15 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 		}
 		conf.AuthKey = key
 	}
+
 	capVerConfigs := make(map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha)
+	capVerConfigs[107] = *conf
+
+	// AppConnector config option is only understood by clients of capver 107 and newer.
+	conf.AppConnector = nil
 	capVerConfigs[95] = *conf
-	// legacy config should not contain NoStatefulFiltering field.
+
+	// StatefulFiltering is only understood by clients of capver 95 and newer.
 	conf.NoStatefulFiltering.Clear()
 	capVerConfigs[94] = *conf
 	return capVerConfigs, nil
