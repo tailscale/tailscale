@@ -142,7 +142,7 @@ type CapabilityVersion int
 //   - 97: 2024-06-06: Client understands NodeAttrDisableSplitDNSWhenNoCustomResolvers
 //   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
 //   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
-//   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
+//   - 100: 2024-06-18: Initial support for filtertype.Match.SrcCaps - actually usable in capver 109 (issue #12542)
 //   - 101: 2024-07-01: Client supports SSH agent forwarding when handling connections with /bin/su
 //   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
 //   - 103: 2024-07-24: Client supports NodeAttrDisableCaptivePortalDetection
@@ -151,7 +151,8 @@ type CapabilityVersion int
 //   - 106: 2024-09-03: fix panic regression from cryptokey routing change (65fe0ba7b5)
 //   - 107: 2024-10-30: add App Connector to conffile (PR #13942)
 //   - 108: 2024-11-08: Client sends ServicesHash in Hostinfo, understands c2n GET /vip-services.
-const CurrentCapabilityVersion CapabilityVersion = 108
+//   - 109: 2024-11-18: Client supports filtertype.Match.SrcCaps (issue #12542)
+const CurrentCapabilityVersion CapabilityVersion = 109
 
 type StableID string
 
