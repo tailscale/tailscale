@@ -150,7 +150,7 @@ type CapabilityVersion int
 //   - 105: 2024-08-05: Fixed SSH behavior on systems that use busybox (issue #12849)
 //   - 106: 2024-09-03: fix panic regression from cryptokey routing change (65fe0ba7b5)
 //   - 107: 2024-10-30: add App Connector to conffile (PR #13942)
-//   - 108: 2024-11-08: Client sends ServicesHash in Hostinfo, understands c2n GET /vip-services. PeerCapabilityServicesDestination added but currently unused.
+//   - 108: 2024-11-08: Client sends ServicesHash in Hostinfo, understands c2n GET /vip-services.
 const CurrentCapabilityVersion CapabilityVersion = 108
 
 type StableID string
