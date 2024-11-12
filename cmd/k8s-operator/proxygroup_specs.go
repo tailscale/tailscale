@@ -93,6 +93,10 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 	c.Image = image
 	c.VolumeMounts = func() []corev1.VolumeMount {
 		var mounts []corev1.VolumeMount
+
+		// TODO(tomhjp): Read config directly from the secret instead. The
+		// mounts change on scaling up/down which causes unnecessary restarts
+		// for pods that haven't meaningfully changed.
 		for i := range pgReplicas(pg) {
 			mounts = append(mounts, corev1.VolumeMount{
 				Name:      fmt.Sprintf("tailscaledconfig-%d", i),
