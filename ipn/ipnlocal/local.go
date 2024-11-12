@@ -4890,7 +4890,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	}
 	hi.SSH_HostKeys = sshHostKeys
 
-	services := b.vipServicesFromPrefs(prefs)
+	services := vipServicesFromPrefs(prefs)
 	if len(services) > 0 {
 		buf, _ := json.Marshal(services)
 		hi.ServicesHash = fmt.Sprintf("%02x", sha256.Sum256(buf))
@@ -7505,10 +7505,10 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 func (b *LocalBackend) VIPServices() []*tailcfg.VIPService {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.vipServicesFromPrefs(b.pm.CurrentPrefs())
+	return vipServicesFromPrefs(b.pm.CurrentPrefs())
 }
 
-func (b *LocalBackend) vipServicesFromPrefs(prefs ipn.PrefsView) []*tailcfg.VIPService {
+func vipServicesFromPrefs(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	// keyed by service name
 	var services map[string]*tailcfg.VIPService
 

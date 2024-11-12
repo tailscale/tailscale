@@ -4532,11 +4532,10 @@ func TestGetVIPServices(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			envknob.Setenv("TS_DEBUG_ALLPORTS_SERVICES", strings.Join(tt.mapped, ","))
-			b := newTestBackend(t)
 			prefs := &ipn.Prefs{
 				AdvertiseServices: tt.advertised,
 			}
-			got := b.vipServicesFromPrefs(prefs.View())
+			got := vipServicesFromPrefs(prefs.View())
 			slices.SortFunc(got, func(a, b *tailcfg.VIPService) int {
 				return strings.Compare(a.Name, b.Name)
 			})

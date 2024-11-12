@@ -834,18 +834,18 @@ type Hostinfo struct {
 
 // VIPService represents a service created on a tailnet from the
 // perspective of a node providing that service. These services
-// have an IP address pair distinct from the node's IPs.
+// have an virtual IP (VIP) address pair distinct from the node's IPs.
 type VIPService struct {
-	// Ports specify which ProtoPorts are made available by this node
-	// on the service's IPs.
-	Ports []ProtoPortRange
-
 	// Name is the name of the service, of the form `svc:dns-label`.
 	// See CheckServiceName for a validation func.
 	// Name uniquely identifies a service on a particular tailnet,
 	// and so also corresponds uniquely to the pair of IP addresses
 	// belonging to the VIP service.
 	Name string
+
+	// Ports specify which ProtoPorts are made available by this node
+	// on the service's IPs.
+	Ports []ProtoPortRange
 
 	// Active specifies whether new requests for the service should be
 	// sent to this node by control.
@@ -1455,7 +1455,7 @@ const (
 	// PeerCapabilityServicesDestination grants a peer the ability to serve as
 	// a destination for a set of given VIP services, which is provided as the
 	// value of this key in NodeCapMap.
-	PeerCapabilityServicesDestination = "tailscale.com/cap/services-destination"
+	PeerCapabilityServicesDestination PeerCapability = "tailscale.com/cap/services-destination"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
