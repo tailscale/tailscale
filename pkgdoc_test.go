@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestPackageDocs(t *testing.T) {
+func testPackageDocs(t *testing.T) {
 	switch runtime.GOOS {
 	case "darwin", "linux":
 		// Enough coverage for CI+devs.

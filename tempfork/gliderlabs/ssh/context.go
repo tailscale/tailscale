@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // contextKey is a value for use with context.WithValue. It's used as
@@ -121,7 +121,6 @@ func applyConnMetadata(ctx Context, conn gossh.ConnMetadata) {
 	ctx.SetValue(ContextKeyUser, conn.User())
 	ctx.SetValue(ContextKeyLocalAddr, conn.LocalAddr())
 	ctx.SetValue(ContextKeyRemoteAddr, conn.RemoteAddr())
-	ctx.SetValue(ContextKeySendAuthBanner, conn.SendAuthBanner)
 }
 
 func (ctx *sshContext) SetValue(key, value interface{}) {

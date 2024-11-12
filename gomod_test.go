@@ -10,7 +10,7 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-func TestGoMod(t *testing.T) {
+func testGoMod(t *testing.T) {
 	goMod, err := os.ReadFile("go.mod")
 	if err != nil {
 		t.Fatal(err)

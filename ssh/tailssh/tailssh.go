@@ -30,7 +30,7 @@ import (
 	"syscall"
 	"time"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/logtail/backoff"
@@ -45,7 +45,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/slicesx"
 )
 
 var (
@@ -295,7 +294,7 @@ var errDenied = errors.New("ssh: access denied")
 
 // errPubKeyRequired is returned by NoClientAuthCallback to make the client
 // resort to public-key auth; not user visible.
-var errPubKeyRequired = errors.New("ssh publickey required")
+// var errPubKeyRequired = errors.New("ssh publickey required")
 
 // NoClientAuthCallback implements gossh.NoClientAuthCallback and is called by
 // the ssh.Server when the client first connects with the "none"
@@ -323,24 +322,27 @@ func (c *conn) NoClientAuthCallback(ctx ssh.Context) error {
 	// "none" auth.
 	if strings.HasSuffix(ctx.User(), forcePasswordSuffix) {
 		c.anyPasswordIsOkay = true
-		return errors.New("any password please") // not shown to users
+		return &ssh.PartialSuccessError{
+			Context:         ctx,
+			PasswordHandler: c.fakePasswordHandler,
+		}
 	}
 	return nil
 }
 
-func (c *conn) nextAuthMethodCallback(cm gossh.ConnMetadata, prevErrors []error) (nextMethod []string) {
-	switch {
-	case c.anyPasswordIsOkay:
-		nextMethod = append(nextMethod, "password")
-	case slicesx.LastEqual(prevErrors, errPubKeyRequired):
-		nextMethod = append(nextMethod, "publickey")
-	}
+// func (c *conn) nextAuthMethodCallback(cm gossh.ConnMetadata, prevErrors []error) (nextMethod []string) {
+// 	switch {
+// 	case c.anyPasswordIsOkay:
+// 		nextMethod = append(nextMethod, "password")
+// 	case slicesx.LastEqual(prevErrors, errPubKeyRequired):
+// 		nextMethod = append(nextMethod, "publickey")
+// 	}
 
-	// The fake "tailscale" method is always appended to next so OpenSSH renders
-	// that in parens as the final failure. (It also shows up in "ssh -v", etc)
-	nextMethod = append(nextMethod, "tailscale")
-	return
-}
+// 	// The fake "tailscale" method is always appended to next so OpenSSH renders
+// 	// that in parens as the final failure. (It also shows up in "ssh -v", etc)
+// 	nextMethod = append(nextMethod, "tailscale")
+// 	return
+// }
 
 // fakePasswordHandler is our implementation of the PasswordHandler hook that
 // checks whether the user's password is correct. But we don't actually use
@@ -381,7 +383,10 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 	a, localUser, acceptEnv, err := c.evaluatePolicy(pubKey)
 	if err != nil {
 		if pubKey == nil && c.havePubKeyPolicy() {
-			return errPubKeyRequired
+			return &ssh.PartialSuccessError{
+				Context:          ctx,
+				PublicKeyHandler: c.PublicKeyHandler,
+			}
 		}
 		return fmt.Errorf("%w: %v", errDenied, err)
 	}
@@ -424,8 +429,7 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 // ServerConfig implements ssh.ServerConfigCallback.
 func (c *conn) ServerConfig(ctx ssh.Context) *gossh.ServerConfig {
 	return &gossh.ServerConfig{
-		NoClientAuth:           true, // required for the NoClientAuthCallback to run
-		NextAuthMethodCallback: c.nextAuthMethodCallback,
+		NoClientAuth: true, // required for the NoClientAuthCallback to run
 	}
 }
 
@@ -449,7 +453,7 @@ func (srv *server) newConn() (*conn, error) {
 
 		NoClientAuthHandler: c.NoClientAuthCallback,
 		PublicKeyHandler:    c.PublicKeyHandler,
-		PasswordHandler:     c.fakePasswordHandler,
+		// PasswordHandler:     c.fakePasswordHandler,
 
 		Handler:                       c.handleSessionPostSSHAuth,
 		LocalPortForwardingCallback:   c.mayForwardLocalPortTo,

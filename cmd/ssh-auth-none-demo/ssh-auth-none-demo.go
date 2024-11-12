@@ -22,9 +22,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 )
 
@@ -62,13 +63,23 @@ func main() {
 		Handler: handleSessionPostSSHAuth,
 		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
 			start := time.Now()
+			var pac atomic.Pointer[gossh.ServerPreAuthConn]
+			getPAC := func() gossh.ServerPreAuthConn {
+				_pac := pac.Load()
+				return *_pac
+			}
 			return &gossh.ServerConfig{
-				NextAuthMethodCallback: func(conn gossh.ConnMetadata, prevErrors []error) []string {
-					return []string{"tailscale"}
+				PreAuthConnCallback: func(_pac gossh.ServerPreAuthConn) {
+					pac.Store(&_pac)
+				},
+				PasswordCallback: func(conn gossh.ConnMetadata, password []byte) (*gossh.Permissions, error) {
+					return nil, &gossh.PartialSuccessError{
+						Next: gossh.ServerAuthCallbacks{},
+					}
 				},
 				NoClientAuth: true, // required for the NoClientAuthCallback to run
 				NoClientAuthCallback: func(cm gossh.ConnMetadata) (*gossh.Permissions, error) {
-					cm.SendAuthBanner(fmt.Sprintf("# Banner: doing none auth at %v\r\n", time.Since(start)))
+					getPAC().SendAuthBanner(fmt.Sprintf("# Banner: doing none auth at %v\r\n", time.Since(start)))
 
 					totalBanners := 2
 					if cm.User() == "banners" {
@@ -77,9 +88,9 @@ func main() {
 					for banner := 2; banner <= totalBanners; banner++ {
 						time.Sleep(time.Second)
 						if banner == totalBanners {
-							cm.SendAuthBanner(fmt.Sprintf("# Banner%d: access granted at %v\r\n", banner, time.Since(start)))
+							getPAC().SendAuthBanner(fmt.Sprintf("# Banner%d: access granted at %v\r\n", banner, time.Since(start)))
 						} else {
-							cm.SendAuthBanner(fmt.Sprintf("# Banner%d at %v\r\n", banner, time.Since(start)))
+							getPAC().SendAuthBanner(fmt.Sprintf("# Banner%d at %v\r\n", banner, time.Since(start)))
 						}
 					}
 					return nil, nil

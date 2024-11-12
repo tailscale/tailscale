@@ -24,8 +24,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tailscale/golang-x-crypto/ssh"
 	"go4.org/mem"
+	"golang.org/x/crypto/ssh"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/util/mak"
