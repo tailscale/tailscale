@@ -76,7 +76,15 @@ func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, ing)
 	}
 
-	return reconcile.Result{}, a.maybeProvision(ctx, logger, ing)
+	if err := a.maybeProvision(ctx, logger, ing); err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+		} else {
+			return reconcile.Result{}, err
+		}
+	}
+
+	return reconcile.Result{}, nil
 }
 
 func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, ing *networkingv1.Ingress) error {

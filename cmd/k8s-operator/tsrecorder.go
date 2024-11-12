@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -38,6 +39,7 @@ import (
 
 const (
 	reasonRecorderCreationFailed = "RecorderCreationFailed"
+	reasonRecorderCreating       = "RecorderCreating"
 	reasonRecorderCreated        = "RecorderCreated"
 	reasonRecorderInvalid        = "RecorderInvalid"
 
@@ -119,23 +121,28 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		logger.Infof("ensuring Recorder is set up")
 		tsr.Finalizers = append(tsr.Finalizers, FinalizerName)
 		if err := r.Update(ctx, tsr); err != nil {
-			logger.Errorf("error adding finalizer: %w", err)
 			return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderCreationFailed, reasonRecorderCreationFailed)
 		}
 	}
 
 	if err := r.validate(tsr); err != nil {
-		logger.Errorf("error validating Recorder spec: %w", err)
 		message := fmt.Sprintf("Recorder is invalid: %s", err)
 		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderInvalid, message)
 		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderInvalid, message)
 	}
 
 	if err = r.maybeProvision(ctx, tsr); err != nil {
-		logger.Errorf("error creating Recorder resources: %w", err)
+		reason := reasonRecorderCreationFailed
 		message := fmt.Sprintf("failed creating Recorder: %s", err)
-		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, message)
-		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderCreationFailed, message)
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			reason = reasonRecorderCreating
+			message = fmt.Sprintf("optimistic lock error, retrying: %s", err)
+			err = nil
+			logger.Info(message)
+		} else {
+			r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, message)
+		}
+		return setStatusReady(tsr, metav1.ConditionFalse, reason, message)
 	}
 
 	logger.Info("Recorder resources synced")

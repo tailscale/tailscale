@@ -157,7 +157,15 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 		return res, err
 	}
 
-	return res, esr.maybeProvision(ctx, svc, l)
+	if err := esr.maybeProvision(ctx, svc, l); err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			l.Infof("optimistic lock error, retrying: %s", err)
+		} else {
+			return reconcile.Result{}, err
+		}
+	}
+
+	return res, nil
 }
 
 func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1.Service, l *zap.SugaredLogger) (err error) {

@@ -121,7 +121,15 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
 
-	return reconcile.Result{}, a.maybeProvision(ctx, logger, svc)
+	if err := a.maybeProvision(ctx, logger, svc); err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+		} else {
+			return reconcile.Result{}, err
+		}
+	}
+
+	return reconcile.Result{}, nil
 }
 
 // maybeCleanup removes any existing resources related to serving svc over tailscale.

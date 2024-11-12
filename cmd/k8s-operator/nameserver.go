@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	_ "embed"
@@ -131,7 +132,12 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		}
 	}
 	if err := a.maybeProvision(ctx, &dnsCfg, logger); err != nil {
-		return reconcile.Result{}, fmt.Errorf("error provisioning nameserver resources: %w", err)
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+			return reconcile.Result{}, nil
+		} else {
+			return reconcile.Result{}, fmt.Errorf("error provisioning nameserver resources: %w", err)
+		}
 	}
 
 	a.mu.Lock()
