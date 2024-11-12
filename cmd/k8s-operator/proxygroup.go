@@ -398,15 +398,13 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			mak.Set(&cfgSecret.StringData, tsoperator.TailscaledConfigFileName(cap), string(cfgJSON))
 		}
 
-		// The config sha256 sum is used to trigger pod restarts when config
-		// changes. We only use the first pod's config as input because we
-		// don't want to restart all pods unnecessarily every time the
-		// ProxyGroup is scaled up or down. But you can't change the config in
-		// a way that one pod needs a restart without others needing a restart,
-		// so it should be sufficient to just hash one pod's config.
+		// The config sha256 sum is a value for a hash annotation used to trigger
+		// pod restarts when tailscaled config changes. Any config changes apply
+		// to all replicas, so it is sufficient to only hash the config for the
+		// first replica.
 		//
 		// In future, we're aiming to eliminate restarts altogether and have
-		// pods dynamically reload their config when it changes on disk.
+		// pods dynamically reload their config when it changes.
 		if i == 0 {
 			sum := sha256.New()
 			for _, cfg := range configs {
