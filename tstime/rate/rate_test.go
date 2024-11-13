@@ -145,6 +145,31 @@ func TestSimultaneousRequests(t *testing.T) {
 	}
 }
 
+func TestDelay(t *testing.T) {
+	lim := NewLimiter(Every(1*time.Second), 1)
+	// We'll allow for 10 ms of slop to avoid flakiness.
+	// w should always be just slightly greater than d
+	slop := int64(10)
+
+	lim.Allow()
+
+	d := lim.Delay().Milliseconds()
+	w := int64(1000)
+
+	if w-d > slop || d > w {
+		t.Errorf("Delay() = %v want 1000", d)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	w = 950
+	d = lim.Delay().Milliseconds()
+
+	// ~50 milliseconds will have passed,
+	if w-d > slop || d > w {
+		t.Errorf("Delay() = %v want 950", d)
+	}
+}
+
 func BenchmarkAllowN(b *testing.B) {
 	lim := NewLimiter(Every(1*time.Second), 1)
 	now := mono.Now()

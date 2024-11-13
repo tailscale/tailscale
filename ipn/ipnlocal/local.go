@@ -82,6 +82,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
+	"tailscale.com/tstime/rate"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
@@ -370,6 +371,16 @@ type LocalBackend struct {
 	// backend is healthy and captive portal detection is not required
 	// (sending false).
 	needsCaptiveDetection chan bool
+
+	// netmapRateLimiter rate limits netmap updates to to the IPN bus.
+	// It should be nil if the ipn bus options do not include the rate limiting flag.
+	// It is automatically created via setNetmapRateLimit.
+	netmapRateLimiter *rate.Limiter
+
+	// deferredNetmapCancel is used to cancel deferred netmap updates which
+	// were initially blocked due to rate limiting.  We always attempt to send the latest
+	// netmap once the rate limiter allows it, discarding any pending netmaps.
+	deferredNetmapCancel context.CancelFunc
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -475,6 +486,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCtx:            captiveCtx,
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
+		deferredNetmapCancel:  nil,
 	}
 	mConn.SetNetInfoCallback(b.setNetInfo)
 
@@ -965,6 +977,11 @@ func (b *LocalBackend) Shutdown() {
 	if b.notifyCancel != nil {
 		b.notifyCancel()
 	}
+
+	if b.deferredNetmapCancel != nil {
+		b.deferredNetmapCancel()
+	}
+
 	b.mu.Unlock()
 	b.webClientShutdown()
 
@@ -1591,8 +1608,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 		// Update the DERP map in the health package, which uses it for health notifications
 		b.health.SetDERPMap(st.NetMap.DERPMap)
-
-		b.send(ipn.Notify{NetMap: st.NetMap})
+		b.sendNetmap(st.NetMap)
 	}
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
@@ -1677,20 +1693,91 @@ func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
 	return anyChange
 }
 
+// setNetmapRateLimit Sets the minimum interval between netmap updates on the IPN Bus (in seconds)
+// If interval is 0 or negative, the rate limiter is disabled.  Netmap rate limiting is
+// disabled by default
+// b.mu must be held
+func (b *LocalBackend) setNetmapRateLimit(interval time.Duration) {
+	if interval > 0 {
+		b.netmapRateLimiter = rate.NewLimiter(rate.Every(interval), 1)
+	} else {
+		b.netmapRateLimiter = nil
+	}
+}
+
+// sendNetmap sends a netmap update to the IPN bus respecting the rate limiter.  This function
+// should be used for all netmap updates on the IPN bus unless there is some critical reason that
+// a netmap update be sent immediately.
+//
+// A non-nil channel will be returned if the netmap update was deferred due to rate limiting.  The channel will be closed
+// when the netmap update is handled.  true or false will be sent to the channel to indicate whether
+// or not the netmap was sent or cancelled respectively.  A nil return value indicates that the netmap
+// was sent immediately.  The returned value is primarily useful for testing and you can safely ignore
+// it and just call this method at will.
+func (b *LocalBackend) sendNetmap(nm *netmap.NetworkMap) chan bool {
+	notify := ipn.Notify{NetMap: nm}
+
+	b.mu.Lock()
+
+	// Cancel all pending netmap updates, they're stale and we have something newer
+	if b.deferredNetmapCancel != nil {
+		b.deferredNetmapCancel()
+	}
+
+	// No rate limiter?  Send it.
+	// Rate limiter allows the send?  Send it.
+	if b.netmapRateLimiter == nil || b.netmapRateLimiter.Allow() {
+		b.mu.Unlock()
+		b.send(notify)
+		return nil
+	}
+
+	// We're rate limited.  Defer the netmap update
+	var ctx context.Context
+	ctx, cancel := context.WithCancel(b.ctx)
+	b.deferredNetmapCancel = cancel
+	// The rate limiter is set to Limit() events per second.  Convert that back to
+	// the time interval we need to wait
+	delay := b.netmapRateLimiter.Delay()
+	b.mu.Unlock()
+
+	c := make(chan bool)
+
+	// Send the netmap update once the rate limiter allows it
+	go func() {
+		select {
+		case <-time.After(delay):
+			b.send(notify)
+			c <- true
+		case <-ctx.Done():
+			c <- false
+		}
+		close(c)
+	}()
+	return c
+}
+
 var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
 
-// UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
 func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
 	if !b.MagicConn().UpdateNetmapDelta(muts) {
 		return false
 	}
 
-	var notify *ipn.Notify // non-nil if we need to send a Notify
+	// Will be sent if non nil
+	var netmap *netmap.NetworkMap
+	// Will send an empty notify if true and netmap is nil (for tests - see below)
+	var sendEmpty = false
+
 	defer func() {
-		if notify != nil {
+		if netmap != nil {
+			b.sendNetmap(netmap)
+		} else if sendEmpty {
+			notify := new(ipn.Notify)
 			b.send(*notify)
 		}
 	}()
+
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if !b.updateNetmapDeltaLocked(muts) {
@@ -1712,13 +1799,14 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 			return cmp.Compare(a.ID(), b.ID())
 		})
-		notify = &ipn.Notify{NetMap: nm}
+		netmap = nm
 	} else if testenv.InTest() {
 		// In tests, send an empty Notify as a wake-up so end-to-end
 		// integration tests in another repo can check on the status of
 		// LocalBackend after processing deltas.
-		notify = new(ipn.Notify)
+		sendEmpty = true
 	}
+
 	return true
 }
 
@@ -2749,6 +2837,12 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		cancel:    cancel,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
+	if mask&ipn.NotifyRateLimitNetmaps != 0 {
+		b.setNetmapRateLimit(ipn.DefaultNetmapRateLimit)
+	} else {
+		b.setNetmapRateLimit(0)
+	}
+
 	b.mu.Unlock()
 
 	defer func() {
@@ -4989,6 +5083,9 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		if authURL == "" {
 			systemd.Status("Stopped; run 'tailscale up' to log in")
 		}
+		if b.deferredNetmapCancel != nil {
+			b.deferredNetmapCancel()
+		}
 	case ipn.Starting, ipn.NeedsMachineAuth:
 		b.authReconfig()
 		// Needed so that UpdateEndpoints can run
@@ -5001,7 +5098,9 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		}
 		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
 	case ipn.NoState:
-		// Do nothing.
+		if b.deferredNetmapCancel != nil {
+			b.deferredNetmapCancel()
+		}
 	default:
 		b.logf("[unexpected] unknown newState %#v", newState)
 	}

@@ -572,6 +572,164 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 	}
 }
 
+func TestNetmapRateLimiting(t *testing.T) {
+	b := new(LocalBackend)
+	var cancel context.CancelFunc
+	b.ctx, cancel = context.WithCancel(context.Background())
+	b.logf = t.Logf
+	b.setNetmapRateLimit(time.Duration(100 * time.Millisecond))
+
+	if b.netmapRateLimiter == nil {
+		t.Fatalf("no netmapRateLimiter")
+	}
+
+	now := time.Now()
+
+	b.netMap = new(netmap.NetworkMap)
+	if g := b.sendNetmap(b.netMap); g != nil {
+		t.Errorf("First should be immediately sent immediately")
+	}
+
+	// We just sent a netmap, so these should all be rate limited. c1 should get cancelled.
+	// c2 should be cancelled.  c3 should be sent after 100ms.
+	c1 := b.sendNetmap(b.netMap)
+	c2 := b.sendNetmap(b.netMap)
+
+	// Let's spam a bunch more we won't track, just for fun
+	for i := 0; i < 10; i++ {
+		if g := b.sendNetmap(b.netMap); g == nil {
+			t.Errorf("should have been deferred")
+		}
+	}
+
+	// This is our last netmap send. It should be deferred and sent after 100ms.
+	c3 := b.sendNetmap(b.netMap)
+
+	// The first onnetmape should be cancelled
+	select {
+	case sent := <-c1:
+		if sent {
+			t.Errorf("Second netmap update was not cacncelled; sent got %v, want %v", sent, false)
+		}
+	}
+
+	// The second netmap should be cancelled
+	select {
+	case sent := <-c2:
+		if sent {
+			t.Errorf("Second netmap update was not cacncelled; got %v, sent want %v", sent, false)
+		}
+	}
+
+	// The last netmap should be sent after about 100ms
+	select {
+	case sent := <-c3:
+		if !sent {
+			t.Errorf("Fourth netmap update was deferred but not sent; sent got %v, want %v", sent, true)
+		}
+	}
+
+	elapsed := time.Since(now)
+	if elapsed < 90*time.Millisecond {
+		t.Errorf("elapsed time %v is too short", elapsed)
+	}
+	if elapsed > 110*time.Millisecond {
+		t.Errorf("elapsed time %v is too long", elapsed)
+	}
+
+	// The rate limiter should be reset at this point and the next netmap should be sent immediately.
+	if g := b.sendNetmap(b.netMap); g != nil {
+		t.Errorf("netmap should be immediately sent immediately")
+	}
+
+	// We're rate limited - becuase we just sent a netmap.
+	// Lower the rate limit and make sure we can send again once the rate limit is up.
+	b.setNetmapRateLimit(time.Duration(10 * time.Millisecond))
+	time.Sleep(12 * time.Millisecond)
+	if g := b.sendNetmap(b.netMap); g != nil {
+		t.Errorf("netmap should be immediately sent immediately")
+	}
+
+	// Check to make sure the cancellation function is properly set and does what it's
+	// supposed to do.
+	c4 := b.sendNetmap(b.netMap)
+	b.deferredNetmapCancel()
+	select {
+	case sent := <-c4:
+		if sent {
+			t.Errorf("Fourth netmap should have been cancelled; sent got %v, want %v", sent, true)
+		}
+	}
+
+	cancel()
+}
+
+func TestNetmapDeferral(t *testing.T) {
+	b := new(LocalBackend)
+	var cancel context.CancelFunc
+	b.ctx, cancel = context.WithCancel(context.Background())
+	b.logf = t.Logf
+
+	w := 40 * time.Millisecond
+
+	// Ensure that a deferred netmap gets sent with the correct delay
+	b.setNetmapRateLimit(time.Duration(w))
+	start := time.Now()
+	b.sendNetmap(b.netMap)
+
+	// Snooze for 20ms
+	time.Sleep(20 * time.Millisecond)
+
+	// This one should be deferred and sent after ~40-20ms
+	c := b.sendNetmap(b.netMap)
+	select {
+	case sent := <-c:
+		if !sent {
+			t.Errorf("Fourth netmap update was deferred but not sent; sent got %v, want %v", sent, true)
+		}
+	}
+
+	slop := 5 * time.Millisecond
+	g := time.Since(start) * time.Millisecond
+
+	// The difference between the elapsed time and the expected time should be within the slop
+	// and our total time should always be slightly greater than the expected time.
+	if w-g > slop || w > g {
+		t.Errorf("elapsed time is too incorrect w:%v g:%v", w, g)
+	}
+
+	cancel()
+}
+
+func TestNetmapNoRateLimiting(t *testing.T) {
+	b := new(LocalBackend)
+	var cancel context.CancelFunc
+	b.ctx, cancel = context.WithCancel(context.Background())
+	b.logf = t.Logf
+
+	// A zero rate limit means send-at-will
+	b.setNetmapRateLimit(0)
+
+	b.netMap = new(netmap.NetworkMap)
+
+	for i := 0; i < 10; i++ {
+		if g := b.sendNetmap(b.netMap); g != nil {
+			t.Errorf("should be immediately sent immediately")
+		}
+	}
+
+	// A negative rate limit also means send-at-will
+	b.setNetmapRateLimit(-1)
+
+	for i := 0; i < 10; i++ {
+		if g := b.sendNetmap(b.netMap); g != nil {
+			t.Errorf("should be immediately sent immediately")
+		}
+	}
+
+	cancel()
+}
+
 func TestFileTargets(t *testing.T) {
 	b := new(LocalBackend)
 	_, err := b.FileTargets()

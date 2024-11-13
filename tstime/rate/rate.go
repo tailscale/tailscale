@@ -56,6 +56,29 @@ func NewLimiter(r Limit, b int) *Limiter {
 	return &Limiter{limit: r, burst: float64(b)}
 }
 
+// Limit returns the maximum overall event rate.
+func (lim *Limiter) Limit() Limit {
+	return lim.limit
+}
+
+// Delay returns the approximate minimum duration before sufficient tokens
+// will be available to permit another event.
+func (lim *Limiter) Delay() time.Duration {
+	lim.mu.Lock()
+	defer lim.mu.Unlock()
+
+	// Calculate the new number of tokens available due to the passage of time.
+	elapsed := mono.Now().Sub(lim.last)
+	tokens := lim.tokens + float64(lim.limit)*elapsed.Seconds()
+	if tokens > lim.burst {
+		tokens = lim.burst
+	}
+
+	// Calculate the time until the next token is available.
+	wait := time.Duration((1-tokens)/float64(lim.limit)*1e9) * time.Nanosecond
+	return wait
+}
+
 // Allow reports whether an event may happen now.
 func (lim *Limiter) Allow() bool {
 	return lim.allow(mono.Now())

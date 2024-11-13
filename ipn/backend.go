@@ -73,6 +73,15 @@ const (
 	NotifyInitialOutgoingFiles // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
 
 	NotifyInitialHealthState // if set, the first Notify message (sent immediately) will contain the current health.State of the client
+
+	NotifyRateLimitNetmaps // if set, rate limit netmap updates to once every DefaultNetmapRateLimit seconds
+)
+
+const (
+	// This is the minimum time between netmap updates when NotifyRateLimitNetmaps is included in the Notify opts.
+	// 3 seconds should be sufficient to avoid flooding the UI with netmap updates on large/chatty tailnets without
+	// causing noticable issues with the UI being out of date.
+	DefaultNetmapRateLimit = time.Duration(3 * time.Second)
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
