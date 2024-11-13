@@ -28,11 +28,12 @@ flowchart LR
 
     subgraph Key
         ts[Tailscale device]:::tsnode
+        pod((Pod)):::pod
     end
 
     subgraph k8s[Kubernetes cluster]
-        subgraph tailscale-ns[tailscale]
-            operator["operator (dst)"]:::tsnode
+        subgraph tailscale-ns[ns=tailscale]
+            operator(("operator (dst)")):::tsnode
         end
 
         subgraph controlplane["Control plane"]
@@ -40,7 +41,7 @@ flowchart LR
         end
     end
     client["client (src)"]:::tsnode --> operator
-    operator-->|proxies requests| api
+    operator-->|proxies requests with impersonation headers| api
 
 ```
 
@@ -61,25 +62,27 @@ flowchart TD
 
     subgraph Key
         ts[Tailscale device]:::tsnode
-        pod(Pod):::pod
+        pod((Pod)):::pod
+        foo1-->|WireGuard traffic|foo2
+        foo3-->|Plaintext traffic|foo4
     end
 
     subgraph k8s[Kubernetes cluster]
-        subgraph tailscale-ns[tailscale]
-            operator(operator):::tsnode
-            ingress("ingress proxy (dst)"):::tsnode
-            secret
+        subgraph tailscale-ns[ns=tailscale]
+            operator((operator)):::tsnode
+            ingress(("ingress proxy (dst)")):::tsnode
+            secret[config Secret]
         end
 
-        subgraph defaultns[default]
-            svc[annotated svc]
-            svc --> app1(app)
-            svc --> app2(app)
+        subgraph defaultns[ns=default]
+            svc[annotated Service]
+            svc --> pod1((pod1))
+            svc --> pod2((pod2))
         end
     end
     client["client (src)"]:::tsnode --> ingress
     ingress -->|forwards traffic| svc
-    operator -.->|deploys| ingress
+    operator -.->|creates| ingress
     operator -.->|reads| svc
     operator -.->|creates| secret
     secret -.->|mounted| ingress
@@ -116,30 +119,30 @@ flowchart TD
 
     subgraph Key
         ts[Tailscale device]:::tsnode
-        pod(Pod):::pod
+        pod((Pod)):::pod
     end
 
     subgraph k8s[Kubernetes cluster]
-        subgraph tailscale-ns[tailscale]
-            operator(operator):::tsnode
-            egress("egress proxy (src)"):::tsnode
+        subgraph tailscale-ns[ns=tailscale]
+            operator((operator)):::tsnode
+            egress(("egress proxy (src)")):::tsnode
             headless-svc[headless svc]
             cfg-secret["config Secret"]
             state-secret["state Secret"]
         end
 
-        subgraph defaultns[default]
+        subgraph defaultns[ns=default]
             svc[db ExternalName svc]
-            app1(app) --> svc
-            app2(app) --> svc
+            pod1((pod1)) --> svc
+            pod2((pod2)) --> svc
         end
     end
     node["db.tails-scales.ts.net (dst)"]:::tsnode
     svc -->|DNS points to| headless-svc
     headless-svc -->|forwards traffic| egress
     egress -->|forwards traffic| node
-    operator -.->|deploys| egress
-    operator -.->|deploys| headless-svc
+    operator -.->|creates| egress
+    operator -.->|creates| headless-svc
     operator -.->|creates| cfg-secret
     operator -.->|watches & updates| svc
     cfg-secret -.->|mounted| egress
@@ -168,15 +171,15 @@ flowchart TD
 
     subgraph Key
         ts[Tailscale device]:::tsnode
-        pod(Pod):::pod
+        pod((Pod)):::pod
     end
 
     subgraph k8s[Kubernetes cluster]
-        subgraph tailscale-ns[tailscale]
-            operator(operator):::tsnode
+        subgraph tailscale-ns[ns=tailscale]
+            operator((operator)):::tsnode
             pg-sts[pg StatefulSet]
-            pg-0("pg-0 (src)"):::tsnode
-            pg-1("pg-1 (src)"):::tsnode
+            pg-0(("pg-0 (src)")):::tsnode
+            pg-1(("pg-1 (src)")):::tsnode
             cfg-secret-0["pg-0-config Secret"]
             cfg-secret-1["pg-1-config Secret"]
             state-secret-0["pg-0 Secret"]
@@ -188,7 +191,7 @@ flowchart TD
         end
     end
     operator-.->|watches| pg
-    operator -.->|deploys| pg-sts
+    operator -.->|creates| pg-sts
     pg-sts -.->|manages| pg-0
     pg-sts -.->|manages| pg-1
     operator -.->|creates| cfg-secret-0
@@ -220,14 +223,14 @@ flowchart TD
 
     subgraph Key
         ts[Tailscale device]:::tsnode
-        pod(Pod):::pod
+        pod((Pod)):::pod
     end
 
     subgraph k8s[Kubernetes cluster]
-        subgraph tailscale-ns[tailscale]
-            operator(operator):::tsnode
+        subgraph tailscale-ns[ns=tailscale]
+            operator((operator)):::tsnode
             rec-sts[rec StatefulSet]
-            rec-0("rec-0 Pod (tsrecorder)"):::tsnode
+            rec-0(("rec-0 Pod (tsrecorder)")):::tsnode
             cfg-secret-0["rec-0-config Secret"]
             state-secret-0["rec-0 Secret"]
         end
@@ -237,7 +240,7 @@ flowchart TD
         end
     end
     operator-.->|watches| rec
-    operator -.->|deploys| rec-sts
+    operator -.->|creates| rec-sts
     rec-sts -.->|manages| rec-0
     operator -.->|creates| cfg-secret-0
     cfg-secret-0 -.->|mounted| rec-0
