@@ -7,6 +7,7 @@ package mem
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"sync"
 
 	xmaps "golang.org/x/exp/maps"
@@ -32,18 +33,21 @@ func (s *Store) String() string { return "mem.Store" }
 // ReadState implements the StateStore interface.
 // It returns ipn.ErrStateNotExist if the state does not exist.
 func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
+	log.Printf("TEST: ReadState key %v ", id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	bs, ok := s.cache[id]
 	if !ok {
 		return nil, ipn.ErrStateNotExist
 	}
+	log.Printf("TEST: ReadState key %v val %v", id, string(bs))
 	return bs, nil
 }
 
 // WriteState implements the StateStore interface.
 // It never returns an error.
 func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
+	log.Printf("TEST: WriteState key %v ", id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cache == nil {
@@ -57,10 +61,12 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 // Any existing content is cleared, and the provided map is
 // copied into the cache.
 func (s *Store) LoadFromMap(m map[string][]byte) {
+	log.Printf("Store: LoadFromMap")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	xmaps.Clear(s.cache)
 	for k, v := range m {
+		log.Printf("TEST: setting state key %v %+#v", k, string(v))
 		mak.Set(&s.cache, ipn.StateKey(k), v)
 	}
 	return

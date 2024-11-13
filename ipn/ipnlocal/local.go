@@ -1995,6 +1995,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	defer unlock()
 
 	if opts.UpdatePrefs != nil {
+		log.Printf("TESTPREFS: update prefs non-nil")
 		if err := b.checkPrefsLocked(opts.UpdatePrefs); err != nil {
 			return err
 		}
@@ -2061,6 +2062,10 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	prefs := b.pm.CurrentPrefs()
+	log.Printf("TESTPREFS persistent prefs: %v", prefs.Persist())
+	if s := prefs.Persist().AsStruct(); s != nil {
+		log.Printf("TESTPREFS persistent prefs private key is %v", s.PrivateNodeKey)
+	}
 	wantRunning := prefs.WantRunning()
 	if wantRunning {
 		if err := b.initMachineKeyLocked(); err != nil {
@@ -6778,6 +6783,7 @@ func (b *LocalBackend) CurrentProfile() ipn.LoginProfile {
 
 // NewProfile creates and switches to the new profile.
 func (b *LocalBackend) NewProfile() error {
+	log.Printf("TESTPREFS: NewProfile LB")
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 

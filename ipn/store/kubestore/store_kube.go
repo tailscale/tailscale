@@ -7,6 +7,7 @@ package kubestore
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -142,6 +143,7 @@ func (s *Store) loadState() error {
 		}
 		return err
 	}
+	log.Printf("TEST: kube store: got secret: %#+v", secret.Data)
 	s.memory.LoadFromMap(secret.Data)
 	return nil
 }

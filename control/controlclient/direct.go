@@ -564,6 +564,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	case opt.URL != "":
 		// Nothing.
 	case regen || persist.PrivateNodeKey.IsZero():
+		if regen {
+			c.logf("TEST: need to regenerate")
+		} else {
+			c.logf("TEST: private node key is zero, persist is %v", persist)
+			c.logf("TEST: private node key is zero, persist is %v", persist)
+		}
 		c.logf("Generating a new nodekey.")
 		persist.OldPrivateNodeKey = persist.PrivateNodeKey
 		tryingNewKey = key.NewNode()

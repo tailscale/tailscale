@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"runtime"
 	"slices"
 	"strings"
@@ -203,6 +204,7 @@ func (pm *profileManager) setUnattendedModeAsConfigured() error {
 
 // Reset unloads the current profile, if any.
 func (pm *profileManager) Reset() {
+	log.Printf("TESTPREFS: Reset")
 	pm.currentUserID = ""
 	pm.NewProfile()
 }
@@ -215,6 +217,7 @@ func (pm *profileManager) Reset() {
 // is logged into so that we can keep track of things like their domain name
 // across user switches to disambiguate the same account but a different tailnet.
 func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile) error {
+	log.Printf("TESTPREFS: SetPrefs with prefs %v", prefsIn)
 	cp := pm.currentProfile
 	if persist := prefsIn.Persist(); !persist.Valid() || persist.NodeID() == "" || persist.UserProfile().LoginName == "" {
 		// We don't know anything about this profile, so ignore it for now.
@@ -223,6 +226,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 
 	// Check if we already have an existing profile that matches the user/node.
 	if existing := pm.findMatchingProfiles(prefsIn); len(existing) > 0 {
+		log.Printf("TESTPREFS: SetPrefs found existing profile")
 		// We already have a profile for this user/node we should reuse it. Also
 		// cleanup any other duplicate profiles.
 		cp = existing[0]
@@ -230,6 +234,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 		for _, p := range existing {
 			// Clear the state.
 			if err := pm.store.WriteState(p.Key, nil); err != nil {
+				log.Printf("TESTPREFS: SetPrefs found existing profile, error writing state: %v", err)
 				// We couldn't delete the state, so keep the profile around.
 				continue
 			}
@@ -237,6 +242,8 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 			// in [profileManager.setProfilePrefs] below.
 			delete(pm.knownProfiles, p.ID)
 		}
+	} else {
+		log.Printf("TESTPREFS: SetPrefs not found existing profile")
 	}
 	pm.currentProfile = cp
 	if err := pm.SetProfilePrefs(cp, prefsIn, np); err != nil {
@@ -327,6 +334,7 @@ func newUnusedID(knownProfiles map[ipn.ProfileID]*ipn.LoginProfile) (ipn.Profile
 // profile, such as verifying the caller's access rights or checking
 // if another profile for the same node already exists.
 func (pm *profileManager) setProfilePrefsNoPermCheck(profile *ipn.LoginProfile, clonedPrefs ipn.PrefsView) error {
+	log.Printf("TESTPREFS: setProfilePrefsNoPerm")
 	isCurrentProfile := pm.currentProfile == profile
 	if isCurrentProfile {
 		pm.prefs = clonedPrefs
@@ -423,6 +431,7 @@ func (pm *profileManager) profilePrefs(p *ipn.LoginProfile) (ipn.PrefsView, erro
 // If the profile exists but is not accessible to the current user, it returns an [errProfileAccessDenied].
 // If the profile does not exist, it returns an [errProfileNotFound].
 func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
+	log.Printf("TESTPREFS: SwitchProfile")
 	metricSwitchProfile.Add(1)
 
 	kp, ok := pm.knownProfiles[id]
@@ -450,6 +459,7 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 // It creates a new one and switches to it if the current user does not have a default profile,
 // or returns an error if the default profile is inaccessible or could not be loaded.
 func (pm *profileManager) SwitchToDefaultProfile() error {
+	log.Printf("TESTPREFS: SwitchToDefault")
 	if id := pm.DefaultUserProfileID(pm.currentUserID); id != "" {
 		return pm.SwitchProfile(id)
 	}
@@ -547,6 +557,7 @@ func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
 }
 
 func (pm *profileManager) deleteCurrentProfile() error {
+	log.Printf("TESTPREFS: deleteCurrent")
 	if err := pm.checkProfileAccess(pm.currentProfile); err != nil {
 		return err
 	}
@@ -627,6 +638,7 @@ func (pm *profileManager) NewProfile() {
 // NewProfileForUser is like [profileManager.NewProfile], but it switches to the
 // specified user and sets that user as the profile owner for the new profile.
 func (pm *profileManager) NewProfileForUser(uid ipn.WindowsUserID) {
+	log.Printf("TESTPREFS: NewProfileForUser")
 	pm.currentUserID = uid
 
 	metricNewProfile.Add(1)
@@ -641,6 +653,7 @@ func (pm *profileManager) NewProfileForUser(uid ipn.WindowsUserID) {
 // newly created profile immediately. It returns the newly created profile on success,
 // or an error on failure.
 func (pm *profileManager) newProfileWithPrefs(uid ipn.WindowsUserID, prefs ipn.PrefsView, switchNow bool) (*ipn.LoginProfile, error) {
+	log.Printf("TESTPREFS: newProfileWithPrefs")
 	metricNewProfile.Add(1)
 
 	profile := &ipn.LoginProfile{LocalUserID: uid}
@@ -733,6 +746,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("TESTPREFS: newProfileWithGOOS with state key %v", stateKey)
 
 	knownProfiles, err := readKnownProfiles(store)
 	if err != nil {
@@ -748,12 +762,15 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 	}
 
 	if stateKey != "" {
+		log.Printf("TESTPREFS: state key %v exists", stateKey)
 		for _, v := range knownProfiles {
+			log.Printf("TESTPREFS: state key %v exists looking at matching profile %s", stateKey, v)
 			if v.Key == stateKey {
 				pm.currentProfile = v
 			}
 		}
 		if pm.currentProfile == nil {
+			log.Printf("TESTPREFS: current profile is nil")
 			if suf, ok := strings.CutPrefix(string(stateKey), "user-"); ok {
 				pm.currentUserID = ipn.WindowsUserID(suf)
 			}
@@ -776,12 +793,14 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 		// uid passed in from the unix tests. The uid's used for Windows tests
 		// and runtime must be valid Windows security identifier structures.
 	} else if len(knownProfiles) == 0 && goos != "windows" && runtime.GOOS != "windows" {
+		log.Printf("TESTPREFS: no known profiles")
 		// No known profiles, try a migration.
 		pm.dlogf("no known profiles; trying to migrate from legacy prefs")
 		if _, err := pm.migrateFromLegacyPrefs(pm.currentUserID, true); err != nil {
 			return nil, err
 		}
 	} else {
+		log.Printf("TESTPREFS: newProfileWithGOOS new profile")
 		pm.NewProfile()
 	}
 
