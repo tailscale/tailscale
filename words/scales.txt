@@ -398,3 +398,4 @@ fahrenheit
 rankine
 piano
 ruler
+scoville
