@@ -93,8 +93,13 @@ func Run(args []string) (err error) {
 
 	args = CleanUpArgs(args)
 
-	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
-		args = []string{"version"}
+	if len(args) == 1 {
+		switch args[0] {
+		case "-V", "--version":
+			args = []string{"version"}
+		case "help":
+			args = []string{"--help"}
+		}
 	}
 
 	var warnOnce sync.Once
