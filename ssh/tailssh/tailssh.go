@@ -1170,7 +1170,7 @@ func (ss *sshSession) run() {
 		if err != nil && !errors.Is(err, io.EOF) {
 			isErrBecauseProcessExited := processDone.Load() && errors.Is(err, syscall.EIO)
 			if !isErrBecauseProcessExited {
-				logf("stdout copy: %v, %T", err)
+				logf("stdout copy: %v", err)
 				ss.cancelCtx(err)
 			}
 		}
@@ -1520,9 +1520,14 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		go func() {
 			err := <-errChan
 			if err == nil {
-				// Success.
-				ss.logf("recording: finished uploading recording")
-				return
+				select {
+				case <-ss.ctx.Done():
+					// Success.
+					ss.logf("recording: finished uploading recording")
+					return
+				default:
+					err = errors.New("recording upload ended before the SSH session")
+				}
 			}
 			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
 				lastAttempt := attempts[len(attempts)-1]
