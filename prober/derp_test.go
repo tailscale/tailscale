@@ -44,6 +44,19 @@ func TestDerpProber(t *testing.T) {
 					},
 				},
 			},
+			1: {
+				RegionID:   1,
+				RegionCode: "one",
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "n3",
+						RegionID: 0,
+						HostName: "derpn3.tailscale.test",
+						IPv4:     "1.1.1.1",
+						IPv6:     "::1",
+					},
+				},
+			},
 		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -62,17 +75,20 @@ func TestDerpProber(t *testing.T) {
 		derpMapURL:   srv.URL,
 		tlsInterval:  time.Second,
 		tlsProbeFn:   func(_ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
+		tlsRegions:   []string{"zero"},
 		udpInterval:  time.Second,
 		udpProbeFn:   func(_ string, _ int) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
+		udpRegions:   []string{"zero"},
 		meshInterval: time.Second,
 		meshProbeFn:  func(_, _ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
+		meshRegions:  []string{"zero"},
 		nodes:        make(map[string]*tailcfg.DERPNode),
 		probes:       make(map[string]*Probe),
 	}
 	if err := dp.probeMapFn(context.Background()); err != nil {
 		t.Errorf("unexpected probeMapFn() error: %s", err)
 	}
-	if len(dp.nodes) != 2 || dp.nodes["n1"] == nil || dp.nodes["n2"] == nil {
+	if len(dp.nodes) != 3 || dp.nodes["n1"] == nil || dp.nodes["n2"] == nil || dp.nodes["n3"] == nil {
 		t.Errorf("unexpected nodes: %+v", dp.nodes)
 	}
 	// Probes expected for two nodes:
@@ -84,16 +100,16 @@ func TestDerpProber(t *testing.T) {
 
 	// Add one more node and check that probes got created.
 	dm.Regions[0].Nodes = append(dm.Regions[0].Nodes, &tailcfg.DERPNode{
-		Name:     "n3",
+		Name:     "n4",
 		RegionID: 0,
-		HostName: "derpn3.tailscale.test",
+		HostName: "derpn4.tailscale.test",
 		IPv4:     "1.1.1.1",
 		IPv6:     "::1",
 	})
 	if err := dp.probeMapFn(context.Background()); err != nil {
 		t.Errorf("unexpected probeMapFn() error: %s", err)
 	}
-	if len(dp.nodes) != 3 {
+	if len(dp.nodes) != 4 {
 		t.Errorf("unexpected nodes: %+v", dp.nodes)
 	}
 	// 9 regular probes + 9 mesh probes
@@ -106,11 +122,26 @@ func TestDerpProber(t *testing.T) {
 	if err := dp.probeMapFn(context.Background()); err != nil {
 		t.Errorf("unexpected probeMapFn() error: %s", err)
 	}
-	if len(dp.nodes) != 1 {
+	if len(dp.nodes) != 2 {
 		t.Errorf("unexpected nodes: %+v", dp.nodes)
 	}
-	// 3 regular probes + 1 mesh probe
+	// 3 regular probes + 1 mesh probes
 	if len(dp.probes) != 4 {
+		t.Errorf("unexpected probes: %+v", dp.probes)
+	}
+
+	// Stop filtering regions.
+	dp.tlsRegions = nil
+	dp.udpRegions = nil
+	dp.meshRegions = nil
+	if err := dp.probeMapFn(context.Background()); err != nil {
+		t.Errorf("unexpected probeMapFn() error: %s", err)
+	}
+	if len(dp.nodes) != 2 {
+		t.Errorf("unexpected nodes: %+v", dp.nodes)
+	}
+	// 6 regular probes + 2 mesh probe
+	if len(dp.probes) != 8 {
 		t.Errorf("unexpected probes: %+v", dp.probes)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,12 +39,16 @@ type derpProber struct {
 	p            *Prober
 	derpMapURL   string // or "local"
 	udpInterval  time.Duration
+	udpRegions   []string
 	meshInterval time.Duration
+	meshRegions  []string
 	tlsInterval  time.Duration
+	tlsRegions   []string
 
 	// Optional bandwidth probing.
 	bwInterval  time.Duration
 	bwProbeSize int64
+	bwRegions   []string
 
 	// Probe class for fetching & updating the DERP map.
 	ProbeMap ProbeClass
@@ -65,35 +70,44 @@ type DERPOpt func(*derpProber)
 
 // WithBandwidthProbing enables bandwidth probing. When enabled, a payload of
 // `size` bytes will be regularly transferred through each DERP server, and each
-// pair of DERP servers in every region.
-func WithBandwidthProbing(interval time.Duration, size int64) DERPOpt {
+// pair of DERP servers in every region. Optionally, `regions` allows restricting
+// bandwidth probes to specific region codes.
+func WithBandwidthProbing(interval time.Duration, size int64, regions ...string) DERPOpt {
 	return func(d *derpProber) {
 		d.bwInterval = interval
 		d.bwProbeSize = size
+		d.bwRegions = regions
 	}
 }
 
 // WithMeshProbing enables mesh probing. When enabled, a small message will be
 // transferred through each DERP server and each pair of DERP servers.
-func WithMeshProbing(interval time.Duration) DERPOpt {
+// Optionally, `regions` allows restricting mesh probes to specific region
+// codes.
+func WithMeshProbing(interval time.Duration, regions ...string) DERPOpt {
 	return func(d *derpProber) {
 		d.meshInterval = interval
+		d.meshRegions = regions
 	}
 }
 
 // WithSTUNProbing enables STUN/UDP probing, with a STUN request being sent
-// to each DERP server every `interval`.
-func WithSTUNProbing(interval time.Duration) DERPOpt {
+// to each DERP server every `interval`. Optionally, `regions` allows
+// restricting STUN probes to specific region codes.
+func WithSTUNProbing(interval time.Duration, regions ...string) DERPOpt {
 	return func(d *derpProber) {
 		d.udpInterval = interval
+		d.udpRegions = regions
 	}
 }
 
 // WithTLSProbing enables TLS probing that will check TLS certificate on port
-// 443 of each DERP server every `interval`.
-func WithTLSProbing(interval time.Duration) DERPOpt {
+// 443 of each DERP server every `interval`. Optionally, `regions` allows
+// restricting TLS probes to specific region codes.
+func WithTLSProbing(interval time.Duration, regions ...string) DERPOpt {
 	return func(d *derpProber) {
 		d.tlsInterval = interval
+		d.tlsRegions = regions
 	}
 }
 
@@ -142,7 +156,7 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 				"hostname":  server.HostName,
 			}
 
-			if d.tlsInterval > 0 {
+			if d.tlsInterval > 0 && d.includeRegion(d.tlsRegions, region) {
 				n := fmt.Sprintf("derp/%s/%s/tls", region.RegionCode, server.Name)
 				wantProbes[n] = true
 				if d.probes[n] == nil {
@@ -152,7 +166,7 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 				}
 			}
 
-			if d.udpInterval > 0 {
+			if d.udpInterval > 0 && d.includeRegion(d.udpRegions, region) {
 				for idx, ipStr := range []string{server.IPv6, server.IPv4} {
 					n := fmt.Sprintf("derp/%s/%s/udp", region.RegionCode, server.Name)
 					if idx == 0 {
@@ -172,7 +186,7 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 			}
 
 			for _, to := range region.Nodes {
-				if d.meshInterval > 0 {
+				if d.meshInterval > 0 && d.includeRegion(d.meshRegions, region) {
 					n := fmt.Sprintf("derp/%s/%s/%s/mesh", region.RegionCode, server.Name, to.Name)
 					wantProbes[n] = true
 					if d.probes[n] == nil {
@@ -181,7 +195,7 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 					}
 				}
 
-				if d.bwInterval > 0 && d.bwProbeSize > 0 {
+				if d.bwInterval > 0 && d.bwProbeSize > 0 && d.includeRegion(d.bwRegions, region) {
 					n := fmt.Sprintf("derp/%s/%s/%s/bw", region.RegionCode, server.Name, to.Name)
 					wantProbes[n] = true
 					if d.probes[n] == nil {
@@ -336,6 +350,10 @@ func (d *derpProber) ProbeUDP(ipaddr string, port int) ProbeClass {
 		},
 		Class: "derp_udp",
 	}
+}
+
+func (d *derpProber) includeRegion(regions []string, region *tailcfg.DERPRegion) bool {
+	return len(regions) == 0 || slices.Contains(regions, region.RegionCode)
 }
 
 func derpProbeUDP(ctx context.Context, ipStr string, port int) error {
