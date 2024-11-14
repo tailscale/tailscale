@@ -29,6 +29,7 @@ var (
 	tlsInterval  = flag.Duration("tls-interval", 15*time.Second, "TLS probe interval")
 	bwInterval   = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing)")
 	bwSize       = flag.Int64("bw-probe-size-bytes", 1_000_000, "bandwidth probe size")
+	regionCode   = flag.String("region-code", "", "probe only this region (e.g. 'lax'); if left blank, all regions will be probed")
 )
 
 func main() {
@@ -46,6 +47,9 @@ func main() {
 	}
 	if *bwInterval > 0 {
 		opts = append(opts, prober.WithBandwidthProbing(*bwInterval, *bwSize))
+	}
+	if *regionCode != "" {
+		opts = append(opts, prober.WithRegion(*regionCode))
 	}
 	dp, err := prober.DERP(p, *derpMapURL, opts...)
 	if err != nil {
