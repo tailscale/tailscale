@@ -73,6 +73,8 @@ const (
 	NotifyInitialOutgoingFiles // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
 
 	NotifyInitialHealthState // if set, the first Notify message (sent immediately) will contain the current health.State of the client
+
+	NotifyRateLimit // if set, rate limit spammy netmap updates to every few seconds
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
