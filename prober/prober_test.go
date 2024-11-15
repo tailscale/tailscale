@@ -316,7 +316,7 @@ func TestProberProbeInfo(t *testing.T) {
 			Interval:        probeInterval,
 			Labels:          map[string]string{"class": "", "name": "probe1"},
 			Latency:         500 * time.Millisecond,
-			Result:          true,
+			Status:          ProbeStatusSucceeded,
 			RecentResults:   []bool{true},
 			RecentLatencies: []time.Duration{500 * time.Millisecond},
 		},
@@ -324,6 +324,7 @@ func TestProberProbeInfo(t *testing.T) {
 			Name:            "probe2",
 			Interval:        probeInterval,
 			Labels:          map[string]string{"class": "", "name": "probe2"},
+			Status:          ProbeStatusFailed,
 			Error:           "error2",
 			RecentResults:   []bool{false},
 			RecentLatencies: nil, // no latency for failed probes
@@ -349,7 +350,7 @@ func TestProbeInfoRecent(t *testing.T) {
 	}{
 		{
 			name:                    "no_runs",
-			wantProbeInfo:           ProbeInfo{},
+			wantProbeInfo:           ProbeInfo{Status: ProbeStatusUnknown},
 			wantRecentSuccessRatio:  0,
 			wantRecentMedianLatency: 0,
 		},
@@ -358,7 +359,7 @@ func TestProbeInfoRecent(t *testing.T) {
 			results: []probeResult{{latency: 100 * time.Millisecond, err: nil}},
 			wantProbeInfo: ProbeInfo{
 				Latency:         100 * time.Millisecond,
-				Result:          true,
+				Status:          ProbeStatusSucceeded,
 				RecentResults:   []bool{true},
 				RecentLatencies: []time.Duration{100 * time.Millisecond},
 			},
@@ -369,7 +370,7 @@ func TestProbeInfoRecent(t *testing.T) {
 			name:    "single_failure",
 			results: []probeResult{{latency: 100 * time.Millisecond, err: errors.New("error123")}},
 			wantProbeInfo: ProbeInfo{
-				Result:          false,
+				Status:          ProbeStatusFailed,
 				RecentResults:   []bool{false},
 				RecentLatencies: nil,
 				Error:           "error123",
@@ -390,7 +391,7 @@ func TestProbeInfoRecent(t *testing.T) {
 				{latency: 80 * time.Millisecond, err: nil},
 			},
 			wantProbeInfo: ProbeInfo{
-				Result:        true,
+				Status:        ProbeStatusSucceeded,
 				Latency:       80 * time.Millisecond,
 				RecentResults: []bool{false, true, true, false, true, true, false, true},
 				RecentLatencies: []time.Duration{
@@ -420,7 +421,7 @@ func TestProbeInfoRecent(t *testing.T) {
 				{latency: 110 * time.Millisecond, err: nil},
 			},
 			wantProbeInfo: ProbeInfo{
-				Result:        true,
+				Status:        ProbeStatusSucceeded,
 				Latency:       110 * time.Millisecond,
 				RecentResults: []bool{true, true, true, true, true, true, true, true, true, true},
 				RecentLatencies: []time.Duration{
@@ -483,7 +484,7 @@ func TestProberRunHandler(t *testing.T) {
 				ProbeInfo: ProbeInfo{
 					Name:          "success",
 					Interval:      probeInterval,
-					Result:        true,
+					Status:        ProbeStatusSucceeded,
 					RecentResults: []bool{true, true},
 				},
 				PreviousSuccessRatio: 1,
@@ -498,7 +499,7 @@ func TestProberRunHandler(t *testing.T) {
 				ProbeInfo: ProbeInfo{
 					Name:          "failure",
 					Interval:      probeInterval,
-					Result:        false,
+					Status:        ProbeStatusFailed,
 					Error:         "error123",
 					RecentResults: []bool{false, false},
 				},

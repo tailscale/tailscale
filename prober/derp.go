@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"expvar"
@@ -15,10 +16,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"tailscale.com/client/tailscale"
@@ -55,7 +58,7 @@ type derpProber struct {
 	tlsProbeFn  func(string) ProbeClass
 	udpProbeFn  func(string, int) ProbeClass
 	meshProbeFn func(string, string) ProbeClass
-	bwProbeFn   func(string, string, int64) ProbeClass
+	bwProbeFn   func(string, string, int64, bool) ProbeClass
 
 	sync.Mutex
 	lastDERPMap   *tailcfg.DERPMap
@@ -69,6 +72,11 @@ type DERPOpt func(*derpProber)
 // WithBandwidthProbing enables bandwidth probing. When enabled, a payload of
 // `size` bytes will be regularly transferred through each DERP server, and each
 // pair of DERP servers in every region.
+//
+// If `size` is less than 0, this will trigger the probe to continuously send
+// data as fast as possible. Continuous mode can consume huge amounts of
+// network bandwidth, so it is best used when probing DERP servers on the same
+// LAN/datacenter.
 func WithBandwidthProbing(interval time.Duration, size int64) DERPOpt {
 	return func(d *derpProber) {
 		d.bwInterval = interval
@@ -94,7 +102,7 @@ func WithSTUNProbing(interval time.Duration) DERPOpt {
 
 // WithTLSProbing enables TLS probing that will check TLS certificate on port
 // 443 of each DERP server every `interval`.
-func WithTLSProbing(interval time.Duration) DERPOpt {
+func WithTLSProbing(interval time.Duration, regions ...string) DERPOpt {
 	return func(d *derpProber) {
 		d.tlsInterval = interval
 	}
@@ -196,12 +204,12 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 					}
 				}
 
-				if d.bwInterval > 0 && d.bwProbeSize > 0 {
+				if d.bwInterval != 0 && d.bwProbeSize > 0 {
 					n := fmt.Sprintf("derp/%s/%s/%s/bw", region.RegionCode, server.Name, to.Name)
 					wantProbes[n] = true
 					if d.probes[n] == nil {
 						log.Printf("adding DERP bandwidth probe for %s->%s (%s) %v bytes every %v", server.Name, to.Name, region.RegionName, d.bwProbeSize, d.bwInterval)
-						d.probes[n] = d.p.Run(n, d.bwInterval, labels, d.bwProbeFn(server.Name, to.Name, d.bwProbeSize))
+						d.probes[n] = d.p.Run(n, d.bwInterval, labels, d.bwProbeFn(server.Name, to.Name, d.bwProbeSize, d.bwInterval < 0))
 					}
 				}
 			}
@@ -246,11 +254,19 @@ func (d *derpProber) probeMesh(from, to string) ProbeClass {
 // through a pair of DERP servers (or just one server, if 'from' and 'to' are
 // the same). 'from' and 'to' are expected to be names (DERPNode.Name) of two
 // DERP servers in the same region.
-func (d *derpProber) probeBandwidth(from, to string, size int64) ProbeClass {
+func (d *derpProber) probeBandwidth(from, to string, size int64, continuous bool) ProbeClass {
 	derpPath := "mesh"
 	if from == to {
 		derpPath = "single"
 	}
+	if continuous {
+		return d.probeBandwidthContinuous(from, to, derpPath, size)
+	} else {
+		return d.probeBandwidthOnce(from, to, derpPath, size)
+	}
+}
+
+func (d *derpProber) probeBandwidthOnce(from, to, derpPath string, size int64) ProbeClass {
 	var transferTime expvar.Float
 	return ProbeClass{
 		Probe: func(ctx context.Context) error {
@@ -258,7 +274,7 @@ func (d *derpProber) probeBandwidth(from, to string, size int64) ProbeClass {
 			if err != nil {
 				return err
 			}
-			return derpProbeBandwidth(ctx, d.lastDERPMap, fromN, toN, size, &transferTime)
+			return derpProbeBandwidthOnce(ctx, d.lastDERPMap, fromN, toN, size, &transferTime)
 		},
 		Class:  "derp_bw",
 		Labels: Labels{"derp_path": derpPath},
@@ -268,6 +284,76 @@ func (d *derpProber) probeBandwidth(from, to string, size int64) ProbeClass {
 				prometheus.MustNewConstMetric(prometheus.NewDesc("derp_bw_transfer_time_seconds_total", "Time it took to transfer data", nil, l), prometheus.CounterValue, transferTime.Value()),
 			}
 		},
+	}
+}
+
+func (d *derpProber) probeBandwidthContinuous(from, to, derpPath string, size int64) ProbeClass {
+	var bytesTransferred expvar.Float
+	var transferTime expvar.Float
+	var qdh queuingDelayHistogram
+	qdh.reset()
+	return ProbeClass{
+		Probe: func(ctx context.Context) error {
+			fromN, toN, err := d.getNodePair(from, to)
+			if err != nil {
+				return err
+			}
+			return derpProbeBandwidthContinuous(ctx, d.lastDERPMap, fromN, toN, size, &bytesTransferred, &transferTime, &qdh)
+		},
+		Class:  "derp_bw",
+		Labels: Labels{"derp_path": derpPath},
+		Metrics: func(l prometheus.Labels) []prometheus.Metric {
+			qdh.mx.Lock()
+			result := []prometheus.Metric{
+				prometheus.MustNewConstMetric(prometheus.NewDesc("derp_bw_probe_continuous_size_bytes", "Payload size of the bandwidth prober", nil, l), prometheus.GaugeValue, float64(size)),
+				prometheus.MustNewConstMetric(prometheus.NewDesc("derp_bw_probe_continuous_bytes_total", "Total data transferred", nil, l), prometheus.CounterValue, float64(bytesTransferred.Value())),
+				prometheus.MustNewConstMetric(prometheus.NewDesc("derp_bw_probe_continuous_transfer_time_seconds_total", "Time it took to transfer data", nil, l), prometheus.CounterValue, transferTime.Value()),
+				prometheus.MustNewConstHistogram(prometheus.NewDesc("derp_bw_probe_continuous_queuing_delays_seconds", "Distribution of queuing delays", nil, l), qdh.count, qdh.sum, qdh.buckets),
+			}
+			qdh.resetLocked()
+			qdh.mx.Unlock()
+			return result
+		},
+	}
+}
+
+// queuingDelayHistogram allows tracking a histogram of queuing delays
+type queuingDelayHistogram struct {
+	count   uint64
+	sum     float64
+	buckets map[float64]uint64
+	mx      sync.Mutex
+}
+
+// qdhBuckets defines the buckets (in seconds) for the queuingDelayHistogram.
+var qdhBuckets = []float64{0.0001, 0.0002, 0.0005}
+
+func (qdh *queuingDelayHistogram) reset() {
+	qdh.mx.Lock()
+	defer qdh.mx.Unlock()
+	qdh.resetLocked()
+}
+
+func (qdh *queuingDelayHistogram) resetLocked() {
+	qdh.count = 0
+	qdh.sum = 0
+	qdh.buckets = make(map[float64]uint64, len(qdhBuckets))
+}
+
+func (qdh *queuingDelayHistogram) add(d time.Duration) {
+	qdh.mx.Lock()
+	defer qdh.mx.Unlock()
+
+	seconds := float64(d.Seconds())
+	qdh.count++
+	qdh.sum += seconds
+
+	for _, b := range qdhBuckets {
+		if seconds > b {
+			continue
+		}
+		qdh.buckets[b] += 1
+		break
 	}
 }
 
@@ -411,9 +497,9 @@ func derpProbeUDP(ctx context.Context, ipStr string, port int) error {
 	return nil
 }
 
-// derpProbeBandwidth sends a payload of a given size between two local
+// derpProbeBandwidthOnce sends a payload of a given size between two local
 // DERP clients connected to two DERP servers.
-func derpProbeBandwidth(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode, size int64, transferTime *expvar.Float) (err error) {
+func derpProbeBandwidthOnce(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode, size int64, transferTime *expvar.Float) (err error) {
 	// This probe uses clients with isProber=false to avoid spamming the derper logs with every packet
 	// sent by the bandwidth probe.
 	fromc, err := newConn(ctx, dm, from, false)
@@ -437,7 +523,39 @@ func derpProbeBandwidth(ctx context.Context, dm *tailcfg.DERPMap, from, to *tail
 	start := time.Now()
 	defer func() { transferTime.Add(time.Since(start).Seconds()) }()
 
-	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc, size); err != nil {
+	if err := runDerpProbeNodePairOnce(ctx, from, to, fromc, toc, size); err != nil {
+		// Record pubkeys on failed probes to aid investigation.
+		return fmt.Errorf("%s -> %s: %w",
+			fromc.SelfPublicKey().ShortString(),
+			toc.SelfPublicKey().ShortString(), err)
+	}
+	return nil
+}
+
+// derpProbeBandwidthContinuous continuously sends data between two local
+// DERP clients connected to two DERP servers.
+func derpProbeBandwidthContinuous(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode, size int64, bytesTransferred, transferTime *expvar.Float, qdh *queuingDelayHistogram) (err error) {
+	// This probe uses clients with isProber=false to avoid spamming the derper logs with every packet
+	// sent by the bandwidth probe.
+	fromc, err := newConn(ctx, dm, from, false)
+	if err != nil {
+		return err
+	}
+	defer fromc.Close()
+	toc, err := newConn(ctx, dm, to, false)
+	if err != nil {
+		return err
+	}
+	defer toc.Close()
+
+	// Wait a bit for from's node to hear about to existing on the
+	// other node in the region, in the case where the two nodes
+	// are different.
+	if from.Name != to.Name {
+		time.Sleep(100 * time.Millisecond) // pretty arbitrary
+	}
+
+	if err := runDerpProbeNodePairContinuously(ctx, from, to, fromc, toc, size, bytesTransferred, transferTime, qdh); err != nil {
 		// Record pubkeys on failed probes to aid investigation.
 		return fmt.Errorf("%s -> %s: %w",
 			fromc.SelfPublicKey().ShortString(),
@@ -468,7 +586,7 @@ func derpProbeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailc
 	}
 
 	const meshProbePacketSize = 8
-	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc, meshProbePacketSize); err != nil {
+	if err := runDerpProbeNodePairOnce(ctx, from, to, fromc, toc, meshProbePacketSize); err != nil {
 		// Record pubkeys on failed probes to aid investigation.
 		return fmt.Errorf("%s -> %s: %w",
 			fromc.SelfPublicKey().ShortString(),
@@ -504,10 +622,10 @@ func packetsForSize(size int64) [][]byte {
 	return pkts
 }
 
-// runDerpProbeNodePair takes two DERP clients (fromc and toc) connected to two
+// runDerpProbeNodePairOnce takes two DERP clients (fromc and toc) connected to two
 // DERP servers (from and to) and sends a test payload of a given size from one
 // to another.
-func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client, size int64) error {
+func runDerpProbeNodePairOnce(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client, size int64) error {
 	// To avoid derper dropping enqueued packets, limit the number of packets in flight.
 	// The value here is slightly smaller than perClientSendQueueDepth in derp_server.go
 	inFlight := syncs.NewSemaphore(30)
@@ -544,6 +662,8 @@ func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc
 					recvc <- fmt.Errorf("got data packet %d from unexpected source, %v", idx, v.Source)
 					return
 				}
+				// This assumes that the packets are received reliably and in order.
+				// The DERP protocol does not guarantee this, but this probe assumes it.
 				if got, want := v.Data, pkts[idx]; !bytes.Equal(got, want) {
 					recvc <- fmt.Errorf("unexpected data packet %d (out of %d)", idx, len(pkts))
 					return
@@ -552,6 +672,91 @@ func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc
 				if idx == len(pkts) {
 					return
 				}
+
+			case derp.KeepAliveMessage:
+				// Silently ignore.
+			default:
+				log.Printf("%v: ignoring Recv frame type %T", to.Name, v)
+				// Loop.
+			}
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("timeout: %w", ctx.Err())
+	case err := <-sendc:
+		if err != nil {
+			return fmt.Errorf("error sending via %q: %w", from.Name, err)
+		}
+	case err := <-recvc:
+		if err != nil {
+			return fmt.Errorf("error receiving from %q: %w", to.Name, err)
+		}
+	}
+	return nil
+}
+
+func runDerpProbeNodePairContinuously(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client, pktSize int64, bytesTransferred, transferTime *expvar.Float, qdh *queuingDelayHistogram) error {
+	// To avoid derper dropping enqueued packets, limit the number of packets in flight.
+	// The value here is slightly smaller than perClientSendQueueDepth in derp_server.go
+	inFlight := syncs.NewSemaphore(30)
+
+	// Send the packets.
+	sendc := make(chan error, 1)
+	pkt := make([]byte, pktSize) // sized slightly smaller than MTU to avoid fragmentation
+	crand.Read(pkt)
+	go func() {
+		for {
+			inFlight.AcquireContext(ctx)
+			now := time.Now()
+			// Write the monotonic time into the first 16 bytes of the packet
+			wall, ext := wallAndExt(now)
+			binary.BigEndian.PutUint64(pkt, wall)
+			binary.BigEndian.PutUint64(pkt[8:], uint64(ext))
+			if err := fromc.Send(toc.SelfPublicKey(), pkt); err != nil {
+				sendc <- fmt.Errorf("sending packet %w", err)
+				return
+			}
+		}
+	}()
+
+	// Increment transfer time every 1 second.
+	ticker := time.NewTicker(1 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				transferTime.Add(1)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Receive the packets.
+	recvc := make(chan error, 1)
+	go func() {
+		defer close(recvc) // to break out of 'select' below.
+		for {
+			m, err := toc.Recv()
+			if err != nil {
+				recvc <- err
+				return
+			}
+			switch v := m.(type) {
+			case derp.ReceivedPacket:
+				now := time.Now()
+				inFlight.Release()
+				if v.Source != fromc.SelfPublicKey() {
+					recvc <- fmt.Errorf("got data packet from unexpected source, %v", v.Source)
+					return
+				}
+				wall := binary.BigEndian.Uint64(v.Data)
+				ext := int64(binary.BigEndian.Uint64(v.Data[8:]))
+				sent := fromWallAndExt(wall, ext)
+				qdh.add(now.Sub(sent))
+				bytesTransferred.Add(float64(pktSize))
 
 			case derp.KeepAliveMessage:
 				// Silently ignore.
@@ -597,18 +802,22 @@ func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode, isPr
 	if err != nil {
 		return nil, err
 	}
-	cs, ok := dc.TLSConnectionState()
-	if !ok {
-		dc.Close()
-		return nil, errors.New("no TLS state")
-	}
-	if len(cs.PeerCertificates) == 0 {
-		dc.Close()
-		return nil, errors.New("no peer certificates")
-	}
-	if cs.ServerName != n.HostName {
-		dc.Close()
-		return nil, fmt.Errorf("TLS server name %q != derp hostname %q", cs.ServerName, n.HostName)
+
+	// Only verify TLS state if this is a prober.
+	if isProber {
+		cs, ok := dc.TLSConnectionState()
+		if !ok {
+			dc.Close()
+			return nil, errors.New("no TLS state")
+		}
+		if len(cs.PeerCertificates) == 0 {
+			dc.Close()
+			return nil, errors.New("no peer certificates")
+		}
+		if cs.ServerName != n.HostName {
+			dc.Close()
+			return nil, fmt.Errorf("TLS server name %q != derp hostname %q", cs.ServerName, n.HostName)
+		}
 	}
 
 	errc := make(chan error, 1)
@@ -644,4 +853,28 @@ func httpOrFileTransport() http.RoundTripper {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.RegisterProtocol("file", http.NewFileTransport(http.Dir("/")))
 	return tr
+}
+
+// wallAndExt extracts the wall and ext fields from a time.Time,
+// allowing us to marshal a monotonic clock reading.
+func wallAndExt(t time.Time) (uint64, int64) {
+	v := reflect.ValueOf(&t).Elem()
+	return exposeField(v.Field(0)).Uint(), exposeField(v.Field(1)).Int()
+}
+
+// fromWallAndExt constructs a time.Time from wall and ext fields,
+// allowing us to unmarshal a monotonic clock reading.
+func fromWallAndExt(wall uint64, ext int64) time.Time {
+	var t time.Time
+	v := reflect.ValueOf(&t).Elem()
+	exposeField(v.Field(0)).SetUint(wall)
+	exposeField(v.Field(1)).SetInt(ext)
+	return t
+}
+
+func exposeField(v reflect.Value) reflect.Value {
+	if v.CanSet() {
+		return v
+	}
+	return reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem()
 }

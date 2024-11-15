@@ -192,7 +192,7 @@ func TestRunDerpProbeNodePair(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	err = runDerpProbeNodePair(ctx, &tailcfg.DERPNode{Name: "c1"}, &tailcfg.DERPNode{Name: "c2"}, c1, c2, 100_000_000)
+	err = runDerpProbeNodePairOnce(ctx, &tailcfg.DERPNode{Name: "c1"}, &tailcfg.DERPNode{Name: "c2"}, c1, c2, 100_000_000)
 	if err != nil {
 		t.Error(err)
 	}
@@ -235,5 +235,14 @@ func Test_packetsForSize(t *testing.T) {
 				t.Errorf("packetsForSize(%d) is unique=%v (returned %d different answers); want unique=%v", tt.size, unique, len(hashes), unique)
 			}
 		})
+	}
+}
+
+func TestWallAndExt(t *testing.T) {
+	now := time.Now()
+	now2 := fromWallAndExt(wallAndExt(now))
+	diff := now2.Sub(now)
+	if now2.Sub(now) != 0 {
+		t.Fatalf("fromWallAndExt(wallAndExt(now)) = %v; want 0", diff)
 	}
 }
