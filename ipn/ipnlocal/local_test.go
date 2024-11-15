@@ -30,6 +30,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -4462,5 +4463,92 @@ func TestConfigFileReload(t *testing.T) {
 	lb.mu.Unlock()
 	if hn != "bar" {
 		t.Fatalf("got %q; want %q", hn, "bar")
+	}
+}
+
+func TestGetVIPServices(t *testing.T) {
+	tests := []struct {
+		name       string
+		advertised []string
+		mapped     []string
+		want       []*tailcfg.VIPService
+	}{
+		{
+			"advertised-only",
+			[]string{"svc:abc", "svc:def"},
+			[]string{},
+			[]*tailcfg.VIPService{
+				{
+					Name:   "svc:abc",
+					Active: true,
+				},
+				{
+					Name:   "svc:def",
+					Active: true,
+				},
+			},
+		},
+		{
+			"mapped-only",
+			[]string{},
+			[]string{"svc:abc"},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+			},
+		},
+		{
+			"mapped-and-advertised",
+			[]string{"svc:abc"},
+			[]string{"svc:abc"},
+			[]*tailcfg.VIPService{
+				{
+					Name:   "svc:abc",
+					Active: true,
+					Ports:  []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+			},
+		},
+		{
+			"mapped-and-advertised-separately",
+			[]string{"svc:def"},
+			[]string{"svc:abc"},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+				{
+					Name:   "svc:def",
+					Active: true,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envknob.Setenv("TS_DEBUG_ALLPORTS_SERVICES", strings.Join(tt.mapped, ","))
+			prefs := &ipn.Prefs{
+				AdvertiseServices: tt.advertised,
+			}
+			got := vipServicesFromPrefs(prefs.View())
+			slices.SortFunc(got, func(a, b *tailcfg.VIPService) int {
+				return strings.Compare(a.Name, b.Name)
+			})
+			if !reflect.DeepEqual(tt.want, got) {
+				t.Logf("want:")
+				for _, s := range tt.want {
+					t.Logf("%+v", s)
+				}
+				t.Logf("got:")
+				for _, s := range got {
+					t.Logf("%+v", s)
+				}
+				t.Fail()
+				return
+			}
+		})
 	}
 }
