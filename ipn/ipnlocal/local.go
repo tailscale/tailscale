@@ -2157,10 +2157,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
-	b.sendToLocked(ipn.Notify{
-		BackendLogID: &blid,
-		Prefs:        &prefs,
-	}, allClients)
+	b.sendToLocked(ipn.Notify{Prefs: &prefs}, allClients)
 
 	if !loggedOut && (b.hasNodeKeyLocked() || confWantRunning) {
 		// If we know that we're either logged in or meant to be
