@@ -313,6 +313,16 @@
         <string>hide</string>
       </disabledValue>
     </policy>
+    <policy name="OnboardingFlow" class="Both" displayName="$(string.OnboardingFlow)" explainText="$(string.OnboardingFlow_Help)" key="Software\Policies\Tailscale" valueName="OnboardingFlow">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_78" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
     <policy name="ManagedBy" class="Both" displayName="$(string.ManagedBy)" explainText="$(string.ManagedBy_Help)" presentation="$(presentation.ManagedBy)" key="Software\Policies\Tailscale">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_62" />
