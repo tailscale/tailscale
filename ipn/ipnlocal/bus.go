@@ -146,7 +146,6 @@ func isNotableNotify(n *ipn.Notify) bool {
 	}
 	return n.State != nil ||
 		n.SessionID != "" ||
-		n.BackendLogID != nil ||
 		n.BrowseToURL != nil ||
 		n.LocalTCPPort != nil ||
 		n.ClientVersion != nil ||
