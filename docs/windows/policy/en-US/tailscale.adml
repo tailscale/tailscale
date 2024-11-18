@@ -16,6 +16,7 @@
             <string id="SINCE_V1_62">Tailscale version 1.62.0 and later</string>
             <string id="SINCE_V1_74">Tailscale version 1.74.0 and later</string>
             <string id="SINCE_V1_78">Tailscale version 1.78.0 and later</string>
+            <string id="SINCE_V1_80">Tailscale version 1.80.0 and later</string>
             <string id="SINCE_V1_82">Tailscale version 1.82.0 and later</string>
             <string id="SINCE_V1_84">Tailscale version 1.84.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
@@ -271,6 +272,12 @@ If you enable this policy, the menu item will be displayed indicating the organi
 If you disable this policy or do not configure it, the corresponding menu item will be hidden.
 
 See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more details.]]></string>
+            <string id="OnboardingFlow">Show the onboarding flow</string>
+            <string id="OnboardingFlow_Help"><![CDATA[This policy can be used to show or hide the onboarding flow displayed by the GUI.
+
+If you enable or don't configure this policy, the onboarding flow will be shown to new users who have not yet signed in to a Tailscale account.
+
+If you disable this policy, the onboarding flow will never be shown.]]></string>
         </stringTable>
         <presentationTable>
             <presentation id="LoginURL">
