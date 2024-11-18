@@ -54,6 +54,10 @@
                   displayName="$(string.SINCE_V1_78)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_80"
+                  displayName="$(string.SINCE_V1_80)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
       <definition name="SINCE_V1_82"
                   displayName="$(string.SINCE_V1_82)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
@@ -328,6 +332,16 @@
     <policy name="ExitNodesPicker" class="Both" displayName="$(string.ExitNodesPicker)" explainText="$(string.ExitNodesPicker_Help)" key="Software\Policies\Tailscale" valueName="ExitNodesPicker">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
+    <policy name="OnboardingFlow" class="Both" displayName="$(string.OnboardingFlow)" explainText="$(string.OnboardingFlow_Help)" key="Software\Policies\Tailscale" valueName="OnboardingFlow">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_80" />
       <enabledValue>
         <string>show</string>
       </enabledValue>
