@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -128,9 +129,10 @@ func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLe
 	if err != nil {
 		return nil, err
 	}
+	tokenCloseOnce := sync.OnceFunc(func() { token.Close() })
 	defer func() {
 		if err != nil {
-			token.Close()
+			tokenCloseOnce()
 		}
 	}()
 
@@ -162,6 +164,7 @@ func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLe
 				sessToken.Close()
 			}
 		}()
+		tokenCloseOnce()
 	}
 
 	userProfile, err := winutil.LoadUserProfile(sessToken, u)
