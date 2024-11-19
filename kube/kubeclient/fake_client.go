@@ -29,7 +29,11 @@ func (fc *FakeClient) SetDialer(dialer func(ctx context.Context, network, addr s
 func (fc *FakeClient) StrategicMergePatchSecret(context.Context, string, *kubeapi.Secret, string) error {
 	return nil
 }
-func (fc *FakeClient) JSONPatchSecret(context.Context, string, []JSONPatch) error {
+func (fc *FakeClient) Event(context.Context, string, string, string) error {
+	return nil
+}
+
+func (fc *FakeClient) JSONPatchResource(context.Context, string, string, []JSONPatch) error {
 	return nil
 }
 func (fc *FakeClient) UpdateSecret(context.Context, *kubeapi.Secret) error { return nil }

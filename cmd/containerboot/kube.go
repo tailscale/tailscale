@@ -61,7 +61,7 @@ func deleteAuthKey(ctx context.Context, secretName string) error {
 			Path: "/data/authkey",
 		},
 	}
-	if err := kc.JSONPatchSecret(ctx, secretName, m); err != nil {
+	if err := kc.JSONPatchResource(ctx, secretName, kubeclient.TypeSecrets, m); err != nil {
 		if s, ok := err.(*kubeapi.Status); ok && s.Code == http.StatusUnprocessableEntity {
 			// This is kubernetes-ese for "the field you asked to
 			// delete already doesn't exist", aka no-op.
@@ -81,7 +81,7 @@ func initKubeClient(root string) {
 		kubeclient.SetRootPathForTesting(root)
 	}
 	var err error
-	kc, err = kubeclient.New()
+	kc, err = kubeclient.New("tailscale-container")
 	if err != nil {
 		log.Fatalf("Error creating kube client: %v", err)
 	}

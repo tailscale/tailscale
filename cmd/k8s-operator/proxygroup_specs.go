@@ -127,15 +127,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 				},
 			},
 			{
-				Name: "POD_NAME",
-				ValueFrom: &corev1.EnvVarSource{
-					FieldRef: &corev1.ObjectFieldSelector{
-						// Secret is named after the pod.
-						FieldPath: "metadata.name",
-					},
-				},
-			},
-			{
 				Name:  "TS_KUBE_SECRET",
 				Value: "$(POD_NAME)",
 			},
@@ -146,10 +137,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			{
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
-			},
-			{
-				Name:  "TS_USERSPACE",
-				Value: "false",
 			},
 			{
 				Name:  "TS_INTERNAL_APP",
@@ -171,7 +158,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			})
 		}
 
-		return envs
+		return append(c.Env, envs...)
 	}()
 
 	return ss, nil
@@ -214,6 +201,15 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 					}
 					return secrets
 				}(),
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"events"},
+				Verbs: []string{
+					"create",
+					"patch",
+					"get",
+				},
 			},
 		},
 	}
