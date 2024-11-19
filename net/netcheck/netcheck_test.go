@@ -401,7 +401,7 @@ func TestMakeProbePlan(t *testing.T) {
 	basicMap := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{},
 	}
-	for rid := 1; rid <= 5; rid++ {
+	for rid := 1; rid <= 6; rid++ {
 		var nodes []*tailcfg.DERPNode
 		for nid := 0; nid < rid; nid++ {
 			nodes = append(nodes, &tailcfg.DERPNode{
@@ -415,6 +415,7 @@ func TestMakeProbePlan(t *testing.T) {
 		basicMap.Regions[rid] = &tailcfg.DERPRegion{
 			RegionID: rid,
 			Nodes:    nodes,
+			Avoid:    rid == 6,
 		}
 	}
 

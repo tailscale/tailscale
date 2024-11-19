@@ -541,7 +541,7 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *netmon.State) (plan prob
 	plan = make(probePlan)
 
 	for _, reg := range dm.Regions {
-		if len(reg.Nodes) == 0 {
+		if reg.Avoid || len(reg.Nodes) == 0 {
 			continue
 		}
 
