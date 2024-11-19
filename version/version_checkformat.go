@@ -9,7 +9,7 @@ import "fmt"
 
 func init() {
 	// For official Android builds using the tailscale_go toolchain,
-	// panic if the builder is screwed up we fail to stamp a valid
+	// panic if the builder is screwed up and we fail to stamp a valid
 	// version string.
 	if !isValidLongWithTwoRepos(Long()) {
 		panic(fmt.Sprintf("malformed version.Long value %q", Long()))

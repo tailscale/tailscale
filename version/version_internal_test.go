@@ -14,7 +14,6 @@ func TestIsValidLongWithTwoRepos(t *testing.T) {
 		{"1.2.259-t01234abcde-g01234abcde", true}, // big patch version
 		{"1.2.3-t01234abcde", false},              // missing repo
 		{"1.2.3-g01234abcde", false},              // missing repo
-		{"1.2.3-g01234abcde", false},              // missing repo
 		{"-t01234abcde-g01234abcde", false},
 		{"1.2.3", false},
 		{"1.2.3-t01234abcde-g", false},
