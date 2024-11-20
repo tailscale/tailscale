@@ -66,13 +66,19 @@ const (
 	TailscaleServiceIPv6String = "fd7a:115c:a1e0::53"
 )
 
-// IsTailscaleIP reports whether ip is an IP address in a range that
+// IsTailscaleIP reports whether IP is an IP address in a range that
 // Tailscale assigns from.
 func IsTailscaleIP(ip netip.Addr) bool {
 	if ip.Is4() {
-		return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
+		return IsTailscaleIPv4(ip)
 	}
 	return TailscaleULARange().Contains(ip)
+}
+
+// IsTailscaleIPv4 reports whether an IPv4 IP is an IP address that
+// Tailscale assigns from.
+func IsTailscaleIPv4(ip netip.Addr) bool {
+	return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
 }
 
 // TailscaleULARange returns the IPv6 Unique Local Address range that
