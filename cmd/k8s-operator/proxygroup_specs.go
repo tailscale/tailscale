@@ -116,10 +116,8 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 		return mounts
 	}()
 	c.Env = func() []corev1.EnvVar {
-		envs := make([]corev1.EnvVar, len(c.Env), len(c.Env)+8)
-		copy(envs, c.Env)
-		envs = append(envs,
-			corev1.EnvVar{
+		envs := []corev1.EnvVar{
+			{
 				// TODO(irbekrm): verify that .status.podIPs are always set, else read in .status.podIP as well.
 				Name: "POD_IPS", // this will be a comma separate list i.e 10.136.0.6,2600:1900:4011:161:0:e:0:6
 				ValueFrom: &corev1.EnvVarSource{
@@ -128,23 +126,23 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 					},
 				},
 			},
-			corev1.EnvVar{
+			{
 				Name:  "TS_KUBE_SECRET",
 				Value: "$(POD_NAME)",
 			},
-			corev1.EnvVar{
+			{
 				Name:  "TS_STATE",
 				Value: "kube:$(POD_NAME)",
 			},
-			corev1.EnvVar{
+			{
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
 			},
-			corev1.EnvVar{
+			{
 				Name:  "TS_INTERNAL_APP",
 				Value: kubetypes.AppProxyGroupEgress,
 			},
-		)
+		}
 
 		if tsFirewallMode != "" {
 			envs = append(envs, corev1.EnvVar{
@@ -154,15 +152,10 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 		}
 
 		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-			envs = append(envs,
-				corev1.EnvVar{
-					Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
-					Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
-				},
-				corev1.EnvVar{
-					Name:  "TS_INTERNAL_APP",
-					Value: kubetypes.AppProxyGroupEgress,
-				})
+			envs = append(envs, corev1.EnvVar{
+				Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
+				Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
+			})
 		}
 
 		return append(c.Env, envs...)
