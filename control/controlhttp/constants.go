@@ -76,6 +76,8 @@ type Dialer struct {
 	// dropped.
 	Logf logger.Logf
 
+	// NetMon is the [netmon.Monitor] to use for this Dialer. It must be
+	// non-nil.
 	NetMon *netmon.Monitor
 
 	// HealthTracker, if non-nil, is the health tracker to use.
