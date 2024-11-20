@@ -209,6 +209,15 @@ type Container struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
 	// +optional
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
+	// Container debug configuration.
+	// Options for enabling extra debug information.
+	Debug Debug `json:"debug,omitempty"`
+}
+
+type Debug struct {
+	// Endpoints enable http pprof and internal tailscaled debug metrics.
+	// Available on <pod-ip>:9002/debug/pprof and <pod-ip>:9002/debug/metrics.
+	Endpoints bool `json:"endpoints"`
 }
 
 type Env struct {
