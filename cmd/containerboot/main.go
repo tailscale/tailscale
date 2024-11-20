@@ -178,9 +178,9 @@ func main() {
 	}
 	defer killTailscaled()
 
-	if cfg.UserMetricsAddrPort != "" {
+	if cfg.MetricsAddrPort != "" {
 		m := &metrics{lc: client}
-		runMetrics(cfg.UserMetricsAddrPort, m)
+		runMetrics(cfg.MetricsAddrPort, m)
 	}
 
 	if cfg.EnableForwardingOptimizations {

@@ -6,6 +6,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/envknob"
 	"tailscale.com/util/httpm"
 )
 
@@ -29,6 +31,7 @@ func (m *metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to construct request", http.StatusInternalServerError)
 		return
 	}
+	req.Header = r.Header.Clone()
 
 	resp, err := m.lc.DoLocalRequest(req)
 	if err != nil {
@@ -37,8 +40,48 @@ func (m *metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	for key, val := range resp.Header {
+		for _, v := range val {
+			w.Header().Add(key, v)
+		}
+	}
+
 	// Send response back to web frontend.
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func debugProxy(w http.ResponseWriter, r *http.Request) {
+	// /debug/metrics -> PODIP+PORT/debug/metrics
+	endpoint := envknob.String("TS_DEBUG_ENDPOINT_ADDR_PORT")
+	if endpoint == "" {
+		// TODO(kradalby): handle
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, "http://"+endpoint+r.URL.Path, r.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to construct request: %s", err), http.StatusInternalServerError)
+		return
+	}
+	req.Header = r.Header.Clone()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	for key, val := range resp.Header {
+		for _, v := range val {
+			w.Header().Add(key, v)
+		}
+	}
+
+	// Send response back to web frontend.
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -54,6 +97,7 @@ func runMetrics(addr string, m *metrics) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", m)
+	mux.HandleFunc("/debug/", debugProxy)
 	log.Printf("Running metrics endpoint at %s/metrics", addr)
 	ms := &http.Server{Handler: mux}
 
