@@ -6,6 +6,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -60,9 +61,9 @@ func debugProxy(w http.ResponseWriter, r *http.Request) {
 		// TODO(kradalby): handle
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.Scheme+endpoint+r.URL.Path, nil)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.Scheme+endpoint+r.URL.Path, r.Body)
 	if err != nil {
-		http.Error(w, "failed to construct request", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("failed to construct request: %s", err), http.StatusInternalServerError)
 		return
 	}
 	req.Header = r.Header.Clone()
