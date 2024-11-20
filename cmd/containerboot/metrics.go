@@ -96,7 +96,7 @@ func runMetrics(addr string, m *metrics) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", m)
-	mux.HandleFunc("/debug", debugProxy)
+	mux.HandleFunc("/debug/", debugProxy)
 	log.Printf("Running metrics endpoint at %s/metrics", addr)
 	ms := &http.Server{Handler: mux}
 
