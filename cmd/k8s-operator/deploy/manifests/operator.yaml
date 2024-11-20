@@ -1675,6 +1675,19 @@ spec:
                                             tailscaleContainer:
                                                 description: Configuration for the proxy container running tailscale.
                                                 properties:
+                                                    debug:
+                                                        description: |-
+                                                            Container debug configuration.
+                                                            Options for enabling extra debug information.
+                                                        properties:
+                                                            endpoints:
+                                                                description: |-
+                                                                    Endpoints enable http pprof and internal tailscaled debug metrics.
+                                                                    Available on <pod-ip>:9002/debug/pprof and <pod-ip>:9002/debug/metrics.
+                                                                type: boolean
+                                                        required:
+                                                            - endpoints
+                                                        type: object
                                                     env:
                                                         description: |-
                                                             List of environment variables to set in the container.
@@ -1979,6 +1992,19 @@ spec:
                                             tailscaleInitContainer:
                                                 description: Configuration for the proxy init container that enables forwarding.
                                                 properties:
+                                                    debug:
+                                                        description: |-
+                                                            Container debug configuration.
+                                                            Options for enabling extra debug information.
+                                                        properties:
+                                                            endpoints:
+                                                                description: |-
+                                                                    Endpoints enable http pprof and internal tailscaled debug metrics.
+                                                                    Available on <pod-ip>:9002/debug/pprof and <pod-ip>:9002/debug/metrics.
+                                                                type: boolean
+                                                        required:
+                                                            - endpoints
+                                                        type: object
                                                     env:
                                                         description: |-
                                                             List of environment variables to set in the container.

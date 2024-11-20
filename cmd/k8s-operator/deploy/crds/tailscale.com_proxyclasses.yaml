@@ -1249,6 +1249,19 @@ spec:
                           description: Configuration for the proxy container running tailscale.
                           type: object
                           properties:
+                            debug:
+                              description: |-
+                                Container debug configuration.
+                                Options for enabling extra debug information.
+                              type: object
+                              required:
+                                - endpoints
+                              properties:
+                                endpoints:
+                                  description: |-
+                                    Endpoints enable http pprof and internal tailscaled debug metrics.
+                                    Available on <pod-ip>:9002/debug/pprof and <pod-ip>:9002/debug/metrics.
+                                  type: boolean
                             env:
                               description: |-
                                 List of environment variables to set in the container.
@@ -1553,6 +1566,19 @@ spec:
                           description: Configuration for the proxy init container that enables forwarding.
                           type: object
                           properties:
+                            debug:
+                              description: |-
+                                Container debug configuration.
+                                Options for enabling extra debug information.
+                              type: object
+                              required:
+                                - endpoints
+                              properties:
+                                endpoints:
+                                  description: |-
+                                    Endpoints enable http pprof and internal tailscaled debug metrics.
+                                    Available on <pod-ip>:9002/debug/pprof and <pod-ip>:9002/debug/metrics.
+                                  type: boolean
                             env:
                               description: |-
                                 List of environment variables to set in the container.
