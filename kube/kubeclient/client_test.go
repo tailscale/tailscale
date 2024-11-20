@@ -134,7 +134,7 @@ func fakeKubeAPIRequest(t *testing.T, argSets []args) kubeAPIRequestFunc {
 			t.Errorf("[%d] got method %q, wants method %q", count, gotMethod, a.wantsMethod)
 		}
 		if gotUrl != a.wantsURL {
-			t.Errorf("[%d] got URL %q, wants URL %q", count, gotMethod, a.wantsMethod)
+			t.Errorf("[%d] got URL %q, wants URL %q", count, gotUrl, a.wantsURL)
 		}
 		if d := cmp.Diff(gotIn, a.wantsIn); d != "" {
 			t.Errorf("[%d] unexpected payload (-want + got):\n%s", count, d)
