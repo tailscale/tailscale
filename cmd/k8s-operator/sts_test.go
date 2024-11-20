@@ -239,7 +239,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	// 5. Test that a ProxyClass with metrics enabled gets correctly applied to a StatefulSet.
 	wantSS = nonUserspaceProxySS.DeepCopy()
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: "TS_TAILSCALED_EXTRA_ARGS", Value: "--debug=$(POD_IP):9001"})
-	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: "TS_USERMETRICS_ADDR_PORT", Value: "$(POD_IP):9002"})
+	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: "TS_METRICS_ADDR_PORT", Value: "$(POD_IP):9002"})
 	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{
 		{Name: "metrics", Protocol: "TCP", ContainerPort: 9001},
 		{Name: "usermetrics", Protocol: "TCP", ContainerPort: 9002},
