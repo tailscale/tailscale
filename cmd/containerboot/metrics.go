@@ -61,7 +61,7 @@ func debugProxy(w http.ResponseWriter, r *http.Request) {
 		// TODO(kradalby): handle
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.Scheme+endpoint+r.URL.Path, r.Body)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, "http://"+endpoint+r.URL.Path, r.Body)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to construct request: %s", err), http.StatusInternalServerError)
 		return
