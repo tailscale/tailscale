@@ -72,6 +72,21 @@ func deleteAuthKey(ctx context.Context, secretName string) error {
 	return nil
 }
 
+// storeCapVer stores the current capability version of tailscale and, if provided, UID of the Pod in the tailscale
+// state Secret. This can be used to observe the current capability version of tailscaled running in this container.
+func storeCapVer(ctx context.Context, secretName string, podUID string) error {
+	capVerS := fmt.Sprintf("%d", tailcfg.CurrentCapabilityVersion)
+	if podUID != "" {
+		capVerS += fmt.Sprintf(":%s", podUID)
+	}
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			"tailscale_capver": []byte(capVerS),
+		},
+	}
+	return kc.StrategicMergePatchSecret(ctx, secretName, s, "tailscale-container")
+}
+
 var kc kubeclient.Client
 
 func initKubeClient(root string) {

@@ -337,6 +337,12 @@ authLoop:
 		}
 	}
 
+	if hasKubeStateStore(cfg) {
+		if err := storeCapVer(ctx, cfg.KubeSecret, cfg.PodUID); err != nil {
+			log.Fatalf("storing capability version: %v", err)
+		}
+	}
+
 	w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
 	if err != nil {
 		log.Fatalf("rewatching tailscaled for updates after auth: %v", err)
