@@ -380,17 +380,20 @@ func (nc *NoiseClient) dial(ctx context.Context) (*noiseconn.Conn, error) {
 // post does a POST to the control server at the given path, JSON-encoding body.
 // The provided nodeKey is an optional load balancing hint.
 func (nc *NoiseClient) post(ctx context.Context, path string, nodeKey key.NodePublic, body any) (*http.Response, error) {
+	return nc.doWithBody(ctx, "POST", path, nodeKey, body)
+}
+
+func (nc *NoiseClient) doWithBody(ctx context.Context, method, path string, nodeKey key.NodePublic, body any) (*http.Response, error) {
 	jbody, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://"+nc.host+path, bytes.NewReader(jbody))
+	req, err := http.NewRequestWithContext(ctx, method, "https://"+nc.host+path, bytes.NewReader(jbody))
 	if err != nil {
 		return nil, err
 	}
 	addLBHeader(req, nodeKey)
 	req.Header.Set("Content-Type", "application/json")
-
 	conn, err := nc.getConn(ctx)
 	if err != nil {
 		return nil, err

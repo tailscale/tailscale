@@ -2455,6 +2455,34 @@ type HealthChangeRequest struct {
 	NodeKey key.NodePublic
 }
 
+// SetDeviceAttributesRequest is a request to update the
+// current node's device posture attributes.
+//
+// As of 2024-12-30, this is an experimental dev feature
+// for internal testing. See tailscale/corp#24690.
+type SetDeviceAttributesRequest struct {
+	// Version is the current binary's [CurrentCapabilityVersion].
+	Version CapabilityVersion
+
+	// NodeKey identifies the node to modify. It should be the currently active
+	// node and is an error if not.
+	NodeKey key.NodePublic
+
+	// Update is a map of device posture attributes to update.
+	// Attributes not in the map are left unchanged.
+	Update AttrUpdate
+}
+
+// AttrUpdate is a map of attributes to update.
+// Attributes not in the map are left unchanged.
+// The value can be a string, float64, bool, or nil to delete.
+//
+// See https://tailscale.com/s/api-device-posture-attrs.
+//
+// TODO(bradfitz): add struct type for specifying optional associated data
+// for each attribute value, like an expiry time?
+type AttrUpdate map[string]any
+
 // SSHPolicy is the policy for how to handle incoming SSH connections
 // over Tailscale.
 type SSHPolicy struct {

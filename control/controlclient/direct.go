@@ -1643,6 +1643,56 @@ func (c *Direct) ReportHealthChange(w *health.Warnable, us *health.UnhealthyStat
 	res.Body.Close()
 }
 
+// SetDeviceAttrs does a synchronous call to the control plane to update
+// the node's attributes.
+//
+// See docs on [tailcfg.SetDeviceAttributesRequest] for background.
+func (c *Auto) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
+	return c.direct.SetDeviceAttrs(ctx, attrs)
+}
+
+// SetDeviceAttrs does a synchronous call to the control plane to update
+// the node's attributes.
+//
+// See docs on [tailcfg.SetDeviceAttributesRequest] for background.
+func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return err
+	}
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return errors.New("no node key")
+	}
+	if c.panicOnUse {
+		panic("tainted client")
+	}
+	req := &tailcfg.SetDeviceAttributesRequest{
+		NodeKey: nodeKey,
+		Version: tailcfg.CurrentCapabilityVersion,
+		Update:  attrs,
+	}
+
+	// TODO(bradfitz): unify the callers using doWithBody vs those using
+	// DoNoiseRequest. There seems to be a ~50/50 split and they're very close,
+	// but doWithBody sets the load balancing header and auto-JSON-encodes the
+	// body, but DoNoiseRequest is exported. Clean it up so they're consistent
+	// one way or another.
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, err := nc.doWithBody(ctx, "PATCH", "/machine/set-device-attr", nodeKey, req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	all, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		return fmt.Errorf("HTTP error from control plane: %v: %s", res.Status, all)
+	}
+	return nil
+}
+
 func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
 	if !nodeKey.IsZero() {
 		req.Header.Add(tailcfg.LBHeader, nodeKey.String())
