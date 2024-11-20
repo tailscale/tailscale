@@ -776,12 +776,16 @@ func enableMetrics(ss *appsv1.StatefulSet) {
 				// side-effect as a feature.
 				corev1.EnvVar{
 					Name:  "TS_TAILSCALED_EXTRA_ARGS",
-					Value: "--debug=$(POD_IP):9001",
+					Value: "--debug=$(POD_IP):9002",
 				},
-				// Serve client usermetrics on <pod-ip>:9002/metrics.
 				corev1.EnvVar{
-					Name:  "TS_USERMETRICS_ADDR_PORT",
+					Name:  "TS_DEBUG_ENDPOINT_ADDR_PORT",
 					Value: "$(POD_IP):9002",
+				},
+				// Serve client metrics on <pod-ip>:9001/metrics and <pod-ip>:9001/debug endpoints.
+				corev1.EnvVar{
+					Name:  "TS_METRICS_ADDR_PORT",
+					Value: "$(POD_IP):9001",
 				},
 			)
 			ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports,
@@ -791,7 +795,7 @@ func enableMetrics(ss *appsv1.StatefulSet) {
 					ContainerPort: 9001,
 				},
 				corev1.ContainerPort{
-					Name:          "usermetrics",
+					Name:          "debug",
 					Protocol:      "TCP",
 					ContainerPort: 9002,
 				},
