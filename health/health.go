@@ -331,7 +331,7 @@ func (t *Tracker) SetMetricsRegistry(reg *usermetric.Registry) {
 	)
 
 	t.metricHealthMessage.Set(metricHealthMessageLabel{
-		Type: "warning",
+		Type: MetricLabelWarning,
 	}, expvar.Func(func() any {
 		if t.nil() {
 			return 0
@@ -1282,6 +1282,8 @@ func (t *Tracker) LastNoiseDialWasRecent() bool {
 	t.lastNoiseDial = now
 	return dur < 2*time.Minute
 }
+
+const MetricLabelWarning = "warning"
 
 type metricHealthMessageLabel struct {
 	// TODO: break down by warnable.severity as well?

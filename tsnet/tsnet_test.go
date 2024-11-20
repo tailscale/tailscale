@@ -38,7 +38,6 @@ import (
 	"golang.org/x/net/proxy"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/testwrapper/flakytest"
-	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
@@ -822,16 +821,6 @@ func TestUDPConn(t *testing.T) {
 	}
 }
 
-// testWarnable is a Warnable that is used within this package for testing purposes only.
-var testWarnable = health.Register(&health.Warnable{
-	Code:     "test-warnable-tsnet",
-	Title:    "Test warnable",
-	Severity: health.SeverityLow,
-	Text: func(args health.Args) string {
-		return args[health.ArgError]
-	},
-})
-
 func parseMetrics(m []byte) (map[string]float64, error) {
 	metrics := make(map[string]float64)
 
@@ -1045,11 +1034,6 @@ func TestUserMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status1, err := lc1.Status(ctxLc)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	parsedMetrics1, err := parseMetrics(metrics1)
 	if err != nil {
 		t.Fatal(err)
@@ -1075,11 +1059,6 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
 	}
 
-	// Validate the health counter metric against the status of the node
-	if got, want := parsedMetrics1[`tailscaled_health_messages{type="warning"}`], float64(len(status1.Health)); got != want {
-		t.Errorf("metrics1, tailscaled_health_messages: got %v, want %v", got, want)
-	}
-
 	// Verify that the amount of data recorded in bytes is higher or equal to the
 	// 10 megabytes sent.
 	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
@@ -1093,11 +1072,6 @@ func TestUserMetrics(t *testing.T) {
 	}
 
 	metrics2, err := lc2.UserMetrics(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	status2, err := lc2.Status(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1117,11 +1091,6 @@ func TestUserMetrics(t *testing.T) {
 	// The control has approved 0 routes
 	if got, want := parsedMetrics2["tailscaled_approved_routes"], 0.0; got != want {
 		t.Errorf("metrics2, tailscaled_approved_routes: got %v, want %v", got, want)
-	}
-
-	// Validate the health counter metric against the status of the node
-	if got, want := parsedMetrics2[`tailscaled_health_messages{type="warning"}`], float64(len(status2.Health)); got != want {
-		t.Errorf("metrics2, tailscaled_health_messages: got %v, want %v", got, want)
 	}
 
 	// Verify that the amount of data recorded in bytes is higher or equal than the
