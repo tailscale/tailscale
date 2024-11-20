@@ -205,7 +205,7 @@ func (s *settings) validate() error {
 // setupKube is responsible for doing any necessary configuration and checks to
 // ensure that tailscale state storage and authentication mechanism will work on
 // Kubernetes.
-func (cfg *settings) setupKube(ctx context.Context) error {
+func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 	if cfg.KubeSecret == "" {
 		return nil
 	}

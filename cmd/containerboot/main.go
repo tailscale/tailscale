@@ -121,6 +121,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -167,9 +168,13 @@ func main() {
 	bootCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	var kc *kubeClient
 	if cfg.InKubernetes {
-		initKubeClient(cfg.Root)
-		if err := cfg.setupKube(bootCtx); err != nil {
+		kc, err = newKubeClient(cfg.Root, cfg.KubeSecret)
+		if err != nil {
+			log.Fatalf("error initializing kube client: %v", err)
+		}
+		if err := cfg.setupKube(bootCtx, kc); err != nil {
 			log.Fatalf("error setting up for running on Kubernetes: %v", err)
 		}
 	}
@@ -332,13 +337,13 @@ authLoop:
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
 		log.Printf("Deleting authkey from kube secret")
-		if err := deleteAuthKey(ctx, cfg.KubeSecret); err != nil {
+		if err := kc.deleteAuthKey(ctx); err != nil {
 			log.Fatalf("deleting authkey from kube secret: %v", err)
 		}
 	}
 
 	if hasKubeStateStore(cfg) {
-		if err := storeCapVer(ctx, cfg.KubeSecret, cfg.PodUID); err != nil {
+		if err := kc.storeCapVer(ctx, cfg.PodUID); err != nil {
 			log.Fatalf("storing capability version: %v", err)
 		}
 	}
@@ -465,7 +470,7 @@ runLoop:
 				// fails.
 				deviceID := n.NetMap.SelfNode.StableID()
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
-					if err := storeDeviceID(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID()); err != nil {
+					if err := kc.storeDeviceID(ctx, n.NetMap.SelfNode.StableID()); err != nil {
 						log.Fatalf("storing device ID in Kubernetes Secret: %v", err)
 					}
 				}
@@ -581,7 +586,7 @@ runLoop:
 				// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
 				deviceEndpoints := []any{n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses()}
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
-					if err := storeDeviceEndpoints(ctx, cfg.KubeSecret, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
+					if err := kc.storeDeviceEndpoints(ctx, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
 						log.Fatalf("storing device IPs and FQDN in Kubernetes Secret: %v", err)
 					}
 				}
