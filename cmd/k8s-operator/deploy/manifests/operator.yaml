@@ -4783,6 +4783,14 @@ spec:
                       value: "false"
                     - name: PROXY_FIREWALL_MODE
                       value: auto
+                    - name: POD_NAME
+                      valueFrom:
+                        fieldRef:
+                            fieldPath: metadata.name
+                    - name: POD_UID
+                      valueFrom:
+                        fieldRef:
+                            fieldPath: metadata.uid
                   image: tailscale/k8s-operator:unstable
                   imagePullPolicy: Always
                   name: operator
