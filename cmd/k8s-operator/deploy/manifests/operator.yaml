@@ -1721,7 +1721,7 @@ spec:
                                                             Configuration for enabling extra debug information in the container.
                                                             Not recommended for production use.
                                                         properties:
-                                                            endpoints:
+                                                            enable:
                                                                 description: |-
                                                                     Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9002/debug/pprof/
                                                                     and internal debug metrics endpoint at <pod-ip>:9002/debug/metrics, where
@@ -2044,7 +2044,7 @@ spec:
                                                             Configuration for enabling extra debug information in the container.
                                                             Not recommended for production use.
                                                         properties:
-                                                            endpoints:
+                                                            enable:
                                                                 description: |-
                                                                     Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9002/debug/pprof/
                                                                     and internal debug metrics endpoint at <pod-ip>:9002/debug/metrics, where

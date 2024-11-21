@@ -228,7 +228,7 @@ type Debug struct {
 	// this setting will default to false, and no requests will be proxied.
 	//
 	// +optional
-	Enable bool `json:"endpoints"`
+	Enable bool `json:"enable"`
 }
 
 type Env struct {

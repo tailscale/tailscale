@@ -262,7 +262,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `endpoints` _boolean_ | Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9002/debug/pprof/<br />and internal debug metrics endpoint at <pod-ip>:9002/debug/metrics, where<br />9002 is a container port named "debug". The endpoints and their responses<br />may change in backwards incompatible ways in the future, and should not<br />be considered stable.<br />In 1.78.x and 1.80.x, this setting will default to the value of<br />.spec.metrics.enable, and requests to the "metrics" port matching the<br />mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,<br />this setting will default to false, and no requests will be proxied. |  |  |
+| `enable` _boolean_ | Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9002/debug/pprof/<br />and internal debug metrics endpoint at <pod-ip>:9002/debug/metrics, where<br />9002 is a container port named "debug". The endpoints and their responses<br />may change in backwards incompatible ways in the future, and should not<br />be considered stable.<br />In 1.78.x and 1.80.x, this setting will default to the value of<br />.spec.metrics.enable, and requests to the "metrics" port matching the<br />mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,<br />this setting will default to false, and no requests will be proxied. |  |  |
 
 
 #### Env

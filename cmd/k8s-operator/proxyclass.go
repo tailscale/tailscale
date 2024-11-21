@@ -161,8 +161,8 @@ func (pcr *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations fiel
 					}
 				}
 
-				if tc.Debug.Enable {
-					violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleInitContainer", "debug", "enable"), tc.Debug.Enable, "debug settings cannot be enabled on the init container"))
+				if tc.Debug != nil {
+					violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleInitContainer", "debug"), tc.Debug, "debug settings cannot be configured on the init container"))
 				}
 			}
 		}
