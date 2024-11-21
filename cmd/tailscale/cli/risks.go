@@ -17,10 +17,17 @@ import (
 )
 
 var (
-	riskTypes   []string
-	riskLoseSSH = registerRiskType("lose-ssh")
-	riskAll     = registerRiskType("all")
+	riskTypes           []string
+	riskLoseSSH         = registerRiskType("lose-ssh")
+	riskMacAppConnector = registerRiskType("mac-app-connector")
+	riskAll             = registerRiskType("all")
 )
+
+const riskMacAppConnectorMessage = `
+You are trying to configure an app connector on macOS, which is not officially supported due to system limitations. This may result in performance and reliability issues. 
+
+Do not use a macOS app connector for any mission-critical purposes. For the best experience, Linux is the only recommended platform for app connectors.
+`
 
 func registerRiskType(riskType string) string {
 	riskTypes = append(riskTypes, riskType)
