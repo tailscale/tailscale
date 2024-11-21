@@ -810,6 +810,12 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 						Name:  "TS_DEBUG_ADDR_PORT",
 						Value: "$(POD_IP):9002",
 					},
+					// TODO(tomhjp): Can remove this env var once 1.76.x is no
+					// longer supported.
+					corev1.EnvVar{
+						Name:  "TS_TAILSCALED_EXTRA_ARGS",
+						Value: "--debug=$(TS_DEBUG_ADDR_PORT)",
+					},
 				)
 
 				ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports,

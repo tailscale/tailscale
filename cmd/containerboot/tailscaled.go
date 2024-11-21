@@ -90,7 +90,10 @@ func tailscaledArgs(cfg *settings) []string {
 	if cfg.TailscaledConfigFilePath != "" {
 		args = append(args, "--config="+cfg.TailscaledConfigFilePath)
 	}
-	if cfg.DebugAddrPort != "" {
+	// Once enough proxy versions have been released for all the supported
+	// versions to understand this cfg setting, the operator can stop
+	// setting TS_TAILSCALED_EXTRA_ARGS for the debug flag.
+	if cfg.DebugAddrPort != "" && !strings.Contains(cfg.DaemonExtraArgs, cfg.DebugAddrPort) {
 		args = append(args, "--debug="+cfg.DebugAddrPort)
 	}
 	if cfg.DaemonExtraArgs != "" {
