@@ -381,8 +381,7 @@ func (esr *egressSvcsReconciler) maybeCleanupProxyGroupConfig(ctx context.Contex
 // usedPortsForPG calculates the currently used match ports for ProxyGroup
 // containers. It does that by looking by retrieving all target ports of all
 // ClusterIP Services created for egress services exposed on this ProxyGroup's
-// proxies. It also adds some well-known ports that are configured by the
-// operator for metrics and debug endpoints.
+// proxies.
 // TODO(irbekrm): this is currently good enough because we only have a single worker and
 // because these Services are created by us, so we can always expect to get the
 // latest ClusterIP Services via the controller cache. It will not work as well
@@ -399,15 +398,6 @@ func (esr *egressSvcsReconciler) usedPortsForPG(ctx context.Context, pg string) 
 			usedPorts.Insert(p.TargetPort.IntVal)
 		}
 	}
-
-	// Reserve ports used for metrics and debug endpoints.
-	// TODO(tomhjp): This doesn't address possible port conflicts from the -port
-	// flag, or TS_SOCKS5_SERVER, TS_HEALTHCHECK_ADDR_PORT, and
-	// TS_OUTBOUND_HTTP_PROXY_LISTEN env vars.
-	for _, p := range []int32{9001, 9002} {
-		usedPorts.Insert(p)
-	}
-
 	return usedPorts, nil
 }
 
