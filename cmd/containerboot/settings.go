@@ -75,6 +75,10 @@ type settings struct {
 }
 
 func configFromEnv() (*settings, error) {
+	defaultObservabilityAddrPort := ""
+	if v, ok := os.LookupEnv("POD_IP"); ok && v != "" {
+		defaultObservabilityAddrPort = fmt.Sprintf("%s:9001", v)
+	}
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
@@ -101,7 +105,7 @@ func configFromEnv() (*settings, error) {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
-		ObservabilityAddrPort:                 defaultEnv("TS_OBSERVABILITY_ADDR_PORT", fmt.Sprintf("%s:9001", os.Getenv("POD_IP"))),
+		ObservabilityAddrPort:                 defaultEnv("TS_OBSERVABILITY_ADDR_PORT", defaultObservabilityAddrPort),
 		MetricsEnabled:                        defaultBool("TS_METRICS_ENABLED", false),
 		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
