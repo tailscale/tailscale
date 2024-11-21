@@ -90,6 +90,9 @@ func tailscaledArgs(cfg *settings) []string {
 	if cfg.TailscaledConfigFilePath != "" {
 		args = append(args, "--config="+cfg.TailscaledConfigFilePath)
 	}
+	if cfg.DebugAddrPort != "" {
+		args = append(args, "--debug="+cfg.DebugAddrPort)
+	}
 	if cfg.DaemonExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.DaemonExtraArgs)...)
 	}

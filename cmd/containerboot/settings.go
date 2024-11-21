@@ -69,6 +69,7 @@ type settings struct {
 	PodIPv6             string
 	HealthCheckAddrPort string
 	MetricsAddrPort     string
+	DebugAddrPort       string
 	EgressSvcsCfgPath   string
 }
 
@@ -100,6 +101,7 @@ func configFromEnv() (*settings, error) {
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
 		MetricsAddrPort:                       defaultEnv("TS_METRICS_ADDR_PORT", ""),
+		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
 	}
 	podIPs, ok := os.LookupEnv("POD_IPS")
@@ -180,6 +182,11 @@ func (s *settings) validate() error {
 	if s.MetricsAddrPort != "" {
 		if _, err := netip.ParseAddrPort(s.MetricsAddrPort); err != nil {
 			return fmt.Errorf("error parsing TS_METRICS_ADDR_PORT value %q: %w", s.MetricsAddrPort, err)
+		}
+	}
+	if s.DebugAddrPort != "" {
+		if _, err := netip.ParseAddrPort(s.DebugAddrPort); err != nil {
+			return fmt.Errorf("error parsing TS_DEBUG_ADDR_PORT value %q: %w", s.DebugAddrPort, err)
 		}
 	}
 	return nil

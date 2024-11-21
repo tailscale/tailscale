@@ -179,7 +179,10 @@ func main() {
 	defer killTailscaled()
 
 	if cfg.MetricsAddrPort != "" {
-		m := &metrics{lc: client}
+		m := &metrics{
+			lc:            client,
+			debugEndpoint: cfg.DebugAddrPort,
+		}
 		runMetrics(cfg.MetricsAddrPort, m)
 	}
 

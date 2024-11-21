@@ -146,7 +146,7 @@ _Appears in:_
 | `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#pullpolicy-v1-core)_ | Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  | Enum: [Always Never IfNotPresent] <br /> |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#resourcerequirements-v1-core)_ | Container resource requirements.<br />By default Tailscale Kubernetes operator does not apply any resource<br />requirements. The amount of resources required wil depend on the<br />amount of resources the operator needs to parse, usage patterns and<br />cluster size.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources |  |  |
 | `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context.<br />Security context specified here will override the security context by the operator.<br />By default the operator:<br />- sets 'privileged: true' for the init container<br />- set NET_ADMIN capability for tailscale container for proxies that<br />are created for Services or Connector.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  |  |
-| `debug` _[Debug](#debug)_ | Container debug configuration.<br />Options for enabling extra debug information. |  |  |
+| `debug` _[Debug](#debug)_ | Configuration for enabling extra debug information in the container.<br />Not recommended for production use. |  |  |
 
 
 #### DNSConfig
@@ -262,7 +262,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `endpoints` _boolean_ | Endpoints enable http pprof and internal tailscaled debug metrics.<br />Available on <pod-ip>:9002/debug/pprof and <pod-ip>:9002/debug/metrics. |  |  |
+| `endpoints` _boolean_ | Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9002/debug/pprof/<br />and internal debug metrics endpoint at <pod-ip>:9002/debug/metrics, where<br />9002 is a container port named "debug". The endpoints and their responses<br />may change in backwards incompatible ways in the future, and should not<br />be considered stable.<br />In 1.78.x and 1.80.x, this setting will default to the value of<br />.spec.metrics.enable, and requests to the "metrics" port matching the<br />mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,<br />this setting will default to false, and no requests will be proxied. |  |  |
 
 
 #### Env

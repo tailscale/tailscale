@@ -209,15 +209,26 @@ type Container struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
 	// +optional
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
-	// Container debug configuration.
-	// Options for enabling extra debug information.
-	Debug Debug `json:"debug,omitempty"`
+	// Configuration for enabling extra debug information in the container.
+	// Not recommended for production use.
+	// +optional
+	Debug *Debug `json:"debug,omitempty"`
 }
 
 type Debug struct {
-	// Endpoints enable http pprof and internal tailscaled debug metrics.
-	// Available on <pod-ip>:9002/debug/pprof and <pod-ip>:9002/debug/metrics.
-	Endpoints bool `json:"endpoints"`
+	// Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9002/debug/pprof/
+	// and internal debug metrics endpoint at <pod-ip>:9002/debug/metrics, where
+	// 9002 is a container port named "debug". The endpoints and their responses
+	// may change in backwards incompatible ways in the future, and should not
+	// be considered stable.
+	//
+	// In 1.78.x and 1.80.x, this setting will default to the value of
+	// .spec.metrics.enable, and requests to the "metrics" port matching the
+	// mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+	// this setting will default to false, and no requests will be proxied.
+	//
+	// +optional
+	Enable bool `json:"endpoints"`
 }
 
 type Env struct {
