@@ -252,7 +252,7 @@ func TestIsTailscaleIPv4(t *testing.T) {
 	}
 	for _, tt := range tests {
 		if got := IsTailscaleIPv4(tt.in); got != tt.want {
-			t.Errorf("IsTailscaleIPv4() = %v, want %v", got, tt.want)
+			t.Errorf("IsTailscaleIPv4(%v) = %v, want %v", tt.in, got, tt.want)
 		}
 	}
 }
@@ -286,7 +286,7 @@ func TestIsTailscaleIP(t *testing.T) {
 	}
 	for _, tt := range tests {
 		if got := IsTailscaleIP(tt.in); got != tt.want {
-			t.Errorf("IsTailscaleIP() = %v, want %v", got, tt.want)
+			t.Errorf("IsTailscaleIP(%v) = %v, want %v", tt.in, got, tt.want)
 		}
 	}
 }
