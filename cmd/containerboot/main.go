@@ -178,12 +178,12 @@ func main() {
 	}
 	defer killTailscaled()
 
-	if cfg.MetricsAddrPort != "" {
+	if cfg.ObservabilityAddrPort != "" && cfg.MetricsEnabled {
 		m := &metrics{
 			lc:            client,
 			debugEndpoint: cfg.DebugAddrPort,
 		}
-		runMetrics(cfg.MetricsAddrPort, m)
+		runMetrics(cfg.ObservabilityAddrPort, m)
 	}
 
 	if cfg.EnableForwardingOptimizations {

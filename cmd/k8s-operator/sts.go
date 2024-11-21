@@ -784,10 +784,14 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 		if c.Name == "tailscale" {
 			if metrics {
 				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
-					// Serve client metrics on <pod-ip>:9001/metrics and <pod-ip>:9001/debug endpoints.
+					// Serve client metrics on <pod-ip>:9001/metrics.
 					corev1.EnvVar{
-						Name:  "TS_METRICS_ADDR_PORT",
+						Name:  "TS_OBSERVABILITY_ADDR_PORT",
 						Value: "$(POD_IP):9001",
+					},
+					corev1.EnvVar{
+						Name:  "TS_METRICS_ENABLED",
+						Value: "true",
 					},
 				)
 				ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports,
