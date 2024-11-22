@@ -309,6 +309,7 @@ func TestStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(b.Shutdown)
 	b.DisablePortMapperForTest()
 
 	var cc, previousCC *mockControl
@@ -942,6 +943,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(b.Shutdown)
 	b.hostinfo = &tailcfg.Hostinfo{OS: "testos"}
 	b.pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
@@ -1023,6 +1025,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	sys.Set(eng)
 	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	c.Assert(err, qt.IsNil)
+	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {

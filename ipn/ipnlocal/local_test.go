@@ -458,6 +458,7 @@ func newTestLocalBackendWithSys(t testing.TB, sys *tsd.System) *LocalBackend {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(lb.Shutdown)
 	return lb
 }
 
@@ -4109,6 +4110,7 @@ func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(b.Shutdown)
 	b.DisablePortMapperForTest()
 
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
