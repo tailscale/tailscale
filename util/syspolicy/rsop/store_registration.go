@@ -7,6 +7,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/setting"
@@ -33,6 +34,9 @@ func RegisterStore(name string, scope setting.PolicyScope, store source.Store) (
 // RegisterStoreForTest is like [RegisterStore], but unregisters the store when
 // tb and all its subtests complete.
 func RegisterStoreForTest(tb internal.TB, name string, scope setting.PolicyScope, store source.Store) (*StoreRegistration, error) {
+	setForTest(tb, &policyReloadMinDelay, 10*time.Millisecond)
+	setForTest(tb, &policyReloadMaxDelay, 500*time.Millisecond)
+
 	reg, err := RegisterStore(name, scope, store)
 	if err == nil {
 		tb.Cleanup(func() {
