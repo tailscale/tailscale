@@ -64,20 +64,20 @@ type settings struct {
 	// when setting up rules to proxy cluster traffic to cluster ingress
 	// target.
 	// Deprecated: use PodIPv4, PodIPv6 instead to support dual stack clusters
-	PodIP                 string
-	PodIPv4               string
-	PodIPv6               string
-	HealthCheckAddrPort   string // TODO(tomhjp): use the observability endpoint instead.
-	ObservabilityAddrPort string
-	MetricsEnabled        bool
-	DebugAddrPort         string
-	EgressSvcsCfgPath     string
+	PodIP               string
+	PodIPv4             string
+	PodIPv6             string
+	HealthCheckAddrPort string // TODO(tomhjp): use the local addr/port instead.
+	LocalAddrPort       string
+	MetricsEnabled      bool
+	DebugAddrPort       string
+	EgressSvcsCfgPath   string
 }
 
 func configFromEnv() (*settings, error) {
-	defaultObservabilityAddrPort := ""
+	defaultLocalAddrPort := ""
 	if v, ok := os.LookupEnv("POD_IP"); ok && v != "" {
-		defaultObservabilityAddrPort = fmt.Sprintf("%s:9001", v)
+		defaultLocalAddrPort = fmt.Sprintf("%s:9001", v)
 	}
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
@@ -105,7 +105,7 @@ func configFromEnv() (*settings, error) {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
-		ObservabilityAddrPort:                 defaultEnv("TS_OBSERVABILITY_ADDR_PORT", defaultObservabilityAddrPort),
+		LocalAddrPort:                         defaultEnv("TS_LOCAL_ADDR_PORT", defaultLocalAddrPort),
 		MetricsEnabled:                        defaultBool("TS_METRICS_ENABLED", false),
 		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
@@ -185,9 +185,9 @@ func (s *settings) validate() error {
 			return fmt.Errorf("error parsing TS_HEALTH_CHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
 		}
 	}
-	if s.ObservabilityAddrPort != "" {
-		if _, err := netip.ParseAddrPort(s.ObservabilityAddrPort); err != nil {
-			return fmt.Errorf("error parsing TS_OBSERVABILITY_ADDR_PORT value %q: %w", s.ObservabilityAddrPort, err)
+	if s.LocalAddrPort != "" {
+		if _, err := netip.ParseAddrPort(s.LocalAddrPort); err != nil {
+			return fmt.Errorf("error parsing TS_LOCAL_ADDR_PORT value %q: %w", s.LocalAddrPort, err)
 		}
 	}
 	if s.DebugAddrPort != "" {

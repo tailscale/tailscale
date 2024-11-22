@@ -255,7 +255,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	// 5. Metrics enabled defaults to enabling both metrics and debug.
 	wantSS = nonUserspaceProxySS.DeepCopy()
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env,
-		corev1.EnvVar{Name: "TS_OBSERVABILITY_ADDR_PORT", Value: "$(POD_IP):9001"},
+		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9001"},
 		corev1.EnvVar{Name: "TS_METRICS_ENABLED", Value: "true"},
 		corev1.EnvVar{Name: "TS_DEBUG_ADDR_PORT", Value: "$(POD_IP):9002"},
 		corev1.EnvVar{Name: "TS_TAILSCALED_EXTRA_ARGS", Value: "--debug=$(TS_DEBUG_ADDR_PORT)"},
@@ -272,7 +272,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	// 6. Enable _just_ metrics by explicitly disabling debug.
 	wantSS = nonUserspaceProxySS.DeepCopy()
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env,
-		corev1.EnvVar{Name: "TS_OBSERVABILITY_ADDR_PORT", Value: "$(POD_IP):9001"},
+		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9001"},
 		corev1.EnvVar{Name: "TS_METRICS_ENABLED", Value: "true"},
 	)
 	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: "metrics", Protocol: "TCP", ContainerPort: 9001}}

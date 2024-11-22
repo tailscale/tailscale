@@ -786,7 +786,7 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
 					// Serve client metrics on <pod-ip>:9001/metrics.
 					corev1.EnvVar{
-						Name:  "TS_OBSERVABILITY_ADDR_PORT",
+						Name:  "TS_LOCAL_ADDR_PORT",
 						Value: "$(POD_IP):9001",
 					},
 					corev1.EnvVar{
