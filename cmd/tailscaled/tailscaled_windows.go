@@ -134,14 +134,13 @@ func runWindowsService(pol *logpolicy.Policy) error {
 		logger.Logf(log.Printf).JSON(1, "SupportInfo", osdiag.SupportInfo(osdiag.LogSupportInfoReasonStartup))
 	}()
 
-	if logSCMInteractions, _ := syspolicy.GetBoolean(syspolicy.LogSCMInteractions, false); logSCMInteractions {
-		syslog, err := eventlog.Open(serviceName)
-		if err == nil {
-			syslogf = func(format string, args ...any) {
+	if syslog, err := eventlog.Open(serviceName); err == nil {
+		syslogf = func(format string, args ...any) {
+			if logSCMInteractions, _ := syspolicy.GetBoolean(syspolicy.LogSCMInteractions, false); logSCMInteractions {
 				syslog.Info(0, fmt.Sprintf(format, args...))
 			}
-			defer syslog.Close()
 		}
+		defer syslog.Close()
 	}
 
 	syslogf("Service entering svc.Run")
