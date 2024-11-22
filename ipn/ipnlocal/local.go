@@ -1489,10 +1489,10 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
 		}
 	}
-	if setExitNodeID(prefs, curNetMap, b.lastSuggestedExitNode) {
+	if applySysPolicy(prefs, b.lastSuggestedExitNode) {
 		prefsChanged = true
 	}
-	if applySysPolicy(prefs) {
+	if setExitNodeID(prefs, curNetMap) {
 		prefsChanged = true
 	}
 
@@ -1658,10 +1658,35 @@ var preferencePolicies = []preferencePolicyInfo{
 
 // applySysPolicy overwrites configured preferences with policies that may be
 // configured by the system administrator in an OS-specific way.
-func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
+func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID) (anyChange bool) {
 	if controlURL, err := syspolicy.GetString(syspolicy.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
 		prefs.ControlURL = controlURL
 		anyChange = true
+	}
+
+	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
+		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
+		if shouldAutoExitNode() && lastSuggestedExitNode != "" {
+			exitNodeID = lastSuggestedExitNode
+		}
+		// Note: when exitNodeIDStr == "auto" && lastSuggestedExitNode == "",
+		// then exitNodeID is now "auto" which will never match a peer's node ID.
+		// When there is no a peer matching the node ID, traffic will blackhole,
+		// preventing accidental non-exit-node usage when a policy is in effect that requires an exit node.
+		if prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid() {
+			anyChange = true
+		}
+		prefs.ExitNodeID = exitNodeID
+		prefs.ExitNodeIP = netip.Addr{}
+	} else if exitNodeIPStr, _ := syspolicy.GetString(syspolicy.ExitNodeIP, ""); exitNodeIPStr != "" {
+		exitNodeIP, err := netip.ParseAddr(exitNodeIPStr)
+		if exitNodeIP.IsValid() && err == nil {
+			if prefs.ExitNodeID != "" || prefs.ExitNodeIP != exitNodeIP {
+				anyChange = true
+			}
+			prefs.ExitNodeID = ""
+			prefs.ExitNodeIP = exitNodeIP
+		}
 	}
 
 	for _, opt := range preferencePolicies {
@@ -1770,30 +1795,7 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 
 // setExitNodeID updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
-func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap, lastSuggestedExitNode tailcfg.StableNodeID) (prefsChanged bool) {
-	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
-		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
-		if shouldAutoExitNode() && lastSuggestedExitNode != "" {
-			exitNodeID = lastSuggestedExitNode
-		}
-		// Note: when exitNodeIDStr == "auto" && lastSuggestedExitNode == "", then exitNodeID is now "auto" which will never match a peer's node ID.
-		// When there is no a peer matching the node ID, traffic will blackhole, preventing accidental non-exit-node usage when a policy is in effect that requires an exit node.
-		changed := prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid()
-		prefs.ExitNodeID = exitNodeID
-		prefs.ExitNodeIP = netip.Addr{}
-		return changed
-	}
-
-	oldExitNodeID := prefs.ExitNodeID
-	if exitNodeIPStr, _ := syspolicy.GetString(syspolicy.ExitNodeIP, ""); exitNodeIPStr != "" {
-		exitNodeIP, err := netip.ParseAddr(exitNodeIPStr)
-		if exitNodeIP.IsValid() && err == nil {
-			prefsChanged = prefs.ExitNodeID != "" || prefs.ExitNodeIP != exitNodeIP
-			prefs.ExitNodeID = ""
-			prefs.ExitNodeIP = exitNodeIP
-		}
-	}
-
+func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
 	if nm == nil {
 		// No netmap, can't resolve anything.
 		return false
@@ -1811,6 +1813,7 @@ func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap, lastSuggestedExitNod
 		prefsChanged = true
 	}
 
+	oldExitNodeID := prefs.ExitNodeID
 	for _, peer := range nm.Peers {
 		for _, addr := range peer.Addresses().All() {
 			if !addr.IsSingleIP() || addr.Addr() != prefs.ExitNodeIP {
@@ -1820,7 +1823,7 @@ func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap, lastSuggestedExitNod
 			// reference it directly for next time.
 			prefs.ExitNodeID = peer.StableID()
 			prefs.ExitNodeIP = netip.Addr{}
-			return oldExitNodeID != prefs.ExitNodeID
+			return prefsChanged || oldExitNodeID != prefs.ExitNodeID
 		}
 	}
 
@@ -3844,12 +3847,12 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// setExitNodeID returns whether it updated b.prefs, but
-	// everything in this function treats b.prefs as completely new
-	// anyway. No-op if no exit node resolution is needed.
-	setExitNodeID(newp, netMap, b.lastSuggestedExitNode)
-	// applySysPolicy does likewise so we can also ignore its return value.
-	applySysPolicy(newp)
+	// applySysPolicyToPrefsLocked returns whether it updated newp,
+	// but everything in this function treats b.prefs as completely new
+	// anyway, so its return value can be ignored here.
+	applySysPolicy(newp, b.lastSuggestedExitNode)
+	// setExitNodeID does likewise. No-op if no exit node resolution is needed.
+	setExitNodeID(newp, netMap)
 	// We do this to avoid holding the lock while doing everything else.
 
 	oldHi := b.hostinfo
