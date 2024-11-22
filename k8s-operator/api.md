@@ -262,7 +262,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `enable` _boolean_ | Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9002/debug/pprof/<br />and internal debug metrics endpoint at <pod-ip>:9002/debug/metrics, where<br />9002 is a container port named "debug". The endpoints and their responses<br />may change in backwards incompatible ways in the future, and should not<br />be considered stable.<br />In 1.78.x and 1.80.x, this setting will default to the value of<br />.spec.metrics.enable, and requests to the "metrics" port matching the<br />mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,<br />this setting will default to false, and no requests will be proxied. |  |  |
+| `enable` _boolean_ | Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/<br />and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where<br />9001 is a container port named "debug". The endpoints and their responses<br />may change in backwards incompatible ways in the future, and should not<br />be considered stable.<br />In 1.78.x and 1.80.x, this setting will default to the value of<br />.spec.metrics.enable, and requests to the "metrics" port matching the<br />mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,<br />this setting will default to false, and no requests will be proxied. |  |  |
 
 
 #### Env
@@ -326,7 +326,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `enable` _boolean_ | Setting enable to true will make the proxy serve Tailscale metrics<br />at <pod-ip>:9001/debug/metrics.<br />Defaults to false. |  |  |
+| `enable` _boolean_ | Setting enable to true will make the proxy serve Tailscale metrics<br />at <pod-ip>:9002/metrics.<br />In 1.78.x and 1.80.x, this field also serves as the default value for<br />.spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both<br />fields will independently default to false.<br />Defaults to false. |  |  |
 
 
 #### Name

@@ -782,37 +782,16 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 	for i, c := range ss.Spec.Template.Spec.Containers {
 		if c.Name == "tailscale" {
-			if metrics {
-				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
-					// Serve client metrics on <pod-ip>:9001/metrics.
-					corev1.EnvVar{
-						Name:  "TS_LOCAL_ADDR_PORT",
-						Value: "$(POD_IP):9001",
-					},
-					corev1.EnvVar{
-						Name:  "TS_METRICS_ENABLED",
-						Value: "true",
-					},
-				)
-				ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports,
-					corev1.ContainerPort{
-						Name:          "metrics",
-						Protocol:      "TCP",
-						ContainerPort: 9001,
-					},
-				)
-			}
-
 			if debug {
 				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
 					// Serve tailscaled's debug metrics on on
-					// <pod-ip>:9002/debug/metrics. If we didn't specify Pod IP
+					// <pod-ip>:9001/debug/metrics. If we didn't specify Pod IP
 					// here, the proxy would, in some cases, also listen to its
 					// Tailscale IP- we don't want folks to start relying on this
 					// side-effect as a feature.
 					corev1.EnvVar{
 						Name:  "TS_DEBUG_ADDR_PORT",
-						Value: "$(POD_IP):9002",
+						Value: "$(POD_IP):9001",
 					},
 					// TODO(tomhjp): Can remove this env var once 1.76.x is no
 					// longer supported.
@@ -825,6 +804,27 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 				ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports,
 					corev1.ContainerPort{
 						Name:          "debug",
+						Protocol:      "TCP",
+						ContainerPort: 9001,
+					},
+				)
+			}
+
+			if metrics {
+				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
+					// Serve client metrics on <pod-ip>:9002/metrics.
+					corev1.EnvVar{
+						Name:  "TS_LOCAL_ADDR_PORT",
+						Value: "$(POD_IP):9002",
+					},
+					corev1.EnvVar{
+						Name:  "TS_METRICS_ENABLED",
+						Value: "true",
+					},
+				)
+				ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports,
+					corev1.ContainerPort{
+						Name:          "metrics",
 						Protocol:      "TCP",
 						ContainerPort: 9002,
 					},

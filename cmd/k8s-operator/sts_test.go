@@ -255,14 +255,14 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	// 5. Metrics enabled defaults to enabling both metrics and debug.
 	wantSS = nonUserspaceProxySS.DeepCopy()
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env,
-		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9001"},
-		corev1.EnvVar{Name: "TS_METRICS_ENABLED", Value: "true"},
-		corev1.EnvVar{Name: "TS_DEBUG_ADDR_PORT", Value: "$(POD_IP):9002"},
+		corev1.EnvVar{Name: "TS_DEBUG_ADDR_PORT", Value: "$(POD_IP):9001"},
 		corev1.EnvVar{Name: "TS_TAILSCALED_EXTRA_ARGS", Value: "--debug=$(TS_DEBUG_ADDR_PORT)"},
+		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9002"},
+		corev1.EnvVar{Name: "TS_METRICS_ENABLED", Value: "true"},
 	)
 	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{
-		{Name: "metrics", Protocol: "TCP", ContainerPort: 9001},
-		{Name: "debug", Protocol: "TCP", ContainerPort: 9002},
+		{Name: "debug", Protocol: "TCP", ContainerPort: 9001},
+		{Name: "metrics", Protocol: "TCP", ContainerPort: 9002},
 	}
 	gotSS = applyProxyClassToStatefulSet(proxyClassWithMetricsDebug(true, nil), nonUserspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
 	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
@@ -272,10 +272,10 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	// 6. Enable _just_ metrics by explicitly disabling debug.
 	wantSS = nonUserspaceProxySS.DeepCopy()
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env,
-		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9001"},
+		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9002"},
 		corev1.EnvVar{Name: "TS_METRICS_ENABLED", Value: "true"},
 	)
-	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: "metrics", Protocol: "TCP", ContainerPort: 9001}}
+	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: "metrics", Protocol: "TCP", ContainerPort: 9002}}
 	gotSS = applyProxyClassToStatefulSet(proxyClassWithMetricsDebug(true, ptr.To(false)), nonUserspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
 	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
 		t.Errorf("Unexpected result applying ProxyClass with metrics enabled to a StatefulSet (-got +want):\n%s", diff)
@@ -284,10 +284,10 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	// 7. Enable _just_ debug without metrics.
 	wantSS = nonUserspaceProxySS.DeepCopy()
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env,
-		corev1.EnvVar{Name: "TS_DEBUG_ADDR_PORT", Value: "$(POD_IP):9002"},
+		corev1.EnvVar{Name: "TS_DEBUG_ADDR_PORT", Value: "$(POD_IP):9001"},
 		corev1.EnvVar{Name: "TS_TAILSCALED_EXTRA_ARGS", Value: "--debug=$(TS_DEBUG_ADDR_PORT)"},
 	)
-	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: "debug", Protocol: "TCP", ContainerPort: 9002}}
+	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: "debug", Protocol: "TCP", ContainerPort: 9001}}
 	gotSS = applyProxyClassToStatefulSet(proxyClassWithMetricsDebug(false, ptr.To(true)), nonUserspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
 	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
 		t.Errorf("Unexpected result applying ProxyClass with metrics enabled to a StatefulSet (-got +want):\n%s", diff)

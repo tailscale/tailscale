@@ -77,7 +77,7 @@ type settings struct {
 func configFromEnv() (*settings, error) {
 	defaultLocalAddrPort := ""
 	if v, ok := os.LookupEnv("POD_IP"); ok && v != "" {
-		defaultLocalAddrPort = fmt.Sprintf("%s:9001", v)
+		defaultLocalAddrPort = fmt.Sprintf("%s:9002", v)
 	}
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
