@@ -106,6 +106,7 @@ import (
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
@@ -178,27 +179,28 @@ type watchSession struct {
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx                   context.Context    // canceled by Close
-	ctxCancel             context.CancelFunc // cancels ctx
-	logf                  logger.Logf        // general logging
-	keyLogf               logger.Logf        // for printing list of peers on change
-	statsLogf             logger.Logf        // for printing peers stats on change
-	sys                   *tsd.System
-	health                *health.Tracker // always non-nil
-	metrics               metrics
-	e                     wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
-	store                 ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
-	dialer                *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
-	pushDeviceToken       syncs.AtomicValue[string]
-	backendLogID          logid.PublicID
-	unregisterNetMon      func()
-	unregisterHealthWatch func()
-	portpoll              *portlist.Poller // may be nil
-	portpollOnce          sync.Once        // guards starting readPoller
-	varRoot               string           // or empty if SetVarRoot never called
-	logFlushFunc          func()           // or nil if SetLogFlusher wasn't called
-	em                    *expiryManager   // non-nil
-	sshAtomicBool         atomic.Bool
+	ctx                      context.Context    // canceled by Close
+	ctxCancel                context.CancelFunc // cancels ctx
+	logf                     logger.Logf        // general logging
+	keyLogf                  logger.Logf        // for printing list of peers on change
+	statsLogf                logger.Logf        // for printing peers stats on change
+	sys                      *tsd.System
+	health                   *health.Tracker // always non-nil
+	metrics                  metrics
+	e                        wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
+	store                    ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
+	dialer                   *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
+	pushDeviceToken          syncs.AtomicValue[string]
+	backendLogID             logid.PublicID
+	unregisterNetMon         func()
+	unregisterHealthWatch    func()
+	unregisterSysPolicyWatch func()
+	portpoll                 *portlist.Poller // may be nil
+	portpollOnce             sync.Once        // guards starting readPoller
+	varRoot                  string           // or empty if SetVarRoot never called
+	logFlushFunc             func()           // or nil if SetLogFlusher wasn't called
+	em                       *expiryManager   // non-nil
+	sshAtomicBool            atomic.Bool
 	// webClientAtomicBool controls whether the web client is running. This should
 	// be true unless the disable-web-client node attribute has been set.
 	webClientAtomicBool atomic.Bool
@@ -410,7 +412,7 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 // but is not actually running.
 //
 // If dialer is nil, a new one is made.
-func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, loginFlags controlclient.LoginFlags) (*LocalBackend, error) {
+func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, loginFlags controlclient.LoginFlags) (_ *LocalBackend, err error) {
 	e := sys.Engine.Get()
 	store := sys.StateStore.Get()
 	dialer := sys.Dialer.Get()
@@ -484,6 +486,15 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			return nil, err
 		}
 	}
+
+	if b.unregisterSysPolicyWatch, err = b.registerSysPolicyWatch(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			b.unregisterSysPolicyWatch()
+		}
+	}()
 
 	netMon := sys.NetMon.Get()
 	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker())
@@ -981,6 +992,7 @@ func (b *LocalBackend) Shutdown() {
 
 	b.unregisterNetMon()
 	b.unregisterHealthWatch()
+	b.unregisterSysPolicyWatch()
 	if cc != nil {
 		cc.Shutdown()
 	}
@@ -1701,6 +1713,40 @@ func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID
 	}
 
 	return anyChange
+}
+
+// registerSysPolicyWatch subscribes to syspolicy change notifications
+// and immediately applies the effective syspolicy settings to the current profile.
+func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
+	if unregister, err = syspolicy.RegisterChangeCallback(b.sysPolicyChanged); err != nil {
+		return nil, fmt.Errorf("syspolicy: LocalBacked failed to register policy change callback: %v", err)
+	}
+	if prefs, anyChange := b.applySysPolicy(); anyChange {
+		b.logf("syspolicy: changed initial profile prefs: %v", prefs.Pretty())
+	}
+	return unregister, nil
+}
+
+// applySysPolicy overwrites the current profile's preferences with policies
+// that may be configured by the system administrator in an OS-specific way.
+//
+// b.mu must not be held.
+func (b *LocalBackend) applySysPolicy() (_ ipn.PrefsView, anyChange bool) {
+	unlock := b.lockAndGetUnlock()
+	prefs := b.pm.CurrentPrefs().AsStruct()
+	if !applySysPolicy(prefs, b.lastSuggestedExitNode) {
+		unlock.UnlockEarly()
+		return prefs.View(), false
+	}
+	return b.setPrefsLockedOnEntry(prefs, unlock), true
+}
+
+// sysPolicyChanged is a callback triggered by syspolicy when it detects
+// a change in one or more syspolicy settings.
+func (b *LocalBackend) sysPolicyChanged(*rsop.PolicyChange) {
+	if prefs, anyChange := b.applySysPolicy(); anyChange {
+		b.logf("syspolicy: changed profile prefs: %v", prefs.Pretty())
+	}
 }
 
 var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
@@ -3889,10 +3935,14 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	}
 
 	prefs := newp.View()
-	if err := b.pm.SetPrefs(prefs, ipn.NetworkProfile{
-		MagicDNSName: b.netMap.MagicDNSSuffix(),
-		DomainName:   b.netMap.DomainName(),
-	}); err != nil {
+	np := b.pm.CurrentProfile().NetworkProfile
+	if netMap != nil {
+		np = ipn.NetworkProfile{
+			MagicDNSName: b.netMap.MagicDNSSuffix(),
+			DomainName:   b.netMap.DomainName(),
+		}
+	}
+	if err := b.pm.SetPrefs(prefs, np); err != nil {
 		b.logf("failed to save new controlclient state: %v", err)
 	}
 

@@ -4562,3 +4562,126 @@ func TestGetVIPServices(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
+	const enableLogging = false
+
+	type fieldChange struct {
+		name string
+		want any
+	}
+
+	wantPrefsChanges := func(want ...fieldChange) *wantedNotification {
+		return &wantedNotification{
+			name: "Prefs",
+			cond: func(t testing.TB, actor ipnauth.Actor, n *ipn.Notify) bool {
+				if n.Prefs != nil {
+					prefs := reflect.Indirect(reflect.ValueOf(n.Prefs.AsStruct()))
+					for _, f := range want {
+						got := prefs.FieldByName(f.name).Interface()
+						if !reflect.DeepEqual(got, f.want) {
+							t.Errorf("%v: got %v; want %v", f.name, got, f.want)
+						}
+					}
+				}
+				return n.Prefs != nil
+			},
+		}
+	}
+
+	unexpectedPrefsChange := func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+		if n.Prefs != nil {
+			t.Errorf("Unexpected Prefs: %v", n.Prefs.Pretty())
+			return true
+		}
+		return false
+	}
+
+	tests := []struct {
+		name           string
+		initialPrefs   *ipn.Prefs
+		stringSettings []source.TestSetting[string]
+		want           *wantedNotification
+	}{
+		{
+			name:           "ShieldsUp/True",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableIncomingConnections, "never")},
+			want:           wantPrefsChanges(fieldChange{"ShieldsUp", true}),
+		},
+		{
+			name:           "ShieldsUp/False",
+			initialPrefs:   &ipn.Prefs{ShieldsUp: true},
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableIncomingConnections, "always")},
+			want:           wantPrefsChanges(fieldChange{"ShieldsUp", false}),
+		},
+		{
+			name:           "ExitNodeID",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.ExitNodeID, "foo")},
+			want:           wantPrefsChanges(fieldChange{"ExitNodeID", tailcfg.StableNodeID("foo")}),
+		},
+		{
+			name:           "EnableRunExitNode",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableRunExitNode, "always")},
+			want:           wantPrefsChanges(fieldChange{"AdvertiseRoutes", []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()}}),
+		},
+		{
+			name: "Multiple",
+			initialPrefs: &ipn.Prefs{
+				ExitNodeAllowLANAccess: true,
+			},
+			stringSettings: []source.TestSetting[string]{
+				source.TestSettingOf(syspolicy.EnableServerMode, "always"),
+				source.TestSettingOf(syspolicy.ExitNodeAllowLANAccess, "never"),
+				source.TestSettingOf(syspolicy.ExitNodeIP, "127.0.0.1"),
+			},
+			want: wantPrefsChanges(
+				fieldChange{"ForceDaemon", true},
+				fieldChange{"ExitNodeAllowLANAccess", false},
+				fieldChange{"ExitNodeIP", netip.MustParseAddr("127.0.0.1")},
+			),
+		},
+		{
+			name: "NoChange",
+			initialPrefs: &ipn.Prefs{
+				CorpDNS:         true,
+				ExitNodeID:      "foo",
+				AdvertiseRoutes: []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
+			},
+			stringSettings: []source.TestSetting[string]{
+				source.TestSettingOf(syspolicy.EnableTailscaleDNS, "always"),
+				source.TestSettingOf(syspolicy.ExitNodeID, "foo"),
+				source.TestSettingOf(syspolicy.EnableRunExitNode, "always"),
+			},
+			want: nil, // syspolicy settings match the preferences; no change notification is expected.
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			syspolicy.RegisterWellKnownSettingsForTest(t)
+			store := source.NewTestStoreOf[string](t)
+			syspolicy.MustRegisterStoreForTest(t, "TestSource", setting.DeviceScope, store)
+
+			lb := newLocalBackendWithTestControl(t, enableLogging, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+				return newClient(tb, opts)
+			})
+			if tt.initialPrefs != nil {
+				lb.SetPrefsForTest(tt.initialPrefs)
+			}
+			if err := lb.Start(ipn.Options{}); err != nil {
+				t.Fatalf("(*LocalBackend).Start(): %v", err)
+			}
+
+			nw := newNotificationWatcher(t, lb, &ipnauth.TestActor{})
+			if tt.want != nil {
+				nw.watch(0, []wantedNotification{*tt.want})
+			} else {
+				nw.watch(0, nil, unexpectedPrefsChange)
+			}
+
+			store.SetStrings(tt.stringSettings...)
+
+			nw.check()
+		})
+	}
+}
