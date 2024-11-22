@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/setting"
 
@@ -446,4 +447,10 @@ func (p *Policy) Close() {
 		// started, we need to call [Policy.closeInternal] manually.
 		go p.closeInternal()
 	}
+}
+
+func setForTest[T any](tb internal.TB, target *T, newValue T) {
+	oldValue := *target
+	tb.Cleanup(func() { *target = oldValue })
+	*target = newValue
 }

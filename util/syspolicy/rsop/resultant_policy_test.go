@@ -574,9 +574,6 @@ func TestPolicyChangeHasChanged(t *testing.T) {
 }
 
 func TestChangePolicySetting(t *testing.T) {
-	setForTest(t, &policyReloadMinDelay, 100*time.Millisecond)
-	setForTest(t, &policyReloadMaxDelay, 500*time.Millisecond)
-
 	// Register policy settings used in this test.
 	settingA := setting.NewDefinition("TestSettingA", setting.DeviceSetting, setting.StringValue)
 	settingB := setting.NewDefinition("TestSettingB", setting.DeviceSetting, setting.StringValue)
@@ -589,6 +586,10 @@ func TestChangePolicySetting(t *testing.T) {
 	if _, err := RegisterStoreForTest(t, "TestSource", setting.DeviceScope, store); err != nil {
 		t.Fatalf("Failed to register policy store: %v", err)
 	}
+
+	setForTest(t, &policyReloadMinDelay, 100*time.Millisecond)
+	setForTest(t, &policyReloadMaxDelay, 500*time.Millisecond)
+
 	policy, err := policyForTest(t, setting.DeviceScope)
 	if err != nil {
 		t.Fatalf("Failed to get effective policy: %v", err)
@@ -977,10 +978,4 @@ func policyForTest(tb testing.TB, target setting.PolicyScope) (*Policy, error) {
 		deletePolicy(policy)
 	})
 	return policy, nil
-}
-
-func setForTest[T any](tb testing.TB, target *T, newValue T) {
-	oldValue := *target
-	tb.Cleanup(func() { *target = oldValue })
-	*target = newValue
 }
