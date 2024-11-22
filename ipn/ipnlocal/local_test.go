@@ -1789,10 +1789,13 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			b := newTestBackend(t)
 
-			policyStore := source.NewTestStoreOf(t,
-				source.TestSettingOf(syspolicy.ExitNodeID, test.exitNodeID),
-				source.TestSettingOf(syspolicy.ExitNodeIP, test.exitNodeIP),
-			)
+			policyStore := source.NewTestStore(t)
+			if test.exitNodeIDKey {
+				policyStore.SetStrings(source.TestSettingOf(syspolicy.ExitNodeID, test.exitNodeID))
+			}
+			if test.exitNodeIPKey {
+				policyStore.SetStrings(source.TestSettingOf(syspolicy.ExitNodeIP, test.exitNodeIP))
+			}
 			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 
 			if test.nm == nil {
@@ -1806,7 +1809,16 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.netMap = test.nm
 			b.pm = pm
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
-			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm, tailcfg.StableNodeID(test.lastSuggestedExitNode))
+
+			prefs := b.pm.prefs.AsStruct()
+			if changed := applySysPolicy(prefs, test.lastSuggestedExitNode) || setExitNodeID(prefs, test.nm); changed != test.prefsChanged {
+				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
+			}
+
+			// Both [LocalBackend.SetPrefsForTest] and [LocalBackend.EditPrefs]
+			// apply syspolicy settings to the current profile's preferences. Therefore,
+			// we pass the current, unmodified preferences and expect the effective
+			// preferences to change.
 			b.SetPrefsForTest(pm.CurrentPrefs().AsStruct())
 
 			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
@@ -1818,10 +1830,6 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				}
 			} else if got.String() != test.exitNodeIPWant {
 				t.Errorf("got %v want %v", got, test.exitNodeIPWant)
-			}
-
-			if changed != test.prefsChanged {
-				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 		})
 	}
@@ -2332,7 +2340,7 @@ func TestApplySysPolicy(t *testing.T) {
 			t.Run("unit", func(t *testing.T) {
 				prefs := tt.prefs.Clone()
 
-				gotAnyChange := applySysPolicy(prefs)
+				gotAnyChange := applySysPolicy(prefs, "")
 
 				if gotAnyChange && prefs.Equals(&tt.prefs) {
 					t.Errorf("anyChange but prefs is unchanged: %v", prefs.Pretty())
@@ -2480,7 +2488,7 @@ func TestPreferencePolicyInfo(t *testing.T) {
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
 
-					gotAnyChange := applySysPolicy(prefs)
+					gotAnyChange := applySysPolicy(prefs, "")
 
 					if gotAnyChange != tt.wantChange {
 						t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantChange)
