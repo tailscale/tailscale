@@ -67,11 +67,18 @@ type settings struct {
 	PodIP               string
 	PodIPv4             string
 	PodIPv6             string
-	HealthCheckAddrPort string
+	HealthCheckAddrPort string // TODO(tomhjp): use the local addr/port instead.
+	LocalAddrPort       string
+	MetricsEnabled      bool
+	DebugAddrPort       string
 	EgressSvcsCfgPath   string
 }
 
 func configFromEnv() (*settings, error) {
+	defaultLocalAddrPort := ""
+	if v, ok := os.LookupEnv("POD_IP"); ok && v != "" {
+		defaultLocalAddrPort = fmt.Sprintf("%s:9002", v)
+	}
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
@@ -98,6 +105,9 @@ func configFromEnv() (*settings, error) {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
+		LocalAddrPort:                         defaultEnv("TS_LOCAL_ADDR_PORT", defaultLocalAddrPort),
+		MetricsEnabled:                        defaultBool("TS_METRICS_ENABLED", false),
+		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
 	}
 	podIPs, ok := os.LookupEnv("POD_IPS")
@@ -173,6 +183,16 @@ func (s *settings) validate() error {
 	if s.HealthCheckAddrPort != "" {
 		if _, err := netip.ParseAddrPort(s.HealthCheckAddrPort); err != nil {
 			return fmt.Errorf("error parsing TS_HEALTH_CHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
+		}
+	}
+	if s.LocalAddrPort != "" {
+		if _, err := netip.ParseAddrPort(s.LocalAddrPort); err != nil {
+			return fmt.Errorf("error parsing TS_LOCAL_ADDR_PORT value %q: %w", s.LocalAddrPort, err)
+		}
+	}
+	if s.DebugAddrPort != "" {
+		if _, err := netip.ParseAddrPort(s.DebugAddrPort); err != nil {
+			return fmt.Errorf("error parsing TS_DEBUG_ADDR_PORT value %q: %w", s.DebugAddrPort, err)
 		}
 	}
 	return nil
