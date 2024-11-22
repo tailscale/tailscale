@@ -87,7 +87,6 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
-	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -355,6 +354,12 @@ type LocalBackend struct {
 	// lastSuggestedExitNode stores the last suggested exit node suggestion to
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
+
+	// allowedSuggestedExitNodes is a set of exit nodes permitted by the most recent
+	// [syspolicy.AllowedSuggestedExitNodes] value. The allowedSuggestedExitNodesMu
+	// mutex guards access to this set.
+	allowedSuggestedExitNodesMu sync.Mutex
+	allowedSuggestedExitNodes   set.Set[tailcfg.StableNodeID]
 
 	// refreshAutoExitNode indicates if the exit node should be recomputed when the next netcheck report is available.
 	refreshAutoExitNode bool
@@ -1724,6 +1729,7 @@ func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
 	if prefs, anyChange := b.applySysPolicy(); anyChange {
 		b.logf("syspolicy: changed initial profile prefs: %v", prefs.Pretty())
 	}
+	b.refreshAllowedSuggestions()
 	return unregister, nil
 }
 
@@ -1743,7 +1749,20 @@ func (b *LocalBackend) applySysPolicy() (_ ipn.PrefsView, anyChange bool) {
 
 // sysPolicyChanged is a callback triggered by syspolicy when it detects
 // a change in one or more syspolicy settings.
-func (b *LocalBackend) sysPolicyChanged(*rsop.PolicyChange) {
+func (b *LocalBackend) sysPolicyChanged(policy *rsop.PolicyChange) {
+	if policy.HasChanged(syspolicy.AllowedSuggestedExitNodes) {
+		b.refreshAllowedSuggestions()
+		// Re-evaluate exit node suggestion now that the policy setting has changed.
+		b.mu.Lock()
+		_, err := b.suggestExitNodeLocked(nil)
+		b.mu.Unlock()
+		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
+			b.logf("failed to select auto exit node: %v", err)
+		}
+		// If [syspolicy.ExitNodeID] is set to `auto:any`, the suggested exit node ID
+		// will be used when [applySysPolicy] updates the current profile's prefs.
+	}
+
 	if prefs, anyChange := b.applySysPolicy(); anyChange {
 		b.logf("syspolicy: changed profile prefs: %v", prefs.Pretty())
 	}
@@ -7197,7 +7216,7 @@ func (b *LocalBackend) suggestExitNodeLocked(netMap *netmap.NetworkMap) (respons
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
 	prevSuggestion := b.lastSuggestedExitNode
 
-	res, err := suggestExitNode(lastReport, netMap, prevSuggestion, randomRegion, randomNode, getAllowedSuggestions())
+	res, err := suggestExitNode(lastReport, netMap, prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
 	if err != nil {
 		return res, err
 	}
@@ -7211,6 +7230,22 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	return b.suggestExitNodeLocked(nil)
 }
 
+// getAllowedSuggestions returns a set of exit nodes permitted by the most recent
+// [syspolicy.AllowedSuggestedExitNodes] value. Callers must not mutate the returned set.
+func (b *LocalBackend) getAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
+	b.allowedSuggestedExitNodesMu.Lock()
+	defer b.allowedSuggestedExitNodesMu.Unlock()
+	return b.allowedSuggestedExitNodes
+}
+
+// refreshAllowedSuggestions rebuilds the set of permitted exit nodes
+// from the current [syspolicy.AllowedSuggestedExitNodes] value.
+func (b *LocalBackend) refreshAllowedSuggestions() {
+	b.allowedSuggestedExitNodesMu.Lock()
+	defer b.allowedSuggestedExitNodesMu.Unlock()
+	b.allowedSuggestedExitNodes = fillAllowedSuggestions()
+}
+
 // selectRegionFunc returns a DERP region from the slice of candidate regions.
 // The value is returned, not the slice index.
 type selectRegionFunc func(views.Slice[int]) int
@@ -7219,8 +7254,6 @@ type selectRegionFunc func(views.Slice[int]) int
 // selected node is provided for when that information is needed to make a better
 // choice.
 type selectNodeFunc func(nodes views.Slice[tailcfg.NodeView], last tailcfg.StableNodeID) tailcfg.NodeView
-
-var getAllowedSuggestions = lazy.SyncFunc(fillAllowedSuggestions)
 
 func fillAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
 	nodes, err := syspolicy.GetStringArray(syspolicy.AllowedSuggestedExitNodes, nil)
