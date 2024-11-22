@@ -74,7 +74,19 @@ func (kc *kubeClient) storeDeviceEndpoints(ctx context.Context, fqdn string, add
 			kubetypes.KeyDeviceIPs:  deviceIPs,
 		},
 	}
-	return kc.StrategicMergePatchSecret(ctx, secretName, s, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
+}
+
+// storeHTTPSEndpoint writes an HTTPS endpoint exposed by this device via 'tailscale serve' to the named Kubernetes
+// Secret. In practice this will be the same value that gets written to 'device_fqdn', but this should only be called
+// when the serve config has been successfully set up.
+func (kc *kubeClient) storeHTTPSEndpoint(ctx context.Context, ep string) error {
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			kubetypes.KeyHTTPSEndpoint: []byte(ep),
+		},
+	}
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
 }
 
 // deleteAuthKey deletes the 'authkey' field of the given kube
