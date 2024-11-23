@@ -40,6 +40,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/syspolicy/setting"
 )
 
 // defaultLocalClient is the default LocalClient when using the legacy
@@ -814,6 +815,33 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 	return decodeJSON[*ipn.Prefs](body)
 }
 
+// GetEffectivePolicy returns the effective policy for the specified scope.
+func (lc *LocalClient) GetEffectivePolicy(ctx context.Context, scope setting.PolicyScope) (*setting.Snapshot, error) {
+	scopeID, err := scope.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	body, err := lc.get200(ctx, "/localapi/v0/policy/"+string(scopeID))
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*setting.Snapshot](body)
+}
+
+// ReloadEffectivePolicy reloads the effective policy for the specified scope
+// by reading and merging policy settings from all applicable policy sources.
+func (lc *LocalClient) ReloadEffectivePolicy(ctx context.Context, scope setting.PolicyScope) (*setting.Snapshot, error) {
+	scopeID, err := scope.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/policy/"+string(scopeID), 200, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*setting.Snapshot](body)
+}
+
 // GetDNSOSConfig returns the system DNS configuration for the current device.
 // That is, it returns the DNS configuration that the system would use if Tailscale weren't being used.
 func (lc *LocalClient) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, error) {
@@ -1295,6 +1323,17 @@ func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConf
 	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/serve-config", 200, jsonBody(config), h)
 	if err != nil {
 		return fmt.Errorf("sending serve config: %w", err)
+	}
+	return nil
+}
+
+// DisconnectControl shuts down all connections to control, thus making control consider this node inactive. This can be
+// run on HA subnet router or app connector replicas before shutting them down to ensure peers get told to switch over
+// to another replica whilst there is still some grace period for the existing connections to terminate.
+func (lc *LocalClient) DisconnectControl(ctx context.Context) error {
+	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/disconnect-control", 200, nil, nil)
+	if err != nil {
+		return fmt.Errorf("error disconnecting control: %w", err)
 	}
 	return nil
 }

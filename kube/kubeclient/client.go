@@ -23,16 +23,21 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"tailscale.com/kube/kubeapi"
+	"tailscale.com/tstime"
 	"tailscale.com/util/multierr"
 )
 
 const (
 	saPath     = "/var/run/secrets/kubernetes.io/serviceaccount"
 	defaultURL = "https://kubernetes.default.svc"
+
+	TypeSecrets = "secrets"
+	typeEvents  = "events"
 )
 
 // rootPathForTests is set by tests to override the root path to the
@@ -57,8 +62,13 @@ type Client interface {
 	GetSecret(context.Context, string) (*kubeapi.Secret, error)
 	UpdateSecret(context.Context, *kubeapi.Secret) error
 	CreateSecret(context.Context, *kubeapi.Secret) error
+	// Event attempts to ensure an event with the specified options associated with the Pod in which we are
+	// currently running. This is best effort - if the client is not able to create events, this operation will be a
+	// no-op. If there is already an Event with the given reason for the current Pod, it will get updated (only
+	// count and timestamp are expected to change), else a new event will be created.
+	Event(_ context.Context, typ, reason, msg string) error
 	StrategicMergePatchSecret(context.Context, string, *kubeapi.Secret, string) error
-	JSONPatchSecret(context.Context, string, []JSONPatch) error
+	JSONPatchResource(_ context.Context, resourceName string, resourceType string, patches []JSONPatch) error
 	CheckSecretPermissions(context.Context, string) (bool, bool, error)
 	SetDialer(dialer func(context.Context, string, string) (net.Conn, error))
 	SetURL(string)
@@ -66,15 +76,24 @@ type Client interface {
 
 type client struct {
 	mu          sync.Mutex
+	name        string
 	url         string
-	ns          string
+	podName     string
+	podUID      string
+	ns          string // Pod namespace
 	client      *http.Client
 	token       string
 	tokenExpiry time.Time
+	cl          tstime.Clock
+	// hasEventsPerms is true if client can emit Events for the Pod in which it runs. If it is set to false any
+	// calls to Events() will be a no-op.
+	hasEventsPerms bool
+	// kubeAPIRequest sends a request to the kube API server. It can set to a fake in tests.
+	kubeAPIRequest kubeAPIRequestFunc
 }
 
 // New returns a new client
-func New() (Client, error) {
+func New(name string) (Client, error) {
 	ns, err := readFile("namespace")
 	if err != nil {
 		return nil, err
@@ -87,9 +106,11 @@ func New() (Client, error) {
 	if ok := cp.AppendCertsFromPEM(caCert); !ok {
 		return nil, fmt.Errorf("kube: error in creating root cert pool")
 	}
-	return &client{
-		url: defaultURL,
-		ns:  string(ns),
+	c := &client{
+		url:  defaultURL,
+		ns:   string(ns),
+		name: name,
+		cl:   tstime.DefaultClock{},
 		client: &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
@@ -97,7 +118,10 @@ func New() (Client, error) {
 				},
 			},
 		},
-	}, nil
+	}
+	c.kubeAPIRequest = newKubeAPIRequest(c)
+	c.setEventPerms()
+	return c, nil
 }
 
 // SetURL sets the URL to use for the Kubernetes API.
@@ -115,14 +139,14 @@ func (c *client) SetDialer(dialer func(ctx context.Context, network, addr string
 func (c *client) expireToken() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tokenExpiry = time.Now()
+	c.tokenExpiry = c.cl.Now()
 }
 
 func (c *client) getOrRenewToken() (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tk, te := c.token, c.tokenExpiry
-	if time.Now().Before(te) {
+	if c.cl.Now().Before(te) {
 		return tk, nil
 	}
 
@@ -131,15 +155,8 @@ func (c *client) getOrRenewToken() (string, error) {
 		return "", err
 	}
 	c.token = string(tkb)
-	c.tokenExpiry = time.Now().Add(30 * time.Minute)
+	c.tokenExpiry = c.cl.Now().Add(30 * time.Minute)
 	return c.token, nil
-}
-
-func (c *client) secretURL(name string) string {
-	if name == "" {
-		return fmt.Sprintf("%s/api/v1/namespaces/%s/secrets", c.url, c.ns)
-	}
-	return fmt.Sprintf("%s/api/v1/namespaces/%s/secrets/%s", c.url, c.ns, name)
 }
 
 func getError(resp *http.Response) error {
@@ -161,36 +178,41 @@ func setHeader(key, value string) func(*http.Request) {
 	}
 }
 
-// doRequest performs an HTTP request to the Kubernetes API.
-// If in is not nil, it is expected to be a JSON-encodable object and will be
-// sent as the request body.
-// If out is not nil, it is expected to be a pointer to an object that can be
-// decoded from JSON.
-// If the request fails with a 401, the token is expired and a new one is
-// requested.
-func (c *client) doRequest(ctx context.Context, method, url string, in, out any, opts ...func(*http.Request)) error {
-	req, err := c.newRequest(ctx, method, url, in)
-	if err != nil {
-		return err
-	}
-	for _, opt := range opts {
-		opt(req)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if err := getError(resp); err != nil {
-		if st, ok := err.(*kubeapi.Status); ok && st.Code == 401 {
-			c.expireToken()
+type kubeAPIRequestFunc func(ctx context.Context, method, url string, in, out any, opts ...func(*http.Request)) error
+
+// newKubeAPIRequest returns a function that can perform an HTTP request to the Kubernetes API.
+func newKubeAPIRequest(c *client) kubeAPIRequestFunc {
+	// If in is not nil, it is expected to be a JSON-encodable object and will be
+	// sent as the request body.
+	// If out is not nil, it is expected to be a pointer to an object that can be
+	// decoded from JSON.
+	// If the request fails with a 401, the token is expired and a new one is
+	// requested.
+	f := func(ctx context.Context, method, url string, in, out any, opts ...func(*http.Request)) error {
+		req, err := c.newRequest(ctx, method, url, in)
+		if err != nil {
+			return err
 		}
-		return err
+		for _, opt := range opts {
+			opt(req)
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if err := getError(resp); err != nil {
+			if st, ok := err.(*kubeapi.Status); ok && st.Code == 401 {
+				c.expireToken()
+			}
+			return err
+		}
+		if out != nil {
+			return json.NewDecoder(resp.Body).Decode(out)
+		}
+		return nil
 	}
-	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
-	}
-	return nil
+	return f
 }
 
 func (c *client) newRequest(ctx context.Context, method, url string, in any) (*http.Request, error) {
@@ -226,7 +248,7 @@ func (c *client) newRequest(ctx context.Context, method, url string, in any) (*h
 // GetSecret fetches the secret from the Kubernetes API.
 func (c *client) GetSecret(ctx context.Context, name string) (*kubeapi.Secret, error) {
 	s := &kubeapi.Secret{Data: make(map[string][]byte)}
-	if err := c.doRequest(ctx, "GET", c.secretURL(name), nil, s); err != nil {
+	if err := c.kubeAPIRequest(ctx, "GET", c.resourceURL(name, TypeSecrets), nil, s); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -235,16 +257,16 @@ func (c *client) GetSecret(ctx context.Context, name string) (*kubeapi.Secret, e
 // CreateSecret creates a secret in the Kubernetes API.
 func (c *client) CreateSecret(ctx context.Context, s *kubeapi.Secret) error {
 	s.Namespace = c.ns
-	return c.doRequest(ctx, "POST", c.secretURL(""), s, nil)
+	return c.kubeAPIRequest(ctx, "POST", c.resourceURL("", TypeSecrets), s, nil)
 }
 
 // UpdateSecret updates a secret in the Kubernetes API.
 func (c *client) UpdateSecret(ctx context.Context, s *kubeapi.Secret) error {
-	return c.doRequest(ctx, "PUT", c.secretURL(s.Name), s, nil)
+	return c.kubeAPIRequest(ctx, "PUT", c.resourceURL(s.Name, TypeSecrets), s, nil)
 }
 
 // JSONPatch is a JSON patch operation.
-// It currently (2023-03-02) only supports "add" and "remove" operations.
+// It currently (2024-11-15) only supports "add", "remove" and "replace" operations.
 //
 // https://tools.ietf.org/html/rfc6902
 type JSONPatch struct {
@@ -253,22 +275,22 @@ type JSONPatch struct {
 	Value any    `json:"value,omitempty"`
 }
 
-// JSONPatchSecret updates a secret in the Kubernetes API using a JSON patch.
-// It currently (2023-03-02) only supports "add" and "remove" operations.
-func (c *client) JSONPatchSecret(ctx context.Context, name string, patch []JSONPatch) error {
-	for _, p := range patch {
+// JSONPatchResource updates a resource in the Kubernetes API using a JSON patch.
+// It currently (2024-11-15) only supports "add", "remove" and "replace" operations.
+func (c *client) JSONPatchResource(ctx context.Context, name, typ string, patches []JSONPatch) error {
+	for _, p := range patches {
 		if p.Op != "remove" && p.Op != "add" && p.Op != "replace" {
 			return fmt.Errorf("unsupported JSON patch operation: %q", p.Op)
 		}
 	}
-	return c.doRequest(ctx, "PATCH", c.secretURL(name), patch, nil, setHeader("Content-Type", "application/json-patch+json"))
+	return c.kubeAPIRequest(ctx, "PATCH", c.resourceURL(name, typ), patches, nil, setHeader("Content-Type", "application/json-patch+json"))
 }
 
 // StrategicMergePatchSecret updates a secret in the Kubernetes API using a
 // strategic merge patch.
 // If a fieldManager is provided, it will be used to track the patch.
 func (c *client) StrategicMergePatchSecret(ctx context.Context, name string, s *kubeapi.Secret, fieldManager string) error {
-	surl := c.secretURL(name)
+	surl := c.resourceURL(name, TypeSecrets)
 	if fieldManager != "" {
 		uv := url.Values{
 			"fieldManager": {fieldManager},
@@ -277,7 +299,66 @@ func (c *client) StrategicMergePatchSecret(ctx context.Context, name string, s *
 	}
 	s.Namespace = c.ns
 	s.Name = name
-	return c.doRequest(ctx, "PATCH", surl, s, nil, setHeader("Content-Type", "application/strategic-merge-patch+json"))
+	return c.kubeAPIRequest(ctx, "PATCH", surl, s, nil, setHeader("Content-Type", "application/strategic-merge-patch+json"))
+}
+
+// Event tries to ensure an Event associated with the Pod in which we are running. It is best effort - the event will be
+// created if the kube client on startup was able to determine the name and UID of this Pod from POD_NAME,POD_UID env
+// vars and if permissions check for event creation succeeded. Events are keyed on opts.Reason- if an Event for the
+// current Pod with that reason already exists, its count and first timestamp will be updated, else a new Event will be
+// created.
+func (c *client) Event(ctx context.Context, typ, reason, msg string) error {
+	if !c.hasEventsPerms {
+		return nil
+	}
+	name := c.nameForEvent(reason)
+	ev, err := c.getEvent(ctx, name)
+	now := c.cl.Now()
+	if err != nil {
+		if !IsNotFoundErr(err) {
+			return err
+		}
+		// Event not found - create it
+		ev := kubeapi.Event{
+			ObjectMeta: kubeapi.ObjectMeta{
+				Name:      name,
+				Namespace: c.ns,
+			},
+			Type:    typ,
+			Reason:  reason,
+			Message: msg,
+			Source: kubeapi.EventSource{
+				Component: c.name,
+			},
+			InvolvedObject: kubeapi.ObjectReference{
+				Name:       c.podName,
+				Namespace:  c.ns,
+				UID:        c.podUID,
+				Kind:       "Pod",
+				APIVersion: "v1",
+			},
+
+			FirstTimestamp: now,
+			LastTimestamp:  now,
+			Count:          1,
+		}
+		return c.kubeAPIRequest(ctx, "POST", c.resourceURL("", typeEvents), &ev, nil)
+	}
+	// If the Event already exists, we patch its count and last timestamp. This ensures that when users run 'kubectl
+	// describe pod...', they see the event just once (but with a message of how many times it has appeared over
+	// last timestamp - first timestamp period of time).
+	count := ev.Count + 1
+	countPatch := JSONPatch{
+		Op:    "replace",
+		Value: count,
+		Path:  "/count",
+	}
+	tsPatch := JSONPatch{
+		Op:    "replace",
+		Value: now,
+		Path:  "/lastTimestamp",
+	}
+	return c.JSONPatchResource(ctx, name, typeEvents, []JSONPatch{countPatch, tsPatch})
 }
 
 // CheckSecretPermissions checks the secret access permissions of the current
@@ -293,7 +374,7 @@ func (c *client) StrategicMergePatchSecret(ctx context.Context, name string, s *
 func (c *client) CheckSecretPermissions(ctx context.Context, secretName string) (canPatch, canCreate bool, err error) {
 	var errs []error
 	for _, verb := range []string{"get", "update"} {
-		ok, err := c.checkPermission(ctx, verb, secretName)
+		ok, err := c.checkPermission(ctx, verb, TypeSecrets, secretName)
 		if err != nil {
 			log.Printf("error checking %s permission on secret %s: %v", verb, secretName, err)
 		} else if !ok {
@@ -303,12 +384,12 @@ func (c *client) CheckSecretPermissions(ctx context.Context, secretName string) 
 	if len(errs) > 0 {
 		return false, false, multierr.New(errs...)
 	}
-	canPatch, err = c.checkPermission(ctx, "patch", secretName)
+	canPatch, err = c.checkPermission(ctx, "patch", TypeSecrets, secretName)
 	if err != nil {
 		log.Printf("error checking patch permission on secret %s: %v", secretName, err)
 		return false, false, nil
 	}
-	canCreate, err = c.checkPermission(ctx, "create", secretName)
+	canCreate, err = c.checkPermission(ctx, "create", TypeSecrets, secretName)
 	if err != nil {
 		log.Printf("error checking create permission on secret %s: %v", secretName, err)
 		return false, false, nil
@@ -316,19 +397,64 @@ func (c *client) CheckSecretPermissions(ctx context.Context, secretName string) 
 	return canPatch, canCreate, nil
 }
 
-// checkPermission reports whether the current pod has permission to use the
-// given verb (e.g. get, update, patch, create) on secretName.
-func (c *client) checkPermission(ctx context.Context, verb, secretName string) (bool, error) {
+func IsNotFoundErr(err error) bool {
+	if st, ok := err.(*kubeapi.Status); ok && st.Code == 404 {
+		return true
+	}
+	return false
+}
+
+// setEventPerms checks whether this client will be able to write tailscaled Events to its Pod and updates the state
+// accordingly. If it determines that the client can not write Events, any subsequent calls to client.Event will be a
+// no-op.
+func (c *client) setEventPerms() {
+	name := os.Getenv("POD_NAME")
+	uid := os.Getenv("POD_UID")
+	hasPerms := false
+	defer func() {
+		c.podName = name
+		c.podUID = uid
+		c.hasEventsPerms = hasPerms
+		if !hasPerms {
+			log.Printf(`kubeclient: this client is not able to write tailscaled Events to the Pod in which it is running.
+			To help with future debugging you can make it able write Events by giving it get,create,patch permissions for Events in the Pod namespace
+			and setting POD_NAME, POD_UID env vars for the Pod.`)
+		}
+	}()
+	if name == "" || uid == "" {
+		return
+	}
+	for _, verb := range []string{"get", "create", "patch"} {
+		can, err := c.checkPermission(context.Background(), verb, typeEvents, "")
+		if err != nil {
+			log.Printf("kubeclient: error checking Events permissions: %v", err)
+			return
+		}
+		if !can {
+			return
+		}
+	}
+	hasPerms = true
+	return
+}
+
+// checkPermission reports whether the current pod has permission to use the given verb (e.g. get, update, patch,
+// create) on the given resource type. If name is not an empty string, will check the check will be for resource with
+// the given name only.
+func (c *client) checkPermission(ctx context.Context, verb, typ, name string) (bool, error) {
+	ra := map[string]any{
+		"namespace": c.ns,
+		"verb":      verb,
+		"resource":  typ,
+	}
+	if name != "" {
+		ra["name"] = name
+	}
 	sar := map[string]any{
 		"apiVersion": "authorization.k8s.io/v1",
 		"kind":       "SelfSubjectAccessReview",
 		"spec": map[string]any{
-			"resourceAttributes": map[string]any{
-				"namespace": c.ns,
-				"verb":      verb,
-				"resource":  "secrets",
-				"name":      secretName,
-			},
+			"resourceAttributes": ra,
 		},
 	}
 	var res struct {
@@ -337,15 +463,32 @@ func (c *client) checkPermission(ctx context.Context, verb, secretName string) (
 		} `json:"status"`
 	}
 	url := c.url + "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
-	if err := c.doRequest(ctx, "POST", url, sar, &res); err != nil {
+	if err := c.kubeAPIRequest(ctx, "POST", url, sar, &res); err != nil {
 		return false, err
 	}
 	return res.Status.Allowed, nil
 }
 
-func IsNotFoundErr(err error) bool {
-	if st, ok := err.(*kubeapi.Status); ok && st.Code == 404 {
-		return true
+// resourceURL returns a URL that can be used to interact with the given resource type and, if name is not empty string,
+// the named resource of that type.
+// Note that this only works for core/v1 resource types.
+func (c *client) resourceURL(name, typ string) string {
+	if name == "" {
+		return fmt.Sprintf("%s/api/v1/namespaces/%s/%s", c.url, c.ns, typ)
 	}
-	return false
+	return fmt.Sprintf("%s/api/v1/namespaces/%s/%s/%s", c.url, c.ns, typ, name)
+}
+
+// nameForEvent returns a name for the Event that uniquely identifies Event with that reason for the current Pod.
+func (c *client) nameForEvent(reason string) string {
+	return fmt.Sprintf("%s.%s.%s", c.podName, c.podUID, strings.ToLower(reason))
+}
+
+// getEvent fetches the event from the Kubernetes API.
+func (c *client) getEvent(ctx context.Context, name string) (*kubeapi.Event, error) {
+	e := &kubeapi.Event{}
+	if err := c.kubeAPIRequest(ctx, "GET", c.resourceURL(name, typeEvents), nil, e); err != nil {
+		return nil, err
+	}
+	return e, nil
 }

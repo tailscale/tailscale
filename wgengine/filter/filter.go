@@ -202,16 +202,17 @@ func New(matches []Match, capTest CapTestFunc, localNets, logIPs *netipx.IPSet, 
 	}
 
 	f := &Filter{
-		logf:     logf,
-		matches4: matchesFamily(matches, netip.Addr.Is4),
-		matches6: matchesFamily(matches, netip.Addr.Is6),
-		cap4:     capMatchesFunc(matches, netip.Addr.Is4),
-		cap6:     capMatchesFunc(matches, netip.Addr.Is6),
-		local4:   ipset.FalseContainsIPFunc(),
-		local6:   ipset.FalseContainsIPFunc(),
-		logIPs4:  ipset.FalseContainsIPFunc(),
-		logIPs6:  ipset.FalseContainsIPFunc(),
-		state:    state,
+		logf:        logf,
+		matches4:    matchesFamily(matches, netip.Addr.Is4),
+		matches6:    matchesFamily(matches, netip.Addr.Is6),
+		cap4:        capMatchesFunc(matches, netip.Addr.Is4),
+		cap6:        capMatchesFunc(matches, netip.Addr.Is6),
+		local4:      ipset.FalseContainsIPFunc(),
+		local6:      ipset.FalseContainsIPFunc(),
+		logIPs4:     ipset.FalseContainsIPFunc(),
+		logIPs6:     ipset.FalseContainsIPFunc(),
+		state:       state,
+		srcIPHasCap: capTest,
 	}
 	if localNets != nil {
 		p := localNets.Prefixes()

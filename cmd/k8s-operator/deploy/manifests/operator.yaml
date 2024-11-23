@@ -53,6 +53,10 @@ spec:
               jsonPath: .status.isExitNode
               name: IsExitNode
               type: string
+            - description: Whether this Connector instance is an app connector.
+              jsonPath: .status.isAppConnector
+              name: IsAppConnector
+              type: string
             - description: Status of the deployed Connector resources.
               jsonPath: .status.conditions[?(@.type == "ConnectorReady")].reason
               name: Status
@@ -91,10 +95,40 @@ spec:
                             More info:
                             https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
                         properties:
+                            appConnector:
+                                description: |-
+                                    AppConnector defines whether the Connector device should act as a Tailscale app connector. A Connector that is
+                                    configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the
+                                    Connector does not act as an app connector.
+                                    Note that you will need to manually configure the permissions and the domains for the app connector via the
+                                    Admin panel.
+                                    Note also that the main tested and supported use case of this config option is to deploy an app connector on
+                                    Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose
+                                    cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have
+                                    tested or optimised for.
+                                    If you are using the app connector to access SaaS applications because you need a predictable egress IP that
+                                    can be whitelisted, it is also your responsibility to ensure that cluster traffic from the connector flows
+                                    via that predictable IP, for example by enforcing that cluster egress traffic is routed via an egress NAT
+                                    device with a static IP address.
+                                    https://tailscale.com/kb/1281/app-connectors
+                                properties:
+                                    routes:
+                                        description: |-
+                                            Routes are optional preconfigured routes for the domains routed via the app connector.
+                                            If not set, routes for the domains will be discovered dynamically.
+                                            If set, the app connector will immediately be able to route traffic using the preconfigured routes, but may
+                                            also dynamically discover other routes.
+                                            https://tailscale.com/kb/1332/apps-best-practices#preconfiguration
+                                        items:
+                                            format: cidr
+                                            type: string
+                                        minItems: 1
+                                        type: array
+                                type: object
                             exitNode:
                                 description: |-
-                                    ExitNode defines whether the Connector node should act as a
-                                    Tailscale exit node. Defaults to false.
+                                    ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.
+                                    This field is mutually exclusive with the appConnector field.
                                     https://tailscale.com/kb/1103/exit-nodes
                                 type: boolean
                             hostname:
@@ -115,9 +149,11 @@ spec:
                                 type: string
                             subnetRouter:
                                 description: |-
-                                    SubnetRouter defines subnet routes that the Connector node should
-                                    expose to tailnet. If unset, none are exposed.
+                                    SubnetRouter defines subnet routes that the Connector device should
+                                    expose to tailnet as a Tailscale subnet router.
                                     https://tailscale.com/kb/1019/subnets/
+                                    If this field is unset, the device does not get configured as a Tailscale subnet router.
+                                    This field is mutually exclusive with the appConnector field.
                                 properties:
                                     advertiseRoutes:
                                         description: |-
@@ -151,8 +187,10 @@ spec:
                                 type: array
                         type: object
                         x-kubernetes-validations:
-                            - message: A Connector needs to be either an exit node or a subnet router, or both.
-                              rule: has(self.subnetRouter) || self.exitNode == true
+                            - message: A Connector needs to have at least one of exit node, subnet router or app connector configured.
+                              rule: has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true) || has(self.appConnector)
+                            - message: The appConnector field is mutually exclusive with exitNode and subnetRouter fields.
+                              rule: '!((has(self.subnetRouter) || (has(self.exitNode)  && self.exitNode == true)) && has(self.appConnector))'
                     status:
                         description: |-
                             ConnectorStatus describes the status of the Connector. This is set
@@ -225,6 +263,9 @@ spec:
                                     If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
                                     node.
                                 type: string
+                            isAppConnector:
+                                description: IsAppConnector is set to true if the Connector acts as an app connector.
+                                type: boolean
                             isExitNode:
                                 description: IsExitNode is set to true if the Connector acts as an exit node.
                                 type: boolean
@@ -499,7 +540,12 @@ spec:
                                     enable:
                                         description: |-
                                             Setting enable to true will make the proxy serve Tailscale metrics
-                                            at <pod-ip>:9001/debug/metrics.
+                                            at <pod-ip>:9002/metrics.
+
+                                            In 1.78.x and 1.80.x, this field also serves as the default value for
+                                            .spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both
+                                            fields will independently default to false.
+
                                             Defaults to false.
                                         type: boolean
                                 required:
@@ -1675,6 +1721,25 @@ spec:
                                             tailscaleContainer:
                                                 description: Configuration for the proxy container running tailscale.
                                                 properties:
+                                                    debug:
+                                                        description: |-
+                                                            Configuration for enabling extra debug information in the container.
+                                                            Not recommended for production use.
+                                                        properties:
+                                                            enable:
+                                                                description: |-
+                                                                    Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/
+                                                                    and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where
+                                                                    9001 is a container port named "debug". The endpoints and their responses
+                                                                    may change in backwards incompatible ways in the future, and should not
+                                                                    be considered stable.
+
+                                                                    In 1.78.x and 1.80.x, this setting will default to the value of
+                                                                    .spec.metrics.enable, and requests to the "metrics" port matching the
+                                                                    mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+                                                                    this setting will default to false, and no requests will be proxied.
+                                                                type: boolean
+                                                        type: object
                                                     env:
                                                         description: |-
                                                             List of environment variables to set in the container.
@@ -1979,6 +2044,25 @@ spec:
                                             tailscaleInitContainer:
                                                 description: Configuration for the proxy init container that enables forwarding.
                                                 properties:
+                                                    debug:
+                                                        description: |-
+                                                            Configuration for enabling extra debug information in the container.
+                                                            Not recommended for production use.
+                                                        properties:
+                                                            enable:
+                                                                description: |-
+                                                                    Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/
+                                                                    and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where
+                                                                    9001 is a container port named "debug". The endpoints and their responses
+                                                                    may change in backwards incompatible ways in the future, and should not
+                                                                    be considered stable.
+
+                                                                    In 1.78.x and 1.80.x, this setting will default to the value of
+                                                                    .spec.metrics.enable, and requests to the "metrics" port matching the
+                                                                    mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+                                                                    this setting will default to false, and no requests will be proxied.
+                                                                type: boolean
+                                                        type: object
                                                     env:
                                                         description: |-
                                                             List of environment variables to set in the container.
@@ -4662,6 +4746,14 @@ rules:
         - patch
         - update
         - watch
+    - apiGroups:
+        - ""
+      resources:
+        - events
+      verbs:
+        - create
+        - patch
+        - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -4734,6 +4826,14 @@ spec:
                       value: "false"
                     - name: PROXY_FIREWALL_MODE
                       value: auto
+                    - name: POD_NAME
+                      valueFrom:
+                        fieldRef:
+                            fieldPath: metadata.name
+                    - name: POD_UID
+                      valueFrom:
+                        fieldRef:
+                            fieldPath: metadata.uid
                   image: tailscale/k8s-operator:unstable
                   imagePullPolicy: Always
                   name: operator

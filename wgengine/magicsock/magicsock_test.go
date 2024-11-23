@@ -63,6 +63,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cibuild"
+	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/set"
 	"tailscale.com/util/usermetric"
@@ -3082,4 +3083,28 @@ func TestMaybeRebindOnError(t *testing.T) {
 			t.Errorf("darwin should not rebind on syscall.EPERM within 5 seconds of last")
 		}
 	})
+}
+
+func TestNetworkDownSendErrors(t *testing.T) {
+	netMon := must.Get(netmon.New(t.Logf))
+	defer netMon.Close()
+
+	reg := new(usermetric.Registry)
+	conn := must.Get(NewConn(Options{
+		DisablePortMapper: true,
+		Logf:              t.Logf,
+		NetMon:            netMon,
+		Metrics:           reg,
+	}))
+	defer conn.Close()
+
+	conn.SetNetworkUp(false)
+	if err := conn.Send([][]byte{{00}}, &lazyEndpoint{}); err == nil {
+		t.Error("expected error, got nil")
+	}
+	resp := httptest.NewRecorder()
+	reg.Handler(resp, new(http.Request))
+	if !strings.Contains(resp.Body.String(), `tailscaled_outbound_dropped_packets_total{reason="error"} 1`) {
+		t.Errorf("expected NetworkDown to increment packet dropped metric; got %q", resp.Body.String())
+	}
 }

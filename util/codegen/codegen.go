@@ -277,11 +277,16 @@ func IsInvalid(t types.Type) bool {
 // It has special handling for some types that contain pointers
 // that we know are free from memory aliasing/mutation concerns.
 func ContainsPointers(typ types.Type) bool {
-	switch typ.String() {
+	s := typ.String()
+	switch s {
 	case "time.Time":
-		// time.Time contains a pointer that does not need copying
+		// time.Time contains a pointer that does not need cloning.
 		return false
-	case "inet.af/netip.Addr", "net/netip.Addr", "net/netip.Prefix", "net/netip.AddrPort":
+	case "inet.af/netip.Addr":
+		return false
+	}
+	if strings.HasPrefix(s, "unique.Handle[") {
+		// unique.Handle contains a pointer that does not need cloning.
 		return false
 	}
 	switch ft := typ.Underlying().(type) {

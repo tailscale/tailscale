@@ -127,6 +127,10 @@ type metrics struct {
 	outboundBytesIPv4Total expvar.Int
 	outboundBytesIPv6Total expvar.Int
 	outboundBytesDERPTotal expvar.Int
+
+	// outboundPacketsDroppedErrors is the total number of outbound packets
+	// dropped due to errors.
+	outboundPacketsDroppedErrors expvar.Int
 }
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
@@ -605,6 +609,8 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 		"counter",
 		"Counts the number of bytes sent to other peers",
 	)
+	outboundPacketsDroppedErrors := reg.DroppedPacketsOutbound()
+
 	m := new(metrics)
 
 	// Map clientmetrics to the usermetric counters.
@@ -630,6 +636,8 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	outboundBytesTotal.Set(pathDirectV4, &m.outboundBytesIPv4Total)
 	outboundBytesTotal.Set(pathDirectV6, &m.outboundBytesIPv6Total)
 	outboundBytesTotal.Set(pathDERP, &m.outboundBytesDERPTotal)
+
+	outboundPacketsDroppedErrors.Set(usermetric.DropLabels{Reason: usermetric.ReasonError}, &m.outboundPacketsDroppedErrors)
 
 	return m
 }
@@ -1112,8 +1120,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	// re-run.
 	eps = c.endpointTracker.update(time.Now(), eps)
 
-	for i := range c.staticEndpoints.Len() {
-		addAddr(c.staticEndpoints.At(i), tailcfg.EndpointExplicitConf)
+	for _, ep := range c.staticEndpoints.All() {
+		addAddr(ep, tailcfg.EndpointExplicitConf)
 	}
 
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
@@ -1202,8 +1210,13 @@ func (c *Conn) networkDown() bool { return !c.networkUp.Load() }
 // Send implements conn.Bind.
 //
 // See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.Send
-func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) error {
+func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) (err error) {
 	n := int64(len(buffs))
+	defer func() {
+		if err != nil {
+			c.metrics.outboundPacketsDroppedErrors.Add(n)
+		}
+	}()
 	metricSendData.Add(n)
 	if c.networkDown() {
 		metricSendDataNetworkDown.Add(n)
@@ -1356,7 +1369,7 @@ func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) 
 // An example of when they might be different: sending to an
 // IPv6 address when the local machine doesn't have IPv6 support
 // returns (false, nil); it's not an error, but nothing was sent.
-func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (sent bool, err error) {
+func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, isDisco bool) (sent bool, err error) {
 	if addr.Addr() != tailcfg.DerpMagicIPAddr {
 		return c.sendUDP(addr, b)
 	}
@@ -1379,7 +1392,7 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (s
 	case <-c.donec:
 		metricSendDERPErrorClosed.Add(1)
 		return false, errConnClosed
-	case ch <- derpWriteRequest{addr, pubKey, pkt}:
+	case ch <- derpWriteRequest{addr, pubKey, pkt, isDisco}:
 		metricSendDERPQueued.Add(1)
 		return true, nil
 	default:
@@ -1577,7 +1590,8 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 
 	box := di.sharedKey.Seal(m.AppendMarshal(nil))
 	pkt = append(pkt, box...)
-	sent, err = c.sendAddr(dst, dstKey, pkt)
+	const isDisco = true
+	sent, err = c.sendAddr(dst, dstKey, pkt, isDisco)
 	if sent {
 		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco()) {
 			node := "?"
@@ -2346,16 +2360,14 @@ func (c *Conn) logEndpointCreated(n tailcfg.NodeView) {
 			fmt.Fprintf(w, "derp=%v%s ", regionID, code)
 		}
 
-		for i := range n.AllowedIPs().Len() {
-			a := n.AllowedIPs().At(i)
+		for _, a := range n.AllowedIPs().All() {
 			if a.IsSingleIP() {
 				fmt.Fprintf(w, "aip=%v ", a.Addr())
 			} else {
 				fmt.Fprintf(w, "aip=%v ", a)
 			}
 		}
-		for i := range n.Endpoints().Len() {
-			ep := n.Endpoints().At(i)
+		for _, ep := range n.Endpoints().All() {
 			fmt.Fprintf(w, "ep=%v ", ep)
 		}
 	}))

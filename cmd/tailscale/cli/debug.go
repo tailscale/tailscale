@@ -36,6 +36,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/internal/noiseconn"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
@@ -213,6 +214,7 @@ var debugCmd = &ffcli.Command{
 				fs := newFlagSet("watch-ipn")
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 				fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
+				fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messags")
 				fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
 				fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 				return fs
@@ -500,6 +502,7 @@ var watchIPNArgs struct {
 	netmap         bool
 	initial        bool
 	showPrivateKey bool
+	rateLimit      bool
 	count          int
 }
 
@@ -510,6 +513,9 @@ func runWatchIPN(ctx context.Context, args []string) error {
 	}
 	if !watchIPNArgs.showPrivateKey {
 		mask |= ipn.NotifyNoPrivateKeys
+	}
+	if watchIPNArgs.rateLimit {
+		mask |= ipn.NotifyRateLimit
 	}
 	watcher, err := localClient.WatchIPNBus(ctx, mask)
 	if err != nil {
@@ -845,6 +851,11 @@ func runTS2021(ctx context.Context, args []string) error {
 		logf = log.Printf
 	}
 
+	netMon, err := netmon.New(logger.WithPrefix(logf, "netmon: "))
+	if err != nil {
+		return fmt.Errorf("creating netmon: %w", err)
+	}
+
 	noiseDialer := &controlhttp.Dialer{
 		Hostname:        ts2021Args.host,
 		HTTPPort:        "80",
@@ -854,6 +865,7 @@ func runTS2021(ctx context.Context, args []string) error {
 		ProtocolVersion: uint16(ts2021Args.version),
 		Dialer:          dialFunc,
 		Logf:            logf,
+		NetMon:          netMon,
 	}
 	const tries = 2
 	for i := range tries {

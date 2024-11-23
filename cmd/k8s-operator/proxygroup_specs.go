@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/yaml"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/ptr"
 )
 
@@ -92,6 +93,10 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 	c.Image = image
 	c.VolumeMounts = func() []corev1.VolumeMount {
 		var mounts []corev1.VolumeMount
+
+		// TODO(tomhjp): Read config directly from the secret instead. The
+		// mounts change on scaling up/down which causes unnecessary restarts
+		// for pods that haven't meaningfully changed.
 		for i := range pgReplicas(pg) {
 			mounts = append(mounts, corev1.VolumeMount{
 				Name:      fmt.Sprintf("tailscaledconfig-%d", i),
@@ -122,15 +127,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 				},
 			},
 			{
-				Name: "POD_NAME",
-				ValueFrom: &corev1.EnvVarSource{
-					FieldRef: &corev1.ObjectFieldSelector{
-						// Secret is named after the pod.
-						FieldPath: "metadata.name",
-					},
-				},
-			},
-			{
 				Name:  "TS_KUBE_SECRET",
 				Value: "$(POD_NAME)",
 			},
@@ -143,8 +139,8 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 				Value: "/etc/tsconfig/$(POD_NAME)",
 			},
 			{
-				Name:  "TS_USERSPACE",
-				Value: "false",
+				Name:  "TS_INTERNAL_APP",
+				Value: kubetypes.AppProxyGroupEgress,
 			},
 		}
 
@@ -162,7 +158,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			})
 		}
 
-		return envs
+		return append(c.Env, envs...)
 	}()
 
 	return ss, nil
@@ -205,6 +201,15 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 					}
 					return secrets
 				}(),
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"events"},
+				Verbs: []string{
+					"create",
+					"patch",
+					"get",
+				},
 			},
 		},
 	}

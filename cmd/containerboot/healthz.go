@@ -39,7 +39,7 @@ func runHealthz(addr string, h *healthz) {
 		log.Fatalf("error listening on the provided health endpoint address %q: %v", addr, err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", h)
+	mux.Handle("GET /healthz", h)
 	log.Printf("Running healthcheck endpoint at %s/healthz", addr)
 	hs := &http.Server{Handler: mux}
 

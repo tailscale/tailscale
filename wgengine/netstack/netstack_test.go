@@ -64,8 +64,9 @@ func TestInjectInboundLeak(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(lb.Shutdown)
 
-	ns, err := Create(logf, tunWrap, eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := Create(logf, tunWrap, eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +117,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	tb.Cleanup(func() { eng.Close() })
 	sys.Set(eng)
 
-	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
+	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -126,6 +127,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	if err != nil {
 		tb.Fatalf("NewLocalBackend: %v", err)
 	}
+	tb.Cleanup(lb.Shutdown)
 
 	ns.atomicIsLocalIPFunc.Store(func(netip.Addr) bool { return true })
 	if config != nil {

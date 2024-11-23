@@ -134,14 +134,13 @@ func runWindowsService(pol *logpolicy.Policy) error {
 		logger.Logf(log.Printf).JSON(1, "SupportInfo", osdiag.SupportInfo(osdiag.LogSupportInfoReasonStartup))
 	}()
 
-	if logSCMInteractions, _ := syspolicy.GetBoolean(syspolicy.LogSCMInteractions, false); logSCMInteractions {
-		syslog, err := eventlog.Open(serviceName)
-		if err == nil {
-			syslogf = func(format string, args ...any) {
+	if syslog, err := eventlog.Open(serviceName); err == nil {
+		syslogf = func(format string, args ...any) {
+			if logSCMInteractions, _ := syspolicy.GetBoolean(syspolicy.LogSCMInteractions, false); logSCMInteractions {
 				syslog.Info(0, fmt.Sprintf(format, args...))
 			}
-			defer syslog.Close()
 		}
+		defer syslog.Close()
 	}
 
 	syslogf("Service entering svc.Run")
@@ -160,10 +159,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	changes <- svc.Status{State: svc.StartPending}
 	syslogf("Service start pending")
 
-	svcAccepts := svc.AcceptStop
-	if flushDNSOnSessionUnlock, _ := syspolicy.GetBoolean(syspolicy.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
-		svcAccepts |= svc.AcceptSessionChange
-	}
+	svcAccepts := svc.AcceptStop | svc.AcceptSessionChange
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -371,13 +367,15 @@ func handleSessionChange(chgRequest svc.ChangeRequest) {
 		return
 	}
 
-	log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
-	go func() {
-		err := dns.Flush()
-		if err != nil {
-			log.Printf("Error flushing DNS on session unlock: %v", err)
-		}
-	}()
+	if flushDNSOnSessionUnlock, _ := syspolicy.GetBoolean(syspolicy.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
+		log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
+		go func() {
+			err := dns.Flush()
+			if err != nil {
+				log.Printf("Error flushing DNS on session unlock: %v", err)
+			}
+		}()
+	}
 }
 
 var (

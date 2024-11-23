@@ -135,3 +135,56 @@ func TestProxyClass(t *testing.T) {
 	expectReconciled(t, pcr, "", "test")
 	expectEvents(t, fr, expectedEvents)
 }
+
+func TestValidateProxyClass(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pc    *tsapi.ProxyClass
+		valid bool
+	}{
+		"empty": {
+			valid: true,
+			pc:    &tsapi.ProxyClass{},
+		},
+		"debug_enabled_for_main_container": {
+			valid: true,
+			pc: &tsapi.ProxyClass{
+				Spec: tsapi.ProxyClassSpec{
+					StatefulSet: &tsapi.StatefulSet{
+						Pod: &tsapi.Pod{
+							TailscaleContainer: &tsapi.Container{
+								Debug: &tsapi.Debug{
+									Enable: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"debug_enabled_for_init_container": {
+			valid: false,
+			pc: &tsapi.ProxyClass{
+				Spec: tsapi.ProxyClassSpec{
+					StatefulSet: &tsapi.StatefulSet{
+						Pod: &tsapi.Pod{
+							TailscaleInitContainer: &tsapi.Container{
+								Debug: &tsapi.Debug{
+									Enable: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pcr := &ProxyClassReconciler{}
+			err := pcr.validate(tc.pc)
+			valid := err == nil
+			if valid != tc.valid {
+				t.Errorf("expected valid=%v, got valid=%v, err=%v", tc.valid, valid, err)
+			}
+		})
+	}
+}

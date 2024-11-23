@@ -389,7 +389,7 @@ func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Sta
 		Path:  fmt.Sprintf("/data/%s", egressservices.KeyEgressServices),
 		Value: bs,
 	}
-	if err := ep.kc.JSONPatchSecret(ctx, ep.stateSecret, []kubeclient.JSONPatch{patch}); err != nil {
+	if err := ep.kc.JSONPatchResource(ctx, ep.stateSecret, kubeclient.TypeSecrets, []kubeclient.JSONPatch{patch}); err != nil {
 		return fmt.Errorf("error patching state Secret: %w", err)
 	}
 	ep.tailnetAddrs = n.NetMap.SelfNode.Addresses().AsSlice()

@@ -32,7 +32,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
-	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/metrics"
@@ -174,19 +173,18 @@ type Impl struct {
 	// It can only be set before calling Start.
 	ProcessSubnets bool
 
-	ipstack       *stack.Stack
-	linkEP        *linkEndpoint
-	tundev        *tstun.Wrapper
-	e             wgengine.Engine
-	pm            *proxymap.Mapper
-	mc            *magicsock.Conn
-	logf          logger.Logf
-	dialer        *tsdial.Dialer
-	ctx           context.Context        // alive until Close
-	ctxCancel     context.CancelFunc     // called on Close
-	lb            *ipnlocal.LocalBackend // or nil
-	dns           *dns.Manager
-	driveForLocal drive.FileSystemForLocal // or nil
+	ipstack   *stack.Stack
+	linkEP    *linkEndpoint
+	tundev    *tstun.Wrapper
+	e         wgengine.Engine
+	pm        *proxymap.Mapper
+	mc        *magicsock.Conn
+	logf      logger.Logf
+	dialer    *tsdial.Dialer
+	ctx       context.Context        // alive until Close
+	ctxCancel context.CancelFunc     // called on Close
+	lb        *ipnlocal.LocalBackend // or nil
+	dns       *dns.Manager
 
 	// loopbackPort, if non-nil, will enable Impl to loop back (dnat to
 	// <address-family-loopback>:loopbackPort) TCP & UDP flows originally
@@ -288,7 +286,7 @@ func setTCPBufSizes(ipstack *stack.Stack) error {
 }
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, driveForLocal drive.FileSystemForLocal) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -382,7 +380,6 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		connsInFlightByClient: make(map[netip.Addr]int),
 		packetsInFlight:       make(map[stack.TransportEndpointID]struct{}),
 		dns:                   dns,
-		driveForLocal:         driveForLocal,
 	}
 	loopbackPort, ok := envknob.LookupInt("TS_DEBUG_NETSTACK_LOOPBACK_PORT")
 	if ok && loopbackPort >= 0 && loopbackPort <= math.MaxUint16 {
@@ -646,13 +643,11 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	newPfx := make(map[netip.Prefix]bool)
 
 	if selfNode.Valid() {
-		for i := range selfNode.Addresses().Len() {
-			p := selfNode.Addresses().At(i)
+		for _, p := range selfNode.Addresses().All() {
 			newPfx[p] = true
 		}
 		if ns.ProcessSubnets {
-			for i := range selfNode.AllowedIPs().Len() {
-				p := selfNode.AllowedIPs().At(i)
+			for _, p := range selfNode.AllowedIPs().All() {
 				newPfx[p] = true
 			}
 		}

@@ -7,7 +7,9 @@
 // dependency size for those consumers when adding anything new here.
 package kubeapi
 
-import "time"
+import (
+	"time"
+)
 
 // Note: The API types are copied from k8s.io/api{,machinery} to not introduce a
 // module dependency on the Kubernetes API as it pulls in many more dependencies.
@@ -151,6 +153,57 @@ type Secret struct {
 	Data map[string][]byte `json:"data,omitempty"`
 }
 
+// Event contains a subset of fields from corev1.Event.
+// https://github.com/kubernetes/api/blob/6cc44b8953ae704d6d9ec2adf32e7ae19199ea9f/core/v1/types.go#L7034
+// It is copied here to avoid having to import kube libraries.
+type Event struct {
+	TypeMeta   `json:",inline"`
+	ObjectMeta `json:"metadata"`
+	Message    string      `json:"message,omitempty"`
+	Reason     string      `json:"reason,omitempty"`
+	Source     EventSource `json:"source,omitempty"` // who is emitting this Event
+	Type       string      `json:"type,omitempty"`   // Normal or Warning
+	// InvolvedObject is the subject of the Event. `kubectl describe` will, for most object types, display any
+	// currently present cluster Events matching the object (but you probably want to set UID for this to work).
+	InvolvedObject ObjectReference `json:"involvedObject"`
+	Count          int32           `json:"count,omitempty"` // how many times Event was observed
+	FirstTimestamp time.Time       `json:"firstTimestamp,omitempty"`
+	LastTimestamp  time.Time       `json:"lastTimestamp,omitempty"`
+}
+
+// EventSource includes a subset of fields from corev1.EventSource.
+// https://github.com/kubernetes/api/blob/6cc44b8953ae704d6d9ec2adf32e7ae19199ea9f/core/v1/types.go#L7007
+// It is copied here to avoid having to import kube libraries.
+type EventSource struct {
+	// Component is the name of the component that is emitting the Event.
+	Component string `json:"component,omitempty"`
+}
+
+// ObjectReference contains a subset of fields from corev1.ObjectReference.
+// https://github.com/kubernetes/api/blob/6cc44b8953ae704d6d9ec2adf32e7ae19199ea9f/core/v1/types.go#L6902
+// It is copied here to avoid having to import kube libraries.
+type ObjectReference struct {
+	// Kind of the referent.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+	// +optional
+	Kind string `json:"kind,omitempty"`
+	// Namespace of the referent.
+	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+	// Name of the referent.
+	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+	// +optional
+	Name string `json:"name,omitempty"`
+	// UID of the referent.
+	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+	// +optional
+	UID string `json:"uid,omitempty"`
+	// API version of the referent.
+	// +optional
+	APIVersion string `json:"apiVersion,omitempty"`
+}
+
 // Status is a return value for calls that don't return other objects.
 type Status struct {
 	TypeMeta `json:",inline"`
@@ -186,6 +239,6 @@ type Status struct {
 	Code int `json:"code,omitempty"`
 }
 
-func (s *Status) Error() string {
+func (s Status) Error() string {
 	return s.Message
 }

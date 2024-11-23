@@ -3,7 +3,8 @@
 
 //go:build !ios
 
-package controlhttp
+// Package controlhttpserver contains the HTTP server side of the ts2021 control protocol.
+package controlhttpserver
 
 import (
 	"context"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/coder/websocket"
 	"tailscale.com/control/controlbase"
+	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/wsconn"
 	"tailscale.com/types/key"
@@ -45,12 +47,12 @@ func acceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 	if next == "websocket" {
 		return acceptWebsocket(ctx, w, r, private)
 	}
-	if next != upgradeHeaderValue {
+	if next != controlhttpcommon.UpgradeHeaderValue {
 		http.Error(w, "unknown next protocol", http.StatusBadRequest)
 		return nil, fmt.Errorf("client requested unhandled next protocol %q", next)
 	}
 
-	initB64 := r.Header.Get(handshakeHeaderName)
+	initB64 := r.Header.Get(controlhttpcommon.HandshakeHeaderName)
 	if initB64 == "" {
 		http.Error(w, "missing Tailscale handshake header", http.StatusBadRequest)
 		return nil, errors.New("no tailscale handshake header in HTTP request")
@@ -67,7 +69,7 @@ func acceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 		return nil, errors.New("can't hijack client connection")
 	}
 
-	w.Header().Set("Upgrade", upgradeHeaderValue)
+	w.Header().Set("Upgrade", controlhttpcommon.UpgradeHeaderValue)
 	w.Header().Set("Connection", "upgrade")
 	w.WriteHeader(http.StatusSwitchingProtocols)
 
@@ -117,7 +119,7 @@ func acceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 // speak HTTP) to a Tailscale control protocol base transport connection.
 func acceptWebsocket(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate) (*controlbase.Conn, error) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols:   []string{upgradeHeaderValue},
+		Subprotocols:   []string{controlhttpcommon.UpgradeHeaderValue},
 		OriginPatterns: []string{"*"},
 		// Disable compression because we transmit Noise messages that are not
 		// compressible.
@@ -129,7 +131,7 @@ func acceptWebsocket(ctx context.Context, w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return nil, fmt.Errorf("Could not accept WebSocket connection %v", err)
 	}
-	if c.Subprotocol() != upgradeHeaderValue {
+	if c.Subprotocol() != controlhttpcommon.UpgradeHeaderValue {
 		c.Close(websocket.StatusPolicyViolation, "client must speak the control subprotocol")
 		return nil, fmt.Errorf("Unexpected subprotocol %q", c.Subprotocol())
 	}
@@ -137,7 +139,7 @@ func acceptWebsocket(ctx context.Context, w http.ResponseWriter, r *http.Request
 		c.Close(websocket.StatusPolicyViolation, "Could not parse parameters")
 		return nil, fmt.Errorf("parse query parameters: %v", err)
 	}
-	initB64 := r.Form.Get(handshakeHeaderName)
+	initB64 := r.Form.Get(controlhttpcommon.HandshakeHeaderName)
 	if initB64 == "" {
 		c.Close(websocket.StatusPolicyViolation, "missing Tailscale handshake parameter")
 		return nil, errors.New("no tailscale handshake parameter in HTTP request")

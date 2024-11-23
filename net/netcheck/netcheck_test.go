@@ -357,6 +357,15 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 3,
 			wantDERP:    2, // moved to d2 since d1 is gone
 		},
+		{
+			name: "preferred_derp_hysteresis_no_switch_pct",
+			steps: []step{
+				{0 * time.Second, report("d1", 34*time.Millisecond, "d2", 35*time.Millisecond)},
+				{1 * time.Second, report("d1", 34*time.Millisecond, "d2", 23*time.Millisecond)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    1, // diff is 11ms, but d2 is greater than 2/3s of d1
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -590,6 +599,40 @@ func TestMakeProbePlan(t *testing.T) {
 				"region-3-v4": []probe{p("3a", 4)},
 			},
 		},
+		{
+			// #13969: ensure that the prior/current home region is always included in
+			// probe plans, so that we don't flap between regions due to a single major
+			// netcheck having excluded the home region due to a spuriously high sample.
+			name:    "ensure_home_region_inclusion",
+			dm:      basicMap,
+			have6if: true,
+			last: &Report{
+				RegionLatency: map[int]time.Duration{
+					1: 50 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+				},
+				RegionV4Latency: map[int]time.Duration{
+					1: 50 * time.Millisecond,
+					2: 20 * time.Millisecond,
+				},
+				RegionV6Latency: map[int]time.Duration{
+					3: 30 * time.Millisecond,
+					4: 40 * time.Millisecond,
+				},
+				PreferredDERP: 1,
+			},
+			want: probePlan{
+				"region-1-v4": []probe{p("1a", 4), p("1a", 4, 60*ms), p("1a", 4, 220*ms), p("1a", 4, 330*ms)},
+				"region-1-v6": []probe{p("1a", 6), p("1a", 6, 60*ms), p("1a", 6, 220*ms), p("1a", 6, 330*ms)},
+				"region-2-v4": []probe{p("2a", 4), p("2b", 4, 24*ms)},
+				"region-2-v6": []probe{p("2a", 6), p("2b", 6, 24*ms)},
+				"region-3-v4": []probe{p("3a", 4), p("3b", 4, 36*ms)},
+				"region-3-v6": []probe{p("3a", 6), p("3b", 6, 36*ms)},
+				"region-4-v4": []probe{p("4a", 4)},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -597,7 +640,11 @@ func TestMakeProbePlan(t *testing.T) {
 				HaveV6: tt.have6if,
 				HaveV4: !tt.no4,
 			}
-			got := makeProbePlan(tt.dm, ifState, tt.last)
+			preferredDERP := 0
+			if tt.last != nil {
+				preferredDERP = tt.last.PreferredDERP
+			}
+			got := makeProbePlan(tt.dm, ifState, tt.last, preferredDERP)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("unexpected plan; got:\n%v\nwant:\n%v\n", got, tt.want)
 			}
@@ -770,7 +817,7 @@ func TestSortRegions(t *testing.T) {
 	report.RegionLatency[3] = time.Second * time.Duration(6)
 	report.RegionLatency[4] = time.Second * time.Duration(0)
 	report.RegionLatency[5] = time.Second * time.Duration(2)
-	sortedMap := sortRegions(unsortedMap, report)
+	sortedMap := sortRegions(unsortedMap, report, 0)
 
 	// Sorting by latency this should result in rid: 5, 2, 1, 3
 	// rid 4 with latency 0 should be at the end

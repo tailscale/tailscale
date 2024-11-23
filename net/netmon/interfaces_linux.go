@@ -23,7 +23,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/netaddr"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 )
 
 func init() {
@@ -31,11 +31,6 @@ func init() {
 }
 
 var procNetRouteErr atomic.Bool
-
-// errStopReading is a sentinel error value used internally by
-// lineread.File callers to stop reading. It doesn't escape to
-// callers/users.
-var errStopReading = errors.New("stop reading")
 
 /*
 Parse 10.0.0.1 out of:
@@ -52,44 +47,42 @@ func likelyHomeRouterIPLinux() (ret netip.Addr, myIP netip.Addr, ok bool) {
 	}
 	lineNum := 0
 	var f []mem.RO
-	err := lineread.File(procNetRoutePath, func(line []byte) error {
+	for lr := range lineiter.File(procNetRoutePath) {
+		line, err := lr.Value()
+		if err != nil {
+			procNetRouteErr.Store(true)
+			log.Printf("interfaces: failed to read /proc/net/route: %v", err)
+			return ret, myIP, false
+		}
 		lineNum++
 		if lineNum == 1 {
 			// Skip header line.
-			return nil
+			continue
 		}
 		if lineNum > maxProcNetRouteRead {
-			return errStopReading
+			break
 		}
 		f = mem.AppendFields(f[:0], mem.B(line))
 		if len(f) < 4 {
-			return nil
+			continue
 		}
 		gwHex, flagsHex := f[2], f[3]
 		flags, err := mem.ParseUint(flagsHex, 16, 16)
 		if err != nil {
-			return nil // ignore error, skip line and keep going
+			continue // ignore error, skip line and keep going
 		}
 		if flags&(unix.RTF_UP|unix.RTF_GATEWAY) != unix.RTF_UP|unix.RTF_GATEWAY {
-			return nil
+			continue
 		}
 		ipu32, err := mem.ParseUint(gwHex, 16, 32)
 		if err != nil {
-			return nil // ignore error, skip line and keep going
+			continue // ignore error, skip line and keep going
 		}
 		ip := netaddr.IPv4(byte(ipu32), byte(ipu32>>8), byte(ipu32>>16), byte(ipu32>>24))
 		if ip.IsPrivate() {
 			ret = ip
-			return errStopReading
+			break
 		}
-		return nil
-	})
-	if errors.Is(err, errStopReading) {
-		err = nil
-	}
-	if err != nil {
-		procNetRouteErr.Store(true)
-		log.Printf("interfaces: failed to read /proc/net/route: %v", err)
 	}
 	if ret.IsValid() {
 		// Try to get the local IP of the interface associated with

@@ -121,8 +121,8 @@ func (b *LocalBackend) updateWebClientListenersLocked() {
 	}
 
 	addrs := b.netMap.GetAddresses()
-	for i := range addrs.Len() {
-		addrPort := netip.AddrPortFrom(addrs.At(i).Addr(), webClientPort)
+	for _, pfx := range addrs.All() {
+		addrPort := netip.AddrPortFrom(pfx.Addr(), webClientPort)
 		if _, ok := b.webClientListeners[addrPort]; ok {
 			continue // already listening
 		}

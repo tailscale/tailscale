@@ -102,7 +102,6 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -178,6 +177,14 @@ func main() {
 		}
 	}
 	defer killTailscaled()
+
+	if cfg.LocalAddrPort != "" && cfg.MetricsEnabled {
+		m := &metrics{
+			lc:            client,
+			debugEndpoint: cfg.DebugAddrPort,
+		}
+		runMetrics(cfg.LocalAddrPort, m)
+	}
 
 	if cfg.EnableForwardingOptimizations {
 		if err := client.SetUDPGROForwarding(bootCtx); err != nil {
@@ -731,7 +738,6 @@ func tailscaledConfigFilePath() string {
 		}
 		cv, err := kubeutils.CapVerFromFileName(e.Name())
 		if err != nil {
-			log.Printf("skipping file %q in tailscaled config directory %q: %v", e.Name(), dir, err)
 			continue
 		}
 		if cv > maxCompatVer && cv <= tailcfg.CurrentCapabilityVersion {
@@ -739,8 +745,9 @@ func tailscaledConfigFilePath() string {
 		}
 	}
 	if maxCompatVer == -1 {
-		log.Fatalf("no tailscaled config file found in %q for current capability version %q", dir, tailcfg.CurrentCapabilityVersion)
+		log.Fatalf("no tailscaled config file found in %q for current capability version %d", dir, tailcfg.CurrentCapabilityVersion)
 	}
-	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
-	return path.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
+	filePath := filepath.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
+	log.Printf("Using tailscaled config file %q to match current capability version %d", filePath, tailcfg.CurrentCapabilityVersion)
+	return filePath
 }

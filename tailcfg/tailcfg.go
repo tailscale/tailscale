@@ -142,14 +142,17 @@ type CapabilityVersion int
 //   - 97: 2024-06-06: Client understands NodeAttrDisableSplitDNSWhenNoCustomResolvers
 //   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
 //   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
-//   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
+//   - 100: 2024-06-18: Initial support for filtertype.Match.SrcCaps - actually usable in capver 109 (issue #12542)
 //   - 101: 2024-07-01: Client supports SSH agent forwarding when handling connections with /bin/su
 //   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
 //   - 103: 2024-07-24: Client supports NodeAttrDisableCaptivePortalDetection
 //   - 104: 2024-08-03: SelfNodeV6MasqAddrForThisPeer now works
 //   - 105: 2024-08-05: Fixed SSH behavior on systems that use busybox (issue #12849)
 //   - 106: 2024-09-03: fix panic regression from cryptokey routing change (65fe0ba7b5)
-const CurrentCapabilityVersion CapabilityVersion = 106
+//   - 107: 2024-10-30: add App Connector to conffile (PR #13942)
+//   - 108: 2024-11-08: Client sends ServicesHash in Hostinfo, understands c2n GET /vip-services.
+//   - 109: 2024-11-18: Client supports filtertype.Match.SrcCaps (issue #12542)
+const CurrentCapabilityVersion CapabilityVersion = 109
 
 type StableID string
 
@@ -819,6 +822,7 @@ type Hostinfo struct {
 	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
 	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
 	AppConnector    opt.Bool       `json:",omitempty"` // if the client is running the app-connector service
+	ServicesHash    string         `json:",omitempty"` // opaque hash of the most recent list of tailnet services, change in hash indicates config should be fetched via c2n
 
 	// Location represents geographical location data about a
 	// Tailscale host. Location is optional and only set if
@@ -827,6 +831,26 @@ type Hostinfo struct {
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
+}
+
+// VIPService represents a service created on a tailnet from the
+// perspective of a node providing that service. These services
+// have an virtual IP (VIP) address pair distinct from the node's IPs.
+type VIPService struct {
+	// Name is the name of the service, of the form `svc:dns-label`.
+	// See CheckServiceName for a validation func.
+	// Name uniquely identifies a service on a particular tailnet,
+	// and so also corresponds uniquely to the pair of IP addresses
+	// belonging to the VIP service.
+	Name string
+
+	// Ports specify which ProtoPorts are made available by this node
+	// on the service's IPs.
+	Ports []ProtoPortRange
+
+	// Active specifies whether new requests for the service should be
+	// sent to this node by control.
+	Active bool
 }
 
 // TailscaleSSHEnabled reports whether or not this node is acting as a
@@ -1428,6 +1452,11 @@ const (
 	// user groups as Kubernetes user groups. This capability is read by
 	// peers that are Tailscale Kubernetes operator instances.
 	PeerCapabilityKubernetes PeerCapability = "tailscale.com/cap/kubernetes"
+
+	// PeerCapabilityServicesDestination grants a peer the ability to serve as
+	// a destination for a set of given VIP services, which is provided as the
+	// value of this key in NodeCapMap.
+	PeerCapabilityServicesDestination PeerCapability = "tailscale.com/cap/services-destination"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for

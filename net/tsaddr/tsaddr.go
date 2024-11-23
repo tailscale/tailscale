@@ -66,13 +66,19 @@ const (
 	TailscaleServiceIPv6String = "fd7a:115c:a1e0::53"
 )
 
-// IsTailscaleIP reports whether ip is an IP address in a range that
+// IsTailscaleIP reports whether IP is an IP address in a range that
 // Tailscale assigns from.
 func IsTailscaleIP(ip netip.Addr) bool {
 	if ip.Is4() {
-		return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
+		return IsTailscaleIPv4(ip)
 	}
 	return TailscaleULARange().Contains(ip)
+}
+
+// IsTailscaleIPv4 reports whether an IPv4 IP is an IP address that
+// Tailscale assigns from.
+func IsTailscaleIPv4(ip netip.Addr) bool {
+	return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
 }
 
 // TailscaleULARange returns the IPv6 Unique Local Address range that
@@ -180,8 +186,7 @@ func PrefixIs6(p netip.Prefix) bool { return p.Addr().Is6() }
 // IPv6 /0 route.
 func ContainsExitRoutes(rr views.Slice[netip.Prefix]) bool {
 	var v4, v6 bool
-	for i := range rr.Len() {
-		r := rr.At(i)
+	for _, r := range rr.All() {
 		if r == allIPv4 {
 			v4 = true
 		} else if r == allIPv6 {
@@ -194,8 +199,8 @@ func ContainsExitRoutes(rr views.Slice[netip.Prefix]) bool {
 // ContainsExitRoute reports whether rr contains at least one of IPv4 or
 // IPv6 /0 (exit) routes.
 func ContainsExitRoute(rr views.Slice[netip.Prefix]) bool {
-	for i := range rr.Len() {
-		if rr.At(i).Bits() == 0 {
+	for _, r := range rr.All() {
+		if r.Bits() == 0 {
 			return true
 		}
 	}
@@ -205,8 +210,8 @@ func ContainsExitRoute(rr views.Slice[netip.Prefix]) bool {
 // ContainsNonExitSubnetRoutes reports whether v contains Subnet
 // Routes other than ExitNode Routes.
 func ContainsNonExitSubnetRoutes(rr views.Slice[netip.Prefix]) bool {
-	for i := range rr.Len() {
-		if rr.At(i).Bits() != 0 {
+	for _, r := range rr.All() {
+		if r.Bits() != 0 {
 			return true
 		}
 	}

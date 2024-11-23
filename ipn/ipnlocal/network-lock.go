@@ -430,8 +430,7 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 		}
 		bootstrapStateID := fmt.Sprintf("%d:%d", genesis.State.StateID1, genesis.State.StateID2)
 
-		for i := range persist.DisallowedTKAStateIDs().Len() {
-			stateID := persist.DisallowedTKAStateIDs().At(i)
+		for _, stateID := range persist.DisallowedTKAStateIDs().All() {
 			if stateID == bootstrapStateID {
 				return fmt.Errorf("TKA with stateID of %q is disallowed on this node", stateID)
 			}
@@ -572,8 +571,7 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 		TailscaleIPs: make([]netip.Addr, 0, p.Addresses().Len()),
 		NodeKey:      p.Key(),
 	}
-	for i := range p.Addresses().Len() {
-		addr := p.Addresses().At(i)
+	for _, addr := range p.Addresses().All() {
 		if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
 			fp.TailscaleIPs = append(fp.TailscaleIPs, addr.Addr())
 		}

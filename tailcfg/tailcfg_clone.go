@@ -183,6 +183,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
 	AppConnector    opt.Bool
+	ServicesHash    string
 	Location        *Location
 }{})
 

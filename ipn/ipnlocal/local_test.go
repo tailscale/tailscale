@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -29,9 +30,11 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
@@ -432,20 +435,30 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func newTestLocalBackend(t testing.TB) *LocalBackend {
+	return newTestLocalBackendWithSys(t, new(tsd.System))
+}
+
+// newTestLocalBackendWithSys creates a new LocalBackend with the given tsd.System.
+// If the state store or engine are not set in sys, they will be set to a new
+// in-memory store and fake userspace engine, respectively.
+func newTestLocalBackendWithSys(t testing.TB, sys *tsd.System) *LocalBackend {
 	var logf logger.Logf = logger.Discard
-	sys := new(tsd.System)
-	store := new(mem.Store)
-	sys.Set(store)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
-	if err != nil {
-		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	if _, ok := sys.StateStore.GetOK(); !ok {
+		sys.Set(new(mem.Store))
 	}
-	t.Cleanup(eng.Close)
-	sys.Set(eng)
+	if _, ok := sys.Engine.GetOK(); !ok {
+		eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+		if err != nil {
+			t.Fatalf("NewFakeUserspaceEngine: %v", err)
+		}
+		t.Cleanup(eng.Close)
+		sys.Set(eng)
+	}
 	lb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(lb.Shutdown)
 	return lb
 }
 
@@ -1776,10 +1789,13 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			b := newTestBackend(t)
 
-			policyStore := source.NewTestStoreOf(t,
-				source.TestSettingOf(syspolicy.ExitNodeID, test.exitNodeID),
-				source.TestSettingOf(syspolicy.ExitNodeIP, test.exitNodeIP),
-			)
+			policyStore := source.NewTestStore(t)
+			if test.exitNodeIDKey {
+				policyStore.SetStrings(source.TestSettingOf(syspolicy.ExitNodeID, test.exitNodeID))
+			}
+			if test.exitNodeIPKey {
+				policyStore.SetStrings(source.TestSettingOf(syspolicy.ExitNodeIP, test.exitNodeIP))
+			}
 			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 
 			if test.nm == nil {
@@ -1793,7 +1809,16 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.netMap = test.nm
 			b.pm = pm
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
-			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm, tailcfg.StableNodeID(test.lastSuggestedExitNode))
+
+			prefs := b.pm.prefs.AsStruct()
+			if changed := applySysPolicy(prefs, test.lastSuggestedExitNode) || setExitNodeID(prefs, test.nm); changed != test.prefsChanged {
+				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
+			}
+
+			// Both [LocalBackend.SetPrefsForTest] and [LocalBackend.EditPrefs]
+			// apply syspolicy settings to the current profile's preferences. Therefore,
+			// we pass the current, unmodified preferences and expect the effective
+			// preferences to change.
 			b.SetPrefsForTest(pm.CurrentPrefs().AsStruct())
 
 			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
@@ -1805,10 +1830,6 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				}
 			} else if got.String() != test.exitNodeIPWant {
 				t.Errorf("got %v want %v", got, test.exitNodeIPWant)
-			}
-
-			if changed != test.prefsChanged {
-				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 		})
 	}
@@ -2319,7 +2340,7 @@ func TestApplySysPolicy(t *testing.T) {
 			t.Run("unit", func(t *testing.T) {
 				prefs := tt.prefs.Clone()
 
-				gotAnyChange := applySysPolicy(prefs)
+				gotAnyChange := applySysPolicy(prefs, "")
 
 				if gotAnyChange && prefs.Equals(&tt.prefs) {
 					t.Errorf("anyChange but prefs is unchanged: %v", prefs.Pretty())
@@ -2467,7 +2488,7 @@ func TestPreferencePolicyInfo(t *testing.T) {
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
 
-					gotAnyChange := applySysPolicy(prefs)
+					gotAnyChange := applySysPolicy(prefs, "")
 
 					if gotAnyChange != tt.wantChange {
 						t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantChange)
@@ -3030,12 +3051,10 @@ func deterministicNodeForTest(t testing.TB, want views.Slice[tailcfg.StableNodeI
 		var ret tailcfg.NodeView
 
 		gotIDs := make([]tailcfg.StableNodeID, got.Len())
-		for i := range got.Len() {
-			nv := got.At(i)
+		for i, nv := range got.All() {
 			if !nv.Valid() {
 				t.Fatalf("invalid node at index %v", i)
 			}
-
 			gotIDs[i] = nv.StableID()
 			if nv.StableID() == use {
 				ret = nv
@@ -4099,6 +4118,7 @@ func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(b.Shutdown)
 	b.DisablePortMapperForTest()
 
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
@@ -4420,6 +4440,248 @@ func TestLoginNotifications(t *testing.T) {
 				}()
 			}
 			wg.Wait()
+		})
+	}
+}
+
+// TestConfigFileReload tests that the LocalBackend reloads its configuration
+// when the configuration file changes.
+func TestConfigFileReload(t *testing.T) {
+	cfg1 := `{"Hostname": "foo", "Version": "alpha0"}`
+	f := filepath.Join(t.TempDir(), "cfg")
+	must.Do(os.WriteFile(f, []byte(cfg1), 0600))
+	sys := new(tsd.System)
+	sys.InitialConfig = must.Get(conffile.Load(f))
+	lb := newTestLocalBackendWithSys(t, sys)
+	must.Do(lb.Start(ipn.Options{}))
+
+	lb.mu.Lock()
+	hn := lb.hostinfo.Hostname
+	lb.mu.Unlock()
+	if hn != "foo" {
+		t.Fatalf("got %q; want %q", hn, "foo")
+	}
+
+	cfg2 := `{"Hostname": "bar", "Version": "alpha0"}`
+	must.Do(os.WriteFile(f, []byte(cfg2), 0600))
+	if !must.Get(lb.ReloadConfig()) {
+		t.Fatal("reload failed")
+	}
+
+	lb.mu.Lock()
+	hn = lb.hostinfo.Hostname
+	lb.mu.Unlock()
+	if hn != "bar" {
+		t.Fatalf("got %q; want %q", hn, "bar")
+	}
+}
+
+func TestGetVIPServices(t *testing.T) {
+	tests := []struct {
+		name       string
+		advertised []string
+		mapped     []string
+		want       []*tailcfg.VIPService
+	}{
+		{
+			"advertised-only",
+			[]string{"svc:abc", "svc:def"},
+			[]string{},
+			[]*tailcfg.VIPService{
+				{
+					Name:   "svc:abc",
+					Active: true,
+				},
+				{
+					Name:   "svc:def",
+					Active: true,
+				},
+			},
+		},
+		{
+			"mapped-only",
+			[]string{},
+			[]string{"svc:abc"},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+			},
+		},
+		{
+			"mapped-and-advertised",
+			[]string{"svc:abc"},
+			[]string{"svc:abc"},
+			[]*tailcfg.VIPService{
+				{
+					Name:   "svc:abc",
+					Active: true,
+					Ports:  []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+			},
+		},
+		{
+			"mapped-and-advertised-separately",
+			[]string{"svc:def"},
+			[]string{"svc:abc"},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+				{
+					Name:   "svc:def",
+					Active: true,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envknob.Setenv("TS_DEBUG_ALLPORTS_SERVICES", strings.Join(tt.mapped, ","))
+			prefs := &ipn.Prefs{
+				AdvertiseServices: tt.advertised,
+			}
+			got := vipServicesFromPrefs(prefs.View())
+			slices.SortFunc(got, func(a, b *tailcfg.VIPService) int {
+				return strings.Compare(a.Name, b.Name)
+			})
+			if !reflect.DeepEqual(tt.want, got) {
+				t.Logf("want:")
+				for _, s := range tt.want {
+					t.Logf("%+v", s)
+				}
+				t.Logf("got:")
+				for _, s := range got {
+					t.Logf("%+v", s)
+				}
+				t.Fail()
+				return
+			}
+		})
+	}
+}
+
+func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
+	const enableLogging = false
+
+	type fieldChange struct {
+		name string
+		want any
+	}
+
+	wantPrefsChanges := func(want ...fieldChange) *wantedNotification {
+		return &wantedNotification{
+			name: "Prefs",
+			cond: func(t testing.TB, actor ipnauth.Actor, n *ipn.Notify) bool {
+				if n.Prefs != nil {
+					prefs := reflect.Indirect(reflect.ValueOf(n.Prefs.AsStruct()))
+					for _, f := range want {
+						got := prefs.FieldByName(f.name).Interface()
+						if !reflect.DeepEqual(got, f.want) {
+							t.Errorf("%v: got %v; want %v", f.name, got, f.want)
+						}
+					}
+				}
+				return n.Prefs != nil
+			},
+		}
+	}
+
+	unexpectedPrefsChange := func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+		if n.Prefs != nil {
+			t.Errorf("Unexpected Prefs: %v", n.Prefs.Pretty())
+			return true
+		}
+		return false
+	}
+
+	tests := []struct {
+		name           string
+		initialPrefs   *ipn.Prefs
+		stringSettings []source.TestSetting[string]
+		want           *wantedNotification
+	}{
+		{
+			name:           "ShieldsUp/True",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableIncomingConnections, "never")},
+			want:           wantPrefsChanges(fieldChange{"ShieldsUp", true}),
+		},
+		{
+			name:           "ShieldsUp/False",
+			initialPrefs:   &ipn.Prefs{ShieldsUp: true},
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableIncomingConnections, "always")},
+			want:           wantPrefsChanges(fieldChange{"ShieldsUp", false}),
+		},
+		{
+			name:           "ExitNodeID",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.ExitNodeID, "foo")},
+			want:           wantPrefsChanges(fieldChange{"ExitNodeID", tailcfg.StableNodeID("foo")}),
+		},
+		{
+			name:           "EnableRunExitNode",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableRunExitNode, "always")},
+			want:           wantPrefsChanges(fieldChange{"AdvertiseRoutes", []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()}}),
+		},
+		{
+			name: "Multiple",
+			initialPrefs: &ipn.Prefs{
+				ExitNodeAllowLANAccess: true,
+			},
+			stringSettings: []source.TestSetting[string]{
+				source.TestSettingOf(syspolicy.EnableServerMode, "always"),
+				source.TestSettingOf(syspolicy.ExitNodeAllowLANAccess, "never"),
+				source.TestSettingOf(syspolicy.ExitNodeIP, "127.0.0.1"),
+			},
+			want: wantPrefsChanges(
+				fieldChange{"ForceDaemon", true},
+				fieldChange{"ExitNodeAllowLANAccess", false},
+				fieldChange{"ExitNodeIP", netip.MustParseAddr("127.0.0.1")},
+			),
+		},
+		{
+			name: "NoChange",
+			initialPrefs: &ipn.Prefs{
+				CorpDNS:         true,
+				ExitNodeID:      "foo",
+				AdvertiseRoutes: []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
+			},
+			stringSettings: []source.TestSetting[string]{
+				source.TestSettingOf(syspolicy.EnableTailscaleDNS, "always"),
+				source.TestSettingOf(syspolicy.ExitNodeID, "foo"),
+				source.TestSettingOf(syspolicy.EnableRunExitNode, "always"),
+			},
+			want: nil, // syspolicy settings match the preferences; no change notification is expected.
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			syspolicy.RegisterWellKnownSettingsForTest(t)
+			store := source.NewTestStoreOf[string](t)
+			syspolicy.MustRegisterStoreForTest(t, "TestSource", setting.DeviceScope, store)
+
+			lb := newLocalBackendWithTestControl(t, enableLogging, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+				return newClient(tb, opts)
+			})
+			if tt.initialPrefs != nil {
+				lb.SetPrefsForTest(tt.initialPrefs)
+			}
+			if err := lb.Start(ipn.Options{}); err != nil {
+				t.Fatalf("(*LocalBackend).Start(): %v", err)
+			}
+
+			nw := newNotificationWatcher(t, lb, &ipnauth.TestActor{})
+			if tt.want != nil {
+				nw.watch(0, []wantedNotification{*tt.want})
+			} else {
+				nw.watch(0, nil, unexpectedPrefsChange)
+			}
+
+			store.SetStrings(tt.stringSettings...)
+
+			nw.check()
 		})
 	}
 }

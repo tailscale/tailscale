@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"tailscale.com/control/controlbase"
+	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
@@ -571,9 +572,9 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 		Method: "POST",
 		URL:    u,
 		Header: http.Header{
-			"Upgrade":           []string{upgradeHeaderValue},
-			"Connection":        []string{"upgrade"},
-			handshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
+			"Upgrade":                             []string{controlhttpcommon.UpgradeHeaderValue},
+			"Connection":                          []string{"upgrade"},
+			controlhttpcommon.HandshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
 		},
 	}
 	req = req.WithContext(ctx)
@@ -597,7 +598,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 		return nil, fmt.Errorf("httptrace didn't provide a connection")
 	}
 
-	if next := resp.Header.Get("Upgrade"); next != upgradeHeaderValue {
+	if next := resp.Header.Get("Upgrade"); next != controlhttpcommon.UpgradeHeaderValue {
 		resp.Body.Close()
 		return nil, fmt.Errorf("server switched to unexpected protocol %q", next)
 	}

@@ -81,6 +81,12 @@ const (
 	addrTypeNotSupported replyCode = 8
 )
 
+// UDP conn default buffer size and read timeout.
+const (
+	bufferSize  = 8 * 1024
+	readTimeout = 5 * time.Second
+)
+
 // Server is a SOCKS5 proxy server.
 type Server struct {
 	// Logf optionally specifies the logger to use.
@@ -143,7 +149,8 @@ type Conn struct {
 	clientConn net.Conn
 	request    *request
 
-	udpClientAddr net.Addr
+	udpClientAddr  net.Addr
+	udpTargetConns map[socksAddr]net.Conn
 }
 
 // Run starts the new connection.
@@ -276,15 +283,6 @@ func (c *Conn) handleUDP() error {
 	}
 	defer clientUDPConn.Close()
 
-	serverUDPConn, err := net.ListenPacket("udp", "[::]:0")
-	if err != nil {
-		res := errorResponse(generalFailure)
-		buf, _ := res.marshal()
-		c.clientConn.Write(buf)
-		return err
-	}
-	defer serverUDPConn.Close()
-
 	bindAddr, bindPort, err := splitHostPort(clientUDPConn.LocalAddr().String())
 	if err != nil {
 		return err
@@ -305,25 +303,32 @@ func (c *Conn) handleUDP() error {
 	}
 	c.clientConn.Write(buf)
 
-	return c.transferUDP(c.clientConn, clientUDPConn, serverUDPConn)
+	return c.transferUDP(c.clientConn, clientUDPConn)
 }
 
-func (c *Conn) transferUDP(associatedTCP net.Conn, clientConn net.PacketConn, targetConn net.PacketConn) error {
+func (c *Conn) transferUDP(associatedTCP net.Conn, clientConn net.PacketConn) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	const bufferSize = 8 * 1024
-	const readTimeout = 5 * time.Second
 
 	// client -> target
 	go func() {
 		defer cancel()
+
+		c.udpTargetConns = make(map[socksAddr]net.Conn)
+		// close all target udp connections when the client connection is closed
+		defer func() {
+			for _, conn := range c.udpTargetConns {
+				_ = conn.Close()
+			}
+		}()
+
 		buf := make([]byte, bufferSize)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				err := c.handleUDPRequest(clientConn, targetConn, buf, readTimeout)
+				err := c.handleUDPRequest(ctx, clientConn, buf)
 				if err != nil {
 					if isTimeout(err) {
 						continue
@@ -332,29 +337,6 @@ func (c *Conn) transferUDP(associatedTCP net.Conn, clientConn net.PacketConn, ta
 						return
 					}
 					c.logf("udp transfer: handle udp request fail: %v", err)
-				}
-			}
-		}
-	}()
-
-	// target -> client
-	go func() {
-		defer cancel()
-		buf := make([]byte, bufferSize)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				err := c.handleUDPResponse(targetConn, clientConn, buf, readTimeout)
-				if err != nil {
-					if isTimeout(err) {
-						continue
-					}
-					if errors.Is(err, net.ErrClosed) {
-						return
-					}
-					c.logf("udp transfer: handle udp response fail: %v", err)
 				}
 			}
 		}
@@ -369,11 +351,50 @@ func (c *Conn) transferUDP(associatedTCP net.Conn, clientConn net.PacketConn, ta
 	return err
 }
 
-func (c *Conn) handleUDPRequest(
+func (c *Conn) getOrDialTargetConn(
+	ctx context.Context,
 	clientConn net.PacketConn,
-	targetConn net.PacketConn,
+	targetAddr socksAddr,
+) (net.Conn, error) {
+	conn, exist := c.udpTargetConns[targetAddr]
+	if exist {
+		return conn, nil
+	}
+	conn, err := c.srv.dial(ctx, "udp", targetAddr.hostPort())
+	if err != nil {
+		return nil, err
+	}
+	c.udpTargetConns[targetAddr] = conn
+
+	// target -> client
+	go func() {
+		buf := make([]byte, bufferSize)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				err := c.handleUDPResponse(clientConn, targetAddr, conn, buf)
+				if err != nil {
+					if isTimeout(err) {
+						continue
+					}
+					if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+						return
+					}
+					c.logf("udp transfer: handle udp response fail: %v", err)
+				}
+			}
+		}
+	}()
+
+	return conn, nil
+}
+
+func (c *Conn) handleUDPRequest(
+	ctx context.Context,
+	clientConn net.PacketConn,
 	buf []byte,
-	readTimeout time.Duration,
 ) error {
 	// add a deadline for the read to avoid blocking forever
 	_ = clientConn.SetReadDeadline(time.Now().Add(readTimeout))
@@ -386,38 +407,35 @@ func (c *Conn) handleUDPRequest(
 	if err != nil {
 		return fmt.Errorf("parse udp request: %w", err)
 	}
-	targetAddr, err := net.ResolveUDPAddr("udp", req.addr.hostPort())
+
+	targetConn, err := c.getOrDialTargetConn(ctx, clientConn, req.addr)
 	if err != nil {
-		c.logf("resolve target addr fail: %v", err)
+		return fmt.Errorf("dial target %s fail: %w", req.addr, err)
 	}
 
-	nn, err := targetConn.WriteTo(data, targetAddr)
+	nn, err := targetConn.Write(data)
 	if err != nil {
-		return fmt.Errorf("write to target %s fail: %w", targetAddr, err)
+		return fmt.Errorf("write to target %s fail: %w", req.addr, err)
 	}
 	if nn != len(data) {
-		return fmt.Errorf("write to target %s fail: %w", targetAddr, io.ErrShortWrite)
+		return fmt.Errorf("write to target %s fail: %w", req.addr, io.ErrShortWrite)
 	}
 	return nil
 }
 
 func (c *Conn) handleUDPResponse(
-	targetConn net.PacketConn,
 	clientConn net.PacketConn,
+	targetAddr socksAddr,
+	targetConn net.Conn,
 	buf []byte,
-	readTimeout time.Duration,
 ) error {
 	// add a deadline for the read to avoid blocking forever
 	_ = targetConn.SetReadDeadline(time.Now().Add(readTimeout))
-	n, addr, err := targetConn.ReadFrom(buf)
+	n, err := targetConn.Read(buf)
 	if err != nil {
 		return fmt.Errorf("read from target: %w", err)
 	}
-	host, port, err := splitHostPort(addr.String())
-	if err != nil {
-		return fmt.Errorf("split host port: %w", err)
-	}
-	hdr := udpRequest{addr: socksAddr{addrType: getAddrType(host), addr: host, port: port}}
+	hdr := udpRequest{addr: targetAddr}
 	pkt, err := hdr.marshal()
 	if err != nil {
 		return fmt.Errorf("marshal udp request: %w", err)
@@ -627,8 +645,13 @@ func (s socksAddr) marshal() ([]byte, error) {
 	pkt = binary.BigEndian.AppendUint16(pkt, s.port)
 	return pkt, nil
 }
+
 func (s socksAddr) hostPort() string {
 	return net.JoinHostPort(s.addr, strconv.Itoa(int(s.port)))
+}
+
+func (s socksAddr) String() string {
+	return s.hostPort()
 }
 
 // response contains the contents of

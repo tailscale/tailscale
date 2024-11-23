@@ -102,7 +102,7 @@ type Hijacker struct {
 // connection succeeds. In case of success, returns a list with a single
 // successful recording attempt and an error channel. If the connection errors
 // after having been established, an error is sent down the channel.
-type RecorderDialFn func(context.Context, []netip.AddrPort, func(context.Context, string, string) (net.Conn, error)) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error)
+type RecorderDialFn func(context.Context, []netip.AddrPort, sessionrecording.DialFunc) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error)
 
 // Hijack hijacks a 'kubectl exec' session and configures for the session
 // contents to be sent to a recorder.

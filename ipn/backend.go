@@ -73,6 +73,8 @@ const (
 	NotifyInitialOutgoingFiles // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
 
 	NotifyInitialHealthState // if set, the first Notify message (sent immediately) will contain the current health.State of the client
+
+	NotifyRateLimit // if set, rate limit spammy netmap updates to every few seconds
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -100,7 +102,6 @@ type Notify struct {
 	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
 	Engine        *EngineStatus      // if non-nil, the new or current wireguard stats
 	BrowseToURL   *string            // if non-nil, UI should open a browser right now
-	BackendLogID  *string            // if non-nil, the public logtail ID used by backend
 
 	// FilesWaiting if non-nil means that files are buffered in
 	// the Tailscale daemon and ready for local transfer to the
@@ -172,9 +173,6 @@ func (n Notify) String() string {
 	}
 	if n.BrowseToURL != nil {
 		sb.WriteString("URL=<...> ")
-	}
-	if n.BackendLogID != nil {
-		sb.WriteString("BackendLogID ")
 	}
 	if n.FilesWaiting != nil {
 		sb.WriteString("FilesWaiting ")

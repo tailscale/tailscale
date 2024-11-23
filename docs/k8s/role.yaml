@@ -13,3 +13,6 @@ rules:
   resourceNames: ["{{TS_KUBE_SECRET}}"]
   resources: ["secrets"]
   verbs: ["get", "update", "patch"]
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["events"]
+  verbs: ["get", "create", "patch"]

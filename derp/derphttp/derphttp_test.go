@@ -17,7 +17,9 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tstest/deptest"
 	"tailscale.com/types/key"
+	"tailscale.com/util/set"
 )
 
 func TestSendRecv(t *testing.T) {
@@ -484,4 +486,24 @@ func TestProbe(t *testing.T) {
 			t.Errorf("for path %q got HTTP status %v; want %v", tt.path, got, tt.want)
 		}
 	}
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "darwin",
+		GOARCH: "arm64",
+		BadDeps: map[string]string{
+			"github.com/coder/websocket": "shouldn't link websockets except on js/wasm",
+		},
+	}.Check(t)
+
+	deptest.DepChecker{
+		GOOS:   "darwin",
+		GOARCH: "arm64",
+		Tags:   "ts_debug_websockets",
+		WantDeps: set.Of(
+			"github.com/coder/websocket",
+		),
+	}.Check(t)
+
 }

@@ -1,3 +1,4 @@
+{{- if .Values.ingressClass.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: IngressClass
 metadata:
@@ -6,3 +7,4 @@ metadata:
 spec:
   controller: tailscale.com/ts-ingress # controller name currently can not be changed
   # parameters: {} # currently no parameters are supported
+{{- end }}

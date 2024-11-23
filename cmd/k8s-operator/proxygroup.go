@@ -47,7 +47,7 @@ const (
 	reasonProxyGroupInvalid        = "ProxyGroupInvalid"
 )
 
-var gaugeProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupCount)
+var gaugeProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
 
 // ProxyGroupReconciler ensures cluster resources for a ProxyGroup definition.
 type ProxyGroupReconciler struct {
@@ -353,7 +353,7 @@ func (r *ProxyGroupReconciler) deleteTailnetDevice(ctx context.Context, id tailc
 
 func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (hash string, err error) {
 	logger := r.logger(pg.Name)
-	var allConfigs []tailscaledConfigs
+	var configSHA256Sum string
 	for i := range pgReplicas(pg) {
 		cfgSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
@@ -389,7 +389,6 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 		if err != nil {
 			return "", fmt.Errorf("error creating tailscaled config: %w", err)
 		}
-		allConfigs = append(allConfigs, configs)
 
 		for cap, cfg := range configs {
 			cfgJSON, err := json.Marshal(cfg)
@@ -397,6 +396,32 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 				return "", fmt.Errorf("error marshalling tailscaled config: %w", err)
 			}
 			mak.Set(&cfgSecret.StringData, tsoperator.TailscaledConfigFileName(cap), string(cfgJSON))
+		}
+
+		// The config sha256 sum is a value for a hash annotation used to trigger
+		// pod restarts when tailscaled config changes. Any config changes apply
+		// to all replicas, so it is sufficient to only hash the config for the
+		// first replica.
+		//
+		// In future, we're aiming to eliminate restarts altogether and have
+		// pods dynamically reload their config when it changes.
+		if i == 0 {
+			sum := sha256.New()
+			for _, cfg := range configs {
+				// Zero out the auth key so it doesn't affect the sha256 hash when we
+				// remove it from the config after the pods have all authed. Otherwise
+				// all the pods will need to restart immediately after authing.
+				cfg.AuthKey = nil
+				b, err := json.Marshal(cfg)
+				if err != nil {
+					return "", err
+				}
+				if _, err := sum.Write(b); err != nil {
+					return "", err
+				}
+			}
+
+			configSHA256Sum = fmt.Sprintf("%x", sum.Sum(nil))
 		}
 
 		if existingCfgSecret != nil {
@@ -412,16 +437,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 		}
 	}
 
-	sum := sha256.New()
-	b, err := json.Marshal(allConfigs)
-	if err != nil {
-		return "", err
-	}
-	if _, err := sum.Write(b); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("%x", sum.Sum(nil)), nil
+	return configSHA256Sum, nil
 }
 
 func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32, authKey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {

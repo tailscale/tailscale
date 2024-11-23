@@ -54,6 +54,9 @@ operatorConfig:
   # - name: EXTRA_VAR2
   #   value: "value2"
 
+# In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
+ingressClass:
+  enabled: true
 
 # proxyConfig contains configuraton that will be applied to any ingress/egress
 # proxies created by the operator.

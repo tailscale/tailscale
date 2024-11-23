@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 )
 
 // These vars are overridden for tests.
@@ -76,21 +76,22 @@ func synologyProxiesFromConfig() (*url.URL, *url.URL, error) {
 func parseSynologyConfig(r io.Reader) (*url.URL, *url.URL, error) {
 	cfg := map[string]string{}
 
-	if err := lineread.Reader(r, func(line []byte) error {
+	for lr := range lineiter.Reader(r) {
+		line, err := lr.Value()
+		if err != nil {
+			return nil, nil, err
+		}
 		// accept and skip over empty lines
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
-			return nil
+			continue
 		}
 
 		key, value, ok := strings.Cut(string(line), "=")
 		if !ok {
-			return fmt.Errorf("missing \"=\" in proxy.conf line: %q", line)
+			return nil, nil, fmt.Errorf("missing \"=\" in proxy.conf line: %q", line)
 		}
 		cfg[string(key)] = string(value)
-		return nil
-	}); err != nil {
-		return nil, nil, err
 	}
 
 	if cfg["proxy_enabled"] != "yes" {

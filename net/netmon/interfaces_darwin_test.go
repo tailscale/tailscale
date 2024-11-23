@@ -4,14 +4,13 @@
 package netmon
 
 import (
-	"errors"
 	"io"
 	"net/netip"
 	"os/exec"
 	"testing"
 
 	"go4.org/mem"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 	"tailscale.com/version"
 )
 
@@ -73,31 +72,34 @@ func likelyHomeRouterIPDarwinExec() (ret netip.Addr, netif string, ok bool) {
 	defer io.Copy(io.Discard, stdout) // clear the pipe to prevent hangs
 
 	var f []mem.RO
-	lineread.Reader(stdout, func(lineb []byte) error {
+	for lr := range lineiter.Reader(stdout) {
+		lineb, err := lr.Value()
+		if err != nil {
+			break
+		}
 		line := mem.B(lineb)
 		if !mem.Contains(line, mem.S("default")) {
-			return nil
+			continue
 		}
 		f = mem.AppendFields(f[:0], line)
 		if len(f) < 4 || !f[0].EqualString("default") {
-			return nil
+			continue
 		}
 		ipm, flagsm, netifm := f[1], f[2], f[3]
 		if !mem.Contains(flagsm, mem.S("G")) {
-			return nil
+			continue
 		}
 		if mem.Contains(flagsm, mem.S("I")) {
-			return nil
+			continue
 		}
 		ip, err := netip.ParseAddr(string(mem.Append(nil, ipm)))
 		if err == nil && ip.IsPrivate() {
 			ret = ip
 			netif = netifm.StringCopy()
 			// We've found what we're looking for.
-			return errStopReadingNetstatTable
+			break
 		}
-		return nil
-	})
+	}
 	return ret, netif, ret.IsValid()
 }
 
@@ -110,5 +112,3 @@ func TestFetchRoutingTable(t *testing.T) {
 		}
 	}
 }
-
-var errStopReadingNetstatTable = errors.New("found private gateway")

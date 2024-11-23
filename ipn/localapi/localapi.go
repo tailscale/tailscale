@@ -62,6 +62,8 @@ import (
 	"tailscale.com/util/osdiag"
 	"tailscale.com/util/progresstracking"
 	"tailscale.com/util/rands"
+	"tailscale.com/util/syspolicy/rsop"
+	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -76,6 +78,7 @@ var handler = map[string]localAPIHandler{
 	"cert/":     (*Handler).serveCert,
 	"file-put/": (*Handler).serveFilePut,
 	"files/":    (*Handler).serveFiles,
+	"policy/":   (*Handler).servePolicy,
 	"profiles/": (*Handler).serveProfiles,
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
@@ -97,6 +100,7 @@ var handler = map[string]localAPIHandler{
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"dial":                        (*Handler).serveDial,
+	"disconnect-control":          (*Handler).disconnectControl,
 	"dns-osconfig":                (*Handler).serveDNSOSConfig,
 	"dns-query":                   (*Handler).serveDNSQuery,
 	"drive/fileserver-address":    (*Handler).serveDriveServerAddr,
@@ -949,6 +953,22 @@ func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 	servePprofFunc(w, r)
 }
 
+// disconnectControl is the handler for local API /disconnect-control endpoint that shuts down control client, so that
+// node no longer communicates with control. Doing this makes control consider this node inactive. This can be used
+// before shutting down a replica of HA subnet  router or app connector deployments to ensure that control tells the
+// peers to switch over to another replica whilst still maintaining th existing peer connections.
+func (h *Handler) disconnectControl(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	h.b.DisconnectControl()
+}
+
 func (h *Handler) reloadConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "access denied", http.StatusForbidden)
@@ -1330,6 +1350,53 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(prefs)
+}
+
+func (h *Handler) servePolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "policy access denied", http.StatusForbidden)
+		return
+	}
+
+	suffix, ok := strings.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/policy/")
+	if !ok {
+		http.Error(w, "misconfigured", http.StatusInternalServerError)
+		return
+	}
+
+	var scope setting.PolicyScope
+	if suffix == "" {
+		scope = setting.DefaultScope()
+	} else if err := scope.UnmarshalText([]byte(suffix)); err != nil {
+		http.Error(w, fmt.Sprintf("%q is not a valid scope", suffix), http.StatusBadRequest)
+		return
+	}
+
+	policy, err := rsop.PolicyFor(scope)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var effectivePolicy *setting.Snapshot
+	switch r.Method {
+	case "GET":
+		effectivePolicy = policy.Get()
+	case "POST":
+		effectivePolicy, err = policy.Reload()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	default:
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(effectivePolicy)
 }
 
 type resJSON struct {

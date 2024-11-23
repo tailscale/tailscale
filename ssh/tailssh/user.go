@@ -6,7 +6,6 @@
 package tailssh
 
 import (
-	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -18,7 +17,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 	"tailscale.com/util/osuser"
 	"tailscale.com/version/distro"
 )
@@ -110,15 +109,16 @@ func defaultPathForUser(u *user.User) string {
 }
 
 func defaultPathForUserOnNixOS(u *user.User) string {
-	var path string
-	lineread.File("/etc/pam/environment", func(lineb []byte) error {
-		if v := pathFromPAMEnvLine(lineb, u); v != "" {
-			path = v
-			return io.EOF // stop iteration
+	for lr := range lineiter.File("/etc/pam/environment") {
+		lineb, err := lr.Value()
+		if err != nil {
+			return ""
 		}
-		return nil
-	})
-	return path
+		if v := pathFromPAMEnvLine(lineb, u); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func pathFromPAMEnvLine(line []byte, u *user.User) (path string) {

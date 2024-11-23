@@ -17,7 +17,6 @@ import (
 
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlhttp"
-	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/internal/noiseconn"
 	"tailscale.com/net/dnscache"
@@ -30,7 +29,6 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
-	"tailscale.com/util/testenv"
 )
 
 // NoiseClient provides a http.Client to connect to tailcontrol over
@@ -107,11 +105,6 @@ type NoiseOpts struct {
 	DialPlan func() *tailcfg.ControlDialPlan
 }
 
-// controlIsPlaintext is whether we should assume that the controlplane is only accessible
-// over plaintext HTTP (as the first hop, before the ts2021 encryption begins).
-// This is used by some tests which don't have a real TLS certificate.
-var controlIsPlaintext = envknob.RegisterBool("TS_CONTROL_IS_PLAINTEXT_HTTP")
-
 // NewNoiseClient returns a new noiseClient for the provided server and machine key.
 // serverURL is of the form https://<host>:<port> (no trailing slash).
 //
@@ -129,7 +122,7 @@ func NewNoiseClient(opts NoiseOpts) (*NoiseClient, error) {
 		if u.Scheme == "http" {
 			httpPort = port
 			httpsPort = "443"
-			if (testenv.InTest() || controlIsPlaintext()) && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost") {
+			if u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" {
 				httpsPort = ""
 			}
 		} else {

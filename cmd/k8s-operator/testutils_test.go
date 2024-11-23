@@ -48,6 +48,7 @@ type configOpts struct {
 	clusterTargetDNS                               string
 	subnetRoutes                                   string
 	isExitNode                                     bool
+	isAppConnector                                 bool
 	confFileHash                                   string
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
@@ -69,8 +70,9 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		Env: []corev1.EnvVar{
 			{Name: "TS_USERSPACE", Value: "false"},
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
+			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.name"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
+			{Name: "POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.uid"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
-			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
 			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
 		},
 		SecurityContext: &corev1.SecurityContext{
@@ -228,8 +230,9 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 		Env: []corev1.EnvVar{
 			{Name: "TS_USERSPACE", Value: "true"},
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
+			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.name"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
+			{Name: "POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.uid"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
-			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
 			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
 			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/serve-config"},
 			{Name: "TS_INTERNAL_APP", Value: opts.app},
@@ -356,6 +359,7 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		Locked:       "false",
 		AuthKey:      ptr.To("secret-authkey"),
 		AcceptRoutes: "false",
+		AppConnector: &ipn.AppConnectorPrefs{Advertise: false},
 	}
 	if opts.proxyClass != "" {
 		t.Logf("applying configuration from ProxyClass %s", opts.proxyClass)
@@ -369,6 +373,9 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 	}
 	if opts.shouldRemoveAuthKey {
 		conf.AuthKey = nil
+	}
+	if opts.isAppConnector {
+		conf.AppConnector = &ipn.AppConnectorPrefs{Advertise: true}
 	}
 	var routes []netip.Prefix
 	if opts.subnetRoutes != "" || opts.isExitNode {
@@ -384,22 +391,23 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 			routes = append(routes, prefix)
 		}
 	}
-	conf.AdvertiseRoutes = routes
-	b, err := json.Marshal(conf)
-	if err != nil {
-		t.Fatalf("error marshalling tailscaled config")
-	}
 	if opts.tailnetTargetFQDN != "" || opts.tailnetTargetIP != "" {
 		conf.NoStatefulFiltering = "true"
 	} else {
 		conf.NoStatefulFiltering = "false"
 	}
+	conf.AdvertiseRoutes = routes
+	bnn, err := json.Marshal(conf)
+	if err != nil {
+		t.Fatalf("error marshalling tailscaled config")
+	}
+	conf.AppConnector = nil
 	bn, err := json.Marshal(conf)
 	if err != nil {
 		t.Fatalf("error marshalling tailscaled config")
 	}
-	mak.Set(&s.StringData, "tailscaled", string(b))
 	mak.Set(&s.StringData, "cap-95.hujson", string(bn))
+	mak.Set(&s.StringData, "cap-107.hujson", string(bnn))
 	labels := map[string]string{
 		"tailscale.com/managed":              "true",
 		"tailscale.com/parent-resource":      "test",
@@ -650,18 +658,6 @@ func removeTargetPortsFromSvc(svc *corev1.Service) {
 func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 	return func(secret *corev1.Secret) {
 		t.Helper()
-		if len(secret.StringData["tailscaled"]) != 0 {
-			conf := &ipn.ConfigVAlpha{}
-			if err := json.Unmarshal([]byte(secret.StringData["tailscaled"]), conf); err != nil {
-				t.Fatalf("error unmarshalling 'tailscaled' contents: %v", err)
-			}
-			conf.AuthKey = nil
-			b, err := json.Marshal(conf)
-			if err != nil {
-				t.Fatalf("error marshalling updated 'tailscaled' config: %v", err)
-			}
-			mak.Set(&secret.StringData, "tailscaled", string(b))
-		}
 		if len(secret.StringData["cap-95.hujson"]) != 0 {
 			conf := &ipn.ConfigVAlpha{}
 			if err := json.Unmarshal([]byte(secret.StringData["cap-95.hujson"]), conf); err != nil {
@@ -673,6 +669,18 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 				t.Fatalf("error marshalling 'cap-95.huson' contents: %v", err)
 			}
 			mak.Set(&secret.StringData, "cap-95.hujson", string(b))
+		}
+		if len(secret.StringData["cap-107.hujson"]) != 0 {
+			conf := &ipn.ConfigVAlpha{}
+			if err := json.Unmarshal([]byte(secret.StringData["cap-107.hujson"]), conf); err != nil {
+				t.Fatalf("error umarshalling 'cap-107.hujson' contents: %v", err)
+			}
+			conf.AuthKey = nil
+			b, err := json.Marshal(conf)
+			if err != nil {
+				t.Fatalf("error marshalling 'cap-107.huson' contents: %v", err)
+			}
+			mak.Set(&secret.StringData, "cap-107.hujson", string(b))
 		}
 	}
 }

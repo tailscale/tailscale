@@ -313,6 +313,9 @@ func (c *Client) preferIPv6() bool {
 var dialWebsocketFunc func(ctx context.Context, urlStr string) (net.Conn, error)
 
 func useWebsockets() bool {
+	if !canWebsockets {
+		return false
+	}
 	if runtime.GOOS == "js" {
 		return true
 	}
@@ -383,7 +386,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	var node *tailcfg.DERPNode // nil when using c.url to dial
 	var idealNodeInRegion bool
 	switch {
-	case useWebsockets():
+	case canWebsockets && useWebsockets():
 		var urlStr string
 		if c.url != nil {
 			urlStr = c.url.String()

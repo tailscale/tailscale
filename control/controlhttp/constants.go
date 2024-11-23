@@ -18,15 +18,6 @@ import (
 )
 
 const (
-	// upgradeHeader is the value of the Upgrade HTTP header used to
-	// indicate the Tailscale control protocol.
-	upgradeHeaderValue = "tailscale-control-protocol"
-
-	// handshakeHeaderName is the HTTP request header that can
-	// optionally contain base64-encoded initial handshake
-	// payload, to save an RTT.
-	handshakeHeaderName = "X-Tailscale-Handshake"
-
 	// serverUpgradePath is where the server-side HTTP handler to
 	// to do the protocol switch is located.
 	serverUpgradePath = "/ts2021"
@@ -85,6 +76,8 @@ type Dialer struct {
 	// dropped.
 	Logf logger.Logf
 
+	// NetMon is the [netmon.Monitor] to use for this Dialer. It must be
+	// non-nil.
 	NetMon *netmon.Monitor
 
 	// HealthTracker, if non-nil, is the health tracker to use.

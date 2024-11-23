@@ -45,6 +45,9 @@ type derpProber struct {
 	bwInterval  time.Duration
 	bwProbeSize int64
 
+	// Optionally restrict probes to a single regionCode.
+	regionCode string
+
 	// Probe class for fetching & updating the DERP map.
 	ProbeMap ProbeClass
 
@@ -97,6 +100,14 @@ func WithTLSProbing(interval time.Duration) DERPOpt {
 	}
 }
 
+// WithRegion restricts probing to the specified region identified by its code
+// (e.g. "lax"). This is case sensitive.
+func WithRegion(regionCode string) DERPOpt {
+	return func(d *derpProber) {
+		d.regionCode = regionCode
+	}
+}
+
 // DERP creates a new derpProber.
 //
 // If derpMapURL is "local", the DERPMap is fetched via
@@ -135,6 +146,10 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 	defer d.Unlock()
 
 	for _, region := range d.lastDERPMap.Regions {
+		if d.skipRegion(region) {
+			continue
+		}
+
 		for _, server := range region.Nodes {
 			labels := Labels{
 				"region":    region.RegionCode,
@@ -316,6 +331,10 @@ func (d *derpProber) updateMap(ctx context.Context) error {
 	d.lastDERPMapAt = time.Now()
 	d.nodes = make(map[string]*tailcfg.DERPNode)
 	for _, reg := range d.lastDERPMap.Regions {
+		if d.skipRegion(reg) {
+			continue
+		}
+
 		for _, n := range reg.Nodes {
 			if existing, ok := d.nodes[n.Name]; ok {
 				return fmt.Errorf("derpmap has duplicate nodes: %+v and %+v", existing, n)
@@ -336,6 +355,10 @@ func (d *derpProber) ProbeUDP(ipaddr string, port int) ProbeClass {
 		},
 		Class: "derp_udp",
 	}
+}
+
+func (d *derpProber) skipRegion(region *tailcfg.DERPRegion) bool {
+	return d.regionCode != "" && region.RegionCode != d.regionCode
 }
 
 func derpProbeUDP(ctx context.Context, ipStr string, port int) error {

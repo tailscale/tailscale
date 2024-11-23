@@ -241,18 +241,26 @@ func TestCSRFProtection(t *testing.T) {
 func TestContentSecurityPolicyHeader(t *testing.T) {
 	tests := []struct {
 		name     string
+		csp      CSP
 		apiRoute bool
-		wantCSP  bool
+		wantCSP  string
 	}{
 		{
-			name:     "default routes get CSP headers",
-			apiRoute: false,
-			wantCSP:  true,
+			name:    "default CSP",
+			wantCSP: `base-uri 'self'; block-all-mixed-content; default-src 'self'; form-action 'self'; frame-ancestors 'none';`,
+		},
+		{
+			name: "custom CSP",
+			csp: CSP{
+				"default-src":               {"'self'", "https://tailscale.com"},
+				"upgrade-insecure-requests": nil,
+			},
+			wantCSP: `default-src 'self' https://tailscale.com; upgrade-insecure-requests;`,
 		},
 		{
 			name:     "`/api/*` routes do not get CSP headers",
 			apiRoute: true,
-			wantCSP:  false,
+			wantCSP:  "",
 		},
 	}
 
@@ -265,9 +273,9 @@ func TestContentSecurityPolicyHeader(t *testing.T) {
 			var s *Server
 			var err error
 			if tt.apiRoute {
-				s, err = NewServer(Config{APIMux: h})
+				s, err = NewServer(Config{APIMux: h, CSP: tt.csp})
 			} else {
-				s, err = NewServer(Config{BrowserMux: h})
+				s, err = NewServer(Config{BrowserMux: h, CSP: tt.csp})
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -279,8 +287,8 @@ func TestContentSecurityPolicyHeader(t *testing.T) {
 			s.h.Handler.ServeHTTP(w, req)
 			resp := w.Result()
 
-			if (resp.Header.Get("Content-Security-Policy") == "") == tt.wantCSP {
-				t.Fatalf("content security policy want: %v; got: %v", tt.wantCSP, resp.Header.Get("Content-Security-Policy"))
+			if got := resp.Header.Get("Content-Security-Policy"); got != tt.wantCSP {
+				t.Fatalf("content security policy want: %q; got: %q", tt.wantCSP, got)
 			}
 		})
 	}
@@ -397,7 +405,7 @@ func TestCSPAllowInlineStyles(t *testing.T) {
 			csp := resp.Header.Get("Content-Security-Policy")
 			allowsStyles := strings.Contains(csp, "style-src 'self' 'unsafe-inline'")
 			if allowsStyles != allow {
-				t.Fatalf("CSP inline styles want: %v; got: %v", allow, allowsStyles)
+				t.Fatalf("CSP inline styles want: %v, got: %v in %q", allow, allowsStyles, csp)
 			}
 		})
 	}
@@ -527,13 +535,13 @@ func TestGetMoreSpecificPattern(t *testing.T) {
 		{
 			desc: "same prefix",
 			a:    "/foo/bar/quux",
-			b:    "/foo/bar/",
+			b:    "/foo/bar/", // path.Clean will strip the trailing slash.
 			want: apiHandler,
 		},
 		{
 			desc: "almost same prefix, but not a path component",
 			a:    "/goat/sheep/cheese",
-			b:    "/goat/sheepcheese/",
+			b:    "/goat/sheepcheese/", // path.Clean will strip the trailing slash.
 			want: apiHandler,
 		},
 		{
@@ -553,6 +561,12 @@ func TestGetMoreSpecificPattern(t *testing.T) {
 			a:    "/",
 			b:    "///////",
 			want: unknownHandler,
+		},
+		{
+			desc: "root-level",
+			a:    "/latest",
+			b:    "/", // path.Clean will NOT strip the trailing slash.
+			want: apiHandler,
 		},
 	} {
 		t.Run(tt.desc, func(t *testing.T) {

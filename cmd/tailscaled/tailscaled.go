@@ -788,7 +788,6 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	tfs, _ := sys.DriveForLocal.GetOK()
 	ret, err := netstack.Create(logf,
 		sys.Tun.Get(),
 		sys.Engine.Get(),
@@ -796,7 +795,6 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 		sys.Dialer.Get(),
 		sys.DNSManager.Get(),
 		sys.ProxyMapper(),
-		tfs,
 	)
 	if err != nil {
 		return nil, err

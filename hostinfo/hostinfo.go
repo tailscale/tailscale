@@ -25,7 +25,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -231,12 +231,12 @@ func desktop() (ret opt.Bool) {
 	}
 
 	seenDesktop := false
-	lineread.File("/proc/net/unix", func(line []byte) error {
+	for lr := range lineiter.File("/proc/net/unix") {
+		line, _ := lr.Value()
 		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S(" @/tmp/dbus-"))
 		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S(".X11-unix"))
 		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S("/wayland-1"))
-		return nil
-	})
+	}
 	ret.Set(seenDesktop)
 
 	// Only cache after a minute - compositors might not have started yet.
@@ -305,21 +305,21 @@ func inContainer() opt.Bool {
 		ret.Set(true)
 		return ret
 	}
-	lineread.File("/proc/1/cgroup", func(line []byte) error {
+	for lr := range lineiter.File("/proc/1/cgroup") {
+		line, _ := lr.Value()
 		if mem.Contains(mem.B(line), mem.S("/docker/")) ||
 			mem.Contains(mem.B(line), mem.S("/lxc/")) {
 			ret.Set(true)
-			return io.EOF // arbitrary non-nil error to stop loop
+			break
 		}
-		return nil
-	})
-	lineread.File("/proc/mounts", func(line []byte) error {
+	}
+	for lr := range lineiter.File("/proc/mounts") {
+		line, _ := lr.Value()
 		if mem.Contains(mem.B(line), mem.S("lxcfs /proc/cpuinfo fuse.lxcfs")) {
 			ret.Set(true)
-			return io.EOF
+			break
 		}
-		return nil
-	})
+	}
 	return ret
 }
 

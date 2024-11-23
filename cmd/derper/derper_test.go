@@ -4,7 +4,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,6 +109,34 @@ func TestDeps(t *testing.T) {
 			"gvisor.dev/gvisor/pkg/tcpip/header": "https://github.com/tailscale/tailscale/issues/9756",
 			"tailscale.com/net/packet":           "not needed in derper",
 			"github.com/gaissmai/bart":           "not needed in derper",
+			"database/sql/driver":                "not needed in derper", // previously came in via github.com/google/uuid
 		},
 	}.Check(t)
+}
+
+func TestTemplate(t *testing.T) {
+	buf := &bytes.Buffer{}
+	err := homePageTemplate.Execute(buf, templateData{
+		ShowAbuseInfo: true,
+		Disabled:      true,
+		AllowDebug:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	str := buf.String()
+	if !strings.Contains(str, "If you suspect abuse") {
+		t.Error("Output is missing abuse mailto")
+	}
+	if !strings.Contains(str, "Tailscale Security Policies") {
+		t.Error("Output is missing Tailscale Security Policies link")
+	}
+	if !strings.Contains(str, "Status:") {
+		t.Error("Output is missing disabled status")
+	}
+	if !strings.Contains(str, "Debug info") {
+		t.Error("Output is missing debug info")
+	}
+	fmt.Println(buf.String())
 }

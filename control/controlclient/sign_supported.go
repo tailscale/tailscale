@@ -13,7 +13,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/tailscale/certstore"
@@ -21,11 +20,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/util/syspolicy"
 )
-
-var getMachineCertificateSubjectOnce struct {
-	sync.Once
-	v string // Subject of machine certificate to search for
-}
 
 // getMachineCertificateSubject returns the exact name of a Subject that needs
 // to be present in an identity's certificate chain to sign a RegisterRequest,
@@ -37,11 +31,8 @@ var getMachineCertificateSubjectOnce struct {
 //
 // Example: "CN=Tailscale Inc Test Root CA,OU=Tailscale Inc Test Certificate Authority,O=Tailscale Inc,ST=ON,C=CA"
 func getMachineCertificateSubject() string {
-	getMachineCertificateSubjectOnce.Do(func() {
-		getMachineCertificateSubjectOnce.v, _ = syspolicy.GetString(syspolicy.MachineCertificateSubject, "")
-	})
-
-	return getMachineCertificateSubjectOnce.v
+	machineCertSubject, _ := syspolicy.GetString(syspolicy.MachineCertificateSubject, "")
+	return machineCertSubject
 }
 
 var (

@@ -136,26 +136,31 @@ func interfaceNameDoesNotNeedCaptiveDetection(ifName string, goos string) bool {
 func (d *Detector) detectOnInterface(ctx context.Context, ifIndex int, endpoints []Endpoint) bool {
 	defer d.httpClient.CloseIdleConnections()
 
-	d.logf("[v2] %d available captive portal detection endpoints: %v", len(endpoints), endpoints)
+	use := min(len(endpoints), 5)
+	endpoints = endpoints[:use]
+	d.logf("[v2] %d available captive portal detection endpoints; trying %v", len(endpoints), use)
 
 	// We try to detect the captive portal more quickly by making requests to multiple endpoints concurrently.
 	var wg sync.WaitGroup
 	resultCh := make(chan bool, len(endpoints))
 
-	for i, e := range endpoints {
-		if i >= 5 {
-			// Try a maximum of 5 endpoints, break out (returning false) if we run of attempts.
-			break
-		}
+	// Once any goroutine detects a captive portal, we shut down the others.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for _, e := range endpoints {
 		wg.Add(1)
 		go func(endpoint Endpoint) {
 			defer wg.Done()
 			found, err := d.verifyCaptivePortalEndpoint(ctx, endpoint, ifIndex)
 			if err != nil {
-				d.logf("[v1] checkCaptivePortalEndpoint failed with endpoint %v: %v", endpoint, err)
+				if ctx.Err() == nil {
+					d.logf("[v1] checkCaptivePortalEndpoint failed with endpoint %v: %v", endpoint, err)
+				}
 				return
 			}
 			if found {
+				cancel() // one match is good enough
 				resultCh <- true
 			}
 		}(e)

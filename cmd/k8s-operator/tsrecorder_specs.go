@@ -130,6 +130,15 @@ func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
 					fmt.Sprintf("%s-0", tsr.Name), // Contains the node state.
 				},
 			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"events"},
+				Verbs: []string{
+					"get",
+					"create",
+					"patch",
+				},
+			},
 		},
 	}
 }
@@ -200,6 +209,14 @@ func env(tsr *tsapi.Recorder) []corev1.EnvVar {
 				FieldRef: &corev1.ObjectFieldSelector{
 					// Secret is named after the pod.
 					FieldPath: "metadata.name",
+				},
+			},
+		},
+		{
+			Name: "POD_UID",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.uid",
 				},
 			},
 		},

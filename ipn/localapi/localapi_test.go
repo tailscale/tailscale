@@ -349,6 +349,7 @@ func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(lb.Shutdown)
 	return lb
 }
 

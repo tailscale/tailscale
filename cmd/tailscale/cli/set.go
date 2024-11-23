@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -199,6 +200,12 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	if maskedPrefs.AdvertiseRoutesSet {
 		maskedPrefs.AdvertiseRoutes, err = calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet, curPrefs, setArgs)
 		if err != nil {
+			return err
+		}
+	}
+
+	if runtime.GOOS == "darwin" && maskedPrefs.AppConnector.Advertise {
+		if err := presentRiskToUser(riskMacAppConnector, riskMacAppConnectorMessage, setArgs.acceptedRisks); err != nil {
 			return err
 		}
 	}

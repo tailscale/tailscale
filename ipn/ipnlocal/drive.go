@@ -354,9 +354,8 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 
 				// Check that the peer is allowed to share with us.
 				addresses := peer.Addresses()
-				for i := range addresses.Len() {
-					addr := addresses.At(i)
-					capsMap := b.PeerCaps(addr.Addr())
+				for _, p := range addresses.All() {
+					capsMap := b.PeerCaps(p.Addr())
 					if capsMap.HasCapability(tailcfg.PeerCapabilityTaildriveSharer) {
 						return true
 					}

@@ -163,7 +163,12 @@ type Pod struct {
 
 type Metrics struct {
 	// Setting enable to true will make the proxy serve Tailscale metrics
-	// at <pod-ip>:9001/debug/metrics.
+	// at <pod-ip>:9002/metrics.
+	//
+	// In 1.78.x and 1.80.x, this field also serves as the default value for
+	// .spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both
+	// fields will independently default to false.
+	//
 	// Defaults to false.
 	Enable bool `json:"enable"`
 }
@@ -209,6 +214,26 @@ type Container struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
 	// +optional
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
+	// Configuration for enabling extra debug information in the container.
+	// Not recommended for production use.
+	// +optional
+	Debug *Debug `json:"debug,omitempty"`
+}
+
+type Debug struct {
+	// Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/
+	// and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where
+	// 9001 is a container port named "debug". The endpoints and their responses
+	// may change in backwards incompatible ways in the future, and should not
+	// be considered stable.
+	//
+	// In 1.78.x and 1.80.x, this setting will default to the value of
+	// .spec.metrics.enable, and requests to the "metrics" port matching the
+	// mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+	// this setting will default to false, and no requests will be proxied.
+	//
+	// +optional
+	Enable bool `json:"enable"`
 }
 
 type Env struct {

@@ -81,6 +81,14 @@ spec:
             - name: PROXY_DEFAULT_CLASS
               value: {{ .Values.proxyConfig.defaultProxyClass }}
             {{- end }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
             {{- with .Values.operatorConfig.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
