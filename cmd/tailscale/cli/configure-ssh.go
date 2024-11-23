@@ -14,46 +14,77 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/util/lineread"
+	"tailscale.com/version"
 )
 
 const tsConfigStartMark = "## BEGIN Tailscale ##"
 const tsConfigEndMark = "## END Tailscale ##"
 
 func init() {
+
+	longHelp := strings.TrimSpace(`
+Run this command to add a snippet to your $HOME/.ssh/config file that will use
+Tailscale to check for KnownHosts.`)
+
+	d := false
+
+	if version.IsSandboxedMacOS() {
+		longHelp = longHelp + `
+
+On MacOS sandboxed apps the output will be displayed on stdout instead of
+modifying the file in place. You can redirect the output to the file manually.
+tailscale configure sshconfig >> $HOME/.ssh/config`
+
+		d = true
+
+	}
+	configureSSHconfigCmd := &ffcli.Command{
+		Name:       "sshconfig",
+		ShortHelp:  "[ALPHA] Configure $HOME/.ssh/config to check Tailscale for KnownHosts",
+		ShortUsage: "tailscale configure sshconfig >> $HOME/.ssh/config",
+		LongHelp:   longHelp,
+		FlagSet: (func() *flag.FlagSet {
+			fs := newFlagSet("sshconfig")
+			fs.BoolVar(&sshConfigArgs.display, "display", d, "Display the config snippet on stdout instead of modifying the file in place")
+			return fs
+		})(),
+		Exec: runConfigureSSHconfig,
+	}
 	configureCmd.Subcommands = append(configureCmd.Subcommands, configureSSHconfigCmd)
 }
 
-var configureSSHconfigCmd = &ffcli.Command{
-	Name:       "sshconfig",
-	ShortHelp:  "[ALPHA] Configure $HOME/.ssh/config to check Tailscale for KnownHosts",
-	ShortUsage: "sshconfig >> $HOME/.ssh/config",
-	LongHelp: strings.TrimSpace(`
-Run this command to output a ssh_config snippet that configures SSH to check
-Tailscale for KnownHosts.
-
-You can use this snippet by running: tailscale sshconfig >> $HOME/.ssh/config
-or copy and paste it into your $HOME/.ssh/config file.
-`),
-	Exec: runConfigureSSHconfig,
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("sshconfig")
-		fs.BoolVar(&sshConfigArgs.export, "export", false, "export the config snippet to stdout or modify $HOME/.ssh/config in place")
-		return fs
-	})(),
-}
-
 var sshConfigArgs struct {
-	export bool // export the config snippet to stdout or modify in place
+	display bool // display the config snippet on stdout or modify in place
 }
 
-func replaceBetween[S ~[]T, T any](s S, start, end int, replacement []T) S {
-	if start < 0 || end < 0 || start > end || end > len(s) {
-		panic("invalid indices")
+// findConfigMark finds and returns the index of the tsConfigStartMark and
+// tsConfigEndmark in a file. If the file doesn't contain the marks, it returns
+// -1, -1
+func findConfigMark(file []string) (int, int) {
+	start := -1
+	end := -1
+	for i, v := range file {
+		if strings.Contains(v, tsConfigStartMark) {
+			start = i
+		}
+		if strings.Contains(v, tsConfigEndMark) {
+			end = i
+		}
 	}
-	if start == end {
+
+	return start, end
+}
+
+// replaceBetweenConfigMark replaces the lines between the tsConfigStartMark and
+// tsConfigEndMark with the replacement string. If the marks are not present, it
+// returns the original slice.
+func replaceBetweenConfigMark(s []string, replacement string, start, end int) []string {
+	if start == -1 || end == -1 {
 		return s
 	}
-	return append(append(s[:start+1:start+1], replacement...), s[end:]...)
+	n := append(s[:start+1], replacement, tsConfigEndMark)
+	n = append(n, s[end+1:]...)
+	return n
 }
 
 // runConfigureSSHconfig updates the user's $HOME/.ssh/config file to add the
@@ -81,9 +112,8 @@ func runConfigureSSHconfig(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if !sshConfigArgs.export {
-		sshConfigFilePath := filepath.FromSlash(h + "/.ssh/config")
-		fmt.Println(sshConfigFilePath)
+	if !sshConfigArgs.display {
+		sshConfigFilePath := filepath.Join(h, ".ssh", "config")
 		var sshConfig []string
 
 		// Create the file if it does not exist
@@ -101,6 +131,17 @@ func runConfigureSSHconfig(ctx context.Context, args []string) error {
 		}
 
 		start, end := findConfigMark(sshConfig)
+		if start > end {
+			return fmt.Errorf(strings.TrimSpace(`
+Invalid config file. Start mark is after end mark. Please ensure that the
+following is in your ~/.ssh/config file:
+
+%s
+%s
+%s`),
+				tsConfigStartMark, tsSshConfig, tsConfigStartMark)
+
+		}
 		if start == -1 || end == -1 {
 			sshConfig = append(sshConfig, tsConfigStartMark)
 			sshConfig = append(sshConfig, tsSshConfig)
@@ -108,7 +149,7 @@ func runConfigureSSHconfig(ctx context.Context, args []string) error {
 		} else {
 			existingConfig := strings.Join(sshConfig[start+1:end], "\n")
 			if existingConfig != tsSshConfig {
-				sshConfig = replaceBetween(sshConfig, start+1, end, []string{tsSshConfig})
+				sshConfig = replaceBetweenConfigMark(sshConfig, tsSshConfig, start, end)
 			}
 		}
 
@@ -131,21 +172,4 @@ func runConfigureSSHconfig(ctx context.Context, args []string) error {
 	}
 
 	return nil
-}
-
-// findConfigMark finds and returns the index of the tsConfigStartMark and
-// tsConfigEndmark in a file. If the file doesn't contain the marks, it returns
-// -1, -1
-func findConfigMark(file []string) (int, int) {
-	start := -1
-	end := -1
-	for i, v := range file {
-		if strings.Contains(v, tsConfigStartMark) {
-			start = i
-		}
-		if strings.Contains(v, tsConfigEndMark) {
-			end = i
-		}
-	}
-	return start, end
 }
