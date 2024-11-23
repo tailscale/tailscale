@@ -38,12 +38,12 @@ func proxy(w http.ResponseWriter, r *http.Request, url string, do func(*http.Req
 	}
 	defer resp.Body.Close()
 
-	w.WriteHeader(resp.StatusCode)
 	for key, val := range resp.Header {
 		for _, v := range val {
 			w.Header().Add(key, v)
 		}
 	}
+	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
