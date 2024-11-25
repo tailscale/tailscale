@@ -936,32 +936,15 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 	return nil
 }
 
-func TestUserMetrics(t *testing.T) {
+func TestUserMetricsByteCounters(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	controlURL, c := startControl(t)
-	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
 	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
-
-	s1.lb.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: []netip.Prefix{
-				netip.MustParsePrefix("192.0.2.0/24"),
-				netip.MustParsePrefix("192.0.3.0/24"),
-				netip.MustParsePrefix("192.0.5.1/32"),
-				netip.MustParsePrefix("0.0.0.0/0"),
-			},
-		},
-		AdvertiseRoutesSet: true,
-	})
-	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{
-		netip.MustParsePrefix("192.0.2.0/24"),
-		netip.MustParsePrefix("192.0.5.1/32"),
-		netip.MustParsePrefix("0.0.0.0/0"),
-	})
 
 	lc1, err := s1.LocalClient()
 	if err != nil {
@@ -973,28 +956,12 @@ func TestUserMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
-	if err != nil {
-		t.Fatalf("pinging: %s", err)
-	}
-	t.Logf("ping success: %#+v", res)
-
-	ht := s1.lb.HealthTracker()
-	ht.SetUnhealthy(testWarnable, health.Args{"Text": "Hello world 1"})
-
 	// Force an update to the netmap to ensure that the metrics are up-to-date.
 	s1.lb.DebugForceNetmapUpdate()
 	s2.lb.DebugForceNetmapUpdate()
 
-	wantRoutes := float64(2)
-	if runtime.GOOS == "windows" {
-		wantRoutes = 0
-	}
-
-	// Wait for the routes to be propagated to node 1 to ensure
-	// that the metrics are up-to-date.
-	waitForCondition(t, "primary routes available for node1", 90*time.Second, func() bool {
+	// Wait for both nodes to have a peer in their netmap.
+	waitForCondition(t, "waiting for netmaps to contain peer", 90*time.Second, func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		status1, err := lc1.Status(ctx)
@@ -1002,16 +969,20 @@ func TestUserMetrics(t *testing.T) {
 			t.Logf("getting status: %s", err)
 			return false
 		}
-		if runtime.GOOS == "windows" {
-			// Windows does not seem to support or report back routes when running in
-			// userspace via tsnet. So, we skip this check on Windows.
-			// TODO(kradalby): Figure out if this is correct.
-			return true
+		status2, err := lc2.Status(ctx)
+		if err != nil {
+			t.Logf("getting status: %s", err)
+			return false
 		}
-		// Wait for the primary routes to reach our desired routes, which is wantRoutes + 1, because
-		// the PrimaryRoutes list will contain a exit node route, which the metric does not count.
-		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == int(wantRoutes)+1
+		return len(status1.Peers()) > 0 && len(status2.Peers()) > 0
 	})
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatalf("pinging: %s", err)
+	}
+	t.Logf("ping success: %#+v", res)
 
 	mustDirect(t, t.Logf, lc1, lc2)
 
@@ -1044,21 +1015,6 @@ func TestUserMetrics(t *testing.T) {
 
 	t.Logf("Metrics1:\n%s\n", metrics1)
 
-	// The node is advertising 4 routes:
-	// - 192.0.2.0/24
-	// - 192.0.3.0/24
-	// - 192.0.5.1/32
-	if got, want := parsedMetrics1["tailscaled_advertised_routes"], 3.0; got != want {
-		t.Errorf("metrics1, tailscaled_advertised_routes: got %v, want %v", got, want)
-	}
-
-	// The control has approved 2 routes:
-	// - 192.0.2.0/24
-	// - 192.0.5.1/32
-	if got, want := parsedMetrics1["tailscaled_approved_routes"], wantRoutes; got != want {
-		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
-	}
-
 	// Verify that the amount of data recorded in bytes is higher or equal to the data sent
 	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
 	if inboundBytes1 < float64(bytesToSend) {
@@ -1082,16 +1038,6 @@ func TestUserMetrics(t *testing.T) {
 
 	t.Logf("Metrics2:\n%s\n", metrics2)
 
-	// The node is advertising 0 routes
-	if got, want := parsedMetrics2["tailscaled_advertised_routes"], 0.0; got != want {
-		t.Errorf("metrics2, tailscaled_advertised_routes: got %v, want %v", got, want)
-	}
-
-	// The control has approved 0 routes
-	if got, want := parsedMetrics2["tailscaled_approved_routes"], 0.0; got != want {
-		t.Errorf("metrics2, tailscaled_approved_routes: got %v, want %v", got, want)
-	}
-
 	// Verify that the amount of data recorded in bytes is higher or equal than the data sent.
 	outboundBytes2 := parsedMetrics2[`tailscaled_outbound_bytes_total{path="direct_ipv4"}`]
 	if outboundBytes2 < float64(bytesToSend) {
@@ -1101,6 +1047,122 @@ func TestUserMetrics(t *testing.T) {
 	// But ensure that it is not too much higher than the data sent.
 	if outboundBytes2 > float64(bytesToSend)*bytesSentTolerance {
 		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, outboundBytes2)
+	}
+}
+
+func TestUserMetricsRouteGauges(t *testing.T) {
+	// Windows does not seem to support or report back routes when running in
+	// userspace via tsnet. So, we skip this check on Windows.
+	// TODO(kradalby): Figure out if this is correct.
+	if runtime.GOOS == "windows" {
+		t.Skipf("skipping on windows")
+	}
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	controlURL, c := startControl(t)
+	s1, _, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+
+	s1.lb.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: []netip.Prefix{
+				netip.MustParsePrefix("192.0.2.0/24"),
+				netip.MustParsePrefix("192.0.3.0/24"),
+				netip.MustParsePrefix("192.0.5.1/32"),
+				netip.MustParsePrefix("0.0.0.0/0"),
+			},
+		},
+		AdvertiseRoutesSet: true,
+	})
+	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("192.0.5.1/32"),
+		netip.MustParsePrefix("0.0.0.0/0"),
+	})
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Force an update to the netmap to ensure that the metrics are up-to-date.
+	s1.lb.DebugForceNetmapUpdate()
+	s2.lb.DebugForceNetmapUpdate()
+
+	wantRoutes := float64(2)
+
+	// Wait for the routes to be propagated to node 1 to ensure
+	// that the metrics are up-to-date.
+	waitForCondition(t, "primary routes available for node1", 90*time.Second, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status1, err := lc1.Status(ctx)
+		if err != nil {
+			t.Logf("getting status: %s", err)
+			return false
+		}
+		// Wait for the primary routes to reach our desired routes, which is wantRoutes + 1, because
+		// the PrimaryRoutes list will contain a exit node route, which the metric does not count.
+		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == int(wantRoutes)+1
+	})
+
+	ctxLc, cancelLc := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLc()
+	metrics1, err := lc1.UserMetrics(ctxLc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics1, err := parseMetrics(metrics1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Metrics1:\n%s\n", metrics1)
+
+	// The node is advertising 4 routes:
+	// - 192.0.2.0/24
+	// - 192.0.3.0/24
+	// - 192.0.5.1/32
+	if got, want := parsedMetrics1["tailscaled_advertised_routes"], 3.0; got != want {
+		t.Errorf("metrics1, tailscaled_advertised_routes: got %v, want %v", got, want)
+	}
+
+	// The control has approved 2 routes:
+	// - 192.0.2.0/24
+	// - 192.0.5.1/32
+	if got, want := parsedMetrics1["tailscaled_approved_routes"], wantRoutes; got != want {
+		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
+	}
+
+	metrics2, err := lc2.UserMetrics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics2, err := parseMetrics(metrics2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Metrics2:\n%s\n", metrics2)
+
+	// The node is advertising 0 routes
+	if got, want := parsedMetrics2["tailscaled_advertised_routes"], 0.0; got != want {
+		t.Errorf("metrics2, tailscaled_advertised_routes: got %v, want %v", got, want)
+	}
+
+	// The control has approved 0 routes
+	if got, want := parsedMetrics2["tailscaled_approved_routes"], 0.0; got != want {
+		t.Errorf("metrics2, tailscaled_approved_routes: got %v, want %v", got, want)
 	}
 }
 
