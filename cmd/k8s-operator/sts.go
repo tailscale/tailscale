@@ -854,17 +854,10 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 		AcceptRoutes:        "false", // AcceptRoutes defaults to true
 		Locked:              "false",
 		Hostname:            &stsC.Hostname,
-		NoStatefulFiltering: "false",
+		NoStatefulFiltering: "true", // Explicitly enforce default value, see #14216
 		AppConnector:        &ipn.AppConnectorPrefs{Advertise: false},
 	}
 
-	// For egress proxies only, we need to ensure that stateful filtering is
-	// not in place so that traffic from cluster can be forwarded via
-	// Tailscale IPs.
-	// TODO (irbekrm): set it to true always as this is now the default in core.
-	if stsC.TailnetTargetFQDN != "" || stsC.TailnetTargetIP != "" {
-		conf.NoStatefulFiltering = "true"
-	}
 	if stsC.Connector != nil {
 		routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)
 		if err != nil {
