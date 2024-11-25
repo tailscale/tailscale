@@ -58,9 +58,12 @@ func (m *darwinRouteMon) Receive() (message, error) {
 		}
 		msgs, err := func() (msgs []route.Message, err error) {
 			defer func() {
-				if recover() != nil {
+				// TODO(raggi,#14201): remove once we've got a fix from
+				// golang/go#70528.
+				msg := recover()
+				if msg != nil {
 					msgs = nil
-					err = fmt.Errorf("panic parsing route message")
+					err = fmt.Errorf("panic in route.ParseRIB: %s", msg)
 				}
 			}()
 			return route.ParseRIB(route.RIBTypeRoute, m.buf[:n])
