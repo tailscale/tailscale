@@ -894,9 +894,11 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 		for {
 			got := make([]byte, bytesCount)
 			n, err := conn.Read(got)
-			if n != bytesCount {
-				logf("read %d bytes, want %d", n, bytesCount)
+			if err != nil {
+				allReceived <- fmt.Errorf("failed reading packet, %s", err)
+				return
 			}
+			got = got[:n]
 
 			select {
 			case <-stopReceive:
@@ -904,13 +906,17 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 			default:
 			}
 
-			if err != nil {
-				allReceived <- fmt.Errorf("failed reading packet, %s", err)
-				return
-			}
-
 			total += n
 			logf("received %d/%d bytes, %.2f %%", total, bytesCount, (float64(total) / (float64(bytesCount)) * 100))
+
+			// Validate the received bytes to be the same as the sent bytes.
+			for _, b := range string(got) {
+				if b != 'A' {
+					allReceived <- fmt.Errorf("received unexpected byte: %c", b)
+					return
+				}
+			}
+
 			if total == bytesCount {
 				break
 			}
