@@ -1015,8 +1015,8 @@ func TestUserMetrics(t *testing.T) {
 
 	mustDirect(t, t.Logf, lc1, lc2)
 
-	// 10 megabytes
-	bytesToSend := 10 * 1024 * 1024
+	// 1 megabytes
+	bytesToSend := 1 * 1024 * 1024
 
 	// This asserts generates some traffic, it is factored out
 	// of TestUDPConn.
@@ -1059,14 +1059,13 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
 	}
 
-	// Verify that the amount of data recorded in bytes is higher or equal to the
-	// 10 megabytes sent.
+	// Verify that the amount of data recorded in bytes is higher or equal to the data sent
 	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
 	if inboundBytes1 < float64(bytesToSend) {
 		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, inboundBytes1)
 	}
 
-	// But ensure that it is not too much higher than the 10 megabytes sent.
+	// But ensure that it is not too much higher than the data sent.
 	if inboundBytes1 > float64(bytesToSend)*bytesSentTolerance {
 		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, inboundBytes1)
 	}
@@ -1093,14 +1092,13 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics2, tailscaled_approved_routes: got %v, want %v", got, want)
 	}
 
-	// Verify that the amount of data recorded in bytes is higher or equal than the
-	// 10 megabytes sent.
+	// Verify that the amount of data recorded in bytes is higher or equal than the data sent.
 	outboundBytes2 := parsedMetrics2[`tailscaled_outbound_bytes_total{path="direct_ipv4"}`]
 	if outboundBytes2 < float64(bytesToSend) {
 		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, outboundBytes2)
 	}
 
-	// But ensure that it is not too much higher than the 10 megabytes sent.
+	// But ensure that it is not too much higher than the data sent.
 	if outboundBytes2 > float64(bytesToSend)*bytesSentTolerance {
 		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, outboundBytes2)
 	}
