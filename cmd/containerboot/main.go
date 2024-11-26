@@ -328,10 +328,12 @@ authLoop:
 
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
-
-		h             = &healthz{} // http server for the healthz endpoint
-		healthzRunner = sync.OnceFunc(func() { runHealthz(cfg.HealthCheckAddrPort, h) })
 	)
+
+	if cfg.HealthCheckAddrPort != "" {
+		h := &healthz{lc: client}
+		h.run(cfg.HealthCheckAddrPort)
+	}
 	if cfg.ServeConfigPath != "" {
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
 	}
@@ -556,12 +558,6 @@ runLoop:
 					}
 				}
 
-				if cfg.HealthCheckAddrPort != "" {
-					h.Lock()
-					h.hasAddrs = len(addrs) != 0
-					h.Unlock()
-					healthzRunner()
-				}
 				if egressSvcsNotify != nil {
 					egressSvcsNotify <- n
 				}

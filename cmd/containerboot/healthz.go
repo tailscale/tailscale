@@ -6,34 +6,45 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
-	"sync"
+	"time"
+
+	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn/ipnstate"
 )
 
-// healthz is a simple health check server, if enabled it returns 200 OK if
-// this tailscale node currently has at least one tailnet IP address else
-// returns 503.
+// healthz is a simple health check server, if enabled it returns 200 OK if this tailscale device can be considered
+// healthy (running, connected to control plane, has tailnet IPs) else returns 503.
 type healthz struct {
-	sync.Mutex
-	hasAddrs bool
+	lc *tailscale.LocalClient
 }
 
 func (h *healthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.Lock()
-	defer h.Unlock()
-	if h.hasAddrs {
+	// Most health checks will have their own timeout, but a local client call should not take more than 5s.
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	defer cancel()
+	st, err := h.lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("unable to check status of the tailscale device: %v", err), http.StatusServiceUnavailable)
+		return
+	}
+	online := isOnline(st)
+	addrs := getAddrs(st)
+	if st.BackendState == "Running" && online && len(addrs) != 0 {
 		w.Write([]byte("ok"))
 	} else {
-		http.Error(w, "node currently has no tailscale IPs", http.StatusInternalServerError)
+		log.Printf("healthz: tailscale device is not ready, state: %q, online: %t, addrs: %v", st.BackendState, online, addrs)
+		http.Error(w, "tailscale device is not ready", http.StatusServiceUnavailable)
 	}
 }
 
 // runHealthz runs a simple HTTP health endpoint on /healthz, listening on the
-// provided address. A containerized tailscale instance is considered healthy if
-// it has at least one tailnet IP address.
-func runHealthz(addr string, h *healthz) {
+// provided address.
+func (h *healthz) run(addr string) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("error listening on the provided health endpoint address %q: %v", addr, err)
@@ -48,4 +59,15 @@ func runHealthz(addr string, h *healthz) {
 			log.Fatalf("failed running health endpoint: %v", err)
 		}
 	}()
+}
+
+func isOnline(st *ipnstate.Status) bool {
+	return st != nil && st.Self != nil && st.Self.Online
+}
+
+func getAddrs(st *ipnstate.Status) (addrs []string) {
+	if st == nil || st.Self == nil {
+		return
+	}
+	return st.Self.Addrs
 }
