@@ -25,6 +25,7 @@ import (
 	"tailscale.com/control/controlbase"
 	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/control/controlhttp/controlhttpserver"
+	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/socks5"
@@ -228,6 +229,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		omitCertErrorLogging: true,
 		testFallbackDelay:    fallbackDelay,
 		Clock:                clock,
+		HealthTracker:        new(health.Tracker),
 	}
 
 	if param.httpInDial {
@@ -729,6 +731,7 @@ func TestDialPlan(t *testing.T) {
 				omitCertErrorLogging: true,
 				testFallbackDelay:    50 * time.Millisecond,
 				Clock:                clock,
+				HealthTracker:        new(health.Tracker),
 			}
 
 			conn, err := a.dial(ctx)
