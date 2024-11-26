@@ -98,9 +98,9 @@ func printPolicySettings(policy *setting.Snapshot) {
 			origin = o.String()
 		}
 		if err := setting.Error(); err != nil {
-			fmt.Fprintf(w, "%s\t%s\t\t{%s}\n", k, origin, err)
+			fmt.Fprintf(w, "%s\t%s\t\t{%v}\n", k, origin, err)
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t\n", k, origin, setting.Value())
+			fmt.Fprintf(w, "%s\t%s\t%v\t\n", k, origin, setting.Value())
 		}
 	}
 	w.Flush()
