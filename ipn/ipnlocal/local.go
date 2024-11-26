@@ -3740,11 +3740,16 @@ func updateExitNodeUsageWarning(p ipn.PrefsView, state *netmon.State, healthTrac
 }
 
 func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
+	tryingToUseExitNode := p.ExitNodeIP.IsValid() || p.ExitNodeID != ""
+	if !tryingToUseExitNode {
+		return nil
+	}
+
 	if err := featureknob.CanUseExitNode(); err != nil {
 		return err
 	}
 
-	if (p.ExitNodeIP.IsValid() || p.ExitNodeID != "") && p.AdvertisesExitNode() {
+	if p.AdvertisesExitNode() {
 		return errors.New("Cannot advertise an exit node and use an exit node at the same time.")
 	}
 	return nil
