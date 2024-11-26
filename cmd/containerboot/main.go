@@ -99,6 +99,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -178,12 +179,32 @@ func main() {
 	}
 	defer killTailscaled()
 
-	if cfg.LocalAddrPort != "" && cfg.MetricsEnabled {
-		m := &metrics{
-			lc:            client,
-			debugEndpoint: cfg.DebugAddrPort,
+	var healthCheck *healthz
+	if cfg.HealthCheckAddrPort != "" {
+		mux := http.NewServeMux()
+
+		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
+		healthCheck = healthHandlers(mux)
+
+		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
+		defer close()
+	}
+
+	if cfg.localMetricsEnabled() || cfg.localHealthEnabled() {
+		mux := http.NewServeMux()
+
+		if cfg.localMetricsEnabled() {
+			log.Printf("Running metrics endpoint at %s/metrics", cfg.LocalAddrPort)
+			metricsHandlers(mux, client, cfg.DebugAddrPort)
 		}
-		runMetrics(cfg.LocalAddrPort, m)
+
+		if cfg.localHealthEnabled() {
+			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
+			healthCheck = healthHandlers(mux)
+		}
+
+		close := runHTTPServer(mux, cfg.LocalAddrPort)
+		defer close()
 	}
 
 	if cfg.EnableForwardingOptimizations {
@@ -328,9 +349,6 @@ authLoop:
 
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
-
-		h             = &healthz{} // http server for the healthz endpoint
-		healthzRunner = sync.OnceFunc(func() { runHealthz(cfg.HealthCheckAddrPort, h) })
 	)
 	if cfg.ServeConfigPath != "" {
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
@@ -556,11 +574,8 @@ runLoop:
 					}
 				}
 
-				if cfg.HealthCheckAddrPort != "" {
-					h.Lock()
-					h.hasAddrs = len(addrs) != 0
-					h.Unlock()
-					healthzRunner()
+				if healthCheck != nil {
+					healthCheck.update(len(addrs) != 0)
 				}
 				if egressSvcsNotify != nil {
 					egressSvcsNotify <- n
@@ -750,4 +765,23 @@ func tailscaledConfigFilePath() string {
 	filePath := filepath.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
 	log.Printf("Using tailscaled config file %q to match current capability version %d", filePath, tailcfg.CurrentCapabilityVersion)
 	return filePath
+}
+
+func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("failed to listen on addr %q: %v", addr, err)
+	}
+	srv := &http.Server{Handler: mux}
+
+	go func() {
+		if err := srv.Serve(ln); err != nil {
+			log.Fatalf("failed running server: %v", err)
+		}
+	}()
+
+	return func() error {
+		err := srv.Shutdown(context.Background())
+		return errors.Join(err, ln.Close())
+	}
 }

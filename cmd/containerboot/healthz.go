@@ -7,7 +7,6 @@ package main
 
 import (
 	"log"
-	"net"
 	"net/http"
 	"sync"
 )
@@ -26,26 +25,24 @@ func (h *healthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.hasAddrs {
 		w.Write([]byte("ok"))
 	} else {
-		http.Error(w, "node currently has no tailscale IPs", http.StatusInternalServerError)
+		http.Error(w, "node currently has no tailscale IPs", http.StatusServiceUnavailable)
 	}
 }
 
-// runHealthz runs a simple HTTP health endpoint on /healthz, listening on the
-// provided address. A containerized tailscale instance is considered healthy if
-// it has at least one tailnet IP address.
-func runHealthz(addr string, h *healthz) {
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatalf("error listening on the provided health endpoint address %q: %v", addr, err)
+func (h *healthz) update(healthy bool) {
+	h.Lock()
+	if h.hasAddrs != healthy {
+		log.Println("Setting healthy", healthy)
 	}
-	mux := http.NewServeMux()
-	mux.Handle("GET /healthz", h)
-	log.Printf("Running healthcheck endpoint at %s/healthz", addr)
-	hs := &http.Server{Handler: mux}
+	h.hasAddrs = healthy
+	h.Unlock()
+}
 
-	go func() {
-		if err := hs.Serve(lis); err != nil {
-			log.Fatalf("failed running health endpoint: %v", err)
-		}
-	}()
+// healthHandlers registers a simple health handler at /healthz.
+// A containerized tailscale instance is considered healthy if
+// it has at least one tailnet IP address.
+func healthHandlers(mux *http.ServeMux) *healthz {
+	h := &healthz{}
+	mux.Handle("GET /healthz", h)
+	return h
 }
