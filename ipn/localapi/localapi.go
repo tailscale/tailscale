@@ -563,6 +563,7 @@ func (h *Handler) serveLogTap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
+	metricDebugMetricsCalls.Add(1)
 	// Require write access out of paranoia that the metrics
 	// might contain something sensitive.
 	if !h.PermitWrite {
@@ -576,6 +577,7 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 // serveUserMetrics returns user-facing metrics in Prometheus text
 // exposition format.
 func (h *Handler) serveUserMetrics(w http.ResponseWriter, r *http.Request) {
+	metricUserMetricsCalls.Add(1)
 	h.b.UserMetricsRegistry().Handler(w, r)
 }
 
@@ -2972,7 +2974,9 @@ var (
 	metricInvalidRequests = clientmetric.NewCounter("localapi_invalid_requests")
 
 	// User-visible LocalAPI endpoints.
-	metricFilePutCalls = clientmetric.NewCounter("localapi_file_put")
+	metricFilePutCalls      = clientmetric.NewCounter("localapi_file_put")
+	metricDebugMetricsCalls = clientmetric.NewCounter("localapi_debugmetric_requests")
+	metricUserMetricsCalls  = clientmetric.NewCounter("localapi_usermetric_requests")
 )
 
 // serveSuggestExitNode serves a POST endpoint for returning a suggested exit node.
