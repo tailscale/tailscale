@@ -246,7 +246,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 		results[i].conn = nil // so we don't close it in the defer
 		return conn, nil
 	}
-	merr := multierr.New(errs...)
+	merr := multierr.New(multierr.DeduplicateContextErrors(errs)...)
 
 	// If we get here, then we didn't get anywhere with our dial plan; fall back to just using DNS.
 	a.logf("controlhttp: failed dialing using DialPlan, falling back to DNS; errs=%s", merr.Error())
