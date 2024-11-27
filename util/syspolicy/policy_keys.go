@@ -126,6 +126,9 @@ const (
 	// Keys with a string array value.
 	// AllowedSuggestedExitNodes's string array value is a list of exit node IDs that restricts which exit nodes are considered when generating suggestions for exit nodes.
 	AllowedSuggestedExitNodes Key = "AllowedSuggestedExitNodes"
+	// HideHealthWarnings hides the specified health.WarnableCode types from
+	// the user when they become unhealthy.
+	HideHealthWarnings Key = "HideHealthWarnings"
 )
 
 // implicitDefinitions is a list of [setting.Definition] that will be registered
@@ -170,6 +173,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(TestMenuVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(UpdateMenuVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(OnboardingFlowVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(HideHealthWarnings, setting.UserSetting, setting.StringListValue),
 }
 
 func init() {

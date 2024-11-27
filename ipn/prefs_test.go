@@ -65,6 +65,7 @@ func TestPrefsEqual(t *testing.T) {
 		"PostureChecking",
 		"NetfilterKind",
 		"DriveShares",
+		"HideHealthWarnings",
 		"AllowSingleHosts",
 		"Persist",
 	}

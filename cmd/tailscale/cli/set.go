@@ -17,6 +17,7 @@ import (
 	"tailscale.com/client/web"
 	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
@@ -62,6 +63,7 @@ type setArgsT struct {
 	snat                   bool
 	statefulFiltering      bool
 	netfilterMode          string
+	hideHealthWarnings     string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -82,6 +84,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, hidden+"allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
+	setf.StringVar(&setArgs.hideHealthWarnings, "hide-health-warnings", "", fmt.Sprintf("a comma-separated list of health warnings to hide; known codes: %v", health.RegisteredCodes()))
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -179,7 +182,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	}
 
 	warnOnAdvertiseRouts(ctx, &maskedPrefs.Prefs)
-	var advertiseExitNodeSet, advertiseRoutesSet bool
+	var advertiseExitNodeSet, advertiseRoutesSet, hideHealthWarningsSet bool
 	setFlagSet.Visit(func(f *flag.Flag) {
 		updateMaskedPrefsFromUpOrSetFlag(maskedPrefs, f.Name)
 		switch f.Name {
@@ -187,8 +190,17 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			advertiseExitNodeSet = true
 		case "advertise-routes":
 			advertiseRoutesSet = true
+		case "hide-health-warnings":
+			hideHealthWarningsSet = true
 		}
 	})
+	if hideHealthWarningsSet {
+		var hide []health.WarnableCode
+		for _, w := range strings.Split(setArgs.hideHealthWarnings, ",") {
+			hide = append(hide, health.WarnableCode(strings.TrimSpace(w)))
+		}
+		maskedPrefs.Prefs.HideHealthWarnings = hide
+	}
 	if maskedPrefs.IsEmpty() {
 		return flag.ErrHelp
 	}

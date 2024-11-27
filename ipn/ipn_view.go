@@ -11,6 +11,7 @@ import (
 	"net/netip"
 
 	"tailscale.com/drive"
+	"tailscale.com/health"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
@@ -100,6 +101,9 @@ func (v PrefsView) NetfilterKind() string                 { return v.ж.Netfilte
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
 	return views.SliceOfViews[*drive.Share, drive.ShareView](v.ж.DriveShares)
 }
+func (v PrefsView) HideHealthWarnings() views.Slice[health.WarnableCode] {
+	return views.SliceOf(v.ж.HideHealthWarnings)
+}
 func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
 func (v PrefsView) Persist() persist.PersistView          { return v.ж.Persist.View() }
 
@@ -134,6 +138,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share
+	HideHealthWarnings     []health.WarnableCode
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})

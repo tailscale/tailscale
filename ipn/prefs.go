@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/drive"
+	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
@@ -245,6 +246,9 @@ type Prefs struct {
 	// by name.
 	DriveShares []*drive.Share
 
+	// HideHealthWarnings is a list of warnable codes to hide from the user.
+	HideHealthWarnings []health.WarnableCode
+
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
 	// peers got /32 or /127 routes for each other.
@@ -336,6 +340,7 @@ type MaskedPrefs struct {
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
 	DriveSharesSet            bool                `json:",omitempty"`
+	HideHealthWarningsSet     bool                `json:",omitempty"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -615,7 +620,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
-		p.NetfilterKind == p2.NetfilterKind
+		p.NetfilterKind == p2.NetfilterKind &&
+		slices.Equal(p.HideHealthWarnings, p2.HideHealthWarnings)
 }
 
 func (au AutoUpdatePrefs) Pretty() string {

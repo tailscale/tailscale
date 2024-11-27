@@ -557,6 +557,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			fs.SetShares(shares)
 		}
 	}
+	if hideWarns := pm.prefs.HideHealthWarnings().AsSlice(); len(hideWarns) != 0 {
+		b.health.HideWarnables(hideWarns)
+	}
 
 	return b, nil
 }
@@ -1714,6 +1717,21 @@ func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID
 				opt.set(prefs, newVal)
 				anyChange = true
 			}
+		}
+	}
+	// Gross, but the type mismatch causes these silly conversion copies.
+	hideHealthWarnings := make([]string, 0, len(prefs.HideHealthWarnings))
+	for _, w := range prefs.HideHealthWarnings {
+		hideHealthWarnings = append(hideHealthWarnings, string(w))
+	}
+	if po, err := syspolicy.GetStringArray(syspolicy.HideHealthWarnings, hideHealthWarnings); err == nil {
+		if !slices.Equal(po, hideHealthWarnings) {
+			newVal := make([]health.WarnableCode, 0, len(po))
+			for _, w := range po {
+				newVal = append(newVal, health.WarnableCode(w))
+			}
+			prefs.HideHealthWarnings = newVal
+			anyChange = true
 		}
 	}
 
@@ -3997,6 +4015,10 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 		b.stateMachine()
 	} else {
 		b.authReconfig()
+	}
+
+	if !slices.Equal(oldp.HideHealthWarnings().AsSlice(), newp.HideHealthWarnings) {
+		b.health.HideWarnables(newp.HideHealthWarnings)
 	}
 
 	b.send(ipn.Notify{Prefs: &prefs})

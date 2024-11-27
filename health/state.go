@@ -4,6 +4,7 @@
 package health
 
 import (
+	"slices"
 	"time"
 )
 
@@ -86,7 +87,7 @@ func (t *Tracker) CurrentState() *State {
 	wm := map[WarnableCode]UnhealthyState{}
 
 	for w, ws := range t.warnableVal {
-		if !w.IsVisible(ws) {
+		if !w.IsVisible(ws) || slices.Contains(t.hideWarnables, w.Code) {
 			// Skip invisible Warnables.
 			continue
 		}
