@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +55,17 @@ var mitmBlockWarnable = health.Register(&health.Warnable{
 	Severity:            health.SeverityMedium,
 	ImpactsConnectivity: true,
 })
+
+var mitmDetectWarnable = health.Register(&health.Warnable{
+	Code:  "mitm-detected",
+	Title: "Network may be intercepting Tailscale traffic",
+	Text: func(args health.Args) string {
+		return fmt.Sprintf("This network may be intercepting Tailscale TLS traffic. The TLS certificate for one of Tailscale's domains is signed by %q, but all real Tailscale domains use Let's Encrypt. If this is not an intentional setup connect to another network, or contact your network administrator for assistance.", args["issuer"])
+	},
+	Severity: health.SeverityMedium,
+})
+
+var systemCertPool = x509.SystemCertPool
 
 // Config returns a tls.Config for connecting to a server.
 // If base is non-nil, it's cloned as the base config before
@@ -98,12 +110,12 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 		// Perform some health checks on this certificate before we do
 		// any verification.
 		var cert *x509.Certificate
-		var selfSignedIssuer string
+		var issuer string
+		var selfSignedIssuer bool
 		if certs := cs.PeerCertificates; len(certs) > 0 {
 			cert = certs[0]
-			if certIsSelfSigned(cert) {
-				selfSignedIssuer = cert.Issuer.String()
-			}
+			issuer = cert.Issuer.CommonName
+			selfSignedIssuer = certIsSelfSigned(cert)
 		}
 		if ht != nil {
 			defer func() {
@@ -120,18 +132,18 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 				} else {
 					ht.SetHealthy(mitmBlockWarnable)
 				}
-				if retErr != nil && selfSignedIssuer != "" {
+				if retErr != nil && selfSignedIssuer {
 					// Self-signed certs are never valid.
 					//
 					// TODO(bradfitz): plumb down the selfSignedIssuer as a
 					// structured health warning argument.
-					ht.SetTLSConnectionError(cs.ServerName, fmt.Errorf("likely intercepted connection; certificate is self-signed by %v", selfSignedIssuer))
+					ht.SetTLSConnectionError(cs.ServerName, fmt.Errorf("likely intercepted connection; certificate is self-signed by %v", issuer))
 				} else {
 					// Ensure we clear any error state for this ServerName.
 					ht.SetTLSConnectionError(cs.ServerName, nil)
-					if selfSignedIssuer != "" {
+					if selfSignedIssuer {
 						// Log the self-signed issuer, but don't treat it as an error.
-						log.Printf("tlsdial: warning: server cert for %q passed x509 validation but is self-signed by %q", host, selfSignedIssuer)
+						log.Printf("tlsdial: warning: server cert for %q passed x509 validation but is self-signed by %q", host, issuer)
 					}
 				}
 			}()
@@ -143,6 +155,11 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 			DNSName:       cs.ServerName,
 			Intermediates: x509.NewCertPool(),
 		}
+		sysRoots, err := systemCertPool()
+		if err != nil {
+			return fmt.Errorf("failed loading system CA roots: %w", err)
+		}
+		opts.Roots = sysRoots
 		for _, cert := range cs.PeerCertificates[1:] {
 			opts.Intermediates.AddCert(cert)
 		}
@@ -165,6 +182,19 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 				} else {
 					log.Printf("tlsdial: error: server cert for %q failed to verify and is not a Let's Encrypt cert", host)
 				}
+			}
+		}
+		// If validation with system roots succeeded but Let's Encrypt roots
+		// didn't, then we have some custom CA in system roots that's used to
+		// impersonate a Tailscale domain.
+		if strings.HasSuffix(cs.ServerName, "tailscale.com") || strings.HasSuffix(cs.ServerName, "tailscale.io") {
+			// TODO(awly): there should be an MDM or prefs toggle to disable
+			// this detection, for companies that legitimately do stuff like
+			// DPI.
+			if errSys == nil && bakedErr != nil {
+				ht.SetUnhealthy(mitmDetectWarnable, health.Args{"issuer": issuer})
+			} else {
+				ht.SetHealthy(mitmDetectWarnable)
 			}
 		}
 
