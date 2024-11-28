@@ -943,14 +943,14 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 }
 
 func TestUserMetricsByteCounters(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
-	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	controlURL, _ := startControl(t)
 	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+	defer s1.Close()
 	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
+	defer s2.Close()
 
 	lc1, err := s1.LocalClient()
 	if err != nil {
@@ -1063,14 +1063,14 @@ func TestUserMetricsRouteGauges(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("skipping on windows")
 	}
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
-	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	controlURL, c := startControl(t)
 	s1, _, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	defer s1.Close()
 	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+	defer s2.Close()
 
 	s1.lb.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
