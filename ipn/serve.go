@@ -24,6 +24,23 @@ func ServeConfigKey(profileID ProfileID) StateKey {
 	return StateKey("_serve/" + profileID)
 }
 
+// ServiceConfig contains the config information for a single service.
+// it contains a bool to indicate if the service is in Tun mode (L3 forwarding).
+// If the service is not in Tun mode, the service is configured by the L4 forwarding
+// (TCP ports) and/or the L7 forwarding (http handlers) information.
+type ServiceConfig struct {
+	// TCP are the list of TCP port numbers that tailscaled should handle for
+	// the Tailscale IP addresses. (not subnet routers, etc)
+	TCP map[uint16]*TCPPortHandler `json:",omitempty"`
+
+	// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
+	// keyed by mount point ("/", "/foo", etc)
+	Web map[HostPort]*WebServerConfig `json:",omitempty"`
+
+	// Tun determines if the service should be using L3 forwarding (Tun mode).
+	Tun bool `json:",omitempty"`
+}
+
 // ServeConfig is the JSON type stored in the StateStore for
 // StateKey "_serve/$PROFILE_ID" as returned by ServeConfigKey.
 type ServeConfig struct {
@@ -34,6 +51,10 @@ type ServeConfig struct {
 	// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
 	// keyed by mount point ("/", "/foo", etc)
 	Web map[HostPort]*WebServerConfig `json:",omitempty"`
+
+	// Services maps from service name to a ServiceConfig. Which describes the
+	// L3, L4, and L7 forwarding information for the service.
+	Services map[string]*ServiceConfig `json:",omitempty"`
 
 	// AllowFunnel is the set of SNI:port values for which funnel
 	// traffic is allowed, from trusted ingress peers.

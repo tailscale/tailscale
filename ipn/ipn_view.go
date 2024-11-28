@@ -18,7 +18,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs,ServeConfig,TCPPortHandler,HTTPHandler,WebServerConfig
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,WebServerConfig
 
 // View returns a readonly view of Prefs.
 func (p *Prefs) View() PrefsView {
@@ -195,6 +195,12 @@ func (v ServeConfigView) Web() views.MapFn[HostPort, *WebServerConfig, WebServer
 	})
 }
 
+func (v ServeConfigView) Services() views.MapFn[string, *ServiceConfig, ServiceConfigView] {
+	return views.MapFnOf(v.ж.Services, func(t *ServiceConfig) ServiceConfigView {
+		return t.View()
+	})
+}
+
 func (v ServeConfigView) AllowFunnel() views.Map[HostPort, bool] {
 	return views.MapOf(v.ж.AllowFunnel)
 }
@@ -210,9 +216,75 @@ func (v ServeConfigView) ETag() string { return v.ж.ETag }
 var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
 	TCP         map[uint16]*TCPPortHandler
 	Web         map[HostPort]*WebServerConfig
+	Services    map[string]*ServiceConfig
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
 	ETag        string
+}{})
+
+// View returns a readonly view of ServiceConfig.
+func (p *ServiceConfig) View() ServiceConfigView {
+	return ServiceConfigView{ж: p}
+}
+
+// ServiceConfigView provides a read-only view over ServiceConfig.
+//
+// Its methods should only be called if `Valid()` returns true.
+type ServiceConfigView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *ServiceConfig
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v ServiceConfigView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v ServiceConfigView) AsStruct() *ServiceConfig {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v ServiceConfigView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *ServiceConfigView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x ServiceConfig
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v ServiceConfigView) TCP() views.MapFn[uint16, *TCPPortHandler, TCPPortHandlerView] {
+	return views.MapFnOf(v.ж.TCP, func(t *TCPPortHandler) TCPPortHandlerView {
+		return t.View()
+	})
+}
+
+func (v ServiceConfigView) Web() views.MapFn[HostPort, *WebServerConfig, WebServerConfigView] {
+	return views.MapFnOf(v.ж.Web, func(t *WebServerConfig) WebServerConfigView {
+		return t.View()
+	})
+}
+func (v ServiceConfigView) Tun() bool { return v.ж.Tun }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _ServiceConfigViewNeedsRegeneration = ServiceConfig(struct {
+	TCP map[uint16]*TCPPortHandler
+	Web map[HostPort]*WebServerConfig
+	Tun bool
 }{})
 
 // View returns a readonly view of TCPPortHandler.
