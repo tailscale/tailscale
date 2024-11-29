@@ -560,6 +560,86 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 	}
 }
 
+func TestServeHTTPProxyQuery(t *testing.T) {
+	b := newTestBackend(t)
+
+	// Start test serve endpoint.
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			// Set the raw request query parameter to a response header, so
+			// the final output can can be checked in tests.
+			t.Logf("adding query parameters %s", r.URL.RawQuery)
+			w.Header().Add("QueryParam", r.URL.RawQuery)
+		},
+	))
+	defer testServ.Close()
+
+	// The input query parameters should always be the same as the output query parameters.
+	// For this reason, the tests only include the input query parameters
+	// (rather than both the input and expected query parameters).
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{
+			name: "single well-formed query parameter",
+			in:   "key=value",
+		},
+		{
+			name: "single malformed query parameter",
+			in:   "key=value;nonsense",
+		},
+		{
+			name: "one malformed and one well-formed query parameter",
+			in:   "key1=value1;nonsense&key2=value2",
+		},
+		{
+			name: "one well-formed, one malformed, and another well-formed query parameter",
+			in:   "key1=value1&key2=value2;nonsense&key3=value3",
+		},
+		{
+			name: "one malformed and one well-formed query parameter (this time with percent sign)",
+			in:   "key1=value1%yes%%&key2=value2",
+		},
+	}
+
+	const testPath = "/foo"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						testPath: {Proxy: testServ.URL + testPath},
+					}},
+				},
+			}
+
+			if err := b.SetServeConfig(conf, ""); err != nil {
+				t.Fatal(err)
+			}
+
+			req := &http.Request{
+				URL: &url.URL{Path: testPath, RawQuery: tt.in},
+				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(),
+				&serveHTTPContext{
+					DestPort: 443,
+					SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"),
+				}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			q := w.Result().Header.Get("QueryParam")
+			if q != tt.in {
+				t.Errorf("wanted query params %q got %q", tt.in, q)
+			}
+		})
+	}
+}
+
 func Test_reverseProxyConfiguration(t *testing.T) {
 	b := newTestBackend(t)
 	type test struct {
