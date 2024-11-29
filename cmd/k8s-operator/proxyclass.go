@@ -15,6 +15,7 @@ import (
 	dockerref "github.com/distribution/reference"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
@@ -95,7 +96,7 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	pcr.mu.Unlock()
 
 	oldPCStatus := pc.Status.DeepCopy()
-	if errs := pcr.validate(pc); errs != nil {
+	if errs := pcr.validate(ctx, pc); errs != nil {
 		msg := fmt.Sprintf(messageProxyClassInvalid, errs.ToAggregate().Error())
 		pcr.recorder.Event(pc, corev1.EventTypeWarning, reasonProxyClassInvalid, msg)
 		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, pc.Generation, pcr.clock, logger)
@@ -111,7 +112,7 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	return reconcile.Result{}, nil
 }
 
-func (pcr *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations field.ErrorList) {
+func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyClass) (violations field.ErrorList) {
 	if sts := pc.Spec.StatefulSet; sts != nil {
 		if len(sts.Labels) > 0 {
 			if errs := metavalidation.ValidateLabels(sts.Labels, field.NewPath(".spec.statefulSet.labels")); errs != nil {
@@ -167,11 +168,31 @@ func (pcr *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations fiel
 			}
 		}
 	}
+	if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && pc.Spec.Metrics.ServiceMonitor.Enable {
+		found, err := hasServiceMonitorCRD(ctx, pcr.Client)
+		if err != nil {
+			pcr.logger.Infof("[unexpected]: error retrieving %q CRD: %v", serviceMonitorCRD, err)
+			// best effort validation - don't error out here
+		} else if !found {
+			msg := fmt.Sprintf("ProxyClass defines that a ServiceMonitor custom resource should be created, but %q CRD was not found", serviceMonitorCRD)
+			violations = append(violations, field.TypeInvalid(field.NewPath("spec", "metrics", "serviceMonitor"), "enable", msg))
+		}
+	}
 	// We do not validate embedded fields (security context, resource
 	// requirements etc) as we inherit upstream validation for those fields.
 	// Invalid values would get rejected by upstream validations at apply
 	// time.
 	return violations
+}
+
+func hasServiceMonitorCRD(ctx context.Context, cl client.Client) (bool, error) {
+	sm := &apiextensionsv1.CustomResourceDefinition{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: serviceMonitorCRD}, sm); apierrors.IsNotFound(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // maybeCleanup removes tailscale.com finalizer and ensures that the ProxyClass

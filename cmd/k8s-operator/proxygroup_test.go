@@ -17,6 +17,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,6 +76,13 @@ func TestProxyGroup(t *testing.T) {
 		recorder: fr,
 		l:        zl.Sugar(),
 		clock:    cl,
+	}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	opts := configOpts{
+		proxyType:          "proxygroup",
+		stsName:            pg.Name,
+		parentType:         "proxygroup",
+		tailscaleNamespace: "tailscale",
 	}
 
 	t.Run("proxyclass_not_ready", func(t *testing.T) {
@@ -190,6 +198,27 @@ func TestProxyGroup(t *testing.T) {
 		expectProxyGroupResources(t, fc, pg, true, "518a86e9fae64f270f8e0ec2a2ea6ca06c10f725035d3d6caca132cd61e42a74")
 	})
 
+	t.Run("enable_metrics", func(t *testing.T) {
+		pc.Spec.Metrics = &tsapi.Metrics{Enable: true}
+		mustUpdate(t, fc, "", pc.Name, func(p *tsapi.ProxyClass) {
+			p.Spec = pc.Spec
+		})
+		expectReconciled(t, reconciler, "", pg.Name)
+		expectEqual(t, fc, expectedMetricsService(opts), nil)
+	})
+	t.Run("enable_service_monitor_no_crd", func(t *testing.T) {
+		pc.Spec.Metrics.ServiceMonitor = &tsapi.ServiceMonitor{Enable: true}
+		mustUpdate(t, fc, "", pc.Name, func(p *tsapi.ProxyClass) {
+			p.Spec.Metrics = pc.Spec.Metrics
+		})
+		expectReconciled(t, reconciler, "", pg.Name)
+	})
+	t.Run("create_crd_expect_service_monitor", func(t *testing.T) {
+		mustCreate(t, fc, crd)
+		expectReconciled(t, reconciler, "", pg.Name)
+		expectEqualUnstructured(t, fc, expectedServiceMonitor(t, opts))
+	})
+
 	t.Run("delete_and_cleanup", func(t *testing.T) {
 		if err := fc.Delete(context.Background(), pg); err != nil {
 			t.Fatal(err)
@@ -197,7 +226,7 @@ func TestProxyGroup(t *testing.T) {
 
 		expectReconciled(t, reconciler, "", pg.Name)
 
-		expectMissing[tsapi.Recorder](t, fc, "", pg.Name)
+		expectMissing[tsapi.ProxyGroup](t, fc, "", pg.Name)
 		if expected := 0; reconciler.proxyGroups.Len() != expected {
 			t.Fatalf("expected %d ProxyGroups, got %d", expected, reconciler.proxyGroups.Len())
 		}
@@ -206,6 +235,7 @@ func TestProxyGroup(t *testing.T) {
 		if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-1", "nodeid-2", "nodeid-0"}); diff != "" {
 			t.Fatalf("unexpected deleted devices (-got +want):\n%s", diff)
 		}
+		expectMissing[corev1.Service](t, reconciler, "tailscale", metricsResourceName(pg.Name))
 		// The fake client does not clean up objects whose owner has been
 		// deleted, so we can't test for the owned resources getting deleted.
 	})
