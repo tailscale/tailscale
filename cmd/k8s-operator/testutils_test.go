@@ -650,7 +650,7 @@ func removeHashAnnotation(sts *appsv1.StatefulSet) {
 func removeTargetPortsFromSvc(svc *corev1.Service) {
 	newPorts := make([]corev1.ServicePort, 0)
 	for _, p := range svc.Spec.Ports {
-		newPorts = append(newPorts, corev1.ServicePort{Protocol: p.Protocol, Port: p.Port})
+		newPorts = append(newPorts, corev1.ServicePort{Protocol: p.Protocol, Port: p.Port, Name: p.Name})
 	}
 	svc.Spec.Ports = newPorts
 }
