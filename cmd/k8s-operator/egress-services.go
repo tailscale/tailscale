@@ -136,9 +136,8 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	}
 
 	if !slices.Contains(svc.Finalizers, FinalizerName) {
-		l.Infof("configuring tailnet service") // logged exactly once
 		svc.Finalizers = append(svc.Finalizers, FinalizerName)
-		if err := esr.Update(ctx, svc); err != nil {
+		if err := esr.updateSvcSpec(ctx, svc); err != nil {
 			err := fmt.Errorf("failed to add finalizer: %w", err)
 			r := svcConfiguredReason(svc, false, l)
 			tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, metav1.ConditionFalse, r, err.Error(), esr.clock, l)
@@ -198,7 +197,7 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	if svc.Spec.ExternalName != clusterIPSvcFQDN {
 		l.Infof("Configuring ExternalName Service to point to ClusterIP Service %s", clusterIPSvcFQDN)
 		svc.Spec.ExternalName = clusterIPSvcFQDN
-		if err = esr.Update(ctx, svc); err != nil {
+		if err = esr.updateSvcSpec(ctx, svc); err != nil {
 			err = fmt.Errorf("error updating ExternalName Service: %w", err)
 			return err
 		}
@@ -222,6 +221,15 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		found := false
 		for _, wantsPM := range svc.Spec.Ports {
 			if wantsPM.Port == pm.Port && strings.EqualFold(string(wantsPM.Protocol), string(pm.Protocol)) {
+				// We don't use the port name to distinguish this port internally, but Kubernetes
+				// require that, for Service ports with more than one name each port is uniquely named.
+				// So we can always pick the port name from the ExternalName Service as at this point we
+				// know that those are valid names because Kuberentes already validated it once. Note
+				// that users could have changed an unnamed port to a named port and might have changed
+				// port names- this should still work.
+				// https://kubernetes.io/docs/concepts/services-networking/service/#multi-port-services
+				// See also https://github.com/tailscale/tailscale/issues/13406#issuecomment-2507230388
+				clusterIPSvc.Spec.Ports[i].Name = wantsPM.Name
 				found = true
 				break
 			}
@@ -713,4 +721,14 @@ func epsPortsFromSvc(svc *corev1.Service) (ep []discoveryv1.EndpointPort) {
 		})
 	}
 	return ep
+}
+
+// updateSvcSpec ensures that the given Service's spec is updated in cluster, but the local Service object still retains
+// the not-yet-applied status.
+// TODO(irbekrm): once we do SSA for these patch updates, this will no longer be needed.
+func (esr *egressSvcsReconciler) updateSvcSpec(ctx context.Context, svc *corev1.Service) error {
+	st := svc.Status.DeepCopy()
+	err := esr.Update(ctx, svc)
+	svc.Status = *st
+	return err
 }
