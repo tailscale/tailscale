@@ -1070,6 +1070,7 @@ func crdTransformer(log *zap.SugaredLogger) toolscache.TransformFunc {
 		crd, ok := o.(*apiextensionsv1.CustomResourceDefinition)
 		if !ok {
 			log.Infof("[unexpected] CRD transformer called for a non-CRD type")
+			return crd, nil
 		}
 		crd.Spec = apiextensionsv1.CustomResourceDefinitionSpec{}
 		return crd, nil

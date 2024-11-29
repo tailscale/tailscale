@@ -95,11 +95,11 @@ const (
 	// podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
 	podAnnotationLastSetConfigFileHash = "tailscale.com/operator-last-set-config-file-hash"
 
-	proxyTypeEgress          = "egress"
-	proxyTypeConnector       = "connector"
-	proxyTypeProxyGroup      = "proxygroup"
+	proxyTypeEgress          = "egress_service"
 	proxyTypeIngressService  = "ingress_service"
 	proxyTypeIngressResource = "ingress_resource"
+	proxyTypeConnector       = "connector"
+	proxyTypeProxyGroup      = "proxygroup"
 )
 
 var (
@@ -273,7 +273,11 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 			return false, err
 		}
 	}
-	mo := &metricsOpts{proxyLabels: labels, tsNamespace: a.operatorNamespace, proxyType: typ}
+	mo := &metricsOpts{
+		proxyLabels: labels,
+		tsNamespace: a.operatorNamespace,
+		proxyType:   typ,
+	}
 	if err := maybeCleanupMetricsResources(ctx, mo, a.Client); err != nil {
 		return false, fmt.Errorf("error cleaning up metrics resources: %w", err)
 	}

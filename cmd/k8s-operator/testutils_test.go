@@ -170,12 +170,12 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 				Value: "$(POD_IP):9002",
 			},
 			corev1.EnvVar{
-				Name:  "TS_METRICS_ENABLED",
+				Name:  "TS_ENABLE_METRICS",
 				Value: "true",
 			},
 		)
-		tsContainer.Ports = append(tsContainer.Ports, corev1.ContainerPort{
-			Name: "debug", ContainerPort: 9001, Protocol: "TCP"},
+		tsContainer.Ports = append(tsContainer.Ports,
+			corev1.ContainerPort{Name: "debug", ContainerPort: 9001, Protocol: "TCP"},
 			corev1.ContainerPort{Name: "metrics", ContainerPort: 9002, Protocol: "TCP"},
 		)
 	}
@@ -284,7 +284,7 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 				Value: "$(POD_IP):9002",
 			},
 			corev1.EnvVar{
-				Name:  "TS_METRICS_ENABLED",
+				Name:  "TS_ENABLE_METRICS",
 				Value: "true",
 			},
 		)

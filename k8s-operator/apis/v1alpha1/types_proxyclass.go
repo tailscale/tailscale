@@ -174,12 +174,12 @@ type Metrics struct {
 	//
 	// Defaults to false.
 	Enable bool `json:"enable"`
-	// ServiceMonitor allows to define a Prometheus ServiceMonitor to be created for the proxy's Tailscale metrics.
-	// A ServiceMonitor will be created for each proxy that the ProxyClass applies to.
+	// Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.
+	// The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.
 	// The ingested metrics for each Service monitor will have labels to identify the proxy:
 	// ts_proxy_type: ingress_service|ingress_resource|connector|proxygroup
 	// ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)
-	// ts_proxy_parent_namespace: namespace of the parent resource (only applies to Tailscale Ingress and Tailscale Service)
+	// ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)
 	// job: ts_<proxy type>_[<parent namespace>]_<parent_name>
 	// +optional
 	ServiceMonitor *ServiceMonitor `json:"serviceMonitor"`

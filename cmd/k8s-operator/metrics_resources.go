@@ -75,14 +75,11 @@ type ServiceMonitorEndpoint struct {
 }
 
 func reconcileMetricsResources(ctx context.Context, logger *zap.SugaredLogger, opts *metricsOpts, pc *tsapi.ProxyClass, cl client.Client) error {
-	logger.Infof("reconcileMetricsResources")
 	if opts.proxyType == proxyTypeEgress {
-		logger.Infof("reconcileMetricsResources 80")
 		// Metrics are currently not being enabled for standalone egress proxies.
 		return nil
 	}
 	if pc == nil || pc.Spec.Metrics == nil || !pc.Spec.Metrics.Enable {
-		logger.Infof("reconcileMetricsResources 85")
 		return maybeCleanupMetricsResources(ctx, opts, cl)
 	}
 	metricsSvc := &corev1.Service{
@@ -105,27 +102,27 @@ func reconcileMetricsResources(ctx context.Context, logger *zap.SugaredLogger, o
 	if err != nil {
 		return fmt.Errorf("error ensuring metrics Service: %w", err)
 	}
-	logger.Infof("reconcileMetricsResources 108")
-
-	if pc.Spec.Metrics.ServiceMonitor == nil || !pc.Spec.Metrics.ServiceMonitor.Enable {
-		logger.Infof("reconcileMetricsResources 111")
-		return maybeCleanupServiceMonitor(ctx, cl, opts.proxyStsName, opts.tsNamespace)
-	}
 
 	crdExists, err := hasServiceMonitorCRD(ctx, cl)
 	if err != nil {
 		return fmt.Errorf("error verifying that %q CRD exists: %w", serviceMonitorCRD, err)
 	}
 	if !crdExists {
-		logger.Infof("[unexpected] ProxyClass %q defines that a ServiceMonitor should be created, but %q CRD was not found", pc.Name, serviceMonitorCRD)
 		return nil
 	}
 
-	logger.Info("ensuring ServiceMonitor for metrics svc %s/%s", metricsSvc.Namespace, metricsSvc.Name)
+	if pc.Spec.Metrics.ServiceMonitor == nil || !pc.Spec.Metrics.ServiceMonitor.Enable {
+		return maybeCleanupServiceMonitor(ctx, cl, opts.proxyStsName, opts.tsNamespace)
+	}
+
+	logger.Info("ensuring ServiceMonitor for metrics Service %s/%s", metricsSvc.Namespace, metricsSvc.Name)
 	svcMonitor, err := newServiceMonitor(metricsSvc)
 	if err != nil {
 		return fmt.Errorf("error creating ServiceMonitor: %w", err)
 	}
+	// We don't use createOrUpdate here because that does not work with unstructured types. We also do not update
+	// the ServiceMonitor because it is not expected that any of its fields would change. Currently this is good
+	// enough, but in future we might want to add logic to create-or-update unstructured types.
 	err = cl.Get(ctx, client.ObjectKeyFromObject(metricsSvc), svcMonitor.DeepCopy())
 	if apierrors.IsNotFound(err) {
 		if err := cl.Create(ctx, svcMonitor); err != nil {
@@ -149,14 +146,6 @@ func maybeCleanupMetricsResources(ctx context.Context, opts *metricsOpts, cl cli
 
 // maybeCleanupServiceMonitor cleans up any ServiceMonitor created for the named proxy StatefulSet.
 func maybeCleanupServiceMonitor(ctx context.Context, cl client.Client, stsName, ns string) error {
-	crdExists, err := hasServiceMonitorCRD(ctx, cl)
-	if err != nil {
-		return fmt.Errorf("error verifying that %q CRD exists: %w", serviceMonitorCRD, err)
-	}
-	// If the ServiceMonitor CRD does not exist, there is also no ServiceMonitor.
-	if !crdExists {
-		return nil
-	}
 	smName := metricsResourceName(stsName)
 	sm := serviceMonitorTemplate(smName, ns)
 	u, err := serviceMonitorToUnstructured(sm)

@@ -149,7 +149,7 @@ func TestProxyClass(t *testing.T) {
 	expectedEvent = "Warning ProxyClassInvalid " + msg
 	expectEvents(t, fr, []string{expectedEvent})
 
-	// 7. A ProxyClass with ServiceMonitor enabled and in a cluster that does have the ServiceMonitor CRD is invalid
+	// 7. A ProxyClass with ServiceMonitor enabled and in a cluster that does have the ServiceMonitor CRD is valid
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
 	mustCreate(t, fc, crd)
 	expectReconciled(t, pcr, "", "test")

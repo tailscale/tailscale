@@ -336,7 +336,10 @@ func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, pg *tsapi.Proxy
 		}
 	}
 
-	mo := &metricsOpts{proxyLabels: pgLabels(pg.Name, nil), tsNamespace: r.tsNamespace, proxyType: "proxygroup"}
+	mo := &metricsOpts{
+		proxyLabels: pgLabels(pg.Name, nil),
+		tsNamespace: r.tsNamespace,
+		proxyType:   "proxygroup"}
 	if err := maybeCleanupMetricsResources(ctx, mo, r.Client); err != nil {
 		return false, fmt.Errorf("error cleaning up metrics resources: %w", err)
 	}
