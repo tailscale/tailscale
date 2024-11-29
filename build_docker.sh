@@ -54,7 +54,7 @@ case "$TARGET" in
       --annotations="${ANNOTATIONS}" \
       /usr/local/bin/containerboot
     ;;
-  operator)
+  k8s-operator)
     DEFAULT_REPOS="tailscale/k8s-operator"
     REPOS="${REPOS:-${DEFAULT_REPOS}}"
     go run github.com/tailscale/mkctr \
