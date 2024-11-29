@@ -103,8 +103,8 @@ func configFromEnv() (*settings, error) {
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
 		LocalAddrPort:                         defaultEnv("TS_LOCAL_ADDR_PORT", "[::]:9002"),
-		MetricsEnabled:                        defaultBool("TS_METRICS_ENABLED", false),
-		HealthCheckEnabled:                    defaultBool("TS_HEALTH_CHECK_ENABLED", false),
+		MetricsEnabled:                        defaultBool("TS_ENABLE_METRICS", false),
+		HealthCheckEnabled:                    defaultBool("TS_ENABLE_HEALTH_CHECK", false),
 		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
 	}
@@ -179,7 +179,7 @@ func (s *settings) validate() error {
 		return errors.New("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS is not supported in userspace mode")
 	}
 	if s.HealthCheckAddrPort != "" {
-		log.Printf("[warning] TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0. Please use TS_HEALTH_CHECK_ENABLED and optionally TS_LOCAL_ADDR_PORT instead.")
+		log.Printf("[warning] TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0. Please use TS_ENABLE_HEALTH_CHECK and optionally TS_LOCAL_ADDR_PORT instead.")
 		if _, err := netip.ParseAddrPort(s.HealthCheckAddrPort); err != nil {
 			return fmt.Errorf("error parsing TS_HEALTHCHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
 		}
@@ -195,7 +195,7 @@ func (s *settings) validate() error {
 		}
 	}
 	if s.HealthCheckEnabled && s.HealthCheckAddrPort != "" {
-		return errors.New("TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0, use TS_HEALTH_CHECK_ENABLED and optionally TS_LOCAL_ADDR_PORT")
+		return errors.New("TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0, use TS_ENABLE_HEALTH_CHECK and optionally TS_LOCAL_ADDR_PORT")
 	}
 	return nil
 }

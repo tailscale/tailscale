@@ -729,7 +729,7 @@ func TestContainerBoot(t *testing.T) {
 			Name: "metrics_enabled",
 			Env: map[string]string{
 				"TS_LOCAL_ADDR_PORT": fmt.Sprintf("[::]:%d", localAddrPort),
-				"TS_METRICS_ENABLED": "true",
+				"TS_ENABLE_METRICS":  "true",
 			},
 			Phases: []phase{
 				{
@@ -749,8 +749,8 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "health_enabled",
 			Env: map[string]string{
-				"TS_LOCAL_ADDR_PORT":      fmt.Sprintf("[::]:%d", localAddrPort),
-				"TS_HEALTH_CHECK_ENABLED": "true",
+				"TS_LOCAL_ADDR_PORT":     fmt.Sprintf("[::]:%d", localAddrPort),
+				"TS_ENABLE_HEALTH_CHECK": "true",
 			},
 			Phases: []phase{
 				{
@@ -774,9 +774,9 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "metrics_and_health_on_same_port",
 			Env: map[string]string{
-				"TS_LOCAL_ADDR_PORT":      fmt.Sprintf("[::]:%d", localAddrPort),
-				"TS_METRICS_ENABLED":      "true",
-				"TS_HEALTH_CHECK_ENABLED": "true",
+				"TS_LOCAL_ADDR_PORT":     fmt.Sprintf("[::]:%d", localAddrPort),
+				"TS_ENABLE_METRICS":      "true",
+				"TS_ENABLE_HEALTH_CHECK": "true",
 			},
 			Phases: []phase{
 				{
@@ -801,7 +801,7 @@ func TestContainerBoot(t *testing.T) {
 			Name: "local_metrics_and_deprecated_health",
 			Env: map[string]string{
 				"TS_LOCAL_ADDR_PORT":       fmt.Sprintf("[::]:%d", localAddrPort),
-				"TS_METRICS_ENABLED":       "true",
+				"TS_ENABLE_METRICS":        "true",
 				"TS_HEALTHCHECK_ADDR_PORT": fmt.Sprintf("[::]:%d", healthAddrPort),
 			},
 			Phases: []phase{
