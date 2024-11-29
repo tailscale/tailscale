@@ -70,7 +70,7 @@ type settings struct {
 	HealthCheckAddrPort string
 	LocalAddrPort       string
 	MetricsEnabled      bool
-	HealthEnabled       bool
+	HealthCheckEnabled  bool
 	DebugAddrPort       string
 	EgressSvcsCfgPath   string
 }
@@ -104,7 +104,7 @@ func configFromEnv() (*settings, error) {
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
 		LocalAddrPort:                         defaultEnv("TS_LOCAL_ADDR_PORT", "[::]:9002"),
 		MetricsEnabled:                        defaultBool("TS_METRICS_ENABLED", false),
-		HealthEnabled:                         defaultBool("TS_HEALTH_ENABLED", false),
+		HealthCheckEnabled:                    defaultBool("TS_HEALTH_CHECK_ENABLED", false),
 		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
 	}
@@ -193,8 +193,8 @@ func (s *settings) validate() error {
 			return fmt.Errorf("error parsing TS_DEBUG_ADDR_PORT value %q: %w", s.DebugAddrPort, err)
 		}
 	}
-	if s.HealthEnabled && s.HealthCheckAddrPort != "" {
-		return errors.New("TS_HEALTHCHECK_ADDR_PORT is deprecated, use TS_HEALTH_ENABLED in conjunction with TS_LOCAL_ADDR_PORT")
+	if s.HealthCheckEnabled && s.HealthCheckAddrPort != "" {
+		return errors.New("TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0, use TS_HEALTH_CHECK_ENABLED and optionally TS_LOCAL_ADDR_PORT")
 	}
 	return nil
 }
@@ -298,7 +298,7 @@ func (cfg *settings) localMetricsEnabled() bool {
 }
 
 func (cfg *settings) localHealthEnabled() bool {
-	return cfg.LocalAddrPort != "" && cfg.HealthEnabled
+	return cfg.LocalAddrPort != "" && cfg.HealthCheckEnabled
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if

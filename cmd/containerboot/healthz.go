@@ -22,6 +22,7 @@ type healthz struct {
 func (h *healthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Lock()
 	defer h.Unlock()
+
 	if h.hasAddrs {
 		w.Write([]byte("ok"))
 	} else {
@@ -31,11 +32,12 @@ func (h *healthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *healthz) update(healthy bool) {
 	h.Lock()
+	defer h.Unlock()
+
 	if h.hasAddrs != healthy {
 		log.Println("Setting healthy", healthy)
 	}
 	h.hasAddrs = healthy
-	h.Unlock()
 }
 
 // healthHandlers registers a simple health handler at /healthz.

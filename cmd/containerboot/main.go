@@ -52,11 +52,17 @@
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
 //     It cannot be used in conjunction with TS_DEST_IP. The file is watched for changes,
 //     and will be re-applied when it changes.
-//   - TS_HEALTHCHECK_ADDR_PORT: if specified, an HTTP health endpoint will be
-//     served at /healthz at the provided address, which should be in form [<address>]:<port>.
-//     If not set, no health check will be run. If set to :<port>, addr will default to 0.0.0.0
-//     The health endpoint will return 200 OK if this node has at least one tailnet IP address,
-//     otherwise returns 503.
+//   - TS_HEALTHCHECK_ADDR_PORT: deprecated, use TS_HEALTH_CHECK_ENABLED instead and optionally
+//     set TS_LOCAL_ADDR_PORT. Will be removed in 1.82.0.
+//   - TS_LOCAL_ADDR_PORT: the address and port to serve local metrics and health
+//     check endpoints if enabled via TS_METRICS_ENABLED and/or TS_HEALTH_CHECK_ENABLED.
+//     Defaults to [::]:9002, serving on all available interfaces.
+//   - TS_METRICS_ENABLED: if true, a metrics endpoint will be served at /metrics on
+//     the address specified by TS_LOCAL_ADDR_PORT. See https://tailscale.com/kb/1482/client-metrics
+//     for more information on the metrics exposed.
+//   - TS_HEALTH_CHECK_ENABLED: if true, a health check endpoint will be served at /healthz on
+//     the address specified by TS_LOCAL_ADDR_PORT. The health endpoint will return 200
+//     OK if this node has at least one tailnet IP address, otherwise returns 503.
 //     NB: the health criteria might change in the future.
 //   - TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR: if specified, a path to a
 //     directory that containers tailscaled config in file. The config file needs to be
@@ -184,6 +190,7 @@ func main() {
 		mux := http.NewServeMux()
 
 		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
+		log.Printf("[warning] TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0. Please use TS_HEALTH_CHECK_ENABLED and optionally TS_LOCAL_ADDR_PORT instead.")
 		healthCheck = healthHandlers(mux)
 
 		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
