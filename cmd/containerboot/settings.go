@@ -179,6 +179,7 @@ func (s *settings) validate() error {
 		return errors.New("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS is not supported in userspace mode")
 	}
 	if s.HealthCheckAddrPort != "" {
+		log.Printf("[warning] TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0. Please use TS_HEALTH_CHECK_ENABLED and optionally TS_LOCAL_ADDR_PORT instead.")
 		if _, err := netip.ParseAddrPort(s.HealthCheckAddrPort); err != nil {
 			return fmt.Errorf("error parsing TS_HEALTHCHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
 		}

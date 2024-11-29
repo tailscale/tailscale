@@ -190,7 +190,6 @@ func main() {
 		mux := http.NewServeMux()
 
 		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
-		log.Printf("[warning] TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0. Please use TS_HEALTH_CHECK_ENABLED and optionally TS_LOCAL_ADDR_PORT instead.")
 		healthCheck = healthHandlers(mux)
 
 		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
