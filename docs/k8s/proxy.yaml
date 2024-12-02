@@ -53,6 +53,4 @@ spec:
         fieldRef:
           fieldPath: metadata.uid
     securityContext:
-      capabilities:
-        add:
-        - NET_ADMIN
+      privileged: true
