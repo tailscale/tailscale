@@ -887,8 +887,8 @@ func TestNodeAddrResolve(t *testing.T) {
 			c.UseDNSCache = tt
 
 			t.Run("IPv4", func(t *testing.T) {
-				ap := c.nodeAddr(ctx, dn, probeIPv4)
-				if !ap.IsValid() {
+				ap, ok := c.nodeAddrPort(ctx, dn, dn.STUNPort, probeIPv4)
+				if !ok {
 					t.Fatal("expected valid AddrPort")
 				}
 				if !ap.Addr().Is4() {
@@ -902,8 +902,8 @@ func TestNodeAddrResolve(t *testing.T) {
 					t.Skipf("IPv6 may not work on this machine")
 				}
 
-				ap := c.nodeAddr(ctx, dn, probeIPv6)
-				if !ap.IsValid() {
+				ap, ok := c.nodeAddrPort(ctx, dn, dn.STUNPort, probeIPv6)
+				if !ok {
 					t.Fatal("expected valid AddrPort")
 				}
 				if !ap.Addr().Is6() {
@@ -912,8 +912,8 @@ func TestNodeAddrResolve(t *testing.T) {
 				t.Logf("got IPv6 addr: %v", ap)
 			})
 			t.Run("IPv6 Failure", func(t *testing.T) {
-				ap := c.nodeAddr(ctx, dnV4Only, probeIPv6)
-				if ap.IsValid() {
+				ap, ok := c.nodeAddrPort(ctx, dnV4Only, dn.STUNPort, probeIPv6)
+				if ok {
 					t.Fatalf("expected no addr but got: %v", ap)
 				}
 				t.Logf("correctly got invalid addr")

@@ -1221,17 +1221,19 @@ func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion
 	// Try pinging the first node in the region
 	node := reg.Nodes[0]
 
-	// Get the IPAddr by asking for the UDP address that we would use for
-	// STUN and then using that IP.
-	//
-	// TODO(andrew-d): this is a bit ugly
-	nodeAddr := c.nodeAddr(ctx, node, probeIPv4)
-	if !nodeAddr.IsValid() {
+	if node.STUNPort < 0 {
+		// If STUN is disabled on a node, interpret that as meaning don't measure latency.
+		return 0, false, nil
+	}
+	const unusedPort = 0
+	stunAddrPort, ok := c.nodeAddrPort(ctx, node, unusedPort, probeIPv4)
+	if !ok {
 		return 0, false, fmt.Errorf("no address for node %v (v4-for-icmp)", node.Name)
 	}
+	ip := stunAddrPort.Addr()
 	addr := &net.IPAddr{
-		IP:   net.IP(nodeAddr.Addr().AsSlice()),
-		Zone: nodeAddr.Addr().Zone(),
+		IP:   net.IP(ip.AsSlice()),
+		Zone: ip.Zone(),
 	}
 
 	// Use the unique node.Name field as the packet data to reduce the
@@ -1478,8 +1480,8 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 		return
 	}
 
-	addr := c.nodeAddr(ctx, node, probe.proto)
-	if !addr.IsValid() {
+	addr, ok := c.nodeAddrPort(ctx, node, node.STUNPort, probe.proto)
+	if !ok {
 		c.logf("netcheck.runProbe: named node %q has no %v address", probe.node, probe.proto)
 		return
 	}
@@ -1528,12 +1530,17 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	c.vlogf("sent to %v", addr)
 }
 
-// proto is 4 or 6
-// If it returns nil, the node is skipped.
-func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeProto) (ap netip.AddrPort) {
-	port := cmp.Or(n.STUNPort, 3478)
+// nodeAddrPort returns the IP:port to send a STUN queries to for a given node.
+//
+// The provided port should be n.STUNPort, which may be negative to disable STUN.
+// If STUN is disabled for this node, it returns ok=false.
+// The port parameter is separate for the ICMP caller to provide a fake value.
+//
+// proto is [probeIPv4] or [probeIPv6].
+func (c *Client) nodeAddrPort(ctx context.Context, n *tailcfg.DERPNode, port int, proto probeProto) (_ netip.AddrPort, ok bool) {
+	var zero netip.AddrPort
 	if port < 0 || port > 1<<16-1 {
-		return
+		return zero, false
 	}
 	if n.STUNTestIP != "" {
 		ip, err := netip.ParseAddr(n.STUNTestIP)
@@ -1546,7 +1553,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 		if proto == probeIPv6 && ip.Is4() {
 			return
 		}
-		return netip.AddrPortFrom(ip, uint16(port))
+		return netip.AddrPortFrom(ip, uint16(port)), true
 	}
 
 	switch proto {
@@ -1554,20 +1561,20 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 		if n.IPv4 != "" {
 			ip, _ := netip.ParseAddr(n.IPv4)
 			if !ip.Is4() {
-				return
+				return zero, false
 			}
-			return netip.AddrPortFrom(ip, uint16(port))
+			return netip.AddrPortFrom(ip, uint16(port)), true
 		}
 	case probeIPv6:
 		if n.IPv6 != "" {
 			ip, _ := netip.ParseAddr(n.IPv6)
 			if !ip.Is6() {
-				return
+				return zero, false
 			}
-			return netip.AddrPortFrom(ip, uint16(port))
+			return netip.AddrPortFrom(ip, uint16(port)), true
 		}
 	default:
-		return
+		return zero, false
 	}
 
 	// The default lookup function if we don't set UseDNSCache is to use net.DefaultResolver.
@@ -1609,13 +1616,13 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 	addrs, err := lookupIPAddr(ctx, n.HostName)
 	for _, a := range addrs {
 		if (a.Is4() && probeIsV4) || (a.Is6() && !probeIsV4) {
-			return netip.AddrPortFrom(a, uint16(port))
+			return netip.AddrPortFrom(a, uint16(port)), true
 		}
 	}
 	if err != nil {
 		c.logf("netcheck: DNS lookup error for %q (node %q region %v): %v", n.HostName, n.Name, n.RegionID, err)
 	}
-	return
+	return zero, false
 }
 
 func regionHasDERPNode(r *tailcfg.DERPRegion) bool {
