@@ -67,18 +67,15 @@ type settings struct {
 	PodIP               string
 	PodIPv4             string
 	PodIPv6             string
-	HealthCheckAddrPort string // TODO(tomhjp): use the local addr/port instead.
+	HealthCheckAddrPort string
 	LocalAddrPort       string
 	MetricsEnabled      bool
+	HealthCheckEnabled  bool
 	DebugAddrPort       string
 	EgressSvcsCfgPath   string
 }
 
 func configFromEnv() (*settings, error) {
-	defaultLocalAddrPort := ""
-	if v, ok := os.LookupEnv("POD_IP"); ok && v != "" {
-		defaultLocalAddrPort = fmt.Sprintf("%s:9002", v)
-	}
 	cfg := &settings{
 		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
@@ -105,8 +102,9 @@ func configFromEnv() (*settings, error) {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
-		LocalAddrPort:                         defaultEnv("TS_LOCAL_ADDR_PORT", defaultLocalAddrPort),
-		MetricsEnabled:                        defaultBool("TS_METRICS_ENABLED", false),
+		LocalAddrPort:                         defaultEnv("TS_LOCAL_ADDR_PORT", "[::]:9002"),
+		MetricsEnabled:                        defaultBool("TS_ENABLE_METRICS", false),
+		HealthCheckEnabled:                    defaultBool("TS_ENABLE_HEALTH_CHECK", false),
 		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
 	}
@@ -181,11 +179,12 @@ func (s *settings) validate() error {
 		return errors.New("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS is not supported in userspace mode")
 	}
 	if s.HealthCheckAddrPort != "" {
+		log.Printf("[warning] TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0. Please use TS_ENABLE_HEALTH_CHECK and optionally TS_LOCAL_ADDR_PORT instead.")
 		if _, err := netip.ParseAddrPort(s.HealthCheckAddrPort); err != nil {
-			return fmt.Errorf("error parsing TS_HEALTH_CHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
+			return fmt.Errorf("error parsing TS_HEALTHCHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
 		}
 	}
-	if s.LocalAddrPort != "" {
+	if s.localMetricsEnabled() || s.localHealthEnabled() {
 		if _, err := netip.ParseAddrPort(s.LocalAddrPort); err != nil {
 			return fmt.Errorf("error parsing TS_LOCAL_ADDR_PORT value %q: %w", s.LocalAddrPort, err)
 		}
@@ -194,6 +193,9 @@ func (s *settings) validate() error {
 		if _, err := netip.ParseAddrPort(s.DebugAddrPort); err != nil {
 			return fmt.Errorf("error parsing TS_DEBUG_ADDR_PORT value %q: %w", s.DebugAddrPort, err)
 		}
+	}
+	if s.HealthCheckEnabled && s.HealthCheckAddrPort != "" {
+		return errors.New("TS_HEALTHCHECK_ADDR_PORT is deprecated and will be removed in 1.82.0, use TS_ENABLE_HEALTH_CHECK and optionally TS_LOCAL_ADDR_PORT")
 	}
 	return nil
 }
@@ -290,6 +292,14 @@ func isL3Proxy(cfg *settings) bool {
 // Secret.
 func hasKubeStateStore(cfg *settings) bool {
 	return cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != ""
+}
+
+func (cfg *settings) localMetricsEnabled() bool {
+	return cfg.LocalAddrPort != "" && cfg.MetricsEnabled
+}
+
+func (cfg *settings) localHealthEnabled() bool {
+	return cfg.LocalAddrPort != "" && cfg.HealthCheckEnabled
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if

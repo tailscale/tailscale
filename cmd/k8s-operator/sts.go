@@ -818,7 +818,7 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 						Value: "$(POD_IP):9002",
 					},
 					corev1.EnvVar{
-						Name:  "TS_METRICS_ENABLED",
+						Name:  "TS_ENABLE_METRICS",
 						Value: "true",
 					},
 				)

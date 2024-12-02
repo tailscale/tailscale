@@ -258,7 +258,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 		corev1.EnvVar{Name: "TS_DEBUG_ADDR_PORT", Value: "$(POD_IP):9001"},
 		corev1.EnvVar{Name: "TS_TAILSCALED_EXTRA_ARGS", Value: "--debug=$(TS_DEBUG_ADDR_PORT)"},
 		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9002"},
-		corev1.EnvVar{Name: "TS_METRICS_ENABLED", Value: "true"},
+		corev1.EnvVar{Name: "TS_ENABLE_METRICS", Value: "true"},
 	)
 	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{
 		{Name: "debug", Protocol: "TCP", ContainerPort: 9001},
@@ -273,7 +273,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS = nonUserspaceProxySS.DeepCopy()
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env,
 		corev1.EnvVar{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9002"},
-		corev1.EnvVar{Name: "TS_METRICS_ENABLED", Value: "true"},
+		corev1.EnvVar{Name: "TS_ENABLE_METRICS", Value: "true"},
 	)
 	wantSS.Spec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: "metrics", Protocol: "TCP", ContainerPort: 9002}}
 	gotSS = applyProxyClassToStatefulSet(proxyClassWithMetricsDebug(true, ptr.To(false)), nonUserspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
