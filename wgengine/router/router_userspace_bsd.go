@@ -206,6 +206,10 @@ func (r *userspaceBSDRouter) UpdateMagicsockPort(_ uint16, _ string) error {
 	return nil
 }
 
+func (r *userspaceBSDRouter) SetDebugLoggingEnabled(_ bool) {
+	// TODO(andrew-d): implement; see https://github.com/tailscale/tailscale/issues/13887
+}
+
 func (r *userspaceBSDRouter) Close() error {
 	return nil
 }

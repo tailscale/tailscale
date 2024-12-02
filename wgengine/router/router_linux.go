@@ -41,6 +41,7 @@ const (
 type linuxRouter struct {
 	closed            atomic.Bool
 	logf              func(fmt string, args ...any)
+	debugLogging      atomic.Bool
 	tunname           string
 	netMon            *netmon.Monitor
 	health            *health.Tracker
@@ -228,6 +229,14 @@ func useAmbientCaps() bool {
 	return distro.DSMVersion() >= 7
 }
 
+// dlogf will log a message if debug logging is turned on, at [v1] level.
+func (r *linuxRouter) dlogf(format string, args ...any) {
+	if !r.debugLogging.Load() {
+		return
+	}
+	r.logf("[v1] debug: "+format, args...)
+}
+
 var forceIPCommand = envknob.RegisterBool("TS_DEBUG_USE_IP_COMMAND")
 
 // useIPCommand reports whether r should use the "ip" command (or its
@@ -387,19 +396,19 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		errs = append(errs, err)
 	}
 
-	newLocalRoutes, err := cidrDiff("localRoute", r.localRoutes, cfg.LocalRoutes, r.addThrowRoute, r.delThrowRoute, r.logf)
+	newLocalRoutes, err := cidrDiff("localRoute", r.localRoutes, cfg.LocalRoutes, r.addThrowRoute, r.delThrowRoute, r.logf, r.dlogf)
 	if err != nil {
 		errs = append(errs, err)
 	}
 	r.localRoutes = newLocalRoutes
 
-	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute, r.logf)
+	newRoutes, err := cidrDiff("route", r.routes, cfg.Routes, r.addRoute, r.delRoute, r.logf, r.dlogf)
 	if err != nil {
 		errs = append(errs, err)
 	}
 	r.routes = newRoutes
 
-	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
+	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf, r.dlogf)
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -545,11 +554,16 @@ func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
 	return nil
 }
 
+func (r *linuxRouter) SetDebugLoggingEnabled(enabled bool) {
+	r.debugLogging.Store(enabled)
+}
+
 // setNetfilterMode switches the router to the given netfilter
 // mode. Netfilter state is created or deleted appropriately to
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
 func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
+	r.dlogf("setNetfilterMode(%s), from=%s", mode, r.netfilterMode)
 	if !platformCanNetfilter() {
 		mode = netfilterOff
 	}
@@ -988,6 +1002,7 @@ func (r *linuxRouter) routeTable() int {
 
 // upInterface brings up the tunnel interface.
 func (r *linuxRouter) upInterface() error {
+	r.dlogf("setting interface up")
 	if r.useIPCommand() {
 		return r.cmd.run("ip", "link", "set", "dev", r.tunname, "up")
 	}
@@ -999,6 +1014,7 @@ func (r *linuxRouter) upInterface() error {
 }
 
 func (r *linuxRouter) enableIPForwarding() {
+	r.dlogf("enabling IP forwarding")
 	sysctls := map[string]string{
 		"net.ipv4.ip_forward":          "1",
 		"net.ipv6.conf.all.forwarding": "1",
@@ -1022,6 +1038,7 @@ func writeSysctl(key, val string) error {
 
 // downInterface sets the tunnel interface administratively down.
 func (r *linuxRouter) downInterface() error {
+	r.dlogf("setting interface down")
 	if r.useIPCommand() {
 		return r.cmd.run("ip", "link", "set", "dev", r.tunname, "down")
 	}
@@ -1431,7 +1448,7 @@ func (r *linuxRouter) delStatefulRule() error {
 // old and new match. Returns a map reflecting the actual new state
 // (which may be somewhere in between old and new if some commands
 // failed), and any error encountered while reconfiguring.
-func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, del func(netip.Prefix) error, logf logger.Logf) (map[netip.Prefix]bool, error) {
+func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, del func(netip.Prefix) error, logf, dlogf logger.Logf) (map[netip.Prefix]bool, error) {
 	newMap := make(map[netip.Prefix]bool, len(new))
 	for _, cidr := range new {
 		newMap[cidr] = true
@@ -1449,11 +1466,15 @@ func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, d
 	// end up in a state where we have no addresses on an interface as that
 	// results in other kernel entities (like routes) pointing to that interface
 	// to also be deleted.
-	var addFail []error
+	var (
+		addFail []error
+		added   []netip.Prefix
+	)
 	for cidr := range newMap {
 		if old[cidr] {
 			continue
 		}
+		added = append(added, cidr)
 		if err := add(cidr); err != nil {
 			logf("%s add failed: %v", kind, err)
 			addFail = append(addFail, err)
@@ -1461,6 +1482,7 @@ func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, d
 			ret[cidr] = true
 		}
 	}
+	dlogf("%s add %v", kind, added)
 
 	if len(addFail) == 1 {
 		return ret, addFail[0]
@@ -1469,11 +1491,15 @@ func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, d
 		return ret, fmt.Errorf("%d add %s failures; first was: %w", len(addFail), kind, addFail[0])
 	}
 
-	var delFail []error
+	var (
+		delFail []error
+		deleted []netip.Prefix
+	)
 	for cidr := range old {
 		if newMap[cidr] {
 			continue
 		}
+		deleted = append(deleted, cidr)
 		if err := del(cidr); err != nil {
 			logf("%s del failed: %v", kind, err)
 			delFail = append(delFail, err)
@@ -1481,6 +1507,7 @@ func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, d
 			delete(ret, cidr)
 		}
 	}
+	dlogf("%s del %v", kind, deleted)
 	if len(delFail) == 1 {
 		return ret, delFail[0]
 	}
