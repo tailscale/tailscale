@@ -51,6 +51,9 @@ operatorConfig:
   podAnnotations: {}
   podLabels: {}
 
+  serviceAccountAnnotations: {}
+  # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/tailscale-operator-role
+
   tolerations: []
 
   affinity: {}
