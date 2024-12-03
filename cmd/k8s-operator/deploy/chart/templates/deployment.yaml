@@ -36,12 +36,12 @@ spec:
       {{- end }}
       volumes:
         - name: oauth
-        {{- with .Values.oauthSecretVolume }}
-        {{- toYaml . | nindent 8 }}
-        {{- else }}
+          {{- with .Values.oauthSecretVolume }}
+          {{- toYaml . | nindent 10 }}
+          {{- else }}
           secret:
             secretName: operator-oauth
-        {{- end }}
+          {{- end }}
       containers:
         - name: operator
           {{- with .Values.operatorConfig.securityContext }}
