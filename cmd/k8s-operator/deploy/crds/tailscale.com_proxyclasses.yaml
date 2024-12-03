@@ -74,6 +74,8 @@ spec:
                       description: |-
                         Setting enable to true will make the proxy serve Tailscale metrics
                         at <pod-ip>:9002/metrics.
+                        A metrics Service named <proxy-statefulset>-metrics will also be created in the operator's namespace and will
+                        serve the metrics at <service-ip>:9002/metrics.
 
                         In 1.78.x and 1.80.x, this field also serves as the default value for
                         .spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both
@@ -81,6 +83,25 @@ spec:
 
                         Defaults to false.
                       type: boolean
+                    serviceMonitor:
+                      description: |-
+                        Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.
+                        The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.
+                        The ingested metrics for each Service monitor will have labels to identify the proxy:
+                        ts_proxy_type: ingress_service|ingress_resource|connector|proxygroup
+                        ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)
+                        ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)
+                        job: ts_<proxy type>_[<parent namespace>]_<parent_name>
+                      type: object
+                      required:
+                        - enable
+                      properties:
+                        enable:
+                          description: If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled.
+                          type: boolean
+                  x-kubernetes-validations:
+                    - rule: '!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)'
+                      message: ServiceMonitor can only be enabled if metrics are enabled
                 statefulSet:
                   description: |-
                     Configuration parameters for the proxy's StatefulSet. Tailscale

@@ -94,6 +94,12 @@ const (
 	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
 	// podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
 	podAnnotationLastSetConfigFileHash = "tailscale.com/operator-last-set-config-file-hash"
+
+	proxyTypeEgress          = "egress_service"
+	proxyTypeIngressService  = "ingress_service"
+	proxyTypeIngressResource = "ingress_resource"
+	proxyTypeConnector       = "connector"
+	proxyTypeProxyGroup      = "proxygroup"
 )
 
 var (
@@ -121,6 +127,8 @@ type tailscaleSTSConfig struct {
 
 	Hostname string
 	Tags     []string // if empty, use defaultTags
+
+	proxyType string
 
 	// Connector specifies a configuration of a Connector instance if that's
 	// what this StatefulSet should be created for.
@@ -197,14 +205,22 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
-
+	mo := &metricsOpts{
+		proxyStsName: hsvc.Name,
+		tsNamespace:  hsvc.Namespace,
+		proxyLabels:  hsvc.Labels,
+		proxyType:    sts.proxyType,
+	}
+	if err = reconcileMetricsResources(ctx, logger, mo, sts.ProxyClass, a.Client); err != nil {
+		return nil, fmt.Errorf("failed to ensure metrics resources: %w", err)
+	}
 	return hsvc, nil
 }
 
 // Cleanup removes all resources associated that were created by Provision with
 // the given labels. It returns true when all resources have been removed,
 // otherwise it returns false and the caller should retry later.
-func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.SugaredLogger, labels map[string]string) (done bool, _ error) {
+func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.SugaredLogger, labels map[string]string, typ string) (done bool, _ error) {
 	// Need to delete the StatefulSet first, and delete it with foreground
 	// cascading deletion. That way, the pod that's writing to the Secret will
 	// stop running before we start looking at the Secret's contents, and
@@ -256,6 +272,14 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 		if err := a.DeleteAllOf(ctx, typ, client.InNamespace(a.operatorNamespace), client.MatchingLabels(labels)); err != nil {
 			return false, err
 		}
+	}
+	mo := &metricsOpts{
+		proxyLabels: labels,
+		tsNamespace: a.operatorNamespace,
+		proxyType:   typ,
+	}
+	if err := maybeCleanupMetricsResources(ctx, mo, a.Client); err != nil {
+		return false, fmt.Errorf("error cleaning up metrics resources: %w", err)
 	}
 	return true, nil
 }

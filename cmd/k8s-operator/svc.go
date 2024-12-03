@@ -152,7 +152,12 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		return nil
 	}
 
-	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc.Name, svc.Namespace, "svc")); err != nil {
+	proxyTyp := proxyTypeEgress
+	if a.shouldExpose(svc) {
+		proxyTyp = proxyTypeIngressService
+	}
+
+	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc.Name, svc.Namespace, "svc"), proxyTyp); err != nil {
 		return fmt.Errorf("failed to cleanup: %w", err)
 	} else if !done {
 		logger.Debugf("cleanup not done yet, waiting for next reconcile")
@@ -255,6 +260,10 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		Tags:                tags,
 		ChildResourceLabels: crl,
 		ProxyClassName:      proxyClass,
+	}
+	sts.proxyType = proxyTypeEgress
+	if a.shouldExpose(svc) {
+		sts.proxyType = proxyTypeIngressService
 	}
 
 	a.mu.Lock()

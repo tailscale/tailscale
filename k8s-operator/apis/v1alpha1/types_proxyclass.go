@@ -161,15 +161,32 @@ type Pod struct {
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)",message="ServiceMonitor can only be enabled if metrics are enabled"
 type Metrics struct {
 	// Setting enable to true will make the proxy serve Tailscale metrics
 	// at <pod-ip>:9002/metrics.
+	// A metrics Service named <proxy-statefulset>-metrics will also be created in the operator's namespace and will
+	// serve the metrics at <service-ip>:9002/metrics.
 	//
 	// In 1.78.x and 1.80.x, this field also serves as the default value for
 	// .spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both
 	// fields will independently default to false.
 	//
 	// Defaults to false.
+	Enable bool `json:"enable"`
+	// Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.
+	// The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.
+	// The ingested metrics for each Service monitor will have labels to identify the proxy:
+	// ts_proxy_type: ingress_service|ingress_resource|connector|proxygroup
+	// ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)
+	// ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)
+	// job: ts_<proxy type>_[<parent namespace>]_<parent_name>
+	// +optional
+	ServiceMonitor *ServiceMonitor `json:"serviceMonitor"`
+}
+
+type ServiceMonitor struct {
+	// If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled.
 	Enable bool `json:"enable"`
 }
 

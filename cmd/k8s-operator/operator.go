@@ -24,8 +24,11 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
+	toolscache "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -239,21 +242,29 @@ func runReconcilers(opts reconcilerOpts) {
 	nsFilter := cache.ByObject{
 		Field: client.InNamespace(opts.tailscaleNamespace).AsSelector(),
 	}
+	// We watch the ServiceMonitor CRD to ensure that reconcilers are re-triggered if user's workflows result in the
+	// ServiceMonitor CRD applied after some of our resources that define ServiceMonitor creation. This selector
+	// ensures that we only watch the ServiceMonitor CRD and that we don't cache full contents of it.
+	serviceMonitorSelector := cache.ByObject{
+		Field:     fields.SelectorFromSet(fields.Set{"metadata.name": serviceMonitorCRD}),
+		Transform: crdTransformer(startlog),
+	}
 	mgrOpts := manager.Options{
 		// TODO (irbekrm): stricter filtering what we watch/cache/call
 		// reconcilers on. c/r by default starts a watch on any
 		// resources that we GET via the controller manager's client.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}:             nsFilter,
-				&corev1.ServiceAccount{}:     nsFilter,
-				&corev1.Pod{}:                nsFilter,
-				&corev1.ConfigMap{}:          nsFilter,
-				&appsv1.StatefulSet{}:        nsFilter,
-				&appsv1.Deployment{}:         nsFilter,
-				&discoveryv1.EndpointSlice{}: nsFilter,
-				&rbacv1.Role{}:               nsFilter,
-				&rbacv1.RoleBinding{}:        nsFilter,
+				&corev1.Secret{}:                            nsFilter,
+				&corev1.ServiceAccount{}:                    nsFilter,
+				&corev1.Pod{}:                               nsFilter,
+				&corev1.ConfigMap{}:                         nsFilter,
+				&appsv1.StatefulSet{}:                       nsFilter,
+				&appsv1.Deployment{}:                        nsFilter,
+				&discoveryv1.EndpointSlice{}:                nsFilter,
+				&rbacv1.Role{}:                              nsFilter,
+				&rbacv1.RoleBinding{}:                       nsFilter,
+				&apiextensionsv1.CustomResourceDefinition{}: serviceMonitorSelector,
 			},
 		},
 		Scheme: tsapi.GlobalScheme,
@@ -422,8 +433,13 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create egress EndpointSlices reconciler: %v", err)
 	}
 
+	// ProxyClass reconciler gets triggered on ServiceMonitor CRD changes to ensure that any ProxyClasses, that
+	// define that a ServiceMonitor should be created, were set to invalid because the CRD did not exist get
+	// reconciled if the CRD is applied at a later point.
+	serviceMonitorFilter := handler.EnqueueRequestsFromMapFunc(proxyClassesWithServiceMonitor(mgr.GetClient(), opts.log))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyClass{}).
+		Watches(&apiextensionsv1.CustomResourceDefinition{}, serviceMonitorFilter).
 		Complete(&ProxyClassReconciler{
 			Client:   mgr.GetClient(),
 			recorder: eventRecorder,
@@ -1015,6 +1031,49 @@ func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns 
 			})
 		}
 		return reqs
+	}
+}
+
+// proxyClassesWithServiceMonitor returns an event handler that, given that the event is for the Prometheus
+// ServiceMonitor CRD, returns all ProxyClasses that define that a ServiceMonitor should be created.
+func proxyClassesWithServiceMonitor(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		crd, ok := o.(*apiextensionsv1.CustomResourceDefinition)
+		if !ok {
+			logger.Debugf("[unexpected] ServiceMonitor CRD handler received an object that is not a CustomResourceDefinition")
+			return nil
+		}
+		if crd.Name != serviceMonitorCRD {
+			logger.Debugf("[unexpected] ServiceMonitor CRD handler received an unexpected CRD %q", crd.Name)
+			return nil
+		}
+		pcl := &tsapi.ProxyClassList{}
+		if err := cl.List(ctx, pcl); err != nil {
+			logger.Debugf("[unexpected] error listing ProxyClasses: %v", err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, pc := range pcl.Items {
+			if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && pc.Spec.Metrics.ServiceMonitor.Enable {
+				reqs = append(reqs, reconcile.Request{
+					NamespacedName: types.NamespacedName{Namespace: pc.Namespace, Name: pc.Name},
+				})
+			}
+		}
+		return reqs
+	}
+}
+
+// crdTransformer gets called before a CRD is stored to c/r cache, it removes the CRD spec to reduce memory consumption.
+func crdTransformer(log *zap.SugaredLogger) toolscache.TransformFunc {
+	return func(o any) (any, error) {
+		crd, ok := o.(*apiextensionsv1.CustomResourceDefinition)
+		if !ok {
+			log.Infof("[unexpected] CRD transformer called for a non-CRD type")
+			return crd, nil
+		}
+		crd.Spec = apiextensionsv1.CustomResourceDefinitionSpec{}
+		return crd, nil
 	}
 }
 

@@ -8,10 +8,12 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -134,6 +136,25 @@ func TestProxyClass(t *testing.T) {
 		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future."}
 	expectReconciled(t, pcr, "", "test")
 	expectEvents(t, fr, expectedEvents)
+
+	// 6. A ProxyClass with ServiceMonitor enabled and in a cluster that has not ServiceMonitor CRD is invalid
+	pc.Spec.Metrics = &tsapi.Metrics{Enable: true, ServiceMonitor: &tsapi.ServiceMonitor{Enable: true}}
+	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
+		proxyClass.Spec = pc.Spec
+	})
+	expectReconciled(t, pcr, "", "test")
+	msg = `ProxyClass is not valid: spec.metrics.serviceMonitor: Invalid value: "enable": ProxyClass defines that a ServiceMonitor custom resource should be created, but "servicemonitors.monitoring.coreos.com" CRD was not found`
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc, nil)
+	expectedEvent = "Warning ProxyClassInvalid " + msg
+	expectEvents(t, fr, []string{expectedEvent})
+
+	// 7. A ProxyClass with ServiceMonitor enabled and in a cluster that does have the ServiceMonitor CRD is valid
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	mustCreate(t, fc, crd)
+	expectReconciled(t, pcr, "", "test")
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc, nil)
 }
 
 func TestValidateProxyClass(t *testing.T) {
@@ -180,7 +201,7 @@ func TestValidateProxyClass(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			pcr := &ProxyClassReconciler{}
-			err := pcr.validate(tc.pc)
+			err := pcr.validate(context.Background(), tc.pc)
 			valid := err == nil
 			if valid != tc.valid {
 				t.Errorf("expected valid=%v, got valid=%v, err=%v", tc.valid, valid, err)

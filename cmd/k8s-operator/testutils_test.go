@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,7 +41,10 @@ type configOpts struct {
 	secretName                                     string
 	hostname                                       string
 	namespace                                      string
+	tailscaleNamespace                             string
+	namespaced                                     bool
 	parentType                                     string
+	proxyType                                      string
 	priorityClassName                              string
 	firewallMode                                   string
 	tailnetTargetIP                                string
@@ -56,6 +61,7 @@ type configOpts struct {
 	app                                            string
 	shouldRemoveAuthKey                            bool
 	secretExtraData                                map[string][]byte
+	enableMetrics                                  bool
 }
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
@@ -150,6 +156,29 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		Name:  "TS_INTERNAL_APP",
 		Value: opts.app,
 	})
+	if opts.enableMetrics {
+		tsContainer.Env = append(tsContainer.Env,
+			corev1.EnvVar{
+				Name:  "TS_DEBUG_ADDR_PORT",
+				Value: "$(POD_IP):9001"},
+			corev1.EnvVar{
+				Name:  "TS_TAILSCALED_EXTRA_ARGS",
+				Value: "--debug=$(TS_DEBUG_ADDR_PORT)",
+			},
+			corev1.EnvVar{
+				Name:  "TS_LOCAL_ADDR_PORT",
+				Value: "$(POD_IP):9002",
+			},
+			corev1.EnvVar{
+				Name:  "TS_ENABLE_METRICS",
+				Value: "true",
+			},
+		)
+		tsContainer.Ports = append(tsContainer.Ports,
+			corev1.ContainerPort{Name: "debug", ContainerPort: 9001, Protocol: "TCP"},
+			corev1.ContainerPort{Name: "metrics", ContainerPort: 9002, Protocol: "TCP"},
+		)
+	}
 	ss := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
@@ -240,6 +269,29 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			{Name: "tailscaledconfig", ReadOnly: true, MountPath: "/etc/tsconfig"},
 			{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"},
 		},
+	}
+	if opts.enableMetrics {
+		tsContainer.Env = append(tsContainer.Env,
+			corev1.EnvVar{
+				Name:  "TS_DEBUG_ADDR_PORT",
+				Value: "$(POD_IP):9001"},
+			corev1.EnvVar{
+				Name:  "TS_TAILSCALED_EXTRA_ARGS",
+				Value: "--debug=$(TS_DEBUG_ADDR_PORT)",
+			},
+			corev1.EnvVar{
+				Name:  "TS_LOCAL_ADDR_PORT",
+				Value: "$(POD_IP):9002",
+			},
+			corev1.EnvVar{
+				Name:  "TS_ENABLE_METRICS",
+				Value: "true",
+			},
+		)
+		tsContainer.Ports = append(tsContainer.Ports, corev1.ContainerPort{
+			Name: "debug", ContainerPort: 9001, Protocol: "TCP"},
+			corev1.ContainerPort{Name: "metrics", ContainerPort: 9002, Protocol: "TCP"},
+		)
 	}
 	volumes := []corev1.Volume{
 		{
@@ -333,6 +385,87 @@ func expectedHeadlessService(name string, parentType string) *corev1.Service {
 			IPFamilyPolicy: ptr.To(corev1.IPFamilyPolicyPreferDualStack),
 		},
 	}
+}
+
+func expectedMetricsService(opts configOpts) *corev1.Service {
+	labels := metricsLabels(opts)
+	selector := map[string]string{
+		"tailscale.com/managed":              "true",
+		"tailscale.com/parent-resource":      "test",
+		"tailscale.com/parent-resource-type": opts.parentType,
+	}
+	if opts.namespaced {
+		selector["tailscale.com/parent-resource-ns"] = opts.namespace
+	}
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      metricsResourceName(opts.stsName),
+			Namespace: opts.tailscaleNamespace,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: selector,
+			Type:     corev1.ServiceTypeClusterIP,
+			Ports:    []corev1.ServicePort{{Protocol: "TCP", Port: 9002, Name: "metrics"}},
+		},
+	}
+}
+
+func metricsLabels(opts configOpts) map[string]string {
+	promJob := fmt.Sprintf("ts_%s_default_test", opts.proxyType)
+	if !opts.namespaced {
+		promJob = fmt.Sprintf("ts_%s_test", opts.proxyType)
+	}
+	labels := map[string]string{
+		"tailscale.com/managed":        "true",
+		"tailscale.com/metrics-target": opts.stsName,
+		"ts_prom_job":                  promJob,
+		"ts_proxy_type":                opts.proxyType,
+		"ts_proxy_parent_name":         "test",
+	}
+	if opts.namespaced {
+		labels["ts_proxy_parent_namespace"] = "default"
+	}
+	return labels
+}
+
+func expectedServiceMonitor(t *testing.T, opts configOpts) *unstructured.Unstructured {
+	t.Helper()
+	labels := metricsLabels(opts)
+	name := metricsResourceName(opts.stsName)
+	sm := &ServiceMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       opts.tailscaleNamespace,
+			Labels:          labels,
+			ResourceVersion: "1",
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Service", Name: name, BlockOwnerDeletion: ptr.To(true), Controller: ptr.To(true)}},
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ServiceMonitor",
+			APIVersion: "monitoring.coreos.com/v1",
+		},
+		Spec: ServiceMonitorSpec{
+			Selector: metav1.LabelSelector{MatchLabels: labels},
+			Endpoints: []ServiceMonitorEndpoint{{
+				Port: "metrics",
+			}},
+			NamespaceSelector: ServiceMonitorNamespaceSelector{
+				MatchNames: []string{opts.tailscaleNamespace},
+			},
+			JobLabel: "ts_prom_job",
+			TargetLabels: []string{
+				"ts_proxy_parent_name",
+				"ts_proxy_parent_namespace",
+				"ts_proxy_type",
+			},
+		},
+	}
+	u, err := serviceMonitorToUnstructured(sm)
+	if err != nil {
+		t.Fatalf("error converting ServiceMonitor to unstructured: %v", err)
+	}
+	return u
 }
 
 func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Secret {
@@ -499,6 +632,21 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 	}
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Fatalf("unexpected %s (-got +want):\n%s", reflect.TypeOf(want).Elem().Name(), diff)
+	}
+}
+
+func expectEqualUnstructured(t *testing.T, client client.Client, want *unstructured.Unstructured) {
+	t.Helper()
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(want.GroupVersionKind())
+	if err := client.Get(context.Background(), types.NamespacedName{
+		Name:      want.GetName(),
+		Namespace: want.GetNamespace(),
+	}, got); err != nil {
+		t.Fatalf("getting %q: %v", want.GetName(), err)
+	}
+	if diff := cmp.Diff(got, want); diff != "" {
+		t.Fatalf("unexpected contents of Unstructured (-got +want):\n%s", diff)
 	}
 }
 

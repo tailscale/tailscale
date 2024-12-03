@@ -189,6 +189,7 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 			isExitNode: cn.Spec.ExitNode,
 		},
 		ProxyClassName: proxyClass,
+		proxyType:      proxyTypeConnector,
 	}
 
 	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
@@ -253,7 +254,7 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 }
 
 func (a *ConnectorReconciler) maybeCleanupConnector(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) (bool, error) {
-	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(cn.Name, a.tsnamespace, "connector")); err != nil {
+	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(cn.Name, a.tsnamespace, "connector"), proxyTypeConnector); err != nil {
 		return false, fmt.Errorf("failed to cleanup Connector resources: %w", err)
 	} else if !done {
 		logger.Debugf("Connector cleanup not done yet, waiting for next reconcile")

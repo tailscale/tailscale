@@ -259,6 +259,15 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning StatefulSet: %w", err)
 	}
+	mo := &metricsOpts{
+		tsNamespace:  r.tsNamespace,
+		proxyStsName: pg.Name,
+		proxyLabels:  pgLabels(pg.Name, nil),
+		proxyType:    "proxygroup",
+	}
+	if err := reconcileMetricsResources(ctx, logger, mo, proxyClass, r.Client); err != nil {
+		return fmt.Errorf("error reconciling metrics resources: %w", err)
+	}
 
 	if err := r.cleanupDanglingResources(ctx, pg); err != nil {
 		return fmt.Errorf("error cleaning up dangling resources: %w", err)
@@ -325,6 +334,14 @@ func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, pg *tsapi.Proxy
 		if err := r.deleteTailnetDevice(ctx, m.tsID, logger); err != nil {
 			return false, err
 		}
+	}
+
+	mo := &metricsOpts{
+		proxyLabels: pgLabels(pg.Name, nil),
+		tsNamespace: r.tsNamespace,
+		proxyType:   "proxygroup"}
+	if err := maybeCleanupMetricsResources(ctx, mo, r.Client); err != nil {
+		return false, fmt.Errorf("error cleaning up metrics resources: %w", err)
 	}
 
 	logger.Infof("cleaned up ProxyGroup resources")

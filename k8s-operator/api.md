@@ -326,7 +326,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `enable` _boolean_ | Setting enable to true will make the proxy serve Tailscale metrics<br />at <pod-ip>:9002/metrics.<br />In 1.78.x and 1.80.x, this field also serves as the default value for<br />.spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both<br />fields will independently default to false.<br />Defaults to false. |  |  |
+| `enable` _boolean_ | Setting enable to true will make the proxy serve Tailscale metrics<br />at <pod-ip>:9002/metrics.<br />A metrics Service named <proxy-statefulset>-metrics will also be created in the operator's namespace and will<br />serve the metrics at <service-ip>:9002/metrics.<br />In 1.78.x and 1.80.x, this field also serves as the default value for<br />.spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both<br />fields will independently default to false.<br />Defaults to false. |  |  |
+| `serviceMonitor` _[ServiceMonitor](#servicemonitor)_ | Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.<br />The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.<br />The ingested metrics for each Service monitor will have labels to identify the proxy:<br />ts_proxy_type: ingress_service\|ingress_resource\|connector\|proxygroup<br />ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)<br />ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)<br />job: ts_<proxy type>_[<parent namespace>]_<parent_name> |  |  |
 
 
 #### Name
@@ -834,6 +835,22 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `name` _string_ | The name of a Kubernetes Secret in the operator's namespace that contains<br />credentials for writing to the configured bucket. Each key-value pair<br />from the secret's data will be mounted as an environment variable. It<br />should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if<br />using a static access key. |  |  |
+
+
+#### ServiceMonitor
+
+
+
+
+
+
+
+_Appears in:_
+- [Metrics](#metrics)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `enable` _boolean_ | If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled. |  |  |
 
 
 #### StatefulSet
