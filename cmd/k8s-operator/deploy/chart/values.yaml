@@ -22,6 +22,15 @@ operatorConfig:
   defaultTags:
     - "tag:k8s-operator"
 
+  # Set useDefaultSecrets to false if you want to use a secretProviderClass,
+  # or otherwise don't want the default secret to be used
+  useDefaultSecrets: true
+
+  # Extra volumes to be mounted in the operator pod. This is useful for mounting
+  # secrets from secretProviderClass resources.
+  extraVolumes: []
+  extraVolumeMounts: []
+
   image:
     # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/k8s-operator.
     repository: tailscale/k8s-operator
