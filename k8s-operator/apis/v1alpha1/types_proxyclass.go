@@ -206,11 +206,12 @@ type Container struct {
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 	// Container security context.
-	// Security context specified here will override the security context by the operator.
-	// By default the operator:
-	// - sets 'privileged: true' for the init container
-	// - set NET_ADMIN capability for tailscale container for proxies that
-	// are created for Services or Connector.
+	// Security context specified here will override the security context set by the operator.
+	// By default the operator sets the Tailscale container and the Tailscale init container to privileged
+	// for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.
+	// You can reduce the permissions of the Tailscale container to cap NET_ADMIN by
+	// installing device plugin in your cluster and configuring the proxies tun device to be created
+	// by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
 	// +optional
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
