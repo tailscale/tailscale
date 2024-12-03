@@ -205,6 +205,20 @@ type Container struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// Container livenessProbe.
+	// https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#configure-probes
+	// By default Tailscale Kubernetes operator does not apply any liveness probe.
+	// This can be combined with a defined TS_HEALTHCHECK_ADDR_PORT env var to check
+	// a healthz endpoint.
+	// +optional
+	LivenessProbe *corev1.Probe `json:"livenessProbe,omitempty"`
+	// Container readinessProbe.
+	// https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#configure-probes
+	// By default Tailscale Kubernetes operator does not apply any readiness probe.
+	// This can be combined with a defined TS_HEALTHCHECK_ADDR_PORT env var to check
+	// a healthz endpoint.
+	// +optional
+	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
 	// Container security context.
 	// Security context specified here will override the security context by the operator.
 	// By default the operator:
