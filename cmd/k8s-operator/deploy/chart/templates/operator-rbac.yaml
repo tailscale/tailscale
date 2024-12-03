@@ -6,6 +6,10 @@ kind: ServiceAccount
 metadata:
   name: operator
   namespace: {{ .Release.Namespace }}
+  {{- with .Values.operatorConfig.serviceAccountAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
