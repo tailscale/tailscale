@@ -7,6 +7,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -15,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -47,9 +53,7 @@ func TestContainerBoot(t *testing.T) {
 	defer lapi.Close()
 
 	kube := kubeServer{FSRoot: d}
-	if err := kube.Start(); err != nil {
-		t.Fatal(err)
-	}
+	kube.Start(t, "127.0.0.1")
 	defer kube.Close()
 
 	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
@@ -1179,33 +1183,31 @@ func (k *kubeServer) Reset() {
 	k.secret = map[string]string{}
 }
 
-func (k *kubeServer) Start() error {
+func (k *kubeServer) Start(t *testing.T, ip string) {
 	root := filepath.Join(k.FSRoot, "var/run/secrets/kubernetes.io/serviceaccount")
 
 	if err := os.MkdirAll(root, 0700); err != nil {
-		return err
+		t.Fatal(err)
 	}
 
 	if err := os.WriteFile(filepath.Join(root, "namespace"), []byte("default"), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "token"), []byte("bearer_token"), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
 
-	k.srv = httptest.NewTLSServer(k)
+	k.srv = httptestServer(t, ip, k)
 	k.Host = k.srv.Listener.Addr().(*net.TCPAddr).IP.String()
 	k.Port = strconv.Itoa(k.srv.Listener.Addr().(*net.TCPAddr).Port)
 
 	var cert bytes.Buffer
 	if err := pem.Encode(&cert, &pem.Block{Type: "CERTIFICATE", Bytes: k.srv.Certificate().Raw}); err != nil {
-		return err
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "ca.crt"), cert.Bytes(), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
-
-	return nil
 }
 
 func (k *kubeServer) Close() {
@@ -1217,6 +1219,8 @@ func (k *kubeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		panic("client didn't provide bearer token in request")
 	}
 	switch r.URL.Path {
+	case "/api/v1/namespaces/default/secrets":
+		k.serveCreateSecret(w, r)
 	case "/api/v1/namespaces/default/secrets/tailscale":
 		k.serveSecret(w, r)
 	case "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews":
@@ -1248,12 +1252,47 @@ func (k *kubeServer) serveSSAR(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"status":{"allowed":%v}}`, ok)
 }
 
+func (k *kubeServer) serveCreateSecret(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		panic(fmt.Sprintf("unhandled HTTP request %s %s", r.Method, r.URL))
+	}
+
+	bs, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer r.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	k.Lock()
+	defer k.Unlock()
+	payload := map[string]any{}
+	if err := json.Unmarshal(bs, &payload); err != nil {
+		panic("unmarshal failed")
+	}
+	data := payload["data"].(map[string]any)
+	k.secret = map[string]string{}
+	for key, value := range data {
+		v, err := base64.StdEncoding.DecodeString(value.(string))
+		if err != nil {
+			panic("base64 decode failed")
+		}
+		k.secret[key] = string(v)
+	}
+	// The real API echoes back the secret with additional fields set.
+	if _, err := w.Write(bs); err != nil {
+		panic("write failed")
+	}
+}
+
 func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 	bs, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusInternalServerError)
 		return
 	}
+	defer r.Body.Close()
 
 	switch r.Method {
 	case "GET":
@@ -1308,6 +1347,78 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 			panic(fmt.Sprintf("unknown content type %q", r.Header.Get("Content-Type")))
 		}
 	default:
-		panic(fmt.Sprintf("unhandled HTTP method %q", r.Method))
+		panic(fmt.Sprintf("unhandled HTTP request %s %s", r.Method, r.URL))
 	}
+}
+
+func httptestServer(t *testing.T, ip string, handler http.Handler) *httptest.Server {
+	ln, err := net.Listen("tcp", fmt.Sprintf("%s:0", ip))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &httptest.Server{
+		Listener: ln,
+		Config:   &http.Server{Handler: handler},
+	}
+
+	// Generate a TLS certificate valid for ip.
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		IPAddresses:  []net.IP{net.ParseIP(ip)},
+		SerialNumber: big.NewInt(time.Now().Unix()),
+		Subject: pkix.Name{
+			Organization: []string{"Acme Co"},
+		},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(24 * time.Hour),
+
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv.TLS = &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{derBytes},
+			PrivateKey:  priv,
+		}},
+	}
+	srv.StartTLS()
+
+	return srv
+}
+
+// TestFakeKubernetesAPIServer aims to make it trivially easy to run interactive
+// tests against containerboot within a container but without a real k8s cluster.
+// The container just needs enough kube API to store its state in a "Secret".
+//
+// export TS_AUTHKEY=ts...
+// DOCKER_IP=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+// TAGS=test PLATFORM=local REPO=tailscale make publishdevimage
+// FAKE_KUBERNETES_API_IP=${DOCKER_IP} go test -timeout 0 -v -run TestFakeKubernetesAPIServer ./cmd/containerboot/
+// <Run the docker command printed to the terminal>
+func TestFakeKubernetesAPIServer(t *testing.T) {
+	ip := os.Getenv("FAKE_KUBERNETES_API_IP")
+	if ip == "" {
+		t.Skip("not a real test, set FAKE_KUBERNETES_API_IP to run")
+	}
+
+	d := t.TempDir()
+	kube := &kubeServer{FSRoot: d}
+	kube.Start(t, ip)
+	defer kube.Close()
+
+	t.Logf("Fake Kubernetes API server running at https://%s:%s", kube.Host, kube.Port)
+	t.Logf("Read secret:\ncurl --silent --insecure -H \"Authorization: Bearer bearer_token\" https://%s:%s/api/v1/namespaces/default/secrets/tailscale | jq", kube.Host, kube.Port)
+	t.Logf("Run the client:\ndocker run --rm -e TS_USERSPACE=false -e TS_AUTHKEY -e TS_AUTH_ONCE=true --device /dev/net/tun --cap-add NET_ADMIN --cap-add NET_RAW -e KUBERNETES_SERVICE_HOST=%s -e KUBERNETES_SERVICE_PORT_HTTPS=%s -v %s/var/run/secrets:/var/run/secrets -e TS_KUBERNETES_READ_API_SERVER_ADDRESS_FROM_ENV=true tailscale:test", kube.Host, kube.Port, d)
+
+	<-make(chan struct{})
 }
