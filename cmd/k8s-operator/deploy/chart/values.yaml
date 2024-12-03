@@ -8,6 +8,17 @@ oauth: {}
   # clientId: ""
   # clientSecret: ""
 
+# Secret volume. If set it defines the volume the oauth secrets will be mounted
+# from. If unset the volume will reference the Secret named operator-oauth.
+oauthSecretVolume: {}
+  # csi:
+  #   driver: secrets-store.csi.k8s.io
+  #   readOnly: true
+  #   volumeAttributes:
+  #     secretProviderClass: tailscale-oauth
+  #
+  ## NAME is pre-defined!
+
 # installCRDs determines whether tailscale.com CRDs should be installed as part
 # of chart installation. We do not use Helm's CRD installation mechanism as that
 # does not allow for upgrading CRDs.
