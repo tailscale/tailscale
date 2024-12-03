@@ -102,7 +102,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 	oldTSRStatus := tsr.Status.DeepCopy()
 	setStatusReady := func(tsr *tsapi.Recorder, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, status, reason, message, tsr.Generation, r.clock, logger)
-		if !apiequality.Semantic.DeepEqual(oldTSRStatus, tsr.Status) {
+		if !apiequality.Semantic.DeepEqual(oldTSRStatus, &tsr.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, tsr); updateErr != nil {
 				err = errors.Wrap(err, updateErr.Error())

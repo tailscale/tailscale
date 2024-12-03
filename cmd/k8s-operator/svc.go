@@ -131,7 +131,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (err error) {
 	oldSvcStatus := svc.Status.DeepCopy()
 	defer func() {
-		if !apiequality.Semantic.DeepEqual(oldSvcStatus, svc.Status) {
+		if !apiequality.Semantic.DeepEqual(oldSvcStatus, &svc.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			err = errors.Join(err, a.Client.Status().Update(ctx, svc))
 		}
@@ -196,7 +196,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (err error) {
 	oldSvcStatus := svc.Status.DeepCopy()
 	defer func() {
-		if !apiequality.Semantic.DeepEqual(oldSvcStatus, svc.Status) {
+		if !apiequality.Semantic.DeepEqual(oldSvcStatus, &svc.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			err = errors.Join(err, a.Client.Status().Update(ctx, svc))
 		}

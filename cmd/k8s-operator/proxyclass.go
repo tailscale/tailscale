@@ -103,7 +103,7 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	} else {
 		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, pc.Generation, pcr.clock, logger)
 	}
-	if !apiequality.Semantic.DeepEqual(oldPCStatus, pc.Status) {
+	if !apiequality.Semantic.DeepEqual(oldPCStatus, &pc.Status) {
 		if err := pcr.Client.Status().Update(ctx, pc); err != nil {
 			logger.Errorf("error updating ProxyClass status: %v", err)
 			return reconcile.Result{}, err
