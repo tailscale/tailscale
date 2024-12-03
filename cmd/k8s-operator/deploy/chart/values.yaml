@@ -3,13 +3,17 @@
 
 # Operator oauth credentials. If set a Kubernetes Secret with the provided
 # values will be created in the operator namespace. If unset a Secret named
-# operator-oauth must be precreated.
+# operator-oauth must be precreated or oauthSecretVolume needs to be adjusted.
+# This block will be overridden by oauthSecretVolume, if set.
 oauth: {}
   # clientId: ""
   # clientSecret: ""
 
-# Secret volume. If set it defines the volume the oauth secrets will be mounted
-# from. If unset the volume will reference the Secret named operator-oauth.
+# Secret volume.
+# If set it defines the volume the oauth secrets will be mounted from.
+# The volume needs to contain two files named `client_id` and `client_secret`.
+# If unset the volume will reference the Secret named operator-oauth.
+# This block will override the oauth block.
 oauthSecretVolume: {}
   # csi:
   #   driver: secrets-store.csi.k8s.io
