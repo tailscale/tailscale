@@ -142,6 +142,7 @@ type connector struct {
 }
 type tsnetServer interface {
 	CertDomains() []string
+	GetControlURL() string
 }
 
 type tailscaleSTSReconciler struct {
@@ -525,6 +526,10 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			// New style is in the form of cap-<capability-version>.hujson.
 			Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 			Value: "/etc/tsconfig",
+		},
+		corev1.EnvVar{
+			Name:  "TS_EXTRA_ARGS",
+			Value: "--login-server=" + a.tsnetServer.GetControlURL(),
 		},
 	)
 	if sts.ForwardClusterTrafficViaL7IngressProxy {

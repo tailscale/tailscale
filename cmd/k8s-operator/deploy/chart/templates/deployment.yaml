@@ -77,6 +77,8 @@ spec:
               value: "{{ .Values.apiServerProxyConfig.mode }}"
             - name: PROXY_FIREWALL_MODE
               value: {{ .Values.proxyConfig.firewallMode }}
+            - name: TAILSCALE_BASE_URL
+              value: {{ .Values.operatorConfig.controlURL }}
             {{- if .Values.proxyConfig.defaultProxyClass }}
             - name: PROXY_DEFAULT_CLASS
               value: {{ .Values.proxyConfig.defaultProxyClass }}

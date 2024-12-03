@@ -4826,6 +4826,8 @@ spec:
                       value: "false"
                     - name: PROXY_FIREWALL_MODE
                       value: auto
+                    - name: TAILSCALE_BASE_URL
+                      value: https://login.tailscale.com
                     - name: POD_NAME
                       valueFrom:
                         fieldRef:

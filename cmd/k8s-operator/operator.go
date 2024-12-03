@@ -69,6 +69,7 @@ func main() {
 		priorityClassName     = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags                  = defaultEnv("PROXY_TAGS", "tag:k8s")
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
+		tsBaseURL             = defaultEnv("TAILSCALE_BASE_URL", "https://login.tailscale.com")
 		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
@@ -96,6 +97,9 @@ func main() {
 	}
 
 	s, tsClient := initTSNet(zlog)
+
+	tsClient.BaseURL = tsBaseURL
+
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
@@ -125,6 +129,7 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
 		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
 		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		tsBaseURL        = defaultEnv("TAILSCALE_BASE_URL", "https://login.tailscale.com")
 	)
 	startlog := zlog.Named("startup")
 	if clientIDPath == "" || clientSecretPath == "" {
@@ -141,15 +146,16 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 	credentials := clientcredentials.Config{
 		ClientID:     string(clientID),
 		ClientSecret: string(clientSecret),
-		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
+		TokenURL:     tsBaseURL + "/api/v2/oauth/token",
 	}
 	tsClient := tailscale.NewClient("-", nil)
 	tsClient.UserAgent = "tailscale-k8s-operator"
 	tsClient.HTTPClient = credentials.Client(context.Background())
 
 	s := &tsnet.Server{
-		Hostname: hostname,
-		Logf:     zlog.Named("tailscaled").Debugf,
+		Hostname:   hostname,
+		Logf:       zlog.Named("tailscaled").Debugf,
+		ControlURL: tsBaseURL,
 	}
 	if p := os.Getenv("TS_PORT"); p != "" {
 		port, err := strconv.ParseUint(p, 10, 16)
