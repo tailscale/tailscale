@@ -51,12 +51,12 @@ const (
 	labelSvcType = "tailscale.com/svc-type" // ingress or egress
 	typeEgress   = "egress"
 	// maxPorts is the maximum number of ports that can be exposed on a
-	// container. In practice this will be ports in range [3000 - 4000). The
+	// container. In practice this will be ports in range [10000 - 11000). The
 	// high range should make it easier to distinguish container ports from
 	// the tailnet target ports for debugging purposes (i.e when reading
-	// netfilter rules). The limit of 10000 is somewhat arbitrary, the
+	// netfilter rules). The limit of 1000 is somewhat arbitrary, the
 	// assumption is that this would not be hit in practice.
-	maxPorts = 10000
+	maxPorts = 1000
 
 	indexEgressProxyGroup = ".metadata.annotations.egress-proxy-group"
 )
@@ -254,7 +254,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		if !found {
 			// Calculate a free port to expose on container and add
 			// a new PortMap to the ClusterIP Service.
-			if usedPorts.Len() == maxPorts {
+			if usedPorts.Len() >= maxPorts {
 				// TODO(irbekrm): refactor to avoid extra reconciles here. Low priority as in practice,
 				// the limit should not be hit.
 				return nil, false, fmt.Errorf("unable to allocate additional ports on ProxyGroup %s, %d ports already used. Create another ProxyGroup or open an issue if you believe this is unexpected.", proxyGroupName, maxPorts)
@@ -548,13 +548,13 @@ func svcNameBase(s string) string {
 	}
 }
 
-// unusedPort returns a port in range [3000 - 4000). The caller must ensure that
-// usedPorts does not contain all ports in range [3000 - 4000).
+// unusedPort returns a port in range [10000 - 11000). The caller must ensure that
+// usedPorts does not contain all ports in range [10000 - 11000).
 func unusedPort(usedPorts sets.Set[int32]) int32 {
 	foundFreePort := false
 	var suggestPort int32
 	for !foundFreePort {
-		suggestPort = rand.Int32N(maxPorts) + 3000
+		suggestPort = rand.Int32N(maxPorts) + 10000
 		if !usedPorts.Has(suggestPort) {
 			foundFreePort = true
 		}
