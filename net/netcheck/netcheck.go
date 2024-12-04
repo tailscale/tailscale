@@ -236,6 +236,10 @@ type Client struct {
 	// If false, the default net.Resolver will be used, with no caching.
 	UseDNSCache bool
 
+	// if non-zero, force this DERP region to be preferred in all reports where
+	// the DERP is found to be reachable.
+	ForcePreferredDERP int
+
 	// For tests
 	testEnoughRegions      int
 	testCaptivePortalDelay time.Duration
@@ -780,6 +784,12 @@ func (o *GetReportOpts) getLastDERPActivity(region int) time.Time {
 	return o.GetLastDERPActivity(region)
 }
 
+func (c *Client) SetForcePreferredDERP(region int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ForcePreferredDERP = region
+}
+
 // GetReport gets a report. The 'opts' argument is optional and can be nil.
 // Callers are discouraged from passing a ctx with an arbitrary deadline as this
 // may cause GetReport to return prematurely before all reporting methods have
@@ -1277,6 +1287,9 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 		if r.CaptivePortal != "" {
 			fmt.Fprintf(w, " captiveportal=%v", r.CaptivePortal)
 		}
+		if c.ForcePreferredDERP != 0 {
+			fmt.Fprintf(w, " force=%v", c.ForcePreferredDERP)
+		}
 		fmt.Fprintf(w, " derp=%v", r.PreferredDERP)
 		if r.PreferredDERP != 0 {
 			fmt.Fprintf(w, " derpdist=")
@@ -1434,6 +1447,21 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 		// Reset the report's PreferredDERP to be the previous value,
 		// which undoes any region change we made above.
 		r.PreferredDERP = prevDERP
+	}
+	if c.ForcePreferredDERP != 0 {
+		// If the forced DERP region probed successfully, or has recent traffic,
+		// use it.
+		_, haveLatencySample := r.RegionLatency[c.ForcePreferredDERP]
+		var recentActivity bool
+		if lastHeard := rs.opts.getLastDERPActivity(c.ForcePreferredDERP); !lastHeard.IsZero() {
+			now := c.timeNow()
+			recentActivity = lastHeard.After(rs.start)
+			recentActivity = recentActivity || lastHeard.After(now.Add(-PreferredDERPFrameTime))
+		}
+
+		if haveLatencySample || recentActivity {
+			r.PreferredDERP = c.ForcePreferredDERP
+		}
 	}
 }
 

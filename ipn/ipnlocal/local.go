@@ -2920,6 +2920,12 @@ func (b *LocalBackend) DebugPickNewDERP() error {
 	return b.sys.MagicSock.Get().DebugPickNewDERP()
 }
 
+// DebugForcePreferDERP forwards to netcheck.DebugForcePreferDERP.
+// See its docs.
+func (b *LocalBackend) DebugForcePreferDERP(n int) {
+	b.sys.MagicSock.Get().DebugForcePreferDERP(n)
+}
+
 // send delivers n to the connected frontend and any API watchers from
 // LocalBackend.WatchNotifications (via the LocalAPI).
 //

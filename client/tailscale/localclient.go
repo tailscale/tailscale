@@ -493,6 +493,17 @@ func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
 	return nil
 }
 
+// DebugActionBody invokes a debug action with a body parameter, such as
+// "debug-force-prefer-derp".
+// These are development tools and subject to change or removal over time.
+func (lc *LocalClient) DebugActionBody(ctx context.Context, action string, rbody io.Reader) error {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, rbody)
+	if err != nil {
+		return fmt.Errorf("error %w: %s", err, body)
+	}
+	return nil
+}
+
 // DebugResultJSON invokes a debug action and returns its result as something JSON-able.
 // These are development tools and subject to change or removal over time.
 func (lc *LocalClient) DebugResultJSON(ctx context.Context, action string) (any, error) {
