@@ -320,11 +320,11 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	_, tsHost, tsIPs, err := a.ssr.DeviceInfo(ctx, crl)
+	dev, err := a.ssr.DeviceInfo(ctx, crl, logger)
 	if err != nil {
 		return fmt.Errorf("failed to get device ID: %w", err)
 	}
-	if tsHost == "" {
+	if dev == nil || dev.hostname == "" {
 		msg := "no Tailscale hostname known yet, waiting for proxy pod to finish auth"
 		logger.Debug(msg)
 		// No hostname yet. Wait for the proxy pod to auth.
@@ -333,9 +333,9 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	logger.Debugf("setting Service LoadBalancer status to %q, %s", tsHost, strings.Join(tsIPs, ", "))
+	logger.Debugf("setting Service LoadBalancer status to %q, %s", dev.hostname, strings.Join(dev.ips, ", "))
 	ingress := []corev1.LoadBalancerIngress{
-		{Hostname: tsHost},
+		{Hostname: dev.hostname},
 	}
 	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
 	if err != nil {
@@ -343,7 +343,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
 		return errors.New(msg)
 	}
-	for _, ip := range tsIPs {
+	for _, ip := range dev.ips {
 		addr, err := netip.ParseAddr(ip)
 		if err != nil {
 			continue

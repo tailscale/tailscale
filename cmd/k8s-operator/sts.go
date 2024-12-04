@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -197,11 +198,11 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 	}
 	sts.ProxyClass = proxyClass
 
-	secretName, tsConfigHash, configs, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
+	secretName, tsConfigHash, _, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
-	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretName, tsConfigHash, configs)
+	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretName, tsConfigHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
@@ -246,21 +247,21 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 		return false, nil
 	}
 
-	id, _, _, err := a.DeviceInfo(ctx, labels)
+	dev, err := a.DeviceInfo(ctx, labels, logger)
 	if err != nil {
 		return false, fmt.Errorf("getting device info: %w", err)
 	}
-	if id != "" {
-		logger.Debugf("deleting device %s from control", string(id))
-		if err := a.tsClient.DeleteDevice(ctx, string(id)); err != nil {
+	if dev != nil && dev.id != "" {
+		logger.Debugf("deleting device %s from control", string(dev.id))
+		if err := a.tsClient.DeleteDevice(ctx, string(dev.id)); err != nil {
 			errResp := &tailscale.ErrResponse{}
 			if ok := errors.As(err, errResp); ok && errResp.Status == http.StatusNotFound {
-				logger.Debugf("device %s not found, likely because it has already been deleted from control", string(id))
+				logger.Debugf("device %s not found, likely because it has already been deleted from control", string(dev.id))
 			} else {
 				return false, fmt.Errorf("deleting device: %w", err)
 			}
 		} else {
-			logger.Debugf("device %s deleted from control", string(id))
+			logger.Debugf("device %s deleted from control", string(dev.id))
 		}
 	}
 
@@ -440,40 +441,66 @@ func sanitizeConfigBytes(c ipn.ConfigVAlpha) string {
 // that acts as an operator proxy. It retrieves info from a Kubernetes Secret
 // labeled with the provided labels.
 // Either of device ID, hostname and IPs can be empty string if not found in the Secret.
-func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string) (id tailcfg.StableNodeID, hostname string, ips []string, err error) {
+func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string, logger *zap.SugaredLogger) (dev *device, err error) {
 	sec, err := getSingleObject[corev1.Secret](ctx, a.Client, a.operatorNamespace, childLabels)
 	if err != nil {
-		return "", "", nil, err
+		return dev, err
 	}
 	if sec == nil {
-		return "", "", nil, nil
+		return dev, nil
+	}
+	pod := new(corev1.Pod)
+	if err := a.Get(ctx, types.NamespacedName{Namespace: sec.Namespace, Name: sec.Name}, pod); err != nil && !apierrors.IsNotFound(err) {
+		return dev, nil
 	}
 
-	return deviceInfo(sec)
+	return deviceInfo(sec, pod, logger)
 }
 
-func deviceInfo(sec *corev1.Secret) (id tailcfg.StableNodeID, hostname string, ips []string, err error) {
-	id = tailcfg.StableNodeID(sec.Data["device_id"])
+// device contains tailscale state of a proxy device as gathered from its tailscale state Secret.
+type device struct {
+	id       tailcfg.StableNodeID // device's stable ID
+	hostname string               // MagicDNS name of the device
+	ips      []string             // Tailscale IPs of the device
+	// ingressDNSName is the L7 Ingress DNS name. In practice this will be the same value as hostname, but only set
+	// when the device has been configured to serve traffic on it via 'tailscale serve'.
+	ingressDNSName string
+}
+
+func deviceInfo(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) (dev *device, err error) {
+	id := tailcfg.StableNodeID(sec.Data[kubetypes.KeyDeviceID])
 	if id == "" {
-		return "", "", nil, nil
+		return dev, nil
 	}
+	dev = &device{id: id}
 	// Kubernetes chokes on well-formed FQDNs with the trailing dot, so we have
 	// to remove it.
-	hostname = strings.TrimSuffix(string(sec.Data["device_fqdn"]), ".")
-	if hostname == "" {
+	dev.hostname = strings.TrimSuffix(string(sec.Data[kubetypes.KeyDeviceFQDN]), ".")
+	if dev.hostname == "" {
 		// Device ID gets stored and retrieved in a different flow than
 		// FQDN and IPs. A device that acts as Kubernetes operator
-		// proxy, but whose route setup has failed might have an device
+		// proxy, but whose route setup has failed might have a device
 		// ID, but no FQDN/IPs. If so, return the ID, to allow the
 		// operator to clean up such devices.
-		return id, "", nil, nil
+		return dev, nil
 	}
-	if rawDeviceIPs, ok := sec.Data["device_ips"]; ok {
-		if err := json.Unmarshal(rawDeviceIPs, &ips); err != nil {
-			return "", "", nil, err
+	// TODO(irbekrm): we fall back to using the hostname field to determine Ingress's hostname to ensure backwards
+	// compatibility. In 1.82 we can remove this fallback mechanism.
+	dev.ingressDNSName = dev.hostname
+	if proxyCapVer(sec, pod, log) >= 109 {
+		dev.ingressDNSName = strings.TrimSuffix(string(sec.Data[kubetypes.KeyHTTPSEndpoint]), ".")
+		if strings.EqualFold(dev.ingressDNSName, kubetypes.ValueNoHTTPS) {
+			dev.ingressDNSName = ""
 		}
 	}
-	return id, hostname, ips, nil
+	if rawDeviceIPs, ok := sec.Data[kubetypes.KeyDeviceIPs]; ok {
+		ips := make([]string, 0)
+		if err := json.Unmarshal(rawDeviceIPs, &ips); err != nil {
+			return nil, err
+		}
+		dev.ips = ips
+	}
+	return dev, nil
 }
 
 func newAuthKey(ctx context.Context, tsClient tsClient, tags []string) (string, error) {
@@ -500,7 +527,7 @@ var proxyYaml []byte
 //go:embed deploy/manifests/userspace-proxy.yaml
 var userspaceProxyYaml []byte
 
-func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string, _ map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha) (*appsv1.StatefulSet, error) {
+func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
@@ -1083,4 +1110,24 @@ func nameForService(svc *corev1.Service) string {
 
 func isValidFirewallMode(m string) bool {
 	return m == "auto" || m == "nftables" || m == "iptables"
+}
+
+// proxyCapVer accepts a proxy state Secret and a proxy Pod returns the capability version of a proxy Pod.
+// This is best effort - if the capability version can not (currently) be determined, it returns -1.
+func proxyCapVer(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) tailcfg.CapabilityVersion {
+	if sec == nil || pod == nil {
+		return tailcfg.CapabilityVersion(-1)
+	}
+	if len(sec.Data[kubetypes.KeyCapVer]) == 0 || len(sec.Data[kubetypes.KeyPodUID]) == 0 {
+		return tailcfg.CapabilityVersion(-1)
+	}
+	capVer, err := strconv.Atoi(string(sec.Data[kubetypes.KeyCapVer]))
+	if err != nil {
+		log.Infof("[unexpected]: unexpected capability version in proxy's state Secret, expected an integer, got %q", string(sec.Data[kubetypes.KeyCapVer]))
+		return tailcfg.CapabilityVersion(-1)
+	}
+	if !strings.EqualFold(string(pod.ObjectMeta.UID), string(sec.Data[kubetypes.KeyPodUID])) {
+		return tailcfg.CapabilityVersion(-1)
+	}
+	return tailcfg.CapabilityVersion(capVer)
 }

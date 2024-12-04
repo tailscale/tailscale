@@ -19,6 +19,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/kube/kubetypes"
+	"tailscale.com/types/netmap"
 )
 
 // watchServeConfigChanges watches path for changes, and when it sees one, reads
@@ -26,21 +28,21 @@ import (
 // applies it to lc. It exits when ctx is canceled. cdChanged is a channel that
 // is written to when the certDomain changes, causing the serve config to be
 // re-read and applied.
-func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *tailscale.LocalClient) {
+func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *tailscale.LocalClient, kc *kubeClient) {
 	if certDomainAtomic == nil {
-		panic("cd must not be nil")
+		panic("certDomainAtomic must not be nil")
 	}
 	var tickChan <-chan time.Time
 	var eventChan <-chan fsnotify.Event
 	if w, err := fsnotify.NewWatcher(); err != nil {
-		log.Printf("failed to create fsnotify watcher, timer-only mode: %v", err)
+		log.Printf("serve proxy: failed to create fsnotify watcher, timer-only mode: %v", err)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		tickChan = ticker.C
 	} else {
 		defer w.Close()
 		if err := w.Add(filepath.Dir(path)); err != nil {
-			log.Fatalf("failed to add fsnotify watch: %v", err)
+			log.Fatalf("serve proxy: failed to add fsnotify watch: %v", err)
 		}
 		eventChan = w.Events
 	}
@@ -59,22 +61,58 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 			// k8s handles these mounts. So just re-read the file and apply it
 			// if it's changed.
 		}
-		if certDomain == "" {
-			continue
-		}
 		sc, err := readServeConfig(path, certDomain)
 		if err != nil {
-			log.Fatalf("failed to read serve config: %v", err)
+			log.Fatalf("serve proxy: failed to read serve config: %v", err)
 		}
 		if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {
 			continue
 		}
-		log.Printf("Applying serve config")
-		if err := lc.SetServeConfig(ctx, sc); err != nil {
-			log.Fatalf("failed to set serve config: %v", err)
+		validateHTTPSServe(certDomain, sc)
+		if err := updateServeConfig(ctx, sc, certDomain, lc); err != nil {
+			log.Fatalf("serve proxy: error updating serve config: %v", err)
+		}
+		if err := kc.storeHTTPSEndpoint(ctx, certDomain); err != nil {
+			log.Fatalf("serve proxy: error storing HTTPS endpoint: %v", err)
 		}
 		prevServeConfig = sc
 	}
+}
+
+func certDomainFromNetmap(nm *netmap.NetworkMap) string {
+	if len(nm.DNS.CertDomains) == 0 {
+		return ""
+	}
+	return nm.DNS.CertDomains[0]
+}
+
+func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc *tailscale.LocalClient) error {
+	// TODO(irbekrm): This means that serve config that does not expose HTTPS endpoint will not be set for a tailnet
+	// that does not have HTTPS enabled. We probably want to fix this.
+	if certDomain == kubetypes.ValueNoHTTPS {
+		return nil
+	}
+	log.Printf("serve proxy: applying serve config")
+	return lc.SetServeConfig(ctx, sc)
+}
+
+func validateHTTPSServe(certDomain string, sc *ipn.ServeConfig) {
+	if certDomain != kubetypes.ValueNoHTTPS || !hasHTTPSEndpoint(sc) {
+		return
+	}
+	log.Printf(
+		`serve proxy: this node is configured as a proxy that exposes an HTTPS endpoint to tailnet,
+		(perhaps a Kubernetes operator Ingress proxy) but it is not able to issue TLS certs, so this will likely not work.
+		To make it work, ensure that HTTPS is enabled for your tailnet, see https://tailscale.com/kb/1153/enabling-https for more details.`)
+}
+
+func hasHTTPSEndpoint(cfg *ipn.ServeConfig) bool {
+	for _, tcpCfg := range cfg.TCP {
+		if tcpCfg.HTTPS {
+			return true
+		}
+	}
+	return false
 }
 
 // readServeConfig reads the ipn.ServeConfig from path, replacing

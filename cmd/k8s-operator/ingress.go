@@ -279,12 +279,12 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return fmt.Errorf("failed to provision: %w", err)
 	}
 
-	_, tsHost, _, err := a.ssr.DeviceInfo(ctx, crl)
+	dev, err := a.ssr.DeviceInfo(ctx, crl, logger)
 	if err != nil {
-		return fmt.Errorf("failed to get device ID: %w", err)
+		return fmt.Errorf("failed to retrieve Ingress HTTPS endpoint status: %w", err)
 	}
-	if tsHost == "" {
-		logger.Debugf("no Tailscale hostname known yet, waiting for proxy pod to finish auth")
+	if dev == nil || dev.ingressDNSName == "" {
+		logger.Debugf("no Ingress DNS name known yet, waiting for proxy Pod initialize and start serving Ingress")
 		// No hostname yet. Wait for the proxy pod to auth.
 		ing.Status.LoadBalancer.Ingress = nil
 		if err := a.Status().Update(ctx, ing); err != nil {
@@ -293,10 +293,10 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	logger.Debugf("setting ingress hostname to %q", tsHost)
+	logger.Debugf("setting Ingress hostname to %q", dev.ingressDNSName)
 	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
 		{
-			Hostname: tsHost,
+			Hostname: dev.ingressDNSName,
 			Ports: []networkingv1.IngressPortStatus{
 				{
 					Protocol: "TCP",

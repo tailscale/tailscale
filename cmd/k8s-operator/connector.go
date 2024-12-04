@@ -234,21 +234,21 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		return err
 	}
 
-	_, tsHost, ips, err := a.ssr.DeviceInfo(ctx, crl)
+	dev, err := a.ssr.DeviceInfo(ctx, crl, logger)
 	if err != nil {
 		return err
 	}
 
-	if tsHost == "" {
-		logger.Debugf("no Tailscale hostname known yet, waiting for connector pod to finish auth")
+	if dev == nil || dev.hostname == "" {
+		logger.Debugf("no Tailscale hostname known yet, waiting for Connector Pod to finish auth")
 		// No hostname yet. Wait for the connector pod to auth.
 		cn.Status.TailnetIPs = nil
 		cn.Status.Hostname = ""
 		return nil
 	}
 
-	cn.Status.TailnetIPs = ips
-	cn.Status.Hostname = tsHost
+	cn.Status.TailnetIPs = dev.ips
+	cn.Status.Hostname = dev.hostname
 
 	return nil
 }

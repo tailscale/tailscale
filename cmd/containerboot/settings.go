@@ -67,6 +67,7 @@ type settings struct {
 	PodIP               string
 	PodIPv4             string
 	PodIPv6             string
+	PodUID              string
 	HealthCheckAddrPort string
 	LocalAddrPort       string
 	MetricsEnabled      bool
@@ -107,6 +108,7 @@ func configFromEnv() (*settings, error) {
 		HealthCheckEnabled:                    defaultBool("TS_ENABLE_HEALTH_CHECK", false),
 		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
+		PodUID:                                defaultEnv("POD_UID", ""),
 	}
 	podIPs, ok := os.LookupEnv("POD_IPS")
 	if ok {
@@ -203,7 +205,7 @@ func (s *settings) validate() error {
 // setupKube is responsible for doing any necessary configuration and checks to
 // ensure that tailscale state storage and authentication mechanism will work on
 // Kubernetes.
-func (cfg *settings) setupKube(ctx context.Context) error {
+func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 	if cfg.KubeSecret == "" {
 		return nil
 	}

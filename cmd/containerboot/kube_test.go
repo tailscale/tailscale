@@ -21,7 +21,7 @@ func TestSetupKube(t *testing.T) {
 		cfg     *settings
 		wantErr bool
 		wantCfg *settings
-		kc      kubeclient.Client
+		kc      *kubeClient
 	}{
 		{
 			name: "TS_AUTHKEY set, state Secret exists",
@@ -29,14 +29,14 @@ func TestSetupKube(t *testing.T) {
 				AuthKey:    "foo",
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return false, false, nil
 				},
 				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
 					return nil, nil
 				},
-			},
+			}},
 			wantCfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -48,14 +48,14 @@ func TestSetupKube(t *testing.T) {
 				AuthKey:    "foo",
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return false, true, nil
 				},
 				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
 					return nil, &kubeapi.Status{Code: 404}
 				},
-			},
+			}},
 			wantCfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -67,14 +67,14 @@ func TestSetupKube(t *testing.T) {
 				AuthKey:    "foo",
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return false, false, nil
 				},
 				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
 					return nil, &kubeapi.Status{Code: 404}
 				},
-			},
+			}},
 			wantCfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -87,14 +87,14 @@ func TestSetupKube(t *testing.T) {
 				AuthKey:    "foo",
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return false, false, nil
 				},
 				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
 					return nil, &kubeapi.Status{Code: 403}
 				},
-			},
+			}},
 			wantCfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -111,11 +111,11 @@ func TestSetupKube(t *testing.T) {
 				AuthKey:    "foo",
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return false, false, errors.New("broken")
 				},
-			},
+			}},
 			wantErr: true,
 		},
 		{
@@ -127,14 +127,14 @@ func TestSetupKube(t *testing.T) {
 			wantCfg: &settings{
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return false, true, nil
 				},
 				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
 					return nil, &kubeapi.Status{Code: 404}
 				},
-			},
+			}},
 		},
 		{
 			// Interactive login using URL in Pod logs
@@ -145,28 +145,28 @@ func TestSetupKube(t *testing.T) {
 			wantCfg: &settings{
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return false, false, nil
 				},
 				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
 					return &kubeapi.Secret{}, nil
 				},
-			},
+			}},
 		},
 		{
 			name: "TS_AUTHKEY not set, state Secret contains auth key, we do not have RBAC to patch it",
 			cfg: &settings{
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return false, false, nil
 				},
 				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
 					return &kubeapi.Secret{Data: map[string][]byte{"authkey": []byte("foo")}}, nil
 				},
-			},
+			}},
 			wantCfg: &settings{
 				KubeSecret: "foo",
 			},
@@ -177,14 +177,14 @@ func TestSetupKube(t *testing.T) {
 			cfg: &settings{
 				KubeSecret: "foo",
 			},
-			kc: &kubeclient.FakeClient{
+			kc: &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
 				CheckSecretPermissionsImpl: func(context.Context, string) (bool, bool, error) {
 					return true, false, nil
 				},
 				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
 					return &kubeapi.Secret{Data: map[string][]byte{"authkey": []byte("foo")}}, nil
 				},
-			},
+			}},
 			wantCfg: &settings{
 				KubeSecret:         "foo",
 				AuthKey:            "foo",
@@ -194,9 +194,9 @@ func TestSetupKube(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		kc = tt.kc
+		kc := tt.kc
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.cfg.setupKube(context.Background()); (err != nil) != tt.wantErr {
+			if err := tt.cfg.setupKube(context.Background(), kc); (err != nil) != tt.wantErr {
 				t.Errorf("settings.setupKube() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if diff := cmp.Diff(*tt.cfg, *tt.wantCfg); diff != "" {

@@ -142,6 +142,154 @@ func TestTailscaleIngress(t *testing.T) {
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
 }
 
+func TestTailscaleIngressHostname(t *testing.T) {
+	tsIngressClass := &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "tailscale"}, Spec: networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"}}
+	fc := fake.NewFakeClient(tsIngressClass)
+	ft := &fakeTSClient{}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingR := &IngressReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			tsnetServer:       fakeTsnetServer,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// 1. Resources get created for regular Ingress
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"default-test"}},
+			},
+		},
+	}
+	mustCreate(t, fc, ing)
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "1.2.3.4",
+			Ports: []corev1.ServicePort{{
+				Port: 8080,
+				Name: "http"},
+			},
+		},
+	})
+
+	expectReconciled(t, ingR, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
+	mustCreate(t, fc, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fullName,
+			Namespace: "operator-ns",
+			UID:       "test-uid",
+		},
+	})
+	opts := configOpts{
+		stsName:    shortName,
+		secretName: fullName,
+		namespace:  "default",
+		parentType: "ingress",
+		hostname:   "default-test",
+		app:        kubetypes.AppIngressResource,
+	}
+	serveConfig := &ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://1.2.3.4:8080/"}}}},
+	}
+	opts.serveConfig = serveConfig
+
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
+	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
+
+	// 2. Ingress proxy with capability version >= 110 does not have an HTTPS endpoint set
+	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
+		mak.Set(&secret.Data, "device_id", []byte("1234"))
+		mak.Set(&secret.Data, "tailscale_capver", []byte("110"))
+		mak.Set(&secret.Data, "pod_uid", []byte("test-uid"))
+		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
+	})
+	expectReconciled(t, ingR, "default", "test")
+	ing.Finalizers = append(ing.Finalizers, "tailscale.com/finalizer")
+
+	expectEqual(t, fc, ing, nil)
+
+	// 3. Ingress proxy with capability version >= 110 advertises HTTPS endpoint
+	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
+		mak.Set(&secret.Data, "device_id", []byte("1234"))
+		mak.Set(&secret.Data, "tailscale_capver", []byte("110"))
+		mak.Set(&secret.Data, "pod_uid", []byte("test-uid"))
+		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
+		mak.Set(&secret.Data, "https_endpoint", []byte("foo.tailnetxyz.ts.net"))
+	})
+	expectReconciled(t, ingR, "default", "test")
+	ing.Status.LoadBalancer = networkingv1.IngressLoadBalancerStatus{
+		Ingress: []networkingv1.IngressLoadBalancerIngress{
+			{Hostname: "foo.tailnetxyz.ts.net", Ports: []networkingv1.IngressPortStatus{{Port: 443, Protocol: "TCP"}}},
+		},
+	}
+	expectEqual(t, fc, ing, nil)
+
+	// 4. Ingress proxy with capability version >= 110 does not have an HTTPS endpoint ready
+	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
+		mak.Set(&secret.Data, "device_id", []byte("1234"))
+		mak.Set(&secret.Data, "tailscale_capver", []byte("110"))
+		mak.Set(&secret.Data, "pod_uid", []byte("test-uid"))
+		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
+		mak.Set(&secret.Data, "https_endpoint", []byte("no-https"))
+	})
+	expectReconciled(t, ingR, "default", "test")
+	ing.Status.LoadBalancer.Ingress = nil
+	expectEqual(t, fc, ing, nil)
+
+	// 5. Ingress proxy's state has https_endpoints set, but its capver is not matching Pod UID (downgrade)
+	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
+		mak.Set(&secret.Data, "device_id", []byte("1234"))
+		mak.Set(&secret.Data, "tailscale_capver", []byte("110"))
+		mak.Set(&secret.Data, "pod_uid", []byte("not-the-right-uid"))
+		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
+		mak.Set(&secret.Data, "https_endpoint", []byte("bar.tailnetxyz.ts.net"))
+	})
+	ing.Status.LoadBalancer = networkingv1.IngressLoadBalancerStatus{
+		Ingress: []networkingv1.IngressLoadBalancerIngress{
+			{Hostname: "foo.tailnetxyz.ts.net", Ports: []networkingv1.IngressPortStatus{{Port: 443, Protocol: "TCP"}}},
+		},
+	}
+	expectReconciled(t, ingR, "default", "test")
+	expectEqual(t, fc, ing, nil)
+}
+
 func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	// Setup
 	pc := &tsapi.ProxyClass{

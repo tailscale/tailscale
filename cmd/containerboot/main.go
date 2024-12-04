@@ -121,6 +121,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -167,9 +168,13 @@ func main() {
 	bootCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	var kc *kubeClient
 	if cfg.InKubernetes {
-		initKubeClient(cfg.Root)
-		if err := cfg.setupKube(bootCtx); err != nil {
+		kc, err = newKubeClient(cfg.Root, cfg.KubeSecret)
+		if err != nil {
+			log.Fatalf("error initializing kube client: %v", err)
+		}
+		if err := cfg.setupKube(bootCtx, kc); err != nil {
 			log.Fatalf("error setting up for running on Kubernetes: %v", err)
 		}
 	}
@@ -319,11 +324,15 @@ authLoop:
 		}
 	}
 
+	// Remove any serve config and advertised HTTPS endpoint that may have been set by a previous run of
+	// containerboot, but only if we're providing a new one.
 	if cfg.ServeConfigPath != "" {
-		// Remove any serve config that may have been set by a previous run of
-		// containerboot, but only if we're providing a new one.
+		log.Printf("serve proxy: unsetting previous config")
 		if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
 			log.Fatalf("failed to unset serve config: %v", err)
+		}
+		if err := kc.storeHTTPSEndpoint(ctx, ""); err != nil {
+			log.Fatalf("failed to update HTTPS endpoint in tailscale state: %v", err)
 		}
 	}
 
@@ -332,8 +341,14 @@ authLoop:
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
 		log.Printf("Deleting authkey from kube secret")
-		if err := deleteAuthKey(ctx, cfg.KubeSecret); err != nil {
+		if err := kc.deleteAuthKey(ctx); err != nil {
 			log.Fatalf("deleting authkey from kube secret: %v", err)
+		}
+	}
+
+	if hasKubeStateStore(cfg) {
+		if err := kc.storeCapVerUID(ctx, cfg.PodUID); err != nil {
+			log.Fatalf("storing capability version and UID: %v", err)
 		}
 	}
 
@@ -355,10 +370,10 @@ authLoop:
 
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
+
+		triggerWatchServeConfigChanges sync.Once
 	)
-	if cfg.ServeConfigPath != "" {
-		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
-	}
+
 	var nfr linuxfw.NetfilterRunner
 	if isL3Proxy(cfg) {
 		nfr, err = newNetfilterRunner(log.Printf)
@@ -459,7 +474,7 @@ runLoop:
 				// fails.
 				deviceID := n.NetMap.SelfNode.StableID()
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
-					if err := storeDeviceID(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID()); err != nil {
+					if err := kc.storeDeviceID(ctx, n.NetMap.SelfNode.StableID()); err != nil {
 						log.Fatalf("storing device ID in Kubernetes Secret: %v", err)
 					}
 				}
@@ -532,8 +547,11 @@ runLoop:
 					resetTimer(false)
 					backendAddrs = newBackendAddrs
 				}
-				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) != 0 {
-					cd := n.NetMap.DNS.CertDomains[0]
+				if cfg.ServeConfigPath != "" {
+					cd := certDomainFromNetmap(n.NetMap)
+					if cd == "" {
+						cd = kubetypes.ValueNoHTTPS
+					}
 					prev := certDomain.Swap(ptr.To(cd))
 					if prev == nil || *prev != cd {
 						select {
@@ -575,7 +593,7 @@ runLoop:
 				// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
 				deviceEndpoints := []any{n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses()}
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
-					if err := storeDeviceEndpoints(ctx, cfg.KubeSecret, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
+					if err := kc.storeDeviceEndpoints(ctx, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
 						log.Fatalf("storing device IPs and FQDN in Kubernetes Secret: %v", err)
 					}
 				}
@@ -583,6 +601,13 @@ runLoop:
 				if healthCheck != nil {
 					healthCheck.update(len(addrs) != 0)
 				}
+
+				if cfg.ServeConfigPath != "" {
+					triggerWatchServeConfigChanges.Do(func() {
+						go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client, kc)
+					})
+				}
+
 				if egressSvcsNotify != nil {
 					egressSvcsNotify <- n
 				}
