@@ -378,6 +378,58 @@ func (c *Client) tlsHandshake(tcpConn net.Conn, node *tailcfg.DERPNode) (tlsHand
 	}, nil
 }
 
+// upgradeConnection upgrades the connection to the given DERPNode.
+func (c *Client) upgradeConnection(connData tlsHandshakeData, node *tailcfg.DERPNode, idealNodeHeaderValue *string) (*bufio.ReadWriter, error) {
+	brw := bufio.NewReadWriter(bufio.NewReader(connData.httpConn), bufio.NewWriter(connData.httpConn))
+
+	req, err := http.NewRequest("GET", c.urlString(node), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Upgrade", "DERP")
+	req.Header.Set("Connection", "Upgrade")
+	if idealNodeHeaderValue != nil {
+		// This is purely informative for now (2024-07-06) for stats:
+		req.Header.Set(derp.IdealNodeHeader, *idealNodeHeaderValue)
+	}
+
+	if !connData.serverPub.IsZero() && connData.serverProtoVersion != 0 {
+		// parseMetaCert found the server's public key (no TLS
+		// middlebox was in the way), so skip the HTTP upgrade
+		// exchange.  See https://github.com/tailscale/tailscale/issues/693
+		// for an overview. We still send the HTTP request
+		// just to get routed into the server's HTTP Handler so it
+		// can Hijack the request, but we signal with a special header
+		// that we don't want to deal with its HTTP response.
+		req.Header.Set(fastStartHeader, "1") // suppresses the server's HTTP response
+		if err := req.Write(brw); err != nil {
+			return nil, err
+		}
+		// No need to flush the HTTP request. the derp.Client's initial
+		// client auth frame will flush it.
+	} else {
+		if err := req.Write(brw); err != nil {
+			return nil, err
+		}
+		if err := brw.Flush(); err != nil {
+			return nil, err
+		}
+
+		resp, err := http.ReadResponse(brw.Reader, req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusSwitchingProtocols {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("GET failed: %v: %s", err, b)
+		}
+	}
+
+	return brw, nil
+}
+
 func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, connGen int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -513,61 +565,16 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		return nil, 0, err
 	}
 
-	brw := bufio.NewReadWriter(bufio.NewReader(connData.httpConn), bufio.NewWriter(connData.httpConn))
-	var derpClient *derp.Client
-
-	req, err := http.NewRequest("GET", c.urlString(node), nil)
+	var idealNodeHeaderValue *string
+	if !idealNodeInRegion && reg != nil {
+		idealNodeHeaderValue = &reg.Nodes[0].Name
+	}
+	brw, err := c.upgradeConnection(connData, node, idealNodeHeaderValue)
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("Upgrade", "DERP")
-	req.Header.Set("Connection", "Upgrade")
-	if !idealNodeInRegion && reg != nil {
-		// This is purely informative for now (2024-07-06) for stats:
-		req.Header.Set(derp.IdealNodeHeader, reg.Nodes[0].Name)
-		// TODO(bradfitz,raggi): start a time.AfterFunc for 30m-1h or so to
-		// dialNode(reg.Nodes[0]) and see if we can even TCP connect to it. If
-		// so, TLS handshake it as well (which is mixed up in this massive
-		// connect method) and then if it all appears good, grab the mutex, bump
-		// connGen, finish the Upgrade, close the old one, and set a new field
-		// on Client that's like "here's the connect result and connGen for the
-		// next connect that comes in"). Tracking bug for all this is:
-		// https://github.com/tailscale/tailscale/issues/12724
-	}
 
-	if !connData.serverPub.IsZero() && connData.serverProtoVersion != 0 {
-		// parseMetaCert found the server's public key (no TLS
-		// middlebox was in the way), so skip the HTTP upgrade
-		// exchange.  See https://github.com/tailscale/tailscale/issues/693
-		// for an overview. We still send the HTTP request
-		// just to get routed into the server's HTTP Handler so it
-		// can Hijack the request, but we signal with a special header
-		// that we don't want to deal with its HTTP response.
-		req.Header.Set(fastStartHeader, "1") // suppresses the server's HTTP response
-		if err := req.Write(brw); err != nil {
-			return nil, 0, err
-		}
-		// No need to flush the HTTP request. the derp.Client's initial
-		// client auth frame will flush it.
-	} else {
-		if err := req.Write(brw); err != nil {
-			return nil, 0, err
-		}
-		if err := brw.Flush(); err != nil {
-			return nil, 0, err
-		}
-
-		resp, err := http.ReadResponse(brw.Reader, req)
-		if err != nil {
-			return nil, 0, err
-		}
-		if resp.StatusCode != http.StatusSwitchingProtocols {
-			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
-		}
-	}
-	derpClient, err = derp.NewClient(c.privateKey, connData.httpConn, brw, c.logf,
+	derpClient, err := derp.NewClient(c.privateKey, connData.httpConn, brw, c.logf,
 		derp.MeshKey(c.MeshKey),
 		derp.ServerPublicKey(connData.serverPub),
 		derp.CanAckPings(c.canAckPings),
