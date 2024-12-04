@@ -46,7 +46,6 @@ func main() {
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		TokenURL:     baseURL + "/api/v2/oauth/token",
-		Scopes:       []string{"device"},
 	}
 
 	ctx := context.Background()
