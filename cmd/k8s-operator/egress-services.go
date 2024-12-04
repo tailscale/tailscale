@@ -123,7 +123,7 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 
 	oldStatus := svc.Status.DeepCopy()
 	defer func() {
-		if !apiequality.Semantic.DeepEqual(oldStatus, svc.Status) {
+		if !apiequality.Semantic.DeepEqual(oldStatus, &svc.Status) {
 			err = errors.Join(err, esr.Status().Update(ctx, svc))
 		}
 	}()

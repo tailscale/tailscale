@@ -86,7 +86,7 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			return reconcile.Result{}, nil
 		}
 		logger.Info("Cleaning up DNSConfig resources")
-		if err := a.maybeCleanup(ctx, &dnsCfg, logger); err != nil {
+		if err := a.maybeCleanup(&dnsCfg); err != nil {
 			logger.Errorf("error cleaning up reconciler resource: %v", err)
 			return res, err
 		}
@@ -100,9 +100,9 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	oldCnStatus := dnsCfg.Status.DeepCopy()
-	setStatus := func(dnsCfg *tsapi.DNSConfig, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
+	setStatus := func(dnsCfg *tsapi.DNSConfig, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetDNSConfigCondition(dnsCfg, tsapi.NameserverReady, status, reason, message, dnsCfg.Generation, a.clock, logger)
-		if !apiequality.Semantic.DeepEqual(oldCnStatus, dnsCfg.Status) {
+		if !apiequality.Semantic.DeepEqual(oldCnStatus, &dnsCfg.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := a.Client.Status().Update(ctx, dnsCfg); updateErr != nil {
 				err = errors.Wrap(err, updateErr.Error())
@@ -118,7 +118,7 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		msg := "invalid cluster configuration: more than one tailscale.com/dnsconfigs found. Please ensure that no more than one is created."
 		logger.Error(msg)
 		a.recorder.Event(&dnsCfg, corev1.EventTypeWarning, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
-		setStatus(&dnsCfg, tsapi.NameserverReady, metav1.ConditionFalse, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
+		setStatus(&dnsCfg, metav1.ConditionFalse, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
 	}
 
 	if !slices.Contains(dnsCfg.Finalizers, FinalizerName) {
@@ -127,7 +127,7 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		if err := a.Update(ctx, &dnsCfg); err != nil {
 			msg := fmt.Sprintf(messageNameserverCreationFailed, err)
 			logger.Error(msg)
-			return setStatus(&dnsCfg, tsapi.NameserverReady, metav1.ConditionFalse, reasonNameserverCreationFailed, msg)
+			return setStatus(&dnsCfg, metav1.ConditionFalse, reasonNameserverCreationFailed, msg)
 		}
 	}
 	if err := a.maybeProvision(ctx, &dnsCfg, logger); err != nil {
@@ -149,7 +149,7 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		dnsCfg.Status.Nameserver = &tsapi.NameserverStatus{
 			IP: ip,
 		}
-		return setStatus(&dnsCfg, tsapi.NameserverReady, metav1.ConditionTrue, reasonNameserverCreated, reasonNameserverCreated)
+		return setStatus(&dnsCfg, metav1.ConditionTrue, reasonNameserverCreated, reasonNameserverCreated)
 	}
 	logger.Info("nameserver Service does not have an IP address allocated, waiting...")
 	return reconcile.Result{}, nil
@@ -188,7 +188,7 @@ func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsa
 // maybeCleanup removes DNSConfig from being tracked. The cluster resources
 // created, will be automatically garbage collected as they are owned by the
 // DNSConfig.
-func (a *NameserverReconciler) maybeCleanup(ctx context.Context, dnsCfg *tsapi.DNSConfig, logger *zap.SugaredLogger) error {
+func (a *NameserverReconciler) maybeCleanup(dnsCfg *tsapi.DNSConfig) error {
 	a.mu.Lock()
 	a.managedNameservers.Remove(dnsCfg.UID)
 	a.mu.Unlock()

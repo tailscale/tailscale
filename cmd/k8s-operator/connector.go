@@ -113,7 +113,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	setStatus := func(cn *tsapi.Connector, _ tsapi.ConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetConnectorCondition(cn, tsapi.ConnectorReady, status, reason, message, cn.Generation, a.clock, logger)
 		var updateErr error
-		if !apiequality.Semantic.DeepEqual(oldCnStatus, cn.Status) {
+		if !apiequality.Semantic.DeepEqual(oldCnStatus, &cn.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			updateErr = a.Client.Status().Update(ctx, cn)
 		}
