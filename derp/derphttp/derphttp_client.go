@@ -32,6 +32,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -87,19 +88,20 @@ type Client struct {
 	// Client.conn holds mu.
 	addrFamSelAtomic syncs.AtomicValue[AddressFamilySelector]
 
-	mu           sync.Mutex
-	atomicState  syncs.AtomicValue[ConnectedState] // hold mu to write
-	started      bool                              // true upon first connect, never transitions to false
-	preferred    bool
-	canAckPings  bool
-	closed       bool
-	netConn      io.Closer
-	client       *derp.Client
-	connGen      int // incremented once per new connection; valid values are >0
-	serverPubKey key.NodePublic
-	tlsState     *tls.ConnectionState
-	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
-	clock        tstime.Clock
+	mu                        sync.Mutex
+	atomicState               syncs.AtomicValue[ConnectedState] // hold mu to write
+	started                   bool                              // true upon first connect, never transitions to false
+	preferred                 bool
+	canAckPings               bool
+	closed                    bool
+	netConn                   io.Closer
+	client                    *derp.Client
+	connGen                   int // incremented once per new connection; valid values are >0
+	serverPubKey              key.NodePublic
+	tlsState                  *tls.ConnectionState
+	pingOut                   map[derp.PingMessage]chan<- bool // chan to send to on pong
+	clock                     tstime.Clock
+	attemptingIdealConnection bool
 }
 
 // ConnectedState describes the state of a derphttp Client.
@@ -430,6 +432,110 @@ func (c *Client) upgradeConnection(connData tlsHandshakeData, node *tailcfg.DERP
 	return brw, nil
 }
 
+// attemptIdealConnection attempts to establish a connection to the passed
+// in primary DERPNode and updates the connection data on the client if
+// successful.
+//
+// A successful connection here means that we have both a TCP connection and
+// that a TLS handshake has succeeded, after which we close the existing connection
+// to the non-ideal DERP before proceeding with upgrading our ideal connection
+// and updating the connection data on the client using the ideal connection.
+//
+// This method should only be called if we have a non-ideal connection already from
+// the regular flow through connect.
+func (c *Client) attemptIdealConnection(ctx context.Context, node *tailcfg.DERPNode, caller string) (err error) {
+	// timeout is the fallback maximum time (if ctx doesn't limit
+	// it further) to do all of: DNS + TCP + TLS + HTTP Upgrade +
+	// DERP upgrade.
+	const timeout = 10 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Either timeout fired (handled below), or
+			// we're returning via the defer cancel()
+			// below.
+		case <-c.ctx.Done():
+			// Propagate a Client.Close call into
+			// cancelling this context.
+			cancel()
+		}
+	}()
+	defer cancel()
+
+	var tcpConn net.Conn
+
+	defer func() {
+		if err != nil {
+			if ctx.Err() != nil {
+				err = fmt.Errorf("%v: %v", ctx.Err(), err)
+			}
+			err = fmt.Errorf("%s connect to %v: %v", caller, node.HostName, err)
+			if tcpConn != nil {
+				go tcpConn.Close()
+			}
+		}
+	}()
+
+	tcpConn, err = c.dialNode(ctx, node)
+	if err != nil {
+		return err
+	}
+
+	connData, err := c.tlsHandshake(tcpConn, node)
+	if err != nil {
+		return err
+	}
+
+	// We've established a TCP connection and successfully performed
+	// a TLS handshake with our ideal home DERP, close the existing
+	// non-ideal connection so that we can upgrade our new ideal
+	// connection and swap the client over to using this ideal connection.
+	c.closeForReconnect(c.client)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	brw, err := c.upgradeConnection(connData, node, nil)
+	if err != nil {
+		return err
+	}
+
+	derpClient, err := derp.NewClient(c.privateKey, connData.httpConn, brw, c.logf,
+		derp.MeshKey(c.MeshKey),
+		derp.ServerPublicKey(connData.serverPub),
+		derp.CanAckPings(c.canAckPings),
+		derp.IsProber(c.IsProber),
+	)
+	if err != nil {
+		return err
+	}
+	if err := derpClient.NotePreferred(true); err != nil {
+		go connData.httpConn.Close()
+		return err
+	}
+
+	if c.WatchConnectionChanges {
+		if err := derpClient.WatchConnectionChanges(); err != nil {
+			go connData.httpConn.Close()
+			return err
+		}
+	}
+	c.preferred = true
+	c.serverPubKey = derpClient.ServerPublicKey()
+	c.client = derpClient
+	c.netConn = tcpConn
+	c.tlsState = &connData.tlsState
+	c.connGen++
+
+	localAddr, _ := c.client.LocalAddr()
+	c.atomicState.Store(ConnectedState{
+		Connected: true,
+		LocalAddr: localAddr,
+	})
+	return nil
+}
+
 func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, connGen int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -602,6 +708,28 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	c.netConn = tcpConn
 	c.tlsState = &connData.tlsState
 	c.connGen++
+
+	if !idealNodeInRegion && !c.attemptingIdealConnection && reg != nil {
+		c.attemptingIdealConnection = true
+
+		go func() {
+			bo := backoff.NewBackoff("attempt-ideal-derp-connection", c.logf, 1*time.Hour)
+
+			for {
+				newCtx := c.newContext()
+
+				err := c.attemptIdealConnection(newCtx, reg.Nodes[0], "derphttp.Client.connect")
+				if err == nil {
+					break
+				}
+				bo.BackOff(newCtx, err)
+			}
+
+			c.mu.Lock()
+			c.attemptingIdealConnection = false
+			c.mu.Unlock()
+		}()
+	}
 
 	localAddr, _ := c.client.LocalAddr()
 	c.atomicState.Store(ConnectedState{
