@@ -1157,7 +1157,6 @@ func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 		ClientID:     "some-client-id", // ignored
 		ClientSecret: clientSecret,
 		TokenURL:     baseURL + "/api/v2/oauth/token",
-		Scopes:       []string{"device"},
 	}
 
 	tsClient := tailscale.NewClient("-", nil)
