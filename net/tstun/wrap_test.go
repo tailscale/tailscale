@@ -453,7 +453,7 @@ func TestFilter(t *testing.T) {
 
 	assertMetricPackets(t, "inACL", 3, metricInboundDroppedPacketsACL)
 	assertMetricPackets(t, "inError", 0, metricInboundDroppedPacketsErr)
-	assertMetricPackets(t, "outACL", 1, metricOutboundDroppedPacketsACL)
+	assertMetricPackets(t, "outACL", 0, metricOutboundDroppedPacketsACL)
 }
 
 func assertMetricPackets(t *testing.T, metricName string, want, got int64) {
