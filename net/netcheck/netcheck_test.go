@@ -201,6 +201,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		steps       []step
 		homeParams  *tailcfg.DERPHomeParams
 		opts        *GetReportOpts
+		forcedDERP  int // if non-zero, force this DERP to be the preferred one
 		wantDERP    int // want PreferredDERP on final step
 		wantPrevLen int // wanted len(c.prev)
 	}{
@@ -366,12 +367,65 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 2,
 			wantDERP:    1, // diff is 11ms, but d2 is greater than 2/3s of d1
 		},
+		{
+			name: "forced_two",
+			steps: []step{
+				{time.Second, report("d1", 2, "d2", 3)},
+				{2 * time.Second, report("d1", 4, "d2", 3)},
+			},
+			forcedDERP:  2,
+			wantPrevLen: 2,
+			wantDERP:    2,
+		},
+		{
+			name: "forced_two_unavailable",
+			steps: []step{
+				{time.Second, report("d1", 2, "d2", 1)},
+				{2 * time.Second, report("d1", 4)},
+			},
+			forcedDERP:  2,
+			wantPrevLen: 2,
+			wantDERP:    1,
+		},
+		{
+			name: "forced_two_no_probe_recent_activity",
+			steps: []step{
+				{time.Second, report("d1", 2)},
+				{2 * time.Second, report("d1", 4)},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+					1: startTime,
+					2: startTime.Add(time.Second),
+				}),
+			},
+			forcedDERP:  2,
+			wantPrevLen: 2,
+			wantDERP:    2,
+		},
+		{
+			name: "forced_two_no_probe_no_recent_activity",
+			steps: []step{
+				{time.Second, report("d1", 2)},
+				{PreferredDERPFrameTime + time.Second, report("d1", 4)},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+					1: startTime,
+					2: startTime,
+				}),
+			},
+			forcedDERP:  2,
+			wantPrevLen: 2,
+			wantDERP:    1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeTime := startTime
 			c := &Client{
-				TimeNow: func() time.Time { return fakeTime },
+				TimeNow:            func() time.Time { return fakeTime },
+				ForcePreferredDERP: tt.forcedDERP,
 			}
 			dm := &tailcfg.DERPMap{HomeParams: tt.homeParams}
 			rs := &reportState{

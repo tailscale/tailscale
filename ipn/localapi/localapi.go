@@ -634,6 +634,13 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		}
 	case "pick-new-derp":
 		err = h.b.DebugPickNewDERP()
+	case "force-prefer-derp":
+		var n int
+		err = json.NewDecoder(r.Body).Decode(&n)
+		if err != nil {
+			break
+		}
+		h.b.DebugForcePreferDERP(n)
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:

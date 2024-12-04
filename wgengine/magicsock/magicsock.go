@@ -3013,6 +3013,14 @@ func (c *Conn) DebugPickNewDERP() error {
 	return errors.New("too few regions")
 }
 
+func (c *Conn) DebugForcePreferDERP(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.logf("magicsock: [debug] force preferred DERP set to: %d", n)
+	c.netChecker.SetForcePreferredDERP(n)
+}
+
 // portableTrySetSocketBuffer sets SO_SNDBUF and SO_RECVBUF on pconn to socketBufferSize,
 // logging an error if it occurs.
 func portableTrySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {

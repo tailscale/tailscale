@@ -176,6 +176,12 @@ var debugCmd = &ffcli.Command{
 			ShortHelp:  "Switch to some other random DERP home region for a short time",
 		},
 		{
+			Name:       "force-prefer-derp",
+			ShortUsage: "tailscale debug force-prefer-derp",
+			Exec:       forcePreferDERP,
+			ShortHelp:  "Prefer the given region ID if reachable (until restart, or 0 to clear)",
+		},
+		{
 			Name:       "force-netmap-update",
 			ShortUsage: "tailscale debug force-netmap-update",
 			Exec:       localAPIAction("force-netmap-update"),
@@ -574,6 +580,25 @@ func runDERPMap(ctx context.Context, args []string) error {
 	enc := json.NewEncoder(Stdout)
 	enc.SetIndent("", "\t")
 	enc.Encode(dm)
+	return nil
+}
+
+func forcePreferDERP(ctx context.Context, args []string) error {
+	var n int
+	if len(args) != 1 {
+		return errors.New("expected exactly one integer argument")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("expected exactly one integer argument: %w", err)
+	}
+	b, err := json.Marshal(n)
+	if err != nil {
+		return fmt.Errorf("failed to marshal DERP region: %w", err)
+	}
+	if err := localClient.DebugActionBody(ctx, "force-prefer-derp", bytes.NewReader(b)); err != nil {
+		return fmt.Errorf("failed to force preferred DERP: %w", err)
+	}
 	return nil
 }
 
