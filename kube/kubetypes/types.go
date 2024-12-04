@@ -28,15 +28,14 @@ const (
 	MetricProxyGroupEgressCount          = "k8s_proxygroup_egress_resources"
 	MetricProxyGroupIngressCount         = "k8s_proxygroup_ingress_resources"
 
-	// TODO: rename this file, this is not a metric
 	// Keys that containerboot writes to state file that can be used to determine its state.
 	// fields set in Tailscale state Secret. These are mostly used by the Tailscale Kubernetes operator to determine
 	// the state of this tailscale device.
 	KeyDeviceID   string = "device_id"   // node stable ID of the device
 	KeyDeviceFQDN string = "device_fqdn" // device's tailnet hostname
 	KeyDeviceIPs  string = "device_ips"  // device's tailnet IPs
-	// KeyCapVer contains Tailscale capability version of a proxy in form <capver>[:<pod-uid>]. This is used by the
-	// Kubernetes operator to determine the capability version of a deployed proxy.
+	KeyPodUID     string = "pod_uid"     // Pod UID
+	// KeyCapVer contains Tailscale capability version of this proxy instance.
 	KeyCapVer string = "tailscale_capver"
 	// KeyHTTPSEndpoint is a name of a field that can be set to the value of any HTTPS endpoint currently exposed by
 	// this device to the tailnet. This is used by the Kubernetes operator Ingress proxy to communicate to the operator

@@ -69,8 +69,11 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 			continue
 		}
 		validateHTTPSServe(certDomain, sc)
-		if err := updateServeConfig(ctx, sc, certDomain, kc, lc); err != nil {
+		if err := updateServeConfig(ctx, sc, certDomain, lc); err != nil {
 			log.Fatalf("serve proxy: error updating serve config: %v", err)
+		}
+		if err := kc.storeHTTPSEndpoint(ctx, certDomain); err != nil {
+			log.Fatalf("serve proxy: error storing HTTPS endpoint: %v", err)
 		}
 		prevServeConfig = sc
 	}
@@ -83,12 +86,7 @@ func certDomainFromNetmap(nm *netmap.NetworkMap) string {
 	return nm.DNS.CertDomains[0]
 }
 
-func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, kc *kubeClient, lc *tailscale.LocalClient) error {
-	defer func() {
-		if err := kc.storeHTTPSEndpoint(ctx, certDomain); err != nil {
-			log.Printf("[unexpected]: serve proxy: error storing HTTPS endpoint: %v", err)
-		}
-	}()
+func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc *tailscale.LocalClient) error {
 	// TODO(irbekrm): This means that serve config that does not expose HTTPS endpoint will not be set for a tailnet
 	// that does not have HTTPS enabled. We probably want to fix this.
 	if certDomain == kubetypes.ValueNoHTTPS {
@@ -105,7 +103,7 @@ func validateHTTPSServe(certDomain string, sc *ipn.ServeConfig) {
 	log.Printf(
 		`serve proxy: this node is configured as a proxy that exposes an HTTPS endpoint to tailnet,
 		(perhaps a Kubernetes operator Ingress proxy) but it is not able to issue TLS certs, so this will likely not work.
-		To make it work, ensure that HTTPS is enabled for you tailnet, see https://tailscale.com/kb/1153/enabling-https or this will not work.`)
+		To make it work, ensure that HTTPS is enabled for your tailnet, see https://tailscale.com/kb/1153/enabling-https for more details.`)
 }
 
 func hasHTTPSEndpoint(cfg *ipn.ServeConfig) bool {

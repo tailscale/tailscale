@@ -347,8 +347,8 @@ authLoop:
 	}
 
 	if hasKubeStateStore(cfg) {
-		if err := kc.storeCapVer(ctx, cfg.PodUID); err != nil {
-			log.Fatalf("storing capability version: %v", err)
+		if err := kc.storeCapVerUID(ctx, cfg.PodUID); err != nil {
+			log.Fatalf("storing capability version and UID: %v", err)
 		}
 	}
 
@@ -371,9 +371,6 @@ authLoop:
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
 
-		// triggerWatchServeConfigChanges = sync.OnceFunc(func() {
-		// 	go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client, kc)
-		// })
 		triggerWatchServeConfigChanges sync.Once
 	)
 

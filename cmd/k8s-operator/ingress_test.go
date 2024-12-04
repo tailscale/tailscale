@@ -236,7 +236,8 @@ func TestTailscaleIngressHostname(t *testing.T) {
 	// 2. Ingress proxy with capability version >= 110 does not have an HTTPS endpoint set
 	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
 		mak.Set(&secret.Data, "device_id", []byte("1234"))
-		mak.Set(&secret.Data, "tailscale_capver", []byte("110:test-uid"))
+		mak.Set(&secret.Data, "tailscale_capver", []byte("110"))
+		mak.Set(&secret.Data, "pod_uid", []byte("test-uid"))
 		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
 	})
 	expectReconciled(t, ingR, "default", "test")
@@ -247,7 +248,8 @@ func TestTailscaleIngressHostname(t *testing.T) {
 	// 3. Ingress proxy with capability version >= 110 advertises HTTPS endpoint
 	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
 		mak.Set(&secret.Data, "device_id", []byte("1234"))
-		mak.Set(&secret.Data, "tailscale_capver", []byte("110:test-uid"))
+		mak.Set(&secret.Data, "tailscale_capver", []byte("110"))
+		mak.Set(&secret.Data, "pod_uid", []byte("test-uid"))
 		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
 		mak.Set(&secret.Data, "https_endpoint", []byte("foo.tailnetxyz.ts.net"))
 	})
@@ -262,7 +264,8 @@ func TestTailscaleIngressHostname(t *testing.T) {
 	// 4. Ingress proxy with capability version >= 110 does not have an HTTPS endpoint ready
 	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
 		mak.Set(&secret.Data, "device_id", []byte("1234"))
-		mak.Set(&secret.Data, "tailscale_capver", []byte("110:test-uid"))
+		mak.Set(&secret.Data, "tailscale_capver", []byte("110"))
+		mak.Set(&secret.Data, "pod_uid", []byte("test-uid"))
 		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
 		mak.Set(&secret.Data, "https_endpoint", []byte("no-https"))
 	})
@@ -273,7 +276,8 @@ func TestTailscaleIngressHostname(t *testing.T) {
 	// 5. Ingress proxy's state has https_endpoints set, but its capver is not matching Pod UID (downgrade)
 	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
 		mak.Set(&secret.Data, "device_id", []byte("1234"))
-		mak.Set(&secret.Data, "tailscale_capver", []byte("110:not-the-right-uid"))
+		mak.Set(&secret.Data, "tailscale_capver", []byte("110"))
+		mak.Set(&secret.Data, "pod_uid", []byte("not-the-right-uid"))
 		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
 		mak.Set(&secret.Data, "https_endpoint", []byte("bar.tailnetxyz.ts.net"))
 	})

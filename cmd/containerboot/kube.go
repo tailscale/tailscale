@@ -45,8 +45,7 @@ func newKubeClient(root string, stateSecret string) (*kubeClient, error) {
 	return &kubeClient{Client: kc, stateSecret: stateSecret}, nil
 }
 
-// storeDeviceID writes deviceID to 'device_id' data field of the named
-// Kubernetes Secret.
+// storeDeviceID writes deviceID to 'device_id' data field of the client's state Secret.
 func (kc *kubeClient) storeDeviceID(ctx context.Context, deviceID tailcfg.StableNodeID) error {
 	s := &kubeapi.Secret{
 		Data: map[string][]byte{
@@ -56,8 +55,8 @@ func (kc *kubeClient) storeDeviceID(ctx context.Context, deviceID tailcfg.Stable
 	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
 }
 
-// storeDeviceEndpoints writes device's tailnet IPs and MagicDNS name to fields
-// 'device_ips', 'device_fqdn' of the named Kubernetes Secret.
+// storeDeviceEndpoints writes device's tailnet IPs and MagicDNS name to fields 'device_ips', 'device_fqdn' of client's
+// state Secret.
 func (kc *kubeClient) storeDeviceEndpoints(ctx context.Context, fqdn string, addresses []netip.Prefix) error {
 	var ips []string
 	for _, addr := range addresses {
@@ -77,7 +76,7 @@ func (kc *kubeClient) storeDeviceEndpoints(ctx context.Context, fqdn string, add
 	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
 }
 
-// storeHTTPSEndpoint writes an HTTPS endpoint exposed by this device via 'tailscale serve' to the named Kubernetes
+// storeHTTPSEndpoint writes an HTTPS endpoint exposed by this device via 'tailscale serve' to the client's state
 // Secret. In practice this will be the same value that gets written to 'device_fqdn', but this should only be called
 // when the serve config has been successfully set up.
 func (kc *kubeClient) storeHTTPSEndpoint(ctx context.Context, ep string) error {
@@ -110,17 +109,19 @@ func (kc *kubeClient) deleteAuthKey(ctx context.Context) error {
 	return nil
 }
 
-// storeCapVer stores the current capability version of tailscale and, if provided, UID of the Pod in the tailscale
-// state Secret. This can be used to observe the current capability version of tailscaled running in this container.
-func (kc *kubeClient) storeCapVer(ctx context.Context, podUID string) error {
+// storeCapVerUID stores the current capability version of tailscale and, if provided, UID of the Pod in the tailscale
+// state Secret.
+// These two fields are used by the Kubernetes Operator to observe the current capability version of tailscaled running in this container.
+func (kc *kubeClient) storeCapVerUID(ctx context.Context, podUID string) error {
 	capVerS := fmt.Sprintf("%d", tailcfg.CurrentCapabilityVersion)
+	d := map[string][]byte{
+		kubetypes.KeyCapVer: []byte(capVerS),
+	}
 	if podUID != "" {
-		capVerS += fmt.Sprintf(":%s", podUID)
+		d[kubetypes.KeyPodUID] = []byte(podUID)
 	}
 	s := &kubeapi.Secret{
-		Data: map[string][]byte{
-			kubetypes.KeyCapVer: []byte(capVerS),
-		},
+		Data: d,
 	}
 	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
 }

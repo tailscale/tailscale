@@ -493,8 +493,8 @@ func deviceInfo(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) (de
 			dev.ingressDNSName = ""
 		}
 	}
-	ips := make([]string, 0)
 	if rawDeviceIPs, ok := sec.Data[kubetypes.KeyDeviceIPs]; ok {
+		ips := make([]string, 0)
 		if err := json.Unmarshal(rawDeviceIPs, &ips); err != nil {
 			return nil, err
 		}
@@ -1118,20 +1118,15 @@ func proxyCapVer(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) ta
 	if sec == nil || pod == nil {
 		return tailcfg.CapabilityVersion(-1)
 	}
-	if len(sec.Data[kubetypes.KeyCapVer]) == 0 {
+	if len(sec.Data[kubetypes.KeyCapVer]) == 0 || len(sec.Data[kubetypes.KeyPodUID]) == 0 {
 		return tailcfg.CapabilityVersion(-1)
 	}
-	ss := strings.SplitN(string(sec.Data[kubetypes.KeyCapVer]), ":", 2)
-	if len(ss) != 2 {
-		log.Infof("[unexpected]: unexpected capver in state Secret, wants <capver>:<pod-uid>, got %s", string(sec.Data[kubetypes.KeyCapVer]))
-		return tailcfg.CapabilityVersion(-1)
-	}
-	capVer, err := strconv.Atoi(ss[0])
+	capVer, err := strconv.Atoi(string(sec.Data[kubetypes.KeyCapVer]))
 	if err != nil {
-		log.Infof("[unexpected]: unexpected capability version in proxy's state Secret, expected an integer, got %v", ss[0])
+		log.Infof("[unexpected]: unexpected capability version in proxy's state Secret, expected an integer, got %q", string(sec.Data[kubetypes.KeyCapVer]))
 		return tailcfg.CapabilityVersion(-1)
 	}
-	if !strings.EqualFold(string(pod.ObjectMeta.UID), ss[1]) {
+	if !strings.EqualFold(string(pod.ObjectMeta.UID), string(sec.Data[kubetypes.KeyPodUID])) {
 		return tailcfg.CapabilityVersion(-1)
 	}
 	return tailcfg.CapabilityVersion(capVer)
