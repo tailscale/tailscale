@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,5 +137,4 @@ func TestTemplate(t *testing.T) {
 	if !strings.Contains(str, "Debug info") {
 		t.Error("Output is missing debug info")
 	}
-	fmt.Println(buf.String())
 }
