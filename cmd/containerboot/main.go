@@ -184,6 +184,24 @@ func main() {
 		log.Fatalf("failed to bring up tailscale: %v", err)
 	}
 	killTailscaled := func() {
+		if hasKubeStateStore(cfg) {
+			// Check we're not shutting tailscaled down while it's still writing
+			// state. If we authenticate and fail to write all the state, we'll
+			// never recover automatically.
+			//
+			// The termination grace period for the pod is 30s. We wait 25s at
+			// most so that we still reserve some of that budget for tailscaled
+			// to receive and react to a SIGTERM before the SIGKILL that k8s
+			// will send at the end of the grace period.
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+
+			err := kc.waitForConsistentState(ctx)
+			if err != nil {
+				log.Printf("Error waiting for consistent state on shutdown: %v", err)
+			}
+		}
+		log.Printf("Sending SIGTERM to tailscaled")
 		if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
 			log.Fatalf("error shutting tailscaled down: %v", err)
 		}
