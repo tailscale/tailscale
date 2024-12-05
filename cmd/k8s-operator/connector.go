@@ -145,7 +145,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		reason := reasonConnectorCreationFailed
 		message := fmt.Sprintf(messageConnectorCreationFailed, err)
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			reason = reasonRecorderCreating
+			reason = reasonConnectorCreating
 			message = fmt.Sprintf("optimistic lock error, retrying: %s", err)
 			err = nil
 			logger.Info(message)
