@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 
 const (
 	reasonConnectorCreationFailed = "ConnectorCreationFailed"
+	reasonConnectorCreating       = "ConnectorCreating"
 	reasonConnectorCreated        = "ConnectorCreated"
 	reasonConnectorInvalid        = "ConnectorInvalid"
 
@@ -134,17 +136,24 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	}
 
 	if err := a.validate(cn); err != nil {
-		logger.Errorf("error validating Connector spec: %w", err)
 		message := fmt.Sprintf(messageConnectorInvalid, err)
 		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonConnectorInvalid, message)
 		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reasonConnectorInvalid, message)
 	}
 
 	if err = a.maybeProvisionConnector(ctx, logger, cn); err != nil {
-		logger.Errorf("error creating Connector resources: %w", err)
+		reason := reasonConnectorCreationFailed
 		message := fmt.Sprintf(messageConnectorCreationFailed, err)
-		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonConnectorCreationFailed, message)
-		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reasonConnectorCreationFailed, message)
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			reason = reasonConnectorCreating
+			message = fmt.Sprintf("optimistic lock error, retrying: %s", err)
+			err = nil
+			logger.Info(message)
+		} else {
+			a.recorder.Eventf(cn, corev1.EventTypeWarning, reason, message)
+		}
+
+		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reason, message)
 	}
 
 	logger.Info("Connector resources synced")

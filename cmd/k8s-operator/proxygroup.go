@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -45,6 +46,9 @@ const (
 	reasonProxyGroupReady          = "ProxyGroupReady"
 	reasonProxyGroupCreating       = "ProxyGroupCreating"
 	reasonProxyGroupInvalid        = "ProxyGroupInvalid"
+
+	// Copied from k8s.io/apiserver/pkg/registry/generic/registry/store.go@cccad306d649184bf2a0e319ba830c53f65c445c
+	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 )
 
 var gaugeProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
@@ -166,9 +170,17 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	if err = r.maybeProvision(ctx, pg, proxyClass); err != nil {
-		err = fmt.Errorf("error provisioning ProxyGroup resources: %w", err)
-		r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, err.Error())
-		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, err.Error())
+		reason := reasonProxyGroupCreationFailed
+		msg := fmt.Sprintf("error provisioning ProxyGroup resources: %s", err)
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			reason = reasonProxyGroupCreating
+			msg = fmt.Sprintf("optimistic lock error, retrying: %s", err)
+			err = nil
+			logger.Info(msg)
+		} else {
+			r.recorder.Eventf(pg, corev1.EventTypeWarning, reason, msg)
+		}
+		return setStatusReady(pg, metav1.ConditionFalse, reason, msg)
 	}
 
 	desiredReplicas := int(pgReplicas(pg))
