@@ -58,8 +58,8 @@ func apply(cache *Cache, client *http.Client, tailnet, apiKey string) func(conte
 		}
 
 		if cache.PrevETag == "" {
-			log.Println("no previous etag found, assuming local file is correct and recording that")
-			cache.PrevETag = localEtag
+			log.Println("no previous etag found, assuming the latest control etag")
+			cache.PrevETag = controlEtag
 		}
 
 		log.Printf("control: %s", controlEtag)
@@ -105,8 +105,8 @@ func test(cache *Cache, client *http.Client, tailnet, apiKey string) func(contex
 		}
 
 		if cache.PrevETag == "" {
-			log.Println("no previous etag found, assuming local file is correct and recording that")
-			cache.PrevETag = localEtag
+			log.Println("no previous etag found, assuming the latest control etag")
+			cache.PrevETag = controlEtag
 		}
 
 		log.Printf("control: %s", controlEtag)
@@ -148,8 +148,8 @@ func getChecksums(cache *Cache, client *http.Client, tailnet, apiKey string) fun
 		}
 
 		if cache.PrevETag == "" {
-			log.Println("no previous etag found, assuming local file is correct and recording that")
-			cache.PrevETag = Shuck(localEtag)
+			log.Println("no previous etag found, assuming control etag")
+			cache.PrevETag = Shuck(controlEtag)
 		}
 
 		log.Printf("control: %s", controlEtag)
