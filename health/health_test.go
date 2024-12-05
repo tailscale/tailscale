@@ -14,6 +14,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/usermetric"
+	"tailscale.com/version"
 )
 
 func TestAppendWarnableDebugFlags(t *testing.T) {
@@ -352,6 +353,11 @@ func TestShowUpdateWarnable(t *testing.T) {
 }
 
 func TestHealthMetric(t *testing.T) {
+	unstableBuildWarning := 0
+	if version.IsUnstableBuild() {
+		unstableBuildWarning = 1
+	}
+
 	tests := []struct {
 		desc            string
 		check           bool
@@ -361,20 +367,20 @@ func TestHealthMetric(t *testing.T) {
 	}{
 		// When running in dev, and not initialising the client, there will be two warnings
 		// by default:
-		// - is-using-unstable-version
+		// - is-using-unstable-version (except on the release branch)
 		// - wantrunning-false
 		{
 			desc:            "base-warnings",
 			check:           true,
 			cv:              nil,
-			wantMetricCount: 2,
+			wantMetricCount: unstableBuildWarning + 1,
 		},
 		// with: update-available
 		{
 			desc:            "update-warning",
 			check:           true,
 			cv:              &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
-			wantMetricCount: 3,
+			wantMetricCount: unstableBuildWarning + 2,
 		},
 	}
 	for _, tt := range tests {
