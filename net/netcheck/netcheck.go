@@ -1570,6 +1570,9 @@ func (c *Client) nodeAddrPort(ctx context.Context, n *tailcfg.DERPNode, port int
 	if port < 0 || port > 1<<16-1 {
 		return zero, false
 	}
+	if port == 0 {
+		port = 3478
+	}
 	if n.STUNTestIP != "" {
 		ip, err := netip.ParseAddr(n.STUNTestIP)
 		if err != nil {
