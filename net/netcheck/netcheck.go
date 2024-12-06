@@ -23,7 +23,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tcnksm/go-httpstat"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
 	"tailscale.com/net/captivedetection"
@@ -1110,10 +1109,11 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 	return nil
 }
 
+// measureHTTPSLatency measures the initial TLS connection latency to the DERP
+// region, but only returns success if an HTTPS request to the region succeeds.
 func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netip.Addr, error) {
 	metricHTTPSend.Add(1)
-	var result httpstat.Result
-	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), httpsProbeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, httpsProbeTimeout)
 	defer cancel()
 
 	var ip netip.Addr
@@ -1121,11 +1121,13 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	dc := derphttp.NewNetcheckClient(c.logf, c.NetMon)
 	defer dc.Close()
 
+	startTime := c.timeNow()
 	tlsConn, tcpConn, node, err := dc.DialRegionTLS(ctx, reg)
 	if err != nil {
 		return 0, ip, err
 	}
 	defer tcpConn.Close()
+	connDur := c.timeNow().Sub(startTime)
 
 	if ta, ok := tlsConn.RemoteAddr().(*net.TCPAddr); ok {
 		ip, _ = netip.AddrFromSlice(ta.IP)
@@ -1175,11 +1177,12 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	if err != nil {
 		return 0, ip, err
 	}
-	result.End(c.timeNow())
 
-	// TODO: decide best timing heuristic here.
-	// Maybe the server should return the tcpinfo_rtt?
-	return result.ServerProcessing, ip, nil
+	// return the connection duration, not the request duration, as this is the
+	// best approximation of the RTT latency to the node. Note that the
+	// connection setup performs happy-eyeballs and TLS so there are additional
+	// overheads.
+	return connDur, ip, nil
 }
 
 func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, need []*tailcfg.DERPRegion) error {
