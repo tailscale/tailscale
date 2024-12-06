@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"mime"
 	"mime/multipart"
@@ -149,6 +150,7 @@ var handler = map[string]localAPIHandler{
 	"usermetrics":                 (*Handler).serveUserMetrics,
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
+	"alpha-set-device-attrs":      (*Handler).serveSetDeviceAttrs,
 }
 
 var (
@@ -226,6 +228,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if fn, ok := handlerForPath(r.URL.Path); ok {
 		fn(h, w, r)
 	} else {
+		log.Printf("XXX nothing found for %q", r.URL.Path)
 		http.NotFound(w, r)
 	}
 }
@@ -444,6 +447,29 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 	h.serveWhoIsWithBackend(w, r, h.b)
+}
+
+func (h *Handler) serveSetDeviceAttrs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !h.PermitWrite {
+		http.Error(w, "set-device-attrs access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "PATCH" {
+		http.Error(w, "only PATCH allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.b.SetDeviceAttrs(ctx, req); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, "{}\n")
 }
 
 // localBackendWhoIsMethods is the subset of ipn.LocalBackend as needed

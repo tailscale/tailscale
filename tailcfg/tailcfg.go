@@ -2450,6 +2450,13 @@ type HealthChangeRequest struct {
 	NodeKey key.NodePublic
 }
 
+type SetDeviceAttributesRequest struct {
+	Version CapabilityVersion
+	NodeKey key.NodePublic
+
+	Update map[string]any // attribute name => {string, float64, int64, bool, nil to delete}
+}
+
 // SSHPolicy is the policy for how to handle incoming SSH connections
 // over Tailscale.
 type SSHPolicy struct {

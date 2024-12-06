@@ -1643,6 +1643,43 @@ func (c *Direct) ReportHealthChange(w *health.Warnable, us *health.UnhealthyStat
 	res.Body.Close()
 }
 
+func (c *Auto) SetDeviceAttrs(ctx context.Context, attrs map[string]any) error {
+	return c.direct.SetDeviceAttrs(ctx, attrs)
+}
+
+func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs map[string]any) error {
+	np, err := c.getNoiseClient()
+	if err != nil {
+		return err
+	}
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return errors.New("no node key")
+	}
+	if c.panicOnUse {
+		panic("tainted client")
+	}
+	// TODO(angott): at some point, update `Subsys` in the request to be `Warnable`
+	req := &tailcfg.SetDeviceAttributesRequest{
+		NodeKey: nodeKey,
+		Version: tailcfg.CurrentCapabilityVersion,
+		Update:  attrs,
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, err := np.doWithBody(ctx, "PATCH", "/machine/set-device-attr", nodeKey, req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	all, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		return fmt.Errorf("HTTP error from control plane: %v: %s", res.Status, all)
+	}
+	return nil
+}
+
 func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
 	if !nodeKey.IsZero() {
 		req.Header.Add(tailcfg.LBHeader, nodeKey.String())

@@ -6408,6 +6408,16 @@ func (b *LocalBackend) SetExpirySooner(ctx context.Context, expiry time.Time) er
 	return cc.SetExpirySooner(ctx, expiry)
 }
 
+func (b *LocalBackend) SetDeviceAttrs(ctx context.Context, attrs map[string]any) error {
+	b.mu.Lock()
+	cc := b.ccAuto
+	b.mu.Unlock()
+	if cc == nil {
+		return errors.New("not running")
+	}
+	return cc.SetDeviceAttrs(ctx, attrs)
+}
+
 // exitNodeCanProxyDNS reports the DoH base URL ("http://foo/dns-query") without query parameters
 // to exitNodeID's DoH service, if available.
 //
