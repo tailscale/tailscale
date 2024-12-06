@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -81,6 +82,8 @@ type Tracker struct {
 	// pendingVisibleTimers contains timers for Warnables that are unhealthy, but are
 	// not visible to the user yet, because they haven't been unhealthy for TimeToVisible
 	pendingVisibleTimers map[*Warnable]*time.Timer
+	// hideWarnables is a list of warnables to skip in Tracker output.
+	hideWarnables []WarnableCode
 
 	// sysErr maps subsystems to their current error (or nil if the subsystem is healthy)
 	// Deprecated: using Warnables should be preferred
@@ -175,6 +178,11 @@ func Register(w *Warnable) *Warnable {
 
 	mak.Set(&registeredWarnables, w.Code, w)
 	return w
+}
+
+// RegisteredCodes returns the list of all registered Warnable codes.
+func RegisteredCodes() []WarnableCode {
+	return slices.Collect(maps.Keys(registeredWarnables))
 }
 
 // unregister removes a Warnable from the health package. It should only be used
@@ -377,7 +385,7 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 	}
 	prevWs := t.warnableVal[w]
 	mak.Set(&t.warnableVal, w, ws)
-	if !ws.Equal(prevWs) {
+	if !ws.Equal(prevWs) && !slices.Contains(t.hideWarnables, w.Code) {
 		for _, cb := range t.watchers {
 			// If the Warnable has been unhealthy for more than its TimeToVisible, the callback should be
 			// executed immediately. Otherwise, the callback should be enqueued to run once the Warnable
@@ -883,6 +891,24 @@ func (t *Tracker) SetAutoUpdatePrefs(check bool, apply opt.Bool) {
 	t.selfCheckLocked()
 }
 
+// HideWarnables prevents the provided list of WarnableCodes from notifying
+// watchers or returning in any Tracker output if they become unhealthy. The
+// provided codes replace the previous codes.
+func (t *Tracker) HideWarnables(warnables []WarnableCode) {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.hideWarnables = warnables
+
+	for _, w := range t.warnables {
+		if slices.Contains(t.hideWarnables, w.Code) {
+			t.setHealthyLocked(w)
+		}
+	}
+}
+
 func (t *Tracker) timerSelfCheck() {
 	if t.nil() {
 		return
@@ -936,7 +962,7 @@ func (t *Tracker) Strings() []string {
 func (t *Tracker) stringsLocked() []string {
 	result := []string{}
 	for w, ws := range t.warnableVal {
-		if !w.IsVisible(ws) {
+		if !w.IsVisible(ws) || slices.Contains(t.hideWarnables, w.Code) {
 			// Do not append invisible warnings.
 			continue
 		}
