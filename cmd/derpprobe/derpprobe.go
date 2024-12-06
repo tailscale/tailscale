@@ -27,7 +27,7 @@ var (
 	meshInterval = flag.Duration("mesh-interval", 15*time.Second, "mesh probe interval")
 	stunInterval = flag.Duration("stun-interval", 15*time.Second, "STUN probe interval")
 	tlsInterval  = flag.Duration("tls-interval", 15*time.Second, "TLS probe interval")
-	bwInterval   = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing)")
+	bwInterval   = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing, > 0 = periodic bandwidth probing, < 0 = continuous bandwidth probing)")
 	bwSize       = flag.Int64("bw-probe-size-bytes", 1_000_000, "bandwidth probe size")
 	regionCode   = flag.String("region-code", "", "probe only this region (e.g. 'lax'); if left blank, all regions will be probed")
 )
@@ -45,7 +45,7 @@ func main() {
 		prober.WithSTUNProbing(*stunInterval),
 		prober.WithTLSProbing(*tlsInterval),
 	}
-	if *bwInterval > 0 {
+	if *bwInterval != 0 {
 		opts = append(opts, prober.WithBandwidthProbing(*bwInterval, *bwSize))
 	}
 	if *regionCode != "" {
@@ -106,7 +106,7 @@ func getOverallStatus(p *prober.Prober) (o overallStatus) {
 			// Do not show probes that have not finished yet.
 			continue
 		}
-		if i.Result {
+		if i.Status == prober.ProbeStatusSucceeded {
 			o.addGoodf("%s: %s", p, i.Latency)
 		} else {
 			o.addBadf("%s: %s", p, i.Error)
