@@ -19,3 +19,12 @@ func TestCompare(t *testing.T) {
 		t.Errorf("Compare(true, true) = %v, want 0", got)
 	}
 }
+
+func TestSelect(t *testing.T) {
+	if got := Select(true, 0, 1); got != 0 {
+		t.Errorf("Select(true, 0, 1) = %v, want 0", got)
+	}
+	if got := Select(false, 0, 1); got != 1 {
+		t.Errorf("Select(false, 0, 1) = %v, want 1", got)
+	}
+}
