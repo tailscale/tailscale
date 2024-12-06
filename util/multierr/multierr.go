@@ -6,6 +6,7 @@
 package multierr
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -133,4 +134,41 @@ func Range(err error, fn func(error) bool) bool {
 		}
 	}
 	return true
+}
+
+// DeduplicateContextErrors returns a new slice of errors with at most one
+// occurrence of each [context.Canceled] or [context.DeadlineExceeded], if one
+// or more of them are present in the input slice.
+//
+// All other non-nil errors are returned as-is; nil errors are skipped.
+func DeduplicateContextErrors(errs []error) []error {
+	// preserve nil/non-nil distinction
+	if errs == nil {
+		return nil
+	} else if len(errs) == 0 {
+		return []error{}
+	}
+
+	var (
+		ret                      []error
+		sawCanceled, sawDeadline bool
+	)
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, context.Canceled) {
+			if sawCanceled {
+				continue
+			}
+			sawCanceled = true
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			if sawDeadline {
+				continue
+			}
+			sawDeadline = true
+		}
+		ret = append(ret, err)
+	}
+	return ret
 }
