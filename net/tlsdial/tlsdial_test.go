@@ -4,10 +4,13 @@
 package tlsdial
 
 import (
+	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,30 +43,7 @@ func TestFallbackRootWorks(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("test assumes Linux")
 	}
-	d := t.TempDir()
-	crtFile := filepath.Join(d, "tlsdial.test.crt")
-	keyFile := filepath.Join(d, "tlsdial.test.key")
-	caFile := filepath.Join(d, "rootCA.pem")
-	cmd := exec.Command("go",
-		"run", "filippo.io/mkcert",
-		"--cert-file="+crtFile,
-		"--key-file="+keyFile,
-		"tlsdial.test")
-	cmd.Env = append(os.Environ(), "CAROOT="+d)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("mkcert: %v, %s", err, out)
-	}
-	if debug {
-		t.Logf("Ran: %s", out)
-		dents, err := os.ReadDir(d)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, de := range dents {
-			t.Logf(" - %v", de)
-		}
-	}
+	crtFile, keyFile, caFile := mkcert(t, "tlsdial.test")
 
 	caPEM, err := os.ReadFile(caFile)
 	if err != nil {
@@ -126,6 +106,81 @@ func TestFallbackRootWorks(t *testing.T) {
 	if ctrDelta != 1 {
 		t.Errorf("fallback root success count = %d; want 1", ctrDelta)
 	}
+}
+
+func TestMITMDetection(t *testing.T) {
+	defer resetOnce()
+
+	if runtime.GOOS != "linux" {
+		t.Skip("test assumes Linux")
+	}
+	crtFile, keyFile, caFile := mkcert(t, "test.tailscale.com")
+
+	oldSystemCertPool := systemCertPool
+	defer func() { systemCertPool = oldSystemCertPool }()
+	systemCertPool = func() (*x509.CertPool, error) {
+		roots := x509.NewCertPool()
+		caPEM, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, err
+		}
+		if !roots.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("failed to parse CA file %q", caFile)
+		}
+		return roots, nil
+	}
+
+	crt, err := tls.LoadX509KeyPair(crtFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(sayHi))
+	srv.TLS = &tls.Config{
+		Certificates: []tls.Certificate{crt},
+	}
+	srv.StartTLS()
+	defer srv.Close()
+
+	srv.Client()
+	ht := new(health.Tracker)
+	c := &http.Client{Transport: &http.Transport{
+		Dial: func(network, addr string) (net.Conn, error) {
+			return net.Dial("tcp", srv.Listener.Addr().String())
+		},
+		TLSClientConfig: Config("test.tailscale.com", ht, nil),
+	}}
+
+	res, err := c.Get("https://test.tailscale.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatal(res.Status)
+	}
+
+	detected := ht.CurrentState().Warnings[mitmDetectWarnable.Code].BrokenSince != nil
+	if !detected {
+		t.Errorf("mitmDetectWarnable did not become unhealthy after the request")
+	}
+}
+
+func mkcert(t *testing.T, domain string) (crtFile, keyFile, caFile string) {
+	d := t.TempDir()
+	crtFile = filepath.Join(d, domain+".crt")
+	keyFile = filepath.Join(d, domain+".key")
+	caFile = filepath.Join(d, "rootCA.pem")
+	cmd := exec.Command("go",
+		"run", "filippo.io/mkcert",
+		"--cert-file="+crtFile,
+		"--key-file="+keyFile,
+		domain)
+	cmd.Env = append(os.Environ(), "CAROOT="+d)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mkcert: %v, %s", err, out)
+	}
+	return crtFile, keyFile, caFile
 }
 
 func sayHi(w http.ResponseWriter, r *http.Request) {
