@@ -149,7 +149,7 @@ func (kc *kubeClient) waitForConsistentState(ctx context.Context) error {
 		default:
 		}
 		secret, err := kc.GetSecret(ctx, kc.stateSecret)
-		if kubeclient.IsNotFoundErr(err) {
+		if ctx.Err() != nil || kubeclient.IsNotFoundErr(err) {
 			return nil
 		}
 		if err != nil {

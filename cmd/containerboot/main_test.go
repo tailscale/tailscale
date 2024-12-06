@@ -7,11 +7,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -20,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -134,15 +129,29 @@ func TestContainerBoot(t *testing.T) {
 
 		// WantCmds is the commands that containerboot should run in this phase.
 		WantCmds []string
+
 		// WantKubeSecret is the secret keys/values that should exist in the
 		// kube secret.
 		WantKubeSecret map[string]string
+
+		// Update the kube secret with these keys/values at the beginning of the
+		// phase (simulates our fake tailscaled doing it).
+		UpdateKubeSecret map[string]string
+
 		// WantFiles files that should exist in the container and their
 		// contents.
 		WantFiles map[string]string
-		// WantFatalLog is the fatal log message we expect from containerboot.
-		// If set for a phase, the test will finish on that phase.
-		WantFatalLog string
+
+		// WantLog is a log message we expect from containerboot.
+		WantLog string
+
+		// If set for a phase, the test will expect containerboot to exit with
+		// this error code, and the test will finish on that phase without
+		// waiting for the successful startup log message.
+		WantExitCode *int
+
+		// The signal to send to containerboot at the start of the phase.
+		Signal *syscall.Signal
 
 		EndpointStatuses map[string]int
 	}
@@ -430,7 +439,8 @@ func TestContainerBoot(t *testing.T) {
 							},
 						},
 					},
-					WantFatalLog: "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
+					WantLog:      "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
+					WantExitCode: ptr.To(1),
 				},
 			},
 		},
@@ -833,6 +843,60 @@ func TestContainerBoot(t *testing.T) {
 				},
 			},
 		},
+		{
+			Name: "kube_shutdown_during_state_write",
+			Env: map[string]string{
+				"KUBERNETES_SERVICE_HOST":       kube.Host,
+				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
+			},
+			KubeSecret: map[string]string{
+				"authkey": "tskey-key",
+			},
+			Phases: []phase{
+				{
+					// Normal startup.
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+					},
+					WantKubeSecret: map[string]string{
+						"authkey": "tskey-key",
+					},
+				},
+				{
+					// SIGTERM before state is finished writing, should wait for
+					// consistent state before propagating SIGTERM to tailscaled.
+					Signal: ptr.To(unix.SIGTERM),
+					UpdateKubeSecret: map[string]string{
+						"_machinekey":  "foo",
+						"_profiles":    "foo",
+						"profile-baff": "foo",
+						// Missing "_current-profile" key.
+					},
+					WantKubeSecret: map[string]string{
+						"authkey":      "tskey-key",
+						"_machinekey":  "foo",
+						"_profiles":    "foo",
+						"profile-baff": "foo",
+					},
+					WantLog: "Waiting for tailscaled to finish writing state to Secret \"tailscale\"",
+				},
+				{
+					// tailscaled has finished writing state, should propagate SIGTERM.
+					UpdateKubeSecret: map[string]string{
+						"_current-profile": "foo",
+					},
+					WantKubeSecret: map[string]string{
+						"authkey":          "tskey-key",
+						"_machinekey":      "foo",
+						"_profiles":        "foo",
+						"profile-baff":     "foo",
+						"_current-profile": "foo",
+					},
+					WantExitCode: ptr.To(0),
+				},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -877,26 +941,36 @@ func TestContainerBoot(t *testing.T) {
 
 			var wantCmds []string
 			for i, p := range test.Phases {
+				for k, v := range p.UpdateKubeSecret {
+					kube.SetSecret(k, v)
+				}
 				lapi.Notify(p.Notify)
-				if p.WantFatalLog != "" {
+				if p.Signal != nil {
+					cmd.Process.Signal(*p.Signal)
+				}
+				if p.WantLog != "" {
 					err := tstest.WaitFor(2*time.Second, func() error {
-						state, err := cmd.Process.Wait()
-						if err != nil {
-							return err
-						}
-						if state.ExitCode() != 1 {
-							return fmt.Errorf("process exited with code %d but wanted %d", state.ExitCode(), 1)
-						}
-						waitLogLine(t, time.Second, cbOut, p.WantFatalLog)
+						waitLogLine(t, time.Second, cbOut, p.WantLog)
 						return nil
 					})
 					if err != nil {
 						t.Fatal(err)
 					}
+				}
+
+				if p.WantExitCode != nil {
+					state, err := cmd.Process.Wait()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if state.ExitCode() != *p.WantExitCode {
+						t.Fatalf("phase %d: want exit code %d, got %d", i, *p.WantExitCode, state.ExitCode())
+					}
 
 					// Early test return, we don't expect the successful startup log message.
 					return
 				}
+
 				wantCmds = append(wantCmds, p.WantCmds...)
 				waitArgs(t, 2*time.Second, d, argFile, strings.Join(wantCmds, "\n"))
 				err := tstest.WaitFor(2*time.Second, func() error {
@@ -952,6 +1026,9 @@ func TestContainerBoot(t *testing.T) {
 				}
 			}
 			waitLogLine(t, 2*time.Second, cbOut, "Startup complete, waiting for shutdown signal")
+			if cmd.ProcessState != nil {
+				t.Fatalf("containerboot should be running but exited with exit code %d", cmd.ProcessState.ExitCode())
+			}
 		})
 	}
 }
@@ -1197,7 +1274,7 @@ func (k *kubeServer) Start(t *testing.T, ip string) {
 		t.Fatal(err)
 	}
 
-	k.srv = httptestServer(t, ip, k)
+	k.srv = httptest.NewTLSServer(k)
 	k.Host = k.srv.Listener.Addr().(*net.TCPAddr).IP.String()
 	k.Port = strconv.Itoa(k.srv.Listener.Addr().(*net.TCPAddr).Port)
 
@@ -1219,8 +1296,6 @@ func (k *kubeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		panic("client didn't provide bearer token in request")
 	}
 	switch r.URL.Path {
-	case "/api/v1/namespaces/default/secrets":
-		k.serveCreateSecret(w, r)
 	case "/api/v1/namespaces/default/secrets/tailscale":
 		k.serveSecret(w, r)
 	case "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews":
@@ -1250,40 +1325,6 @@ func (k *kubeServer) serveSSAR(w http.ResponseWriter, r *http.Request) {
 	// Just say yes to all SARs, we don't enforce RBAC.
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status":{"allowed":%v}}`, ok)
-}
-
-func (k *kubeServer) serveCreateSecret(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "PUT" {
-		panic(fmt.Sprintf("unhandled HTTP request %s %s", r.Method, r.URL))
-	}
-
-	bs, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer r.Body.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	k.Lock()
-	defer k.Unlock()
-	payload := map[string]any{}
-	if err := json.Unmarshal(bs, &payload); err != nil {
-		panic("unmarshal failed")
-	}
-	data := payload["data"].(map[string]any)
-	k.secret = map[string]string{}
-	for key, value := range data {
-		v, err := base64.StdEncoding.DecodeString(value.(string))
-		if err != nil {
-			panic("base64 decode failed")
-		}
-		k.secret[key] = string(v)
-	}
-	// The real API echoes back the secret with additional fields set.
-	if _, err := w.Write(bs); err != nil {
-		panic("write failed")
-	}
 }
 
 func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
@@ -1325,13 +1366,16 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
 			for _, op := range req {
-				if op.Op != "remove" {
+				switch op.Op {
+				case "remove":
+					if !strings.HasPrefix(op.Path, "/data/") {
+						panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
+					}
+					delete(k.secret, strings.TrimPrefix(op.Path, "/data/"))
+				default:
 					panic(fmt.Sprintf("unsupported json-patch op %q", op.Op))
 				}
-				if !strings.HasPrefix(op.Path, "/data/") {
-					panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
-				}
-				delete(k.secret, strings.TrimPrefix(op.Path, "/data/"))
+
 			}
 		case "application/strategic-merge-patch+json":
 			req := struct {
@@ -1349,76 +1393,4 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 	default:
 		panic(fmt.Sprintf("unhandled HTTP request %s %s", r.Method, r.URL))
 	}
-}
-
-func httptestServer(t *testing.T, ip string, handler http.Handler) *httptest.Server {
-	ln, err := net.Listen("tcp", fmt.Sprintf("%s:0", ip))
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := &httptest.Server{
-		Listener: ln,
-		Config:   &http.Server{Handler: handler},
-	}
-
-	// Generate a TLS certificate valid for ip.
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := x509.Certificate{
-		IPAddresses:  []net.IP{net.ParseIP(ip)},
-		SerialNumber: big.NewInt(time.Now().Unix()),
-		Subject: pkix.Name{
-			Organization: []string{"Acme Co"},
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(24 * time.Hour),
-
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	srv.TLS = &tls.Config{
-		Certificates: []tls.Certificate{{
-			Certificate: [][]byte{derBytes},
-			PrivateKey:  priv,
-		}},
-	}
-	srv.StartTLS()
-
-	return srv
-}
-
-// TestFakeKubernetesAPIServer aims to make it trivially easy to run interactive
-// tests against containerboot within a container but without a real k8s cluster.
-// The container just needs enough kube API to store its state in a "Secret".
-//
-// export TS_AUTHKEY=ts...
-// DOCKER_IP=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
-// TAGS=test PLATFORM=local REPO=tailscale make publishdevimage
-// FAKE_KUBERNETES_API_IP=${DOCKER_IP} go test -timeout 0 -v -run TestFakeKubernetesAPIServer ./cmd/containerboot/
-// <Run the docker command printed to the terminal>
-func TestFakeKubernetesAPIServer(t *testing.T) {
-	ip := os.Getenv("FAKE_KUBERNETES_API_IP")
-	if ip == "" {
-		t.Skip("not a real test, set FAKE_KUBERNETES_API_IP to run")
-	}
-
-	d := t.TempDir()
-	kube := &kubeServer{FSRoot: d}
-	kube.Start(t, ip)
-	defer kube.Close()
-
-	t.Logf("Fake Kubernetes API server running at https://%s:%s", kube.Host, kube.Port)
-	t.Logf("Read secret:\ncurl --silent --insecure -H \"Authorization: Bearer bearer_token\" https://%s:%s/api/v1/namespaces/default/secrets/tailscale | jq", kube.Host, kube.Port)
-	t.Logf("Run the client:\ndocker run --rm -e TS_USERSPACE=false -e TS_AUTHKEY -e TS_AUTH_ONCE=true --device /dev/net/tun --cap-add NET_ADMIN --cap-add NET_RAW -e KUBERNETES_SERVICE_HOST=%s -e KUBERNETES_SERVICE_PORT_HTTPS=%s -v %s/var/run/secrets:/var/run/secrets -e TS_KUBERNETES_READ_API_SERVER_ADDRESS_FROM_ENV=true tailscale:test", kube.Host, kube.Port, d)
-
-	<-make(chan struct{})
 }
