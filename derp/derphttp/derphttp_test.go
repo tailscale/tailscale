@@ -6,6 +6,7 @@ package derphttp
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -214,7 +215,12 @@ func TestPing(t *testing.T) {
 	}
 }
 
-func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.Server) {
+type testingT interface {
+	Logf(format string, args ...any)
+	Fatal(args ...any)
+}
+
+func newTestServer(t testingT, k key.NodePrivate) (serverURL string, s *derp.Server) {
 	s = derp.NewServer(k, t.Logf)
 	httpsrv := &http.Server{
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
@@ -506,4 +512,52 @@ func TestDeps(t *testing.T) {
 		),
 	}.Check(t)
 
+}
+
+func BenchmarkSendRecvDERP(b *testing.B) {
+	benchmarkSendRecvSize := func(b *testing.B, packetSize int) {
+		serverPrivateKey := key.NewNode()
+		serverURL, s := newTestServer(b, serverPrivateKey)
+		defer s.Close()
+
+		k := key.NewNode()
+		clientKey := k.Public()
+
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer ln.Close()
+
+		client, err := NewClient(k, serverURL, b.Logf, netmon.NewStatic())
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer client.Close()
+
+		msg := make([]byte, packetSize)
+		rand.Read(msg)
+		b.SetBytes(int64(len(msg)))
+		b.ReportAllocs()
+
+		go func() {
+			for {
+				if err := client.Send(clientKey, msg); err != nil {
+					client.Close()
+					return
+				}
+			}
+		}()
+
+		b.ResetTimer()
+		for range b.N {
+			if _, err := client.Recv(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	for _, size := range []int{10, 100, 1000, 10000} {
+		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkSendRecvSize(b, size) })
+	}
 }

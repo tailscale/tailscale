@@ -84,7 +84,7 @@ func init() {
 }
 
 const (
-	perClientSendQueueDepth = 32 // packets buffered for sending
+	perClientSendQueueDepth = 32000 // packets buffered for sending
 	writeTimeout            = 2 * time.Second
 	privilegedWriteTimeout  = 30 * time.Second // for clients with the mesh key
 )

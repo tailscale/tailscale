@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/json"
@@ -1377,69 +1378,128 @@ func BenchmarkConcurrentStreams(b *testing.B) {
 	})
 }
 
-func BenchmarkSendRecv(b *testing.B) {
+func BenchmarkSendRecvDERP(b *testing.B) {
+	benchmarkSendRecvSize := func(b *testing.B, packetSize int) {
+		serverPrivateKey := key.NewNode()
+		s := NewServer(serverPrivateKey, logger.Discard)
+		defer s.Close()
+
+		k := key.NewNode()
+		clientKey := k.Public()
+
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer ln.Close()
+
+		connOut, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer connOut.Close()
+
+		connIn, err := ln.Accept()
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer connIn.Close()
+
+		brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go s.Accept(ctx, connIn, brwServer, "test-client")
+
+		brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
+		client, err := NewClient(k, connOut, brw, logger.Discard)
+		if err != nil {
+			b.Fatalf("client: %v", err)
+		}
+
+		msg := make([]byte, packetSize)
+		rand.Read(msg)
+		b.SetBytes(int64(len(msg)))
+		b.ReportAllocs()
+
+		go func() {
+			for {
+				if err := client.Send(clientKey, msg); err != nil {
+					connIn.Close()
+					connOut.Close()
+					return
+				}
+			}
+		}()
+
+		b.ResetTimer()
+		for range b.N {
+			if _, err := client.Recv(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
 	for _, size := range []int{10, 100, 1000, 10000} {
 		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkSendRecvSize(b, size) })
 	}
 }
 
-func benchmarkSendRecvSize(b *testing.B, packetSize int) {
-	serverPrivateKey := key.NewNode()
-	s := NewServer(serverPrivateKey, logger.Discard)
-	defer s.Close()
+// func BenchmarkSendRecvPlain(b *testing.B) {
+// 	benchmarkSendRecvSize := func(b *testing.B, packetSize int) {
+// 		ln, err := net.Listen("tcp", "127.0.0.1:0")
+// 		if err != nil {
+// 			b.Fatal(err)
+// 		}
+// 		defer ln.Close()
 
-	k := key.NewNode()
-	clientKey := k.Public()
+// 		go func() {
+// 			for {
+// 				conn, err := ln.Accept()
+// 				if err != nil {
+// 					return
+// 				}
+// 				go io.Copy(conn, conn)
+// 			}
+// 		}()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer ln.Close()
+// 		conn, err := net.Dial("tcp", ln.Addr().String())
+// 		if err != nil {
+// 			b.Fatal(err)
+// 		}
+// 		defer conn.Close()
 
-	connOut, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer connOut.Close()
+// 		go io.Copy(io.Discard, conn)
 
-	connIn, err := ln.Accept()
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer connIn.Close()
+// 		msg := make([]byte, packetSize)
+// 		rand.Read(msg)
+// 		b.SetBytes(int64(len(msg)))
+// 		b.ReportAllocs()
 
-	brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+// 		type closeable interface {
+// 			CloseRead() error
+// 			CloseWrite() error
+// 		}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go s.Accept(ctx, connIn, brwServer, "test-client")
+// 		go func() {
+// 			defer conn.(closeable).CloseWrite()
+// 			for range b.N {
+// 				if _, err := conn.Write(msg); err != nil {
+// 					conn.Close()
+// 					return
+// 				}
+// 			}
+// 		}()
+// 		b.ResetTimer()
 
-	brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
-	client, err := NewClient(k, connOut, brw, logger.Discard)
-	if err != nil {
-		b.Fatalf("client: %v", err)
-	}
+// 		n, _ := io.CopyN(io.Discard, conn, int64(b.N)*int64(len(msg)))
+// 		log.Printf("copied %d\n", n)
+// 	}
 
-	go func() {
-		for {
-			_, err := client.Recv()
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	msg := make([]byte, packetSize)
-	b.SetBytes(int64(len(msg)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := client.Send(clientKey, msg); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
+// 	for _, size := range []int{10, 100, 1000, 10000} {
+// 		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkSendRecvSize(b, size) })
+// 	}
+// }
 
 func BenchmarkWriteUint32(b *testing.B) {
 	w := bufio.NewWriter(io.Discard)
