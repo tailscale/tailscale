@@ -8,28 +8,27 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"expvar"
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/quic-go/quic-go"
 	"go4.org/mem"
+	"golang.org/x/net/quic"
 	"golang.org/x/time/rate"
 	"tailscale.com/disco"
 	"tailscale.com/net/memnet"
@@ -1459,26 +1458,42 @@ func BenchmarkSendRecvQUIC(b *testing.B) {
 		k := key.NewNode()
 		clientKey := k.Public()
 
-		ln, err := quic.ListenAddr("127.0.0.1:0", generateTLSConfig(), nil)
+		cfg1, cfg2 := generageQUICConfig(), generageQUICConfig()
+
+		e1, err := quic.Listen("udp", "127.0.0.1:0", cfg1)
 		if err != nil {
 			b.Fatal(err)
 		}
-		defer ln.Close()
+		defer e1.Close(context.Background())
+
+		e2, err := quic.Listen("udp", "127.0.0.1:0", cfg2)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer e2.Close(context.Background())
+
+		qconnOut, err := e2.Dial(context.Background(), "udp", e1.LocalAddr().String(), cfg2)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer qconnOut.Close()
+
+		qconnIn, err := e1.Accept(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer qconnIn.Close()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		go func() {
-			qconnIn, err := ln.Accept(context.Background())
+			_connIn, err := qconnIn.AcceptStream(context.Background())
 			if err != nil {
 				b.Fatal(err)
 			}
-			defer qconnIn.CloseWithError(0, "")
-			connIn, err := qconnIn.AcceptStream(context.Background())
-			if err != nil {
-				b.Fatal(err)
-			}
-			defer connIn.Close()
+			defer _connIn.Close()
+			connIn := &connWithAddr{_connIn, qconnIn.LocalAddr()}
 
 			// read and discard initial byte
 			if _, err := connIn.Read(make([]byte, 1)); err != nil {
@@ -1487,28 +1502,19 @@ func BenchmarkSendRecvQUIC(b *testing.B) {
 
 			brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
 
-			s.Accept(ctx, &connWithAddr{connIn, qconnIn.LocalAddr()}, brwServer, "test-client")
+			s.Accept(ctx, connIn, brwServer, "test-client")
 		}()
 
-		tlsConf := &tls.Config{
-			InsecureSkipVerify: true,
-			// NextProtos:         []string{"quic-echo-example"},
-		}
-		qconnOut, err := quic.DialAddr(context.Background(), ln.Addr().String(), tlsConf, nil)
+		_connOut, err := qconnOut.NewStream(context.Background())
 		if err != nil {
 			b.Fatal(err)
 		}
-		defer qconnOut.CloseWithError(0, "")
-
-		connOut, err := qconnOut.OpenStream()
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer connOut.Close()
+		defer _connOut.Close()
+		connOut := &connWithAddr{_connOut, qconnOut.LocalAddr()}
 
 		connOut.Write([]byte{0})
 		brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
-		client, err := NewClient(k, &connWithAddr{connOut, qconnOut.LocalAddr()}, brw, logger.Discard)
+		client, err := NewClient(k, connOut, brw, logger.Discard)
 		if err != nil {
 			b.Fatalf("client: %v", err)
 		}
@@ -1521,7 +1527,6 @@ func BenchmarkSendRecvQUIC(b *testing.B) {
 		go func() {
 			for {
 				if err := client.Send(clientKey, msg); err != nil {
-					fmt.Println(err)
 					connOut.Close()
 					return
 				}
@@ -1536,19 +1541,44 @@ func BenchmarkSendRecvQUIC(b *testing.B) {
 		}
 	}
 
-	// for _, size := range []int{10, 100, 1000, 10000} {
-	for _, size := range []int{10} {
+	for _, size := range []int{10, 100, 1000, 10000} {
+		// for _, size := range []int{10} {
 		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkSendRecvSize(b, size) })
 	}
 }
 
 type connWithAddr struct {
-	quic.Stream
-	localAddr net.Addr
+	*quic.Stream
+	localAddr netip.AddrPort
 }
 
+type netaddr netip.AddrPort
+
+func (a netaddr) Network() string { return "udp" }
+func (a netaddr) String() string  { return a.String() }
+
+func (c *connWithAddr) Write(p []byte) (int, error) {
+	n, err := c.Stream.Write(p)
+	if err != nil {
+		return n, err
+	}
+	c.Stream.Flush()
+	return n, nil
+}
 func (c *connWithAddr) LocalAddr() net.Addr {
-	return c.localAddr
+	return netaddr(c.localAddr)
+}
+
+func (c *connWithAddr) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (c *connWithAddr) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+func (c *connWithAddr) SetWriteDeadline(t time.Time) error {
+	return nil
 }
 
 // func BenchmarkSendRecvPlain(b *testing.B) {
@@ -1765,26 +1795,63 @@ func TestServerRepliesToPing(t *testing.T) {
 	}
 }
 
-// Setup a bare-bones TLS config for the server
-func generateTLSConfig() *tls.Config {
-	key, err := rsa.GenerateKey(rand.Reader, 1024)
-	if err != nil {
-		panic(err)
-	}
-	template := x509.Certificate{SerialNumber: big.NewInt(1)}
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		panic(err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		panic(err)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		// NextProtos:   []string{"quic-echo-example"},
+func generageQUICConfig() *quic.Config {
+	return &quic.Config{
+		TLSConfig: generateTLSConfig(),
 	}
 }
+
+// Setup a bare-bones TLS config for the server
+func generateTLSConfig() *tls.Config {
+	return &tls.Config{
+		Certificates:       []tls.Certificate{testCert},
+		InsecureSkipVerify: true,
+		CipherSuites: []uint16{
+			tls.TLS_AES_128_GCM_SHA256,
+			tls.TLS_AES_256_GCM_SHA384,
+			tls.TLS_CHACHA20_POLY1305_SHA256,
+		},
+		MinVersion: tls.VersionTLS13,
+		// Default key exchange mechanisms as of Go 1.23 minus X25519Kyber768Draft00,
+		// which bloats the client hello enough to spill into a second datagram.
+		// Tests were written with the assuption each flight in the handshake
+		// fits in one datagram, and it's simpler to keep that property.
+		CurvePreferences: []tls.CurveID{
+			tls.X25519, tls.CurveP256, tls.CurveP384, tls.CurveP521,
+		},
+	}
+}
+
+var testCert = func() tls.Certificate {
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		panic(err)
+	}
+	return cert
+}()
+
+// localhostCert is a PEM-encoded TLS cert with SAN IPs
+// "127.0.0.1" and "[::1]", expiring at Jan 29 16:00:00 2084 GMT.
+// generated from src/crypto/tls:
+// go run generate_cert.go  --ecdsa-curve P256 --host 127.0.0.1,::1,example.com --ca --start-date "Jan 1 00:00:00 1970" --duration=1000000h
+var localhostCert = []byte(`-----BEGIN CERTIFICATE-----
+MIIBrDCCAVKgAwIBAgIPCvPhO+Hfv+NW76kWxULUMAoGCCqGSM49BAMCMBIxEDAO
+BgNVBAoTB0FjbWUgQ28wIBcNNzAwMTAxMDAwMDAwWhgPMjA4NDAxMjkxNjAwMDBa
+MBIxEDAOBgNVBAoTB0FjbWUgQ28wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARh
+WRF8p8X9scgW7JjqAwI9nYV8jtkdhqAXG9gyEgnaFNN5Ze9l3Tp1R9yCDBMNsGms
+PyfMPe5Jrha/LmjgR1G9o4GIMIGFMA4GA1UdDwEB/wQEAwIChDATBgNVHSUEDDAK
+BggrBgEFBQcDATAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBSOJri/wLQxq6oC
+Y6ZImms/STbTljAuBgNVHREEJzAlggtleGFtcGxlLmNvbYcEfwAAAYcQAAAAAAAA
+AAAAAAAAAAAAATAKBggqhkjOPQQDAgNIADBFAiBUguxsW6TGhixBAdORmVNnkx40
+HjkKwncMSDbUaeL9jQIhAJwQ8zV9JpQvYpsiDuMmqCuW35XXil3cQ6Drz82c+fvE
+-----END CERTIFICATE-----`)
+
+// localhostKey is the private key for localhostCert.
+var localhostKey = []byte(testingKey(`-----BEGIN TESTING KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgY1B1eL/Bbwf/MDcs
+rnvvWhFNr1aGmJJR59PdCN9lVVqhRANCAARhWRF8p8X9scgW7JjqAwI9nYV8jtkd
+hqAXG9gyEgnaFNN5Ze9l3Tp1R9yCDBMNsGmsPyfMPe5Jrha/LmjgR1G9
+-----END TESTING KEY-----`))
+
+// testingKey helps keep security scanners from getting excited about a private key in this file.
+func testingKey(s string) string { return strings.ReplaceAll(s, "TESTING KEY", "PRIVATE KEY") }

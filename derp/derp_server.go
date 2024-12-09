@@ -891,10 +891,6 @@ func (s *Server) debugLogf(format string, v ...any) {
 // run serves the client until there's an error.
 // If the client hangs up or the server is closed, run returns nil, otherwise run returns an error.
 func (c *sclient) run(ctx context.Context) error {
-	fmt.Println("ZZZZ Client Running")
-	defer func() {
-		fmt.Println("ZZZZ Client Stopped")
-	}()
 	// Launch sender, but don't return from run until sender goroutine is done.
 	var grp errgroup.Group
 	sendCtx, cancelSender := context.WithCancel(ctx)
@@ -916,9 +912,7 @@ func (c *sclient) run(ctx context.Context) error {
 	c.startStatsLoop(sendCtx)
 
 	for {
-		fmt.Println("ZZZZ reading header")
 		ft, fl, err := readFrameHeader(c.br)
-		fmt.Println("ZZZZ read header")
 		c.debugLogf("read frame type %d len %d err %v", ft, fl, err)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -1691,7 +1685,6 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 	inBatch := -1  // for bufferedWriteFrames
 	for {
 		if werr != nil {
-			fmt.Printf("ZZZZ send loop ending with werr: %s\n", werr)
 			return werr
 		}
 		inBatch++
@@ -1699,7 +1692,6 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		// does as many non-flushing writes as possible.
 		select {
 		case <-ctx.Done():
-			fmt.Println("ZZZZ send loop context done")
 			return nil
 		case msg := <-c.peerGone:
 			werr = c.sendPeerGone(msg.peer, msg.reason)
@@ -1725,7 +1717,6 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			// Flush any writes from the 3 sends above, or from
 			// the blocking loop below.
 			if werr = c.bw.Flush(); werr != nil {
-				fmt.Printf("ZZZZ flush failed: %s\n", werr)
 				return werr
 			}
 			if inBatch != 0 { // the first loop will almost always hit default & be size zero
@@ -1737,7 +1728,6 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		// Then a blocking select with same:
 		select {
 		case <-ctx.Done():
-			fmt.Println("ZZZZ send loop context done")
 			return nil
 		case msg := <-c.peerGone:
 			werr = c.sendPeerGone(msg.peer, msg.reason)
