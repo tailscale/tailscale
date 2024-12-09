@@ -423,10 +423,19 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 
 // ServerConfig implements ssh.ServerConfigCallback.
 func (c *conn) ServerConfig(ctx ssh.Context) *gossh.ServerConfig {
-	return &gossh.ServerConfig{
+	sc := &gossh.ServerConfig{
 		NoClientAuth:           true, // required for the NoClientAuthCallback to run
 		NextAuthMethodCallback: c.nextAuthMethodCallback,
 	}
+	ssFromEnv := func(dst *[]string, envKey string) {
+		if v := os.Getenv(envKey); v != "" {
+			*dst = strings.Split(v, ",")
+		}
+	}
+	ssFromEnv(&sc.KeyExchanges, "TS_SSH_KEY_EXCHANGE_ALGS")
+	ssFromEnv(&sc.Ciphers, "TS_SSH_CIPHERS")
+	ssFromEnv(&sc.MACs, "TS_SSH_MACS")
+	return sc
 }
 
 func (srv *server) newConn() (*conn, error) {
