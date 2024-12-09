@@ -21,7 +21,7 @@ import (
 	"tailscale.com/types/key"
 )
 
-func TestDerpProber(t *testing.T) {
+func TestDERPProber(t *testing.T) {
 	dm := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
 			0: {
@@ -235,5 +235,21 @@ func Test_packetsForSize(t *testing.T) {
 				t.Errorf("packetsForSize(%d) is unique=%v (returned %d different answers); want unique=%v", tt.size, unique, len(hashes), unique)
 			}
 		})
+	}
+}
+
+func TestInSameVPC(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"foo", "bar", true},
+		{"foo-vpc1", "bar-vpc1", true},
+		{"foo-vpc1", "bar-vpc2", false},
+	}
+	for _, tt := range tests {
+		if got := inSameVPC(&tailcfg.DERPNode{Name: tt.a}, &tailcfg.DERPNode{Name: tt.b}); got != tt.want {
+			t.Errorf("inSameVPC(%q, %q) = %v; want %v", tt.a, tt.b, got, tt.want)
+		}
 	}
 }

@@ -187,6 +187,15 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 			}
 
 			for _, to := range region.Nodes {
+				if !inSameVPC(server, to) {
+					// This pair of nodes in the region are in different VPCs; don't expect
+					// them to be meshed. In the general case, the DERPMap data structure and client
+					// don't support such a region configuration. This is a special case for
+					// Tailscale's probers being able to monitor a meta DERP map that's a superset
+					// of multiple independent DERP maps.
+					continue
+				}
+
 				if d.meshInterval > 0 {
 					n := fmt.Sprintf("derp/%s/%s/%s/mesh", region.RegionCode, server.Name, to.Name)
 					wantProbes[n] = true
@@ -217,6 +226,24 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func inSameVPC(a, b *tailcfg.DERPNode) bool {
+	return vpcName(a.Name) == vpcName(b.Name)
+}
+
+// vpcName returns the name of a VPC that a DERP Node is running
+// in as a function of its DERPNode.Name.
+//
+// This is a naming convention for the Tailscale-run DERP nodes only
+// and is not a thing that's supported by clients. See the comments
+// at the caller of this.
+func vpcName(n string) string {
+	_, name, ok := strings.Cut(n, "-vpc")
+	if !ok || name == "" {
+		return "default"
+	}
+	return name
 }
 
 // probeMesh returs a probe class that sends a test packet through a pair of DERP
