@@ -84,10 +84,18 @@ func init() {
 }
 
 const (
-	perClientSendQueueDepth = 32 // packets buffered for sending
-	writeTimeout            = 2 * time.Second
-	privilegedWriteTimeout  = 30 * time.Second // for clients with the mesh key
+	defaultPerClientSendQueueDepth = 32 // default packets buffered for sending
+	writeTimeout                   = 2 * time.Second
+	privilegedWriteTimeout         = 30 * time.Second // for clients with the mesh key
 )
+
+func getPerClientSendQueueDepth() int {
+	if v, ok := envknob.LookupInt("TS_DEBUG_DERP_PER_CLIENT_SEND_QUEUE_DEPTH"); ok {
+		return v
+	}
+
+	return defaultPerClientSendQueueDepth
+}
 
 // dupPolicy is a temporary (2021-08-30) mechanism to change the policy
 // of how duplicate connection for the same key are handled.
@@ -189,6 +197,9 @@ type Server struct {
 
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr map[netip.AddrPort]key.NodePublic
+
+	// Sets the client send queue depth for the server.
+	perClientSendQueueDepth int
 
 	clock tstime.Clock
 }
@@ -377,6 +388,8 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 
 	s.packetsDroppedTypeDisco = s.packetsDroppedType.Get("disco")
 	s.packetsDroppedTypeOther = s.packetsDroppedType.Get("other")
+
+	s.perClientSendQueueDepth = getPerClientSendQueueDepth()
 	return s
 }
 
@@ -849,8 +862,8 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		done:           ctx.Done(),
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
-		sendQueue:      make(chan pkt, perClientSendQueueDepth),
-		discoSendQueue: make(chan pkt, perClientSendQueueDepth),
+		sendQueue:      make(chan pkt, s.perClientSendQueueDepth),
+		discoSendQueue: make(chan pkt, s.perClientSendQueueDepth),
 		sendPongCh:     make(chan [8]byte, 1),
 		peerGone:       make(chan peerGoneMsg),
 		canMesh:        s.isMeshPeer(clientInfo),
