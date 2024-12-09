@@ -35,8 +35,12 @@ remotes/origin/QTSFW_5.0.0`
 	}
 }
 
-func TestInContainer(t *testing.T) {
-	if got := inContainer(); !got.EqualBool(false) {
-		t.Errorf("inContainer = %v; want false due to absence of ts_package_container build tag", got)
+func TestPackageTypeNotContainer(t *testing.T) {
+	var got string
+	if packageType != nil {
+		got = packageType()
+	}
+	if got == "container" {
+		t.Fatal("packageType = container; should only happen if build tag ts_package_container is set")
 	}
 }
