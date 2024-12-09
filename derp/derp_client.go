@@ -216,24 +216,32 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 		return fmt.Errorf("packet too big: %d", len(pkt))
 	}
 
+	fmt.Println("ZZZZ acquiring write lock")
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	fmt.Println("ZZZZ acquired write lock")
 	if c.rate != nil {
 		pktLen := frameHeaderLen + key.NodePublicRawLen + len(pkt)
 		if !c.rate.AllowN(c.clock.Now(), pktLen) {
 			return nil // drop
 		}
 	}
+	fmt.Println("ZZZZ writing frame header")
 	if err := writeFrameHeader(c.bw, frameSendPacket, uint32(key.NodePublicRawLen+len(pkt))); err != nil {
 		return err
 	}
+	fmt.Println("ZZZZ writing destination key")
 	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {
 		return err
 	}
+	fmt.Println("ZZZZ writing packet")
 	if _, err := c.bw.Write(pkt); err != nil {
 		return err
 	}
-	return c.bw.Flush()
+	fmt.Println("ZZZZ flushing buffer")
+	err := c.bw.Flush()
+	fmt.Println("ZZZZ flushed buffer")
+	return err
 }
 
 func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err error) {
