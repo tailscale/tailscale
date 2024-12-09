@@ -37,7 +37,7 @@ func NewChallenge() ChallengePrivate {
 // Panics if ChallengePublic is zero.
 func (k ChallengePrivate) Public() ChallengePublic {
 	pub := NodePrivate(k).Public()
-	return ChallengePublic(pub)
+	return ChallengePublic{k: pub.h.Value()}
 }
 
 // MarshalText implements encoding.TextMarshaler, but by returning an error.
@@ -48,7 +48,7 @@ func (k ChallengePrivate) MarshalText() ([]byte, error) {
 
 // SealToChallenge is like SealTo, but for a ChallengePublic.
 func (k NodePrivate) SealToChallenge(p ChallengePublic, cleartext []byte) (ciphertext []byte) {
-	return k.SealTo(NodePublic(p), cleartext)
+	return k.SealTo(nodePubFrom32(p.k), cleartext)
 }
 
 // OpenFrom opens the NaCl box ciphertext, which must be a value
