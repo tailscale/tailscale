@@ -597,18 +597,22 @@ func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode, isPr
 	if err != nil {
 		return nil, err
 	}
-	cs, ok := dc.TLSConnectionState()
-	if !ok {
-		dc.Close()
-		return nil, errors.New("no TLS state")
-	}
-	if len(cs.PeerCertificates) == 0 {
-		dc.Close()
-		return nil, errors.New("no peer certificates")
-	}
-	if cs.ServerName != n.HostName {
-		dc.Close()
-		return nil, fmt.Errorf("TLS server name %q != derp hostname %q", cs.ServerName, n.HostName)
+
+	// Only verify TLS state if this is a prober.
+	if isProber {
+		cs, ok := dc.TLSConnectionState()
+		if !ok {
+			dc.Close()
+			return nil, errors.New("no TLS state")
+		}
+		if len(cs.PeerCertificates) == 0 {
+			dc.Close()
+			return nil, errors.New("no peer certificates")
+		}
+		if cs.ServerName != n.HostName {
+			dc.Close()
+			return nil, fmt.Errorf("TLS server name %q != derp hostname %q", cs.ServerName, n.HostName)
+		}
 	}
 
 	errc := make(chan error, 1)
