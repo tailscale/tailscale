@@ -44,8 +44,12 @@ func main() {
 			if err != nil {
 				return
 			}
+
+			var bufsToSend [][]byte
 			for i := range n {
-				pkt := bufs[i][16 : sizes[i]+16]
+				buf := bufs[i][:sizes[i]+16]
+				bufsToSend = append(bufsToSend, buf)
+				pkt := buf[16:]
 				src, dst := make([]byte, 4), make([]byte, 4)
 				srcPort, dstPort := make([]byte, 2), make([]byte, 2)
 				copy(src, pkt[12:16])
@@ -60,28 +64,13 @@ func main() {
 				copy(pkt[20:], dstPort)
 				copy(pkt[22:], srcPort)
 			}
-			dev.Write(bufs, 16)
+			// This is where IRL we would send the packet to DERP and read it back from DERP
+			// before writing it back to the TUN device.
+			dev.Write(bufsToSend, 16)
 		}
 	}()
 
-	// l, err := net.Listen("tcp", "*:5201")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// var wg sync.WaitGroup
-	// go func() {
-	// 	defer wg.Done()
-	// 	conn, err := l.Accept()
-	// 	if err != nil {
-	// 		log.Fatal(err)
-	// 	}
-	// 	b, err := io.ReadAll(conn)
-	// 	if err != nil {
-	// 		log.Fatal(err)
-	// 	}
-	// 	fmt.Println(string(b))
-	// }()
-
+	// Uncomment the below to make it easier to capture traffic in Wireshark
 	// log.Println("Waiting 10 seconds before starting")
 	// time.Sleep(10 * time.Second)
 	// defer time.Sleep(10 * time.Second)
@@ -106,6 +95,4 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println(string([]byte(b[:n])))
-
-	// wg.Wait()
 }
