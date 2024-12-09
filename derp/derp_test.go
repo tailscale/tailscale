@@ -8,14 +8,18 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"expvar"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"os"
 	"reflect"
@@ -24,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/disco"
@@ -1445,6 +1450,107 @@ func BenchmarkSendRecvDERP(b *testing.B) {
 	}
 }
 
+func BenchmarkSendRecvQUIC(b *testing.B) {
+	benchmarkSendRecvSize := func(b *testing.B, packetSize int) {
+		serverPrivateKey := key.NewNode()
+		s := NewServer(serverPrivateKey, logger.Discard)
+		defer s.Close()
+
+		k := key.NewNode()
+		clientKey := k.Public()
+
+		ln, err := quic.ListenAddr("127.0.0.1:0", generateTLSConfig(), nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer ln.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go func() {
+			qconnIn, err := ln.Accept(context.Background())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer qconnIn.CloseWithError(0, "")
+			connIn, err := qconnIn.AcceptStream(context.Background())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer connIn.Close()
+
+			// read and discard initial byte
+			if _, err := connIn.Read(make([]byte, 1)); err != nil {
+				b.Fatal(err)
+			}
+
+			brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+
+			s.Accept(ctx, &connWithAddr{connIn, qconnIn.LocalAddr()}, brwServer, "test-client")
+		}()
+
+		tlsConf := &tls.Config{
+			InsecureSkipVerify: true,
+			// NextProtos:         []string{"quic-echo-example"},
+		}
+		qconnOut, err := quic.DialAddr(context.Background(), ln.Addr().String(), tlsConf, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer qconnOut.CloseWithError(0, "")
+
+		connOut, err := qconnOut.OpenStream()
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer connOut.Close()
+
+		connOut.Write([]byte{0})
+		brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
+		client, err := NewClient(k, &connWithAddr{connOut, qconnOut.LocalAddr()}, brw, logger.Discard)
+		if err != nil {
+			b.Fatalf("client: %v", err)
+		}
+
+		msg := make([]byte, packetSize)
+		rand.Read(msg)
+		b.SetBytes(int64(len(msg)))
+		b.ReportAllocs()
+
+		go func() {
+			for {
+				if err := client.Send(clientKey, msg); err != nil {
+					fmt.Println(err)
+					connOut.Close()
+					return
+				}
+			}
+		}()
+
+		b.ResetTimer()
+		for range b.N {
+			if _, err := client.Recv(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	// for _, size := range []int{10, 100, 1000, 10000} {
+	for _, size := range []int{10} {
+		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkSendRecvSize(b, size) })
+	}
+}
+
+type connWithAddr struct {
+	quic.Stream
+	localAddr net.Addr
+}
+
+func (c *connWithAddr) LocalAddr() net.Addr {
+	return c.localAddr
+}
+
 // func BenchmarkSendRecvPlain(b *testing.B) {
 // 	benchmarkSendRecvSize := func(b *testing.B, packetSize int) {
 // 		ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1656,5 +1762,29 @@ func TestServerRepliesToPing(t *testing.T) {
 			}
 			return
 		}
+	}
+}
+
+// Setup a bare-bones TLS config for the server
+func generateTLSConfig() *tls.Config {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		panic(err)
+	}
+	template := x509.Certificate{SerialNumber: big.NewInt(1)}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		panic(err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		// NextProtos:   []string{"quic-echo-example"},
 	}
 }
