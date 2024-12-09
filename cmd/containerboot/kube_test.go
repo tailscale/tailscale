@@ -9,8 +9,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/ipn"
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 )
@@ -203,5 +205,36 @@ func TestSetupKube(t *testing.T) {
 				t.Errorf("unexpected contents of settings after running settings.setupKube()\n(-got +want):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestWaitForConsistentState(t *testing.T) {
+	data := map[string][]byte{
+		// Missing _current-profile.
+		string(ipn.KnownProfilesStateKey): []byte(""),
+		string(ipn.MachineKeyStateKey):    []byte(""),
+		"profile-foo":                     []byte(""),
+	}
+	kc := &kubeClient{
+		Client: &kubeclient.FakeClient{
+			GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
+				return &kubeapi.Secret{
+					Data: data,
+				}, nil
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := kc.waitForConsistentState(ctx); err != context.DeadlineExceeded {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	data[string(ipn.CurrentProfileStateKey)] = []byte("")
+	if err := kc.waitForConsistentState(ctx); err != nil {
+		t.Fatalf("expected nil, got %v", err)
 	}
 }
