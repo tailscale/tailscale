@@ -62,8 +62,9 @@ func (p *Prober) StatusHandler(opts ...statusHandlerOpt) tsweb.ReturnHandlerFunc
 	return func(w http.ResponseWriter, r *http.Request) error {
 		type probeStatus struct {
 			ProbeInfo
-			TimeSinceLast time.Duration
-			Links         map[string]template.URL
+			TimeSinceLastStart time.Duration
+			TimeSinceLastEnd   time.Duration
+			Links              map[string]template.URL
 		}
 		vars := struct {
 			Title           string
@@ -81,12 +82,15 @@ func (p *Prober) StatusHandler(opts ...statusHandlerOpt) tsweb.ReturnHandlerFunc
 
 		for name, info := range p.ProbeInfo() {
 			vars.TotalProbes++
-			if !info.Result {
+			if info.Error != "" {
 				vars.UnhealthyProbes++
 			}
 			s := probeStatus{ProbeInfo: info}
+			if !info.Start.IsZero() {
+				s.TimeSinceLastStart = time.Since(info.Start).Truncate(time.Second)
+			}
 			if !info.End.IsZero() {
-				s.TimeSinceLast = time.Since(info.End).Truncate(time.Second)
+				s.TimeSinceLastEnd = time.Since(info.End).Truncate(time.Second)
 			}
 			for textTpl, urlTpl := range params.probeLinks {
 				text, err := renderTemplate(textTpl, info)

@@ -748,7 +748,7 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 				select {
 				case <-ctx.Done():
 					// Either user canceled original context,
-					// it timed out, or the v6 dial succeeded.
+					// if timed out, or the v6 dial succeeded.
 					t.Stop()
 					return
 				case <-tChannel:
@@ -757,6 +757,9 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 			}
 			dst := cmp.Or(dstPrimary, n.HostName)
 			port := "443"
+			if !c.useHTTPS() {
+				port = "3340"
+			}
 			if n.DERPPort != 0 {
 				port = fmt.Sprint(n.DERPPort)
 			}
