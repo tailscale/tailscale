@@ -18,18 +18,19 @@ import (
 )
 
 var (
-	derpMapURL   = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://) or 'local' to use the local tailscaled's DERP map")
-	versionFlag  = flag.Bool("version", false, "print version and exit")
-	listen       = flag.String("listen", ":8030", "HTTP listen address")
-	probeOnce    = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")
-	spread       = flag.Bool("spread", true, "whether to spread probing over time")
-	interval     = flag.Duration("interval", 15*time.Second, "probe interval")
-	meshInterval = flag.Duration("mesh-interval", 15*time.Second, "mesh probe interval")
-	stunInterval = flag.Duration("stun-interval", 15*time.Second, "STUN probe interval")
-	tlsInterval  = flag.Duration("tls-interval", 15*time.Second, "TLS probe interval")
-	bwInterval   = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing)")
-	bwSize       = flag.Int64("bw-probe-size-bytes", 1_000_000, "bandwidth probe size")
-	regionCode   = flag.String("region-code", "", "probe only this region (e.g. 'lax'); if left blank, all regions will be probed")
+	derpMapURL       = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://) or 'local' to use the local tailscaled's DERP map")
+	versionFlag      = flag.Bool("version", false, "print version and exit")
+	listen           = flag.String("listen", ":8030", "HTTP listen address")
+	probeOnce        = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")
+	spread           = flag.Bool("spread", true, "whether to spread probing over time")
+	interval         = flag.Duration("interval", 15*time.Second, "probe interval")
+	meshInterval     = flag.Duration("mesh-interval", 15*time.Second, "mesh probe interval")
+	stunInterval     = flag.Duration("stun-interval", 15*time.Second, "STUN probe interval")
+	tlsInterval      = flag.Duration("tls-interval", 15*time.Second, "TLS probe interval")
+	bwInterval       = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing)")
+	bwSize           = flag.Int64("bw-probe-size-bytes", 1_000_000, "bandwidth probe size")
+	bwTUNIPv4Address = flag.String("bw-tun-ipv4-addr", "", "if specified, bandwidth probes will be performed over a TUN device at this address in order to exercise TCP-in-TCP in similar fashion to TCP over Tailscale via DERP. We will use a /30 subnet including this IP address.")
+	regionCode       = flag.String("region-code", "", "probe only this region (e.g. 'lax'); if left blank, all regions will be probed")
 )
 
 func main() {
@@ -46,7 +47,7 @@ func main() {
 		prober.WithTLSProbing(*tlsInterval),
 	}
 	if *bwInterval > 0 {
-		opts = append(opts, prober.WithBandwidthProbing(*bwInterval, *bwSize))
+		opts = append(opts, prober.WithBandwidthProbing(*bwInterval, *bwSize, *bwTUNIPv4Address))
 	}
 	if *regionCode != "" {
 		opts = append(opts, prober.WithRegion(*regionCode))
