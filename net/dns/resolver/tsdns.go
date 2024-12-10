@@ -260,6 +260,14 @@ func (r *Resolver) SetMissingUpstreamRecovery(f func()) {
 	r.forwarder.missingUpstreamRecovery = f
 }
 
+// OnSleepChange asks the forwarder to close any idle connections to the upstream
+// DoH servers when the device enters sleep mode.
+func (r *Resolver) OnSleepChange(isSleeping bool) {
+	if isSleeping {
+		r.forwarder.CloseIdleConnections()
+	}
+}
+
 func (r *Resolver) TestOnlySetHook(hook func(Config)) { r.saveConfigForTests = hook }
 
 func (r *Resolver) SetConfig(cfg Config) error {
