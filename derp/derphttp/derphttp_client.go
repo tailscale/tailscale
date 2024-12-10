@@ -757,6 +757,9 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 			}
 			dst := cmp.Or(dstPrimary, n.HostName)
 			port := "443"
+			if !c.useHTTPS() {
+				port = "3340"
+			}
 			if n.DERPPort != 0 {
 				port = fmt.Sprint(n.DERPPort)
 			}
