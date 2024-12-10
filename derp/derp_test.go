@@ -6,6 +6,7 @@ package derp
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/x509"
 	"encoding/asn1"
@@ -23,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	qt "github.com/frankban/quicktest"
 	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/disco"
@@ -1596,5 +1598,31 @@ func TestServerRepliesToPing(t *testing.T) {
 			}
 			return
 		}
+	}
+}
+
+func TestGetPerClientSendQueueDepth(t *testing.T) {
+	c := qt.New(t)
+	envKey := "TS_DEBUG_DERP_PER_CLIENT_SEND_QUEUE_DEPTH"
+
+	testCases := []struct {
+		envVal string
+		want   int
+	}{
+		// Empty case, envknob treats empty as missing also.
+		{
+			"", defaultPerClientSendQueueDepth,
+		},
+		{
+			"64", 64,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(cmp.Or(tc.envVal, "empty"), func(t *testing.T) {
+			t.Setenv(envKey, tc.envVal)
+			val := getPerClientSendQueueDepth()
+			c.Assert(val, qt.Equals, tc.want)
+		})
 	}
 }
