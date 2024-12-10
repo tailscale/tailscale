@@ -8,16 +8,20 @@ import (
 	"cmp"
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"expvar"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -26,10 +30,12 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/stun"
+	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/router"
 )
 
 // derpProber dynamically manages several probes for each DERP server
@@ -434,10 +440,7 @@ func derpProbeBandwidth(ctx context.Context, dm *tailcfg.DERPMap, from, to *tail
 		time.Sleep(100 * time.Millisecond) // pretty arbitrary
 	}
 
-	start := time.Now()
-	defer func() { transferTime.Add(time.Since(start).Seconds()) }()
-
-	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc, size); err != nil {
+	if err := derpProbeBandwidthTUN(ctx, transferTime, from, to, fromc, toc, size); err != nil {
 		// Record pubkeys on failed probes to aid investigation.
 		return fmt.Errorf("%s -> %s: %w",
 			fromc.SelfPublicKey().ShortString(),
@@ -573,6 +576,196 @@ func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc
 		if err != nil {
 			return fmt.Errorf("error receiving from %q: %w", to.Name, err)
 		}
+	}
+	return nil
+}
+
+// derpProbeBandwidthMu ensures that derpProbeBandwidthTUN doesn't run concurrently.
+// This is necessary to avoid conflicts trying to create the TUN device.
+var derpProbeBandwidthMu sync.Mutex
+
+// derpProbeBandwidthTUN takes two DERP clients (fromc and toc) connected to two
+// DERP servers (from and to) and sends a test payload of a given size from one
+// to another over TUN.
+func derpProbeBandwidthTUN(ctx context.Context, transferTime *expvar.Float, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client, size int64) error {
+	derpProbeBandwidthMu.Lock()
+	defer derpProbeBandwidthMu.Unlock()
+
+	// Temporarily set up a TUN device with which to simulate a real client TCP connection
+	// tunneling over DERP.
+	dev, _, err := tstun.New(log.Printf, "utun9")
+	if err != nil {
+		return fmt.Errorf("failed to create TUN device: %w", err)
+	}
+	defer dev.Close()
+	mtu, err := dev.MTU()
+	if err != nil {
+		return fmt.Errorf("failed to get TUN MTU: %w", err)
+	}
+
+	r, err := router.New(log.Printf, dev, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create router: %w", err)
+	}
+	defer r.Close()
+
+	err = r.Set(&router.Config{
+		LocalAddrs: []netip.Prefix{netip.MustParsePrefix("172.16.0.1/30")},
+		Routes:     []netip.Prefix{netip.MustParsePrefix("172.16.0.1/30")},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set routes: %w", err)
+	}
+
+	// Read packets from TUN device
+	tunReadC := make(chan error, 1)
+	go func() {
+		// There's not a lot of thought in the below number. 5 doesn't use a ton of memory,
+		// and a bigger number like 20 didn't seem to increase throughput.
+		numBufs := 5
+		bufs := make([][]byte, 0, numBufs)
+		sizes := make([]int, numBufs)
+		for range numBufs {
+			bufs = append(bufs, make([]byte, mtu+tstun.PacketStartOffset))
+		}
+
+		for {
+			n, err := dev.Read(bufs, sizes, tstun.PacketStartOffset)
+			if err != nil {
+				return
+			}
+
+			for i := range n {
+				buf := bufs[i][:sizes[i]+tstun.PacketStartOffset]
+				pkt := buf[tstun.PacketStartOffset:]
+				src, dst := make([]byte, 4), make([]byte, 4)
+				srcPort, dstPort := make([]byte, 2), make([]byte, 2)
+				copy(src, pkt[12:16])
+				copy(dst, pkt[16:20])
+				// TODO: the below assumes no IP options in header
+				copy(srcPort, pkt[20:22])
+				copy(dstPort, pkt[22:24])
+
+				// Swap
+				copy(pkt[12:], dst)
+				copy(pkt[16:], src)
+				copy(pkt[20:], dstPort)
+				copy(pkt[22:], srcPort)
+				if err := fromc.Send(toc.SelfPublicKey(), buf); err != nil {
+					tunReadC <- err
+					return
+				}
+			}
+		}
+	}()
+
+	// Receive the packets.
+	recvc := make(chan error, 1)
+	go func() {
+		defer close(recvc) // to break out of 'select' below.
+		for {
+			m, err := toc.Recv()
+			if err != nil {
+				recvc <- fmt.Errorf("failed to receive: %w", err)
+				return
+			}
+			switch v := m.(type) {
+			case derp.ReceivedPacket:
+				if v.Source != fromc.SelfPublicKey() {
+					recvc <- fmt.Errorf("got data packet from unexpected source, %v", v.Source)
+					return
+				}
+				pkt := v.Data
+				dev.Write([][]byte{pkt}, tstun.PacketStartOffset)
+			case derp.KeepAliveMessage:
+				// Silently ignore.
+			default:
+				log.Printf("%v: ignoring Recv frame type %T", to.Name, v)
+				// Loop.
+			}
+		}
+	}()
+
+	randData := make([]byte, 10000)
+	_, err = crand.Read(randData)
+	if err != nil {
+		return fmt.Errorf("failed to initialize random data: %w", err)
+	}
+	outHash := sha256.New()
+	inHash := sha256.New()
+	var bytesWritten atomic.Uint64
+	var bytesRead atomic.Uint64
+
+	start := time.Now()
+	defer func() { transferTime.Add(time.Since(start).Seconds()) }()
+
+	// Dial ourselves
+	conn, err := net.Dial("tcp", "172.16.0.2:5201")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Send ourselves data
+	sendc := make(chan error, 1)
+	go func() {
+		loops := int(size) / len(randData)
+		remainderAtEnd := int(size) % len(randData)
+		totalLoops := loops
+		if remainderAtEnd > 0 {
+			totalLoops += 1
+		}
+		for i := range totalLoops {
+			b := randData
+			last := i == loops
+			if last {
+				b = randData[:remainderAtEnd]
+			}
+			bytesWritten.Add(uint64(len(b)))
+			if _, err := outHash.Write(b); err != nil {
+				sendc <- fmt.Errorf("failed to write outHash: %w", err)
+				return
+			}
+			if _, err := conn.Write(b); err != nil {
+				sendc <- fmt.Errorf("failed to write to conn: %w", err)
+				return
+			}
+		}
+	}()
+
+	// Read the data we've sent
+	readC := make(chan error, 1)
+	go func() {
+		n, err := io.CopyN(inHash, conn, size)
+		bytesRead.Store(uint64(n))
+		readC <- err
+	}()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("timeout: %w", ctx.Err())
+	case err := <-tunReadC:
+		if err != nil {
+			return fmt.Errorf("error reading from TUN via %q: %w", from.Name, err)
+		}
+	case err := <-sendc:
+		if err != nil {
+			return fmt.Errorf("error sending via %q: %w", from.Name, err)
+		}
+	case err := <-recvc:
+		if err != nil {
+			return fmt.Errorf("error receiving from %q: %w", to.Name, err)
+		}
+	case err := <-readC:
+		if err != nil {
+			return fmt.Errorf("error reading from %q to TUN: %w", to.Name, err)
+		}
+	}
+
+	outSum := outHash.Sum(nil)
+	inSum := inHash.Sum(nil)
+	if !bytes.Equal(outSum, inSum) {
+		return fmt.Errorf("%d bytes read did not match %d bytes written", bytesRead.Load(), bytesWritten.Load())
 	}
 	return nil
 }
