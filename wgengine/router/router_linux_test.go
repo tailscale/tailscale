@@ -1231,3 +1231,38 @@ func adjustFwmask(t *testing.T, s string) string {
 
 	return fwmaskAdjustRe.ReplaceAllString(s, "$1")
 }
+
+func TestAddUDMProIpRules(t *testing.T) {
+	originalIpRules := make([]netlink.Rule, len(_ipRules))
+	copy(originalIpRules, _ipRules)
+
+	addUDMProIpRules()
+
+	expectedRules := []netlink.Rule{
+		{
+			Priority: 21,
+			Mark:     linuxfw.TailscaleBypassMarkNum,
+			Table:    udmProRouteTable1.Num,
+		},
+		{
+			Priority: 22,
+			Mark:     linuxfw.TailscaleBypassMarkNum,
+			Table:    udmProRouteTable2.Num,
+		},
+	}
+
+	for _, expected := range expectedRules {
+		found := false
+		for _, actual := range ipRules() {
+			if reflect.DeepEqual(actual, expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected rule %+v; not found in ipRules", expected)
+		}
+	}
+
+	_ipRules = originalIpRules
+}
