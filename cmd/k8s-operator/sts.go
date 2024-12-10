@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -93,8 +92,6 @@ const (
 	podAnnotationLastSetClusterDNSName    = "tailscale.com/operator-last-set-cluster-dns-name"
 	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
 	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
-	// podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
-	podAnnotationLastSetConfigFileHash = "tailscale.com/operator-last-set-config-file-hash"
 
 	proxyTypeEgress          = "egress_service"
 	proxyTypeIngressService  = "ingress_service"
@@ -107,7 +104,7 @@ var (
 	// tailscaleManagedLabels are label keys that tailscale operator sets on StatefulSets and Pods.
 	tailscaleManagedLabels = []string{LabelManaged, LabelParentType, LabelParentName, LabelParentNamespace, "app"}
 	// tailscaleManagedAnnotations are annotation keys that tailscale operator sets on StatefulSets and Pods.
-	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN, podAnnotationLastSetConfigFileHash}
+	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN}
 )
 
 type tailscaleSTSConfig struct {
@@ -198,11 +195,11 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 	}
 	sts.ProxyClass = proxyClass
 
-	secretName, tsConfigHash, _, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
+	secretName, _, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
-	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretName, tsConfigHash)
+	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
@@ -332,7 +329,7 @@ func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, l
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
 }
 
-func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) (secretName, hash string, configs tailscaledConfigs, _ error) {
+func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) (secretName string, configs tailscaledConfigs, _ error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			// Hardcode a -0 suffix so that in future, if we support
@@ -348,7 +345,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		logger.Debugf("secret %s/%s already exists", secret.GetNamespace(), secret.GetName())
 		orig = secret.DeepCopy()
 	} else if !apierrors.IsNotFound(err) {
-		return "", "", nil, err
+		return "", nil, err
 	}
 
 	var authKey string
@@ -358,13 +355,13 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		// ACME account key.
 		sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, stsC.ChildResourceLabels)
 		if err != nil {
-			return "", "", nil, err
+			return "", nil, err
 		}
 		if sts != nil {
 			// StatefulSet exists, so we have already created the secret.
 			// If the secret is missing, they should delete the StatefulSet.
 			logger.Errorf("Tailscale proxy secret doesn't exist, but the corresponding StatefulSet %s/%s already does. Something is wrong, please delete the StatefulSet.", sts.GetNamespace(), sts.GetName())
-			return "", "", nil, nil
+			return "", nil, nil
 		}
 		// Create API Key secret which is going to be used by the statefulset
 		// to authenticate with Tailscale.
@@ -375,16 +372,12 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		}
 		authKey, err = newAuthKey(ctx, a.tsClient, tags)
 		if err != nil {
-			return "", "", nil, err
+			return "", nil, err
 		}
 	}
 	configs, err := tailscaledConfig(stsC, authKey, orig)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("error creating tailscaled config: %w", err)
-	}
-	hash, err = tailscaledConfigHash(configs)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("error calculating hash of tailscaled configs: %w", err)
+		return "", nil, fmt.Errorf("error creating tailscaled config: %w", err)
 	}
 
 	latest := tailcfg.CapabilityVersion(-1)
@@ -393,7 +386,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		fn := tsoperator.TailscaledConfigFileName(key)
 		b, err := json.Marshal(val)
 		if err != nil {
-			return "", "", nil, fmt.Errorf("error marshalling tailscaled config: %w", err)
+			return "", nil, fmt.Errorf("error marshalling tailscaled config: %w", err)
 		}
 		mak.Set(&secret.StringData, fn, string(b))
 		if key > latest {
@@ -405,7 +398,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 	if stsC.ServeConfig != nil {
 		j, err := json.Marshal(stsC.ServeConfig)
 		if err != nil {
-			return "", "", nil, err
+			return "", nil, err
 		}
 		mak.Set(&secret.StringData, "serve-config", string(j))
 	}
@@ -413,15 +406,15 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 	if orig != nil {
 		logger.Debugf("patching the existing proxy Secret with tailscaled config %s", sanitizeConfigBytes(latestConfig))
 		if err := a.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
-			return "", "", nil, err
+			return "", nil, err
 		}
 	} else {
 		logger.Debugf("creating a new Secret for the proxy with tailscaled config %s", sanitizeConfigBytes(latestConfig))
 		if err := a.Create(ctx, secret); err != nil {
-			return "", "", nil, err
+			return "", nil, err
 		}
 	}
-	return secret.Name, hash, configs, nil
+	return secret.Name, configs, nil
 }
 
 // sanitizeConfigBytes returns ipn.ConfigVAlpha in string form with redacted
@@ -527,7 +520,7 @@ var proxyYaml []byte
 //go:embed deploy/manifests/userspace-proxy.yaml
 var userspaceProxyYaml []byte
 
-func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string) (*appsv1.StatefulSet, error) {
+func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret string) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
@@ -584,8 +577,6 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: "true",
 		})
 	}
-	// Configure containeboot to run tailscaled with a configfile read from the state Secret.
-	mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, tsConfigHash)
 
 	configVolume := corev1.Volume{
 		Name: "tailscaledconfig",
@@ -896,8 +887,7 @@ func readAuthKey(secret *corev1.Secret, key string) (*string, error) {
 }
 
 // tailscaledConfig takes a proxy config, a newly generated auth key if generated and a Secret with the previous proxy
-// state and auth key and returns tailscaled config files for currently supported proxy versions and a hash of that
-// configuration.
+// state and auth key and returns tailscaled config files for currently supported proxy versions.
 func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
 	conf := &ipn.ConfigVAlpha{
 		Version:             "alpha0",
@@ -989,27 +979,6 @@ type ptrObject[T any] interface {
 }
 
 type tailscaledConfigs map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha
-
-// hashBytes produces a hash for the provided tailscaled config that is the same across
-// different invocations of this code. We do not use the
-// tailscale.com/deephash.Hash here because that produces a different hash for
-// the same value in different tailscale builds. The hash we are producing here
-// is used to determine if the container running the Connector Tailscale node
-// needs to be restarted. The container does not need restarting when the only
-// thing that changed is operator version (the hash is also exposed to users via
-// an annotation and might be confusing if it changes without the config having
-// changed).
-func tailscaledConfigHash(c tailscaledConfigs) (string, error) {
-	b, err := json.Marshal(c)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling tailscaled configs: %w", err)
-	}
-	h := sha256.New()
-	if _, err = h.Write(b); err != nil {
-		return "", fmt.Errorf("error calculating hash: %w", err)
-	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
 
 // createOrUpdate adds obj to the k8s cluster, unless the object already exists,
 // in which case update is called to make changes to it. If update is nil, the
