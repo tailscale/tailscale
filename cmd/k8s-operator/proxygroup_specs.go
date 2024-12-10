@@ -53,9 +53,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 		Namespace:                  namespace,
 		Labels:                     pgLabels(pg.Name, nil),
 		DeletionGracePeriodSeconds: ptr.To[int64](10),
-		Annotations: map[string]string{
-			podAnnotationLastSetConfigFileHash: cfgHash,
-		},
 	}
 	tmpl.Spec.ServiceAccountName = pg.Name
 	tmpl.Spec.InitContainers[0].Image = image
