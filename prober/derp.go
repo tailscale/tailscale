@@ -575,7 +575,6 @@ func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc
 			return fmt.Errorf("error sending via %q: %w", from.Name, err)
 		}
 	case err := <-recvc:
-		fmt.Println("Received")
 		if err != nil {
 			return fmt.Errorf("error receiving from %q: %w", to.Name, err)
 		}
@@ -583,9 +582,9 @@ func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc
 	return nil
 }
 
-// runDerpProbeNodePair takes two DERP clients (fromc and toc) connected to two
+// runDerpProbeNodePairTUN takes two DERP clients (fromc and toc) connected to two
 // DERP servers (from and to) and sends a test payload of a given size from one
-// to another.
+// to another over TUN.
 func runDerpProbeNodePairTUN(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client, size int64) error {
 	// Temporarily set up a TUN device with which to simulate a real client TCP connection
 	// tunneling over DERP.
@@ -615,21 +614,21 @@ func runDerpProbeNodePairTUN(ctx context.Context, from, to *tailcfg.DERPNode, fr
 	go func() {
 		var bufs [][]byte
 		var sizes []int
+		// TODO: optimize the number of bufs
 		for range 5 {
-			// TODO: figure out the 16 byte magic number.
-			bufs = append(bufs, make([]byte, mtu+16))
+			bufs = append(bufs, make([]byte, mtu+tstun.PacketStartOffset))
 			sizes = append(sizes, 0)
 		}
 
 		for {
-			n, err := dev.Read(bufs, sizes, 16)
+			n, err := dev.Read(bufs, sizes, tstun.PacketStartOffset)
 			if err != nil {
 				return
 			}
 
 			for i := range n {
-				buf := bufs[i][:sizes[i]+16]
-				pkt := buf[16:]
+				buf := bufs[i][:sizes[i]+tstun.PacketStartOffset]
+				pkt := buf[tstun.PacketStartOffset:]
 				src, dst := make([]byte, 4), make([]byte, 4)
 				srcPort, dstPort := make([]byte, 2), make([]byte, 2)
 				copy(src, pkt[12:16])
@@ -668,7 +667,7 @@ func runDerpProbeNodePairTUN(ctx context.Context, from, to *tailcfg.DERPNode, fr
 					return
 				}
 				pkt := v.Data
-				dev.Write([][]byte{pkt}, 16)
+				dev.Write([][]byte{pkt}, tstun.PacketStartOffset)
 			case derp.KeepAliveMessage:
 				// Silently ignore.
 			default:
@@ -698,8 +697,6 @@ func runDerpProbeNodePairTUN(ctx context.Context, from, to *tailcfg.DERPNode, fr
 	go func() {
 		loops := int(size) / len(randData)
 		remainderAtEnd := int(size) % len(randData)
-		fmt.Printf("ZZZZ loops: %d\n", loops)
-		fmt.Printf("ZZZZ remainder at end: %d\n", remainderAtEnd)
 		totalLoops := loops
 		if remainderAtEnd > 0 {
 			totalLoops += 1
@@ -721,6 +718,7 @@ func runDerpProbeNodePairTUN(ctx context.Context, from, to *tailcfg.DERPNode, fr
 		}
 	}()
 
+	// Read the data we've sent
 	readC := make(chan error, 1)
 	go func() {
 		_, err := io.CopyN(inHash, conn, size)
