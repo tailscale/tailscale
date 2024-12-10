@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"unique"
 
 	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
@@ -172,6 +173,16 @@ func (p NodePublic) Shard() uint8 {
 // using bytes.Compare on the bytes of the public key.
 func (p NodePublic) Compare(p2 NodePublic) int {
 	return bytes.Compare(p.k[:], p2.k[:])
+}
+
+// Handle returns a unique.Handle for this NodePublic. The Handle is more
+// efficient for storage and comparison than the NodePublic itself, but is also
+// more expensive to create. It is best to keep a copy of the Handle on a longer
+// term object representing a NodePublic, rather than creating it on the fly,
+// but in doing so if the Handle is used in multiple other data structures the
+// cost of Handle storage and comparisons on lookups will quickly amortize.
+func (p NodePublic) Handle() unique.Handle[NodePublic] {
+	return unique.Make(p)
 }
 
 // ParseNodePublicUntyped parses an untyped 64-character hex value

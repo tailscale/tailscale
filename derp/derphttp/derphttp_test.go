@@ -327,7 +327,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 		}
 		watcher1.breakConnection(watcher1.client)
 		// re-establish connection by sending a packet
-		watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+		watcher1.ForwardPacket(key.NodePublic{}.Handle(), key.NodePublic{}.Handle(), []byte("bogus"))
 
 		timer.Reset(5 * time.Second)
 	}
@@ -400,7 +400,7 @@ func TestBreakWatcherConn(t *testing.T) {
 		}
 		watcher1.breakConnection(watcher1.client)
 		// re-establish connection by sending a packet
-		watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+		watcher1.ForwardPacket(key.NodePublic{}.Handle(), key.NodePublic{}.Handle(), []byte("bogus"))
 		// signal that the breaker is done
 		breakerChan <- true
 
