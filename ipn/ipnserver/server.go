@@ -32,6 +32,10 @@ import (
 	"tailscale.com/util/systemd"
 )
 
+// addH2C is a no-op on platforms where the LocalAPI
+// does not support H2C ("cleartext" HTTP/2).
+var addH2C = func(*http.Server) {}
+
 // Server is an IPN backend and its set of 0 or more active localhost
 // TCP or unix socket connections talking to that backend.
 type Server struct {
@@ -506,6 +510,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		},
 		ErrorLog: logger.StdLogger(logger.WithPrefix(s.logf, "ipnserver: ")),
 	}
+	addH2C(hs)
 	if err := hs.Serve(ln); err != nil {
 		if err := ctx.Err(); err != nil {
 			return err
