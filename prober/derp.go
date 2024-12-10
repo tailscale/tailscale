@@ -8,13 +8,16 @@ import (
 	"cmp"
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"expvar"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,10 +29,12 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/stun"
+	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/router"
 )
 
 // derpProber dynamically manages several probes for each DERP server
@@ -437,7 +442,7 @@ func derpProbeBandwidth(ctx context.Context, dm *tailcfg.DERPMap, from, to *tail
 	start := time.Now()
 	defer func() { transferTime.Add(time.Since(start).Seconds()) }()
 
-	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc, size); err != nil {
+	if err := runDerpProbeNodePairTUN(ctx, from, to, fromc, toc, size); err != nil {
 		// Record pubkeys on failed probes to aid investigation.
 		return fmt.Errorf("%s -> %s: %w",
 			fromc.SelfPublicKey().ShortString(),
@@ -577,6 +582,175 @@ func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc
 	return nil
 }
 
+// runDerpProbeNodePairTUN takes two DERP clients (fromc and toc) connected to two
+// DERP servers (from and to) and sends a test payload of a given size from one
+// to another over TUN.
+func runDerpProbeNodePairTUN(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client, size int64) error {
+	// Temporarily set up a TUN device with which to simulate a real client TCP connection
+	// tunneling over DERP.
+	dev, _, err := tstun.New(log.Printf, "utun9")
+	if err != nil {
+		return fmt.Errorf("failed to create TUN device: %w", err)
+	}
+	defer dev.Close()
+	mtu, err := dev.MTU()
+	if err != nil {
+		return fmt.Errorf("failed to get TUN MTU: %w", err)
+	}
+
+	r, err := router.New(log.Printf, dev, nil, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer r.Close()
+
+	r.Set(&router.Config{
+		LocalAddrs: []netip.Prefix{netip.MustParsePrefix("172.16.0.1/30")},
+		Routes:     []netip.Prefix{netip.MustParsePrefix("172.16.0.1/30")},
+	})
+
+	// Read packets from TUN device
+	tunReadC := make(chan error, 1)
+	go func() {
+		var bufs [][]byte
+		var sizes []int
+		// TODO: optimize the number of bufs
+		for range 5 {
+			bufs = append(bufs, make([]byte, mtu+tstun.PacketStartOffset))
+			sizes = append(sizes, 0)
+		}
+
+		for {
+			n, err := dev.Read(bufs, sizes, tstun.PacketStartOffset)
+			if err != nil {
+				return
+			}
+
+			for i := range n {
+				buf := bufs[i][:sizes[i]+tstun.PacketStartOffset]
+				pkt := buf[tstun.PacketStartOffset:]
+				src, dst := make([]byte, 4), make([]byte, 4)
+				srcPort, dstPort := make([]byte, 2), make([]byte, 2)
+				copy(src, pkt[12:16])
+				copy(dst, pkt[16:20])
+				// TODO: the below assumes no IP options in header
+				copy(srcPort, pkt[20:22])
+				copy(dstPort, pkt[22:24])
+
+				// Swap
+				copy(pkt[12:], dst)
+				copy(pkt[16:], src)
+				copy(pkt[20:], dstPort)
+				copy(pkt[22:], srcPort)
+				if err := fromc.Send(toc.SelfPublicKey(), buf); err != nil {
+					tunReadC <- err
+					return
+				}
+			}
+		}
+	}()
+
+	// Receive the packets.
+	recvc := make(chan error, 1)
+	go func() {
+		defer close(recvc) // to break out of 'select' below.
+		for {
+			m, err := toc.Recv()
+			if err != nil {
+				recvc <- fmt.Errorf("failed to receive: %w", err)
+				return
+			}
+			switch v := m.(type) {
+			case derp.ReceivedPacket:
+				if v.Source != fromc.SelfPublicKey() {
+					recvc <- fmt.Errorf("got data packet from unexpected source, %v", v.Source)
+					return
+				}
+				pkt := v.Data
+				dev.Write([][]byte{pkt}, tstun.PacketStartOffset)
+			case derp.KeepAliveMessage:
+				// Silently ignore.
+			default:
+				log.Printf("%v: ignoring Recv frame type %T", to.Name, v)
+				// Loop.
+			}
+		}
+	}()
+
+	randData := make([]byte, 10000)
+	_, err = crand.Read(randData)
+	if err != nil {
+		return fmt.Errorf("failed to initialize random data: %w", err)
+	}
+	outHash := sha256.New()
+	inHash := sha256.New()
+
+	// Dial ourselves
+	conn, err := net.Dial("tcp", "172.16.0.2:5201")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Send ourselves data
+	sendc := make(chan error, 1)
+	go func() {
+		loops := int(size) / len(randData)
+		remainderAtEnd := int(size) % len(randData)
+		totalLoops := loops
+		if remainderAtEnd > 0 {
+			totalLoops += 1
+		}
+		for i := range totalLoops {
+			b := randData
+			last := i == loops
+			if last {
+				b = randData[:remainderAtEnd]
+			}
+			if _, err := outHash.Write(b); err != nil {
+				sendc <- fmt.Errorf("failed to write outHash: %w", err)
+				return
+			}
+			if _, err := conn.Write(b); err != nil {
+				sendc <- fmt.Errorf("failed to write to conn: %w", err)
+				return
+			}
+		}
+	}()
+
+	// Read the data we've sent
+	readC := make(chan error, 1)
+	go func() {
+		_, err := io.CopyN(inHash, conn, size)
+		readC <- err
+	}()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("timeout: %w", ctx.Err())
+	case err := <-tunReadC:
+		if err != nil {
+			return fmt.Errorf("error reading from TUN via %q: %w", from.Name, err)
+		}
+	case err := <-sendc:
+		if err != nil {
+			return fmt.Errorf("error sending via %q: %w", from.Name, err)
+		}
+	case err := <-recvc:
+		if err != nil {
+			return fmt.Errorf("error receiving from %q: %w", to.Name, err)
+		}
+	case err := <-readC:
+		outSum := outHash.Sum(nil)
+		inSum := inHash.Sum(nil)
+		if !bytes.Equal(outSum, inSum) {
+			return errors.New("read data did not match written")
+		}
+		return err
+	}
+	return nil
+}
+
 func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode, isProber bool) (*derphttp.Client, error) {
 	// To avoid spamming the log with regular connection messages.
 	l := logger.Filtered(log.Printf, func(s string) bool {
@@ -597,18 +771,22 @@ func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode, isPr
 	if err != nil {
 		return nil, err
 	}
-	cs, ok := dc.TLSConnectionState()
-	if !ok {
-		dc.Close()
-		return nil, errors.New("no TLS state")
-	}
-	if len(cs.PeerCertificates) == 0 {
-		dc.Close()
-		return nil, errors.New("no peer certificates")
-	}
-	if cs.ServerName != n.HostName {
-		dc.Close()
-		return nil, fmt.Errorf("TLS server name %q != derp hostname %q", cs.ServerName, n.HostName)
+
+	// Only verify TLS state if this is a prober.
+	if isProber {
+		cs, ok := dc.TLSConnectionState()
+		if !ok {
+			dc.Close()
+			return nil, errors.New("no TLS state")
+		}
+		if len(cs.PeerCertificates) == 0 {
+			dc.Close()
+			return nil, errors.New("no peer certificates")
+		}
+		if cs.ServerName != n.HostName {
+			dc.Close()
+			return nil, fmt.Errorf("TLS server name %q != derp hostname %q", cs.ServerName, n.HostName)
+		}
 	}
 
 	errc := make(chan error, 1)
