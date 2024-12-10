@@ -49,6 +49,8 @@ type Menu struct {
 	more *systray.MenuItem
 	quit *systray.MenuItem
 
+	accountsCh chan ipn.ProfileID
+
 	eventCancel func() // cancel eventLoop
 }
 
@@ -64,15 +66,32 @@ func onReady() {
 
 	chState = make(chan ipn.State, 1)
 
+	menu := new(Menu)
+	menu.rebuild(fetchState(ctx))
+
+	go watchIPNBus(ctx)
+}
+
+type state struct {
+	status      *ipnstate.Status
+	curProfile  ipn.LoginProfile
+	allProfiles []ipn.LoginProfile
+}
+
+func fetchState(ctx context.Context) state {
 	status, err := localClient.Status(ctx)
 	if err != nil {
 		log.Print(err)
 	}
-
-	menu := new(Menu)
-	menu.rebuild(status)
-
-	go watchIPNBus(ctx)
+	curProfile, allProfiles, err := localClient.ProfileStatus(ctx)
+	if err != nil {
+		log.Print(err)
+	}
+	return state{
+		status:      status,
+		curProfile:  curProfile,
+		allProfiles: allProfiles,
+	}
 }
 
 // rebuild the systray menu based on the current Tailscale state.
@@ -80,14 +99,17 @@ func onReady() {
 // We currently rebuild the entire menu because it is not easy to update the existing menu.
 // You cannot iterate over the items in a menu, nor can you remove some items like separators.
 // So for now we rebuild the whole thing, and can optimize this later if needed.
-func (menu *Menu) rebuild(status *ipnstate.Status) {
+func (menu *Menu) rebuild(state state) {
 	menu.mu.Lock()
 	defer menu.mu.Unlock()
 
 	if menu.eventCancel != nil {
 		menu.eventCancel()
 	}
-	menu.status = status
+	ctx := context.Background()
+	ctx, menu.eventCancel = context.WithCancel(ctx)
+
+	menu.status = state.status
 	systray.ResetMenu()
 
 	menu.connect = systray.AddMenuItem("Connect", "")
@@ -95,8 +117,46 @@ func (menu *Menu) rebuild(status *ipnstate.Status) {
 	menu.disconnect.Hide()
 	systray.AddSeparator()
 
-	if status != nil && status.Self != nil {
-		title := fmt.Sprintf("This Device: %s (%s)", status.Self.HostName, status.Self.TailscaleIPs[0])
+	account := "Account"
+	if state.curProfile.Name != "" {
+		account += fmt.Sprintf(" (%s)", state.curProfile.Name)
+	}
+	accounts := systray.AddMenuItem(account, "")
+	// The dbus message about this menu item must propagate to the receiving
+	// end before we attach any submenu items. Otherwise the receiver may not
+	// yet record the parent menu item and error out.
+	//
+	// On waybar with libdbusmenu-gtk, this manifests as the following warning:
+	//    (waybar:153009): LIBDBUSMENU-GTK-WARNING **: 18:07:11.551: Children but no menu, someone's been naughty with their 'children-display' property: 'submenu'
+	time.Sleep(100 * time.Millisecond)
+	// Aggregate all clicks into a shared channel.
+	menu.accountsCh = make(chan ipn.ProfileID)
+	for _, profile := range state.allProfiles {
+		title := fmt.Sprintf("%s (%s)", profile.Name, profile.NetworkProfile.DomainName)
+		// Note: we could use AddSubMenuItemCheckbox instead of this formatting
+		// hack, but checkboxes don't work across all desktops unfortunately.
+		if profile.ID == state.curProfile.ID {
+			title = "* " + title
+		}
+		item := accounts.AddSubMenuItem(title, "")
+		go func(profile ipn.LoginProfile) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-item.ClickedCh:
+					select {
+					case <-ctx.Done():
+						return
+					case menu.accountsCh <- profile.ID:
+					}
+				}
+			}
+		}(profile)
+	}
+
+	if state.status != nil && state.status.Self != nil {
+		title := fmt.Sprintf("This Device: %s (%s)", state.status.Self.HostName, state.status.Self.TailscaleIPs[0])
 		menu.self = systray.AddMenuItem(title, "")
 	}
 	systray.AddSeparator()
@@ -107,8 +167,6 @@ func (menu *Menu) rebuild(status *ipnstate.Status) {
 	menu.quit = systray.AddMenuItem("Quit", "Quit the app")
 	menu.quit.Enable()
 
-	ctx := context.Background()
-	ctx, menu.eventCancel = context.WithCancel(ctx)
 	go menu.eventLoop(ctx)
 }
 
@@ -124,11 +182,7 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 			switch state {
 			case ipn.Running:
 				setAppIcon(loading)
-				status, err := localClient.Status(ctx)
-				if err != nil {
-					log.Printf("error getting tailscale status: %v", err)
-				}
-				menu.rebuild(status)
+				menu.rebuild(fetchState(ctx))
 				setAppIcon(connected)
 				menu.connect.SetTitle("Connected")
 				menu.connect.Disable()
@@ -171,6 +225,11 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 
 		case <-menu.more.ClickedCh:
 			webbrowser.Open("http://100.100.100.100/")
+
+		case id := <-menu.accountsCh:
+			if err := localClient.SwitchProfile(ctx, id); err != nil {
+				log.Printf("failed switching to profile ID %v: %v", id, err)
+			}
 
 		case <-menu.quit.ClickedCh:
 			systray.Quit()
