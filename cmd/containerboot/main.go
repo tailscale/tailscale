@@ -331,8 +331,10 @@ authLoop:
 		if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
 			log.Fatalf("failed to unset serve config: %v", err)
 		}
-		if err := kc.storeHTTPSEndpoint(ctx, ""); err != nil {
-			log.Fatalf("failed to update HTTPS endpoint in tailscale state: %v", err)
+		if hasKubeStateStore(cfg) {
+			if err := kc.storeHTTPSEndpoint(ctx, ""); err != nil {
+				log.Fatalf("failed to update HTTPS endpoint in tailscale state: %v", err)
+			}
 		}
 	}
 
