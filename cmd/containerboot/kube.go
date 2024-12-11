@@ -24,6 +24,7 @@ import (
 type kubeClient struct {
 	kubeclient.Client
 	stateSecret string
+	canPatch    bool // whether the client has permissions to patch Kubernetes Secrets
 }
 
 func newKubeClient(root string, stateSecret string) (*kubeClient, error) {

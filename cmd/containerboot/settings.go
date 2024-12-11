@@ -217,6 +217,7 @@ func (cfg *settings) setupKube(ctx context.Context, kc *kubeClient) error {
 		return fmt.Errorf("some Kubernetes permissions are missing, please check your RBAC configuration: %v", err)
 	}
 	cfg.KubernetesCanPatch = canPatch
+	kc.canPatch = canPatch
 
 	s, err := kc.GetSecret(ctx, cfg.KubeSecret)
 	if err != nil {
