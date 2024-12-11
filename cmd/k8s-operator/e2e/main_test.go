@@ -52,7 +52,7 @@ var (
 // - Operator installed with --set apiServerProxyConfig.mode="true"
 // - ACLs that define tag:e2e-test-proxy tag. TODO(tomhjp): Can maybe replace this prereq onwards with an API key
 // - OAuth client ID and secret in TS_API_CLIENT_ID and TS_API_CLIENT_SECRET env
-// - OAuth client must have acl write and device write for tag:e2e-test-proxy tag
+// - OAuth client must have auth_keys and policy_file write for tag:e2e-test-proxy tag
 func TestMain(m *testing.M) {
 	code, err := runTests(m)
 	if err != nil {
@@ -61,7 +61,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func runTests(m *testing.M) (_ int, err error) {
+func runTests(m *testing.M) (int, error) {
 	zlog := kzap.NewRaw([]kzap.Opts{kzap.UseDevMode(true), kzap.Level(zapcore.DebugLevel)}...).Sugar()
 	logf.SetLogger(zapr.NewLogger(zlog.Desugar()))
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
@@ -79,13 +79,13 @@ func runTests(m *testing.M) (_ int, err error) {
 	return m.Run(), nil
 }
 
-func setupClientAndACLs() (func() error, error) {
+func setupClientAndACLs() (cleanup func() error, _ error) {
 	ctx := context.Background()
 	credentials := clientcredentials.Config{
 		ClientID:     os.Getenv("TS_API_CLIENT_ID"),
 		ClientSecret: os.Getenv("TS_API_CLIENT_SECRET"),
 		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
-		Scopes:       []string{"devices", "acl"},
+		Scopes:       []string{"auth_keys", "policy_file"},
 	}
 	tsClient = tailscale.NewClient("-", nil)
 	tsClient.HTTPClient = credentials.Client(ctx)
