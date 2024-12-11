@@ -19,3 +19,12 @@ func TestCompare(t *testing.T) {
 		t.Errorf("Compare(true, true) = %v, want 0", got)
 	}
 }
+
+func TestIfElse(t *testing.T) {
+	if got := IfElse(true, 0, 1); got != 0 {
+		t.Errorf("IfElse(true, 0, 1) = %v, want 0", got)
+	}
+	if got := IfElse(false, 0, 1); got != 1 {
+		t.Errorf("IfElse(false, 0, 1) = %v, want 1", got)
+	}
+}
