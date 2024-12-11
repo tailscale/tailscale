@@ -72,8 +72,10 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 		if err := updateServeConfig(ctx, sc, certDomain, lc); err != nil {
 			log.Fatalf("serve proxy: error updating serve config: %v", err)
 		}
-		if err := kc.storeHTTPSEndpoint(ctx, certDomain); err != nil {
-			log.Fatalf("serve proxy: error storing HTTPS endpoint: %v", err)
+		if kc != nil {
+			if err := kc.storeHTTPSEndpoint(ctx, certDomain); err != nil {
+				log.Fatalf("serve proxy: error storing HTTPS endpoint: %v", err)
+			}
 		}
 		prevServeConfig = sc
 	}
