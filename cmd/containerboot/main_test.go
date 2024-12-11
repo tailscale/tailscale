@@ -31,6 +31,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/sys/unix"
 	"tailscale.com/ipn"
+	"tailscale.com/kube/egressservices"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
@@ -57,6 +58,16 @@ func TestContainerBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error unmarshaling tailscaled config: %v", err)
 	}
+	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
+	serveConfBytes, err := json.Marshal(serveConf)
+	if err != nil {
+		t.Fatalf("error unmarshaling serve config: %v", err)
+	}
+	egressSvcsCfg := egressservices.Configs{"foo": {TailnetTarget: egressservices.TailnetTarget{FQDN: "foo.tailnetxyx.ts.net"}}}
+	egressSvcsCfgBytes, err := json.Marshal(egressSvcsCfg)
+	if err != nil {
+		t.Fatalf("error unmarshaling egress services config: %v", err)
+	}
 
 	dirs := []string{
 		"var/lib",
@@ -73,14 +84,16 @@ func TestContainerBoot(t *testing.T) {
 		}
 	}
 	files := map[string][]byte{
-		"usr/bin/tailscaled":                    fakeTailscaled,
-		"usr/bin/tailscale":                     fakeTailscale,
-		"usr/bin/iptables":                      fakeTailscale,
-		"usr/bin/ip6tables":                     fakeTailscale,
-		"dev/net/tun":                           []byte(""),
-		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
-		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
-		"etc/tailscaled/cap-95.hujson":          tailscaledConfBytes,
+		"usr/bin/tailscaled":                         fakeTailscaled,
+		"usr/bin/tailscale":                          fakeTailscale,
+		"usr/bin/iptables":                           fakeTailscale,
+		"usr/bin/ip6tables":                          fakeTailscale,
+		"dev/net/tun":                                []byte(""),
+		"proc/sys/net/ipv4/ip_forward":               []byte("0"),
+		"proc/sys/net/ipv6/conf/all/forwarding":      []byte("0"),
+		"etc/tailscaled/cap-95.hujson":               tailscaledConfBytes,
+		"etc/tailscaled/serve-config.json":           serveConfBytes,
+		"etc/tailscaled/egress-services-config.json": egressSvcsCfgBytes,
 	}
 	resetFiles := func() {
 		for path, content := range files {
@@ -826,6 +839,101 @@ func TestContainerBoot(t *testing.T) {
 						metricsURL(localAddrPort): 200,
 						healthURL(healthAddrPort): 200,
 					},
+				},
+			},
+		},
+		{
+			Name: "serve_config_no_kube",
+			Env: map[string]string{
+				"TS_SERVE_CONFIG": filepath.Join(d, "etc/tailscaled/serve-config.json"),
+				"TS_AUTHKEY":      "tskey-key",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+					},
+				},
+				{
+					Notify: runningNotify,
+				},
+			},
+		},
+		{
+			Name: "serve_config_kube",
+			Env: map[string]string{
+				"KUBERNETES_SERVICE_HOST":       kube.Host,
+				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
+				"TS_SERVE_CONFIG":               filepath.Join(d, "etc/tailscaled/serve-config.json"),
+			},
+			KubeSecret: map[string]string{
+				"authkey": "tskey-key",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+					},
+					WantKubeSecret: map[string]string{
+						"authkey": "tskey-key",
+					},
+				},
+				{
+					Notify: runningNotify,
+					WantKubeSecret: map[string]string{
+						"authkey":          "tskey-key",
+						"device_fqdn":      "test-node.test.ts.net",
+						"device_id":        "myID",
+						"device_ips":       `["100.64.0.1"]`,
+						"https_endpoint":   "no-https",
+						"tailscale_capver": capver,
+					},
+				},
+			},
+		},
+		{
+			Name: "egress_svcs_config_kube",
+			Env: map[string]string{
+				"KUBERNETES_SERVICE_HOST":        kube.Host,
+				"KUBERNETES_SERVICE_PORT_HTTPS":  kube.Port,
+				"TS_EGRESS_SERVICES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled/egress-services-config.json"),
+			},
+			KubeSecret: map[string]string{
+				"authkey": "tskey-key",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+					},
+					WantKubeSecret: map[string]string{
+						"authkey": "tskey-key",
+					},
+				},
+				{
+					Notify: runningNotify,
+					WantKubeSecret: map[string]string{
+						"authkey":          "tskey-key",
+						"device_fqdn":      "test-node.test.ts.net",
+						"device_id":        "myID",
+						"device_ips":       `["100.64.0.1"]`,
+						"tailscale_capver": capver,
+					},
+				},
+			},
+		},
+		{
+			Name: "egress_svcs_config_no_kube",
+			Env: map[string]string{
+				"TS_EGRESS_SERVICES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled/egress-services-config.json"),
+				"TS_AUTHKEY":                     "tskey-key",
+			},
+			Phases: []phase{
+				{
+					WantFatalLog: "TS_EGRESS_SERVICES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
 				},
 			},
 		},
