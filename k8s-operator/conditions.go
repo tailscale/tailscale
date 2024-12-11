@@ -167,3 +167,14 @@ func DNSCfgIsReady(cfg *tsapi.DNSConfig) bool {
 	cond := cfg.Status.Conditions[idx]
 	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == cfg.Generation
 }
+
+func SvcIsReady(svc *corev1.Service) bool {
+	idx := xslices.IndexFunc(svc.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(tsapi.ProxyReady)
+	})
+	if idx == -1 {
+		return false
+	}
+	cond := svc.Status.Conditions[idx]
+	return cond.Status == metav1.ConditionTrue
+}
