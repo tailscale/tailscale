@@ -1260,19 +1260,21 @@ func (v *SSHPrincipalView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v SSHPrincipalView) Node() StableNodeID           { return v.ж.Node }
-func (v SSHPrincipalView) NodeIP() string               { return v.ж.NodeIP }
-func (v SSHPrincipalView) UserLogin() string            { return v.ж.UserLogin }
-func (v SSHPrincipalView) Any() bool                    { return v.ж.Any }
-func (v SSHPrincipalView) PubKeys() views.Slice[string] { return views.SliceOf(v.ж.PubKeys) }
+func (v SSHPrincipalView) Node() StableNodeID { return v.ж.Node }
+func (v SSHPrincipalView) NodeIP() string     { return v.ж.NodeIP }
+func (v SSHPrincipalView) UserLogin() string  { return v.ж.UserLogin }
+func (v SSHPrincipalView) Any() bool          { return v.ж.Any }
+func (v SSHPrincipalView) UnusedPubKeys() views.Slice[string] {
+	return views.SliceOf(v.ж.UnusedPubKeys)
+}
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHPrincipalViewNeedsRegeneration = SSHPrincipal(struct {
-	Node      StableNodeID
-	NodeIP    string
-	UserLogin string
-	Any       bool
-	PubKeys   []string
+	Node          StableNodeID
+	NodeIP        string
+	UserLogin     string
+	Any           bool
+	UnusedPubKeys []string
 }{})
 
 // View returns a readonly view of ControlDialPlan.

@@ -152,7 +152,8 @@ type CapabilityVersion int
 //   - 107: 2024-10-30: add App Connector to conffile (PR #13942)
 //   - 108: 2024-11-08: Client sends ServicesHash in Hostinfo, understands c2n GET /vip-services.
 //   - 109: 2024-11-18: Client supports filtertype.Match.SrcCaps (issue #12542)
-const CurrentCapabilityVersion CapabilityVersion = 109
+//   - 110: 2024-12-12: removed never-before-used Tailscale SSH public key support (#14373)
+const CurrentCapabilityVersion CapabilityVersion = 110
 
 type StableID string
 
@@ -2525,16 +2526,13 @@ type SSHPrincipal struct {
 	Any       bool         `json:"any,omitempty"`       // if true, match any connection
 	// TODO(bradfitz): add StableUserID, once that exists
 
-	// PubKeys, if non-empty, means that this SSHPrincipal only
-	// matches if one of these public keys is presented by the user.
+	// UnusedPubKeys was public key support. It never became an official product
+	// feature and so as of 2024-12-12 is being removed.
+	// This stub exists to remind us not to re-use the JSON field name "pubKeys"
+	// in the future if we bring it back with different semantics.
 	//
-	// As a special case, if len(PubKeys) == 1 and PubKeys[0] starts
-	// with "https://", then it's fetched (like https://github.com/username.keys).
-	// In that case, the following variable expansions are also supported
-	// in the URL:
-	//   * $LOGINNAME_EMAIL ("foo@bar.com" or "foo@github")
-	//   * $LOGINNAME_LOCALPART (the "foo" from either of the above)
-	PubKeys []string `json:"pubKeys,omitempty"`
+	// Deprecated: do not use. It does nothing.
+	UnusedPubKeys []string `json:"pubKeys,omitempty"`
 }
 
 // SSHAction is how to handle an incoming connection.

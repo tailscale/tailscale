@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -229,7 +228,7 @@ func TestMatchRule(t *testing.T) {
 				info: tt.ci,
 				srv:  &server{logf: t.Logf},
 			}
-			got, gotUser, gotAcceptEnv, err := c.matchRule(tt.rule, nil)
+			got, gotUser, gotAcceptEnv, err := c.matchRule(tt.rule)
 			if err != tt.wantErr {
 				t.Errorf("err = %v; want %v", err, tt.wantErr)
 			}
@@ -348,7 +347,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 				info: tt.ci,
 				srv:  &server{logf: t.Logf},
 			}
-			got, gotUser, gotAcceptEnv, match := c.evalSSHPolicy(tt.policy, nil)
+			got, gotUser, gotAcceptEnv, match := c.evalSSHPolicy(tt.policy)
 			if match != tt.wantMatch {
 				t.Errorf("match = %v; want %v", match, tt.wantMatch)
 			}
@@ -1127,89 +1126,6 @@ func parseEnv(out []byte) map[string]string {
 		}
 	}
 	return e
-}
-
-func TestPublicKeyFetching(t *testing.T) {
-	var reqsTotal, reqsIfNoneMatchHit, reqsIfNoneMatchMiss int32
-	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32((&reqsTotal), 1)
-		etag := fmt.Sprintf("W/%q", sha256.Sum256([]byte(r.URL.Path)))
-		w.Header().Set("Etag", etag)
-		if v := r.Header.Get("If-None-Match"); v != "" {
-			if v == etag {
-				atomic.AddInt32(&reqsIfNoneMatchHit, 1)
-				w.WriteHeader(304)
-				return
-			}
-			atomic.AddInt32(&reqsIfNoneMatchMiss, 1)
-		}
-		io.WriteString(w, "foo\nbar\n"+string(r.URL.Path)+"\n")
-	}))
-	ts.StartTLS()
-	defer ts.Close()
-	keys := ts.URL
-
-	clock := &tstest.Clock{}
-	srv := &server{
-		pubKeyHTTPClient: ts.Client(),
-		timeNow:          clock.Now,
-	}
-	for range 2 {
-		got, err := srv.fetchPublicKeysURL(keys + "/alice.keys")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := []string{"foo", "bar", "/alice.keys"}; !reflect.DeepEqual(got, want) {
-			t.Errorf("got %q; want %q", got, want)
-		}
-	}
-	if got, want := atomic.LoadInt32(&reqsTotal), int32(1); got != want {
-		t.Errorf("got %d requests; want %d", got, want)
-	}
-	if got, want := atomic.LoadInt32(&reqsIfNoneMatchHit), int32(0); got != want {
-		t.Errorf("got %d etag hits; want %d", got, want)
-	}
-	clock.Advance(5 * time.Minute)
-	got, err := srv.fetchPublicKeysURL(keys + "/alice.keys")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"foo", "bar", "/alice.keys"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("got %q; want %q", got, want)
-	}
-	if got, want := atomic.LoadInt32(&reqsTotal), int32(2); got != want {
-		t.Errorf("got %d requests; want %d", got, want)
-	}
-	if got, want := atomic.LoadInt32(&reqsIfNoneMatchHit), int32(1); got != want {
-		t.Errorf("got %d etag hits; want %d", got, want)
-	}
-	if got, want := atomic.LoadInt32(&reqsIfNoneMatchMiss), int32(0); got != want {
-		t.Errorf("got %d etag misses; want %d", got, want)
-	}
-
-}
-
-func TestExpandPublicKeyURL(t *testing.T) {
-	c := &conn{
-		info: &sshConnInfo{
-			uprof: tailcfg.UserProfile{
-				LoginName: "bar@baz.tld",
-			},
-		},
-	}
-	if got, want := c.expandPublicKeyURL("foo"), "foo"; got != want {
-		t.Errorf("basic: got %q; want %q", got, want)
-	}
-	if got, want := c.expandPublicKeyURL("https://example.com/$LOGINNAME_LOCALPART.keys"), "https://example.com/bar.keys"; got != want {
-		t.Errorf("localpart: got %q; want %q", got, want)
-	}
-	if got, want := c.expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email=bar@baz.tld"; got != want {
-		t.Errorf("email: got %q; want %q", got, want)
-	}
-	c.info = new(sshConnInfo)
-	if got, want := c.expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email="; got != want {
-		t.Errorf("on empty: got %q; want %q", got, want)
-	}
 }
 
 func TestAcceptEnvPair(t *testing.T) {
