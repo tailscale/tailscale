@@ -48,5 +48,5 @@ func runWhoami(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return printWhoIs(who, whoamiArgs.json)
+	return printWhoIs(who, st.CurrentTailnet, whoamiArgs.json)
 }
