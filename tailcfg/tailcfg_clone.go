@@ -556,17 +556,17 @@ func (src *SSHPrincipal) Clone() *SSHPrincipal {
 	}
 	dst := new(SSHPrincipal)
 	*dst = *src
-	dst.PubKeys = append(src.PubKeys[:0:0], src.PubKeys...)
+	dst.UnusedPubKeys = append(src.UnusedPubKeys[:0:0], src.UnusedPubKeys...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHPrincipalCloneNeedsRegeneration = SSHPrincipal(struct {
-	Node      StableNodeID
-	NodeIP    string
-	UserLogin string
-	Any       bool
-	PubKeys   []string
+	Node          StableNodeID
+	NodeIP        string
+	UserLogin     string
+	Any           bool
+	UnusedPubKeys []string
 }{})
 
 // Clone makes a deep copy of ControlDialPlan.
