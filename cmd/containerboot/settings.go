@@ -44,6 +44,7 @@ type settings struct {
 	DaemonExtraArgs               string
 	ExtraArgs                     string
 	InKubernetes                  bool
+	State                         string
 	UserspaceMode                 bool
 	StateDir                      string
 	AcceptDNS                     *bool
@@ -89,6 +90,7 @@ func configFromEnv() (*settings, error) {
 		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
 		ExtraArgs:                             defaultEnv("TS_EXTRA_ARGS", ""),
 		InKubernetes:                          os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		State:                                 defaultEnv("TS_STATE", ""),
 		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
 		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
 		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
@@ -110,6 +112,19 @@ func configFromEnv() (*settings, error) {
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
 		PodUID:                                defaultEnv("POD_UID", ""),
 	}
+
+	if cfg.State == "" {
+		if cfg.InKubernetes && cfg.KubeSecret != "" {
+			cfg.State = "kube:" + cfg.KubeSecret
+		} else {
+			cfg.State = "mem:"
+		}
+	}
+
+	if !strings.HasPrefix(cfg.State, "mem:") && !strings.HasPrefix(cfg.State, "kube:") && !strings.HasPrefix(cfg.State, "ssm:") {
+		return nil, fmt.Errorf("invalid TS_STATE value %q; must start with 'mem:', 'kube:', or 'ssm:'", cfg.State)
+	}
+
 	podIPs, ok := os.LookupEnv("POD_IPS")
 	if ok {
 		ips := strings.Split(podIPs, ",")
@@ -135,6 +150,35 @@ func configFromEnv() (*settings, error) {
 }
 
 func (s *settings) validate() error {
+
+	// Validate TS_STATE if set
+	if s.State != "" {
+		if !strings.HasPrefix(s.State, "mem:") && 
+		   !strings.HasPrefix(s.State, "kube:") && 
+		   !strings.HasPrefix(s.State, "ssm:") {
+			return fmt.Errorf("invalid TS_STATE value %q; must start with 'mem:', 'kube:', or 'ssm:'", s.State)
+		}
+
+		if strings.HasPrefix(s.State, "kube:") && !s.InKubernetes {
+			return fmt.Errorf("TS_STATE specifies Kubernetes state but the runtime environment is not Kubernetes")
+		}
+	}
+
+	// Check legacy settings and ensure no conflicts if TS_STATE is set
+	if s.State != "" {
+		if s.KubeSecret != "" {
+			log.Printf("[warning] TS_STATE is set; ignoring legacy TS_KUBE_SECRET")
+		}
+		if s.StateDir != "" {
+			log.Printf("[warning] TS_STATE is set; ignoring legacy TS_STATE_DIR")
+		}
+	} else {
+		// Fallback to legacy checks if TS_STATE is not set
+		if s.KubeSecret != "" && !s.InKubernetes {
+			return fmt.Errorf("TS_KUBE_SECRET is set but the runtime environment is not Kubernetes")
+		}
+	}
+
 	if s.TailscaledConfigFilePath != "" {
 		dir, file := path.Split(s.TailscaledConfigFilePath)
 		if _, err := os.Stat(dir); err != nil {
@@ -202,6 +246,7 @@ func (s *settings) validate() error {
 	if s.EgressSvcsCfgPath != "" && !(s.InKubernetes && s.KubeSecret != "") {
 		return errors.New("TS_EGRESS_SERVICES_CONFIG_PATH is only supported for Tailscale running on Kubernetes")
 	}
+	
 	return nil
 }
 
