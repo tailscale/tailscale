@@ -13,6 +13,7 @@ import (
 	"net/http"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/util/httpclient"
 )
 
 // DNSNameServers is returned when retrieving the list of nameservers.
@@ -55,8 +56,7 @@ func (c *Client) dnsGETRequest(ctx context.Context, endpoint string) ([]byte, er
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return nil, handleErrorResponse(b, resp)
 	}
 
@@ -82,8 +82,7 @@ func (c *Client) dnsPOSTRequest(ctx context.Context, endpoint string, postData a
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return nil, handleErrorResponse(b, resp)
 	}
 

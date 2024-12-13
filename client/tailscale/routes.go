@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+
+	"tailscale.com/util/httpclient"
 )
 
 // Routes contains the lists of subnet routes that are currently advertised by a device,
@@ -42,8 +44,7 @@ func (c *Client) Routes(ctx context.Context, deviceID string) (routes *Routes, e
 		return nil, err
 	}
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return nil, handleErrorResponse(b, resp)
 	}
 
@@ -82,8 +83,7 @@ func (c *Client) SetRoutes(ctx context.Context, deviceID string, subnets []netip
 		return nil, err
 	}
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return nil, handleErrorResponse(b, resp)
 	}
 
