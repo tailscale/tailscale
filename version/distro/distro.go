@@ -30,6 +30,7 @@ const (
 	WDMyCloud = Distro("wdmycloud")
 	Unraid    = Distro("unraid")
 	Alpine    = Distro("alpine")
+	IStoreOS  = Distro("istoreos")
 )
 
 var distro lazy.SyncValue[Distro]
@@ -95,6 +96,8 @@ func linuxDistro() Distro {
 		return Unraid
 	case have("/etc/alpine-release"):
 		return Alpine
+	case have("/usr/libexec/istore"):
+		return IStoreOS
 	}
 	return ""
 }
