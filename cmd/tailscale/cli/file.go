@@ -486,6 +486,14 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targe
 		return "", 0, fmt.Errorf("opening inbox file %q: %w", wf.Name, err)
 	}
 	defer rc.Close()
+	if dir == "-" {
+		f := os.Stdout
+		_, err = io.Copy(f, rc)
+		if err != nil {
+			return "", 0, fmt.Errorf("failed to write %v: %v", f.Name(), err)
+		}
+		return f.Name(), size, nil
+	}
 	f, err := openFileOrSubstitute(dir, wf.Name, getArgs.conflict)
 	if err != nil {
 		return "", 0, err
@@ -565,8 +573,10 @@ func runFileGet(ctx context.Context, args []string) error {
 		return wipeInbox(ctx)
 	}
 
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		return fmt.Errorf("%q is not a directory", dir)
+	if dir != "-" {
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			return fmt.Errorf("%q is not a directory", dir)
+		}
 	}
 	if getArgs.loop {
 		for {
