@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	jsonv2 "github.com/go-json-experiment/json"
+	"tailscale.com/types/bools"
+	"tailscale.com/util/must"
 )
 
 type testStruct struct {
@@ -87,7 +89,14 @@ func TestValue(t *testing.T) {
 				False:         ValueOf(false),
 				ExplicitUnset: Value[bool]{},
 			},
-			want: `{"True":true,"False":false,"Unset":null,"ExplicitUnset":null}`,
+			want: bools.IfElse(
+				// Detect whether v1 "encoding/json" supports `omitzero` or not.
+				// TODO(Go1.24): Remove this after `omitzero` is supported.
+				string(must.Get(json.Marshal(struct {
+					X int `json:",omitzero"`
+				}{}))) == `{}`,
+				`{"True":true,"False":false}`,                                    // omitzero supported
+				`{"True":true,"False":false,"Unset":null,"ExplicitUnset":null}`), // omitzero not supported
 			wantBack: struct {
 				True          Value[bool] `json:",omitzero"`
 				False         Value[bool] `json:",omitzero"`
