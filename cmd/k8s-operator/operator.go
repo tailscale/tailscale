@@ -74,6 +74,7 @@ func main() {
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
 		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
+		autoSignNodeKeys      = defaultBool("OPERATOR_AUTO_SIGN_NODE_KEYS", true)
 	)
 
 	var opts []kzap.Opts
@@ -114,6 +115,7 @@ func main() {
 		proxyTags:                     tags,
 		proxyFirewallMode:             tsFirewallMode,
 		defaultProxyClass:             defaultProxyClass,
+		autoSignNodeKeys:              autoSignNodeKeys,
 	}
 	runReconcilers(rOpts)
 }
@@ -527,6 +529,28 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)
 	}
 
+	// NodeKeySigner reconciler.
+	// Only start the NodeKeySigner reconciler if autoSignNodeKeys is set to true.
+	if opts.autoSignNodeKeys {
+		secFilter := handler.EnqueueRequestsFromMapFunc(managedSecretHandler(opts.tailscaleNamespace))
+		tsLocalClient, err := opts.tsServer.LocalClient()
+		if err != nil {
+			startlog.Fatalf("getting local tailscale client: %v", err)
+		}
+		err = builder.
+			ControllerManagedBy(mgr).
+			Named("node-key-signer-reconciler").
+			Watches(&corev1.Secret{}, secFilter).
+			Complete(&NodeKeySignerReconciler{
+				Client:        mgr.GetClient(),
+				logger:        opts.log.Named("node-key-signer-reconciler"),
+				tsLocalClient: tsLocalClient,
+			})
+		if err != nil {
+			startlog.Fatalf("could not create node key signer reconciler: %v", err)
+		}
+	}
+
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)
@@ -571,6 +595,9 @@ type reconcilerOpts struct {
 	// class for proxies that do not have a ProxyClass set.
 	// this is defined by an operator env variable.
 	defaultProxyClass string
+	// autoSignNodeKeys determines whether the operator should sign node keys
+	// for the Tailscale nodes when the tailnet is locked.
+	autoSignNodeKeys bool
 }
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each
@@ -714,6 +741,22 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handle
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&svc)})
 		}
 		return reqs
+	}
+}
+
+// managedSecretHandler filters Secret events to only those which
+// are managed by the operator.
+func managedSecretHandler(ns string) handler.MapFunc {
+	return func(_ context.Context, o client.Object) []reconcile.Request {
+		if o.GetNamespace() != ns {
+			return nil
+		}
+		if !isManagedResource(o) {
+			return nil
+		}
+		return []reconcile.Request{
+			{NamespacedName: client.ObjectKeyFromObject(o)},
+		}
 	}
 }
 

@@ -37,6 +37,12 @@ operatorConfig:
   defaultTags:
     - "tag:k8s-operator"
 
+  # Automatically sign node keys. If set to true, the operator will automatically
+  # sign node keys for devices it manages when running in a locked tailnet.
+  # In order for devices to be trusted, the operator's public lock key must be a
+  # trusted signer in the tailnet.
+  autoSignNodeKeys: true
+
   image:
     # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/k8s-operator.
     repository: tailscale/k8s-operator
