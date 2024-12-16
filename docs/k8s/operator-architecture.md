@@ -369,8 +369,10 @@ flowchart TD
 
     subgraph grouping[" "]
         subgraph k8s[Kubernetes cluster]
+            api["kube-apiserver"]
+
             subgraph tailscale-ns[namespace=tailscale]
-                operator((operator)):::tsnode
+                operator(("operator (dst)")):::tsnode
                 rec-sts[StatefulSet]
                 rec-0(("tsrecorder")):::tsnode
                 cfg-secret-0["config Secret"]
@@ -383,13 +385,17 @@ flowchart TD
         end
 
         client["client (src)"]:::tsnode
+        kubectl-exec["kubectl exec (src)"]:::tsnode
         server["server (dst)"]:::tsnode
         s3["S3-compatible storage"]
     end
 
-    client-->|ssh session|server
-    server-->|ssh session recording|rec-0
-    rec-0-->s3
+    kubectl-exec-->|exec session| operator
+    operator-->|exec session recording| rec-0
+    operator-->|exec session| api
+    client-->|ssh session| server
+    server-->|ssh session recording| rec-0
+    rec-0-->|session recordings| s3
     operator-.->|watches| rec
     operator -.->|creates| rec-sts
     rec-sts -.->|manages| rec-0
@@ -401,6 +407,8 @@ flowchart TD
     linkStyle 0 stroke:blue;
     linkStyle 1 stroke:blue;
     linkStyle 2 stroke:blue;
+    linkStyle 4 stroke:blue;
+    linkStyle 5 stroke:blue;
 
 ```
 
