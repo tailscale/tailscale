@@ -31,7 +31,7 @@ See https://tailscale.com/kb/1315/mdm-keys#set-a-custom-control-server-url for m
             <string id="LogTarget_Help"><![CDATA[This policy can be used to require the use of a non-standard log server.
 Please note that using a non-standard log server will limit Tailscale Support's ability to diagnose problems.
 
-If you configure this policy, set it to the URL of your log server, beginning with https:// and ending with no trailing slash. If blank or "https://log.tailscale.io", the default log server will be used.
+If you configure this policy, set it to the URL of your log server, beginning with https:// and ending with no trailing slash. If blank or "https://log.tailscale.com", the default log server will be used.
 
 If you disable this policy, the Tailscale standard log server will be used by default, but a non-standard Tailscale log server can be configured using the TS_LOG_TARGET environment variable.]]></string>
             <string id="Tailnet">Specify which Tailnet should be used for Login</string>

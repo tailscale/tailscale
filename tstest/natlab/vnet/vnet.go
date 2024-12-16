@@ -394,7 +394,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-// serveLogCatchConn serves a TCP connection to "log.tailscale.io", speaking the
+// serveLogCatchConn serves a TCP connection to "log.tailscale.com", speaking the
 // logtail/logcatcher protocol.
 //
 // We terminate TLS with an arbitrary cert; the client is configured to not
