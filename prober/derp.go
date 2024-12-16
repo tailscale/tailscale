@@ -51,7 +51,7 @@ type derpProber struct {
 	// Optional bandwidth probing.
 	bwInterval      time.Duration
 	bwProbeSize     int64
-	bwTUNIPv4Prefix *netip.Prefix
+	bwTUNIPv4Prefix *netip.Prefix // or nil to not use TUN
 
 	// Optionally restrict probes to a single regionCode.
 	regionCode string
@@ -78,16 +78,18 @@ type DERPOpt func(*derpProber)
 // `size` bytes will be regularly transferred through each DERP server, and each
 // pair of DERP servers in every region. If tunAddress is specified, probes will
 // use a TCP connection over a TUN device at this address in order to exercise
-// TCP-in-TCP in similar fashion to TCP over Tailscale via DERP
+// TCP-in-TCP in similar fashion to TCP over Tailscale via DERP.
 func WithBandwidthProbing(interval time.Duration, size int64, tunAddress string) DERPOpt {
 	return func(d *derpProber) {
 		d.bwInterval = interval
 		d.bwProbeSize = size
-		prefix, err := netip.ParsePrefix(fmt.Sprintf("%s/30", tunAddress))
-		if err != nil {
-			log.Fatalf("failed to parse IP prefix from bw-tun-ipv4-addr: %v", err)
+		if tunAddress != "" {
+			prefix, err := netip.ParsePrefix(fmt.Sprintf("%s/30", tunAddress))
+			if err != nil {
+				log.Fatalf("failed to parse IP prefix from bw-tun-ipv4-addr: %v", err)
+			}
+			d.bwTUNIPv4Prefix = &prefix
 		}
-		d.bwTUNIPv4Prefix = &prefix
 	}
 }
 
