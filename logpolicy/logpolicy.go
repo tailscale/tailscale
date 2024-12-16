@@ -889,7 +889,7 @@ func (opts TransportOptions) New() http.RoundTripper {
 
 	host := cmp.Or(opts.Host, logtail.DefaultHost)
 	tr.TLSClientConfig = tlsdial.Config(host, opts.Health, tr.TLSClientConfig)
-	// Force TLS 1.3 since we know log.tailscale.io supports it.
+	// Force TLS 1.3 since we know log.tailscale.com supports it.
 	tr.TLSClientConfig.MinVersion = tls.VersionTLS13
 
 	return tr

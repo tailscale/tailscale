@@ -89,8 +89,8 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 	// (with the baked-in fallback root) in the VerifyConnection hook.
 	conf.InsecureSkipVerify = true
 	conf.VerifyConnection = func(cs tls.ConnectionState) (retErr error) {
-		if host == "log.tailscale.io" && hostinfo.IsNATLabGuestVM() {
-			// Allow log.tailscale.io TLS MITM for integration tests when
+		if host == "log.tailscale.com" && hostinfo.IsNATLabGuestVM() {
+			// Allow log.tailscale.com TLS MITM for integration tests when
 			// the client's running within a NATLab VM.
 			return nil
 		}
