@@ -6,6 +6,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -211,12 +212,12 @@ var fileCmd func() *ffcli.Command
 
 func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
-	rootfs.Func("socket", "path to tailscaled socket", func(s string) error {
+	rootfs.Func("socket", "path to tailscaled socket; defaults to the TS_SOCKET environment value if set, else it uses the system default", func(s string) error {
 		localClient.Socket = s
 		localClient.UseSocketOnly = true
 		return nil
 	})
-	rootfs.Lookup("socket").DefValue = localClient.Socket
+	rootfs.Lookup("socket").DefValue = cmp.Or(envknob.String("TS_SOCKET"), localClient.Socket)
 
 	rootCmd := &ffcli.Command{
 		Name:       "tailscale",
