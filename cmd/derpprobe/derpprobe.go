@@ -18,19 +18,21 @@ import (
 )
 
 var (
-	derpMapURL       = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://) or 'local' to use the local tailscaled's DERP map")
-	versionFlag      = flag.Bool("version", false, "print version and exit")
-	listen           = flag.String("listen", ":8030", "HTTP listen address")
-	probeOnce        = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")
-	spread           = flag.Bool("spread", true, "whether to spread probing over time")
-	interval         = flag.Duration("interval", 15*time.Second, "probe interval")
-	meshInterval     = flag.Duration("mesh-interval", 15*time.Second, "mesh probe interval")
-	stunInterval     = flag.Duration("stun-interval", 15*time.Second, "STUN probe interval")
-	tlsInterval      = flag.Duration("tls-interval", 15*time.Second, "TLS probe interval")
-	bwInterval       = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing)")
-	bwSize           = flag.Int64("bw-probe-size-bytes", 1_000_000, "bandwidth probe size")
-	bwTUNIPv4Address = flag.String("bw-tun-ipv4-addr", "", "if specified, bandwidth probes will be performed over a TUN device at this address in order to exercise TCP-in-TCP in similar fashion to TCP over Tailscale via DERP. We will use a /30 subnet including this IP address.")
-	regionCode       = flag.String("region-code", "", "probe only this region (e.g. 'lax'); if left blank, all regions will be probed")
+	derpMapURL         = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://) or 'local' to use the local tailscaled's DERP map")
+	versionFlag        = flag.Bool("version", false, "print version and exit")
+	listen             = flag.String("listen", ":8030", "HTTP listen address")
+	probeOnce          = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")
+	spread             = flag.Bool("spread", true, "whether to spread probing over time")
+	interval           = flag.Duration("interval", 15*time.Second, "probe interval")
+	meshInterval       = flag.Duration("mesh-interval", 15*time.Second, "mesh probe interval")
+	stunInterval       = flag.Duration("stun-interval", 15*time.Second, "STUN probe interval")
+	tlsInterval        = flag.Duration("tls-interval", 15*time.Second, "TLS probe interval")
+	bwInterval         = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing)")
+	bwSize             = flag.Int64("bw-probe-size-bytes", 1_000_000, "bandwidth probe size")
+	bwTUNIPv4Address   = flag.String("bw-tun-ipv4-addr", "", "if specified, bandwidth probes will be performed over a TUN device at this address in order to exercise TCP-in-TCP in similar fashion to TCP over Tailscale via DERP; we will use a /30 subnet including this IP address")
+	qdPacketsPerSecond = flag.Int("qd-packets-per-second", 0, "if greater than 0, queuing delay will be measured continuously using 260 byte packets (approximate size of a CallMeMaybe packet) sent at this rate per second")
+	qdPacketTimeout    = flag.Duration("qd-packet-timeout", 5*time.Second, "queuing delay packets arriving after this period of time from being sent are treated like dropped packets and don't count toward queuing delay timings")
+	regionCode         = flag.String("region-code", "", "probe only this region (e.g. 'lax'); if left blank, all regions will be probed")
 )
 
 func main() {
@@ -45,6 +47,7 @@ func main() {
 		prober.WithMeshProbing(*meshInterval),
 		prober.WithSTUNProbing(*stunInterval),
 		prober.WithTLSProbing(*tlsInterval),
+		prober.WithQueuingDelayProbing(*qdPacketsPerSecond, *qdPacketTimeout),
 	}
 	if *bwInterval > 0 {
 		opts = append(opts, prober.WithBandwidthProbing(*bwInterval, *bwSize, *bwTUNIPv4Address))
@@ -107,7 +110,7 @@ func getOverallStatus(p *prober.Prober) (o overallStatus) {
 			// Do not show probes that have not finished yet.
 			continue
 		}
-		if i.Result {
+		if i.Status == prober.ProbeStatusSucceeded {
 			o.addGoodf("%s: %s", p, i.Latency)
 		} else {
 			o.addBadf("%s: %s", p, i.Error)
