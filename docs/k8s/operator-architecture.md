@@ -56,7 +56,7 @@ flowchart LR
     end
 
     client["client (src)"]:::tsnode --> operator
-    operator -.->|"proxy (maybe with impersonation headers)"| api
+    operator -->|"proxy (maybe with impersonation headers)"| api
 
     linkStyle 0 stroke:red;
     linkStyle 2 stroke:red;
@@ -414,7 +414,7 @@ flowchart TD
 
     client --> cn-pod
     cn-pod -->|app connector or exit node routes| Internet
-    cn-pod -.->|subnet route| pod1
+    cn-pod -->|subnet route| pod1
     operator -.->|watches| cn
     operator -.->|creates| cn-sts
     cn-sts -.->|manages| cn-pod
@@ -478,12 +478,12 @@ flowchart TD
         s3["S3-compatible storage"]
     end
 
-    kubectl-exec -.->|exec session| operator
-    operator -.->|exec session recording| rec-0
-    operator -.->|exec session| api
-    client -.->|ssh session| server
-    server -.->|ssh session recording| rec-0
-    rec-0 -.->|session recordings| s3
+    kubectl-exec -->|exec session| operator
+    operator -->|exec session recording| rec-0
+    operator -->|exec session| api
+    client -->|ssh session| server
+    server -->|ssh session recording| rec-0
+    rec-0 -->|session recordings| s3
     operator -.->|watches| rec
     operator -.->|creates| rec-sts
     rec-sts -.->|manages| rec-0
