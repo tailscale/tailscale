@@ -1,8 +1,8 @@
 # Operator architecture diagrams
 
-The Tailscale Kubernetes operator has a collection of use-cases that can be
-mixed and matched as required. The following diagrams illustrate how the
-operator implements each use-case.
+The Tailscale [Kubernetes operator][kb-operator] has a collection of use-cases
+that can be mixed and matched as required. The following diagrams illustrate
+how the operator implements each use-case.
 
 In each diagram, the "tailscale" namespace is entirely managed by the operator
 once the operator itself has been deployed.
@@ -41,7 +41,8 @@ flowchart LR
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        hidden[" "]-->|WireGuard traffic|hidden2[" "]
+        blank[" "]-->|WireGuard traffic|blank2[" "]
+        blank3[" "]-->|Other network traffic|blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -53,11 +54,15 @@ flowchart LR
             api[kube-apiserver]
         end
     end
+
     client["client (src)"]:::tsnode --> operator
     operator-->|"proxy (maybe with impersonation headers)"| api
 
-    linkStyle 0 stroke:blue;
+    linkStyle 0 stroke:red;
+    linkStyle 2 stroke:red;
+
     linkStyle 1 stroke:blue;
+    linkStyle 3 stroke:blue;
 
 ```
 
@@ -72,8 +77,7 @@ that selects the app's Pods. Either add the annotation
 proxy that allows devices anywhere on the tailnet to access the Service.
 
 The proxy Pod uses `iptables` or `nftables` rules to DNAT traffic bound for the
-proxy's tailnet IP to the Service's internal Cluster IP instead. This usually
-means traffic coming in on `tailscale0` is forwarded to the `eth0` interface.
+proxy's tailnet IP to the Service's internal Cluster IP instead.
 
 ```mermaid
 %%{ init: { 'theme':'neutral' } }%%
@@ -84,7 +88,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        hidden[" "]-->|WireGuard traffic|hidden2[" "]
+        blank[" "]-->|WireGuard traffic|blank2[" "]
+        blank3[" "]-->|Other network traffic|blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -102,6 +107,7 @@ flowchart TD
             svc --> pod2((pod2))
         end
     end
+
     client["client (src)"]:::tsnode --> ingress
     ingress -->|forwards traffic| svc
     operator -.->|creates| ingress-sts
@@ -111,8 +117,13 @@ flowchart TD
     config-secret -.->|mounted| ingress
     ingress -.->|stores state| state-secret
 
-    linkStyle 0 stroke:blue;
+    linkStyle 0 stroke:red;
+    linkStyle 4 stroke:red;
+
+    linkStyle 1 stroke:blue;
+    linkStyle 2 stroke:blue;
     linkStyle 3 stroke:blue;
+    linkStyle 5 stroke:blue;
 
 ```
 
@@ -135,7 +146,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        hidden[" "]-->|WireGuard traffic|hidden2[" "]
+        blank[" "]-->|WireGuard traffic|blank2[" "]
+        blank3[" "]-->|Other network traffic|blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -154,6 +166,7 @@ flowchart TD
             svc --> pod2((pod2))
         end
     end
+
     client["client (src)"]:::tsnode --> ingress-pod
     ingress-pod -->|forwards /api prefix traffic| svc
     operator -.->|creates| ingress-sts
@@ -164,8 +177,13 @@ flowchart TD
     ingress-pod -.->|stores state| state-secret
     ingress -.->|/api prefix| svc
 
-    linkStyle 0 stroke:blue;
+    linkStyle 0 stroke:red;
+    linkStyle 4 stroke:red;
+
+    linkStyle 1 stroke:blue;
+    linkStyle 2 stroke:blue;
     linkStyle 3 stroke:blue;
+    linkStyle 5 stroke:blue;
 
 ```
 
@@ -194,7 +212,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        hidden[" "]-->|WireGuard traffic|hidden2[" "]
+        blank[" "]-->|WireGuard traffic|blank2[" "]
+        blank3[" "]-->|Other network traffic|blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -213,7 +232,9 @@ flowchart TD
             pod2((pod2)) --> svc
         end
     end
+
     node["db.tails-scales.ts.net (dst)"]:::tsnode
+
     svc -->|DNS points to| headless-svc
     headless-svc -->|selects egress Pod| egress
     egress -->|forwards traffic| node
@@ -225,7 +246,13 @@ flowchart TD
     cfg-secret -.->|mounted| egress
     egress -.->|stores state| state-secret
 
-    linkStyle 0 stroke:blue;
+    linkStyle 0 stroke:red;
+    linkStyle 6 stroke:red;
+
+    linkStyle 1 stroke:blue;
+    linkStyle 2 stroke:blue;
+    linkStyle 3 stroke:blue;
+    linkStyle 4 stroke:blue;
     linkStyle 5 stroke:blue;
 
 ```
@@ -252,6 +279,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
+        blank[" "]-->|WireGuard traffic|blank2[" "]
+        blank3[" "]-->|Other network traffic|blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -260,6 +289,7 @@ flowchart TD
             pg-sts[StatefulSet]
             pg-0(("pg-0 (src)")):::tsnode
             pg-1(("pg-1 (src)")):::tsnode
+            cluster-ip-svc[ClusterIP Service]
             cfg-secret-0["Secret 'pg-0-config'"]
             cfg-secret-1["Secret 'pg-1-config'"]
             state-secret-0["Secret 'pg-0'"]
@@ -269,7 +299,25 @@ flowchart TD
         subgraph cluster-scope["Cluster scoped resources"]
             pg["ProxyGroup 'pg'"]
         end
+
+        subgraph defaultns[namespace=default]
+            svc[ExternalName Service]
+            pod1((pod1)) --> svc
+            pod2((pod2)) --> svc
+        end
     end
+
+    db["db.tails-scales.ts.net (dst)"]:::tsnode
+    api["api.tails-scales.ts.net (dst)"]:::tsnode
+
+    svc -->|DNS points to| cluster-ip-svc
+    cluster-ip-svc -->|maps to ephemeral ports| pg-0
+    cluster-ip-svc -->|maps to ephemeral ports| pg-1
+    pg-0 --> db
+    pg-0 --> api
+    pg-1 --> db
+    pg-1 --> db
+    operator -.->|creates & populates endpoints| cluster-ip-svc
     operator-.->|watches| pg
     operator -.->|creates| pg-sts
     pg-sts -.->|manages| pg-0
@@ -280,6 +328,19 @@ flowchart TD
     cfg-secret-1 -.->|mounted| pg-1
     pg-0 -.->|stores state| state-secret-0
     pg-1 -.->|stores state| state-secret-1
+
+    linkStyle 0 stroke:red;
+    linkStyle 7 stroke:red;
+    linkStyle 8 stroke:red;
+    linkStyle 9 stroke:red;
+    linkStyle 10 stroke:red;
+
+    linkStyle 1 stroke:blue;
+    linkStyle 2 stroke:blue;
+    linkStyle 3 stroke:blue;
+    linkStyle 4 stroke:blue;
+    linkStyle 5 stroke:blue;
+    linkStyle 6 stroke:blue;
 
 ```
 
@@ -304,7 +365,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        hidden[" "]-->|WireGuard traffic|hidden2[" "]
+        blank[" "]-->|WireGuard traffic|blank2[" "]
+        blank3[" "]-->|Other network traffic|blank4[" "]
     end
 
     subgraph grouping[" "]
@@ -341,8 +403,13 @@ flowchart TD
     cn-pod -.->|stores state| state-secret
 
     class grouping hidden
-    linkStyle 0 stroke:blue;
+
+    linkStyle 0 stroke:red;
+    linkStyle 2 stroke:red;
+
     linkStyle 1 stroke:blue;
+    linkStyle 3 stroke:blue;
+    linkStyle 4 stroke:blue;
 
 ```
 
@@ -364,7 +431,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        hidden[" "]-->|WireGuard traffic|hidden2[" "]
+        blank[" "]-->|WireGuard traffic|blank2[" "]
+        blank3[" "]-->|Other network traffic|blank4[" "]
     end
 
     subgraph grouping[" "]
@@ -404,14 +472,20 @@ flowchart TD
     rec-0 -.->|stores state| state-secret-0
 
     class grouping hidden
-    linkStyle 0 stroke:blue;
+
+    linkStyle 0 stroke:red;
+    linkStyle 2 stroke:red;
+    linkStyle 3 stroke:red;
+    linkStyle 5 stroke:red;
+    linkStyle 6 stroke:red;
+
     linkStyle 1 stroke:blue;
-    linkStyle 2 stroke:blue;
     linkStyle 4 stroke:blue;
-    linkStyle 5 stroke:blue;
+    linkStyle 7 stroke:blue;
 
 ```
 
+[kb-operator]: https://tailscale.com/kb/1236/kubernetes-operator
 [kb-operator-proxy]: https://tailscale.com/kb/1437/kubernetes-operator-api-server-proxy
 [kb-operator-l3-ingress]: https://tailscale.com/kb/1439/kubernetes-operator-cluster-ingress#exposing-a-cluster-workload-using-a-kubernetes-service
 [kb-operator-l7-ingress]: https://tailscale.com/kb/1439/kubernetes-operator-cluster-ingress#exposing-cluster-workloads-using-a-kubernetes-ingress
