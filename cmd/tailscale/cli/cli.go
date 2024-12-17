@@ -6,6 +6,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -79,7 +80,7 @@ func CleanUpArgs(args []string) []string {
 }
 
 var localClient = tailscale.LocalClient{
-	Socket: paths.DefaultTailscaledSocket(),
+	Socket: cmp.Or(envknob.String("TS_SOCKET"), paths.DefaultTailscaledSocket()),
 }
 
 // Run runs the CLI. The args do not include the binary name.

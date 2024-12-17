@@ -89,7 +89,7 @@ func (lc *LocalClient) socket() string {
 	if lc.Socket != "" {
 		return lc.Socket
 	}
-	return paths.DefaultTailscaledSocket()
+	return cmp.Or(envknob.String("TS_SOCKET"), paths.DefaultTailscaledSocket())
 }
 
 func (lc *LocalClient) dialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
