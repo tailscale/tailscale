@@ -41,8 +41,8 @@ flowchart LR
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        blank[" "]-->|WireGuard traffic|blank2[" "]
-        blank3[" "]-->|Other network traffic|blank4[" "]
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -56,7 +56,7 @@ flowchart LR
     end
 
     client["client (src)"]:::tsnode --> operator
-    operator-->|"proxy (maybe with impersonation headers)"| api
+    operator -.->|"proxy (maybe with impersonation headers)"| api
 
     linkStyle 0 stroke:red;
     linkStyle 2 stroke:red;
@@ -88,8 +88,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        blank[" "]-->|WireGuard traffic|blank2[" "]
-        blank3[" "]-->|Other network traffic|blank4[" "]
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -146,8 +146,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        blank[" "]-->|WireGuard traffic|blank2[" "]
-        blank3[" "]-->|Other network traffic|blank4[" "]
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -198,9 +198,10 @@ flowchart TD
   at the headless Service it created in the previous step.
 
 (Optional) If the user also adds the `tailscale.com/proxy-group: egress-proxies`
-annotation to their `ExternalName` Service, the operator will skip creating a proxy Pod and
-instead point the headless Service at the existing ProxyGroup's pods. In this
-case, ports are also required in the `ExternalName` Service spec.
+annotation to their `ExternalName` Service, the operator will skip creating a
+proxy Pod and instead point the headless Service at the existing ProxyGroup's
+pods. In this case, ports are also required in the `ExternalName` Service spec.
+See below for a more representative diagram.
 
 ```mermaid
 %%{ init: { 'theme':'neutral' } }%%
@@ -212,8 +213,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        blank[" "]-->|WireGuard traffic|blank2[" "]
-        blank3[" "]-->|Other network traffic|blank4[" "]
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -261,26 +262,36 @@ flowchart TD
 
 [Documentation][kb-operator-l3-egress-proxygroup]
 
-The `ProxyGroup` custom resource manages a collection of proxy Pods that can be
-configured to egress traffic out of the cluster via ExternalName Services defined
-elsewhere. They will also support ingress in the future. In this diagram, the
-`ProxyGroup` is named `pg`, and the operator creates proxy pods, via a StatefulSet
-but they don't yet serve any traffic.
+The `ProxyGroup` custom resource manages a collection of proxy Pods that
+can be configured to egress traffic out of the cluster via ExternalName
+Services. A `ProxyGroup` is both a high availability (HA) version of L3
+egress, and a mechanism to serve multiple ExternalName Services on a single
+set of Tailscale devices (coalescing).
 
-`ProxyGroups` currently only support egress (see above).
+In this diagram, the `ProxyGroup` is named `pg`. The Secrets associated with
+the `ProxyGroup` Pods are omitted for simplicity. They are similar to the L3
+egress case above, but there is a pair of config + state Secrets _per Pod_.
+
+Each ExternalName Service defines which ports should be mapped to their defined
+egress target. The operator maps from these ports to randomly chosen ephemeral
+ports via the ClusterIP Service and its EndpointSlice. It then generates the
+egress ConfigMap that tells the `ProxyGroup` Pods which incoming ports map to
+which egress targets.
+
+`ProxyGroups` currently only support egress.
 
 ```mermaid
 %%{ init: { 'theme':'neutral' } }%%
 
-flowchart TD
+flowchart LR
     classDef tsnode color:#fff,fill:#000;
     classDef pod fill:#fff;
 
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        blank[" "]-->|WireGuard traffic|blank2[" "]
-        blank3[" "]-->|Other network traffic|blank4[" "]
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
     end
 
     subgraph k8s[Kubernetes cluster]
@@ -289,11 +300,9 @@ flowchart TD
             pg-sts[StatefulSet]
             pg-0(("pg-0 (src)")):::tsnode
             pg-1(("pg-1 (src)")):::tsnode
-            cluster-ip-svc[ClusterIP Service]
-            cfg-secret-0["Secret 'pg-0-config'"]
-            cfg-secret-1["Secret 'pg-1-config'"]
-            state-secret-0["Secret 'pg-0'"]
-            state-secret-1["Secret 'pg-1'"]
+            db-cluster-ip[db ClusterIP Service]
+            api-cluster-ip[api ClusterIP Service]
+            egress-cm["egress ConfigMap"]
         end
 
         subgraph cluster-scope["Cluster scoped resources"]
@@ -301,39 +310,45 @@ flowchart TD
         end
 
         subgraph defaultns[namespace=default]
-            svc[ExternalName Service]
-            pod1((pod1)) --> svc
-            pod2((pod2)) --> svc
+            db-svc[db ExternalName Service]
+            api-svc[api ExternalName Service]
+            pod1((pod1)) --> db-svc
+            pod2((pod2)) --> db-svc
+            pod1((pod1)) --> api-svc
+            pod2((pod2)) --> api-svc
         end
     end
 
     db["db.tails-scales.ts.net (dst)"]:::tsnode
     api["api.tails-scales.ts.net (dst)"]:::tsnode
 
-    svc -->|DNS points to| cluster-ip-svc
-    cluster-ip-svc -->|maps to ephemeral ports| pg-0
-    cluster-ip-svc -->|maps to ephemeral ports| pg-1
-    pg-0 --> db
-    pg-0 --> api
-    pg-1 --> db
-    pg-1 --> db
-    operator -.->|creates & populates endpoints| cluster-ip-svc
-    operator-.->|watches| pg
+    db-svc -->|DNS points to| db-cluster-ip
+    api-svc -->|DNS points to| api-cluster-ip
+    db-cluster-ip -->|maps to ephemeral db ports| pg-0
+    db-cluster-ip -->|maps to ephemeral db ports| pg-1
+    api-cluster-ip -->|maps to ephemeral api ports| pg-0
+    api-cluster-ip -->|maps to ephemeral api ports| pg-1
+    pg-0 -->|forwards db port traffic| db
+    pg-0 -->|forwards api port traffic| api
+    pg-1 -->|forwards db port traffic| db
+    pg-1 -->|forwards api port traffic| api
+    operator -.->|creates & populates endpointslice| db-cluster-ip
+    operator -.->|creates & populates endpointslice| api-cluster-ip
+    operator -.->|stores port mapping| egress-cm
+    egress-cm -.->|mounted| pg-0
+    egress-cm -.->|mounted| pg-1
+    operator -.->|watches| pg
     operator -.->|creates| pg-sts
     pg-sts -.->|manages| pg-0
     pg-sts -.->|manages| pg-1
-    operator -.->|creates| cfg-secret-0
-    operator -.->|creates| cfg-secret-1
-    cfg-secret-0 -.->|mounted| pg-0
-    cfg-secret-1 -.->|mounted| pg-1
-    pg-0 -.->|stores state| state-secret-0
-    pg-1 -.->|stores state| state-secret-1
+    operator -.->|watches| db-svc
+    operator -.->|watches| api-svc
 
     linkStyle 0 stroke:red;
-    linkStyle 7 stroke:red;
-    linkStyle 8 stroke:red;
-    linkStyle 9 stroke:red;
-    linkStyle 10 stroke:red;
+    linkStyle 12 stroke:red;
+    linkStyle 13 stroke:red;
+    linkStyle 14 stroke:red;
+    linkStyle 15 stroke:red;
 
     linkStyle 1 stroke:blue;
     linkStyle 2 stroke:blue;
@@ -341,6 +356,11 @@ flowchart TD
     linkStyle 4 stroke:blue;
     linkStyle 5 stroke:blue;
     linkStyle 6 stroke:blue;
+    linkStyle 7 stroke:blue;
+    linkStyle 8 stroke:blue;
+    linkStyle 9 stroke:blue;
+    linkStyle 10 stroke:blue;
+    linkStyle 11 stroke:blue;
 
 ```
 
@@ -365,8 +385,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        blank[" "]-->|WireGuard traffic|blank2[" "]
-        blank3[" "]-->|Other network traffic|blank4[" "]
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
     end
 
     subgraph grouping[" "]
@@ -392,10 +412,10 @@ flowchart TD
         Internet
     end
 
-    client-->cn-pod
-    cn-pod-->|app connector or exit node routes| Internet
-    cn-pod-->|subnet route| pod1
-    operator-.->|watches| cn
+    client --> cn-pod
+    cn-pod -->|app connector or exit node routes| Internet
+    cn-pod -.->|subnet route| pod1
+    operator -.->|watches| cn
     operator -.->|creates| cn-sts
     cn-sts -.->|manages| cn-pod
     operator -.->|creates| cfg-secret
@@ -431,8 +451,8 @@ flowchart TD
     subgraph Key
         ts[Tailscale device]:::tsnode
         pod((Pod)):::pod
-        blank[" "]-->|WireGuard traffic|blank2[" "]
-        blank3[" "]-->|Other network traffic|blank4[" "]
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
     end
 
     subgraph grouping[" "]
@@ -458,13 +478,13 @@ flowchart TD
         s3["S3-compatible storage"]
     end
 
-    kubectl-exec-->|exec session| operator
-    operator-->|exec session recording| rec-0
-    operator-->|exec session| api
-    client-->|ssh session| server
-    server-->|ssh session recording| rec-0
-    rec-0-->|session recordings| s3
-    operator-.->|watches| rec
+    kubectl-exec -.->|exec session| operator
+    operator -.->|exec session recording| rec-0
+    operator -.->|exec session| api
+    client -.->|ssh session| server
+    server -.->|ssh session recording| rec-0
+    rec-0 -.->|session recordings| s3
+    operator -.->|watches| rec
     operator -.->|creates| rec-sts
     rec-sts -.->|manages| rec-0
     operator -.->|creates| cfg-secret-0
