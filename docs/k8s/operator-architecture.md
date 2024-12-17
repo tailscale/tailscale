@@ -274,9 +274,9 @@ egress case above, but there is a pair of config + state Secrets _per Pod_.
 
 Each ExternalName Service defines which ports should be mapped to their defined
 egress target. The operator maps from these ports to randomly chosen ephemeral
-ports via the ClusterIP Service and its EndpointSlice. It then generates the
-egress ConfigMap that tells the `ProxyGroup` Pods which incoming ports map to
-which egress targets.
+ports via the ClusterIP Service and its EndpointSlice. The operator then
+generates the egress ConfigMap that tells the `ProxyGroup` Pods which incoming
+ports map to which egress targets.
 
 `ProxyGroups` currently only support egress.
 
