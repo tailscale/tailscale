@@ -29,7 +29,8 @@ var (
 	tlsInterval      = flag.Duration("tls-interval", 15*time.Second, "TLS probe interval")
 	bwInterval       = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing)")
 	bwSize           = flag.Int64("bw-probe-size-bytes", 1_000_000, "bandwidth probe size")
-	bwTUNIPv4Address = flag.String("bw-tun-ipv4-addr", "", "if specified, bandwidth probes will be performed over a TUN device at this address in order to exercise TCP-in-TCP in similar fashion to TCP over Tailscale via DERP. We will use a /30 subnet including this IP address.")
+	bwTUNIPv4Address = flag.String("bw-tun-ipv4-addr", "", "if specified, bandwidth probes will be performed over a TUN device at this address in order to exercise TCP-in-TCP in similar fashion to TCP over Tailscale via DERP; we will use a /30 subnet including this IP address")
+	queuingDelay     = flag.Bool("qd", false, "if specified, queuing delay will be measured continuously using 260 byte packets (approximate size of a CallMeMaybe packet) sent at a rate of 10 per second")
 	regionCode       = flag.String("region-code", "", "probe only this region (e.g. 'lax'); if left blank, all regions will be probed")
 )
 
@@ -45,6 +46,7 @@ func main() {
 		prober.WithMeshProbing(*meshInterval),
 		prober.WithSTUNProbing(*stunInterval),
 		prober.WithTLSProbing(*tlsInterval),
+		prober.WithQueuingDelayProbing(*queuingDelay),
 	}
 	if *bwInterval > 0 {
 		opts = append(opts, prober.WithBandwidthProbing(*bwInterval, *bwSize, *bwTUNIPv4Address))
@@ -107,7 +109,7 @@ func getOverallStatus(p *prober.Prober) (o overallStatus) {
 			// Do not show probes that have not finished yet.
 			continue
 		}
-		if i.Result {
+		if i.Status == prober.ProbeStatusSucceeded {
 			o.addGoodf("%s: %s", p, i.Latency)
 		} else {
 			o.addBadf("%s: %s", p, i.Error)
