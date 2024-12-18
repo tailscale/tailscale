@@ -51,18 +51,44 @@ import (
 var debugCmd = &ffcli.Command{
 	Name:       "debug",
 	Exec:       runDebug,
-	ShortUsage: "tailscale debug <debug-flags | subcommand>",
+	ShortUsage: "tailscale debug <subcommand>",
 	ShortHelp:  "Debug commands",
 	LongHelp:   hidden + `"tailscale debug" contains misc debug facilities; it is not a stable interface.`,
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("debug")
-		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
-		fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-seconds seconds and write it to this file; - for stdout")
-		fs.StringVar(&debugArgs.memFile, "mem-profile", "", "if non-empty, grab a memory profile and write it to this file; - for stdout")
-		fs.IntVar(&debugArgs.cpuSec, "profile-seconds", 15, "number of seconds to run a CPU profile for, when --cpu-profile is non-empty")
-		return fs
-	})(),
 	Subcommands: []*ffcli.Command{
+		{
+			Name:       "file",
+			ShortUsage: "tailscale debug file <file-name> [--delete]",
+			Exec:       runFile,
+			ShortHelp:  "Exercise the low-level Taildrop LocalAPI; get or delete a file",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("file")
+				fs.BoolVar(&fileArgs.delete, "delete", true, "specify whether to delete the file")
+				return fs
+			})(),
+		},
+		{
+			Name:       "mem-profile",
+			ShortUsage: "tailscale debug mem-profile --out <file-name>",
+			Exec:       runPprofMemory,
+			ShortHelp:  "Gather Memory profiling information in Go pprof format",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("mem-profile")
+				fs.StringVar(&pprofMemoryArgs.out, "out", "", "grab a memory profile and write it to this file; - for stdout")
+				return fs
+			})(),
+		},
+		{
+			Name:       "cpu-profile",
+			ShortUsage: "tailscale debug cpu-profile --out <file-name> --profile-seconds",
+			Exec:       runPprofCPU,
+			ShortHelp:  "Gather CPU profiling information in Go pprof format",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("cpu-profile")
+				fs.StringVar(&pprofCpuArgs.out, "out", "", "grab a CPU profile for --profile-seconds seconds and write it to this file; - for stdout")
+				fs.IntVar(&pprofCpuArgs.cpuSec, "profile-seconds", 15, "number of seconds to run a CPU profile")
+				return fs
+			})(),
+		},
 		{
 			Name:       "derp-map",
 			ShortUsage: "tailscale debug derp-map",
@@ -358,13 +384,6 @@ func runGoBuildInfo(ctx context.Context, args []string) error {
 	return e.Encode(bi)
 }
 
-var debugArgs struct {
-	file    string
-	cpuSec  int
-	cpuFile string
-	memFile string
-}
-
 func writeProfile(dst string, v []byte) error {
 	if dst == "-" {
 		_, err := Stdout.Write(v)
@@ -387,59 +406,7 @@ func runDebug(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return fmt.Errorf("tailscale debug: unknown subcommand: %s", args[0])
 	}
-	var usedFlag bool
-	if out := debugArgs.cpuFile; out != "" {
-		usedFlag = true // TODO(bradfitz): add "pprof" subcommand
-		log.Printf("Capturing CPU profile for %v seconds ...", debugArgs.cpuSec)
-		if v, err := localClient.Pprof(ctx, "profile", debugArgs.cpuSec); err != nil {
-			return err
-		} else {
-			if err := writeProfile(out, v); err != nil {
-				return err
-			}
-			log.Printf("CPU profile written to %s", outName(out))
-		}
-	}
-	if out := debugArgs.memFile; out != "" {
-		usedFlag = true // TODO(bradfitz): add "pprof" subcommand
-		log.Printf("Capturing memory profile ...")
-		if v, err := localClient.Pprof(ctx, "heap", 0); err != nil {
-			return err
-		} else {
-			if err := writeProfile(out, v); err != nil {
-				return err
-			}
-			log.Printf("Memory profile written to %s", outName(out))
-		}
-	}
-	if debugArgs.file != "" {
-		usedFlag = true // TODO(bradfitz): add "file" subcommand
-		if debugArgs.file == "get" {
-			wfs, err := localClient.WaitingFiles(ctx)
-			if err != nil {
-				fatalf("%v\n", err)
-			}
-			e := json.NewEncoder(Stdout)
-			e.SetIndent("", "\t")
-			e.Encode(wfs)
-			return nil
-		}
-		if name, ok := strings.CutPrefix(debugArgs.file, "delete:"); ok {
-			return localClient.DeleteWaitingFile(ctx, name)
-		}
-		rc, size, err := localClient.GetWaitingFile(ctx, debugArgs.file)
-		if err != nil {
-			return err
-		}
-		log.Printf("Size: %v\n", size)
-		io.Copy(Stdout, rc)
-		return nil
-	}
-	if usedFlag {
-		// TODO(bradfitz): delete this path when all debug flags are migrated
-		// to subcommands.
-		return nil
-	}
+
 	return errors.New("tailscale debug: subcommand or flag required")
 }
 
@@ -1268,5 +1235,91 @@ func runDebugResolve(ctx context.Context, args []string) error {
 	for _, ip := range ips {
 		fmt.Printf("%s\n", ip)
 	}
+	return nil
+}
+
+var pprofMemoryArgs struct {
+	out string
+}
+
+func runPprofMemory(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("usage: tailscale debug mem-profile --out <file-name>")
+	}
+
+	out := pprofMemoryArgs.out
+	if out == "" {
+		return errors.New("--out must be provided")
+	}
+
+	log.Printf("Capturing memory profile ...")
+	if v, err := localClient.Pprof(ctx, "heap", 0); err != nil {
+		return err
+	} else {
+		if err := writeProfile(out, v); err != nil {
+			return err
+		}
+		log.Printf("Memory profile written to %s", outName(out))
+	}
+
+	return nil
+}
+
+var pprofCpuArgs struct {
+	out    string
+	cpuSec int
+}
+
+func runPprofCPU(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("usage: tailscale debug cpu-profile --out <file-name> --profile-seconds")
+	}
+
+	out := pprofCpuArgs.out
+	if out == "" {
+		return errors.New("--out must be provided")
+	}
+	cpuSec := pprofCpuArgs.cpuSec
+
+	log.Printf("Capturing CPU profile for %v seconds ...", cpuSec)
+	if v, err := localClient.Pprof(ctx, "profile", cpuSec); err != nil {
+		return err
+	} else {
+		if err := writeProfile(out, v); err != nil {
+			return err
+		}
+		log.Printf("CPU profile written to %s", outName(out))
+	}
+
+	return nil
+}
+
+var fileArgs struct {
+	delete bool
+}
+
+func runFile(ctx context.Context, args []string) error {
+	if len(args) < 1 || len(args) > 2 || args[0] == "" {
+		return errors.New("usage: tailscale debug file <name> [--delete]")
+	}
+
+	name := args[0]
+	delete := fileArgs.delete
+
+	if delete {
+		return localClient.DeleteWaitingFile(ctx, name)
+	}
+
+	wfs, err := localClient.WaitingFiles(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get waiting files: %v", err)
+	}
+
+	e := json.NewEncoder(Stdout)
+	e.SetIndent("", "\t")
+	if err := e.Encode(wfs); err != nil {
+		return fmt.Errorf("failed to encode files to JSON: %v", err)
+	}
+
 	return nil
 }
