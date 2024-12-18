@@ -25,6 +25,7 @@ func initClosedChan() <-chan struct{} {
 }
 
 // AtomicValue is the generic version of [atomic.Value].
+// See [MutexValue] for guidance on whether to use this type.
 type AtomicValue[T any] struct {
 	v atomic.Value
 }
@@ -72,6 +73,67 @@ func (v *AtomicValue[T]) Swap(x T) (old T) {
 // CompareAndSwap executes the compare-and-swap operation for the Value.
 func (v *AtomicValue[T]) CompareAndSwap(oldV, newV T) (swapped bool) {
 	return v.v.CompareAndSwap(wrappedValue[T]{oldV}, wrappedValue[T]{newV})
+}
+
+// MutexValue is a value protected by a mutex.
+//
+// AtomicValue, [MutexValue], [atomic.Pointer] are similar and
+// overlap in their use cases.
+//
+//   - Use [atomic.Pointer] if the value being stored is a pointer and
+//     you only ever need load and store operations.
+//     An atomic pointer only occupies 1 word of memory.
+//
+//   - Use [MutexValue] if the value being stored is not a pointer or
+//     you need the ability for a mutex to protect a set of operations
+//     performed on the value.
+//     A mutex-guarded value occupies 1 word of memory plus
+//     the memory representation of T.
+//
+//   - AtomicValue is useful for non-pointer types that happen to
+//     have the memory layout of a single pointer.
+//     Examples include a map, channel, func, or a single field struct
+//     that contains any prior types.
+//     An atomic value occupies 2 words of memory.
+//     Consequently, Storing of non-pointer types always allocates.
+//
+// Note that [AtomicValue] has the ability to report whether it was set
+// while [MutexValue] lacks the ability to detect if the value was set
+// and it happens to be the zero value of T. If such a use case is
+// necessary, then you could consider wrapping T in [opt.Value].
+type MutexValue[T any] struct {
+	mu sync.Mutex
+	v  T
+}
+
+// WithLock calls f with a pointer to the value while holding the lock.
+// The provided pointer must not leak beyond the scope of the call.
+func (m *MutexValue[T]) WithLock(f func(p *T)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f(&m.v)
+}
+
+// Load returns a shallow copy of the underlying value.
+func (m *MutexValue[T]) Load() T {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.v
+}
+
+// Store stores a shallow copy of the provided value.
+func (m *MutexValue[T]) Store(v T) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.v = v
+}
+
+// Swap stores new into m and returns the previous value.
+func (m *MutexValue[T]) Swap(new T) (old T) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old, m.v = m.v, new
+	return old
 }
 
 // WaitGroupChan is like a sync.WaitGroup, but has a chan that closes
