@@ -94,6 +94,9 @@ func newForTest(now func() time.Time, newTicker func(time.Duration) ticker) *Pro
 
 // Run executes probe class function every interval, and exports probe results under probeName.
 //
+// If interval is negative, the probe will run continuously. If it encounters a failure while
+// running continuously, it will pause for -1*interval and then retry.
+//
 // Registering a probe under an already-registered name panics.
 func (p *Prober) Run(name string, interval time.Duration, labels Labels, pc ProbeClass) *Probe {
 	p.mu.Lock()
@@ -256,6 +259,11 @@ type Probe struct {
 	latencyHist *ring.Ring
 }
 
+// IsContinuous indicates that this is a continuous probe.
+func (p *Probe) IsContinuous() bool {
+	return p.interval < 0
+}
+
 // Close shuts down the Probe and unregisters it from its Prober.
 // It is safe to Run a new probe of the same name after Close returns.
 func (p *Probe) Close() error {
@@ -286,6 +294,22 @@ func (p *Probe) loop() {
 
 	if p.prober.once {
 		return
+	}
+
+	if p.IsContinuous() {
+		// Probe function is going to run continuously.
+		for {
+			p.run()
+			// Wait and then retry if probe fails. We use the inverse of the
+			// configured negative interval as our sleep period.
+			// TODO(percy):implement exponential backoff, possibly using logtail/backoff.
+			select {
+			case <-time.After(-1 * p.interval):
+				p.run()
+			case <-p.ctx.Done():
+				return
+			}
+		}
 	}
 
 	p.tick = p.prober.newTicker(p.interval)
@@ -323,9 +347,13 @@ func (p *Probe) run() (pi ProbeInfo, err error) {
 			p.recordEnd(err)
 		}
 	}()
-	timeout := time.Duration(float64(p.interval) * 0.8)
-	ctx, cancel := context.WithTimeout(p.ctx, timeout)
-	defer cancel()
+	ctx := p.ctx
+	if !p.IsContinuous() {
+		timeout := time.Duration(float64(p.interval) * 0.8)
+		var cancel func()
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 
 	err = p.probeClass.Probe(ctx)
 	p.recordEnd(err)
@@ -365,6 +393,16 @@ func (p *Probe) recordEnd(err error) {
 	p.successHist = p.successHist.Next()
 }
 
+// ProbeStatus indicates the status of a probe.
+type ProbeStatus string
+
+const (
+	ProbeStatusUnknown   = "unknown"
+	ProbeStatusRunning   = "running"
+	ProbeStatusFailed    = "failed"
+	ProbeStatusSucceeded = "succeeded"
+)
+
 // ProbeInfo is a snapshot of the configuration and state of a Probe.
 type ProbeInfo struct {
 	Name            string
@@ -374,7 +412,7 @@ type ProbeInfo struct {
 	Start           time.Time
 	End             time.Time
 	Latency         time.Duration
-	Result          bool
+	Status          ProbeStatus
 	Error           string
 	RecentResults   []bool
 	RecentLatencies []time.Duration
@@ -400,6 +438,10 @@ func (pb ProbeInfo) RecentMedianLatency() time.Duration {
 		return 0
 	}
 	return pb.RecentLatencies[len(pb.RecentLatencies)/2]
+}
+
+func (pb ProbeInfo) Continuous() bool {
+	return pb.Interval < 0
 }
 
 // ProbeInfo returns the state of all probes.
@@ -429,9 +471,14 @@ func (probe *Probe) probeInfoLocked() ProbeInfo {
 		Labels:   probe.metricLabels,
 		Start:    probe.start,
 		End:      probe.end,
-		Result:   probe.succeeded,
 	}
-	if probe.lastErr != nil {
+	inf.Status = ProbeStatusUnknown
+	if probe.end.Before(probe.start) {
+		inf.Status = ProbeStatusRunning
+	} else if probe.succeeded {
+		inf.Status = ProbeStatusSucceeded
+	} else if probe.lastErr != nil {
+		inf.Status = ProbeStatusFailed
 		inf.Error = probe.lastErr.Error()
 	}
 	if probe.latency > 0 {
@@ -467,7 +514,7 @@ func (p *Prober) RunHandler(w http.ResponseWriter, r *http.Request) error {
 	p.mu.Lock()
 	probe, ok := p.probes[name]
 	p.mu.Unlock()
-	if !ok {
+	if !ok || probe.IsContinuous() {
 		return tsweb.Error(http.StatusNotFound, fmt.Sprintf("unknown probe %q", name), nil)
 	}
 
@@ -531,7 +578,8 @@ func (p *Probe) Collect(ch chan<- prometheus.Metric) {
 	if !p.start.IsZero() {
 		ch <- prometheus.MustNewConstMetric(p.mStartTime, prometheus.GaugeValue, float64(p.start.Unix()))
 	}
-	if p.end.IsZero() {
+	// For periodic probes that haven't ended, don't collect probe metrics yet.
+	if p.end.IsZero() && !p.IsContinuous() {
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(p.mEndTime, prometheus.GaugeValue, float64(p.end.Unix()))
