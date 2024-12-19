@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -119,9 +120,13 @@ func (menu *Menu) rebuild(state state) {
 
 	account := "Account"
 	if state.curProfile.Name != "" {
-		account += fmt.Sprintf(" (%s)", state.curProfile.Name)
+		account = state.curProfile.Name
+		if state.curProfile.NetworkProfile.DomainName != "" {
+			account += "\n" + state.curProfile.NetworkProfile.DomainName
+		}
 	}
 	accounts := systray.AddMenuItem(account, "")
+	setRemoteIcon(accounts, state.curProfile.UserProfile.ProfilePicURL)
 	// The dbus message about this menu item must propagate to the receiving
 	// end before we attach any submenu items. Otherwise the receiver may not
 	// yet record the parent menu item and error out.
@@ -132,13 +137,17 @@ func (menu *Menu) rebuild(state state) {
 	// Aggregate all clicks into a shared channel.
 	menu.accountsCh = make(chan ipn.ProfileID)
 	for _, profile := range state.allProfiles {
-		title := fmt.Sprintf("%s (%s)", profile.Name, profile.NetworkProfile.DomainName)
-		// Note: we could use AddSubMenuItemCheckbox instead of this formatting
-		// hack, but checkboxes don't work across all desktops unfortunately.
-		if profile.ID == state.curProfile.ID {
-			title = "* " + title
+		title := profile.Name
+		if profile.NetworkProfile.DomainName != "" {
+			title += "\n" + profile.NetworkProfile.DomainName
 		}
-		item := accounts.AddSubMenuItem(title, "")
+		var item *systray.MenuItem
+		if profile.ID == state.curProfile.ID {
+			item = accounts.AddSubMenuItemCheckbox(title, "", true)
+		} else {
+			item = accounts.AddSubMenuItem(title, "")
+		}
+		setRemoteIcon(accounts, profile.UserProfile.ProfilePicURL)
 		go func(profile ipn.LoginProfile) {
 			for {
 				select {
@@ -168,6 +177,34 @@ func (menu *Menu) rebuild(state state) {
 	menu.quit.Enable()
 
 	go menu.eventLoop(ctx)
+}
+
+var (
+	cacheMu   sync.Mutex
+	httpCache = map[string][]byte{}
+)
+
+// setRemoteIcon sets the icon for menu to the specified remote image.
+// Remote images are fetched as needed and cached.
+func setRemoteIcon(menu *systray.MenuItem, urlStr string) {
+	if menu == nil || urlStr == "" {
+		return
+	}
+
+	cacheMu.Lock()
+	b, ok := httpCache[urlStr]
+	if !ok {
+		if resp, err := http.Get(urlStr); err == nil {
+			b, _ = io.ReadAll(resp.Body)
+			httpCache[urlStr] = b
+			resp.Body.Close()
+		}
+	}
+	cacheMu.Unlock()
+
+	if len(b) > 0 {
+		menu.SetIcon(b)
+	}
 }
 
 // eventLoop is the main event loop for handling click events on menu items
