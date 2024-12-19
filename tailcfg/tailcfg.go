@@ -1453,11 +1453,6 @@ const (
 	// user groups as Kubernetes user groups. This capability is read by
 	// peers that are Tailscale Kubernetes operator instances.
 	PeerCapabilityKubernetes PeerCapability = "tailscale.com/cap/kubernetes"
-
-	// PeerCapabilityServicesDestination grants a peer the ability to serve as
-	// a destination for a set of given VIP services, which is provided as the
-	// value of this key in NodeCapMap.
-	PeerCapabilityServicesDestination PeerCapability = "tailscale.com/cap/services-destination"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
@@ -2401,6 +2396,11 @@ const (
 	// NodeAttrSSHEnvironmentVariables enables logic for handling environment variables sent
 	// via SendEnv in the SSH server and applying them to the SSH session.
 	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
+
+	// NodeAttrServiceHost grants a peer the ability to serve as
+	// a host for a set of given VIP services, which is provided as the
+	// value of this key in NodeCapMap.
+	NodeAttrServiceHost NodeCapability = "service-host"
 )
 
 // SetDNSRequest is a request to add a DNS record.
