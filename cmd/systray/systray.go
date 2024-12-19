@@ -62,7 +62,7 @@ func onReady() {
 
 	// dbus wants a file path for notification icons, so copy to a temp file.
 	appIcon, _ = os.CreateTemp("", "tailscale-systray.png")
-	io.Copy(appIcon, connected.render())
+	io.Copy(appIcon, connected.renderWithBorder(3))
 
 	chState = make(chan ipn.State, 1)
 

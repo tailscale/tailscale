@@ -128,8 +128,14 @@ var (
 
 // render returns a PNG image of the logo.
 func (logo tsLogo) render() *bytes.Buffer {
-	const radius = 25
 	const borderUnits = 1
+	return logo.renderWithBorder(borderUnits)
+}
+
+// renderWithBorder returns a PNG image of the logo with the specified border width.
+// One border unit is equal to the radius of a tailscale logo dot.
+func (logo tsLogo) renderWithBorder(borderUnits int) *bytes.Buffer {
+	const radius = 25
 	dim := radius * (8 + borderUnits*2)
 
 	dc := gg.NewContext(dim, dim)
