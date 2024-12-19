@@ -2401,6 +2401,10 @@ const (
 	// NodeAttrSSHEnvironmentVariables enables logic for handling environment variables sent
 	// via SendEnv in the SSH server and applying them to the SSH session.
 	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
+
+	// NodeAttrDisableExitNodeBehindCaptivePortal instructs the client to temporarily disable exit nodes when
+	// behind a captive portal.
+	NodeAttrDisableExitNodeBehindCaptivePortal NodeCapability = "disable-exit-node-behind-captive-portal"
 )
 
 // SetDNSRequest is a request to add a DNS record.
