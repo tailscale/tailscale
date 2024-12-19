@@ -32,6 +32,8 @@ type ConfigVAlpha struct {
 	AdvertiseRoutes []netip.Prefix `json:",omitempty"`
 	DisableSNAT     opt.Bool       `json:",omitempty"`
 
+	AdvertiseServices []string `json:",omitempty"`
+
 	AppConnector *AppConnectorPrefs `json:",omitempty"` // advertise app connector; defaults to false (if nil or explicitly set to false)
 
 	NetfilterMode       *string  `json:",omitempty"` // "on", "off", "nodivert"
@@ -142,6 +144,10 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	if c.AppConnector != nil {
 		mp.AppConnector = *c.AppConnector
 		mp.AppConnectorSet = true
+	}
+	if c.AdvertiseServices != nil {
+		mp.AdvertiseServices = c.AdvertiseServices
+		mp.AdvertiseServicesSet = true
 	}
 	return mp, nil
 }
