@@ -105,7 +105,7 @@ func TestTailscaleIngress(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), nil)
 
 	// 2. Ingress status gets updated with ingress proxy's MagicDNS name
 	// once that becomes available.
@@ -129,7 +129,7 @@ func TestTailscaleIngress(t *testing.T) {
 	})
 	opts.shouldEnableForwardingClusterTrafficViaIngress = true
 	expectReconciled(t, ingR, "default", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), nil)
 
 	// 4. Resources get cleaned up when Ingress class is unset
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
@@ -231,7 +231,7 @@ func TestTailscaleIngressHostname(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), nil)
 
 	// 2. Ingress proxy with capability version >= 110 does not have an HTTPS endpoint set
 	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
@@ -385,7 +385,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), nil)
 
 	// 2. Ingress is updated to specify a ProxyClass, ProxyClass is not yet
 	// ready, so proxy resource configuration does not change.
@@ -393,7 +393,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		mak.Set(&ing.ObjectMeta.Labels, LabelProxyClass, "custom-metadata")
 	})
 	expectReconciled(t, ingR, "default", "test")
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), nil)
 
 	// 3. ProxyClass is set to Ready by proxy-class reconciler. Ingress get
 	// reconciled and configuration from the ProxyClass is applied to the
@@ -408,7 +408,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = pc.Name
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), nil)
 
 	// 4. tailscale.com/proxy-class label is removed from the Ingress, the
 	// Ingress gets reconciled and the custom ProxyClass configuration is
@@ -418,7 +418,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = ""
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), nil)
 }
 
 func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
@@ -530,7 +530,7 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
 	expectEqual(t, fc, expectedMetricsService(opts), nil)
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), nil)
 	// 2. Enable ServiceMonitor - should not error when there is no ServiceMonitor CRD in cluster
 	mustUpdate(t, fc, "", "metrics", func(pc *tsapi.ProxyClass) {
 		pc.Spec.Metrics.ServiceMonitor = &tsapi.ServiceMonitor{Enable: true}
