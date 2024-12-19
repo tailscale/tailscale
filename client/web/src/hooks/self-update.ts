@@ -55,7 +55,7 @@ export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
     let timer: NodeJS.Timeout | undefined
 
     function poll() {
-      apiFetch<UpdateProgress[]>("/local/v0/update/progress", "GET")
+      apiFetch<UpdateProgress[]>("/update/progress", "GET")
         .then((res) => {
           // res contains a list of UpdateProgresses that is strictly increasing
           // in size, so updateMessagesRead keeps track (across calls of poll())
