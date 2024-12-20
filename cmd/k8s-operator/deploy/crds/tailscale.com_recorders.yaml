@@ -27,6 +27,12 @@ spec:
       name: v1alpha1
       schema:
         openAPIV3Schema:
+          description: |-
+            Recorder defines a tsrecorder device for recording SSH sessions. By default,
+            it will store recordings in a local ephemeral volume. If you want to persist
+            recordings, you can configure an S3-compatible API for storage.
+
+            More info: https://tailscale.com/kb/1484/kubernetes-operator-deploying-tsrecorder
           type: object
           required:
             - spec
