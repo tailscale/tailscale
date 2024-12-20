@@ -1453,11 +1453,6 @@ const (
 	// user groups as Kubernetes user groups. This capability is read by
 	// peers that are Tailscale Kubernetes operator instances.
 	PeerCapabilityKubernetes PeerCapability = "tailscale.com/cap/kubernetes"
-
-	// PeerCapabilityServicesDestination grants a peer the ability to serve as
-	// a destination for a set of given VIP services, which is provided as the
-	// value of this key in NodeCapMap.
-	PeerCapabilityServicesDestination PeerCapability = "tailscale.com/cap/services-destination"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
@@ -2401,6 +2396,15 @@ const (
 	// NodeAttrSSHEnvironmentVariables enables logic for handling environment variables sent
 	// via SendEnv in the SSH server and applying them to the SSH session.
 	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
+
+	// NodeAttrServiceHost indicates the VIP Services for which the client is
+	// approved to act as a service host, and which IP addresses are assigned
+	// to those VIP Services. Any VIP Services that the client is not
+	// advertising can be ignored.
+	// Each value of this key in [NodeCapMap] is of type [ServiceIPMappings].
+	// If multiple values of this key exist, they should be merged in sequence
+	// (replace conflicting keys).
+	NodeAttrServiceHost NodeCapability = "service-host"
 )
 
 // SetDNSRequest is a request to add a DNS record.
@@ -2883,3 +2887,21 @@ type EarlyNoise struct {
 // For some request types, the header may have multiple values. (e.g. OldNodeKey
 // vs NodeKey)
 const LBHeader = "Ts-Lb"
+
+// ServiceIPMappings maps service names (strings that conform to
+// [CheckServiceName]) to lists of IP addresses. This is used as the value of
+// the [NodeAttrServiceHost] capability, to inform service hosts what IP
+// addresses they need to listen on for each service that they are advertising.
+//
+// This is of the form:
+//
+//	{
+//	  "svc:samba": ["100.65.32.1", "fd7a:115c:a1e0::1234"],
+//	  "svc:web": ["100.102.42.3", "fd7a:115c:a1e0::abcd"],
+//	}
+//
+// where the IP addresses are the IPs of the VIP services. These IPs are also
+// provided in AllowedIPs, but this lets the client know which services
+// correspond to those IPs. Any services that don't correspond to a service
+// this client is hosting can be ignored.
+type ServiceIPMappings map[string][]netip.Addr
