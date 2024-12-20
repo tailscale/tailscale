@@ -30,6 +30,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/must"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter/filtertype"
 )
 
@@ -211,7 +212,7 @@ func TestUDPState(t *testing.T) {
 		t.Fatalf("incoming initial packet not dropped, got=%v: %v", got, a4)
 	}
 	// We talk to that peer
-	if got := acl.RunOut(&b4, flags); got != Accept {
+	if got, _ := acl.RunOut(&b4, flags); got != Accept {
 		t.Fatalf("outbound packet didn't egress, got=%v: %v", got, b4)
 	}
 	// Now, the same packet as before is allowed back.
@@ -227,7 +228,7 @@ func TestUDPState(t *testing.T) {
 		t.Fatalf("incoming initial packet not dropped: %v", a4)
 	}
 	// We talk to that peer
-	if got := acl.RunOut(&b6, flags); got != Accept {
+	if got, _ := acl.RunOut(&b6, flags); got != Accept {
 		t.Fatalf("outbound packet didn't egress: %v", b4)
 	}
 	// Now, the same packet as before is allowed back.
@@ -382,25 +383,26 @@ func BenchmarkFilter(b *testing.B) {
 
 func TestPreFilter(t *testing.T) {
 	packets := []struct {
-		desc string
-		want Response
-		b    []byte
+		desc       string
+		want       Response
+		wantReason usermetric.DropReason
+		b          []byte
 	}{
-		{"empty", Accept, []byte{}},
-		{"short", Drop, []byte("short")},
-		{"junk", Drop, raw4default(ipproto.Unknown, 10)},
-		{"fragment", Accept, raw4default(ipproto.Fragment, 40)},
-		{"tcp", noVerdict, raw4default(ipproto.TCP, 0)},
-		{"udp", noVerdict, raw4default(ipproto.UDP, 0)},
-		{"icmp", noVerdict, raw4default(ipproto.ICMPv4, 0)},
+		{"empty", Accept, "", []byte{}},
+		{"short", Drop, usermetric.ReasonTooShort, []byte("short")},
+		{"junk", Drop, "", raw4default(ipproto.Unknown, 10)},
+		{"fragment", Accept, "", raw4default(ipproto.Fragment, 40)},
+		{"tcp", noVerdict, "", raw4default(ipproto.TCP, 0)},
+		{"udp", noVerdict, "", raw4default(ipproto.UDP, 0)},
+		{"icmp", noVerdict, "", raw4default(ipproto.ICMPv4, 0)},
 	}
 	f := NewAllowNone(t.Logf, &netipx.IPSet{})
 	for _, testPacket := range packets {
 		p := &packet.Parsed{}
 		p.Decode(testPacket.b)
-		got := f.pre(p, LogDrops|LogAccepts, in)
-		if got != testPacket.want {
-			t.Errorf("%q got=%v want=%v packet:\n%s", testPacket.desc, got, testPacket.want, packet.Hexdump(testPacket.b))
+		got, gotReason := f.pre(p, LogDrops|LogAccepts, in)
+		if got != testPacket.want || gotReason != testPacket.wantReason {
+			t.Errorf("%q got=%v want=%v gotReason=%s wantReason=%s packet:\n%s", testPacket.desc, got, testPacket.want, gotReason, testPacket.wantReason, packet.Hexdump(testPacket.b))
 		}
 	}
 }
