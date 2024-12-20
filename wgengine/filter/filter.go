@@ -24,6 +24,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter/filtertype"
 )
 
@@ -410,7 +411,7 @@ func (f *Filter) ShieldsUp() bool { return f.shieldsUp }
 // Tailscale peer.
 func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
 	dir := in
-	r := f.pre(q, rf, dir)
+	r, _ := f.pre(q, rf, dir)
 	if r == Accept || r == Drop {
 		// already logged
 		return r
@@ -431,16 +432,16 @@ func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
 
 // RunOut determines whether this node is allowed to send q to a
 // Tailscale peer.
-func (f *Filter) RunOut(q *packet.Parsed, rf RunFlags) Response {
+func (f *Filter) RunOut(q *packet.Parsed, rf RunFlags) (Response, usermetric.DropReason) {
 	dir := out
-	r := f.pre(q, rf, dir)
+	r, reason := f.pre(q, rf, dir)
 	if r == Accept || r == Drop {
 		// already logged
-		return r
+		return r, reason
 	}
 	r, why := f.runOut(q)
 	f.logRateLimit(rf, q, dir, r, why)
-	return r
+	return r, ""
 }
 
 var unknownProtoStringCache sync.Map // ipproto.Proto -> string
@@ -610,33 +611,33 @@ var gcpDNSAddr = netaddr.IPv4(169, 254, 169, 254)
 
 // pre runs the direction-agnostic filter logic. dir is only used for
 // logging.
-func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
+func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, usermetric.DropReason) {
 	if len(q.Buffer()) == 0 {
 		// wireguard keepalive packet, always permit.
-		return Accept
+		return Accept, ""
 	}
 	if len(q.Buffer()) < 20 {
 		f.logRateLimit(rf, q, dir, Drop, "too short")
-		return Drop
+		return Drop, usermetric.ReasonTooShort
 	}
 
 	if q.Dst.Addr().IsMulticast() {
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
-		return Drop
+		return Drop, usermetric.ReasonMulticast
 	}
 	if q.Dst.Addr().IsLinkLocalUnicast() && q.Dst.Addr() != gcpDNSAddr {
 		f.logRateLimit(rf, q, dir, Drop, "link-local-unicast")
-		return Drop
+		return Drop, usermetric.ReasonLinkLocalUnicast
 	}
 
 	if q.IPProto == ipproto.Fragment {
 		// Fragments after the first always need to be passed through.
 		// Very small fragments are considered Junk by Parsed.
 		f.logRateLimit(rf, q, dir, Accept, "fragment")
-		return Accept
+		return Accept, ""
 	}
 
-	return noVerdict
+	return noVerdict, ""
 }
 
 // loggingAllowed reports whether p can appear in logs at all.
