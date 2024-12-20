@@ -2403,7 +2403,7 @@ const (
 	// advertising can be ignored.
 	// Each value of this key in [NodeCapMap] is of type [ServiceIPMappings].
 	// If multiple values of this key exist, they should be merged in sequence
-	// (replace conflicting keys)..
+	// (replace conflicting keys).
 	NodeAttrServiceHost NodeCapability = "service-host"
 )
 
