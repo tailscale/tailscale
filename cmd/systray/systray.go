@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,10 @@ var (
 	chState     chan ipn.State // tailscale state changes
 
 	appIcon *os.File
+
+	// newMenuDelay is the amount of time to sleep after creating a new menu,
+	// but before adding items to it. This works around a bug in some dbus implementations.
+	newMenuDelay time.Duration
 )
 
 func main() {
@@ -53,6 +58,30 @@ type Menu struct {
 	accountsCh chan ipn.ProfileID
 
 	eventCancel func() // cancel eventLoop
+}
+
+func init() {
+	if runtime.GOOS != "linux" {
+		// so far, these tweaks are only needed on Linux
+		return
+	}
+
+	desktop := strings.ToLower(os.Getenv("XDG_CURRENT_DESKTOP"))
+	switch desktop {
+	case "kde":
+		// KDE doesn't need a delay, and actually won't render submenus
+		// if we delay for more than about 400µs.
+		newMenuDelay = 0
+	default:
+		// Add a slight delay to ensure the menu is created before adding items.
+		//
+		// Systray implementations that use libdbusmenu sometimes process messages out of order,
+		// resulting in errors such as:
+		//    (waybar:153009): LIBDBUSMENU-GTK-WARNING **: 18:07:11.551: Children but no menu, someone's been naughty with their 'children-display' property: 'submenu'
+		//
+		// See also: https://github.com/fyne-io/systray/issues/12
+		newMenuDelay = 100 * time.Millisecond
+	}
 }
 
 func onReady() {
@@ -124,13 +153,7 @@ func (menu *Menu) rebuild(state state) {
 	}
 	accounts := systray.AddMenuItem(account, "")
 	setRemoteIcon(accounts, state.curProfile.UserProfile.ProfilePicURL)
-	// The dbus message about this menu item must propagate to the receiving
-	// end before we attach any submenu items. Otherwise the receiver may not
-	// yet record the parent menu item and error out.
-	//
-	// On waybar with libdbusmenu-gtk, this manifests as the following warning:
-	//    (waybar:153009): LIBDBUSMENU-GTK-WARNING **: 18:07:11.551: Children but no menu, someone's been naughty with their 'children-display' property: 'submenu'
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(newMenuDelay)
 	// Aggregate all clicks into a shared channel.
 	menu.accountsCh = make(chan ipn.ProfileID)
 	for _, profile := range state.allProfiles {
