@@ -877,12 +877,13 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 		return filter.Drop, gro
 	}
 
-	if filt.RunOut(p, t.filterFlags) != filter.Accept {
+	if resp, reason := filt.RunOut(p, t.filterFlags); resp != filter.Accept {
 		metricPacketOutDropFilter.Add(1)
-		// TODO(#14280): increment a t.metrics.outboundDroppedPacketsTotal here
-		// once we figure out & document what labels to use for multicast,
-		// link-local-unicast, IP fragments, etc. But they're not
-		// usermetric.ReasonACL.
+		if reason != "" {
+			t.metrics.outboundDroppedPacketsTotal.Add(usermetric.DropLabels{
+				Reason: reason,
+			}, 1)
+		}
 		return filter.Drop, gro
 	}
 
