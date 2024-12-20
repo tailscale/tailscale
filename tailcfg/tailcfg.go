@@ -2398,8 +2398,11 @@ const (
 	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
 
 	// NodeAttrServiceHost grants a peer the ability to serve as a host for a
-	// set of given VIP services. The value of this key in [NodeCapMap] is
-	// of type [ServiceIPMappings].
+	// set of given VIP services. A service host is a Tailscale node that can
+	// act as a provider for a VIP service (ie. fulfills all the port mapping
+	// requirements set up in control), and opts into acting as a provider
+	// (by using `tailscale advertise`).
+	// The value of this key in [NodeCapMap] is of type [ServiceIPMappings].
 	NodeAttrServiceHost NodeCapability = "service-host"
 )
 
@@ -2896,6 +2899,8 @@ const LBHeader = "Ts-Lb"
 //	  "svc:web": ["100.102.42.3", "fd7a:115c:a1e0::abcd"],
 //	}
 //
-// where the IP addresses are the IPs of the VIP services that the service host
-// is expected to add to its AllowedIPs.
+// where the IP addresses are the IPs of the VIP services. These IPs are also
+// provided in AllowedIPs, but this lets the client know which services
+// correspond to those IPs. Any service IPs in AllowedIPs that don't correspond
+// to a service this client is hosting can be ignored by it.
 type ServiceIPMappings map[string][]netip.Addr
