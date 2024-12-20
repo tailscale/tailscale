@@ -16,6 +16,11 @@ import (
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "RecorderReady")].reason`,description="Status of the deployed Recorder resources."
 // +kubebuilder:printcolumn:name="URL",type="string",JSONPath=`.status.devices[?(@.url != "")].url`,description="URL on which the UI is exposed if enabled."
 
+// Recorder defines a tsrecorder device for recording SSH sessions. By default,
+// it will store recordings in a local ephemeral volume. If you want to persist
+// recordings, you can configure an S3-compatible API for storage.
+//
+// More info: https://tailscale.com/kb/1484/kubernetes-operator-deploying-tsrecorder
 type Recorder struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

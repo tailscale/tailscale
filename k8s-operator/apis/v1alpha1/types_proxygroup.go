@@ -14,6 +14,16 @@ import (
 // +kubebuilder:resource:scope=Cluster,shortName=pg
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ProxyGroupReady")].reason`,description="Status of the deployed ProxyGroup resources."
 
+// ProxyGroup defines a set of Tailscale devices that will act as proxies.
+// Currently only egress ProxyGroups are supported.
+//
+// Use the tailscale.com/proxy-group annotation on a Service to specify that
+// the egress proxy should be implemented by a ProxyGroup instead of a single
+// dedicated proxy. In addition to running a highly available set of proxies,
+// ProxyGroup also allows for serving many annotated Services from a single
+// set of proxies to minimise resource consumption.
+//
+// More info: https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
 type ProxyGroup struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -508,7 +508,16 @@ _Appears in:_
 
 
 
+ProxyGroup defines a set of Tailscale devices that will act as proxies.
+Currently only egress ProxyGroups are supported.
 
+Use the tailscale.com/proxy-group annotation on a Service to specify that
+the egress proxy should be implemented by a ProxyGroup instead of a single
+dedicated proxy. In addition to running a highly available set of proxies,
+ProxyGroup also allows for serving many annotated Services from a single
+set of proxies to minimise resource consumption.
+
+More info: https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
 
 
 
@@ -602,7 +611,11 @@ _Appears in:_
 
 
 
+Recorder defines a tsrecorder device for recording SSH sessions. By default,
+it will store recordings in a local ephemeral volume. If you want to persist
+recordings, you can configure an S3-compatible API for storage.
 
+More info: https://tailscale.com/kb/1484/kubernetes-operator-deploying-tsrecorder
 
 
 
