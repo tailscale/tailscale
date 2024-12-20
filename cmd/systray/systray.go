@@ -7,14 +7,17 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +29,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 )
 
 var (
@@ -51,11 +55,13 @@ type Menu struct {
 	connect    *systray.MenuItem
 	disconnect *systray.MenuItem
 
-	self *systray.MenuItem
-	more *systray.MenuItem
-	quit *systray.MenuItem
+	self      *systray.MenuItem
+	more      *systray.MenuItem
+	exitNodes *systray.MenuItem
+	quit      *systray.MenuItem
 
 	accountsCh chan ipn.ProfileID
+	exitNodeCh chan tailcfg.StableNodeID // ID of selected exit node
 
 	eventCancel func() // cancel eventLoop
 }
@@ -80,7 +86,7 @@ func init() {
 		//    (waybar:153009): LIBDBUSMENU-GTK-WARNING **: 18:07:11.551: Children but no menu, someone's been naughty with their 'children-display' property: 'submenu'
 		//
 		// See also: https://github.com/fyne-io/systray/issues/12
-		newMenuDelay = 100 * time.Millisecond
+		newMenuDelay = 10 * time.Millisecond
 	}
 }
 
@@ -186,6 +192,9 @@ func (menu *Menu) rebuild(state state) {
 		menu.self = systray.AddMenuItem(title, "")
 	}
 	systray.AddSeparator()
+
+	menu.exitNodeCh = make(chan tailcfg.StableNodeID)
+	menu.rebuildExitNodeMenu(ctx)
 
 	menu.more = systray.AddMenuItem("More settings", "")
 	menu.more.Enable()
@@ -295,6 +304,26 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 				log.Printf("failed switching to profile ID %v: %v", id, err)
 			}
 
+		case exitNode := <-menu.exitNodeCh:
+			if exitNode.IsZero() {
+				log.Print("disable exit node")
+				if err := localClient.SetUseExitNode(ctx, false); err != nil {
+					log.Printf("failed disabling exit node: %v", err)
+				}
+			} else {
+				log.Printf("enable exit node: %v", exitNode)
+				mp := &ipn.MaskedPrefs{
+					Prefs: ipn.Prefs{
+						ExitNodeID: exitNode,
+					},
+					ExitNodeIDSet: true,
+				}
+				if _, err := localClient.EditPrefs(ctx, mp); err != nil {
+					log.Printf("failed setting exit node: %v", err)
+				}
+			}
+			menu.rebuild(fetchState(ctx))
+
 		case <-menu.quit.ClickedCh:
 			systray.Quit()
 		}
@@ -373,6 +402,224 @@ func sendNotification(title, content string) {
 	if call.Err != nil {
 		log.Printf("dbus: %v", call.Err)
 	}
+}
+
+func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
+	status := menu.status
+	menu.exitNodes = systray.AddMenuItem("Exit Nodes", "")
+	time.Sleep(newMenuDelay)
+
+	// register a click handler for a menu item to set nodeID as the exit node.
+	onClick := func(item *systray.MenuItem, nodeID tailcfg.StableNodeID) {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-item.ClickedCh:
+					select {
+					case <-ctx.Done():
+						return
+					case menu.exitNodeCh <- nodeID:
+					}
+				}
+			}
+		}()
+	}
+
+	noExitNodeMenu := menu.exitNodes.AddSubMenuItemCheckbox("None", "", status.ExitNodeStatus == nil)
+	onClick(noExitNodeMenu, "")
+
+	// Show recommended exit node if available.
+	if status.Self.CapMap.Contains(tailcfg.NodeAttrSuggestExitNodeUI) {
+		sugg, err := localClient.SuggestExitNode(ctx)
+		if err == nil {
+			title := "Recommended: "
+			if loc := sugg.Location; loc.Valid() && loc.Country() != "" {
+				flag := countryFlag(loc.CountryCode())
+				title += fmt.Sprintf("%s %s: %s", flag, loc.Country(), loc.City())
+			} else {
+				title += strings.Split(sugg.Name, ".")[0]
+			}
+			menu.exitNodes.AddSeparator()
+			rm := menu.exitNodes.AddSubMenuItemCheckbox(title, "", false)
+			onClick(rm, sugg.ID)
+			if status.ExitNodeStatus != nil && sugg.ID == status.ExitNodeStatus.ID {
+				rm.Check()
+			}
+		}
+	}
+
+	// Add tailnet exit nodes if present.
+	var tailnetExitNodes []*ipnstate.PeerStatus
+	for _, ps := range status.Peer {
+		if ps.ExitNodeOption && ps.Location == nil {
+			tailnetExitNodes = append(tailnetExitNodes, ps)
+		}
+	}
+	if len(tailnetExitNodes) > 0 {
+		menu.exitNodes.AddSeparator()
+		menu.exitNodes.AddSubMenuItem("Tailnet Exit Nodes", "").Disable()
+		for _, ps := range status.Peer {
+			if !ps.ExitNodeOption || ps.Location != nil {
+				continue
+			}
+			name := strings.Split(ps.DNSName, ".")[0]
+			if !ps.Online {
+				name += " (offline)"
+			}
+			sm := menu.exitNodes.AddSubMenuItemCheckbox(name, "", false)
+			if !ps.Online {
+				sm.Disable()
+			}
+			if status.ExitNodeStatus != nil && ps.ID == status.ExitNodeStatus.ID {
+				sm.Check()
+			}
+			onClick(sm, ps.ID)
+		}
+	}
+
+	// Add mullvad exit nodes if present.
+	var mullvadExitNodes mullvadPeers
+	if status.Self.CapMap.Contains("mullvad") {
+		mullvadExitNodes = newMullvadPeers(status)
+	}
+	if len(mullvadExitNodes.countries) > 0 {
+		menu.exitNodes.AddSeparator()
+		menu.exitNodes.AddSubMenuItem("Location-based Exit Nodes", "").Disable()
+		mullvadMenu := menu.exitNodes.AddSubMenuItemCheckbox("Mullvad VPN", "", false)
+
+		for _, country := range mullvadExitNodes.sortedCountries() {
+			flag := countryFlag(country.code)
+			countryMenu := mullvadMenu.AddSubMenuItemCheckbox(flag+" "+country.name, "", false)
+
+			// single-city country, no submenu
+			if len(country.cities) == 1 {
+				onClick(countryMenu, country.best.ID)
+				if status.ExitNodeStatus != nil {
+					for _, city := range country.cities {
+						for _, ps := range city.peers {
+							if status.ExitNodeStatus.ID == ps.ID {
+								mullvadMenu.Check()
+								countryMenu.Check()
+							}
+						}
+					}
+				}
+				continue
+			}
+
+			// multi-city country, build submenu with "best available" option and cities.
+			time.Sleep(newMenuDelay)
+			bm := countryMenu.AddSubMenuItemCheckbox("Best Available", "", false)
+			onClick(bm, country.best.ID)
+			countryMenu.AddSeparator()
+
+			for _, city := range country.sortedCities() {
+				cityMenu := countryMenu.AddSubMenuItemCheckbox(city.name, "", false)
+				onClick(cityMenu, city.best.ID)
+				if status.ExitNodeStatus != nil {
+					for _, ps := range city.peers {
+						if status.ExitNodeStatus.ID == ps.ID {
+							mullvadMenu.Check()
+							countryMenu.Check()
+							cityMenu.Check()
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// TODO: "Allow Local Network Access" and "Run Exit Node" menu items
+}
+
+// mullvadPeers contains all mullvad peer nodes, sorted by country and city.
+type mullvadPeers struct {
+	countries map[string]*mvCountry // country code (uppercase) => country
+}
+
+// sortedCountries returns countries containing mullvad nodes, sorted by name.
+func (mp mullvadPeers) sortedCountries() []*mvCountry {
+	countries := slices.Collect(maps.Values(mp.countries))
+	slices.SortFunc(countries, func(a, b *mvCountry) int {
+		return cmp.Compare(a.name, b.name)
+	})
+	return countries
+}
+
+type mvCountry struct {
+	code   string
+	name   string
+	best   *ipnstate.PeerStatus // highest priority peer in the country
+	cities map[string]*mvCity   // city code => city
+}
+
+// sortedCities returns cities containing mullvad nodes, sorted by name.
+func (mc *mvCountry) sortedCities() []*mvCity {
+	cities := slices.Collect(maps.Values(mc.cities))
+	slices.SortFunc(cities, func(a, b *mvCity) int {
+		return cmp.Compare(a.name, b.name)
+	})
+	return cities
+}
+
+// countryFlag takes a 2-character ASCII string and returns the corresponding emoji flag.
+// It returns the empty string on error.
+func countryFlag(code string) string {
+	if len(code) != 2 {
+		return ""
+	}
+	runes := make([]rune, 0, 2)
+	for i := range 2 {
+		b := code[i] | 32 // lowercase
+		if b < 'a' || b > 'z' {
+			return ""
+		}
+		// https://en.wikipedia.org/wiki/Regional_indicator_symbol
+		runes = append(runes, 0x1F1E6+rune(b-'a'))
+	}
+	return string(runes)
+}
+
+type mvCity struct {
+	name  string
+	best  *ipnstate.PeerStatus // highest priority peer in the city
+	peers []*ipnstate.PeerStatus
+}
+
+func newMullvadPeers(status *ipnstate.Status) mullvadPeers {
+	countries := make(map[string]*mvCountry)
+	for _, ps := range status.Peer {
+		if !ps.ExitNodeOption || ps.Location == nil {
+			continue
+		}
+		loc := ps.Location
+		country, ok := countries[loc.CountryCode]
+		if !ok {
+			country = &mvCountry{
+				code:   loc.CountryCode,
+				name:   loc.Country,
+				cities: make(map[string]*mvCity),
+			}
+			countries[loc.CountryCode] = country
+		}
+		city, ok := countries[loc.CountryCode].cities[loc.CityCode]
+		if !ok {
+			city = &mvCity{
+				name: loc.City,
+			}
+			countries[loc.CountryCode].cities[loc.CityCode] = city
+		}
+		city.peers = append(city.peers, ps)
+		if city.best == nil || ps.Location.Priority > city.best.Location.Priority {
+			city.best = ps
+		}
+		if country.best == nil || ps.Location.Priority > country.best.Location.Priority {
+			country.best = ps
+		}
+	}
+	return mullvadPeers{countries}
 }
 
 func onExit() {
