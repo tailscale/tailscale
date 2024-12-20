@@ -23,7 +23,7 @@ func TestHistogram(t *testing.T) {
 	if diff := cmp.Diff(h.sum, 7.5); diff != "" {
 		t.Errorf("wrong sum; (-got+want):%v", diff)
 	}
-	if diff := cmp.Diff(h.bucketedCounts, map[float64]uint64{1: 2, 2: 2}); diff != "" {
+	if diff := cmp.Diff(h.bucketedCounts, map[float64]uint64{1: 2, 2: 4}); diff != "" {
 		t.Errorf("wrong bucketedCounts; (-got+want):%v", diff)
 	}
 }

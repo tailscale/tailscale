@@ -45,6 +45,5 @@ func (h *histogram) add(v float64) {
 			continue
 		}
 		h.bucketedCounts[b] += 1
-		break
 	}
 }
