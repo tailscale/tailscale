@@ -371,8 +371,13 @@ type LocalBackend struct {
 	// captiveCtx will always be non-nil, though it might be a canceled
 	// context. captiveCancel is non-nil if checkCaptivePortalLoop is
 	// running, and is set to nil after being canceled.
-	captiveCtx    context.Context
-	captiveCancel context.CancelFunc
+	//
+	// captiveDetected is true if the backend is currently behind a captive
+	// portal, and is used to temporarily disable exit nodes and other
+	// features that require connectivity.
+	captiveCtx      context.Context
+	captiveCancel   context.CancelFunc
+	captiveDetected bool
 	// needsCaptiveDetection is a channel that is used to signal either
 	// that captive portal detection is required (sending true) or that the
 	// backend is healthy and captive portal detection is not required
@@ -931,12 +936,39 @@ func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthySt
 	} else {
 		// If connectivity is not impacted, we know for sure we're not behind a captive portal,
 		// so drop any warning, and signal that we don't need captive portal detection.
-		b.health.SetHealthy(captivePortalWarnable)
+		b.setCaptivePortalDetected(false)
 		select {
 		case b.needsCaptiveDetection <- false:
 		case <-ctx.Done():
 		}
 	}
+}
+
+func (b *LocalBackend) setCaptivePortalDetected(found bool) {
+	b.mu.Lock()
+	prev := b.captiveDetected
+	b.captiveDetected = found
+	b.mu.Unlock()
+	b.logf("b.captiveDetected = %v, was %v", found, prev)
+
+	if found {
+		b.health.SetUnhealthy(captivePortalWarnable, nil)
+	} else {
+		b.health.SetHealthy(captivePortalWarnable)
+	}
+
+	if b.wantsExitNodeDisablementBehindCaptivePortal() && prev != found {
+		b.logf("b.captiveDetected changed to %v (was %v), calling authReconfig()", found, prev)
+		b.authReconfig()
+	}
+}
+
+func (b *LocalBackend) wantsExitNodeDisablementBehindCaptivePortal() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	res := b.ControlKnobs().DisableExitNodeBehindCaptivePortal.Load()
+	b.logf("wantsExitNodeDisablementBehindCaptivePortal = %v", res)
+	return res
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
@@ -2471,11 +2503,7 @@ func (b *LocalBackend) performCaptiveDetection() {
 	netMon := b.NetMon()
 	b.mu.Unlock()
 	found := d.Detect(ctx, netMon, dm, preferredDERP)
-	if found {
-		b.health.SetUnhealthy(captivePortalWarnable, health.Args{})
-	} else {
-		b.health.SetHealthy(captivePortalWarnable)
-	}
+	b.setCaptivePortalDetected(found)
 }
 
 // shouldRunCaptivePortalDetection reports whether captive portal detection
@@ -4914,6 +4942,22 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		default:
 			if prefs.ExitNodeAllowLANAccess() {
 				b.logf("warning: ExitNodeAllowLANAccess has no effect on " + runtime.GOOS)
+			}
+		}
+
+		b.logf("routerConfig: b.captiveDetected is %v", b.captiveDetected)
+		if b.captiveDetected && b.wantsExitNodeDisablementBehindCaptivePortal() {
+			isZeroRouteFunc := func(p netip.Prefix) bool {
+				return p == ipv4Default || p == ipv6Default
+			}
+			hasZeroRoutes := slices.ContainsFunc(rs.Routes, isZeroRouteFunc)
+			if hasZeroRoutes {
+				b.logf("captive portal detected, dropping zero routes")
+				// If a captive portal is present, remove the zero routes (ipv4Default and ipv6Default)
+				// to allow the user to authenticate with the captive portal.
+				rs.Routes = slices.DeleteFunc(rs.Routes, isZeroRouteFunc)
+			} else {
+				b.logf("captive portal detected, but no zero routes to drop")
 			}
 		}
 	}
