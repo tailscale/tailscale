@@ -21,6 +21,15 @@ func TestLabelMap(t *testing.T) {
 	if g, w := m.Get("bar").Value(), int64(2); g != w {
 		t.Errorf("bar = %v; want %v", g, w)
 	}
+	m.GetShardedInt("sharded").Add(5)
+	if g, w := m.GetShardedInt("sharded").Value(), int64(5); g != w {
+		t.Errorf("sharded = %v; want %v", g, w)
+	}
+	m.Add("sharded", 1)
+	if g, w := m.GetShardedInt("sharded").Value(), int64(6); g != w {
+		t.Errorf("sharded = %v; want %v", g, w)
+	}
+	m.Add("neverbefore", 1)
 }
 
 func TestCurrentFileDescriptors(t *testing.T) {
