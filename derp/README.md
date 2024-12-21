@@ -59,3 +59,103 @@ We generally run a minimum of three nodes in a region not for quorum reasons
 failure reasons: if you're running two nodes at 51% load (CPU, memory, etc) and
 then one fails, that makes the second one fail. With three or more nodes, you
 can run each node a bit hotter.
+
+## Sequence Diagrams
+
+The below sequence diagrams show some of the main DERP-related interactions.
+
+### Connection Establishment
+
+Tailscale clients connect to the control server and to their respective DERP homes. The control server distributes knowledge about chosen DERP homes to other clients.
+
+At the end of this flow, both client A and client B are connected to their respective home DERPs 1x and 2x, and both know of each other's chosen DERP home region.
+
+```mermaid
+sequenceDiagram
+	participant a as Client A
+  participant 1x as DERP 1x
+  participant control as Control
+  participant 2x as DERP 2x
+	participant b as Client B
+  
+  par A
+  a->>control: connect
+  and B
+  b->>control: connect
+  end
+  par A
+  control->>a: DERP map
+  a->>a: choose home region by latency
+  a->>a: choose DERP in home region based on priority order in DERP map
+  a->>1x: connect to home DERP
+  a->>control: report home region 1
+  control->>b: notify Client A's home region is 1
+  and B
+  control->>b: DERP map
+  b->>b: choose home region by latency
+  b->>b: choose DERP in home region based on priority order in DERP map
+  b->>2x: connect to home DERP
+  b->>control: report home region 2
+  control->>a: notify Client B's home region is 2
+  end
+```
+
+### Packet Sending, Same Home Region, Same Home DERP
+
+This is the simplest case, in which both clients are already connected to the same DERP server.
+
+```mermaid
+sequenceDiagram
+	participant a as Client A
+  participant 1x as DERP 1x
+  participant b as Client B
+  
+  b->>1x: send packet to Client A
+  1x->>a: forward packet to Client A
+```
+
+### Packet Sending, Same Home Region, Different Home DERP (Mesh)
+
+In this case, both clients are using the same home region, but they are connected to different DERP servers within this region.
+
+```mermaid
+sequenceDiagram
+	participant a as Client A
+  participant 1x as DERP 1x
+  participant 1y as DERP 1y
+  participant b as Client B
+  
+  a->>1x: connect to home DERP
+  1x->>1y: notify that Client A is connected to 1x
+  b->>1y: send packet to Client A
+  1y->>1x: forward packet for Client A
+  1x->>a: forward packet to Client A
+```
+
+### Packet Sending, Different Home Regions
+
+In this case, both clients are using different home regions. The sending Client B connects to the recipients's home region.
+Note that the Client B remains connected to its own home DERP even as it sends traffic to Client A via its home DERP region.
+
+```mermaid
+sequenceDiagram
+	participant a as Client A
+  participant 1x as DERP 1x
+  participant control as Control
+  participant 2x as DERP 2x
+  participant b as Client B
+  
+  par A
+  a->>1x: connect to home DERP
+  a->>control: report home region 1
+  control->>b: notify Client A's home region is 1
+  and B
+  b->>2x: connect to home DERP
+  b->>control: report home region 2
+  control->>a: notify Client B's home region is 2
+  end
+  b->>1x: connect to Client A's home DERP
+  b->>1x: send packet to Client A
+  1x->>a: forward packet to Client A
+```
+
