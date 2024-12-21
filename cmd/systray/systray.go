@@ -41,6 +41,10 @@ var (
 	// newMenuDelay is the amount of time to sleep after creating a new menu,
 	// but before adding items to it. This works around a bug in some dbus implementations.
 	newMenuDelay time.Duration
+
+	// if true, treat all mullvad exit node countries as single-city.
+	// Instead of rendering a submenu with cities, just select the highest-priority peer.
+	hideMullvadCities bool
 )
 
 func main() {
@@ -74,6 +78,12 @@ func init() {
 
 	desktop := strings.ToLower(os.Getenv("XDG_CURRENT_DESKTOP"))
 	switch desktop {
+	case "gnome":
+		// GNOME expands submenus downward in the main menu, rather than flyouts to the side.
+		// Either as a result of that or another limitation, there seems to be a maximum depth of submenus.
+		// Mullvad countries that have a city submenu are not being rendered, and so can't be selected.
+		// Handle this by simply treating all mullvad countries as single-city and select the best peer.
+		hideMullvadCities = true
 	case "kde":
 		// KDE doesn't need a delay, and actually won't render submenus
 		// if we delay for more than about 400µs.
@@ -209,7 +219,12 @@ func (menu *Menu) rebuild(state state) {
 func profileTitle(profile ipn.LoginProfile) string {
 	title := profile.Name
 	if profile.NetworkProfile.DomainName != "" {
-		title += "\n" + profile.NetworkProfile.DomainName
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+			// windows and mac don't support multi-line menu
+			title += " (" + profile.NetworkProfile.DomainName + ")"
+		} else {
+			title += "\n" + profile.NetworkProfile.DomainName
+		}
 	}
 	return title
 }
@@ -494,7 +509,7 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 			countryMenu := mullvadMenu.AddSubMenuItemCheckbox(flag+" "+country.name, "", false)
 
 			// single-city country, no submenu
-			if len(country.cities) == 1 {
+			if len(country.cities) == 1 || hideMullvadCities {
 				onClick(countryMenu, country.best.ID)
 				if status.ExitNodeStatus != nil {
 					for _, city := range country.cities {
