@@ -424,6 +424,10 @@ func (s *Server) CertDomains() []string {
 	return slices.Clone(nm.DNS.CertDomains)
 }
 
+func (s *Server) GetControlURL() string {
+	return s.ControlURL
+}
+
 // TailscaleIPs returns IPv4 and IPv6 addresses for this node. If the node
 // has not yet joined a tailnet or is otherwise unaware of its own IP addresses,
 // the returned ip4, ip6 will be !netip.IsValid().
