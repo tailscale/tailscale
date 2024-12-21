@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"sync"
+
+	"tailscale.com/kube/kubetypes"
 )
 
 // healthz is a simple health check server, if enabled it returns 200 OK if
@@ -17,14 +19,18 @@ import (
 type healthz struct {
 	sync.Mutex
 	hasAddrs bool
+	podIPv4  string
 }
 
 func (h *healthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add(kubetypes.PodIPv4Header, h.podIPv4)
 	h.Lock()
 	defer h.Unlock()
 
 	if h.hasAddrs {
-		w.Write([]byte("ok"))
+		if _, err := w.Write([]byte("ok")); err != nil {
+			http.Error(w, "error writing status", http.StatusInternalServerError)
+		}
 	} else {
 		http.Error(w, "node currently has no tailscale IPs", http.StatusServiceUnavailable)
 	}
@@ -43,8 +49,8 @@ func (h *healthz) update(healthy bool) {
 // healthHandlers registers a simple health handler at /healthz.
 // A containerized tailscale instance is considered healthy if
 // it has at least one tailnet IP address.
-func healthHandlers(mux *http.ServeMux) *healthz {
-	h := &healthz{}
+func healthHandlers(mux *http.ServeMux, podIPv4 string) *healthz {
+	h := &healthz{podIPv4: podIPv4}
 	mux.Handle("GET /healthz", h)
 	return h
 }

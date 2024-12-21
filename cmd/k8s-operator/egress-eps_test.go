@@ -55,6 +55,17 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			},
 		},
 	}
+	pg := &tsapi.ProxyGroup{
+		TypeMeta: metav1.TypeMeta{Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "foo",
+			UID:  types.UID("1234-UID"),
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Replicas: pointer.To[int32](3),
+			Type:     tsapi.ProxyGroupTypeEgress,
+		},
+	}
 	port := randomPort()
 	cm := configMapForSvc(t, svc, port)
 	fc := fake.NewClientBuilder().
@@ -93,6 +104,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		pod, stateS := podAndSecretForProxyGroup("foo")
 		mustCreate(t, fc, pod)
 		mustCreate(t, fc, stateS)
+		mustCreate(t, fc, pg)
 		expectReconciled(t, er, "operator-ns", "foo") // should not error
 	})
 

@@ -18,9 +18,11 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	tsoperator "tailscale.com/k8s-operator"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/types/ptr"
 )
@@ -71,6 +73,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	if err != nil {
 		return res, fmt.Errorf("error retrieving ExternalName Service: %w", err)
 	}
+
 	if !tsoperator.EgressServiceIsValidAndConfigured(svc) {
 		l.Infof("Cluster resources for ExternalName Service %s/%s are not yet configured", svc.Namespace, svc.Name)
 		return res, nil
@@ -80,8 +83,16 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// wasteful. Once we have a Ready condition for ExternalName Services for ProxyGroup, use the condition to
 	// determine if a reconcile is needed.
 
-	oldEps := eps.DeepCopy()
 	proxyGroupName := eps.Labels[labelProxyGroup]
+	pg := &tsapi.ProxyGroup{}
+	if err := er.Get(ctx, types.NamespacedName{Name: proxyGroupName}, pg); err != nil {
+		if apierrors.IsNotFound(err) {
+			l.Infof("ProxyGroup %v not found, waiting", proxyGroupName)
+			return res, nil
+		}
+		return res, fmt.Errorf("error retrieving ProxyGroup %s: %v", proxyGroupName, err)
+	}
+	oldEps := eps.DeepCopy()
 	tailnetSvc := tailnetSvcName(svc)
 	l = l.With("tailnet-service-name", tailnetSvc)
 
@@ -165,7 +176,7 @@ func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod
 		return false, fmt.Errorf("error determining Pod IP address: %v", err)
 	}
 	if podIP == "" {
-		l.Infof("[unexpected] Pod does not have an IPv4 address, and IPv6 is not currently supported")
+		l.Infof("[unexpected] Pod does not yet have an IPv4 address, waiting...")
 		return false, nil
 	}
 	stateS := &corev1.Secret{
@@ -208,6 +219,7 @@ func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod
 		l.Debugf("proxy has configured egress service for ports %#+v, wants ports %#+v, waiting for proxy to reconfigure", st.Ports, cfg.Ports)
 		return false, nil
 	}
+
 	l.Debugf("proxy is ready to route traffic to egress service")
 	return true, nil
 }
