@@ -11,6 +11,8 @@ import (
 	"io"
 	"slices"
 	"strings"
+
+	"tailscale.com/syncs"
 )
 
 // Set is a string-to-Var map variable that satisfies the expvar.Var
@@ -49,6 +51,21 @@ func (m *LabelMap) SetInt64(key string, v int64) {
 func (m *LabelMap) Get(key string) *expvar.Int {
 	m.Add(key, 0)
 	return m.Map.Get(key).(*expvar.Int)
+}
+
+// GetShardedInt returns a direct pointer to the syncs.ShardedInt for key,
+// creating it if necessary.
+//
+// Note: this method can race, so early modifications may be lost under
+// contention, this is unavoidable until expvar provides an atomic set operation
+// for arbitrary expvar.Var values.
+func (m *LabelMap) GetShardedInt(key string) *syncs.ShardedInt {
+	i := m.Map.Get(key)
+	if i == nil {
+		i = syncs.NewShardedInt()
+		m.Set(key, i)
+	}
+	return i.(*syncs.ShardedInt)
 }
 
 // GetIncrFunc returns a function that increments the expvar.Int named by key.
