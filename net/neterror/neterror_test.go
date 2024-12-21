@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestTreatAsLostUDP(t *testing.T) {
+func TestIsEPERM(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -45,7 +45,7 @@ func TestTreatAsLostUDP(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := TreatAsLostUDP(tt.err); got != tt.want {
+			if got := IsEPERM(tt.err); got != tt.want {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
 		})
