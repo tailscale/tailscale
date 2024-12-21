@@ -359,6 +359,12 @@ authLoop:
 		log.Fatalf("rewatching tailscaled for updates after auth: %v", err)
 	}
 
+	// If tailscaled config was read from a mounted file, watch the file for updates and reload.
+	cfgWatchErrChan := make(chan error)
+	if cfg.TailscaledConfigFilePath != "" {
+		go watchTailscaledConfigChanges(ctx, cfg.TailscaledConfigFilePath, client, cfgWatchErrChan)
+	}
+
 	var (
 		startupTasksDone       = false
 		currentIPs             deephash.Sum // tailscale IPs assigned to device
@@ -452,6 +458,8 @@ runLoop:
 			break runLoop
 		case err := <-errChan:
 			log.Fatalf("failed to read from tailscaled: %v", err)
+		case err := <-cfgWatchErrChan:
+			log.Fatalf("failed to watch tailscaled config: %v", err)
 		case n := <-notifyChan:
 			if n.State != nil && *n.State != ipn.Running {
 				// Something's gone wrong and we've left the authenticated state.
