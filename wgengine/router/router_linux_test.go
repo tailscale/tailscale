@@ -1233,14 +1233,14 @@ func adjustFwmask(t *testing.T, s string) string {
 	return fwmaskAdjustRe.ReplaceAllString(s, "$1")
 }
 
-func TestIPRulesForUDMPro(t *testing.T) {
+func TestIPRulesForUBNT(t *testing.T) {
 	// Override the global getDistroFunc
 	getDistroFunc = func() distro.Distro {
-		return distro.UDMPro
+		return distro.UBNT
 	}
 	defer func() { getDistroFunc = distro.Get }() // Restore original after the test
 
-	expected := udmProIPRules
+	expected := ubntIPRules
 	actual := ipRules()
 
 	if len(expected) != len(actual) {
