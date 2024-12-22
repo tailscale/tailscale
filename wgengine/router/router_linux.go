@@ -1184,7 +1184,7 @@ var (
 )
 
 // baseIPRules are the policy routing rules that Tailscale uses, when not
-// running on a UDM-Pro.
+// running on a UBNT device.
 //
 // The priority is the value represented here added to r.ipPolicyPrefBase,
 // which is usually 5200.
@@ -1236,15 +1236,15 @@ var baseIPRules = []netlink.Rule{
 	// usual rules (pref 32766 and 32767, ie. main and default).
 }
 
-// udmProIPRules are the policy routing rules that Tailscale uses, when running
-// on a UDM-Pro.
+// ubntIPRules are the policy routing rules that Tailscale uses, when running
+// on a UBNT device.
 //
 // The priority is the value represented here added to
 // r.ipPolicyPrefBase, which is usually 5200.
 //
 // This represents an experiment that will be used to gather more information.
 // If this goes well, Tailscale may opt to use this for all of Linux.
-var udmProIPRules = []netlink.Rule{
+var ubntIPRules = []netlink.Rule{
 	// non-fwmark packets fall through to the usual rules (pref 32766 and 32767,
 	// ie. main and default).
 	{
@@ -1256,10 +1256,10 @@ var udmProIPRules = []netlink.Rule{
 }
 
 // ipRules returns the appropriate list of ip rules to be used by Tailscale. See
-// comments on baseIPRules and udmProIPRules for more details.
+// comments on baseIPRules and ubntIPRules for more details.
 func ipRules() []netlink.Rule {
-	if getDistroFunc() == distro.UDMPro {
-		return udmProIPRules
+	if getDistroFunc() == distro.UBNT {
+		return ubntIPRules
 	}
 	return baseIPRules
 }
