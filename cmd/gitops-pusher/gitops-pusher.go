@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -229,6 +230,14 @@ func main() {
 	}
 
 	if err := root.Parse(os.Args[1:]); err != nil {
+		if noexec := (ffcli.NoExecError{}); errors.As(err, &noexec) {
+			if args := noexec.Command.FlagSet.Args(); len(args) > 0 {
+				log.Fatalf("invalid subcommand %s, see -help for available subcommands", args[0])
+			} else {
+				log.Fatal("missing subcommand, see -help for available subcommands")
+			}
+		}
+
 		log.Fatal(err)
 	}
 
