@@ -154,7 +154,7 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
-			Deepin)  # https://github.com/tailscale/tailscale/issues/7862
+			Deepin|deepin)  # https://github.com/tailscale/tailscale/issues/7862
 				OS="debian"
 				PACKAGETYPE="apt"
 				if [ "$VERSION_ID" -lt 20 ]; then
