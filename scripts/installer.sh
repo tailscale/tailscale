@@ -165,6 +165,19 @@ main() {
 					VERSION="bullseye"
 				fi
 				;;
+			pika)
+				PACKAGETYPE="apt"
+				# All versions of PikaOS are new enough to prefer keyring
+				APT_KEY_TYPE="keyring"
+				# Older versions of PikaOS are based on Ubuntu rather than Debian
+				if [ "$VERSION_ID" -lt 4 ]; then
+					OS="ubuntu"
+					VERSION="$UBUNTU_CODENAME"
+				else
+					OS="debian"
+					VERSION="$DEBIAN_CODENAME"
+				fi
+				;;
 			centos)
 				OS="$ID"
 				VERSION="$VERSION_ID"
