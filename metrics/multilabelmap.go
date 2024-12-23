@@ -13,6 +13,13 @@ import (
 	"sync"
 )
 
+// MetricType is a Prometheus metric type. At the moment we only support
+// counter and gauge.
+type MetricType string
+
+const Counter MetricType = "counter"
+const Gauge MetricType = "gauge"
+
 // MultiLabelMap is a struct-value-to-Var map variable that satisfies the
 // [expvar.Var] interface but also allows for multiple Prometheus labels to be
 // associated with each value.
@@ -22,7 +29,7 @@ import (
 // The struct fields must all be strings, and the string values must be valid
 // Prometheus label values without requiring quoting.
 type MultiLabelMap[T comparable] struct {
-	Type string // optional Prometheus type ("counter", "gauge")
+	Type MetricType
 	Help string // optional Prometheus help string
 
 	m sync.Map // map[T]expvar.Var
@@ -33,7 +40,7 @@ type MultiLabelMap[T comparable] struct {
 
 // NewMultiLabelMap creates and publishes (via expvar.Publish) a new
 // MultiLabelMap[T] variable with the given name and returns it.
-func NewMultiLabelMap[T comparable](name string, promType, helpText string) *MultiLabelMap[T] {
+func NewMultiLabelMap[T comparable](name string, promType MetricType, helpText string) *MultiLabelMap[T] {
 	m := &MultiLabelMap[T]{
 		Type: promType,
 		Help: helpText,
@@ -108,7 +115,7 @@ func (v *MultiLabelMap[T]) WritePrometheus(w io.Writer, name string) {
 		io.WriteString(w, "# TYPE ")
 		io.WriteString(w, name)
 		io.WriteString(w, " ")
-		io.WriteString(w, v.Type)
+		io.WriteString(w, string(v.Type))
 		io.WriteString(w, "\n")
 	}
 	if v.Help != "" {

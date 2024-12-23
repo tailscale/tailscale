@@ -93,7 +93,7 @@ func TestMultiLabelMapTypes(t *testing.T) {
 	}
 
 	m := new(MultiLabelMap[LabelTypes])
-	m.Type = "counter"
+	m.Type = Counter
 	m.Help = "some good stuff"
 	m.Add(LabelTypes{"a", true, -1, 2}, 3)
 	var buf bytes.Buffer
