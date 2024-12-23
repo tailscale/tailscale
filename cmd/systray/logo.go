@@ -136,6 +136,7 @@ var (
 			1, 1, 1,
 			0, 1, 0,
 		},
+		// draw an arrow mask in the bottom right corner with a reasonably thick line width.
 		dotMask: func(dc *gg.Context, borderUnits int, radius int) *image.Alpha {
 			bu, r := float64(borderUnits), float64(radius)
 
@@ -144,13 +145,14 @@ var (
 			x2 := x1 + (r * 5)
 
 			mc := gg.NewContext(dc.Width(), dc.Height())
-			mc.DrawLine(x1, y, x2, y)
-			mc.DrawLine(x2-(1.5*r), y-(1.5*r), x2, y)
-			mc.DrawLine(x2-(1.5*r), y+(1.5*r), x2, y)
+			mc.DrawLine(x1, y, x2, y)                 // arrow center line
+			mc.DrawLine(x2-(1.5*r), y-(1.5*r), x2, y) // top of arrow tip
+			mc.DrawLine(x2-(1.5*r), y+(1.5*r), x2, y) // bottom of arrow tip
 			mc.SetLineWidth(r * 3)
 			mc.Stroke()
 			return mc.AsMask()
 		},
+		// draw an arrow in the bottom right corner over the masked area.
 		overlay: func(dc *gg.Context, borderUnits int, radius int) {
 			bu, r := float64(borderUnits), float64(radius)
 
@@ -158,9 +160,9 @@ var (
 			y := r * (bu + 7)
 			x2 := x1 + (r * 5)
 
-			dc.DrawLine(x1, y, x2, y)
-			dc.DrawLine(x2-(1.5*r), y-(1.5*r), x2, y)
-			dc.DrawLine(x2-(1.5*r), y+(1.5*r), x2, y)
+			dc.DrawLine(x1, y, x2, y)                 // arrow center line
+			dc.DrawLine(x2-(1.5*r), y-(1.5*r), x2, y) // top of arrow tip
+			dc.DrawLine(x2-(1.5*r), y+(1.5*r), x2, y) // bottom of arrow tip
 			dc.SetColor(fg)
 			dc.SetLineWidth(r)
 			dc.Stroke()
@@ -174,6 +176,7 @@ var (
 			1, 1, 1,
 			0, 1, 0,
 		},
+		// Draw a square that hides the four dots in the bottom right corner,
 		dotMask: func(dc *gg.Context, borderUnits int, radius int) *image.Alpha {
 			bu, r := float64(borderUnits), float64(radius)
 			x := r * (bu + 3)
@@ -183,13 +186,14 @@ var (
 			mc.Fill()
 			return mc.AsMask()
 		},
+		// draw a red "x" over the bottom right corner.
 		overlay: func(dc *gg.Context, borderUnits int, radius int) {
 			bu, r := float64(borderUnits), float64(radius)
 
 			x1 := r * (bu + 4)
 			x2 := x1 + (r * 3.5)
-			dc.DrawLine(x1, x1, x2, x2)
-			dc.DrawLine(x1, x2, x2, x1)
+			dc.DrawLine(x1, x1, x2, x2) // top-left to bottom-right stroke
+			dc.DrawLine(x1, x2, x2, x1) // bottom-left to top-right stroke
 			dc.SetColor(red)
 			dc.SetLineWidth(r)
 			dc.Stroke()
