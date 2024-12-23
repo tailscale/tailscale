@@ -34,11 +34,8 @@ import (
 
 var (
 	localClient tailscale.LocalClient
-	chState     chan ipn.State // tailscale state changes
-
-	chRebuild chan struct{} // triggers a menu rebuild
-
-	appIcon *os.File
+	rebuildCh   chan struct{} // triggers a menu rebuild
+	appIcon     *os.File
 
 	// newMenuDelay is the amount of time to sleep after creating a new menu,
 	// but before adding items to it. This works around a bug in some dbus implementations.
@@ -112,8 +109,7 @@ func onReady() {
 	appIcon, _ = os.CreateTemp("", "tailscale-systray.png")
 	io.Copy(appIcon, connected.renderWithBorder(3))
 
-	chState = make(chan ipn.State, 1)
-	chRebuild = make(chan struct{}, 1)
+	rebuildCh = make(chan struct{}, 1)
 
 	menu := new(Menu)
 	menu.rebuild(fetchState(ctx))
@@ -169,6 +165,34 @@ func (menu *Menu) rebuild(state state) {
 	menu.disconnect = systray.AddMenuItem("Disconnect", "")
 	menu.disconnect.Hide()
 	systray.AddSeparator()
+
+	// Set systray menu icon and title.
+	// Also adjust connect/disconnect menu items if needed.
+	switch menu.status.BackendState {
+	case ipn.Running.String():
+		if state.status.ExitNodeStatus != nil && !state.status.ExitNodeStatus.ID.IsZero() {
+			if state.status.ExitNodeStatus.Online {
+				systray.SetTitle("Using exit node")
+				setAppIcon(exitNodeOnline)
+			} else {
+				systray.SetTitle("Exit node offline")
+				setAppIcon(exitNodeOffline)
+			}
+		} else {
+			systray.SetTitle(fmt.Sprintf("Connected to %s", state.status.CurrentTailnet.Name))
+			setAppIcon(connected)
+		}
+		menu.connect.SetTitle("Connected")
+		menu.connect.Disable()
+		menu.disconnect.Show()
+		menu.disconnect.Enable()
+	case ipn.Starting.String():
+		systray.SetTitle("Connecting")
+		setAppIcon(loading)
+	default:
+		systray.SetTitle("Disconnected")
+		setAppIcon(disconnected)
+	}
 
 	account := "Account"
 	if pt := profileTitle(state.curProfile); pt != "" {
@@ -268,27 +292,8 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-chRebuild:
+		case <-rebuildCh:
 			menu.rebuild(fetchState(ctx))
-		case state := <-chState:
-			switch state {
-			case ipn.Running:
-				setAppIcon(loading)
-				menu.rebuild(fetchState(ctx))
-				setAppIcon(connected)
-				menu.connect.SetTitle("Connected")
-				menu.connect.Disable()
-				menu.disconnect.Show()
-				menu.disconnect.Enable()
-			case ipn.NoState, ipn.Stopped:
-				setAppIcon(disconnected)
-				menu.rebuild(fetchState(ctx))
-				menu.connect.SetTitle("Connect")
-				menu.connect.Enable()
-				menu.disconnect.Hide()
-			case ipn.Starting:
-				setAppIcon(loading)
-			}
 		case <-menu.connect.ClickedCh:
 			_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
@@ -397,12 +402,16 @@ func watchIPNBusInner(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("ipnbus error: %w", err)
 			}
+			var rebuild bool
 			if n.State != nil {
-				chState <- *n.State
 				log.Printf("new state: %v", n.State)
+				rebuild = true
 			}
 			if n.Prefs != nil {
-				chRebuild <- struct{}{}
+				rebuild = true
+			}
+			if rebuild {
+				rebuildCh <- struct{}{}
 			}
 		}
 	}
