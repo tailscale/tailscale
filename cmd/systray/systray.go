@@ -15,10 +15,12 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"fyne.io/systray"
@@ -33,10 +35,6 @@ import (
 )
 
 var (
-	localClient tailscale.LocalClient
-	rebuildCh   chan struct{} // triggers a menu rebuild
-	appIcon     *os.File
-
 	// newMenuDelay is the amount of time to sleep after creating a new menu,
 	// but before adding items to it. This works around a bug in some dbus implementations.
 	newMenuDelay time.Duration
@@ -47,26 +45,68 @@ var (
 )
 
 func main() {
-	systray.Run(onReady, onExit)
+	menu := new(Menu)
+	menu.updateState()
+
+	// exit cleanly on SIGINT and SIGTERM
+	go func() {
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+		select {
+		case <-interrupt:
+			menu.onExit()
+		case <-menu.bgCtx.Done():
+		}
+	}()
+
+	systray.Run(menu.onReady, menu.onExit)
 }
 
 // Menu represents the systray menu, its items, and the current Tailscale state.
 type Menu struct {
-	mu     sync.Mutex // protects the entire Menu
-	status *ipnstate.Status
+	mu sync.Mutex // protects the entire Menu
 
+	lc          tailscale.LocalClient
+	status      *ipnstate.Status
+	curProfile  ipn.LoginProfile
+	allProfiles []ipn.LoginProfile
+
+	bgCtx    context.Context // ctx for background tasks not involving menu item clicks
+	bgCancel context.CancelFunc
+
+	// Top-level menu items
 	connect    *systray.MenuItem
 	disconnect *systray.MenuItem
+	self       *systray.MenuItem
+	exitNodes  *systray.MenuItem
+	more       *systray.MenuItem
+	quit       *systray.MenuItem
 
-	self      *systray.MenuItem
-	more      *systray.MenuItem
-	exitNodes *systray.MenuItem
-	quit      *systray.MenuItem
-
+	rebuildCh  chan struct{} // triggers a menu rebuild
 	accountsCh chan ipn.ProfileID
 	exitNodeCh chan tailcfg.StableNodeID // ID of selected exit node
 
-	eventCancel func() // cancel eventLoop
+	eventCancel context.CancelFunc // cancel eventLoop
+
+	notificationIcon *os.File // icon used for desktop notifications
+}
+
+func (menu *Menu) init() {
+	if menu.bgCtx != nil {
+		// already initialized
+		return
+	}
+
+	menu.rebuildCh = make(chan struct{}, 1)
+	menu.accountsCh = make(chan ipn.ProfileID)
+	menu.exitNodeCh = make(chan tailcfg.StableNodeID)
+
+	// dbus wants a file path for notification icons, so copy to a temp file.
+	menu.notificationIcon, _ = os.CreateTemp("", "tailscale-systray.png")
+	io.Copy(menu.notificationIcon, connected.renderWithBorder(3))
+
+	menu.bgCtx, menu.bgCancel = context.WithCancel(context.Background())
+	go menu.watchIPNBus()
 }
 
 func init() {
@@ -99,43 +139,27 @@ func init() {
 	}
 }
 
-func onReady() {
+// onReady is called by the systray package when the menu is ready to be built.
+func (menu *Menu) onReady() {
 	log.Printf("starting")
-	ctx := context.Background()
-
 	setAppIcon(disconnected)
-
-	// dbus wants a file path for notification icons, so copy to a temp file.
-	appIcon, _ = os.CreateTemp("", "tailscale-systray.png")
-	io.Copy(appIcon, connected.renderWithBorder(3))
-
-	rebuildCh = make(chan struct{}, 1)
-
-	menu := new(Menu)
-	menu.rebuild(fetchState(ctx))
-
-	go watchIPNBus(ctx)
+	menu.rebuild()
 }
 
-type state struct {
-	status      *ipnstate.Status
-	curProfile  ipn.LoginProfile
-	allProfiles []ipn.LoginProfile
-}
+// updateState updates the Menu state from the Tailscale local client.
+func (menu *Menu) updateState() {
+	menu.mu.Lock()
+	defer menu.mu.Unlock()
+	menu.init()
 
-func fetchState(ctx context.Context) state {
-	status, err := localClient.Status(ctx)
+	var err error
+	menu.status, err = menu.lc.Status(menu.bgCtx)
 	if err != nil {
 		log.Print(err)
 	}
-	curProfile, allProfiles, err := localClient.ProfileStatus(ctx)
+	menu.curProfile, menu.allProfiles, err = menu.lc.ProfileStatus(menu.bgCtx)
 	if err != nil {
 		log.Print(err)
-	}
-	return state{
-		status:      status,
-		curProfile:  curProfile,
-		allProfiles: allProfiles,
 	}
 }
 
@@ -144,13 +168,10 @@ func fetchState(ctx context.Context) state {
 // We currently rebuild the entire menu because it is not easy to update the existing menu.
 // You cannot iterate over the items in a menu, nor can you remove some items like separators.
 // So for now we rebuild the whole thing, and can optimize this later if needed.
-func (menu *Menu) rebuild(state state) {
-	if state.status == nil {
-		return
-	}
-
+func (menu *Menu) rebuild() {
 	menu.mu.Lock()
 	defer menu.mu.Unlock()
+	menu.init()
 
 	if menu.eventCancel != nil {
 		menu.eventCancel()
@@ -158,7 +179,6 @@ func (menu *Menu) rebuild(state state) {
 	ctx := context.Background()
 	ctx, menu.eventCancel = context.WithCancel(ctx)
 
-	menu.status = state.status
 	systray.ResetMenu()
 
 	menu.connect = systray.AddMenuItem("Connect", "")
@@ -166,12 +186,19 @@ func (menu *Menu) rebuild(state state) {
 	menu.disconnect.Hide()
 	systray.AddSeparator()
 
+	// delay to prevent race setting icon on first start
+	time.Sleep(newMenuDelay)
+
 	// Set systray menu icon and title.
 	// Also adjust connect/disconnect menu items if needed.
-	switch menu.status.BackendState {
+	var backendState string
+	if menu.status != nil {
+		backendState = menu.status.BackendState
+	}
+	switch backendState {
 	case ipn.Running.String():
-		if state.status.ExitNodeStatus != nil && !state.status.ExitNodeStatus.ID.IsZero() {
-			if state.status.ExitNodeStatus.Online {
+		if menu.status.ExitNodeStatus != nil && !menu.status.ExitNodeStatus.ID.IsZero() {
+			if menu.status.ExitNodeStatus.Online {
 				systray.SetTitle("Using exit node")
 				setAppIcon(exitNodeOnline)
 			} else {
@@ -179,7 +206,7 @@ func (menu *Menu) rebuild(state state) {
 				setAppIcon(exitNodeOffline)
 			}
 		} else {
-			systray.SetTitle(fmt.Sprintf("Connected to %s", state.status.CurrentTailnet.Name))
+			systray.SetTitle(fmt.Sprintf("Connected to %s", menu.status.CurrentTailnet.Name))
 			setAppIcon(connected)
 		}
 		menu.connect.SetTitle("Connected")
@@ -195,18 +222,16 @@ func (menu *Menu) rebuild(state state) {
 	}
 
 	account := "Account"
-	if pt := profileTitle(state.curProfile); pt != "" {
+	if pt := profileTitle(menu.curProfile); pt != "" {
 		account = pt
 	}
 	accounts := systray.AddMenuItem(account, "")
-	setRemoteIcon(accounts, state.curProfile.UserProfile.ProfilePicURL)
+	setRemoteIcon(accounts, menu.curProfile.UserProfile.ProfilePicURL)
 	time.Sleep(newMenuDelay)
-	// Aggregate all clicks into a shared channel.
-	menu.accountsCh = make(chan ipn.ProfileID)
-	for _, profile := range state.allProfiles {
+	for _, profile := range menu.allProfiles {
 		title := profileTitle(profile)
 		var item *systray.MenuItem
-		if profile.ID == state.curProfile.ID {
+		if profile.ID == menu.curProfile.ID {
 			item = accounts.AddSubMenuItemCheckbox(title, "", true)
 		} else {
 			item = accounts.AddSubMenuItem(title, "")
@@ -220,8 +245,8 @@ func (menu *Menu) rebuild(state state) {
 		})
 	}
 
-	if state.status != nil && state.status.Self != nil && len(state.status.Self.TailscaleIPs) > 0 {
-		title := fmt.Sprintf("This Device: %s (%s)", state.status.Self.HostName, state.status.Self.TailscaleIPs[0])
+	if menu.status != nil && menu.status.Self != nil && len(menu.status.Self.TailscaleIPs) > 0 {
+		title := fmt.Sprintf("This Device: %s (%s)", menu.status.Self.HostName, menu.status.Self.TailscaleIPs[0])
 		menu.self = systray.AddMenuItem(title, "")
 	} else {
 		menu.self = systray.AddMenuItem("This Device: not connected", "")
@@ -229,11 +254,14 @@ func (menu *Menu) rebuild(state state) {
 	}
 	systray.AddSeparator()
 
-	menu.exitNodeCh = make(chan tailcfg.StableNodeID)
 	menu.rebuildExitNodeMenu(ctx)
 
-	menu.more = systray.AddMenuItem("More settings", "")
-	menu.more.Enable()
+	if menu.status != nil {
+		menu.more = systray.AddMenuItem("More settings", "")
+		onClick(ctx, menu.more, func(_ context.Context) {
+			webbrowser.Open("http://100.100.100.100/")
+		})
+	}
 
 	menu.quit = systray.AddMenuItem("Quit", "Quit the app")
 	menu.quit.Enable()
@@ -292,48 +320,44 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-rebuildCh:
-			menu.rebuild(fetchState(ctx))
+		case <-menu.rebuildCh:
+			menu.updateState()
+			menu.rebuild()
 		case <-menu.connect.ClickedCh:
-			_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
+			_, err := menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
 					WantRunning: true,
 				},
 				WantRunningSet: true,
 			})
 			if err != nil {
-				log.Print(err)
-				continue
+				log.Printf("error connecting: %v", err)
 			}
 
 		case <-menu.disconnect.ClickedCh:
-			_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
+			_, err := menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 				Prefs: ipn.Prefs{
 					WantRunning: false,
 				},
 				WantRunningSet: true,
 			})
 			if err != nil {
-				log.Printf("disconnecting: %v", err)
-				continue
+				log.Printf("error disconnecting: %v", err)
 			}
 
 		case <-menu.self.ClickedCh:
-			copyTailscaleIP(menu.status.Self)
-
-		case <-menu.more.ClickedCh:
-			webbrowser.Open("http://100.100.100.100/")
+			menu.copyTailscaleIP(menu.status.Self)
 
 		case id := <-menu.accountsCh:
-			if err := localClient.SwitchProfile(ctx, id); err != nil {
-				log.Printf("failed switching to profile ID %v: %v", id, err)
+			if err := menu.lc.SwitchProfile(ctx, id); err != nil {
+				log.Printf("error switching to profile ID %v: %v", id, err)
 			}
 
 		case exitNode := <-menu.exitNodeCh:
 			if exitNode.IsZero() {
 				log.Print("disable exit node")
-				if err := localClient.SetUseExitNode(ctx, false); err != nil {
-					log.Printf("failed disabling exit node: %v", err)
+				if err := menu.lc.SetUseExitNode(ctx, false); err != nil {
+					log.Printf("error disabling exit node: %v", err)
 				}
 			} else {
 				log.Printf("enable exit node: %v", exitNode)
@@ -343,8 +367,8 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 					},
 					ExitNodeIDSet: true,
 				}
-				if _, err := localClient.EditPrefs(ctx, mp); err != nil {
-					log.Printf("failed setting exit node: %v", err)
+				if _, err := menu.lc.EditPrefs(ctx, mp); err != nil {
+					log.Printf("error setting exit node: %v", err)
 				}
 			}
 
@@ -370,9 +394,9 @@ func onClick(ctx context.Context, item *systray.MenuItem, fn func(ctx context.Co
 
 // watchIPNBus subscribes to the tailscale event bus and sends state updates to chState.
 // This method does not return.
-func watchIPNBus(ctx context.Context) {
+func (menu *Menu) watchIPNBus() {
 	for {
-		if err := watchIPNBusInner(ctx); err != nil {
+		if err := menu.watchIPNBusInner(); err != nil {
 			log.Println(err)
 			if errors.Is(err, context.Canceled) {
 				// If the context got canceled, we will never be able to
@@ -387,15 +411,15 @@ func watchIPNBus(ctx context.Context) {
 	}
 }
 
-func watchIPNBusInner(ctx context.Context) error {
-	watcher, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
+func (menu *Menu) watchIPNBusInner() error {
+	watcher, err := menu.lc.WatchIPNBus(menu.bgCtx, ipn.NotifyNoPrivateKeys)
 	if err != nil {
 		return fmt.Errorf("watching ipn bus: %w", err)
 	}
 	defer watcher.Close()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-menu.bgCtx.Done():
 			return nil
 		default:
 			n, err := watcher.Next()
@@ -411,7 +435,7 @@ func watchIPNBusInner(ctx context.Context) error {
 				rebuild = true
 			}
 			if rebuild {
-				rebuildCh <- struct{}{}
+				menu.rebuildCh <- struct{}{}
 			}
 		}
 	}
@@ -419,7 +443,7 @@ func watchIPNBusInner(ctx context.Context) error {
 
 // copyTailscaleIP copies the first Tailscale IP of the given device to the clipboard
 // and sends a notification with the copied value.
-func copyTailscaleIP(device *ipnstate.PeerStatus) {
+func (menu *Menu) copyTailscaleIP(device *ipnstate.PeerStatus) {
 	if device == nil || len(device.TailscaleIPs) == 0 {
 		return
 	}
@@ -430,11 +454,11 @@ func copyTailscaleIP(device *ipnstate.PeerStatus) {
 		log.Printf("clipboard error: %v", err)
 	}
 
-	sendNotification(fmt.Sprintf("Copied Address for %v", name), ip)
+	menu.sendNotification(fmt.Sprintf("Copied Address for %v", name), ip)
 }
 
 // sendNotification sends a desktop notification with the given title and content.
-func sendNotification(title, content string) {
+func (menu *Menu) sendNotification(title, content string) {
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		log.Printf("dbus: %v", err)
@@ -443,13 +467,17 @@ func sendNotification(title, content string) {
 	timeout := 3 * time.Second
 	obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
 	call := obj.Call("org.freedesktop.Notifications.Notify", 0, "Tailscale", uint32(0),
-		appIcon.Name(), title, content, []string{}, map[string]dbus.Variant{}, int32(timeout.Milliseconds()))
+		menu.notificationIcon.Name(), title, content, []string{}, map[string]dbus.Variant{}, int32(timeout.Milliseconds()))
 	if call.Err != nil {
 		log.Printf("dbus: %v", call.Err)
 	}
 }
 
 func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
+	if menu.status == nil {
+		return
+	}
+
 	status := menu.status
 	menu.exitNodes = systray.AddMenuItem("Exit Nodes", "")
 	time.Sleep(newMenuDelay)
@@ -469,7 +497,7 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 
 	// Show recommended exit node if available.
 	if status.Self.CapMap.Contains(tailcfg.NodeAttrSuggestExitNodeUI) {
-		sugg, err := localClient.SuggestExitNode(ctx)
+		sugg, err := menu.lc.SuggestExitNode(ctx)
 		if err == nil {
 			title := "Recommended: "
 			if loc := sugg.Location; loc.Valid() && loc.Country() != "" {
@@ -659,7 +687,15 @@ func newMullvadPeers(status *ipnstate.Status) mullvadPeers {
 	return mullvadPeers{countries}
 }
 
-func onExit() {
+// onExit is called by the systray package when the menu is exiting.
+func (menu *Menu) onExit() {
 	log.Printf("exiting")
-	os.Remove(appIcon.Name())
+	if menu.bgCancel != nil {
+		menu.bgCancel()
+	}
+	if menu.eventCancel != nil {
+		menu.eventCancel()
+	}
+
+	os.Remove(menu.notificationIcon.Name())
 }
