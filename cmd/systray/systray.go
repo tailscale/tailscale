@@ -199,14 +199,14 @@ func (menu *Menu) rebuild() {
 	case ipn.Running.String():
 		if menu.status.ExitNodeStatus != nil && !menu.status.ExitNodeStatus.ID.IsZero() {
 			if menu.status.ExitNodeStatus.Online {
-				systray.SetTitle("Using exit node")
+				setTooltip("Using exit node")
 				setAppIcon(exitNodeOnline)
 			} else {
-				systray.SetTitle("Exit node offline")
+				setTooltip("Exit node offline")
 				setAppIcon(exitNodeOffline)
 			}
 		} else {
-			systray.SetTitle(fmt.Sprintf("Connected to %s", menu.status.CurrentTailnet.Name))
+			setTooltip(fmt.Sprintf("Connected to %s", menu.status.CurrentTailnet.Name))
 			setAppIcon(connected)
 		}
 		menu.connect.SetTitle("Connected")
@@ -214,10 +214,10 @@ func (menu *Menu) rebuild() {
 		menu.disconnect.Show()
 		menu.disconnect.Enable()
 	case ipn.Starting.String():
-		systray.SetTitle("Connecting")
+		setTooltip("Connecting")
 		setAppIcon(loading)
 	default:
-		systray.SetTitle("Disconnected")
+		setTooltip("Disconnected")
 		setAppIcon(disconnected)
 	}
 
@@ -309,6 +309,16 @@ func setRemoteIcon(menu *systray.MenuItem, urlStr string) {
 
 	if len(b) > 0 {
 		menu.SetIcon(b)
+	}
+}
+
+// setTooltip sets the tooltip text for the systray icon.
+func setTooltip(text string) {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		systray.SetTooltip(text)
+	} else {
+		// on Linux, SetTitle actually sets the tooltip
+		systray.SetTitle(text)
 	}
 }
 
