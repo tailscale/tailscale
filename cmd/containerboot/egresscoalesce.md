@@ -46,3 +46,9 @@ Also:
 ## Next steps:
 
 - try to figure out if the same can be achieved with a smaller number of Tailscale Pods. The problem there is how to set up routing to Pods across hosts
+
+## Caveats
+
+- does not work with Cilium in kube-proxy replacement mode
+
+- not easily extensible to route to instances behind a subnet router (possibly a routing loop)
