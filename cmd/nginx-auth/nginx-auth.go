@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/exp/slices"
 	"github.com/coreos/go-systemd/activation"
 	"tailscale.com/client/tailscale"
 )
@@ -81,6 +82,20 @@ func main() {
 			w.WriteHeader(http.StatusForbidden)
 			log.Printf("user is part of tailnet %s, wanted: %s", tailnet, url.QueryEscape(expectedTailnet))
 			return
+		}
+
+		if expectedCap := r.Header.Get("Expected-Cap"); expectedCap != "" {
+			if info.Caps == nil {
+				w.WriteHeader(http.StatusForbidden)
+				log.Printf("user does not have any caps, wanted: %s", url.QueryEscape(expectedCap))
+				return
+			}
+
+			if !slices.Contains(info.Caps, expectedCap) {
+				w.WriteHeader(http.StatusForbidden)
+				log.Printf("user is missing expected cap, has: %s, wanted: %s", strings.Join(info.Caps[:], ","), url.QueryEscape(expectedCap))
+				return
+			}
 		}
 
 		h := w.Header()
