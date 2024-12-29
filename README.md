@@ -72,7 +72,7 @@ Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
 `Signed-off-by` lines in commits.
 
 See `git log` for our commit message style. It's basically the same as
-[Go's style](https://github.com/golang/go/wiki/CommitMessage).
+[Go's style](https://go.dev/wiki/CommitMessage).
 
 ## About Us
 
