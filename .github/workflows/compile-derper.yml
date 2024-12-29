@@ -1,0 +1,72 @@
+name: Compile DERPER
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Update and install dependencies
+      run: |
+        sudo apt-get update && sudo apt-get upgrade -y
+        sudo apt-get install -y wget git openssl curl
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: 'latest'  # 使用最新版本的 Go
+        cache: 'go'
+
+    - name: Configure Go environment
+      run: |
+        go env -w GO111MODULE=on
+        go env -w GOPROXY=https://goproxy.cn,direct
+
+    - name: Verify Go installation
+      run: go version
+
+    - name: Install DERPER
+      run: go install tailscale.com/cmd/derper@latest
+
+    - name: Find DERPER module path
+      id: find_path
+      run: |
+        DERPER_MODULE_PATH=$(find $(go env GOPATH)/pkg/mod -type d -path "*/tailscale.com@*/cmd/derper" | head -n 1)
+        echo "DERPER_MODULE_PATH=$DERPER_MODULE_PATH" >> $GITHUB_ENV
+
+    - name: Modify cert.go to disable domain verification
+      run: |
+        CERT_GO_FILE="$DERPER_MODULE_PATH/cert.go"
+        if [ -f "$CERT_GO_FILE" ]; then
+          sed -i '/if hi.ServerName != m.hostname {/i \ \ \ \ \ \ \ \ // ' "$CERT_GO_FILE"
+          sed -i '/if hi.ServerName != m.hostname {/a \ \ \ \ \ \ \ \ //' "$CERT_GO_FILE"
+          sed -i '/if hi.ServerName != m.hostname {/a \ \ \ \ \ \ \ \ //' "$CERT_GO_FILE"
+        else
+          echo "cert.go not found at $CERT_GO_FILE"
+          exit 1
+        fi
+
+    - name: Build DERPER
+      run: |
+        cd "$DERPER_MODULE_PATH"
+        mkdir -p /tmp/derp_build
+        go build -o /tmp/derp_build/derper
+
+    - name: Check build result
+      run: |
+        ls -l /tmp/derp_build
+        file /tmp/derp_build/derper
+
+    - name: Upload DERPER binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: derper
+        path: /tmp/derp_build/derper
