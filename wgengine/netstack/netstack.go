@@ -11,6 +11,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/netip"
@@ -990,6 +991,15 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 			return true
 		}
 	}
+	if ns.lb != nil && p.IPProto == ipproto.UDP && isLocal {
+		log.Printf("TEST: got a a UDP packet")
+		if ns.lb.ShouldInterceptUDPPort(p.Dst.Port()) {
+			log.Printf("UDP packet should be intercepted")
+			return true
+		} else {
+			log.Printf("UDP packet should not be intercepted")
+		}
+	}
 	if p.IPVersion == 6 && !isLocal && viaRange.Contains(dstIP) {
 		return ns.lb != nil && ns.lb.ShouldHandleViaIP(dstIP)
 	}
@@ -1503,6 +1513,16 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 		default:
 			ep.Close()
 			return // Only MagicDNS and loopback traffic runs on the service IPs for now.
+		}
+	}
+
+	if ns.lb != nil {
+		log.Printf("checking for a UDP handler for %v -> %v", srcAddr, dstAddr)
+		handler := ns.lb.UDPHandlerForDst(srcAddr, dstAddr)
+		if handler != nil {
+			log.Printf("got a UDP handler for %v -> %v", srcAddr, dstAddr)
+			handler(gonet.NewUDPConn(&wq, ep))
+			return
 		}
 	}
 

@@ -52,6 +52,10 @@ type ServeConfig struct {
 	// keyed by mount point ("/", "/foo", etc)
 	Web map[HostPort]*WebServerConfig `json:",omitempty"`
 
+	// UDP are the list of UDP port numbers that tailscaled should handle for
+	// the Tailscale IP addresses. (not subnet routers, etc)
+	UDP map[uint16]*UDPPortHandler `json:",omitempty"`
+
 	// Services maps from service name to a ServiceConfig. Which describes the
 	// L3, L4, and L7 forwarding information for the service.
 	Services map[string]*ServiceConfig `json:",omitempty"`
@@ -146,6 +150,22 @@ type TCPPortHandler struct {
 	// SNI name with this value. It is only used if TCPForward is non-empty.
 	// (the HTTPS mode uses ServeConfig.Web)
 	TerminateTLS string `json:",omitempty"`
+}
+
+type UDPPortHandler struct {
+	// HTTPS, if true, means that tailscaled should handle this connection as an
+	// HTTPS request as configured by ServeConfig.Web.
+	//
+	// It is mutually exclusive with TCPForward.
+	HTTPS bool `json:",omitempty"`
+
+	// HTTP, if true, means that tailscaled should handle this connection as an
+	// HTTP request as configured by ServeConfig.Web.
+	//
+	// It is mutually exclusive with TCPForward.
+	HTTP bool `json:",omitempty"`
+	// UDPForward is the IP:port to forward UDP connections to.
+	UDPForward string `json:",omitempty"`
 }
 
 // HTTPHandler is either a path or a proxy to serve.
@@ -585,6 +605,27 @@ func (v ServeConfigView) RangeOverTCPs(f func(port uint16, _ TCPPortHandlerView)
 	})
 }
 
+// RangeOverTCPs ranges over both background and foreground TCPs.
+// If the returned bool from the given f is false, then this function stops
+// iterating immediately and does not check other foreground configs.
+func (v ServeConfigView) RangeOverUDPs(f func(port uint16, _ UDPPortHandlerView) bool) {
+	parentCont := true
+	v.UDP().Range(func(k uint16, v UDPPortHandlerView) (cont bool) {
+		parentCont = f(k, v)
+		return parentCont
+	})
+	v.Foreground().Range(func(k string, v ServeConfigView) (cont bool) {
+		if !parentCont {
+			return false
+		}
+		v.UDP().Range(func(k uint16, v UDPPortHandlerView) (cont bool) {
+			parentCont = f(k, v)
+			return parentCont
+		})
+		return parentCont
+	})
+}
+
 // RangeOverWebs ranges over both background and foreground Webs.
 // If the returned bool from the given f is false, then this function stops
 // iterating immediately and does not check other foreground configs.
@@ -618,6 +659,20 @@ func (v ServeConfigView) FindTCP(port uint16) (res TCPPortHandlerView, ok bool) 
 		return res, ok
 	}
 	return v.TCP().GetOk(port)
+}
+
+// FindTCP returns the first TCP that matches with the given port. It
+// prefers a foreground match first followed by a background search if none
+// existed.
+func (v ServeConfigView) FindUDP(port uint16) (res UDPPortHandlerView, ok bool) {
+	v.Foreground().Range(func(_ string, v ServeConfigView) (cont bool) {
+		res, ok = v.UDP().GetOk(port)
+		return !ok
+	})
+	if ok {
+		return res, ok
+	}
+	return v.UDP().GetOk(port)
 }
 
 // FindWeb returns the first Web that matches with the given HostPort. It

@@ -18,7 +18,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,WebServerConfig
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,WebServerConfig,UDPPortHandler
 
 // View returns a readonly view of Prefs.
 func (p *Prefs) View() PrefsView {
@@ -195,6 +195,12 @@ func (v ServeConfigView) Web() views.MapFn[HostPort, *WebServerConfig, WebServer
 	})
 }
 
+func (v ServeConfigView) UDP() views.MapFn[uint16, *UDPPortHandler, UDPPortHandlerView] {
+	return views.MapFnOf(v.ж.UDP, func(t *UDPPortHandler) UDPPortHandlerView {
+		return t.View()
+	})
+}
+
 func (v ServeConfigView) Services() views.MapFn[string, *ServiceConfig, ServiceConfigView] {
 	return views.MapFnOf(v.ж.Services, func(t *ServiceConfig) ServiceConfigView {
 		return t.View()
@@ -216,6 +222,7 @@ func (v ServeConfigView) ETag() string { return v.ж.ETag }
 var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
 	TCP         map[uint16]*TCPPortHandler
 	Web         map[HostPort]*WebServerConfig
+	UDP         map[uint16]*UDPPortHandler
 	Services    map[string]*ServiceConfig
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
@@ -455,4 +462,60 @@ func (v WebServerConfigView) Handlers() views.MapFn[string, *HTTPHandler, HTTPHa
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _WebServerConfigViewNeedsRegeneration = WebServerConfig(struct {
 	Handlers map[string]*HTTPHandler
+}{})
+
+// View returns a readonly view of UDPPortHandler.
+func (p *UDPPortHandler) View() UDPPortHandlerView {
+	return UDPPortHandlerView{ж: p}
+}
+
+// UDPPortHandlerView provides a read-only view over UDPPortHandler.
+//
+// Its methods should only be called if `Valid()` returns true.
+type UDPPortHandlerView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *UDPPortHandler
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v UDPPortHandlerView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v UDPPortHandlerView) AsStruct() *UDPPortHandler {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v UDPPortHandlerView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *UDPPortHandlerView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x UDPPortHandler
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v UDPPortHandlerView) HTTPS() bool        { return v.ж.HTTPS }
+func (v UDPPortHandlerView) HTTP() bool         { return v.ж.HTTP }
+func (v UDPPortHandlerView) UDPForward() string { return v.ж.UDPForward }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _UDPPortHandlerViewNeedsRegeneration = UDPPortHandler(struct {
+	HTTPS      bool
+	HTTP       bool
+	UDPForward string
 }{})

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -85,12 +86,13 @@ type localListener struct {
 	cancel context.CancelFunc // for ctx, to close listener
 	logf   logger.Logf
 	bo     *backoff.Backoff // for retrying failed Listen calls
+	proto  string
 
 	handler       func(net.Conn) error            // handler for inbound connections
 	closeListener syncs.AtomicValue[func() error] // Listener's Close method, if any
 }
 
-func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, logf logger.Logf) *localListener {
+func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, logf logger.Logf, proto string) *localListener {
 	ctx, cancel := context.WithCancel(ctx)
 	return &localListener{
 		b:      b,
@@ -98,6 +100,7 @@ func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, 
 		ctx:    ctx,
 		cancel: cancel,
 		logf:   logf,
+		proto:  proto,
 
 		handler: func(conn net.Conn) error {
 			srcAddr := conn.RemoteAddr().(*net.TCPAddr).AddrPort()
@@ -155,9 +158,9 @@ func (s *localListener) Run() {
 			}
 		}
 
-		tcp4or6 := "tcp4"
+		network := fmt.Sprintf("%s4", s.proto)
 		if ip.Is6() {
-			tcp4or6 = "tcp6"
+			network = fmt.Sprintf("%s6", s.proto)
 		}
 
 		// while we were backing off and trying again, the context got canceled
@@ -168,7 +171,7 @@ func (s *localListener) Run() {
 			return
 		}
 
-		ln, err := lc.Listen(s.ctx, tcp4or6, net.JoinHostPort(ipStr, fmt.Sprint(s.ap.Port())))
+		ln, err := lc.Listen(s.ctx, network, net.JoinHostPort(ipStr, fmt.Sprint(s.ap.Port())))
 		if err != nil {
 			if s.shouldWarnAboutListenError(err) {
 				s.logf("localListener failed to listen on %v, backing off: %v", s.ap, err)
@@ -178,7 +181,7 @@ func (s *localListener) Run() {
 		}
 		s.closeListener.Store(ln.Close)
 
-		s.logf("listening on %v", s.ap)
+		s.logf("listening on %v proto %v", s.ap, network)
 		err = s.handleListenersAccept(ln)
 		if s.ctx.Err() != nil {
 			// context canceled, we're done
@@ -218,9 +221,10 @@ func (s *localListener) handleListenersAccept(ln net.Listener) error {
 // updateServeTCPPortNetMapAddrListenersLocked starts a net.Listen for configured
 // Serve ports on all the node's addresses.
 // Existing Listeners are closed if port no longer in incoming ports list.
+// TODO: different name or different function for UDP.
 //
 // b.mu must be held.
-func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint16) {
+func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint16, proto string) {
 	// close existing listeners where port
 	// is no longer in incoming ports list
 	for ap, sl := range b.serveListeners {
@@ -249,7 +253,7 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 				continue // already listening
 			}
 
-			sl := b.newServeListener(context.Background(), addrPort, b.logf)
+			sl := b.newServeListener(context.Background(), addrPort, b.logf, proto)
 			mak.Set(&b.serveListeners, addrPort, sl)
 
 			go sl.Run()
@@ -416,6 +420,7 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 			return
 		}
 	}
+	log.Printf("TEST: line 420 HandleIngressTCPConn")
 	handler := b.tcpHandlerForServe(dport, srcAddr, &funnelFlow{
 		Host:        host,
 		IngressPeer: ingressPeer,
@@ -425,12 +430,59 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 		sendRST()
 		return
 	}
+	log.Printf("TEST: line 430 HandleIngressTCPConn")
 	c, ok := getConnOrReset()
 	if !ok {
 		logf("getConn didn't complete from %v to port %v", srcAddr, dport)
 		return
 	}
 	handler(c)
+}
+
+func (b *LocalBackend) udpHandlerForServe(dport uint16, srcAddr netip.AddrPort) (handler func(net.Conn) error) {
+	log.Printf("UDP Forward with dport %v srcAddr %v", dport, srcAddr)
+	b.mu.Lock()
+	sc := b.serveConfig
+	b.mu.Unlock()
+
+	if !sc.Valid() {
+		return nil
+	}
+
+	udph, ok := sc.FindUDP(dport)
+	if !ok {
+		log.Printf("UDP Forward  port not found")
+		return nil
+	}
+	log.Printf("UDP Forward  port found")
+	if backDst := udph.UDPForward(); backDst != "" {
+		log.Printf("UDP Forward  backend dst found %v", backDst)
+		return func(conn net.Conn) error {
+			defer conn.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			backConn, err := b.dialer.SystemDial(ctx, "udp", backDst)
+			cancel()
+			if err != nil {
+				b.logf("localbackend: failed to UDP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				return nil
+			}
+			defer backConn.Close()
+
+			// TODO(bradfitz): do the RegisterIPPortIdentity and
+			// UnregisterIPPortIdentity stuff that netstack does
+			errc := make(chan error, 1)
+			go func() {
+				_, err := io.Copy(backConn, conn)
+				errc <- err
+			}()
+			go func() {
+				_, err := io.Copy(conn, backConn)
+				errc <- err
+			}()
+			return <-errc
+		}
+	}
+	return nil
 }
 
 // tcpHandlerForServe returns a handler for a TCP connection to be served via
