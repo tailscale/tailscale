@@ -115,7 +115,7 @@ func (b *LocalBackend) handleWebClientConn(c net.Conn) error {
 // updateWebClientListenersLocked creates listeners on the web client port (5252)
 // for each of the local device's Tailscale IP addresses. This is needed to properly
 // route local traffic when using kernel networking mode.
-func (b *LocalBackend) updateWebClientListenersLocked() {
+func (b *LocalBackend) updateWebClientListenersLocked(vipSvc map[string][]uint16) {
 	if b.netMap == nil {
 		return
 	}
@@ -131,6 +131,24 @@ func (b *LocalBackend) updateWebClientListenersLocked() {
 		mak.Set(&b.webClientListeners, addrPort, sl)
 
 		go sl.Run()
+	}
+
+	vipServiceHI := b.netMap.GetVIPServiceHostInfo()
+	for svcName, addrs := range vipServiceHI {
+		if svcCfg, ok := b.serveConfig.Services().GetOk(svcName); ok && svcCfg.Web().Len() > 0 {
+			vipSvc[svcName] = append(vipSvc[svcName], webClientPort)
+			for _, addr := range addrs {
+				addrPort := netip.AddrPortFrom(addr, webClientPort)
+				if _, ok := b.webClientListeners[addrPort]; ok {
+					continue // already listening
+				}
+
+				sl := b.newWebClientListener(context.Background(), addrPort, b.logf)
+				mak.Set(&b.webClientListeners, addrPort, sl)
+
+				go sl.Run()
+			}
+		}
 	}
 }
 

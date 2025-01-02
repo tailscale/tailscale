@@ -101,6 +101,24 @@ func (nm *NetworkMap) GetAddresses() views.Slice[netip.Prefix] {
 	return nm.SelfNode.Addresses()
 }
 
+type ServiceHostInfo map[string][]netip.Addr
+
+func (nm *NetworkMap) GetVIPServiceHostInfo() ServiceHostInfo {
+	var zero ServiceHostInfo
+	if !nm.SelfNode.Valid() {
+		return zero
+	}
+
+	ipMaps, err := tailcfg.UnmarshalNodeCapJSON[ServiceHostInfo](nm.SelfNode.AsStruct().CapMap, tailcfg.CapabilityVIPServiceDestinations)
+	if err != nil {
+		return zero
+	}
+
+	// There should only be one entry in the slice.
+	serviceHostInfo := ipMaps[0]
+	return serviceHostInfo
+}
+
 // AnyPeersAdvertiseRoutes reports whether any peer is advertising non-exit node routes.
 func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
 	for _, p := range nm.Peers {

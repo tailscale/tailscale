@@ -3291,10 +3291,7 @@ func (b *LocalBackend) clearMachineKeyLocked() error {
 	return nil
 }
 
-// setTCPPortsIntercepted populates b.shouldInterceptTCPPortAtomic with an
-// efficient func for ShouldInterceptTCPPort to use, which is called on every
-// incoming packet.
-func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
+func generateShouldInterceptTCPPortFunc(ports []uint16) func(uint16) bool {
 	slices.Sort(ports)
 	uniq.ModifySlice(&ports)
 	var f func(uint16) bool
@@ -3325,6 +3322,14 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 			}
 		}
 	}
+	return f
+}
+
+// setTCPPortsIntercepted populates b.shouldInterceptTCPPortAtomic with an
+// efficient func for ShouldInterceptTCPPort to use, which is called on every
+// incoming packet.
+func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16, svcPorts map[string][]uint16) {
+
 	b.shouldInterceptTCPPortAtomic.Store(f)
 }
 
@@ -4965,14 +4970,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 		}
 	}
 	hi.SSH_HostKeys = sshHostKeys
-
-	services := vipServicesFromPrefs(prefs)
-	if len(services) > 0 {
-		buf, _ := json.Marshal(services)
-		hi.ServicesHash = fmt.Sprintf("%02x", sha256.Sum256(buf))
-	} else {
-		hi.ServicesHash = ""
-	}
+	hi.ServicesHash = b.vipServiceHashLocked(prefs)
 
 	// The Hostinfo.WantIngress field tells control whether this node wants to
 	// be wired up for ingress connections. If harmless if it's accidentally
@@ -5868,6 +5866,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 // b.mu must be held.
 func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.PrefsView) {
 	handlePorts := make([]uint16, 0, 4)
+	vipServicesPorts := make(map[string][]uint16)
 
 	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
 		handlePorts = append(handlePorts, 22)
@@ -5877,7 +5876,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 
 		// don't listen on netmap addresses if we're in userspace mode
 		if !b.sys.IsNetstack() {
-			b.updateWebClientListenersLocked()
+			b.updateWebClientListenersLocked(vipServicesPorts)
 		}
 	}
 
@@ -5892,21 +5891,50 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		})
 		handlePorts = append(handlePorts, servePorts...)
 
+		b.serveConfig.Services().Range(func(s string, v ipn.ServiceConfigView) bool {
+			servicePorts := make([]uint16, 0, 3)
+			v.RangeOverTCPs(func(port uint16, _ ipn.TCPPortHandlerView) bool {
+				if port > 0 {
+					servicePorts = append(servicePorts, uint16(port))
+				}
+				return true
+			})
+			if _, ok := vipServicesPorts[s]; !ok {
+				vipServicesPorts[s] = servicePorts
+			} else {
+				vipServicesPorts[s] = append(vipServicesPorts[s], servicePorts...)
+			}
+			return true
+		})
+
 		b.setServeProxyHandlersLocked()
 
 		// don't listen on netmap addresses if we're in userspace mode
 		if !b.sys.IsNetstack() {
-			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
+			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts, vipServicesPorts)
 		}
 	}
-	// Kick off a Hostinfo update to control if WireIngress changed.
-	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
-		b.logf("Hostinfo.WireIngress changed to %v", wire)
-		b.hostinfo.WireIngress = wire
+
+	newServicesHash := b.vipServiceHashLocked(prefs)
+	SHchanged := b.hostinfo.ServicesHash != newServicesHash
+
+	// Kick off a Hostinfo update to control if WireIngress changed or service config changed.
+	wire := b.wantIngressLocked()
+
+	WIchanged := b.hostinfo.WireIngress != wire
+	if b.hostinfo != nil && (WIchanged || SHchanged) {
+		if WIchanged {
+			b.logf("Hostinfo.WireIngress changed to %v", wire)
+			b.hostinfo.WireIngress = wire
+		}
+		if SHchanged {
+			b.logf("Hostinfo.ServicesHash changed to %v", newServicesHash)
+			b.hostinfo.ServicesHash = newServicesHash
+		}
 		go b.doSetHostinfoFilterServices()
 	}
 
-	b.setTCPPortsIntercepted(handlePorts)
+	b.setTCPPortsIntercepted(handlePorts, vipServicesPorts)
 }
 
 // setServeProxyHandlersLocked ensures there is an http proxy handler for each
@@ -7592,26 +7620,38 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 func (b *LocalBackend) VIPServices() []*tailcfg.VIPService {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return vipServicesFromPrefs(b.pm.CurrentPrefs())
+	return b.vipServicesFromPrefsLocked(b.pm.CurrentPrefs())
 }
 
-func vipServicesFromPrefs(prefs ipn.PrefsView) []*tailcfg.VIPService {
+func (b *LocalBackend) vipServiceHashLocked(prefs ipn.PrefsView) string {
+	services := b.vipServicesFromPrefsLocked(prefs)
+	var servicesHash string
+	if len(services) > 0 {
+		buf, _ := json.Marshal(services)
+		servicesHash = fmt.Sprintf("%02x", sha256.Sum256(buf))
+	} else {
+		servicesHash = ""
+	}
+	return servicesHash
+}
+
+func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	// keyed by service name
 	var services map[string]*tailcfg.VIPService
 
-	// TODO(naman): this envknob will be replaced with service-specific port
-	// information once we start storing that.
-	var allPortsServices []string
-	if env := envknob.String("TS_DEBUG_ALLPORTS_SERVICES"); env != "" {
-		allPortsServices = strings.Split(env, ",")
+	if !b.serveConfig.Valid() {
+		return nil
 	}
 
-	for _, s := range allPortsServices {
-		mak.Set(&services, s, &tailcfg.VIPService{
-			Name:  s,
-			Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+	allPortsServices := b.serveConfig.Services()
+
+	allPortsServices.Range(func(n string, s ipn.ServiceConfigView) bool {
+		mak.Set(&services, n, &tailcfg.VIPService{
+			Name:  n,
+			Ports: s.ServicePortRange(),
 		})
-	}
+		return true
+	})
 
 	for _, s := range prefs.AdvertiseServices().AsSlice() {
 		if services == nil || services[s] == nil {

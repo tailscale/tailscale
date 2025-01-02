@@ -220,31 +220,29 @@ func (s *localListener) handleListenersAccept(ln net.Listener) error {
 // Existing Listeners are closed if port no longer in incoming ports list.
 //
 // b.mu must be held.
-func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint16) {
-	// close existing listeners where port
-	// is no longer in incoming ports list
-	for ap, sl := range b.serveListeners {
-		if !slices.Contains(ports, ap.Port()) {
+func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint16, vipPorts map[string][]uint16) {
+	nm := b.netMap
+	if nm == nil {
+		b.logf("netMap is nil")
+	}
+	if !nm.SelfNode.Valid() {
+		b.logf("netMap SelfNode is nil")
+	}
+	if nm == nil || !nm.SelfNode.Valid() {
+		for ap, sl := range b.serveListeners {
 			b.logf("closing listener %v", ap)
 			sl.Close()
 			delete(b.serveListeners, ap)
 		}
-	}
-
-	nm := b.netMap
-	if nm == nil {
-		b.logf("netMap is nil")
-		return
-	}
-	if !nm.SelfNode.Valid() {
-		b.logf("netMap SelfNode is nil")
 		return
 	}
 
+	currentAPs := make([]netip.AddrPort, 0, 10)
 	addrs := nm.GetAddresses()
 	for _, a := range addrs.All() {
 		for _, p := range ports {
 			addrPort := netip.AddrPortFrom(a.Addr(), p)
+			currentAPs = append(currentAPs, addrPort)
 			if _, ok := b.serveListeners[addrPort]; ok {
 				continue // already listening
 			}
@@ -253,6 +251,34 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 			mak.Set(&b.serveListeners, addrPort, sl)
 
 			go sl.Run()
+		}
+	}
+	vipAddrs := nm.GetVIPServiceHostInfo()
+	for svc, addrs := range vipAddrs {
+		if _, ok := vipPorts[svc]; !ok {
+			continue
+		}
+		for _, addr := range addrs {
+			for _, p := range vipPorts[svc] {
+				addrPort := netip.AddrPortFrom(addr, p)
+				currentAPs = append(currentAPs, addrPort)
+				if _, ok := b.serveListeners[addrPort]; ok {
+					continue // already listening
+				}
+
+				sl := b.newServeListener(context.Background(), addrPort, b.logf)
+				mak.Set(&b.serveListeners, addrPort, sl)
+
+				go sl.Run()
+			}
+		}
+	}
+
+	for ap, sl := range b.serveListeners {
+		if !slices.Contains(currentAPs, ap) {
+			b.logf("closing listener %v", ap)
+			sl.Close()
+			delete(b.serveListeners, ap)
 		}
 	}
 }
