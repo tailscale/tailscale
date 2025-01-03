@@ -27,6 +27,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/version"
 )
 
@@ -707,10 +708,7 @@ func (e *serveEnv) printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) erro
 		return "", ""
 	}
 
-	var mounts []string
-	for k := range sc.Web[hp].Handlers {
-		mounts = append(mounts, k)
-	}
+	mounts := slicesx.MapKeys(sc.Web[hp].Handlers)
 	sort.Slice(mounts, func(i, j int) bool {
 		return len(mounts[i]) < len(mounts[j])
 	})

@@ -11,6 +11,7 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/setting"
 )
@@ -418,7 +419,7 @@ func (s *TestStore) NotifyPolicyChanged() {
 		s.mu.RUnlock()
 		return
 	}
-	cbs := xmaps.Values(s.cbs)
+	cbs := slicesx.MapValues(s.cbs)
 	s.mu.RUnlock()
 
 	var wg sync.WaitGroup

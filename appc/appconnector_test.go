@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc/appctest"
 	"tailscale.com/tstest"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
+	"tailscale.com/util/slicesx"
 )
 
 func fakeStoreRoutes(*RouteInfo) error { return nil }
@@ -50,7 +50,7 @@ func TestUpdateDomains(t *testing.T) {
 		// domains are explicitly downcased on set.
 		a.UpdateDomains([]string{"UP.EXAMPLE.COM"})
 		a.Wait(ctx)
-		if got, want := xmaps.Keys(a.domains), []string{"up.example.com"}; !slices.Equal(got, want) {
+		if got, want := slicesx.MapKeys(a.domains), []string{"up.example.com"}; !slices.Equal(got, want) {
 			t.Errorf("got %v; want %v", got, want)
 		}
 	}

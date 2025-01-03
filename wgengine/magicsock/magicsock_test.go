@@ -33,7 +33,6 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
-	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"tailscale.com/cmd/testwrapper/flakytest"
@@ -66,6 +65,7 @@ import (
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/set"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -1133,7 +1133,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 			}
 		}
 		t.Helper()
-		t.Errorf("missing any connection to %s from %s", wantConns, xmaps.Keys(stats))
+		t.Errorf("missing any connection to %s from %s", wantConns, slicesx.MapKeys(stats))
 	}
 
 	addrPort := netip.MustParseAddrPort

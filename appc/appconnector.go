@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -291,11 +290,11 @@ func (e *AppConnector) updateDomains(domains []string) {
 			}
 		}
 		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-			e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", xmaps.Keys(oldDomains), toRemove, err)
+			e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
 		}
 	}
 
-	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
+	e.logf("handling domains: %v and wildcards: %v", slicesx.MapKeys(e.domains), e.wildcards)
 }
 
 // updateRoutes merges the supplied routes into the currently configured routes. The routes supplied
@@ -354,7 +353,7 @@ func (e *AppConnector) Domains() views.Slice[string] {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	return views.SliceOf(xmaps.Keys(e.domains))
+	return views.SliceOf(slicesx.MapKeys(e.domains))
 }
 
 // DomainRoutes returns a map of domains to resolved IP

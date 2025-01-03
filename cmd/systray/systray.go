@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +30,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/util/stringsx"
 )
 
@@ -616,7 +616,7 @@ type mullvadPeers struct {
 
 // sortedCountries returns countries containing mullvad nodes, sorted by name.
 func (mp mullvadPeers) sortedCountries() []*mvCountry {
-	countries := slices.Collect(maps.Values(mp.countries))
+	countries := slicesx.MapValues(mp.countries)
 	slices.SortFunc(countries, func(a, b *mvCountry) int {
 		return stringsx.CompareFold(a.name, b.name)
 	})
@@ -632,7 +632,7 @@ type mvCountry struct {
 
 // sortedCities returns cities containing mullvad nodes, sorted by name.
 func (mc *mvCountry) sortedCities() []*mvCity {
-	cities := slices.Collect(maps.Values(mc.cities))
+	cities := slicesx.MapValues(mc.cities)
 	slices.SortFunc(cities, func(a, b *mvCity) int {
 		return stringsx.CompareFold(a.name, b.name)
 	})
