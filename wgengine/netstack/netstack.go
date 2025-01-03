@@ -621,7 +621,9 @@ var v4broadcast = netaddr.IPv4(255, 255, 255, 255)
 func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	var selfNode tailcfg.NodeView
 	if nm != nil {
-		ns.atomicIsLocalIPFunc.Store(ipset.NewContainsIPFunc(nm.GetAddresses()))
+		localAddrs := nm.GetAddresses()
+		// Todo (Kevin Liang): add the VIP service prefixes to the localAddrs.
+		ns.atomicIsLocalIPFunc.Store(ipset.NewContainsIPFunc(localAddrs))
 		selfNode = nm.SelfNode
 	} else {
 		ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())

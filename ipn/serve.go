@@ -10,11 +10,13 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/util/mak"
 )
 
@@ -604,6 +606,16 @@ func (v ServeConfigView) RangeOverWebs(f func(_ HostPort, conf WebServerConfigVi
 		})
 		return parentCont
 	})
+	v.Services().Range(func(k string, v ServiceConfigView) (cont bool) {
+		if !parentCont {
+			return false
+		}
+		v.Web().Range(func(k HostPort, v WebServerConfigView) (cont bool) {
+			parentCont = f(k, v)
+			return parentCont
+		})
+		return parentCont
+	})
 }
 
 // FindTCP returns the first TCP that matches with the given port. It
@@ -661,4 +673,49 @@ func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
 		return true
 	})
 	return exists
+}
+
+// ServicePortRange returns the list of tailcfg.ProtoPortRange that represents
+// the TCP ports that are being served by the service.
+func (v ServiceConfigView) ServicePortRange() []tailcfg.ProtoPortRange {
+	tcp := int(ipproto.TCP)
+
+	// Deduplicate the ports.
+	servePorts := make(map[uint16]struct{})
+	v.TCP().Range(func(port uint16, _ TCPPortHandlerView) bool {
+		if port > 0 {
+			servePorts[uint16(port)] = struct{}{}
+		}
+		return true
+	})
+	dedupedServePorts := make([]uint16, 0, len(servePorts))
+	for port := range servePorts {
+		dedupedServePorts = append(dedupedServePorts, port)
+	}
+
+	// Sort the ports.
+	sort.Slice(dedupedServePorts, func(i, j int) bool {
+		return dedupedServePorts[i] < dedupedServePorts[j]
+	})
+
+	// Create the port ranges.
+	ranges := make([]tailcfg.ProtoPortRange, 0, 10)
+	start, end := dedupedServePorts[0], dedupedServePorts[0]
+	for i := 1; i < len(dedupedServePorts); i++ {
+		if dedupedServePorts[i] == end+1 {
+			end = dedupedServePorts[i]
+		} else {
+			ranges = append(ranges, tailcfg.ProtoPortRange{Proto: tcp, Ports: tailcfg.PortRange{First: start, Last: end}})
+			start, end = dedupedServePorts[i], dedupedServePorts[i]
+		}
+	}
+	// append last range.
+	ranges = append(ranges, tailcfg.ProtoPortRange{Proto: tcp, Ports: tailcfg.PortRange{First: start, Last: end}})
+	return ranges
+}
+
+func (v ServiceConfigView) RangeOverTCPs(f func(port uint16, _ TCPPortHandlerView) bool) {
+	v.TCP().Range(func(k uint16, v TCPPortHandlerView) (cont bool) {
+		return f(k, v)
+	})
 }

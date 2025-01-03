@@ -2243,6 +2243,8 @@ const (
 	// e.g. https://tailscale.com/cap/funnel-ports?ports=80,443,8080-8090
 	CapabilityFunnelPorts NodeCapability = "https://tailscale.com/cap/funnel-ports"
 
+	CapabilityVIPServiceDestinations NodeCapability = "https://dev.example.com/cap/vip-service-destinations"
+
 	// NodeAttrOnlyTCP443 specifies that the client should not attempt to generate
 	// any outbound traffic that isn't TCP on port 443 (HTTPS). This is used for
 	// clients in restricted environments where only HTTPS traffic is allowed
