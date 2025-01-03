@@ -15,10 +15,10 @@ import (
 
 	"github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/slicesx"
 )
 
 func exitNodeCmd() *ffcli.Command {
@@ -255,7 +255,7 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 	}
 
 	filteredExitNodes := filteredExitNodes{
-		Countries: xmaps.Values(countries),
+		Countries: slicesx.MapValues(countries),
 	}
 
 	for _, country := range filteredExitNodes.Countries {

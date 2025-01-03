@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	xmaps "golang.org/x/exp/maps"
+	"tailscale.com/util/slicesx"
 )
 
 func TestLRU(t *testing.T) {
@@ -75,7 +75,7 @@ func TestStressEvictions(t *testing.T) {
 	for len(vm) < numKeys {
 		vm[rand.Uint64()] = true
 	}
-	vals := xmaps.Keys(vm)
+	vals := slicesx.MapKeys(vm)
 
 	c := Cache[uint64, bool]{
 		MaxEntries: cacheSize,
@@ -106,7 +106,7 @@ func TestStressBatchedEvictions(t *testing.T) {
 	for len(vm) < numKeys {
 		vm[rand.Uint64()] = true
 	}
-	vals := xmaps.Keys(vm)
+	vals := slicesx.MapKeys(vm)
 
 	c := Cache[uint64, bool]{}
 
