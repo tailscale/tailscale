@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"tailscale.com/taildrop"
 	"time"
 	"unicode/utf8"
 
@@ -129,6 +130,7 @@ func runCp(ctx context.Context, args []string) error {
 		var name = cpArgs.name
 		var contentLength int64 = -1
 		if fileArg == "-" {
+			// sending stdin as single file
 			fileContents = &countingReader{Reader: os.Stdin}
 			if name == "" {
 				name, fileContents, err = pickStdinFilename()
@@ -150,16 +152,28 @@ func runCp(ctx context.Context, args []string) error {
 				return err
 			}
 			if fi.IsDir() {
-				return errors.New("directories not supported")
-			}
-			contentLength = fi.Size()
-			fileContents = &countingReader{Reader: io.LimitReader(f, contentLength)}
-			if name == "" {
-				name = filepath.Base(fileArg)
-			}
+				// sending a directory
+				// compress it into a <dir-name>.tscompresseddir TAR archive to send
+				dirReader, err := taildrop.GetCompressedDirReader(fileArg)
+				if err != nil {
+					return err
+				}
+				fileContents = &countingReader{Reader: dirReader}
+				if name == "" {
+					name = filepath.Base(fileArg)
+				}
+				name += taildrop.CompressedDirSuffix
+			} else {
+				// sending a single file
+				contentLength = fi.Size()
+				fileContents = &countingReader{Reader: io.LimitReader(f, contentLength)}
+				if name == "" {
+					name = filepath.Base(fileArg)
+				}
 
-			if envknob.Bool("TS_DEBUG_SLOW_PUSH") {
-				fileContents = &countingReader{Reader: &slowReader{r: fileContents}}
+				if envknob.Bool("TS_DEBUG_SLOW_PUSH") {
+					fileContents = &countingReader{Reader: &slowReader{r: fileContents}}
+				}
 			}
 		}
 
@@ -188,6 +202,9 @@ func runCp(ctx context.Context, args []string) error {
 }
 
 func progressPrinter(ctx context.Context, name string, contentCount func() int64, contentLength int64) {
+	// remove internal suffixes from name
+	name = strings.TrimSuffix(name, taildrop.CompressedDirSuffix)
+
 	var rateValueFast, rateValueSlow tsrate.Value
 	rateValueFast.HalfLife = 1 * time.Second  // fast response for rate measurement
 	rateValueSlow.HalfLife = 10 * time.Second // slow response for ETA measurement
@@ -486,20 +503,29 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targe
 		return "", 0, fmt.Errorf("opening inbox file %q: %w", wf.Name, err)
 	}
 	defer rc.Close()
-	f, err := openFileOrSubstitute(dir, wf.Name, getArgs.conflict)
-	if err != nil {
-		return "", 0, err
+	if strings.HasSuffix(wf.Name, taildrop.CompressedDirSuffix) {
+		// receiving a directory
+		if err := taildrop.ExtractCompressedDir(rc, dir, getArgs.conflict.String()); err != nil {
+			return "", 0, err
+		}
+		return wf.Name, size, nil
+	} else {
+		// receiving a single file
+		f, err := openFileOrSubstitute(dir, wf.Name, getArgs.conflict)
+		if err != nil {
+			return "", 0, err
+		}
+		// Apply quarantine attribute before copying
+		if err := quarantine.SetOnFile(f); err != nil {
+			return "", 0, fmt.Errorf("failed to apply quarantine attribute to file %v: %v", f.Name(), err)
+		}
+		_, err = io.Copy(f, rc)
+		if err != nil {
+			f.Close()
+			return "", 0, fmt.Errorf("failed to write %v: %v", f.Name(), err)
+		}
+		return f.Name(), size, f.Close()
 	}
-	// Apply quarantine attribute before copying
-	if err := quarantine.SetOnFile(f); err != nil {
-		return "", 0, fmt.Errorf("failed to apply quarantine attribute to file %v: %v", f.Name(), err)
-	}
-	_, err = io.Copy(f, rc)
-	if err != nil {
-		f.Close()
-		return "", 0, fmt.Errorf("failed to write %v: %v", f.Name(), err)
-	}
-	return f.Name(), size, f.Close()
 }
 
 func runFileGetOneBatch(ctx context.Context, dir string) []error {
