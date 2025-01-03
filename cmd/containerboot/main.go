@@ -191,17 +191,18 @@ func main() {
 	defer killTailscaled()
 
 	var healthCheck *healthz
+	ep := &egressProxy{}
 	if cfg.HealthCheckAddrPort != "" {
 		mux := http.NewServeMux()
 
 		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
-		healthCheck = healthHandlers(mux)
+		healthCheck = healthHandlers(mux, cfg.PodIPv4)
 
 		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
 		defer close()
 	}
 
-	if cfg.localMetricsEnabled() || cfg.localHealthEnabled() {
+	if cfg.localMetricsEnabled() || cfg.localHealthEnabled() || cfg.egressSvcsTerminateEPEnabled() {
 		mux := http.NewServeMux()
 
 		if cfg.localMetricsEnabled() {
@@ -211,7 +212,11 @@ func main() {
 
 		if cfg.localHealthEnabled() {
 			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
-			healthCheck = healthHandlers(mux)
+			healthCheck = healthHandlers(mux, cfg.PodIPv4)
+		}
+		if cfg.EgressSvcsCfgPath != "" {
+			log.Printf("Running preshutdown hook at %s/egress-services-terminate", cfg.LocalAddrPort)
+			ep.registerHandlers(mux)
 		}
 
 		close := runHTTPServer(mux, cfg.LocalAddrPort)
@@ -634,15 +639,15 @@ runLoop:
 					if cfg.EgressSvcsCfgPath != "" {
 						log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressSvcsCfgPath)
 						egressSvcsNotify = make(chan ipn.Notify)
-						ep := egressProxy{
-							cfgPath:      cfg.EgressSvcsCfgPath,
-							nfr:          nfr,
-							kc:           kc,
-							stateSecret:  cfg.KubeSecret,
-							netmapChan:   egressSvcsNotify,
-							podIPv4:      cfg.PodIPv4,
-							tailnetAddrs: addrs,
-						}
+						ep.cfgPath = cfg.EgressSvcsCfgPath
+						ep.replicaCountPath = cfg.EgressProxyGroupReplicaCountPath
+						ep.nfr = nfr
+						ep.kc = kc
+						ep.tsClient = client
+						ep.stateSecret = cfg.KubeSecret
+						ep.netmapChan = egressSvcsNotify
+						ep.podIPv4 = cfg.PodIPv4
+						ep.tailnetAddrs = addrs
 						go func() {
 							if err := ep.run(ctx, n); err != nil {
 								egressSvcsErrorChan <- err

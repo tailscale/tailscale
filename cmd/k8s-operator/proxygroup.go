@@ -211,6 +211,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	if err != nil {
 		return fmt.Errorf("error provisioning config Secrets: %w", err)
 	}
+
 	// State secrets are precreated so we can use the ProxyGroup CR as their owner ref.
 	stateSecrets := pgStateSecrets(pg, r.tsNamespace)
 	for _, sec := range stateSecrets {

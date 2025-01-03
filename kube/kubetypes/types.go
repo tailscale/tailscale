@@ -42,4 +42,7 @@ const (
 	// that cluster workloads behind the Ingress can now be accessed via the given DNS name over HTTPS.
 	KeyHTTPSEndpoint string = "https_endpoint"
 	ValueNoHTTPS     string = "no-https"
+
+	// Pod's IPv4 address header key as returned by containerboot health check endpoint.
+	PodIPv4Header string = "Pod-v4-IP"
 )

@@ -11,18 +11,26 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
+	"tailscale.com/kube/kubetypes"
+	"tailscale.com/logtail/backoff"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/util/mak"
 )
@@ -37,12 +45,15 @@ const tailscaleTunInterface = "tailscale0"
 // egressProxy knows how to configure firewall rules to route cluster traffic to
 // one or more tailnet services.
 type egressProxy struct {
-	cfgPath string // path to egress service config file
+	cfgPath          string // path to egress service config file
+	replicaCountPath string // path to a file that holds replica count for this ProxyGroup
 
 	nfr linuxfw.NetfilterRunner // never nil
 
 	kc          kubeclient.Client // never nil
 	stateSecret string            // name of the kube state Secret
+
+	tsClient *tailscale.LocalClient // never nil
 
 	netmapChan chan ipn.Notify // chan to receive netmap updates on
 
@@ -55,8 +66,15 @@ type egressProxy struct {
 	// memory at all.
 	targetFQDNs map[string][]netip.Prefix
 
-	// used to configure firewall rules.
-	tailnetAddrs []netip.Prefix
+	tailnetAddrs []netip.Prefix // tailnet IPs of this tailnet device
+
+	// waitTailnetTargetsReachableOnStart ensures that the proxy only waits for currently configured egress targets
+	// to be reachable once, on start.
+	// TODO(irbekrm): in future we might want to also wait for newly configured targets to become available before
+	// advertising their availability on status. We do, however, want to make sure that we do not repeatedly ping
+	// targets whose reachability was already confirmed, or at least, not with the current aggressive backoff
+	// interval- from my testing that seemed to impact performance for cluster connections.
+	waitTailnetTargetsReachableOnStart sync.Once
 }
 
 // run configures egress proxy firewall rules and ensures that the firewall rules are reconfigured when:
@@ -124,6 +142,23 @@ func (ep *egressProxy) sync(ctx context.Context, n ipn.Notify) error {
 	if err != nil {
 		return fmt.Errorf("error syncing egress service configs: %w", err)
 	}
+
+	// Wait for a bit to ensure tailnet endpoints that this device can proxy to has received netmap update with this
+	// peer's info.
+	// TODO(irbekrm): maybe a received netmap update should cancel the wait for peer connectivity (i.e in case a
+	// target IP has changed). Something to be looked into if we receive reports that this does not perform well in
+	// frequently changing tailnets.
+	ep.waitTailnetTargetsReachableOnStart.Do(func() {
+		if newStatus == nil || len(newStatus.Services) == 0 {
+			log.Printf("proxy has no egress targets configured")
+			return
+		}
+		err = waitTailnetTargetsReachable(ctx, newStatus.Services, ep.tsClient)
+	})
+	if err != nil {
+		return fmt.Errorf("error waiting for initial peer connectivity: %w", err)
+	}
+
 	if !servicesStatusIsEqual(newStatus, status) {
 		if err := ep.setStatus(ctx, newStatus, n); err != nil {
 			return fmt.Errorf("error setting egress proxy status: %w", err)
@@ -211,6 +246,73 @@ func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *e
 	}
 
 	return newStatus, nil
+}
+
+func peerMatchingIP(st *ipnstate.Status, ip netip.Addr) *ipnstate.PeerStatus {
+	for _, ps := range st.Peer {
+		for _, pip := range ps.TailscaleIPs {
+			if ip == pip {
+				return ps
+			}
+		}
+	}
+	return nil
+}
+
+// waitForPeerConnectivity is a best effort attempt to wait for all peers that are tailnet endpoints reachable via this
+// proxy to become reachable (i.e netmap updates with this node's tailnet IP have been propagated).
+// It attempts to ensure that cluster workloads do not attempt to reach tailnet targets that CAN be reached via this
+// proxy before it can talk to them. It DOES NOT attempt to ensure that all tailnet target specified can be reached (but
+// does log a warning if an unreachable peer is encountered). If a peer is not found or is not online, log a warning. If
+// a peer does not become reachable within 2 minutes, log a warning and return.
+func waitTailnetTargetsReachable(ctx context.Context, svcs map[string]*egressservices.ServiceStatus, tsClient *tailscale.LocalClient) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*10)
+	defer cancel()
+	wg := syncs.WaitGroup{}
+	st, err := tsClient.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("egress services: error querying client's status: %w", err)
+	}
+	for _, ips := range svcs {
+		for _, ip := range ips.TailnetTargetIPs {
+			wg.Go(func() {
+				p := peerMatchingIP(st, ip)
+				if p == nil {
+					log.Printf("egress services: unable to check connectivity with peer %v, peer not found", ip)
+					return
+				}
+				if !p.Online {
+					log.Printf("egress services: unable to check connectivity with peer %v, peer is not online", p)
+					return
+				}
+
+				log.Printf("egress services: verifying connectivity with peer %s", ip)
+				bo := backoff.NewBackoff(fmt.Sprintf("peer-%s", ip), log.Printf, 20*time.Second)
+				for {
+					res, err := tsClient.Ping(ctx, ip, tailcfg.PingPeerAPI)
+					if err != nil {
+						log.Printf("egress services: error attempting to reach peer %s:  %v, will retry...", ip, err)
+						bo.BackOff(ctx, err)
+
+					} else if res.Err != "" {
+						log.Printf("egess services: error attempting to reach peer %s: %v, will retry...", ip, res.Err)
+						bo.BackOff(ctx, errors.New(res.Err))
+					} else {
+						log.Printf("egress services: peer %s can be reached", ip)
+						return
+					}
+					select {
+					case <-ctx.Done():
+						log.Printf("egress services: unable to reach peer %s", ip)
+						return
+					default:
+					}
+				}
+			})
+		}
+	}
+	wg.Wait()
+	return nil
 }
 
 // updatesForCfg calculates any rules that need to be added or deleted for an individucal egress service config.
@@ -342,6 +444,26 @@ func (ep *egressProxy) getConfigs() (*egressservices.Configs, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// getConfigs gets the mounted replica count number.
+func (ep *egressProxy) getReplicaCount() (int, error) {
+	j, err := os.ReadFile(ep.replicaCountPath)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return -1, err
+	}
+	if len(j) == 0 || string(j) == "" {
+		return 0, nil
+	}
+
+	var rc int
+	if err := json.Unmarshal(j, &rc); err != nil {
+		return -1, err
+	}
+	return rc, nil
 }
 
 // getStatus gets the current status of the configured firewall. The current
@@ -476,6 +598,116 @@ func (ep *egressProxy) shouldResync(n ipn.Notify) bool {
 		}
 	}
 	return false
+}
+
+// registerHandlers adds a new handler to the provided ServeMux that can be called as a Kubernetes prestop hook to
+// delay shutdown till it's safe to do so.
+func (ep *egressProxy) registerHandlers(mux *http.ServeMux) {
+	mux.Handle("GET /egress-services-terminate", ep)
+}
+
+func (ep *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	cfgs, err := ep.getConfigs()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error retrieving egress services configs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if cfgs == nil {
+		if _, err := w.Write([]byte("safe to terminate")); err != nil {
+			http.Error(w, fmt.Sprintf("error writing termination status: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	rc, err := ep.getReplicaCount()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error determining ProxyGroup replica count: %v", err), http.StatusInternalServerError)
+		return
+	}
+	ep.waitTillSafeToShutdown(r.Context(), cfgs, rc)
+}
+
+// waitTillSafeToShutdown looks up all egress targets configured to be proxied via this instance and, for each target
+// whose configuration includes a healthcheck endpoint, pings the endpoint up to 5 minutes till none of the responses
+// are returned by this instance. In practice, the endpoint will be a Kubernetes Service for whom one of the backends
+// would normally be this Pod. When this Pod is being deleted, the operator should have removed it from the Service
+// backends and eventually kube proxy routing rules should be updated to no longer route traffic for the Service to this
+// Pod.
+func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egressservices.Configs, replicas int) {
+	if cfgs == nil {
+		return
+	}
+	log.Printf("Ensuring that cluster traffic for egress targets is no longer routed via this Pod...")
+	wg := syncs.WaitGroup{}
+	for s, cfg := range *cfgs {
+		hep := cfg.HealthCheckEndpoint
+		svc := s
+		if hep == "" {
+			log.Printf("Tailnet target %q does not have a cluster healthcheck specified, unable to verify if cluster traffic for the target is still routed via this Pod", s)
+			continue
+		}
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+			defer cancel()
+			log.Printf("Ensuring that cluster traffic is no longer routed to %q via this Pod...", svc)
+			for {
+				found, err := lookupPodRoute(ctx, hep, ep.podIPv4, replicas*3)
+				if err != nil {
+					log.Printf("unable to reach endpoint %q, assuming the routing rules for this Pod have been deleted: %v", hep, err)
+					return
+				}
+				if !found {
+					log.Printf("This Pod is no longer an endpoint for %q", hep)
+					return
+				}
+				log.Printf("Cluster traffic for %q is still routed via this Pod, waiting for kube proxy rules to be updated...", hep)
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				time.Sleep(time.Second)
+			}
+		})
+	}
+	wg.Wait()
+	// The earlier checks would have only been able to validate that this Pod's IP address has been removed from all
+	// egress Service's endpoints lists on this node.
+	// Sleep for a bit to ensure that kube proxies on all nodes have updated their configurations.
+	// TODO(irbekrm): currently I am not aware of a better way how to ensure all kube proxies have updated their
+	// configurations. This may not be good enough though, in which case we might need to look into another
+	// solution.
+	log.Printf("Sleeping for 10 seconds before shutdown to ensure that kube proxies on all nodes have updated routing configuration")
+	time.Sleep(time.Second * 10)
+}
+
+func lookupPodRoute(ctx context.Context, hep, podIP string, repeat int) (bool, error) {
+	for range repeat {
+		f, err := lookup(ctx, hep, podIP)
+		if err != nil {
+			return false, err
+		}
+		if f {
+			return true, nil
+		}
+		time.Sleep(time.Millisecond * 10)
+	}
+	return false, nil
+}
+
+func lookup(ctx context.Context, hep, podIP string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, httpm.GET, hep, nil)
+	if err != nil {
+		return false, fmt.Errorf("error creating new HTTP request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("Endpoint %q can not be reached: %v", hep, err)
+	}
+	defer resp.Body.Close()
+	gotIP := resp.Header.Get(kubetypes.PodIPv4Header)
+	return strings.EqualFold(podIP, gotIP), nil
 }
 
 // ensureServiceDeleted ensures that any rules for an egress service are removed

@@ -64,16 +64,17 @@ type settings struct {
 	// when setting up rules to proxy cluster traffic to cluster ingress
 	// target.
 	// Deprecated: use PodIPv4, PodIPv6 instead to support dual stack clusters
-	PodIP               string
-	PodIPv4             string
-	PodIPv6             string
-	PodUID              string
-	HealthCheckAddrPort string
-	LocalAddrPort       string
-	MetricsEnabled      bool
-	HealthCheckEnabled  bool
-	DebugAddrPort       string
-	EgressSvcsCfgPath   string
+	PodIP                            string
+	PodIPv4                          string
+	PodIPv6                          string
+	PodUID                           string
+	HealthCheckAddrPort              string
+	LocalAddrPort                    string
+	MetricsEnabled                   bool
+	HealthCheckEnabled               bool
+	DebugAddrPort                    string
+	EgressSvcsCfgPath                string
+	EgressProxyGroupReplicaCountPath string
 }
 
 func configFromEnv() (*settings, error) {
@@ -108,6 +109,7 @@ func configFromEnv() (*settings, error) {
 		HealthCheckEnabled:                    defaultBool("TS_ENABLE_HEALTH_CHECK", false),
 		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
+		EgressProxyGroupReplicaCountPath:      defaultEnv("TS_EGRESS_PROXY_GROUP_REPLICA_COUNT_PATH", ""),
 		PodUID:                                defaultEnv("POD_UID", ""),
 	}
 	podIPs, ok := os.LookupEnv("POD_IPS")
@@ -186,7 +188,7 @@ func (s *settings) validate() error {
 			return fmt.Errorf("error parsing TS_HEALTHCHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
 		}
 	}
-	if s.localMetricsEnabled() || s.localHealthEnabled() {
+	if s.localMetricsEnabled() || s.localHealthEnabled() || s.EgressSvcsCfgPath != "" {
 		if _, err := netip.ParseAddrPort(s.LocalAddrPort); err != nil {
 			return fmt.Errorf("error parsing TS_LOCAL_ADDR_PORT value %q: %w", s.LocalAddrPort, err)
 		}
@@ -306,6 +308,10 @@ func (cfg *settings) localMetricsEnabled() bool {
 
 func (cfg *settings) localHealthEnabled() bool {
 	return cfg.LocalAddrPort != "" && cfg.HealthCheckEnabled
+}
+
+func (cfg *settings) egressSvcsTerminateEPEnabled() bool {
+	return cfg.LocalAddrPort != "" && cfg.EgressSvcsCfgPath != ""
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if

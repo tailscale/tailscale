@@ -55,7 +55,7 @@ func Test_jsonMarshalConfig(t *testing.T) {
 			protocol:   "tcp",
 			matchPort:  4003,
 			targetPort: 80,
-			wantsBs:    []byte(`{"tailnetTarget":{"ip":"","fqdn":""},"ports":[{"protocol":"tcp","matchPort":4003,"targetPort":80}]}`),
+			wantsBs:    []byte(`{"healthCheckEndpoint":"","tailnetTarget":{"ip":"","fqdn":""},"ports":[{"protocol":"tcp","matchPort":4003,"targetPort":80}]}`),
 		},
 	}
 	for _, tt := range tests {
