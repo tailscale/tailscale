@@ -340,18 +340,17 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			}
 			ms := newTestMapSession(t, nil)
 			for _, n := range tt.prev {
-				mak.Set(&ms.peers, n.ID, ptr.To(n.View()))
+				mak.Set(&ms.peers, n.ID, n.View())
 			}
-			ms.rebuildSorted()
 
 			gotStats := ms.updatePeersStateFromResponse(tt.mapRes)
-
-			got := make([]*tailcfg.Node, len(ms.sortedPeers))
-			for i, vp := range ms.sortedPeers {
-				got[i] = vp.AsStruct()
-			}
 			if gotStats != tt.wantStats {
 				t.Errorf("got stats = %+v; want %+v", gotStats, tt.wantStats)
+			}
+
+			var got []*tailcfg.Node
+			for _, vp := range ms.sortedPeers() {
+				got = append(got, vp.AsStruct())
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("wrong results\n got: %s\nwant: %s", formatNodes(got), formatNodes(tt.want))

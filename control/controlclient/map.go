@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -31,6 +30,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -75,8 +75,7 @@ type mapSession struct {
 	lastPrintMap           time.Time
 	lastNode               tailcfg.NodeView
 	lastCapSet             set.Set[tailcfg.NodeCapability]
-	peers                  map[tailcfg.NodeID]*tailcfg.NodeView // pointer to view (oddly). same pointers as sortedPeers.
-	sortedPeers            []*tailcfg.NodeView                  // same pointers as peers, but sorted by Node.ID
+	peers                  map[tailcfg.NodeID]tailcfg.NodeView
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
@@ -366,16 +365,11 @@ var (
 	patchifiedPeerEqual = clientmetric.NewCounter("controlclient_patchified_peer_equal")
 )
 
-// updatePeersStateFromResponseres updates ms.peers and ms.sortedPeers from res. It takes ownership of res.
+// updatePeersStateFromResponseres updates ms.peers from resp.
+// It takes ownership of resp.
 func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (stats updateStats) {
-	defer func() {
-		if stats.removed > 0 || stats.added > 0 {
-			ms.rebuildSorted()
-		}
-	}()
-
 	if ms.peers == nil {
-		ms.peers = make(map[tailcfg.NodeID]*tailcfg.NodeView)
+		ms.peers = make(map[tailcfg.NodeID]tailcfg.NodeView)
 	}
 
 	if len(resp.Peers) > 0 {
@@ -384,12 +378,12 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 		keep := make(map[tailcfg.NodeID]bool, len(resp.Peers))
 		for _, n := range resp.Peers {
 			keep[n.ID] = true
-			if vp, ok := ms.peers[n.ID]; ok {
+			lenBefore := len(ms.peers)
+			ms.peers[n.ID] = n.View()
+			if len(ms.peers) == lenBefore {
 				stats.changed++
-				*vp = n.View()
 			} else {
 				stats.added++
-				ms.peers[n.ID] = ptr.To(n.View())
 			}
 		}
 		for id := range ms.peers {
@@ -410,12 +404,12 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 	}
 
 	for _, n := range resp.PeersChanged {
-		if vp, ok := ms.peers[n.ID]; ok {
+		lenBefore := len(ms.peers)
+		ms.peers[n.ID] = n.View()
+		if len(ms.peers) == lenBefore {
 			stats.changed++
-			*vp = n.View()
 		} else {
 			stats.added++
-			ms.peers[n.ID] = ptr.To(n.View())
 		}
 	}
 
@@ -427,7 +421,7 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 			} else {
 				mut.LastSeen = nil
 			}
-			*vp = mut.View()
+			ms.peers[nodeID] = mut.View()
 			stats.changed++
 		}
 	}
@@ -436,7 +430,7 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 		if vp, ok := ms.peers[nodeID]; ok {
 			mut := vp.AsStruct()
 			mut.Online = ptr.To(online)
-			*vp = mut.View()
+			ms.peers[nodeID] = mut.View()
 			stats.changed++
 		}
 	}
@@ -488,29 +482,10 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 			mut.CapMap = v
 			patchCapMap.Add(1)
 		}
-		*vp = mut.View()
+		ms.peers[pc.NodeID] = mut.View()
 	}
 
 	return
-}
-
-// rebuildSorted rebuilds ms.sortedPeers from ms.peers. It should be called
-// after any additions or removals from peers.
-func (ms *mapSession) rebuildSorted() {
-	if ms.sortedPeers == nil {
-		ms.sortedPeers = make([]*tailcfg.NodeView, 0, len(ms.peers))
-	} else {
-		if len(ms.sortedPeers) > len(ms.peers) {
-			clear(ms.sortedPeers[len(ms.peers):])
-		}
-		ms.sortedPeers = ms.sortedPeers[:0]
-	}
-	for _, p := range ms.peers {
-		ms.sortedPeers = append(ms.sortedPeers, p)
-	}
-	sort.Slice(ms.sortedPeers, func(i, j int) bool {
-		return ms.sortedPeers[i].ID() < ms.sortedPeers[j].ID()
-	})
 }
 
 func (ms *mapSession) addUserProfile(nm *netmap.NetworkMap, userID tailcfg.UserID) {
@@ -576,7 +551,7 @@ func (ms *mapSession) patchifyPeer(n *tailcfg.Node) (_ *tailcfg.PeerChange, ok b
 	if !ok {
 		return nil, false
 	}
-	return peerChangeDiff(*was, n)
+	return peerChangeDiff(was, n)
 }
 
 // peerChangeDiff returns the difference from 'was' to 'n', if possible.
@@ -778,14 +753,19 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 	return ret, true
 }
 
+func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
+	ret := slicesx.MapValues(ms.peers)
+	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
+		return cmp.Compare(a.ID(), b.ID())
+	})
+	return ret
+}
+
 // netmap returns a fully populated NetworkMap from the last state seen from
 // a call to updateStateFromResponse, filling in omitted
 // information from prior MapResponse values.
 func (ms *mapSession) netmap() *netmap.NetworkMap {
-	peerViews := make([]tailcfg.NodeView, len(ms.sortedPeers))
-	for i, vp := range ms.sortedPeers {
-		peerViews[i] = *vp
-	}
+	peerViews := ms.sortedPeers()
 
 	nm := &netmap.NetworkMap{
 		NodeKey:           ms.publicNodeKey,
