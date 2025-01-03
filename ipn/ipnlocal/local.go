@@ -178,7 +178,7 @@ type watchSession struct {
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx                      context.Context    // canceled by Close
+	ctx                      context.Context    // canceled by [LocalBackend.Shutdown]
 	ctxCancel                context.CancelFunc // cancels ctx
 	logf                     logger.Logf        // general logging
 	keyLogf                  logger.Logf        // for printing list of peers on change
@@ -309,6 +309,10 @@ type LocalBackend struct {
 	//
 	//lint:ignore U1000 only used in Linux and Windows builds in autoupdate.go
 	offlineAutoUpdateCancel func()
+	// Goroutine accounting for tests and clean shutdown of the backend:
+	goroutinesStarted int // counter
+	goroutinesRunning int // gauge
+	onGoroutineDone   set.HandleSet[func()]
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
@@ -866,7 +870,7 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 			// TODO(raggi,tailscale/corp#22574): authReconfig should be refactored such that we can call the
 			// necessary operations here and avoid the need for asynchronous behavior that is racy and hard
 			// to test here, and do less extra work in these conditions.
-			go b.authReconfig()
+			b.goFuncLocked(b.authReconfig)
 		}
 	}
 
@@ -879,7 +883,7 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 		want := b.netMap.GetAddresses().Len()
 		if len(b.peerAPIListeners) < want {
 			b.logf("linkChange: peerAPIListeners too low; trying again")
-			go b.initPeerAPIListener()
+			b.goFuncLocked(b.initPeerAPIListener)
 		}
 	}
 }
@@ -1004,6 +1008,31 @@ func (b *LocalBackend) Shutdown() {
 	b.ctxCancel()
 	b.e.Close()
 	<-b.e.Done()
+	b.awaitNoGoroutinesInTest()
+}
+
+func (b *LocalBackend) awaitNoGoroutinesInTest() {
+	if !testenv.InTest() {
+		return
+	}
+
+	ch := make(chan bool, 1)
+	defer b.addGoroutineDoneCallback(func() { ch <- true })()
+
+	running := func() int {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.goroutinesRunning
+	}
+
+	for {
+		n := running()
+		if n == 0 {
+			return
+		}
+		b.logf("awaiting %d goroutines to finish in test", n)
+		<-ch
+	}
 }
 
 func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
@@ -1782,8 +1811,9 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			b.send(*notify)
 		}
 	}()
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if !b.updateNetmapDeltaLocked(muts) {
 		return false
 	}
@@ -1791,14 +1821,8 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	if b.netMap != nil && mutationsAreWorthyOfTellingIPNBus(muts) {
 		nm := ptr.To(*b.netMap) // shallow clone
 		nm.Peers = make([]tailcfg.NodeView, 0, len(b.peers))
-		shouldAutoExitNode := shouldAutoExitNode()
 		for _, p := range b.peers {
 			nm.Peers = append(nm.Peers, p)
-			// If the auto exit node currently set goes offline, find another auto exit node.
-			if shouldAutoExitNode && b.pm.prefs.ExitNodeID() == p.StableID() && p.Online() != nil && !*p.Online() {
-				b.setAutoExitNodeIDLockedOnEntry(unlock)
-				return false
-			}
 		}
 		slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 			return cmp.Compare(a.ID(), b.ID())
@@ -1829,6 +1853,20 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 	return false
 }
 
+// pickNewAutoExitNode picks a new automatic exit node if needed.
+func (b *LocalBackend) pickNewAutoExitNode() {
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
+	newPrefs := b.setAutoExitNodeIDLockedOnEntry(unlock)
+	if !newPrefs.Valid() {
+		// Unchanged.
+		return
+	}
+
+	b.send(ipn.Notify{Prefs: &newPrefs})
+}
+
 func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (handled bool) {
 	if b.netMap == nil || len(b.peers) == 0 {
 		return false
@@ -1851,11 +1889,67 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 			mak.Set(&mutableNodes, nv.ID(), n)
 		}
 		m.Apply(n)
+
+		// If our exit node went offline, we need to schedule picking
+		// a new one.
+		if mo, ok := m.(netmap.NodeMutationOnline); ok && !mo.Online && n.StableID == b.pm.prefs.ExitNodeID() && shouldAutoExitNode() {
+			b.goFuncLocked(b.pickNewAutoExitNode)
+		}
 	}
 	for nid, n := range mutableNodes {
 		b.peers[nid] = n.View()
 	}
 	return true
+}
+
+// goFunc starts a goroutine, with some accounting around it.
+//
+// It acquires b.mu while starting a goroutine
+// to run f. It releases the lock before returning.
+//
+// If b.mu is already held, use goLocked instead.
+func (b *LocalBackend) goFunc(f func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.goFuncLocked(f)
+}
+
+// goFuncLocked is like goFunc, but assumes b.mu is already held.
+func (b *LocalBackend) goFuncLocked(f func()) {
+	b.goroutinesStarted++
+	b.goroutinesRunning++
+	go b.runGoroutine(f)
+}
+
+// runGoroutine is an implementation detail of goFunc and goFuncLocked.
+// Do not use directly.
+func (b *LocalBackend) runGoroutine(f func()) {
+	defer func() {
+		b.mu.Lock()
+		b.goroutinesRunning--
+		for _, f := range b.onGoroutineDone {
+			go f()
+		}
+		b.mu.Unlock()
+	}()
+	f()
+}
+
+// addGoroutineDoneCallback adds a callback to be called in a new goroutine
+// whenever a goroutine managed by LocalBackend (excluding ones from this method)
+// finishes. It returns a function to remove the callback.
+func (b *LocalBackend) addGoroutineDoneCallback(f func()) (remove func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.onGoroutineDone == nil {
+		b.onGoroutineDone = set.HandleSet[func()]{}
+	}
+	h := b.onGoroutineDone.Add(f)
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		delete(b.onGoroutineDone, h)
+	}
 }
 
 // setExitNodeID updates prefs to reference an exit node by ID, rather
@@ -2154,7 +2248,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	if b.portpoll != nil {
 		b.portpollOnce.Do(func() {
-			go b.readPoller()
+			b.goFuncLocked(b.readPoller)
 		})
 	}
 
@@ -2368,7 +2462,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 	b.e.SetJailedFilter(filter.NewShieldsUpFilter(localNets, logNets, oldJailedFilter, b.logf))
 
 	if b.sshServer != nil {
-		go b.sshServer.OnPolicyChange()
+		b.goFuncLocked(b.sshServer.OnPolicyChange)
 	}
 }
 
@@ -2845,7 +2939,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	// request every 2 seconds.
 	// TODO(bradfitz): plumb this further and only send a Notify on change.
 	if mask&ipn.NotifyWatchEngineUpdates != 0 {
-		go b.pollRequestEngineStatus(ctx)
+		b.goFunc(func() { b.pollRequestEngineStatus(ctx) })
 	}
 
 	// TODO(marwan-at-work): streaming background logs?
@@ -3852,7 +3946,7 @@ func (b *LocalBackend) editPrefsLockedOnEntry(mp *ipn.MaskedPrefs, unlock unlock
 	if mp.EggSet {
 		mp.EggSet = false
 		b.egg = true
-		go b.doSetHostinfoFilterServices()
+		b.goFuncLocked(b.doSetHostinfoFilterServices)
 	}
 	p0 := b.pm.CurrentPrefs()
 	p1 := b.pm.CurrentPrefs().AsStruct()
@@ -3945,7 +4039,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 
 	if oldp.ShouldSSHBeRunning() && !newp.ShouldSSHBeRunning() {
 		if b.sshServer != nil {
-			go b.sshServer.Shutdown()
+			b.goFuncLocked(b.sshServer.Shutdown)
 			b.sshServer = nil
 		}
 	}
@@ -4287,7 +4381,13 @@ func (b *LocalBackend) authReconfig() {
 	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.keyExpired, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
+	closing := b.shutdownCalled
 	b.mu.Unlock()
+
+	if closing {
+		b.logf("[v1] authReconfig: skipping because in shutdown")
+		return
+	}
 
 	if blocked {
 		b.logf("[v1] authReconfig: blocked, skipping.")
@@ -4753,7 +4853,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
 	}
 
-	go b.doSetHostinfoFilterServices()
+	b.goFuncLocked(b.doSetHostinfoFilterServices)
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
@@ -5022,7 +5122,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		// can be shut down if we transition away from Running.
 		if b.captiveCancel == nil {
 			b.captiveCtx, b.captiveCancel = context.WithCancel(b.ctx)
-			go b.checkCaptivePortalLoop(b.captiveCtx)
+			b.goFuncLocked(func() { b.checkCaptivePortalLoop(b.captiveCtx) })
 		}
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
@@ -5274,7 +5374,7 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.statusLock.Lock()
 	defer b.statusLock.Unlock()
 
-	go b.e.RequestStatus()
+	b.goFunc(b.e.RequestStatus)
 	b.logf("requestEngineStatusAndWait: waiting...")
 	b.statusChanged.Wait() // temporarily releases lock while waiting
 	b.logf("requestEngineStatusAndWait: got status update.")
@@ -5385,7 +5485,7 @@ func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap) {
 	shouldRun := !nm.HasCap(tailcfg.NodeAttrDisableWebClient)
 	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
 	if wasRunning && !shouldRun {
-		go b.webClientShutdown() // stop web client
+		b.goFuncLocked(b.webClientShutdown) // stop web client
 	}
 }
 
@@ -5506,29 +5606,34 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	}
 }
 
-func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) {
+func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) (newPrefs ipn.PrefsView) {
+	var zero ipn.PrefsView
 	defer unlock()
 
 	prefs := b.pm.CurrentPrefs()
 	if !prefs.Valid() {
 		b.logf("[unexpected]: received tailnet exit node ID pref change callback but current prefs are nil")
-		return
+		return zero
 	}
 	prefsClone := prefs.AsStruct()
 	newSuggestion, err := b.suggestExitNodeLocked(nil)
 	if err != nil {
 		b.logf("setAutoExitNodeID: %v", err)
-		return
+		return zero
+	}
+	if prefsClone.ExitNodeID == newSuggestion.ID {
+		return zero
 	}
 	prefsClone.ExitNodeID = newSuggestion.ID
-	_, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
+	newPrefs, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
 		Prefs:         *prefsClone,
 		ExitNodeIDSet: true,
 	}, unlock)
 	if err != nil {
 		b.logf("setAutoExitNodeID: failed to apply exit node ID preference: %v", err)
-		return
+		return zero
 	}
+	return newPrefs
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
@@ -5903,7 +6008,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
 		b.logf("Hostinfo.WireIngress changed to %v", wire)
 		b.hostinfo.WireIngress = wire
-		go b.doSetHostinfoFilterServices()
+		b.goFuncLocked(b.doSetHostinfoFilterServices)
 	}
 
 	b.setTCPPortsIntercepted(handlePorts)
