@@ -147,7 +147,7 @@ type Notify struct {
 	// any changes to the user in the UI.
 	Health *health.State `json:",omitempty"`
 
-	// type is mirrored in xcode/Shared/IPN.swift
+	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }
 
 func (n Notify) String() string {
