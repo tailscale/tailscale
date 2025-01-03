@@ -12,6 +12,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"expvar"
 	"flag"
@@ -25,6 +26,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -159,6 +161,7 @@ func main() {
 
 	defaultVerbosity := envknob.RegisterInt("TS_LOG_VERBOSITY")
 	printVersion := false
+	printSbom := false
 	flag.IntVar(&args.verbose, "verbose", defaultVerbosity(), "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanUp, "cleanup", false, "clean up system state and exit")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
@@ -173,6 +176,7 @@ func main() {
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
+	flag.BoolVar(&printSbom, "sbom", false, "prints go-build SBoM to stdout")
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
@@ -208,6 +212,17 @@ func main() {
 
 	if printVersion {
 		fmt.Println(version.String())
+		os.Exit(0)
+	}
+
+	if printSbom {
+		bi, ok := debug.ReadBuildInfo()
+		if !ok {
+			log.Fatalf("no Go build info")
+		}
+		e := json.NewEncoder(os.Stdout)
+		e.SetIndent("", "\t")
+		e.Encode(bi)
 		os.Exit(0)
 	}
 
