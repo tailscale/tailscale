@@ -1867,16 +1867,16 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 		PreferredDERP: 2,
 	}
 	tests := []struct {
-		name                      string
-		lastSuggestedExitNode     tailcfg.StableNodeID
-		netmap                    *netmap.NetworkMap
-		muts                      []*tailcfg.PeerChange
-		exitNodeIDWant            tailcfg.StableNodeID
-		updateNetmapDeltaResponse bool
-		report                    *netcheck.Report
+		name                  string
+		lastSuggestedExitNode tailcfg.StableNodeID
+		netmap                *netmap.NetworkMap
+		muts                  []*tailcfg.PeerChange
+		exitNodeIDWant        tailcfg.StableNodeID
+		report                *netcheck.Report
 	}{
 		{
-			name:                  "selected auto exit node goes offline",
+			// selected auto exit node goes offline
+			name:                  "exit-node-goes-offline",
 			lastSuggestedExitNode: peer1.StableID(),
 			netmap: &netmap.NetworkMap{
 				Peers: []tailcfg.NodeView{
@@ -1895,12 +1895,12 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 					Online: ptr.To(true),
 				},
 			},
-			exitNodeIDWant:            peer2.StableID(),
-			updateNetmapDeltaResponse: false,
-			report:                    report,
+			exitNodeIDWant: peer2.StableID(),
+			report:         report,
 		},
 		{
-			name:                  "other exit node goes offline doesn't change selected auto exit node that's still online",
+			// other exit node goes offline doesn't change selected auto exit node that's still online
+			name:                  "other-node-goes-offline",
 			lastSuggestedExitNode: peer2.StableID(),
 			netmap: &netmap.NetworkMap{
 				Peers: []tailcfg.NodeView{
@@ -1919,9 +1919,8 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 					Online: ptr.To(true),
 				},
 			},
-			exitNodeIDWant:            peer2.StableID(),
-			updateNetmapDeltaResponse: true,
-			report:                    report,
+			exitNodeIDWant: peer2.StableID(),
+			report:         report,
 		},
 	}
 
@@ -1939,6 +1938,20 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			b.lastSuggestedExitNode = tt.lastSuggestedExitNode
 			b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, tt.report)
 			b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
+
+			allDone := make(chan bool, 1)
+			defer b.goTracker.AddDoneCallback(func() {
+				b.mu.Lock()
+				defer b.mu.Unlock()
+				if b.goTracker.RunningGoroutines() > 0 {
+					return
+				}
+				select {
+				case allDone <- true:
+				default:
+				}
+			})()
+
 			someTime := time.Unix(123, 0)
 			muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
 				PeersChangedPatch: tt.muts,
@@ -1946,16 +1959,34 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			if !ok {
 				t.Fatal("netmap.MutationsFromMapResponse failed")
 			}
+
 			if b.pm.prefs.ExitNodeID() != tt.lastSuggestedExitNode {
 				t.Fatalf("did not set exit node ID to last suggested exit node despite auto policy")
 			}
 
+			was := b.goTracker.StartedGoroutines()
 			got := b.UpdateNetmapDelta(muts)
-			if got != tt.updateNetmapDeltaResponse {
-				t.Fatalf("got %v expected %v from UpdateNetmapDelta", got, tt.updateNetmapDeltaResponse)
+			if !got {
+				t.Error("got false from UpdateNetmapDelta")
 			}
-			if b.pm.prefs.ExitNodeID() != tt.exitNodeIDWant {
-				t.Fatalf("did not get expected exit node id after UpdateNetmapDelta")
+			startedGoroutine := b.goTracker.StartedGoroutines() != was
+
+			wantChange := tt.exitNodeIDWant != tt.lastSuggestedExitNode
+			if startedGoroutine != wantChange {
+				t.Errorf("got startedGoroutine %v, want %v", startedGoroutine, wantChange)
+			}
+			if startedGoroutine {
+				select {
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for goroutine to finish")
+				case <-allDone:
+				}
+			}
+			b.mu.Lock()
+			gotExitNode := b.pm.prefs.ExitNodeID()
+			b.mu.Unlock()
+			if gotExitNode != tt.exitNodeIDWant {
+				t.Fatalf("exit node ID after UpdateNetmapDelta = %v; want %v", gotExitNode, tt.exitNodeIDWant)
 			}
 		})
 	}

@@ -367,7 +367,7 @@ type LocalBackend struct {
 	allowedSuggestedExitNodes   set.Set[tailcfg.StableNodeID]
 
 	// refreshAutoExitNode indicates if the exit node should be recomputed when the next netcheck report is available.
-	refreshAutoExitNode bool
+	refreshAutoExitNode bool // guarded by mu
 
 	// captiveCtx and captiveCancel are used to control captive portal
 	// detection. They are protected by 'mu' and can be changed during the
@@ -1812,8 +1812,9 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			b.send(*notify)
 		}
 	}()
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if !b.updateNetmapDeltaLocked(muts) {
 		return false
 	}
@@ -1821,14 +1822,8 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	if b.netMap != nil && mutationsAreWorthyOfTellingIPNBus(muts) {
 		nm := ptr.To(*b.netMap) // shallow clone
 		nm.Peers = make([]tailcfg.NodeView, 0, len(b.peers))
-		shouldAutoExitNode := shouldAutoExitNode()
 		for _, p := range b.peers {
 			nm.Peers = append(nm.Peers, p)
-			// If the auto exit node currently set goes offline, find another auto exit node.
-			if shouldAutoExitNode && b.pm.prefs.ExitNodeID() == p.StableID() && p.Online() != nil && !*p.Online() {
-				b.setAutoExitNodeIDLockedOnEntry(unlock)
-				return false
-			}
 		}
 		slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 			return cmp.Compare(a.ID(), b.ID())
@@ -1859,6 +1854,20 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 	return false
 }
 
+// pickNewAutoExitNode picks a new automatic exit node if needed.
+func (b *LocalBackend) pickNewAutoExitNode() {
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
+	newPrefs := b.setAutoExitNodeIDLockedOnEntry(unlock)
+	if !newPrefs.Valid() {
+		// Unchanged.
+		return
+	}
+
+	b.send(ipn.Notify{Prefs: &newPrefs})
+}
+
 func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (handled bool) {
 	if b.netMap == nil || len(b.peers) == 0 {
 		return false
@@ -1881,6 +1890,12 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 			mak.Set(&mutableNodes, nv.ID(), n)
 		}
 		m.Apply(n)
+
+		// If our exit node went offline, we need to schedule picking
+		// a new one.
+		if mo, ok := m.(netmap.NodeMutationOnline); ok && !mo.Online && n.StableID == b.pm.prefs.ExitNodeID() && shouldAutoExitNode() {
+			b.goTracker.Go(b.pickNewAutoExitNode)
+		}
 	}
 	for nid, n := range mutableNodes {
 		b.peers[nid] = n.View()
@@ -5542,29 +5557,34 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	}
 }
 
-func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) {
+func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) (newPrefs ipn.PrefsView) {
+	var zero ipn.PrefsView
 	defer unlock()
 
 	prefs := b.pm.CurrentPrefs()
 	if !prefs.Valid() {
 		b.logf("[unexpected]: received tailnet exit node ID pref change callback but current prefs are nil")
-		return
+		return zero
 	}
 	prefsClone := prefs.AsStruct()
 	newSuggestion, err := b.suggestExitNodeLocked(nil)
 	if err != nil {
 		b.logf("setAutoExitNodeID: %v", err)
-		return
+		return zero
+	}
+	if prefsClone.ExitNodeID == newSuggestion.ID {
+		return zero
 	}
 	prefsClone.ExitNodeID = newSuggestion.ID
-	_, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
+	newPrefs, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
 		Prefs:         *prefsClone,
 		ExitNodeIDSet: true,
 	}, unlock)
 	if err != nil {
 		b.logf("setAutoExitNodeID: failed to apply exit node ID preference: %v", err)
-		return
+		return zero
 	}
+	return newPrefs
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
