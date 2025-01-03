@@ -115,7 +115,7 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyClass) (violations field.ErrorList) {
 	if sts := pc.Spec.StatefulSet; sts != nil {
 		if len(sts.Labels) > 0 {
-			if errs := metavalidation.ValidateLabels(sts.Labels, field.NewPath(".spec.statefulSet.labels")); errs != nil {
+			if errs := metavalidation.ValidateLabels(sts.Labels.Parse(), field.NewPath(".spec.statefulSet.labels")); errs != nil {
 				violations = append(violations, errs...)
 			}
 		}
@@ -126,7 +126,7 @@ func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyCl
 		}
 		if pod := sts.Pod; pod != nil {
 			if len(pod.Labels) > 0 {
-				if errs := metavalidation.ValidateLabels(pod.Labels, field.NewPath(".spec.statefulSet.pod.labels")); errs != nil {
+				if errs := metavalidation.ValidateLabels(pod.Labels.Parse(), field.NewPath(".spec.statefulSet.pod.labels")); errs != nil {
 					violations = append(violations, errs...)
 				}
 			}
@@ -176,6 +176,11 @@ func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyCl
 		} else if !found {
 			msg := fmt.Sprintf("ProxyClass defines that a ServiceMonitor custom resource should be created, but %q CRD was not found", serviceMonitorCRD)
 			violations = append(violations, field.TypeInvalid(field.NewPath("spec", "metrics", "serviceMonitor"), "enable", msg))
+		}
+	}
+	if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && len(pc.Spec.Metrics.ServiceMonitor.Labels) > 0 {
+		if errs := metavalidation.ValidateLabels(pc.Spec.Metrics.ServiceMonitor.Labels.Parse(), field.NewPath(".spec.metrics.serviceMonitor.labels")); errs != nil {
+			violations = append(violations, errs...)
 		}
 	}
 	// We do not validate embedded fields (security context, resource

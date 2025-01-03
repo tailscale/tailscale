@@ -203,7 +203,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 	pc := &tsapi.ProxyClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "custom-metadata"},
 		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
-			Labels:      map[string]string{"foo": "bar"},
+			Labels:      tsapi.Labels{"foo": "bar"},
 			Annotations: map[string]string{"bar.io/foo": "some-val"},
 			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
 	}

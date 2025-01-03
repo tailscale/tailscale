@@ -61,7 +61,10 @@ type configOpts struct {
 	app                                            string
 	shouldRemoveAuthKey                            bool
 	secretExtraData                                map[string][]byte
-	enableMetrics                                  bool
+	resourceVersion                                string
+
+	enableMetrics        bool
+	serviceMonitorLabels tsapi.Labels
 }
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
@@ -431,14 +434,17 @@ func metricsLabels(opts configOpts) map[string]string {
 
 func expectedServiceMonitor(t *testing.T, opts configOpts) *unstructured.Unstructured {
 	t.Helper()
-	labels := metricsLabels(opts)
+	smLabels := metricsLabels(opts)
+	if len(opts.serviceMonitorLabels) != 0 {
+		smLabels = mergeMapKeys(smLabels, opts.serviceMonitorLabels.Parse())
+	}
 	name := metricsResourceName(opts.stsName)
 	sm := &ServiceMonitor{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            name,
 			Namespace:       opts.tailscaleNamespace,
-			Labels:          labels,
-			ResourceVersion: "1",
+			Labels:          smLabels,
+			ResourceVersion: opts.resourceVersion,
 			OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Service", Name: name, BlockOwnerDeletion: ptr.To(true), Controller: ptr.To(true)}},
 		},
 		TypeMeta: metav1.TypeMeta{
@@ -446,7 +452,7 @@ func expectedServiceMonitor(t *testing.T, opts configOpts) *unstructured.Unstruc
 			APIVersion: "monitoring.coreos.com/v1",
 		},
 		Spec: ServiceMonitorSpec{
-			Selector: metav1.LabelSelector{MatchLabels: labels},
+			Selector: metav1.LabelSelector{MatchLabels: metricsLabels(opts)},
 			Endpoints: []ServiceMonitorEndpoint{{
 				Port: "metrics",
 			}},
@@ -653,10 +659,11 @@ func expectEqualUnstructured(t *testing.T, client client.Client, want *unstructu
 func expectMissing[T any, O ptrObject[T]](t *testing.T, client client.Client, ns, name string) {
 	t.Helper()
 	obj := O(new(T))
-	if err := client.Get(context.Background(), types.NamespacedName{
+	err := client.Get(context.Background(), types.NamespacedName{
 		Name:      name,
 		Namespace: ns,
-	}, obj); !apierrors.IsNotFound(err) {
+	}, obj)
+	if !apierrors.IsNotFound(err) {
 		t.Fatalf("%s %s/%s unexpectedly present, wanted missing", reflect.TypeOf(obj).Elem().Name(), ns, name)
 	}
 }

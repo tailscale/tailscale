@@ -16,6 +16,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -1129,7 +1130,7 @@ func TestProxyClassForService(t *testing.T) {
 				AcceptRoutes: true,
 			},
 			StatefulSet: &tsapi.StatefulSet{
-				Labels:      map[string]string{"foo": "bar"},
+				Labels:      tsapi.Labels{"foo": "bar"},
 				Annotations: map[string]string{"bar.io/foo": "some-val"},
 				Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
 	}
@@ -1764,6 +1765,106 @@ func Test_externalNameService(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 	opts.clusterTargetDNS = "bar.com"
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+}
+
+func Test_metricsResourceCreation(t *testing.T) {
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "metrics", Generation: 1},
+		Spec:       tsapi.ProxyClassSpec{},
+		Status: tsapi.ProxyClassStatus{
+			Conditions: []metav1.Condition{{
+				Status:             metav1.ConditionTrue,
+				Type:               string(tsapi.ProxyClassReady),
+				ObservedGeneration: 1,
+			}}},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Labels:    map[string]string{LabelProxyClass: "metrics"},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "10.20.30.40",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: ptr.To("tailscale"),
+		},
+	}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc, svc).
+		WithStatusSubresource(pc).
+		Build()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			operatorNamespace: "operator-ns",
+		},
+		logger: zl.Sugar(),
+		clock:  clock,
+	}
+	expectReconciled(t, sr, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+	opts := configOpts{
+		stsName:            shortName,
+		secretName:         fullName,
+		namespace:          "default",
+		parentType:         "svc",
+		tailscaleNamespace: "operator-ns",
+		hostname:           "default-test",
+		namespaced:         true,
+		proxyType:          proxyTypeIngressService,
+		app:                kubetypes.AppIngressProxy,
+		resourceVersion:    "1",
+	}
+
+	// 1. Enable metrics- expect metrics Service to be created
+	mustUpdate(t, fc, "", "metrics", func(pc *tsapi.ProxyClass) {
+		pc.Spec = tsapi.ProxyClassSpec{Metrics: &tsapi.Metrics{Enable: true}}
+	})
+	expectReconciled(t, sr, "default", "test")
+	opts.enableMetrics = true
+	expectEqual(t, fc, expectedMetricsService(opts), nil)
+
+	// 2. Enable ServiceMonitor - should not error when there is no ServiceMonitor CRD in cluster
+	mustUpdate(t, fc, "", "metrics", func(pc *tsapi.ProxyClass) {
+		pc.Spec.Metrics.ServiceMonitor = &tsapi.ServiceMonitor{Enable: true}
+	})
+	expectReconciled(t, sr, "default", "test")
+
+	// 3. Create ServiceMonitor CRD and reconcile- ServiceMonitor should get created
+	mustCreate(t, fc, crd)
+	expectReconciled(t, sr, "default", "test")
+	expectEqualUnstructured(t, fc, expectedServiceMonitor(t, opts))
+
+	// 4. A change to ServiceMonitor config gets reflected in the ServiceMonitor resource
+	mustUpdate(t, fc, "", "metrics", func(pc *tsapi.ProxyClass) {
+		pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar"}
+	})
+	expectReconciled(t, sr, "default", "test")
+	opts.serviceMonitorLabels = tsapi.Labels{"foo": "bar"}
+	opts.resourceVersion = "2"
+	expectEqual(t, fc, expectedMetricsService(opts), nil)
+	expectEqualUnstructured(t, fc, expectedServiceMonitor(t, opts))
+
+	// 5. Disable metrics- expect metrics Service to be deleted
+	mustUpdate(t, fc, "", "metrics", func(pc *tsapi.ProxyClass) {
+		pc.Spec.Metrics = nil
+	})
+	expectReconciled(t, sr, "default", "test")
+	expectMissing[corev1.Service](t, fc, "operator-ns", metricsResourceName(opts.stsName))
+	// ServiceMonitor gets garbage collected when Service gets deleted (it has OwnerReference of the Service
+	// object). We cannot test this using the fake client.
 }
 
 func toFQDN(t *testing.T, s string) dnsname.FQDN {
