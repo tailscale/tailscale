@@ -163,7 +163,7 @@ type watchSession struct {
 	ch        chan *ipn.Notify
 	owner     ipnauth.Actor // or nil
 	sessionID string
-	cancel    func() // call to signal that the session must be terminated
+	cancel    context.CancelFunc // to shut down the session
 }
 
 // LocalBackend is the glue between the major pieces of the Tailscale
