@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The goroutines package contains utilities for getting active goroutines.
+// The goroutines package contains utilities for tracking and getting active goroutines.
 package goroutines
 
 import (
