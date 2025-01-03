@@ -54,7 +54,6 @@ type configOpts struct {
 	subnetRoutes                                   string
 	isExitNode                                     bool
 	isAppConnector                                 bool
-	confFileHash                                   string
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
 	proxyClass                                     string // configuration from the named ProxyClass should be applied to proxy resources
@@ -92,8 +91,8 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			Value: "true",
 		})
 	}
-	annots := make(map[string]string)
 	var volumes []corev1.Volume
+	var annots map[string]string
 	volumes = []corev1.Volume{
 		{
 			Name: "tailscaledconfig",
@@ -109,9 +108,6 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		ReadOnly:  true,
 		MountPath: "/etc/tsconfig",
 	}}
-	if opts.confFileHash != "" {
-		annots["tailscale.com/operator-last-set-config-file-hash"] = opts.confFileHash
-	}
 	if opts.firewallMode != "" {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 			Name:  "TS_DEBUG_FIREWALL_MODE",
@@ -119,13 +115,13 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		})
 	}
 	if opts.tailnetTargetIP != "" {
-		annots["tailscale.com/operator-last-set-ts-tailnet-target-ip"] = opts.tailnetTargetIP
+		mak.Set(&annots, "tailscale.com/operator-last-set-ts-tailnet-target-ip", opts.tailnetTargetIP)
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 			Name:  "TS_TAILNET_TARGET_IP",
 			Value: opts.tailnetTargetIP,
 		})
 	} else if opts.tailnetTargetFQDN != "" {
-		annots["tailscale.com/operator-last-set-ts-tailnet-target-fqdn"] = opts.tailnetTargetFQDN
+		mak.Set(&annots, "tailscale.com/operator-last-set-ts-tailnet-target-fqdn", opts.tailnetTargetFQDN)
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 			Name:  "TS_TAILNET_TARGET_FQDN",
 			Value: opts.tailnetTargetFQDN,
@@ -136,13 +132,13 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			Name:  "TS_DEST_IP",
 			Value: opts.clusterTargetIP,
 		})
-		annots["tailscale.com/operator-last-set-cluster-ip"] = opts.clusterTargetIP
+		mak.Set(&annots, "tailscale.com/operator-last-set-cluster-ip", opts.clusterTargetIP)
 	} else if opts.clusterTargetDNS != "" {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 			Name:  "TS_EXPERIMENTAL_DEST_DNS_NAME",
 			Value: opts.clusterTargetDNS,
 		})
-		annots["tailscale.com/operator-last-set-cluster-dns-name"] = opts.clusterTargetDNS
+		mak.Set(&annots, "tailscale.com/operator-last-set-cluster-dns-name", opts.clusterTargetDNS)
 	}
 	if opts.serveConfig != nil {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
@@ -346,10 +342,6 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 				},
 			},
 		},
-	}
-	ss.Spec.Template.Annotations = map[string]string{}
-	if opts.confFileHash != "" {
-		ss.Spec.Template.Annotations["tailscale.com/operator-last-set-config-file-hash"] = opts.confFileHash
 	}
 	// If opts.proxyClass is set, retrieve the ProxyClass and apply
 	// configuration from that to the StatefulSet.
@@ -779,14 +771,6 @@ func (c *fakeTSClient) Deleted() []string {
 	c.Lock()
 	defer c.Unlock()
 	return c.deleted
-}
-
-// removeHashAnnotation can be used to remove declarative tailscaled config hash
-// annotation from proxy StatefulSets to make the tests more maintainable (so
-// that we don't have to change the annotation in each test case after any
-// change to the configfile contents).
-func removeHashAnnotation(sts *appsv1.StatefulSet) {
-	delete(sts.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash)
 }
 
 func removeTargetPortsFromSvc(svc *corev1.Service) {
