@@ -6,6 +6,7 @@ package ipn
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"net"
 	"net/netip"
 	"net/url"
@@ -564,37 +565,40 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 	return u.String(), nil
 }
 
-// RangeOverTCPs ranges over both background and foreground TCPs.
-// If the returned bool from the given f is false, then this function stops
-// iterating immediately and does not check other foreground configs.
-func (v ServeConfigView) RangeOverTCPs(f func(port uint16, _ TCPPortHandlerView) bool) {
-	for k, v := range v.TCP().All() {
-		if !f(k, v) {
-			return
-		}
-	}
-	for _, conf := range v.Foreground().All() {
-		for k, v := range conf.TCP().All() {
-			if !f(k, v) {
+// TCPs returns an iterator over both background and foreground TCP
+// listeners.
+//
+// The key is the port number.
+func (v ServeConfigView) TCPs() iter.Seq2[uint16, TCPPortHandlerView] {
+	return func(yield func(uint16, TCPPortHandlerView) bool) {
+		for k, v := range v.TCP().All() {
+			if !yield(k, v) {
 				return
+			}
+		}
+		for _, conf := range v.Foreground().All() {
+			for k, v := range conf.TCP().All() {
+				if !yield(k, v) {
+					return
+				}
 			}
 		}
 	}
 }
 
-// RangeOverWebs ranges over both background and foreground Webs.
-// If the returned bool from the given f is false, then this function stops
-// iterating immediately and does not check other foreground configs.
-func (v ServeConfigView) RangeOverWebs(f func(HostPort, WebServerConfigView) bool) {
-	for k, v := range v.Web().All() {
-		if !f(k, v) {
-			return
-		}
-	}
-	for _, conf := range v.Foreground().All() {
-		for k, v := range conf.Web().All() {
-			if !f(k, v) {
+// Webs returns an iterator over both background and foreground Web configurations.
+func (v ServeConfigView) Webs() iter.Seq2[HostPort, WebServerConfigView] {
+	return func(yield func(HostPort, WebServerConfigView) bool) {
+		for k, v := range v.Web().All() {
+			if !yield(k, v) {
 				return
+			}
+		}
+		for _, conf := range v.Foreground().All() {
+			for k, v := range conf.Web().All() {
+				if !yield(k, v) {
+					return
+				}
 			}
 		}
 	}
