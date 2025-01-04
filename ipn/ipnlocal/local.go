@@ -5882,12 +5882,11 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	b.reloadServeConfigLocked(prefs)
 	if b.serveConfig.Valid() {
 		servePorts := make([]uint16, 0, 3)
-		b.serveConfig.RangeOverTCPs(func(port uint16, _ ipn.TCPPortHandlerView) bool {
+		for port := range b.serveConfig.TCPs() {
 			if port > 0 {
 				servePorts = append(servePorts, uint16(port))
 			}
-			return true
-		})
+		}
 		handlePorts = append(handlePorts, servePorts...)
 
 		b.setServeProxyHandlersLocked()
@@ -5915,7 +5914,7 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 		return
 	}
 	var backends map[string]bool
-	b.serveConfig.RangeOverWebs(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
+	for _, conf := range b.serveConfig.Webs() {
 		for _, h := range conf.Handlers().All() {
 			backend := h.Proxy()
 			if backend == "" {
@@ -5937,8 +5936,7 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 			}
 			b.serveProxyHandlers.Store(backend, p)
 		}
-		return true
-	})
+	}
 
 	// Clean up handlers for proxy backends that are no longer present
 	// in configuration.
