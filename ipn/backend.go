@@ -58,23 +58,29 @@ type EngineStatus struct {
 // to subscribe to.
 type NotifyWatchOpt uint64
 
+// NotifyWatchOpt values.
+//
+// These aren't declared using Go's iota because they're not purely internal to
+// the process and iota should not be used for values that are serialized to
+// disk or network. In this case, these values come over the network via the
+// LocalAPI, a mostly stable API.
 const (
 	// NotifyWatchEngineUpdates, if set, causes Engine updates to be sent to the
 	// client either regularly or when they change, without having to ask for
 	// each one via Engine.RequestStatus.
-	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << iota
+	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << 0
 
-	NotifyInitialState  // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL + SessionID
-	NotifyInitialPrefs  // if set, the first Notify message (sent immediately) will contain the current Prefs
-	NotifyInitialNetMap // if set, the first Notify message (sent immediately) will contain the current NetMap
+	NotifyInitialState  NotifyWatchOpt = 1 << 1 // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL + SessionID
+	NotifyInitialPrefs  NotifyWatchOpt = 1 << 2 // if set, the first Notify message (sent immediately) will contain the current Prefs
+	NotifyInitialNetMap NotifyWatchOpt = 1 << 3 // if set, the first Notify message (sent immediately) will contain the current NetMap
 
-	NotifyNoPrivateKeys        // if set, private keys that would normally be sent in updates are zeroed out
-	NotifyInitialDriveShares   // if set, the first Notify message (sent immediately) will contain the current Taildrive Shares
-	NotifyInitialOutgoingFiles // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
+	NotifyNoPrivateKeys        NotifyWatchOpt = 1 << 4 // if set, private keys that would normally be sent in updates are zeroed out
+	NotifyInitialDriveShares   NotifyWatchOpt = 1 << 5 // if set, the first Notify message (sent immediately) will contain the current Taildrive Shares
+	NotifyInitialOutgoingFiles NotifyWatchOpt = 1 << 6 // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
 
-	NotifyInitialHealthState // if set, the first Notify message (sent immediately) will contain the current health.State of the client
+	NotifyInitialHealthState NotifyWatchOpt = 1 << 7 // if set, the first Notify message (sent immediately) will contain the current health.State of the client
 
-	NotifyRateLimit // if set, rate limit spammy netmap updates to every few seconds
+	NotifyRateLimit NotifyWatchOpt = 1 << 8 // if set, rate limit spammy netmap updates to every few seconds
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
