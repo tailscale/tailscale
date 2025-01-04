@@ -229,6 +229,7 @@ type LocalBackend struct {
 	filterAtomic                 atomic.Pointer[filter.Filter]
 	containsViaIPFuncAtomic      syncs.AtomicValue[func(netip.Addr) bool]
 	shouldInterceptTCPPortAtomic syncs.AtomicValue[func(uint16) bool]
+	shouldInterceptUDPPortAtomic syncs.AtomicValue[func(uint16) bool]
 	numClientStatusCalls         atomic.Uint32
 
 	// The mutex protects the following elements.
@@ -317,8 +318,9 @@ type LocalBackend struct {
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
 
-	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
-	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
+	serveListeners     map[netip.AddrPort]*localListener    // listeners for local serve traffic
+	serveUDPListeners  map[netip.AddrPort]*localUDPListener // listeners for local serve UDP traffic
+	serveProxyHandlers sync.Map                             // string (HTTPHandler.Proxy) => *reverseProxy
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -378,6 +380,9 @@ type LocalBackend struct {
 	// backend is healthy and captive portal detection is not required
 	// (sending false).
 	needsCaptiveDetection chan bool
+
+	// New field for tracking UDP ports to intercept
+	udpPortsToIntercept map[uint16]struct{}
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -483,6 +488,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCtx:            captiveCtx,
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
+		udpPortsToIntercept:   make(map[uint16]struct{}),
 	}
 	mConn.SetNetInfoCallback(b.setNetInfo)
 
@@ -2660,7 +2666,7 @@ func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, 
 }
 
 // readPoller is a goroutine that receives service lists from
-// b.portpoll and propagates them into the controlclient's HostInfo.
+// b.portpoll and propagates them into the controlclient's Hostinfo.
 func (b *LocalBackend) readPoller() {
 	if !envknob.BoolDefaultTrue("TS_PORTLIST") {
 		return
@@ -3326,6 +3332,39 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 		}
 	}
 	b.shouldInterceptTCPPortAtomic.Store(f)
+}
+func (b *LocalBackend) setUDPPortsIntercepted(ports []uint16) {
+	slices.Sort(ports)
+	uniq.ModifySlice(&ports)
+	var f func(uint16) bool
+	switch len(ports) {
+	case 0:
+		f = func(uint16) bool { return false }
+	case 1:
+		f = func(p uint16) bool { return ports[0] == p }
+	case 2:
+		f = func(p uint16) bool { return ports[0] == p || ports[1] == p }
+	case 3:
+		f = func(p uint16) bool { return ports[0] == p || ports[1] == p || ports[2] == p }
+	default:
+		if len(ports) > 16 {
+			m := map[uint16]bool{}
+			for _, p := range ports {
+				m[p] = true
+			}
+			f = func(p uint16) bool { return m[p] }
+		} else {
+			f = func(p uint16) bool {
+				for _, x := range ports {
+					if p == x {
+						return true
+					}
+				}
+				return false
+			}
+		}
+	}
+	b.shouldInterceptUDPPortAtomic.Store(f)
 }
 
 // setAtomicValuesFromPrefsLocked populates sshAtomicBool, containsViaIPFuncAtomic,
@@ -4104,7 +4143,12 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 	}
 	return nil, nil
 }
-
+func (b *LocalBackend) UDPHandlerForDst(src, dst netip.AddrPort) (handler func(c net.PacketConn) error) {
+	if handler := b.udpHandlerForServe(dst.Port(), src); handler != nil {
+		return handler
+	}
+	return nil
+}
 func (b *LocalBackend) handleDriveConn(conn net.Conn) error {
 	fs, ok := b.sys.DriveForLocal.GetOK()
 	if !ok || !b.DriveAccessEnabled() {
@@ -5882,6 +5926,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	}
 
 	b.reloadServeConfigLocked(prefs)
+	serveUDPPorts := make([]uint16, 0, 3)
 	if b.serveConfig.Valid() {
 		servePorts := make([]uint16, 0, 3)
 		b.serveConfig.RangeOverTCPs(func(port uint16, _ ipn.TCPPortHandlerView) bool {
@@ -5898,6 +5943,15 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		if !b.sys.IsNetstack() {
 			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
 		}
+		b.serveConfig.RangeOverUDPs(func(port uint16, _ ipn.UDPPortHandlerView) bool {
+			if port > 0 {
+				serveUDPPorts = append(serveUDPPorts, uint16(port))
+			}
+			return true
+		})
+		if !b.sys.IsNetstack() {
+			b.updateServeUDPPortNetMapAddrListenersLocked(serveUDPPorts)
+		}
 	}
 	// Kick off a Hostinfo update to control if WireIngress changed.
 	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
@@ -5907,6 +5961,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	}
 
 	b.setTCPPortsIntercepted(handlePorts)
+	b.setUDPPortsIntercepted(serveUDPPorts)
 }
 
 // setServeProxyHandlersLocked ensures there is an http proxy handler for each
@@ -6738,6 +6793,13 @@ func (b *LocalBackend) SetDevStateStore(key, value string) error {
 // Tailscaled and handled in-process.
 func (b *LocalBackend) ShouldInterceptTCPPort(port uint16) bool {
 	return b.shouldInterceptTCPPortAtomic.Load()(port)
+}
+
+// ShouldInterceptUDPPort reports whether the given UDP port number to a
+// Tailscale IP (not a subnet router, service IP, etc) should be intercepted by
+// Tailscaled and handled in-process.
+func (b *LocalBackend) ShouldInterceptUDPPort(port uint16) bool {
+	return b.shouldInterceptUDPPortAtomic.Load()(port)
 }
 
 // SwitchProfile switches to the profile with the given id.

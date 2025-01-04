@@ -149,7 +149,7 @@ func (s *localListener) Run() {
 				// On macOS, we need to bind to ""/all-interfaces due to
 				// the network sandbox. Ideally we would only bind to the
 				// Tailscale interface, but macOS errors out if we try to
-				// to listen on privileged ports binding only to a specific
+				// listen on privileged ports binding only to a specific
 				// interface. (#6364)
 				ipStr = ""
 			}
@@ -934,5 +934,238 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHe
 			return nil, err
 		}
 		return &cert, nil
+	}
+}
+
+// localUDPListener is the state of host-level net.ListenPacket for a specific (Tailscale IP, port)
+// combination. It is used to handle UDP traffic.
+type localUDPListener struct {
+	b      *LocalBackend
+	ap     netip.AddrPort
+	ctx    context.Context    // valid while listener is desired
+	cancel context.CancelFunc // for ctx, to close listener
+	logf   logger.Logf
+	bo     *backoff.Backoff // for retrying failed Listen calls
+
+	handler       func(net.PacketConn) error      // handler for inbound packets
+	closeListener syncs.AtomicValue[func() error] // Listener's Close method, if any
+}
+
+func (b *LocalBackend) newServeUDPListener(ctx context.Context, ap netip.AddrPort, logf logger.Logf) *localUDPListener {
+	ctx, cancel := context.WithCancel(ctx)
+	return &localUDPListener{
+		b:      b,
+		ap:     ap,
+		ctx:    ctx,
+		cancel: cancel,
+		logf:   logf,
+		handler: func(conn net.PacketConn) error {
+			srcAddr := conn.LocalAddr().(*net.UDPAddr).AddrPort()
+			handler := b.udpHandlerForServe(ap.Port(), srcAddr)
+			if handler == nil {
+				b.logf("[unexpected] local-serve: no handler for %v to port %v", srcAddr, ap.Port())
+				conn.Close()
+				return nil
+			}
+			return handler(conn)
+		},
+		bo: backoff.NewBackoff("serve-udp-listener", logf, 30*time.Second),
+	}
+}
+
+// Close cancels the context and closes the listener, if any.
+func (s *localUDPListener) Close() error {
+	s.cancel()
+	if close, ok := s.closeListener.LoadOk(); ok {
+		s.closeListener.Store(nil)
+		close()
+	}
+	return nil
+}
+
+// Run starts a net.ListenPacket for the localUDPListener's address and port.
+// If unable to listen, it retries with exponential backoff.
+// Listen is retried until the context is canceled.
+func (s *localUDPListener) Run() {
+	for {
+		ip := s.ap.Addr()
+		ipStr := ip.String()
+
+		var lc net.ListenConfig
+		if initListenConfig != nil {
+			if err := initListenConfig(&lc, ip, s.b.prevIfState, s.b.dialer.TUNName()); err != nil {
+				s.logf("localUDPListener failed to init listen config %v, backing off: %v", s.ap, err)
+				s.bo.BackOff(s.ctx, err)
+				continue
+			}
+		}
+
+		// while we were backing off and trying again, the context got canceled
+		// so don't bind, just return, because otherwise there will be no way
+		// to close this listener
+		if s.ctx.Err() != nil {
+			s.logf("localUDPListener context closed before binding")
+			return
+		}
+
+		conn, err := lc.ListenPacket(s.ctx, "udp", net.JoinHostPort(ipStr, fmt.Sprint(s.ap.Port())))
+		if err != nil {
+			if s.shouldWarnAboutListenError(err) {
+				s.logf("localUDPListener failed to listen on %v, backing off: %v", s.ap, err)
+			}
+			s.bo.BackOff(s.ctx, err)
+			continue
+		}
+		s.closeListener.Store(conn.Close)
+
+		s.logf("listening on %v", s.ap)
+		err = s.handler(conn)
+		if s.ctx.Err() != nil {
+			// context canceled, we're done
+			return
+		}
+		if err != nil {
+			s.logf("localUDPListener handler error, retrying: %v", err)
+		}
+	}
+}
+
+func (s *localUDPListener) shouldWarnAboutListenError(err error) bool {
+	if !s.b.sys.NetMon.Get().InterfaceState().HasIP(s.ap.Addr()) {
+		return false
+	}
+	return true
+}
+
+// udpHandlerForServe returns a handler for a UDP connection to be served via
+// the ipn.ServeConfig.
+func (b *LocalBackend) udpHandlerForServe(port uint16, src netip.AddrPort) func(conn net.PacketConn) error {
+	if h, ok := b.serveConfig.FindUDP(port); ok {
+		return func(conn net.PacketConn) error {
+			// TODO: buffer size?
+			buf := make([]byte, 4096)
+			remoteAddr := h.UDPForward()
+			rAddrPort, err := netip.ParseAddrPort(remoteAddr)
+			if err != nil {
+				b.logf("localbackend: error parsing remote address: %v", err)
+				return nil
+			}
+			udpAddr := net.UDPAddrFromAddrPort(rAddrPort)
+			srcAddr := net.UDPAddrFromAddrPort(src)
+
+			// Instead of using net.ListenPacket, we use netns.NewDialer to create a connection to the remote address
+			// Create a connection to the remote address
+			rconn, err := net.ListenPacket("udp", ":0")
+			if err != nil {
+				b.logf("localbackend: error creating remote UDP connection: %v", err)
+				return nil
+			}
+			defer rconn.Close()
+
+			// Create a context for cleanup
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			// Forward from conn to remote
+			go func() {
+				defer wg.Done()
+				for {
+					n, _, err := conn.ReadFrom(buf)
+					if err != nil {
+						if ctx.Err() == nil {
+							b.logf("localbackend: error reading from UDP connection: %v", err)
+						}
+						cancel()
+						return
+					}
+					_, err = rconn.WriteTo(buf[:n], udpAddr)
+					if err != nil {
+						if ctx.Err() == nil {
+							b.logf("localbackend: error forwarding UDP packet to %s: %v", remoteAddr, err)
+						}
+						cancel()
+						return
+					}
+				}
+			}()
+
+			// Forward from remote back to conn
+			go func() {
+				defer wg.Done()
+				buf := make([]byte, 4096)
+				for {
+					n, _, err := rconn.ReadFrom(buf)
+					if err != nil {
+						if ctx.Err() == nil {
+							b.logf("localbackend: error reading from remote UDP connection: %v", err)
+						}
+						cancel()
+						return
+					}
+					_, err = conn.WriteTo(buf[:n], srcAddr)
+					if err != nil {
+						if ctx.Err() == nil {
+							b.logf("localbackend: error forwarding UDP packet back to source: %v", err)
+						}
+						cancel()
+						return
+					}
+				}
+			}()
+
+			wg.Wait()
+			return nil
+		}
+	}
+	return nil
+}
+
+// updateServeUDPPortNetMapAddrListenersLocked starts a net.ListenPacket for configured
+// UDP Serve ports on all the node's addresses.
+// Existing Listeners are closed if port no longer in incoming ports list.
+//
+// b.mu must be held.
+func (b *LocalBackend) updateServeUDPPortNetMapAddrListenersLocked(ports []uint16) {
+	// Create a list of listeners to close first
+	var toClose []netip.AddrPort
+	for ap, sl := range b.serveUDPListeners {
+		if !slices.Contains(ports, ap.Port()) {
+			b.logf("closing UDP listener %v", ap)
+			sl.Close()
+			toClose = append(toClose, ap)
+		}
+	}
+
+	// Now delete them from the map
+	for _, ap := range toClose {
+		delete(b.serveUDPListeners, ap)
+	}
+
+	nm := b.netMap
+	if nm == nil {
+		b.logf("netMap is nil")
+		return
+	}
+	if !nm.SelfNode.Valid() {
+		b.logf("netMap SelfNode is nil")
+		return
+	}
+
+	addrs := nm.GetAddresses()
+	for _, a := range addrs.All() {
+		for _, p := range ports {
+			addrPort := netip.AddrPortFrom(a.Addr(), p)
+			if _, ok := b.serveUDPListeners[addrPort]; ok {
+				continue // already listening
+			}
+
+			sl := b.newServeUDPListener(context.Background(), addrPort, b.logf)
+			mak.Set(&b.serveUDPListeners, addrPort, sl)
+
+			go sl.Run()
+		}
 	}
 }

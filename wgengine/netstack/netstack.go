@@ -981,24 +981,29 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 		} else {
 			peerAPIPort = uint16(ns.peerAPIPortAtomic(dstIP).Load())
 		}
-		dport := p.Dst.Port()
-		if dport == peerAPIPort {
+
+		if peerAPIPort != 0 && p.Dst.Port() == peerAPIPort {
 			return true
 		}
-		// Also handle SSH connections, webserver, etc, if enabled:
-		if ns.lb.ShouldInterceptTCPPort(dport) {
+
+		// Handle TCP connections for ports configured in ServeConfig
+		if ns.lb.ShouldInterceptTCPPort(p.Dst.Port()) {
 			return true
 		}
 	}
-	if p.IPVersion == 6 && !isLocal && viaRange.Contains(dstIP) {
-		return ns.lb != nil && ns.lb.ShouldHandleViaIP(dstIP)
+
+	// Handle UDP packets to the Tailscale IP(s) for ports configured in ServeConfig
+	if ns.lb != nil && p.IPProto == ipproto.UDP && isLocal {
+		if ns.lb.ShouldInterceptUDPPort(p.Dst.Port()) {
+			return true
+		}
 	}
-	if ns.ProcessLocalIPs && isLocal {
+
+	// Handle 4via6 packets
+	if p.IPVersion == 6 && viaRange.Contains(dstIP) && ns.lb != nil && ns.lb.ShouldHandleViaIP(dstIP) {
 		return true
 	}
-	if ns.ProcessSubnets && !isLocal {
-		return true
-	}
+
 	return false
 }
 
@@ -1503,6 +1508,13 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 		default:
 			ep.Close()
 			return // Only MagicDNS and loopback traffic runs on the service IPs for now.
+		}
+	}
+	if ns.lb != nil {
+		handler := ns.lb.UDPHandlerForDst(srcAddr, dstAddr)
+		if handler != nil {
+			go handler(gonet.NewUDPConn(&wq, ep))
+			return
 		}
 	}
 

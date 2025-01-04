@@ -95,6 +95,16 @@ func (src *ServeConfig) Clone() *ServeConfig {
 			}
 		}
 	}
+	if dst.UDP != nil {
+		dst.UDP = map[uint16]*UDPPortHandler{}
+		for k, v := range src.UDP {
+			if v == nil {
+				dst.UDP[k] = nil
+			} else {
+				dst.UDP[k] = ptr.To(*v)
+			}
+		}
+	}
 	if dst.Web != nil {
 		dst.Web = map[HostPort]*WebServerConfig{}
 		for k, v := range src.Web {
@@ -132,6 +142,7 @@ func (src *ServeConfig) Clone() *ServeConfig {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
 	TCP         map[uint16]*TCPPortHandler
+	UDP         map[uint16]*UDPPortHandler
 	Web         map[HostPort]*WebServerConfig
 	Services    map[string]*ServiceConfig
 	AllowFunnel map[HostPort]bool
@@ -194,6 +205,22 @@ var _TCPPortHandlerCloneNeedsRegeneration = TCPPortHandler(struct {
 	HTTP         bool
 	TCPForward   string
 	TerminateTLS string
+}{})
+
+// Clone makes a deep copy of UDPPortHandler.
+// The result aliases no memory with the original.
+func (src *UDPPortHandler) Clone() *UDPPortHandler {
+	if src == nil {
+		return nil
+	}
+	dst := new(UDPPortHandler)
+	*dst = *src
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _UDPPortHandlerCloneNeedsRegeneration = UDPPortHandler(struct {
+	UDPForward string
 }{})
 
 // Clone makes a deep copy of HTTPHandler.

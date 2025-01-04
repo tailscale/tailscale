@@ -48,6 +48,10 @@ type ServeConfig struct {
 	// the Tailscale IP addresses. (not subnet routers, etc)
 	TCP map[uint16]*TCPPortHandler `json:",omitempty"`
 
+	// UDP are the list of UDP port numbers that tailscaled should handle for
+	// the Tailscale IP addresses.
+	UDP map[uint16]*UDPPortHandler `json:",omitempty"`
+
 	// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
 	// keyed by mount point ("/", "/foo", etc)
 	Web map[HostPort]*WebServerConfig `json:",omitempty"`
@@ -146,6 +150,12 @@ type TCPPortHandler struct {
 	// SNI name with this value. It is only used if TCPForward is non-empty.
 	// (the HTTPS mode uses ServeConfig.Web)
 	TerminateTLS string `json:",omitempty"`
+}
+
+// UDPPortHandler describes what to do when handling a UDP connection.
+type UDPPortHandler struct {
+	// UDPForward is the IP:port to forward UDP packets to.
+	UDPForward string `json:",omitempty"`
 }
 
 // HTTPHandler is either a path or a proxy to serve.
@@ -377,6 +387,24 @@ func (sc *ServeConfig) RemoveTCPForwarding(port uint16) {
 	delete(sc.TCP, port)
 	if len(sc.TCP) == 0 {
 		sc.TCP = nil
+	}
+}
+
+// SetUDPForwarding sets the fwdAddr (IP:port form) to which to forward
+// UDP packets from the given port.
+func (sc *ServeConfig) SetUDPForwarding(port uint16, fwdAddr string) {
+	if sc == nil {
+		sc = new(ServeConfig)
+	}
+	mak.Set(&sc.UDP, port, &UDPPortHandler{UDPForward: fwdAddr})
+}
+
+// RemoveUDPForwarding deletes the UDP forwarding configuration for the given
+// port from the serve config.
+func (sc *ServeConfig) RemoveUDPForwarding(port uint16) {
+	delete(sc.UDP, port)
+	if len(sc.UDP) == 0 {
+		sc.UDP = nil
 	}
 }
 
@@ -661,4 +689,39 @@ func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
 		return true
 	})
 	return exists
+}
+
+// RangeOverUDPs ranges over both background and foreground UDPs.
+// If the returned bool from the given f is false, then this function stops
+// iterating immediately and does not check other foreground configs.
+func (v ServeConfigView) RangeOverUDPs(f func(port uint16, _ UDPPortHandlerView) bool) {
+	parentCont := true
+	v.UDP().Range(func(k uint16, v UDPPortHandlerView) (cont bool) {
+		parentCont = f(k, v)
+		return parentCont
+	})
+	v.Foreground().Range(func(k string, v ServeConfigView) (cont bool) {
+		if !parentCont {
+			return false
+		}
+		v.UDP().Range(func(k uint16, v UDPPortHandlerView) (cont bool) {
+			parentCont = f(k, v)
+			return parentCont
+		})
+		return parentCont
+	})
+}
+
+// FindUDP returns the first UDP that matches with the given port. It
+// prefers a foreground match first followed by a background search if none
+// existed.
+func (v ServeConfigView) FindUDP(port uint16) (res UDPPortHandlerView, ok bool) {
+	v.Foreground().Range(func(_ string, v ServeConfigView) (cont bool) {
+		res, ok = v.UDP().GetOk(port)
+		return !ok
+	})
+	if ok {
+		return res, ok
+	}
+	return v.UDP().GetOk(port)
 }
