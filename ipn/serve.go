@@ -568,54 +568,46 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 // If the returned bool from the given f is false, then this function stops
 // iterating immediately and does not check other foreground configs.
 func (v ServeConfigView) RangeOverTCPs(f func(port uint16, _ TCPPortHandlerView) bool) {
-	parentCont := true
-	v.TCP().Range(func(k uint16, v TCPPortHandlerView) (cont bool) {
-		parentCont = f(k, v)
-		return parentCont
-	})
-	v.Foreground().Range(func(k string, v ServeConfigView) (cont bool) {
-		if !parentCont {
-			return false
+	for k, v := range v.TCP().All() {
+		if !f(k, v) {
+			return
 		}
-		v.TCP().Range(func(k uint16, v TCPPortHandlerView) (cont bool) {
-			parentCont = f(k, v)
-			return parentCont
-		})
-		return parentCont
-	})
+	}
+	for _, conf := range v.Foreground().All() {
+		for k, v := range conf.TCP().All() {
+			if !f(k, v) {
+				return
+			}
+		}
+	}
 }
 
 // RangeOverWebs ranges over both background and foreground Webs.
 // If the returned bool from the given f is false, then this function stops
 // iterating immediately and does not check other foreground configs.
-func (v ServeConfigView) RangeOverWebs(f func(_ HostPort, conf WebServerConfigView) bool) {
-	parentCont := true
-	v.Web().Range(func(k HostPort, v WebServerConfigView) (cont bool) {
-		parentCont = f(k, v)
-		return parentCont
-	})
-	v.Foreground().Range(func(k string, v ServeConfigView) (cont bool) {
-		if !parentCont {
-			return false
+func (v ServeConfigView) RangeOverWebs(f func(HostPort, WebServerConfigView) bool) {
+	for k, v := range v.Web().All() {
+		if !f(k, v) {
+			return
 		}
-		v.Web().Range(func(k HostPort, v WebServerConfigView) (cont bool) {
-			parentCont = f(k, v)
-			return parentCont
-		})
-		return parentCont
-	})
+	}
+	for _, conf := range v.Foreground().All() {
+		for k, v := range conf.Web().All() {
+			if !f(k, v) {
+				return
+			}
+		}
+	}
 }
 
 // FindTCP returns the first TCP that matches with the given port. It
 // prefers a foreground match first followed by a background search if none
 // existed.
 func (v ServeConfigView) FindTCP(port uint16) (res TCPPortHandlerView, ok bool) {
-	v.Foreground().Range(func(_ string, v ServeConfigView) (cont bool) {
-		res, ok = v.TCP().GetOk(port)
-		return !ok
-	})
-	if ok {
-		return res, ok
+	for _, conf := range v.Foreground().All() {
+		if res, ok := conf.TCP().GetOk(port); ok {
+			return res, ok
+		}
 	}
 	return v.TCP().GetOk(port)
 }
@@ -624,12 +616,10 @@ func (v ServeConfigView) FindTCP(port uint16) (res TCPPortHandlerView, ok bool) 
 // prefers a foreground match first followed by a background search if none
 // existed.
 func (v ServeConfigView) FindWeb(hp HostPort) (res WebServerConfigView, ok bool) {
-	v.Foreground().Range(func(_ string, v ServeConfigView) (cont bool) {
-		res, ok = v.Web().GetOk(hp)
-		return !ok
-	})
-	if ok {
-		return res, ok
+	for _, conf := range v.Foreground().All() {
+		if res, ok := conf.Web().GetOk(hp); ok {
+			return res, ok
+		}
 	}
 	return v.Web().GetOk(hp)
 }
@@ -637,14 +627,15 @@ func (v ServeConfigView) FindWeb(hp HostPort) (res WebServerConfigView, ok bool)
 // HasAllowFunnel returns whether this config has at least one AllowFunnel
 // set in the background or foreground configs.
 func (v ServeConfigView) HasAllowFunnel() bool {
-	return v.AllowFunnel().Len() > 0 || func() bool {
-		var exists bool
-		v.Foreground().Range(func(k string, v ServeConfigView) (cont bool) {
-			exists = v.AllowFunnel().Len() > 0
-			return !exists
-		})
-		return exists
-	}()
+	if v.AllowFunnel().Len() > 0 {
+		return true
+	}
+	for _, conf := range v.Foreground().All() {
+		if conf.AllowFunnel().Len() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // FindFunnel reports whether target exists in either the background AllowFunnel
@@ -653,12 +644,10 @@ func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
 	if v.AllowFunnel().Get(target) {
 		return true
 	}
-	var exists bool
-	v.Foreground().Range(func(_ string, v ServeConfigView) (cont bool) {
-		if exists = v.AllowFunnel().Get(target); exists {
-			return false
+	for _, conf := range v.Foreground().All() {
+		if conf.AllowFunnel().Get(target) {
+			return true
 		}
-		return true
-	})
-	return exists
+	}
+	return false
 }
