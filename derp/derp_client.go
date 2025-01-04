@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"sync"
 	"time"
+	"unique"
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
@@ -236,7 +237,7 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	return c.bw.Flush()
 }
 
-func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err error) {
+func (c *Client) ForwardPacket(srcHandle, dstHandle unique.Handle[key.NodePublic], pkt []byte) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("derp.ForwardPacket: %w", err)
@@ -256,10 +257,10 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err e
 	if err := writeFrameHeader(c.bw, frameForwardPacket, uint32(keyLen*2+len(pkt))); err != nil {
 		return err
 	}
-	if _, err := c.bw.Write(srcKey.AppendTo(nil)); err != nil {
+	if _, err := c.bw.Write(srcHandle.Value().AppendTo(nil)); err != nil {
 		return err
 	}
-	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {
+	if _, err := c.bw.Write(dstHandle.Value().AppendTo(nil)); err != nil {
 		return err
 	}
 	if _, err := c.bw.Write(pkt); err != nil {
