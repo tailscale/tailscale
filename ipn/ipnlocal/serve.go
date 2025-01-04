@@ -326,7 +326,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		if b.serveConfig.Valid() {
 			has = b.serveConfig.Foreground().Contains
 		}
-		prevConfig.Foreground().Range(func(k string, v ipn.ServeConfigView) (cont bool) {
+		for k := range prevConfig.Foreground().All() {
 			if !has(k) {
 				for _, sess := range b.notifyWatchers {
 					if sess.sessionID == k {
@@ -334,8 +334,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 					}
 				}
 			}
-			return true
-		})
+		}
 	}
 
 	return nil

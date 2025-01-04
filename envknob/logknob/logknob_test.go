@@ -11,6 +11,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/set"
 )
 
 var testKnob = NewLogKnob(
@@ -63,11 +64,7 @@ func TestLogKnob(t *testing.T) {
 		}
 
 		testKnob.UpdateFromNetMap(&netmap.NetworkMap{
-			SelfNode: (&tailcfg.Node{
-				Capabilities: []tailcfg.NodeCapability{
-					"https://tailscale.com/cap/testing",
-				},
-			}).View(),
+			AllCaps: set.Of(tailcfg.NodeCapability("https://tailscale.com/cap/testing")),
 		})
 		if !testKnob.shouldLog() {
 			t.Errorf("expected shouldLog()=true")

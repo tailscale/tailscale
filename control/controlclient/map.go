@@ -663,21 +663,23 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "CapMap":
 			if len(n.CapMap) != was.CapMap().Len() {
+				// If they have different lengths, they're different.
 				if n.CapMap == nil {
 					pc().CapMap = make(tailcfg.NodeCapMap)
 				} else {
 					pc().CapMap = maps.Clone(n.CapMap)
 				}
-				break
-			}
-			was.CapMap().Range(func(k tailcfg.NodeCapability, v views.Slice[tailcfg.RawMessage]) bool {
-				nv, ok := n.CapMap[k]
-				if !ok || !views.SliceEqual(v, views.SliceOf(nv)) {
-					pc().CapMap = maps.Clone(n.CapMap)
-					return false
+			} else {
+				// If they have the same length, check that all their keys
+				// have the same values.
+				for k, v := range was.CapMap().All() {
+					nv, ok := n.CapMap[k]
+					if !ok || !views.SliceEqual(v, views.SliceOf(nv)) {
+						pc().CapMap = maps.Clone(n.CapMap)
+						break
+					}
 				}
-				return true
-			})
+			}
 		case "Tags":
 			if !views.SliceEqual(was.Tags(), views.SliceOf(n.Tags)) {
 				return nil, false
