@@ -768,7 +768,7 @@ func ports(s string) PortRange {
 	if err != nil {
 		panic(fmt.Sprintf("invalid NetPortRange %q", s))
 	}
-	return PortRange{uint16(first), uint16(last)}
+	return PortRange{First: uint16(first), Last: uint16(last)}
 }
 
 func netports(netPorts ...string) (ret []NetPortRange) {
@@ -814,11 +814,11 @@ func TestMatchesFromFilterRules(t *testing.T) {
 					Dsts: []NetPortRange{
 						{
 							Net:   netip.MustParsePrefix("0.0.0.0/0"),
-							Ports: PortRange{22, 22},
+							Ports: PortRange{First: 22, Last: 22},
 						},
 						{
 							Net:   netip.MustParsePrefix("::0/0"),
-							Ports: PortRange{22, 22},
+							Ports: PortRange{First: 22, Last: 22},
 						},
 					},
 					Srcs: []netip.Prefix{
@@ -848,7 +848,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 					Dsts: []NetPortRange{
 						{
 							Net:   netip.MustParsePrefix("1.2.0.0/16"),
-							Ports: PortRange{22, 22},
+							Ports: PortRange{First: 22, Last: 22},
 						},
 					},
 					Srcs: []netip.Prefix{
