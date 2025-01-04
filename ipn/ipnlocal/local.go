@@ -1126,11 +1126,10 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 					ss.Capabilities = make([]tailcfg.NodeCapability, 1, cm.Len()+1)
 					ss.Capabilities[0] = "HTTPS://TAILSCALE.COM/s/DEPRECATED-NODE-CAPS#see-https://github.com/tailscale/tailscale/issues/11508"
 					ss.CapMap = make(tailcfg.NodeCapMap, sn.CapMap().Len())
-					cm.Range(func(k tailcfg.NodeCapability, v views.Slice[tailcfg.RawMessage]) bool {
+					for k, v := range cm.All() {
 						ss.CapMap[k] = v.AsSlice()
 						ss.Capabilities = append(ss.Capabilities, k)
-						return true
-					})
+					}
 					slices.Sort(ss.Capabilities[1:])
 				}
 			}
@@ -1192,10 +1191,9 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		}
 		if cm := p.CapMap(); cm.Len() > 0 {
 			ps.CapMap = make(tailcfg.NodeCapMap, cm.Len())
-			cm.Range(func(k tailcfg.NodeCapability, v views.Slice[tailcfg.RawMessage]) bool {
+			for k, v := range cm.All() {
 				ps.CapMap[k] = v.AsSlice()
-				return true
-			})
+			}
 		}
 		peerStatusFromNode(ps, p)
 
@@ -5918,15 +5916,15 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 	}
 	var backends map[string]bool
 	b.serveConfig.RangeOverWebs(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
-		conf.Handlers().Range(func(_ string, h ipn.HTTPHandlerView) (cont bool) {
+		for _, h := range conf.Handlers().All() {
 			backend := h.Proxy()
 			if backend == "" {
 				// Only create proxy handlers for servers with a proxy backend.
-				return true
+				continue
 			}
 			mak.Set(&backends, backend, true)
 			if _, ok := b.serveProxyHandlers.Load(backend); ok {
-				return true
+				continue
 			}
 
 			b.logf("serve: creating a new proxy handler for %s", backend)
@@ -5935,11 +5933,10 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 				// The backend endpoint (h.Proxy) should have been validated by expandProxyTarget
 				// in the CLI, so just log the error here.
 				b.logf("[unexpected] could not create proxy for %v: %s", backend, err)
-				return true
+				continue
 			}
 			b.serveProxyHandlers.Store(backend, p)
-			return true
-		})
+		}
 		return true
 	})
 

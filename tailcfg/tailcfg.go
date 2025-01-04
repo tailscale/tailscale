@@ -1457,7 +1457,7 @@ const (
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
 // a capability to have no values (nil slice); such capabilities can be tested
-// for by using the Contains method.
+// for by using the [NodeCapMap.Contains] method.
 //
 // See [NodeCapability] for more information on keys.
 type NodeCapMap map[NodeCapability][]RawMessage
@@ -1873,7 +1873,7 @@ type MapResponse struct {
 
 	// PeersChangedPatch, if non-nil, means that node(s) have changed.
 	// This is a lighter version of the older PeersChanged support that
-	// only supports certain types of updates
+	// only supports certain types of updates.
 	//
 	// These are applied after Peers* above, but in practice the
 	// control server should only send these on their own, without
