@@ -3056,29 +3056,20 @@ func TestMaybeRebindOnError(t *testing.T) {
 
 	err := fmt.Errorf("outer err: %w", syscall.EPERM)
 
-	t.Run("darwin-rebind", func(t *testing.T) {
+	t.Run("rebind", func(t *testing.T) {
 		conn := newTestConn(t)
 		defer conn.Close()
-		rebound := conn.maybeRebindOnError("darwin", err)
+		rebound := conn.maybeRebindOnError(err)
 		if !rebound {
 			t.Errorf("darwin should rebind on syscall.EPERM")
-		}
-	})
-
-	t.Run("linux-not-rebind", func(t *testing.T) {
-		conn := newTestConn(t)
-		defer conn.Close()
-		rebound := conn.maybeRebindOnError("linux", err)
-		if rebound {
-			t.Errorf("linux should not rebind on syscall.EPERM")
 		}
 	})
 
 	t.Run("no-frequent-rebind", func(t *testing.T) {
 		conn := newTestConn(t)
 		defer conn.Close()
-		conn.lastEPERMRebind.Store(time.Now().Add(-1 * time.Second))
-		rebound := conn.maybeRebindOnError("darwin", err)
+		conn.lastEPERMRebind.Store(time.Now().Add(-60 * time.Second))
+		rebound := conn.maybeRebindOnError(err)
 		if rebound {
 			t.Errorf("darwin should not rebind on syscall.EPERM within 5 seconds of last")
 		}
