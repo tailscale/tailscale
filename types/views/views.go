@@ -415,16 +415,6 @@ func (m *MapSlice[K, V]) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, &m.ж)
 }
 
-// Range calls f for every k,v pair in the underlying map.
-// It stops iteration immediately if f returns false.
-func (m MapSlice[K, V]) Range(f MapRangeFn[K, Slice[V]]) {
-	for k, v := range m.ж {
-		if !f(k, SliceOf(v)) {
-			return
-		}
-	}
-}
-
 // AsMap returns a shallow-clone of the underlying map.
 //
 // If V is a pointer type, it is the caller's responsibility to make sure the
@@ -527,16 +517,6 @@ func (m Map[K, V]) AsMap() map[K]V {
 // Implementations should return false to stop range.
 type MapRangeFn[K comparable, V any] func(k K, v V) (cont bool)
 
-// Range calls f for every k,v pair in the underlying map.
-// It stops iteration immediately if f returns false.
-func (m Map[K, V]) Range(f MapRangeFn[K, V]) {
-	for k, v := range m.ж {
-		if !f(k, v) {
-			return
-		}
-	}
-}
-
 // All returns an iterator iterating over the keys
 // and values of m.
 func (m Map[K, V]) All() iter.Seq2[K, V] {
@@ -598,16 +578,6 @@ func (m MapFn[K, T, V]) Len() int { return len(m.ж) }
 func (m MapFn[K, T, V]) GetOk(k K) (V, bool) {
 	v, ok := m.ж[k]
 	return m.wrapv(v), ok
-}
-
-// Range calls f for every k,v pair in the underlying map.
-// It stops iteration immediately if f returns false.
-func (m MapFn[K, T, V]) Range(f MapRangeFn[K, V]) {
-	for k, v := range m.ж {
-		if !f(k, m.wrapv(v)) {
-			return
-		}
-	}
 }
 
 // All returns an iterator iterating over the keys and value views of m.
