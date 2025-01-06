@@ -13,6 +13,7 @@ import (
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=pg
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ProxyGroupReady")].reason`,description="Status of the deployed ProxyGroup resources."
+// +kubebuilder:printcolumn:name="Type",type="string",JSONPath=`.spec.type`,description="ProxyGroup type."
 
 // ProxyGroup defines a set of Tailscale devices that will act as proxies.
 // Currently only egress ProxyGroups are supported.
@@ -47,7 +48,9 @@ type ProxyGroupList struct {
 }
 
 type ProxyGroupSpec struct {
-	// Type of the ProxyGroup proxies. Currently the only supported type is egress.
+	// Type of the ProxyGroup proxies. Supported types are egress and ingress.
+	// Type is immutable once a ProxyGroup is created.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ProxyGroup type is immutable"
 	Type ProxyGroupType `json:"type"`
 
 	// Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].
@@ -62,6 +65,7 @@ type ProxyGroupSpec struct {
 	// Replicas specifies how many replicas to create the StatefulSet with.
 	// Defaults to 2.
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	Replicas *int32 `json:"replicas,omitempty"`
 
 	// HostnamePrefix is the hostname prefix to use for tailnet devices created
@@ -109,11 +113,12 @@ type TailnetDevice struct {
 }
 
 // +kubebuilder:validation:Type=string
-// +kubebuilder:validation:Enum=egress
+// +kubebuilder:validation:Enum=egress;ingress
 type ProxyGroupType string
 
 const (
-	ProxyGroupTypeEgress ProxyGroupType = "egress"
+	ProxyGroupTypeEgress  ProxyGroupType = "egress"
+	ProxyGroupTypeIngress ProxyGroupType = "ingress"
 )
 
 // +kubebuilder:validation:Type=string

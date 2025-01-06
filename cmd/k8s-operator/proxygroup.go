@@ -51,7 +51,10 @@ const (
 	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 )
 
-var gaugeProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
+var (
+	gaugeEgressProxyGroupResources  = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
+	gaugeIngressProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupIngressCount)
+)
 
 // ProxyGroupReconciler ensures cluster resources for a ProxyGroup definition.
 type ProxyGroupReconciler struct {
@@ -68,8 +71,9 @@ type ProxyGroupReconciler struct {
 	tsFirewallMode    string
 	defaultProxyClass string
 
-	mu          sync.Mutex           // protects following
-	proxyGroups set.Slice[types.UID] // for proxygroups gauge
+	mu                 sync.Mutex           // protects following
+	egressProxyGroups  set.Slice[types.UID] // for egress proxygroups gauge
+	ingressProxyGroups set.Slice[types.UID] // for ingress proxygroups gauge
 }
 
 func (r *ProxyGroupReconciler) logger(name string) *zap.SugaredLogger {
@@ -203,8 +207,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) error {
 	logger := r.logger(pg.Name)
 	r.mu.Lock()
-	r.proxyGroups.Add(pg.UID)
-	gaugeProxyGroupResources.Set(int64(r.proxyGroups.Len()))
+	r.ensureAddedToGaugeForProxyGroup(pg)
 	r.mu.Unlock()
 
 	cfgHash, err := r.ensureConfigSecretsCreated(ctx, pg, proxyClass)
@@ -358,8 +361,7 @@ func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, pg *tsapi.Proxy
 
 	logger.Infof("cleaned up ProxyGroup resources")
 	r.mu.Lock()
-	r.proxyGroups.Remove(pg.UID)
-	gaugeProxyGroupResources.Set(int64(r.proxyGroups.Len()))
+	r.ensureRemovedFromGaugeForProxyGroup(pg)
 	r.mu.Unlock()
 	return true, nil
 }
@@ -467,6 +469,32 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 	}
 
 	return configSHA256Sum, nil
+}
+
+// ensureAddedToGaugeForProxyGroup ensures the gauge metric for the ProxyGroup resource is updated when the ProxyGroup
+// is created. r.mu must be held.
+func (r *ProxyGroupReconciler) ensureAddedToGaugeForProxyGroup(pg *tsapi.ProxyGroup) {
+	switch pg.Spec.Type {
+	case tsapi.ProxyGroupTypeEgress:
+		r.egressProxyGroups.Add(pg.UID)
+	case tsapi.ProxyGroupTypeIngress:
+		r.ingressProxyGroups.Add(pg.UID)
+	}
+	gaugeEgressProxyGroupResources.Set(int64(r.egressProxyGroups.Len()))
+	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
+}
+
+// ensureRemovedFromGaugeForProxyGroup ensures the gauge metric for the ProxyGroup resource type is updated when the
+// ProxyGroup is deleted. r.mu must be held.
+func (r *ProxyGroupReconciler) ensureRemovedFromGaugeForProxyGroup(pg *tsapi.ProxyGroup) {
+	switch pg.Spec.Type {
+	case tsapi.ProxyGroupTypeEgress:
+		r.egressProxyGroups.Remove(pg.UID)
+	case tsapi.ProxyGroupTypeIngress:
+		r.ingressProxyGroups.Remove(pg.UID)
+	}
+	gaugeEgressProxyGroupResources.Set(int64(r.egressProxyGroups.Len()))
+	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 }
 
 func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32, authKey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
