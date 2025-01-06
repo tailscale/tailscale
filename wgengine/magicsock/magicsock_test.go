@@ -3050,37 +3050,68 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 	}
 }
 
+func TestShouldRebind(t *testing.T) {
+	tests := []struct {
+		err    error
+		ok     bool
+		reason string
+	}{
+		{nil, false, ""},
+		{io.EOF, false, ""},
+		{io.ErrUnexpectedEOF, false, ""},
+		{io.ErrShortBuffer, false, ""},
+		{&net.OpError{Err: syscall.EPERM}, true, "operation-not-permitted"},
+		{&net.OpError{Err: syscall.EPIPE}, true, "broken-pipe"},
+		{&net.OpError{Err: syscall.ENOTCONN}, true, "broken-pipe"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s-%v", tt.err, tt.ok), func(t *testing.T) {
+			if got, reason := shouldRebind(tt.err); got != tt.ok || reason != tt.reason {
+				t.Errorf("errShouldRebind(%v) = %v, %q; want %v, %q", tt.err, got, reason, tt.ok, tt.reason)
+			}
+		})
+	}
+}
+
 func TestMaybeRebindOnError(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
-	err := fmt.Errorf("outer err: %w", syscall.EPERM)
+	var rebindErrs []error
+	if runtime.GOOS != "plan9" {
+		rebindErrs = append(rebindErrs,
+			&net.OpError{Err: syscall.EPERM},
+			&net.OpError{Err: syscall.EPIPE},
+			&net.OpError{Err: syscall.ENOTCONN},
+		)
+	}
 
-	t.Run("darwin-rebind", func(t *testing.T) {
-		conn := newTestConn(t)
-		defer conn.Close()
-		rebound := conn.maybeRebindOnError("darwin", err)
-		if !rebound {
-			t.Errorf("darwin should rebind on syscall.EPERM")
-		}
-	})
+	for _, rebindErr := range rebindErrs {
+		t.Run(fmt.Sprintf("rebind-%s", rebindErr), func(t *testing.T) {
+			conn := newTestConn(t)
+			defer conn.Close()
 
-	t.Run("linux-not-rebind", func(t *testing.T) {
-		conn := newTestConn(t)
-		defer conn.Close()
-		rebound := conn.maybeRebindOnError("linux", err)
-		if rebound {
-			t.Errorf("linux should not rebind on syscall.EPERM")
-		}
-	})
+			before := metricRebindCalls.Value()
+			conn.maybeRebindOnError(rebindErr)
+			after := metricRebindCalls.Value()
+			if before+1 != after {
+				t.Errorf("should rebind on %#v", rebindErr)
+			}
+		})
+	}
 
 	t.Run("no-frequent-rebind", func(t *testing.T) {
-		conn := newTestConn(t)
-		defer conn.Close()
-		conn.lastEPERMRebind.Store(time.Now().Add(-1 * time.Second))
-		rebound := conn.maybeRebindOnError("darwin", err)
-		if rebound {
-			t.Errorf("darwin should not rebind on syscall.EPERM within 5 seconds of last")
+		if runtime.GOOS != "plan9" {
+			err := fmt.Errorf("outer err: %w", syscall.EPERM)
+			conn := newTestConn(t)
+			defer conn.Close()
+			conn.lastErrRebind.Store(time.Now().Add(-1 * time.Second))
+			before := metricRebindCalls.Value()
+			conn.maybeRebindOnError(err)
+			after := metricRebindCalls.Value()
+			if before != after {
+				t.Errorf("should not rebind within 5 seconds of last")
+			}
 		}
 	})
 }

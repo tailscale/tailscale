@@ -5,8 +5,8 @@
 
 package magicsock
 
-// maybeRebindOnError performs a rebind and restun if the error is defined and
-// any conditionals are met.
-func (c *Conn) maybeRebindOnError(os string, err error) bool {
-	return false
+// shouldRebind returns if the error is one that is known to be healed by a
+// rebind, and if so also returns a resason string for the rebind.
+func shouldRebind(err error) (ok bool, reason string) {
+	return false, ""
 }
