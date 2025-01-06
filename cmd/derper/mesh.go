@@ -47,6 +47,7 @@ func startMeshWithHost(s *derp.Server, host string) error {
 	c.SetURLDialer(func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
+			logf("failed to split %q: %v", addr, err)
 			return nil, err
 		}
 		var d net.Dialer
@@ -55,15 +56,18 @@ func startMeshWithHost(s *derp.Server, host string) error {
 			subCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
 			vpcHost := base + "-vpc.tailscale.com"
-			ips, _ := r.LookupIP(subCtx, "ip", vpcHost)
+			ips, err := r.LookupIP(subCtx, "ip", vpcHost)
+			if err != nil {
+				logf("failed to resolve %v: %v", vpcHost, err)
+			}
 			if len(ips) > 0 {
 				vpcAddr := net.JoinHostPort(ips[0].String(), port)
 				c, err := d.DialContext(subCtx, network, vpcAddr)
 				if err == nil {
-					log.Printf("connected to %v (%v) instead of %v", vpcHost, ips[0], base)
+					logf("connected to %v (%v) instead of %v", vpcHost, ips[0], base)
 					return c, nil
 				}
-				log.Printf("failed to connect to %v (%v): %v; trying non-VPC route", vpcHost, ips[0], err)
+				logf("failed to connect to %v (%v): %v; trying non-VPC route", vpcHost, ips[0], err)
 			}
 		}
 		return d.DialContext(ctx, network, addr)
