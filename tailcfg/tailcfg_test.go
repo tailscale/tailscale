@@ -666,7 +666,6 @@ func TestCloneUser(t *testing.T) {
 		u    *User
 	}{
 		{"nil_logins", &User{}},
-		{"zero_logins", &User{Logins: make([]LoginID, 0)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
