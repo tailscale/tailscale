@@ -379,7 +379,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		return false, nil, err
 	}
 
-	if runtime.GOOS == "darwin" && env.upArgs.advertiseConnector {
+	if env.goos == "darwin" && env.upArgs.advertiseConnector {
 		if err := presentRiskToUser(riskMacAppConnector, riskMacAppConnectorMessage, env.upArgs.acceptedRisks); err != nil {
 			return false, nil, err
 		}
