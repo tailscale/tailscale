@@ -8,42 +8,24 @@ package magicsock
 import (
 	"errors"
 	"syscall"
-	"time"
 )
 
-// maybeRebindOnError performs a rebind and restun if the error is defined and
-// any conditionals are met.
-func (c *Conn) maybeRebindOnError(os string, err error) bool {
+// shouldRebind returns if the error is one that is known to be healed by a
+// rebind, and if so also returns a resason string for the rebind.
+func shouldRebind(err error) (ok bool, reason string) {
 	switch {
-	case errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ENOTCONN):
-		// EPIPE/ENOTCONN are common errors when a send fails due to a closed
-		// socket. There is some platform and version inconsistency in which
-		// error is returned, but the meaning is the same.
-		why := "broken-pipe-rebind"
-		c.logf("magicsock: performing %q", why)
-		c.Rebind()
-		go c.ReSTUN(why)
-		return true
+	// EPIPE/ENOTCONN are common errors when a send fails due to a closed
+	// socket. There is some platform and version inconsistency in which
+	// error is returned, but the meaning is the same.
+	case errors.Is(err, syscall.EPIPE), errors.Is(err, syscall.ENOTCONN):
+		return true, "broken-pipe"
+
+	// EPERM is typically caused by EDR software, and has been observed to be
+	// transient, it seems that some versions of some EDR lose track of sockets
+	// at times, and return EPERM, but reconnects will establish appropriate
+	// rights associated with a new socket.
 	case errors.Is(err, syscall.EPERM):
-		why := "operation-not-permitted-rebind"
-		switch os {
-		// We currently will only rebind and restun on a syscall.EPERM if it is experienced
-		// on a client running darwin.
-		// TODO(charlotte, raggi): expand os options if required.
-		case "darwin":
-			// TODO(charlotte): implement a backoff, so we don't end up in a rebind loop for persistent
-			// EPERMs.
-			if c.lastEPERMRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
-				c.logf("magicsock: performing %q", why)
-				c.lastEPERMRebind.Store(time.Now())
-				c.Rebind()
-				go c.ReSTUN(why)
-				return true
-			}
-		default:
-			c.logf("magicsock: not performing %q", why)
-			return false
-		}
+		return true, "operation-not-permitted"
 	}
-	return false
+	return false, ""
 }

@@ -364,9 +364,9 @@ type Conn struct {
 	// wireguard state by its public key. If nil, it's not used.
 	getPeerByKey func(key.NodePublic) (_ wgint.Peer, ok bool)
 
-	// lastEPERMRebind tracks the last time a rebind was performed
-	// after experiencing a syscall.EPERM.
-	lastEPERMRebind syncs.AtomicValue[time.Time]
+	// lastErrRebind tracks the last time a rebind was performed after
+	// experiencing a write error, and is used to throttle the rate of rebinds.
+	lastErrRebind syncs.AtomicValue[time.Time]
 
 	// staticEndpoints are user set endpoints that this node should
 	// advertise amongst its wireguard endpoints. It is user's
@@ -1258,7 +1258,7 @@ func (c *Conn) sendUDPBatch(addr netip.AddrPort, buffs [][]byte) (sent bool, err
 			c.logf("magicsock: %s", errGSO.Error())
 			err = errGSO.RetryErr
 		} else {
-			_ = c.maybeRebindOnError(runtime.GOOS, err)
+			c.maybeRebindOnError(err)
 		}
 	}
 	return err == nil, err
@@ -1273,7 +1273,7 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool) (sent bool, e
 	sent, err = c.sendUDPStd(ipp, b)
 	if err != nil {
 		metricSendUDPError.Add(1)
-		_ = c.maybeRebindOnError(runtime.GOOS, err)
+		c.maybeRebindOnError(err)
 	} else {
 		if sent && !isDisco {
 			switch {
@@ -1287,6 +1287,23 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool) (sent bool, e
 		}
 	}
 	return
+}
+
+// maybeRebindOnError performs a rebind and restun if the error is one that is
+// known to be healed by a rebind, and the rebind is not throttled.
+func (c *Conn) maybeRebindOnError(err error) {
+	ok, reason := shouldRebind(err)
+	if !ok {
+		return
+	}
+
+	if c.lastErrRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
+		c.logf("magicsock: performing rebind due to %q", reason)
+		c.Rebind()
+		go c.ReSTUN(reason)
+	} else {
+		c.logf("magicsock: not performing %q rebind due to throttle", reason)
+	}
 }
 
 // sendUDPNetcheck sends b via UDP to addr. It is used exclusively by netcheck.
