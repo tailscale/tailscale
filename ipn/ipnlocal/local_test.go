@@ -30,7 +30,6 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
-	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -4509,15 +4508,15 @@ func TestConfigFileReload(t *testing.T) {
 
 func TestGetVIPServices(t *testing.T) {
 	tests := []struct {
-		name       string
-		advertised []string
-		mapped     []string
-		want       []*tailcfg.VIPService
+		name        string
+		advertised  []string
+		serveConfig *ipn.ServeConfig
+		want        []*tailcfg.VIPService
 	}{
 		{
 			"advertised-only",
 			[]string{"svc:abc", "svc:def"},
-			[]string{},
+			&ipn.ServeConfig{},
 			[]*tailcfg.VIPService{
 				{
 					Name:   "svc:abc",
@@ -4530,9 +4529,13 @@ func TestGetVIPServices(t *testing.T) {
 			},
 		},
 		{
-			"mapped-only",
+			"served-only",
 			[]string{},
-			[]string{"svc:abc"},
+			&ipn.ServeConfig{
+				Services: map[string]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
 			[]*tailcfg.VIPService{
 				{
 					Name:  "svc:abc",
@@ -4541,9 +4544,13 @@ func TestGetVIPServices(t *testing.T) {
 			},
 		},
 		{
-			"mapped-and-advertised",
+			"served-and-advertised",
 			[]string{"svc:abc"},
-			[]string{"svc:abc"},
+			&ipn.ServeConfig{
+				Services: map[string]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
 			[]*tailcfg.VIPService{
 				{
 					Name:   "svc:abc",
@@ -4553,9 +4560,13 @@ func TestGetVIPServices(t *testing.T) {
 			},
 		},
 		{
-			"mapped-and-advertised-separately",
+			"served-and-advertised-different-service",
 			[]string{"svc:def"},
-			[]string{"svc:abc"},
+			&ipn.ServeConfig{
+				Services: map[string]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
 			[]*tailcfg.VIPService{
 				{
 					Name:  "svc:abc",
@@ -4567,14 +4578,78 @@ func TestGetVIPServices(t *testing.T) {
 				},
 			},
 		},
+		{
+			"served-with-port-ranges-one-range-single",
+			[]string{},
+			&ipn.ServeConfig{
+				Services: map[string]*ipn.ServiceConfig{
+					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
+						80: {HTTPS: true},
+					}},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 80, Last: 80}}},
+				},
+			},
+		},
+		{
+			"served-with-port-ranges-one-range-multiple",
+			[]string{},
+			&ipn.ServeConfig{
+				Services: map[string]*ipn.ServiceConfig{
+					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
+						80: {HTTPS: true},
+						81: {HTTPS: true},
+						82: {HTTPS: true},
+					}},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 80, Last: 82}}},
+				},
+			},
+		},
+		{
+			"served-with-port-ranges-multiple-ranges",
+			[]string{},
+			&ipn.ServeConfig{
+				Services: map[string]*ipn.ServiceConfig{
+					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
+						80:   {HTTPS: true},
+						81:   {HTTPS: true},
+						82:   {HTTPS: true},
+						1212: {HTTPS: true},
+						1213: {HTTPS: true},
+						1214: {HTTPS: true},
+					}},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name: "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{
+						{Proto: 6, Ports: tailcfg.PortRange{First: 80, Last: 82}},
+						{Proto: 6, Ports: tailcfg.PortRange{First: 1212, Last: 1214}},
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			envknob.Setenv("TS_DEBUG_ALLPORTS_SERVICES", strings.Join(tt.mapped, ","))
+			lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+				return newClient(tb, opts)
+			})
+			lb.serveConfig = tt.serveConfig.View()
 			prefs := &ipn.Prefs{
 				AdvertiseServices: tt.advertised,
 			}
-			got := vipServicesFromPrefs(prefs.View())
+			got := lb.vipServicesFromPrefsLocked(prefs.View())
 			slices.SortFunc(got, func(a, b *tailcfg.VIPService) int {
 				return strings.Compare(a.Name, b.Name)
 			})

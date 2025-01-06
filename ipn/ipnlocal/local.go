@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -5017,13 +5018,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	}
 	hi.SSH_HostKeys = sshHostKeys
 
-	services := vipServicesFromPrefs(prefs)
-	if len(services) > 0 {
-		buf, _ := json.Marshal(services)
-		hi.ServicesHash = fmt.Sprintf("%02x", sha256.Sum256(buf))
-	} else {
-		hi.ServicesHash = ""
-	}
+	hi.ServicesHash = b.vipServiceHashLocked(prefs)
 
 	// The Hostinfo.WantIngress field tells control whether this node wants to
 	// be wired up for ingress connections. If harmless if it's accidentally
@@ -7659,28 +7654,38 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 func (b *LocalBackend) VIPServices() []*tailcfg.VIPService {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return vipServicesFromPrefs(b.pm.CurrentPrefs())
+	return b.vipServicesFromPrefsLocked(b.pm.CurrentPrefs())
 }
 
-func vipServicesFromPrefs(prefs ipn.PrefsView) []*tailcfg.VIPService {
+func (b *LocalBackend) vipServiceHashLocked(prefs ipn.PrefsView) string {
+	services := b.vipServicesFromPrefsLocked(prefs)
+	if len(services) == 0 {
+		return ""
+	}
+	buf, err := json.Marshal(services)
+	if err != nil {
+		b.logf("vipServiceHashLocked: %v", err)
+		return ""
+	}
+	hash := sha256.Sum256(buf)
+	return hex.EncodeToString(hash[:])
+}
+
+func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	// keyed by service name
 	var services map[string]*tailcfg.VIPService
-
-	// TODO(naman): this envknob will be replaced with service-specific port
-	// information once we start storing that.
-	var allPortsServices []string
-	if env := envknob.String("TS_DEBUG_ALLPORTS_SERVICES"); env != "" {
-		allPortsServices = strings.Split(env, ",")
+	if !b.serveConfig.Valid() {
+		return nil
 	}
 
-	for _, s := range allPortsServices {
-		mak.Set(&services, s, &tailcfg.VIPService{
-			Name:  s,
-			Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+	for svc, config := range b.serveConfig.Services().All() {
+		mak.Set(&services, svc, &tailcfg.VIPService{
+			Name:  svc,
+			Ports: config.ServicePortRange(),
 		})
 	}
 
-	for _, s := range prefs.AdvertiseServices().AsSlice() {
+	for _, s := range prefs.AdvertiseServices().All() {
 		if services == nil || services[s] == nil {
 			mak.Set(&services, s, &tailcfg.VIPService{
 				Name: s,

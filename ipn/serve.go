@@ -16,7 +16,9 @@ import (
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 )
 
 // ServeConfigKey returns a StateKey that stores the
@@ -654,4 +656,42 @@ func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
 		}
 	}
 	return false
+}
+
+// ServicePortRange returns the list of tailcfg.ProtoPortRange that represents
+// the proto/ports pairs that are being served by the service.
+//
+// Right now Tun mode is the only thing supports UDP, otherwise serve only supports TCP.
+func (v ServiceConfigView) ServicePortRange() []tailcfg.ProtoPortRange {
+	if v.Tun() {
+		// If the service is in Tun mode, means service accept TCP/UDP on all ports.
+		return []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}}
+	}
+	tcp := int(ipproto.TCP)
+
+	// Deduplicate the ports.
+	servePorts := make(set.Set[uint16])
+	for port := range v.TCP().All() {
+		if port > 0 {
+			servePorts.Add(uint16(port))
+		}
+	}
+	dedupedServePorts := servePorts.Slice()
+	slices.Sort(dedupedServePorts)
+
+	var ranges []tailcfg.ProtoPortRange
+	for _, p := range dedupedServePorts {
+		if n := len(ranges); n > 0 && p == ranges[n-1].Ports.Last+1 {
+			ranges[n-1].Ports.Last = p
+			continue
+		}
+		ranges = append(ranges, tailcfg.ProtoPortRange{
+			Proto: tcp,
+			Ports: tailcfg.PortRange{
+				First: p,
+				Last:  p,
+			},
+		})
+	}
+	return ranges
 }
