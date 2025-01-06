@@ -155,35 +155,70 @@ type CapabilityVersion int
 //   - 110: 2024-12-12: removed never-before-used Tailscale SSH public key support (#14373)
 const CurrentCapabilityVersion CapabilityVersion = 110
 
-type StableID string
-
+// ID is an integer ID for a user, node, or login allocated by the
+// control plane.
+//
+// To be nice, control plane servers should not use int64s that are too large to
+// fit in a JavaScript number (see JavaScript's Number.MAX_SAFE_INTEGER).
+// The Tailscale-hosted control plane stopped allocating large integers in
+// March 2023 but nodes prior to that may have IDs larger than
+// MAX_SAFE_INTEGER (2^53 – 1).
+//
+// IDs must not be zero or negative.
 type ID int64
 
+// UserID is an [ID] for a [User].
 type UserID ID
 
 func (u UserID) IsZero() bool {
 	return u == 0
 }
 
+// LoginID is an [ID] for a [Login].
+//
+// It is not used in the Tailscale client, but is used in the control plane.
 type LoginID ID
 
 func (u LoginID) IsZero() bool {
 	return u == 0
 }
 
+// NodeID is a unique integer ID for a node.
+//
+// It's global within a control plane URL ("tailscale up --login-server") and is
+// (as of 2025-01-06) never re-used even after a node is deleted.
+//
+// To be nice, control plane servers should not use int64s that are too large to
+// fit in a JavaScript number (see JavaScript's Number.MAX_SAFE_INTEGER).
+// The Tailscale-hosted control plane stopped allocating large integers in
+// March 2023 but nodes prior to that may have node IDs larger than
+// MAX_SAFE_INTEGER (2^53 – 1).
+//
+// NodeIDs are not stable across control plane URLs. For more stable URLs,
+// see [StableNodeID].
 type NodeID ID
 
 func (u NodeID) IsZero() bool {
 	return u == 0
 }
 
-type StableNodeID StableID
+// StableNodeID is a string form of [NodeID].
+//
+// Different control plane servers should ideally have different StableNodeID
+// suffixes for different sites or regions.
+//
+// Being a string, it's safer to use in JavaScript without worrying about the
+// size of the integer, as documented on [NodeID].
+//
+// But in general, Tailscale APIs can accept either a [NodeID] integer or a
+// [StableNodeID] string when referring to a node.
+type StableNodeID string
 
 func (u StableNodeID) IsZero() bool {
 	return u == ""
 }
 
-// User is an IPN user.
+// User is a Tailscale user.
 //
 // A user can have multiple logins associated with it (e.g. gmail and github oauth).
 // (Note: none of our UIs support this yet.)
@@ -196,23 +231,29 @@ func (u StableNodeID) IsZero() bool {
 // have a general gmail address login associated with the user.
 type User struct {
 	ID            UserID
-	LoginName     string `json:"-"` // not stored, filled from Login // TODO REMOVE
 	DisplayName   string // if non-empty overrides Login field
 	ProfilePicURL string // if non-empty overrides Login field
-	Logins        []LoginID
 	Created       time.Time
+
+	// Old, unused fields...
+	// TODO(bradfitz): remove, once verifying old clients don't need them.
+
+	LoginName string `json:"-"` // not stored, filled from Login // TODO REMOVE
+	Logins    []LoginID
 }
 
+// Login is a user from a specific identity provider, not associated with any
+// particular tailnet.
 type Login struct {
 	_             structs.Incomparable
-	ID            LoginID
-	Provider      string
-	LoginName     string
-	DisplayName   string
-	ProfilePicURL string
+	ID            LoginID // unused in the Tailscale client
+	Provider      string  // "google", "github", "okta_foo", etc.
+	LoginName     string  // an email address or "email-ish" string (like alice@github)
+	DisplayName   string  // from the IdP
+	ProfilePicURL string  // from the IdP
 }
 
-// A UserProfile is display-friendly data for a user.
+// A UserProfile is display-friendly data for a [User].
 // It includes the LoginName for display purposes but *not* the Provider.
 // It also includes derived data from one of the user's logins.
 type UserProfile struct {
@@ -283,6 +324,7 @@ func MarshalCapJSON[T any](capRule T) (RawMessage, error) {
 	return RawMessage(string(bs)), nil
 }
 
+// Node is a Tailscale device in a tailnet.
 type Node struct {
 	ID       NodeID
 	StableID StableNodeID
@@ -563,6 +605,11 @@ func (n *Node) InitDisplayNames(networkMagicDNSSuffix string) {
 	n.ComputedNameWithHost = nameWithHost
 }
 
+// MachineStatus is the state of a [Node]'s approval into a tailnet.
+//
+// A "node" and a "machine" are often 1:1, but technically a Tailscale
+// daemon has one machine key and can have multiple nodes (e.g. different
+// users on Windows) for that one machine key.
 type MachineStatus int
 
 const (
