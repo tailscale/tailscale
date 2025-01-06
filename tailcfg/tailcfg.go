@@ -234,12 +234,6 @@ type User struct {
 	DisplayName   string // if non-empty overrides Login field
 	ProfilePicURL string // if non-empty overrides Login field
 	Created       time.Time
-
-	// Old, unused fields...
-	// TODO(bradfitz): remove, once verifying old clients don't need them.
-
-	LoginName string `json:"-"` // not stored, filled from Login // TODO REMOVE
-	Logins    []LoginID
 }
 
 // Login is a user from a specific identity provider, not associated with any

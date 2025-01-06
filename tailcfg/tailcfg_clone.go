@@ -26,7 +26,6 @@ func (src *User) Clone() *User {
 	}
 	dst := new(User)
 	*dst = *src
-	dst.Logins = append(src.Logins[:0:0], src.Logins...)
 	return dst
 }
 
@@ -36,8 +35,6 @@ var _UserCloneNeedsRegeneration = User(struct {
 	DisplayName   string
 	ProfilePicURL string
 	Created       time.Time
-	LoginName     string
-	Logins        []LoginID
 }{})
 
 // Clone makes a deep copy of Node.
@@ -302,7 +299,6 @@ func (src *RegisterResponse) Clone() *RegisterResponse {
 	}
 	dst := new(RegisterResponse)
 	*dst = *src
-	dst.User = *src.User.Clone()
 	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	return dst
 }
