@@ -33,11 +33,11 @@ func (src *User) Clone() *User {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _UserCloneNeedsRegeneration = User(struct {
 	ID            UserID
-	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Logins        []LoginID
 	Created       time.Time
+	LoginName     string
+	Logins        []LoginID
 }{})
 
 // Clone makes a deep copy of Node.
