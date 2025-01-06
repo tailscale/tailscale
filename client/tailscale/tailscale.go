@@ -39,6 +39,7 @@ const maxReadSize = 10 << 20
 type Client struct {
 	// tailnet is the globally unique identifier for a Tailscale network, such
 	// as "example.com" or "user@gmail.com".
+	// Set to "-" to indicate that the API call should be performed on the default tailnet for the provided credentials.
 	tailnet string
 	// auth is the authentication method to use for this client.
 	// nil means none, which generally won't work, but won't crash.
