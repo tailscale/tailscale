@@ -804,8 +804,8 @@ type nodeData struct {
 	DeviceName  string
 	TailnetName string // TLS cert name
 	DomainName  string
-	IPv4        string
-	IPv6        string
+	IPv4        netip.Addr
+	IPv6        netip.Addr
 	OS          string
 	IPNVersion  string
 
@@ -864,10 +864,14 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filterRules, _ := s.lc.DebugPacketFilterRules(r.Context())
+	ipv4, ipv6 := s.selfNodeAddresses(r, st)
+
 	data := &nodeData{
 		ID:               st.Self.ID,
 		Status:           st.BackendState,
 		DeviceName:       strings.Split(st.Self.DNSName, ".")[0],
+		IPv4:             ipv4,
+		IPv6:             ipv6,
 		OS:               st.Self.OS,
 		IPNVersion:       strings.Split(st.Version, "-")[0],
 		Profile:          st.User[st.Self.UserID],
@@ -886,10 +890,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 
 		ACLAllowsAnyIncomingTraffic: s.aclsAllowAccess(filterRules),
 	}
-
-	ipv4, ipv6 := s.selfNodeAddresses(r, st)
-	data.IPv4 = ipv4.String()
-	data.IPv6 = ipv6.String()
 
 	if hostinfo.GetEnvType() == hostinfo.HomeAssistantAddOn && data.URLPrefix == "" {
 		// X-Ingress-Path is the path prefix in use for Home Assistant
