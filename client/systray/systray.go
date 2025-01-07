@@ -3,8 +3,8 @@
 
 //go:build cgo || !darwin
 
-// The systray command is a minimal Tailscale systray application for Linux.
-package main
+// Package systray provides a minimal Tailscale systray application.
+package systray
 
 import (
 	"context"
@@ -44,8 +44,8 @@ var (
 	hideMullvadCities bool
 )
 
-func main() {
-	menu := new(Menu)
+// Run starts the systray menu and blocks until the menu exits.
+func (menu *Menu) Run() {
 	menu.updateState()
 
 	// exit cleanly on SIGINT and SIGTERM

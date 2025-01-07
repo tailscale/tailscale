@@ -3,7 +3,7 @@
 
 //go:build cgo || !darwin
 
-package main
+package systray
 
 import (
 	"bytes"
