@@ -77,7 +77,7 @@ func presentRiskToUser(riskType, riskMessage, acceptedRisks string) error {
 	for left := riskAbortTimeSeconds; left > 0; left-- {
 		msg := fmt.Sprintf("\rContinuing in %d seconds...", left)
 		msgLen = len(msg)
-		printf(msg)
+		printf("%s", msg)
 		select {
 		case <-interrupt:
 			printf("\r%s\r", strings.Repeat("x", msgLen+1))
