@@ -11,6 +11,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sync"
 	"time"
@@ -111,24 +112,39 @@ type NoiseOpts struct {
 // netMon may be nil, if non-nil it's used to do faster interface lookups.
 // dialPlan may be nil
 func NewNoiseClient(opts NoiseOpts) (*NoiseClient, error) {
+	logf := opts.Logf
 	u, err := url.Parse(opts.ServerURL)
 	if err != nil {
 		return nil, err
 	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, errors.New("invalid ServerURL scheme, must be http or https")
+	}
+
 	var httpPort string
 	var httpsPort string
+	addr, _ := netip.ParseAddr(u.Hostname())
+	isPrivateHost := addr.IsPrivate() || addr.IsLoopback() || u.Hostname() == "localhost"
 	if port := u.Port(); port != "" {
-		// If there is an explicit port specified, trust the scheme and hope for the best
-		if u.Scheme == "http" {
+		// If there is an explicit port specified, entirely rely on the scheme,
+		// unless it's http with a private host in which case we never try using HTTPS.
+		if u.Scheme == "https" {
+			httpPort = ""
+			httpsPort = port
+		} else if u.Scheme == "http" {
 			httpPort = port
 			httpsPort = "443"
-			if u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" {
+			if isPrivateHost {
+				logf("setting empty HTTPS port with http scheme and private host %s", u.Hostname())
 				httpsPort = ""
 			}
-		} else {
-			httpPort = "80"
-			httpsPort = port
 		}
+	} else if u.Scheme == "http" && isPrivateHost {
+		// Whenever the scheme is http and the hostname is an IP address, do not set the HTTPS port,
+		// as there cannot be a TLS certificate issued for an IP, unless it's a public IP.
+		httpPort = "80"
+		httpsPort = ""
 	} else {
 		// Otherwise, use the standard ports
 		httpPort = "80"

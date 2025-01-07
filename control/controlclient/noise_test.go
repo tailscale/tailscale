@@ -54,6 +54,123 @@ func TestNoiseClientHTTP2Upgrade_earlyPayload(t *testing.T) {
 	}.run(t)
 }
 
+func makeClientWithURL(t *testing.T, url string) *NoiseClient {
+	nc, err := NewNoiseClient(NoiseOpts{
+		Logf:      t.Logf,
+		ServerURL: url,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nc
+}
+
+func TestNoiseClientPortsAreSet(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		wantHTTPS string
+		wantHTTP  string
+	}{
+		{
+			name:      "https-url",
+			url:       "https://example.com",
+			wantHTTPS: "443",
+			wantHTTP:  "80",
+		},
+		{
+			name:      "http-url",
+			url:       "http://example.com",
+			wantHTTPS: "443", // TODO(bradfitz): questionable; change?
+			wantHTTP:  "80",
+		},
+		{
+			name:      "https-url-custom-port",
+			url:       "https://example.com:123",
+			wantHTTPS: "123",
+			wantHTTP:  "",
+		},
+		{
+			name:      "http-url-custom-port",
+			url:       "http://example.com:123",
+			wantHTTPS: "443", // TODO(bradfitz): questionable; change?
+			wantHTTP:  "123",
+		},
+		{
+			name:      "http-loopback-no-port",
+			url:       "http://127.0.0.1",
+			wantHTTPS: "",
+			wantHTTP:  "80",
+		},
+		{
+			name:      "http-loopback-custom-port",
+			url:       "http://127.0.0.1:8080",
+			wantHTTPS: "",
+			wantHTTP:  "8080",
+		},
+		{
+			name:      "http-localhost-no-port",
+			url:       "http://localhost",
+			wantHTTPS: "",
+			wantHTTP:  "80",
+		},
+		{
+			name:      "http-localhost-custom-port",
+			url:       "http://localhost:8080",
+			wantHTTPS: "",
+			wantHTTP:  "8080",
+		},
+		{
+			name:      "http-private-ip-no-port",
+			url:       "http://192.168.2.3",
+			wantHTTPS: "",
+			wantHTTP:  "80",
+		},
+		{
+			name:      "http-private-ip-custom-port",
+			url:       "http://192.168.2.3:8080",
+			wantHTTPS: "",
+			wantHTTP:  "8080",
+		},
+		{
+			name:      "http-public-ip",
+			url:       "http://1.2.3.4",
+			wantHTTPS: "443", // TODO(bradfitz): questionable; change?
+			wantHTTP:  "80",
+		},
+		{
+			name:      "http-public-ip-custom-port",
+			url:       "http://1.2.3.4:8080",
+			wantHTTPS: "443", // TODO(bradfitz): questionable; change?
+			wantHTTP:  "8080",
+		},
+		{
+			name:      "https-public-ip",
+			url:       "https://1.2.3.4",
+			wantHTTPS: "443",
+			wantHTTP:  "80",
+		},
+		{
+			name:      "https-public-ip-custom-port",
+			url:       "https://1.2.3.4:8080",
+			wantHTTPS: "8080",
+			wantHTTP:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nc := makeClientWithURL(t, tt.url)
+			if nc.httpsPort != tt.wantHTTPS {
+				t.Errorf("nc.httpsPort = %q; want %q", nc.httpsPort, tt.wantHTTPS)
+			}
+			if nc.httpPort != tt.wantHTTP {
+				t.Errorf("nc.httpPort = %q; want %q", nc.httpPort, tt.wantHTTP)
+			}
+		})
+	}
+}
+
 func (tt noiseClientTest) run(t *testing.T) {
 	serverPrivate := key.NewMachine()
 	clientPrivate := key.NewMachine()
@@ -81,6 +198,7 @@ func (tt noiseClientTest) run(t *testing.T) {
 		ServerPubKey: serverPrivate.Public(),
 		ServerURL:    hs.URL,
 		Dialer:       dialer,
+		Logf:         t.Logf,
 	})
 	if err != nil {
 		t.Fatal(err)
