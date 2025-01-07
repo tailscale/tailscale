@@ -47,7 +47,7 @@ func synologyProxyFromConfigCached(req *http.Request) (*url.URL, error) {
 	var err error
 	modtime := mtime(synologyProxyConfigPath)
 
-	if modtime != cache.updated {
+	if !modtime.Equal(cache.updated) {
 		cache.httpProxy, cache.httpsProxy, err = synologyProxiesFromConfig()
 		cache.updated = modtime
 	}

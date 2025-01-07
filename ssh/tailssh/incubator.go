@@ -1014,10 +1014,10 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 
 func envForUser(u *userMeta) []string {
 	return []string{
-		fmt.Sprintf("SHELL=" + u.LoginShell()),
-		fmt.Sprintf("USER=" + u.Username),
-		fmt.Sprintf("HOME=" + u.HomeDir),
-		fmt.Sprintf("PATH=" + defaultPathForUser(&u.User)),
+		fmt.Sprintf("SHELL=%s", u.LoginShell()),
+		fmt.Sprintf("USER=%s", u.Username),
+		fmt.Sprintf("HOME=%s", u.HomeDir),
+		fmt.Sprintf("PATH=%s", defaultPathForUser(&u.User)),
 	}
 }
 

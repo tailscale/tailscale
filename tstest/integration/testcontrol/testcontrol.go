@@ -955,7 +955,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	if dns != nil && s.MagicDNSDomain != "" {
 		dns = dns.Clone()
 		dns.CertDomains = []string{
-			fmt.Sprintf(node.Hostinfo.Hostname() + "." + s.MagicDNSDomain),
+			node.Hostinfo.Hostname() + "." + s.MagicDNSDomain,
 		}
 	}
 
