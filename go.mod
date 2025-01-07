@@ -82,7 +82,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20241111153353-1a38f6676f10
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
-	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4
+	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240226180453-5db17b287bf1
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20241113014420-4e883d38c8d3
@@ -101,7 +101,7 @@ require (
 	golang.org/x/net v0.32.0
 	golang.org/x/oauth2 v0.16.0
 	golang.org/x/sync v0.10.0
-	golang.org/x/sys v0.28.0
+	golang.org/x/sys v0.29.1-0.20250107080300-1c14dcadc3ab
 	golang.org/x/term v0.27.0
 	golang.org/x/time v0.5.0
 	golang.org/x/tools v0.23.0
