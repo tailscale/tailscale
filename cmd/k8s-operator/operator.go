@@ -18,7 +18,6 @@ import (
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/oauth2/clientcredentials"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -98,14 +97,14 @@ func main() {
 		hostinfo.SetApp(kubetypes.AppAPIServerProxy)
 	}
 
-	s, tsClient := initTSNet(zlog)
+	s, tsc := initTSNet(zlog)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
 	rOpts := reconcilerOpts{
 		log:                           zlog,
 		tsServer:                      s,
-		tsClient:                      tsClient,
+		tsClient:                      tsc,
 		tailscaleNamespace:            tsNamespace,
 		restConfig:                    restConfig,
 		proxyImage:                    image,
@@ -121,7 +120,7 @@ func main() {
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
-func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
+func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClientI) {
 	var (
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
 		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
@@ -133,23 +132,10 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 	if clientIDPath == "" || clientSecretPath == "" {
 		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
 	}
-	clientID, err := os.ReadFile(clientIDPath)
+	tsc, err := newTSClient(context.Background(), clientIDPath, clientSecretPath)
 	if err != nil {
-		startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
+		startlog.Fatalf("error creating Tailscale client: %v", err)
 	}
-	clientSecret, err := os.ReadFile(clientSecretPath)
-	if err != nil {
-		startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
-	}
-	credentials := clientcredentials.Config{
-		ClientID:     string(clientID),
-		ClientSecret: string(clientSecret),
-		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
-	}
-	tsClient := tailscale.NewClient("-", nil)
-	tsClient.UserAgent = "tailscale-k8s-operator"
-	tsClient.HTTPClient = credentials.Client(context.Background())
-
 	s := &tsnet.Server{
 		Hostname: hostname,
 		Logf:     zlog.Named("tailscaled").Debugf,
@@ -202,7 +188,7 @@ waitOnline:
 					},
 				},
 			}
-			authkey, _, err := tsClient.CreateKey(ctx, caps)
+			authkey, _, err := tsc.CreateKey(ctx, caps)
 			if err != nil {
 				startlog.Fatalf("creating operator authkey: %v", err)
 			}
@@ -226,7 +212,7 @@ waitOnline:
 		}
 		time.Sleep(time.Second)
 	}
-	return s, tsClient
+	return s, tsc
 }
 
 // runReconcilers starts the controller-runtime manager and registers the
@@ -536,7 +522,7 @@ func runReconcilers(opts reconcilerOpts) {
 type reconcilerOpts struct {
 	log                *zap.SugaredLogger
 	tsServer           *tsnet.Server
-	tsClient           *tailscale.Client
+	tsClient           tsClientI
 	tailscaleNamespace string       // namespace in which operator resources will be deployed
 	restConfig         *rest.Config // config for connecting to the kube API server
 	proxyImage         string       // <proxy-image-repo>:<proxy-image-tag>
@@ -659,12 +645,6 @@ func dnsRecordsReconcilerIngressHandler(ns string, isDefaultLoadBalancer bool, c
 		}
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: headlessSvc.Namespace, Name: headlessSvc.Name}}}
 	}
-}
-
-type tsClient interface {
-	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
-	Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error)
-	DeleteDevice(ctx context.Context, nodeStableID string) error
 }
 
 func isManagedResource(o client.Object) bool {

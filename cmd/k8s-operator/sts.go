@@ -156,7 +156,7 @@ type tsnetServer interface {
 type tailscaleSTSReconciler struct {
 	client.Client
 	tsnetServer            tsnetServer
-	tsClient               tsClient
+	tsClient               tsClientI
 	defaultTags            []string
 	operatorNamespace      string
 	proxyImage             string
@@ -508,7 +508,7 @@ func deviceInfo(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) (dev 
 	return dev, nil
 }
 
-func newAuthKey(ctx context.Context, tsClient tsClient, tags []string) (string, error) {
+func newAuthKey(ctx context.Context, tsClient tsClientI, tags []string) (string, error) {
 	caps := tailscale.KeyCapabilities{
 		Devices: tailscale.KeyDeviceCapabilities{
 			Create: tailscale.KeyDeviceCreateCapabilities{

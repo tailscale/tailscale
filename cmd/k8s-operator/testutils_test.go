@@ -836,3 +836,50 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 		}
 	}
 }
+
+func (c *fakeTSClient) getVIPServiceByName(ctx context.Context, name string) (*VIPService, error) {
+	c.Lock()
+	defer c.Unlock()
+	if c.vipServices == nil {
+		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
+	}
+	svc, ok := c.vipServices[name]
+	if !ok {
+		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
+	}
+	return svc, nil
+}
+
+func (c *fakeTSClient) createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPService) error {
+	c.Lock()
+	defer c.Unlock()
+	if c.vipServices == nil {
+		c.vipServices = make(map[string]*VIPService)
+	}
+	c.vipServices[svc.Name] = svc
+	return nil
+}
+
+func (c *fakeTSClient) deleteVIPServiceByName(ctx context.Context, name string) error {
+	c.Lock()
+	defer c.Unlock()
+	if c.vipServices != nil {
+		delete(c.vipServices, name)
+	}
+	return nil
+}
+
+type fakeLocalClient struct {
+	status *ipnstate.Status
+}
+
+func (f *fakeLocalClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
+	if f.status == nil {
+		return &ipnstate.Status{
+			Self: &ipnstate.PeerStatus{
+				DNSName: "test-node.test.ts.net.",
+			},
+		}, nil
+	}
+	return f.status, nil
+}

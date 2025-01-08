@@ -56,7 +56,7 @@ type RecorderReconciler struct {
 	recorder    record.EventRecorder
 	clock       tstime.Clock
 	tsNamespace string
-	tsClient    tsClient
+	tsClient    tsClientI
 
 	mu        sync.Mutex           // protects following
 	recorders set.Slice[types.UID] // for recorders gauge
@@ -366,7 +366,7 @@ func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) 
 	return getDeviceInfo(ctx, r.tsClient, secret)
 }
 
-func getDeviceInfo(ctx context.Context, tsClient tsClient, secret *corev1.Secret) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
+func getDeviceInfo(ctx context.Context, tsClient tsClientI, secret *corev1.Secret) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
 	nodeID, dnsName, ok, err := getNodeMetadata(ctx, secret)
 	if !ok || err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, err
