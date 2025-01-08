@@ -513,6 +513,47 @@ func (m Map[K, V]) AsMap() map[K]V {
 	return maps.Clone(m.ж)
 }
 
+// NOTE: the type constraints for MapViewsEqual and MapViewsEqualFunc are based
+// on those for maps.Equal and maps.EqualFunc.
+
+// MapViewsEqual returns whether the two given [Map]s are equal. Both K and V
+// must be comparable; if V is non-comparable, use [MapViewsEqualFunc] instead.
+func MapViewsEqual[K, V comparable](a, b Map[K, V]) bool {
+	if a.Len() != b.Len() || a.IsNil() != b.IsNil() {
+		return false
+	}
+	if a.IsNil() {
+		return true // both nil; can exit early
+	}
+
+	for k, v := range a.All() {
+		bv, ok := b.GetOk(k)
+		if !ok || v != bv {
+			return false
+		}
+	}
+	return true
+}
+
+// MapViewsEqualFunc returns whether the two given [Map]s are equal, using the
+// given function to compare two values.
+func MapViewsEqualFunc[K comparable, V1, V2 any](a Map[K, V1], b Map[K, V2], eq func(V1, V2) bool) bool {
+	if a.Len() != b.Len() || a.IsNil() != b.IsNil() {
+		return false
+	}
+	if a.IsNil() {
+		return true // both nil; can exit early
+	}
+
+	for k, v := range a.All() {
+		bv, ok := b.GetOk(k)
+		if !ok || !eq(v, bv) {
+			return false
+		}
+	}
+	return true
+}
+
 // MapRangeFn is the func called from a Map.Range call.
 // Implementations should return false to stop range.
 type MapRangeFn[K comparable, V any] func(k K, v V) (cont bool)
