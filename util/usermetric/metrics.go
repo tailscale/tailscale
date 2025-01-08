@@ -41,6 +41,9 @@ const (
 	// ReasonFragment means that the packet was dropped because it was an IP fragment.
 	ReasonFragment DropReason = "fragment"
 
+	// ReasonUnknownProtocol means that the packet was dropped because it was an unknown protocol.
+	ReasonUnknownProtocol DropReason = "unknown_protocol"
+
 	// ReasonError means that the packet was dropped because of an error.
 	ReasonError DropReason = "error"
 )

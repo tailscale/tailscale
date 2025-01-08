@@ -390,7 +390,8 @@ func TestPreFilter(t *testing.T) {
 	}{
 		{"empty", Accept, "", []byte{}},
 		{"short", Drop, usermetric.ReasonTooShort, []byte("short")},
-		{"junk", Drop, "", raw4default(ipproto.Unknown, 10)},
+		{"short-junk", Drop, usermetric.ReasonTooShort, raw4default(ipproto.Unknown, 10)},
+		{"long-junk", Drop, usermetric.ReasonUnknownProtocol, raw4default(ipproto.Unknown, 21)},
 		{"fragment", Accept, "", raw4default(ipproto.Fragment, 40)},
 		{"tcp", noVerdict, "", raw4default(ipproto.TCP, 0)},
 		{"udp", noVerdict, "", raw4default(ipproto.UDP, 0)},
