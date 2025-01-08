@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -350,7 +351,7 @@ func (d *derpProber) probeQueuingDelay(from, to string, packetsPerSecond int, pa
 			qdh.mx.Lock()
 			result := []prometheus.Metric{
 				prometheus.MustNewConstMetric(prometheus.NewDesc("derp_qd_probe_dropped_packets", "Total packets dropped", nil, l), prometheus.CounterValue, float64(packetsDropped.Value())),
-				prometheus.MustNewConstHistogram(prometheus.NewDesc("derp_qd_probe_delays_seconds", "Distribution of queuing delays", nil, l), qdh.count, qdh.sum, qdh.bucketedCounts),
+				prometheus.MustNewConstHistogram(prometheus.NewDesc("derp_qd_probe_delays_seconds", "Distribution of queuing delays", nil, l), qdh.count, qdh.sum, maps.Clone(qdh.bucketedCounts)),
 			}
 			qdh.mx.Unlock()
 			return result
