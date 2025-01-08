@@ -145,21 +145,11 @@ func (v NodeView) Created() time.Time                       { return v.ж.Create
 func (v NodeView) Cap() CapabilityVersion                   { return v.ж.Cap }
 func (v NodeView) Tags() views.Slice[string]                { return views.SliceOf(v.ж.Tags) }
 func (v NodeView) PrimaryRoutes() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.PrimaryRoutes) }
-func (v NodeView) LastSeen() *time.Time {
-	if v.ж.LastSeen == nil {
-		return nil
-	}
-	x := *v.ж.LastSeen
-	return &x
+func (v NodeView) LastSeen() views.ValuePointer[time.Time] {
+	return views.ValuePointerOf(v.ж.LastSeen)
 }
 
-func (v NodeView) Online() *bool {
-	if v.ж.Online == nil {
-		return nil
-	}
-	x := *v.ж.Online
-	return &x
-}
+func (v NodeView) Online() views.ValuePointer[bool] { return views.ValuePointerOf(v.ж.Online) }
 
 func (v NodeView) MachineAuthorized() bool                   { return v.ж.MachineAuthorized }
 func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.SliceOf(v.ж.Capabilities) }
@@ -172,20 +162,12 @@ func (v NodeView) ComputedName() string         { return v.ж.ComputedName }
 func (v NodeView) ComputedNameWithHost() string { return v.ж.ComputedNameWithHost }
 func (v NodeView) DataPlaneAuditLogID() string  { return v.ж.DataPlaneAuditLogID }
 func (v NodeView) Expired() bool                { return v.ж.Expired }
-func (v NodeView) SelfNodeV4MasqAddrForThisPeer() *netip.Addr {
-	if v.ж.SelfNodeV4MasqAddrForThisPeer == nil {
-		return nil
-	}
-	x := *v.ж.SelfNodeV4MasqAddrForThisPeer
-	return &x
+func (v NodeView) SelfNodeV4MasqAddrForThisPeer() views.ValuePointer[netip.Addr] {
+	return views.ValuePointerOf(v.ж.SelfNodeV4MasqAddrForThisPeer)
 }
 
-func (v NodeView) SelfNodeV6MasqAddrForThisPeer() *netip.Addr {
-	if v.ж.SelfNodeV6MasqAddrForThisPeer == nil {
-		return nil
-	}
-	x := *v.ж.SelfNodeV6MasqAddrForThisPeer
-	return &x
+func (v NodeView) SelfNodeV6MasqAddrForThisPeer() views.ValuePointer[netip.Addr] {
+	return views.ValuePointerOf(v.ж.SelfNodeV6MasqAddrForThisPeer)
 }
 
 func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
@@ -315,15 +297,8 @@ func (v HostinfoView) Userspace() opt.Bool                    { return v.ж.User
 func (v HostinfoView) UserspaceRouter() opt.Bool              { return v.ж.UserspaceRouter }
 func (v HostinfoView) AppConnector() opt.Bool                 { return v.ж.AppConnector }
 func (v HostinfoView) ServicesHash() string                   { return v.ж.ServicesHash }
-func (v HostinfoView) Location() *Location {
-	if v.ж.Location == nil {
-		return nil
-	}
-	x := *v.ж.Location
-	return &x
-}
-
-func (v HostinfoView) Equal(v2 HostinfoView) bool { return v.ж.Equal(v2.ж) }
+func (v HostinfoView) Location() LocationView                 { return v.ж.Location.View() }
+func (v HostinfoView) Equal(v2 HostinfoView) bool             { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
@@ -699,12 +674,8 @@ func (v *RegisterResponseAuthView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v RegisterResponseAuthView) Oauth2Token() *Oauth2Token {
-	if v.ж.Oauth2Token == nil {
-		return nil
-	}
-	x := *v.ж.Oauth2Token
-	return &x
+func (v RegisterResponseAuthView) Oauth2Token() views.ValuePointer[Oauth2Token] {
+	return views.ValuePointerOf(v.ж.Oauth2Token)
 }
 
 func (v RegisterResponseAuthView) AuthKey() string { return v.ж.AuthKey }
@@ -774,12 +745,8 @@ func (v RegisterRequestView) NodeKeySignature() views.ByteSlice[tkatype.Marshale
 	return views.ByteSliceOf(v.ж.NodeKeySignature)
 }
 func (v RegisterRequestView) SignatureType() SignatureType { return v.ж.SignatureType }
-func (v RegisterRequestView) Timestamp() *time.Time {
-	if v.ж.Timestamp == nil {
-		return nil
-	}
-	x := *v.ж.Timestamp
-	return &x
+func (v RegisterRequestView) Timestamp() views.ValuePointer[time.Time] {
+	return views.ValuePointerOf(v.ж.Timestamp)
 }
 
 func (v RegisterRequestView) DeviceCert() views.ByteSlice[[]byte] {
@@ -1110,12 +1077,8 @@ func (v *SSHRuleView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v SSHRuleView) RuleExpires() *time.Time {
-	if v.ж.RuleExpires == nil {
-		return nil
-	}
-	x := *v.ж.RuleExpires
-	return &x
+func (v SSHRuleView) RuleExpires() views.ValuePointer[time.Time] {
+	return views.ValuePointerOf(v.ж.RuleExpires)
 }
 
 func (v SSHRuleView) Principals() views.SliceView[*SSHPrincipal, SSHPrincipalView] {
@@ -1189,12 +1152,8 @@ func (v SSHActionView) HoldAndDelegate() string                { return v.ж.Hol
 func (v SSHActionView) AllowLocalPortForwarding() bool         { return v.ж.AllowLocalPortForwarding }
 func (v SSHActionView) AllowRemotePortForwarding() bool        { return v.ж.AllowRemotePortForwarding }
 func (v SSHActionView) Recorders() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Recorders) }
-func (v SSHActionView) OnRecordingFailure() *SSHRecorderFailureAction {
-	if v.ж.OnRecordingFailure == nil {
-		return nil
-	}
-	x := *v.ж.OnRecordingFailure
-	return &x
+func (v SSHActionView) OnRecordingFailure() views.ValuePointer[SSHRecorderFailureAction] {
+	return views.ValuePointerOf(v.ж.OnRecordingFailure)
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.

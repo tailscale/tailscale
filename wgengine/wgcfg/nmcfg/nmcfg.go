@@ -106,8 +106,8 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		cpeer := &cfg.Peers[len(cfg.Peers)-1]
 
 		didExitNodeWarn := false
-		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer()
-		cpeer.V6MasqAddr = peer.SelfNodeV6MasqAddrForThisPeer()
+		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer().Clone()
+		cpeer.V6MasqAddr = peer.SelfNodeV6MasqAddrForThisPeer().Clone()
 		cpeer.IsJailed = peer.IsJailed()
 		for _, allowedIP := range peer.AllowedIPs().All() {
 			if allowedIP.Bits() == 0 && peer.StableID() != exitNode {

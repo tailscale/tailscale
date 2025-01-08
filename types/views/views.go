@@ -16,6 +16,7 @@ import (
 	"slices"
 
 	"go4.org/mem"
+	"tailscale.com/types/ptr"
 )
 
 func unmarshalSliceFromJSON[T any](b []byte, x *[]T) error {
@@ -688,6 +689,85 @@ func (m MapFn[K, T, V]) All() iter.Seq2[K, V] {
 			}
 		}
 	}
+}
+
+// ValuePointer provides a read-only view of a pointer to a value type,
+// such as a primitive type or an immutable struct. Its Value and ValueOk
+// methods return a stack-allocated shallow copy of the underlying value.
+// It is the caller's responsibility to ensure that T
+// is free from memory aliasing/mutation concerns.
+type ValuePointer[T any] struct {
+	// ж is the underlying value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *T
+}
+
+// Valid reports whether the underlying pointer is non-nil.
+func (p ValuePointer[T]) Valid() bool {
+	return p.ж != nil
+}
+
+// Get returns a shallow copy of the value if the underlying pointer is non-nil.
+// Otherwise, it returns a zero value.
+func (p ValuePointer[T]) Get() T {
+	v, _ := p.GetOk()
+	return v
+}
+
+// GetOk returns a shallow copy of the underlying value and true if the underlying
+// pointer is non-nil. Otherwise, it returns a zero value and false.
+func (p ValuePointer[T]) GetOk() (value T, ok bool) {
+	if p.ж == nil {
+		return value, false // value holds a zero value
+	}
+	return *p.ж, true
+}
+
+// GetOr returns a shallow copy of the underlying value if it is non-nil.
+// Otherwise, it returns the provided default value.
+func (p ValuePointer[T]) GetOr(def T) T {
+	if p.ж == nil {
+		return def
+	}
+	return *p.ж
+}
+
+// Clone returns a shallow copy of the underlying value.
+func (p ValuePointer[T]) Clone() *T {
+	if p.ж == nil {
+		return nil
+	}
+	return ptr.To(*p.ж)
+}
+
+// String implements [fmt.Stringer].
+func (p ValuePointer[T]) String() string {
+	if p.ж == nil {
+		return "nil"
+	}
+	return fmt.Sprint(p.ж)
+}
+
+// ValuePointerOf returns an immutable view of a pointer to an immutable value.
+// It is the caller's responsibility to ensure that T
+// is free from memory aliasing/mutation concerns.
+func ValuePointerOf[T any](v *T) ValuePointer[T] {
+	return ValuePointer[T]{v}
+}
+
+// MarshalJSON implements [json.Marshaler].
+func (p ValuePointer[T]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(p.ж)
+}
+
+// UnmarshalJSON implements [json.Unmarshaler].
+func (p *ValuePointer[T]) UnmarshalJSON(b []byte) error {
+	if p.ж != nil {
+		return errors.New("already initialized")
+	}
+	return json.Unmarshal(b, &p.ж)
 }
 
 // ContainsPointers reports whether T contains any pointers,

@@ -689,13 +689,11 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				return nil, false
 			}
 		case "Online":
-			wasOnline := was.Online()
-			if n.Online != nil && wasOnline != nil && *n.Online != *wasOnline {
+			if wasOnline, ok := was.Online().GetOk(); ok && n.Online != nil && *n.Online != wasOnline {
 				pc().Online = ptr.To(*n.Online)
 			}
 		case "LastSeen":
-			wasSeen := was.LastSeen()
-			if n.LastSeen != nil && wasSeen != nil && !wasSeen.Equal(*n.LastSeen) {
+			if wasSeen, ok := was.LastSeen().GetOk(); ok && n.LastSeen != nil && !wasSeen.Equal(*n.LastSeen) {
 				pc().LastSeen = ptr.To(*n.LastSeen)
 			}
 		case "MachineAuthorized":
@@ -720,18 +718,18 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "SelfNodeV4MasqAddrForThisPeer":
 			va, vb := was.SelfNodeV4MasqAddrForThisPeer(), n.SelfNodeV4MasqAddrForThisPeer
-			if va == nil && vb == nil {
+			if !va.Valid() && vb == nil {
 				continue
 			}
-			if va == nil || vb == nil || *va != *vb {
+			if va, ok := va.GetOk(); !ok || vb == nil || va != *vb {
 				return nil, false
 			}
 		case "SelfNodeV6MasqAddrForThisPeer":
 			va, vb := was.SelfNodeV6MasqAddrForThisPeer(), n.SelfNodeV6MasqAddrForThisPeer
-			if va == nil && vb == nil {
+			if !va.Valid() && vb == nil {
 				continue
 			}
-			if va == nil || vb == nil || *va != *vb {
+			if va, ok := va.GetOk(); !ok || vb == nil || va != *vb {
 				return nil, false
 			}
 		case "ExitNodeDNSResolvers":

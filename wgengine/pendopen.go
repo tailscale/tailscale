@@ -239,15 +239,15 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	if n.IsWireGuardOnly() {
 		online = "wg"
 	} else {
-		if v := n.Online(); v != nil {
-			if *v {
+		if v, ok := n.Online().GetOk(); ok {
+			if v {
 				online = "yes"
 			} else {
 				online = "no"
 			}
 		}
-		if n.LastSeen() != nil && online != "yes" {
-			online += fmt.Sprintf(", lastseen=%v", durFmt(*n.LastSeen()))
+		if lastSeen, ok := n.LastSeen().GetOk(); ok && online != "yes" {
+			online += fmt.Sprintf(", lastseen=%v", durFmt(lastSeen))
 		}
 	}
 	e.logf("open-conn-track: timeout opening %v to node %v; online=%v, lastRecv=%v",

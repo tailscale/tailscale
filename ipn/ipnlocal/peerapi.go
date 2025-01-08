@@ -233,11 +233,11 @@ func (h *peerAPIHandler) logf(format string, a ...any) {
 // isAddressValid reports whether addr is a valid destination address for this
 // node originating from the peer.
 func (h *peerAPIHandler) isAddressValid(addr netip.Addr) bool {
-	if v := h.peerNode.SelfNodeV4MasqAddrForThisPeer(); v != nil {
-		return *v == addr
+	if v, ok := h.peerNode.SelfNodeV4MasqAddrForThisPeer().GetOk(); ok {
+		return v == addr
 	}
-	if v := h.peerNode.SelfNodeV6MasqAddrForThisPeer(); v != nil {
-		return *v == addr
+	if v, ok := h.peerNode.SelfNodeV6MasqAddrForThisPeer().GetOk(); ok {
+		return v == addr
 	}
 	pfx := netip.PrefixFrom(addr, addr.BitLen())
 	return views.SliceContains(h.selfNode.Addresses(), pfx)

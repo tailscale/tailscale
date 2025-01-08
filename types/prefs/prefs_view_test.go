@@ -162,15 +162,8 @@ func (v *TestBundleView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v TestBundleView) Name() string { return v.ж.Name }
-func (v TestBundleView) Nested() *TestValueStruct {
-	if v.ж.Nested == nil {
-		return nil
-	}
-	x := *v.ж.Nested
-	return &x
-}
-
+func (v TestBundleView) Name() string                 { return v.ж.Name }
+func (v TestBundleView) Nested() TestValueStructView  { return v.ж.Nested.View() }
 func (v TestBundleView) Equal(v2 TestBundleView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
