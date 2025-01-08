@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/types/ptr"
 )
 
@@ -28,6 +29,18 @@ func TestIngressPGReconciler(t *testing.T) {
 	tsIngressClass := &networkingv1.IngressClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
 		Spec:       networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},
+	}
+
+	// Pre-create the ProxyGroup
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-pg",
+			Namespace:  "operator-ns",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type: tsapi.ProxyGroupTypeIngress,
+		},
 	}
 
 	// Pre-create the ConfigMap for the ProxyGroup
@@ -41,7 +54,20 @@ func TestIngressPGReconciler(t *testing.T) {
 		},
 	}
 
-	fc := fake.NewFakeClient(tsIngressClass, pgConfigMap)
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg, pgConfigMap, tsIngressClass).
+		WithStatusSubresource(pg).
+		Build()
+	mustUpdateStatus(t, fc, "operator-ns", pg.Name, func(pg *tsapi.ProxyGroup) {
+		pg.Status.Conditions = []metav1.Condition{
+			{
+				Type:               string(tsapi.ProxyGroupReady),
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 1,
+			},
+		}
+	})
 	ft := &fakeTSClient{}
 	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 	zl, err := zap.NewDevelopment()

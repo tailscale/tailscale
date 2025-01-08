@@ -1,3 +1,8 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+//go:build !plan9
+
 package main
 
 import (
@@ -24,6 +29,8 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	tsoperator "tailscale.com/k8s-operator"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
@@ -107,8 +114,27 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		logger.Warnf("error validating tailscale IngressClass: %v. In future this might be a terminal error.", err)
 	}
 
+	// Get and validate ProxyGroup readiness
+	pgName := ing.Annotations[AnnotationProxyGroup]
+	if pgName == "" {
+		logger.Infof("[unexpected] no ProxyGroup annotation, skipping VIPService provisioning")
+		return nil
+	}
+	pg := &tsapi.ProxyGroup{}
+	if err := a.Get(ctx, client.ObjectKey{Name: pgName, Namespace: a.tsNamespace}, pg); err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Infof("ProxyGroup %q does not exist", pgName)
+			return nil
+		}
+		return fmt.Errorf("getting ProxyGroup %q: %w", pgName, err)
+	}
+	if !tsoperator.ProxyGroupIsReady(pg) {
+		logger.Infof("ProxyGroup %q is not ready", pgName)
+		return nil
+	}
+
 	// Validate Ingress configuration
-	if err := validateIngress(ing); err != nil {
+	if err := a.validateIngress(ing, pg); err != nil {
 		logger.Errorf("invalid Ingress configuration: %v", err)
 		a.recorder.Event(ing, corev1.EventTypeWarning, "InvalidIngressConfiguration", err.Error())
 		return nil
@@ -117,11 +143,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	if !IsHTTPSEnabledOnTailnet(a.tsnetServer) {
 		a.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
 	}
-	pg := ing.Annotations[AnnotationProxyGroup]
-	if pg == "" {
-		logger.Infof("[unexpected] no ProxyGroup annotation, skipping VIPService provisioning")
-		return nil
-	}
+
 	logger = logger.With("proxy-group", pg)
 
 	if !slices.Contains(ing.Finalizers, FinalizerNamePG) {
@@ -146,7 +168,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	// and no longer owned by an Ingress are cleaned up. This is fine- it is not expensive and ensures that in edge
 	// cases (a single update changed both hostname and removed ProxyGroup annotation) the VIPService is more likely
 	// to be (eventually) removed.
-	if err := a.maybeCleanupProxyGroup(ctx, pg, logger); err != nil {
+	if err := a.maybeCleanupProxyGroup(ctx, pgName, logger); err != nil {
 		return fmt.Errorf("failed to cleanup VIPService resources for ProxyGroup: %w", err)
 	}
 
@@ -177,9 +199,13 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	// 3. Ensure that the serve config for the ProxyGroup contains the VIPService
-	cm, cfg, err := a.proxyGroupServeConfig(ctx, pg)
+	cm, cfg, err := a.proxyGroupServeConfig(ctx, pgName)
 	if err != nil {
 		return fmt.Errorf("error getting ingress serve config: %w", err)
+	}
+	if cm == nil {
+		logger.Infof("no ingress serve config ConfigMap found, unable to update serve config. Ensure that ProxyGroup is healthy.")
+		return nil
 	}
 	ep := ipn.HostPort(fmt.Sprintf("%s:443", dnsName))
 	handlers, err := handlersForIngress(ctx, ing, a.Client, a.recorder, dnsName, logger)
@@ -361,7 +387,7 @@ func (a *IngressPGReconciler) maybeCleanup(ctx context.Context, hostname string,
 	if cfg == nil || cfg.Services == nil || cfg.Services[hostname] == nil {
 		return nil
 	}
-	logger.Infof("Ensuring that VIPService %q configuratin is cleaned up", hostname)
+	logger.Infof("Ensuring that VIPService %q configuration is cleaned up", hostname)
 
 	// 2. Delete the VIPService.
 	svc, err := a.getVIPService(ctx, hostname, logger)
@@ -410,12 +436,12 @@ func (a *IngressPGReconciler) deleteFinalizer(ctx context.Context, ing *networki
 	return nil
 }
 
-func pgIngresCMName(pg string) string {
+func pgIngressCMName(pg string) string {
 	return fmt.Sprintf("%s-ingress-config", pg)
 }
 
 func (a *IngressPGReconciler) proxyGroupServeConfig(ctx context.Context, pg string) (cm *corev1.ConfigMap, cfg *ipn.ServeConfig, err error) {
-	name := pgIngresCMName(pg)
+	name := pgIngressCMName(pg)
 	cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -494,7 +520,8 @@ func isVIPServiceForAnyIngress(svc *VIPService) bool {
 // Currently validates:
 // - Any tags provided via tailscale.com/tags annotation are valid Tailscale ACL tags
 // - The derived hostname is a valid DNS label
-func validateIngress(ing *networkingv1.Ingress) error {
+// - The referenced ProxyGroup exists and is of type 'ingress'
+func (a *IngressPGReconciler) validateIngress(ing *networkingv1.Ingress, pg *tsapi.ProxyGroup) error {
 	// Validate tags if present
 	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
 		tags := strings.Split(tstr, ",")
@@ -518,6 +545,15 @@ func validateIngress(ing *networkingv1.Ingress) error {
 	// TODO(irbekrm): link docs for how hostnames are derived
 	if err := dnsname.ValidLabel(hostname); err != nil {
 		return fmt.Errorf("invalid hostname %q: %w. Ensure that the hostname is a valid DNS label", hostname, err)
+	}
+
+	if pg.Spec.Type != tsapi.ProxyGroupTypeIngress {
+		return fmt.Errorf("ProxyGroup %q is of type %q but must be of type %q",
+			pg.Name, pg.Spec.Type, tsapi.ProxyGroupTypeIngress)
+	}
+
+	if !tsoperator.ProxyGroupIsReady(pg) {
+		return fmt.Errorf("ProxyGroup %q is not ready", pg.Name)
 	}
 
 	return nil
