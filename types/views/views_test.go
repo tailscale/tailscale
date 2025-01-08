@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	qt "github.com/frankban/quicktest"
+	"tailscale.com/types/structs"
 )
 
 type viewStruct struct {
@@ -499,5 +500,89 @@ func TestMapFnIter(t *testing.T) {
 	want := []string{"bar-barVal", "foo-fooVal"}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
+func TestMapViewsEqual(t *testing.T) {
+	testCases := []struct {
+		name string
+		a, b map[string]string
+		want bool
+	}{
+		{
+			name: "both_nil",
+			a:    nil,
+			b:    nil,
+			want: true,
+		},
+		{
+			name: "both_empty",
+			a:    map[string]string{},
+			b:    map[string]string{},
+			want: true,
+		},
+		{
+			name: "one_nil",
+			a:    nil,
+			b:    map[string]string{"a": "1"},
+			want: false,
+		},
+		{
+			name: "different_length",
+			a:    map[string]string{"a": "1"},
+			b:    map[string]string{"a": "1", "b": "2"},
+			want: false,
+		},
+		{
+			name: "different_values",
+			a:    map[string]string{"a": "1"},
+			b:    map[string]string{"a": "2"},
+			want: false,
+		},
+		{
+			name: "different_keys",
+			a:    map[string]string{"a": "1"},
+			b:    map[string]string{"b": "1"},
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MapViewsEqual(MapOf(tc.a), MapOf(tc.b))
+			if got != tc.want {
+				t.Errorf("MapViewsEqual: got=%v, want %v", got, tc.want)
+			}
+
+			got = MapViewsEqualFunc(MapOf(tc.a), MapOf(tc.b), func(a, b string) bool {
+				return a == b
+			})
+			if got != tc.want {
+				t.Errorf("MapViewsEqualFunc: got=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMapViewsEqualFunc(t *testing.T) {
+	// Test that we can compare maps with two different non-comparable
+	// values using a custom comparison function.
+	type customStruct1 struct {
+		_      structs.Incomparable
+		Field1 string
+	}
+	type customStruct2 struct {
+		_      structs.Incomparable
+		Field2 string
+	}
+
+	a := map[string]customStruct1{"a": {Field1: "1"}}
+	b := map[string]customStruct2{"a": {Field2: "1"}}
+
+	got := MapViewsEqualFunc(MapOf(a), MapOf(b), func(a customStruct1, b customStruct2) bool {
+		return a.Field1 == b.Field2
+	})
+	if !got {
+		t.Errorf("MapViewsEqualFunc: got=%v, want true", got)
 	}
 }
