@@ -233,7 +233,6 @@ func desktop() (ret opt.Bool) {
 	seenDesktop := false
 	for lr := range lineiter.File("/proc/net/unix") {
 		line, _ := lr.Value()
-		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S(" @/tmp/dbus-"))
 		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S(".X11-unix"))
 		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S("/wayland-1"))
 	}
