@@ -2721,6 +2721,10 @@ spec:
               jsonPath: .status.conditions[?(@.type == "ProxyGroupReady")].reason
               name: Status
               type: string
+            - description: ProxyGroup type.
+              jsonPath: .spec.type
+              name: Type
+              type: string
           name: v1alpha1
           schema:
             openAPIV3Schema:
@@ -2778,6 +2782,7 @@ spec:
                                     Replicas specifies how many replicas to create the StatefulSet with.
                                     Defaults to 2.
                                 format: int32
+                                minimum: 0
                                 type: integer
                             tags:
                                 description: |-
@@ -2792,10 +2797,16 @@ spec:
                                     type: string
                                 type: array
                             type:
-                                description: Type of the ProxyGroup proxies. Currently the only supported type is egress.
+                                description: |-
+                                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
+                                    Type is immutable once a ProxyGroup is created.
                                 enum:
                                     - egress
+                                    - ingress
                                 type: string
+                                x-kubernetes-validations:
+                                    - message: ProxyGroup type is immutable
+                                      rule: self == oldSelf
                         required:
                             - type
                         type: object

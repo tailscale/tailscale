@@ -20,6 +20,10 @@ spec:
           jsonPath: .status.conditions[?(@.type == "ProxyGroupReady")].reason
           name: Status
           type: string
+        - description: ProxyGroup type.
+          jsonPath: .spec.type
+          name: Type
+          type: string
       name: v1alpha1
       schema:
         openAPIV3Schema:
@@ -84,6 +88,7 @@ spec:
                     Defaults to 2.
                   type: integer
                   format: int32
+                  minimum: 0
                 tags:
                   description: |-
                     Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].
@@ -97,10 +102,16 @@ spec:
                     type: string
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                 type:
-                  description: Type of the ProxyGroup proxies. Currently the only supported type is egress.
+                  description: |-
+                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
+                    Type is immutable once a ProxyGroup is created.
                   type: string
                   enum:
                     - egress
+                    - ingress
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: ProxyGroup type is immutable
             status:
               description: |-
                 ProxyGroupStatus describes the status of the ProxyGroup resources. This is

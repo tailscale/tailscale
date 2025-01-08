@@ -499,7 +499,7 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
 	}
 
-	// Recorder reconciler.
+	// ProxyGroup reconciler.
 	ownedByProxyGroupFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.ProxyGroup{})
 	proxyClassFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForProxyGroup(mgr.GetClient(), startlog))
 	err = builder.ControllerManagedBy(mgr).

@@ -138,10 +138,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
 			},
-			{
-				Name:  "TS_INTERNAL_APP",
-				Value: kubetypes.AppProxyGroupEgress,
-			},
 		}
 
 		if tsFirewallMode != "" {
@@ -155,9 +151,18 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			envs = append(envs, corev1.EnvVar{
 				Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
 				Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
+			},
+				corev1.EnvVar{
+					Name:  "TS_INTERNAL_APP",
+					Value: kubetypes.AppProxyGroupEgress,
+				},
+			)
+		} else {
+			envs = append(envs, corev1.EnvVar{
+				Name:  "TS_INTERNAL_APP",
+				Value: kubetypes.AppProxyGroupIngress,
 			})
 		}
-
 		return append(c.Env, envs...)
 	}()
 

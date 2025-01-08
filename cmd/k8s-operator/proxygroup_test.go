@@ -25,6 +25,8 @@ import (
 	"tailscale.com/client/tailscale"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ptr"
 )
@@ -52,6 +54,9 @@ func TestProxyGroup(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Finalizers: []string{"tailscale.com/finalizer"},
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type: tsapi.ProxyGroupTypeEgress,
 		},
 	}
 
@@ -112,8 +117,8 @@ func TestProxyGroup(t *testing.T) {
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg, nil)
 		expectProxyGroupResources(t, fc, pg, true, initialCfgHash)
-		if expected := 1; reconciler.proxyGroups.Len() != expected {
-			t.Fatalf("expected %d recorders, got %d", expected, reconciler.proxyGroups.Len())
+		if expected := 1; reconciler.egressProxyGroups.Len() != expected {
+			t.Fatalf("expected %d egress ProxyGroups, got %d", expected, reconciler.egressProxyGroups.Len())
 		}
 		expectProxyGroupResources(t, fc, pg, true, initialCfgHash)
 		keyReq := tailscale.KeyCapabilities{
@@ -227,8 +232,8 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		expectMissing[tsapi.ProxyGroup](t, fc, "", pg.Name)
-		if expected := 0; reconciler.proxyGroups.Len() != expected {
-			t.Fatalf("expected %d ProxyGroups, got %d", expected, reconciler.proxyGroups.Len())
+		if expected := 0; reconciler.egressProxyGroups.Len() != expected {
+			t.Fatalf("expected %d ProxyGroups, got %d", expected, reconciler.egressProxyGroups.Len())
 		}
 		// 2 nodes should get deleted as part of the scale down, and then finally
 		// the first node gets deleted with the ProxyGroup cleanup.
@@ -239,6 +244,131 @@ func TestProxyGroup(t *testing.T) {
 		// The fake client does not clean up objects whose owner has been
 		// deleted, so we can't test for the owned resources getting deleted.
 	})
+}
+
+func TestProxyGroupTypes(t *testing.T) {
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		Build()
+
+	zl, _ := zap.NewDevelopment()
+	reconciler := &ProxyGroupReconciler{
+		tsNamespace: tsNamespace,
+		proxyImage:  testProxyImage,
+		Client:      fc,
+		l:           zl.Sugar(),
+		tsClient:    &fakeTSClient{},
+		clock:       tstest.NewClock(tstest.ClockOpts{}),
+	}
+
+	t.Run("egress_type", func(t *testing.T) {
+		pg := &tsapi.ProxyGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-egress",
+				UID:  "test-egress-uid",
+			},
+			Spec: tsapi.ProxyGroupSpec{
+				Type:     tsapi.ProxyGroupTypeEgress,
+				Replicas: ptr.To[int32](0),
+			},
+		}
+		if err := fc.Create(context.Background(), pg); err != nil {
+			t.Fatal(err)
+		}
+
+		expectReconciled(t, reconciler, "", pg.Name)
+		verifyProxyGroupCounts(t, reconciler, 0, 1)
+
+		sts := &appsv1.StatefulSet{}
+		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatalf("failed to get StatefulSet: %v", err)
+		}
+		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupEgress)
+		verifyEnvVar(t, sts, "TS_EGRESS_SERVICES_CONFIG_PATH", fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices))
+
+		// Verify that egress configuration has been set up.
+		cm := &corev1.ConfigMap{}
+		cmName := fmt.Sprintf("%s-egress-config", pg.Name)
+		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: cmName}, cm); err != nil {
+			t.Fatalf("failed to get ConfigMap: %v", err)
+		}
+
+		expectedVolumes := []corev1.Volume{
+			{
+				Name: cmName,
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: cmName,
+						},
+					},
+				},
+			},
+		}
+
+		expectedVolumeMounts := []corev1.VolumeMount{
+			{
+				Name:      cmName,
+				MountPath: "/etc/proxies",
+				ReadOnly:  true,
+			},
+		}
+
+		if diff := cmp.Diff(expectedVolumes, sts.Spec.Template.Spec.Volumes); diff != "" {
+			t.Errorf("unexpected volumes (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff(expectedVolumeMounts, sts.Spec.Template.Spec.Containers[0].VolumeMounts); diff != "" {
+			t.Errorf("unexpected volume mounts (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ingress_type", func(t *testing.T) {
+		pg := &tsapi.ProxyGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-ingress",
+				UID:  "test-ingress-uid",
+			},
+			Spec: tsapi.ProxyGroupSpec{
+				Type: tsapi.ProxyGroupTypeIngress,
+			},
+		}
+		if err := fc.Create(context.Background(), pg); err != nil {
+			t.Fatal(err)
+		}
+
+		expectReconciled(t, reconciler, "", pg.Name)
+		verifyProxyGroupCounts(t, reconciler, 1, 1)
+
+		sts := &appsv1.StatefulSet{}
+		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatalf("failed to get StatefulSet: %v", err)
+		}
+		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupIngress)
+	})
+}
+
+func verifyProxyGroupCounts(t *testing.T, r *ProxyGroupReconciler, wantIngress, wantEgress int) {
+	t.Helper()
+	if r.ingressProxyGroups.Len() != wantIngress {
+		t.Errorf("expected %d ingress proxy groups, got %d", wantIngress, r.ingressProxyGroups.Len())
+	}
+	if r.egressProxyGroups.Len() != wantEgress {
+		t.Errorf("expected %d egress proxy groups, got %d", wantEgress, r.egressProxyGroups.Len())
+	}
+}
+
+func verifyEnvVar(t *testing.T, sts *appsv1.StatefulSet, name, expectedValue string) {
+	t.Helper()
+	for _, env := range sts.Spec.Template.Spec.Containers[0].Env {
+		if env.Name == name {
+			if env.Value != expectedValue {
+				t.Errorf("expected %s=%s, got %s", name, expectedValue, env.Value)
+			}
+			return
+		}
+	}
+	t.Errorf("%s environment variable not found", name)
 }
 
 func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup, shouldExist bool, cfgHash string) {
