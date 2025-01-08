@@ -61,8 +61,8 @@ type ACLDetails struct {
 
 // ACL contains an ACLDetails and metadata.
 type ACL struct {
-	ACL  ACLDetails
-	ETag string // to check with version on server
+	ACL  ACLDetails `json:"acl,omitempty"`
+	ETag string     `json:"e_tag,omitempty"` // to check with version on server
 }
 
 // ACLHuJSON contains the HuJSON string of the ACL and metadata.
