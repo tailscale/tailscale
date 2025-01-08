@@ -28,6 +28,9 @@ func (src *StructWithPtrs) Clone() *StructWithPtrs {
 	if dst.Int != nil {
 		dst.Int = ptr.To(*src.Int)
 	}
+	if dst.NoView != nil {
+		dst.NoView = ptr.To(*src.NoView)
+	}
 	return dst
 }
 
@@ -35,6 +38,7 @@ func (src *StructWithPtrs) Clone() *StructWithPtrs {
 var _StructWithPtrsCloneNeedsRegeneration = StructWithPtrs(struct {
 	Value        *StructWithoutPtrs
 	Int          *int
+	NoView       *StructWithNoView
 	NoCloneValue *StructWithoutPtrs
 }{})
 

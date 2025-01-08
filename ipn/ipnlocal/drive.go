@@ -347,8 +347,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// TODO(oxtoacart): for some reason, this correctly
 				// catches when a node goes from offline to online,
 				// but not the other way around...
-				online := peer.Online()
-				if online == nil || !*online {
+				if !peer.Online().Get() {
 					return false
 				}
 

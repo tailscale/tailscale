@@ -283,11 +283,11 @@ func formatNodes(nodes []tailcfg.NodeView) string {
 		}
 		fmt.Fprintf(&sb, "(%d, %q", n.ID(), n.Name())
 
-		if n.Online() != nil {
-			fmt.Fprintf(&sb, ", online=%v", *n.Online())
+		if online, ok := n.Online().GetOk(); ok {
+			fmt.Fprintf(&sb, ", online=%v", online)
 		}
-		if n.LastSeen() != nil {
-			fmt.Fprintf(&sb, ", lastSeen=%v", n.LastSeen().Unix())
+		if lastSeen, ok := n.LastSeen().GetOk(); ok {
+			fmt.Fprintf(&sb, ", lastSeen=%v", lastSeen.Unix())
 		}
 		if n.Key() != (key.NodePublic{}) {
 			fmt.Fprintf(&sb, ", key=%v", n.Key().String())

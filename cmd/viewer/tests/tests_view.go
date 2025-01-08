@@ -61,20 +61,11 @@ func (v *StructWithPtrsView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v StructWithPtrsView) Value() *StructWithoutPtrs {
-	if v.ж.Value == nil {
-		return nil
-	}
-	x := *v.ж.Value
-	return &x
-}
+func (v StructWithPtrsView) Value() StructWithoutPtrsView { return v.ж.Value.View() }
+func (v StructWithPtrsView) Int() views.ValuePointer[int] { return views.ValuePointerOf(v.ж.Int) }
 
-func (v StructWithPtrsView) Int() *int {
-	if v.ж.Int == nil {
-		return nil
-	}
-	x := *v.ж.Int
-	return &x
+func (v StructWithPtrsView) NoView() views.ValuePointer[StructWithNoView] {
+	return views.ValuePointerOf(v.ж.NoView)
 }
 
 func (v StructWithPtrsView) NoCloneValue() *StructWithoutPtrs { return v.ж.NoCloneValue }
@@ -85,6 +76,7 @@ func (v StructWithPtrsView) Equal(v2 StructWithPtrsView) bool { return v.ж.Equa
 var _StructWithPtrsViewNeedsRegeneration = StructWithPtrs(struct {
 	Value        *StructWithoutPtrs
 	Int          *int
+	NoView       *StructWithNoView
 	NoCloneValue *StructWithoutPtrs
 }{})
 
@@ -424,12 +416,8 @@ func (v *GenericIntStructView[T]) UnmarshalJSON(b []byte) error {
 }
 
 func (v GenericIntStructView[T]) Value() T { return v.ж.Value }
-func (v GenericIntStructView[T]) Pointer() *T {
-	if v.ж.Pointer == nil {
-		return nil
-	}
-	x := *v.ж.Pointer
-	return &x
+func (v GenericIntStructView[T]) Pointer() views.ValuePointer[T] {
+	return views.ValuePointerOf(v.ж.Pointer)
 }
 
 func (v GenericIntStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
@@ -500,12 +488,8 @@ func (v *GenericNoPtrsStructView[T]) UnmarshalJSON(b []byte) error {
 }
 
 func (v GenericNoPtrsStructView[T]) Value() T { return v.ж.Value }
-func (v GenericNoPtrsStructView[T]) Pointer() *T {
-	if v.ж.Pointer == nil {
-		return nil
-	}
-	x := *v.ж.Pointer
-	return &x
+func (v GenericNoPtrsStructView[T]) Pointer() views.ValuePointer[T] {
+	return views.ValuePointerOf(v.ж.Pointer)
 }
 
 func (v GenericNoPtrsStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
@@ -722,19 +706,14 @@ func (v *StructWithTypeAliasFieldsView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v StructWithTypeAliasFieldsView) WithPtr() StructWithPtrsView        { return v.ж.WithPtr.View() }
+func (v StructWithTypeAliasFieldsView) WithPtr() StructWithPtrsAliasView   { return v.ж.WithPtr.View() }
 func (v StructWithTypeAliasFieldsView) WithoutPtr() StructWithoutPtrsAlias { return v.ж.WithoutPtr }
 func (v StructWithTypeAliasFieldsView) WithPtrByPtr() StructWithPtrsAliasView {
 	return v.ж.WithPtrByPtr.View()
 }
-func (v StructWithTypeAliasFieldsView) WithoutPtrByPtr() *StructWithoutPtrsAlias {
-	if v.ж.WithoutPtrByPtr == nil {
-		return nil
-	}
-	x := *v.ж.WithoutPtrByPtr
-	return &x
+func (v StructWithTypeAliasFieldsView) WithoutPtrByPtr() StructWithoutPtrsAliasView {
+	return v.ж.WithoutPtrByPtr.View()
 }
-
 func (v StructWithTypeAliasFieldsView) SliceWithPtrs() views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
 	return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](v.ж.SliceWithPtrs)
 }

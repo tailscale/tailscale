@@ -37,9 +37,14 @@ type Map struct {
 	StructWithPtrKey map[StructWithPtrs]int `json:"-"`
 }
 
+type StructWithNoView struct {
+	Value int
+}
+
 type StructWithPtrs struct {
-	Value *StructWithoutPtrs
-	Int   *int
+	Value  *StructWithoutPtrs
+	Int    *int
+	NoView *StructWithNoView
 
 	NoCloneValue *StructWithoutPtrs `codegen:"noclone"`
 }

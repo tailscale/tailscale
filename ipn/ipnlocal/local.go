@@ -1117,13 +1117,9 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				}
 				if !prefs.ExitNodeID().IsZero() {
 					if exitPeer, ok := b.netMap.PeerWithStableID(prefs.ExitNodeID()); ok {
-						online := false
-						if v := exitPeer.Online(); v != nil {
-							online = *v
-						}
 						s.ExitNodeStatus = &ipnstate.ExitNodeStatus{
 							ID:           prefs.ExitNodeID(),
-							Online:       online,
+							Online:       exitPeer.Online().Get(),
 							TailscaleIPs: exitPeer.Addresses().AsSlice(),
 						}
 					}
@@ -1194,10 +1190,6 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 	}
 	exitNodeID := b.pm.CurrentPrefs().ExitNodeID()
 	for _, p := range b.peers {
-		var lastSeen time.Time
-		if p.LastSeen() != nil {
-			lastSeen = *p.LastSeen()
-		}
 		tailscaleIPs := make([]netip.Addr, 0, p.Addresses().Len())
 		for i := range p.Addresses().Len() {
 			addr := p.Addresses().At(i)
@@ -1205,7 +1197,6 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
 		}
-		online := p.Online()
 		ps := &ipnstate.PeerStatus{
 			InNetworkMap:    true,
 			UserID:          p.User(),
@@ -1214,12 +1205,12 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			HostName:        p.Hostinfo().Hostname(),
 			DNSName:         p.Name(),
 			OS:              p.Hostinfo().OS(),
-			LastSeen:        lastSeen,
-			Online:          online != nil && *online,
+			LastSeen:        p.LastSeen().Get(),
+			Online:          p.Online().Get(),
 			ShareeNode:      p.Hostinfo().ShareeNode(),
 			ExitNode:        p.StableID() != "" && p.StableID() == exitNodeID,
 			SSH_HostKeys:    p.Hostinfo().SSH_HostKeys().AsSlice(),
-			Location:        p.Hostinfo().Location(),
+			Location:        p.Hostinfo().Location().AsStruct(),
 			Capabilities:    p.Capabilities().AsSlice(),
 		}
 		if cm := p.CapMap(); cm.Len() > 0 {
@@ -7369,8 +7360,8 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSug
 	if len(candidates) == 1 {
 		peer := candidates[0]
 		if hi := peer.Hostinfo(); hi.Valid() {
-			if loc := hi.Location(); loc != nil {
-				res.Location = loc.View()
+			if loc := hi.Location(); loc.Valid() {
+				res.Location = loc
 			}
 		}
 		res.ID = peer.StableID()
@@ -7414,10 +7405,10 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSug
 			continue
 		}
 		loc := hi.Location()
-		if loc == nil {
+		if !loc.Valid() {
 			continue
 		}
-		distance := longLatDistance(preferredDERP.Latitude, preferredDERP.Longitude, loc.Latitude, loc.Longitude)
+		distance := longLatDistance(preferredDERP.Latitude, preferredDERP.Longitude, loc.Latitude(), loc.Longitude())
 		if distance < minDistance {
 			minDistance = distance
 		}
@@ -7438,8 +7429,8 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSug
 		res.ID = chosen.StableID()
 		res.Name = chosen.Name()
 		if hi := chosen.Hostinfo(); hi.Valid() {
-			if loc := hi.Location(); loc != nil {
-				res.Location = loc.View()
+			if loc := hi.Location(); loc.Valid() {
+				res.Location = loc
 			}
 		}
 		return res, nil
@@ -7468,8 +7459,8 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSug
 	res.ID = chosen.StableID()
 	res.Name = chosen.Name()
 	if hi := chosen.Hostinfo(); hi.Valid() {
-		if loc := hi.Location(); loc != nil {
-			res.Location = loc.View()
+		if loc := hi.Location(); loc.Valid() {
+			res.Location = loc
 		}
 	}
 	return res, nil
@@ -7485,13 +7476,13 @@ func pickWeighted(candidates []tailcfg.NodeView) []tailcfg.NodeView {
 			continue
 		}
 		loc := hi.Location()
-		if loc == nil || loc.Priority < maxWeight {
+		if !loc.Valid() || loc.Priority() < maxWeight {
 			continue
 		}
-		if maxWeight != loc.Priority {
+		if maxWeight != loc.Priority() {
 			best = best[:0]
 		}
-		maxWeight = loc.Priority
+		maxWeight = loc.Priority()
 		best = append(best, c)
 	}
 	return best

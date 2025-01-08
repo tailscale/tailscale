@@ -282,7 +282,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 							MachineKey: p.Machine().String(),
 							NodeKey:    p.Key().String(),
 						},
-						Online:              p.Online(),
+						Online:              p.Online().Clone(),
 						TailscaleSSHEnabled: p.Hostinfo().TailscaleSSHEnabled(),
 					}
 				}),
