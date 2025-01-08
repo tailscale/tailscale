@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -30,6 +32,13 @@ func isLoopback(nif *net.Interface) bool { return nif.Flags&net.FlagLoopback != 
 
 func isProblematicInterface(nif *net.Interface) bool {
 	name := nif.Name
+
+	if regex := os.Getenv("TS_NETMON_IGNORE"); regex != "" {
+		if match, _ := regexp.MatchString(regex, name); match {
+			return true
+		}
+	}
+
 	// Don't try to send disco/etc packets over zerotier; they effectively
 	// DoS each other by doing traffic amplification, both of them
 	// preferring/trying to use each other for transport. See:
