@@ -188,6 +188,9 @@ func ForeachInterface(fn func(Interface, []netip.Prefix)) error {
 // the interface, and Bits are the subnet mask.
 func (ifaces InterfaceList) ForeachInterface(fn func(Interface, []netip.Prefix)) error {
 	for _, iface := range ifaces {
+		if isProblematicInterface(iface.Interface) {
+			continue
+		}
 		addrs, err := iface.Addrs()
 		if err != nil {
 			return err
