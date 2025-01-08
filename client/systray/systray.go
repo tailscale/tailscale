@@ -58,6 +58,7 @@ func (menu *Menu) Run() {
 		case <-menu.bgCtx.Done():
 		}
 	}()
+	go menu.lc.IncrementCounter(menu.bgCtx, "systray_start", 1)
 
 	systray.Run(menu.onReady, menu.onExit)
 }
