@@ -621,6 +621,11 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) (Response, us
 		return Drop, usermetric.ReasonTooShort
 	}
 
+	if q.IPProto == ipproto.Unknown {
+		f.logRateLimit(rf, q, dir, Drop, "unknown proto")
+		return Drop, usermetric.ReasonUnknownProtocol
+	}
+
 	if q.Dst.Addr().IsMulticast() {
 		f.logRateLimit(rf, q, dir, Drop, "multicast")
 		return Drop, usermetric.ReasonMulticast
