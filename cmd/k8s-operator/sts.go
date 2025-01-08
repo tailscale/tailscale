@@ -172,8 +172,8 @@ func (sts tailscaleSTSReconciler) validate() error {
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
-func (a *tailscaleSTSReconciler) IsHTTPSEnabledOnTailnet() bool {
-	return len(a.tsnetServer.CertDomains()) > 0
+func IsHTTPSEnabledOnTailnet(tsnetServer tsnetServer) bool {
+	return len(tsnetServer.CertDomains()) > 0
 }
 
 // Provision ensures that the StatefulSet for the given service is running and
