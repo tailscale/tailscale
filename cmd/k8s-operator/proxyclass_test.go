@@ -36,10 +36,10 @@ func TestProxyClass(t *testing.T) {
 		},
 		Spec: tsapi.ProxyClassSpec{
 			StatefulSet: &tsapi.StatefulSet{
-				Labels:      map[string]string{"foo": "bar", "xyz1234": "abc567"},
+				Labels:      tsapi.Labels{"foo": "bar", "xyz1234": "abc567"},
 				Annotations: map[string]string{"foo.io/bar": "{'key': 'val1232'}"},
 				Pod: &tsapi.Pod{
-					Labels:      map[string]string{"foo": "bar", "xyz1234": "abc567"},
+					Labels:      tsapi.Labels{"foo": "bar", "xyz1234": "abc567"},
 					Annotations: map[string]string{"foo.io/bar": "{'key': 'val1232'}"},
 					TailscaleContainer: &tsapi.Container{
 						Env:             []tsapi.Env{{Name: "FOO", Value: "BAR"}},
@@ -152,6 +152,25 @@ func TestProxyClass(t *testing.T) {
 	// 7. A ProxyClass with ServiceMonitor enabled and in a cluster that does have the ServiceMonitor CRD is valid
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
 	mustCreate(t, fc, crd)
+	expectReconciled(t, pcr, "", "test")
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc, nil)
+
+	// 7. A ProxyClass with invalid ServiceMonitor labels gets its status updated to Invalid with an error message.
+	pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar!"}
+	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
+		proxyClass.Spec.Metrics.ServiceMonitor.Labels = pc.Spec.Metrics.ServiceMonitor.Labels
+	})
+	expectReconciled(t, pcr, "", "test")
+	msg = `ProxyClass is not valid: .spec.metrics.serviceMonitor.labels: Invalid value: "bar!": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc, nil)
+
+	// 8. A ProxyClass with valid ServiceMonitor labels gets its status updated to Valid.
+	pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar", "xyz1234": "abc567", "empty": "", "onechar": "a"}
+	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
+		proxyClass.Spec.Metrics.ServiceMonitor.Labels = pc.Spec.Metrics.ServiceMonitor.Labels
+	})
 	expectReconciled(t, pcr, "", "test")
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, 0, cl, zl.Sugar())
 	expectEqual(t, fc, pc, nil)

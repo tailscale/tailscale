@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -115,15 +116,15 @@ func reconcileMetricsResources(ctx context.Context, logger *zap.SugaredLogger, o
 		return maybeCleanupServiceMonitor(ctx, cl, opts.proxyStsName, opts.tsNamespace)
 	}
 
-	logger.Info("ensuring ServiceMonitor for metrics Service %s/%s", metricsSvc.Namespace, metricsSvc.Name)
-	svcMonitor, err := newServiceMonitor(metricsSvc)
+	logger.Infof("ensuring ServiceMonitor for metrics Service %s/%s", metricsSvc.Namespace, metricsSvc.Name)
+	svcMonitor, err := newServiceMonitor(metricsSvc, pc.Spec.Metrics.ServiceMonitor)
 	if err != nil {
 		return fmt.Errorf("error creating ServiceMonitor: %w", err)
 	}
-	// We don't use createOrUpdate here because that does not work with unstructured types. We also do not update
-	// the ServiceMonitor because it is not expected that any of its fields would change. Currently this is good
-	// enough, but in future we might want to add logic to create-or-update unstructured types.
-	err = cl.Get(ctx, client.ObjectKeyFromObject(metricsSvc), svcMonitor.DeepCopy())
+
+	// We don't use createOrUpdate here because that does not work with unstructured types.
+	existing := svcMonitor.DeepCopy()
+	err = cl.Get(ctx, client.ObjectKeyFromObject(metricsSvc), existing)
 	if apierrors.IsNotFound(err) {
 		if err := cl.Create(ctx, svcMonitor); err != nil {
 			return fmt.Errorf("error creating ServiceMonitor: %w", err)
@@ -132,6 +133,13 @@ func reconcileMetricsResources(ctx context.Context, logger *zap.SugaredLogger, o
 	}
 	if err != nil {
 		return fmt.Errorf("error getting ServiceMonitor: %w", err)
+	}
+	// Currently, we only update labels on the ServiceMonitor as those are the only values that can change.
+	if !reflect.DeepEqual(existing.GetLabels(), svcMonitor.GetLabels()) {
+		existing.SetLabels(svcMonitor.GetLabels())
+		if err := cl.Update(ctx, existing); err != nil {
+			return fmt.Errorf("error updating ServiceMonitor: %w", err)
+		}
 	}
 	return nil
 }
@@ -165,9 +173,13 @@ func maybeCleanupServiceMonitor(ctx context.Context, cl client.Client, stsName, 
 // newServiceMonitor takes a metrics Service created for a proxy and constructs and returns a ServiceMonitor for that
 // proxy that can be applied to the kube API server.
 // The ServiceMonitor is returned as Unstructured type - this allows us to avoid importing prometheus-operator API server client/schema.
-func newServiceMonitor(metricsSvc *corev1.Service) (*unstructured.Unstructured, error) {
+func newServiceMonitor(metricsSvc *corev1.Service, spec *tsapi.ServiceMonitor) (*unstructured.Unstructured, error) {
 	sm := serviceMonitorTemplate(metricsSvc.Name, metricsSvc.Namespace)
 	sm.ObjectMeta.Labels = metricsSvc.Labels
+	if spec != nil && len(spec.Labels) > 0 {
+		sm.ObjectMeta.Labels = mergeMapKeys(sm.ObjectMeta.Labels, spec.Labels.Parse())
+	}
+
 	sm.ObjectMeta.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(metricsSvc, corev1.SchemeGroupVersion.WithKind("Service"))}
 	sm.Spec = ServiceMonitorSpec{
 		Selector: metav1.LabelSelector{MatchLabels: metricsSvc.Labels},
@@ -269,4 +281,15 @@ type metricsOpts struct {
 
 func isNamespacedProxyType(typ string) bool {
 	return typ == proxyTypeIngressResource || typ == proxyTypeIngressService
+}
+
+func mergeMapKeys(a, b map[string]string) map[string]string {
+	m := make(map[string]string, len(a)+len(b))
+	for key, val := range b {
+		m[key] = val
+	}
+	for key, val := range a {
+		m[key] = val
+	}
+	return m
 }

@@ -88,6 +88,7 @@ func TestProxyGroup(t *testing.T) {
 		stsName:            pg.Name,
 		parentType:         "proxygroup",
 		tailscaleNamespace: "tailscale",
+		resourceVersion:    "1",
 	}
 
 	t.Run("proxyclass_not_ready", func(t *testing.T) {

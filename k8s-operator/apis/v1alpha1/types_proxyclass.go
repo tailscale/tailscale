@@ -87,7 +87,7 @@ type StatefulSet struct {
 	// Label keys and values must be valid Kubernetes label keys and values.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
-	Labels map[string]string `json:"labels,omitempty"`
+	Labels Labels `json:"labels,omitempty"`
 	// Annotations that will be added to the StatefulSet created for the proxy.
 	// Any Annotations specified here will be merged with the default annotations
 	// applied to the StatefulSet by the Tailscale Kubernetes operator as
@@ -109,7 +109,7 @@ type Pod struct {
 	// Label keys and values must be valid Kubernetes label keys and values.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
-	Labels map[string]string `json:"labels,omitempty"`
+	Labels Labels `json:"labels,omitempty"`
 	// Annotations that will be added to the proxy Pod.
 	// Any annotations specified here will be merged with the default
 	// annotations applied to the Pod by the Tailscale Kubernetes operator.
@@ -188,7 +188,33 @@ type Metrics struct {
 type ServiceMonitor struct {
 	// If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled.
 	Enable bool `json:"enable"`
+	// Labels to add to the ServiceMonitor.
+	// Labels must be valid Kubernetes labels.
+	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+	// +optional
+	Labels Labels `json:"labels"`
 }
+
+type Labels map[string]LabelValue
+
+func (l Labels) Parse() map[string]string {
+	if l == nil {
+		return nil
+	}
+	m := make(map[string]string, len(l))
+	for k, v := range l {
+		m[k] = string(v)
+	}
+	return m
+}
+
+// We do not validate the values of the label keys here - it is done by the ProxyClass
+// reconciler because the validation rules are too complex for a CRD validation markers regex.
+
+// +kubebuilder:validation:Type=string
+// +kubebuilder:validation:Pattern=`^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$`
+// +kubebuilder:validation:MaxLength=63
+type LabelValue string
 
 type Container struct {
 	// List of environment variables to set in the container.

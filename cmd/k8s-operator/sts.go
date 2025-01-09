@@ -761,7 +761,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	}
 
 	// Update StatefulSet metadata.
-	if wantsSSLabels := pc.Spec.StatefulSet.Labels; len(wantsSSLabels) > 0 {
+	if wantsSSLabels := pc.Spec.StatefulSet.Labels.Parse(); len(wantsSSLabels) > 0 {
 		ss.ObjectMeta.Labels = mergeStatefulSetLabelsOrAnnots(ss.ObjectMeta.Labels, wantsSSLabels, tailscaleManagedLabels)
 	}
 	if wantsSSAnnots := pc.Spec.StatefulSet.Annotations; len(wantsSSAnnots) > 0 {
@@ -773,7 +773,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 		return ss
 	}
 	wantsPod := pc.Spec.StatefulSet.Pod
-	if wantsPodLabels := wantsPod.Labels; len(wantsPodLabels) > 0 {
+	if wantsPodLabels := wantsPod.Labels.Parse(); len(wantsPodLabels) > 0 {
 		ss.Spec.Template.ObjectMeta.Labels = mergeStatefulSetLabelsOrAnnots(ss.Spec.Template.ObjectMeta.Labels, wantsPodLabels, tailscaleManagedLabels)
 	}
 	if wantsPodAnnots := wantsPod.Annotations; len(wantsPodAnnots) > 0 {

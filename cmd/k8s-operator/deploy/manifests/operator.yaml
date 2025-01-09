@@ -563,6 +563,16 @@ spec:
                                             enable:
                                                 description: If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled.
                                                 type: boolean
+                                            labels:
+                                                additionalProperties:
+                                                    maxLength: 63
+                                                    pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
+                                                    type: string
+                                                description: |-
+                                                    Labels to add to the ServiceMonitor.
+                                                    Labels must be valid Kubernetes labels.
+                                                    https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+                                                type: object
                                         required:
                                             - enable
                                         type: object
@@ -592,6 +602,8 @@ spec:
                                         type: object
                                     labels:
                                         additionalProperties:
+                                            maxLength: 63
+                                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                                             type: string
                                         description: |-
                                             Labels that will be added to the StatefulSet created for the proxy.
@@ -1522,6 +1534,8 @@ spec:
                                                 type: array
                                             labels:
                                                 additionalProperties:
+                                                    maxLength: 63
+                                                    pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                                                     type: string
                                                 description: |-
                                                     Labels that will be added to the proxy Pod.

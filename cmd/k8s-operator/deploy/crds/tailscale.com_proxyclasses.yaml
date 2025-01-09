@@ -99,6 +99,16 @@ spec:
                         enable:
                           description: If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled.
                           type: boolean
+                        labels:
+                          description: |-
+                            Labels to add to the ServiceMonitor.
+                            Labels must be valid Kubernetes labels.
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+                          type: object
+                          additionalProperties:
+                            type: string
+                            maxLength: 63
+                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                   x-kubernetes-validations:
                     - rule: '!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)'
                       message: ServiceMonitor can only be enabled if metrics are enabled
@@ -133,6 +143,8 @@ spec:
                       type: object
                       additionalProperties:
                         type: string
+                        maxLength: 63
+                        pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                     pod:
                       description: Configuration for the proxy Pod.
                       type: object
@@ -1062,6 +1074,8 @@ spec:
                           type: object
                           additionalProperties:
                             type: string
+                            maxLength: 63
+                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                         nodeName:
                           description: |-
                             Proxy Pod's node name.

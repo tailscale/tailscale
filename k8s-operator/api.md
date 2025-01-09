@@ -313,6 +313,37 @@ _Appears in:_
 
 
 
+#### LabelValue
+
+_Underlying type:_ _string_
+
+
+
+_Validation:_
+- MaxLength: 63
+- Pattern: `^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$`
+- Type: string
+
+_Appears in:_
+- [Labels](#labels)
+
+
+
+#### Labels
+
+_Underlying type:_ _[map[string]LabelValue](#map[string]labelvalue)_
+
+
+
+
+
+_Appears in:_
+- [Pod](#pod)
+- [ServiceMonitor](#servicemonitor)
+- [StatefulSet](#statefulset)
+
+
+
 #### Metrics
 
 
@@ -407,7 +438,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `labels` _object (keys:string, values:string)_ | Labels that will be added to the proxy Pod.<br />Any labels specified here will be merged with the default labels<br />applied to the Pod by the Tailscale Kubernetes operator.<br />Label keys and values must be valid Kubernetes label keys and values.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `labels` _[Labels](#labels)_ | Labels that will be added to the proxy Pod.<br />Any labels specified here will be merged with the default labels<br />applied to the Pod by the Tailscale Kubernetes operator.<br />Label keys and values must be valid Kubernetes label keys and values.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
 | `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the proxy Pod.<br />Any annotations specified here will be merged with the default<br />annotations applied to the Pod by the Tailscale Kubernetes operator.<br />Annotations must be valid Kubernetes annotations.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
 | `affinity` _[Affinity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#affinity-v1-core)_ | Proxy Pod's affinity rules.<br />By default, the Tailscale Kubernetes operator does not apply any affinity rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity |  |  |
 | `tailscaleContainer` _[Container](#container)_ | Configuration for the proxy container running tailscale. |  |  |
@@ -864,6 +895,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `enable` _boolean_ | If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled. |  |  |
+| `labels` _[Labels](#labels)_ | Labels to add to the ServiceMonitor.<br />Labels must be valid Kubernetes labels.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
 
 
 #### StatefulSet
@@ -879,7 +911,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for the proxy.<br />Any labels specified here will be merged with the default labels<br />applied to the StatefulSet by the Tailscale Kubernetes operator as<br />well as any other labels that might have been applied by other<br />actors.<br />Label keys and values must be valid Kubernetes label keys and values.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `labels` _[Labels](#labels)_ | Labels that will be added to the StatefulSet created for the proxy.<br />Any labels specified here will be merged with the default labels<br />applied to the StatefulSet by the Tailscale Kubernetes operator as<br />well as any other labels that might have been applied by other<br />actors.<br />Label keys and values must be valid Kubernetes label keys and values.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
 | `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for the proxy.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the Tailscale Kubernetes operator as<br />well as any other annotations that might have been applied by other<br />actors.<br />Annotations must be valid Kubernetes annotations.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
 | `pod` _[Pod](#pod)_ | Configuration for the proxy Pod. |  |  |
 
