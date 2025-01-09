@@ -102,3 +102,18 @@ type C2NTLSCertInfo struct {
 	// TODO(bradfitz): add fields for whether an ACME fetch is currently in
 	// process and when it started, etc.
 }
+
+// C2NVIPServicesResponse is the response (from node to control) from the
+// /vip-services handler.
+//
+// It returns the list of VIPServices that the node is currently serving with
+// their port info and whether they are active or not. It also returns a hash of
+// the response to allow the control server to detect changes.
+type C2NVIPServicesResponse struct {
+	// VIPServices is the list of VIP services that the node is currently serving.
+	VIPServices []*VIPService `json:",omitempty"`
+
+	// ServicesHash is the hash of VIPServices to allow the control server to detect
+	// changes. This value matches what is reported in latest [Hostinfo.ServicesHash].
+	ServicesHash string
+}
