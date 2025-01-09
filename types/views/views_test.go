@@ -153,6 +153,43 @@ func TestViewUtils(t *testing.T) {
 		qt.Equals, true)
 }
 
+func TestSliceEqualAnyOrderFunc(t *testing.T) {
+	type nc struct {
+		_ structs.Incomparable
+		v string
+	}
+
+	// ncFrom returns a Slice[nc] from a slice of []string
+	ncFrom := func(s ...string) Slice[nc] {
+		var out []nc
+		for _, v := range s {
+			out = append(out, nc{v: v})
+		}
+		return SliceOf(out)
+	}
+
+	// cmp returns a comparable value for a nc
+	cmp := func(a nc) string { return a.v }
+
+	v := ncFrom("foo", "bar")
+	c := qt.New(t)
+
+	// Simple case of slice equal to itself.
+	c.Check(SliceEqualAnyOrderFunc(v, v, cmp), qt.Equals, true)
+
+	// Different order.
+	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("bar", "foo"), cmp), qt.Equals, true)
+
+	// Different values, same length
+	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("foo", "baz"), cmp), qt.Equals, false)
+
+	// Different values, different length
+	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("foo"), cmp), qt.Equals, false)
+
+	// Nothing shared
+	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("baz", "qux"), cmp), qt.Equals, false)
+}
+
 func TestSliceEqual(t *testing.T) {
 	a := SliceOf([]string{"foo", "bar"})
 	b := SliceOf([]string{"foo", "bar"})

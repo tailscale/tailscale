@@ -360,6 +360,41 @@ func SliceEqualAnyOrder[T comparable](a, b Slice[T]) bool {
 	return true
 }
 
+// SliceEqualAnyOrderFunc reports whether a and b contain the same elements,
+// regardless of order. The underlying slices for a and b can be nil.
+//
+// The provided function should return a comparable value for each element.
+func SliceEqualAnyOrderFunc[T any, V comparable](a, b Slice[T], cmp func(T) V) bool {
+	if a.Len() != b.Len() {
+		return false
+	}
+
+	var diffStart int // beginning index where a and b differ
+	for n := a.Len(); diffStart < n; diffStart++ {
+		av := cmp(a.At(diffStart))
+		bv := cmp(b.At(diffStart))
+		if av != bv {
+			break
+		}
+	}
+	if diffStart == a.Len() {
+		return true
+	}
+
+	// count the occurrences of remaining values and compare
+	valueCount := make(map[V]int)
+	for i, n := diffStart, a.Len(); i < n; i++ {
+		valueCount[cmp(a.At(i))]++
+		valueCount[cmp(b.At(i))]--
+	}
+	for _, count := range valueCount {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // MapSlice is a view over a map whose values are slices.
 type MapSlice[K comparable, V any] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
