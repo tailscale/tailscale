@@ -437,10 +437,10 @@ func sanitizeConfigBytes(c ipn.ConfigVAlpha) string {
 	return string(sanitizedBytes)
 }
 
-// DeviceInfo returns the device ID, hostname and IPs for the Tailscale device
-// that acts as an operator proxy. It retrieves info from a Kubernetes Secret
-// labeled with the provided labels.
-// Either of device ID, hostname and IPs can be empty string if not found in the Secret.
+// DeviceInfo returns the device ID, hostname, IPs and capver for the Tailscale device that acts as an operator proxy.
+// It retrieves info from a Kubernetes Secret labeled with the provided labels. Capver is cross-validated against the
+// Pod to ensure that it is the currently running Pod that set the capver. If the Pod or the Secret does not exist, the
+// returned capver is -1. Either of device ID, hostname and IPs can be empty string if not found in the Secret.
 func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string, logger *zap.SugaredLogger) (dev *device, err error) {
 	sec, err := getSingleObject[corev1.Secret](ctx, a.Client, a.operatorNamespace, childLabels)
 	if err != nil {
@@ -465,6 +465,7 @@ type device struct {
 	// ingressDNSName is the L7 Ingress DNS name. In practice this will be the same value as hostname, but only set
 	// when the device has been configured to serve traffic on it via 'tailscale serve'.
 	ingressDNSName string
+	capver         tailcfg.CapabilityVersion
 }
 
 func deviceInfo(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) (dev *device, err error) {
@@ -484,10 +485,12 @@ func deviceInfo(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) (de
 		// operator to clean up such devices.
 		return dev, nil
 	}
+	dev.ingressDNSName = dev.hostname
+	pcv := proxyCapVer(sec, pod, log)
+	dev.capver = pcv
 	// TODO(irbekrm): we fall back to using the hostname field to determine Ingress's hostname to ensure backwards
 	// compatibility. In 1.82 we can remove this fallback mechanism.
-	dev.ingressDNSName = dev.hostname
-	if proxyCapVer(sec, pod, log) >= 109 {
+	if pcv >= 109 {
 		dev.ingressDNSName = strings.TrimSuffix(string(sec.Data[kubetypes.KeyHTTPSEndpoint]), ".")
 		if strings.EqualFold(dev.ingressDNSName, kubetypes.ValueNoHTTPS) {
 			dev.ingressDNSName = ""
@@ -584,8 +587,6 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: "true",
 		})
 	}
-	// Configure containeboot to run tailscaled with a configfile read from the state Secret.
-	mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, tsConfigHash)
 
 	configVolume := corev1.Volume{
 		Name: "tailscaledconfig",
@@ -655,6 +656,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			},
 		})
 	}
+
+	dev, err := a.DeviceInfo(ctx, sts.ChildResourceLabels, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get device info: %w", err)
+	}
+
 	app, err := appInfoForProxy(sts)
 	if err != nil {
 		// No need to error out if now or in future we end up in a
@@ -673,7 +680,25 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		ss = applyProxyClassToStatefulSet(sts.ProxyClass, ss, sts, logger)
 	}
 	updateSS := func(s *appsv1.StatefulSet) {
+		// This is a temporary workaround to ensure that proxies with capver older than 110
+		// are restarted when tailscaled configfile contents have changed.
+		// This workaround ensures that:
+		// 1. The hash mechanism is used to trigger pod restarts for proxies below capver 110.
+		// 2. Proxies above capver are not unnecessarily restarted when the configfile contents change.
+		// 3. If the hash has alreay been set, but the capver is above 110, the old hash is preserved to avoid
+		// unnecessary pod restarts that could result in an update loop where capver cannot be determined for a
+		// restarting Pod and the hash is re-added again.
+		// Note that the hash annotation is only set on updates not creation, because if the StatefulSet is
+		// being created, there is no need for a restart.
+		// TODO(irbekrm): remove this in 1.84.
+		hash := tsConfigHash
+		if dev != nil && dev.capver >= 110 {
+			hash = s.Spec.Template.GetAnnotations()[podAnnotationLastSetConfigFileHash]
+		}
 		s.Spec = ss.Spec
+		if hash != "" {
+			mak.Set(&s.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, hash)
+		}
 		s.ObjectMeta.Labels = ss.Labels
 		s.ObjectMeta.Annotations = ss.Annotations
 	}
