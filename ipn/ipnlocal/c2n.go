@@ -274,8 +274,12 @@ func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.R
 
 func handleC2NVIPServicesGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
 	b.logf("c2n: GET /vip-services received")
+	var res tailcfg.C2NVIPServicesResponse
+	res.VIPServices = b.VIPServices()
+	res.ServicesHash = b.vipServiceHash(res.VIPServices)
 
-	json.NewEncoder(w).Encode(b.VIPServices())
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 func handleC2NUpdateGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {

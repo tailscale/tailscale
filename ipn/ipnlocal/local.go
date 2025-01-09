@@ -5022,7 +5022,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	}
 	hi.SSH_HostKeys = sshHostKeys
 
-	hi.ServicesHash = b.vipServiceHashLocked(prefs)
+	hi.ServicesHash = b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
 
 	// The Hostinfo.WantIngress field tells control whether this node wants to
 	// be wired up for ingress connections. If harmless if it's accidentally
@@ -7661,8 +7661,7 @@ func (b *LocalBackend) VIPServices() []*tailcfg.VIPService {
 	return b.vipServicesFromPrefsLocked(b.pm.CurrentPrefs())
 }
 
-func (b *LocalBackend) vipServiceHashLocked(prefs ipn.PrefsView) string {
-	services := b.vipServicesFromPrefsLocked(prefs)
+func (b *LocalBackend) vipServiceHash(services []*tailcfg.VIPService) string {
 	if len(services) == 0 {
 		return ""
 	}
