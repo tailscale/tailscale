@@ -188,6 +188,15 @@ func TestSliceEqualAnyOrderFunc(t *testing.T) {
 
 	// Nothing shared
 	c.Check(SliceEqualAnyOrderFunc(v, ncFrom("baz", "qux"), cmp), qt.Equals, false)
+
+	// Long slice that matches
+	longSlice := ncFrom("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
+	longSame := ncFrom("b", "a", "c", "d", "e", "f", "g", "h", "i", "j") // first 2 elems swapped
+	c.Check(SliceEqualAnyOrderFunc(longSlice, longSame, cmp), qt.Equals, true)
+
+	// Long difference; past the quadratic limit
+	longDiff := ncFrom("b", "a", "c", "d", "e", "f", "g", "h", "i", "k") // differs at end
+	c.Check(SliceEqualAnyOrderFunc(longSlice, longDiff, cmp), qt.Equals, false)
 }
 
 func TestSliceEqual(t *testing.T) {
