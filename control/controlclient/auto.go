@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -423,6 +424,11 @@ type mapRoutineState struct {
 var _ NetmapDeltaUpdater = mapRoutineState{}
 
 func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
+	for _, p := range nm.Peers {
+		if routes := p.PrimaryRoutes(); routes.Len() > 0 {
+			log.Printf("DEBUG: node %q routes %q", p.Name(), routes.AsSlice())
+		}
+	}
 	c := mrs.c
 
 	c.mu.Lock()

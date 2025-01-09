@@ -1297,6 +1297,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	if rcode == dns.RCodeRefused {
 		return nil, errNotOurName // sentinel error return value: it requests forwarding
 	}
+	r.logf("DEBUG: resolveLocal(%q) ip: %q code: %q", name, ip, rcode)
 
 	resp := parser.response()
 	resp.Header.RCode = rcode

@@ -6,9 +6,7 @@ package resolver
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -23,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
@@ -938,6 +937,11 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 	if len(resolvers) == 0 {
 		resolvers = f.resolvers(domain)
+		names := make([]string, len(resolvers))
+		for _, r := range resolvers {
+			names = append(names, r.name.Addr)
+		}
+		f.logf("DEBUG: resolvers for %q: %q", domain, names)
 		if len(resolvers) == 0 {
 			metricDNSFwdErrorNoUpstream.Add(1)
 			f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: ""})
@@ -974,9 +978,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	defer fq.closeOnCtxDone.Close()
 
 	if verboseDNSForward() {
-		domainSha256 := sha256.Sum256([]byte(domain))
-		domainSig := base64.RawStdEncoding.EncodeToString(domainSha256[:3])
-		f.logf("request(%d, %v, %d, %s) %d...", fq.txid, typ, len(domain), domainSig, len(fq.packet))
+		//domainSha256 := sha256.Sum256([]byte(domain))
+		//domainSig := base64.RawStdEncoding.EncodeToString(domainSha256[:3])
+		f.logf("request(%d, %v, %q, %s) %d...", fq.txid, typ, len(domain), domain, len(fq.packet))
 	}
 
 	resc := make(chan []byte, 1) // it's fine buffered or not
@@ -1018,8 +1022,29 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 				metricDNSFwdErrorContext.Add(1)
 				return fmt.Errorf("waiting to send response: %w", ctx.Err())
 			case responseChan <- packet{v, query.family, query.addr}:
-				if verboseDNSForward() {
-					f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
+				answers, err := func() ([]string, error) {
+					p := new(dnsmessage.Parser)
+					_, err := p.Start(v)
+					if err != nil {
+						return nil, err
+					}
+					if err := p.SkipAllQuestions(); err != nil {
+						return nil, err
+					}
+					ans, err := p.AllAnswers()
+					if err != nil {
+						return nil, err
+					}
+					var res []string
+					for _, a := range ans {
+						res = append(res, a.Body.GoString())
+					}
+					return res, nil
+				}()
+				if err != nil {
+					f.logf("failed to parse DNS response: %v", err)
+				} else {
+					f.logf("response(%d, %v, %q) = %q, nil", fq.txid, typ, domain, answers)
 				}
 				metricDNSFwdSuccess.Add(1)
 				f.health.SetHealthy(dnsForwarderFailing)
