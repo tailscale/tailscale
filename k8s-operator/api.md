@@ -321,7 +321,7 @@ _Underlying type:_ _string_
 
 _Validation:_
 - MaxLength: 63
-- Pattern: `^([a-zA-Z0-9][-._a-zA-Z0-9]*[a-zA-Z0-9]){0,1}$`
+- Pattern: `^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$`
 - Type: string
 
 _Appears in:_

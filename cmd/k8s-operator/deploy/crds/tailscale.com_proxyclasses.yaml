@@ -108,7 +108,7 @@ spec:
                           additionalProperties:
                             type: string
                             maxLength: 63
-                            pattern: ^([a-zA-Z0-9][-._a-zA-Z0-9]*[a-zA-Z0-9]){0,1}$
+                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                   x-kubernetes-validations:
                     - rule: '!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)'
                       message: ServiceMonitor can only be enabled if metrics are enabled
@@ -144,7 +144,7 @@ spec:
                       additionalProperties:
                         type: string
                         maxLength: 63
-                        pattern: ^([a-zA-Z0-9][-._a-zA-Z0-9]*[a-zA-Z0-9]){0,1}$
+                        pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                     pod:
                       description: Configuration for the proxy Pod.
                       type: object
@@ -1075,7 +1075,7 @@ spec:
                           additionalProperties:
                             type: string
                             maxLength: 63
-                            pattern: ^([a-zA-Z0-9][-._a-zA-Z0-9]*[a-zA-Z0-9]){0,1}$
+                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                         nodeName:
                           description: |-
                             Proxy Pod's node name.

@@ -212,7 +212,7 @@ func (l Labels) Parse() map[string]string {
 // reconciler because the validation rules are too complex for a CRD validation markers regex.
 
 // +kubebuilder:validation:Type=string
-// +kubebuilder:validation:Pattern=`^([a-zA-Z0-9][-._a-zA-Z0-9]*[a-zA-Z0-9]){0,1}$`
+// +kubebuilder:validation:Pattern=`^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$`
 // +kubebuilder:validation:MaxLength=63
 type LabelValue string
 

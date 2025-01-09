@@ -167,7 +167,7 @@ func TestProxyClass(t *testing.T) {
 	expectEqual(t, fc, pc, nil)
 
 	// 8. A ProxyClass with valid ServiceMonitor labels gets its status updated to Valid.
-	pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar", "xyz1234": "abc567"}
+	pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar", "xyz1234": "abc567", "empty": "", "onechar": "a"}
 	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
 		proxyClass.Spec.Metrics.ServiceMonitor.Labels = pc.Spec.Metrics.ServiceMonitor.Labels
 	})

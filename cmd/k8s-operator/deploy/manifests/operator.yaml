@@ -566,7 +566,7 @@ spec:
                                             labels:
                                                 additionalProperties:
                                                     maxLength: 63
-                                                    pattern: ^([a-zA-Z0-9][-._a-zA-Z0-9]*[a-zA-Z0-9]){0,1}$
+                                                    pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                                                     type: string
                                                 description: |-
                                                     Labels to add to the ServiceMonitor.
@@ -603,7 +603,7 @@ spec:
                                     labels:
                                         additionalProperties:
                                             maxLength: 63
-                                            pattern: ^([a-zA-Z0-9][-._a-zA-Z0-9]*[a-zA-Z0-9]){0,1}$
+                                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                                             type: string
                                         description: |-
                                             Labels that will be added to the StatefulSet created for the proxy.
@@ -1535,7 +1535,7 @@ spec:
                                             labels:
                                                 additionalProperties:
                                                     maxLength: 63
-                                                    pattern: ^([a-zA-Z0-9][-._a-zA-Z0-9]*[a-zA-Z0-9]){0,1}$
+                                                    pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                                                     type: string
                                                 description: |-
                                                     Labels that will be added to the proxy Pod.

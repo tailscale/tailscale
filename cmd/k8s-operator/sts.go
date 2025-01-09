@@ -1131,14 +1131,3 @@ func proxyCapVer(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) ta
 	}
 	return tailcfg.CapabilityVersion(capVer)
 }
-
-func mergeMapKeys(a, b map[string]string) map[string]string {
-	m := make(map[string]string, len(a)+len(b))
-	for key, val := range b {
-		m[key] = val
-	}
-	for key, val := range a {
-		m[key] = val
-	}
-	return m
-}

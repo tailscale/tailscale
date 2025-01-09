@@ -282,3 +282,14 @@ type metricsOpts struct {
 func isNamespacedProxyType(typ string) bool {
 	return typ == proxyTypeIngressResource || typ == proxyTypeIngressService
 }
+
+func mergeMapKeys(a, b map[string]string) map[string]string {
+	m := make(map[string]string, len(a)+len(b))
+	for key, val := range b {
+		m[key] = val
+	}
+	for key, val := range a {
+		m[key] = val
+	}
+	return m
+}
