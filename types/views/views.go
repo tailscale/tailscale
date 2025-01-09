@@ -381,6 +381,29 @@ func SliceEqualAnyOrderFunc[T any, V comparable](a, b Slice[T], cmp func(T) V) b
 		return true
 	}
 
+	// For a small number of items, avoid the allocation of a map and just
+	// do the quadratic thing. We can also only check the items between
+	// diffStart and the end.
+	nRemain := a.Len() - diffStart
+	if nRemain <= 5 {
+		maxLen := a.Len() // same as b.Len()
+		for i := diffStart; i < maxLen; i++ {
+			av := cmp(a.At(i))
+			found := false
+			for j := diffStart; j < maxLen; j++ {
+				bv := cmp(b.At(j))
+				if av == bv {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		return true
+	}
+
 	// count the occurrences of remaining values and compare
 	valueCount := make(map[V]int)
 	for i, n := diffStart, a.Len(); i < n; i++ {
