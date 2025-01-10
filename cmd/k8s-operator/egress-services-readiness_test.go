@@ -67,24 +67,24 @@ func TestEgressServiceReadiness(t *testing.T) {
 	setClusterNotReady(egressSvc, cl, zl.Sugar())
 	t.Run("endpointslice_does_not_exist", func(t *testing.T) {
 		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc, nil) // not ready
+		expectEqual(t, fc, egressSvc) // not ready
 	})
 	t.Run("proxy_group_does_not_exist", func(t *testing.T) {
 		mustCreate(t, fc, eps)
 		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc, nil) // still not ready
+		expectEqual(t, fc, egressSvc) // still not ready
 	})
 	t.Run("proxy_group_not_ready", func(t *testing.T) {
 		mustCreate(t, fc, pg)
 		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc, nil) // still not ready
+		expectEqual(t, fc, egressSvc) // still not ready
 	})
 	t.Run("no_ready_replicas", func(t *testing.T) {
 		setPGReady(pg, cl, zl.Sugar())
 		mustUpdateStatus(t, fc, pg.Namespace, pg.Name, func(p *tsapi.ProxyGroup) {
 			p.Status = pg.Status
 		})
-		expectEqual(t, fc, pg, nil)
+		expectEqual(t, fc, pg)
 		for i := range pgReplicas(pg) {
 			p := pod(pg, i)
 			mustCreate(t, fc, p)
@@ -94,7 +94,7 @@ func TestEgressServiceReadiness(t *testing.T) {
 		}
 		expectReconciled(t, rec, "dev", "my-app")
 		setNotReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg))
-		expectEqual(t, fc, egressSvc, nil) // still not ready
+		expectEqual(t, fc, egressSvc) // still not ready
 	})
 	t.Run("one_ready_replica", func(t *testing.T) {
 		setEndpointForReplica(pg, 0, eps)
@@ -103,7 +103,7 @@ func TestEgressServiceReadiness(t *testing.T) {
 		})
 		setReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg), 1)
 		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc, nil) // partially ready
+		expectEqual(t, fc, egressSvc) // partially ready
 	})
 	t.Run("all_replicas_ready", func(t *testing.T) {
 		for i := range pgReplicas(pg) {
@@ -114,7 +114,7 @@ func TestEgressServiceReadiness(t *testing.T) {
 		})
 		setReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg), pgReplicas(pg))
 		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc, nil) // ready
+		expectEqual(t, fc, egressSvc) // ready
 	})
 }
 

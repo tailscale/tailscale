@@ -78,7 +78,7 @@ func TestProxyClass(t *testing.T) {
 		LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 	})
 
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 
 	// 2. A ProxyClass resource with invalid labels gets its status updated to Invalid with an error message.
 	pc.Spec.StatefulSet.Labels["foo"] = "?!someVal"
@@ -88,7 +88,7 @@ func TestProxyClass(t *testing.T) {
 	expectReconciled(t, pcr, "", "test")
 	msg := `ProxyClass is not valid: .spec.statefulSet.labels: Invalid value: "?!someVal": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 	expectedEvent := "Warning ProxyClassInvalid ProxyClass is not valid: .spec.statefulSet.labels: Invalid value: \"?!someVal\": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')"
 	expectEvents(t, fr, []string{expectedEvent})
 
@@ -102,7 +102,7 @@ func TestProxyClass(t *testing.T) {
 	expectReconciled(t, pcr, "", "test")
 	msg = `ProxyClass is not valid: spec.statefulSet.pod.tailscaleContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 	expectedEvent = `Warning ProxyClassInvalid ProxyClass is not valid: spec.statefulSet.pod.tailscaleContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
 	expectEvents(t, fr, []string{expectedEvent})
 
@@ -121,7 +121,7 @@ func TestProxyClass(t *testing.T) {
 	expectReconciled(t, pcr, "", "test")
 	msg = `ProxyClass is not valid: spec.statefulSet.pod.tailscaleInitContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 	expectedEvent = `Warning ProxyClassInvalid ProxyClass is not valid: spec.statefulSet.pod.tailscaleInitContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
 	expectEvents(t, fr, []string{expectedEvent})
 
@@ -145,7 +145,7 @@ func TestProxyClass(t *testing.T) {
 	expectReconciled(t, pcr, "", "test")
 	msg = `ProxyClass is not valid: spec.metrics.serviceMonitor: Invalid value: "enable": ProxyClass defines that a ServiceMonitor custom resource should be created, but "servicemonitors.monitoring.coreos.com" CRD was not found`
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 	expectedEvent = "Warning ProxyClassInvalid " + msg
 	expectEvents(t, fr, []string{expectedEvent})
 
@@ -154,7 +154,7 @@ func TestProxyClass(t *testing.T) {
 	mustCreate(t, fc, crd)
 	expectReconciled(t, pcr, "", "test")
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 
 	// 7. A ProxyClass with invalid ServiceMonitor labels gets its status updated to Invalid with an error message.
 	pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar!"}
@@ -164,7 +164,7 @@ func TestProxyClass(t *testing.T) {
 	expectReconciled(t, pcr, "", "test")
 	msg = `ProxyClass is not valid: .spec.metrics.serviceMonitor.labels: Invalid value: "bar!": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 
 	// 8. A ProxyClass with valid ServiceMonitor labels gets its status updated to Valid.
 	pc.Spec.Metrics.ServiceMonitor.Labels = tsapi.Labels{"foo": "bar", "xyz1234": "abc567", "empty": "", "onechar": "a"}
@@ -173,7 +173,7 @@ func TestProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, pcr, "", "test")
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc, nil)
+	expectEqual(t, fc, pc)
 }
 
 func TestValidateProxyClass(t *testing.T) {

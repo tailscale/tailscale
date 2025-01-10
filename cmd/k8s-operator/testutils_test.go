@@ -618,7 +618,7 @@ func mustUpdateStatus[T any, O ptrObject[T]](t *testing.T, client client.Client,
 // modify func to ensure that they are removed from the cluster object and the
 // object passed as 'want'. If no such modifications are needed, you can pass
 // nil in place of the modify function.
-func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want O, modifier func(O)) {
+func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want O, modifiers ...func(O)) {
 	t.Helper()
 	got := O(new(T))
 	if err := client.Get(context.Background(), types.NamespacedName{
@@ -632,7 +632,7 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 	// so just remove it from both got and want.
 	got.SetResourceVersion("")
 	want.SetResourceVersion("")
-	if modifier != nil {
+	for _, modifier := range modifiers {
 		modifier(want)
 		modifier(got)
 	}
@@ -796,6 +796,12 @@ func removeHashAnnotation(sts *appsv1.StatefulSet) {
 	delete(sts.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash)
 	if len(sts.Spec.Template.Annotations) == 0 {
 		sts.Spec.Template.Annotations = nil
+	}
+}
+
+func removeResourceReqs(sts *appsv1.StatefulSet) {
+	if sts != nil {
+		sts.Spec.Template.Spec.Resources = nil
 	}
 }
 

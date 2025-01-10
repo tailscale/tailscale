@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
+    controller-gen.kubebuilder.io/version: v0.17.0
   name: connectors.tailscale.com
 spec:
   group: tailscale.com
