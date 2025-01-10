@@ -246,8 +246,10 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// the OS.
 	rcfg.Hosts = cfg.Hosts
 	routes := map[dnsname.FQDN][]*dnstype.Resolver{} // assigned conditionally to rcfg.Routes below.
+	var propagateHostsToOS bool
 	for suffix, resolvers := range cfg.Routes {
 		if len(resolvers) == 0 {
+			propagateHostsToOS = true
 			rcfg.LocalDomains = append(rcfg.LocalDomains, suffix)
 		} else {
 			routes[suffix] = resolvers
@@ -256,7 +258,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 
 	// Similarly, the OS always gets search paths.
 	ocfg.SearchDomains = cfg.SearchDomains
-	if m.goos == "windows" {
+	if propagateHostsToOS && m.goos == "windows" {
 		ocfg.Hosts = compileHostEntries(cfg)
 	}
 
