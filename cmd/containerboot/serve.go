@@ -133,6 +133,8 @@ func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Serve config can be provided by users as well as the Kubernetes Operator (for its proxies). User-provided
+	// config could be empty for reasons.
 	if len(j) == 0 {
 		log.Printf("serve proxy: serve config file is empty, skipping")
 		return nil, nil
