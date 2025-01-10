@@ -71,17 +71,17 @@ func TestDerpProber(t *testing.T) {
 	clk := newFakeTime()
 	p := newForTest(clk.Now, clk.NewTicker)
 	dp := &derpProber{
-		p:            p,
-		derpMapURL:   srv.URL,
-		tlsInterval:  time.Second,
-		tlsProbeFn:   func(_ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
-		udpInterval:  time.Second,
-		udpProbeFn:   func(_ string, _ int) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
-		meshInterval: time.Second,
-		meshProbeFn:  func(_, _ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
-		nodes:        make(map[string]*tailcfg.DERPNode),
-		probes:       make(map[string]*Probe),
-		regionCode:   "zero",
+		p:              p,
+		derpMapURL:     srv.URL,
+		tlsInterval:    time.Second,
+		tlsProbeFn:     func(_ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
+		udpInterval:    time.Second,
+		udpProbeFn:     func(_ string, _ int) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
+		meshInterval:   time.Second,
+		meshProbeFn:    func(_, _ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
+		nodes:          make(map[string]*tailcfg.DERPNode),
+		probes:         make(map[string]*Probe),
+		regionCodeOrID: "zero",
 	}
 	if err := dp.probeMapFn(context.Background()); err != nil {
 		t.Errorf("unexpected probeMapFn() error: %s", err)
@@ -129,7 +129,7 @@ func TestDerpProber(t *testing.T) {
 	}
 
 	// Stop filtering regions.
-	dp.regionCode = ""
+	dp.regionCodeOrID = ""
 	if err := dp.probeMapFn(context.Background()); err != nil {
 		t.Errorf("unexpected probeMapFn() error: %s", err)
 	}
