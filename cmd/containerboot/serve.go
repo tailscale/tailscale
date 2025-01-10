@@ -68,7 +68,6 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 		if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {
 			continue
 		}
-		validateHTTPSServe(certDomain, sc)
 		if err := updateServeConfig(ctx, sc, certDomain, lc); err != nil {
 			log.Fatalf("serve proxy: error updating serve config: %v", err)
 		}
@@ -88,27 +87,34 @@ func certDomainFromNetmap(nm *netmap.NetworkMap) string {
 	return nm.DNS.CertDomains[0]
 }
 
-func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc *tailscale.LocalClient) error {
-	// TODO(irbekrm): This means that serve config that does not expose HTTPS endpoint will not be set for a tailnet
-	// that does not have HTTPS enabled. We probably want to fix this.
-	if certDomain == kubetypes.ValueNoHTTPS {
+// localClient is a subset of tailscale.LocalClient that can be mocked for testing.
+type localClient interface {
+	SetServeConfig(context.Context, *ipn.ServeConfig) error
+}
+
+func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc localClient) error {
+	if !isValidHTTPSConfig(certDomain, sc) {
 		return nil
 	}
 	log.Printf("serve proxy: applying serve config")
 	return lc.SetServeConfig(ctx, sc)
 }
 
-func validateHTTPSServe(certDomain string, sc *ipn.ServeConfig) {
-	if certDomain != kubetypes.ValueNoHTTPS || !hasHTTPSEndpoint(sc) {
-		return
-	}
-	log.Printf(
-		`serve proxy: this node is configured as a proxy that exposes an HTTPS endpoint to tailnet,
+func isValidHTTPSConfig(certDomain string, sc *ipn.ServeConfig) bool {
+	if certDomain == kubetypes.ValueNoHTTPS && hasHTTPSEndpoint(sc) {
+		log.Printf(
+			`serve proxy: this node is configured as a proxy that exposes an HTTPS endpoint to tailnet,
 		(perhaps a Kubernetes operator Ingress proxy) but it is not able to issue TLS certs, so this will likely not work.
 		To make it work, ensure that HTTPS is enabled for your tailnet, see https://tailscale.com/kb/1153/enabling-https for more details.`)
+		return false
+	}
+	return true
 }
 
 func hasHTTPSEndpoint(cfg *ipn.ServeConfig) bool {
+	if cfg == nil {
+		return false
+	}
 	for _, tcpCfg := range cfg.TCP {
 		if tcpCfg.HTTPS {
 			return true
@@ -126,6 +132,12 @@ func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
 	j, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	// Serve config can be provided by users as well as the Kubernetes Operator (for its proxies). User-provided
+	// config could be empty for reasons.
+	if len(j) == 0 {
+		log.Printf("serve proxy: serve config file is empty, skipping")
+		return nil, nil
 	}
 	j = bytes.ReplaceAll(j, []byte("${TS_CERT_DOMAIN}"), []byte(certDomain))
 	var sc ipn.ServeConfig
