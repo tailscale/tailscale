@@ -1380,6 +1380,7 @@ func TestTailscaledConfigfileHash(t *testing.T) {
 	})
 
 	expectReconciled(t, sr, "default", "test")
+	expectReconciled(t, sr, "default", "test")
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
@@ -1389,7 +1390,7 @@ func TestTailscaledConfigfileHash(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "acf3467364b0a3ba9b8ee0dd772cb7c2f0bf585e288fa99b7fe4566009ed6041",
+		confFileHash:    "848bff4b5ba83ac999e6984c8464e597156daba961ae045e7dbaef606d54ab5e",
 		app:             kubetypes.AppIngressProxy,
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o), nil)

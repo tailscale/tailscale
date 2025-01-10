@@ -29,6 +29,7 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/mak"
 )
 
 const testProxyImage = "tailscale/tailscale:test"
@@ -117,11 +118,11 @@ func TestProxyGroup(t *testing.T) {
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg, nil)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash)
+		expectProxyGroupResources(t, fc, pg, true, "")
 		if expected := 1; reconciler.egressProxyGroups.Len() != expected {
 			t.Fatalf("expected %d egress ProxyGroups, got %d", expected, reconciler.egressProxyGroups.Len())
 		}
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash)
+		expectProxyGroupResources(t, fc, pg, true, "")
 		keyReq := tailscale.KeyCapabilities{
 			Devices: tailscale.KeyDeviceCapabilities{
 				Create: tailscale.KeyDeviceCreateCapabilities{
@@ -378,11 +379,14 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	role := pgRole(pg, tsNamespace)
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
-	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", cfgHash)
+	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto")
 	if err != nil {
 		t.Fatal(err)
 	}
 	statefulSet.Annotations = defaultProxyClassAnnotations
+	if cfgHash != "" {
+		mak.Set(&statefulSet.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, cfgHash)
+	}
 
 	if shouldExist {
 		expectEqual(t, fc, role, nil)
