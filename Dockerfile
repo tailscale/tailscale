@@ -62,7 +62,7 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.gitCommitStamp=$VERSION_GIT_HASH" \
       -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
-FROM alpine:3.18
+FROM alpine:3.21
 RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
