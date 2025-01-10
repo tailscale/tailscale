@@ -449,12 +449,14 @@ func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map
 	if sec == nil {
 		return dev, nil
 	}
+	podUID := ""
 	pod := new(corev1.Pod)
 	if err := a.Get(ctx, types.NamespacedName{Namespace: sec.Namespace, Name: sec.Name}, pod); err != nil && !apierrors.IsNotFound(err) {
-		return dev, nil
+		return dev, err
+	} else if err == nil {
+		podUID = string(pod.ObjectMeta.UID)
 	}
-
-	return deviceInfo(sec, pod, logger)
+	return deviceInfo(sec, podUID, logger)
 }
 
 // device contains tailscale state of a proxy device as gathered from its tailscale state Secret.
@@ -468,7 +470,7 @@ type device struct {
 	capver         tailcfg.CapabilityVersion
 }
 
-func deviceInfo(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) (dev *device, err error) {
+func deviceInfo(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) (dev *device, err error) {
 	id := tailcfg.StableNodeID(sec.Data[kubetypes.KeyDeviceID])
 	if id == "" {
 		return dev, nil
@@ -486,7 +488,7 @@ func deviceInfo(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) (de
 		return dev, nil
 	}
 	dev.ingressDNSName = dev.hostname
-	pcv := proxyCapVer(sec, pod, log)
+	pcv := proxyCapVer(sec, podUID, log)
 	dev.capver = pcv
 	// TODO(irbekrm): we fall back to using the hostname field to determine Ingress's hostname to ensure backwards
 	// compatibility. In 1.82 we can remove this fallback mechanism.
@@ -1137,10 +1139,11 @@ func isValidFirewallMode(m string) bool {
 	return m == "auto" || m == "nftables" || m == "iptables"
 }
 
-// proxyCapVer accepts a proxy state Secret and a proxy Pod returns the capability version of a proxy Pod.
-// This is best effort - if the capability version can not (currently) be determined, it returns -1.
-func proxyCapVer(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) tailcfg.CapabilityVersion {
-	if sec == nil || pod == nil {
+// proxyCapVer accepts a proxy state Secret and UID of the current proxy Pod returns the capability version of the
+// tailscale running in that Pod. This is best effort - if the capability version can not (currently) be determined, it
+// returns -1.
+func proxyCapVer(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) tailcfg.CapabilityVersion {
+	if sec == nil || podUID == "" {
 		return tailcfg.CapabilityVersion(-1)
 	}
 	if len(sec.Data[kubetypes.KeyCapVer]) == 0 || len(sec.Data[kubetypes.KeyPodUID]) == 0 {
@@ -1151,7 +1154,7 @@ func proxyCapVer(sec *corev1.Secret, pod *corev1.Pod, log *zap.SugaredLogger) ta
 		log.Infof("[unexpected]: unexpected capability version in proxy's state Secret, expected an integer, got %q", string(sec.Data[kubetypes.KeyCapVer]))
 		return tailcfg.CapabilityVersion(-1)
 	}
-	if !strings.EqualFold(string(pod.ObjectMeta.UID), string(sec.Data[kubetypes.KeyPodUID])) {
+	if !strings.EqualFold(podUID, string(sec.Data[kubetypes.KeyPodUID])) {
 		return tailcfg.CapabilityVersion(-1)
 	}
 	return tailcfg.CapabilityVersion(capVer)

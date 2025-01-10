@@ -282,7 +282,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		// unnecessary pod restarts that could result in an update loop where capver cannot be determined for a
 		// restarting Pod and the hash is re-added again.
 		// Note that this workaround is only applied to egress ProxyGroups, because ingress ProxyGroup was added after capver 110.
-		// Note also that the hash annotation is only set on updates, not creation because if the StatefulSet is
+		// Note also that the hash annotation is only set on updates, not creation, because if the StatefulSet is
 		// being created, there is no need for a restart.
 		// TODO(irbekrm): remove this in 1.84.
 		hash := cfgHash
@@ -600,8 +600,9 @@ func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.Pr
 		pod := &corev1.Pod{}
 		if err := r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: secret.Name}, pod); err != nil && !apierrors.IsNotFound(err) {
 			return nil, err
+		} else if err == nil {
+			nm.podUID = string(pod.UID)
 		}
-		nm.pod = pod
 		metadata = append(metadata, nm)
 	}
 
@@ -634,9 +635,10 @@ func (r *ProxyGroupReconciler) getDeviceInfo(ctx context.Context, pg *tsapi.Prox
 type nodeMetadata struct {
 	ordinal     int
 	stateSecret *corev1.Secret
-	pod         *corev1.Pod // nil if there is no Pod (yet)
-	tsID        tailcfg.StableNodeID
-	dnsName     string
+	// podUID is the UID of the current Pod or empty if the Pod does not exist.
+	podUID  string
+	tsID    tailcfg.StableNodeID
+	dnsName string
 }
 
 // capVerForPG returns best effort capability version for the given ProxyGroup. It attempts to find it by looking at the
@@ -647,14 +649,15 @@ func (r *ProxyGroupReconciler) capVerForPG(ctx context.Context, pg *tsapi.ProxyG
 	if err != nil {
 		return -1, fmt.Errorf("error getting node metadata: %w", err)
 	}
-	if len(metas) != 0 {
-		dev, err := deviceInfo(metas[0].stateSecret, metas[0].pod, logger)
-		if err != nil {
-			return -1, fmt.Errorf("error getting device info: %w", err)
-		}
-		if dev != nil {
-			return dev.capver, nil
-		}
+	if len(metas) == 0 {
+		return -1, nil
 	}
-	return -1, nil
+	dev, err := deviceInfo(metas[0].stateSecret, metas[0].podUID, logger)
+	if err != nil {
+		return -1, fmt.Errorf("error getting device info: %w", err)
+	}
+	if dev == nil {
+		return -1, nil
+	}
+	return dev.capver, nil
 }
