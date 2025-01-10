@@ -60,8 +60,8 @@ type derpProber struct {
 	qdPacketsPerSecond int // in packets per second
 	qdPacketTimeout    time.Duration
 
-	// Optionally restrict probes to a single regionCode.
-	regionCode string
+	// Optionally restrict probes to a single regionCodeOrID.
+	regionCodeOrID string
 
 	// Probe class for fetching & updating the DERP map.
 	ProbeMap ProbeClass
@@ -135,11 +135,11 @@ func WithTLSProbing(interval time.Duration) DERPOpt {
 	}
 }
 
-// WithRegion restricts probing to the specified region identified by its code
-// (e.g. "lax"). This is case sensitive.
-func WithRegion(regionCode string) DERPOpt {
+// WithRegionCodeOrID restricts probing to the specified region identified by its code
+// (e.g. "lax") or its id (e.g. "17"). This is case sensitive.
+func WithRegionCodeOrID(regionCode string) DERPOpt {
 	return func(d *derpProber) {
-		d.regionCode = regionCode
+		d.regionCodeOrID = regionCode
 	}
 }
 
@@ -598,7 +598,7 @@ func (d *derpProber) ProbeUDP(ipaddr string, port int) ProbeClass {
 }
 
 func (d *derpProber) skipRegion(region *tailcfg.DERPRegion) bool {
-	return d.regionCode != "" && region.RegionCode != d.regionCode
+	return d.regionCodeOrID != "" && region.RegionCode != d.regionCodeOrID && strconv.Itoa(region.RegionID) != d.regionCodeOrID
 }
 
 func derpProbeUDP(ctx context.Context, ipStr string, port int) error {

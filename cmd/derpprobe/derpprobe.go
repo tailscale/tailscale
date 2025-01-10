@@ -32,7 +32,7 @@ var (
 	bwTUNIPv4Address   = flag.String("bw-tun-ipv4-addr", "", "if specified, bandwidth probes will be performed over a TUN device at this address in order to exercise TCP-in-TCP in similar fashion to TCP over Tailscale via DERP; we will use a /30 subnet including this IP address")
 	qdPacketsPerSecond = flag.Int("qd-packets-per-second", 0, "if greater than 0, queuing delay will be measured continuously using 260 byte packets (approximate size of a CallMeMaybe packet) sent at this rate per second")
 	qdPacketTimeout    = flag.Duration("qd-packet-timeout", 5*time.Second, "queuing delay packets arriving after this period of time from being sent are treated like dropped packets and don't count toward queuing delay timings")
-	regionCode         = flag.String("region-code", "", "probe only this region (e.g. 'lax'); if left blank, all regions will be probed")
+	regionCodeOrID     = flag.String("region-code", "", "probe only this region (e.g. 'lax' or '17'); if left blank, all regions will be probed")
 )
 
 func main() {
@@ -52,8 +52,8 @@ func main() {
 	if *bwInterval > 0 {
 		opts = append(opts, prober.WithBandwidthProbing(*bwInterval, *bwSize, *bwTUNIPv4Address))
 	}
-	if *regionCode != "" {
-		opts = append(opts, prober.WithRegion(*regionCode))
+	if *regionCodeOrID != "" {
+		opts = append(opts, prober.WithRegionCodeOrID(*regionCodeOrID))
 	}
 	dp, err := prober.DERP(p, *derpMapURL, opts...)
 	if err != nil {
