@@ -36,6 +36,7 @@ const maxReadSize = 10 << 20
 //
 // Use NewClient to instantiate one. Exported fields should be set before
 // the client is used and not changed thereafter.
+// Deprecated: use https://github.com/tailscale/tailscale-client-go instead.
 type Client struct {
 	// tailnet is the globally unique identifier for a Tailscale network, such
 	// as "example.com" or "user@gmail.com".
@@ -98,6 +99,7 @@ func (c *Client) setAuth(r *http.Request) {
 // If httpClient is nil, then http.DefaultClient is used.
 // "api.tailscale.com" is set as the BaseURL for the returned client
 // and can be changed manually by the user.
+// Deprecated: use https://github.com/tailscale/tailscale-client-go instead.
 func NewClient(tailnet string, auth AuthMethod) *Client {
 	return &Client{
 		tailnet:   tailnet,
