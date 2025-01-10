@@ -69,7 +69,9 @@ func TestUpdateRoutes(t *testing.T) {
 		a.updateDomains([]string{"*.example.com"})
 
 		// This route should be collapsed into the range
-		a.ObserveDNSResponse(dnsResponse("a.example.com.", "192.0.2.1"))
+		if err := a.ObserveDNSResponse(dnsResponse("a.example.com.", "192.0.2.1")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 
 		if !slices.Equal(rc.Routes(), []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}) {
@@ -77,7 +79,9 @@ func TestUpdateRoutes(t *testing.T) {
 		}
 
 		// This route should not be collapsed or removed
-		a.ObserveDNSResponse(dnsResponse("b.example.com.", "192.0.0.1"))
+		if err := a.ObserveDNSResponse(dnsResponse("b.example.com.", "192.0.0.1")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 
 		routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("192.0.0.1/32")}
@@ -130,7 +134,9 @@ func TestDomainRoutes(t *testing.T) {
 			a = NewAppConnector(t.Logf, rc, nil, nil)
 		}
 		a.updateDomains([]string{"example.com"})
-		a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(context.Background())
 
 		want := map[string][]netip.Addr{
@@ -155,7 +161,9 @@ func TestObserveDNSResponse(t *testing.T) {
 		}
 
 		// a has no domains configured, so it should not advertise any routes
-		a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		if got, want := rc.Routes(), ([]netip.Prefix)(nil); !slices.Equal(got, want) {
 			t.Errorf("got %v; want %v", got, want)
 		}
@@ -163,7 +171,9 @@ func TestObserveDNSResponse(t *testing.T) {
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 
 		a.updateDomains([]string{"example.com"})
-		a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 		if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
 			t.Errorf("got %v; want %v", got, want)
@@ -172,7 +182,9 @@ func TestObserveDNSResponse(t *testing.T) {
 		// a CNAME record chain should result in a route being added if the chain
 		// matches a routed domain.
 		a.updateDomains([]string{"www.example.com", "example.com"})
-		a.ObserveDNSResponse(dnsCNAMEResponse("192.0.0.9", "www.example.com.", "chain.example.com.", "example.com."))
+		if err := a.ObserveDNSResponse(dnsCNAMEResponse("192.0.0.9", "www.example.com.", "chain.example.com.", "example.com.")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 		wantRoutes = append(wantRoutes, netip.MustParsePrefix("192.0.0.9/32"))
 		if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
@@ -181,7 +193,9 @@ func TestObserveDNSResponse(t *testing.T) {
 
 		// a CNAME record chain should result in a route being added if the chain
 		// even if only found in the middle of the chain
-		a.ObserveDNSResponse(dnsCNAMEResponse("192.0.0.10", "outside.example.org.", "www.example.com.", "example.org."))
+		if err := a.ObserveDNSResponse(dnsCNAMEResponse("192.0.0.10", "outside.example.org.", "www.example.com.", "example.org.")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 		wantRoutes = append(wantRoutes, netip.MustParsePrefix("192.0.0.10/32"))
 		if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
@@ -190,14 +204,18 @@ func TestObserveDNSResponse(t *testing.T) {
 
 		wantRoutes = append(wantRoutes, netip.MustParsePrefix("2001:db8::1/128"))
 
-		a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1"))
+		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 		if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
 			t.Errorf("got %v; want %v", got, want)
 		}
 
 		// don't re-advertise routes that have already been advertised
-		a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1"))
+		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 		if !slices.Equal(rc.Routes(), wantRoutes) {
 			t.Errorf("rc.Routes(): got %v; want %v", rc.Routes(), wantRoutes)
@@ -207,7 +225,9 @@ func TestObserveDNSResponse(t *testing.T) {
 		pfx := netip.MustParsePrefix("192.0.2.0/24")
 		a.updateRoutes([]netip.Prefix{pfx})
 		wantRoutes = append(wantRoutes, pfx)
-		a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.2.1"))
+		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.2.1")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 		if !slices.Equal(rc.Routes(), wantRoutes) {
 			t.Errorf("rc.Routes(): got %v; want %v", rc.Routes(), wantRoutes)
@@ -230,7 +250,9 @@ func TestWildcardDomains(t *testing.T) {
 		}
 
 		a.updateDomains([]string{"*.example.com"})
-		a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8"))
+		if err := a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		a.Wait(ctx)
 		if got, want := rc.Routes(), []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}; !slices.Equal(got, want) {
 			t.Errorf("routes: got %v; want %v", got, want)
@@ -438,10 +460,16 @@ func TestUpdateDomainRouteRemoval(t *testing.T) {
 		// adding domains doesn't immediately cause any routes to be advertised
 		assertRoutes("update domains", []netip.Prefix{}, []netip.Prefix{})
 
-		a.ObserveDNSResponse(dnsResponse("a.example.com.", "1.2.3.1"))
-		a.ObserveDNSResponse(dnsResponse("a.example.com.", "1.2.3.2"))
-		a.ObserveDNSResponse(dnsResponse("b.example.com.", "1.2.3.3"))
-		a.ObserveDNSResponse(dnsResponse("b.example.com.", "1.2.3.4"))
+		for _, res := range [][]byte{
+			dnsResponse("a.example.com.", "1.2.3.1"),
+			dnsResponse("a.example.com.", "1.2.3.2"),
+			dnsResponse("b.example.com.", "1.2.3.3"),
+			dnsResponse("b.example.com.", "1.2.3.4"),
+		} {
+			if err := a.ObserveDNSResponse(res); err != nil {
+				t.Errorf("ObserveDNSResponse: %v", err)
+			}
+		}
 		a.Wait(ctx)
 		// observing dns responses causes routes to be advertised
 		assertRoutes("observed dns", prefixes("1.2.3.1/32", "1.2.3.2/32", "1.2.3.3/32", "1.2.3.4/32"), []netip.Prefix{})
@@ -487,10 +515,16 @@ func TestUpdateWildcardRouteRemoval(t *testing.T) {
 		// adding domains doesn't immediately cause any routes to be advertised
 		assertRoutes("update domains", []netip.Prefix{}, []netip.Prefix{})
 
-		a.ObserveDNSResponse(dnsResponse("a.example.com.", "1.2.3.1"))
-		a.ObserveDNSResponse(dnsResponse("a.example.com.", "1.2.3.2"))
-		a.ObserveDNSResponse(dnsResponse("1.b.example.com.", "1.2.3.3"))
-		a.ObserveDNSResponse(dnsResponse("2.b.example.com.", "1.2.3.4"))
+		for _, res := range [][]byte{
+			dnsResponse("a.example.com.", "1.2.3.1"),
+			dnsResponse("a.example.com.", "1.2.3.2"),
+			dnsResponse("1.b.example.com.", "1.2.3.3"),
+			dnsResponse("2.b.example.com.", "1.2.3.4"),
+		} {
+			if err := a.ObserveDNSResponse(res); err != nil {
+				t.Errorf("ObserveDNSResponse: %v", err)
+			}
+		}
 		a.Wait(ctx)
 		// observing dns responses causes routes to be advertised
 		assertRoutes("observed dns", prefixes("1.2.3.1/32", "1.2.3.2/32", "1.2.3.3/32", "1.2.3.4/32"), []netip.Prefix{})

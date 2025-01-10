@@ -374,13 +374,13 @@ func (e *AppConnector) DomainRoutes() map[string][]netip.Addr {
 // response is being returned over the PeerAPI. The response is parsed and
 // matched against the configured domains, if matched the routeAdvertiser is
 // advised to advertise the discovered route.
-func (e *AppConnector) ObserveDNSResponse(res []byte) {
+func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 	var p dnsmessage.Parser
 	if _, err := p.Start(res); err != nil {
-		return
+		return err
 	}
 	if err := p.SkipAllQuestions(); err != nil {
-		return
+		return err
 	}
 
 	// cnameChain tracks a chain of CNAMEs for a given query in order to reverse
@@ -399,12 +399,12 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 			break
 		}
 		if err != nil {
-			return
+			return err
 		}
 
 		if h.Class != dnsmessage.ClassINET {
 			if err := p.SkipAnswer(); err != nil {
-				return
+				return err
 			}
 			continue
 		}
@@ -413,7 +413,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		case dnsmessage.TypeCNAME, dnsmessage.TypeA, dnsmessage.TypeAAAA:
 		default:
 			if err := p.SkipAnswer(); err != nil {
-				return
+				return err
 			}
 			continue
 
@@ -427,7 +427,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		if h.Type == dnsmessage.TypeCNAME {
 			res, err := p.CNAMEResource()
 			if err != nil {
-				return
+				return err
 			}
 			cname := strings.TrimSuffix(strings.ToLower(res.CNAME.String()), ".")
 			if len(cname) == 0 {
@@ -441,20 +441,20 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		case dnsmessage.TypeA:
 			r, err := p.AResource()
 			if err != nil {
-				return
+				return err
 			}
 			addr := netip.AddrFrom4(r.A)
 			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
 		case dnsmessage.TypeAAAA:
 			r, err := p.AAAAResource()
 			if err != nil {
-				return
+				return err
 			}
 			addr := netip.AddrFrom16(r.AAAA)
 			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
 		default:
 			if err := p.SkipAnswer(); err != nil {
-				return
+				return err
 			}
 			continue
 		}
@@ -485,6 +485,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 			e.scheduleAdvertisement(domain, toAdvertise...)
 		}
 	}
+	return nil
 }
 
 // starting from the given domain that resolved to an address, find it, or any
