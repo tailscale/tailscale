@@ -68,6 +68,57 @@ func TestTopK(t *testing.T) {
 	t.Errorf("top K mismatch\ngot: %v\nwant: %v", got, want)
 }
 
+func TestTopKNoDuplicates(t *testing.T) {
+	// Create a TopK that tracks top 5 elements
+	topk := New[string](5, func(in []byte, val string) []byte {
+		return append(in, []byte(val)...)
+	})
+
+	// Add a single element many times
+	const commonElement = "very-common"
+	for i := 0; i < 500; i++ {
+		topk.Add(commonElement)
+	}
+
+	// We should only have a single "top" element here, despite having
+	// added the same element 500 times.
+	if n := len(topk.Top()); n != 1 {
+		t.Errorf("expected only one element, got %d", n)
+	}
+
+	// Add some less frequent elements
+	for i := 0; i < 5; i++ {
+		topk.Add(fmt.Sprintf("less-common-%d", i))
+	}
+
+	// Add common element again
+	for i := 0; i < 500; i++ {
+		topk.Add(commonElement)
+	}
+
+	// Get the top elements
+	results := topk.Top()
+
+	// Count occurrences of the common element
+	commonCount := 0
+	for _, res := range results {
+		if res == commonElement {
+			commonCount++
+		}
+	}
+
+	if commonCount > 1 {
+		t.Errorf("common element appeared %d times in results, want 1", commonCount)
+	} else if commonCount == 0 {
+		t.Error("common element did not appear in results")
+	}
+
+	// We expect that the common element is last (i.e. "top") in the returned list.
+	if idx := len(results) - 1; results[idx] != commonElement {
+		t.Errorf("common element not last in results: %q", results[idx])
+	}
+}
+
 func TestPickParams(t *testing.T) {
 	hashes, buckets := PickParams(
 		0.001, // 0.1% error rate
