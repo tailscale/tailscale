@@ -119,10 +119,6 @@ type Handler struct {
 	// (operator user).
 	PermitWrite bool
 
-	// PermitCert is whether the client is additionally granted
-	// cert fetching access.
-	PermitCert bool
-
 	// Actor is the identity of the client connected to the Handler.
 	Actor ipnauth.Actor
 

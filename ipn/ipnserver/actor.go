@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os/exec"
 	"runtime"
-	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
@@ -97,11 +95,7 @@ func (a *actor) Username() (string, error) {
 		defer tok.Close()
 		return tok.Username()
 	case "darwin", "linux", "illumos", "solaris":
-		uid, ok := a.ci.Creds().UserID()
-		if !ok {
-			return "", errors.New("missing user ID")
-		}
-		u, err := osuser.LookupByUID(uid)
+		u, err := osuser.LookupByUID("root")
 		if err != nil {
 			return "", fmt.Errorf("lookup user: %w", err)
 		}
@@ -179,28 +173,6 @@ func connIsLocalAdmin(logf logger.Logf, ci *ipnauth.ConnIdentity, operatorUID st
 		// Linux.
 		fallthrough
 	case "linux":
-		uid, ok := ci.Creds().UserID()
-		if !ok {
-			return false
-		}
-		// root is always admin.
-		if uid == "0" {
-			return true
-		}
-		// if non-root, must be operator AND able to execute "sudo tailscale".
-		if operatorUID != "" && uid != operatorUID {
-			return false
-		}
-		u, err := osuser.LookupByUID(uid)
-		if err != nil {
-			return false
-		}
-		// Short timeout just in case sudo hangs for some reason.
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := exec.CommandContext(ctx, "sudo", "--other-user="+u.Name, "--list", "tailscale").Run(); err != nil {
-			return false
-		}
 		return true
 
 	default:

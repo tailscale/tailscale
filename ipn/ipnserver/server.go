@@ -195,7 +195,6 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
 		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
 		lah.PermitRead, lah.PermitWrite = ci.Permissions(lb.OperatorUserID())
-		lah.PermitCert = ci.CanFetchCerts()
 		lah.Actor = ci
 		lah.ServeHTTP(w, r)
 		return
@@ -332,26 +331,6 @@ func isAllDigit(s string) bool {
 		}
 	}
 	return true
-}
-
-// CanFetchCerts reports whether the actor is allowed to fetch HTTPS
-// certs from this server when it wouldn't otherwise be able to.
-//
-// That is, this reports whether the actor should grant additional
-// capabilities over what the actor would otherwise be able to do.
-//
-// For now this only returns true on Unix machines when
-// TS_PERMIT_CERT_UID is set the to the userid of the peer
-// connection. It's intended to give your non-root webserver access
-// (www-data, caddy, nginx, etc) to certs.
-func (a *actor) CanFetchCerts() bool {
-	if a.ci.IsUnixSock() && a.ci.Creds() != nil {
-		connUID, ok := a.ci.Creds().UserID()
-		if ok && connUID == userIDFromString(envknob.String("TS_PERMIT_CERT_UID")) {
-			return true
-		}
-	}
-	return false
 }
 
 // addActiveHTTPRequest adds c to the server's list of active HTTP requests.

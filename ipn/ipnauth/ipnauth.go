@@ -9,15 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"os/user"
 	"runtime"
-	"strconv"
 
-	"github.com/tailscale/peercred"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
-	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/groupmember"
@@ -63,8 +59,7 @@ type ConnIdentity struct {
 	notWindows bool // runtime.GOOS != "windows"
 
 	// Fields used when NotWindows:
-	isUnixSock bool            // Conn is a *net.UnixConn
-	creds      *peercred.Creds // or nil
+	isUnixSock bool // Conn is a *net.UnixConn
 
 	// Used on Windows:
 	// TODO(bradfitz): merge these into the peercreds package and
@@ -87,19 +82,11 @@ func (ci *ConnIdentity) WindowsUserID() ipn.WindowsUserID {
 			return uid
 		}
 	}
-	// For Linux tests running as Windows:
-	const isBroken = true // TODO(bradfitz,maisem): fix tests; this doesn't work yet
-	if ci.creds != nil && !isBroken {
-		if uid, ok := ci.creds.UserID(); ok {
-			return ipn.WindowsUserID(uid)
-		}
-	}
 	return ""
 }
 
-func (ci *ConnIdentity) Pid() int               { return ci.pid }
-func (ci *ConnIdentity) IsUnixSock() bool       { return ci.isUnixSock }
-func (ci *ConnIdentity) Creds() *peercred.Creds { return ci.creds }
+func (ci *ConnIdentity) Pid() int         { return ci.pid }
+func (ci *ConnIdentity) IsUnixSock() bool { return ci.isUnixSock }
 
 var metricIssue869Workaround = clientmetric.NewCounter("issue_869_workaround")
 
@@ -148,47 +135,7 @@ func LookupUserFromID(logf logger.Logf, uid string) (*user.User, error) {
 //
 // TODO(bradfitz): rename it? Also make Windows use this.
 func (ci *ConnIdentity) IsReadonlyConn(operatorUID string, logf logger.Logf) bool {
-	if runtime.GOOS == "windows" {
-		// Windows doesn't need/use this mechanism, at least yet. It
-		// has a different last-user-wins auth model.
-		return false
-	}
-	const ro = true
-	const rw = false
-	if !safesocket.PlatformUsesPeerCreds() {
-		return rw
-	}
-	creds := ci.creds
-	if creds == nil {
-		logf("connection from unknown peer; read-only")
-		return ro
-	}
-	uid, ok := creds.UserID()
-	if !ok {
-		logf("connection from peer with unknown userid; read-only")
-		return ro
-	}
-	if uid == "0" {
-		logf("connection from userid %v; root has access", uid)
-		return rw
-	}
-	if selfUID := os.Getuid(); selfUID != 0 && uid == strconv.Itoa(selfUID) {
-		logf("connection from userid %v; connection from non-root user matching daemon has access", uid)
-		return rw
-	}
-	if operatorUID != "" && uid == operatorUID {
-		logf("connection from userid %v; is configured operator", uid)
-		return rw
-	}
-	if yes, err := isLocalAdmin(uid); err != nil {
-		logf("connection from userid %v; read-only; %v", uid, err)
-		return ro
-	} else if yes {
-		logf("connection from userid %v; is local admin, has access", uid)
-		return rw
-	}
-	logf("connection from userid %v; read-only", uid)
-	return ro
+	return false
 }
 
 func isLocalAdmin(uid string) (bool, error) {
