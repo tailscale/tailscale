@@ -25,7 +25,6 @@ import (
 
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
-	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -913,9 +912,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 
 		tmr := time.AfterFunc(c.captivePortalDelay(), func() {
 			defer close(ch)
-			d := captivedetection.NewDetector(c.logf)
-			found := d.Detect(ctx, c.NetMon, dm, preferredDERP)
-			rs.report.CaptivePortal.Set(found)
 		})
 
 		captivePortalStop = func() {

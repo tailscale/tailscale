@@ -62,7 +62,6 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
-	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -2497,31 +2496,6 @@ func (b *LocalBackend) checkCaptivePortalLoop(ctx context.Context) {
 // performCaptiveDetection checks if captive portal detection is enabled via controlknob. If so, it runs
 // the detection and updates the Warnable accordingly.
 func (b *LocalBackend) performCaptiveDetection() {
-	if !b.shouldRunCaptivePortalDetection() {
-		return
-	}
-
-	d := captivedetection.NewDetector(b.logf)
-	var dm *tailcfg.DERPMap
-	b.mu.Lock()
-	if b.netMap != nil {
-		dm = b.netMap.DERPMap
-	}
-	preferredDERP := 0
-	if b.hostinfo != nil {
-		if b.hostinfo.NetInfo != nil {
-			preferredDERP = b.hostinfo.NetInfo.PreferredDERP
-		}
-	}
-	ctx := b.ctx
-	netMon := b.NetMon()
-	b.mu.Unlock()
-	found := d.Detect(ctx, netMon, dm, preferredDERP)
-	if found {
-		b.health.SetUnhealthy(captivePortalWarnable, health.Args{})
-	} else {
-		b.health.SetHealthy(captivePortalWarnable)
-	}
 }
 
 // shouldRunCaptivePortalDetection reports whether captive portal detection
