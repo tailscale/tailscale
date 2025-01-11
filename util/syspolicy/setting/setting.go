@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"tailscale.com/types/lazy"
-	"tailscale.com/util/syspolicy/internal"
 )
 
 // Scope indicates the broadest scope at which a policy setting may apply,
@@ -169,14 +168,6 @@ func (d *Definition) Type() Type {
 	return d.typ
 }
 
-// IsSupported reports whether the policy setting is supported on the current OS.
-func (d *Definition) IsSupported() bool {
-	if d == nil {
-		return false
-	}
-	return d.platforms.HasCurrent()
-}
-
 // SupportedPlatforms reports platforms on which the policy setting is supported.
 // An empty [PlatformList] indicates that s is available on all platforms.
 func (d *Definition) SupportedPlatforms() PlatformList {
@@ -217,103 +208,6 @@ var (
 	definitionsUsed bool
 )
 
-// Register registers a policy setting with the specified key, scope, value type,
-// and an optional list of supported platforms. All policy settings must be
-// registered before any of them can be used. Register panics if called after
-// invoking any functions that use the registered policy definitions. This
-// includes calling [Definitions] or [DefinitionOf] directly, or reading any
-// policy settings via syspolicy.
-func Register(k Key, s Scope, t Type, platforms ...string) {
-	RegisterDefinition(NewDefinition(k, s, t, platforms...))
-}
-
-// RegisterDefinition is like [Register], but accepts a [Definition].
-func RegisterDefinition(d *Definition) {
-	definitionsMu.Lock()
-	defer definitionsMu.Unlock()
-	registerLocked(d)
-}
-
-func registerLocked(d *Definition) {
-	if definitionsUsed {
-		panic("policy definitions are already in use")
-	}
-	definitionsList = append(definitionsList, d)
-}
-
-func settingDefinitions() (DefinitionMap, error) {
-	return definitions.GetErr(func() (DefinitionMap, error) {
-		if err := internal.Init.Do(); err != nil {
-			return nil, err
-		}
-		definitionsMu.Lock()
-		defer definitionsMu.Unlock()
-		definitionsUsed = true
-		return DefinitionMapOf(definitionsList)
-	})
-}
-
-// DefinitionMapOf returns a [DefinitionMap] with the specified settings,
-// or an error if any settings have the same key but different type or scope.
-func DefinitionMapOf(settings []*Definition) (DefinitionMap, error) {
-	m := make(DefinitionMap, len(settings))
-	for _, s := range settings {
-		if existing, exists := m[s.key]; exists {
-			if existing.Equal(s) {
-				// Ignore duplicate setting definitions if they match. It is acceptable
-				// if the same policy setting was registered more than once
-				// (e.g. by the syspolicy package itself and by iOS/Android code).
-				existing.platforms.mergeFrom(s.platforms)
-				continue
-			}
-			return nil, fmt.Errorf("duplicate policy definition: %q", s.key)
-		}
-		m[s.key] = s
-	}
-	return m, nil
-}
-
-// SetDefinitionsForTest allows to register the specified setting definitions
-// for the test duration. It is not concurrency-safe, but unlike [Register],
-// it does not panic and can be called anytime.
-// It returns an error if ds contains two different settings with the same [Key].
-func SetDefinitionsForTest(tb lazy.TB, ds ...*Definition) error {
-	m, err := DefinitionMapOf(ds)
-	if err != nil {
-		return err
-	}
-	definitions.SetForTest(tb, m, err)
-	return nil
-}
-
-// DefinitionOf returns a setting definition by key,
-// or [ErrNoSuchKey] if the specified key does not exist,
-// or an error if there are conflicting policy definitions.
-func DefinitionOf(k Key) (*Definition, error) {
-	ds, err := settingDefinitions()
-	if err != nil {
-		return nil, err
-	}
-	if d, ok := ds[k]; ok {
-		return d, nil
-	}
-	return nil, ErrNoSuchKey
-}
-
-// Definitions returns all registered setting definitions,
-// or an error if different policies were registered under the same name.
-func Definitions() ([]*Definition, error) {
-	ds, err := settingDefinitions()
-	if err != nil {
-		return nil, err
-	}
-	res := make([]*Definition, 0, len(ds))
-	for _, d := range ds {
-		res = append(res, d)
-	}
-	return res, nil
-}
-
 // PlatformList is a list of OSes.
 // An empty list indicates that all possible platforms are supported.
 type PlatformList []string
@@ -326,11 +220,6 @@ func (l PlatformList) Has(target string) bool {
 	return slices.ContainsFunc(l, func(os string) bool {
 		return strings.EqualFold(os, target)
 	})
-}
-
-// HasCurrent is like Has, but for the current platform.
-func (l PlatformList) HasCurrent() bool {
-	return l.Has(internal.OS())
 }
 
 // mergeFrom merges l2 into l. Since an empty list indicates no platform restrictions,

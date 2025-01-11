@@ -4,8 +4,6 @@
 package syspolicy
 
 import (
-	"tailscale.com/util/syspolicy/internal"
-	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
 )
@@ -28,27 +26,6 @@ type Handler interface {
 	// ReadStringArray reads the policy setting's string array value for the given key.
 	// It should return ErrNoSuchKey if the key does not have a value set.
 	ReadStringArray(key string) ([]string, error)
-}
-
-// RegisterHandler wraps and registers the specified handler as the device's
-// policy [source.Store] for the program's lifetime.
-//
-// Deprecated: using [RegisterStore] should be preferred.
-func RegisterHandler(h Handler) {
-	rsop.RegisterStore("DeviceHandler", setting.DeviceScope, WrapHandler(h))
-}
-
-// TB is a subset of testing.TB that we use to set up test helpers.
-// It's defined here to avoid pulling in the testing package.
-type TB = internal.TB
-
-// SetHandlerForTest wraps and sets the specified handler as the device's policy
-// [source.Store] for the duration of tb.
-//
-// Deprecated: using [MustRegisterStoreForTest] should be preferred.
-func SetHandlerForTest(tb TB, h Handler) {
-	RegisterWellKnownSettingsForTest(tb)
-	MustRegisterStoreForTest(tb, "DeviceHandler-TestOnly", setting.DefaultScope(), WrapHandler(h))
 }
 
 var _ source.Store = (*handlerStore)(nil)

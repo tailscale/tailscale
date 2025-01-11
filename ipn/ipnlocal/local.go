@@ -79,7 +79,6 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy"
-	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
 	"tailscale.com/util/usermetric"
@@ -448,15 +447,6 @@ func NewLocalBackend(logf logger.Logf, sys *tsd.System, loginFlags controlclient
 		}
 	}
 
-	if b.unregisterSysPolicyWatch, err = b.registerSysPolicyWatch(); err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			b.unregisterSysPolicyWatch()
-		}
-	}()
-
 	netMon := sys.NetMon.Get()
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
@@ -514,8 +504,6 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	switch component {
 	case "magicsock":
 		setEnabled = b.MagicConn().SetDebugLoggingEnabled
-	case "syspolicy":
-		setEnabled = syspolicy.SetDebugLoggingEnabled
 	}
 	if setEnabled == nil || !slices.Contains(ipn.DebuggableComponents, component) {
 		return fmt.Errorf("unknown component %q", component)
@@ -1346,9 +1334,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
 		}
 	}
-	if applySysPolicy(prefs, b.lastSuggestedExitNode) {
-		prefsChanged = true
-	}
 	if setExitNodeID(prefs, curNetMap) {
 		prefsChanged = true
 	}
@@ -1490,101 +1475,6 @@ var preferencePolicies = []preferencePolicyInfo{
 		get: func(p ipn.PrefsView) bool { return p.AdvertisesExitNode() },
 		set: func(p *ipn.Prefs, v bool) { p.SetAdvertiseExitNode(v) },
 	},
-}
-
-// applySysPolicy overwrites configured preferences with policies that may be
-// configured by the system administrator in an OS-specific way.
-func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID) (anyChange bool) {
-	if controlURL, err := syspolicy.GetString(syspolicy.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
-		prefs.ControlURL = controlURL
-		anyChange = true
-	}
-
-	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
-		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
-		if shouldAutoExitNode() && lastSuggestedExitNode != "" {
-			exitNodeID = lastSuggestedExitNode
-		}
-		// Note: when exitNodeIDStr == "auto" && lastSuggestedExitNode == "",
-		// then exitNodeID is now "auto" which will never match a peer's node ID.
-		// When there is no a peer matching the node ID, traffic will blackhole,
-		// preventing accidental non-exit-node usage when a policy is in effect that requires an exit node.
-		if prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid() {
-			anyChange = true
-		}
-		prefs.ExitNodeID = exitNodeID
-		prefs.ExitNodeIP = netip.Addr{}
-	} else if exitNodeIPStr, _ := syspolicy.GetString(syspolicy.ExitNodeIP, ""); exitNodeIPStr != "" {
-		exitNodeIP, err := netip.ParseAddr(exitNodeIPStr)
-		if exitNodeIP.IsValid() && err == nil {
-			if prefs.ExitNodeID != "" || prefs.ExitNodeIP != exitNodeIP {
-				anyChange = true
-			}
-			prefs.ExitNodeID = ""
-			prefs.ExitNodeIP = exitNodeIP
-		}
-	}
-
-	for _, opt := range preferencePolicies {
-		if po, err := syspolicy.GetPreferenceOption(opt.key); err == nil {
-			curVal := opt.get(prefs.View())
-			newVal := po.ShouldEnable(curVal)
-			if curVal != newVal {
-				opt.set(prefs, newVal)
-				anyChange = true
-			}
-		}
-	}
-
-	return anyChange
-}
-
-// registerSysPolicyWatch subscribes to syspolicy change notifications
-// and immediately applies the effective syspolicy settings to the current profile.
-func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
-	if unregister, err = syspolicy.RegisterChangeCallback(b.sysPolicyChanged); err != nil {
-		return nil, fmt.Errorf("syspolicy: LocalBacked failed to register policy change callback: %v", err)
-	}
-	if prefs, anyChange := b.applySysPolicy(); anyChange {
-		b.logf("syspolicy: changed initial profile prefs: %v", prefs.Pretty())
-	}
-	b.refreshAllowedSuggestions()
-	return unregister, nil
-}
-
-// applySysPolicy overwrites the current profile's preferences with policies
-// that may be configured by the system administrator in an OS-specific way.
-//
-// b.mu must not be held.
-func (b *LocalBackend) applySysPolicy() (_ ipn.PrefsView, anyChange bool) {
-	unlock := b.lockAndGetUnlock()
-	prefs := b.pm.CurrentPrefs().AsStruct()
-	if !applySysPolicy(prefs, b.lastSuggestedExitNode) {
-		unlock.UnlockEarly()
-		return prefs.View(), false
-	}
-	return b.setPrefsLockedOnEntry(prefs, unlock), true
-}
-
-// sysPolicyChanged is a callback triggered by syspolicy when it detects
-// a change in one or more syspolicy settings.
-func (b *LocalBackend) sysPolicyChanged(policy *rsop.PolicyChange) {
-	if policy.HasChanged(syspolicy.AllowedSuggestedExitNodes) {
-		b.refreshAllowedSuggestions()
-		// Re-evaluate exit node suggestion now that the policy setting has changed.
-		b.mu.Lock()
-		_, err := b.suggestExitNodeLocked(nil)
-		b.mu.Unlock()
-		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
-			b.logf("failed to select auto exit node: %v", err)
-		}
-		// If [syspolicy.ExitNodeID] is set to `auto:any`, the suggested exit node ID
-		// will be used when [applySysPolicy] updates the current profile's prefs.
-	}
-
-	if prefs, anyChange := b.applySysPolicy(); anyChange {
-		b.logf("syspolicy: changed profile prefs: %v", prefs.Pretty())
-	}
 }
 
 var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
@@ -1915,11 +1805,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	if b.state != ipn.Running && b.conf == nil && opts.AuthKey == "" {
-		sysak, _ := syspolicy.GetString(syspolicy.AuthKey, "")
-		if sysak != "" {
-			b.logf("Start: setting opts.AuthKey by syspolicy, len=%v", len(sysak))
-			opts.AuthKey = strings.TrimSpace(sysak)
-		}
 	}
 
 	hostinfo := hostinfo.New()
@@ -3646,10 +3531,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// applySysPolicyToPrefsLocked returns whether it updated newp,
-	// but everything in this function treats b.prefs as completely new
-	// anyway, so its return value can be ignored here.
-	applySysPolicy(newp, b.lastSuggestedExitNode)
 	// setExitNodeID does likewise. No-op if no exit node resolution is needed.
 	setExitNodeID(newp, netMap)
 	// We do this to avoid holding the lock while doing everything else.

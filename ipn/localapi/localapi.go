@@ -38,8 +38,6 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/rands"
-	"tailscale.com/util/syspolicy/rsop"
-	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -51,7 +49,6 @@ type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
 // then it's a prefix match.
 var handler = map[string]localAPIHandler{
 	// The prefix match handlers end with a slash:
-	"policy/":   (*Handler).servePolicy,
 	"profiles/": (*Handler).serveProfiles,
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
@@ -771,53 +768,6 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(prefs)
-}
-
-func (h *Handler) servePolicy(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "policy access denied", http.StatusForbidden)
-		return
-	}
-
-	suffix, ok := strings.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/policy/")
-	if !ok {
-		http.Error(w, "misconfigured", http.StatusInternalServerError)
-		return
-	}
-
-	var scope setting.PolicyScope
-	if suffix == "" {
-		scope = setting.DefaultScope()
-	} else if err := scope.UnmarshalText([]byte(suffix)); err != nil {
-		http.Error(w, fmt.Sprintf("%q is not a valid scope", suffix), http.StatusBadRequest)
-		return
-	}
-
-	policy, err := rsop.PolicyFor(scope)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var effectivePolicy *setting.Snapshot
-	switch r.Method {
-	case "GET":
-		effectivePolicy = policy.Get()
-	case "POST":
-		effectivePolicy, err = policy.Reload()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	default:
-		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	e := json.NewEncoder(w)
-	e.SetIndent("", "\t")
-	e.Encode(effectivePolicy)
 }
 
 type resJSON struct {

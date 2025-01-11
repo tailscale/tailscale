@@ -6,9 +6,6 @@
 package internal
 
 import (
-	"bytes"
-
-	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/lazy"
 	"tailscale.com/version"
 )
@@ -35,32 +32,4 @@ type TB interface {
 	Errorf(format string, args ...any)
 	Fatal(args ...any)
 	Fatalf(format string, args ...any)
-}
-
-// EqualJSONForTest compares the JSON in j1 and j2 for semantic equality.
-// It returns "", "", true if j1 and j2 are equal. Otherwise, it returns
-// indented versions of j1 and j2 and false.
-func EqualJSONForTest(tb TB, j1, j2 jsontext.Value) (s1, s2 string, equal bool) {
-	tb.Helper()
-	j1 = j1.Clone()
-	j2 = j2.Clone()
-	// Canonicalize JSON values for comparison.
-	if err := j1.Canonicalize(); err != nil {
-		tb.Error(err)
-	}
-	if err := j2.Canonicalize(); err != nil {
-		tb.Error(err)
-	}
-	// Check and return true if the two values are structurally equal.
-	if bytes.Equal(j1, j2) {
-		return "", "", true
-	}
-	// Otherwise, format the values for display and return false.
-	if err := j1.Indent("", "\t"); err != nil {
-		tb.Fatal(err)
-	}
-	if err := j2.Indent("", "\t"); err != nil {
-		tb.Fatal(err)
-	}
-	return j1.String(), j2.String(), false
 }

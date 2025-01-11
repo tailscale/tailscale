@@ -47,7 +47,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
-	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/zstdframe"
 )
@@ -559,10 +558,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, nil, err
 	}
 
-	tailnet, err := syspolicy.GetString(syspolicy.Tailnet, "")
-	if err != nil {
-		c.logf("unable to provide Tailnet field in register request. err: %v", err)
-	}
 	now := c.clock.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:    1,
@@ -572,7 +567,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Followup:   opt.URL,
 		Timestamp:  &now,
 		Ephemeral:  (opt.Flags & LoginEphemeral) != 0,
-		Tailnet:    tailnet,
 	}
 	if opt.Logout {
 		request.Expiry = time.Unix(123, 0) // far in the past

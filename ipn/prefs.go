@@ -26,7 +26,6 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/util/syspolicy"
 )
 
 // DefaultControlURL is the URL base of the control plane
@@ -690,10 +689,7 @@ func (p PrefsView) ControlURLOrDefault() string {
 // If not configured, or if the configured value is a legacy name equivalent to
 // the default, then DefaultControlURL is returned instead.
 func (p *Prefs) ControlURLOrDefault() string {
-	controlURL, err := syspolicy.GetString(syspolicy.ControlURL, p.ControlURL)
-	if err != nil {
-		controlURL = p.ControlURL
-	}
+	controlURL := p.ControlURL
 
 	if controlURL != "" {
 		if controlURL != DefaultControlURL && IsLoginServerSynonym(controlURL) {
