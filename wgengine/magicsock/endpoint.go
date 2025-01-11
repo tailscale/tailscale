@@ -32,7 +32,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/ringbuffer"
 	"tailscale.com/util/slicesx"
 )
 
@@ -59,7 +58,6 @@ type endpoint struct {
 	lastRecvWG            mono.Time // last time there were incoming packets from this peer destined for wireguard-go (e.g. not disco)
 	lastRecvUDPAny        mono.Time // last time there were incoming UDP packets from this peer of any kind
 	numStopAndResetAtomic int64
-	debugUpdates          *ringbuffer.RingBuffer[EndpointChange]
 
 	// These fields are initialized once and never modified.
 	c            *Conn
@@ -439,18 +437,8 @@ func (st *endpointState) addPongReplyLocked(r pongReply) {
 }
 
 func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
-	de.debugUpdates.Add(EndpointChange{
-		When: time.Now(),
-		What: "deleteEndpointLocked-" + why,
-		From: ep,
-	})
 	delete(de.endpointState, ep)
 	if de.bestAddr.AddrPort == ep {
-		de.debugUpdates.Add(EndpointChange{
-			When: time.Now(),
-			What: "deleteEndpointLocked-bestAddr-" + why,
-			From: de.bestAddr,
-		})
 		de.setBestAddrLocked(addrQuality{})
 	}
 }
@@ -1345,30 +1333,15 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 			key:   n.DiscoKey(),
 			short: n.DiscoKey().ShortString(),
 		})
-		de.debugUpdates.Add(EndpointChange{
-			When: time.Now(),
-			What: "updateFromNode-resetLocked",
-		})
 		de.resetLocked()
 	}
 	if n.DERP() == "" {
 		if de.derpAddr.IsValid() {
-			de.debugUpdates.Add(EndpointChange{
-				When: time.Now(),
-				What: "updateFromNode-remove-DERP",
-				From: de.derpAddr,
-			})
 		}
 		de.derpAddr = netip.AddrPort{}
 	} else {
 		newDerp, _ := netip.ParseAddrPort(n.DERP())
 		if de.derpAddr != newDerp {
-			de.debugUpdates.Add(EndpointChange{
-				When: time.Now(),
-				What: "updateFromNode-DERP",
-				From: de.derpAddr,
-				To:   newDerp,
-			})
 		}
 		de.derpAddr = newDerp
 	}
@@ -1399,13 +1372,6 @@ func (de *endpoint) setEndpointsLocked(eps interface {
 			de.endpointState[ipp] = &endpointState{index: int16(i)}
 			newIpps = append(newIpps, ipp)
 		}
-	}
-	if len(newIpps) > 0 {
-		de.debugUpdates.Add(EndpointChange{
-			When: time.Now(),
-			What: "updateFromNode-new-Endpoints",
-			To:   newIpps,
-		})
 	}
 
 	// Now delete anything unless it's still in the network map or
@@ -1603,21 +1569,9 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 		thisPong := addrQuality{sp.to, latency, tstun.WireMTU(pingSizeToPktLen(sp.size, sp.to.Addr().Is6()))}
 		if betterAddr(thisPong, de.bestAddr) {
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
-			de.debugUpdates.Add(EndpointChange{
-				When: time.Now(),
-				What: "handlePingLocked-bestAddr-update",
-				From: de.bestAddr,
-				To:   thisPong,
-			})
 			de.setBestAddrLocked(thisPong)
 		}
 		if de.bestAddr.AddrPort == thisPong.AddrPort {
-			de.debugUpdates.Add(EndpointChange{
-				When: time.Now(),
-				What: "handlePingLocked-bestAddr-latency",
-				From: de.bestAddr,
-				To:   thisPong,
-			})
 			de.bestAddr.latency = latency
 			de.bestAddrAt = now
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
@@ -1749,11 +1703,6 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 		}
 	}
 	if len(newEPs) > 0 {
-		de.debugUpdates.Add(EndpointChange{
-			When: time.Now(),
-			What: "handleCallMeMaybe-new-endpoints",
-			To:   newEPs,
-		})
 
 		de.c.dlogf("[v1] magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
 			de.publicKey.ShortString(), de.discoShort(),
@@ -1820,10 +1769,6 @@ func (de *endpoint) stopAndReset() {
 		}
 	}
 
-	de.debugUpdates.Add(EndpointChange{
-		When: time.Now(),
-		What: "stopAndReset-resetLocked",
-	})
 	de.resetLocked()
 	if de.heartBeatTimer != nil {
 		de.heartBeatTimer.Stop()

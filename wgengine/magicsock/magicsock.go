@@ -54,7 +54,6 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/ringbuffer"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
@@ -949,25 +948,6 @@ func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency t
 	regionID := int(ep.Port())
 	res.DERPRegionID = regionID
 	res.DERPRegionCode = c.derpRegionCodeLocked(regionID)
-}
-
-// GetEndpointChanges returns the most recent changes for a particular
-// endpoint. The returned EndpointChange structs are for debug use only and
-// there are no guarantees about order, size, or content.
-func (c *Conn) GetEndpointChanges(peer tailcfg.NodeView) ([]EndpointChange, error) {
-	c.mu.Lock()
-	if c.privateKey.IsZero() {
-		c.mu.Unlock()
-		return nil, fmt.Errorf("tailscaled stopped")
-	}
-	ep, ok := c.peerMap.endpointForNodeKey(peer.Key())
-	c.mu.Unlock()
-
-	if !ok {
-		return nil, fmt.Errorf("unknown peer")
-	}
-
-	return ep.debugUpdates.GetAll(), nil
 }
 
 // DiscoPublicKey returns the discovery public key.
@@ -2042,32 +2022,6 @@ func nodesEqual(x, y views.Slice[tailcfg.NodeView]) bool {
 	return true
 }
 
-// debugRingBufferSize returns a maximum size for our set of endpoint ring
-// buffers by assuming that a single large update is ~500 bytes, and that we
-// want to not use more than 1MiB of memory on phones / 4MiB on other devices.
-// Calculate the per-endpoint ring buffer size by dividing that out, but always
-// storing at least two entries.
-func debugRingBufferSize(numPeers int) int {
-	const defaultVal = 2
-	if numPeers == 0 {
-		return defaultVal
-	}
-	var maxRingBufferSize int
-	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
-		maxRingBufferSize = 1 << 20
-		// But as of 2024-03-20, we now just disable the ring buffer entirely
-		// on mobile as it hadn't proven useful enough to justify even 1 MB.
-	} else {
-		maxRingBufferSize = 4 << 20
-	}
-	if v := debugRingBufferMaxSizeBytes(); v > 0 {
-		maxRingBufferSize = v
-	}
-
-	const averageRingBufferElemSize = 512
-	return max(defaultVal, maxRingBufferSize/(averageRingBufferElemSize*numPeers))
-}
-
 // debugFlags are the debug flags in use by the magicsock package.
 // They might be set by envknob and/or controlknob.
 // The value is comparable.
@@ -2155,8 +2109,6 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(nm.Peers))
 
-	entriesPerBuffer := debugRingBufferSize(len(nm.Peers))
-
 	// Try a pass of just upserting nodes and creating missing
 	// endpoints. If the set of nodes is the same, this is an
 	// efficient alloc-free update. If the set of nodes is different,
@@ -2232,14 +2184,6 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			endpointState:     map[netip.AddrPort]*endpointState{},
 			heartbeatDisabled: flags.heartbeatDisabled,
 			isWireguardOnly:   n.IsWireGuardOnly(),
-		}
-		switch runtime.GOOS {
-		case "ios", "android":
-			// Omit, to save memory. Prior to 2024-03-20 we used to limit it to
-			// ~1MB on mobile but we never used the data so the memory was just
-			// wasted.
-		default:
-			ep.debugUpdates = ringbuffer.New[EndpointChange](entriesPerBuffer)
 		}
 		if n.Addresses().Len() > 0 {
 			ep.nodeAddr = n.Addresses().At(0).Addr()

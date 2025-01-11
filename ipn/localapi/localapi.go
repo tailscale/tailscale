@@ -70,7 +70,6 @@ var handler = map[string]localAPIHandler{
 	"debug-log":                   (*Handler).serveDebugLog,
 	"debug-packet-filter-matches": (*Handler).serveDebugPacketFilterMatches,
 	"debug-packet-filter-rules":   (*Handler).serveDebugPacketFilterRules,
-	"debug-peer-endpoint-changes": (*Handler).serveDebugPeerEndpointChanges,
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"dial":                        (*Handler).serveDial,
@@ -860,34 +859,6 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(st)
-}
-
-func (h *Handler) serveDebugPeerEndpointChanges(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "status access denied", http.StatusForbidden)
-		return
-	}
-
-	ipStr := r.FormValue("ip")
-	if ipStr == "" {
-		http.Error(w, "missing 'ip' parameter", http.StatusBadRequest)
-		return
-	}
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		http.Error(w, "invalid IP", http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	chs, err := h.b.GetPeerEndpointChanges(r.Context(), ip)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	e := json.NewEncoder(w)
-	e.SetIndent("", "\t")
-	e.Encode(chs)
 }
 
 // InUseOtherUserIPNStream reports whether r is a request for the watch-ipn-bus

@@ -5845,23 +5845,6 @@ func (b *LocalBackend) ResetAuth() error {
 	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
-func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr) ([]magicsock.EndpointChange, error) {
-	pip, ok := b.e.PeerForIP(ip)
-	if !ok {
-		return nil, fmt.Errorf("no matching peer")
-	}
-	if pip.IsSelf {
-		return nil, fmt.Errorf("%v is local Tailscale IP", ip)
-	}
-	peer := pip.Node
-
-	chs, err := b.MagicConn().GetEndpointChanges(peer)
-	if err != nil {
-		return nil, fmt.Errorf("getting endpoint changes: %w", err)
-	}
-	return chs, nil
-}
-
 var breakTCPConns func() error
 
 func (b *LocalBackend) DebugBreakTCPConns() error {
