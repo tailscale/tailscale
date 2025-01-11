@@ -69,7 +69,6 @@ type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
 // then it's a prefix match.
 var handler = map[string]localAPIHandler{
 	// The prefix match handlers end with a slash:
-	"cert/":     (*Handler).serveCert,
 	"file-put/": (*Handler).serveFilePut,
 	"files/":    (*Handler).serveFiles,
 	"policy/":   (*Handler).servePolicy,
