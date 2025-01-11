@@ -30,7 +30,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
-	"tailscale.com/proxymap"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
@@ -64,7 +63,6 @@ type System struct {
 	onlyNetstack bool
 
 	controlKnobs controlknobs.Knobs
-	proxyMap     proxymap.Mapper
 
 	healthTracker       health.Tracker
 	userMetricsRegistry usermetric.Registry
@@ -132,11 +130,6 @@ func (s *System) IsNetstack() bool {
 // ControlKnobs returns the control knobs for this node.
 func (s *System) ControlKnobs() *controlknobs.Knobs {
 	return &s.controlKnobs
-}
-
-// ProxyMapper returns the ephemeral ip:port mapper.
-func (s *System) ProxyMapper() *proxymap.Mapper {
-	return &s.proxyMap
 }
 
 // HealthTracker returns the system health tracker.

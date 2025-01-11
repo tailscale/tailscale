@@ -1299,30 +1299,7 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 
 	nid, ok := b.nodeByAddr[ipp.Addr()]
 	if !ok {
-		var ip netip.Addr
-		if ipp.Port() != 0 {
-			var protos []string
-			if proto != "" {
-				protos = []string{proto}
-			} else {
-				// If the user didn't specify a protocol, try all of them
-				protos = []string{"tcp", "udp"}
-			}
-
-			for _, tryproto := range protos {
-				ip, ok = b.sys.ProxyMapper().WhoIsIPPort(tryproto, ipp)
-				if ok {
-					break
-				}
-			}
-		}
-		if !ok {
-			return failf("no IP found in ProxyMapper for %v", ipp)
-		}
-		nid, ok = b.nodeByAddr[ip]
-		if !ok {
-			return failf("no node for proxymapped IP %v", ip)
-		}
+		return failf("no node for proxymapped IP %v", ipp.Addr())
 	}
 	if b.netMap == nil {
 		return failf("no netmap")
