@@ -51,7 +51,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
-	"tailscale.com/util/osshare"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -228,9 +227,6 @@ func main() {
 	}
 
 	err := run()
-
-	// Remove file sharing from Windows shell (noop in non-windows)
-	osshare.SetFileSharingEnabled(false, logger.Discard)
 
 	if err != nil {
 		log.Fatal(err)

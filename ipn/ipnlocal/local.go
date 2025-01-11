@@ -88,7 +88,6 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
-	"tailscale.com/util/osshare"
 	"tailscale.com/util/osuser"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
@@ -423,7 +422,6 @@ func NewLocalBackend(logf logger.Logf, sys *tsd.System, loginFlags controlclient
 	}
 
 	envknob.LogCurrent(logf)
-	osshare.SetFileSharingEnabled(false, logf)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := tstime.StdClock{}
@@ -5270,7 +5268,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// Determine if file sharing is enabled
 	fs := nm.HasCap(tailcfg.CapabilityFileSharing)
 	if fs != b.capFileSharing {
-		osshare.SetFileSharingEnabled(fs, b.logf)
 	}
 	b.capFileSharing = fs
 
