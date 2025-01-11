@@ -1719,27 +1719,6 @@ func (b *LocalBackend) SetControlClientGetterForTesting(newControlClient func(co
 	b.ccGen = newControlClient
 }
 
-// NodeViewByIDForTest returns the state of the node with the given ID
-// for integration tests in another repo.
-func (b *LocalBackend) NodeViewByIDForTest(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	n, ok := b.peers[id]
-	return n, ok
-}
-
-// PeersForTest returns all the current peers, sorted by Node.ID,
-// for integration tests in another repo.
-func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	ret := slicesx.MapValues(b.peers)
-	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
-		return cmp.Compare(a.ID(), b.ID())
-	})
-	return ret
-}
-
 func (b *LocalBackend) getNewControlClientFuncLocked() clientGen {
 	if b.ccGen == nil {
 		// Initialize it rather than just returning the
