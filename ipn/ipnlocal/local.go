@@ -37,7 +37,6 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
-	"tailscale.com/envknob/featureknob"
 	"tailscale.com/health"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
@@ -313,9 +312,6 @@ type LocalBackend struct {
 	// mutex guards access to this set.
 	allowedSuggestedExitNodesMu sync.Mutex
 	allowedSuggestedExitNodes   set.Set[tailcfg.StableNodeID]
-
-	// refreshAutoExitNode indicates if the exit node should be recomputed when the next netcheck report is available.
-	refreshAutoExitNode bool // guarded by mu
 
 	// captiveCtx and captiveCancel are used to control captive portal
 	// detection. They are protected by 'mu' and can be changed during the
@@ -691,9 +687,6 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	hadPAC := b.prevIfState.HasPAC()
 	b.prevIfState = ifst
 	b.pauseOrResumeControlClientLocked()
-	if delta.Major && shouldAutoExitNode() {
-		b.refreshAutoExitNode = true
-	}
 
 	var needReconfig bool
 	// If the network changed and we're using an exit node and allowing LAN access, we may need to reconfigure.
@@ -721,7 +714,6 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	// If the local network configuration has changed, our filter may
 	// need updating to tweak default routes.
 	b.updateFilterLocked(b.netMap, b.pm.CurrentPrefs())
-	updateExitNodeUsageWarning(b.pm.CurrentPrefs(), delta.New, b.health)
 }
 
 func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthyState) {
@@ -917,11 +909,6 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		s.Health = b.health.Strings()
 		s.HaveNodeKey = b.hasNodeKeyLocked()
 
-		// TODO(bradfitz): move this health check into a health.Warnable
-		// and remove from here.
-		if m := b.sshOnButUnusableHealthCheckMessageLocked(); m != "" {
-			s.Health = append(s.Health, m)
-		}
 		if b.netMap != nil {
 			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			if s.CurrentTailnet == nil {
@@ -1329,9 +1316,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
 		}
 	}
-	if setExitNodeID(prefs, curNetMap) {
-		prefsChanged = true
-	}
 
 	// Until recently, we did not store the account's tailnet name. So check if this is the case,
 	// and backfill it on incoming status update.
@@ -1528,20 +1512,6 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 	return false
 }
 
-// pickNewAutoExitNode picks a new automatic exit node if needed.
-func (b *LocalBackend) pickNewAutoExitNode() {
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
-
-	newPrefs := b.setAutoExitNodeIDLockedOnEntry(unlock)
-	if !newPrefs.Valid() {
-		// Unchanged.
-		return
-	}
-
-	b.send(ipn.Notify{Prefs: &newPrefs})
-}
-
 func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (handled bool) {
 	if b.netMap == nil || len(b.peers) == 0 {
 		return false
@@ -1564,54 +1534,11 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 			mak.Set(&mutableNodes, nv.ID(), n)
 		}
 		m.Apply(n)
-
-		// If our exit node went offline, we need to schedule picking
-		// a new one.
-		if mo, ok := m.(netmap.NodeMutationOnline); ok && !mo.Online && n.StableID == b.pm.prefs.ExitNodeID() && shouldAutoExitNode() {
-			b.goTracker.Go(b.pickNewAutoExitNode)
-		}
 	}
 	for nid, n := range mutableNodes {
 		b.peers[nid] = n.View()
 	}
 	return true
-}
-
-// setExitNodeID updates prefs to reference an exit node by ID, rather
-// than by IP. It returns whether prefs was mutated.
-func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
-	if nm == nil {
-		// No netmap, can't resolve anything.
-		return false
-	}
-
-	// If we have a desired IP on file, try to find the corresponding
-	// node.
-	if !prefs.ExitNodeIP.IsValid() {
-		return false
-	}
-
-	// IP takes precedence over ID, so if both are set, clear ID.
-	if prefs.ExitNodeID != "" {
-		prefs.ExitNodeID = ""
-		prefsChanged = true
-	}
-
-	oldExitNodeID := prefs.ExitNodeID
-	for _, peer := range nm.Peers {
-		for _, addr := range peer.Addresses().All() {
-			if !addr.IsSingleIP() || addr.Addr() != prefs.ExitNodeIP {
-				continue
-			}
-			// Found the node being referenced, upgrade prefs to
-			// reference it directly for next time.
-			prefs.ExitNodeID = peer.StableID()
-			prefs.ExitNodeIP = netip.Addr{}
-			return prefsChanged || oldExitNodeID != prefs.ExitNodeID
-		}
-	}
-
-	return prefsChanged
 }
 
 // setWgengineStatus is the callback by the wireguard engine whenever it posts a new status.
@@ -3203,65 +3130,7 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := b.checkProfileNameLocked(p); err != nil {
 		errs = append(errs, err)
 	}
-	if err := b.checkSSHPrefsLocked(p); err != nil {
-		errs = append(errs, err)
-	}
-	if err := b.checkExitNodePrefsLocked(p); err != nil {
-		errs = append(errs, err)
-	}
-	if err := b.checkAutoUpdatePrefsLocked(p); err != nil {
-		errs = append(errs, err)
-	}
 	return multierr.New(errs...)
-}
-
-func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
-	if !p.RunSSH {
-		return nil
-	}
-	if err := featureknob.CanRunTailscaleSSH(); err != nil {
-		return err
-	}
-	if runtime.GOOS == "linux" {
-		b.updateSELinuxHealthWarning()
-	}
-	if envknob.SSHIgnoreTailnetPolicy() || envknob.SSHPolicyFile() != "" {
-		return nil
-	}
-	if b.netMap != nil {
-		if !b.netMap.HasCap(tailcfg.CapabilitySSH) {
-			if b.isDefaultServerLocked() {
-				return errors.New("Unable to enable local Tailscale SSH server; not enabled on Tailnet. See https://tailscale.com/s/ssh")
-			}
-			return errors.New("Unable to enable local Tailscale SSH server; not enabled on Tailnet.")
-		}
-	}
-	return nil
-}
-
-func (b *LocalBackend) sshOnButUnusableHealthCheckMessageLocked() (healthMessage string) {
-	if p := b.pm.CurrentPrefs(); !p.Valid() || !p.RunSSH() {
-		return ""
-	}
-	if envknob.SSHIgnoreTailnetPolicy() || envknob.SSHPolicyFile() != "" {
-		return "development SSH policy in use"
-	}
-	nm := b.netMap
-	if nm == nil {
-		return ""
-	}
-	if nm.SSHPolicy != nil && len(nm.SSHPolicy.Rules) > 0 {
-		return ""
-	}
-	isDefault := b.isDefaultServerLocked()
-
-	if !nm.HasCap(tailcfg.CapabilityAdmin) {
-		return healthmsg.TailscaleSSHOnBut + "access controls don't allow anyone to access this device. Ask your admin to update your tailnet's ACLs to allow access."
-	}
-	if !isDefault {
-		return healthmsg.TailscaleSSHOnBut + "access controls don't allow anyone to access this device. Update your tailnet's ACLs to allow access."
-	}
-	return healthmsg.TailscaleSSHOnBut + "access controls don't allow anyone to access this device. Update your tailnet's ACLs at https://tailscale.com/s/ssh-policy"
 }
 
 func (b *LocalBackend) isDefaultServerLocked() bool {
@@ -3272,102 +3141,9 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 	return prefs.ControlURLOrDefault() == ipn.DefaultControlURL
 }
 
-var exitNodeMisconfigurationWarnable = health.Register(&health.Warnable{
-	Code:     "exit-node-misconfiguration",
-	Title:    "Exit node misconfiguration",
-	Severity: health.SeverityMedium,
-	Text: func(args health.Args) string {
-		return "Exit node misconfiguration: " + args[health.ArgError]
-	},
-})
-
-// updateExitNodeUsageWarning updates a warnable meant to notify users of
-// configuration issues that could break exit node usage.
-func updateExitNodeUsageWarning(p ipn.PrefsView, state *netmon.State, healthTracker *health.Tracker) {
-	var msg string
-	if p.ExitNodeIP().IsValid() || p.ExitNodeID() != "" {
-		warn, _ := netutil.CheckReversePathFiltering(state)
-		const comment = "please set rp_filter=2 instead of rp_filter=1; see https://github.com/tailscale/tailscale/issues/3310"
-		if len(warn) > 0 {
-			msg = fmt.Sprintf("%s: %v, %s", healthmsg.WarnExitNodeUsage, warn, comment)
-		}
-	}
-	if len(msg) > 0 {
-		healthTracker.SetUnhealthy(exitNodeMisconfigurationWarnable, health.Args{health.ArgError: msg})
-	} else {
-		healthTracker.SetHealthy(exitNodeMisconfigurationWarnable)
-	}
-}
-
-func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
-	tryingToUseExitNode := p.ExitNodeIP.IsValid() || p.ExitNodeID != ""
-	if !tryingToUseExitNode {
-		return nil
-	}
-
-	if err := featureknob.CanUseExitNode(); err != nil {
-		return err
-	}
-
-	if p.AdvertisesExitNode() {
-		return errors.New("Cannot advertise an exit node and use an exit node at the same time.")
-	}
-	return nil
-}
-
-func (b *LocalBackend) checkAutoUpdatePrefsLocked(p *ipn.Prefs) error {
-	return nil
-}
-
-// SetUseExitNodeEnabled turns on or off the most recently selected exit node.
-//
-// On success, it returns the resulting prefs (or current prefs, in the case of no change).
-// Setting the value to false when use of an exit node is already false is not an error,
-// nor is true when the exit node is already in use.
-func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
-
-	p0 := b.pm.CurrentPrefs()
-	if v && p0.ExitNodeID() != "" {
-		// Already on.
-		return p0, nil
-	}
-	if !v && p0.ExitNodeID() == "" {
-		// Already off.
-		return p0, nil
-	}
-
-	var zero ipn.PrefsView
-	if v && p0.InternalExitNodePrior() == "" {
-		if !p0.ExitNodeIP().IsValid() {
-			return zero, errors.New("no exit node IP to enable & prior exit node IP was never resolved an a node")
-		}
-		return zero, errors.New("no prior exit node to enable")
-	}
-
-	mp := &ipn.MaskedPrefs{}
-	if v {
-		mp.ExitNodeIDSet = true
-		mp.ExitNodeID = tailcfg.StableNodeID(p0.InternalExitNodePrior())
-	} else {
-		mp.ExitNodeIDSet = true
-		mp.ExitNodeID = ""
-		mp.InternalExitNodePriorSet = true
-		mp.InternalExitNodePrior = p0.ExitNodeID()
-	}
-	return b.editPrefsLockedOnEntry(mp, unlock)
-}
-
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	if mp.SetsInternal() {
 		return ipn.PrefsView{}, errors.New("can't set Internal fields")
-	}
-
-	// Zeroing the ExitNodeId via localAPI must also zero the prior exit node.
-	if mp.ExitNodeIDSet && mp.ExitNodeID == "" {
-		mp.InternalExitNodePrior = ""
-		mp.InternalExitNodePriorSet = true
 	}
 
 	unlock := b.lockAndGetUnlock()
@@ -3440,8 +3216,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// setExitNodeID does likewise. No-op if no exit node resolution is needed.
-	setExitNodeID(newp, netMap)
 	// We do this to avoid holding the lock while doing everything else.
 
 	oldHi := b.hostinfo
@@ -3850,53 +3624,6 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 	if distro.Get() == distro.Synology {
 		// Issue 1995: we don't use iptables on Synology.
 		rs.NetfilterMode = preftype.NetfilterOff
-	}
-
-	// Sanity check: we expect the control server to program both a v4
-	// and a v6 default route, if default routing is on. Fill in
-	// blackhole routes appropriately if we're missing some. This is
-	// likely to break some functionality, but if the user expressed a
-	// preference for routing remotely, we want to avoid leaking
-	// traffic at the expense of functionality.
-	if prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid() {
-		var default4, default6 bool
-		for _, route := range rs.Routes {
-			switch route {
-			case tsaddr.AllIPv4():
-				default4 = true
-			case tsaddr.AllIPv6():
-				default6 = true
-			}
-			if default4 && default6 {
-				break
-			}
-		}
-		if !default4 {
-			rs.Routes = append(rs.Routes, tsaddr.AllIPv4())
-		}
-		if !default6 {
-			rs.Routes = append(rs.Routes, tsaddr.AllIPv6())
-		}
-		internalIPs, externalIPs, err := internalAndExternalInterfaces()
-		if err != nil {
-			b.logf("failed to discover interface ips: %v", err)
-		}
-		switch runtime.GOOS {
-		case "linux", "windows", "darwin", "ios", "android":
-			rs.LocalRoutes = internalIPs // unconditionally allow access to guest VM networks
-			if prefs.ExitNodeAllowLANAccess() {
-				rs.LocalRoutes = append(rs.LocalRoutes, externalIPs...)
-			} else {
-				// Explicitly add routes to the local network so that we do not
-				// leak any traffic.
-				rs.Routes = append(rs.Routes, externalIPs...)
-			}
-			b.logf("allowing exit node access to local IPs: %v", rs.LocalRoutes)
-		default:
-			if prefs.ExitNodeAllowLANAccess() {
-				b.logf("warning: ExitNodeAllowLANAccess has no effect on " + runtime.GOOS)
-			}
-		}
 	}
 
 	if slices.ContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs4) {
@@ -4375,73 +4102,12 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	cc := b.cc
-	var refresh bool
-	if b.MagicConn().DERPs() > 0 || testenv.InTest() {
-		// When b.refreshAutoExitNode is set, we recently observed a link change
-		// that indicates we have switched networks. After switching networks,
-		// the previously selected automatic exit node is no longer as likely
-		// to be a good choice and connectivity will already be broken due to
-		// the network switch. Therefore, it is a good time to switch to a new
-		// exit node because the network is already disrupted.
-		//
-		// Unfortunately, at the time of the link change, no information is
-		// known about the new network's latency or location, so the necessary
-		// details are not available to make a new choice. Instead, it sets
-		// b.refreshAutoExitNode to signal that a new decision should be made
-		// when we have an updated netcheck report. ni is that updated report.
-		//
-		// However, during testing we observed that often the first ni is
-		// inconclusive because it was running during the link change or the
-		// link was otherwise not stable yet. b.MagicConn().updateEndpoints()
-		// can detect when the netcheck failed and trigger a rebind, but the
-		// required information is not available here, and moderate additional
-		// plumbing is required to pass that in. Instead, checking for an active
-		// DERP link offers an easy approximation. We will continue to refine
-		// this over time.
-		refresh = b.refreshAutoExitNode
-		b.refreshAutoExitNode = false
-	}
 	b.mu.Unlock()
 
 	if cc == nil {
 		return
 	}
 	cc.SetNetInfo(ni)
-	if refresh {
-		unlock := b.lockAndGetUnlock()
-		defer unlock()
-		b.setAutoExitNodeIDLockedOnEntry(unlock)
-	}
-}
-
-func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) (newPrefs ipn.PrefsView) {
-	var zero ipn.PrefsView
-	defer unlock()
-
-	prefs := b.pm.CurrentPrefs()
-	if !prefs.Valid() {
-		b.logf("[unexpected]: received tailnet exit node ID pref change callback but current prefs are nil")
-		return zero
-	}
-	prefsClone := prefs.AsStruct()
-	newSuggestion, err := b.suggestExitNodeLocked(nil)
-	if err != nil {
-		b.logf("setAutoExitNodeID: %v", err)
-		return zero
-	}
-	if prefsClone.ExitNodeID == newSuggestion.ID {
-		return zero
-	}
-	prefsClone.ExitNodeID = newSuggestion.ID
-	newPrefs, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
-		Prefs:         *prefsClone,
-		ExitNodeIDSet: true,
-	}, unlock)
-	if err != nil {
-		b.logf("setAutoExitNodeID: failed to apply exit node ID preference: %v", err)
-		return zero
-	}
-	return newPrefs
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
@@ -5254,14 +4920,6 @@ func (b *LocalBackend) getAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
 	b.allowedSuggestedExitNodesMu.Lock()
 	defer b.allowedSuggestedExitNodesMu.Unlock()
 	return b.allowedSuggestedExitNodes
-}
-
-// refreshAllowedSuggestions rebuilds the set of permitted exit nodes
-// from the current [syspolicy.AllowedSuggestedExitNodes] value.
-func (b *LocalBackend) refreshAllowedSuggestions() {
-	b.allowedSuggestedExitNodesMu.Lock()
-	defer b.allowedSuggestedExitNodesMu.Unlock()
-	b.allowedSuggestedExitNodes = fillAllowedSuggestions()
 }
 
 // selectRegionFunc returns a DERP region from the slice of candidate regions.
