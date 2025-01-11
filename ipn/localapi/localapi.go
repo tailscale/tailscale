@@ -365,7 +365,6 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	h.logf.JSON(1, "UserBugReportOS", osdiag.SupportInfo(osdiag.LogSupportInfoReasonBugReport))
 
 	if defBool(r.URL.Query().Get("diagnose"), false) {
-		h.b.Doctor(r.Context(), logger.WithPrefix(h.logf, "diag: "))
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprintln(w, startMarker)
