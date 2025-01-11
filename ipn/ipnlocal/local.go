@@ -6,7 +6,6 @@
 package ipnlocal
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -24,7 +23,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -39,7 +37,6 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
@@ -939,8 +936,6 @@ func (b *LocalBackend) Shutdown() {
 		b.notifyCancel()
 	}
 	b.mu.Unlock()
-
-	b.stopOfflineAutoUpdate()
 
 	b.unregisterNetMon()
 	b.unregisterHealthWatch()
@@ -3659,9 +3654,6 @@ func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
 }
 
 func (b *LocalBackend) checkAutoUpdatePrefsLocked(p *ipn.Prefs) error {
-	if p.AutoUpdate.Apply.EqualBool(true) && !clientupdate.CanAutoUpdate() {
-		return errors.New("Auto-updates are not supported on this platform.")
-	}
 	return nil
 }
 
@@ -3837,14 +3829,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	}
 	if err := b.pm.SetPrefs(prefs, np); err != nil {
 		b.logf("failed to save new controlclient state: %v", err)
-	}
-
-	if newp.AutoUpdate.Apply.EqualBool(true) {
-		if b.state != ipn.Running {
-			b.maybeStartOfflineAutoUpdate(newp.View())
-		}
-	} else {
-		b.stopOfflineAutoUpdate()
 	}
 
 	unlock.UnlockEarly()
@@ -4757,12 +4741,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		}
 	}
 	b.pauseOrResumeControlClientLocked()
-
-	if newState == ipn.Running {
-		b.stopOfflineAutoUpdate()
-	} else {
-		b.maybeStartOfflineAutoUpdate(prefs)
-	}
 
 	unlock.UnlockEarly()
 
@@ -6157,40 +6135,6 @@ func (b *LocalBackend) clearSelfUpdateProgress() {
 	b.lastSelfUpdateState = ipnstate.UpdateFinished
 }
 
-func (b *LocalBackend) GetSelfUpdateProgress() []ipnstate.UpdateProgress {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	res := make([]ipnstate.UpdateProgress, len(b.selfUpdateProgress))
-	copy(res, b.selfUpdateProgress)
-	return res
-}
-
-func (b *LocalBackend) DoSelfUpdate() {
-	b.mu.Lock()
-	updateState := b.lastSelfUpdateState
-	b.mu.Unlock()
-	// don't start an update if one is already in progress
-	if updateState == ipnstate.UpdateInProgress {
-		return
-	}
-	b.clearSelfUpdateProgress()
-	b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, ""))
-	up, err := clientupdate.NewUpdater(clientupdate.Arguments{
-		Logf: func(format string, args ...any) {
-			b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, fmt.Sprintf(format, args...)))
-		},
-	})
-	if err != nil {
-		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
-	}
-	err = up.Update()
-	if err != nil {
-		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
-	} else {
-		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFinished, "tailscaled did not restart; please restart Tailscale manually."))
-	}
-}
-
 // ErrDisallowedAutoRoute is returned by AdvertiseRoute when a route that is not allowed is requested.
 var ErrDisallowedAutoRoute = errors.New("route is not allowed")
 
@@ -6539,58 +6483,6 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 func shouldAutoExitNode() bool {
 	exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, "")
 	return exitNodeIDStr == "auto:any"
-}
-
-// startAutoUpdate triggers an auto-update attempt. The actual update happens
-// asynchronously. If another update is in progress, an error is returned.
-func (b *LocalBackend) startAutoUpdate(logPrefix string) (retErr error) {
-	// Check if update was already started, and mark as started.
-	if !b.trySetC2NUpdateStarted() {
-		return errors.New("update already started")
-	}
-	defer func() {
-		// Clear the started flag if something failed.
-		if retErr != nil {
-			b.setC2NUpdateStarted(false)
-		}
-	}()
-
-	cmdTS, err := findCmdTailscale()
-	if err != nil {
-		return fmt.Errorf("failed to find cmd/tailscale binary: %w", err)
-	}
-	var ver struct {
-		Long string `json:"long"`
-	}
-	out, err := exec.Command(cmdTS, "version", "--json").Output()
-	if err != nil {
-		return fmt.Errorf("failed to find cmd/tailscale binary: %w", err)
-	}
-	if err := json.Unmarshal(out, &ver); err != nil {
-		return fmt.Errorf("invalid JSON from cmd/tailscale version --json: %w", err)
-	}
-	if ver.Long != version.Long() {
-		return fmt.Errorf("cmd/tailscale version %q does not match tailscaled version %q", ver.Long, version.Long())
-	}
-
-	cmd := tailscaleUpdateCmd(cmdTS)
-	buf := new(bytes.Buffer)
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-	b.logf("%s: running %q", logPrefix, strings.Join(cmd.Args, " "))
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start cmd/tailscale update: %w", err)
-	}
-
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			b.logf("%s: update command failed: %v, output: %s", logPrefix, err, buf)
-		} else {
-			b.logf("%s: update attempt complete", logPrefix)
-		}
-		b.setC2NUpdateStarted(false)
-	}()
-	return nil
 }
 
 // srcIPHasCapForFilter is called by the packet filter when evaluating firewall

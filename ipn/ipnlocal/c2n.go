@@ -18,8 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/clientupdate"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
@@ -44,10 +42,6 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 	// PPROF - We only expose a subset of typical pprof endpoints for security.
 	req("/debug/pprof/heap"):   handleC2NPprof,
 	req("/debug/pprof/allocs"): handleC2NPprof,
-
-	// Auto-updates.
-	req("GET /update"):  handleC2NUpdateGet,
-	req("POST /update"): handleC2NUpdatePost,
 
 	// Linux netfilter.
 	req("POST /netfilter-kind"): handleC2NSetNetfilterKind,
@@ -107,14 +101,6 @@ func handleC2NEcho(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
 	// Test handler.
 	body, _ := io.ReadAll(r.Body)
 	w.Write(body)
-}
-
-func handleC2NLogtailFlush(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	if b.TryFlushLogs() {
-		w.WriteHeader(http.StatusNoContent)
-	} else {
-		http.Error(w, "no log flusher wired up", http.StatusInternalServerError)
-	}
 }
 
 func handleC2NDebugGoroutines(_ *LocalBackend, w http.ResponseWriter, r *http.Request) {
@@ -207,84 +193,6 @@ func handleC2NVIPServicesGet(b *LocalBackend, w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
-}
-
-func handleC2NUpdateGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	b.logf("c2n: GET /update received")
-
-	res := b.newC2NUpdateResponse()
-	res.Started = b.c2nUpdateStarted()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
-func handleC2NUpdatePost(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	b.logf("c2n: POST /update received")
-	res := b.newC2NUpdateResponse()
-	defer func() {
-		if res.Err != "" {
-			b.logf("c2n: POST /update failed: %s", res.Err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
-	}()
-
-	if !res.Enabled {
-		res.Err = "not enabled"
-		return
-	}
-	if !res.Supported {
-		res.Err = "not supported"
-		return
-	}
-
-	// Do not update if we have active inbound SSH connections. Control can set
-	// force=true query parameter to override this.
-	if r.FormValue("force") != "true" && b.sshServer != nil && b.sshServer.NumActiveConns() > 0 {
-		res.Err = "not updating due to active SSH connections"
-		return
-	}
-
-	if err := b.startAutoUpdate("c2n"); err != nil {
-		res.Err = err.Error()
-		return
-	}
-	res.Started = true
-}
-
-func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
-	// If NewUpdater does not return an error, we can update the installation.
-	//
-	// Note that we create the Updater solely to check for errors; we do not
-	// invoke it here. For this purpose, it is ok to pass it a zero Arguments.
-	prefs := b.Prefs().AutoUpdate()
-	return tailcfg.C2NUpdateResponse{
-		Enabled:   envknob.AllowsRemoteUpdate() || prefs.Apply.EqualBool(true),
-		Supported: clientupdate.CanAutoUpdate() && !version.IsMacSysExt(),
-	}
-}
-
-func (b *LocalBackend) c2nUpdateStarted() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.c2nUpdateStatus.started
-}
-
-func (b *LocalBackend) setC2NUpdateStarted(v bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.c2nUpdateStatus.started = v
-}
-
-func (b *LocalBackend) trySetC2NUpdateStarted() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.c2nUpdateStatus.started {
-		return false
-	}
-	b.c2nUpdateStatus.started = true
-	return true
 }
 
 // findCmdTailscale looks for the cmd/tailscale that corresponds to the
