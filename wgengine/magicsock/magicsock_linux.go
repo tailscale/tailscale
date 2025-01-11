@@ -4,16 +4,13 @@
 package magicsock
 
 import (
-	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"strings"
 	"syscall"
 
-	"github.com/mdlayher/socket"
 	"golang.org/x/net/bpf"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -22,7 +19,6 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/types/ipproto"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 )
@@ -249,96 +245,6 @@ func (c *Conn) discoLogf(format string, args ...any) {
 		c.logf(format, args...)
 	} else {
 		c.dlogf(format, args...)
-	}
-}
-
-func (c *Conn) receiveDisco(pc *socket.Conn, isIPV6 bool) {
-	// Given that we're parsing raw packets, be extra careful and recover
-	// from any panics in this function.
-	//
-	// If we didn't have a recover() here and panic'd, we'd take down the
-	// entire process since this function is the top of a goroutine, and Go
-	// will kill the process if a goroutine panics and it unwinds past the
-	// top-level function.
-	defer func() {
-		if err := recover(); err != nil {
-			c.logf("[unexpected] recovered from panic in receiveDisco(isIPv6=%v): %v", isIPV6, err)
-		}
-	}()
-
-	ctx := context.Background()
-
-	// Set up our loggers
-	var family string
-	if isIPV6 {
-		family = "ip6"
-	} else {
-		family = "ip4"
-	}
-	var (
-		prefix string      = "disco raw " + family + ": "
-		logf   logger.Logf = logger.WithPrefix(c.logf, prefix)
-		dlogf  logger.Logf = logger.WithPrefix(c.discoLogf, prefix)
-	)
-
-	var buf [1500]byte
-	for {
-		n, src, err := pc.Recvfrom(ctx, buf[:], 0)
-		if debugRawDiscoReads() {
-			logf("read from %s = (%v, %v)", printSockaddr(src), n, err)
-		}
-		if err != nil && (errors.Is(err, net.ErrClosed) || err.Error() == "use of closed file") {
-			// EOF; no need to print an error
-			return
-		} else if err != nil {
-			logf("reader failed: %v", err)
-			return
-		}
-
-		srcAddr, dstAddr, payload := parseUDPPacket(buf[:n], family == "ip6")
-		if payload == nil {
-			// callee logged
-			continue
-		}
-
-		dstPort := dstAddr.Port()
-		if dstPort == 0 {
-			logf("[unexpected] received packet for port 0")
-		}
-
-		var acceptPort uint16
-		if isIPV6 {
-			acceptPort = c.pconn6.Port()
-		} else {
-			acceptPort = c.pconn4.Port()
-		}
-		if acceptPort == 0 {
-			// This should only typically happen if the receiving address family
-			// was recently disabled.
-			dlogf("[v1] dropping packet for port %d as acceptPort=0", dstPort)
-			continue
-		}
-
-		// If the packet isn't destined for our local port, then we
-		// should drop it since it might be for another Tailscale
-		// process on the same machine, or NATed to a different machine
-		// if this is a router, etc.
-		//
-		// We get the local port to compare against inside the receive
-		// loop; we can't cache this beforehand because it can change
-		// if/when we rebind.
-		if dstPort != acceptPort {
-			dlogf("[v1] dropping packet for port %d that isn't our local port", dstPort)
-			continue
-		}
-
-		if isIPV6 {
-			metricRecvDiscoPacketIPv6.Add(1)
-		} else {
-			metricRecvDiscoPacketIPv4.Add(1)
-		}
-
-		c.handleDiscoMessage(payload, srcAddr, key.NodePublic{}, discoRXPathRawSocket)
 	}
 }
 
