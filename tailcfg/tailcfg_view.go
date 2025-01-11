@@ -11,11 +11,9 @@ import (
 	"net/netip"
 	"time"
 
-	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
-	"tailscale.com/types/tkatype"
 	"tailscale.com/types/views"
 )
 
@@ -124,16 +122,13 @@ func (v *NodeView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v NodeView) ID() NodeID             { return v.ж.ID }
-func (v NodeView) StableID() StableNodeID { return v.ж.StableID }
-func (v NodeView) Name() string           { return v.ж.Name }
-func (v NodeView) User() UserID           { return v.ж.User }
-func (v NodeView) Sharer() UserID         { return v.ж.Sharer }
-func (v NodeView) Key() key.NodePublic    { return v.ж.Key }
-func (v NodeView) KeyExpiry() time.Time   { return v.ж.KeyExpiry }
-func (v NodeView) KeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
-	return views.ByteSliceOf(v.ж.KeySignature)
-}
+func (v NodeView) ID() NodeID                               { return v.ж.ID }
+func (v NodeView) StableID() StableNodeID                   { return v.ж.StableID }
+func (v NodeView) Name() string                             { return v.ж.Name }
+func (v NodeView) User() UserID                             { return v.ж.User }
+func (v NodeView) Sharer() UserID                           { return v.ж.Sharer }
+func (v NodeView) Key() key.NodePublic                      { return v.ж.Key }
+func (v NodeView) KeyExpiry() time.Time                     { return v.ж.KeyExpiry }
 func (v NodeView) Machine() key.MachinePublic               { return v.ж.Machine }
 func (v NodeView) DiscoKey() key.DiscoPublic                { return v.ж.DiscoKey }
 func (v NodeView) Addresses() views.Slice[netip.Prefix]     { return views.SliceOf(v.ж.Addresses) }
@@ -188,11 +183,8 @@ func (v NodeView) SelfNodeV6MasqAddrForThisPeer() *netip.Addr {
 	return &x
 }
 
-func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
-func (v NodeView) IsJailed() bool        { return v.ж.IsJailed }
-func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
-	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
-}
+func (v NodeView) IsWireGuardOnly() bool  { return v.ж.IsWireGuardOnly }
+func (v NodeView) IsJailed() bool         { return v.ж.IsJailed }
 func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -204,7 +196,6 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	Sharer                        UserID
 	Key                           key.NodePublic
 	KeyExpiry                     time.Time
-	KeySignature                  tkatype.MarshaledSignature
 	Machine                       key.MachinePublic
 	DiscoKey                      key.DiscoPublic
 	Addresses                     []netip.Prefix
@@ -231,7 +222,6 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
 	IsJailed                      bool
-	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 
 // View returns a readonly view of Hostinfo.
@@ -552,40 +542,8 @@ func (v *DNSConfigView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v DNSConfigView) Resolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
-	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.Resolvers)
-}
-
-func (v DNSConfigView) Routes() views.MapFn[string, []*dnstype.Resolver, views.SliceView[*dnstype.Resolver, dnstype.ResolverView]] {
-	return views.MapFnOf(v.ж.Routes, func(t []*dnstype.Resolver) views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
-		return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](t)
-	})
-}
-func (v DNSConfigView) FallbackResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
-	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.FallbackResolvers)
-}
-func (v DNSConfigView) Domains() views.Slice[string]         { return views.SliceOf(v.ж.Domains) }
-func (v DNSConfigView) Proxied() bool                        { return v.ж.Proxied }
-func (v DNSConfigView) Nameservers() views.Slice[netip.Addr] { return views.SliceOf(v.ж.Nameservers) }
-func (v DNSConfigView) CertDomains() views.Slice[string]     { return views.SliceOf(v.ж.CertDomains) }
-func (v DNSConfigView) ExtraRecords() views.Slice[DNSRecord] { return views.SliceOf(v.ж.ExtraRecords) }
-func (v DNSConfigView) ExitNodeFilteredSet() views.Slice[string] {
-	return views.SliceOf(v.ж.ExitNodeFilteredSet)
-}
-func (v DNSConfigView) TempCorpIssue13969() string { return v.ж.TempCorpIssue13969 }
-
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DNSConfigViewNeedsRegeneration = DNSConfig(struct {
-	Resolvers           []*dnstype.Resolver
-	Routes              map[string][]*dnstype.Resolver
-	FallbackResolvers   []*dnstype.Resolver
-	Domains             []string
-	Proxied             bool
-	Nameservers         []netip.Addr
-	CertDomains         []string
-	ExtraRecords        []DNSRecord
-	ExitNodeFilteredSet []string
-	TempCorpIssue13969  string
 }{})
 
 // View returns a readonly view of RegisterResponse.
@@ -638,10 +596,7 @@ func (v RegisterResponseView) Login() Login            { return v.ж.Login }
 func (v RegisterResponseView) NodeKeyExpired() bool    { return v.ж.NodeKeyExpired }
 func (v RegisterResponseView) MachineAuthorized() bool { return v.ж.MachineAuthorized }
 func (v RegisterResponseView) AuthURL() string         { return v.ж.AuthURL }
-func (v RegisterResponseView) NodeKeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
-	return views.ByteSliceOf(v.ж.NodeKeySignature)
-}
-func (v RegisterResponseView) Error() string { return v.ж.Error }
+func (v RegisterResponseView) Error() string           { return v.ж.Error }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
@@ -650,7 +605,6 @@ var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
 	NodeKeyExpired    bool
 	MachineAuthorized bool
 	AuthURL           string
-	NodeKeySignature  tkatype.MarshaledSignature
 	Error             string
 }{})
 
@@ -764,16 +718,12 @@ func (v *RegisterRequestView) UnmarshalJSON(b []byte) error {
 func (v RegisterRequestView) Version() CapabilityVersion     { return v.ж.Version }
 func (v RegisterRequestView) NodeKey() key.NodePublic        { return v.ж.NodeKey }
 func (v RegisterRequestView) OldNodeKey() key.NodePublic     { return v.ж.OldNodeKey }
-func (v RegisterRequestView) NLKey() key.NLPublic            { return v.ж.NLKey }
 func (v RegisterRequestView) Auth() RegisterResponseAuthView { return v.ж.Auth.View() }
 func (v RegisterRequestView) Expiry() time.Time              { return v.ж.Expiry }
 func (v RegisterRequestView) Followup() string               { return v.ж.Followup }
 func (v RegisterRequestView) Hostinfo() HostinfoView         { return v.ж.Hostinfo.View() }
 func (v RegisterRequestView) Ephemeral() bool                { return v.ж.Ephemeral }
-func (v RegisterRequestView) NodeKeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
-	return views.ByteSliceOf(v.ж.NodeKeySignature)
-}
-func (v RegisterRequestView) SignatureType() SignatureType { return v.ж.SignatureType }
+func (v RegisterRequestView) SignatureType() SignatureType   { return v.ж.SignatureType }
 func (v RegisterRequestView) Timestamp() *time.Time {
 	if v.ж.Timestamp == nil {
 		return nil
@@ -792,22 +742,20 @@ func (v RegisterRequestView) Tailnet() string { return v.ж.Tailnet }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
-	_                structs.Incomparable
-	Version          CapabilityVersion
-	NodeKey          key.NodePublic
-	OldNodeKey       key.NodePublic
-	NLKey            key.NLPublic
-	Auth             *RegisterResponseAuth
-	Expiry           time.Time
-	Followup         string
-	Hostinfo         *Hostinfo
-	Ephemeral        bool
-	NodeKeySignature tkatype.MarshaledSignature
-	SignatureType    SignatureType
-	Timestamp        *time.Time
-	DeviceCert       []byte
-	Signature        []byte
-	Tailnet          string
+	_             structs.Incomparable
+	Version       CapabilityVersion
+	NodeKey       key.NodePublic
+	OldNodeKey    key.NodePublic
+	Auth          *RegisterResponseAuth
+	Expiry        time.Time
+	Followup      string
+	Hostinfo      *Hostinfo
+	Ephemeral     bool
+	SignatureType SignatureType
+	Timestamp     *time.Time
+	DeviceCert    []byte
+	Signature     []byte
+	Tailnet       string
 }{})
 
 // View returns a readonly view of DERPHomeParams.

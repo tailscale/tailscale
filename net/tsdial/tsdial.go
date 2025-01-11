@@ -21,13 +21,11 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/testenv"
-	"tailscale.com/version"
 )
 
 // NewDialer returns a new Dialer that can dial out of tailscaled.
@@ -74,7 +72,6 @@ type Dialer struct {
 
 	mu               sync.Mutex
 	closed           bool
-	dns              dnsMap
 	tunName          string // tun device name
 	netMon           *netmon.Monitor
 	netMonUnregister func()
@@ -264,47 +261,9 @@ func (d *Dialer) PeerDialControlFunc() func(network, address string, c syscall.R
 // SetNetMap sets the current network map and notably, the DNS names
 // in its DNS configuration.
 func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
-	m := dnsMapFromNetworkMap(nm)
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.dns = m
-}
-
-// userDialResolve resolves addr as if a user initiating the dial. (e.g. from a
-// SOCKS or HTTP outbound proxy)
-func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
-	d.mu.Lock()
-	dns := d.dns
-	d.mu.Unlock()
-
-	// MagicDNS or otherwise baked into the NetworkMap? Try that first.
-	ipp, err := dns.resolveMemory(ctx, network, addr)
-	if err != errUnresolved {
-		return ipp, err
-	}
-
-	// Otherwise, hit the network.
-
-	// TODO(bradfitz): wire up net/dnscache too.
-
-	host, port, err := splitHostPort(addr)
-	if err != nil {
-		// addr is malformed.
-		return netip.AddrPort{}, err
-	}
-
-	var r net.Resolver
-
-	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
-	if err != nil {
-		return netip.AddrPort{}, err
-	}
-	if len(ips) == 0 {
-		return netip.AddrPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
-	}
-	ip, _ := netip.AddrFromSlice(ips[0])
-	return netip.AddrPortFrom(ip.Unmap(), port), nil
 }
 
 // ipNetOfNetwork returns "ip", "ip4", or "ip6" corresponding
@@ -363,44 +322,6 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 		d:    d,
 		Conn: c,
 	}, nil
-}
-
-// UserDial connects to the provided network address as if a user were
-// initiating the dial. (e.g. from a SOCKS or HTTP outbound proxy)
-func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	ipp, err := d.userDialResolve(ctx, network, addr)
-	if err != nil {
-		return nil, err
-	}
-	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
-		if d.NetstackDialTCP == nil || d.NetstackDialUDP == nil {
-			return nil, errors.New("Dialer not initialized correctly")
-		}
-		if strings.HasPrefix(network, "udp") {
-			return d.NetstackDialUDP(ctx, ipp)
-		}
-		return d.NetstackDialTCP(ctx, ipp)
-	}
-
-	if routes := d.routes.Load(); routes != nil {
-		if isTailscaleRoute, _ := routes.Lookup(ipp.Addr()); isTailscaleRoute {
-			return d.getPeerDialer().DialContext(ctx, network, ipp.String())
-		}
-
-		return d.SystemDial(ctx, network, ipp.String())
-	}
-
-	// Workaround for macOS for now: dial Tailscale IPs with peer dialer.
-	// TODO(bradfitz): fix dialing subnet routers, public IPs via exit nodes,
-	// etc. This is a temporary partial for macOS. We need to plumb ART tables &
-	// prefs & host routing table updates around in more places. We just don't
-	// know from the limited context here how to dial properly.
-	if version.IsMacGUIVariant() && tsaddr.IsTailscaleIP(ipp.Addr()) {
-		return d.getPeerDialer().DialContext(ctx, network, ipp.String())
-	}
-	// TODO(bradfitz): netns, etc
-	var stdDialer net.Dialer
-	return stdDialer.DialContext(ctx, network, ipp.String())
 }
 
 // dialPeerAPI connects to a Tailscale peer's peerapi over TCP.

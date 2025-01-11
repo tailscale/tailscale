@@ -8,7 +8,6 @@ package tailcfg
 //go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile --clonefunc
 
 import (
-	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -20,11 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
-	"tailscale.com/types/tkatype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/slicesx"
 )
@@ -337,14 +334,13 @@ type Node struct {
 	// Sharer, if non-zero, is the user who shared this node, if different than User.
 	Sharer UserID `json:",omitempty"`
 
-	Key          key.NodePublic
-	KeyExpiry    time.Time                  // the zero value if this node does not expire
-	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
-	Machine      key.MachinePublic
-	DiscoKey     key.DiscoPublic
-	Addresses    []netip.Prefix   // IP addresses of this Node directly
-	AllowedIPs   []netip.Prefix   // range of IP addresses to route to this node
-	Endpoints    []netip.AddrPort `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+	Key        key.NodePublic
+	KeyExpiry  time.Time // the zero value if this node does not expire
+	Machine    key.MachinePublic
+	DiscoKey   key.DiscoPublic
+	Addresses  []netip.Prefix   // IP addresses of this Node directly
+	AllowedIPs []netip.Prefix   // range of IP addresses to route to this node
+	Endpoints  []netip.AddrPort `json:",omitempty"` // IP+port (public via STUN, and local LANs)
 
 	// DERP is this node's home DERP region ID integer, but shoved into an
 	// IP:port string for legacy reasons. The IP address is always "127.3.3.40"
@@ -484,10 +480,6 @@ type Node struct {
 	// initiate connections, however outbound connections to it should still be
 	// allowed.
 	IsJailed bool `json:",omitempty"`
-
-	// ExitNodeDNSResolvers is the list of DNS servers that should be used when this
-	// node is marked IsWireGuardOnly and being used as an exit node.
-	ExitNodeDNSResolvers []*dnstype.Resolver `json:",omitempty"`
 }
 
 // HasCap reports whether the node has the given capability.
@@ -1215,7 +1207,6 @@ type RegisterRequest struct {
 
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
-	NLKey      key.NLPublic
 	Auth       *RegisterResponseAuth `json:",omitempty"`
 	// Expiry optionally specifies the requested key expiry.
 	// The server policy may override.
@@ -1229,13 +1220,6 @@ type RegisterRequest struct {
 	// node be considered ephemeral and be automatically deleted
 	// when it stops being active.
 	Ephemeral bool `json:",omitempty"`
-
-	// NodeKeySignature is the node's own node-key signature, re-signed
-	// for its new node key using its network-lock key.
-	//
-	// This field is set when the client retries registration after learning
-	// its NodeKeySignature (which is in need of rotation).
-	NodeKeySignature tkatype.MarshaledSignature
 
 	// The following fields are not used for SignatureNone and are required for
 	// SignatureV1:
@@ -1263,10 +1247,6 @@ type RegisterResponse struct {
 	NodeKeyExpired    bool   // if true, the NodeKey needs to be replaced
 	MachineAuthorized bool   // TODO(crawshaw): move to using MachineStatus
 	AuthURL           string // if set, authorization pending
-
-	// If set, this is the current node-key signature that needs to be
-	// re-signed for the node's new node-key.
-	NodeKeySignature tkatype.MarshaledSignature
 
 	// Error indicates that authorization failed. If this is non-empty,
 	// other status fields should be ignored.
@@ -1643,93 +1623,7 @@ var FilterAllowAll = []FilterRule{
 	},
 }
 
-// DNSConfig is the DNS configuration.
-type DNSConfig struct {
-	// Resolvers are the DNS resolvers to use, in order of preference.
-	Resolvers []*dnstype.Resolver `json:",omitempty"`
-
-	// Routes maps DNS name suffixes to a set of DNS resolvers to
-	// use. It is used to implement "split DNS" and other advanced DNS
-	// routing overlays.
-	//
-	// Map keys are fully-qualified DNS name suffixes; they may
-	// optionally contain a trailing dot but no leading dot.
-	//
-	// If the value is an empty slice, that means the suffix should still
-	// be handled by Tailscale's built-in resolver (100.100.100.100), such
-	// as for the purpose of handling ExtraRecords.
-	Routes map[string][]*dnstype.Resolver `json:",omitempty"`
-
-	// FallbackResolvers is like Resolvers, but is only used if a
-	// split DNS configuration is requested in a configuration that
-	// doesn't work yet without explicit default resolvers.
-	// https://github.com/tailscale/tailscale/issues/1743
-	FallbackResolvers []*dnstype.Resolver `json:",omitempty"`
-	// Domains are the search domains to use.
-	// Search domains must be FQDNs, but *without* the trailing dot.
-	Domains []string `json:",omitempty"`
-	// Proxied turns on automatic resolution of hostnames for devices
-	// in the network map, aka MagicDNS.
-	// Despite the (legacy) name, does not necessarily cause request
-	// proxying to be enabled.
-	Proxied bool `json:",omitempty"`
-
-	// The following fields are only set and used by
-	// MapRequest.Version >=9 and <14.
-
-	// Nameservers are the IP addresses of the nameservers to use.
-	Nameservers []netip.Addr `json:",omitempty"`
-
-	// CertDomains are the set of DNS names for which the control
-	// plane server will assist with provisioning TLS
-	// certificates. See SetDNSRequest, which can be used to
-	// answer dns-01 ACME challenges for e.g. LetsEncrypt.
-	// These names are FQDNs without trailing periods, and without
-	// any "_acme-challenge." prefix.
-	CertDomains []string `json:",omitempty"`
-
-	// ExtraRecords contains extra DNS records to add to the
-	// MagicDNS config.
-	ExtraRecords []DNSRecord `json:",omitempty"`
-
-	// ExitNodeFilteredSuffixes are the DNS suffixes that the
-	// node, when being an exit node DNS proxy, should not answer.
-	//
-	// The entries do not contain trailing periods and are always
-	// all lowercase.
-	//
-	// If an entry starts with a period, it's a suffix match (but
-	// suffix ".a.b" doesn't match "a.b"; a prefix is required).
-	//
-	// If an entry does not start with a period, it's an exact
-	// match.
-	//
-	// Matches are case insensitive.
-	ExitNodeFilteredSet []string `json:",omitempty"`
-
-	// TempCorpIssue13969 is a temporary (2023-08-16) field for an internal hack day prototype.
-	// It contains a user inputed URL that should have a list of domains to be blocked.
-	// See https://github.com/tailscale/corp/issues/13969.
-	TempCorpIssue13969 string `json:",omitempty"`
-}
-
-// DNSRecord is an extra DNS record to add to MagicDNS.
-type DNSRecord struct {
-	// Name is the fully qualified domain name of
-	// the record to add. The trailing dot is optional.
-	Name string
-
-	// Type is the DNS record type.
-	// Empty means A or AAAA, depending on value.
-	// Other values are currently ignored.
-	Type string `json:",omitempty"`
-
-	// Value is the IP address in string form.
-	// TODO(bradfitz): if we ever add support for record types
-	// with non-UTF8 binary data, add ValueBytes []byte that
-	// would take precedence.
-	Value string
-}
+type DNSConfig struct{}
 
 // PingType is a string representing the kind of ping to perform.
 type PingType string
@@ -2009,16 +1903,6 @@ type MapResponse struct {
 	// ControlTime, if non-zero, is the current timestamp according to the control server.
 	ControlTime *time.Time `json:",omitempty"`
 
-	// TKAInfo describes the control plane's view of tailnet
-	// key authority (TKA) state.
-	//
-	// An initial nil TKAInfo indicates that the control plane
-	// believes TKA should not be enabled. An initial non-nil TKAInfo
-	// indicates the control plane believes TKA should be enabled.
-	// A nil TKAInfo in a mapresponse stream (i.e. a 'delta' mapresponse)
-	// indicates no change from the value sent earlier.
-	TKAInfo *TKAInfo `json:",omitempty"`
-
 	// DomainDataPlaneAuditLogID, if non-empty, is the per-tailnet log ID to be
 	// used when writing data plane audit logs.
 	DomainDataPlaneAuditLogID string `json:",omitempty"`
@@ -2154,7 +2038,6 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.UnsignedPeerAPIOnly == n2.UnsignedPeerAPIOnly &&
 		n.Key == n2.Key &&
 		n.KeyExpiry.Equal(n2.KeyExpiry) &&
-		bytes.Equal(n.KeySignature, n2.KeySignature) &&
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
 		eqPtr(n.Online, n2.Online) &&
@@ -2900,10 +2783,6 @@ type PeerChange struct {
 
 	// Key, if non-nil, means that the NodeID's wireguard public key changed.
 	Key *key.NodePublic `json:",omitempty"`
-
-	// KeySignature, if non-nil, means that the signature of the wireguard
-	// public key has changed.
-	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
 
 	// DiscoKey, if non-nil, means that the NodeID's discokey changed.
 	DiscoKey *key.DiscoPublic `json:",omitempty"`

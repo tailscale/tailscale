@@ -59,7 +59,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
-	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -72,7 +71,6 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
@@ -888,7 +886,6 @@ func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
 	p2.Persist.LegacyFrontendPrivateMachineKey = key.MachinePrivate{}
 	p2.Persist.PrivateNodeKey = key.NodePrivate{}
 	p2.Persist.OldPrivateNodeKey = key.NodePrivate{}
-	p2.Persist.NetworkLockKey = key.NLPrivate{}
 	return p2.View()
 }
 
@@ -943,13 +940,11 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			s.Health = append(s.Health, m)
 		}
 		if b.netMap != nil {
-			s.CertDomains = append([]string(nil), b.netMap.DNS.CertDomains...)
 			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			if s.CurrentTailnet == nil {
 				s.CurrentTailnet = &ipnstate.TailnetStatus{}
 			}
 			s.CurrentTailnet.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
-			s.CurrentTailnet.MagicDNSEnabled = b.netMap.DNS.Proxied
 			s.CurrentTailnet.Name = b.netMap.Domain
 			if prefs := b.pm.CurrentPrefs(); prefs.Valid() {
 				if !prefs.RouteAll() && b.netMap.AnyPeersAdvertiseRoutes() {
@@ -4943,37 +4938,6 @@ func (b *LocalBackend) OfferingExitNode() bool {
 	return def4 && def6
 }
 
-// allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS
-// proxy is allowed to serve responses for the provided DNS name.
-func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	nm := b.netMap
-	if nm == nil {
-		return false
-	}
-	name = strings.ToLower(name)
-	for _, bad := range nm.DNS.ExitNodeFilteredSet {
-		if bad == "" {
-			// Invalid, ignore.
-			continue
-		}
-		if bad[0] == '.' {
-			// Entries beginning with a dot are suffix matches.
-			if dnsname.HasSuffix(name, bad) {
-				return false
-			}
-			continue
-		}
-		// Otherwise entries are exact matches. They're
-		// guaranteed to be lowercase already.
-		if name == bad {
-			return false
-		}
-	}
-	return true
-}
-
 // SetExpiry updates the expiry of the current node key to t, as long as it's
 // only sooner than the old expiry.
 //
@@ -5017,32 +4981,6 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg
 		}
 	}
 	return "", false
-}
-
-// wireguardExitNodeDNSResolvers returns the DNS resolvers to use for a
-// WireGuard-only exit node, if it has resolver addresses.
-func wireguardExitNodeDNSResolvers(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, exitNodeID tailcfg.StableNodeID) ([]*dnstype.Resolver, bool) {
-	if exitNodeID.IsZero() {
-		return nil, false
-	}
-
-	for _, p := range peers {
-		if p.StableID() == exitNodeID {
-			if p.IsWireGuardOnly() {
-				resolvers := p.ExitNodeDNSResolvers()
-				if !resolvers.IsNil() && resolvers.Len() > 0 {
-					copies := make([]*dnstype.Resolver, resolvers.Len())
-					for i, r := range resolvers.All() {
-						copies[i] = r.AsStruct()
-					}
-					return copies, true
-				}
-			}
-			return nil, false
-		}
-	}
-
-	return nil, false
 }
 
 func peerCanProxyDNS(p tailcfg.NodeView) bool {

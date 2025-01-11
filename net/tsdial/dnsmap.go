@@ -11,9 +11,6 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
-
-	"tailscale.com/types/netmap"
-	"tailscale.com/util/dnsname"
 )
 
 // dnsMap maps MagicDNS names (both base + FQDN) to their first IP.
@@ -26,55 +23,6 @@ type dnsMap map[string]netip.Addr
 // canonMapKey canonicalizes its input s to be a dnsMap map key.
 func canonMapKey(s string) string {
 	return strings.ToLower(strings.TrimSuffix(s, "."))
-}
-
-func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
-	if nm == nil {
-		return nil
-	}
-	ret := make(dnsMap)
-	suffix := nm.MagicDNSSuffix()
-	have4 := false
-	addrs := nm.GetAddresses()
-	if nm.Name != "" && addrs.Len() > 0 {
-		ip := addrs.At(0).Addr()
-		ret[canonMapKey(nm.Name)] = ip
-		if dnsname.HasSuffix(nm.Name, suffix) {
-			ret[canonMapKey(dnsname.TrimSuffix(nm.Name, suffix))] = ip
-		}
-		for _, p := range addrs.All() {
-			if p.Addr().Is4() {
-				have4 = true
-			}
-		}
-	}
-	for _, p := range nm.Peers {
-		if p.Name() == "" {
-			continue
-		}
-		for _, pfx := range p.Addresses().All() {
-			ip := pfx.Addr()
-			if ip.Is4() && !have4 {
-				continue
-			}
-			ret[canonMapKey(p.Name())] = ip
-			if dnsname.HasSuffix(p.Name(), suffix) {
-				ret[canonMapKey(dnsname.TrimSuffix(p.Name(), suffix))] = ip
-			}
-			break
-		}
-	}
-	for _, rec := range nm.DNS.ExtraRecords {
-		if rec.Type != "" {
-			continue
-		}
-		ip, err := netip.ParseAddr(rec.Value)
-		if err != nil {
-			continue
-		}
-		ret[canonMapKey(rec.Name)] = ip
-	}
-	return ret
 }
 
 // errUnresolved is a sentinel error returned by dnsMap.resolveMemory.

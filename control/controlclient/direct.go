@@ -44,7 +44,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/ptr"
-	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
@@ -412,13 +411,12 @@ func (c *Direct) WaitLoginURL(ctx context.Context, url string) (newURL string, e
 }
 
 func (c *Direct) doLoginOrRegen(ctx context.Context, opt loginOpt) (newURL string, err error) {
-	mustRegen, url, oldNodeKeySignature, err := c.doLogin(ctx, opt)
+	mustRegen, url, _, err := c.doLogin(ctx, opt)
 	if err != nil {
 		return url, err
 	}
 	if mustRegen {
 		opt.Regen = true
-		opt.OldNodeKeySignature = oldNodeKeySignature
 		_, url, _, err = c.doLogin(ctx, opt)
 	}
 	return url, err
@@ -444,10 +442,6 @@ type loginOpt struct {
 	// It is ignored if Logout is set since Logout works by setting a
 	// expiry time in the far past.
 	Expiry *time.Time
-
-	// OldNodeKeySignature indicates the former NodeKeySignature
-	// that must be resigned for the new node-key.
-	OldNodeKeySignature tkatype.MarshaledSignature
 }
 
 // hostInfoLocked returns a Clone of c.hostinfo and c.netinfo.
@@ -468,7 +462,7 @@ var macOSScreenTime = health.Register(&health.Warnable{
 	ImpactsConnectivity: true,
 })
 
-func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
+func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, Old any, err error) {
 	if c.panicOnUse {
 		panic("tainted client")
 	}
@@ -552,21 +546,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if !persist.OldPrivateNodeKey.IsZero() {
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
-	if persist.NetworkLockKey.IsZero() {
-		persist.NetworkLockKey = key.NewNLPrivate()
-	}
-	nlPub := persist.NetworkLockKey.Public()
 
 	if tryingNewKey.IsZero() {
 		if opt.Logout {
 			return false, "", nil, errors.New("no nodekey to log out")
 		}
 		log.Fatalf("tryingNewKey is empty, give up")
-	}
-
-	var nodeKeySignature tkatype.MarshaledSignature
-	if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
-		// lanscaping
 	}
 
 	if backendLogID == "" {
@@ -580,16 +565,14 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 	now := c.clock.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
-		Version:          1,
-		OldNodeKey:       oldNodeKey,
-		NodeKey:          tryingNewKey.Public(),
-		NLKey:            nlPub,
-		Hostinfo:         hi,
-		Followup:         opt.URL,
-		Timestamp:        &now,
-		Ephemeral:        (opt.Flags & LoginEphemeral) != 0,
-		NodeKeySignature: nodeKeySignature,
-		Tailnet:          tailnet,
+		Version:    1,
+		OldNodeKey: oldNodeKey,
+		NodeKey:    tryingNewKey.Public(),
+		Hostinfo:   hi,
+		Followup:   opt.URL,
+		Timestamp:  &now,
+		Ephemeral:  (opt.Flags & LoginEphemeral) != 0,
+		Tailnet:    tailnet,
 	}
 	if opt.Logout {
 		request.Expiry = time.Unix(123, 0) // far in the past
@@ -598,7 +581,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 	c.logf("RegisterReq: onode=%v node=%v fup=%v nks=%v",
 		request.OldNodeKey.ShortString(),
-		request.NodeKey.ShortString(), opt.URL != "", len(nodeKeySignature) > 0)
+		request.NodeKey.ShortString(), opt.URL != "", false)
 	if authKey != "" {
 		request.Auth = &tailcfg.RegisterResponseAuth{
 			AuthKey: authKey,
@@ -670,9 +653,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	if resp.Error != "" {
 		return false, "", nil, UserVisibleError(resp.Error)
-	}
-	if len(resp.NodeKeySignature) > 0 {
-		return true, "", resp.NodeKeySignature, nil
 	}
 
 	if resp.NodeKeyExpired {

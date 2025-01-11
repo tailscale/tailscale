@@ -88,7 +88,6 @@ type mapSession struct {
 	lastDomainAuditLogID   string
 	lastHealth             []string
 	lastPopBrowserURL      string
-	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
 	lastMaxExpiry          time.Duration
 }
@@ -341,9 +340,6 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
 	}
-	if resp.TKAInfo != nil {
-		ms.lastTKAInfo = resp.TKAInfo
-	}
 	if resp.MaxKeyDuration > 0 {
 		ms.lastMaxExpiry = resp.MaxKeyDuration
 	}
@@ -474,10 +470,6 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 			mut.KeyExpiry = *v
 			patchKeyExpiry.Add(1)
 		}
-		if v := pc.KeySignature; v != nil {
-			mut.KeySignature = v
-			patchKeySignature.Add(1)
-		}
 		if v := pc.CapMap; v != nil {
 			mut.CapMap = v
 			patchCapMap.Add(1)
@@ -607,10 +599,6 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			if !was.KeyExpiry().Equal(n.KeyExpiry) {
 				pc().KeyExpiry = ptr.To(n.KeyExpiry)
 			}
-		case "KeySignature":
-			if !was.KeySignature().Equal(n.KeySignature) {
-				pc().KeySignature = slices.Clone(n.KeySignature)
-			}
 		case "Machine":
 			if was.Machine() != n.Machine {
 				return nil, false
@@ -734,18 +722,6 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			if va == nil || vb == nil || *va != *vb {
 				return nil, false
 			}
-		case "ExitNodeDNSResolvers":
-			va, vb := was.ExitNodeDNSResolvers(), views.SliceOfViews(n.ExitNodeDNSResolvers)
-
-			if va.Len() != vb.Len() {
-				return nil, false
-			}
-
-			for i := range va.Len() {
-				if !va.At(i).Equal(vb.At(i)) {
-					return nil, false
-				}
-			}
 
 		}
 	}
@@ -798,9 +774,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 	for _, peer := range peerViews {
 		ms.addUserProfile(nm, peer.Sharer())
 		ms.addUserProfile(nm, peer.User())
-	}
-	if DevKnob.ForceProxyDNS() {
-		nm.DNS.Proxied = true
 	}
 	return nm
 }

@@ -35,7 +35,6 @@ type Persist struct {
 	PrivateNodeKey    key.NodePrivate
 	OldPrivateNodeKey key.NodePrivate // needed to request key rotation
 	UserProfile       tailcfg.UserProfile
-	NetworkLockKey    key.NLPrivate
 	NodeID            tailcfg.StableNodeID
 
 	// DisallowedTKAStateIDs stores the tka.State.StateID values which
@@ -99,7 +98,6 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.UserProfile.Equal(&p2.UserProfile) &&
-		p.NetworkLockKey.Equal(p2.NetworkLockKey) &&
 		p.NodeID == p2.NodeID &&
 		reflect.DeepEqual(nilIfEmpty(p.DisallowedTKAStateIDs), nilIfEmpty(p2.DisallowedTKAStateIDs))
 }

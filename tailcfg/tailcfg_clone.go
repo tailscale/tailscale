@@ -10,12 +10,10 @@ import (
 	"net/netip"
 	"time"
 
-	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/structs"
-	"tailscale.com/types/tkatype"
 )
 
 // Clone makes a deep copy of User.
@@ -45,7 +43,6 @@ func (src *Node) Clone() *Node {
 	}
 	dst := new(Node)
 	*dst = *src
-	dst.KeySignature = append(src.KeySignature[:0:0], src.KeySignature...)
 	dst.Addresses = append(src.Addresses[:0:0], src.Addresses...)
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
 	dst.Endpoints = append(src.Endpoints[:0:0], src.Endpoints...)
@@ -71,16 +68,6 @@ func (src *Node) Clone() *Node {
 	if dst.SelfNodeV6MasqAddrForThisPeer != nil {
 		dst.SelfNodeV6MasqAddrForThisPeer = ptr.To(*src.SelfNodeV6MasqAddrForThisPeer)
 	}
-	if src.ExitNodeDNSResolvers != nil {
-		dst.ExitNodeDNSResolvers = make([]*dnstype.Resolver, len(src.ExitNodeDNSResolvers))
-		for i := range dst.ExitNodeDNSResolvers {
-			if src.ExitNodeDNSResolvers[i] == nil {
-				dst.ExitNodeDNSResolvers[i] = nil
-			} else {
-				dst.ExitNodeDNSResolvers[i] = src.ExitNodeDNSResolvers[i].Clone()
-			}
-		}
-	}
 	return dst
 }
 
@@ -93,7 +80,6 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Sharer                        UserID
 	Key                           key.NodePublic
 	KeyExpiry                     time.Time
-	KeySignature                  tkatype.MarshaledSignature
 	Machine                       key.MachinePublic
 	DiscoKey                      key.DiscoPublic
 	Addresses                     []netip.Prefix
@@ -120,7 +106,6 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
 	IsJailed                      bool
-	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 
 // Clone makes a deep copy of Hostinfo.
@@ -243,52 +228,11 @@ func (src *DNSConfig) Clone() *DNSConfig {
 	}
 	dst := new(DNSConfig)
 	*dst = *src
-	if src.Resolvers != nil {
-		dst.Resolvers = make([]*dnstype.Resolver, len(src.Resolvers))
-		for i := range dst.Resolvers {
-			if src.Resolvers[i] == nil {
-				dst.Resolvers[i] = nil
-			} else {
-				dst.Resolvers[i] = src.Resolvers[i].Clone()
-			}
-		}
-	}
-	if dst.Routes != nil {
-		dst.Routes = map[string][]*dnstype.Resolver{}
-		for k := range src.Routes {
-			dst.Routes[k] = append([]*dnstype.Resolver{}, src.Routes[k]...)
-		}
-	}
-	if src.FallbackResolvers != nil {
-		dst.FallbackResolvers = make([]*dnstype.Resolver, len(src.FallbackResolvers))
-		for i := range dst.FallbackResolvers {
-			if src.FallbackResolvers[i] == nil {
-				dst.FallbackResolvers[i] = nil
-			} else {
-				dst.FallbackResolvers[i] = src.FallbackResolvers[i].Clone()
-			}
-		}
-	}
-	dst.Domains = append(src.Domains[:0:0], src.Domains...)
-	dst.Nameservers = append(src.Nameservers[:0:0], src.Nameservers...)
-	dst.CertDomains = append(src.CertDomains[:0:0], src.CertDomains...)
-	dst.ExtraRecords = append(src.ExtraRecords[:0:0], src.ExtraRecords...)
-	dst.ExitNodeFilteredSet = append(src.ExitNodeFilteredSet[:0:0], src.ExitNodeFilteredSet...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
-	Resolvers           []*dnstype.Resolver
-	Routes              map[string][]*dnstype.Resolver
-	FallbackResolvers   []*dnstype.Resolver
-	Domains             []string
-	Proxied             bool
-	Nameservers         []netip.Addr
-	CertDomains         []string
-	ExtraRecords        []DNSRecord
-	ExitNodeFilteredSet []string
-	TempCorpIssue13969  string
 }{})
 
 // Clone makes a deep copy of RegisterResponse.
@@ -299,7 +243,6 @@ func (src *RegisterResponse) Clone() *RegisterResponse {
 	}
 	dst := new(RegisterResponse)
 	*dst = *src
-	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	return dst
 }
 
@@ -310,7 +253,6 @@ var _RegisterResponseCloneNeedsRegeneration = RegisterResponse(struct {
 	NodeKeyExpired    bool
 	MachineAuthorized bool
 	AuthURL           string
-	NodeKeySignature  tkatype.MarshaledSignature
 	Error             string
 }{})
 
@@ -345,7 +287,6 @@ func (src *RegisterRequest) Clone() *RegisterRequest {
 	*dst = *src
 	dst.Auth = src.Auth.Clone()
 	dst.Hostinfo = src.Hostinfo.Clone()
-	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	if dst.Timestamp != nil {
 		dst.Timestamp = ptr.To(*src.Timestamp)
 	}
@@ -356,22 +297,20 @@ func (src *RegisterRequest) Clone() *RegisterRequest {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterRequestCloneNeedsRegeneration = RegisterRequest(struct {
-	_                structs.Incomparable
-	Version          CapabilityVersion
-	NodeKey          key.NodePublic
-	OldNodeKey       key.NodePublic
-	NLKey            key.NLPublic
-	Auth             *RegisterResponseAuth
-	Expiry           time.Time
-	Followup         string
-	Hostinfo         *Hostinfo
-	Ephemeral        bool
-	NodeKeySignature tkatype.MarshaledSignature
-	SignatureType    SignatureType
-	Timestamp        *time.Time
-	DeviceCert       []byte
-	Signature        []byte
-	Tailnet          string
+	_             structs.Incomparable
+	Version       CapabilityVersion
+	NodeKey       key.NodePublic
+	OldNodeKey    key.NodePublic
+	Auth          *RegisterResponseAuth
+	Expiry        time.Time
+	Followup      string
+	Hostinfo      *Hostinfo
+	Ephemeral     bool
+	SignatureType SignatureType
+	Timestamp     *time.Time
+	DeviceCert    []byte
+	Signature     []byte
+	Tailnet       string
 }{})
 
 // Clone makes a deep copy of DERPHomeParams.

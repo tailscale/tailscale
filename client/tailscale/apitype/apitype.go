@@ -6,7 +6,6 @@ package apitype
 
 import (
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/dnstype"
 )
 
 // LocalAPIHost is the Host header value used by the LocalAPI.
@@ -73,6 +72,4 @@ type DNSOSConfig struct {
 type DNSQueryResponse struct {
 	// Bytes is the raw DNS response bytes.
 	Bytes []byte
-	// Resolvers is the list of resolvers that the forwarder deemed able to resolve the query.
-	Resolvers []*dnstype.Resolver
 }
