@@ -25,7 +25,6 @@ import (
 
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -220,15 +219,6 @@ type Client struct {
 	// in tests to avoid probing the local LAN's router, etc.
 	SkipExternalNetwork bool
 
-	// UseDNSCache controls whether this client should use a
-	// *dnscache.Resolver to resolve DERP hostnames, when no IP address is
-	// provided in the DERP map. Note that Tailscale-provided DERP servers
-	// all specify explicit IPv4 and IPv6 addresses, so this is mostly
-	// helpful for users with custom DERP servers.
-	//
-	// If false, the default net.Resolver will be used, with no caching.
-	UseDNSCache bool
-
 	// if non-zero, force this DERP region to be preferred in all reports where
 	// the DERP is found to be reachable.
 	ForcePreferredDERP int
@@ -243,7 +233,6 @@ type Client struct {
 	last     *Report               // most recent report
 	lastFull time.Time             // time of last full (non-incremental) report
 	curState *reportState          // non-nil if we're in a call to GetReport
-	resolver *dnscache.Resolver    // only set if UseDNSCache is true
 }
 
 func (c *Client) enoughRegions() int {
@@ -1594,23 +1583,6 @@ func (c *Client) nodeAddrPort(ctx context.Context, n *tailcfg.DERPNode, port int
 		}
 		return naddrs, nil
 	}
-
-	c.mu.Lock()
-	if c.UseDNSCache {
-		if c.resolver == nil {
-			c.resolver = &dnscache.Resolver{
-				Forward:     net.DefaultResolver,
-				UseLastGood: true,
-				Logf:        c.logf,
-			}
-		}
-		resolver := c.resolver
-		lookupIPAddr = func(ctx context.Context, host string) ([]netip.Addr, error) {
-			_, _, allIPs, err := resolver.LookupIP(ctx, host)
-			return allIPs, err
-		}
-	}
-	c.mu.Unlock()
 
 	probeIsV4 := proto == probeIPv4
 	addrs, err := lookupIPAddr(ctx, n.HostName)

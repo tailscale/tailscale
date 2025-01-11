@@ -32,7 +32,6 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/sockstats"
@@ -52,11 +51,10 @@ import (
 // Send/Recv will completely re-establish the connection (unless Close
 // has been called).
 type Client struct {
-	TLSConfig     *tls.Config        // optional; nil means default
-	HealthTracker *health.Tracker    // optional; used if non-nil only
-	DNSCache      *dnscache.Resolver // optional; nil means no caching
-	MeshKey       string             // optional; for trusted clients
-	IsProber      bool               // optional; for probers to optional declare themselves as such
+	TLSConfig     *tls.Config     // optional; nil means default
+	HealthTracker *health.Tracker // optional; used if non-nil only
+	MeshKey       string          // optional; for trusted clients
+	IsProber      bool            // optional; for probers to optional declare themselves as such
 
 	// WatchConnectionChanges is whether the client wishes to subscribe to
 	// notifications about clients connecting & disconnecting.
@@ -598,18 +596,6 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 	}
 	hostOrIP := host
 	dialer := netns.NewDialer(c.logf, c.netMon)
-
-	if c.DNSCache != nil {
-		ip, _, _, err := c.DNSCache.LookupIP(ctx, host)
-		if err == nil {
-			hostOrIP = ip.String()
-		}
-		if err != nil && netns.IsSOCKSDialer(dialer) {
-			// Return an error if we're not using a dial
-			// proxy that can do DNS lookups for us.
-			return nil, err
-		}
-	}
 
 	tcpConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
 	if err != nil {

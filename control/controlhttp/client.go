@@ -41,8 +41,6 @@ import (
 	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
-	"tailscale.com/net/dnscache"
-	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
@@ -422,21 +420,6 @@ func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr) (*
 	}, nil
 }
 
-// resolver returns a.DNSCache if non-nil or a new *dnscache.Resolver
-// otherwise.
-func (a *Dialer) resolver() *dnscache.Resolver {
-	if a.DNSCache != nil {
-		return a.DNSCache
-	}
-
-	return &dnscache.Resolver{
-		Forward:          dnscache.Get().Forward,
-		LookupIPFallback: dnsfallback.MakeLookupFunc(a.logf, a.NetMon),
-		UseLastGood:      true,
-		Logf:             a.Logf, // not a.logf method; we want to propagate nil-ness
-	}
-}
-
 func isLoopback(a net.Addr) bool {
 	if ta, ok := a.(*net.TCPAddr); ok {
 		return ta.IP.IsLoopback()
@@ -461,26 +444,9 @@ var macOSScreenTime = health.Register(&health.Warnable{
 //
 // Only the provided ctx is used, not a.ctx.
 func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Addr, init []byte) (_ net.Conn, retErr error) {
-	var dns *dnscache.Resolver
 
-	// If we were provided an address to dial, then create a resolver that just
-	// returns that value; otherwise, fall back to DNS.
-	if optAddr.IsValid() {
-		dns = &dnscache.Resolver{
-			SingleHostStaticResult: []netip.Addr{optAddr},
-			SingleHost:             u.Hostname(),
-			Logf:                   a.Logf, // not a.logf method; we want to propagate nil-ness
-		}
-	} else {
-		dns = a.resolver()
-	}
-
-	var dialer dnscache.DialContextFunc
-	if a.Dialer != nil {
-		dialer = a.Dialer
-	} else {
-		dialer = stdDialer.DialContext
-	}
+	var dialer func(ctx context.Context, network, address string) (net.Conn, error)
+	dialer = stdDialer.DialContext
 
 	// On macOS, see if Screen Time is blocking things.
 	if runtime.GOOS == "darwin" {
@@ -510,7 +476,6 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 	defer tr.CloseIdleConnections()
 	tr.Proxy = a.getProxyFunc()
 	tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-	tr.DialContext = dnscache.Dialer(dialer, dns)
 	// Disable HTTP2, since h2 can't do protocol switching.
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
@@ -533,7 +498,6 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 		return nil // regardless
 	}
 
-	tr.DialTLSContext = dnscache.TLSDialer(dialer, dns, tr.TLSClientConfig)
 	tr.DisableCompression = true
 
 	// (mis)use httptrace to extract the underlying net.Conn from the

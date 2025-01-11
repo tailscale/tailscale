@@ -47,8 +47,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
-	"tailscale.com/net/dnscache"
-	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
@@ -1451,9 +1449,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.e.SetNetworkMap(st.NetMap)
 		b.MagicConn().SetDERPMap(st.NetMap.DERPMap)
 		b.MagicConn().SetOnlyTCP443(st.NetMap.HasCap(tailcfg.NodeAttrOnlyTCP443))
-
-		// Update our cached DERP map
-		dnsfallback.UpdateCache(st.NetMap.DERPMap, b.logf)
 
 		// Update the DERP map in the health package, which uses it for health notifications
 		b.health.SetDERPMap(st.NetMap.DERPMap)
@@ -3833,7 +3828,6 @@ func (b *LocalBackend) authReconfig() {
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := nm.HasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	userDialUseRoutes := nm.HasCap(tailcfg.NodeAttrUserDialUseRoutes)
-	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
 	// If the current node is an app connector, ensure the app connector machine is started
 	closing := b.shutdownCalled
 	b.mu.Unlock()
@@ -3865,15 +3859,6 @@ func (b *LocalBackend) authReconfig() {
 			b.logf("authReconfig: have PAC; disabling subnet routes")
 			flags &^= netmap.AllowSubnetRoutes
 		}
-	}
-
-	// Keep the dialer updated about whether we're supposed to use
-	// an exit node's DNS server (so SOCKS5/HTTP outgoing dials
-	// can use it for name resolution)
-	if dohURLOK {
-		b.dialer.SetExitDNSDoH(dohURL)
-	} else {
-		b.dialer.SetExitDNSDoH("")
 	}
 
 	cfg, err := nmcfg.WGCfg(nm, b.logf, flags, prefs.ExitNodeID())
@@ -4815,13 +4800,6 @@ func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
 // setDebugLogsByCapabilityLocked sets debug logging based on the self node's
 // capabilities in the provided NetMap.
 func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
-	// These are sufficiently cheap (atomic bools) that we don't need to
-	// store state and compare.
-	if nm.HasCap(tailcfg.CapabilityDebugTSDNSResolution) {
-		dnscache.SetDebugLoggingEnabled(true)
-	} else {
-		dnscache.SetDebugLoggingEnabled(false)
-	}
 }
 
 // operatorUserName returns the current pref's OperatorUser's name, or the

@@ -539,7 +539,6 @@ func NewConn(opts Options) (*Conn, error) {
 		NetMon:              c.netMon,
 		SendPacket:          c.sendUDPNetcheck,
 		SkipExternalNetwork: inTest(),
-		UseDNSCache:         true,
 	}
 
 	c.metrics = registerMetrics(opts.Metrics)

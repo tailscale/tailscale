@@ -20,7 +20,6 @@ import (
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/health"
 	"tailscale.com/internal/noiseconn"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
@@ -54,7 +53,6 @@ type NoiseClient struct {
 	sfDial singleflight.Group[struct{}, *noiseconn.Conn]
 
 	dialer       *tsdial.Dialer
-	dnsCache     *dnscache.Resolver
 	privKey      key.MachinePrivate
 	serverPubKey key.MachinePublic
 	host         string // the host part of serverURL
@@ -89,10 +87,6 @@ type NoiseOpts struct {
 	ServerURL string
 	// Dialer's SystemDial function is used to connect to the server.
 	Dialer *tsdial.Dialer
-	// DNSCache is the caching Resolver to use to connect to the server.
-	//
-	// This field can be nil.
-	DNSCache *dnscache.Resolver
 	// Logf is the log function to use. This field can be nil.
 	Logf logger.Logf
 	// NetMon is the network monitor that, if set, will be used to get the
@@ -158,7 +152,6 @@ func NewNoiseClient(opts NoiseOpts) (*NoiseClient, error) {
 		httpPort:     httpPort,
 		httpsPort:    httpsPort,
 		dialer:       opts.Dialer,
-		dnsCache:     opts.DNSCache,
 		dialPlan:     opts.DialPlan,
 		logf:         opts.Logf,
 		netMon:       opts.NetMon,
@@ -364,8 +357,6 @@ func (nc *NoiseClient) dial(ctx context.Context) (*noiseconn.Conn, error) {
 		MachineKey:      nc.privKey,
 		ControlKey:      nc.serverPubKey,
 		ProtocolVersion: uint16(tailcfg.CurrentCapabilityVersion),
-		Dialer:          nc.dialer.SystemDial,
-		DNSCache:        nc.dnsCache,
 		DialPlan:        dialPlan,
 		Logf:            nc.logf,
 		NetMon:          nc.netMon,

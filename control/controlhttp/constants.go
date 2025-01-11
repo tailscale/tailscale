@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"tailscale.com/health"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -61,16 +60,6 @@ type Dialer struct {
 	//
 	// If "none" (NoPort), HTTPS is disabled.
 	HTTPSPort string
-
-	// Dialer is the dialer used to make outbound connections.
-	//
-	// If not specified, this defaults to net.Dialer.DialContext.
-	Dialer dnscache.DialContextFunc
-
-	// DNSCache is the caching Resolver used by this Dialer.
-	//
-	// If not specified, a new Resolver is created per attempt.
-	DNSCache *dnscache.Resolver
 
 	// Logf, if set, is a logging function to use; if unset, logs are
 	// dropped.

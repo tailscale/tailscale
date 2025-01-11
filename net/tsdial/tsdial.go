@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,7 +18,6 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -80,8 +78,7 @@ type Dialer struct {
 	tunName          string // tun device name
 	netMon           *netmon.Monitor
 	netMonUnregister func()
-	exitDNSDoHBase   string                 // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
-	dnsCache         *dnscache.MessageCache // nil until first non-empty SetExitDNSDoH
+	exitDNSDoHBase   string // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
 	nextSysConnID    int
 	activeSysConns   map[int]net.Conn // active connections not yet closed
 }
@@ -115,26 +112,6 @@ func (d *Dialer) TUNName() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.tunName
-}
-
-// SetExitDNSDoH sets (or clears) the exit node DNS DoH server base URL to use.
-// The doh URL should contain the scheme, authority, and path, but without
-// a '?' and/or query parameters.
-//
-// For example, "http://100.68.82.120:47830/dns-query".
-func (d *Dialer) SetExitDNSDoH(doh string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.exitDNSDoHBase == doh {
-		return
-	}
-	d.exitDNSDoHBase = doh
-	if doh != "" && d.dnsCache == nil {
-		d.dnsCache = new(dnscache.MessageCache)
-	}
-	if d.dnsCache != nil {
-		d.dnsCache.Flush()
-	}
 }
 
 // SetRoutes configures the dialer to dial the specified routes via Tailscale,
@@ -299,7 +276,6 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
 	d.mu.Lock()
 	dns := d.dns
-	exitDNSDoH := d.exitDNSDoHBase
 	d.mu.Unlock()
 
 	// MagicDNS or otherwise baked into the NetworkMap? Try that first.
@@ -319,17 +295,6 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	}
 
 	var r net.Resolver
-	if exitDNSDoH != "" && runtime.GOOS != "windows" { // Windows: https://github.com/golang/go/issues/33097
-		r.PreferGo = true
-		r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
-			return &dohConn{
-				ctx:      ctx,
-				baseURL:  exitDNSDoH,
-				hc:       d.PeerAPIHTTPClient(),
-				dnsCache: d.dnsCache,
-			}, nil
-		}
-	}
 
 	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
 	if err != nil {

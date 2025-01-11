@@ -22,7 +22,6 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
@@ -406,7 +405,6 @@ func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan<- 
 	dc.SetCanAckPings(true)
 	dc.NotePreferred(c.myDerp == regionID)
 	dc.SetAddressFamilySelector(derpAddrFamSelector{c})
-	dc.DNSCache = dnscache.Get()
 
 	ctx, cancel := context.WithCancel(c.connCtx)
 	ch := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop())

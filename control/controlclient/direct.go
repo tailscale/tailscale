@@ -33,8 +33,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/dnscache"
-	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
@@ -61,7 +59,6 @@ type Direct struct {
 	httpc                      *http.Client // HTTP client used to talk to tailcontrol
 	interceptedDial            *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
 	dialer                     *tsdial.Dialer
-	dnsCache                   *dnscache.Resolver
 	controlKnobs               *controlknobs.Knobs // always non-nil
 	serverURL                  string              // URL of the tailcontrol server
 	clock                      tstime.Clock
@@ -243,13 +240,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		opts.Logf = log.Printf
 	}
 
-	dnsCache := &dnscache.Resolver{
-		Forward:          dnscache.Get().Forward, // use default cache's forwarder
-		UseLastGood:      true,
-		LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, netMon),
-		Logf:             opts.Logf,
-	}
-
 	httpc := opts.HTTPTestClient
 	if httpc == nil && runtime.GOOS == "js" {
 		// In js/wasm, net/http.Transport (as of Go 1.18) will
@@ -264,10 +254,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), opts.HealthTracker, tr.TLSClientConfig)
-		var dialFunc dialFunc
-		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
-		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
-		tr.DialTLSContext = dnscache.TLSDialer(dialFunc, dnsCache, tr.TLSClientConfig)
 		tr.ForceAttemptHTTP2 = true
 		// Disable implicit gzip compression; the various
 		// handlers (register, map, set-dns, etc) do their own
@@ -299,7 +285,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		onControlTime:              opts.OnControlTime,
 		c2nHandler:                 opts.C2NHandler,
 		dialer:                     opts.Dialer,
-		dnsCache:                   dnsCache,
 		dialPlan:                   opts.DialPlan,
 	}
 	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
@@ -1447,7 +1432,6 @@ func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 			ServerPubKey:  serverNoiseKey,
 			ServerURL:     c.serverURL,
 			Dialer:        c.dialer,
-			DNSCache:      c.dnsCache,
 			Logf:          c.logf,
 			NetMon:        c.netMon,
 			HealthTracker: c.health,

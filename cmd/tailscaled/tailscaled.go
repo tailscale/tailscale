@@ -35,7 +35,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
-	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
@@ -504,7 +503,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, sys *tsd.System) (_ 
 	}
 	lb.SetVarRoot(opts.VarRoot)
 	if root := lb.TailscaleVarRoot(); root != "" {
-		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
+		// lanscaping dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
 	if err := startNetstack(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
