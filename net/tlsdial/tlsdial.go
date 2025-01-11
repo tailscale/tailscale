@@ -27,7 +27,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
-	"tailscale.com/net/tlsdial/blockblame"
 )
 
 var counterFallbackOK int32 // atomic
@@ -107,19 +106,6 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 		}
 		if ht != nil {
 			defer func() {
-				if retErr != nil && cert != nil {
-					// Is it a MITM SSL certificate from a well-known network appliance manufacturer?
-					// Show a dedicated warning.
-					m, ok := blockblame.VerifyCertificate(cert)
-					if ok {
-						log.Printf("tlsdial: server cert for %q looks like %q equipment (could be blocking Tailscale)", host, m.Name)
-						ht.SetUnhealthy(mitmBlockWarnable, health.Args{"manufacturer": m.Name})
-					} else {
-						ht.SetHealthy(mitmBlockWarnable)
-					}
-				} else {
-					ht.SetHealthy(mitmBlockWarnable)
-				}
 				if retErr != nil && selfSignedIssuer != "" {
 					// Self-signed certs are never valid.
 					//
