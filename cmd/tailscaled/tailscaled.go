@@ -26,7 +26,6 @@ import (
 	"syscall"
 	"time"
 
-	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
@@ -128,7 +127,6 @@ var (
 var subCommands = map[string]*func([]string) error{
 	"install-system-daemon":   &installSystemDaemon,
 	"uninstall-system-daemon": &uninstallSystemDaemon,
-	"be-child":                &beChildFunc,
 }
 
 var beCLI func() // non-nil if CLI is linked in
@@ -636,20 +634,6 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-var beChildFunc = beChild
-
-func beChild(args []string) error {
-	if len(args) == 0 {
-		return errors.New("missing mode argument")
-	}
-	typ := args[0]
-	f, ok := childproc.Code[typ]
-	if !ok {
-		return fmt.Errorf("unknown be-child mode %q", typ)
-	}
-	return f(args[1:])
 }
 
 // dieOnPipeReadErrorOfFD reads from the pipe named by fd and exit the process
