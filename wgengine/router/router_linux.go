@@ -6,7 +6,6 @@ package router
 import (
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -16,10 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tailscale/netlink"
 	"github.com/tailscale/wireguard-go/tun"
-	"go4.org/netipx"
-	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -103,14 +99,6 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 	}
 	if r.useIPCommand() {
 		r.ipRuleAvailable = (cmd.run("ip", "rule") == nil)
-	} else {
-		if rules, err := netlink.RuleList(netlink.FAMILY_V4); err != nil {
-			r.logf("error querying IP rules (does kernel have IP_MULTIPLE_TABLES?): %v", err)
-			r.logf("warning: running without policy routing")
-		} else {
-			r.logf("[v1] policy routing available; found %d rules", len(rules))
-			r.ipRuleAvailable = true
-		}
 	}
 
 	// A common installation of OpenWRT involves use of the 'mwan3' package.
@@ -128,13 +116,6 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 	// shift the priority of our policies to 13xx. This effectively puts us between mwan3's
 	// permit-by-src-ip rules and mwan3 lookup of its own routing table which would drop
 	// the packet.
-	isMWAN3, err := checkOpenWRTUsingMWAN3()
-	if err != nil {
-		r.logf("error checking mwan3 installation: %v", err)
-	} else if isMWAN3 {
-		r.ipPolicyPrefBase = 1300
-		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
-	}
 
 	r.v6Available = linuxfw.CheckIPv6(r.logf) == nil
 
@@ -235,18 +216,7 @@ var forceIPCommand = envknob.RegisterBool("TS_DEBUG_USE_IP_COMMAND")
 // useIPCommand reports whether r should use the "ip" command (or its
 // fake commandRunner for tests) instead of netlink.
 func (r *linuxRouter) useIPCommand() bool {
-	if r.cmd == nil {
-		panic("invalid init")
-	}
-	if forceIPCommand() {
-		return true
-	}
-	// In the future we might need to fall back to using the "ip"
-	// command if, say, netlink is blocked somewhere but the ip
-	// command is allowed to use netlink. For now we only use the ip
-	// command runner in tests.
-	_, ok := r.cmd.(osCommandRunner)
-	return !ok
+	return true
 }
 
 // fwmaskWorks reports whether we can use 'ip rule...fwmark <mark>/<mask>'.
@@ -721,13 +691,7 @@ func (r *linuxRouter) addAddress(addr netip.Prefix) error {
 			return fmt.Errorf("adding address %q to tunnel interface: %w", addr, err)
 		}
 	} else {
-		link, err := r.link()
-		if err != nil {
-			return fmt.Errorf("adding address %v, %w", addr, err)
-		}
-		if err := netlink.AddrReplace(link, nlAddrOfPrefix(addr)); err != nil {
-			return fmt.Errorf("adding address %v from tunnel interface: %w", addr, err)
-		}
+		panic("lanscaping")
 	}
 	if err := r.addLoopbackRule(addr.Addr()); err != nil {
 		return err
@@ -750,13 +714,7 @@ func (r *linuxRouter) delAddress(addr netip.Prefix) error {
 			return fmt.Errorf("deleting address %q from tunnel interface: %w", addr, err)
 		}
 	} else {
-		link, err := r.link()
-		if err != nil {
-			return fmt.Errorf("deleting address %v, %w", addr, err)
-		}
-		if err := netlink.AddrDel(link, nlAddrOfPrefix(addr)); err != nil {
-			return fmt.Errorf("deleting address %v from tunnel interface: %w", addr, err)
-		}
+		panic("lanscaping")
 	}
 	return nil
 }
@@ -803,15 +761,7 @@ func (r *linuxRouter) addRoute(cidr netip.Prefix) error {
 	if r.useIPCommand() {
 		return r.addRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
 	}
-	linkIndex, err := r.linkIndex()
-	if err != nil {
-		return err
-	}
-	return netlink.RouteReplace(&netlink.Route{
-		LinkIndex: linkIndex,
-		Dst:       netipx.PrefixIPNet(cidr.Masked()),
-		Table:     r.routeTable(),
-	})
+	panic("lanscaping")
 }
 
 // addThrowRoute adds a throw route for the provided cidr.
@@ -828,15 +778,7 @@ func (r *linuxRouter) addThrowRoute(cidr netip.Prefix) error {
 	if r.useIPCommand() {
 		return r.addRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
 	}
-	err := netlink.RouteReplace(&netlink.Route{
-		Dst:   netipx.PrefixIPNet(cidr.Masked()),
-		Table: tailscaleRouteTable.Num,
-		Type:  unix.RTN_THROW,
-	})
-	if err != nil {
-		r.logf("THROW ERROR adding %v: %#v", cidr, err)
-	}
-	return err
+	panic("lanscaping")
 }
 
 func (r *linuxRouter) addRouteDef(routeDef []string, cidr netip.Prefix) error {
@@ -880,20 +822,7 @@ func (r *linuxRouter) delRoute(cidr netip.Prefix) error {
 	if r.useIPCommand() {
 		return r.delRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
 	}
-	linkIndex, err := r.linkIndex()
-	if err != nil {
-		return err
-	}
-	err = netlink.RouteDel(&netlink.Route{
-		LinkIndex: linkIndex,
-		Dst:       netipx.PrefixIPNet(cidr.Masked()),
-		Table:     r.routeTable(),
-	})
-	if errors.Is(err, errESRCH) {
-		// Didn't exist to begin with.
-		return nil
-	}
-	return err
+	panic("lanscaping")
 }
 
 // delThrowRoute removes the throw route for the cidr. Fails if the route
@@ -908,16 +837,8 @@ func (r *linuxRouter) delThrowRoute(cidr netip.Prefix) error {
 	if r.useIPCommand() {
 		return r.delRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
 	}
-	err := netlink.RouteDel(&netlink.Route{
-		Dst:   netipx.PrefixIPNet(cidr.Masked()),
-		Table: r.routeTable(),
-		Type:  unix.RTN_THROW,
-	})
-	if errors.Is(err, errESRCH) {
-		// Didn't exist to begin with.
-		return nil
-	}
-	return err
+	panic("lanscaping")
+
 }
 
 func (r *linuxRouter) delRouteDef(routeDef []string, cidr netip.Prefix) error {
@@ -962,24 +883,6 @@ func (r *linuxRouter) hasRoute(routeDef []string, cidr netip.Prefix) (bool, erro
 	return len(out) > 0, nil
 }
 
-func (r *linuxRouter) link() (netlink.Link, error) {
-	link, err := netlink.LinkByName(r.tunname)
-	if err != nil {
-		return nil, fmt.Errorf("failed to look up link %q: %w", r.tunname, err)
-	}
-	return link, nil
-}
-
-func (r *linuxRouter) linkIndex() (int, error) {
-	// TODO(bradfitz): cache this? It doesn't change often, and on start-up
-	// hundreds of addRoute calls to add /32s can happen quickly.
-	link, err := r.link()
-	if err != nil {
-		return 0, err
-	}
-	return link.Attrs().Index, nil
-}
-
 // routeTable returns the route table to use.
 func (r *linuxRouter) routeTable() int {
 	if r.ipRuleAvailable {
@@ -993,11 +896,8 @@ func (r *linuxRouter) upInterface() error {
 	if r.useIPCommand() {
 		return r.cmd.run("ip", "link", "set", "dev", r.tunname, "up")
 	}
-	link, err := r.link()
-	if err != nil {
-		return fmt.Errorf("bringing interface up, %w", err)
-	}
-	return netlink.LinkSetUp(link)
+	panic("lanscaping")
+
 }
 
 func (r *linuxRouter) enableIPForwarding() {
@@ -1027,11 +927,8 @@ func (r *linuxRouter) downInterface() error {
 	if r.useIPCommand() {
 		return r.cmd.run("ip", "link", "set", "dev", r.tunname, "down")
 	}
-	link, err := r.link()
-	if err != nil {
-		return fmt.Errorf("bringing interface down, %w", err)
-	}
-	return netlink.LinkSetDown(link)
+	panic("lanscaping")
+
 }
 
 // fixupWSLMTU sets the MTU on the eth0 interface to 1360 bytes if running under
@@ -1046,31 +943,7 @@ func (r *linuxRouter) fixupWSLMTU() {
 		return
 	}
 
-	link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		r.logf("warning: fixupWSLMTU: could not open eth0: %v", err)
-		return
-	}
-
-	routes, err := netlink.RouteGet(net.IPv4(8, 8, 8, 8))
-	if err != nil || len(routes) == 0 {
-		if err == nil {
-			err = fmt.Errorf("none found")
-		}
-		r.logf("fixupWSLMTU: could not get default route: %v", err)
-		return
-	}
-
-	if routes[0].LinkIndex != link.Attrs().Index {
-		r.logf("fixupWSLMTU: default route is not via eth0")
-		return
-	}
-
-	if link.Attrs().MTU == 1280 {
-		if err := netlink.LinkSetMTU(link, 1360); err != nil {
-			r.logf("warning: fixupWSLMTU: could not raise eth0 MTU: %v", err)
-		}
-	}
+	panic("lanscaping")
 }
 
 // addrFamily is an address family: IPv4 or IPv6.
@@ -1087,16 +960,6 @@ func (f addrFamily) dashArg() string {
 		return "-4"
 	case 6:
 		return "-6"
-	}
-	panic("illegal")
-}
-
-func (f addrFamily) netlinkInt() int {
-	switch f {
-	case 4:
-		return netlink.FAMILY_V4
-	case 6:
-		return netlink.FAMILY_V6
 	}
 	panic("illegal")
 }
@@ -1183,151 +1046,9 @@ var (
 	tailscaleRouteTable = newRouteTable("tailscale", 52)
 )
 
-// baseIPRules are the policy routing rules that Tailscale uses, when not
-// running on a UBNT device.
-//
-// The priority is the value represented here added to r.ipPolicyPrefBase,
-// which is usually 5200.
-//
-// NOTE(apenwarr): We leave spaces between each pref number.
-// This is so the sysadmin can override by inserting rules in
-// between if they want.
-//
-// NOTE(apenwarr): This sequence seems complicated, right?
-// If we could simply have a rule that said "match packets that
-// *don't* have this fwmark", then we would only need to add one
-// link to table 52 and we'd be done. Unfortunately, older kernels
-// and 'ip rule' implementations (including busybox), don't support
-// checking for the lack of a fwmark, only the presence. The technique
-// below works even on very old kernels.
-var baseIPRules = []netlink.Rule{
-	// Packets from us, tagged with our fwmark, first try the kernel's
-	// main routing table.
-	{
-		Priority: 10,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
-		Table:    mainRouteTable.Num,
-	},
-	// ...and then we try the 'default' table, for correctness,
-	// even though it's been empty on every Linux system I've ever seen.
-	{
-		Priority: 30,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
-		Table:    defaultRouteTable.Num,
-	},
-	// If neither of those matched (no default route on this system?)
-	// then packets from us should be aborted rather than falling through
-	// to the tailscale routes, because that would create routing loops.
-	{
-		Priority: 50,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
-		Type:     unix.RTN_UNREACHABLE,
-	},
-	// If we get to this point, capture all packets and send them
-	// through to the tailscale route table. For apps other than us
-	// (ie. with no fwmark set), this is the first routing table, so
-	// it takes precedence over all the others, ie. VPN routes always
-	// beat non-VPN routes.
-	{
-		Priority: 70,
-		Table:    tailscaleRouteTable.Num,
-	},
-	// If that didn't match, then non-fwmark packets fall through to the
-	// usual rules (pref 32766 and 32767, ie. main and default).
-}
-
-// ubntIPRules are the policy routing rules that Tailscale uses, when running
-// on a UBNT device.
-//
-// The priority is the value represented here added to
-// r.ipPolicyPrefBase, which is usually 5200.
-//
-// This represents an experiment that will be used to gather more information.
-// If this goes well, Tailscale may opt to use this for all of Linux.
-var ubntIPRules = []netlink.Rule{
-	// non-fwmark packets fall through to the usual rules (pref 32766 and 32767,
-	// ie. main and default).
-	{
-		Priority: 70,
-		Invert:   true,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
-		Table:    tailscaleRouteTable.Num,
-	},
-}
-
-// ipRules returns the appropriate list of ip rules to be used by Tailscale. See
-// comments on baseIPRules and ubntIPRules for more details.
-func ipRules() []netlink.Rule {
-	if getDistroFunc() == distro.UBNT {
-		return ubntIPRules
-	}
-	return baseIPRules
-}
-
 // justAddIPRules adds policy routing rule without deleting any first.
 func (r *linuxRouter) justAddIPRules() error {
-	if !r.ipRuleAvailable {
-		return nil
-	}
-	if r.useIPCommand() {
-		return r.addIPRulesWithIPCommand()
-	}
-	var errAcc error
-	for _, family := range r.addrFamilies() {
-
-		for _, ru := range ipRules() {
-			// Note: r is a value type here; safe to mutate it.
-			ru.Family = family.netlinkInt()
-			if ru.Mark != 0 {
-				ru.Mask = linuxfw.TailscaleFwmarkMaskNum
-			}
-			ru.Goto = -1
-			ru.SuppressIfgroup = -1
-			ru.SuppressPrefixlen = -1
-			ru.Flow = -1
-			ru.Priority += r.ipPolicyPrefBase
-
-			err := netlink.RuleAdd(&ru)
-			if errors.Is(err, errEEXIST) {
-				// Ignore dups.
-				continue
-			}
-			if err != nil && errAcc == nil {
-				errAcc = err
-			}
-		}
-	}
-	return errAcc
-}
-
-func (r *linuxRouter) addIPRulesWithIPCommand() error {
-	rg := newRunGroup(nil, r.cmd)
-
-	for _, family := range r.addrFamilies() {
-		for _, rule := range ipRules() {
-			args := []string{
-				"ip", family.dashArg(),
-				"rule", "add",
-				"pref", strconv.Itoa(rule.Priority + r.ipPolicyPrefBase),
-			}
-			if rule.Mark != 0 {
-				if r.fwmaskWorks() {
-					args = append(args, "fwmark", fmt.Sprintf("0x%x/%s", rule.Mark, linuxfw.TailscaleFwmarkMask))
-				} else {
-					args = append(args, "fwmark", fmt.Sprintf("0x%x", rule.Mark))
-				}
-			}
-			if rule.Table != 0 {
-				args = append(args, "table", mustRouteTable(rule.Table).ipCmdArg())
-			}
-			if rule.Type == unix.RTN_UNREACHABLE {
-				args = append(args, "type", "unreachable")
-			}
-			rg.Run(args...)
-		}
-	}
-
-	return rg.ErrAcc
+	return nil
 }
 
 // delRoutes removes any local routes that we added that would not be
@@ -1344,73 +1065,7 @@ func (r *linuxRouter) delRoutes() error {
 // delIPRules removes the policy routing rules that avoid
 // tailscaled routing loops, if it exists.
 func (r *linuxRouter) delIPRules() error {
-	if !r.ipRuleAvailable {
-		return nil
-	}
-	if r.useIPCommand() {
-		return r.delIPRulesWithIPCommand()
-	}
-	var errAcc error
-	for _, family := range r.addrFamilies() {
-		for _, ru := range ipRules() {
-			// Note: r is a value type here; safe to mutate it.
-			// When deleting rules, we want to be a bit specific (mention which
-			// table we were routing to) but not *too* specific (fwmarks, etc).
-			// That leaves us some flexibility to change these values in later
-			// versions without having ongoing hacks for every possible
-			// combination.
-			ru.Family = family.netlinkInt()
-			ru.Mark = -1
-			ru.Mask = -1
-			ru.Goto = -1
-			ru.SuppressIfgroup = -1
-			ru.SuppressPrefixlen = -1
-			ru.Priority += r.ipPolicyPrefBase
-
-			err := netlink.RuleDel(&ru)
-			if errors.Is(err, errENOENT) {
-				// Didn't exist to begin with.
-				continue
-			}
-			if err != nil && errAcc == nil {
-				errAcc = err
-			}
-		}
-	}
-	return errAcc
-}
-
-func (r *linuxRouter) delIPRulesWithIPCommand() error {
-	// Error codes: 'ip rule' returns error code 2 if the rule is a
-	// duplicate (add) or not found (del). It returns a different code
-	// for syntax errors. This is also true of busybox.
-	//
-	// Some older versions of iproute2 also return error code 254 for
-	// unknown rules during deletion.
-	rg := newRunGroup([]int{2, 254}, r.cmd)
-
-	for _, family := range r.addrFamilies() {
-		// When deleting rules, we want to be a bit specific (mention which
-		// table we were routing to) but not *too* specific (fwmarks, etc).
-		// That leaves us some flexibility to change these values in later
-		// versions without having ongoing hacks for every possible
-		// combination.
-		for _, rule := range ipRules() {
-			args := []string{
-				"ip", family.dashArg(),
-				"rule", "del",
-				"pref", strconv.Itoa(rule.Priority + r.ipPolicyPrefBase),
-			}
-			if rule.Table != 0 {
-				args = append(args, "table", mustRouteTable(rule.Table).ipCmdArg())
-			} else {
-				args = append(args, "type", "unreachable")
-			}
-			rg.Run(args...)
-		}
-	}
-
-	return rg.ErrAcc
+	return nil
 }
 
 // addSNATRule adds a netfilter rule to SNAT traffic destined for
@@ -1551,44 +1206,5 @@ func cleanUp(logf logger.Logf, interfaceName string) {
 	if interfaceName != "userspace-networking" && platformCanNetfilter() {
 		linuxfw.IPTablesCleanUp(logf)
 		linuxfw.NfTablesCleanUp(logf)
-	}
-}
-
-// Checks if the running openWRT system is using mwan3, based on the heuristic
-// of the config file being present as well as a policy rule with a specific
-// priority (2000 + 1 - first interface mwan3 manages) and non-zero mark.
-func checkOpenWRTUsingMWAN3() (bool, error) {
-	if getDistroFunc() != distro.OpenWrt {
-		return false, nil
-	}
-
-	if _, err := os.Stat("/etc/config/mwan3"); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	rules, err := netlink.RuleList(netlink.FAMILY_V4)
-	if err != nil {
-		return false, err
-	}
-	for _, r := range rules {
-		// We want to match on a rule like this:
-		//    2001:	from all fwmark 0x100/0x3f00 lookup 1
-		//
-		// We dont match on the mask because it can vary, or the
-		// table because I'm not sure if it can vary.
-		if r.Priority >= 2001 && r.Priority <= 2004 && r.Mark != 0 {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
-func nlAddrOfPrefix(p netip.Prefix) *netlink.Addr {
-	return &netlink.Addr{
-		IPNet: netipx.PrefixIPNet(p),
 	}
 }

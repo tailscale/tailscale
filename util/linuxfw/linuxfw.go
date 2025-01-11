@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tailscale/netlink"
 	"tailscale.com/types/logger"
 )
 
@@ -145,38 +144,7 @@ func CheckIPv6(logf logger.Logf) error {
 		if disabled {
 			return errors.New("disable_policy is set")
 		}
-	}
 
-	if err := CheckIPRuleSupportsV6(logf); err != nil {
-		return fmt.Errorf("kernel doesn't support IPv6 policy routing: %w", err)
 	}
-
 	return nil
-}
-
-func CheckIPRuleSupportsV6(logf logger.Logf) error {
-	// First try just a read-only operation to ideally avoid
-	// having to modify any state.
-	if rules, err := netlink.RuleList(netlink.FAMILY_V6); err != nil {
-		return fmt.Errorf("querying IPv6 policy routing rules: %w", err)
-	} else {
-		if len(rules) > 0 {
-			logf("[v1] kernel supports IPv6 policy routing (found %d rules)", len(rules))
-			return nil
-		}
-	}
-
-	// Try to actually create & delete one as a test.
-	rule := netlink.NewRule()
-	rule.Priority = 1234
-	rule.Mark = TailscaleBypassMarkNum
-	rule.Table = 52
-	rule.Family = netlink.FAMILY_V6
-	// First delete the rule unconditionally, and don't check for
-	// errors. This is just cleaning up anything that might be already
-	// there.
-	netlink.RuleDel(rule)
-	// And clean up on exit.
-	defer netlink.RuleDel(rule)
-	return netlink.RuleAdd(rule)
 }
