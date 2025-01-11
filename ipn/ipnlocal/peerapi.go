@@ -18,13 +18,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/kortschak/wol"
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/http/httpguts"
 	"tailscale.com/drive"
@@ -332,10 +330,6 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/dnsfwd":
 		h.handleServeDNSFwd(w, r)
 		return
-	case "/v0/wol":
-		metricWakeOnLANCalls.Add(1)
-		h.handleWakeOnLAN(w, r)
-		return
 	case "/v0/interfaces":
 		h.handleServeInterfaces(w, r)
 		return
@@ -519,61 +513,6 @@ func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	dh.ServeHTTP(w, r)
-}
-
-func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request) {
-	if !h.canWakeOnLAN() {
-		http.Error(w, "no WoL access", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "bad method", http.StatusMethodNotAllowed)
-		return
-	}
-	macStr := r.FormValue("mac")
-	if macStr == "" {
-		http.Error(w, "missing 'mac' param", http.StatusBadRequest)
-		return
-	}
-	mac, err := net.ParseMAC(macStr)
-	if err != nil {
-		http.Error(w, "bad 'mac' param", http.StatusBadRequest)
-		return
-	}
-	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
-	st := h.ps.b.sys.NetMon.Get().InterfaceState()
-	if st == nil {
-		http.Error(w, "failed to get interfaces state", http.StatusInternalServerError)
-		return
-	}
-	var res struct {
-		SentTo []string
-		Errors []string
-	}
-	for ifName, ips := range st.InterfaceIPs {
-		for _, ip := range ips {
-			if ip.Addr().IsLoopback() || ip.Addr().Is6() {
-				continue
-			}
-			local := &net.UDPAddr{
-				IP:   ip.Addr().AsSlice(),
-				Port: 0,
-			}
-			remote := &net.UDPAddr{
-				IP:   net.IPv4bcast,
-				Port: 0,
-			}
-			if err := wol.Wake(mac, password, local, remote); err != nil {
-				res.Errors = append(res.Errors, err.Error())
-			} else {
-				res.SentTo = append(res.SentTo, ifName)
-			}
-			break // one per interface is enough
-		}
-	}
-	sort.Strings(res.SentTo)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
 }
 
 func (h *peerAPIHandler) replyToDNSQueries() bool {
