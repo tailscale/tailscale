@@ -725,12 +725,6 @@ func (c *Auto) TestOnlyTimeNow() time.Time {
 	return c.clock.Now()
 }
 
-// SetDNS sends the SetDNSRequest request to the control plane server,
-// requesting a DNS record be created or updated.
-func (c *Auto) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
-	return c.direct.SetDNS(ctx, req)
-}
-
 func (c *Auto) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	return c.direct.DoNoiseRequest(req)
 }

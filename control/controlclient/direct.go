@@ -1496,18 +1496,6 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	return nil
 }
 
-// SetDNS sends the SetDNSRequest request to the control plane server,
-// requesting a DNS record be created or updated.
-func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err error) {
-	metricSetDNS.Add(1)
-	defer func() {
-		if err != nil {
-			metricSetDNSError.Add(1)
-		}
-	}()
-	return c.setDNSNoise(ctx, req)
-}
-
 func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	if c.panicOnUse {
 		panic("tainted client")
