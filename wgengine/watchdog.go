@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
-	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -88,7 +87,6 @@ func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
 		return err
 	case <-t.C:
 		buf := new(strings.Builder)
-		pprof.Lookup("goroutine").WriteTo(buf, 1)
 		e.logf("wgengine watchdog stacks:\n%s", buf.String())
 
 		// Collect the list of in-flight operations for debugging.

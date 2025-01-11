@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -106,7 +105,6 @@ var args struct {
 
 	cleanUp        bool
 	confFile       string // empty, file path, or "vm:user-data"
-	debug          string
 	port           uint16
 	statepath      string
 	statedir       string
@@ -131,7 +129,6 @@ var (
 var subCommands = map[string]*func([]string) error{
 	"install-system-daemon":   &installSystemDaemon,
 	"uninstall-system-daemon": &uninstallSystemDaemon,
-	"debug":                   &debugModeFunc,
 	"be-child":                &beChildFunc,
 }
 
@@ -146,7 +143,6 @@ func main() {
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", defaultVerbosity(), "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanUp, "cleanup", false, "clean up system state and exit")
-	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
 	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
 	flag.StringVar(&args.httpProxyAddr, "outbound-http-proxy-listen", "", `optional [ip]:port to run an outbound HTTP proxy (e.g. "localhost:8080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
@@ -314,8 +310,6 @@ func ipnServerOpts() (o serverOptions) {
 	return o
 }
 
-var debugMux *http.ServeMux
-
 func run() (err error) {
 	var logf logger.Logf = log.Printf
 
@@ -378,10 +372,6 @@ func run() (err error) {
 		log.Printf("error in synology migration: %v", err)
 	}
 
-	if args.debug != "" {
-		debugMux = newDebugMux()
-	}
-
 	if app := envknob.App(); app != "" {
 		hostinfo.SetApp(app)
 	}
@@ -433,9 +423,6 @@ func startIPNServer(ctx context.Context, logf logger.Logf, sys *tsd.System) erro
 	}()
 
 	srv := ipnserver.New(logf, sys.NetMon.Get())
-	if debugMux != nil {
-		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
-	}
 	var lbErr syncs.AtomicValue[error]
 
 	go func() {
@@ -492,12 +479,6 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, sys *tsd.System) (_ 
 	onlyNetstack, err := createEngine(logf, sys)
 	if err != nil {
 		return nil, fmt.Errorf("createEngine: %w", err)
-	}
-	if debugMux != nil {
-		if ms, ok := sys.MagicSock.GetOK(); ok {
-			debugMux.HandleFunc("/debug/magicsock", ms.ServeHTTPDebug)
-		}
-		go runDebugServer(debugMux, args.debug)
 	}
 
 	startNetstack, err := newNetstack(logf, sys, onlyNetstack, handleSubnetsInNetstack())
@@ -640,17 +621,6 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 	sys.NetstackRouter.Set(netstackSubnetRouter)
 
 	return onlyNetstack, nil
-}
-
-func newDebugMux() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/debug/metrics", servePrometheusMetrics)
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	return mux
 }
 
 func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {

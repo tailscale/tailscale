@@ -7,7 +7,6 @@ package localapi
 import (
 	"bytes"
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,44 +58,34 @@ var handler = map[string]localAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
-	"alpha-set-device-attrs":      (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
-	"bugreport":                   (*Handler).serveBugReport,
-	"check-ip-forwarding":         (*Handler).serveCheckIPForwarding,
-	"check-prefs":                 (*Handler).serveCheckPrefs,
-	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
-	"debug":                       (*Handler).serveDebug,
-	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
-	"debug-dial-types":            (*Handler).serveDebugDialTypes,
-	"debug-log":                   (*Handler).serveDebugLog,
-	"debug-packet-filter-matches": (*Handler).serveDebugPacketFilterMatches,
-	"debug-packet-filter-rules":   (*Handler).serveDebugPacketFilterRules,
-	"derpmap":                     (*Handler).serveDERPMap,
-	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
-	"dial":                        (*Handler).serveDial,
-	"disconnect-control":          (*Handler).disconnectControl,
-	"goroutines":                  (*Handler).serveGoroutines,
-	"handle-push-message":         (*Handler).serveHandlePushMessage,
-	"id-token":                    (*Handler).serveIDToken,
-	"login-interactive":           (*Handler).serveLoginInteractive,
-	"logout":                      (*Handler).serveLogout,
-	"metrics":                     (*Handler).serveMetrics,
-	"ping":                        (*Handler).servePing,
-	"pprof":                       (*Handler).servePprof,
-	"prefs":                       (*Handler).servePrefs,
-	"query-feature":               (*Handler).serveQueryFeature,
-	"reload-config":               (*Handler).reloadConfig,
-	"reset-auth":                  (*Handler).serveResetAuth,
-	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
-	"set-gui-visible":             (*Handler).serveSetGUIVisible,
-	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
-	"set-use-exit-node-enabled":   (*Handler).serveSetUseExitNodeEnabled,
-	"start":                       (*Handler).serveStart,
-	"status":                      (*Handler).serveStatus,
-	"suggest-exit-node":           (*Handler).serveSuggestExitNode,
-	"upload-client-metrics":       (*Handler).serveUploadClientMetrics,
-	"usermetrics":                 (*Handler).serveUserMetrics,
-	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
-	"whois":                       (*Handler).serveWhoIs,
+	"alpha-set-device-attrs":    (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
+	"bugreport":                 (*Handler).serveBugReport,
+	"check-ip-forwarding":       (*Handler).serveCheckIPForwarding,
+	"check-prefs":               (*Handler).serveCheckPrefs,
+	"dial":                      (*Handler).serveDial,
+	"disconnect-control":        (*Handler).disconnectControl,
+	"goroutines":                (*Handler).serveGoroutines,
+	"handle-push-message":       (*Handler).serveHandlePushMessage,
+	"id-token":                  (*Handler).serveIDToken,
+	"login-interactive":         (*Handler).serveLoginInteractive,
+	"logout":                    (*Handler).serveLogout,
+	"metrics":                   (*Handler).serveMetrics,
+	"ping":                      (*Handler).servePing,
+	"prefs":                     (*Handler).servePrefs,
+	"query-feature":             (*Handler).serveQueryFeature,
+	"reload-config":             (*Handler).reloadConfig,
+	"reset-auth":                (*Handler).serveResetAuth,
+	"set-expiry-sooner":         (*Handler).serveSetExpirySooner,
+	"set-gui-visible":           (*Handler).serveSetGUIVisible,
+	"set-push-device-token":     (*Handler).serveSetPushDeviceToken,
+	"set-use-exit-node-enabled": (*Handler).serveSetUseExitNodeEnabled,
+	"start":                     (*Handler).serveStart,
+	"status":                    (*Handler).serveStatus,
+	"suggest-exit-node":         (*Handler).serveSuggestExitNode,
+	"upload-client-metrics":     (*Handler).serveUploadClientMetrics,
+	"usermetrics":               (*Handler).serveUserMetrics,
+	"watch-ipn-bus":             (*Handler).serveWatchIPNBus,
+	"whois":                     (*Handler).serveWhoIs,
 }
 
 var (
@@ -510,236 +499,6 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serveUserMetrics(w http.ResponseWriter, r *http.Request) {
 	metricUserMetricsCalls.Add(1)
 	h.b.UserMetricsRegistry().Handler(w, r)
-}
-
-func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "debug access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
-		return
-	}
-	// The action is normally in a POST form parameter, but
-	// some actions (like "notify") want a full JSON body, so
-	// permit some to have their action in a header.
-	var action string
-	switch v := r.Header.Get("Debug-Action"); v {
-	case "notify":
-		action = v
-	default:
-		action = r.FormValue("action")
-	}
-	var err error
-	switch action {
-	case "derp-set-homeless":
-		h.b.MagicConn().SetHomeless(true)
-	case "derp-unset-homeless":
-		h.b.MagicConn().SetHomeless(false)
-	case "rebind":
-		err = h.b.DebugRebind()
-	case "restun":
-		err = h.b.DebugReSTUN()
-	case "notify":
-		var n ipn.Notify
-		err = json.NewDecoder(r.Body).Decode(&n)
-		if err != nil {
-			break
-		}
-		h.b.DebugNotify(n)
-	case "notify-last-netmap":
-		h.b.DebugNotifyLastNetMap()
-	case "break-tcp-conns":
-		err = h.b.DebugBreakTCPConns()
-	case "break-derp-conns":
-		err = h.b.DebugBreakDERPConns()
-	case "force-netmap-update":
-		h.b.DebugForceNetmapUpdate()
-	case "control-knobs":
-		k := h.b.ControlKnobs()
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(k.AsDebugJSON())
-		if err == nil {
-			return
-		}
-	case "pick-new-derp":
-		err = h.b.DebugPickNewDERP()
-	case "force-prefer-derp":
-		var n int
-		err = json.NewDecoder(r.Body).Decode(&n)
-		if err != nil {
-			break
-		}
-		h.b.DebugForcePreferDERP(n)
-	case "":
-		err = fmt.Errorf("missing parameter 'action'")
-	default:
-		err = fmt.Errorf("unknown action %q", action)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	io.WriteString(w, "done\n")
-}
-
-func (h *Handler) serveDevSetStateStore(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "debug access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
-		return
-	}
-	if err := h.b.SetDevStateStore(r.FormValue("key"), r.FormValue("value")); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	io.WriteString(w, "done\n")
-}
-
-func (h *Handler) serveDebugPacketFilterRules(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "debug access denied", http.StatusForbidden)
-		return
-	}
-	nm := h.b.NetMap()
-	if nm == nil {
-		http.Error(w, "no netmap", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "\t")
-	enc.Encode(nm.PacketFilterRules)
-}
-
-func (h *Handler) serveDebugPacketFilterMatches(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "debug access denied", http.StatusForbidden)
-		return
-	}
-	nm := h.b.NetMap()
-	if nm == nil {
-		http.Error(w, "no netmap", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "\t")
-	enc.Encode(nm.PacketFilter)
-}
-
-func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "debug access denied", http.StatusForbidden)
-		return
-	}
-	component := r.FormValue("component")
-	secs, _ := strconv.Atoi(r.FormValue("secs"))
-	err := h.b.SetComponentDebugLogging(component, h.clock.Now().Add(time.Duration(secs)*time.Second))
-	var res struct {
-		Error string
-	}
-	if err != nil {
-		res.Error = err.Error()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
-func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "debug-dial-types access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != httpm.POST {
-		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	ip := r.FormValue("ip")
-	port := r.FormValue("port")
-	network := r.FormValue("network")
-
-	addr := ip + ":" + port
-	if _, err := netip.ParseAddrPort(addr); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "invalid address %q: %v", addr, err)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	var bareDialer net.Dialer
-
-	dialer := h.b.Dialer()
-
-	var peerDialer net.Dialer
-	peerDialer.Control = dialer.PeerDialControlFunc()
-
-	// Kick off a dial with each available dialer in parallel.
-	dialers := []struct {
-		name string
-		dial func(context.Context, string, string) (net.Conn, error)
-	}{
-		{"SystemDial", dialer.SystemDial},
-		{"UserDial", dialer.UserDial},
-		{"PeerDial", peerDialer.DialContext},
-		{"BareDial", bareDialer.DialContext},
-	}
-	type result struct {
-		name string
-		conn net.Conn
-		err  error
-	}
-	results := make(chan result, len(dialers))
-
-	var wg sync.WaitGroup
-	for _, dialer := range dialers {
-		dialer := dialer // loop capture
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			conn, err := dialer.dial(ctx, network, addr)
-			results <- result{dialer.name, conn, err}
-		}()
-	}
-
-	wg.Wait()
-	for range len(dialers) {
-		res := <-results
-		fmt.Fprintf(w, "[%s] connected=%v err=%v\n", res.name, res.conn != nil, res.err)
-		if res.conn != nil {
-			res.conn.Close()
-		}
-	}
-}
-
-// servePprofFunc is the implementation of Handler.servePprof, after auth,
-// for platforms where we want to link it in.
-var servePprofFunc func(http.ResponseWriter, *http.Request)
-
-func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
-	// Require write access out of paranoia that the profile dump
-	// might contain something sensitive.
-	if !h.PermitWrite {
-		http.Error(w, "profile access denied", http.StatusForbidden)
-		return
-	}
-	if servePprofFunc == nil {
-		http.Error(w, "not implemented on this platform", http.StatusServiceUnavailable)
-		return
-	}
-	servePprofFunc(w, r)
 }
 
 // disconnectControl is the handler for local API /disconnect-control endpoint that shuts down control client, so that
