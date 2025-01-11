@@ -33,7 +33,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
-	"tailscale.com/taildrop"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httpm"
@@ -58,8 +57,6 @@ type peerDNSQueryHandler interface {
 type peerAPIServer struct {
 	b        *LocalBackend
 	resolver peerDNSQueryHandler
-
-	taildrop *taildrop.Manager
 }
 
 func (s *peerAPIServer) listen(ip netip.Addr, ifState *netmon.State) (ln net.Listener, err error) {
