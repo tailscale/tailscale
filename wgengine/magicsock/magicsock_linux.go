@@ -4,17 +4,14 @@
 package magicsock
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/mdlayher/socket"
 	"golang.org/x/net/bpf"
@@ -24,7 +21,6 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
-	"tailscale.com/net/netns"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -163,117 +159,6 @@ var (
 		0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
 	}
 )
-
-// listenRawDisco starts listening for disco packets on the given
-// address family, which must be "ip4" or "ip6", using a raw socket
-// and BPF filter.
-// https://github.com/tailscale/tailscale/issues/3824
-func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
-	if !envknobEnableRawDisco() {
-		// Return an 'errors.ErrUnsupported' to prevent the callee from
-		// logging; when we switch this to an opt-out (vs. an opt-in),
-		// drop the ErrUnsupported so that the callee logs that it was
-		// disabled.
-		return nil, fmt.Errorf("raw disco not enabled: %w", errors.ErrUnsupported)
-	}
-
-	// https://github.com/tailscale/tailscale/issues/5607
-	if !netns.UseSocketMark() {
-		return nil, errors.New("raw disco listening disabled, SO_MARK unavailable")
-	}
-
-	var (
-		udpnet   string
-		addr     string
-		proto    int
-		testAddr netip.AddrPort
-		prog     []bpf.Instruction
-	)
-	switch family {
-	case "ip4":
-		udpnet = "udp4"
-		addr = "0.0.0.0"
-		proto = ethernetProtoIPv4()
-		testAddr = netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), 1)
-		prog = magicsockFilterV4
-	case "ip6":
-		udpnet = "udp6"
-		addr = "::"
-		proto = ethernetProtoIPv6()
-		testAddr = netip.AddrPortFrom(netip.IPv6Loopback(), 1)
-		prog = magicsockFilterV6
-	default:
-		return nil, fmt.Errorf("unsupported address family %q", family)
-	}
-
-	asm, err := bpf.Assemble(prog)
-	if err != nil {
-		return nil, fmt.Errorf("assembling filter: %w", err)
-	}
-
-	sock, err := socket.Socket(
-		unix.AF_PACKET,
-		unix.SOCK_DGRAM,
-		proto,
-		"afpacket",
-		nil, // no config
-	)
-	if err != nil {
-		return nil, fmt.Errorf("creating AF_PACKET socket: %w", err)
-	}
-
-	if err := sock.SetBPF(asm); err != nil {
-		sock.Close()
-		return nil, fmt.Errorf("installing BPF filter: %w", err)
-	}
-
-	// If all the above succeeds, we should be ready to receive. Just
-	// out of paranoia, check that we do receive a well-formed disco
-	// packet.
-	tc, err := net.ListenPacket(udpnet, net.JoinHostPort(addr, "0"))
-	if err != nil {
-		sock.Close()
-		return nil, fmt.Errorf("creating disco test socket: %w", err)
-	}
-	defer tc.Close()
-	if _, err := tc.(*net.UDPConn).WriteToUDPAddrPort(testDiscoPacket, testAddr); err != nil {
-		sock.Close()
-		return nil, fmt.Errorf("writing disco test packet: %w", err)
-	}
-
-	const selfTestTimeout = 100 * time.Millisecond
-	if err := sock.SetReadDeadline(time.Now().Add(selfTestTimeout)); err != nil {
-		sock.Close()
-		return nil, fmt.Errorf("setting socket timeout: %w", err)
-	}
-
-	var (
-		ctx = context.Background()
-		buf [1500]byte
-	)
-	for {
-		n, _, err := sock.Recvfrom(ctx, buf[:], 0)
-		if err != nil {
-			sock.Close()
-			return nil, fmt.Errorf("reading during raw disco self-test: %w", err)
-		}
-
-		_ /* src */, _ /* dst */, payload := parseUDPPacket(buf[:n], family == "ip6")
-		if payload == nil {
-			continue
-		}
-		if !bytes.Equal(payload, testDiscoPacket) {
-			c.discoLogf("listenRawDisco: self-test: received mismatched UDP packet of %d bytes", len(payload))
-			continue
-		}
-		c.logf("[v1] listenRawDisco: self-test passed for %s", family)
-		break
-	}
-	sock.SetReadDeadline(time.Time{})
-
-	go c.receiveDisco(sock, family == "ip6")
-	return sock, nil
-}
 
 // parseUDPPacket is a basic parser for UDP packets that returns the source and
 // destination addresses, and the payload. The returned payload is a sub-slice

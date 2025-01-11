@@ -533,19 +533,6 @@ func NewConn(opts Options) (*Conn, error) {
 
 	c.metrics = registerMetrics(opts.Metrics)
 
-	if d4, err := c.listenRawDisco("ip4"); err == nil {
-		c.logf("[v1] using BPF disco receiver for IPv4")
-		c.closeDisco4 = d4
-	} else if !errors.Is(err, errors.ErrUnsupported) {
-		c.logf("[v1] couldn't create raw v4 disco listener, using regular listener instead: %v", err)
-	}
-	if d6, err := c.listenRawDisco("ip6"); err == nil {
-		c.logf("[v1] using BPF disco receiver for IPv6")
-		c.closeDisco6 = d6
-	} else if !errors.Is(err, errors.ErrUnsupported) {
-		c.logf("[v1] couldn't create raw v6 disco listener, using regular listener instead: %v", err)
-	}
-
 	c.logf("magicsock: disco key = %v", c.discoShort)
 	return c, nil
 }

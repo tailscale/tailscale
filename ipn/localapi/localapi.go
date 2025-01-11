@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -22,8 +21,6 @@ import (
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/envknob"
-	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
@@ -36,8 +33,6 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httpm"
-	"tailscale.com/util/mak"
-	"tailscale.com/util/rands"
 	"tailscale.com/version"
 )
 
@@ -52,25 +47,20 @@ var handler = map[string]localAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
-	"alpha-set-device-attrs": (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
-	"bugreport":              (*Handler).serveBugReport,
-	"check-ip-forwarding":    (*Handler).serveCheckIPForwarding,
-	"check-prefs":            (*Handler).serveCheckPrefs,
-	"disconnect-control":     (*Handler).disconnectControl,
-	"goroutines":             (*Handler).serveGoroutines,
-	"id-token":               (*Handler).serveIDToken,
-	"login-interactive":      (*Handler).serveLoginInteractive,
-	"logout":                 (*Handler).serveLogout,
-	"metrics":                (*Handler).serveMetrics,
-	"prefs":                  (*Handler).servePrefs,
-	"query-feature":          (*Handler).serveQueryFeature,
-	"reload-config":          (*Handler).reloadConfig,
-	"reset-auth":             (*Handler).serveResetAuth,
-	"start":                  (*Handler).serveStart,
-	"status":                 (*Handler).serveStatus,
-	"suggest-exit-node":      (*Handler).serveSuggestExitNode,
-	"watch-ipn-bus":          (*Handler).serveWatchIPNBus,
-	"whois":                  (*Handler).serveWhoIs,
+	"check-prefs":        (*Handler).serveCheckPrefs,
+	"disconnect-control": (*Handler).disconnectControl,
+	"goroutines":         (*Handler).serveGoroutines,
+	"login-interactive":  (*Handler).serveLoginInteractive,
+	"logout":             (*Handler).serveLogout,
+	"metrics":            (*Handler).serveMetrics,
+	"prefs":              (*Handler).servePrefs,
+	"query-feature":      (*Handler).serveQueryFeature,
+	"reload-config":      (*Handler).reloadConfig,
+	"reset-auth":         (*Handler).serveResetAuth,
+	"start":              (*Handler).serveStart,
+	"status":             (*Handler).serveStatus,
+	"watch-ipn-bus":      (*Handler).serveWatchIPNBus,
+	"whois":              (*Handler).serveWhoIs,
 }
 
 var (
@@ -209,181 +199,8 @@ func (*Handler) serveLocalAPIRoot(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "tailscaled\n")
 }
 
-// serveIDToken handles requests to get an OIDC ID token.
-func (h *Handler) serveIDToken(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "id-token access denied", http.StatusForbidden)
-		return
-	}
-	nm := h.b.NetMap()
-	if nm == nil {
-		http.Error(w, "no netmap", http.StatusServiceUnavailable)
-		return
-	}
-	aud := strings.TrimSpace(r.FormValue("aud"))
-	if len(aud) == 0 {
-		http.Error(w, "no audience requested", http.StatusBadRequest)
-		return
-	}
-	req := &tailcfg.TokenRequest{
-		CapVersion: tailcfg.CurrentCapabilityVersion,
-		Audience:   aud,
-		NodeKey:    nm.NodeKey,
-	}
-	b, err := json.Marshal(req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	httpReq, err := http.NewRequest("POST", "https://unused/machine/id-token", bytes.NewReader(b))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	resp, err := h.b.DoNoiseRequest(httpReq)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-}
-
-func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "bugreport access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	logMarker := func() string {
-		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, h.clock.Now().UTC().Format("20060102150405Z"), rands.HexString(16))
-	}
-	if envknob.NoLogsNoSupport() {
-		logMarker = func() string { return "BUG-NO-LOGS-NO-SUPPORT-this-node-has-had-its-logging-disabled" }
-	}
-
-	startMarker := logMarker()
-	h.logf("user bugreport: %s", startMarker)
-	if note := r.URL.Query().Get("note"); len(note) > 0 {
-		h.logf("user bugreport note: %s", note)
-	}
-	hi, _ := json.Marshal(hostinfo.New())
-	h.logf("user bugreport hostinfo: %s", hi)
-	if err := h.b.HealthTracker().OverallError(); err != nil {
-		h.logf("user bugreport health: %s", err.Error())
-	} else {
-		h.logf("user bugreport health: ok")
-	}
-
-	// Information about the current node from the netmap
-	if nm := h.b.NetMap(); nm != nil {
-		if self := nm.SelfNode; self.Valid() {
-			h.logf("user bugreport node info: nodeid=%q stableid=%q expiry=%q", self.ID(), self.StableID(), self.KeyExpiry().Format(time.RFC3339))
-		}
-		h.logf("user bugreport public keys: machine=%q node=%q", nm.MachineKey, nm.NodeKey)
-	} else {
-		h.logf("user bugreport netmap: no active netmap")
-	}
-
-	// Print all envknobs; we otherwise only print these on startup, and
-	// printing them here ensures we don't have to go spelunking through
-	// logs for them.
-	envknob.LogCurrent(logger.WithPrefix(h.logf, "user bugreport: "))
-
-	if defBool(r.URL.Query().Get("diagnose"), false) {
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprintln(w, startMarker)
-
-	// Nothing else to do if we're not in record mode; we wrote the marker
-	// above, so we can just finish our response now.
-	if !defBool(r.URL.Query().Get("record"), false) {
-		return
-	}
-
-	until := h.clock.Now().Add(12 * time.Hour)
-
-	var changed map[string]bool
-	for _, component := range []string{"magicsock"} {
-		if h.b.GetComponentDebugLogging(component).IsZero() {
-			if err := h.b.SetComponentDebugLogging(component, until); err != nil {
-				h.logf("bugreport: error setting component %q logging: %v", component, err)
-				continue
-			}
-
-			mak.Set(&changed, component, true)
-		}
-	}
-	defer func() {
-		for component := range changed {
-			h.b.SetComponentDebugLogging(component, time.Time{})
-		}
-	}()
-
-	// NOTE(andrew): if we have anything else we want to do while recording
-	// a bugreport, we can add it here.
-
-	// Read from the client; this will also return when the client closes
-	// the connection.
-	var buf [1]byte
-	_, err := r.Body.Read(buf[:])
-
-	switch {
-	case err == nil:
-		// good
-	case errors.Is(err, io.EOF):
-		// good
-	case errors.Is(err, io.ErrUnexpectedEOF):
-		// this happens when Ctrl-C'ing the tailscale client; don't
-		// bother logging an error
-	default:
-		// Log but continue anyway.
-		h.logf("user bugreport: error reading body: %v", err)
-	}
-
-	// Generate another log marker and return it to the client.
-	endMarker := logMarker()
-	h.logf("user bugreport end: %s", endMarker)
-	fmt.Fprintln(w, endMarker)
-}
-
 func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 	h.serveWhoIsWithBackend(w, r, h.b)
-}
-
-// serveSetDeviceAttrs is (as of 2024-12-30) an experimental LocalAPI handler to
-// set device attributes via the control plane.
-//
-// See tailscale/corp#24690.
-func (h *Handler) serveSetDeviceAttrs(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if !h.PermitWrite {
-		http.Error(w, "set-device-attrs access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "PATCH" {
-		http.Error(w, "only PATCH allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := h.b.SetDeviceAttrs(ctx, req); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	io.WriteString(w, "{}\n")
 }
 
 // localBackendWhoIsMethods is the subset of ipn.LocalBackend as needed
@@ -558,23 +375,6 @@ func authorizeServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeC
 		panic("unreachable")
 	}
 
-}
-
-func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "IP forwarding check access denied", http.StatusForbidden)
-		return
-	}
-	var warning string
-	if err := h.b.CheckIPForwarding(); err != nil {
-		warning = err.Error()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
-		Warning string
-	}{
-		Warning: warning,
-	})
 }
 
 func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
@@ -997,18 +797,3 @@ var (
 	metricDebugMetricsCalls = clientmetric.NewCounter("localapi_debugmetric_requests")
 	metricUserMetricsCalls  = clientmetric.NewCounter("localapi_usermetric_requests")
 )
-
-// serveSuggestExitNode serves a POST endpoint for returning a suggested exit node.
-func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	res, err := h.b.SuggestExitNode()
-	if err != nil {
-		writeErrorJSON(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
