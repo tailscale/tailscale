@@ -5,14 +5,12 @@ package magicsock
 
 import (
 	"bufio"
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
 	"math"
 	"math/rand/v2"
-	"net"
 	"net/netip"
 	"reflect"
 	"runtime"
@@ -926,7 +924,7 @@ func (de *endpoint) send(buffs [][]byte) error {
 
 	if de.isWireguardOnly {
 		if startWGPing {
-			de.sendWireGuardOnlyPingsLocked(now)
+			// lanscaping de.sendWireGuardOnlyPingsLocked(now)
 		}
 	} else if !udpAddr.IsValid() || now.After(de.trustBestAddrUntil) {
 		de.sendDiscoPingsLocked(now, true)
@@ -1222,75 +1220,6 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		// would be a good time for them to connect.
 		go de.c.enqueueCallMeMaybe(derpAddr, de)
 	}
-}
-
-// sendWireGuardOnlyPingsLocked evaluates all available addresses for
-// a WireGuard only endpoint and initates an ICMP ping for useable
-// addresses.
-func (de *endpoint) sendWireGuardOnlyPingsLocked(now mono.Time) {
-	if runtime.GOOS == "js" {
-		return
-	}
-
-	// Normally we only send pings at a low rate as the decision to start
-	// sending a ping sets bestAddrAtUntil with a reasonable time to keep trying
-	// that address, however, if that code changed we may want to be sure that
-	// we don't ever send excessive pings to avoid impact to the client/user.
-	if !now.After(de.lastFullPing.Add(10 * time.Second)) {
-		return
-	}
-	de.lastFullPing = now
-
-	for ipp := range de.endpointState {
-		if ipp.Addr().Is4() && de.c.noV4.Load() {
-			continue
-		}
-		if ipp.Addr().Is6() && de.c.noV6.Load() {
-			continue
-		}
-
-		go de.sendWireGuardOnlyPing(ipp, now)
-	}
-}
-
-// sendWireGuardOnlyPing sends a ICMP ping to a WireGuard only address to
-// discover the latency.
-func (de *endpoint) sendWireGuardOnlyPing(ipp netip.AddrPort, now mono.Time) {
-	ctx, cancel := context.WithTimeout(de.c.connCtx, 5*time.Second)
-	defer cancel()
-
-	de.setLastPing(ipp, now)
-
-	addr := &net.IPAddr{
-		IP:   net.IP(ipp.Addr().AsSlice()),
-		Zone: ipp.Addr().Zone(),
-	}
-
-	p := de.c.getPinger()
-	if p == nil {
-		de.c.logf("[v2] magicsock: sendWireGuardOnlyPingLocked: pinger is nil")
-		return
-	}
-
-	latency, err := p.Send(ctx, addr, nil)
-	if err != nil {
-		de.c.logf("[v2] magicsock: sendWireGuardOnlyPingLocked: %s", err)
-		return
-	}
-
-	de.mu.Lock()
-	defer de.mu.Unlock()
-
-	state, ok := de.endpointState[ipp]
-	if !ok {
-		return
-	}
-	state.addPongReplyLocked(pongReply{
-		latency: latency,
-		pongAt:  now,
-		from:    ipp,
-		pongSrc: netip.AddrPort{}, // We don't know this.
-	})
 }
 
 // setLastPing sets lastPing on the endpointState to now.

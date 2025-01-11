@@ -38,7 +38,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/ping"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/tstun"
@@ -47,7 +46,6 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
-	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
@@ -342,9 +340,6 @@ type Conn struct {
 	// peerLastDerp tracks which DERP node we last used to speak with a
 	// peer. It's only used to quiet logging, so we only log on change.
 	peerLastDerp map[key.NodePublic]int
-
-	// wgPinger is the WireGuard only pinger used for latency measurements.
-	wgPinger lazy.SyncValue[*ping.Pinger]
 
 	// onPortUpdate is called with the new port when magicsock rebinds to
 	// a new port.
@@ -2412,10 +2407,6 @@ func (c *Conn) Close() error {
 		c.muCond.Wait()
 	}
 
-	if pinger := c.getPinger(); pinger != nil {
-		pinger.Close()
-	}
-
 	deregisterMetrics(c.metrics)
 
 	return nil
@@ -2858,14 +2849,6 @@ var (
 // indexSentinelDeleted is the temporary value that endpointState.index takes while
 // a endpoint's endpoints are being updated from a new network map.
 const indexSentinelDeleted = -1
-
-// getPinger lazily instantiates a pinger and returns it, if it was
-// already instantiated it returns the existing one.
-func (c *Conn) getPinger() *ping.Pinger {
-	return c.wgPinger.Get(func() *ping.Pinger {
-		return ping.New(c.connCtx, c.dlogf, netns.Listener(c.logf, c.netMon))
-	})
-}
 
 // DebugPickNewDERP picks a new DERP random home temporarily (even if just for
 // seconds) and reports it to control. It exists to test DERP home changes and

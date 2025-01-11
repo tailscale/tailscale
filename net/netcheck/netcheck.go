@@ -8,10 +8,8 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"maps"
 	"net"
@@ -20,15 +18,12 @@ import (
 	"runtime"
 	"sort"
 	"sync"
-	"syscall"
 	"time"
 
-	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
-	"tailscale.com/net/ping"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
@@ -924,65 +919,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 
 	rs.stopTimers()
 
-	// Try HTTPS and ICMP latency check if all STUN probes failed due to
-	// UDP presumably being blocked.
-	// TODO: this should be moved into the probePlan, using probeProto probeHTTPS.
-	if !rs.anyUDP() && ctx.Err() == nil {
-		var wg sync.WaitGroup
-		var need []*tailcfg.DERPRegion
-		for rid, reg := range dm.Regions {
-			if !rs.haveRegionLatency(rid) && regionHasDERPNode(reg) {
-				need = append(need, reg)
-			}
-		}
-		if len(need) > 0 {
-			if opts == nil || !opts.OnlyTCP443 {
-				// Kick off ICMP in parallel to HTTPS checks; we don't
-				// reuse the same WaitGroup for those probes because we
-				// need to close the underlying Pinger after a timeout
-				// or when all ICMP probes are done, regardless of
-				// whether the HTTPS probes have finished.
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					if err := c.measureAllICMPLatency(ctx, rs, need); err != nil {
-						c.logf("[v1] measureAllICMPLatency: %v", err)
-					}
-				}()
-			}
-			wg.Add(len(need))
-			c.logf("netcheck: UDP is blocked, trying HTTPS")
-		}
-		for _, reg := range need {
-			go func(reg *tailcfg.DERPRegion) {
-				defer wg.Done()
-				if d, ip, err := c.measureHTTPSLatency(ctx, reg); err != nil {
-					c.logf("[v1] netcheck: measuring HTTPS latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)
-				} else {
-					rs.mu.Lock()
-					if l, ok := rs.report.RegionLatency[reg.RegionID]; !ok {
-						mak.Set(&rs.report.RegionLatency, reg.RegionID, d)
-					} else if l >= d {
-						rs.report.RegionLatency[reg.RegionID] = d
-					}
-					// We set these IPv4 and IPv6 but they're not really used
-					// and we don't necessarily set them both. If UDP is blocked
-					// and both IPv4 and IPv6 are available over TCP, it's basically
-					// random which fields end up getting set here.
-					// Since they're not needed, that's fine for now.
-					if ip.Is4() {
-						rs.report.IPv4 = true
-					}
-					if ip.Is6() {
-						rs.report.IPv6 = true
-					}
-					rs.mu.Unlock()
-				}
-			}(reg)
-		}
-		wg.Wait()
-	}
-
 	// Wait for captive portal check before finishing the report.
 	<-captivePortalDone
 
@@ -1055,165 +991,6 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 	}
 	wg.Wait()
 	return nil
-}
-
-// measureHTTPSLatency measures HTTP request latency to the DERP region, but
-// only returns success if an HTTPS request to the region succeeds.
-func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netip.Addr, error) {
-	metricHTTPSend.Add(1)
-	ctx, cancel := context.WithTimeout(ctx, httpsProbeTimeout)
-	defer cancel()
-
-	var ip netip.Addr
-
-	dc := derphttp.NewNetcheckClient(c.logf, c.NetMon)
-	defer dc.Close()
-
-	// DialRegionTLS may dial multiple times if a node is not available, as such
-	// it does not have stable timing to measure.
-	tlsConn, tcpConn, node, err := dc.DialRegionTLS(ctx, reg)
-	if err != nil {
-		return 0, ip, err
-	}
-	defer tcpConn.Close()
-
-	if ta, ok := tlsConn.RemoteAddr().(*net.TCPAddr); ok {
-		ip, _ = netip.AddrFromSlice(ta.IP)
-		ip = ip.Unmap()
-	}
-	if ip == (netip.Addr{}) {
-		return 0, ip, fmt.Errorf("no unexpected RemoteAddr %#v", tlsConn.RemoteAddr())
-	}
-
-	connc := make(chan *tls.Conn, 1)
-	connc <- tlsConn
-
-	// make an HTTP request to measure, as this enables us to account for MITM
-	// overhead in e.g. corp environments that have HTTP MITM in front of DERP.
-	tr := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return nil, errors.New("unexpected DialContext dial")
-		},
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			select {
-			case nc := <-connc:
-				return nc, nil
-			default:
-				return nil, errors.New("only one conn expected")
-			}
-		},
-	}
-	hc := &http.Client{Transport: tr}
-
-	// This is the request that will be measured, the request and response
-	// should be small enough to fit into a single packet each way unless the
-	// connection has already become unstable.
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+node.HostName+"/derp/latency-check", nil)
-	if err != nil {
-		return 0, ip, err
-	}
-
-	startTime := c.timeNow()
-	resp, err := hc.Do(req)
-	reqDur := c.timeNow().Sub(startTime)
-	if err != nil {
-		return 0, ip, err
-	}
-	defer resp.Body.Close()
-
-	// DERPs should give us a nominal status code, so anything else is probably
-	// an access denied by a MITM proxy (or at the very least a signal not to
-	// trust this latency check).
-	if resp.StatusCode > 299 {
-		return 0, ip, fmt.Errorf("unexpected status code: %d (%s)", resp.StatusCode, resp.Status)
-	}
-
-	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
-	if err != nil {
-		return 0, ip, err
-	}
-
-	// return the connection duration, not the request duration, as this is the
-	// best approximation of the RTT latency to the node. Note that the
-	// connection setup performs happy-eyeballs and TLS so there are additional
-	// overheads.
-	return reqDur, ip, nil
-}
-
-func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, need []*tailcfg.DERPRegion) error {
-	if len(need) == 0 {
-		return nil
-	}
-	ctx, done := context.WithTimeout(ctx, icmpProbeTimeout)
-	defer done()
-
-	p := ping.New(ctx, c.logf, netns.Listener(c.logf, c.NetMon))
-	defer p.Close()
-
-	c.logf("UDP is blocked, trying ICMP")
-
-	var wg sync.WaitGroup
-	wg.Add(len(need))
-	for _, reg := range need {
-		go func(reg *tailcfg.DERPRegion) {
-			defer wg.Done()
-			if d, ok, err := c.measureICMPLatency(ctx, reg, p); err != nil {
-				c.logf("[v1] measuring ICMP latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)
-			} else if ok {
-				c.logf("[v1] ICMP latency of %v (%d): %v", reg.RegionCode, reg.RegionID, d)
-				rs.mu.Lock()
-				if l, ok := rs.report.RegionLatency[reg.RegionID]; !ok {
-					mak.Set(&rs.report.RegionLatency, reg.RegionID, d)
-				} else if l >= d {
-					rs.report.RegionLatency[reg.RegionID] = d
-				}
-
-				// We only send IPv4 ICMP right now
-				rs.report.IPv4 = true
-				rs.report.ICMPv4 = true
-
-				rs.mu.Unlock()
-			}
-		}(reg)
-	}
-
-	wg.Wait()
-	return nil
-}
-
-func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion, p *ping.Pinger) (_ time.Duration, ok bool, err error) {
-	if len(reg.Nodes) == 0 {
-		return 0, false, fmt.Errorf("no nodes for region %d (%v)", reg.RegionID, reg.RegionCode)
-	}
-
-	// Try pinging the first node in the region
-	node := reg.Nodes[0]
-
-	if node.STUNPort < 0 {
-		// If STUN is disabled on a node, interpret that as meaning don't measure latency.
-		return 0, false, nil
-	}
-	const unusedPort = 0
-	stunAddrPort, ok := c.nodeAddrPort(ctx, node, unusedPort, probeIPv4)
-	if !ok {
-		return 0, false, fmt.Errorf("no address for node %v (v4-for-icmp)", node.Name)
-	}
-	ip := stunAddrPort.Addr()
-	addr := &net.IPAddr{
-		IP:   net.IP(ip.AsSlice()),
-		Zone: ip.Zone(),
-	}
-
-	// Use the unique node.Name field as the packet data to reduce the
-	// likelihood that we get a mismatched echo response.
-	d, err := p.Send(ctx, addr, []byte(node.Name))
-	if err != nil {
-		if errors.Is(err, syscall.EPERM) {
-			return 0, false, nil
-		}
-		return 0, false, err
-	}
-	return d, true, nil
 }
 
 func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
