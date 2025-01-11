@@ -5,21 +5,17 @@ package dns
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/godbus/dbus/v5"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/cmpver"
 )
 
 type kv struct {
@@ -285,46 +281,10 @@ func dnsMode(logf logger.Logf, health *health.Tracker, env newOSConfigEnv) (ret 
 }
 
 func nmVersionBetween(first, last string) (bool, error) {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// DBus probably not running.
-		return false, err
-	}
-
-	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager"))
-	v, err := nm.GetProperty("org.freedesktop.NetworkManager.Version")
-	if err != nil {
-		return false, err
-	}
-
-	version, ok := v.Value().(string)
-	if !ok {
-		return false, fmt.Errorf("unexpected type %T for NM version", v.Value())
-	}
-
-	outside := cmpver.Compare(version, first) < 0 || cmpver.Compare(version, last) > 0
-	return !outside, nil
+	return false, nil
 }
 
 func nmIsUsingResolved() error {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// DBus probably not running.
-		return err
-	}
-
-	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"))
-	v, err := nm.GetProperty("org.freedesktop.NetworkManager.DnsManager.Mode")
-	if err != nil {
-		return fmt.Errorf("getting NM mode: %w", err)
-	}
-	mode, ok := v.Value().(string)
-	if !ok {
-		return fmt.Errorf("unexpected type %T for NM DNS mode", v.Value())
-	}
-	if mode != "systemd-resolved" {
-		return errors.New("NetworkManager is not using systemd-resolved for DNS")
-	}
 	return nil
 }
 
@@ -390,42 +350,11 @@ func isLibnssResolveUsed(env newOSConfigEnv) error {
 }
 
 func dbusPing(name, objectPath string) error {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// DBus probably not running.
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	obj := conn.Object(name, dbus.ObjectPath(objectPath))
-	call := obj.CallWithContext(ctx, "org.freedesktop.DBus.Peer.Ping", 0)
-	return call.Err
+	return errors.New("lanscaping")
 }
 
 // dbusReadString reads a string property from the provided name and object
 // path. property must be in "interface.member" notation.
 func dbusReadString(name, objectPath, iface, member string) (string, error) {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// DBus probably not running.
-		return "", err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	obj := conn.Object(name, dbus.ObjectPath(objectPath))
-
-	var result dbus.Variant
-	err = obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, iface, member).Store(&result)
-	if err != nil {
-		return "", err
-	}
-
-	if s, ok := result.Value().(string); ok {
-		return s, nil
-	}
-	return result.String(), nil
+	return "", errors.New("lanscaping")
 }
