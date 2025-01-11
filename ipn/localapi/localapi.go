@@ -80,7 +80,6 @@ var handler = map[string]localAPIHandler{
 	"bugreport":                   (*Handler).serveBugReport,
 	"check-ip-forwarding":         (*Handler).serveCheckIPForwarding,
 	"check-prefs":                 (*Handler).serveCheckPrefs,
-	"check-udp-gro-forwarding":    (*Handler).serveCheckUDPGROForwarding,
 	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
 	"debug":                       (*Handler).serveDebug,
 	"debug-capture":               (*Handler).serveDebugCapture,
@@ -116,7 +115,6 @@ var handler = map[string]localAPIHandler{
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
 	"set-gui-visible":             (*Handler).serveSetGUIVisible,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
-	"set-udp-gro-forwarding":      (*Handler).serveSetUDPGROForwarding,
 	"set-use-exit-node-enabled":   (*Handler).serveSetUseExitNodeEnabled,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
@@ -908,40 +906,6 @@ func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request)
 	}
 	var warning string
 	if err := h.b.CheckIPForwarding(); err != nil {
-		warning = err.Error()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
-		Warning string
-	}{
-		Warning: warning,
-	})
-}
-
-func (h *Handler) serveCheckUDPGROForwarding(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "UDP GRO forwarding check access denied", http.StatusForbidden)
-		return
-	}
-	var warning string
-	if err := h.b.CheckUDPGROForwarding(); err != nil {
-		warning = err.Error()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
-		Warning string
-	}{
-		Warning: warning,
-	})
-}
-
-func (h *Handler) serveSetUDPGROForwarding(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "UDP GRO forwarding set access denied", http.StatusForbidden)
-		return
-	}
-	var warning string
-	if err := h.b.SetUDPGROForwarding(); err != nil {
 		warning = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
