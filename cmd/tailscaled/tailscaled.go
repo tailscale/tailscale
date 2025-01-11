@@ -582,7 +582,6 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
-	configureTaildrop(logf, lb)
 	if err := startNetstack(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}

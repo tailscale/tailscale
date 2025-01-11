@@ -15,11 +15,9 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,12 +34,10 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
-	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/httphdr"
 	"tailscale.com/util/httpm"
 	"tailscale.com/wgengine/filter"
 )
@@ -311,13 +307,6 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
-	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
-		if r.Method == "PUT" {
-			metricPutCalls.Add(1)
-		}
-		h.handlePeerPut(w, r)
-		return
-	}
 	if strings.HasPrefix(r.URL.Path, "/dns-query") {
 		metricDNSCalls.Add(1)
 		h.handleDNSQuery(w, r)
@@ -349,12 +338,6 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/v0/interfaces":
 		h.handleServeInterfaces(w, r)
-		return
-	case "/v0/doctor":
-		h.handleServeDoctor(w, r)
-		return
-	case "/v0/sockstats":
-		h.handleServeSockStats(w, r)
 		return
 	case "/v0/ingress":
 		metricIngressCalls.Add(1)
@@ -425,131 +408,6 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 	fmt.Fprintln(w, "</table>")
 }
 
-func (h *peerAPIHandler) handleServeDoctor(w http.ResponseWriter, r *http.Request) {
-	if !h.canDebug() {
-		http.Error(w, "denied; no debug access", http.StatusForbidden)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintln(w, "<h1>Doctor Output</h1>")
-
-	fmt.Fprintln(w, "<pre>")
-
-	h.ps.b.Doctor(r.Context(), func(format string, args ...any) {
-		line := fmt.Sprintf(format, args...)
-		fmt.Fprintln(w, html.EscapeString(line))
-	})
-
-	fmt.Fprintln(w, "</pre>")
-}
-
-func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Request) {
-	if !h.canDebug() {
-		http.Error(w, "denied; no debug access", http.StatusForbidden)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintln(w, "<!DOCTYPE html><h1>Socket Stats</h1>")
-
-	if !sockstats.IsAvailable {
-		fmt.Fprintln(w, "Socket stats are not available for this client")
-		return
-	}
-
-	stats, interfaceStats, validation := sockstats.Get(), sockstats.GetInterfaces(), sockstats.GetValidation()
-	if stats == nil {
-		fmt.Fprintln(w, "No socket stats available")
-		return
-	}
-
-	fmt.Fprintln(w, "<table border='1' cellspacing='0' style='border-collapse: collapse;'>")
-	fmt.Fprintln(w, "<thead>")
-	fmt.Fprintln(w, "<th>Label</th>")
-	fmt.Fprintln(w, "<th>Tx</th>")
-	fmt.Fprintln(w, "<th>Rx</th>")
-	for _, iface := range interfaceStats.Interfaces {
-		fmt.Fprintf(w, "<th>Tx (%s)</th>", html.EscapeString(iface))
-		fmt.Fprintf(w, "<th>Rx (%s)</th>", html.EscapeString(iface))
-	}
-	fmt.Fprintln(w, "<th>Validation</th>")
-	fmt.Fprintln(w, "</thead>")
-
-	fmt.Fprintln(w, "<tbody>")
-	labels := make([]sockstats.Label, 0, len(stats.Stats))
-	for label := range stats.Stats {
-		labels = append(labels, label)
-	}
-	slices.SortFunc(labels, func(a, b sockstats.Label) int {
-		return strings.Compare(a.String(), b.String())
-	})
-
-	txTotal := uint64(0)
-	rxTotal := uint64(0)
-	txTotalByInterface := map[string]uint64{}
-	rxTotalByInterface := map[string]uint64{}
-
-	for _, label := range labels {
-		stat := stats.Stats[label]
-		fmt.Fprintln(w, "<tr>")
-		fmt.Fprintf(w, "<td>%s</td>", html.EscapeString(label.String()))
-		fmt.Fprintf(w, "<td align=right>%d</td>", stat.TxBytes)
-		fmt.Fprintf(w, "<td align=right>%d</td>", stat.RxBytes)
-
-		txTotal += stat.TxBytes
-		rxTotal += stat.RxBytes
-
-		if interfaceStat, ok := interfaceStats.Stats[label]; ok {
-			for _, iface := range interfaceStats.Interfaces {
-				fmt.Fprintf(w, "<td align=right>%d</td>", interfaceStat.TxBytesByInterface[iface])
-				fmt.Fprintf(w, "<td align=right>%d</td>", interfaceStat.RxBytesByInterface[iface])
-				txTotalByInterface[iface] += interfaceStat.TxBytesByInterface[iface]
-				rxTotalByInterface[iface] += interfaceStat.RxBytesByInterface[iface]
-			}
-		}
-
-		if validationStat, ok := validation.Stats[label]; ok && (validationStat.RxBytes > 0 || validationStat.TxBytes > 0) {
-			fmt.Fprintf(w, "<td>Tx=%d (%+d) Rx=%d (%+d)</td>",
-				validationStat.TxBytes,
-				int64(validationStat.TxBytes)-int64(stat.TxBytes),
-				validationStat.RxBytes,
-				int64(validationStat.RxBytes)-int64(stat.RxBytes))
-		} else {
-			fmt.Fprintln(w, "<td></td>")
-		}
-
-		fmt.Fprintln(w, "</tr>")
-	}
-	fmt.Fprintln(w, "</tbody>")
-
-	fmt.Fprintln(w, "<tfoot>")
-	fmt.Fprintln(w, "<th>Total</th>")
-	fmt.Fprintf(w, "<th>%d</th>", txTotal)
-	fmt.Fprintf(w, "<th>%d</th>", rxTotal)
-	for _, iface := range interfaceStats.Interfaces {
-		fmt.Fprintf(w, "<th>%d</th>", txTotalByInterface[iface])
-		fmt.Fprintf(w, "<th>%d</th>", rxTotalByInterface[iface])
-	}
-	fmt.Fprintln(w, "<th></th>")
-	fmt.Fprintln(w, "</tfoot>")
-
-	fmt.Fprintln(w, "</table>")
-
-	fmt.Fprintln(w, "<h2>Debug Info</h2>")
-
-	fmt.Fprintln(w, "<pre>")
-	fmt.Fprintln(w, html.EscapeString(sockstats.DebugInfo()))
-	fmt.Fprintln(w, "</pre>")
-}
-
-// canPutFile reports whether h can put a file ("Taildrop") to this node.
-func (h *peerAPIHandler) canPutFile() bool {
-	if h.peerNode.UnsignedPeerAPIOnly() {
-		// Unsigned peers can't send files.
-		return false
-	}
-	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityFileSharingSend)
-}
-
 // canDebug reports whether h can debug this node (goroutines, metrics,
 // magicsock internal state, etc).
 func (h *peerAPIHandler) canDebug() bool {
@@ -585,100 +443,6 @@ func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
 
 func (h *peerAPIHandler) peerCaps() tailcfg.PeerCapMap {
 	return h.ps.b.PeerCaps(h.remoteAddr.Addr())
-}
-
-func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
-	if !h.canPutFile() {
-		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
-		return
-	}
-	if !h.ps.b.hasCapFileSharing() {
-		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
-		return
-	}
-	rawPath := r.URL.EscapedPath()
-	prefix, ok := strings.CutPrefix(rawPath, "/v0/put/")
-	if !ok {
-		http.Error(w, "misconfigured internals", http.StatusForbidden)
-		return
-	}
-	baseName, err := url.PathUnescape(prefix)
-	if err != nil {
-		http.Error(w, taildrop.ErrInvalidFileName.Error(), http.StatusBadRequest)
-		return
-	}
-	enc := json.NewEncoder(w)
-	switch r.Method {
-	case "GET":
-		id := taildrop.ClientID(h.peerNode.StableID())
-		if prefix == "" {
-			// List all the partial files.
-			files, err := h.ps.taildrop.PartialFiles(id)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			if err := enc.Encode(files); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				h.logf("json.Encoder.Encode error: %v", err)
-				return
-			}
-		} else {
-			// Stream all the block hashes for the specified file.
-			next, close, err := h.ps.taildrop.HashPartialFile(id, baseName)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			defer close()
-			for {
-				switch cs, err := next(); {
-				case err == io.EOF:
-					return
-				case err != nil:
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					h.logf("HashPartialFile.next error: %v", err)
-					return
-				default:
-					if err := enc.Encode(cs); err != nil {
-						http.Error(w, err.Error(), http.StatusInternalServerError)
-						h.logf("json.Encoder.Encode error: %v", err)
-						return
-					}
-				}
-			}
-		}
-	case "PUT":
-		t0 := h.ps.b.clock.Now()
-		id := taildrop.ClientID(h.peerNode.StableID())
-
-		var offset int64
-		if rangeHdr := r.Header.Get("Range"); rangeHdr != "" {
-			ranges, ok := httphdr.ParseRange(rangeHdr)
-			if !ok || len(ranges) != 1 || ranges[0].Length != 0 {
-				http.Error(w, "invalid Range header", http.StatusBadRequest)
-				return
-			}
-			offset = ranges[0].Start
-		}
-		n, err := h.ps.taildrop.PutFile(taildrop.ClientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
-		switch err {
-		case nil:
-			d := h.ps.b.clock.Since(t0).Round(time.Second / 10)
-			h.logf("got put of %s in %v from %v/%v", approxSize(n), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
-			io.WriteString(w, "{}\n")
-		case taildrop.ErrNoTaildrop:
-			http.Error(w, err.Error(), http.StatusForbidden)
-		case taildrop.ErrInvalidFileName:
-			http.Error(w, err.Error(), http.StatusBadRequest)
-		case taildrop.ErrFileExists:
-			http.Error(w, err.Error(), http.StatusConflict)
-		default:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-	default:
-		http.Error(w, "expected method GET or PUT", http.StatusMethodNotAllowed)
-	}
 }
 
 func approxSize(n int64) string {
