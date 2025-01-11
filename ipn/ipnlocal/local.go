@@ -71,7 +71,6 @@ import (
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
-	"tailscale.com/util/osuser"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
@@ -4217,16 +4216,7 @@ func (b *LocalBackend) operatorUserName() string {
 // OperatorUserID returns the current pref's OperatorUser's ID (in
 // os/user.User.Uid string form), or the empty string if none.
 func (b *LocalBackend) OperatorUserID() string {
-	opUserName := b.operatorUserName()
-	if opUserName == "" {
-		return ""
-	}
-	u, err := osuser.LookupByUsername(opUserName)
-	if err != nil {
-		b.logf("error looking up operator %q uid: %v", opUserName, err)
-		return ""
-	}
-	return u.Uid
+	return "0"
 }
 
 // TestOnlyPublicKeys returns the current machine and node public

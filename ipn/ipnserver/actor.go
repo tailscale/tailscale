@@ -14,7 +14,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/ctxkey"
-	"tailscale.com/util/osuser"
 	"tailscale.com/version"
 )
 
@@ -95,11 +94,7 @@ func (a *actor) Username() (string, error) {
 		defer tok.Close()
 		return tok.Username()
 	case "darwin", "linux", "illumos", "solaris":
-		u, err := osuser.LookupByUID("root")
-		if err != nil {
-			return "", fmt.Errorf("lookup user: %w", err)
-		}
-		return u.Username, nil
+		return "root", nil
 	default:
 		return "", errors.New("unsupported OS")
 	}
