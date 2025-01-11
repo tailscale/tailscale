@@ -38,7 +38,6 @@ import (
 
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
@@ -78,7 +77,6 @@ import (
 	"tailscale.com/taildrop"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
-	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -238,10 +236,9 @@ type LocalBackend struct {
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
-	httpTestClient *http.Client       // for controlclient. nil by default, used by tests.
-	ccGen          clientGen          // function for producing controlclient; lazily populated
-	sshServer      SSHServer          // or nil, initialized lazily.
-	appConnector   *appc.AppConnector // or nil, initialized when configured.
+	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
+	ccGen          clientGen    // function for producing controlclient; lazily populated
+	sshServer      SSHServer    // or nil, initialized lazily.
 	// notifyCancel cancels notifications to the current SetNotifyCallback.
 	notifyCancel   context.CancelFunc
 	cc             controlclient.Client
@@ -2107,7 +2104,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo.FrontendLogID = opts.FrontendLogID
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
-	hostinfo.AppConnector.Set(b.appConnector != nil)
 	b.logf.JSON(1, "Hostinfo", hostinfo)
 
 	// TODO(apenwarr): avoid the need to reinit controlclient.
@@ -3782,19 +3778,6 @@ func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
 	return b.editPrefsLockedOnEntry(mp, unlock)
 }
 
-// MaybeClearAppConnector clears the routes from any AppConnector if
-// AdvertiseRoutes has been set in the MaskedPrefs.
-func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
-	var err error
-	if b.appConnector != nil && mp.AdvertiseRoutesSet {
-		err = b.appConnector.ClearRoutes()
-		if err != nil {
-			b.logf("appc: clear routes error: %v", err)
-		}
-	}
-	return err
-}
-
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	if mp.SetsInternal() {
 		return ipn.PrefsView{}, errors.New("can't set Internal fields")
@@ -4103,76 +4086,6 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 	b.mu.Unlock()
 }
 
-// reconfigAppConnectorLocked updates the app connector state based on the
-// current network map and preferences.
-// b.mu must be held.
-func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
-	const appConnectorCapName = "tailscale.com/app-connectors"
-	defer func() {
-		if b.hostinfo != nil {
-			b.hostinfo.AppConnector.Set(b.appConnector != nil)
-		}
-	}()
-
-	if !prefs.AppConnector().Advertise {
-		b.appConnector = nil
-		return
-	}
-
-	shouldAppCStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
-	if b.appConnector == nil || b.appConnector.ShouldStoreRoutes() != shouldAppCStoreRoutes {
-		var ri *appc.RouteInfo
-		var storeFunc func(*appc.RouteInfo) error
-		if shouldAppCStoreRoutes {
-			var err error
-			ri, err = b.readRouteInfoLocked()
-			if err != nil {
-				ri = &appc.RouteInfo{}
-				if err != ipn.ErrStateNotExist {
-					b.logf("Unsuccessful Read RouteInfo: ", err)
-				}
-			}
-			storeFunc = b.storeRouteInfo
-		}
-		b.appConnector = appc.NewAppConnector(b.logf, b, ri, storeFunc)
-	}
-	if nm == nil {
-		return
-	}
-
-	// TODO(raggi): rework the view infrastructure so the large deep clone is no
-	// longer required
-	sn := nm.SelfNode.AsStruct()
-	attrs, err := tailcfg.UnmarshalNodeCapJSON[appctype.AppConnectorAttr](sn.CapMap, appConnectorCapName)
-	if err != nil {
-		b.logf("[unexpected] error parsing app connector mapcap: %v", err)
-		return
-	}
-
-	// Geometric cost, assumes that the number of advertised tags is small
-	selfHasTag := func(attrTags []string) bool {
-		return nm.SelfNode.Tags().ContainsFunc(func(tag string) bool {
-			return slices.Contains(attrTags, tag)
-		})
-	}
-
-	var (
-		domains []string
-		routes  []netip.Prefix
-	)
-	for _, attr := range attrs {
-		if slices.Contains(attr.Connectors, "*") || selfHasTag(attr.Connectors) {
-			domains = append(domains, attr.Domains...)
-			routes = append(routes, attr.Routes...)
-		}
-	}
-	slices.Sort(domains)
-	slices.SortFunc(routes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
-	domains = slices.Compact(domains)
-	routes = slices.Compact(routes)
-	b.appConnector.UpdateDomainsAndRoutes(domains, routes)
-}
-
 // authReconfig pushes a new configuration into wgengine, if engine
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
@@ -4187,7 +4100,6 @@ func (b *LocalBackend) authReconfig() {
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
 	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.keyExpired, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
-	b.reconfigAppConnectorLocked(nm, prefs)
 	closing := b.shutdownCalled
 	b.mu.Unlock()
 
@@ -6085,14 +5997,6 @@ func (b *LocalBackend) OfferingExitNode() bool {
 	return def4 && def6
 }
 
-// OfferingAppConnector reports whether b is currently offering app
-// connector services.
-func (b *LocalBackend) OfferingAppConnector() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.appConnector != nil
-}
-
 // allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS
 // proxy is allowed to serve responses for the provided DNS name.
 func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
@@ -6722,102 +6626,8 @@ func (b *LocalBackend) DoSelfUpdate() {
 	}
 }
 
-// ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
-// App Connector to enable route discovery.
-func (b *LocalBackend) ObserveDNSResponse(res []byte) {
-	var appConnector *appc.AppConnector
-	b.mu.Lock()
-	if b.appConnector == nil {
-		b.mu.Unlock()
-		return
-	}
-	appConnector = b.appConnector
-	b.mu.Unlock()
-
-	appConnector.ObserveDNSResponse(res)
-}
-
 // ErrDisallowedAutoRoute is returned by AdvertiseRoute when a route that is not allowed is requested.
 var ErrDisallowedAutoRoute = errors.New("route is not allowed")
-
-// AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
-// route advertisement if one is not already present in the existing routes.
-// If the route is disallowed, ErrDisallowedAutoRoute is returned.
-func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
-	finalRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
-	newRoutes := false
-
-	for _, ipp := range ipps {
-		if !allowedAutoRoute(ipp) {
-			continue
-		}
-		if slices.Contains(finalRoutes, ipp) {
-			continue
-		}
-
-		// If the new prefix is already contained by existing routes, skip it.
-		if coveredRouteRangeNoDefault(finalRoutes, ipp) {
-			continue
-		}
-
-		finalRoutes = append(finalRoutes, ipp)
-		newRoutes = true
-	}
-
-	if !newRoutes {
-		return nil
-	}
-
-	_, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: finalRoutes,
-		},
-		AdvertiseRoutesSet: true,
-	})
-	return err
-}
-
-// coveredRouteRangeNoDefault checks if a route is already included in a slice of
-// prefixes, ignoring default routes in the range.
-func coveredRouteRangeNoDefault(finalRoutes []netip.Prefix, ipp netip.Prefix) bool {
-	for _, r := range finalRoutes {
-		if r == tsaddr.AllIPv4() || r == tsaddr.AllIPv6() {
-			continue
-		}
-		if ipp.IsSingleIP() {
-			if r.Contains(ipp.Addr()) {
-				return true
-			}
-		} else {
-			if r.Contains(ipp.Addr()) && r.Contains(netipx.PrefixLastIP(ipp)) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
-// a route advertisement if one is present in the existing routes.
-func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
-	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
-	finalRoutes := currentRoutes[:0]
-
-	for _, ipp := range currentRoutes {
-		if slices.Contains(toRemove, ipp) {
-			continue
-		}
-		finalRoutes = append(finalRoutes, ipp)
-	}
-
-	_, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: finalRoutes,
-		},
-		AdvertiseRoutesSet: true,
-	})
-	return err
-}
 
 // namespace a key with the profile manager's current profile key, if any
 func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.StateKey {
@@ -6825,36 +6635,6 @@ func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.Sta
 }
 
 const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
-
-func (b *LocalBackend) storeRouteInfo(ri *appc.RouteInfo) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.pm.CurrentProfile().ID == "" {
-		return nil
-	}
-	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
-	bs, err := json.Marshal(ri)
-	if err != nil {
-		return err
-	}
-	return b.pm.WriteState(key, bs)
-}
-
-func (b *LocalBackend) readRouteInfoLocked() (*appc.RouteInfo, error) {
-	if b.pm.CurrentProfile().ID == "" {
-		return &appc.RouteInfo{}, nil
-	}
-	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
-	bs, err := b.pm.Store().ReadState(key)
-	ri := &appc.RouteInfo{}
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(bs, ri); err != nil {
-		return nil, err
-	}
-	return ri, nil
-}
 
 // seamlessRenewalEnabled reports whether seamless key renewals are enabled
 // (i.e. we saw our self node with the SeamlessKeyRenewal attr in a netmap).

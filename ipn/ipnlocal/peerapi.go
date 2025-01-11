@@ -522,7 +522,7 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 		return true
 	}
 	b := h.ps.b
-	if !b.OfferingExitNode() && !b.OfferingAppConnector() {
+	if !b.OfferingExitNode() {
 		// If we're not an exit node or app connector, there's
 		// no point to being a DNS server for somebody.
 		return false
@@ -604,12 +604,6 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "DNS forwarding error", http.StatusInternalServerError)
 		}
 		return
-	}
-	// TODO(raggi): consider pushing the integration down into the resolver
-	// instead to avoid re-parsing the DNS response for improved performance in
-	// the future.
-	if h.ps.b.OfferingAppConnector() {
-		h.ps.b.ObserveDNSResponse(res)
 	}
 
 	if pretty {

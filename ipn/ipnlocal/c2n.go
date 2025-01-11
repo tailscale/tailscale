@@ -24,12 +24,10 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/sockstats"
-	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/set"
-	"tailscale.com/util/syspolicy"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -62,12 +60,6 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 	// Auto-updates.
 	req("GET /update"):  handleC2NUpdateGet,
 	req("POST /update"): handleC2NUpdatePost,
-
-	// Device posture.
-	req("GET /posture/identity"): handleC2NPostureIdentityGet,
-
-	// App Connectors.
-	req("GET /appconnector/routes"): handleC2NAppConnectorDomainRoutesGet,
 
 	// Linux netfilter.
 	req("POST /netfilter-kind"): handleC2NSetNetfilterKind,
@@ -220,26 +212,6 @@ func handleC2NSockStats(b *LocalBackend, w http.ResponseWriter, r *http.Request)
 	fmt.Fprintf(w, "debug info: %v\n", sockstats.DebugInfo())
 }
 
-// handleC2NAppConnectorDomainRoutesGet handles returning the domains
-// that the app connector is responsible for, as well as the resolved
-// IP addresses for each domain. If the node is not configured as
-// an app connector, an empty map is returned.
-func handleC2NAppConnectorDomainRoutesGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	b.logf("c2n: GET /appconnector/routes received")
-
-	var res tailcfg.C2NAppConnectorDomainRoutesResponse
-	if b.appConnector == nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
-		return
-	}
-
-	res.Domains = b.appConnector.DomainRoutes()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
 func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
 	b.logf("c2n: POST /netfilter-kind received")
 
@@ -318,49 +290,6 @@ func handleC2NUpdatePost(b *LocalBackend, w http.ResponseWriter, r *http.Request
 		return
 	}
 	res.Started = true
-}
-
-func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	b.logf("c2n: GET /posture/identity received")
-
-	res := tailcfg.C2NPostureIdentityResponse{}
-
-	// Only collect posture identity if enabled on the client,
-	// this will first check syspolicy, MDM settings like Registry
-	// on Windows or defaults on macOS. If they are not set, it falls
-	// back to the cli-flag, `--posture-checking`.
-	choice, err := syspolicy.GetPreferenceOption(syspolicy.PostureChecking)
-	if err != nil {
-		b.logf(
-			"c2n: failed to read PostureChecking from syspolicy, returning default from CLI: %s; got error: %s",
-			b.Prefs().PostureChecking(),
-			err,
-		)
-	}
-
-	if choice.ShouldEnable(b.Prefs().PostureChecking()) {
-		res.SerialNumbers, err = posture.GetSerialNumbers(b.logf)
-		if err != nil {
-			b.logf("c2n: GetSerialNumbers returned error: %v", err)
-		}
-
-		// TODO(tailscale/corp#21371, 2024-07-10): once this has landed in a stable release
-		// and looks good in client metrics, remove this parameter and always report MAC
-		// addresses.
-		if r.FormValue("hwaddrs") == "true" {
-			res.IfaceHardwareAddrs, err = posture.GetHardwareAddrs()
-			if err != nil {
-				b.logf("c2n: GetHardwareAddrs returned error: %v", err)
-			}
-		}
-	} else {
-		res.PostureDisabled = true
-	}
-
-	b.logf("c2n: posture identity disabled=%v reported %d serials %d hwaddrs", res.PostureDisabled, len(res.SerialNumbers), len(res.IfaceHardwareAddrs))
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
 }
 
 func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
