@@ -39,7 +39,6 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
-	"tailscale.com/wgengine/magicsock"
 )
 
 type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
@@ -53,32 +52,25 @@ var handler = map[string]localAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
-	"alpha-set-device-attrs":    (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
-	"bugreport":                 (*Handler).serveBugReport,
-	"check-ip-forwarding":       (*Handler).serveCheckIPForwarding,
-	"check-prefs":               (*Handler).serveCheckPrefs,
-	"disconnect-control":        (*Handler).disconnectControl,
-	"goroutines":                (*Handler).serveGoroutines,
-	"handle-push-message":       (*Handler).serveHandlePushMessage,
-	"id-token":                  (*Handler).serveIDToken,
-	"login-interactive":         (*Handler).serveLoginInteractive,
-	"logout":                    (*Handler).serveLogout,
-	"metrics":                   (*Handler).serveMetrics,
-	"ping":                      (*Handler).servePing,
-	"prefs":                     (*Handler).servePrefs,
-	"query-feature":             (*Handler).serveQueryFeature,
-	"reload-config":             (*Handler).reloadConfig,
-	"reset-auth":                (*Handler).serveResetAuth,
-	"set-expiry-sooner":         (*Handler).serveSetExpirySooner,
-	"set-gui-visible":           (*Handler).serveSetGUIVisible,
-	"set-push-device-token":     (*Handler).serveSetPushDeviceToken,
-	"set-use-exit-node-enabled": (*Handler).serveSetUseExitNodeEnabled,
-	"start":                     (*Handler).serveStart,
-	"status":                    (*Handler).serveStatus,
-	"suggest-exit-node":         (*Handler).serveSuggestExitNode,
-	"upload-client-metrics":     (*Handler).serveUploadClientMetrics,
-	"watch-ipn-bus":             (*Handler).serveWatchIPNBus,
-	"whois":                     (*Handler).serveWhoIs,
+	"alpha-set-device-attrs": (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
+	"bugreport":              (*Handler).serveBugReport,
+	"check-ip-forwarding":    (*Handler).serveCheckIPForwarding,
+	"check-prefs":            (*Handler).serveCheckPrefs,
+	"disconnect-control":     (*Handler).disconnectControl,
+	"goroutines":             (*Handler).serveGoroutines,
+	"id-token":               (*Handler).serveIDToken,
+	"login-interactive":      (*Handler).serveLoginInteractive,
+	"logout":                 (*Handler).serveLogout,
+	"metrics":                (*Handler).serveMetrics,
+	"prefs":                  (*Handler).servePrefs,
+	"query-feature":          (*Handler).serveQueryFeature,
+	"reload-config":          (*Handler).reloadConfig,
+	"reset-auth":             (*Handler).serveResetAuth,
+	"start":                  (*Handler).serveStart,
+	"status":                 (*Handler).serveStatus,
+	"suggest-exit-node":      (*Handler).serveSuggestExitNode,
+	"watch-ipn-bus":          (*Handler).serveWatchIPNBus,
+	"whois":                  (*Handler).serveWhoIs,
 }
 
 var (
@@ -799,230 +791,6 @@ func writeErrorJSON(w http.ResponseWriter, err error) {
 		Error string `json:"error"`
 	}
 	json.NewEncoder(w).Encode(E{err.Error()})
-}
-
-func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "want GET", http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	e := json.NewEncoder(w)
-	e.SetIndent("", "\t")
-	e.Encode(h.b.DERPMap())
-}
-
-// serveSetExpirySooner sets the expiry date on the current machine, specified
-// by an `expiry` unix timestamp as POST or query param.
-func (h *Handler) serveSetExpirySooner(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var expiryTime time.Time
-	if v := r.FormValue("expiry"); v != "" {
-		expiryInt, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			http.Error(w, "can't parse expiry time, expects a unix timestamp", http.StatusBadRequest)
-			return
-		}
-		expiryTime = time.Unix(expiryInt, 0)
-	} else {
-		http.Error(w, "missing 'expiry' parameter, a unix timestamp", http.StatusBadRequest)
-		return
-	}
-	err := h.b.SetExpirySooner(r.Context(), expiryTime)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	io.WriteString(w, "done\n")
-}
-
-func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if r.Method != "POST" {
-		http.Error(w, "want POST", http.StatusBadRequest)
-		return
-	}
-	ipStr := r.FormValue("ip")
-	if ipStr == "" {
-		http.Error(w, "missing 'ip' parameter", http.StatusBadRequest)
-		return
-	}
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		http.Error(w, "invalid IP", http.StatusBadRequest)
-		return
-	}
-	pingTypeStr := r.FormValue("type")
-	if pingTypeStr == "" {
-		http.Error(w, "missing 'type' parameter", http.StatusBadRequest)
-		return
-	}
-	size := 0
-	sizeStr := r.FormValue("size")
-	if sizeStr != "" {
-		size, err = strconv.Atoi(sizeStr)
-		if err != nil {
-			http.Error(w, "invalid 'size' parameter", http.StatusBadRequest)
-			return
-		}
-		if size != 0 && tailcfg.PingType(pingTypeStr) != tailcfg.PingDisco {
-			http.Error(w, "'size' parameter is only supported with disco pings", http.StatusBadRequest)
-			return
-		}
-		if size > magicsock.MaxDiscoPingSize {
-			http.Error(w, fmt.Sprintf("maximum value for 'size' is %v", magicsock.MaxDiscoPingSize), http.StatusBadRequest)
-			return
-		}
-	}
-	res, err := h.b.Ping(ctx, ip, tailcfg.PingType(pingTypeStr), size)
-	if err != nil {
-		writeErrorJSON(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
-func (h *Handler) serveSetPushDeviceToken(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "set push device token access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
-		return
-	}
-	var params apitype.SetPushDeviceTokenRequest
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-	h.b.SetPushDeviceToken(params.PushDeviceToken)
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *Handler) serveHandlePushMessage(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "handle push message not allowed", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
-		return
-	}
-	var pushMessageBody map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&pushMessageBody); err != nil {
-		http.Error(w, "failed to decode JSON body: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// TODO(bradfitz): do something with pushMessageBody
-	h.logf("localapi: got push message: %v", logger.AsJSON(pushMessageBody))
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
-		return
-	}
-	type clientMetricJSON struct {
-		Name  string `json:"name"`
-		Type  string `json:"type"`  // one of "counter" or "gauge"
-		Value int    `json:"value"` // amount to increment metric by
-	}
-
-	var clientMetrics []clientMetricJSON
-	if err := json.NewDecoder(r.Body).Decode(&clientMetrics); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-
-	metricsMu.Lock()
-	defer metricsMu.Unlock()
-
-	for _, m := range clientMetrics {
-		if metric, ok := metrics[m.Name]; ok {
-			metric.Add(int64(m.Value))
-		} else {
-			if clientmetric.HasPublished(m.Name) {
-				http.Error(w, "Already have a metric named "+m.Name, http.StatusBadRequest)
-				return
-			}
-			var metric *clientmetric.Metric
-			switch m.Type {
-			case "counter":
-				metric = clientmetric.NewCounter(m.Name)
-			case "gauge":
-				metric = clientmetric.NewGauge(m.Name)
-			default:
-				http.Error(w, "Unknown metric type "+m.Type, http.StatusBadRequest)
-				return
-			}
-			metrics[m.Name] = metric
-			metric.Add(int64(m.Value))
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct{}{})
-}
-
-func (h *Handler) serveSetGUIVisible(w http.ResponseWriter, r *http.Request) {
-	if r.Method != httpm.POST {
-		http.Error(w, "use POST", http.StatusMethodNotAllowed)
-		return
-	}
-
-	type setGUIVisibleRequest struct {
-		IsVisible bool   // whether the Tailscale client UI is now presented to the user
-		SessionID string // the last SessionID sent to the client in ipn.Notify.SessionID
-	}
-	var req setGUIVisibleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-
-	// TODO(bradfitz): use `req.IsVisible == true` to flush netmap
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *Handler) serveSetUseExitNodeEnabled(w http.ResponseWriter, r *http.Request) {
-	if r.Method != httpm.POST {
-		http.Error(w, "use POST", http.StatusMethodNotAllowed)
-		return
-	}
-	if !h.PermitWrite {
-		http.Error(w, "access denied", http.StatusForbidden)
-		return
-	}
-
-	v, err := strconv.ParseBool(r.URL.Query().Get("enabled"))
-	if err != nil {
-		http.Error(w, "invalid 'enabled' parameter", http.StatusBadRequest)
-		return
-	}
-	prefs, err := h.b.SetUseExitNodeEnabled(v)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	e := json.NewEncoder(w)
-	e.SetIndent("", "\t")
-	e.Encode(prefs)
 }
 
 // serveProfiles serves profile switching-related endpoints. Supported methods
