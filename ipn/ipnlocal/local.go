@@ -1902,10 +1902,6 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 	}
 	localNets, _ := localNetsB.IPSet()
 	logNets, _ := logNetsB.IPSet()
-	var sshPol tailcfg.SSHPolicy
-	if haveNetmap && netMap.SSHPolicy != nil {
-		sshPol = *netMap.SSHPolicy
-	}
 
 	changed := deephash.Update(&b.filterHash, &struct {
 		HaveNetmap  bool
@@ -1914,8 +1910,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 		LocalNets   []netipx.IPRange
 		LogNets     []netipx.IPRange
 		ShieldsUp   bool
-		SSHPolicy   tailcfg.SSHPolicy
-	}{haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp, sshPol})
+	}{haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp})
 	if !changed {
 		return
 	}
@@ -2969,21 +2964,6 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineSt
 	return ret
 }
 
-// shouldUploadServices reports whether this node should include services
-// in Hostinfo. When the user preferences currently request "shields up"
-// mode, all inbound connections are refused, so services are not reported.
-// Otherwise, shouldUploadServices respects NetMap.CollectServices.
-func (b *LocalBackend) shouldUploadServices() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	p := b.pm.CurrentPrefs()
-	if !p.Valid() || b.netMap == nil {
-		return false // default to safest setting
-	}
-	return !p.ShieldsUp() && b.netMap.CollectServices
-}
-
 func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -3202,11 +3182,6 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 	hi := *b.hostinfo // shallow copy
 	unlock.UnlockEarly()
 
-	// Make a shallow copy of hostinfo so we can mutate
-	// at the Service field.
-	if !b.shouldUploadServices() {
-		hi.Services = []tailcfg.Service{}
-	}
 	// Don't mutate hi.Service's underlying array. Append to
 	// the slice with no free capacity.
 	hi.PushDeviceToken = b.pushDeviceToken.Load()
@@ -4002,12 +3977,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.activeLogin = login
 	}
 	b.pauseOrResumeControlClientLocked()
-
-	if nm != nil {
-		b.health.SetControlHealth(nm.ControlHealth)
-	} else {
-		b.health.SetControlHealth(nil)
-	}
 
 	// Determine if file sharing is enabled
 	fs := nm.HasCap(tailcfg.CapabilityFileSharing)

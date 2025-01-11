@@ -418,92 +418,6 @@ var _DERPNodeCloneNeedsRegeneration = DERPNode(struct {
 	CanPort80        bool
 }{})
 
-// Clone makes a deep copy of SSHRule.
-// The result aliases no memory with the original.
-func (src *SSHRule) Clone() *SSHRule {
-	if src == nil {
-		return nil
-	}
-	dst := new(SSHRule)
-	*dst = *src
-	if dst.RuleExpires != nil {
-		dst.RuleExpires = ptr.To(*src.RuleExpires)
-	}
-	if src.Principals != nil {
-		dst.Principals = make([]*SSHPrincipal, len(src.Principals))
-		for i := range dst.Principals {
-			if src.Principals[i] == nil {
-				dst.Principals[i] = nil
-			} else {
-				dst.Principals[i] = src.Principals[i].Clone()
-			}
-		}
-	}
-	dst.SSHUsers = maps.Clone(src.SSHUsers)
-	dst.Action = src.Action.Clone()
-	dst.AcceptEnv = append(src.AcceptEnv[:0:0], src.AcceptEnv...)
-	return dst
-}
-
-// A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _SSHRuleCloneNeedsRegeneration = SSHRule(struct {
-	RuleExpires *time.Time
-	Principals  []*SSHPrincipal
-	SSHUsers    map[string]string
-	Action      *SSHAction
-	AcceptEnv   []string
-}{})
-
-// Clone makes a deep copy of SSHAction.
-// The result aliases no memory with the original.
-func (src *SSHAction) Clone() *SSHAction {
-	if src == nil {
-		return nil
-	}
-	dst := new(SSHAction)
-	*dst = *src
-	dst.Recorders = append(src.Recorders[:0:0], src.Recorders...)
-	if dst.OnRecordingFailure != nil {
-		dst.OnRecordingFailure = ptr.To(*src.OnRecordingFailure)
-	}
-	return dst
-}
-
-// A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _SSHActionCloneNeedsRegeneration = SSHAction(struct {
-	Message                   string
-	Reject                    bool
-	Accept                    bool
-	SessionDuration           time.Duration
-	AllowAgentForwarding      bool
-	HoldAndDelegate           string
-	AllowLocalPortForwarding  bool
-	AllowRemotePortForwarding bool
-	Recorders                 []netip.AddrPort
-	OnRecordingFailure        *SSHRecorderFailureAction
-}{})
-
-// Clone makes a deep copy of SSHPrincipal.
-// The result aliases no memory with the original.
-func (src *SSHPrincipal) Clone() *SSHPrincipal {
-	if src == nil {
-		return nil
-	}
-	dst := new(SSHPrincipal)
-	*dst = *src
-	dst.UnusedPubKeys = append(src.UnusedPubKeys[:0:0], src.UnusedPubKeys...)
-	return dst
-}
-
-// A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _SSHPrincipalCloneNeedsRegeneration = SSHPrincipal(struct {
-	Node          StableNodeID
-	NodeIP        string
-	UserLogin     string
-	Any           bool
-	UnusedPubKeys []string
-}{})
-
 // Clone makes a deep copy of ControlDialPlan.
 // The result aliases no memory with the original.
 func (src *ControlDialPlan) Clone() *ControlDialPlan {
@@ -565,7 +479,7 @@ var _UserProfileCloneNeedsRegeneration = UserProfile(struct {
 
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,ControlDialPlan,Location,UserProfile.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -682,33 +596,6 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **DERPNode:
-			*dst = src.Clone()
-			return true
-		}
-	case *SSHRule:
-		switch dst := dst.(type) {
-		case *SSHRule:
-			*dst = *src.Clone()
-			return true
-		case **SSHRule:
-			*dst = src.Clone()
-			return true
-		}
-	case *SSHAction:
-		switch dst := dst.(type) {
-		case *SSHAction:
-			*dst = *src.Clone()
-			return true
-		case **SSHAction:
-			*dst = src.Clone()
-			return true
-		}
-	case *SSHPrincipal:
-		switch dst := dst.(type) {
-		case *SSHPrincipal:
-			*dst = *src.Clone()
-			return true
-		case **SSHPrincipal:
 			*dst = src.Clone()
 			return true
 		}

@@ -82,11 +82,8 @@ type mapSession struct {
 	lastPacketFilterRules  views.Slice[tailcfg.FilterRule] // concatenation of all namedPacketFilters
 	namedPacketFilters     map[string]views.Slice[tailcfg.FilterRule]
 	lastParsedPacketFilter []filter.Match
-	lastSSHPolicy          *tailcfg.SSHPolicy
 	collectServices        bool
 	lastDomain             string
-	lastDomainAuditLogID   string
-	lastHealth             []string
 	lastPopBrowserURL      string
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
 	lastMaxExpiry          time.Duration
@@ -324,21 +321,12 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	if c := resp.DNSConfig; c != nil {
 		ms.lastDNSConfig = c
 	}
-	if p := resp.SSHPolicy; p != nil {
-		ms.lastSSHPolicy = p
-	}
 
 	if v, ok := resp.CollectServices.Get(); ok {
 		ms.collectServices = v
 	}
 	if resp.Domain != "" {
 		ms.lastDomain = resp.Domain
-	}
-	if resp.DomainDataPlaneAuditLogID != "" {
-		ms.lastDomainAuditLogID = resp.DomainDataPlaneAuditLogID
-	}
-	if resp.Health != nil {
-		ms.lastHealth = resp.Health
 	}
 	if resp.MaxKeyDuration > 0 {
 		ms.lastMaxExpiry = resp.MaxKeyDuration
@@ -752,14 +740,10 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		Peers:             peerViews,
 		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfile),
 		Domain:            ms.lastDomain,
-		DomainAuditLogID:  ms.lastDomainAuditLogID,
 		DNS:               *ms.lastDNSConfig,
 		PacketFilter:      ms.lastParsedPacketFilter,
 		PacketFilterRules: ms.lastPacketFilterRules,
-		SSHPolicy:         ms.lastSSHPolicy,
-		CollectServices:   ms.collectServices,
 		DERPMap:           ms.lastDERPMap,
-		ControlHealth:     ms.lastHealth,
 		MaxKeyDuration:    ms.lastMaxExpiry,
 	}
 

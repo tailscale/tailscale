@@ -41,32 +41,13 @@ type NetworkMap struct {
 
 	PacketFilter      []filtertype.Match
 	PacketFilterRules views.Slice[tailcfg.FilterRule]
-	SSHPolicy         *tailcfg.SSHPolicy // or nil, if not enabled/allowed
-
-	// CollectServices reports whether this node's Tailnet has
-	// requested that info about services be included in HostInfo.
-	// If set, Hostinfo.ShieldsUp blocks services collection; that
-	// takes precedence over this field.
-	CollectServices bool
 
 	// DERPMap is the last DERP server map received. It's reused
 	// between updates and should not be modified.
 	DERPMap *tailcfg.DERPMap
 
-	// ControlHealth are the list of health check problems for this
-	// node from the perspective of the control plane.
-	// If empty, there are no known problems from the control plane's
-	// point of view, but the node might know about its own health
-	// check problems.
-	ControlHealth []string
-
 	// Domain is the current Tailnet name.
 	Domain string
-
-	// DomainAuditLogID is an audit log ID provided by control and
-	// only populated if the domain opts into data-plane audit logging.
-	// If this is empty, then data-plane audit logging is disabled.
-	DomainAuditLogID string
 
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
 
