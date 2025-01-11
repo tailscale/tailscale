@@ -36,7 +36,6 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
-	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/envknob/featureknob"
 	"tailscale.com/health"
@@ -309,11 +308,6 @@ type LocalBackend struct {
 
 	// lastNotifiedDriveSharesMu guards lastNotifiedDriveShares
 	lastNotifiedDriveSharesMu sync.Mutex
-
-	// lastNotifiedDriveShares keeps track of the last set of shares that we
-	// notified about.
-	lastNotifiedDriveShares *views.SliceView[*drive.Share, drive.ShareView]
-
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
 
@@ -492,19 +486,6 @@ func NewLocalBackend(logf logger.Logf, sys *tsd.System, loginFlags controlclient
 				// conditional to avoid log spam at start when off
 				b.SetComponentDebugLogging(component, until)
 			}
-		}
-	}
-
-	// initialize Taildrive shares from saved state
-	fs, ok := b.sys.DriveForRemote.GetOK()
-	if ok {
-		currentShares := b.pm.prefs.DriveShares()
-		if currentShares.Len() > 0 {
-			var shares []*drive.Share
-			for _, share := range currentShares.All() {
-				shares = append(shares, share.AsStruct())
-			}
-			fs.SetShares(shares)
 		}
 	}
 

@@ -14,11 +14,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 
 	"tailscale.com/atomicfile"
-	"tailscale.com/drive"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
@@ -240,10 +238,6 @@ type Prefs struct {
 	//
 	// Linux-only.
 	NetfilterKind string
-
-	// DriveShares are the configured DriveShares, stored in increasing order
-	// by name.
-	DriveShares []*drive.Share
 
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
@@ -614,7 +608,6 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&
 		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
-		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind
 }
 

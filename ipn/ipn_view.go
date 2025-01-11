@@ -10,7 +10,6 @@ import (
 	"errors"
 	"net/netip"
 
-	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
@@ -97,9 +96,6 @@ func (v PrefsView) AutoUpdate() AutoUpdatePrefs           { return v.ж.AutoUpda
 func (v PrefsView) AppConnector() AppConnectorPrefs       { return v.ж.AppConnector }
 func (v PrefsView) PostureChecking() bool                 { return v.ж.PostureChecking }
 func (v PrefsView) NetfilterKind() string                 { return v.ж.NetfilterKind }
-func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
-	return views.SliceOfViews[*drive.Share, drive.ShareView](v.ж.DriveShares)
-}
 func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
 func (v PrefsView) Persist() persist.PersistView          { return v.ж.Persist.View() }
 
@@ -133,7 +129,6 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AppConnector           AppConnectorPrefs
 	PostureChecking        bool
 	NetfilterKind          string
-	DriveShares            []*drive.Share
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})

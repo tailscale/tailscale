@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net/netip"
 
-	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
@@ -28,16 +27,6 @@ func (src *Prefs) Clone() *Prefs {
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
 	dst.AdvertiseServices = append(src.AdvertiseServices[:0:0], src.AdvertiseServices...)
-	if src.DriveShares != nil {
-		dst.DriveShares = make([]*drive.Share, len(src.DriveShares))
-		for i := range dst.DriveShares {
-			if src.DriveShares[i] == nil {
-				dst.DriveShares[i] = nil
-			} else {
-				dst.DriveShares[i] = src.DriveShares[i].Clone()
-			}
-		}
-	}
 	dst.Persist = src.Persist.Clone()
 	return dst
 }
@@ -72,7 +61,6 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	AppConnector           AppConnectorPrefs
 	PostureChecking        bool
 	NetfilterKind          string
-	DriveShares            []*drive.Share
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})

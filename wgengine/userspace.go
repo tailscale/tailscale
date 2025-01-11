@@ -19,7 +19,6 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/control/controlknobs"
-	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
@@ -203,10 +202,6 @@ type Config struct {
 
 	// SetSubsystem, if non-nil, is called for each new subsystem created, just before a successful return.
 	SetSubsystem func(any)
-
-	// DriveForLocal, if populated, will cause the engine to expose a Taildrive
-	// listener at 100.100.100.100:8080.
-	DriveForLocal drive.FileSystemForLocal
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -490,9 +485,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		conf.SetSubsystem(conf.Router)
 		conf.SetSubsystem(conf.Dialer)
 		conf.SetSubsystem(e.netMon)
-		if conf.DriveForLocal != nil {
-			conf.SetSubsystem(conf.DriveForLocal)
-		}
 	}
 
 	e.logf("Engine created.")
