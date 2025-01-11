@@ -11,7 +11,6 @@ import (
 	"io"
 	"math"
 	"net/netip"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -24,7 +23,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/dns"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netmon"
@@ -37,7 +35,6 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
-	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -95,7 +92,6 @@ type userspaceEngine struct {
 	wgdev            *device.Device
 	router           router.Router
 	confListenPort   uint16 // original conf.ListenPort
-	dns              *dns.Manager
 	magicConn        *magicsock.Conn
 	netMon           *netmon.Monitor
 	health           *health.Tracker
@@ -111,18 +107,13 @@ type userspaceEngine struct {
 	// incorrectly sent to us.
 	isLocalAddr syncs.AtomicValue[func(netip.Addr) bool]
 
-	// isDNSIPOverTailscale reports the whether a DNS resolver's IP
-	// is being routed over Tailscale.
-	isDNSIPOverTailscale syncs.AtomicValue[func(netip.Addr) bool]
-
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
 	lastNMinPeers       int
 	lastRouterSig       deephash.Sum // of router.Config
 	lastEngineSigFull   deephash.Sum // of full wireguard config
 	lastEngineSigTrim   deephash.Sum // of trimmed wireguard config
-	lastDNSConfig       *dns.Config
-	lastIsSubnetRouter  bool // was the node a primary subnet router in the last run.
+	lastIsSubnetRouter  bool         // was the node a primary subnet router in the last run.
 	recvActivityAt      map[key.NodePublic]mono.Time
 	trimmedNodes        map[key.NodePublic]bool   // set of node keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netip.Addr]*mono.Time // value is accessed atomically
@@ -170,10 +161,6 @@ type Config struct {
 	// Router interfaces the Engine to the OS network stack.
 	// If nil, a fake Router that does nothing is used.
 	Router router.Router
-
-	// DNS interfaces the Engine to the OS DNS resolver configuration.
-	// If nil, a fake OSConfigurator that does nothing is used.
-	DNS dns.OSConfigurator
 
 	// ReconfigureVPN provides an optional hook for platforms like Android to
 	// know when it's time to reconfigure their VPN implementation. Such
@@ -279,14 +266,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		logf("[v1] using fake (no-op) OS network configurator")
 		conf.Router = router.NewFake(logf)
 	}
-	if conf.DNS == nil {
-		logf("[v1] using fake (no-op) DNS configurator")
-		d, err := dns.NewNoopManager()
-		if err != nil {
-			return nil, err
-		}
-		conf.DNS = d
-	}
 	if conf.Dialer == nil {
 		conf.Dialer = &tsdial.Dialer{Logf: logf}
 	}
@@ -337,7 +316,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 	}
 	e.isLocalAddr.Store(ipset.FalseContainsIPFunc())
-	e.isDNSIPOverTailscale.Store(ipset.FalseContainsIPFunc())
 
 	if conf.NetMon != nil {
 		e.netMon = conf.NetMon
@@ -354,7 +332,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	tunName, _ := conf.Tun.Name()
 	conf.Dialer.SetTUNName(tunName)
 	conf.Dialer.SetNetMon(e.netMon)
-	e.dns = dns.NewManager(logf, conf.DNS, e.health, conf.Dialer, fwdDNSLinkSelector{e, tunName}, conf.ControlKnobs, runtime.GOOS)
 
 	// TODO: there's probably a better place for this
 	sockstats.SetNetMon(e.netMon)
@@ -512,7 +489,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	if conf.SetSubsystem != nil {
 		conf.SetSubsystem(e.tundev)
 		conf.SetSubsystem(e.magicConn)
-		conf.SetSubsystem(e.dns)
 		conf.SetSubsystem(conf.Router)
 		conf.SetSubsystem(conf.Dialer)
 		conf.SetSubsystem(e.netMon)
@@ -820,12 +796,9 @@ func hasOverlap(aips, rips views.Slice[netip.Prefix]) bool {
 	return false
 }
 
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
-	}
-	if dnsCfg == nil {
-		panic("dnsCfg must not be nil")
 	}
 
 	e.isLocalAddr.Store(ipset.NewContainsIPFunc(views.SliceOf(routerCfg.LocalAddrs)))
@@ -833,7 +806,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 	e.tundev.SetWGConfig(cfg)
-	e.lastDNSConfig = dnsCfg
 
 	peerSet := make(set.Set[key.NodePublic], len(cfg.Peers))
 	e.mu.Lock()
@@ -864,20 +836,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	engineChanged := deephash.Update(&e.lastEngineSigFull, cfg)
 	routerChanged := deephash.Update(&e.lastRouterSig, &struct {
 		RouterConfig *router.Config
-		DNSConfig    *dns.Config
-	}{routerCfg, dnsCfg})
+	}{routerCfg})
 	listenPortChanged := listenPort != e.magicConn.LocalPort()
 	peerMTUChanged := peerMTUEnable != e.magicConn.PeerMTUEnabled()
 	if !engineChanged && !routerChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged {
 		return ErrNoChanges
 	}
-
-	// TODO(bradfitz,danderson): maybe delete this isDNSIPOverTailscale
-	// field and delete the resolver.ForwardLinkSelector hook and
-	// instead have ipnlocal populate a map of DNS IP => linkName and
-	// put that in the *dns.Config instead, and plumb it down to the
-	// dns.Manager. Maybe also with isLocalAddr above.
-	e.isDNSIPOverTailscale.Store(ipset.NewContainsIPFunc(views.SliceOf(dnsIPsOverTailscale(dnsCfg, routerCfg))))
 
 	// See if any peers have changed disco keys, which means they've restarted.
 	// If so, we need to update the wireguard-go/device.Device in two phases:
@@ -925,15 +889,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.logf("wgengine: Reconfig: configuring router")
 		err := e.router.Set(routerCfg)
 		e.health.SetRouterHealth(err)
-		if err != nil {
-			return err
-		}
-		// Keep DNS configuration after router configuration, as some
-		// DNS managers refuse to apply settings if the device has no
-		// assigned address.
-		e.logf("wgengine: Reconfig: configuring DNS")
-		err = e.dns.Set(*dnsCfg)
-		e.health.SetDNSHealth(err)
 		if err != nil {
 			return err
 		}
@@ -1100,7 +1055,6 @@ func (e *userspaceEngine) Close() {
 	if e.netMonOwned {
 		e.netMon.Close()
 	}
-	e.dns.Down()
 	e.router.Close()
 	e.wgdev.Close()
 	e.tundev.Close()
@@ -1129,35 +1083,6 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 
 	e.health.SetAnyInterfaceUp(up)
 	e.magicConn.SetNetworkUp(up)
-	if !up || changed {
-		if err := e.dns.FlushCaches(); err != nil {
-			e.logf("wgengine: dns flush failed after major link change: %v", err)
-		}
-	}
-
-	// Hacky workaround for Unix DNS issue 2458: on
-	// suspend/resume or whenever NetworkManager is started, it
-	// nukes all systemd-resolved configs. So reapply our DNS
-	// config on major link change.
-	// TODO: explain why this is ncessary not just on Linux but also android
-	// and Apple platforms.
-	if changed {
-		switch runtime.GOOS {
-		case "linux", "android", "ios", "darwin", "openbsd":
-			e.wgLock.Lock()
-			dnsCfg := e.lastDNSConfig
-			e.wgLock.Unlock()
-			if dnsCfg != nil {
-				if err := e.dns.Set(*dnsCfg); err != nil {
-					e.logf("wgengine: error setting DNS config after major link change: %v", err)
-				} else if err := e.reconfigureVPNIfNecessary(); err != nil {
-					e.logf("wgengine: error reconfiguring VPN after major link change: %v", err)
-				} else {
-					e.logf("wgengine: set DNS config again after major link change")
-				}
-			}
-		}
-	}
 
 	why := "link-change-minor"
 	if changed {
@@ -1450,49 +1375,14 @@ func ipInPrefixes(ip netip.Addr, pp []netip.Prefix) bool {
 // dnsIPsOverTailscale returns the IPPrefixes of DNS resolver IPs that are
 // routed over Tailscale. The returned value does not contain duplicates is
 // not necessarily sorted.
-func dnsIPsOverTailscale(dnsCfg *dns.Config, routerCfg *router.Config) (ret []netip.Prefix) {
+func dnsIPsOverTailscale(routerCfg *router.Config) (ret []netip.Prefix) {
 	m := map[netip.Addr]bool{}
-
-	add := func(resolvers []*dnstype.Resolver) {
-		for _, r := range resolvers {
-			ip, err := netip.ParseAddr(r.Addr)
-			if err != nil {
-				if ipp, err := netip.ParseAddrPort(r.Addr); err == nil {
-					ip = ipp.Addr()
-				} else {
-					continue
-				}
-			}
-			if ipInPrefixes(ip, routerCfg.Routes) && !ipInPrefixes(ip, routerCfg.LocalRoutes) {
-				m[ip] = true
-			}
-		}
-	}
-
-	add(dnsCfg.DefaultResolvers)
-	for _, resolvers := range dnsCfg.Routes {
-		add(resolvers)
-	}
 
 	ret = make([]netip.Prefix, 0, len(m))
 	for ip := range m {
 		ret = append(ret, netip.PrefixFrom(ip, ip.BitLen()))
 	}
 	return ret
-}
-
-// fwdDNSLinkSelector is userspaceEngine's resolver.ForwardLinkSelector, to pick
-// which network interface to send DNS queries out of.
-type fwdDNSLinkSelector struct {
-	ue      *userspaceEngine
-	tunName string
-}
-
-func (ls fwdDNSLinkSelector) PickLink(ip netip.Addr) (linkName string) {
-	if ls.ue.isDNSIPOverTailscale.Load()(ip) {
-		return ls.tunName
-	}
-	return ""
 }
 
 var (

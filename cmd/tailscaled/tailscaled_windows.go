@@ -45,7 +45,6 @@ import (
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
 	"tailscale.com/logtail/backoff"
-	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tsd"
@@ -367,12 +366,6 @@ func handleSessionChange(chgRequest svc.ChangeRequest) {
 
 	if flushDNSOnSessionUnlock, _ := syspolicy.GetBoolean(syspolicy.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
 		log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
-		go func() {
-			err := dns.Flush()
-			if err != nil {
-				log.Printf("Error flushing DNS on session unlock: %v", err)
-			}
-		}()
 	}
 }
 

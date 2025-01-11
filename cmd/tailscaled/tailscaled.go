@@ -36,7 +36,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
-	"tailscale.com/net/dns"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -366,10 +365,6 @@ func run() (err error) {
 	if envknob.Bool("TS_PLEASE_PANIC") {
 		panic("TS_PLEASE_PANIC asked us to panic")
 	}
-	// Always clean up, even if we're going to run the server. This covers cases
-	// such as when a system was rebooted without shutting down, or tailscaled
-	// crashed, and would for example restore system DNS configuration.
-	dns.CleanUp(logf, netMon, sys.HealthTracker(), args.tunname)
 	router.CleanUp(logf, netMon, args.tunname)
 	// If the cleanUp flag was passed, then exit.
 	if args.cleanUp {
@@ -606,19 +601,9 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 	}
 	if onlyNetstack {
 		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
-			// On Synology in netstack mode, still init a DNS
-			// manager (directManager) to avoid the health check
-			// warnings in 'tailscale status' about DNS base
-			// configuration being unavailable (from the noop
-			// manager). More in Issue 4017.
-			// TODO(bradfitz): add a Synology-specific DNS manager.
-			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker(), sys.ControlKnobs(), "") // empty interface name
-			if err != nil {
-				return false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
-			}
 		}
 	} else {
-		dev, devName, err := tstunNew(logf, name)
+		dev, _, err := tstunNew(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name, err)
 			return false, fmt.Errorf("tstun.New(%q): %w", name, err)
@@ -640,13 +625,6 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, fmt.Errorf("creating router: %w", err)
 		}
 
-		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker(), sys.ControlKnobs(), devName)
-		if err != nil {
-			dev.Close()
-			r.Close()
-			return false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
-		}
-		conf.DNS = d
 		conf.Router = r
 		if handleSubnetsInNetstack() {
 			netstackSubnetRouter = true

@@ -35,7 +35,6 @@ import (
 	"time"
 
 	"go4.org/netipx"
-	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
@@ -50,7 +49,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
-	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/ipset"
@@ -591,59 +589,6 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	}
 	mak.Set(&b.componentLogUntil, component, newSt)
 	return nil
-}
-
-// GetDNSOSConfig returns the base OS DNS configuration, as seen by the DNS manager.
-func (b *LocalBackend) GetDNSOSConfig() (dns.OSConfig, error) {
-	manager, ok := b.sys.DNSManager.GetOK()
-	if !ok {
-		return dns.OSConfig{}, errors.New("DNS manager not available")
-	}
-	return manager.GetBaseConfig()
-}
-
-// QueryDNS performs a DNS query for name and queryType using the built-in DNS resolver, and returns
-// the raw DNS response and the resolvers that are were able to handle the query (the internal forwarder
-// may race multiple resolvers).
-func (b *LocalBackend) QueryDNS(name string, queryType dnsmessage.Type) (res []byte, resolvers []*dnstype.Resolver, err error) {
-	manager, ok := b.sys.DNSManager.GetOK()
-	if !ok {
-		return nil, nil, errors.New("DNS manager not available")
-	}
-	fqdn, err := dnsname.ToFQDN(name)
-	if err != nil {
-		b.logf("DNSQuery: failed to parse FQDN %q: %v", name, err)
-		return nil, nil, err
-	}
-	n, err := dnsmessage.NewName(fqdn.WithTrailingDot())
-	if err != nil {
-		b.logf("DNSQuery: failed to parse name %q: %v", name, err)
-		return nil, nil, err
-	}
-	from := netip.MustParseAddrPort("127.0.0.1:0")
-	db := dnsmessage.NewBuilder(nil, dnsmessage.Header{
-		OpCode:           0,
-		RecursionDesired: true,
-		ID:               1,
-	})
-	db.StartQuestions()
-	db.Question(dnsmessage.Question{
-		Name:  n,
-		Type:  queryType,
-		Class: dnsmessage.ClassINET,
-	})
-	q, err := db.Finish()
-	if err != nil {
-		b.logf("DNSQuery: failed to build query: %v", err)
-		return nil, nil, err
-	}
-	res, err = manager.Query(b.ctx, q, "tcp", from)
-	if err != nil {
-		b.logf("DNSQuery: failed to query %q: %v", name, err)
-		return nil, nil, err
-	}
-	rr := manager.Resolver().GetUpstreamResolvers(fqdn)
-	return res, rr, nil
 }
 
 // GetComponentDebugLogging gets the time that component's debug logging is
@@ -4009,7 +3954,6 @@ func (b *LocalBackend) authReconfig() {
 	disableSubnetsIfPAC := nm.HasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	userDialUseRoutes := nm.HasCap(tailcfg.NodeAttrUserDialUseRoutes)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
-	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.keyExpired, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	closing := b.shutdownCalled
 	b.mu.Unlock()
@@ -4061,7 +4005,7 @@ func (b *LocalBackend) authReconfig() {
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.ControlKnobs(), version.OS())
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 
-	err = b.e.Reconfig(cfg, rcfg, dcfg)
+	err = b.e.Reconfig(cfg, rcfg)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
@@ -4107,193 +4051,6 @@ func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, 
 		}
 	}
 	return false
-}
-
-// dnsConfigForNetmap returns a *dns.Config for the given netmap,
-// prefs, client OS version, and cloud hosting environment.
-//
-// The versionOS is a Tailscale-style version ("iOS", "macOS") and not
-// a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
-	if nm == nil {
-		return nil
-	}
-
-	// If the current node's key is expired, then we don't program any DNS
-	// configuration into the operating system. This ensures that if the
-	// DNS configuration specifies a DNS server that is only reachable over
-	// Tailscale, we don't break connectivity for the user.
-	//
-	// TODO(andrew-d): this also stops returning anything from quad-100; we
-	// could do the same thing as having "CorpDNS: false" and keep that but
-	// not program the OS?
-	if selfExpired {
-		return &dns.Config{}
-	}
-
-	dcfg := &dns.Config{
-		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-		Hosts:  map[dnsname.FQDN][]netip.Addr{},
-	}
-
-	// selfV6Only is whether we only have IPv6 addresses ourselves.
-	selfV6Only := nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
-		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
-	dcfg.OnlyIPv6 = selfV6Only
-
-	// Populate MagicDNS records. We do this unconditionally so that
-	// quad-100 can always respond to MagicDNS queries, even if the OS
-	// isn't configured to make MagicDNS resolution truly
-	// magic. Details in
-	// https://github.com/tailscale/tailscale/issues/1886.
-	set := func(name string, addrs views.Slice[netip.Prefix]) {
-		if addrs.Len() == 0 || name == "" {
-			return
-		}
-		fqdn, err := dnsname.ToFQDN(name)
-		if err != nil {
-			return // TODO: propagate error?
-		}
-		var have4 bool
-		for _, addr := range addrs.All() {
-			if addr.Addr().Is4() {
-				have4 = true
-				break
-			}
-		}
-		var ips []netip.Addr
-		for _, addr := range addrs.All() {
-			if selfV6Only {
-				if addr.Addr().Is6() {
-					ips = append(ips, addr.Addr())
-				}
-				continue
-			}
-			// If this node has an IPv4 address, then
-			// remove peers' IPv6 addresses for now, as we
-			// don't guarantee that the peer node actually
-			// can speak IPv6 correctly.
-			//
-			// https://github.com/tailscale/tailscale/issues/1152
-			// tracks adding the right capability reporting to
-			// enable AAAA in MagicDNS.
-			if addr.Addr().Is6() && have4 {
-				continue
-			}
-			ips = append(ips, addr.Addr())
-		}
-		dcfg.Hosts[fqdn] = ips
-	}
-	set(nm.Name, nm.GetAddresses())
-	for _, peer := range peers {
-		set(peer.Name(), peer.Addresses())
-	}
-	for _, rec := range nm.DNS.ExtraRecords {
-		switch rec.Type {
-		case "", "A", "AAAA":
-			// Treat these all the same for now: infer from the value
-		default:
-			// TODO: more
-			continue
-		}
-		ip, err := netip.ParseAddr(rec.Value)
-		if err != nil {
-			// Ignore.
-			continue
-		}
-		fqdn, err := dnsname.ToFQDN(rec.Name)
-		if err != nil {
-			continue
-		}
-		dcfg.Hosts[fqdn] = append(dcfg.Hosts[fqdn], ip)
-	}
-
-	if !prefs.CorpDNS() {
-		return dcfg
-	}
-
-	for _, dom := range nm.DNS.Domains {
-		fqdn, err := dnsname.ToFQDN(dom)
-		if err != nil {
-			logf("[unexpected] non-FQDN search domain %q", dom)
-		}
-		dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
-	}
-	if nm.DNS.Proxied { // actually means "enable MagicDNS"
-		for _, dom := range magicDNSRootDomains(nm) {
-			dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
-		}
-	}
-
-	addDefault := func(resolvers []*dnstype.Resolver) {
-		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
-	}
-
-	// If we're using an exit node and that exit node is new enough (1.19.x+)
-	// to run a DoH DNS proxy, then send all our DNS traffic through it.
-	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
-		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
-		return dcfg
-	}
-
-	// If the user has set default resolvers ("override local DNS"), prefer to
-	// use those resolvers as the default, otherwise if there are WireGuard exit
-	// node resolvers, use those as the default.
-	if len(nm.DNS.Resolvers) > 0 {
-		addDefault(nm.DNS.Resolvers)
-	} else {
-		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
-			addDefault(resolvers)
-		}
-	}
-
-	for suffix, resolvers := range nm.DNS.Routes {
-		fqdn, err := dnsname.ToFQDN(suffix)
-		if err != nil {
-			logf("[unexpected] non-FQDN route suffix %q", suffix)
-		}
-
-		// Create map entry even if len(resolvers) == 0; Issue 2706.
-		// This lets the control plane send ExtraRecords for which we
-		// can authoritatively answer "name not exists" for when the
-		// control plane also sends this explicit but empty route
-		// making it as something we handle.
-		//
-		// While we're already populating it, might as well size the
-		// slice appropriately.
-		// Per #9498 the exact requirements of nil vs empty slice remain
-		// unclear, this is a haunted graveyard to be resolved.
-		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
-		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
-	}
-
-	// Set FallbackResolvers as the default resolvers in the
-	// scenarios that can't handle a purely split-DNS config. See
-	// https://github.com/tailscale/tailscale/issues/1743 for
-	// details.
-	switch {
-	case len(dcfg.DefaultResolvers) != 0:
-		// Default resolvers already set.
-	case !prefs.ExitNodeID().IsZero():
-		// When using an exit node, we send all DNS traffic to the exit node, so
-		// we don't need a fallback resolver.
-		//
-		// However, if the exit node is too old to run a DoH DNS proxy, then we
-		// need to use a fallback resolver as it's very likely the LAN resolvers
-		// will become unreachable.
-		//
-		// This is especially important on Apple OSes, where
-		// adding the default route to the tunnel interface makes
-		// it "primary", and we MUST provide VPN-sourced DNS
-		// settings or we break all DNS resolution.
-		//
-		// https://github.com/tailscale/tailscale/issues/1713
-		addDefault(nm.DNS.FallbackResolvers)
-	case len(dcfg.Routes) == 0:
-		// No settings requiring split DNS, no problem.
-	}
-
-	return dcfg
 }
 
 // SetTCPHandlerForFunnelFlow sets the TCP handler for Funnel flows.
@@ -4435,9 +4192,6 @@ func (b *LocalBackend) initPeerAPIListener() {
 
 	ps := &peerAPIServer{
 		b: b,
-	}
-	if dm, ok := b.sys.DNSManager.GetOK(); ok {
-		ps.resolver = dm.Resolver()
 	}
 	b.peerAPIServer = ps
 
@@ -4762,7 +4516,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		b.blockEngineUpdates(true)
 		fallthrough
 	case ipn.Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -4949,7 +4703,7 @@ func (u unlockOnce) UnlockEarly() {
 // a status update that predates the "I've shut down" update.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+	b.e.Reconfig(&wgcfg.Config{}, &router.Config{})
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }

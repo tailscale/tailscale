@@ -16,7 +16,6 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -119,8 +118,8 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 	})
 }
 
-func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
-	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg, dnsCfg) })
+func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config) error {
+	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg) })
 }
 func (e *watchdogEngine) GetFilter() *filter.Filter {
 	return e.wrap.GetFilter()

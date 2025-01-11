@@ -26,7 +26,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
-	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
@@ -40,7 +39,6 @@ import (
 // System contains all the subsystems of a Tailscale node (tailscaled, etc.)
 type System struct {
 	Dialer         SubSystem[*tsdial.Dialer]
-	DNSManager     SubSystem[*dns.Manager] // can get its *resolver.Resolver from DNSManager.Resolver
 	Engine         SubSystem[wgengine.Engine]
 	NetMon         SubSystem[*netmon.Monitor]
 	MagicSock      SubSystem[*magicsock.Conn]
@@ -82,8 +80,6 @@ func (s *System) Set(v any) {
 	switch v := v.(type) {
 	case *netmon.Monitor:
 		s.NetMon.Set(v)
-	case *dns.Manager:
-		s.DNSManager.Set(v)
 	case *tsdial.Dialer:
 		s.Dialer.Set(v)
 	case wgengine.Engine:

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -66,7 +65,7 @@ type Engine interface {
 	// sends an updated network map.
 	//
 	// The returned error is ErrNoChanges if no changes were made.
-	Reconfig(*wgcfg.Config, *router.Config, *dns.Config) error
+	Reconfig(*wgcfg.Config, *router.Config) error
 
 	// PeerForIP returns the node to which the provided IP routes,
 	// if any. If none is found, (nil, false) is returned.
