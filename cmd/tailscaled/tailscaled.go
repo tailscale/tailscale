@@ -16,7 +16,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -41,10 +40,7 @@ import (
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
-	"tailscale.com/net/proxymux"
-	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -499,8 +495,6 @@ func startIPNServer(ctx context.Context, logf logger.Logf, sys *tsd.System) erro
 
 func getLocalBackend(ctx context.Context, logf logger.Logf, sys *tsd.System) (_ *ipnlocal.LocalBackend, retErr error) {
 
-	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
-
 	dialer := &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	sys.Set(dialer)
 
@@ -518,28 +512,6 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, sys *tsd.System) (_ 
 	startNetstack, err := newNetstack(logf, sys, onlyNetstack, handleSubnetsInNetstack())
 	if err != nil {
 		return nil, fmt.Errorf("newNetstack: %w", err)
-	}
-
-	if socksListener != nil || httpProxyListener != nil {
-		var addrs []string
-		if httpProxyListener != nil {
-			hs := &http.Server{Handler: httpProxyHandler(dialer.UserDial)}
-			go func() {
-				log.Fatalf("HTTP proxy exited: %v", hs.Serve(httpProxyListener))
-			}()
-			addrs = append(addrs, httpProxyListener.Addr().String())
-		}
-		if socksListener != nil {
-			ss := &socks5.Server{
-				Logf:   logger.WithPrefix(logf, "socks5: "),
-				Dialer: dialer.UserDial,
-			}
-			go func() {
-				log.Fatalf("SOCKS5 server exited: %v", ss.Serve(socksListener))
-			}()
-			addrs = append(addrs, socksListener.Addr().String())
-		}
-		tshttpproxy.SetSelfProxy(addrs...)
 	}
 
 	opts := ipnServerOpts()
@@ -721,50 +693,6 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-// mustStartProxyListeners creates listeners for local SOCKS and HTTP
-// proxies, if the respective addresses are not empty. socksAddr and
-// httpAddr can be the same, in which case socksListener will receive
-// connections that look like they're speaking SOCKS and httpListener
-// will receive everything else.
-//
-// socksListener and httpListener can be nil, if their respective
-// addrs are empty.
-func mustStartProxyListeners(socksAddr, httpAddr string) (socksListener, httpListener net.Listener) {
-	if socksAddr == httpAddr && socksAddr != "" && !strings.HasSuffix(socksAddr, ":0") {
-		ln, err := net.Listen("tcp", socksAddr)
-		if err != nil {
-			log.Fatalf("proxy listener: %v", err)
-		}
-		return proxymux.SplitSOCKSAndHTTP(ln)
-	}
-
-	var err error
-	if socksAddr != "" {
-		socksListener, err = net.Listen("tcp", socksAddr)
-		if err != nil {
-			log.Fatalf("SOCKS5 listener: %v", err)
-		}
-		if strings.HasSuffix(socksAddr, ":0") {
-			// Log kernel-selected port number so integration tests
-			// can find it portably.
-			log.Printf("SOCKS5 listening on %v", socksListener.Addr())
-		}
-	}
-	if httpAddr != "" {
-		httpListener, err = net.Listen("tcp", httpAddr)
-		if err != nil {
-			log.Fatalf("HTTP proxy listener: %v", err)
-		}
-		if strings.HasSuffix(httpAddr, ":0") {
-			// Log kernel-selected port number so integration tests
-			// can find it portably.
-			log.Printf("HTTP proxy listening on %v", httpListener.Addr())
-		}
-	}
-
-	return socksListener, httpListener
 }
 
 var beChildFunc = beChild
