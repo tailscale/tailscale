@@ -22,6 +22,7 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/netmon"
@@ -30,6 +31,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
+	"tailscale.com/util/testenv"
 )
 
 // Server is an IPN backend and its set of 0 or more active localhost
@@ -50,7 +52,7 @@ type Server struct {
 	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
 	lastUserID    ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
-	activeReqs    map[*http.Request]*actor
+	activeReqs    map[*http.Request]ipnauth.Actor
 	backendWaiter waiterSet // of LocalBackend waiters
 	zeroReqWaiter waiterSet // of blockUntilZeroConnections waiters
 }
@@ -195,8 +197,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
 		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
-		lah.PermitRead, lah.PermitWrite = ci.Permissions(lb.OperatorUserID())
-		lah.PermitCert = ci.CanFetchCerts()
+		if actor, ok := ci.(*actor); ok {
+			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
+			lah.PermitCert = actor.CanFetchCerts()
+		} else if testenv.InTest() {
+			lah.PermitRead, lah.PermitWrite = true, true
+		}
 		lah.Actor = ci
 		lah.ServeHTTP(w, r)
 		return
@@ -230,11 +236,11 @@ func (e inUseOtherUserError) Unwrap() error { return e.error }
 // The returned error, when non-nil, will be of type inUseOtherUserError.
 //
 // s.mu must be held.
-func (s *Server) checkConnIdentityLocked(ci *actor) error {
+func (s *Server) checkConnIdentityLocked(ci ipnauth.Actor) error {
 	// If clients are already connected, verify they're the same user.
 	// This mostly matters on Windows at the moment.
 	if len(s.activeReqs) > 0 {
-		var active *actor
+		var active ipnauth.Actor
 		for _, active = range s.activeReqs {
 			break
 		}
@@ -251,7 +257,9 @@ func (s *Server) checkConnIdentityLocked(ci *actor) error {
 				if username, err := active.Username(); err == nil {
 					fmt.Fprintf(&b, " by %s", username)
 				}
-				fmt.Fprintf(&b, ", pid %d", active.pid())
+				if active, ok := active.(*actor); ok {
+					fmt.Fprintf(&b, ", pid %d", active.pid())
+				}
 				return inUseOtherUserError{errors.New(b.String())}
 			}
 		}
@@ -267,7 +275,7 @@ func (s *Server) checkConnIdentityLocked(ci *actor) error {
 //
 // This is primarily used for the Windows GUI, to block until one user's done
 // controlling the tailscaled process.
-func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor *actor) error {
+func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor ipnauth.Actor) error {
 	inUse := func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -361,7 +369,7 @@ func (a *actor) CanFetchCerts() bool {
 // The returned error may be of type [inUseOtherUserError].
 //
 // onDone must be called when the HTTP request is done.
-func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone func(), err error) {
+func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (onDone func(), err error) {
 	if actor == nil {
 		return nil, errors.New("internal error: nil actor")
 	}
