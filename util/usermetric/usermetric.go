@@ -9,11 +9,9 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 
 	"tailscale.com/metrics"
-	"tailscale.com/tsweb/varz"
 	"tailscale.com/util/set"
 )
 
@@ -89,12 +87,6 @@ func (g *Gauge) WritePrometheus(w io.Writer, name string) {
 
 	io.WriteString(w, name)
 	fmt.Fprintf(w, " %v\n", g.m.Value())
-}
-
-// Handler returns a varz.Handler that serves the userfacing expvar contained
-// in this package.
-func (r *Registry) Handler(w http.ResponseWriter, req *http.Request) {
-	varz.ExpvarDoHandler(r.vars.Do)(w, req)
 }
 
 // String returns the string representation of all the metrics and their

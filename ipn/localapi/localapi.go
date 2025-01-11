@@ -77,7 +77,6 @@ var handler = map[string]localAPIHandler{
 	"status":                    (*Handler).serveStatus,
 	"suggest-exit-node":         (*Handler).serveSuggestExitNode,
 	"upload-client-metrics":     (*Handler).serveUploadClientMetrics,
-	"usermetrics":               (*Handler).serveUserMetrics,
 	"watch-ipn-bus":             (*Handler).serveWatchIPNBus,
 	"whois":                     (*Handler).serveWhoIs,
 }
@@ -482,13 +481,6 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	clientmetric.WritePrometheusExpositionFormat(w)
-}
-
-// serveUserMetrics returns user-facing metrics in Prometheus text
-// exposition format.
-func (h *Handler) serveUserMetrics(w http.ResponseWriter, r *http.Request) {
-	metricUserMetricsCalls.Add(1)
-	h.b.UserMetricsRegistry().Handler(w, r)
 }
 
 // disconnectControl is the handler for local API /disconnect-control endpoint that shuts down control client, so that

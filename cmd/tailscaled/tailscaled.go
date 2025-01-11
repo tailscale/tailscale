@@ -42,10 +42,8 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
 	"tailscale.com/tsd"
-	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -618,12 +616,6 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 	sys.NetstackRouter.Set(netstackSubnetRouter)
 
 	return onlyNetstack, nil
-}
-
-func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	varz.Handler(w, r)
-	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
 func runDebugServer(mux *http.ServeMux, addr string) {
