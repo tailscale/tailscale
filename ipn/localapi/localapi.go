@@ -22,7 +22,6 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -93,9 +92,6 @@ type Handler struct {
 	// It effectively means that the user is root or the admin
 	// (operator user).
 	PermitWrite bool
-
-	// Actor is the identity of the client connected to the Handler.
-	Actor ipnauth.Actor
 
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
@@ -361,9 +357,6 @@ func authorizeServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeC
 	if !configIn.HasPathHandler() {
 		return nil
 	}
-	if h.Actor.IsLocalAdmin(h.b.OperatorUserID()) {
-		return nil
-	}
 	switch goos {
 	case "windows":
 		return errors.New("must be a Windows local admin to serve a path")
@@ -452,7 +445,7 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
 	enc := json.NewEncoder(w)
-	h.b.WatchNotificationsAs(ctx, h.Actor, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
+	h.b.WatchNotificationsAs(ctx, nil, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
 		err := enc.Encode(roNotify)
 		if err != nil {
 			h.logf("json.Encode: %v", err)
@@ -472,7 +465,7 @@ func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
-	h.b.StartLoginInteractiveAs(r.Context(), h.Actor)
+	h.b.StartLoginInteractiveAs(r.Context(), nil)
 	w.WriteHeader(http.StatusNoContent)
 	return
 }

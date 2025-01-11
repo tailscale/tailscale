@@ -8,8 +8,6 @@ package ipnserver
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -27,7 +25,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
-	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
 
@@ -49,9 +46,8 @@ type Server struct {
 	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
 	lastUserID    ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
-	activeReqs    map[*http.Request]*actor
-	backendWaiter waiterSet // of LocalBackend waiters
-	zeroReqWaiter waiterSet // of blockUntilZeroConnections waiters
+	backendWaiter waiterSet         // of LocalBackend waiters
+	zeroReqWaiter waiterSet         // of blockUntilZeroConnections waiters
 }
 
 func (s *Server) mustBackend() *ipnlocal.LocalBackend {
@@ -170,21 +166,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ci, err := actorFromContext(r.Context())
-	if err != nil {
-		if errors.Is(err, errNoActor) {
-			http.Error(w, "internal error: "+err.Error(), http.StatusInternalServerError)
-		} else {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-		}
-		return
-	}
-
-	onDone, err := s.addActiveHTTPRequest(r, ci)
+	onDone, err := s.addActiveHTTPRequest(r)
 	if err != nil {
 		if ou, ok := err.(inUseOtherUserError); ok && localapi.InUseOtherUserIPNStream(w, r, ou.Unwrap()) {
 			w.(http.Flusher).Flush()
-			s.blockWhileIdentityInUse(ctx, ci)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -194,8 +179,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
 		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
-		lah.PermitRead, lah.PermitWrite = ci.Permissions(lb.OperatorUserID())
-		lah.Actor = ci
+		lah.PermitRead, lah.PermitWrite = true, true
 		lah.ServeHTTP(w, r)
 		return
 	}
@@ -228,86 +212,9 @@ func (e inUseOtherUserError) Unwrap() error { return e.error }
 // The returned error, when non-nil, will be of type inUseOtherUserError.
 //
 // s.mu must be held.
-func (s *Server) checkConnIdentityLocked(ci *actor) error {
-	// If clients are already connected, verify they're the same user.
-	// This mostly matters on Windows at the moment.
-	if len(s.activeReqs) > 0 {
-		var active *actor
-		for _, active = range s.activeReqs {
-			break
-		}
-		if active != nil {
-			// Always allow Windows SYSTEM user to connect,
-			// even if Tailscale is currently being used by another user.
-			if ci.IsLocalSystem() {
-				return nil
-			}
+func (s *Server) checkConnIdentityLocked() error {
 
-			if ci.UserID() != active.UserID() {
-				var b strings.Builder
-				b.WriteString("Tailscale already in use")
-				if username, err := active.Username(); err == nil {
-					fmt.Fprintf(&b, " by %s", username)
-				}
-				fmt.Fprintf(&b, ", pid %d", active.pid())
-				return inUseOtherUserError{errors.New(b.String())}
-			}
-		}
-	}
-	if err := s.mustBackend().CheckIPNConnectionAllowed(ci); err != nil {
-		return inUseOtherUserError{err}
-	}
 	return nil
-}
-
-// blockWhileIdentityInUse blocks while ci can't connect to the server because
-// the server is in use by a different user.
-//
-// This is primarily used for the Windows GUI, to block until one user's done
-// controlling the tailscaled process.
-func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor *actor) error {
-	inUse := func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		_, ok := s.checkConnIdentityLocked(actor).(inUseOtherUserError)
-		return ok
-	}
-	for inUse() {
-		// Check whenever the connection count drops down to zero.
-		ready, cleanup := s.zeroReqWaiter.add(&s.mu, ctx)
-		<-ready
-		cleanup()
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Permissions returns the actor's permissions for accessing
-// the Tailscale local daemon API. The operatorUID is only used on
-// Unix-like platforms and specifies the ID of a local user
-// (in the os/user.User.Uid string form) who is allowed
-// to operate tailscaled without being root or using sudo.
-func (a *actor) Permissions(operatorUID string) (read, write bool) {
-	switch envknob.GOOS() {
-	case "windows":
-		// As of 2024-08-27, according to the current permission model,
-		// Windows users always have read/write access to the local API if
-		// they're allowed to connect. Whether a user is allowed to connect
-		// is determined by [Server.checkConnIdentityLocked] when adding a
-		// new connection in [Server.addActiveHTTPRequest]. Therefore, it's
-		// acceptable to permit read and write access without any additional
-		// checks here. Note that this permission model is being changed in
-		// tailscale/corp#18342.
-		return true, true
-	case "js":
-		return true, true
-	}
-	if a.ci.IsUnixSock() {
-		return true, !a.ci.IsReadonlyConn(operatorUID, logger.Discard)
-	}
-	return false, false
 }
 
 // userIDFromString maps from either a numeric user id in string form
@@ -339,10 +246,7 @@ func isAllDigit(s string) bool {
 // The returned error may be of type [inUseOtherUserError].
 //
 // onDone must be called when the HTTP request is done.
-func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone func(), err error) {
-	if actor == nil {
-		return nil, errors.New("internal error: nil actor")
-	}
+func (s *Server) addActiveHTTPRequest(req *http.Request) (onDone func(), err error) {
 
 	lb := s.mustBackend()
 
@@ -359,51 +263,12 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone f
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.checkConnIdentityLocked(actor); err != nil {
+	if err := s.checkConnIdentityLocked(); err != nil {
 		return nil, err
 	}
 
-	mak.Set(&s.activeReqs, req, actor)
-
-	if len(s.activeReqs) == 1 {
-		if envknob.GOOS() == "windows" && !actor.IsLocalSystem() {
-			// Tell the LocalBackend about the identity we're now running as,
-			// unless its the SYSTEM user. That user is not a real account and
-			// doesn't have a home directory.
-			uid, err := lb.SetCurrentUser(actor)
-			if err != nil {
-				return nil, err
-			}
-			if s.lastUserID != uid {
-				if s.lastUserID != "" {
-					doReset = true
-				}
-				s.lastUserID = uid
-			}
-		}
-	}
-
 	onDone = func() {
-		s.mu.Lock()
-		delete(s.activeReqs, req)
-		remain := len(s.activeReqs)
-		s.mu.Unlock()
 
-		if remain == 0 && s.resetOnZero {
-			if lb.InServerMode() {
-				s.logf("client disconnected; staying alive in server mode")
-			} else {
-				s.logf("client disconnected; stopping server")
-				lb.ResetForClientDisconnect()
-			}
-		}
-
-		// Wake up callers waiting for the server to be idle:
-		if remain == 0 {
-			s.mu.Lock()
-			s.zeroReqWaiter.wakeAll()
-			s.mu.Unlock()
-		}
 	}
 
 	return onDone, nil
@@ -476,10 +341,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	hs := &http.Server{
 		Handler:     http.HandlerFunc(s.serveHTTP),
 		BaseContext: func(_ net.Listener) context.Context { return ctx },
-		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
-			return contextWithActor(ctx, s.logf, c)
-		},
-		ErrorLog: logger.StdLogger(logger.WithPrefix(s.logf, "ipnserver: ")),
+		ErrorLog:    logger.StdLogger(logger.WithPrefix(s.logf, "ipnserver: ")),
 	}
 	if err := hs.Serve(ln); err != nil {
 		if err := ctx.Err(); err != nil {

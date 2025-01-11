@@ -42,7 +42,6 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
-	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netcheck"
@@ -88,6 +87,8 @@ import (
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
 
+type ipnauthActor interface{}
+
 var controlDebugFlags = getControlDebugFlags()
 
 func getControlDebugFlags() []string {
@@ -124,11 +125,11 @@ func RegisterNewSSHServer(fn newSSHServerFunc) {
 }
 
 // watchSession represents a WatchNotifications channel,
-// an [ipnauth.Actor] that owns it (e.g., a connected GUI/CLI),
+// an [ipnauthActor] that owns it (e.g., a connected GUI/CLI),
 // and sessionID as required to close targeted buses.
 type watchSession struct {
 	ch        chan *ipn.Notify
-	owner     ipnauth.Actor // or nil
+	owner     ipnauthActor // or nil
 	sessionID string
 	cancel    context.CancelFunc // to shut down the session
 }
@@ -235,9 +236,9 @@ type LocalBackend struct {
 	endpoints      []tailcfg.Endpoint
 	blocked        bool
 	keyExpired     bool
-	authURL        string        // non-empty if not Running
-	authURLTime    time.Time     // when the authURL was received from the control server
-	authActor      ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil
+	authURL        string       // non-empty if not Running
+	authURLTime    time.Time    // when the authURL was received from the control server
+	authActor      ipnauthActor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil
 	egg            bool
 	prevIfState    *netmon.State
 	loginFlags     controlclient.LoginFlags
@@ -260,7 +261,7 @@ type LocalBackend struct {
 	componentLogUntil map[string]componentLogState
 	// c2nUpdateStatus is the status of c2n-triggered client update.
 	c2nUpdateStatus     updateStatus
-	currentUser         ipnauth.Actor
+	currentUser         ipnauthActor
 	selfUpdateProgress  []ipnstate.UpdateProgress
 	lastSelfUpdateState ipnstate.SelfUpdateStatus
 	// capForcedNetfilter is the netfilter that control instructs Linux clients
@@ -2249,10 +2250,10 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	b.WatchNotificationsAs(ctx, nil, mask, onWatchAdded, fn)
 }
 
-// WatchNotificationsAs is like WatchNotifications but takes an [ipnauth.Actor]
+// WatchNotificationsAs is like WatchNotifications but takes an [ipnauthActor]
 // as an additional parameter. If non-nil, the specified callback is invoked
 // only for notifications relevant to this actor.
-func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.Actor, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
+func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauthActor, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	ch := make(chan *ipn.Notify, 128)
 	sessionID := rands.HexString(16)
 	origFn := fn
@@ -2442,10 +2443,6 @@ type notificationTarget struct {
 	// TODO(nickkhyl): make this field cross-platform rather
 	// than Windows-specific.
 	userID ipn.WindowsUserID
-	// clientID identifies a client that should be the exclusive recipient
-	// of the notification. A zero value indicates that notification should
-	// be sent to all sessions of the specified user.
-	clientID ipnauth.ClientID
 }
 
 var allClients = notificationTarget{} // broadcast to all connected clients
@@ -2454,11 +2451,10 @@ var allClients = notificationTarget{} // broadcast to all connected clients
 // representing the same user as the specified actor. If the actor represents
 // a specific connected client, the [ipnauth.ClientID] must also match.
 // If the actor is nil, the [notificationTarget] matches all actors.
-func toNotificationTarget(actor ipnauth.Actor) notificationTarget {
+func toNotificationTarget(actor ipnauthActor) notificationTarget {
 	t := notificationTarget{}
 	if actor != nil {
-		t.userID = actor.UserID()
-		t.clientID, _ = actor.ClientID()
+		// lanscaping
 	}
 	return t
 }
@@ -2466,22 +2462,8 @@ func toNotificationTarget(actor ipnauth.Actor) notificationTarget {
 // match reports whether the specified actor should receive notifications
 // targeting t. If the actor is nil, it should only receive notifications
 // intended for all users.
-func (t notificationTarget) match(actor ipnauth.Actor) bool {
-	if t == allClients {
-		return true
-	}
-	if actor == nil {
-		return false
-	}
-	if t.userID != "" && t.userID != actor.UserID() {
-		return false
-	}
-	if t.clientID != ipnauth.NoClientID {
-		clientID, ok := actor.ClientID()
-		if !ok || clientID != t.clientID {
-			return false
-		}
-	}
+func (t notificationTarget) match(actor ipnauthActor) bool {
+
 	return true
 }
 
@@ -2520,7 +2502,7 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 // If url is "", it is equivalent to calling [LocalBackend.resetAuthURLLocked] with b.mu held.
 func (b *LocalBackend) setAuthURL(url string) {
 	var popBrowser, keyExpired bool
-	var recipient ipnauth.Actor
+	var recipient ipnauthActor
 
 	b.mu.Lock()
 	switch {
@@ -2555,7 +2537,7 @@ func (b *LocalBackend) setAuthURL(url string) {
 // keyExpired is the value of b.keyExpired upon entry and indicates
 // whether the node's key has expired.
 // It must not be called with b.mu held.
-func (b *LocalBackend) popBrowserAuthNow(url string, keyExpired bool, recipient ipnauth.Actor) {
+func (b *LocalBackend) popBrowserAuthNow(url string, keyExpired bool, recipient ipnauthActor) {
 	b.logf("popBrowserAuthNow(%q): url=%v, key-expired=%v, seamless-key-renewal=%v", maybeUsernameOf(recipient), url != "", keyExpired, b.seamlessRenewalEnabled())
 
 	// Deconfigure the local network data plane if:
@@ -2836,43 +2818,8 @@ func (b *LocalBackend) InServerMode() bool {
 // Currently (as of 2024-08-26), this is only used on Windows.
 // We plan to remove it as part of the multi-user and unattended mode improvements
 // as we progress on tailscale/corp#18342.
-func (b *LocalBackend) CheckIPNConnectionAllowed(actor ipnauth.Actor) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	serverModeUid := b.pm.CurrentUserID()
-	if serverModeUid == "" {
-		// Either this platform isn't a "multi-user" platform or we're not yet
-		// running as one.
-		return nil
-	}
-	if !b.pm.CurrentPrefs().ForceDaemon() {
-		return nil
-	}
-
-	// Always allow Windows SYSTEM user to connect,
-	// even if Tailscale is currently being used by another user.
-	if actor.IsLocalSystem() {
-		return nil
-	}
-
-	uid := actor.UserID()
-	if uid == "" {
-		return errors.New("empty user uid in connection identity")
-	}
-	if uid != serverModeUid {
-		return fmt.Errorf("Tailscale running in server mode (%q); connection from %q not allowed", b.tryLookupUserName(string(serverModeUid)), b.tryLookupUserName(string(uid)))
-	}
+func (b *LocalBackend) CheckIPNConnectionAllowed(actor ipnauthActor) error {
 	return nil
-}
-
-// tryLookupUserName tries to look up the username for the uid.
-// It returns the username on success, or the UID on failure.
-func (b *LocalBackend) tryLookupUserName(uid string) string {
-	u, err := ipnauth.LookupUserFromID(b.logf, uid)
-	if err != nil {
-		return uid
-	}
-	return u.Username
 }
 
 // StartLoginInteractive requests a new interactive login from controlclient,
@@ -2883,12 +2830,12 @@ func (b *LocalBackend) StartLoginInteractive(ctx context.Context) error {
 	return b.StartLoginInteractiveAs(ctx, nil)
 }
 
-// StartLoginInteractiveAs is like StartLoginInteractive but takes an [ipnauth.Actor]
+// StartLoginInteractiveAs is like StartLoginInteractive but takes an [ipnauthActor]
 // as an additional parameter. If non-nil, the specified user is expected to complete
 // the interactive login, and therefore will receive the BrowseToURL notification once
 // the control plane sends us one. Otherwise, the notification will be delivered to all
 // active [watchSession]s.
-func (b *LocalBackend) StartLoginInteractiveAs(ctx context.Context, user ipnauth.Actor) error {
+func (b *LocalBackend) StartLoginInteractiveAs(ctx context.Context, user ipnauthActor) error {
 	b.mu.Lock()
 	if b.cc == nil {
 		panic("LocalBackend.assertClient: b.cc == nil")
@@ -3035,46 +2982,6 @@ func (b *LocalBackend) shouldUploadServices() bool {
 		return false // default to safest setting
 	}
 	return !p.ShieldsUp() && b.netMap.CollectServices
-}
-
-// SetCurrentUser is used to implement support for multi-user systems (only
-// Windows 2022-11-25). On such systems, the uid is used to determine which
-// user's state should be used. The current user is maintained by active
-// connections open to the backend.
-//
-// When the backend initially starts it will typically start with no user. Then,
-// the first connection to the backend from the GUI frontend will set the
-// current user. Once set, the current user cannot be changed until all previous
-// connections are closed. The user is also used to determine which
-// LoginProfiles are accessible.
-//
-// In unattended mode, the backend will start with the user which enabled
-// unattended mode. The user must disable unattended mode before the user can be
-// changed.
-//
-// On non-multi-user systems, the user should be set to nil.
-//
-// SetCurrentUser returns the ipn.WindowsUserID associated with the user
-// when successful.
-func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) (ipn.WindowsUserID, error) {
-	var uid ipn.WindowsUserID
-	if actor != nil {
-		uid = actor.UserID()
-	}
-
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
-
-	if b.pm.CurrentUserID() == uid {
-		return uid, nil
-	}
-	b.pm.SetCurrentUserID(uid)
-	if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
-		c.Close()
-	}
-	b.currentUser = actor
-	b.resetForProfileChangeLockedOnEntry(unlock)
-	return uid, nil
 }
 
 func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
@@ -3989,12 +3896,6 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 	b.setNetMapLocked(nil)
 	b.pm.Reset()
-	if b.currentUser != nil {
-		if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
-			c.Close()
-		}
-		b.currentUser = nil
-	}
 	b.keyExpired = false
 	b.resetAuthURLLocked()
 	b.activeLogin = ""
@@ -5149,12 +5050,8 @@ func (b *LocalBackend) srcIPHasCapForFilter(srcIP netip.Addr, cap tailcfg.NodeCa
 
 // maybeUsernameOf returns the actor's username if the actor
 // is non-nil and its username can be resolved.
-func maybeUsernameOf(actor ipnauth.Actor) string {
-	var username string
-	if actor != nil {
-		username, _ = actor.Username()
-	}
-	return username
+func maybeUsernameOf(actor ipnauthActor) string {
+	return "root"
 }
 
 // VIPServices returns the list of tailnet services that this node
