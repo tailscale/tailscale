@@ -24,6 +24,11 @@ updatedeps: ## Update depaware deps
 		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund
 
+updatemindeps:
+		PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --file=depaware-minlinux.txt --goos=linux --tags=ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion --update \
+		tailscale.com/cmd/tailscaled \
+		tailscale.com/cmd/tailscale
+
 depaware: ## Run depaware checks
 	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
 	# it finds in its $$PATH is the right one.

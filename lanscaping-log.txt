@@ -1,0 +1,18 @@
+bradfitz@bradm4 tailscale.com % git pull origin main --rebase
+From github.com:tailscale/tailscale
+ * branch                main       -> FETCH_HEAD
+Already up to date.
+bradfitz@bradm4 tailscale.com % go install ./cmd/tailscaled && ls -lh ~/go/bin/tailscaled
+-rwxr-xr-x@ 1 bradfitz  staff    29M Jan 10 19:01 /Users/bradfitz/go/bin/tailscaled
+bradfitz@bradm4 tailscale.com % git rev-parse HEAD
+5fdb4f83ad23f0ee7a9dc08ecc2a0ceeabd81fc3bradfitz@bradm4 tailscale.com % go install -ldflags "-w -s" --tags=ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion ./cmd/tailscaled && ls -lh ~/go/bin/tailscaled
+-rwxr-xr-x@ 1 bradfitz  staff    20M Jan 10 19:03 /Users/bradfitz/go/bin/tailscaled
+bradfitz@bradm4 tailscale.com % cat lanscaping-log.txt
+bradfitz@bradm4 tailscale.com % git pull origin main --rebase
+From github.com:tailscale/tailscale
+ * branch                main       -> FETCH_HEAD
+Already up to date.
+bradfitz@bradm4 tailscale.com % go install ./cmd/tailscaled && ls -lh ~/go/bin/tailscaled
+-rwxr-xr-x@ 1 bradfitz  staff    29M Jan 10 19:01 /Users/bradfitz/go/bin/tailscaledbradfitz@bradm4 tailscale.com % go build -o $HOME/bin/tailscaled.min -ldflags "-w -s" --tags=ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion ./cmd/tailscaled
+bradfitz@bradm4 tailscale.com % ls -lh $HOME/bin/tailscaled.min
+-rwxr-xr-x@ 1 bradfitz  staff    20M Jan 10 19:05 /Users/bradfitz/bin/tailscaled.min
