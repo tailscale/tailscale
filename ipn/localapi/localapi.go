@@ -43,7 +43,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/osdiag"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
@@ -337,9 +336,6 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	// printing them here ensures we don't have to go spelunking through
 	// logs for them.
 	envknob.LogCurrent(logger.WithPrefix(h.logf, "user bugreport: "))
-
-	// OS-specific details
-	h.logf.JSON(1, "UserBugReportOS", osdiag.SupportInfo(osdiag.LogSupportInfoReasonBugReport))
 
 	if defBool(r.URL.Query().Get("diagnose"), false) {
 	}
