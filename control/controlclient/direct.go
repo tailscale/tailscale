@@ -42,7 +42,6 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -498,7 +497,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverLegacyKey
 	serverNoiseKey := c.serverNoiseKey
-	authKey, isWrapped, wrappedSig, wrappedKey := tka.DecodeWrappedAuthkey(c.authKey, c.logf)
+	authKey := c.authKey
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
 	expired := !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
@@ -588,17 +587,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	var nodeKeySignature tkatype.MarshaledSignature
 	if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
-		if nodeKeySignature, err = tka.ResignNKS(persist.NetworkLockKey, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
-			c.logf("Failed re-signing node-key signature: %v", err)
-		}
-	} else if isWrapped {
-		// We were given a wrapped pre-auth key, which means that in addition
-		// to being a regular pre-auth key there was a suffix with information to
-		// generate a tailnet-lock signature.
-		nodeKeySignature, err = tka.SignByCredential(wrappedKey, wrappedSig, tryingNewKey.Public())
-		if err != nil {
-			return false, "", nil, err
-		}
+		// lanscaping
 	}
 
 	if backendLogID == "" {

@@ -206,7 +206,6 @@ change in the future.
 			fileCmd,
 			bugReportCmd,
 			certCmd,
-			netlockCmd,
 			licensesCmd,
 			exitNodeCmd(),
 			updateCmd,

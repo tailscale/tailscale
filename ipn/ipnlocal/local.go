@@ -78,7 +78,6 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
-	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
@@ -250,7 +249,7 @@ type LocalBackend struct {
 	cc             controlclient.Client
 	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
 	machinePrivKey key.MachinePrivate
-	tka            *tkaState
+	tka            *int
 	state          ipn.State
 	capFileSharing bool // whether netMap contains the file sharing capability
 	capTailnetLock bool // whether netMap contains the tailnet lock capability
@@ -1570,29 +1569,12 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.capTailnetLock = st.NetMap.HasCap(tailcfg.CapabilityTailnetLock)
 		b.setWebClientAtomicBoolLocked(st.NetMap)
 
-		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
-		if err := b.tkaSyncIfNeeded(st.NetMap, prefs.View()); err != nil {
-			b.logf("[v1] TKA sync error: %v", err)
-		}
-		b.mu.Lock()
 		// As we stepped outside of the lock, it's possible for b.cc
 		// to now be nil.
 		if b.cc != nil {
-			if b.tka != nil {
-				head, err := b.tka.authority.Head().MarshalText()
-				if err != nil {
-					b.logf("[v1] error marshalling tka head: %v", err)
-				} else {
-					b.cc.SetTKAHead(string(head))
-				}
-			} else {
-				b.cc.SetTKAHead("")
-			}
+			b.cc.SetTKAHead("")
 		}
 
-		if !envknob.TKASkipSignatureCheck() {
-			b.tkaFilterNetmapLocked(st.NetMap)
-		}
 		b.setNetMapLocked(st.NetMap)
 		b.updateFilterLocked(st.NetMap, prefs.View())
 	}
@@ -2254,13 +2236,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		b.logf("initTKALocked: %v", err)
 	}
 	var tkaHead string
-	if b.tka != nil {
-		head, err := b.tka.authority.Head().MarshalText()
-		if err != nil {
-			return fmt.Errorf("marshalling tka head: %w", err)
-		}
-		tkaHead = string(head)
-	}
 	confWantRunning := b.conf != nil && wantRunning
 
 	if endpoints != nil {
@@ -2498,7 +2473,7 @@ func (b *LocalBackend) checkCaptivePortalLoop(ctx context.Context) {
 func (b *LocalBackend) performCaptiveDetection() {
 }
 
-// shouldRunCaptivePortalDetection reports whether captive portal detection
+// shouldRunCaptivePortalDetection reports whether capgtive portal detection
 // should be run. It is enabled by default, but can be disabled via a control
 // knob. It is also only run when the user explicitly wants the backend to be
 // running.
@@ -6739,48 +6714,6 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 }
 
 func (b *LocalBackend) initTKALocked() error {
-	cp := b.pm.CurrentProfile()
-	if cp.ID == "" {
-		b.tka = nil
-		return nil
-	}
-	if b.tka != nil {
-		if b.tka.profile == cp.ID {
-			// Already initialized.
-			return nil
-		}
-		// As we're switching profiles, we need to reset the TKA to nil.
-		b.tka = nil
-	}
-	root := b.TailscaleVarRoot()
-	if root == "" {
-		b.tka = nil
-		b.logf("network-lock unavailable; no state directory")
-		return nil
-	}
-
-	chonkDir := b.chonkPathLocked()
-	if _, err := os.Stat(chonkDir); err == nil {
-		// The directory exists, which means network-lock has been initialized.
-		storage, err := tka.ChonkDir(chonkDir)
-		if err != nil {
-			return fmt.Errorf("opening tailchonk: %v", err)
-		}
-		authority, err := tka.Open(storage)
-		if err != nil {
-			return fmt.Errorf("initializing tka: %v", err)
-		}
-		if err := authority.Compact(storage, tkaCompactionDefaults); err != nil {
-			b.logf("tka compaction failed: %v", err)
-		}
-
-		b.tka = &tkaState{
-			profile:   cp.ID,
-			authority: authority,
-			storage:   storage,
-		}
-		b.logf("tka initialized at head %x", authority.Head())
-	}
 
 	return nil
 }

@@ -18,15 +18,12 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
-	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 )
-
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=TKAPeer
 
 // Status represents the entire state of the IPN network.
 type Status struct {
@@ -85,77 +82,6 @@ type Status struct {
 	// version of the Tailscale client that's available. Depending on
 	// the platform and client settings, it may not be available.
 	ClientVersion *tailcfg.ClientVersion
-}
-
-// TKAKey describes a key trusted by network lock.
-type TKAKey struct {
-	Key      key.NLPublic
-	Metadata map[string]string
-	Votes    uint
-}
-
-// TKAPeer describes a peer and its network lock details.
-type TKAPeer struct {
-	Name             string // DNS
-	ID               tailcfg.NodeID
-	StableID         tailcfg.StableNodeID
-	TailscaleIPs     []netip.Addr // Tailscale IP(s) assigned to this node
-	NodeKey          key.NodePublic
-	NodeKeySignature tka.NodeKeySignature
-}
-
-// NetworkLockStatus represents whether network-lock is enabled,
-// along with details about the locally-known state of the tailnet
-// key authority.
-type NetworkLockStatus struct {
-	// Enabled is true if network lock is enabled.
-	Enabled bool
-
-	// Head describes the AUM hash of the leaf AUM. Head is nil
-	// if network lock is not enabled.
-	Head *[32]byte
-
-	// PublicKey describes the node's network-lock public key.
-	// It may be zero if the node has not logged in.
-	PublicKey key.NLPublic
-
-	// NodeKey describes the node's current node-key. This field is not
-	// populated if the node is not operating (i.e. waiting for a login).
-	NodeKey *key.NodePublic
-
-	// NodeKeySigned is true if our node is authorized by network-lock.
-	NodeKeySigned bool
-
-	// NodeKeySignature is the current signature of this node's key.
-	NodeKeySignature *tka.NodeKeySignature
-
-	// TrustedKeys describes the keys currently trusted to make changes
-	// to network-lock.
-	TrustedKeys []TKAKey
-
-	// VisiblePeers describes peers which are visible in the netmap that
-	// have valid Tailnet Lock signatures signatures.
-	VisiblePeers []*TKAPeer
-
-	// FilteredPeers describes peers which were removed from the netmap
-	// (i.e. no connectivity) because they failed tailnet lock
-	// checks.
-	FilteredPeers []*TKAPeer
-
-	// StateID is a nonce associated with the network lock authority,
-	// generated upon enablement. This field is not populated if the
-	// network lock is disabled.
-	StateID uint64
-}
-
-// NetworkLockUpdate describes a change to network-lock state.
-type NetworkLockUpdate struct {
-	Hash   [32]byte
-	Change string // values of tka.AUMKind.String()
-
-	// Raw contains the serialized AUM. The AUM is sent in serialized
-	// form to avoid transitive dependences bloating this package.
-	Raw []byte
 }
 
 // TailnetStatus is information about a Tailscale network ("tailnet").

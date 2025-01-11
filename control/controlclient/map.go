@@ -784,15 +784,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		CollectServices:   ms.collectServices,
 		DERPMap:           ms.lastDERPMap,
 		ControlHealth:     ms.lastHealth,
-		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 		MaxKeyDuration:    ms.lastMaxExpiry,
-	}
-
-	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {
-		if err := nm.TKAHead.UnmarshalText([]byte(ms.lastTKAInfo.Head)); err != nil {
-			ms.logf("error unmarshalling TKAHead: %v", err)
-			nm.TKAEnabled = false
-		}
 	}
 
 	if node := ms.lastNode; node.Valid() {
