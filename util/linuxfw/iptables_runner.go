@@ -6,31 +6,16 @@
 package linuxfw
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"net/netip"
-	"os"
 	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/coreos/go-iptables/iptables"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/multierr"
-	"tailscale.com/version/distro"
 )
-
-// isNotExistError needs to be overridden in tests that rely on distinguishing
-// this error, because we don't have a good way how to create a new
-// iptables.Error of that type.
-var isNotExistError = func(err error) bool {
-	var e *iptables.Error
-	return errors.As(err, &e) && e.IsNotExist()
-}
 
 type iptablesInterface interface {
 	// Adding this interface for testing purposes so we can mock out
@@ -67,91 +52,7 @@ func checkIP6TablesExists() error {
 // returned. The runner probes for IPv6 support once at initialization time and
 // if not found, no IPv6 rules will be modified for the lifetime of the runner.
 func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
-	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
-	if err != nil {
-		return nil, err
-	}
-
-	supportsV6, supportsV6NAT, supportsV6Filter := false, false, false
-	v6err := CheckIPv6(logf)
-	ip6terr := checkIP6TablesExists()
-	var ipt6 *iptables.IPTables
-	switch {
-	case v6err != nil:
-		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
-	case ip6terr != nil:
-		logf("disabling tunneled IPv6 due to missing ip6tables: %v", ip6terr)
-	default:
-		supportsV6 = true
-		ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
-		if err != nil {
-			return nil, err
-		}
-		supportsV6Filter = checkSupportsV6Filter(ipt6, logf)
-		supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
-		logf("netfilter running in iptables mode v6 = %v, v6filter = %v, v6nat = %v", supportsV6, supportsV6Filter, supportsV6NAT)
-	}
-	return &iptablesRunner{
-		ipt4:              ipt4,
-		ipt6:              ipt6,
-		v6Available:       supportsV6,
-		v6NATAvailable:    supportsV6NAT,
-		v6FilterAvailable: supportsV6Filter}, nil
-}
-
-// checkSupportsV6Filter returns whether the system has a "filter" table in the
-// IPv6 tables. Some container environments such as GitHub codespaces have
-// limited local IPv6 support, and containers containing ip6tables, but do not
-// have kernel support for IPv6 filtering.
-// We will not set ip6tables rules in these instances.
-func checkSupportsV6Filter(ipt *iptables.IPTables, logf logger.Logf) bool {
-	if ipt == nil {
-		return false
-	}
-	_, filterListErr := ipt.ListChains("filter")
-	if filterListErr == nil {
-		return true
-	}
-	logf("ip6tables filtering is not supported on this host: %v", filterListErr)
-	return false
-}
-
-// checkSupportsV6NAT returns whether the system has a "nat" table in the
-// IPv6 netfilter stack.
-//
-// The nat table was added after the initial release of ipv6
-// netfilter, so some older distros ship a kernel that can't NAT IPv6
-// traffic.
-// ipt must be initialized for IPv6.
-func checkSupportsV6NAT(ipt *iptables.IPTables, logf logger.Logf) bool {
-	if ipt == nil || ipt.Proto() != iptables.ProtocolIPv6 {
-		return false
-	}
-	_, natListErr := ipt.ListChains("nat")
-	if natListErr == nil {
-		return true
-	}
-
-	// TODO (irbekrm): the following two checks were added before the check
-	// above that verifies that nat chains can be listed. It is a
-	// container-friendly check (see
-	// https://github.com/tailscale/tailscale/issues/11344), but also should
-	// be good enough on its own in other environments. If we never observe
-	// it falsely succeed, let's remove the other two checks.
-
-	bs, err := os.ReadFile("/proc/net/ip6_tables_names")
-	if err != nil {
-		return false
-	}
-	if bytes.Contains(bs, []byte("nat\n")) {
-		logf("[unexpected] listing nat chains failed, but /proc/net/ip6_tables_name reports a nat table existing")
-		return true
-	}
-	if exec.Command("modprobe", "ip6table_nat").Run() == nil {
-		logf("[unexpected] listing nat chains failed, but modprobe ip6table_nat succeeded")
-		return true
-	}
-	return false
+	return nil, errors.New("lanscaping")
 }
 
 // HasIPV6 reports true if the system supports IPv6.
@@ -266,281 +167,68 @@ func (i *iptablesRunner) AddHooks() error {
 // AddChains creates custom Tailscale chains in netfilter via iptables
 // if the ts-chain doesn't already exist.
 func (i *iptablesRunner) AddChains() error {
-	// create creates a chain in the given table if it doesn't already exist.
-	// If the chain already exists, it is a no-op.
-	create := func(ipt iptablesInterface, table, chain string) error {
-		err := ipt.ClearChain(table, chain)
-		if isNotExistError(err) {
-			// nonexistent chain. let's create it!
-			return ipt.NewChain(table, chain)
-		}
-		if err != nil {
-			return fmt.Errorf("setting up %s/%s: %w", table, chain, err)
-		}
-		return nil
-	}
-
-	for _, ipt := range i.getTables() {
-		if err := create(ipt, "filter", "ts-input"); err != nil {
-			return err
-		}
-		if err := create(ipt, "filter", "ts-forward"); err != nil {
-			return err
-		}
-	}
-
-	for _, ipt := range i.getNATTables() {
-		if err := create(ipt, "nat", "ts-postrouting"); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return errors.New("lanscaping")
 }
 
 // AddBase adds some basic processing rules to be supplemented by
 // later calls to other helpers.
 func (i *iptablesRunner) AddBase(tunname string) error {
-	if err := i.addBase4(tunname); err != nil {
-		return err
-	}
-	if i.HasIPV6Filter() {
-		if err := i.addBase6(tunname); err != nil {
-			return err
-		}
-	}
-	return nil
+	return errors.New("lanscaping")
 }
 
 // addBase4 adds some basic IPv4 processing rules to be
 // supplemented by later calls to other helpers.
 func (i *iptablesRunner) addBase4(tunname string) error {
-	// Only allow CGNAT range traffic to come from tailscale0. There
-	// is an exception carved out for ranges used by ChromeOS, for
-	// which we fall out of the Tailscale chain.
-	//
-	// Note, this will definitely break nodes that end up using the
-	// CGNAT range for other purposes :(.
-	args := []string{"!", "-i", tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"}
-	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
-	}
-	args = []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
-	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
-	}
+	return errors.New("lanscaping")
 
-	// Explicitly allow all other inbound traffic to the tun interface
-	args = []string{"-i", tunname, "-j", "ACCEPT"}
-	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
-	}
-
-	// Forward all traffic from the Tailscale interface, and drop
-	// traffic to the tailscale interface by default. We use packet
-	// marks here so both filter/FORWARD and nat/POSTROUTING can match
-	// on these packets of interest.
-	//
-	// In particular, we only want to apply SNAT rules in
-	// nat/POSTROUTING to packets that originated from the Tailscale
-	// interface, but we can't match on the inbound interface in
-	// POSTROUTING. So instead, we match on the inbound interface in
-	// filter/FORWARD, and set a packet mark that nat/POSTROUTING can
-	// use to effectively run that same test again.
-	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask}
-	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
-	}
-	args = []string{"-m", "mark", "--mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask, "-j", "ACCEPT"}
-	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
-	}
-	args = []string{"-o", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
-	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
-	}
-	args = []string{"-o", tunname, "-j", "ACCEPT"}
-	if err := i.ipt4.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
-	}
-
-	return nil
 }
 
 func (i *iptablesRunner) AddDNATRule(origDst, dst netip.Addr) error {
-	table := i.getIPTByAddr(dst)
-	return table.Insert("nat", "PREROUTING", 1, "--destination", origDst.String(), "-j", "DNAT", "--to-destination", dst.String())
+	return errors.New("lanscaping")
 }
 
 // EnsureSNATForDst sets up firewall to ensure that all traffic aimed for dst, has its source ip set to src:
 // - creates a SNAT rule if not already present
 // - ensures that any no longer valid SNAT rules for the same dst are removed
 func (i *iptablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
-	table := i.getIPTByAddr(dst)
-	rules, err := table.List("nat", "POSTROUTING")
-	if err != nil {
-		return fmt.Errorf("error listing rules: %v", err)
-	}
-	// iptables accept either address or a CIDR value for the --destination flag, but converts an address to /32
-	// CIDR. Explicitly passing a /32 CIDR made it possible to test this rule.
-	dstPrefix, err := dst.Prefix(32)
-	if err != nil {
-		return fmt.Errorf("error calculating prefix of dst %v: %v", dst, err)
-	}
-
-	// wantsArgsPrefix is the prefix of the SNAT rule for the provided destination.
-	// We should only have one POSTROUTING rule with this prefix.
-	wantsArgsPrefix := fmt.Sprintf("-d %s -j SNAT --to-source", dstPrefix.String())
-	// wantsArgs is the actual SNAT rule that we want.
-	wantsArgs := fmt.Sprintf("%s %s", wantsArgsPrefix, src.String())
-	for _, r := range rules {
-		args := argsFromPostRoutingRule(r)
-		if strings.HasPrefix(args, wantsArgsPrefix) {
-			if strings.HasPrefix(args, wantsArgs) {
-				return nil
-			}
-			// SNAT rule matching the destination, but for a different source - delete.
-			if err := table.Delete("nat", "POSTROUTING", strings.Split(args, " ")...); err != nil {
-				// If we failed to delete don't crash the node- the proxy should still be functioning.
-				log.Printf("[unexpected] error deleting rule %s: %v, please report it.", r, err)
-			}
-			break
-		}
-	}
-	return table.Insert("nat", "POSTROUTING", 1, "-d", dstPrefix.String(), "-j", "SNAT", "--to-source", src.String())
+	return errors.New("lanscaping")
 }
 
 func (i *iptablesRunner) DNATNonTailscaleTraffic(tun string, dst netip.Addr) error {
-	table := i.getIPTByAddr(dst)
-	return table.Insert("nat", "PREROUTING", 1, "!", "-i", tun, "-j", "DNAT", "--to-destination", dst.String())
+	return errors.New("lanscaping")
 }
 
 // DNATWithLoadBalancer adds iptables rules to forward all traffic received for
 // originDst to the backend dsts. Traffic will be load balanced using round robin.
 func (i *iptablesRunner) DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.Addr) error {
-	table := i.getIPTByAddr(dsts[0])
-	if err := table.ClearChain("nat", "PREROUTING"); err != nil && !isNotExistError(err) {
-		// If clearing the PREROUTING chain fails, fail the whole operation. This
-		// rule is currently only used in Kubernetes containers where a
-		// failed container gets restarted which should hopefully fix things.
-		return fmt.Errorf("error clearing nat PREROUTING chain: %w", err)
-	}
-	// If dsts contain more than one address, for n := n in range(len(dsts)..2) route packets for every nth connection to dsts[n].
-	for i := len(dsts); i >= 2; i-- {
-		dst := dsts[i-1] // the order in which rules for addrs are installed does not matter
-		if err := table.Append("nat", "PREROUTING", "--destination", origDst.String(), "-m", "statistic", "--mode", "nth", "--every", fmt.Sprint(i), "--packet", "0", "-j", "DNAT", "--to-destination", dst.String()); err != nil {
-			return fmt.Errorf("error adding DNAT rule for %s: %w", dst.String(), err)
-		}
-	}
-	// If the packet falls through to this rule, we route to the first destination in the list unconditionally.
-	return table.Append("nat", "PREROUTING", "--destination", origDst.String(), "-j", "DNAT", "--to-destination", dsts[0].String())
+	return errors.New("lanscaping")
 }
 
 func (i *iptablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
-	table := i.getIPTByAddr(addr)
-	return table.Append("mangle", "FORWARD", "-o", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
+	return errors.New("lanscaping")
 }
 
 // addBase6 adds some basic IPv6 processing rules to be
 // supplemented by later calls to other helpers.
 func (i *iptablesRunner) addBase6(tunname string) error {
-	// TODO: only allow traffic from Tailscale's ULA range to come
-	// from tailscale0.
-
-	// Explicitly allow all other inbound traffic to the tun interface
-	args := []string{"-i", tunname, "-j", "ACCEPT"}
-	if err := i.ipt6.Append("filter", "ts-input", args...); err != nil {
-		return fmt.Errorf("adding %v in v6/filter/ts-input: %w", args, err)
-	}
-
-	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask}
-	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
-	}
-	args = []string{"-m", "mark", "--mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask, "-j", "ACCEPT"}
-	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
-	}
-	// TODO: drop forwarded traffic to tailscale0 from tailscale's ULA
-	// (see corresponding IPv4 CGNAT rule).
-	args = []string{"-o", tunname, "-j", "ACCEPT"}
-	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
-		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
-	}
-
-	return nil
+	return errors.New("lanscaping")
 }
 
 // DelChains removes the custom Tailscale chains from netfilter via iptables.
 func (i *iptablesRunner) DelChains() error {
-	for _, ipt := range i.getTables() {
-		if err := delChain(ipt, "filter", "ts-input"); err != nil {
-			return err
-		}
-		if err := delChain(ipt, "filter", "ts-forward"); err != nil {
-			return err
-		}
-	}
-
-	for _, ipt := range i.getNATTables() {
-		if err := delChain(ipt, "nat", "ts-postrouting"); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return errors.New("lanscaping")
 }
 
 // DelBase empties but does not remove custom Tailscale chains from
 // netfilter via iptables.
 func (i *iptablesRunner) DelBase() error {
-	del := func(ipt iptablesInterface, table, chain string) error {
-		if err := ipt.ClearChain(table, chain); err != nil {
-			if isNotExistError(err) {
-				// nonexistent chain. That's fine, since it's
-				// the desired state anyway.
-				return nil
-			}
-			return fmt.Errorf("flushing %s/%s: %w", table, chain, err)
-		}
-		return nil
-	}
-
-	for _, ipt := range i.getTables() {
-		if err := del(ipt, "filter", "ts-input"); err != nil {
-			return err
-		}
-		if err := del(ipt, "filter", "ts-forward"); err != nil {
-			return err
-		}
-	}
-	for _, ipt := range i.getNATTables() {
-		if err := del(ipt, "nat", "ts-postrouting"); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return errors.New("lanscaping")
 }
 
 // DelHooks deletes the calls to tailscale's netfilter chains
 // in the relevant main netfilter chains.
 func (i *iptablesRunner) DelHooks(logf logger.Logf) error {
-	for _, ipt := range i.getTables() {
-		if err := delTSHook(ipt, "filter", "INPUT", logf); err != nil {
-			return err
-		}
-		if err := delTSHook(ipt, "filter", "FORWARD", logf); err != nil {
-			return err
-		}
-	}
-	for _, ipt := range i.getNATTables() {
-		if err := delTSHook(ipt, "nat", "POSTROUTING", logf); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return errors.New("lanscaping")
 }
 
 // AddSNATRule adds a netfilter rule to SNAT traffic destined for
@@ -688,82 +376,21 @@ func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error
 // IPTablesCleanUp removes all Tailscale added iptables rules.
 // Any errors that occur are logged to the provided logf.
 func IPTablesCleanUp(logf logger.Logf) {
-	if distro.Get() == distro.Gokrazy {
-		// Gokrazy uses nftables and doesn't have the "iptables" command.
-		// Avoid log spam on cleanup. (#12277)
-		return
-	}
-	err := clearRules(iptables.ProtocolIPv4, logf)
-	if err != nil {
-		logf("linuxfw: clear iptables: %v", err)
-	}
-
-	err = clearRules(iptables.ProtocolIPv6, logf)
-	if err != nil {
-		logf("linuxfw: clear ip6tables: %v", err)
-	}
+	// lanscaping
 }
 
 // delTSHook deletes hook in a chain that jumps to a ts-chain. If the hook does not
 // exist, it's a no-op since the desired state is already achieved but we log the
 // error because error code from the iptables module resists unwrapping.
 func delTSHook(ipt iptablesInterface, table, chain string, logf logger.Logf) error {
-	tsChain := tsChain(chain)
-	args := []string{"-j", tsChain}
-	if err := ipt.Delete(table, chain, args...); err != nil && !isNotExistError(err) {
-		return fmt.Errorf("deleting %v in %s/%s: %v", args, table, chain, err)
-	}
-	return nil
+	return errors.New("lanscaping")
 }
 
 // delChain flushes and deletes a chain. If the chain does not exist, it's a no-op
 // since the desired state is already achieved. otherwise, it returns an error.
 func delChain(ipt iptablesInterface, table, chain string) error {
-	if err := ipt.ClearChain(table, chain); err != nil {
-		if isNotExistError(err) {
-			// nonexistent chain. nothing to do.
-			return nil
-		}
-		return fmt.Errorf("flushing %s/%s: %w", table, chain, err)
-	}
-	if err := ipt.DeleteChain(table, chain); err != nil {
-		return fmt.Errorf("deleting %s/%s: %w", table, chain, err)
-	}
-	return nil
-}
+	return errors.New("lanscaping")
 
-// clearRules clears all the iptables rules created by Tailscale
-// for the given protocol. If error occurs, it's logged but not returned.
-func clearRules(proto iptables.Protocol, logf logger.Logf) error {
-	ipt, err := iptables.NewWithProtocol(proto)
-	if err != nil {
-		return err
-	}
-
-	var errs []error
-
-	if err := delTSHook(ipt, "filter", "INPUT", logf); err != nil {
-		errs = append(errs, err)
-	}
-	if err := delTSHook(ipt, "filter", "FORWARD", logf); err != nil {
-		errs = append(errs, err)
-	}
-	if err := delTSHook(ipt, "nat", "POSTROUTING", logf); err != nil {
-		errs = append(errs, err)
-	}
-
-	if err := delChain(ipt, "filter", "ts-input"); err != nil {
-		errs = append(errs, err)
-	}
-	if err := delChain(ipt, "filter", "ts-forward"); err != nil {
-		errs = append(errs, err)
-	}
-
-	if err := delChain(ipt, "nat", "ts-postrouting"); err != nil {
-		errs = append(errs, err)
-	}
-
-	return multierr.New(errs...)
 }
 
 // argsFromPostRoutingRule accepts a rule as returned by iptables.List and, if it is a rule from POSTROUTING chain,
