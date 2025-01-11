@@ -35,15 +35,26 @@ const (
 // ID tokens used by the Android client.
 const GoogleIDTokenType = "ts_android_google_login"
 
-func (s State) String() string {
-	return [...]string{
-		"NoState",
-		"InUseOtherUser",
-		"NeedsLogin",
-		"NeedsMachineAuth",
-		"Stopped",
-		"Starting",
-		"Running"}[s]
+var stateStringValues = [...]string{
+	"NoState",
+	"InUseOtherUser",
+	"NeedsLogin",
+	"NeedsMachineAuth",
+	"Stopped",
+	"Starting",
+	"Running",
+}
+
+func (s State) String() string { return stateStringValues[s] }
+
+// ParseState from string representation.
+func ParseState(s string) (State, error) {
+	for i, v := range stateStringValues {
+		if s == v {
+			return State(i), nil
+		}
+	}
+	return NoState, fmt.Errorf("unknown State %q", s)
 }
 
 // EngineStatus contains WireGuard engine stats.
