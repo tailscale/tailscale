@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"expvar"
 	"fmt"
 	"io"
 	"net"
@@ -54,7 +53,6 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/wgint"
 )
@@ -89,41 +87,6 @@ type pathLabel struct {
 	// - direct_ipv6
 	// - derp
 	Path Path
-}
-
-// metrics in wgengine contains the usermetrics counters for magicsock, it
-// is however a bit special. All them metrics are labeled, but looking up
-// the metric everytime we need to record it has an overhead, and includes
-// a lock in MultiLabelMap. The metrics are therefore instead created with
-// wgengine and the underlying expvar.Int is stored to be used directly.
-type metrics struct {
-	// inboundPacketsTotal is the total number of inbound packets received,
-	// labeled by the path the packet took.
-	inboundPacketsIPv4Total expvar.Int
-	inboundPacketsIPv6Total expvar.Int
-	inboundPacketsDERPTotal expvar.Int
-
-	// inboundBytesTotal is the total number of inbound bytes received,
-	// labeled by the path the packet took.
-	inboundBytesIPv4Total expvar.Int
-	inboundBytesIPv6Total expvar.Int
-	inboundBytesDERPTotal expvar.Int
-
-	// outboundPacketsTotal is the total number of outbound packets sent,
-	// labeled by the path the packet took.
-	outboundPacketsIPv4Total expvar.Int
-	outboundPacketsIPv6Total expvar.Int
-	outboundPacketsDERPTotal expvar.Int
-
-	// outboundBytesTotal is the total number of outbound bytes sent,
-	// labeled by the path the packet took.
-	outboundBytesIPv4Total expvar.Int
-	outboundBytesIPv6Total expvar.Int
-	outboundBytesDERPTotal expvar.Int
-
-	// outboundPacketsDroppedErrors is the total number of outbound packets
-	// dropped due to errors.
-	outboundPacketsDroppedErrors expvar.Int
 }
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
@@ -354,9 +317,6 @@ type Conn struct {
 	// responsibility to ensure that traffic from these endpoints is routed
 	// to the node.
 	staticEndpoints views.Slice[netip.AddrPort]
-
-	// metrics contains the metrics for the magicsock instance.
-	metrics *metrics
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -422,9 +382,6 @@ type Options struct {
 	// HealthTracker optionally specifies the health tracker to
 	// report errors and warnings to.
 	HealthTracker *health.Tracker
-
-	// Metrics specifies the metrics registry to record metrics to.
-	Metrics *usermetric.Registry
 
 	// ControlKnobs are the set of control knobs to use.
 	// If nil, they're ignored and not updated.
@@ -531,84 +488,8 @@ func NewConn(opts Options) (*Conn, error) {
 		SkipExternalNetwork: inTest(),
 	}
 
-	c.metrics = registerMetrics(opts.Metrics)
-
 	c.logf("magicsock: disco key = %v", c.discoShort)
 	return c, nil
-}
-
-// registerMetrics wires up the metrics for wgengine, instead of
-// registering the label metric directly, the underlying expvar is exposed.
-// See metrics for more info.
-func registerMetrics(reg *usermetric.Registry) *metrics {
-	pathDirectV4 := pathLabel{Path: PathDirectIPv4}
-	pathDirectV6 := pathLabel{Path: PathDirectIPv6}
-	pathDERP := pathLabel{Path: PathDERP}
-	inboundPacketsTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
-		reg,
-		"tailscaled_inbound_packets_total",
-		"counter",
-		"Counts the number of packets received from other peers",
-	)
-	inboundBytesTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
-		reg,
-		"tailscaled_inbound_bytes_total",
-		"counter",
-		"Counts the number of bytes received from other peers",
-	)
-	outboundPacketsTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
-		reg,
-		"tailscaled_outbound_packets_total",
-		"counter",
-		"Counts the number of packets sent to other peers",
-	)
-	outboundBytesTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
-		reg,
-		"tailscaled_outbound_bytes_total",
-		"counter",
-		"Counts the number of bytes sent to other peers",
-	)
-	outboundPacketsDroppedErrors := reg.DroppedPacketsOutbound()
-
-	m := new(metrics)
-
-	// Map clientmetrics to the usermetric counters.
-	metricRecvDataPacketsIPv4.Register(&m.inboundPacketsIPv4Total)
-	metricRecvDataPacketsIPv6.Register(&m.inboundPacketsIPv6Total)
-	metricRecvDataPacketsDERP.Register(&m.inboundPacketsDERPTotal)
-	metricSendUDP.Register(&m.outboundPacketsIPv4Total)
-	metricSendUDP.Register(&m.outboundPacketsIPv6Total)
-	metricSendDERP.Register(&m.outboundPacketsDERPTotal)
-
-	inboundPacketsTotal.Set(pathDirectV4, &m.inboundPacketsIPv4Total)
-	inboundPacketsTotal.Set(pathDirectV6, &m.inboundPacketsIPv6Total)
-	inboundPacketsTotal.Set(pathDERP, &m.inboundPacketsDERPTotal)
-
-	inboundBytesTotal.Set(pathDirectV4, &m.inboundBytesIPv4Total)
-	inboundBytesTotal.Set(pathDirectV6, &m.inboundBytesIPv6Total)
-	inboundBytesTotal.Set(pathDERP, &m.inboundBytesDERPTotal)
-
-	outboundPacketsTotal.Set(pathDirectV4, &m.outboundPacketsIPv4Total)
-	outboundPacketsTotal.Set(pathDirectV6, &m.outboundPacketsIPv6Total)
-	outboundPacketsTotal.Set(pathDERP, &m.outboundPacketsDERPTotal)
-
-	outboundBytesTotal.Set(pathDirectV4, &m.outboundBytesIPv4Total)
-	outboundBytesTotal.Set(pathDirectV6, &m.outboundBytesIPv6Total)
-	outboundBytesTotal.Set(pathDERP, &m.outboundBytesDERPTotal)
-
-	outboundPacketsDroppedErrors.Set(usermetric.DropLabels{Reason: usermetric.ReasonError}, &m.outboundPacketsDroppedErrors)
-
-	return m
-}
-
-// deregisterMetrics unregisters the underlying usermetrics expvar counters
-// from clientmetrics.
-func deregisterMetrics(m *metrics) {
-	metricRecvDataPacketsIPv4.UnregisterAll()
-	metricRecvDataPacketsIPv6.UnregisterAll()
-	metricRecvDataPacketsDERP.UnregisterAll()
-	metricSendUDP.UnregisterAll()
-	metricSendDERP.UnregisterAll()
 }
 
 // doPeriodicSTUN is called (in a new goroutine) by
@@ -1108,11 +989,6 @@ func (c *Conn) networkDown() bool { return !c.networkUp.Load() }
 // See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.Send
 func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) (err error) {
 	n := int64(len(buffs))
-	defer func() {
-		if err != nil {
-			c.metrics.outboundPacketsDroppedErrors.Add(n)
-		}
-	}()
 	metricSendData.Add(n)
 	if c.networkDown() {
 		metricSendDataNetworkDown.Add(n)
@@ -1171,17 +1047,6 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool) (sent bool, e
 	if err != nil {
 		metricSendUDPError.Add(1)
 		c.maybeRebindOnError(err)
-	} else {
-		if sent && !isDisco {
-			switch {
-			case ipp.Addr().Is4():
-				c.metrics.outboundPacketsIPv4Total.Add(1)
-				c.metrics.outboundBytesIPv4Total.Add(int64(len(b)))
-			case ipp.Addr().Is6():
-				c.metrics.outboundPacketsIPv6Total.Add(1)
-				c.metrics.outboundBytesIPv6Total.Add(int64(len(b)))
-			}
-		}
 	}
 	return
 }
@@ -1308,23 +1173,17 @@ func (c *Conn) putReceiveBatch(batch *receiveBatch) {
 }
 
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
-		&c.metrics.inboundPacketsIPv4Total,
-		&c.metrics.inboundBytesIPv4Total,
-	)
+	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4))
 }
 
 // receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
-		&c.metrics.inboundPacketsIPv6Total,
-		&c.metrics.inboundBytesIPv6Total,
-	)
+	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6))
 }
 
 // mkReceiveFunc creates a ReceiveFunc reading from ruc.
 // The provided healthItem and metrics are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, packetMetric, bytesMetric *expvar.Int) conn.ReceiveFunc {
+func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats) conn.ReceiveFunc {
 	// epCache caches an IPPort->endpoint for hot flows.
 	var epCache ippEndpointCache
 
@@ -1361,12 +1220,6 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 				}
 				ipp := msg.Addr.(*net.UDPAddr).AddrPort()
 				if ep, ok := c.receiveIP(msg.Buffers[0][:msg.N], ipp, &epCache); ok {
-					if packetMetric != nil {
-						packetMetric.Add(1)
-					}
-					if bytesMetric != nil {
-						bytesMetric.Add(int64(msg.N))
-					}
 					eps[i] = ep
 					sizes[i] = msg.N
 					reportToCaller = true
@@ -2368,8 +2221,6 @@ func (c *Conn) Close() error {
 		c.muCond.Wait()
 	}
 
-	deregisterMetrics(c.metrics)
-
 	return nil
 }
 
@@ -2911,17 +2762,12 @@ var (
 	metricSendDERPErrorChan   = clientmetric.NewCounter("magicsock_send_derp_error_chan")
 	metricSendDERPErrorClosed = clientmetric.NewCounter("magicsock_send_derp_error_closed")
 	metricSendDERPErrorQueue  = clientmetric.NewCounter("magicsock_send_derp_error_queue")
-	metricSendUDP             = clientmetric.NewAggregateCounter("magicsock_send_udp")
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
-	metricSendDERP            = clientmetric.NewAggregateCounter("magicsock_send_derp")
 	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
 
 	// Data packets (non-disco)
 	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
 	metricSendDataNetworkDown = clientmetric.NewCounter("magicsock_send_data_network_down")
-	metricRecvDataPacketsDERP = clientmetric.NewAggregateCounter("magicsock_recv_data_derp")
-	metricRecvDataPacketsIPv4 = clientmetric.NewAggregateCounter("magicsock_recv_data_ipv4")
-	metricRecvDataPacketsIPv6 = clientmetric.NewAggregateCounter("magicsock_recv_data_ipv6")
 
 	// Disco packets
 	metricSendDiscoUDP               = clientmetric.NewCounter("magicsock_disco_send_udp")

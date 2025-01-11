@@ -951,15 +951,6 @@ func (de *endpoint) send(buffs [][]byte) error {
 		for _, b := range buffs {
 			txBytes += len(b)
 		}
-
-		switch {
-		case udpAddr.Addr().Is4():
-			de.c.metrics.outboundPacketsIPv4Total.Add(int64(len(buffs)))
-			de.c.metrics.outboundBytesIPv4Total.Add(int64(txBytes))
-		case udpAddr.Addr().Is6():
-			de.c.metrics.outboundPacketsIPv6Total.Add(int64(len(buffs)))
-			de.c.metrics.outboundBytesIPv6Total.Add(int64(txBytes))
-		}
 	}
 	if derpAddr.IsValid() {
 		allOk := true

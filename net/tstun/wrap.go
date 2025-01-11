@@ -23,7 +23,6 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
 	"tailscale.com/disco"
-	tsmetrics "tailscale.com/metrics"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/tsaddr"
@@ -33,7 +32,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -183,20 +181,6 @@ type Wrapper struct {
 
 	// disableTSMPRejected disables TSMP rejected responses. For tests.
 	disableTSMPRejected bool
-
-	metrics *metrics
-}
-
-type metrics struct {
-	inboundDroppedPacketsTotal  *tsmetrics.MultiLabelMap[usermetric.DropLabels]
-	outboundDroppedPacketsTotal *tsmetrics.MultiLabelMap[usermetric.DropLabels]
-}
-
-func registerMetrics(reg *usermetric.Registry) *metrics {
-	return &metrics{
-		inboundDroppedPacketsTotal:  reg.DroppedPacketsInbound(),
-		outboundDroppedPacketsTotal: reg.DroppedPacketsOutbound(),
-	}
 }
 
 // tunInjectedRead is an injected packet pretending to be a tun.Read().
@@ -227,15 +211,15 @@ func (w *Wrapper) Start() {
 	close(w.startCh)
 }
 
-func WrapTAP(logf logger.Logf, tdev tun.Device, m *usermetric.Registry) *Wrapper {
-	return wrap(logf, tdev, true, m)
+func WrapTAP(logf logger.Logf, tdev tun.Device) *Wrapper {
+	return wrap(logf, tdev, true)
 }
 
-func Wrap(logf logger.Logf, tdev tun.Device, m *usermetric.Registry) *Wrapper {
-	return wrap(logf, tdev, false, m)
+func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
+	return wrap(logf, tdev, false)
 }
 
-func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry) *Wrapper {
+func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 	logf = logger.WithPrefix(logf, "tstun: ")
 	w := &Wrapper{
 		disableFilter: true, // lanscaping
@@ -254,7 +238,6 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry)
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
 		startCh:     make(chan struct{}),
-		metrics:     registerMetrics(m),
 	}
 
 	w.vectorBuffer = make([][]byte, tdev.BatchSize())
@@ -883,9 +866,6 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		t.noteActivity()
 		_, err := t.tdevWrite(buffs, offset)
 		if err != nil {
-			t.metrics.inboundDroppedPacketsTotal.Add(usermetric.DropLabels{
-				Reason: usermetric.ReasonError,
-			}, int64(len(buffs)))
 		}
 		return len(buffs), err
 	}

@@ -29,7 +29,6 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/netmap"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
@@ -59,8 +58,7 @@ type System struct {
 
 	controlKnobs controlknobs.Knobs
 
-	healthTracker       health.Tracker
-	userMetricsRegistry usermetric.Registry
+	healthTracker health.Tracker
 }
 
 // NetstackImpl is the interface that *netstack.Impl implements.
@@ -124,11 +122,6 @@ func (s *System) ControlKnobs() *controlknobs.Knobs {
 // HealthTracker returns the system health tracker.
 func (s *System) HealthTracker() *health.Tracker {
 	return &s.healthTracker
-}
-
-// UserMetricsRegistry returns the system usermetrics.
-func (s *System) UserMetricsRegistry() *usermetric.Registry {
-	return &s.userMetricsRegistry
 }
 
 // SubSystem represents some subsystem of the Tailscale node daemon.

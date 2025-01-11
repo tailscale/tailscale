@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"sync"
 	"time"
@@ -21,6 +22,17 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
+
+// Conn is the subset of the underlying net.Conn the DERP Server needs.
+// It is a defined type so that non-net connections can be used.
+type Conn interface {
+	io.WriteCloser
+	LocalAddr() net.Addr
+	// The *Deadline methods follow the semantics of net.Conn.
+	SetDeadline(time.Time) error
+	SetReadDeadline(time.Time) error
+	SetWriteDeadline(time.Time) error
+}
 
 // Client is a DERP client.
 type Client struct {
@@ -138,6 +150,13 @@ func (c *Client) recvServerKey() error {
 	}
 	c.serverKey = key.NodePublicFromRaw32(mem.B(buf[len(magic):]))
 	return nil
+}
+
+type serverInfo struct {
+	Version int `json:"version,omitempty"`
+
+	TokenBucketBytesPerSecond int `json:",omitempty"`
+	TokenBucketBytesBurst     int `json:",omitempty"`
 }
 
 func (c *Client) parseServerInfo(b []byte) (*serverInfo, error) {

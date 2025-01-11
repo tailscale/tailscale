@@ -4,12 +4,8 @@
 package derphttp
 
 import (
-	"fmt"
-	"log"
 	"net/http"
 	"strings"
-
-	"tailscale.com/derp"
 )
 
 // fastStartHeader is the header (with value "1") that signals to the HTTP
@@ -17,64 +13,6 @@ import (
 // headers and it will begin writing & reading the DERP protocol immediately
 // following its HTTP request.
 const fastStartHeader = "Derp-Fast-Start"
-
-// Handler returns an http.Handler to be mounted at /derp, serving s.
-func Handler(s *derp.Server) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-
-		// These are installed both here and in cmd/derper. The check here
-		// catches both cmd/derper run with DERP disabled (STUN only mode) as
-		// well as DERP being run in tests with derphttp.Handler directly,
-		// as netcheck still assumes this replies.
-		switch r.URL.Path {
-		case "/derp/probe", "/derp/latency-check":
-			ProbeHandler(w, r)
-			return
-		}
-
-		up := strings.ToLower(r.Header.Get("Upgrade"))
-		if up != "websocket" && up != "derp" {
-			if up != "" {
-				log.Printf("Weird upgrade: %q", up)
-			}
-			http.Error(w, "DERP requires connection upgrade", http.StatusUpgradeRequired)
-			return
-		}
-
-		fastStart := r.Header.Get(fastStartHeader) == "1"
-
-		h, ok := w.(http.Hijacker)
-		if !ok {
-			http.Error(w, "HTTP does not support general TCP support", 500)
-			return
-		}
-
-		netConn, conn, err := h.Hijack()
-		if err != nil {
-			log.Printf("Hijack failed: %v", err)
-			http.Error(w, "HTTP does not support general TCP support", 500)
-			return
-		}
-
-		if !fastStart {
-			pubKey := s.PublicKey()
-			fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\n"+
-				"Upgrade: DERP\r\n"+
-				"Connection: Upgrade\r\n"+
-				"Derp-Version: %v\r\n"+
-				"Derp-Public-Key: %s\r\n\r\n",
-				derp.ProtocolVersion,
-				pubKey.UntypedHexString())
-		}
-
-		if v := r.Header.Get(derp.IdealNodeHeader); v != "" {
-			ctx = derp.IdealNodeContextKey.WithValue(ctx, v)
-		}
-
-		s.Accept(ctx, netConn, conn, netConn.RemoteAddr().String())
-	})
-}
 
 // ProbeHandler is the endpoint that clients without UDP access (including js/wasm) hit to measure
 // DERP latency, as a replacement for UDP STUN queries.

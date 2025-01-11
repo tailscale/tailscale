@@ -78,7 +78,6 @@ import (
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -154,7 +153,6 @@ type LocalBackend struct {
 	statsLogf                logger.Logf        // for printing peers stats on change
 	sys                      *tsd.System
 	health                   *health.Tracker // always non-nil
-	metrics                  metrics
 	e                        wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
 	store                    ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
 	dialer                   *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
@@ -334,11 +332,6 @@ func (b *LocalBackend) HealthTracker() *health.Tracker {
 	return b.health
 }
 
-// UserMetricsRegistry returns the usermetrics registry for the backend
-func (b *LocalBackend) UserMetricsRegistry() *usermetric.Registry {
-	return b.sys.UserMetricsRegistry()
-}
-
 // NetMon returns the network monitor for the backend.
 func (b *LocalBackend) NetMon() *netmon.Monitor {
 	return b.sys.NetMon.Get()
@@ -346,16 +339,6 @@ func (b *LocalBackend) NetMon() *netmon.Monitor {
 
 type updateStatus struct {
 	started bool
-}
-
-type metrics struct {
-	// advertisedRoutes is a metric that reports the number of network routes that are advertised by the local node.
-	// This informs the user of how many routes are being advertised by the local node, excluding exit routes.
-	advertisedRoutes *usermetric.Gauge
-
-	// approvedRoutes is a metric that reports the number of network routes served by the local node and approved
-	// by the control server.
-	approvedRoutes *usermetric.Gauge
 }
 
 // clientGen is a func that creates a control plane client.
@@ -400,13 +383,6 @@ func NewLocalBackend(logf logger.Logf, sys *tsd.System, loginFlags controlclient
 	captiveCtx, captiveCancel := context.WithCancel(ctx)
 	captiveCancel()
 
-	m := metrics{
-		advertisedRoutes: sys.UserMetricsRegistry().NewGauge(
-			"tailscaled_advertised_routes", "Number of advertised network routes (e.g. by a subnet router)"),
-		approvedRoutes: sys.UserMetricsRegistry().NewGauge(
-			"tailscaled_approved_routes", "Number of approved network routes (e.g. by a subnet router)"),
-	}
-
 	b := &LocalBackend{
 		ctx:                   ctx,
 		ctxCancel:             cancel,
@@ -415,7 +391,6 @@ func NewLocalBackend(logf logger.Logf, sys *tsd.System, loginFlags controlclient
 		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:                   sys,
 		health:                sys.HealthTracker(),
-		metrics:               m,
 		e:                     e,
 		dialer:                dialer,
 		store:                 store,
@@ -3659,8 +3634,6 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.ShieldsUp = prefs.ShieldsUp()
 	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
 
-	b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
-
 	hi.ServicesHash = b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
 
 	// The Hostinfo.WantIngress field tells control whether this node wants to
@@ -4161,10 +4134,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	if nm == nil {
 		b.nodeByAddr = nil
-
-		// If there is no netmap, the client is going into a "turned off"
-		// state so reset the metrics.
-		b.metrics.approvedRoutes.Set(0)
 		return
 	}
 
@@ -4192,7 +4161,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 				approved++
 			}
 		}
-		b.metrics.approvedRoutes.Set(approved)
 	}
 	for _, p := range nm.Peers {
 		addNode(p)

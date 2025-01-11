@@ -8,7 +8,6 @@ package health
 import (
 	"context"
 	"errors"
-	"expvar"
 	"fmt"
 	"maps"
 	"net/http"
@@ -19,13 +18,11 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
-	"tailscale.com/metrics"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
 
@@ -110,7 +107,6 @@ type Tracker struct {
 	lastLoginErr            error
 	localLogConfigErr       error
 	tlsConnectionErrors     map[string]error // map[ServerName]error
-	metricHealthMessage     *metrics.MultiLabelMap[metricHealthMessageLabel]
 }
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -307,33 +303,6 @@ func (w *Warnable) IsVisible(ws *warningState) bool {
 		return true
 	}
 	return time.Since(ws.BrokenSince) >= w.TimeToVisible
-}
-
-// SetMetricsRegistry sets up the metrics for the Tracker. It takes
-// a usermetric.Registry and registers the metrics there.
-func (t *Tracker) SetMetricsRegistry(reg *usermetric.Registry) {
-	if reg == nil || t.metricHealthMessage != nil {
-		return
-	}
-
-	t.metricHealthMessage = usermetric.NewMultiLabelMapWithRegistry[metricHealthMessageLabel](
-		reg,
-		"tailscaled_health_messages",
-		"gauge",
-		"Number of health messages broken down by type.",
-	)
-
-	t.metricHealthMessage.Set(metricHealthMessageLabel{
-		Type: MetricLabelWarning,
-	}, expvar.Func(func() any {
-		if t.nil() {
-			return 0
-		}
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		t.updateBuiltinWarnablesLocked()
-		return int64(len(t.stringsLocked()))
-	}))
 }
 
 // SetUnhealthy sets a warningState for the given Warnable with the provided Args, and should be
