@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"tailscale.com/util/nocasemaps"
 	"tailscale.com/util/vizerror"
 )
 
@@ -163,7 +162,7 @@ func (p *Proto) UnmarshalText(b []byte) error {
 		return nil
 	}
 
-	if newP, ok := nocasemaps.GetOk(acceptedNames, string(b)); ok {
+	if newP, ok := acceptedNames[string(b)]; ok {
 		*p = newP
 		return nil
 	}
