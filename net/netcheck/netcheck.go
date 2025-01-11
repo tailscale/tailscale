@@ -24,7 +24,6 @@ import (
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
-	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -763,8 +762,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	// (User ctx might be context.Background, etc)
 	ctx, cancel := context.WithTimeout(ctx, ReportTimeout)
 	defer cancel()
-
-	ctx = sockstats.WithSockStats(ctx, sockstats.LabelNetcheckClient, c.logf)
 
 	if dm == nil {
 		return nil, errors.New("netcheck: GetReport: DERP map is nil")

@@ -26,7 +26,6 @@ import (
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
@@ -326,9 +325,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	tunName, _ := conf.Tun.Name()
 	conf.Dialer.SetTUNName(tunName)
 	conf.Dialer.SetNetMon(e.netMon)
-
-	// TODO: there's probably a better place for this
-	sockstats.SetNetMon(e.netMon)
 
 	logf("link state: %+v", e.netMon.InterfaceState())
 

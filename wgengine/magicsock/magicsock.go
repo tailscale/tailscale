@@ -38,7 +38,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
@@ -2504,11 +2503,6 @@ func (c *Conn) ReSTUN(why string) {
 // The network must be "udp4" or "udp6".
 func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, error) {
 	ctx := context.Background() // unused without DNS name to resolve
-	if network == "udp4" {
-		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP4, c.logf)
-	} else {
-		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP6, c.logf)
-	}
 	addr := net.JoinHostPort("", fmt.Sprint(port))
 	if c.testOnlyPacketListener != nil {
 		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)

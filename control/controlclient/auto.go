@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"tailscale.com/logtail/backoff"
-	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -188,10 +187,8 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		observer:   opts.Observer,
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
-	c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
-	c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
 	c.unregisterHealthWatch = opts.HealthTracker.RegisterWatcher(direct.ReportHealthChange)
 	return c, nil
@@ -258,7 +255,6 @@ func (c *Auto) cancelAuthCtxLocked() {
 	}
 	if !c.closed {
 		c.authCtx, c.authCancel = context.WithCancel(context.Background())
-		c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, c.logf)
 	}
 }
 
@@ -269,7 +265,6 @@ func (c *Auto) cancelMapCtxLocked() {
 	}
 	if !c.closed {
 		c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
-		c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, c.logf)
 	}
 }
 

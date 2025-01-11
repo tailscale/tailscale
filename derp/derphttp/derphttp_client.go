@@ -34,7 +34,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
-	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -709,8 +708,6 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 	resc := make(chan res) // must be unbuffered
 	ctx, cancel := context.WithTimeout(ctx, dialNodeTimeout)
 	defer cancel()
-
-	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDERPHTTPClient, c.logf)
 
 	nwait := 0
 	startDial := func(dstPrimary, proto string) {

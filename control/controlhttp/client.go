@@ -42,7 +42,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netutil"
-	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -295,8 +294,6 @@ func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn,
 	// will stop the port 80 dial.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	ctx = sockstats.WithSockStats(ctx, sockstats.LabelControlClientDialer, a.logf)
 
 	// u80 and u443 are the URLs we'll try to hit over HTTP or HTTPS,
 	// respectively, in order to do the HTTP upgrade to a net.Conn over which
