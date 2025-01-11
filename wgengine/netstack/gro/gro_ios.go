@@ -1,8 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build ios
-
 package gro
 
 import (
@@ -13,7 +11,7 @@ import (
 type GRO struct{}
 
 func NewGRO() *GRO {
-	panic("unsupported on iOS")
+	panic("unsupported; removed")
 }
 
 func (g *GRO) SetDispatcher(_ stack.NetworkDispatcher) {}

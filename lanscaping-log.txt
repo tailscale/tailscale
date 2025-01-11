@@ -15,4 +15,7 @@ Already up to date.
 bradfitz@bradm4 tailscale.com % go install ./cmd/tailscaled && ls -lh ~/go/bin/tailscaled
 -rwxr-xr-x@ 1 bradfitz  staff    29M Jan 10 19:01 /Users/bradfitz/go/bin/tailscaledbradfitz@bradm4 tailscale.com % go build -o $HOME/bin/tailscaled.min -ldflags "-w -s" --tags=ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion ./cmd/tailscaled
 bradfitz@bradm4 tailscale.com % ls -lh $HOME/bin/tailscaled.min
--rwxr-xr-x@ 1 bradfitz  staff    20M Jan 10 19:05 /Users/bradfitz/bin/tailscaled.min
+-rwxr-xr-x@ 1 bradfitz  staff    20M Jan 10 19:05 /Users/bradfitz/bin/tailscaled.minbradfitz@bradm4 tailscale.com % make min                                         
+./tool/go build -o OME/bin/tailscaled.min -ldflags "-w -s" --tags=ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion,ts_omit_netstack ./cmd/tailscaled
+ls -lh OME/bin/tailscaled.min
+-rwxr-xr-x@ 1 bradfitz  staff    16M Jan 10 20:03 OME/bin/tailscaled.min

@@ -27,8 +27,8 @@ updatedeps: ## Update depaware deps
 MIN_OMITS ?= ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion,ts_omit_netstack
 
 min:
-	./tool/go build -o $HOME/bin/tailscaled.min -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
-	ls -lh $HOME/bin/tailscaled.min
+	./tool/go build -o $$HOME/bin/tailscaled.min -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
+	ls -lh $$HOME/bin/tailscaled.min
 
 updatemindeps: min
 		PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --file=depaware-minlinux.txt --goos=linux --tags=${MIN_OMITS} --update \

@@ -22,7 +22,6 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
-	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
 	tsmetrics "tailscale.com/metrics"
 	"tailscale.com/net/connstats"
@@ -38,7 +37,6 @@ import (
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/netstack/gro"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -76,16 +74,6 @@ var parsedPacketPool = sync.Pool{New: func() any { return new(packet.Parsed) }}
 // FilterFunc is a packet-filtering function with access to the Wrapper device.
 // It must not hold onto the packet struct, as its backing storage will be reused.
 type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
-
-// GROFilterFunc is a FilterFunc extended with a *gro.GRO, enabling increased
-// throughput where GRO is supported by a packet.Parsed interceptor, e.g.
-// netstack/gVisor, and we are handling a vector of packets. Callers must pass a
-// nil g for the first packet in a given vector, and continue passing the
-// returned *gro.GRO for all remaining packets in said vector. If the returned
-// *gro.GRO is non-nil after the last packet for a given vector is passed
-// through the GROFilterFunc, the caller must also call Flush() on it to deliver
-// any previously Enqueue()'d packets.
-type GROFilterFunc func(p *packet.Parsed, w *Wrapper, g *gro.GRO) (filter.Response, *gro.GRO)
 
 // Wrapper augments a tun.Device with packet filtering and injection.
 //
@@ -171,13 +159,7 @@ type Wrapper struct {
 	// PreFilterPacketInboundFromWireGuard is the inbound filter function that runs before the main filter
 	// and therefore sees the packets that may be later dropped by it.
 	PreFilterPacketInboundFromWireGuard FilterFunc
-	// PostFilterPacketInboundFromWireGuard is the inbound filter function that runs after the main filter.
-	PostFilterPacketInboundFromWireGuard GROFilterFunc
-	// PreFilterPacketOutboundToWireGuardNetstackIntercept is a filter function that runs before the main filter
-	// for packets from the local system. This filter is populated by netstack to hook
-	// packets that should be handled by netstack. If set, this filter runs before
-	// PreFilterFromTunToEngine.
-	PreFilterPacketOutboundToWireGuardNetstackIntercept GROFilterFunc
+
 	// PreFilterPacketOutboundToWireGuardEngineIntercept is a filter function that runs before the main filter
 	// for packets from the local system. This filter is populated by wgengine to hook
 	// packets which it handles internally. If both this and PreFilterFromTunToNetstack
@@ -226,10 +208,7 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 
 // tunInjectedRead is an injected packet pretending to be a tun.Read().
 type tunInjectedRead struct {
-	// Only one of packet or data should be set, and are read in that order of
-	// precedence.
-	packet *stack.PacketBuffer
-	data   []byte
+	data []byte
 }
 
 // tunVectorReadResult is the result of a tun.Read(), or an injected packet
@@ -266,10 +245,11 @@ func Wrap(logf logger.Logf, tdev tun.Device, m *usermetric.Registry) *Wrapper {
 func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry) *Wrapper {
 	logf = logger.WithPrefix(logf, "tstun: ")
 	w := &Wrapper{
-		logf:        logf,
-		limitedLogf: logger.RateLimitedFn(logf, 1*time.Minute, 2, 10),
-		isTAP:       isTAP,
-		tdev:        tdev,
+		disableFilter: true, // lanscaping
+		logf:          logf,
+		limitedLogf:   logger.RateLimitedFn(logf, 1*time.Minute, 2, 10),
+		isTAP:         isTAP,
+		tdev:          tdev,
 		// bufferConsumed is conceptually a condition variable:
 		// a goroutine should not block when setting it, even with no listeners.
 		bufferConsumed: make(chan struct{}, 1),
@@ -816,81 +796,6 @@ var (
 	magicDNSIPPortv6 = netip.AddrPortFrom(tsaddr.TailscaleServiceIPv6(), 0)
 )
 
-func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
-	// Fake ICMP echo responses to MagicDNS (100.100.100.100).
-	if p.IsEchoRequest() {
-		switch p.Dst {
-		case magicDNSIPPort:
-			header := p.ICMP4Header()
-			header.ToResponse()
-			outp := packet.Generate(&header, p.Payload())
-			t.InjectInboundCopy(outp)
-			return filter.DropSilently, gro // don't pass on to OS; already handled
-		case magicDNSIPPortv6:
-			header := p.ICMP6Header()
-			header.ToResponse()
-			outp := packet.Generate(&header, p.Payload())
-			t.InjectInboundCopy(outp)
-			return filter.DropSilently, gro // don't pass on to OS; already handled
-		}
-	}
-
-	// Issue 1526 workaround: if we sent disco packets over
-	// Tailscale from ourselves, then drop them, as that shouldn't
-	// happen unless a networking stack is confused, as it seems
-	// macOS in Network Extension mode might be.
-	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
-		t.isSelfDisco(p) {
-		t.limitedLogf("[unexpected] received self disco out packet over tstun; dropping")
-		metricPacketOutDropSelfDisco.Add(1)
-		return filter.DropSilently, gro
-	}
-
-	if t.PreFilterPacketOutboundToWireGuardNetstackIntercept != nil {
-		var res filter.Response
-		res, gro = t.PreFilterPacketOutboundToWireGuardNetstackIntercept(p, t, gro)
-		if res.IsDrop() {
-			// Handled by netstack.Impl.handleLocalPackets (quad-100 DNS primarily)
-			return res, gro
-		}
-	}
-	if t.PreFilterPacketOutboundToWireGuardEngineIntercept != nil {
-		if res := t.PreFilterPacketOutboundToWireGuardEngineIntercept(p, t); res.IsDrop() {
-			// Handled by userspaceEngine.handleLocalPackets (primarily handles
-			// quad-100 if netstack is not installed).
-			return res, gro
-		}
-	}
-
-	// If the outbound packet is to a jailed peer, use our jailed peer
-	// packet filter.
-	var filt *filter.Filter
-	if pc.outboundPacketIsJailed(p) {
-		filt = t.jailedFilter.Load()
-	} else {
-		filt = t.filter.Load()
-	}
-	if filt == nil {
-		return filter.Drop, gro
-	}
-
-	if filt.RunOut(p, t.filterFlags) != filter.Accept {
-		metricPacketOutDropFilter.Add(1)
-		// TODO(#14280): increment a t.metrics.outboundDroppedPacketsTotal here
-		// once we figure out & document what labels to use for multicast,
-		// link-local-unicast, IP fragments, etc. But they're not
-		// usermetric.ReasonACL.
-		return filter.Drop, gro
-	}
-
-	if t.PostFilterPacketOutboundToWireGuard != nil {
-		if res := t.PostFilterPacketOutboundToWireGuard(p, t); res.IsDrop() {
-			return res, gro
-		}
-	}
-	return filter.Accept, gro
-}
-
 // noteActivity records that there was a read or write at the current time.
 func (t *Wrapper) noteActivity() {
 	t.lastActivityAtomic.StoreAtomic(mono.Now())
@@ -917,7 +822,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		return 0, res.err
 	}
 	if res.data == nil {
-		return t.injectedRead(res.injected, buffs, sizes, offset)
+		panic("unreachable; lanscaping")
 	}
 
 	metricPacketOut.Add(int64(len(res.data)))
@@ -927,7 +832,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	defer parsedPacketPool.Put(p)
 	captHook := t.captureHook.Load()
 	pc := t.peerConfig.Load()
-	var buffsGRO *gro.GRO
 	for _, data := range res.data {
 		p.Decode(data[res.dataOffset:])
 
@@ -938,14 +842,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		}
 		if captHook != nil {
 			captHook(capture.FromLocal, t.now(), p.Buffer(), p.CaptureMeta)
-		}
-		if !t.disableFilter {
-			var response filter.Response
-			response, buffsGRO = t.filterPacketOutboundToWireGuard(p, pc, buffsGRO)
-			if response != filter.Accept {
-				metricPacketOutDrop.Add(1)
-				continue
-			}
 		}
 
 		// Make sure to do SNAT after filtering, so that any flow tracking in
@@ -960,9 +856,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			stats.UpdateTxVirtual(p.Buffer())
 		}
 		buffsPos++
-	}
-	if buffsGRO != nil {
-		buffsGRO.Flush()
 	}
 
 	// t.vectorBuffer has a fixed location in memory.
@@ -981,214 +874,6 @@ const (
 	minTCPHeaderSize = 20
 )
 
-func stackGSOToTunGSO(pkt []byte, gso stack.GSO) (tun.GSOOptions, error) {
-	options := tun.GSOOptions{
-		CsumStart:  gso.L3HdrLen,
-		CsumOffset: gso.CsumOffset,
-		GSOSize:    gso.MSS,
-		NeedsCsum:  gso.NeedsCsum,
-	}
-	switch gso.Type {
-	case stack.GSONone:
-		options.GSOType = tun.GSONone
-		return options, nil
-	case stack.GSOTCPv4:
-		options.GSOType = tun.GSOTCPv4
-	case stack.GSOTCPv6:
-		options.GSOType = tun.GSOTCPv6
-	default:
-		return tun.GSOOptions{}, fmt.Errorf("unsupported gVisor GSOType: %v", gso.Type)
-	}
-	// options.HdrLen is both layer 3 and 4 together, whereas gVisor only
-	// gives us layer 3 length. We have to gather TCP header length
-	// ourselves.
-	if len(pkt) < int(gso.L3HdrLen)+minTCPHeaderSize {
-		return tun.GSOOptions{}, errors.New("gVisor GSOTCP packet length too short")
-	}
-	tcphLen := uint16(pkt[int(gso.L3HdrLen)+12] >> 4 * 4)
-	options.HdrLen = gso.L3HdrLen + tcphLen
-	return options, nil
-}
-
-// invertGSOChecksum inverts the transport layer checksum in pkt if gVisor
-// handed us a segment with a partial checksum. A partial checksum is not a
-// ones' complement of the sum, and incremental checksum updating is not yet
-// partial checksum aware. This may be called twice for a single packet,
-// both before and after partial checksum updates where later checksum
-// offloading still expects a partial checksum.
-// TODO(jwhited): plumb partial checksum awareness into net/packet/checksum.
-func invertGSOChecksum(pkt []byte, gso stack.GSO) {
-	if gso.NeedsCsum != true {
-		return
-	}
-	at := int(gso.L3HdrLen + gso.CsumOffset)
-	if at+1 > len(pkt)-1 {
-		return
-	}
-	pkt[at] = ^pkt[at]
-	pkt[at+1] = ^pkt[at+1]
-}
-
-// injectedRead handles injected reads, which bypass filters.
-func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []int, offset int) (n int, err error) {
-	var gso stack.GSO
-
-	pkt := outBuffs[0][offset:]
-	if res.packet != nil {
-		bufN := copy(pkt, res.packet.NetworkHeader().Slice())
-		bufN += copy(pkt[bufN:], res.packet.TransportHeader().Slice())
-		bufN += copy(pkt[bufN:], res.packet.Data().AsRange().ToSlice())
-		gso = res.packet.GSOOptions
-		pkt = pkt[:bufN]
-		defer res.packet.DecRef() // defer DecRef so we may continue to reference it
-	} else {
-		sizes[0] = copy(pkt, res.data)
-		pkt = pkt[:sizes[0]]
-		n = 1
-	}
-
-	pc := t.peerConfig.Load()
-
-	p := parsedPacketPool.Get().(*packet.Parsed)
-	defer parsedPacketPool.Put(p)
-	p.Decode(pkt)
-
-	invertGSOChecksum(pkt, gso)
-	pc.snat(p)
-	invertGSOChecksum(pkt, gso)
-
-	if m := t.destIPActivity.Load(); m != nil {
-		if fn := m[p.Dst.Addr()]; fn != nil {
-			fn()
-		}
-	}
-
-	if res.packet != nil {
-		var gsoOptions tun.GSOOptions
-		gsoOptions, err = stackGSOToTunGSO(pkt, gso)
-		if err != nil {
-			return 0, err
-		}
-		n, err = tun.GSOSplit(pkt, gsoOptions, outBuffs, sizes, offset)
-	}
-
-	if stats := t.stats.Load(); stats != nil {
-		for i := 0; i < n; i++ {
-			stats.UpdateTxVirtual(outBuffs[i][offset : offset+sizes[i]])
-		}
-	}
-
-	t.noteActivity()
-	metricPacketOut.Add(int64(n))
-	return n, err
-}
-
-func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook capture.Callback, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
-	if captHook != nil {
-		captHook(capture.FromPeer, t.now(), p.Buffer(), p.CaptureMeta)
-	}
-
-	if p.IPProto == ipproto.TSMP {
-		if pingReq, ok := p.AsTSMPPing(); ok {
-			t.noteActivity()
-			t.injectOutboundPong(p, pingReq)
-			return filter.DropSilently, gro
-		} else if data, ok := p.AsTSMPPong(); ok {
-			if f := t.OnTSMPPongReceived; f != nil {
-				f(data)
-			}
-		}
-	}
-
-	if p.IsEchoResponse() {
-		if f := t.OnICMPEchoResponseReceived; f != nil && f(p) {
-			// Note: this looks dropped in metrics, even though it was
-			// handled internally.
-			return filter.DropSilently, gro
-		}
-	}
-
-	// Issue 1526 workaround: if we see disco packets over
-	// Tailscale from ourselves, then drop them, as that shouldn't
-	// happen unless a networking stack is confused, as it seems
-	// macOS in Network Extension mode might be.
-	if p.IPProto == ipproto.UDP && // disco is over UDP; avoid isSelfDisco call for TCP/etc
-		t.isSelfDisco(p) {
-		t.limitedLogf("[unexpected] received self disco in packet over tstun; dropping")
-		metricPacketInDropSelfDisco.Add(1)
-		return filter.DropSilently, gro
-	}
-
-	if t.PreFilterPacketInboundFromWireGuard != nil {
-		if res := t.PreFilterPacketInboundFromWireGuard(p, t); res.IsDrop() {
-			return res, gro
-		}
-	}
-
-	var filt *filter.Filter
-	if pc.inboundPacketIsJailed(p) {
-		filt = t.jailedFilter.Load()
-	} else {
-		filt = t.filter.Load()
-	}
-	if filt == nil {
-		return filter.Drop, gro
-	}
-	outcome := filt.RunIn(p, t.filterFlags)
-
-	// Let peerapi through the filter; its ACLs are handled at L7,
-	// not at the packet level.
-	if outcome != filter.Accept &&
-		p.IPProto == ipproto.TCP &&
-		p.TCPFlags&packet.TCPSyn != 0 &&
-		t.PeerAPIPort != nil {
-		if port, ok := t.PeerAPIPort(p.Dst.Addr()); ok && port == p.Dst.Port() {
-			outcome = filter.Accept
-		}
-	}
-
-	if outcome != filter.Accept {
-		metricPacketInDropFilter.Add(1)
-		t.metrics.inboundDroppedPacketsTotal.Add(usermetric.DropLabels{
-			Reason: usermetric.ReasonACL,
-		}, 1)
-
-		// Tell them, via TSMP, we're dropping them due to the ACL.
-		// Their host networking stack can translate this into ICMP
-		// or whatnot as required. But notably, their GUI or tailscale CLI
-		// can show them a rejection history with reasons.
-		if p.IPVersion == 4 && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPSyn != 0 && !t.disableTSMPRejected {
-			rj := packet.TailscaleRejectedHeader{
-				IPSrc:  p.Dst.Addr(),
-				IPDst:  p.Src.Addr(),
-				Src:    p.Src,
-				Dst:    p.Dst,
-				Proto:  p.IPProto,
-				Reason: packet.RejectedDueToACLs,
-			}
-			if filt.ShieldsUp() {
-				rj.Reason = packet.RejectedDueToShieldsUp
-			}
-			pkt := packet.Generate(rj, nil)
-			t.InjectOutbound(pkt)
-
-			// TODO(bradfitz): also send a TCP RST, after the TSMP message.
-		}
-
-		return filter.Drop, gro
-	}
-
-	if t.PostFilterPacketInboundFromWireGuard != nil {
-		var res filter.Response
-		res, gro = t.PostFilterPacketInboundFromWireGuard(p, t, gro)
-		if res.IsDrop() {
-			return res, gro
-		}
-	}
-
-	return filter.Accept, gro
-}
-
 // Write accepts incoming packets. The packets begin at buffs[:][offset:],
 // like wireguard-go/tun.Device.Write. Write is called per-peer via
 // wireguard-go/device.Peer.RoutineSequentialReceiver, so it MUST be
@@ -1198,28 +883,10 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	i := 0
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
-	captHook := t.captureHook.Load()
 	pc := t.peerConfig.Load()
-	var buffsGRO *gro.GRO
 	for _, buff := range buffs {
 		p.Decode(buff[offset:])
 		pc.dnat(p)
-		if !t.disableFilter {
-			var res filter.Response
-			// TODO(jwhited): name and document this filter code path
-			//  appropriately. It is not only responsible for filtering, it
-			//  also routes packets towards gVisor/netstack.
-			res, buffsGRO = t.filterPacketInboundFromWireGuard(p, captHook, pc, buffsGRO)
-			if res != filter.Accept {
-				metricPacketInDrop.Add(1)
-			} else {
-				buffs[i] = buff
-				i++
-			}
-		}
-	}
-	if buffsGRO != nil {
-		buffsGRO.Flush()
 	}
 	if t.disableFilter {
 		i = len(buffs)
@@ -1264,76 +931,6 @@ func (t *Wrapper) SetJailedFilter(filt *filter.Filter) {
 	t.jailedFilter.Store(filt)
 }
 
-// InjectInboundPacketBuffer makes the Wrapper device behave as if a packet
-// (pkt) with the given contents was received from the network.
-// It takes ownership of one reference count on pkt. The injected
-// packet will not pass through inbound filters.
-//
-// pkt will be copied into buffs before writing to the underlying tun.Device.
-// Therefore, callers must allocate and pass a buffs slice that is sized
-// appropriately for holding pkt.Size() + PacketStartOffset as a single
-// element (buffs[0]) and split across multiple elements if the originating
-// stack supports GSO. sizes must be sized with similar consideration,
-// len(buffs) should be equal to len(sizes). If any len(buffs[<index>]) was
-// mutated by InjectInboundPacketBuffer it will be reset to cap(buffs[<index>])
-// before returning.
-//
-// This path is typically used to deliver synthesized packets to the
-// host networking stack.
-func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer, buffs [][]byte, sizes []int) error {
-	buf := buffs[0][PacketStartOffset:]
-
-	bufN := copy(buf, pkt.NetworkHeader().Slice())
-	bufN += copy(buf[bufN:], pkt.TransportHeader().Slice())
-	bufN += copy(buf[bufN:], pkt.Data().AsRange().ToSlice())
-	if bufN != pkt.Size() {
-		panic("unexpected packet size after copy")
-	}
-	buf = buf[:bufN]
-	defer pkt.DecRef()
-
-	pc := t.peerConfig.Load()
-
-	p := parsedPacketPool.Get().(*packet.Parsed)
-	defer parsedPacketPool.Put(p)
-	p.Decode(buf)
-	captHook := t.captureHook.Load()
-	if captHook != nil {
-		captHook(capture.SynthesizedToLocal, t.now(), p.Buffer(), p.CaptureMeta)
-	}
-
-	invertGSOChecksum(buf, pkt.GSOOptions)
-	pc.dnat(p)
-	invertGSOChecksum(buf, pkt.GSOOptions)
-
-	gso, err := stackGSOToTunGSO(buf, pkt.GSOOptions)
-	if err != nil {
-		return err
-	}
-
-	// TODO(jwhited): support GSO passthrough to t.tdev. If t.tdev supports
-	//  GSO we don't need to split here and coalesce inside wireguard-go,
-	//  we can pass a coalesced segment all the way through.
-	n, err := tun.GSOSplit(buf, gso, buffs, sizes, PacketStartOffset)
-	if err != nil {
-		if errors.Is(err, tun.ErrTooManySegments) {
-			t.limitedLogf("InjectInboundPacketBuffer: GSO split overflows buffs")
-		} else {
-			return err
-		}
-	}
-	for i := 0; i < n; i++ {
-		buffs[i] = buffs[i][:PacketStartOffset+sizes[i]]
-	}
-	defer func() {
-		for i := 0; i < n; i++ {
-			buffs[i] = buffs[i][:cap(buffs[i])]
-		}
-	}()
-	_, err = t.tdevWrite(buffs[:n], PacketStartOffset)
-	return err
-}
-
 // InjectInboundDirect makes the Wrapper device behave as if a packet
 // with the given contents was received from the network.
 // It blocks and does not take ownership of the packet.
@@ -1356,25 +953,6 @@ func (t *Wrapper) InjectInboundDirect(buf []byte, offset int) error {
 	// Write to the underlying device to skip filters.
 	_, err := t.tdevWrite([][]byte{buf}, offset) // TODO(jwhited): alloc?
 	return err
-}
-
-// InjectInboundCopy takes a packet without leading space,
-// reallocates it to conform to the InjectInboundDirect interface
-// and calls InjectInboundDirect on it. Injecting a nil packet is a no-op.
-func (t *Wrapper) InjectInboundCopy(packet []byte) error {
-	// We duplicate this check from InjectInboundDirect here
-	// to avoid wasting an allocation on an oversized packet.
-	if len(packet) > MaxPacketSize {
-		return errPacketTooBig
-	}
-	if len(packet) == 0 {
-		return nil
-	}
-
-	buf := make([]byte, PacketStartOffset+len(packet))
-	copy(buf[PacketStartOffset:], packet)
-
-	return t.InjectInboundDirect(buf, PacketStartOffset)
 }
 
 func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingRequest) {
@@ -1413,28 +991,6 @@ func (t *Wrapper) InjectOutbound(pkt []byte) error {
 		return nil
 	}
 	t.injectOutbound(tunInjectedRead{data: pkt})
-	return nil
-}
-
-// InjectOutboundPacketBuffer logically behaves as InjectOutbound. It takes ownership of one
-// reference count on the packet, and the packet may be mutated. The packet refcount will be
-// decremented after the injected buffer has been read.
-func (t *Wrapper) InjectOutboundPacketBuffer(pkt *stack.PacketBuffer) error {
-	size := pkt.Size()
-	if size > MaxPacketSize {
-		pkt.DecRef()
-		return errPacketTooBig
-	}
-	if size == 0 {
-		pkt.DecRef()
-		return nil
-	}
-	if capt := t.captureHook.Load(); capt != nil {
-		b := pkt.ToBuffer()
-		capt(capture.SynthesizedToPeer, t.now(), b.Flatten(), packet.CaptureMeta{})
-	}
-
-	t.injectOutbound(tunInjectedRead{packet: pkt})
 	return nil
 }
 

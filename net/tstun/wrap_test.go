@@ -22,13 +22,10 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
-	"go4.org/mem"
 	"go4.org/netipx"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	"tailscale.com/disco"
 	"tailscale.com/net/connstats"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
@@ -519,124 +516,6 @@ func TestAtomic64Alignment(t *testing.T) {
 
 	c := new(Wrapper)
 	c.lastActivityAtomic.StoreAtomic(mono.Now())
-}
-
-func TestPeerAPIBypass(t *testing.T) {
-	reg := new(usermetric.Registry)
-	wrapperWithPeerAPI := &Wrapper{
-		PeerAPIPort: func(ip netip.Addr) (port uint16, ok bool) {
-			if ip == netip.MustParseAddr("100.64.1.2") {
-				return 60000, true
-			}
-			return
-		},
-		metrics: registerMetrics(reg),
-	}
-
-	tests := []struct {
-		name   string
-		w      *Wrapper
-		filter *filter.Filter
-		pkt    []byte
-		want   filter.Response
-	}{
-		{
-			name: "reject_nil_filter",
-			w: &Wrapper{
-				PeerAPIPort: func(netip.Addr) (port uint16, ok bool) {
-					return 60000, true
-				},
-				metrics: registerMetrics(reg),
-			},
-			pkt:  tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
-			want: filter.Drop,
-		},
-		{
-			name: "reject_with_filter",
-			w: &Wrapper{
-				metrics: registerMetrics(reg),
-			},
-			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
-			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
-			want:   filter.Drop,
-		},
-		{
-			name:   "peerapi_bypass_filter",
-			w:      wrapperWithPeerAPI,
-			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
-			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
-			want:   filter.Accept,
-		},
-		{
-			name:   "peerapi_dont_bypass_filter_wrong_port",
-			w:      wrapperWithPeerAPI,
-			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
-			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60001),
-			want:   filter.Drop,
-		},
-		{
-			name:   "peerapi_dont_bypass_filter_wrong_dst_ip",
-			w:      wrapperWithPeerAPI,
-			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
-			pkt:    tcp4syn("1.2.3.4", "100.64.1.3", 1234, 60000),
-			want:   filter.Drop,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := new(packet.Parsed)
-			p.Decode(tt.pkt)
-			tt.w.SetFilter(tt.filter)
-			tt.w.disableTSMPRejected = true
-			tt.w.logf = t.Logf
-			if got, _ := tt.w.filterPacketInboundFromWireGuard(p, nil, nil, nil); got != tt.want {
-				t.Errorf("got = %v; want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// Issue 1526: drop disco frames from ourselves.
-func TestFilterDiscoLoop(t *testing.T) {
-	var memLog tstest.MemLogger
-	discoPub := key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 31: 0}))
-	tw := &Wrapper{logf: memLog.Logf, limitedLogf: memLog.Logf}
-	tw.SetDiscoKey(discoPub)
-	uh := packet.UDP4Header{
-		IP4Header: packet.IP4Header{
-			IPProto: ipproto.UDP,
-			Src:     netaddr.IPv4(1, 2, 3, 4),
-			Dst:     netaddr.IPv4(5, 6, 7, 8),
-		},
-		SrcPort: 9,
-		DstPort: 10,
-	}
-	discobs := discoPub.Raw32()
-	discoPayload := fmt.Sprintf("%s%s%s", disco.Magic, discobs[:], [disco.NonceLen]byte{})
-	pkt := make([]byte, uh.Len()+len(discoPayload))
-	uh.Marshal(pkt)
-	copy(pkt[uh.Len():], discoPayload)
-
-	p := new(packet.Parsed)
-	p.Decode(pkt)
-	got, _ := tw.filterPacketInboundFromWireGuard(p, nil, nil, nil)
-	if got != filter.DropSilently {
-		t.Errorf("got %v; want DropSilently", got)
-	}
-	if got, want := memLog.String(), "[unexpected] received self disco in packet over tstun; dropping\n"; got != want {
-		t.Errorf("log output mismatch\n got: %q\nwant: %q\n", got, want)
-	}
-
-	memLog.Reset()
-	pp := new(packet.Parsed)
-	pp.Decode(pkt)
-	got, _ = tw.filterPacketOutboundToWireGuard(pp, nil, nil)
-	if got != filter.DropSilently {
-		t.Errorf("got %v; want DropSilently", got)
-	}
-	if got, want := memLog.String(), "[unexpected] received self disco out packet over tstun; dropping\n"; got != want {
-		t.Errorf("log output mismatch\n got: %q\nwant: %q\n", got, want)
-	}
 }
 
 // TODO(andrew-d): refactor this test to no longer use addrFam, after #11945

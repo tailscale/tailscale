@@ -55,7 +55,6 @@ import (
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/netlog"
-	"tailscale.com/wgengine/netstack/gro"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -415,7 +414,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	tsTUNDev.SetDiscoKey(e.magicConn.DiscoPublicKey())
 
 	if conf.RespondToPing {
-		e.tundev.PostFilterPacketInboundFromWireGuard = echoRespondToAll
+		// lanscaping
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
 
@@ -532,44 +531,11 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	return e, nil
 }
 
-// echoRespondToAll is an inbound post-filter responding to all echo requests.
-func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
-	if p.IsEchoRequest() {
-		header := p.ICMP4Header()
-		header.ToResponse()
-		outp := packet.Generate(&header, p.Payload())
-		t.InjectOutbound(outp)
-		// We already responded to it, but it's not an error.
-		// Proceed with regular delivery. (Since this code is only
-		// used in fake mode, regular delivery just means throwing
-		// it away. If this ever gets run in non-fake mode, you'll
-		// get double responses to pings, which is an indicator you
-		// shouldn't be doing that I guess.)
-		return filter.Accept, gro
-	}
-	return filter.Accept, gro
-}
-
 // handleLocalPackets inspects packets coming from the local network
 // stack, and intercepts any packets that should be handled by
 // tailscaled directly. Other packets are allowed to proceed into the
 // main ACL filter.
 func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
-	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
-		isLocalAddr, ok := e.isLocalAddr.LoadOk()
-		if !ok {
-			e.logf("[unexpected] e.isLocalAddr was nil, can't check for loopback packet")
-		} else if isLocalAddr(p.Dst.Addr()) {
-			// macOS NetworkExtension directs packets destined to the
-			// tunnel's local IP address into the tunnel, instead of
-			// looping back within the kernel network stack. We have to
-			// notice that an outbound packet is actually destined for
-			// ourselves, and loop it back into macOS.
-			t.InjectInboundCopy(p.Buffer())
-			metricReflectToOS.Add(1)
-			return filter.Drop
-		}
-	}
 
 	return filter.Accept
 }

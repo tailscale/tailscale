@@ -8,8 +8,6 @@ import (
 	"encoding/binary"
 	"net/netip"
 
-	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )
@@ -19,27 +17,7 @@ import (
 // is supported. It panics if provided with an address in a different
 // family to the parsed packet.
 func UpdateSrcAddr(q *packet.Parsed, src netip.Addr) {
-	if src.Is6() && q.IPVersion != 6 {
-		panic("UpdateSrcAddr: cannot write IPv6 address to v4 packet")
-	} else if src.Is4() && q.IPVersion != 4 {
-		panic("UpdateSrcAddr: cannot write IPv4 address to v6 packet")
-	}
-	q.CaptureMeta.DidSNAT = true
-	q.CaptureMeta.OriginalSrc = q.Src
-
-	old := q.Src.Addr()
-	q.Src = netip.AddrPortFrom(src, q.Src.Port())
-
-	b := q.Buffer()
-	if src.Is6() {
-		v6 := src.As16()
-		copy(b[8:24], v6[:])
-		updateV6PacketChecksums(q, old, src)
-	} else {
-		v4 := src.As4()
-		copy(b[12:16], v4[:])
-		updateV4PacketChecksums(q, old, src)
-	}
+	panic("lanscaping")
 }
 
 // UpdateDstAddr updates the destination address in the packet buffer (e.g. during
@@ -47,28 +25,14 @@ func UpdateSrcAddr(q *packet.Parsed, src netip.Addr) {
 // is supported. It panics if provided with an address in a different
 // family to the parsed packet.
 func UpdateDstAddr(q *packet.Parsed, dst netip.Addr) {
-	if dst.Is6() && q.IPVersion != 6 {
-		panic("UpdateDstAddr: cannot write IPv6 address to v4 packet")
-	} else if dst.Is4() && q.IPVersion != 4 {
-		panic("UpdateDstAddr: cannot write IPv4 address to v6 packet")
-	}
-	q.CaptureMeta.DidDNAT = true
-	q.CaptureMeta.OriginalDst = q.Dst
-
-	old := q.Dst.Addr()
-	q.Dst = netip.AddrPortFrom(dst, q.Dst.Port())
-
-	b := q.Buffer()
-	if dst.Is6() {
-		v6 := dst.As16()
-		copy(b[24:40], v6[:])
-		updateV6PacketChecksums(q, old, dst)
-	} else {
-		v4 := dst.As4()
-		copy(b[16:20], v4[:])
-		updateV4PacketChecksums(q, old, dst)
-	}
+	panic("lanscaping")
 }
+
+const (
+	headerUDPMinimumSize    = 8  // header.UDPMinimumSize
+	headerTCPMinimumSize    = 20 // header.TCPMinimumSize
+	headerICMPv6MinimumSize = 8  // header.ICMPv6MinimumSize
+)
 
 // updateV4PacketChecksums updates the checksums in the packet buffer.
 // Currently (2023-03-01) only TCP/UDP/ICMP over IPv4 is supported.
@@ -88,13 +52,13 @@ func updateV4PacketChecksums(p *packet.Parsed, old, new netip.Addr) {
 	tr := p.Transport()
 	switch p.IPProto {
 	case ipproto.UDP, ipproto.DCCP:
-		if len(tr) < header.UDPMinimumSize {
+		if len(tr) < headerUDPMinimumSize {
 			// Not enough space for a UDP header.
 			return
 		}
 		updateV4Checksum(tr[6:8], o4[:], n4[:])
 	case ipproto.TCP:
-		if len(tr) < header.TCPMinimumSize {
+		if len(tr) < headerTCPMinimumSize {
 			// Not enough space for a TCP header.
 			return
 		}
@@ -116,33 +80,7 @@ func updateV4PacketChecksums(p *packet.Parsed, old, new netip.Addr) {
 // p is modified in place.
 // If p.IPProto is unknown, no checksums are updated.
 func updateV6PacketChecksums(p *packet.Parsed, old, new netip.Addr) {
-	if len(p.Buffer()) < 40 {
-		// Not enough space for an IPv6 header.
-		return
-	}
-	o6, n6 := tcpip.AddrFrom16Slice(old.AsSlice()), tcpip.AddrFrom16Slice(new.AsSlice())
-
-	// Now update the transport layer checksums, where applicable.
-	tr := p.Transport()
-	switch p.IPProto {
-	case ipproto.ICMPv6:
-		if len(tr) < header.ICMPv6MinimumSize {
-			return
-		}
-		header.ICMPv6(tr).UpdateChecksumPseudoHeaderAddress(o6, n6)
-	case ipproto.UDP, ipproto.DCCP:
-		if len(tr) < header.UDPMinimumSize {
-			return
-		}
-		header.UDP(tr).UpdateChecksumPseudoHeaderAddress(o6, n6, true)
-	case ipproto.TCP:
-		if len(tr) < header.TCPMinimumSize {
-			return
-		}
-		header.TCP(tr).UpdateChecksumPseudoHeaderAddress(o6, n6, true)
-	case ipproto.SCTP:
-		// No transport layer update required.
-	}
+	panic("lanscaping")
 }
 
 // updateV4Checksum calculates and updates the checksum in the packet buffer for
