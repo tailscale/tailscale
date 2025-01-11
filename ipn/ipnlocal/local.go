@@ -27,8 +27,6 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -79,7 +77,6 @@ import (
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/goroutines"
-	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osuser"
@@ -244,25 +241,23 @@ type LocalBackend struct {
 	// peers is the set of current peers and their current values after applying
 	// delta node mutations as they come in (with mu held). The map values can
 	// be given out to callers, but the map itself must not escape the LocalBackend.
-	peers            map[tailcfg.NodeID]tailcfg.NodeView
-	nodeByAddr       map[netip.Addr]tailcfg.NodeID // by Node.Addresses only (not subnet routes)
-	nmExpiryTimer    tstime.TimerController        // for updating netMap on node expiry; can be nil
-	activeLogin      string                        // last logged LoginName from netMap
-	engineStatus     ipn.EngineStatus
-	endpoints        []tailcfg.Endpoint
-	blocked          bool
-	keyExpired       bool
-	authURL          string        // non-empty if not Running
-	authURLTime      time.Time     // when the authURL was received from the control server
-	authActor        ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil
-	egg              bool
-	prevIfState      *netmon.State
-	peerAPIServer    *peerAPIServer // or nil
-	peerAPIListeners []*peerAPIListener
-	loginFlags       controlclient.LoginFlags
-	fileWaiters      set.HandleSet[context.CancelFunc] // of wake-up funcs
-	notifyWatchers   map[string]*watchSession          // by session ID
-	lastStatusTime   time.Time                         // status.AsOf value of the last processed status update
+	peers          map[tailcfg.NodeID]tailcfg.NodeView
+	nodeByAddr     map[netip.Addr]tailcfg.NodeID // by Node.Addresses only (not subnet routes)
+	nmExpiryTimer  tstime.TimerController        // for updating netMap on node expiry; can be nil
+	activeLogin    string                        // last logged LoginName from netMap
+	engineStatus   ipn.EngineStatus
+	endpoints      []tailcfg.Endpoint
+	blocked        bool
+	keyExpired     bool
+	authURL        string        // non-empty if not Running
+	authURLTime    time.Time     // when the authURL was received from the control server
+	authActor      ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil
+	egg            bool
+	prevIfState    *netmon.State
+	loginFlags     controlclient.LoginFlags
+	fileWaiters    set.HandleSet[context.CancelFunc] // of wake-up funcs
+	notifyWatchers map[string]*watchSession          // by session ID
+	lastStatusTime time.Time                         // status.AsOf value of the last processed status update
 	// directFileRoot, if non-empty, means to write received files
 	// directly to this directory, without staging them in an
 	// intermediate buffered directory for "pick-up" later. If
@@ -491,12 +486,6 @@ func NewLocalBackend(logf logger.Logf, sys *tsd.System, loginFlags controlclient
 	b.unregisterNetMon = netMon.RegisterChangeCallback(b.linkChange)
 
 	b.unregisterHealthWatch = b.health.RegisterWatcher(b.onHealthChange)
-
-	if tunWrap, ok := b.sys.Tun.GetOK(); ok {
-		tunWrap.PeerAPIPort = b.GetPeerAPIPort
-	} else {
-		b.logf("[unexpected] failed to wire up PeerAPI port for engine %T", e)
-	}
 
 	for _, component := range ipn.DebuggableComponents {
 		key := componentStateKey(component)
@@ -773,14 +762,6 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	// need updating to tweak default routes.
 	b.updateFilterLocked(b.netMap, b.pm.CurrentPrefs())
 	updateExitNodeUsageWarning(b.pm.CurrentPrefs(), delta.New, b.health)
-
-	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
-		want := b.netMap.GetAddresses().Len()
-		if len(b.peerAPIListeners) < want {
-			b.logf("linkChange: peerAPIListeners too low; trying again")
-			b.goTracker.Go(b.initPeerAPIListener)
-		}
-	}
 }
 
 func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthyState) {
@@ -872,7 +853,6 @@ func (b *LocalBackend) Shutdown() {
 		b.sshServer.Shutdown()
 		b.sshServer = nil
 	}
-	b.closePeerAPIListenersLocked()
 	if b.debugSink != nil {
 		b.debugSink.Close()
 		b.debugSink = nil
@@ -1053,9 +1033,6 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 		} else {
 			ss.HostName, _ = os.Hostname()
-		}
-		for _, pln := range b.peerAPIListeners {
-			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
 		}
 	})
 	// TODO: hostinfo, and its networkinfo
@@ -2650,9 +2627,6 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		if mask&ipn.NotifyInitialNetMap != 0 {
 			ini.NetMap = b.netMap
 		}
-		if mask&ipn.NotifyInitialDriveShares != 0 && b.driveSharingEnabledLocked() {
-			ini.DriveShares = b.pm.prefs.DriveShares()
-		}
 		if mask&ipn.NotifyInitialHealthState != 0 {
 			ini.Health = b.HealthTracker().CurrentState()
 		}
@@ -2870,28 +2844,6 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 			}
 		}
 	}
-}
-
-func (b *LocalBackend) sendFileNotify() {
-	var n ipn.Notify
-
-	b.mu.Lock()
-	for _, wakeWaiter := range b.fileWaiters {
-		wakeWaiter()
-	}
-	apiSrv := b.peerAPIServer
-	if apiSrv == nil {
-		b.mu.Unlock()
-		return
-	}
-
-	b.mu.Unlock()
-
-	sort.Slice(n.IncomingFiles, func(i, j int) bool {
-		return n.IncomingFiles[i].Started.Before(n.IncomingFiles[j].Started)
-	})
-
-	b.send(n)
 }
 
 // setAuthURL sets the authURL and triggers [LocalBackend.popBrowserAuthNow] if the URL has changed.
@@ -3801,40 +3753,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	return prefs
 }
 
-// GetPeerAPIPort returns the port number for the peerapi server
-// running on the provided IP.
-func (b *LocalBackend) GetPeerAPIPort(ip netip.Addr) (port uint16, ok bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, pln := range b.peerAPIListeners {
-		if pln.ip == ip {
-			return uint16(pln.port), true
-		}
-	}
-	return 0, false
-}
-
-// handlePeerAPIConn serves an already-accepted connection c.
-//
-// The remote parameter is the remote address.
-// The local parameter is the local address (either a Tailscale IPv4
-// or IPv6 IP and the peerapi port for that address).
-//
-// The connection will be closed by handlePeerAPIConn.
-func (b *LocalBackend) handlePeerAPIConn(remote, local netip.AddrPort, c net.Conn) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, pln := range b.peerAPIListeners {
-		if pln.ip == local.Addr() {
-			go pln.ServeConn(remote, c)
-			return
-		}
-	}
-	b.logf("[unexpected] no peerAPI listener found for %v", local)
-	c.Close()
-	return
-}
-
 func (b *LocalBackend) isLocalIP(ip netip.Addr) bool {
 	nm := b.NetMap()
 	return nm != nil && views.SliceContains(nm.GetAddresses(), netip.PrefixFrom(ip, ip.BitLen()))
@@ -3844,38 +3762,6 @@ var (
 	magicDNSIP   = tsaddr.TailscaleServiceIP()
 	magicDNSIPv6 = tsaddr.TailscaleServiceIPv6()
 )
-
-func (b *LocalBackend) handleDriveConn(conn net.Conn) error {
-	fs, ok := b.sys.DriveForLocal.GetOK()
-	if !ok || !b.DriveAccessEnabled() {
-		conn.Close()
-		return nil
-	}
-	return fs.HandleConn(conn, conn.RemoteAddr())
-}
-
-func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
-	for _, pln := range b.peerAPIListeners {
-		proto := tailcfg.PeerAPI4
-		if pln.ip.Is6() {
-			proto = tailcfg.PeerAPI6
-		}
-		ret = append(ret, tailcfg.Service{
-			Proto: proto,
-			Port:  uint16(pln.port),
-		})
-	}
-	switch runtime.GOOS {
-	case "linux", "freebsd", "openbsd", "illumos", "solaris", "darwin", "windows", "android", "ios":
-		// These are the platforms currently supported by
-		// net/dns/resolver/tsdns.go:Resolver.HandleExitNodeDNSQuery.
-		ret = append(ret, tailcfg.Service{
-			Proto: tailcfg.PeerAPIDNS,
-			Port:  1, // version
-		})
-	}
-	return ret
-}
 
 // doSetHostinfoFilterServices calls SetHostinfo on the controlclient,
 // possibly after mangling the given hostinfo.
@@ -3895,10 +3781,6 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
 		return
 	}
-	peerAPIServices := b.peerAPIServicesLocked()
-	if b.egg {
-		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg", Port: 1})
-	}
 
 	// TODO(maisem,bradfitz): store hostinfo as a view, not as a mutable struct.
 	hi := *b.hostinfo // shallow copy
@@ -3911,8 +3793,6 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 	}
 	// Don't mutate hi.Service's underlying array. Append to
 	// the slice with no free capacity.
-	c := len(hi.Services)
-	hi.Services = append(hi.Services[:c:c], peerAPIServices...)
 	hi.PushDeviceToken = b.pushDeviceToken.Load()
 	cc.SetHostinfo(&hi)
 }
@@ -4016,8 +3896,6 @@ func (b *LocalBackend) authReconfig() {
 	} else {
 		b.dialer.SetRoutes(nil, nil)
 	}
-
-	b.initPeerAPIListener()
 }
 
 // shouldUseOneCGNATRoute reports whether we should prefer to make one big
@@ -4126,136 +4004,12 @@ func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {
 	return dir
 }
 
-// closePeerAPIListenersLocked closes any existing PeerAPI listeners
-// and clears out the PeerAPI server state.
-//
-// It does not kick off any Hostinfo update with new services.
-//
-// b.mu must be held.
-func (b *LocalBackend) closePeerAPIListenersLocked() {
-	b.peerAPIServer = nil
-	for _, pln := range b.peerAPIListeners {
-		pln.Close()
-	}
-	b.peerAPIListeners = nil
-}
-
 // peerAPIListenAsync is whether the operating system requires that we
 // retry listening on the peerAPI ip/port for whatever reason.
 //
 // On Windows, see Issue 1620.
 // On Android, see Issue 1960.
 const peerAPIListenAsync = runtime.GOOS == "windows" || runtime.GOOS == "android"
-
-func (b *LocalBackend) initPeerAPIListener() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.shutdownCalled {
-		return
-	}
-
-	if b.netMap == nil {
-		// We're called from authReconfig which checks that
-		// netMap is non-nil, but if a concurrent Logout,
-		// ResetForClientDisconnect, or Start happens when its
-		// mutex was released, the netMap could be
-		// nil'ed out (Issue 1996). Bail out early here if so.
-		return
-	}
-
-	addrs := b.netMap.GetAddresses()
-	if addrs.Len() == len(b.peerAPIListeners) {
-		allSame := true
-		for i, pln := range b.peerAPIListeners {
-			if pln.ip != addrs.At(i).Addr() {
-				allSame = false
-				break
-			}
-		}
-		if allSame {
-			// Nothing to do.
-			return
-		}
-	}
-
-	b.closePeerAPIListenersLocked()
-
-	selfNode := b.netMap.SelfNode
-	if !selfNode.Valid() || b.netMap.GetAddresses().Len() == 0 {
-		return
-	}
-
-	fileRoot := b.fileRootLocked(selfNode.User())
-	if fileRoot == "" {
-		b.logf("peerapi starting without Taildrop directory configured")
-	}
-
-	ps := &peerAPIServer{
-		b: b,
-	}
-	b.peerAPIServer = ps
-
-	isNetstack := b.sys.IsNetstack()
-	for i, a := range addrs.All() {
-		var ln net.Listener
-		var err error
-		skipListen := i > 0 && isNetstack
-		if !skipListen {
-			ln, err = ps.listen(a.Addr(), b.prevIfState)
-			if err != nil {
-				if peerAPIListenAsync {
-					// Expected. But we fix it later in linkChange
-					// ("peerAPIListeners too low").
-					continue
-				}
-				b.logf("[unexpected] peerapi listen(%q) error: %v", a.Addr(), err)
-				continue
-			}
-		}
-		pln := &peerAPIListener{
-			ps: ps,
-			ip: a.Addr(),
-			ln: ln, // nil for 2nd+ on netstack
-			lb: b,
-		}
-		if skipListen {
-			pln.port = b.peerAPIListeners[0].port
-		} else {
-			pln.port = ln.Addr().(*net.TCPAddr).Port
-		}
-		pln.urlStr = "http://" + net.JoinHostPort(a.Addr().String(), strconv.Itoa(pln.port))
-		b.logf("peerapi: serving on %s", pln.urlStr)
-		go pln.serve()
-		b.peerAPIListeners = append(b.peerAPIListeners, pln)
-	}
-
-	b.goTracker.Go(b.doSetHostinfoFilterServices)
-}
-
-// magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
-func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
-	if v := nm.MagicDNSSuffix(); v != "" {
-		fqdn, err := dnsname.ToFQDN(v)
-		if err != nil {
-			// TODO: propagate error
-			return nil
-		}
-		ret := []dnsname.FQDN{
-			fqdn,
-			dnsname.FQDN("0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa."),
-		}
-		for i := 64; i <= 127; i++ {
-			fqdn, err = dnsname.ToFQDN(fmt.Sprintf("%d.100.in-addr.arpa.", i))
-			if err != nil {
-				// TODO: propagate error
-				continue
-			}
-			ret = append(ret, fqdn)
-		}
-		return ret
-	}
-	return nil
-}
 
 // peerRoutes returns the routerConfig.Routes to access peers.
 // If there are over cgnatThreshold CGNAT routes, one big CGNAT route
@@ -4482,7 +4236,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		}
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
-		b.closePeerAPIListenersLocked()
 
 		// Stop any existing captive portal detection loop.
 		if b.captiveCancel != nil {
@@ -5033,9 +4786,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			delete(b.nodeByAddr, k)
 		}
 	}
-
-	b.updateDrivePeersLocked(nm)
-	b.driveNotifyCurrentSharesLocked()
 }
 
 func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
@@ -5060,159 +4810,6 @@ func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
 			delete(b.peers, k)
 		}
 	}
-}
-
-// responseBodyWrapper wraps an io.ReadCloser and stores
-// the number of bytesRead.
-type responseBodyWrapper struct {
-	io.ReadCloser
-	bytesRx       int64
-	bytesTx       int64
-	log           logger.Logf
-	method        string
-	statusCode    int
-	contentType   string
-	fileExtension string
-	shareNodeKey  string
-	selfNodeKey   string
-	contentLength int64
-}
-
-// logAccess logs the taildrive: access: log line. If the logger is nil,
-// the log will not be written.
-func (rbw *responseBodyWrapper) logAccess(err string) {
-	if rbw.log == nil {
-		return
-	}
-
-	// Some operating systems create and copy lots of 0 length hidden files for
-	// tracking various states. Omit these to keep logs from being too verbose.
-	if rbw.contentLength > 0 {
-		rbw.log("taildrive: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q", rbw.method, rbw.selfNodeKey, rbw.shareNodeKey, rbw.statusCode, rbw.fileExtension, rbw.contentType, roundTraffic(rbw.contentLength), roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
-	}
-}
-
-// Read implements the io.Reader interface.
-func (rbw *responseBodyWrapper) Read(b []byte) (int, error) {
-	n, err := rbw.ReadCloser.Read(b)
-	rbw.bytesRx += int64(n)
-	if err != nil && !errors.Is(err, io.EOF) {
-		rbw.logAccess(err.Error())
-	}
-
-	return n, err
-}
-
-// Close implements the io.Close interface.
-func (rbw *responseBodyWrapper) Close() error {
-	err := rbw.ReadCloser.Close()
-	var errStr string
-	if err != nil {
-		errStr = err.Error()
-	}
-	rbw.logAccess(errStr)
-
-	return err
-}
-
-// driveTransport is an http.RoundTripper that wraps
-// b.Dialer().PeerAPITransport() with metrics tracking.
-type driveTransport struct {
-	b  *LocalBackend
-	tr *http.Transport
-}
-
-func (b *LocalBackend) newDriveTransport() *driveTransport {
-	return &driveTransport{
-		b:  b,
-		tr: b.Dialer().PeerAPITransport(),
-	}
-}
-
-func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-	// Some WebDAV clients include origin and refer headers, which peerapi does
-	// not like. Remove them.
-	req.Header.Del("origin")
-	req.Header.Del("referer")
-
-	bw := &requestBodyWrapper{}
-	if req.Body != nil {
-		bw.ReadCloser = req.Body
-		req.Body = bw
-	}
-
-	defer func() {
-		contentType := "unknown"
-		switch req.Method {
-		case httpm.PUT:
-			if ct := req.Header.Get("Content-Type"); ct != "" {
-				contentType = ct
-			}
-		case httpm.GET:
-			if ct := resp.Header.Get("Content-Type"); ct != "" {
-				contentType = ct
-			}
-		default:
-			return
-		}
-
-		dt.b.mu.Lock()
-		selfNodeKey := dt.b.netMap.SelfNode.Key().ShortString()
-		dt.b.mu.Unlock()
-		n, _, ok := dt.b.WhoIs("tcp", netip.MustParseAddrPort(req.URL.Host))
-		shareNodeKey := "unknown"
-		if ok {
-			shareNodeKey = string(n.Key().ShortString())
-		}
-
-		rbw := responseBodyWrapper{
-			log:           dt.b.logf,
-			method:        req.Method,
-			bytesTx:       int64(bw.bytesRead),
-			selfNodeKey:   selfNodeKey,
-			shareNodeKey:  shareNodeKey,
-			contentType:   contentType,
-			contentLength: resp.ContentLength,
-			fileExtension: parseDriveFileExtensionForLog(req.URL.Path),
-			statusCode:    resp.StatusCode,
-			ReadCloser:    resp.Body,
-		}
-
-		if resp.StatusCode >= 400 {
-			// in case of error response, just log immediately
-			rbw.logAccess("")
-		} else {
-			resp.Body = &rbw
-		}
-	}()
-
-	return dt.tr.RoundTrip(req)
-}
-
-// roundTraffic rounds bytes. This is used to preserve user privacy within logs.
-func roundTraffic(bytes int64) float64 {
-	var x float64
-	switch {
-	case bytes <= 5:
-		return float64(bytes)
-	case bytes < 1000:
-		x = 10
-	case bytes < 10_000:
-		x = 100
-	case bytes < 100_000:
-		x = 1000
-	case bytes < 1_000_000:
-		x = 10_000
-	case bytes < 10_000_000:
-		x = 100_000
-	case bytes < 100_000_000:
-		x = 1_000_000
-	case bytes < 1_000_000_000:
-		x = 10_000_000
-	default:
-		x = 100_000_000
-	}
-	return math.Round(float64(bytes)/x) * x
 }
 
 // setDebugLogsByCapabilityLocked sets debug logging based on the self node's
