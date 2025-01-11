@@ -37,7 +37,6 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
@@ -1265,8 +1264,6 @@ func (c *sclient) requestMeshUpdate() {
 	}
 }
 
-var localClient tailscale.LocalClient
-
 // isMeshPeer reports whether the client is a trusted mesh peer
 // node in the DERP region.
 func (s *Server) isMeshPeer(info *clientInfo) bool {
@@ -1285,17 +1282,7 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 
 	// tailscaled-based verification:
 	if s.verifyClientsLocalTailscaled {
-		_, err := localClient.WhoIsNodeKey(ctx, clientKey)
-		if err == tailscale.ErrPeerNotFound {
-			return fmt.Errorf("peer %v not authorized (not found in local tailscaled)", clientKey)
-		}
-		if err != nil {
-			if strings.Contains(err.Error(), "invalid 'addr' parameter") {
-				// Issue 12617
-				return errors.New("tailscaled version is too old (out of sync with derper binary)")
-			}
-			return fmt.Errorf("failed to query local tailscaled status for %v: %w", clientKey, err)
-		}
+		return errors.New("lanscaping")
 	}
 
 	// admission controller-based verification:
@@ -2162,33 +2149,13 @@ func (s *Server) ConsistencyCheck() error {
 	}
 
 	if s.verifyClientsLocalTailscaled {
-		if err := s.checkVerifyClientsLocalTailscaled(); err != nil {
-			errs = append(errs, err.Error())
-		}
+		errs = append(errs, "lanscaping")
 	}
 
 	if len(errs) == 0 {
 		return nil
 	}
 	return errors.New(strings.Join(errs, ", "))
-}
-
-// checkVerifyClientsLocalTailscaled checks that a verifyClients call can be made successfully for the derper hosts own node key.
-func (s *Server) checkVerifyClientsLocalTailscaled() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	status, err := localClient.StatusWithoutPeers(ctx)
-	if err != nil {
-		return fmt.Errorf("localClient.Status: %w", err)
-	}
-	info := &clientInfo{
-		IsProber: true,
-	}
-	clientIP := netip.IPv6Loopback()
-	if err := s.verifyClient(ctx, status.Self.PublicKey, info, clientIP); err != nil {
-		return fmt.Errorf("verifyClient for self nodekey: %w", err)
-	}
-	return nil
 }
 
 const minTimeBetweenLogs = 2 * time.Second
