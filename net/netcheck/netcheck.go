@@ -30,7 +30,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/ping"
-	"tailscale.com/net/portmapper"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
@@ -220,10 +219,6 @@ type Client struct {
 	// to reach things other than localhost. This is set to true
 	// in tests to avoid probing the local LAN's router, etc.
 	SkipExternalNetwork bool
-
-	// PortMapper, if non-nil, is used for portmap queries.
-	// If nil, portmap discovery is not done.
-	PortMapper *portmapper.Client // lazily initialized on first use
 
 	// UseDNSCache controls whether this client should use a
 	// *dnscache.Resolver to resolve DERP hostnames, when no IP address is
@@ -726,29 +721,6 @@ func (rs *reportState) setOptBool(b *opt.Bool, v bool) {
 	b.Set(v)
 }
 
-func (rs *reportState) probePortMapServices() {
-	defer rs.waitPortMap.Done()
-
-	rs.setOptBool(&rs.report.UPnP, false)
-	rs.setOptBool(&rs.report.PMP, false)
-	rs.setOptBool(&rs.report.PCP, false)
-
-	res, err := rs.c.PortMapper.Probe(context.Background())
-	if err != nil {
-		if !errors.Is(err, portmapper.ErrGatewayRange) {
-			// "skipping portmap; gateway range likely lacks support"
-			// is not very useful, and too spammy on cloud systems.
-			// If there are other errors, we want to log those.
-			rs.c.logf("probePortMapServices: %v", err)
-		}
-		return
-	}
-
-	rs.setOptBool(&rs.report.UPnP, res.UPnP)
-	rs.setOptBool(&rs.report.PMP, res.PMP)
-	rs.setOptBool(&rs.report.PCP, res.PCP)
-}
-
 func newReport() *Report {
 	return &Report{
 		RegionLatency:   make(map[int]time.Duration),
@@ -887,11 +859,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		v6udp.Close()
 	}
 
-	if !c.SkipExternalNetwork && c.PortMapper != nil {
-		rs.waitPortMap.Add(1)
-		go rs.probePortMapServices()
-	}
-
 	var plan probePlan
 	if opts == nil || !opts.OnlyTCP443 {
 		plan = makeProbePlan(dm, ifState, last, preferredDERP)
@@ -966,10 +933,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		captivePortalStop()
 	}
 
-	if !c.SkipExternalNetwork && c.PortMapper != nil {
-		rs.waitPortMap.Wait()
-		c.vlogf("portMap done")
-	}
 	rs.stopTimers()
 
 	// Try HTTPS and ICMP latency check if all STUN probes failed due to

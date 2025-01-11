@@ -40,7 +40,6 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
-	"tailscale.com/net/portmapper"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/tstun"
@@ -173,10 +172,6 @@ type Conn struct {
 	// netChecker is the prober that discovers local network
 	// conditions, including the closest DERP relay and NAT mappings.
 	netChecker *netcheck.Client
-
-	// portMapper is the NAT-PMP/PCP/UPnP prober/client, for requesting
-	// port mappings from NAT devices.
-	portMapper *portmapper.Client
 
 	// derpRecvCh is used by receiveDERP to read DERP messages.
 	// It must have buffer size > 0; see issue 3736.
@@ -533,11 +528,6 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
-	portMapOpts := &portmapper.DebugKnobs{
-		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
-	}
-	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
-	c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
 	c.onPortUpdate = opts.OnPortUpdate
@@ -554,7 +544,6 @@ func NewConn(opts Options) (*Conn, error) {
 		NetMon:              c.netMon,
 		SendPacket:          c.sendUDPNetcheck,
 		SkipExternalNetwork: inTest(),
-		PortMapper:          c.portMapper,
 		UseDNSCache:         true,
 	}
 
@@ -844,7 +833,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		UPnP:                  report.UPnP,
 		PMP:                   report.PMP,
 		PCP:                   report.PCP,
-		HavePortMap:           c.portMapper.HaveMapping(),
+		HavePortMap:           false,
 	}
 	for rid, d := range report.RegionV4Latency {
 		ni.DERPLatency[fmt.Sprintf("%d-v4", rid)] = d.Seconds()
@@ -1005,12 +994,6 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 //
 // c.mu must NOT be held.
 func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, error) {
-	var havePortmap bool
-	var portmapExt netip.AddrPort
-	if runtime.GOOS != "js" {
-		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
-	}
-
 	nr, err := c.updateNetInfo(ctx)
 	if err != nil {
 		c.logf("magicsock.Conn.determineEndpoints: updateNetInfo: %v", err)
@@ -1044,15 +1027,6 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 			mak.Set(&already, ipp, et)
 			eps = append(eps, tailcfg.Endpoint{Addr: ipp, Type: et})
 		}
-	}
-
-	// If we didn't have a portmap earlier, maybe it's done by now.
-	if !havePortmap {
-		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
-	}
-	if havePortmap {
-		addAddr(portmapExt, tailcfg.EndpointPortmapped)
-		c.setNetInfoHavePortMap()
 	}
 
 	v4Addrs, v6Addrs := nr.GetGlobalAddrs()
@@ -1975,7 +1949,6 @@ func (c *Conn) SetNetworkUp(up bool) {
 	if up {
 		c.startDerpHomeConnectLocked()
 	} else {
-		c.portMapper.NoteNetworkDown()
 		c.closeAllDerpLocked("network-down")
 	}
 }
@@ -2484,7 +2457,6 @@ func (c *Conn) Close() error {
 		c.derpCleanupTimer.Stop()
 	}
 	c.stopPeriodicReSTUNTimerLocked()
-	c.portMapper.Close()
 
 	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ep.stopAndReset()
@@ -2739,7 +2711,6 @@ func (c *Conn) rebind(curPortFate currentPortFate) error {
 	if err := c.bindSocket(&c.pconn4, "udp4", curPortFate); err != nil {
 		return fmt.Errorf("magicsock: Rebind IPv4 failed: %w", err)
 	}
-	c.portMapper.SetLocalPort(c.LocalPort())
 	c.UpdatePMTUD()
 	return nil
 }
