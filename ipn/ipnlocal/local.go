@@ -45,7 +45,6 @@ import (
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/ipn/policy"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
@@ -54,7 +53,6 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
-	"tailscale.com/portlist"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
@@ -166,11 +164,9 @@ type LocalBackend struct {
 	unregisterNetMon         func()
 	unregisterHealthWatch    func()
 	unregisterSysPolicyWatch func()
-	portpoll                 *portlist.Poller // may be nil
-	portpollOnce             sync.Once        // guards starting readPoller
-	varRoot                  string           // or empty if SetVarRoot never called
-	logFlushFunc             func()           // or nil if SetLogFlusher wasn't called
-	em                       *expiryManager   // non-nil
+	varRoot                  string         // or empty if SetVarRoot never called
+	logFlushFunc             func()         // or nil if SetLogFlusher wasn't called
+	em                       *expiryManager // non-nil
 	sshAtomicBool            atomic.Bool
 	// webClientAtomicBool controls whether the web client is running. This should
 	// be true unless the disable-web-client node attribute has been set.
@@ -429,7 +425,6 @@ func NewLocalBackend(logf logger.Logf, sys *tsd.System, loginFlags controlclient
 		store:                 store,
 		pm:                    pm,
 		state:                 ipn.NoState,
-		portpoll:              new(portlist.Poller),
 		em:                    newExpiryManager(logf),
 		loginFlags:            loginFlags,
 		clock:                 clock,
@@ -1733,14 +1728,6 @@ func (b *LocalBackend) NodeViewByIDForTest(id tailcfg.NodeID) (_ tailcfg.NodeVie
 	return n, ok
 }
 
-// DisablePortMapperForTest disables the portmapper for tests.
-// It must be called before Start.
-func (b *LocalBackend) DisablePortMapperForTest() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.portpoll = nil
-}
-
 // PeersForTest returns all the current peers, sorted by Node.ID,
 // for integration tests in another repo.
 func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
@@ -1869,12 +1856,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		persistv = new(persist.Persist)
 	}
 	b.updateFilterLocked(nil, ipn.PrefsView{})
-
-	if b.portpoll != nil {
-		b.portpollOnce.Do(func() {
-			b.goTracker.Go(b.readPoller)
-		})
-	}
 
 	discoPublic := b.MagicConn().DiscoPublicKey()
 
@@ -2343,57 +2324,6 @@ func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, 
 		b.RemovePrefix(pfx)
 	}
 	return b.IPSet()
-}
-
-// readPoller is a goroutine that receives service lists from
-// b.portpoll and propagates them into the controlclient's HostInfo.
-func (b *LocalBackend) readPoller() {
-	if !envknob.BoolDefaultTrue("TS_PORTLIST") {
-		return
-	}
-
-	ticker, tickerChannel := b.clock.NewTicker(portlist.PollInterval())
-	defer ticker.Stop()
-	for {
-		select {
-		case <-tickerChannel:
-		case <-b.ctx.Done():
-			return
-		}
-
-		if !b.shouldUploadServices() {
-			continue
-		}
-
-		ports, changed, err := b.portpoll.Poll()
-		if err != nil {
-			b.logf("error polling for open ports: %v", err)
-			return
-		}
-		if !changed {
-			continue
-		}
-		sl := []tailcfg.Service{}
-		for _, p := range ports {
-			s := tailcfg.Service{
-				Proto:       tailcfg.ServiceProto(p.Proto),
-				Port:        p.Port,
-				Description: p.Process,
-			}
-			if policy.IsInterestingService(s, version.OS()) {
-				sl = append(sl, s)
-			}
-		}
-
-		b.mu.Lock()
-		if b.hostinfo == nil {
-			b.hostinfo = new(tailcfg.Hostinfo)
-		}
-		b.hostinfo.Services = sl
-		b.mu.Unlock()
-
-		b.doSetHostinfoFilterServices()
-	}
 }
 
 // GetPushDeviceToken returns the push notification device token.
