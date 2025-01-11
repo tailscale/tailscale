@@ -9,10 +9,8 @@ import (
 	"encoding/json"
 	"sync"
 
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/mak"
 )
 
 // New returns a new Store.
@@ -51,19 +49,6 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 	}
 	s.cache[id] = bytes.Clone(bs)
 	return nil
-}
-
-// LoadFromMap loads the in-memory cache from the provided map.
-// Any existing content is cleared, and the provided map is
-// copied into the cache.
-func (s *Store) LoadFromMap(m map[string][]byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	xmaps.Clear(s.cache)
-	for k, v := range m {
-		mak.Set(&s.cache, ipn.StateKey(k), v)
-	}
-	return
 }
 
 // LoadFromJSON attempts to unmarshal json content into the
