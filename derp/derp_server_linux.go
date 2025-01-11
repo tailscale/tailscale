@@ -8,47 +8,9 @@ import (
 	"crypto/tls"
 	"net"
 	"time"
-
-	"tailscale.com/net/tcpinfo"
 )
 
 func (c *sclient) startStatsLoop(ctx context.Context) {
-	// Get the RTT initially to verify it's supported.
-	conn := c.tcpConn()
-	if conn == nil {
-		c.s.tcpRtt.Add("non-tcp", 1)
-		return
-	}
-	if _, err := tcpinfo.RTT(conn); err != nil {
-		c.logf("error fetching initial RTT: %v", err)
-		c.s.tcpRtt.Add("error", 1)
-		return
-	}
-
-	const statsInterval = 10 * time.Second
-
-	// Don't launch a goroutine; use a timer instead.
-	var gatherStats func()
-	gatherStats = func() {
-		// Do nothing if the context is finished.
-		if ctx.Err() != nil {
-			return
-		}
-
-		// Reschedule ourselves when this stats gathering is finished.
-		defer c.s.clock.AfterFunc(statsInterval, gatherStats)
-
-		// Gather TCP RTT information.
-		rtt, err := tcpinfo.RTT(conn)
-		if err == nil {
-			c.s.tcpRtt.Add(durationToLabel(rtt), 1)
-		}
-
-		// TODO(andrew): more metrics?
-	}
-
-	// Kick off the initial timer.
-	c.s.clock.AfterFunc(statsInterval, gatherStats)
 }
 
 // tcpConn attempts to get the underlying *net.TCPConn from this client's
