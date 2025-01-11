@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // TODO(#8502): add support for more architectures
-//go:build linux && (arm64 || amd64)
+//go:build linux && (arm64 || amd64) && !ts_omit_nftables
 
 package linuxfw
 

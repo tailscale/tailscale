@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux
+//go:build linux && !ts_omit_nftables
 
 package linuxfw
 
@@ -220,17 +220,6 @@ func (n *nftablesRunner) ensureChainForSvc(svc string, targetIP netip.Addr) (*nf
 		return nil, nil, fmt.Errorf("error ensuring prerouting chain: %w", err)
 	}
 	return nat, svcCh, nil
-}
-
-// // PortMap is the port mapping for a service rule.
-type PortMap struct {
-	// MatchPort is the local port to which the rule should apply.
-	MatchPort uint16
-	// TargetPort is the port to which the traffic should be forwarded.
-	TargetPort uint16
-	// Protocol is the protocol to match packets on. Only TCP and UDP are
-	// supported.
-	Protocol string
 }
 
 func protoFromString(s string) (uint8, error) {

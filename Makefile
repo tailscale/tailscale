@@ -24,14 +24,15 @@ updatedeps: ## Update depaware deps
 		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund
 
-MIN_OMITS ?= ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion,ts_omit_netstack
+MIN_OMITS ?= ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion,ts_omit_netstack,ts_omit_nftables
 
 min:
 	./tool/go build -o $$HOME/bin/tailscaled.min -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
-	ls -lh $$HOME/bin/tailscaled.min
+	GOOS=linux ./tool/go build -o $$HOME/bin/tailscaled.minlinux -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
+	ls -l $$HOME/bin/tailscaled.min{,linux}
 
 updatemindeps: min
-		PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --file=depaware-minlinux.txt --goos=linux --tags=${MIN_OMITS} --update \
+		PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --file=depaware-minlinux.txt --goos=linux,darwin --tags=${MIN_OMITS} --update \
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale
 
