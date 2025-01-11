@@ -24,7 +24,7 @@ updatedeps: ## Update depaware deps
 		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund
 
-MIN_OMITS ?= ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion,ts_omit_netstack,ts_omit_nftables,ts_omit_ssh,ts_omit_tka
+MIN_OMITS ?= ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion,ts_omit_netstack,ts_omit_nftables,ts_omit_ssh,ts_omit_tka,ts_omit_webclient
 
 min:
 	./tool/go build -o $$HOME/bin/tailscaled.min -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled

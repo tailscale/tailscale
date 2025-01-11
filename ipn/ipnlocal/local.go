@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"math"
 	"math/rand/v2"
 	"net"
@@ -37,7 +36,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
@@ -313,16 +311,6 @@ type LocalBackend struct {
 	//
 	//lint:ignore U1000 only used in Linux and Windows builds in autoupdate.go
 	offlineAutoUpdateCancel func()
-
-	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
-	serveConfig       ipn.ServeConfigView // or !Valid if none
-
-	webClient          webClient
-	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
-
-	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
-	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -987,7 +975,6 @@ func (b *LocalBackend) Shutdown() {
 		b.notifyCancel()
 	}
 	b.mu.Unlock()
-	b.webClientShutdown()
 
 	if b.sockstatLogger != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1567,7 +1554,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// Perform all reconfiguration based on the netmap here.
 	if st.NetMap != nil {
 		b.capTailnetLock = st.NetMap.HasCap(tailcfg.CapabilityTailnetLock)
-		b.setWebClientAtomicBoolLocked(st.NetMap)
 
 		// As we stepped outside of the lock, it's possible for b.cc
 		// to now be nil.
@@ -2846,9 +2832,6 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		b.goTracker.Go(func() { b.pollRequestEngineStatus(ctx) })
 	}
 
-	// TODO(marwan-at-work): streaming background logs?
-	defer b.DeleteForegroundSession(sessionID)
-
 	sender := &rateLimitingBusSender{fn: fn}
 	defer sender.close()
 
@@ -3331,17 +3314,13 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 // which may be !Valid().
 func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
-	b.setExposeRemoteWebClientAtomicBoolLocked(p)
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(ipset.FalseContainsIPFunc())
 		b.setTCPPortsIntercepted(nil)
-		b.lastServeConfJSON = mem.B(nil)
-		b.serveConfig = ipn.ServeConfigView{}
 	} else {
 		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
 		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(views.SliceOf(filtered)))
-		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}
 }
 
@@ -3650,9 +3629,6 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := b.checkExitNodePrefsLocked(p); err != nil {
 		errs = append(errs, err)
 	}
-	if err := b.checkFunnelEnabledLocked(p); err != nil {
-		errs = append(errs, err)
-	}
 	if err := b.checkAutoUpdatePrefsLocked(p); err != nil {
 		errs = append(errs, err)
 	}
@@ -3755,13 +3731,6 @@ func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
 
 	if p.AdvertisesExitNode() {
 		return errors.New("Cannot advertise an exit node and use an exit node at the same time.")
-	}
-	return nil
-}
-
-func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
-	if p.ShieldsUp && b.serveConfig.IsFunnelOn() {
-		return errors.New("Cannot enable shields-up when Funnel is enabled.")
 	}
 	return nil
 }
@@ -3892,20 +3861,6 @@ func (b *LocalBackend) checkProfileNameLocked(p *ipn.Prefs) error {
 		return fmt.Errorf("profile name %q already in use", p.ProfileName)
 	}
 	return nil
-}
-
-// wantIngressLocked reports whether this node has ingress configured. This bool
-// is sent to the coordination server (in Hostinfo.WireIngress) as an
-// optimization hint to know primarily which nodes are NOT using ingress, to
-// avoid doing work for regular nodes.
-//
-// Even if the user's ServeConfig.AllowFunnel map was manually edited in raw
-// mode and contains map entries with false values, sending true (from Len > 0)
-// is still fine. This is only an optimization hint for the control plane and
-// doesn't affect security or correctness. And we also don't expect people to
-// modify their ServeConfig in raw mode.
-func (b *LocalBackend) wantIngressLocked() bool {
-	return b.serveConfig.Valid() && b.serveConfig.HasAllowFunnel()
 }
 
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
@@ -4926,7 +4881,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// if this is accidentally false, then control may not configure DNS
 	// properly. This exists as an optimization to control to program fewer DNS
 	// records that have ingress enabled but are not actually being used.
-	hi.WireIngress = b.wantIngressLocked()
+	hi.WireIngress = false
 	hi.AppConnector.Set(prefs.AppConnector().Advertise)
 }
 
@@ -5306,44 +5261,6 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
-// ShouldRunWebClient reports whether the web client is being run
-// within this tailscaled instance. ShouldRunWebClient is safe to
-// call regardless of whether b.mu is held or not.
-func (b *LocalBackend) ShouldRunWebClient() bool { return b.webClientAtomicBool.Load() }
-
-// ShouldExposeRemoteWebClient reports whether the web client should
-// accept connections via [tailscale IP]:5252 in addition to the default
-// behaviour of accepting local connections over 100.100.100.100.
-//
-// This function checks both the web client user pref via
-// exposeRemoteWebClientAtomicBool and the disable-web-client node attr
-// via ShouldRunWebClient to determine whether the web client should be
-// exposed.
-func (b *LocalBackend) ShouldExposeRemoteWebClient() bool {
-	return b.ShouldRunWebClient() && b.exposeRemoteWebClientAtomicBool.Load()
-}
-
-// setWebClientAtomicBoolLocked sets webClientAtomicBool based on whether
-// tailcfg.NodeAttrDisableWebClient has been set in the netmap.NetworkMap.
-//
-// b.mu must be held.
-func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap) {
-	shouldRun := !nm.HasCap(tailcfg.NodeAttrDisableWebClient)
-	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
-	if wasRunning && !shouldRun {
-		b.goTracker.Go(b.webClientShutdown) // stop web client
-	}
-}
-
-// setExposeRemoteWebClientAtomicBoolLocked sets exposeRemoteWebClientAtomicBool
-// based on whether the RunWebClient pref is set.
-//
-// b.mu must be held.
-func (b *LocalBackend) setExposeRemoteWebClientAtomicBoolLocked(prefs ipn.PrefsView) {
-	shouldExpose := prefs.Valid() && prefs.RunWebClient()
-	b.exposeRemoteWebClientAtomicBool.Store(shouldExpose)
-}
-
 // ShouldHandleViaIP reports whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to
 // by Tailscale.
@@ -5532,7 +5449,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	netns.SetBindToInterfaceByRoute(nm.HasCap(tailcfg.CapabilityBindToInterfaceByRoute))
 	netns.SetDisableBindConnToInterface(nm.HasCap(tailcfg.CapabilityDebugDisableBindConnToInterface))
 
-	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if nm == nil {
 		b.nodeByAddr = nil
 
@@ -5769,139 +5685,6 @@ func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
 	} else {
 		dnscache.SetDebugLoggingEnabled(false)
 	}
-}
-
-// reloadServeConfigLocked reloads the serve config from the store or resets the
-// serve config to nil if not logged in. The "changed" parameter, when false, instructs
-// the method to only run the reset-logic and not reload the store from memory to ensure
-// foreground sessions are not removed if they are not saved on disk.
-func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
-	if b.netMap == nil || !b.netMap.SelfNode.Valid() || !prefs.Valid() || b.pm.CurrentProfile().ID == "" {
-		// We're not logged in, so we don't have a profile.
-		// Don't try to load the serve config.
-		b.lastServeConfJSON = mem.B(nil)
-		b.serveConfig = ipn.ServeConfigView{}
-		return
-	}
-
-	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID)
-	// TODO(maisem,bradfitz): prevent reading the config from disk
-	// if the profile has not changed.
-	confj, err := b.store.ReadState(confKey)
-	if err != nil {
-		b.lastServeConfJSON = mem.B(nil)
-		b.serveConfig = ipn.ServeConfigView{}
-		return
-	}
-	if b.lastServeConfJSON.Equal(mem.B(confj)) {
-		return
-	}
-	b.lastServeConfJSON = mem.B(confj)
-	var conf ipn.ServeConfig
-	if err := json.Unmarshal(confj, &conf); err != nil {
-		b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
-		b.serveConfig = ipn.ServeConfigView{}
-		return
-	}
-
-	// remove inactive sessions
-	maps.DeleteFunc(conf.Foreground, func(sessionID string, sc *ipn.ServeConfig) bool {
-		_, ok := b.notifyWatchers[sessionID]
-		return !ok
-	})
-
-	b.serveConfig = conf.View()
-}
-
-// setTCPPortsInterceptedFromNetmapAndPrefsLocked calls setTCPPortsIntercepted with
-// the ports that tailscaled should handle as a function of b.netMap and b.prefs.
-//
-// b.mu must be held.
-func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.PrefsView) {
-	handlePorts := make([]uint16, 0, 4)
-
-	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
-		handlePorts = append(handlePorts, 22)
-	}
-	if b.ShouldExposeRemoteWebClient() {
-		handlePorts = append(handlePorts, webClientPort)
-
-		// don't listen on netmap addresses if we're in userspace mode
-		if !b.sys.IsNetstack() {
-			b.updateWebClientListenersLocked()
-		}
-	}
-
-	b.reloadServeConfigLocked(prefs)
-	if b.serveConfig.Valid() {
-		servePorts := make([]uint16, 0, 3)
-		for port := range b.serveConfig.TCPs() {
-			if port > 0 {
-				servePorts = append(servePorts, uint16(port))
-			}
-		}
-		handlePorts = append(handlePorts, servePorts...)
-
-		b.setServeProxyHandlersLocked()
-
-		// don't listen on netmap addresses if we're in userspace mode
-		if !b.sys.IsNetstack() {
-			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
-		}
-	}
-	// Kick off a Hostinfo update to control if WireIngress changed.
-	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
-		b.logf("Hostinfo.WireIngress changed to %v", wire)
-		b.hostinfo.WireIngress = wire
-		b.goTracker.Go(b.doSetHostinfoFilterServices)
-	}
-
-	b.setTCPPortsIntercepted(handlePorts)
-}
-
-// setServeProxyHandlersLocked ensures there is an http proxy handler for each
-// backend specified in serveConfig. It expects serveConfig to be valid and
-// up-to-date, so should be called after reloadServeConfigLocked.
-func (b *LocalBackend) setServeProxyHandlersLocked() {
-	if !b.serveConfig.Valid() {
-		return
-	}
-	var backends map[string]bool
-	for _, conf := range b.serveConfig.Webs() {
-		for _, h := range conf.Handlers().All() {
-			backend := h.Proxy()
-			if backend == "" {
-				// Only create proxy handlers for servers with a proxy backend.
-				continue
-			}
-			mak.Set(&backends, backend, true)
-			if _, ok := b.serveProxyHandlers.Load(backend); ok {
-				continue
-			}
-
-			b.logf("serve: creating a new proxy handler for %s", backend)
-			p, err := b.proxyHandlerForBackend(backend)
-			if err != nil {
-				// The backend endpoint (h.Proxy) should have been validated by expandProxyTarget
-				// in the CLI, so just log the error here.
-				b.logf("[unexpected] could not create proxy for %v: %s", backend, err)
-				continue
-			}
-			b.serveProxyHandlers.Store(backend, p)
-		}
-	}
-
-	// Clean up handlers for proxy backends that are no longer present
-	// in configuration.
-	b.serveProxyHandlers.Range(func(key, value any) bool {
-		backend := key.(string)
-		if !backends[backend] {
-			b.logf("serve: closing idle connections to %s", backend)
-			b.serveProxyHandlers.Delete(backend)
-			value.(*reverseProxy).close()
-		}
-		return true
-	})
 }
 
 // operatorUserName returns the current pref's OperatorUser's name, or the
@@ -6674,10 +6457,6 @@ func (b *LocalBackend) SetDevStateStore(key, value string) error {
 		return err
 	}
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
-
 	return nil
 }
 
@@ -6747,8 +6526,6 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	if err := b.initTKALocked(); err != nil {
 		return err
 	}
-	b.lastServeConfJSON = mem.B(nil)
-	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
 	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
 	b.health.SetLocalLogConfigHealth(nil)
@@ -7529,29 +7306,7 @@ func (b *LocalBackend) vipServiceHash(services []*tailcfg.VIPService) string {
 }
 
 func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
-	// keyed by service name
-	var services map[string]*tailcfg.VIPService
-	if !b.serveConfig.Valid() {
-		return nil
-	}
-
-	for svc, config := range b.serveConfig.Services().All() {
-		mak.Set(&services, svc, &tailcfg.VIPService{
-			Name:  svc,
-			Ports: config.ServicePortRange(),
-		})
-	}
-
-	for _, s := range prefs.AdvertiseServices().All() {
-		if services == nil || services[s] == nil {
-			mak.Set(&services, s, &tailcfg.VIPService{
-				Name: s,
-			})
-		}
-		services[s].Active = true
-	}
-
-	return slicesx.MapValues(services)
+	return nil
 }
 
 var (
