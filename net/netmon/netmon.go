@@ -128,7 +128,7 @@ func New(logf logger.Logf) (*Monitor, error) {
 	}
 	m.ifState = st
 
-	m.om, err = newOSMon(logf, m)
+	m.om, err = newPollingMon(logf, m)
 	if err != nil {
 		return nil, err
 	}

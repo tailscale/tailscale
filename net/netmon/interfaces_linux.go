@@ -9,17 +9,13 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
 
-	"github.com/jsimonetti/rtnetlink"
-	"github.com/mdlayher/netlink"
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/netaddr"
@@ -126,64 +122,8 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	v, err := defaultRouteInterfaceProcNet()
 	if err == nil {
 		d.InterfaceName = v
-		return d, nil
 	}
-	// Issue 4038: the default route (such as on Unifi UDM Pro)
-	// might be in a non-default table, so it won't show up in
-	// /proc/net/route. Use netlink to find the default route.
-	//
-	// TODO(bradfitz): this allocates a fair bit. We should track
-	// this in net/interfaces/monitor instead and have
-	// interfaces.GetState take a netmon.Monitor or similar so the
-	// routing table can be cached and the monitor's existing
-	// subscription to route changes can update the cached state,
-	// rather than querying the whole thing every time like
-	// defaultRouteFromNetlink does.
-	//
-	// Then we should just always try to use the cached route
-	// table from netlink every time, and only use /proc/net/route
-	// as a fallback for weird environments where netlink might be
-	// banned but /proc/net/route is emulated (e.g. stuff like
-	// Cloud Run?).
-	return defaultRouteFromNetlink()
-}
-
-func defaultRouteFromNetlink() (d DefaultRouteDetails, err error) {
-	c, err := rtnetlink.Dial(&netlink.Config{Strict: true})
-	if err != nil {
-		return d, fmt.Errorf("defaultRouteFromNetlink: Dial: %w", err)
-	}
-	defer c.Close()
-	rms, err := c.Route.List()
-	if err != nil {
-		return d, fmt.Errorf("defaultRouteFromNetlink: List: %w", err)
-	}
-	for _, rm := range rms {
-		if rm.Attributes.Gateway == nil {
-			// A default route has a gateway. If it doesn't, skip it.
-			continue
-		}
-		if rm.Attributes.Dst != nil {
-			// A default route has a nil destination to mean anything
-			// so ignore any route for a specific destination.
-			// TODO(bradfitz): better heuristic?
-			// empirically this seems like enough.
-			continue
-		}
-		// TODO(bradfitz): care about address family, if
-		// callers ever start caring about v4-vs-v6 default
-		// route differences.
-		idx := int(rm.Attributes.OutIface)
-		if idx == 0 {
-			continue
-		}
-		if iface, err := net.InterfaceByIndex(idx); err == nil {
-			d.InterfaceName = iface.Name
-			d.InterfaceIndex = idx
-			return d, nil
-		}
-	}
-	return d, errNoDefaultRoute
+	return d, err
 }
 
 var zeroRouteBytes = []byte("00000000")

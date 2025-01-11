@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build lanscaping_always_false
+
 package netmon
 
 import (
@@ -16,13 +18,6 @@ import (
 )
 
 const debugRouteMessages = false
-
-// unspecifiedMessage is a minimal message implementation that should not
-// be ignored. In general, OS-specific implementations should use better
-// types and avoid this if they can.
-type unspecifiedMessage struct{}
-
-func (unspecifiedMessage) ignore() bool { return false }
 
 func newOSMon(logf logger.Logf, _ *Monitor) (osMon, error) {
 	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, 0)
