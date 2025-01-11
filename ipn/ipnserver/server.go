@@ -29,7 +29,6 @@ import (
 	"tailscale.com/types/logid"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
-	"tailscale.com/util/systemd"
 )
 
 // Server is an IPN backend and its set of 0 or more active localhost
@@ -494,8 +493,6 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		}
 		ln.Close()
 	}()
-
-	systemd.Ready()
 
 	hs := &http.Server{
 		Handler:     http.HandlerFunc(s.serveHTTP),

@@ -52,7 +52,6 @@ import (
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/syspolicy"
-	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/zstdframe"
 )
@@ -516,7 +515,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	} else {
 		if expired {
 			c.logf("Old key expired -> regen=true")
-			systemd.Status("key expired; run 'tailscale up' to authenticate")
 			regen = true
 		}
 		if (opt.Flags & LoginInteractive) != 0 {

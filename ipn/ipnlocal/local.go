@@ -93,7 +93,6 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/rsop"
-	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
 	"tailscale.com/util/usermetric"
@@ -4732,7 +4731,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	}
 
 	netMap := b.netMap
-	activeLogin := b.activeLogin
 	authURL := b.authURL
 	if newState == ipn.Running {
 		b.resetAuthURLLocked()
@@ -4780,7 +4778,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 
 	switch newState {
 	case ipn.NeedsLogin:
-		systemd.Status("Needs login: %s", authURL)
 		if b.seamlessRenewalEnabled() {
 			break
 		}
@@ -4793,19 +4790,12 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		}
 
 		if authURL == "" {
-			systemd.Status("Stopped; run 'tailscale up' to log in")
 		}
 	case ipn.Starting, ipn.NeedsMachineAuth:
 		b.authReconfig()
 		// Needed so that UpdateEndpoints can run
 		b.e.RequestStatus()
 	case ipn.Running:
-		var addrStrs []string
-		addrs := netMap.GetAddresses()
-		for _, p := range addrs.All() {
-			addrStrs = append(addrStrs, p.Addr().String())
-		}
-		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
 	case ipn.NoState:
 		// Do nothing.
 	default:
