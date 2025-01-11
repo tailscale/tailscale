@@ -9,12 +9,7 @@ package setting
 
 import (
 	"fmt"
-	"slices"
 	"strings"
-	"sync"
-	"time"
-
-	"tailscale.com/types/lazy"
 )
 
 // Scope indicates the broadest scope at which a policy setting may apply,
@@ -122,119 +117,5 @@ func (t Type) String() string {
 		return "Duration"
 	default:
 		panic("unreachable")
-	}
-}
-
-// ValueType is a constraint that allows Go types corresponding to [Type].
-type ValueType interface {
-	bool | uint64 | string | []string | Visibility | PreferenceOption | time.Duration
-}
-
-// Definition defines policy key, scope and value type.
-type Definition struct {
-	key       Key
-	scope     Scope
-	typ       Type
-	platforms PlatformList
-}
-
-// NewDefinition returns a new [Definition] with the specified
-// key, scope, type and supported platforms (see [PlatformList]).
-func NewDefinition(k Key, s Scope, t Type, platforms ...string) *Definition {
-	return &Definition{key: k, scope: s, typ: t, platforms: platforms}
-}
-
-// Key returns a policy setting's identifier.
-func (d *Definition) Key() Key {
-	if d == nil {
-		return ""
-	}
-	return d.key
-}
-
-// Scope reports the broadest [Scope] the policy setting may apply to.
-func (d *Definition) Scope() Scope {
-	if d == nil {
-		return 0
-	}
-	return d.scope
-}
-
-// Type reports the underlying value type of the policy setting.
-func (d *Definition) Type() Type {
-	if d == nil {
-		return InvalidValue
-	}
-	return d.typ
-}
-
-// SupportedPlatforms reports platforms on which the policy setting is supported.
-// An empty [PlatformList] indicates that s is available on all platforms.
-func (d *Definition) SupportedPlatforms() PlatformList {
-	if d == nil {
-		return nil
-	}
-	return d.platforms
-}
-
-// String implements [fmt.Stringer].
-func (d *Definition) String() string {
-	if d == nil {
-		return "(nil)"
-	}
-	return fmt.Sprintf("%v(%q, %v)", d.scope, d.key, d.typ)
-}
-
-// Equal reports whether d and d2 have the same key, type and scope.
-// It does not check whether both s and s2 are supported on the same platforms.
-func (d *Definition) Equal(d2 *Definition) bool {
-	if d == d2 {
-		return true
-	}
-	if d == nil || d2 == nil {
-		return false
-	}
-	return d.key == d2.key && d.typ == d2.typ && d.scope == d2.scope
-}
-
-// DefinitionMap is a map of setting [Definition] by [Key].
-type DefinitionMap map[Key]*Definition
-
-var (
-	definitions lazy.SyncValue[DefinitionMap]
-
-	definitionsMu   sync.Mutex
-	definitionsList []*Definition
-	definitionsUsed bool
-)
-
-// PlatformList is a list of OSes.
-// An empty list indicates that all possible platforms are supported.
-type PlatformList []string
-
-// Has reports whether l contains the target platform.
-func (l PlatformList) Has(target string) bool {
-	if len(l) == 0 {
-		return true
-	}
-	return slices.ContainsFunc(l, func(os string) bool {
-		return strings.EqualFold(os, target)
-	})
-}
-
-// mergeFrom merges l2 into l. Since an empty list indicates no platform restrictions,
-// if either l or l2 is empty, the merged result in l will also be empty.
-func (l *PlatformList) mergeFrom(l2 PlatformList) {
-	switch {
-	case len(*l) == 0:
-		// No-op. An empty list indicates no platform restrictions.
-	case len(l2) == 0:
-		// Merging with an empty list results in an empty list.
-		*l = l2
-	default:
-		// Append, sort and dedup.
-		*l = append(*l, l2...)
-		slices.Sort(*l)
-		*l = slices.Compact(*l)
 	}
 }

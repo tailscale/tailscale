@@ -175,9 +175,6 @@ type Conn struct {
 	// bind is the wireguard-go conn.Bind for Conn.
 	bind *connBind
 
-	// cloudInfo is used to query cloud metadata services.
-	cloudInfo *cloudInfo
-
 	// ============================================================
 	// Fields that must be accessed via atomic load/stores.
 
@@ -481,7 +478,6 @@ func newConn(logf logger.Logf) *Conn {
 		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
 		discoPrivate: discoPrivate,
 		discoPublic:  discoPrivate.Public(),
-		cloudInfo:    newCloudInfo(logf),
 	}
 	c.discoShort = c.discoPublic.ShortString()
 	c.bind = &connBind{Conn: c, closed: true}
@@ -1015,27 +1011,6 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	// https://github.com/tailscale/tailscale/issues/12578
 	for _, ap := range pretendpoints() {
 		addAddr(ap, tailcfg.EndpointExplicitConf)
-	}
-
-	// If we're on a cloud instance, we might have a public IPv4 or IPv6
-	// address that we can be reached at. Find those, if they exist, and
-	// add them.
-	if addrs, err := c.cloudInfo.GetPublicIPs(ctx); err == nil {
-		var port4, port6 uint16
-		if addr := c.pconn4.LocalAddr(); addr != nil {
-			port4 = uint16(addr.Port)
-		}
-		if addr := c.pconn6.LocalAddr(); addr != nil {
-			port6 = uint16(addr.Port)
-		}
-
-		for _, addr := range addrs {
-			if addr.Is4() && port4 > 0 {
-				addAddr(netip.AddrPortFrom(addr, port4), tailcfg.EndpointLocal)
-			} else if addr.Is6() && port6 > 0 {
-				addAddr(netip.AddrPortFrom(addr, port6), tailcfg.EndpointLocal)
-			}
-		}
 	}
 
 	// Update our set of endpoints by adding any endpoints that we

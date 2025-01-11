@@ -19,9 +19,6 @@ import (
 func init() {
 	osVersion = lazyOSVersion.Get
 	packageType = packageTypeLinux
-	distroName = distroNameLinux
-	distroVersion = distroVersionLinux
-	distroCodeName = distroCodeNameLinux
 	deviceModel = deviceModelLinux
 }
 

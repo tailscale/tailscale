@@ -23,7 +23,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
-	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/version"
@@ -43,33 +42,24 @@ func New() *tailcfg.Hostinfo {
 		OS:              version.OS(),
 		OSVersion:       GetOSVersion(),
 		Container:       lazyInContainer.Get(),
-		Distro:          condCall(distroName),
-		DistroVersion:   condCall(distroVersion),
-		DistroCodeName:  condCall(distroCodeName),
 		Env:             string(GetEnvType()),
 		Desktop:         desktop(),
-		Package:         packageTypeCached(),
 		GoArch:          runtime.GOARCH,
 		GoArchVar:       lazyGoArchVar.Get(),
 		GoVersion:       runtime.Version(),
 		Machine:         condCall(unameMachine),
 		DeviceModel:     deviceModelCached(),
-		Cloud:           string(cloudenv.Get()),
 		NoLogsNoSupport: envknob.NoLogsNoSupport(),
 		AllowsUpdate:    envknob.AllowsRemoteUpdate(),
-		WoLMACs:         getWoLMACs(),
 	}
 }
 
 // non-nil on some platforms
 var (
-	osVersion      func() string
-	packageType    func() string
-	distroName     func() string
-	distroVersion  func() string
-	distroCodeName func() string
-	unameMachine   func() string
-	deviceModel    func() string
+	osVersion    func() string
+	packageType  func() string
+	unameMachine func() string
+	deviceModel  func() string
 )
 
 func condCall[T any](fn func() T) T {
