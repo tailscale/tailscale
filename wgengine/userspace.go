@@ -5,7 +5,6 @@ package wgengine
 
 import (
 	"bufio"
-	"context"
 	crand "crypto/rand"
 	"errors"
 	"fmt"
@@ -51,10 +50,8 @@ import (
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
-	"tailscale.com/wgengine/netlog"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -148,9 +145,6 @@ type userspaceEngine struct {
 	// echo responses. The map key is a random uint32 that is the little endian
 	// value of the ICMP identifier and sequence number concatenated.
 	icmpEchoResponseCallback map[uint32]func()
-
-	// networkLogger logs statistics about network connections.
-	networkLogger netlog.Logger
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -877,15 +871,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	if !engineChanged && !routerChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged {
 		return ErrNoChanges
 	}
-	newLogIDs := cfg.NetworkLogging
-	oldLogIDs := e.lastCfgFull.NetworkLogging
-	netLogIDsNowValid := !newLogIDs.NodeID.IsZero() && !newLogIDs.DomainID.IsZero()
-	netLogIDsWasValid := !oldLogIDs.NodeID.IsZero() && !oldLogIDs.DomainID.IsZero()
-	netLogIDsChanged := netLogIDsNowValid && netLogIDsWasValid && newLogIDs != oldLogIDs
-	netLogRunning := netLogIDsNowValid && !routerCfg.Equal(&router.Config{})
-	if envknob.NoLogsNoSupport() {
-		netLogRunning = false
-	}
 
 	// TODO(bradfitz,danderson): maybe delete this isDNSIPOverTailscale
 	// field and delete the resolver.ForwardLinkSelector hook and
@@ -936,33 +921,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		return err
 	}
 
-	// Shutdown the network logger because the IDs changed.
-	// Let it be started back up by subsequent logic.
-	if netLogIDsChanged && e.networkLogger.Running() {
-		e.logf("wgengine: Reconfig: shutting down network logger")
-		ctx, cancel := context.WithTimeout(context.Background(), networkLoggerUploadTimeout)
-		defer cancel()
-		if err := e.networkLogger.Shutdown(ctx); err != nil {
-			e.logf("wgengine: Reconfig: error shutting down network logger: %v", err)
-		}
-	}
-
-	// Startup the network logger.
-	// Do this before configuring the router so that we capture initial packets.
-	if netLogRunning && !e.networkLogger.Running() {
-		nid := cfg.NetworkLogging.NodeID
-		tid := cfg.NetworkLogging.DomainID
-		logExitFlowEnabled := cfg.NetworkLogging.LogExitFlowEnabled
-		e.logf("wgengine: Reconfig: starting up network logger (node:%s tailnet:%s)", nid.Public(), tid.Public())
-		if err := e.networkLogger.Startup(cfg.NodeID, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, logExitFlowEnabled); err != nil {
-			e.logf("wgengine: Reconfig: error starting up network logger: %v", err)
-		}
-		e.networkLogger.ReconfigRoutes(routerCfg)
-	}
-
 	if routerChanged {
 		e.logf("wgengine: Reconfig: configuring router")
-		e.networkLogger.ReconfigRoutes(routerCfg)
 		err := e.router.Set(routerCfg)
 		e.health.SetRouterHealth(err)
 		if err != nil {
@@ -979,18 +939,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		}
 		if err := e.reconfigureVPNIfNecessary(); err != nil {
 			return err
-		}
-	}
-
-	// Shutdown the network logger.
-	// Do this after configuring the router so that we capture final packets.
-	// This attempts to flush out any log messages and may block.
-	if !netLogRunning && e.networkLogger.Running() {
-		e.logf("wgengine: Reconfig: shutting down network logger")
-		ctx, cancel := context.WithTimeout(context.Background(), networkLoggerUploadTimeout)
-		defer cancel()
-		if err := e.networkLogger.Shutdown(ctx); err != nil {
-			e.logf("wgengine: Reconfig: error shutting down network logger: %v", err)
 		}
 	}
 
@@ -1161,12 +1109,6 @@ func (e *userspaceEngine) Close() {
 		e.birdClient.Close()
 	}
 	close(e.waitCh)
-
-	ctx, cancel := context.WithTimeout(context.Background(), networkLoggerUploadTimeout)
-	defer cancel()
-	if err := e.networkLogger.Shutdown(ctx); err != nil {
-		e.logf("wgengine: Close: error shutting down network logger: %v", err)
-	}
 }
 
 func (e *userspaceEngine) Done() <-chan struct{} {
@@ -1559,11 +1501,6 @@ var (
 	metricNumMajorChanges = clientmetric.NewCounter("wgengine_major_changes")
 	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")
 )
-
-func (e *userspaceEngine) InstallCaptureHook(cb capture.Callback) {
-	e.tundev.InstallCaptureHook(cb)
-	e.magicConn.InstallCaptureHook(cb)
-}
 
 func (e *userspaceEngine) reconfigureVPNIfNecessary() error {
 	if e.reconfigureVPN == nil {

@@ -33,7 +33,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/logtail"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
@@ -1113,7 +1112,6 @@ func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug) e
 		os.Exit(*code)
 	}
 	if debug.DisableLogTail {
-		logtail.Disable()
 		envknob.SetNoLogsNoSupport()
 	}
 	if sleep := time.Duration(debug.SleepSeconds * float64(time.Second)); sleep > 0 {

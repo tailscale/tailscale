@@ -772,7 +772,6 @@ func TestCaptureHook(t *testing.T) {
 	w.timeNow = func() time.Time {
 		return now
 	}
-	w.InstallCaptureHook(hook)
 	defer w.Close()
 
 	// Loop reading and discarding packets; this ensures that we don't have

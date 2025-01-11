@@ -33,7 +33,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/connstats"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -228,9 +227,6 @@ type Conn struct {
 	//
 	//lint:ignore U1000 used on Linux/Darwin only
 	peerMTUEnabled atomic.Bool
-
-	// stats maintains per-connection counters.
-	stats atomic.Pointer[connstats.Statistics]
 
 	// captureHook, if non-nil, is the pcap logging callback when capturing.
 	captureHook syncs.AtomicValue[capture.Callback]
@@ -638,14 +634,6 @@ func deregisterMetrics(m *metrics) {
 	metricRecvDataPacketsDERP.UnregisterAll()
 	metricSendUDP.UnregisterAll()
 	metricSendDERP.UnregisterAll()
-}
-
-// InstallCaptureHook installs a callback which is called to
-// log debug information into the pcap stream. This function
-// can be called with a nil argument to uninstall the capture
-// hook.
-func (c *Conn) InstallCaptureHook(cb capture.Callback) {
-	c.captureHook.Store(cb)
 }
 
 // doPeriodicSTUN is called (in a new goroutine) by
@@ -1497,9 +1485,6 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) 
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	ep.noteRecvActivity(ipp, now)
-	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, len(b))
-	}
 	return ep, true
 }
 
@@ -2860,12 +2845,6 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		// to include all the DERP connections we have open
 		// and add it here. See the other caller of foreachActiveDerpSortedLocked.
 	})
-}
-
-// SetStatistics specifies a per-connection statistics aggregator.
-// Nil may be specified to disable statistics gathering.
-func (c *Conn) SetStatistics(stats *connstats.Statistics) {
-	c.stats.Store(stats)
 }
 
 // SetHomeless sets whether magicsock should idle harder and not have a DERP

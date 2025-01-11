@@ -37,8 +37,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
-	"tailscale.com/logpolicy"
-	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
@@ -55,7 +53,6 @@ import (
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
@@ -326,7 +323,6 @@ func ipnServerOpts() (o serverOptions) {
 	return o
 }
 
-var logPol *logpolicy.Policy
 var debugMux *http.ServeMux
 
 func run() (err error) {
@@ -356,16 +352,6 @@ func run() (err error) {
 		sys.Set(netMon)
 	}
 
-	pol := logpolicy.New(logtail.CollectionNode, netMon, sys.HealthTracker(), nil /* use log.Printf */)
-	pol.SetVerbosityLevel(args.verbose)
-	logPol = pol
-	defer func() {
-		// Finish uploading logs after closing everything else.
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		pol.Shutdown(ctx)
-	}()
-
 	if err := envknob.ApplyDiskConfigError(); err != nil {
 		log.Printf("Error reading environment config: %v", err)
 	}
@@ -373,7 +359,7 @@ func run() (err error) {
 	if isWinSvc {
 		// Run the IPN server from the Windows service manager.
 		log.Printf("Running service...")
-		if err := runWindowsService(pol); err != nil {
+		if err := runWindowsService(); err != nil {
 			log.Printf("runservice: %v", err)
 		}
 		log.Printf("Service ended.")
@@ -413,12 +399,12 @@ func run() (err error) {
 		hostinfo.SetApp(app)
 	}
 
-	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
+	return startIPNServer(context.Background(), logf, sys)
 }
 
 var sigPipe os.Signal // set by sigpipe.go
 
-func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) error {
+func startIPNServer(ctx context.Context, logf logger.Logf, sys *tsd.System) error {
 	ln, err := safesocket.Listen(args.socketpath)
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
@@ -459,7 +445,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 		}
 	}()
 
-	srv := ipnserver.New(logf, logID, sys.NetMon.Get())
+	srv := ipnserver.New(logf, sys.NetMon.Get())
 	if debugMux != nil {
 		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
 	}
@@ -477,7 +463,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 				return
 			}
 		}
-		lb, err := getLocalBackend(ctx, logf, logID, sys)
+		lb, err := getLocalBackend(ctx, logf, sys)
 		if err == nil {
 			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
 			if lb.Prefs().Valid() {
@@ -511,10 +497,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 	return nil
 }
 
-func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) (_ *ipnlocal.LocalBackend, retErr error) {
-	if logPol != nil {
-		logPol.Logtail.SetNetMon(sys.NetMon.Get())
-	}
+func getLocalBackend(ctx context.Context, logf logger.Logf, sys *tsd.System) (_ *ipnlocal.LocalBackend, retErr error) {
 
 	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
 
@@ -571,14 +554,11 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		w.Start()
 	}
 
-	lb, err := ipnlocal.NewLocalBackend(logf, logID, sys, opts.LoginFlags)
+	lb, err := ipnlocal.NewLocalBackend(logf, sys, opts.LoginFlags)
 	if err != nil {
 		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}
 	lb.SetVarRoot(opts.VarRoot)
-	if logPol != nil {
-		lb.SetLogFlusher(logPol.Logtail.StartFlush)
-	}
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}

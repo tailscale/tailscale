@@ -5,10 +5,8 @@
 
 package main // import "tailscale.com/cmd/tailscaled"
 
-import "tailscale.com/logpolicy"
-
 func isWindowsService() bool { return false }
 
-func runWindowsService(pol *logpolicy.Policy) error { panic("unreachable") }
+func runWindowsService() error { panic("unreachable") }
 
 func beWindowsSubprocess() bool { return false }

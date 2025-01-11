@@ -44,7 +44,6 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
-	"tailscale.com/logpolicy"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
@@ -129,7 +128,7 @@ var syslogf logger.Logf = logger.Discard
 //
 // At this point we're still the parent process that
 // Windows started.
-func runWindowsService(pol *logpolicy.Policy) error {
+func runWindowsService() error {
 	go func() {
 		logger.Logf(log.Printf).JSON(1, "SupportInfo", osdiag.SupportInfo(osdiag.LogSupportInfoReasonStartup))
 	}()
@@ -149,7 +148,6 @@ func runWindowsService(pol *logpolicy.Policy) error {
 }
 
 type ipnService struct {
-	Policy *logpolicy.Policy
 }
 
 // Called by Windows to execute the windows service.

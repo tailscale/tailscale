@@ -21,7 +21,6 @@ import (
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
-	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
@@ -45,9 +44,6 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 	// PPROF - We only expose a subset of typical pprof endpoints for security.
 	req("/debug/pprof/heap"):   handleC2NPprof,
 	req("/debug/pprof/allocs"): handleC2NPprof,
-
-	req("POST /logtail/flush"): handleC2NLogtailFlush,
-	req("POST /sockstats"):     handleC2NSockStats,
 
 	// Auto-updates.
 	req("GET /update"):  handleC2NUpdateGet,
@@ -175,17 +171,6 @@ func handleC2NPprof(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
 	}
 	_, profile := path.Split(r.URL.Path)
 	c2nPprof(w, r, profile)
-}
-
-func handleC2NSockStats(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	if b.sockstatLogger == nil {
-		http.Error(w, "no sockstatLogger", http.StatusInternalServerError)
-		return
-	}
-	b.sockstatLogger.Flush()
-	fmt.Fprintf(w, "logid: %s\n", b.sockstatLogger.LogID())
-	fmt.Fprintf(w, "debug info: %v\n", sockstats.DebugInfo())
 }
 
 func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.Request) {

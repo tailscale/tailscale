@@ -149,7 +149,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "CONNECT" {
 		if envknob.GOOS() == "windows" {
 			// For the GUI client when using an exit node. See docs on handleProxyConnectConn.
-			s.handleProxyConnectConn(w, r)
+			// LANSCAPING
 		} else {
 			http.Error(w, "bad method for platform", http.StatusMethodNotAllowed)
 		}
@@ -437,15 +437,14 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone f
 //
 // At some point, either before or after Run, the Server's SetLocalBackend
 // method must also be called before Server can do anything useful.
-func New(logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) *Server {
+func New(logf logger.Logf, netMon *netmon.Monitor) *Server {
 	if netMon == nil {
 		panic("nil netMon")
 	}
 	return &Server{
-		backendLogID: logID,
-		logf:         logf,
-		netMon:       netMon,
-		resetOnZero:  envknob.GOOS() == "windows",
+		logf:        logf,
+		netMon:      netMon,
+		resetOnZero: envknob.GOOS() == "windows",
 	}
 }
 

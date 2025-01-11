@@ -20,7 +20,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
@@ -160,10 +159,6 @@ func (e *watchdogEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 
 func (e *watchdogEngine) Done() <-chan struct{} {
 	return e.wrap.Done()
-}
-
-func (e *watchdogEngine) InstallCaptureHook(cb capture.Callback) {
-	e.wrap.InstallCaptureHook(cb)
 }
 
 func (e *watchdogEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok bool) {

@@ -24,7 +24,6 @@ import (
 	"go4.org/mem"
 	"tailscale.com/disco"
 	tsmetrics "tailscale.com/metrics"
-	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/tsaddr"
@@ -35,7 +34,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/usermetric"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -185,11 +183,6 @@ type Wrapper struct {
 
 	// disableTSMPRejected disables TSMP rejected responses. For tests.
 	disableTSMPRejected bool
-
-	// stats maintains per-connection counters.
-	stats atomic.Pointer[connstats.Statistics]
-
-	captureHook syncs.AtomicValue[capture.Callback]
 
 	metrics *metrics
 }
@@ -830,7 +823,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	var buffsPos int
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
-	captHook := t.captureHook.Load()
 	pc := t.peerConfig.Load()
 	for _, data := range res.data {
 		p.Decode(data[res.dataOffset:])
@@ -839,9 +831,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			if fn := m[p.Dst.Addr()]; fn != nil {
 				fn()
 			}
-		}
-		if captHook != nil {
-			captHook(capture.FromLocal, t.now(), p.Buffer(), p.CaptureMeta)
 		}
 
 		// Make sure to do SNAT after filtering, so that any flow tracking in
@@ -852,9 +841,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)-res.dataOffset))
 		}
 		sizes[buffsPos] = n
-		if stats := t.stats.Load(); stats != nil {
-			stats.UpdateTxVirtual(p.Buffer())
-		}
 		buffsPos++
 	}
 
@@ -907,11 +893,6 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 }
 
 func (t *Wrapper) tdevWrite(buffs [][]byte, offset int) (int, error) {
-	if stats := t.stats.Load(); stats != nil {
-		for i := range buffs {
-			stats.UpdateRxVirtual((buffs)[i][offset:])
-		}
-	}
 	return t.tdev.Write(buffs, offset)
 }
 
@@ -1011,12 +992,6 @@ func (t *Wrapper) Unwrap() tun.Device {
 	return t.tdev
 }
 
-// SetStatistics specifies a per-connection statistics aggregator.
-// Nil may be specified to disable statistics gathering.
-func (t *Wrapper) SetStatistics(stats *connstats.Statistics) {
-	t.stats.Store(stats)
-}
-
 var (
 	metricPacketIn              = clientmetric.NewCounter("tstun_in_from_wg")
 	metricPacketInDrop          = clientmetric.NewCounter("tstun_in_from_wg_drop")
@@ -1028,7 +1003,3 @@ var (
 	metricPacketOutDropFilter    = clientmetric.NewCounter("tstun_out_to_wg_drop_filter")
 	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
 )
-
-func (t *Wrapper) InstallCaptureHook(cb capture.Callback) {
-	t.captureHook.Store(cb)
-}

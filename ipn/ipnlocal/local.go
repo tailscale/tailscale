@@ -53,8 +53,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
-	"tailscale.com/log/sockstatlog"
-	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -199,7 +197,6 @@ type LocalBackend struct {
 	exposeRemoteWebClientAtomicBool atomic.Bool
 	shutdownCalled                  bool // if Shutdown has been called
 	debugSink                       *capture.Sink
-	sockstatLogger                  *sockstatlog.Logger
 
 	// getTCPHandlerForFunnelFlow returns a handler for an incoming TCP flow for
 	// the provided srcAddr and dstPort if one exists.
@@ -401,7 +398,7 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 // but is not actually running.
 //
 // If dialer is nil, a new one is made.
-func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, loginFlags controlclient.LoginFlags) (_ *LocalBackend, err error) {
+func NewLocalBackend(logf logger.Logf, sys *tsd.System, loginFlags controlclient.LoginFlags) (_ *LocalBackend, err error) {
 	e := sys.Engine.Get()
 	store := sys.StateStore.Get()
 	dialer := sys.Dialer.Get()
@@ -456,7 +453,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		dialer:                dialer,
 		store:                 store,
 		pm:                    pm,
-		backendLogID:          logID,
 		state:                 ipn.NoState,
 		portpoll:              new(portlist.Poller),
 		em:                    newExpiryManager(logf),
@@ -486,14 +482,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}()
 
 	netMon := sys.NetMon.Get()
-	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker())
-	if err != nil {
-		log.Printf("error setting up sockstat logger: %v", err)
-	}
-	// Enable sockstats logs only on non-mobile unstable builds
-	if version.IsUnstableBuild() && !version.IsMobile() && b.sockstatLogger != nil {
-		b.sockstatLogger.SetLoggingEnabled(true)
-	}
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
 	noneFilter := filter.NewAllowNone(logf, &netipx.IPSet{})
@@ -569,17 +557,6 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	switch component {
 	case "magicsock":
 		setEnabled = b.MagicConn().SetDebugLoggingEnabled
-	case "sockstats":
-		if b.sockstatLogger != nil {
-			setEnabled = func(v bool) {
-				b.sockstatLogger.SetLoggingEnabled(v)
-				// Flush (and thus upload) logs when the enabled period ends,
-				// so that the logs are available for debugging.
-				if !v {
-					b.sockstatLogger.Flush()
-				}
-			}
-		}
 	case "syspolicy":
 		setEnabled = syspolicy.SetDebugLoggingEnabled
 	}
@@ -959,7 +936,6 @@ func (b *LocalBackend) Shutdown() {
 	}
 	b.closePeerAPIListenersLocked()
 	if b.debugSink != nil {
-		b.e.InstallCaptureHook(nil)
 		b.debugSink.Close()
 		b.debugSink = nil
 	}
@@ -968,11 +944,6 @@ func (b *LocalBackend) Shutdown() {
 	}
 	b.mu.Unlock()
 
-	if b.sockstatLogger != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		b.sockstatLogger.Shutdown(ctx)
-	}
 	if b.peerAPIServer != nil {
 		b.peerAPIServer.taildrop.Shutdown()
 	}
@@ -6341,48 +6312,6 @@ func (b *LocalBackend) ResetAuth() error {
 	}
 	b.resetDialPlan() // always reset if we're removing everything
 	return b.resetForProfileChangeLockedOnEntry(unlock)
-}
-
-// StreamDebugCapture writes a pcap stream of packets traversing
-// tailscaled to the provided response writer.
-func (b *LocalBackend) StreamDebugCapture(ctx context.Context, w io.Writer) error {
-	var s *capture.Sink
-
-	b.mu.Lock()
-	if b.debugSink == nil {
-		s = capture.New()
-		b.debugSink = s
-		b.e.InstallCaptureHook(s.LogPacket)
-	} else {
-		s = b.debugSink
-	}
-	b.mu.Unlock()
-
-	unregister := s.RegisterOutput(w)
-
-	select {
-	case <-ctx.Done():
-	case <-s.WaitCh():
-	}
-	unregister()
-
-	// Shut down & uninstall the sink if there are no longer
-	// any outputs on it.
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	select {
-	case <-b.ctx.Done():
-		return nil
-	default:
-	}
-	if b.debugSink != nil && b.debugSink.NumOutputs() == 0 {
-		s := b.debugSink
-		b.e.InstallCaptureHook(nil)
-		b.debugSink = nil
-		return s.Close()
-	}
-	return nil
 }
 
 func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr) ([]magicsock.EndpointChange, error) {

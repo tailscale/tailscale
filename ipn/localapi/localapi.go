@@ -39,7 +39,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/logtail"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
@@ -82,7 +81,6 @@ var handler = map[string]localAPIHandler{
 	"check-prefs":                 (*Handler).serveCheckPrefs,
 	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
 	"debug":                       (*Handler).serveDebug,
-	"debug-capture":               (*Handler).serveDebugCapture,
 	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
 	"debug-dial-types":            (*Handler).serveDebugDialTypes,
 	"debug-log":                   (*Handler).serveDebugLog,
@@ -103,7 +101,6 @@ var handler = map[string]localAPIHandler{
 	"id-token":                    (*Handler).serveIDToken,
 	"login-interactive":           (*Handler).serveLoginInteractive,
 	"logout":                      (*Handler).serveLogout,
-	"logtap":                      (*Handler).serveLogTap,
 	"metrics":                     (*Handler).serveMetrics,
 	"ping":                        (*Handler).servePing,
 	"pprof":                       (*Handler).servePprof,
@@ -321,7 +318,6 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	defer h.b.TryFlushLogs() // kick off upload after bugreport's done logging
 
 	logMarker := func() string {
 		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, h.clock.Now().UTC().Format("20060102150405Z"), rands.HexString(16))
@@ -524,45 +520,6 @@ func (h *Handler) serveGoroutines(w http.ResponseWriter, r *http.Request) {
 	buf = buf[:runtime.Stack(buf, true)]
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write(buf)
-}
-
-// serveLogTap taps into the tailscaled/logtail server output and streams
-// it to the client.
-func (h *Handler) serveLogTap(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Require write access (~root) as the logs could contain something
-	// sensitive.
-	if !h.PermitWrite {
-		http.Error(w, "logtap access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "GET" {
-		http.Error(w, "GET required", http.StatusMethodNotAllowed)
-		return
-	}
-	f, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	io.WriteString(w, `{"text":"[logtap connected]\n"}`+"\n")
-	f.Flush()
-
-	msgc := make(chan string, 16)
-	unreg := logtail.RegisterLogTap(msgc)
-	defer unreg()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg := <-msgc:
-			io.WriteString(w, msg)
-			f.Flush()
-		}
-	}
 }
 
 func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
@@ -2045,21 +2002,6 @@ func defBool(a string, def bool) bool {
 		return def
 	}
 	return v
-}
-
-func (h *Handler) serveDebugCapture(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "debug access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
-	h.b.StreamDebugCapture(r.Context(), w)
 }
 
 func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {

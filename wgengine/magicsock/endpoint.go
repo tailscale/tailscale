@@ -974,11 +974,6 @@ func (de *endpoint) send(buffs [][]byte) error {
 			de.c.metrics.outboundPacketsIPv6Total.Add(int64(len(buffs)))
 			de.c.metrics.outboundBytesIPv6Total.Add(int64(txBytes))
 		}
-
-		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.
-		if stats := de.c.stats.Load(); err == nil && stats != nil {
-			stats.UpdateTxPhysical(de.nodeAddr, udpAddr, len(buffs), txBytes)
-		}
 	}
 	if derpAddr.IsValid() {
 		allOk := true
@@ -992,9 +987,6 @@ func (de *endpoint) send(buffs [][]byte) error {
 			}
 		}
 
-		if stats := de.c.stats.Load(); stats != nil {
-			stats.UpdateTxPhysical(de.nodeAddr, derpAddr, len(buffs), txBytes)
-		}
 		if allOk {
 			return nil
 		}

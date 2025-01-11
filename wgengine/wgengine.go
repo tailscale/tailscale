@@ -14,7 +14,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
@@ -125,9 +124,4 @@ type Engine interface {
 	//
 	// If size is zero too small, it is ignored. See tailscale.PingOpts for details.
 	Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult))
-
-	// InstallCaptureHook registers a function to be called to capture
-	// packets traversing the data path. The hook can be uninstalled by
-	// calling this function with a nil value.
-	InstallCaptureHook(capture.Callback)
 }
