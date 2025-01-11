@@ -37,7 +37,6 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -251,8 +250,6 @@ func NewDirect(opts Options) (*Direct, error) {
 	var interceptedDial *atomic.Bool
 	if httpc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.Proxy = tshttpproxy.ProxyFromEnvironment
-		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), opts.HealthTracker, tr.TLSClientConfig)
 		tr.ForceAttemptHTTP2 = true
 		// Disable implicit gzip compression; the various

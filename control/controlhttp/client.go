@@ -44,7 +44,6 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -73,13 +72,6 @@ func (a *Dialer) logf(format string, args ...any) {
 	if a.Logf != nil {
 		a.Logf(format, args...)
 	}
-}
-
-func (a *Dialer) getProxyFunc() func(*http.Request) (*url.URL, error) {
-	if a.proxyFunc != nil {
-		return a.proxyFunc
-	}
-	return tshttpproxy.ProxyFromEnvironment
 }
 
 // httpsFallbackDelay is how long we'll wait for a.HTTPPort to work before
@@ -474,8 +466,6 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	defer tr.CloseIdleConnections()
-	tr.Proxy = a.getProxyFunc()
-	tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 	// Disable HTTP2, since h2 can't do protocol switching.
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}

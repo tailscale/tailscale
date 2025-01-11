@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
 	"runtime"
 	"slices"
@@ -18,7 +17,6 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/net/tshttpproxy"
 )
 
 // LoginEndpointForProxyDetermination is the URL used for testing
@@ -482,19 +480,6 @@ func GetState() (*State, error) {
 		if iface, ok := s.Interface[dr.InterfaceName]; ok {
 			iface.Desc = desc
 			s.Interface[dr.InterfaceName] = iface
-		}
-	}
-
-	if s.AnyInterfaceUp() {
-		req, err := http.NewRequest("GET", LoginEndpointForProxyDetermination, nil)
-		if err != nil {
-			return nil, err
-		}
-		if u, err := tshttpproxy.ProxyFromEnvironment(req); err == nil && u != nil {
-			s.HTTPProxy = u.String()
-		}
-		if getPAC != nil {
-			s.PAC = getPAC()
 		}
 	}
 

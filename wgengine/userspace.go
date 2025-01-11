@@ -30,7 +30,6 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -339,7 +338,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	logf("link state: %+v", e.netMon.InterfaceState())
 
 	unregisterMonWatch := e.netMon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
-		tshttpproxy.InvalidateCache()
 		e.linkChange(delta)
 	})
 	closePool.addFunc(unregisterMonWatch)
