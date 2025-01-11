@@ -5,52 +5,12 @@ package health
 
 import (
 	"fmt"
-	"runtime"
 	"time"
-
-	"tailscale.com/version"
 )
 
 /**
 This file contains definitions for the Warnables maintained within this `health` package.
 */
-
-// updateAvailableWarnable is a Warnable that warns the user that an update is available.
-var updateAvailableWarnable = Register(&Warnable{
-	Code:     "update-available",
-	Title:    "Update available",
-	Severity: SeverityLow,
-	Text: func(args Args) string {
-		if version.IsMacAppStore() || version.IsAppleTV() || version.IsMacSys() || version.IsWindowsGUI() || runtime.GOOS == "android" {
-			return fmt.Sprintf("An update from version %s to %s is available.", args[ArgCurrentVersion], args[ArgAvailableVersion])
-		} else {
-			return fmt.Sprintf("An update from version %s to %s is available. Run `tailscale update` or `tailscale set --auto-update` to update now.", args[ArgCurrentVersion], args[ArgAvailableVersion])
-		}
-	},
-})
-
-// securityUpdateAvailableWarnable is a Warnable that warns the user that an important security update is available.
-var securityUpdateAvailableWarnable = Register(&Warnable{
-	Code:     "security-update-available",
-	Title:    "Security update available",
-	Severity: SeverityMedium,
-	Text: func(args Args) string {
-		if version.IsMacAppStore() || version.IsAppleTV() || version.IsMacSys() || version.IsWindowsGUI() || runtime.GOOS == "android" {
-			return fmt.Sprintf("A security update from version %s to %s is available.", args[ArgCurrentVersion], args[ArgAvailableVersion])
-		} else {
-			return fmt.Sprintf("A security update from version %s to %s is available. Run `tailscale update` or `tailscale set --auto-update` to update now.", args[ArgCurrentVersion], args[ArgAvailableVersion])
-		}
-	},
-})
-
-// unstableWarnable is a Warnable that warns the user that they are using an unstable version of Tailscale
-// so they won't be surprised by all the issues that may arise.
-var unstableWarnable = Register(&Warnable{
-	Code:     "is-using-unstable-version",
-	Title:    "Using an unstable version",
-	Severity: SeverityLow,
-	Text:     StaticMessage("This is an unstable version of Tailscale meant for testing and development purposes. Please report any issues to Tailscale."),
-})
 
 // NetworkStatusWarnable is a Warnable that warns the user that the network is down.
 var NetworkStatusWarnable = Register(&Warnable{

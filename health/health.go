@@ -23,7 +23,6 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
-	"tailscale.com/version"
 )
 
 var (
@@ -926,22 +925,6 @@ var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 func (t *Tracker) updateBuiltinWarnablesLocked() {
 	t.updateWarmingUpWarnableLocked()
 
-	if w, show := t.showUpdateWarnable(); show {
-		t.setUnhealthyLocked(w, Args{
-			ArgCurrentVersion:   version.Short(),
-			ArgAvailableVersion: t.latestVersion.LatestVersion,
-		})
-	} else {
-		t.setHealthyLocked(updateAvailableWarnable)
-		t.setHealthyLocked(securityUpdateAvailableWarnable)
-	}
-
-	if version.IsUnstableBuild() {
-		t.setUnhealthyLocked(unstableWarnable, Args{
-			ArgCurrentVersion: version.Short(),
-		})
-	}
-
 	if v, ok := t.anyInterfaceUp.Get(); ok && !v {
 		t.setUnhealthyLocked(NetworkStatusWarnable, nil)
 	} else {
@@ -1109,24 +1092,6 @@ func (t *Tracker) updateWarmingUpWarnableLocked() {
 	if !t.ipnWantRunningLastTrue.IsZero() && time.Now().After(t.ipnWantRunningLastTrue.Add(warmingUpWarnableDuration)) {
 		t.setHealthyLocked(warmingUpWarnable)
 	}
-}
-
-func (t *Tracker) showUpdateWarnable() (*Warnable, bool) {
-	if !t.checkForUpdates {
-		return nil, false
-	}
-	cv := t.latestVersion
-	if cv == nil || cv.RunningLatest || cv.LatestVersion == "" {
-		return nil, false
-	}
-	if cv.UrgentSecurityUpdate {
-		return securityUpdateAvailableWarnable, true
-	}
-	// Only show update warning when auto-updates are off
-	if !t.applyUpdates.EqualBool(true) {
-		return updateAvailableWarnable, true
-	}
-	return nil, false
 }
 
 // ReceiveFuncStats tracks the calls made to a wireguard-go receive func.
