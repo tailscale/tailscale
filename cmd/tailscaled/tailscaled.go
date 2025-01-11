@@ -13,14 +13,12 @@ package main // import "tailscale.com/cmd/tailscaled"
 import (
 	"context"
 	"errors"
-	"expvar"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -66,7 +64,6 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 )
 
@@ -540,41 +537,11 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		go runDebugServer(debugMux, args.debug)
 	}
 
-	ns, err := newNetstack(logf, sys)
+	startNetstack, err := newNetstack(logf, sys, onlyNetstack, handleSubnetsInNetstack())
 	if err != nil {
 		return nil, fmt.Errorf("newNetstack: %w", err)
 	}
-	sys.Set(ns)
-	ns.ProcessLocalIPs = onlyNetstack
-	ns.ProcessSubnets = onlyNetstack || handleSubnetsInNetstack()
 
-	if onlyNetstack {
-		e := sys.Engine.Get()
-		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-			_, ok := e.PeerForIP(ip)
-			return ok
-		}
-		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			// Note: don't just return ns.DialContextTCP or we'll return
-			// *gonet.TCPConn(nil) instead of a nil interface which trips up
-			// callers.
-			tcpConn, err := ns.DialContextTCP(ctx, dst)
-			if err != nil {
-				return nil, err
-			}
-			return tcpConn, nil
-		}
-		dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			// Note: don't just return ns.DialContextUDP or we'll return
-			// *gonet.UDPConn(nil) instead of a nil interface which trips up
-			// callers.
-			udpConn, err := ns.DialContextUDP(ctx, dst)
-			if err != nil {
-				return nil, err
-			}
-			return udpConn, nil
-		}
-	}
 	if socksListener != nil || httpProxyListener != nil {
 		var addrs []string
 		if httpProxyListener != nil {
@@ -625,7 +592,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		UseSocketOnly: args.socketpath != paths.DefaultTailscaledSocket(),
 	})
 	configureTaildrop(logf, lb)
-	if err := ns.Start(lb); err != nil {
+	if err := startNetstack(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
 	return lb, nil
@@ -785,25 +752,6 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	ret, err := netstack.Create(logf,
-		sys.Tun.Get(),
-		sys.Engine.Get(),
-		sys.MagicSock.Get(),
-		sys.Dialer.Get(),
-		sys.DNSManager.Get(),
-		sys.ProxyMapper(),
-	)
-	if err != nil {
-		return nil, err
-	}
-	// Only register debug info if we have a debug mux
-	if debugMux != nil {
-		expvar.Publish("netstack", ret.ExpVar())
-	}
-	return ret, nil
 }
 
 // mustStartProxyListeners creates listeners for local SOCKS and HTTP

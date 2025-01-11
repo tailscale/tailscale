@@ -24,12 +24,18 @@ updatedeps: ## Update depaware deps
 		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund
 
-updatemindeps:
-		PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --file=depaware-minlinux.txt --goos=linux --tags=ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion --update \
+MIN_OMITS ?= ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion,ts_omit_netstack
+
+min:
+	./tool/go build -o $HOME/bin/tailscaled.min -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
+	ls -lh $HOME/bin/tailscaled.min
+
+updatemindeps: min
+		PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --file=depaware-minlinux.txt --goos=linux --tags=${MIN_OMITS} --update \
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale
 
-depaware: ## Run depaware checks
+depaware: ## Run depaware checksq
 	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
 	# it finds in its $$PATH is the right one.
 	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --check \

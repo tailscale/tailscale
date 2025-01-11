@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build darwin || ios
+//go:build (darwin || ios) && !ts_omit_netstack
 
 package netstack
 
