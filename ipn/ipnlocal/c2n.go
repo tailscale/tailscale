@@ -49,9 +49,6 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 	req("POST /logtail/flush"): handleC2NLogtailFlush,
 	req("POST /sockstats"):     handleC2NSockStats,
 
-	// SSH
-	req("/ssh/usernames"): handleC2NSSHUsernames,
-
 	// Auto-updates.
 	req("GET /update"):  handleC2NUpdateGet,
 	req("POST /update"): handleC2NUpdatePost,
@@ -178,22 +175,6 @@ func handleC2NPprof(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
 	}
 	_, profile := path.Split(r.URL.Path)
 	c2nPprof(w, r, profile)
-}
-
-func handleC2NSSHUsernames(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	var req tailcfg.C2NSSHUsernamesRequest
-	if r.Method == "POST" {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-	res, err := b.getSSHUsernames(&req)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	writeJSON(w, res)
 }
 
 func handleC2NSockStats(b *LocalBackend, w http.ResponseWriter, r *http.Request) {

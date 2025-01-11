@@ -4745,19 +4745,6 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 
 	b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
 
-	var sshHostKeys []string
-	if prefs.RunSSH() && envknob.CanSSHD() {
-		// TODO(bradfitz): this is called with b.mu held. Not ideal.
-		// If the filesystem gets wedged or something we could block for
-		// a long time. But probably fine.
-		var err error
-		sshHostKeys, err = b.getSSHHostKeyPublicStrings()
-		if err != nil {
-			b.logf("warning: unable to get SSH host keys, SSH will appear as disabled for this node: %v", err)
-		}
-	}
-	hi.SSH_HostKeys = sshHostKeys
-
 	hi.ServicesHash = b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
 
 	// The Hostinfo.WantIngress field tells control whether this node wants to
