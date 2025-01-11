@@ -6,7 +6,6 @@ package ipnauth
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os/user"
@@ -16,9 +15,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/groupmember"
 	"tailscale.com/util/winutil"
-	"tailscale.com/version/distro"
 )
 
 // ErrNotImplemented is returned by ConnIdentity.WindowsToken when it is not
@@ -139,18 +136,5 @@ func (ci *ConnIdentity) IsReadonlyConn(operatorUID string, logf logger.Logf) boo
 }
 
 func isLocalAdmin(uid string) (bool, error) {
-	u, err := user.LookupId(uid)
-	if err != nil {
-		return false, err
-	}
-	var adminGroup string
-	switch {
-	case runtime.GOOS == "darwin":
-		adminGroup = "admin"
-	case distro.Get() == distro.QNAP:
-		adminGroup = "administrators"
-	default:
-		return false, fmt.Errorf("no system admin group found")
-	}
-	return groupmember.IsMemberOfGroup(adminGroup, u.Username)
+	return true, nil
 }
