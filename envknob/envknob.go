@@ -16,14 +16,9 @@
 package envknob
 
 import (
-	"bufio"
-	"errors"
-	"fmt"
-	"io"
 	"log"
 	"maps"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -34,7 +29,6 @@ import (
 
 	"tailscale.com/types/opt"
 	"tailscale.com/version"
-	"tailscale.com/version/distro"
 )
 
 var (
@@ -479,163 +473,4 @@ func PanicIfAnyEnvCheckedInInit() {
 	if envCheckedInInitStack != nil {
 		panic("envknob check of called from init function: " + string(envCheckedInInitStack))
 	}
-}
-
-var applyDiskConfigErr error
-
-// ApplyDiskConfigError returns the most recent result of ApplyDiskConfig.
-func ApplyDiskConfigError() error { return applyDiskConfigErr }
-
-// ApplyDiskConfig returns a platform-specific config file of environment
-// keys/values and applies them. On Linux and Unix operating systems, it's a
-// no-op and always returns nil. If no platform-specific config file is found,
-// it also returns nil.
-//
-// It exists primarily for Windows and macOS to make it easy to apply
-// environment variables to a running service in a way similar to modifying
-// /etc/default/tailscaled on Linux.
-//
-// On Windows, you use %ProgramData%\Tailscale\tailscaled-env.txt instead.
-//
-// On macOS, use one of:
-//
-//   - /private/var/root/Library/Containers/io.tailscale.ipn.macsys.network-extension/Data/tailscaled-env.txt
-//     for standalone macOS GUI builds
-//   - ~/Library/Containers/io.tailscale.ipn.macos.network-extension/Data/tailscaled-env.txt
-//     for App Store builds
-//   - /etc/tailscale/tailscaled-env.txt for tailscaled-on-macOS (homebrew, etc)
-func ApplyDiskConfig() (err error) {
-	var f *os.File
-	defer func() {
-		if err != nil {
-			// Stash away our return error for the healthcheck package to use.
-			if f != nil {
-				applyDiskConfigErr = fmt.Errorf("error parsing %s: %w", f.Name(), err)
-			} else {
-				applyDiskConfigErr = fmt.Errorf("error applying disk config: %w", err)
-			}
-		}
-	}()
-
-	// First try the explicitly-provided value for development testing. Not
-	// useful for users to use on their own. (if they can set this, they can set
-	// any environment variable anyway)
-	if name := os.Getenv("TS_DEBUG_ENV_FILE"); name != "" {
-		f, err = os.Open(name)
-		if err != nil {
-			return fmt.Errorf("error opening explicitly configured TS_DEBUG_ENV_FILE: %w", err)
-		}
-		defer f.Close()
-		return applyKeyValueEnv(f)
-	}
-
-	names := getPlatformEnvFiles()
-	if len(names) == 0 {
-		return nil
-	}
-
-	var errs []error
-	for _, name := range names {
-		f, err = os.Open(name)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		defer f.Close()
-
-		return applyKeyValueEnv(f)
-	}
-
-	// If we have any errors, return them; if all errors are such that
-	// os.IsNotExist(err) returns true, then errs is empty and we will
-	// return nil.
-	return errors.Join(errs...)
-}
-
-// getPlatformEnvFiles returns a list of paths to the current platform's
-// optional tailscaled-env.txt file. It returns an empty list if none is
-// defined for the platform.
-func getPlatformEnvFiles() []string {
-	switch runtime.GOOS {
-	case "windows":
-		return []string{
-			filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt"),
-		}
-	case "linux":
-		if distro.Get() == distro.Synology {
-			return []string{"/etc/tailscale/tailscaled-env.txt"}
-		}
-	case "darwin":
-		if version.IsSandboxedMacOS() { // the two GUI variants (App Store or separate download)
-			// On the App Store variant, the home directory is set
-			// to something like:
-			//	~/Library/Containers/io.tailscale.ipn.macos.network-extension/Data
-			//
-			// On the macsys (downloadable Mac GUI) variant, the
-			// home directory can be unset, but we have a working
-			// directory that looks like:
-			//	/private/var/root/Library/Containers/io.tailscale.ipn.macsys.network-extension/Data
-			//
-			// Try both and see if we can find the file in either
-			// location.
-			var candidates []string
-			if home := os.Getenv("HOME"); home != "" {
-				candidates = append(candidates, filepath.Join(home, "tailscaled-env.txt"))
-			}
-			if wd, err := os.Getwd(); err == nil {
-				candidates = append(candidates, filepath.Join(wd, "tailscaled-env.txt"))
-			}
-
-			return candidates
-		} else {
-			// Open source / homebrew variable, running tailscaled-on-macOS.
-			return []string{"/etc/tailscale/tailscaled-env.txt"}
-		}
-	}
-	return nil
-}
-
-// applyKeyValueEnv reads key=value lines r and calls Setenv for each.
-//
-// Empty lines and lines beginning with '#' are skipped.
-//
-// Values can be double quoted, in which case they're unquoted using
-// strconv.Unquote.
-func applyKeyValueEnv(r io.Reader) error {
-	bs := bufio.NewScanner(r)
-	for bs.Scan() {
-		line := strings.TrimSpace(bs.Text())
-		if line == "" || line[0] == '#' {
-			continue
-		}
-		k, v, ok := strings.Cut(line, "=")
-		k = strings.TrimSpace(k)
-		if !ok || k == "" {
-			continue
-		}
-		v = strings.TrimSpace(v)
-		if strings.HasPrefix(v, `"`) {
-			var err error
-			v, err = strconv.Unquote(v)
-			if err != nil {
-				return fmt.Errorf("invalid value in line %q: %v", line, err)
-			}
-		}
-		Setenv(k, v)
-	}
-	return bs.Err()
-}
-
-// IPCVersion returns version.Long usually, unless TS_DEBUG_FAKE_IPC_VERSION is
-// set, in which it contains that value. This is only used for weird development
-// cases when testing mismatched versions and you want the client to act like it's
-// compatible with the server.
-func IPCVersion() string {
-	if v := String("TS_DEBUG_FAKE_IPC_VERSION"); v != "" {
-		return v
-	}
-	return version.Long()
 }

@@ -131,7 +131,6 @@ var beCLI func() // non-nil if CLI is linked in
 
 func main() {
 	envknob.PanicIfAnyEnvCheckedInInit()
-	envknob.ApplyDiskConfig()
 	applyIntegrationTestEnvKnob()
 
 	defaultVerbosity := envknob.RegisterInt("TS_LOG_VERBOSITY")
@@ -330,10 +329,6 @@ func run() (err error) {
 			return fmt.Errorf("netmon.New: %w", err)
 		}
 		sys.Set(netMon)
-	}
-
-	if err := envknob.ApplyDiskConfigError(); err != nil {
-		log.Printf("Error reading environment config: %v", err)
 	}
 
 	if isWinSvc {

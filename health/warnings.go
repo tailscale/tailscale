@@ -188,16 +188,6 @@ var testWarnable = Register(&Warnable{
 	},
 })
 
-// applyDiskConfigWarnable is a Warnable that warns the user that there was an error applying the envknob config stored on disk.
-var applyDiskConfigWarnable = Register(&Warnable{
-	Code:     "apply-disk-config",
-	Title:    "Could not apply configuration",
-	Severity: SeverityMedium,
-	Text: func(args Args) string {
-		return fmt.Sprintf("An error occurred applying the Tailscale envknob configuration stored on disk: %v", args[ArgError])
-	},
-})
-
 // warmingUpWarnableDuration is the duration for which the warmingUpWarnable is reported by the backend after the user
 // has changed ipnWantRunning to true from false.
 const warmingUpWarnableDuration = 5 * time.Second

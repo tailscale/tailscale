@@ -1058,14 +1058,6 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		t.setHealthyLocked(derpRegionErrorWarnable)
 	}
 
-	if err := envknob.ApplyDiskConfigError(); err != nil {
-		t.setUnhealthyLocked(applyDiskConfigWarnable, Args{
-			ArgError: err.Error(),
-		})
-	} else {
-		t.setHealthyLocked(applyDiskConfigWarnable)
-	}
-
 	if len(t.tlsConnectionErrors) > 0 {
 		for serverName, err := range t.tlsConnectionErrors {
 			t.setUnhealthyLocked(tlsConnectionFailedWarnable, Args{
