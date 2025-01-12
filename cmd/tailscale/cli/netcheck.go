@@ -59,9 +59,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 	defer pm.Close()
 
 	c := &netcheck.Client{
-		NetMon:      netMon,
-		PortMapper:  pm,
-		UseDNSCache: false, // always resolve, don't cache
+		NetMon: netMon,
 	}
 	if netcheckArgs.verbose {
 		c.Logf = logger.WithPrefix(log.Printf, "netcheck: ")

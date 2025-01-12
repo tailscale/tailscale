@@ -830,7 +830,6 @@ func runTS2021(ctx context.Context, args []string) error {
 		log.Printf("tshttpproxy.ProxyFromEnvironment = (%v, %v)", proxy, err)
 	}
 	machinePrivate := key.NewMachine()
-	var dialer net.Dialer
 
 	var keys struct {
 		PublicKey key.MachinePublic
@@ -858,19 +857,6 @@ func runTS2021(ctx context.Context, args []string) error {
 		log.Printf("got public key: %v", keys.PublicKey)
 	}
 
-	dialFunc := func(ctx context.Context, network, address string) (net.Conn, error) {
-		log.Printf("Dial(%q, %q) ...", network, address)
-		c, err := dialer.DialContext(ctx, network, address)
-		if err != nil {
-			// skip logging context cancellation errors
-			if !errors.Is(err, context.Canceled) {
-				log.Printf("Dial(%q, %q) = %v", network, address, err)
-			}
-		} else {
-			log.Printf("Dial(%q, %q) = %v / %v", network, address, c.LocalAddr(), c.RemoteAddr())
-		}
-		return c, err
-	}
 	var logf logger.Logf
 	if ts2021Args.verbose {
 		logf = log.Printf
@@ -888,7 +874,6 @@ func runTS2021(ctx context.Context, args []string) error {
 		MachineKey:      machinePrivate,
 		ControlKey:      keys.PublicKey,
 		ProtocolVersion: uint16(ts2021Args.version),
-		Dialer:          dialFunc,
 		Logf:            logf,
 		NetMon:          netMon,
 	}

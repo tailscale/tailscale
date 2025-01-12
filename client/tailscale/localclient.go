@@ -29,16 +29,13 @@ import (
 	"go4.org/mem"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/drive"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
-	"tailscale.com/util/syspolicy/setting"
 )
 
 // defaultLocalClient is the default LocalClient when using the legacy
@@ -143,9 +140,6 @@ func (lc *LocalClient) DoLocalRequest(req *http.Request) (*http.Response, error)
 func (lc *LocalClient) doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
 	res, err := lc.DoLocalRequest(req)
 	if err == nil {
-		if server := res.Header.Get("Tailscale-Version"); server != "" && server != envknob.IPCVersion() && onVersionMismatch != nil {
-			onVersionMismatch(envknob.IPCVersion(), server)
-		}
 		if res.StatusCode == 403 {
 			all, _ := io.ReadAll(res.Body)
 			return nil, &AccessDeniedError{errors.New(errorMessageFromBody(all))}
@@ -824,33 +818,6 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 	return decodeJSON[*ipn.Prefs](body)
 }
 
-// GetEffectivePolicy returns the effective policy for the specified scope.
-func (lc *LocalClient) GetEffectivePolicy(ctx context.Context, scope setting.PolicyScope) (*setting.Snapshot, error) {
-	scopeID, err := scope.MarshalText()
-	if err != nil {
-		return nil, err
-	}
-	body, err := lc.get200(ctx, "/localapi/v0/policy/"+string(scopeID))
-	if err != nil {
-		return nil, err
-	}
-	return decodeJSON[*setting.Snapshot](body)
-}
-
-// ReloadEffectivePolicy reloads the effective policy for the specified scope
-// by reading and merging policy settings from all applicable policy sources.
-func (lc *LocalClient) ReloadEffectivePolicy(ctx context.Context, scope setting.PolicyScope) (*setting.Snapshot, error) {
-	scopeID, err := scope.MarshalText()
-	if err != nil {
-		return nil, err
-	}
-	body, err := lc.send(ctx, "POST", "/localapi/v0/policy/"+string(scopeID), 200, http.NoBody)
-	if err != nil {
-		return nil, err
-	}
-	return decodeJSON[*setting.Snapshot](body)
-}
-
 // GetDNSOSConfig returns the system DNS configuration for the current device.
 // That is, it returns the DNS configuration that the system would use if Tailscale weren't being used.
 func (lc *LocalClient) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, error) {
@@ -863,21 +830,6 @@ func (lc *LocalClient) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig
 		return nil, fmt.Errorf("invalid dns.OSConfig: %w", err)
 	}
 	return &osCfg, nil
-}
-
-// QueryDNS executes a DNS query for a name (`google.com.`) and query type (`CNAME`).
-// It returns the raw DNS response bytes and the resolvers that were used to answer the query
-// (often just one, but can be more if we raced multiple resolvers).
-func (lc *LocalClient) QueryDNS(ctx context.Context, name string, queryType string) (bytes []byte, resolvers []*dnstype.Resolver, err error) {
-	body, err := lc.get200(ctx, fmt.Sprintf("/localapi/v0/dns-query?name=%s&type=%s", url.QueryEscape(name), queryType))
-	if err != nil {
-		return nil, nil, err
-	}
-	var res apitype.DNSQueryResponse
-	if err := json.Unmarshal(body, &res); err != nil {
-		return nil, nil, fmt.Errorf("invalid query response: %w", err)
-	}
-	return res.Bytes, res.Resolvers, nil
 }
 
 // StartLoginInteractive starts an interactive login.

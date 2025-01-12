@@ -29,6 +29,7 @@ MIN_OMITS ?= ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completio
 min:
 	./tool/go build -o $$HOME/bin/tailscaled.min -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
 	GOOS=linux ./tool/go build -o $$HOME/bin/tailscaled.minlinux -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
+	GOOS=linux ./tool/go build -o $$HOME/bin/tailscale.minlinux -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscale
 	ls -l $$HOME/bin/tailscaled.min{,linux}
 
 updatemindeps: min

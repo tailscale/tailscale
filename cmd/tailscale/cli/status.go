@@ -12,24 +12,21 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"github.com/toqueteos/webbrowser"
 	"golang.org/x/net/idna"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/netmon"
 	"tailscale.com/util/dnsname"
 )
 
 var statusCmd = &ffcli.Command{
 	Name:       "status",
-	ShortUsage: "tailscale status [--active] [--web] [--json]",
+	ShortUsage: "tailscale status [--active] [--json]",
 	ShortHelp:  "Show state of tailscaled and its connections",
 	LongHelp: strings.TrimSpace(`
 
@@ -50,7 +47,6 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("status")
 		fs.BoolVar(&statusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
-		fs.BoolVar(&statusArgs.web, "web", false, "run webserver with HTML showing status")
 		fs.BoolVar(&statusArgs.active, "active", false, "filter output to only peers with active sessions (not applicable to web mode)")
 		fs.BoolVar(&statusArgs.self, "self", true, "show status of local machine")
 		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
@@ -62,7 +58,6 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 
 var statusArgs struct {
 	json    bool   // JSON output mode
-	web     bool   // run webserver
 	listen  string // in web mode, webserver address to listen on, empty means auto
 	browser bool   // in web mode, whether to open browser
 	active  bool   // in CLI mode, filter output to only peers with active sessions
@@ -96,38 +91,6 @@ func runStatus(ctx context.Context, args []string) error {
 		}
 		printf("%s", j)
 		return nil
-	}
-	if statusArgs.web {
-		ln, err := net.Listen("tcp", statusArgs.listen)
-		if err != nil {
-			return err
-		}
-		statusURL := netmon.HTTPOfListener(ln)
-		printf("Serving Tailscale status at %v ...\n", statusURL)
-		go func() {
-			<-ctx.Done()
-			ln.Close()
-		}()
-		if statusArgs.browser {
-			go webbrowser.Open(statusURL)
-		}
-		err = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.RequestURI != "/" {
-				http.NotFound(w, r)
-				return
-			}
-			st, err := localClient.Status(ctx)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			st.WriteHTML(w)
-		}))
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return err
 	}
 
 	printHealth := func() {
