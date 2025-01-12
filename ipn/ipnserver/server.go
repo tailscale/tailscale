@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode"
 
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -189,14 +188,6 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if envknob.GOOS() == "windows" {
-		// TODO(bradfitz): remove this once we moved to named pipes for LocalAPI
-		// on Windows. This could then move to all platforms instead at
-		// 100.100.100.100 or something (quad100 handler in LocalAPI)
-		s.ServeHTMLStatus(w, r)
-		return
-	}
-
 	io.WriteString(w, "<html><title>Tailscale</title><body><h1>Tailscale</h1>This is the local Tailscale daemon.\n")
 }
 
@@ -350,30 +341,4 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		return err
 	}
 	return nil
-}
-
-// ServeHTMLStatus serves an HTML status page at http://localhost:41112/ for
-// Windows and via $DEBUG_LISTENER/debug/ipn when tailscaled's --debug flag
-// is used to run a debug server.
-func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
-	lb := s.lb.Load()
-	if lb == nil {
-		http.Error(w, "no LocalBackend", http.StatusServiceUnavailable)
-		return
-	}
-
-	// As this is only meant for debug, verify there's no DNS name being used to
-	// access this.
-	if !strings.HasPrefix(r.Host, "localhost:") && strings.IndexFunc(r.Host, unicode.IsLetter) != -1 {
-		http.Error(w, "invalid host", http.StatusForbidden)
-		return
-	}
-
-	w.Header().Set("Content-Security-Policy", `default-src 'none'; frame-ancestors 'none'; script-src 'none'; script-src-elem 'none'; script-src-attr 'none'`)
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	st := lb.Status()
-	// TODO(bradfitz): add LogID and opts to st?
-	st.WriteHTML(w)
 }

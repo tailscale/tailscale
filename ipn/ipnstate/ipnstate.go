@@ -7,9 +7,6 @@
 package ipnstate
 
 import (
-	"fmt"
-	"html"
-	"io"
 	"log"
 	"net/netip"
 	"slices"
@@ -21,7 +18,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 )
 
@@ -443,143 +439,6 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 
 type StatusUpdater interface {
 	UpdateStatus(*StatusBuilder)
-}
-
-func (st *Status) WriteHTML(w io.Writer) {
-	f := func(format string, args ...any) { fmt.Fprintf(w, format, args...) }
-
-	f(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tailscale State</title>
-<style>
-body { font-family: monospace; }
-.owner { text-decoration: underline; }
-.tailaddr { font-style: italic; }
-.acenter { text-align: center; }
-.aright { text-align: right; }
-table, th, td { border: 1px solid black; border-spacing : 0; border-collapse : collapse; }
-thead { background-color: #FFA500; }
-th, td { padding: 5px; }
-td { vertical-align: top; }
-table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
-</style>
-</head>
-<body>
-<h1>Tailscale State</h1>
-`)
-
-	//f("<p><b>logid:</b> %s</p>\n", logid)
-	//f("<p><b>opts:</b> <code>%s</code></p>\n", html.EscapeString(fmt.Sprintf("%+v", opts)))
-
-	ips := make([]string, 0, len(st.TailscaleIPs))
-	for _, ip := range st.TailscaleIPs {
-		ips = append(ips, ip.String())
-	}
-	f("<p>Tailscale IP: %s", strings.Join(ips, ", "))
-
-	f("<table>\n<thead>\n")
-	f("<tr><th>Peer</th><th>OS</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Connection</th></tr>\n")
-	f("</thead>\n<tbody>\n")
-
-	now := time.Now()
-
-	var peers []*PeerStatus
-	for _, peer := range st.Peers() {
-		ps := st.Peer[peer]
-		if ps.ShareeNode {
-			continue
-		}
-		peers = append(peers, ps)
-	}
-	SortPeers(peers)
-
-	for _, ps := range peers {
-		var actAgo string
-		if !ps.LastWrite.IsZero() {
-			ago := now.Sub(ps.LastWrite)
-			actAgo = ago.Round(time.Second).String() + " ago"
-			if ago < 5*time.Minute {
-				actAgo = "<b>" + actAgo + "</b>"
-			}
-		}
-		var owner string
-		if up, ok := st.User[ps.UserID]; ok {
-			owner = up.LoginName
-			if i := strings.Index(owner, "@"); i != -1 {
-				owner = owner[:i]
-			}
-		}
-
-		hostName := dnsname.SanitizeHostname(ps.HostName)
-		dnsName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
-		if strings.EqualFold(dnsName, hostName) || ps.UserID != st.Self.UserID {
-			hostName = ""
-		}
-		var hostNameHTML string
-		if hostName != "" {
-			hostNameHTML = "<br>" + html.EscapeString(hostName)
-		}
-
-		var tailAddr string
-		if len(ps.TailscaleIPs) > 0 {
-			tailAddr = ps.TailscaleIPs[0].String()
-		}
-		f("<tr><td>%s</td><td class=acenter>%s</td>"+
-			"<td><b>%s</b>%s<div class=\"tailaddr\">%s</div></td><td class=\"acenter owner\">%s</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td><td class=\"aright\">%v</td>",
-			ps.PublicKey.ShortString(),
-			osEmoji(ps.OS),
-			html.EscapeString(dnsName),
-			hostNameHTML,
-			tailAddr,
-			html.EscapeString(owner),
-			ps.RxBytes,
-			ps.TxBytes,
-			actAgo,
-		)
-		f("<td>")
-
-		if ps.Active {
-			if ps.Relay != "" && ps.CurAddr == "" {
-				f("relay <b>%s</b>", html.EscapeString(ps.Relay))
-			} else if ps.CurAddr != "" {
-				f("direct <b>%s</b>", html.EscapeString(ps.CurAddr))
-			}
-		}
-
-		f("</td>") // end Addrs
-
-		f("</tr>\n")
-	}
-	f("</tbody>\n</table>\n")
-	f("</body>\n</html>\n")
-}
-
-func osEmoji(os string) string {
-	switch os {
-	case "linux":
-		return "🐧"
-	case "macOS":
-		return "🍎"
-	case "windows":
-		return "🖥️"
-	case "iOS":
-		return "📱"
-	case "tvOS":
-		return "🍎📺"
-	case "android":
-		return "🤖"
-	case "freebsd":
-		return "👿"
-	case "openbsd":
-		return "🐡"
-	case "illumos":
-		return "☀️"
-	case "solaris":
-		return "🌤️"
-	}
-	return "👽"
 }
 
 // PingResult contains response information for the "tailscale ping" subcommand,
