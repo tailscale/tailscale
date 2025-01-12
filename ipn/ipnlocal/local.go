@@ -15,8 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"math"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -33,7 +31,6 @@ import (
 	"time"
 
 	"go4.org/netipx"
-	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
@@ -44,7 +41,6 @@ import (
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/ipset"
-	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
@@ -72,8 +68,6 @@ import (
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
-	"tailscale.com/util/slicesx"
-	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
@@ -1284,13 +1278,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			prefsChanged = true
 		}
 	}
-	if shouldAutoExitNode() {
-		// Re-evaluate exit node suggestion in case circumstances have changed.
-		_, err := b.suggestExitNodeLocked(curNetMap)
-		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
-			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
-		}
-	}
 
 	// Until recently, we did not store the account's tailnet name. So check if this is the case,
 	// and backfill it on incoming status update.
@@ -1378,57 +1365,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
 	// This is where netmap information gets propagated to router and magicsock.
 	b.authReconfig()
-}
-
-type preferencePolicyInfo struct {
-	key syspolicy.Key
-	get func(ipn.PrefsView) bool
-	set func(*ipn.Prefs, bool)
-}
-
-var preferencePolicies = []preferencePolicyInfo{
-	{
-		key: syspolicy.EnableIncomingConnections,
-		// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
-		// backend), so this has to convert between the two conventions.
-		get: func(p ipn.PrefsView) bool { return !p.ShieldsUp() },
-		set: func(p *ipn.Prefs, v bool) { p.ShieldsUp = !v },
-	},
-	{
-		key: syspolicy.EnableServerMode,
-		get: func(p ipn.PrefsView) bool { return p.ForceDaemon() },
-		set: func(p *ipn.Prefs, v bool) { p.ForceDaemon = v },
-	},
-	{
-		key: syspolicy.ExitNodeAllowLANAccess,
-		get: func(p ipn.PrefsView) bool { return p.ExitNodeAllowLANAccess() },
-		set: func(p *ipn.Prefs, v bool) { p.ExitNodeAllowLANAccess = v },
-	},
-	{
-		key: syspolicy.EnableTailscaleDNS,
-		get: func(p ipn.PrefsView) bool { return p.CorpDNS() },
-		set: func(p *ipn.Prefs, v bool) { p.CorpDNS = v },
-	},
-	{
-		key: syspolicy.EnableTailscaleSubnets,
-		get: func(p ipn.PrefsView) bool { return p.RouteAll() },
-		set: func(p *ipn.Prefs, v bool) { p.RouteAll = v },
-	},
-	{
-		key: syspolicy.CheckUpdates,
-		get: func(p ipn.PrefsView) bool { return p.AutoUpdate().Check },
-		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Check = v },
-	},
-	{
-		key: syspolicy.ApplyUpdates,
-		get: func(p ipn.PrefsView) bool { v, _ := p.AutoUpdate().Apply.Get(); return v },
-		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Apply.Set(v) },
-	},
-	{
-		key: syspolicy.EnableRunExitNode,
-		get: func(p ipn.PrefsView) bool { return p.AdvertisesExitNode() },
-		set: func(p *ipn.Prefs, v bool) { p.SetAdvertiseExitNode(v) },
-	},
 }
 
 var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
@@ -4198,30 +4134,6 @@ func (b *LocalBackend) DERPMap() *tailcfg.DERPMap {
 	return b.netMap.DERPMap
 }
 
-// OfferingExitNode reports whether b is currently offering exit node
-// access.
-func (b *LocalBackend) OfferingExitNode() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !b.pm.CurrentPrefs().Valid() {
-		return false
-	}
-	var def4, def6 bool
-	ar := b.pm.CurrentPrefs().AdvertiseRoutes()
-	for i := range ar.Len() {
-		r := ar.At(i)
-		if r.Bits() != 0 {
-			continue
-		}
-		if r.Addr().Is4() {
-			def4 = true
-		} else if r.Addr().Is6() {
-			def6 = true
-		}
-	}
-	return def4 && def6
-}
-
 // SetExpiry updates the expiry of the current node key to t, as long as it's
 // only sooner than the old expiry.
 //
@@ -4249,40 +4161,6 @@ func (b *LocalBackend) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpd
 		return errors.New("not running")
 	}
 	return cc.SetDeviceAttrs(ctx, attrs)
-}
-
-// exitNodeCanProxyDNS reports the DoH base URL ("http://foo/dns-query") without query parameters
-// to exitNodeID's DoH service, if available.
-//
-// If exitNodeID is the zero valid, it returns "", false.
-func exitNodeCanProxyDNS(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
-	if exitNodeID.IsZero() {
-		return "", false
-	}
-	for _, p := range peers {
-		if p.StableID() == exitNodeID && peerCanProxyDNS(p) {
-			return peerAPIBase(nm, p) + "/dns-query", true
-		}
-	}
-	return "", false
-}
-
-func peerCanProxyDNS(p tailcfg.NodeView) bool {
-	if p.Cap() >= 26 {
-		// Actually added at 25
-		// (https://github.com/tailscale/tailscale/blob/3ae6f898cfdb58fd0e30937147dd6ce28c6808dd/tailcfg/tailcfg.go#L51)
-		// so anything >= 26 can do it.
-		return true
-	}
-	// If p.Cap is not populated (e.g. older control server), then do the old
-	// thing of searching through services.
-	services := p.Hostinfo().Services()
-	for _, s := range services.All() {
-		if s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
-			return true
-		}
-	}
-	return false
 }
 
 func (b *LocalBackend) DebugRebind() error {
@@ -4708,40 +4586,6 @@ func mayDeref[T any](p *T) (v T) {
 
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 
-// suggestExitNodeLocked computes a suggestion based on the current netmap and last netcheck report. If
-// there are multiple equally good options, one is selected at random, so the result is not stable. To be
-// eligible for consideration, the peer must have NodeAttrSuggestExitNode in its CapMap.
-//
-// Currently, peers with a DERP home are preferred over those without (typically this means Mullvad).
-// Peers are selected based on having a DERP home that is the lowest latency to this device. For peers
-// without a DERP home, we look for geographic proximity to this device's DERP home.
-//
-// netMap is an optional netmap to use that overrides b.netMap (needed for SetControlClientStatus before b.netMap is updated).
-// If netMap is nil, then b.netMap is used.
-//
-// b.mu.lock() must be held.
-func (b *LocalBackend) suggestExitNodeLocked(netMap *netmap.NetworkMap) (response apitype.ExitNodeSuggestionResponse, err error) {
-	// netMap is an optional netmap to use that overrides b.netMap (needed for SetControlClientStatus before b.netMap is updated). If netMap is nil, then b.netMap is used.
-	if netMap == nil {
-		netMap = b.netMap
-	}
-	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
-	prevSuggestion := b.lastSuggestedExitNode
-
-	res, err := suggestExitNode(lastReport, netMap, prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
-	if err != nil {
-		return res, err
-	}
-	b.lastSuggestedExitNode = res.ID
-	return res, err
-}
-
-func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.suggestExitNodeLocked(nil)
-}
-
 // getAllowedSuggestions returns a set of exit nodes permitted by the most recent
 // [syspolicy.AllowedSuggestedExitNodes] value. Callers must not mutate the returned set.
 func (b *LocalBackend) getAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
@@ -4759,237 +4603,9 @@ type selectRegionFunc func(views.Slice[int]) int
 // choice.
 type selectNodeFunc func(nodes views.Slice[tailcfg.NodeView], last tailcfg.StableNodeID) tailcfg.NodeView
 
-func fillAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
-	nodes, err := syspolicy.GetStringArray(syspolicy.AllowedSuggestedExitNodes, nil)
-	if err != nil {
-		log.Printf("fillAllowedSuggestions: unable to look up %q policy: %v", syspolicy.AllowedSuggestedExitNodes, err)
-		return nil
-	}
-	if nodes == nil {
-		return nil
-	}
-	s := make(set.Set[tailcfg.StableNodeID], len(nodes))
-	for _, n := range nodes {
-		s.Add(tailcfg.StableNodeID(n))
-	}
-	return s
-}
-
-func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
-	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
-		return res, ErrNoPreferredDERP
-	}
-	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
-	for _, peer := range netMap.Peers {
-		if !peer.Valid() {
-			continue
-		}
-		if allowList != nil && !allowList.Contains(peer.StableID()) {
-			continue
-		}
-		if peer.CapMap().Contains(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
-			candidates = append(candidates, peer)
-		}
-	}
-	if len(candidates) == 0 {
-		return res, nil
-	}
-	if len(candidates) == 1 {
-		peer := candidates[0]
-		if hi := peer.Hostinfo(); hi.Valid() {
-			if loc := hi.Location(); loc != nil {
-				res.Location = loc.View()
-			}
-		}
-		res.ID = peer.StableID()
-		res.Name = peer.Name()
-		return res, nil
-	}
-
-	candidatesByRegion := make(map[int][]tailcfg.NodeView, len(netMap.DERPMap.Regions))
-	preferredDERP, ok := netMap.DERPMap.Regions[report.PreferredDERP]
-	if !ok {
-		return res, ErrNoPreferredDERP
-	}
-	var minDistance float64 = math.MaxFloat64
-	type nodeDistance struct {
-		nv       tailcfg.NodeView
-		distance float64 // in meters, approximately
-	}
-	distances := make([]nodeDistance, 0, len(candidates))
-	for _, c := range candidates {
-		if c.DERP() != "" {
-			ipp, err := netip.ParseAddrPort(c.DERP())
-			if err != nil {
-				continue
-			}
-			if ipp.Addr() != tailcfg.DerpMagicIPAddr {
-				continue
-			}
-			regionID := int(ipp.Port())
-			candidatesByRegion[regionID] = append(candidatesByRegion[regionID], c)
-			continue
-		}
-		if len(candidatesByRegion) > 0 {
-			// Since a candidate exists that does have a DERP home, skip this candidate. We never select
-			// a candidate without a DERP home if there is a candidate available with a DERP home.
-			continue
-		}
-		// This candidate does not have a DERP home.
-		// Use geographic distance from our DERP home to estimate how good this candidate is.
-		hi := c.Hostinfo()
-		if !hi.Valid() {
-			continue
-		}
-		loc := hi.Location()
-		if loc == nil {
-			continue
-		}
-		distance := longLatDistance(preferredDERP.Latitude, preferredDERP.Longitude, loc.Latitude, loc.Longitude)
-		if distance < minDistance {
-			minDistance = distance
-		}
-		distances = append(distances, nodeDistance{nv: c, distance: distance})
-	}
-	// First, try to select an exit node that has the closest DERP home, based on lastReport's DERP latency.
-	// If there are no latency values, it returns an arbitrary region
-	if len(candidatesByRegion) > 0 {
-		minRegion := minLatencyDERPRegion(slicesx.MapKeys(candidatesByRegion), report)
-		if minRegion == 0 {
-			minRegion = selectRegion(views.SliceOf(slicesx.MapKeys(candidatesByRegion)))
-		}
-		regionCandidates, ok := candidatesByRegion[minRegion]
-		if !ok {
-			return res, errors.New("no candidates in expected region: this is a bug")
-		}
-		chosen := selectNode(views.SliceOf(regionCandidates), prevSuggestion)
-		res.ID = chosen.StableID()
-		res.Name = chosen.Name()
-		if hi := chosen.Hostinfo(); hi.Valid() {
-			if loc := hi.Location(); loc != nil {
-				res.Location = loc.View()
-			}
-		}
-		return res, nil
-	}
-	// None of the candidates have a DERP home, so proceed to select based on geographical distance from our preferred DERP region.
-
-	// allowanceMeters is the extra distance that will be permitted when considering peers. By this point, there
-	// are multiple approximations taking place (DERP location standing in for this device's location, the peer's
-	// location may only be city granularity, the distance algorithm assumes a spherical planet, etc.) so it is
-	// reasonable to consider peers that are similar distances. Those peers are good enough to be within
-	// measurement error. 100km corresponds to approximately 1ms of additional round trip light
-	// propagation delay in a fiber optic cable and seems like a reasonable heuristic. It may be adjusted in
-	// future.
-	const allowanceMeters = 100000
-	pickFrom := make([]tailcfg.NodeView, 0, len(distances))
-	for _, candidate := range distances {
-		if candidate.nv.Valid() && candidate.distance <= minDistance+allowanceMeters {
-			pickFrom = append(pickFrom, candidate.nv)
-		}
-	}
-	bestCandidates := pickWeighted(pickFrom)
-	chosen := selectNode(views.SliceOf(bestCandidates), prevSuggestion)
-	if !chosen.Valid() {
-		return res, errors.New("chosen candidate invalid: this is a bug")
-	}
-	res.ID = chosen.StableID()
-	res.Name = chosen.Name()
-	if hi := chosen.Hostinfo(); hi.Valid() {
-		if loc := hi.Location(); loc != nil {
-			res.Location = loc.View()
-		}
-	}
-	return res, nil
-}
-
-// pickWeighted chooses the node with highest priority given a list of mullvad nodes.
-func pickWeighted(candidates []tailcfg.NodeView) []tailcfg.NodeView {
-	maxWeight := 0
-	best := make([]tailcfg.NodeView, 0, 1)
-	for _, c := range candidates {
-		hi := c.Hostinfo()
-		if !hi.Valid() {
-			continue
-		}
-		loc := hi.Location()
-		if loc == nil || loc.Priority < maxWeight {
-			continue
-		}
-		if maxWeight != loc.Priority {
-			best = best[:0]
-		}
-		maxWeight = loc.Priority
-		best = append(best, c)
-	}
-	return best
-}
-
 // randomRegion is a selectRegionFunc that selects a uniformly random region.
 func randomRegion(regions views.Slice[int]) int {
 	return regions.At(rand.IntN(regions.Len()))
-}
-
-// randomNode is a selectNodeFunc that will return the node matching prefer if
-// present, otherwise a uniformly random node will be selected.
-func randomNode(nodes views.Slice[tailcfg.NodeView], prefer tailcfg.StableNodeID) tailcfg.NodeView {
-	if !prefer.IsZero() {
-		for i := range nodes.Len() {
-			nv := nodes.At(i)
-			if nv.StableID() == prefer {
-				return nv
-			}
-		}
-	}
-
-	return nodes.At(rand.IntN(nodes.Len()))
-}
-
-// minLatencyDERPRegion returns the region with the lowest latency value given the last netcheck report.
-// If there are no latency values, it returns 0.
-func minLatencyDERPRegion(regions []int, report *netcheck.Report) int {
-	min := slices.MinFunc(regions, func(i, j int) int {
-		const largeDuration time.Duration = math.MaxInt64
-		iLatency, ok := report.RegionLatency[i]
-		if !ok {
-			iLatency = largeDuration
-		}
-		jLatency, ok := report.RegionLatency[j]
-		if !ok {
-			jLatency = largeDuration
-		}
-		if c := cmp.Compare(iLatency, jLatency); c != 0 {
-			return c
-		}
-		return cmp.Compare(i, j)
-	})
-	latency, ok := report.RegionLatency[min]
-	if !ok || latency == 0 {
-		return 0
-	} else {
-		return min
-	}
-}
-
-// longLatDistance returns an estimated distance given the geographic coordinates of two locations, in degrees.
-// The coordinates are separated into four separate float64 values.
-// Value is returned in meters.
-func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
-	const toRadians = math.Pi / 180
-	diffLat := (fromLat - toLat) * toRadians
-	diffLong := (fromLong - toLong) * toRadians
-	lat1 := fromLat * toRadians
-	lat2 := toLat * toRadians
-	a := math.Pow(math.Sin(diffLat/2), 2) + math.Cos(lat1)*math.Cos(lat2)*math.Pow(math.Sin(diffLong/2), 2)
-	const earthRadiusMeters = 6371000
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return earthRadiusMeters * c
-}
-
-// shouldAutoExitNode checks for the auto exit node MDM policy.
-func shouldAutoExitNode() bool {
-	exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, "")
-	return exitNodeIDStr == "auto:any"
 }
 
 // srcIPHasCapForFilter is called by the packet filter when evaluating firewall
