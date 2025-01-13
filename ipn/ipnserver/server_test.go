@@ -158,6 +158,35 @@ func TestIPNAlreadyInUseOnWindows(t *testing.T) {
 	server.checkCurrentUser(clientA.User)
 }
 
+func TestSequentialOSUserSwitchingOnWindows(t *testing.T) {
+	enableLogging := false
+	setGOOSForTest(t, "windows")
+
+	ctx := context.Background()
+	server := startDefaultTestIPNServer(t, ctx, enableLogging)
+
+	connectDisconnectAsUser := func(name string) {
+		// User connects and starts watching the IPN bus.
+		client := server.getClientAs(name)
+		watcher, cancelWatcher := client.WatchIPNBus(ctx, 0)
+		defer cancelWatcher()
+		go pumpIPNBus(watcher)
+
+		// It should be the current user from the LocalBackend's perspective...
+		server.checkCurrentUser(client.User)
+		// until it disconnects.
+		cancelWatcher()
+		server.blockWhileInUse(ctx)
+		// Now, the current user should be unset.
+		server.checkCurrentUser(nil)
+	}
+
+	// UserA logs in, uses Tailscale for a bit, then logs out.
+	connectDisconnectAsUser("UserA")
+	// Same for UserB.
+	connectDisconnectAsUser("UserB")
+}
+
 func setGOOSForTest(tb testing.TB, goos string) {
 	tb.Helper()
 	envknob.Setenv("TS_DEBUG_FAKE_GOOS", goos)

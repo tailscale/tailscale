@@ -3620,7 +3620,7 @@ func (b *LocalBackend) shouldUploadServices() bool {
 }
 
 // SetCurrentUser is used to implement support for multi-user systems (only
-// Windows 2022-11-25). On such systems, the uid is used to determine which
+// Windows 2022-11-25). On such systems, the actor is used to determine which
 // user's state should be used. The current user is maintained by active
 // connections open to the backend.
 //
@@ -3634,11 +3634,8 @@ func (b *LocalBackend) shouldUploadServices() bool {
 // unattended mode. The user must disable unattended mode before the user can be
 // changed.
 //
-// On non-multi-user systems, the user should be set to nil.
-//
-// SetCurrentUser returns the ipn.WindowsUserID associated with the user
-// when successful.
-func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) (ipn.WindowsUserID, error) {
+// On non-multi-user systems, the actor should be set to nil.
+func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) {
 	var uid ipn.WindowsUserID
 	if actor != nil {
 		uid = actor.UserID()
@@ -3647,16 +3644,17 @@ func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) (ipn.WindowsUserID, e
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
-	if b.pm.CurrentUserID() == uid {
-		return uid, nil
+	if actor != b.currentUser {
+		if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
+			c.Close()
+		}
+		b.currentUser = actor
 	}
-	b.pm.SetCurrentUserID(uid)
-	if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
-		c.Close()
+
+	if b.pm.CurrentUserID() != uid {
+		b.pm.SetCurrentUserID(uid)
+		b.resetForProfileChangeLockedOnEntry(unlock)
 	}
-	b.currentUser = actor
-	b.resetForProfileChangeLockedOnEntry(unlock)
-	return uid, nil
 }
 
 // CurrentUserForTest returns the current user and the associated WindowsUserID.

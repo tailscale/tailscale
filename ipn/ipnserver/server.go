@@ -21,7 +21,6 @@ import (
 	"unicode"
 
 	"tailscale.com/envknob"
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
@@ -51,7 +50,6 @@ type Server struct {
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
-	lastUserID    ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
 	activeReqs    map[*http.Request]ipnauth.Actor
 	backendWaiter waiterSet // of LocalBackend waiters
 	zeroReqWaiter waiterSet // of blockUntilZeroConnections waiters
@@ -376,16 +374,6 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 
 	lb := s.mustBackend()
 
-	// If the connected user changes, reset the backend server state to make
-	// sure node keys don't leak between users.
-	var doReset bool
-	defer func() {
-		if doReset {
-			s.logf("identity changed; resetting server")
-			lb.ResetForClientDisconnect()
-		}
-	}()
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -400,16 +388,7 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 			// Tell the LocalBackend about the identity we're now running as,
 			// unless its the SYSTEM user. That user is not a real account and
 			// doesn't have a home directory.
-			uid, err := lb.SetCurrentUser(actor)
-			if err != nil {
-				return nil, err
-			}
-			if s.lastUserID != uid {
-				if s.lastUserID != "" {
-					doReset = true
-				}
-				s.lastUserID = uid
-			}
+			lb.SetCurrentUser(actor)
 		}
 	}
 
