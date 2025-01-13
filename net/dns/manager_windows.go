@@ -8,10 +8,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -140,9 +142,8 @@ func (m *windowsManager) setSplitDNS(resolvers []netip.Addr, domains []dnsname.F
 	return m.nrptDB.WriteSplitDNSConfig(servers, domains)
 }
 
-func setTailscaleHosts(prevHostsFile []byte, hosts []*HostEntry) ([]byte, error) {
-	b := bytes.ReplaceAll(prevHostsFile, []byte("\r\n"), []byte("\n"))
-	sc := bufio.NewScanner(bytes.NewReader(b))
+func setTailscaleHosts(logf logger.Logf, prevHostsFile []byte, hosts []*HostEntry) ([]byte, error) {
+	sc := bufio.NewScanner(bytes.NewReader(prevHostsFile))
 	const (
 		header = "# TailscaleHostsSectionStart"
 		footer = "# TailscaleHostsSectionEnd"
@@ -151,6 +152,32 @@ func setTailscaleHosts(prevHostsFile []byte, hosts []*HostEntry) ([]byte, error)
 		"# This section contains MagicDNS entries for Tailscale.",
 		"# Do not edit this section manually.",
 	}
+
+	prevEntries := make(map[netip.Addr][]string)
+	addPrevEntry := func(line string) {
+		if line == "" || line[0] == '#' {
+			return
+		}
+
+		parts := strings.Split(line, " ")
+		if len(parts) < 1 {
+			return
+		}
+
+		addr, err := netip.ParseAddr(parts[0])
+		if err != nil {
+			logf("Parsing address from hosts: %v", err)
+			return
+		}
+
+		prevEntries[addr] = parts[1:]
+	}
+
+	nextEntries := make(map[netip.Addr][]string, len(hosts))
+	for _, he := range hosts {
+		nextEntries[he.Addr] = he.Hosts
+	}
+
 	var out bytes.Buffer
 	var inSection bool
 	for sc.Scan() {
@@ -164,26 +191,34 @@ func setTailscaleHosts(prevHostsFile []byte, hosts []*HostEntry) ([]byte, error)
 			continue
 		}
 		if inSection {
+			addPrevEntry(line)
 			continue
 		}
-		fmt.Fprintln(&out, line)
+		fmt.Fprintf(&out, "%s\r\n", line)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	if len(hosts) > 0 {
-		fmt.Fprintln(&out, header)
-		for _, c := range comments {
-			fmt.Fprintln(&out, c)
-		}
-		fmt.Fprintln(&out)
-		for _, he := range hosts {
-			fmt.Fprintf(&out, "%s %s\n", he.Addr, strings.Join(he.Hosts, " "))
-		}
-		fmt.Fprintln(&out)
-		fmt.Fprintln(&out, footer)
+
+	unchanged := maps.EqualFunc(prevEntries, nextEntries, func(a, b []string) bool {
+		return slices.Equal(a, b)
+	})
+	if unchanged {
+		return nil, nil
 	}
-	return bytes.ReplaceAll(out.Bytes(), []byte("\n"), []byte("\r\n")), nil
+
+	if len(hosts) > 0 {
+		fmt.Fprintf(&out, "%s\r\n", header)
+		for _, c := range comments {
+			fmt.Fprintf(&out, "%s\r\n", c)
+		}
+		fmt.Fprintf(&out, "\r\n")
+		for _, he := range hosts {
+			fmt.Fprintf(&out, "%s %s\r\n", he.Addr, strings.Join(he.Hosts, " "))
+		}
+		fmt.Fprintf(&out, "\r\n%s\r\n", footer)
+	}
+	return out.Bytes(), nil
 }
 
 // setHosts sets the hosts file to contain the given host entries.
@@ -197,10 +232,15 @@ func (m *windowsManager) setHosts(hosts []*HostEntry) error {
 	if err != nil {
 		return err
 	}
-	outB, err := setTailscaleHosts(b, hosts)
+	outB, err := setTailscaleHosts(m.logf, b, hosts)
 	if err != nil {
 		return err
 	}
+	if outB == nil {
+		// No change to hosts file, therefore no write necessary.
+		return nil
+	}
+
 	const fileMode = 0 // ignored on windows.
 
 	// This can fail spuriously with an access denied error, so retry it a
