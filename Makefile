@@ -31,6 +31,11 @@ min:
 	GOOS=linux ./tool/go build -o $$HOME/bin/tailscaled.minlinux -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
 	GOOS=linux ./tool/go build -o $$HOME/bin/tailscale.minlinux -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscale
 	ls -l $$HOME/bin/tailscaled.min{,linux}
+min-amd64:
+	./tool/go build -o $$HOME/bin/tailscaled.min -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
+	GOOS=linux GOARCH=amd64 ./tool/go build -o $$HOME/bin/tailscaled.min.linux-amd64 -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscaled
+	GOOS=linux GOARCH=amd64 ./tool/go build -o $$HOME/bin/tailscale.min.linux-amd64 -ldflags "-w -s" --tags=${MIN_OMITS} ./cmd/tailscale
+	ls -l $$HOME/bin/tailscale*.min.linux-amd64
 
 updatemindeps: min
 		PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --file=depaware-minlinux.txt --goos=linux,darwin --tags=${MIN_OMITS} --update \
