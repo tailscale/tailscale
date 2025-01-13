@@ -15,8 +15,9 @@ import (
 )
 
 // WriteFile writes data to filename+some suffix, then renames it into filename.
-// The perm argument is ignored on Windows. If the target filename already
-// exists but is not a regular file, WriteFile returns an error.
+// The perm argument is ignored on Windows, but if the target filename already
+// exists then the target file's attributes and ACLs are preserved. If the target
+// filename already exists but is not a regular file, WriteFile returns an error.
 func WriteFile(filename string, data []byte, perm os.FileMode) (err error) {
 	fi, err := os.Stat(filename)
 	if err == nil && !fi.Mode().IsRegular() {
@@ -47,5 +48,5 @@ func WriteFile(filename string, data []byte, perm os.FileMode) (err error) {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, filename)
+	return rename(tmpName, filename)
 }
