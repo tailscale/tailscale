@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,7 +60,6 @@ import (
 	"tailscale.com/util/ringbuffer"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
-	"tailscale.com/util/uniq"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/wgint"
@@ -2666,7 +2666,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	}
 	ports = append(ports, 0)
 	// Remove duplicates. (All duplicates are consecutive.)
-	uniq.ModifySlice(&ports)
+	ports = slices.Compact(ports)
 
 	if debugBindSocket() {
 		c.logf("magicsock: bindSocket: candidate ports: %+v", ports)

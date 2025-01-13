@@ -111,7 +111,6 @@ import (
 	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
-	"tailscale.com/util/uniq"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -3346,7 +3345,7 @@ func (b *LocalBackend) clearMachineKeyLocked() error {
 // incoming packet.
 func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 	slices.Sort(ports)
-	uniq.ModifySlice(&ports)
+	ports = slices.Compact(ports)
 	var f func(uint16) bool
 	switch len(ports) {
 	case 0:
