@@ -4,6 +4,7 @@
 package ipnauth
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"tailscale.com/ipn"
@@ -75,4 +76,16 @@ func (id ClientID) String() string {
 		return "(none)"
 	}
 	return fmt.Sprint(id.v)
+}
+
+// MarshalJSON implements [json.Marshaler].
+// It is primarily used for testing.
+func (id ClientID) MarshalJSON() ([]byte, error) {
+	return json.Marshal(id.v)
+}
+
+// UnmarshalJSON implements [json.Unmarshaler].
+// It is primarily used for testing.
+func (id *ClientID) UnmarshalJSON(b []byte) error {
+	return json.Unmarshal(b, &id.v)
 }
