@@ -164,9 +164,6 @@ type Wrapper struct {
 	// PostFilterPacketOutboundToWireGuard is the outbound filter function that runs after the main filter.
 	PostFilterPacketOutboundToWireGuard FilterFunc
 
-	// OnTSMPPongReceived, if non-nil, is called whenever a TSMP pong arrives.
-	OnTSMPPongReceived func(packet.TSMPPongReply)
-
 	// OnICMPEchoResponseReceived, if non-nil, is called whenever a ICMP echo response
 	// arrives. If the packet is to be handled internally this returns true,
 	// false otherwise.
@@ -914,29 +911,6 @@ func (t *Wrapper) InjectInboundDirect(buf []byte, offset int) error {
 	// Write to the underlying device to skip filters.
 	_, err := t.tdevWrite([][]byte{buf}, offset) // TODO(jwhited): alloc?
 	return err
-}
-
-func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingRequest) {
-	pong := packet.TSMPPongReply{
-		Data: req.Data,
-	}
-	if t.PeerAPIPort != nil {
-		pong.PeerAPIPort, _ = t.PeerAPIPort(pp.Dst.Addr())
-	}
-	switch pp.IPVersion {
-	case 4:
-		h4 := pp.IP4Header()
-		h4.ToResponse()
-		pong.IPHeader = h4
-	case 6:
-		h6 := pp.IP6Header()
-		h6.ToResponse()
-		pong.IPHeader = h6
-	default:
-		return
-	}
-
-	t.InjectOutbound(packet.Generate(pong, nil))
 }
 
 // InjectOutbound makes the Wrapper device behave as if a packet

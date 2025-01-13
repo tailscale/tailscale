@@ -54,17 +54,6 @@ const (
 	GRE    Proto = 0x2f
 	SCTP   Proto = 0x84
 
-	// TSMP is the Tailscale Message Protocol (our ICMP-ish
-	// thing), an IP protocol used only between Tailscale nodes
-	// (still encrypted by WireGuard) that communicates why things
-	// failed, etc.
-	//
-	// Proto number 99 is reserved for "any private encryption
-	// scheme". We never accept these from the host OS stack nor
-	// send them to the host network stack. It's only used between
-	// nodes.
-	TSMP Proto = 99
-
 	// Fragment represents any non-first IP fragment, for which we
 	// don't have the sub-protocol header (and therefore can't
 	// figure out what the sub-protocol is).
@@ -93,8 +82,6 @@ func (p Proto) String() string {
 		return "TCP"
 	case SCTP:
 		return "SCTP"
-	case TSMP:
-		return "TSMP"
 	case GRE:
 		return "GRE"
 	case DCCP:
@@ -144,7 +131,6 @@ var (
 		"ipv6-icmp": ICMPv6,
 		"sctp":      SCTP,
 		"tcp":       TCP,
-		"tsmp":      TSMP,
 		"udp":       UDP,
 	}
 )

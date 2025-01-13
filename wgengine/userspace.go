@@ -5,7 +5,6 @@ package wgengine
 
 import (
 	"bufio"
-	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +21,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
@@ -123,11 +121,7 @@ type userspaceEngine struct {
 	statusCallback StatusCallback
 	peerSequence   []key.NodePublic
 	endpoints      []tailcfg.Endpoint
-	pendOpen       map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
 
-	// pongCallback is the map of response handlers waiting for disco or TSMP
-	// pong callbacks. The map key is a random slice of bytes.
-	pongCallback map[[8]byte]func(packet.TSMPPongReply)
 	// icmpEchoResponseCallback is the map of response handlers waiting for ICMP
 	// echo responses. The map key is a random uint32 that is the little endian
 	// value of the ICMP identifier and sequence number concatenated.
@@ -366,27 +360,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
 
-	if envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
-		if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
-			return nil, errors.New("unexpected PreFilterIn already set")
-		}
-		e.tundev.PreFilterPacketInboundFromWireGuard = e.trackOpenPreFilterIn
-		if e.tundev.PostFilterPacketOutboundToWireGuard != nil {
-			return nil, errors.New("unexpected PostFilterOut already set")
-		}
-		e.tundev.PostFilterPacketOutboundToWireGuard = e.trackOpenPostFilterOut
-	}
-
 	e.wgLogger = wglog.NewLogger(logf)
-	e.tundev.OnTSMPPongReceived = func(pong packet.TSMPPongReply) {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		cb := e.pongCallback[pong.Data]
-		e.logf("wgengine: got TSMP pong %02x, peerAPIPort=%v; cb=%v", pong.Data, pong.PeerAPIPort, cb != nil)
-		if cb != nil {
-			go cb(pong)
-		}
-	}
 
 	e.tundev.OnICMPEchoResponseReceived = func(p *packet.Parsed) bool {
 		idSeq := p.EchoIDSeq()
@@ -1111,14 +1085,17 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size in
 		cb(res)
 		return
 	}
+	if pingType == "TSMP" {
+		res.Err = "TSMP ping not supported"
+		cb(res)
+		return
+	}
 	peer := pip.Node
 
 	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key().ShortString(), peer.ComputedName())
 	switch pingType {
 	case "disco":
 		e.magicConn.Ping(peer, res, size, cb)
-	case "TSMP":
-		e.sendTSMPPing(ip, peer, res, cb)
 	case "ICMP":
 		e.sendICMPEchoRequest(ip, peer, res, cb)
 	}
@@ -1190,66 +1167,6 @@ func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer tailcfg.No
 
 	icmpPing := packet.Generate(icmph, payload)
 	e.tundev.InjectOutbound(icmpPing)
-}
-
-func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer tailcfg.NodeView, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
-	srcIP, err := e.mySelfIPMatchingFamily(ip)
-	if err != nil {
-		res.Err = err.Error()
-		cb(res)
-		return
-	}
-	var iph packet.Header
-	if srcIP.Is4() {
-		iph = packet.IP4Header{
-			IPProto: ipproto.TSMP,
-			Src:     srcIP,
-			Dst:     ip,
-		}
-	} else {
-		iph = packet.IP6Header{
-			IPProto: ipproto.TSMP,
-			Src:     srcIP,
-			Dst:     ip,
-		}
-	}
-
-	var data [8]byte
-	crand.Read(data[:])
-
-	expireTimer := time.AfterFunc(10*time.Second, func() {
-		e.setTSMPPongCallback(data, nil)
-	})
-	t0 := time.Now()
-	e.setTSMPPongCallback(data, func(pong packet.TSMPPongReply) {
-		expireTimer.Stop()
-		d := time.Since(t0)
-		res.LatencySeconds = d.Seconds()
-		res.NodeIP = ip.String()
-		res.NodeName = peer.ComputedName()
-		res.PeerAPIPort = pong.PeerAPIPort
-		cb(res)
-	})
-
-	var tsmpPayload [9]byte
-	tsmpPayload[0] = byte(packet.TSMPTypePing)
-	copy(tsmpPayload[1:], data[:])
-
-	tsmpPing := packet.Generate(iph, tsmpPayload[:])
-	e.tundev.InjectOutbound(tsmpPing)
-}
-
-func (e *userspaceEngine) setTSMPPongCallback(data [8]byte, cb func(packet.TSMPPongReply)) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.pongCallback == nil {
-		e.pongCallback = map[[8]byte]func(packet.TSMPPongReply){}
-	}
-	if cb == nil {
-		delete(e.pongCallback, data)
-	} else {
-		e.pongCallback[data] = cb
-	}
 }
 
 func (e *userspaceEngine) setICMPEchoResponseCallback(idSeq uint32, cb func()) {

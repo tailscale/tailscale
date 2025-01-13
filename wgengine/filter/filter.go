@@ -503,8 +503,6 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if f.matches4.match(q, f.srcIPHasCap) {
 			return Accept, "ok"
 		}
-	case ipproto.TSMP:
-		return Accept, "tsmp ok"
 	default:
 		if f.matches4.matchProtoAndIPsOnlyIfAllPorts(q) {
 			return Accept, "other-portless ok"
@@ -563,8 +561,6 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		if f.matches6.match(q, f.srcIPHasCap) {
 			return Accept, "ok"
 		}
-	case ipproto.TSMP:
-		return Accept, "tsmp ok"
 	default:
 		if f.matches6.matchProtoAndIPsOnlyIfAllPorts(q) {
 			return Accept, "other-portless ok"

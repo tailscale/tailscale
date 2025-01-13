@@ -218,10 +218,6 @@ func (q *Parsed) decode4(b []byte) {
 			q.Src = withPort(q.Src, binary.BigEndian.Uint16(sub[0:2]))
 			q.Dst = withPort(q.Dst, binary.BigEndian.Uint16(sub[2:4]))
 			return
-		case ipproto.TSMP:
-			// Inter-tailscale messages.
-			q.dataofs = q.subofs
-			return
 		case ipproto.Fragment:
 			// An IPProto value of 0xff (our Fragment constant for internal use)
 			// should never actually be used in the wild; if we see it,
@@ -320,10 +316,6 @@ func (q *Parsed) decode6(b []byte) {
 		}
 		q.Src = withPort(q.Src, binary.BigEndian.Uint16(sub[0:2]))
 		q.Dst = withPort(q.Dst, binary.BigEndian.Uint16(sub[2:4]))
-		return
-	case ipproto.TSMP:
-		// Inter-tailscale messages.
-		q.dataofs = q.subofs
 		return
 	case ipproto.Fragment:
 		// An IPProto value of 0xff (our Fragment constant for internal use)
