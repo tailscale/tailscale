@@ -97,7 +97,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
 		ipPolicyPrefBase: 5200,
 	}
-	if r.useIPCommand() {
+	if false && r.useIPCommand() {
 		r.ipRuleAvailable = (cmd.run("ip", "rule") == nil)
 	}
 
@@ -258,37 +258,18 @@ func (r *linuxRouter) fwmaskWorks() bool {
 // about the priority number. We could just do this in response to any netlink
 // change. Filtering by known priority ranges cuts back on some logspam.
 func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
-	if int(priority) < r.ipPolicyPrefBase || int(priority) >= (r.ipPolicyPrefBase+100) {
-		// Not our rule.
-		return
-	}
-	if r.ruleRestorePending.Swap(true) {
-		// Another timer is already pending.
-		return
-	}
-	rr := r.ipRuleFixLimiter.Reserve()
-	if !rr.OK() {
-		r.ruleRestorePending.Swap(false)
-		return
-	}
-	time.AfterFunc(rr.Delay()+250*time.Millisecond, func() {
-		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
-			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
-			r.justAddIPRules()
-		}
-	})
 }
 
 func (r *linuxRouter) Up() error {
 	if r.unregNetMon == nil && r.netMon != nil {
 		r.unregNetMon = r.netMon.RegisterRuleDeleteCallback(r.onIPRuleDeleted)
 	}
-	if err := r.setNetfilterMode(netfilterOff); err != nil {
-		return fmt.Errorf("setting netfilter mode: %w", err)
-	}
-	if err := r.addIPRules(); err != nil {
-		return fmt.Errorf("adding IP rules: %w", err)
-	}
+	// if err := r.setNetfilterMode(netfilterOff); err != nil {
+	// 	return fmt.Errorf("setting netfilter mode: %w", err)
+	// }
+	// if err := r.addIPRules(); err != nil {
+	// 	return fmt.Errorf("adding IP rules: %w", err)
+	// }
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
 	}
@@ -307,9 +288,9 @@ func (r *linuxRouter) Close() error {
 	if err := r.delIPRules(); err != nil {
 		return err
 	}
-	if err := r.setNetfilterMode(netfilterOff); err != nil {
-		return err
-	}
+	// if err := r.setNetfilterMode(netfilterOff); err != nil {
+	// 	return err
+	// }
 	if err := r.delRoutes(); err != nil {
 		return err
 	}
@@ -327,6 +308,7 @@ func (r *linuxRouter) Close() error {
 func (r *linuxRouter) setupNetfilter(kind string) error {
 	r.netfilterKind = kind
 
+	return nil
 	var err error
 	r.nfr, err = linuxfw.New(r.logf, r.netfilterKind)
 	if err != nil {
@@ -343,21 +325,21 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		cfg = &shutdownConfig
 	}
 
-	if cfg.NetfilterKind != r.netfilterKind {
-		if err := r.setNetfilterMode(netfilterOff); err != nil {
-			err = fmt.Errorf("could not disable existing netfilter: %w", err)
-			errs = append(errs, err)
-		} else {
-			r.nfr = nil
-			if err := r.setupNetfilter(cfg.NetfilterKind); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
+	// if cfg.NetfilterKind != r.netfilterKind {
+	// 	if err := r.setNetfilterMode(netfilterOff); err != nil {
+	// 		err = fmt.Errorf("could not disable existing netfilter: %w", err)
+	// 		errs = append(errs, err)
+	// 	} else {
+	// 		r.nfr = nil
+	// 		if err := r.setupNetfilter(cfg.NetfilterKind); err != nil {
+	// 			errs = append(errs, err)
+	// 		}
+	// 	}
+	// }
 
-	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
-		errs = append(errs, err)
-	}
+	// if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
+	// 	errs = append(errs, err)
+	// }
 
 	newLocalRoutes, err := cidrDiff("localRoute", r.localRoutes, cfg.LocalRoutes, r.addThrowRoute, r.delThrowRoute, r.logf)
 	if err != nil {
@@ -407,12 +389,6 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 	r.statefulFiltering = cfg.StatefulFiltering
 	r.updateStatefulFilteringWithDockerWarning(cfg)
-
-	// Issue 11405: enable IP forwarding on gokrazy.
-	advertisingRoutes := len(cfg.SubnetRoutes) > 0
-	if getDistroFunc() == distro.Gokrazy && advertisingRoutes {
-		r.enableIPForwarding()
-	}
 
 	return multierr.New(errs...)
 }
@@ -571,12 +547,12 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 // getV6FilteringAvailable returns true if the router is able to setup the
 // required tailscale filter rules for IPv6.
 func (r *linuxRouter) getV6FilteringAvailable() bool {
-	return r.nfr.HasIPV6() && r.nfr.HasIPV6Filter()
+	return true
 }
 
 // getV6Available returns true if the host supports IPv6.
 func (r *linuxRouter) getV6Available() bool {
-	return r.nfr.HasIPV6()
+	return true
 }
 
 // addAddress adds an IP/mask to the tunnel interface. Fails if the
@@ -1087,16 +1063,7 @@ func normalizeCIDR(cidr netip.Prefix) string {
 // platformCanNetfilter reports whether the current distro/environment supports
 // running iptables/nftables commands.
 func platformCanNetfilter() bool {
-	switch getDistroFunc() {
-	case distro.Synology:
-		// Synology doesn't support iptables or nftables. Attempting to run it
-		// just blocks for a long time while it logs about failures.
-		//
-		// See https://github.com/tailscale/tailscale/issues/11737 for one such
-		// prior regression where we tried to run iptables on Synology.
-		return false
-	}
-	return true
+	return false
 }
 
 // cleanUp removes all the rules and routes that were added by the linux router.
