@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-
-	"tailscale.com/types/lazy"
+	"sync"
 )
 
-var stringLazy = lazy.SyncFunc(func() string {
+var stringLazy = sync.OnceValue(func() string {
 	var ret strings.Builder
 	ret.WriteString(Short())
 	ret.WriteByte('\n')

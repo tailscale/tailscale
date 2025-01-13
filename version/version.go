@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 
 	tailscaleroot "tailscale.com"
 	"tailscale.com/types/lazy"
@@ -117,7 +118,7 @@ func (i embeddedInfo) commitAbbrev() string {
 	return i.commit
 }
 
-var getEmbeddedInfo = lazy.SyncFunc(func() embeddedInfo {
+var getEmbeddedInfo = sync.OnceValue(func() embeddedInfo {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
 		return embeddedInfo{}

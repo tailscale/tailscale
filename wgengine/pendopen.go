@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gaissmai/bart"
@@ -15,7 +16,6 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/ipproto"
-	"tailscale.com/types/lazy"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
 )
@@ -91,7 +91,7 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 
 var (
 	appleIPRange = netip.MustParsePrefix("17.0.0.0/8")
-	canonicalIPs = lazy.SyncFunc(func() (checkIPFunc func(netip.Addr) bool) {
+	canonicalIPs = sync.OnceValue(func() (checkIPFunc func(netip.Addr) bool) {
 		// https://bgp.he.net/AS41231#_prefixes
 		t := &bart.Table[bool]{}
 		for _, s := range strings.Fields(`
