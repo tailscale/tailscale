@@ -7,6 +7,7 @@ package dns
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/netip"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"github.com/josharian/native"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/util/dnsname"
 )
@@ -137,7 +137,7 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	for _, ip := range config.Nameservers {
 		b := ip.As16()
 		if ip.Is4() {
-			dnsv4 = append(dnsv4, native.Endian.Uint32(b[12:]))
+			dnsv4 = append(dnsv4, binary.NativeEndian.Uint32(b[12:]))
 		} else {
 			dnsv6 = append(dnsv6, b[:])
 		}
