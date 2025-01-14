@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -185,6 +186,72 @@ func TestSequentialOSUserSwitchingOnWindows(t *testing.T) {
 	connectDisconnectAsUser("UserA")
 	// Same for UserB.
 	connectDisconnectAsUser("UserB")
+}
+
+func TestConcurrentOSUserSwitchingOnWindows(t *testing.T) {
+	enableLogging := false
+	setGOOSForTest(t, "windows")
+
+	ctx := context.Background()
+	server := startDefaultTestIPNServer(t, ctx, enableLogging)
+
+	connectDisconnectAsUser := func(name string) {
+		// User connects and starts watching the IPN bus.
+		client := server.getClientAs(name)
+		watcher, cancelWatcher := client.WatchIPNBus(ctx, ipn.NotifyInitialState)
+		defer cancelWatcher()
+
+		runtime.Gosched()
+
+		// Get the current user from the LocalBackend's perspective
+		// as soon as we're connected.
+		gotUID, gotActor := server.mustBackend().CurrentUserForTest()
+
+		// Wait for the first notification to arrive.
+		// It will either be the initial state we've requested via [ipn.NotifyInitialState],
+		// returned by an actual handler, or a "fake" notification sent by the server
+		// itself to indicate that it is being used by someone else.
+		n, err := watcher.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// If our user lost the race and the IPN is in use by another user,
+		// we should just return. For the sake of this test, we're not
+		// interested in waiting for the server to become idle.
+		if n.State != nil && *n.State == ipn.InUseOtherUser {
+			return
+		}
+
+		// Otherwise, our user should have been the current user since the time we connected.
+		if gotUID != client.User.UID {
+			t.Errorf("CurrentUser(Initial): got UID %q; want %q", gotUID, client.User.UID)
+			return
+		}
+		if gotActor, ok := gotActor.(*ipnauth.TestActor); !ok || *gotActor != *client.User {
+			t.Errorf("CurrentUser(Initial): got %v; want %v", gotActor, client.User)
+			return
+		}
+
+		// And should still be the current user (as they're still connected)...
+		server.checkCurrentUser(client.User)
+	}
+
+	numIterations := 10
+	for range numIterations {
+		numGoRoutines := 100
+		var wg sync.WaitGroup
+		wg.Add(numGoRoutines)
+		for i := range numGoRoutines {
+			// User logs in, uses Tailscale for a bit, then logs out
+			// in parallel with other users doing the same.
+			go func() {
+				defer wg.Done()
+				connectDisconnectAsUser("User-" + strconv.Itoa(i))
+			}()
+		}
+		wg.Wait()
+	}
 }
 
 func setGOOSForTest(tb testing.TB, goos string) {
