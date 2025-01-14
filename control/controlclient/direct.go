@@ -650,7 +650,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			c.logf("RegisterReq sign error: %v", err)
 		}
 	}
-	if debugRegister() {
+	if DevKnob.DumpRegister() {
 		j, _ := json.MarshalIndent(request, "", "\t")
 		c.logf("RegisterRequest: %s", j)
 	}
@@ -691,7 +691,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
 		return regen, opt.URL, nil, fmt.Errorf("register request: %v", err)
 	}
-	if debugRegister() {
+	if DevKnob.DumpRegister() {
 		j, _ := json.MarshalIndent(resp, "", "\t")
 		c.logf("RegisterResponse: %s", j)
 	}
@@ -877,7 +877,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	c.logf("[v1] PollNetMap: stream=%v ep=%v", isStreaming, epStrs)
 
 	vlogf := logger.Discard
-	if DevKnob.DumpNetMaps() {
+	if DevKnob.DumpNetMapsVerbose() {
 		// TODO(bradfitz): update this to use "[v2]" prefix perhaps? but we don't
 		// want to upload it always.
 		vlogf = c.logf
@@ -1170,11 +1170,6 @@ func decode(res *http.Response, v any) error {
 	return json.Unmarshal(msg, v)
 }
 
-var (
-	debugMap      = envknob.RegisterBool("TS_DEBUG_MAP")
-	debugRegister = envknob.RegisterBool("TS_DEBUG_REGISTER")
-)
-
 var jsonEscapedZero = []byte(`\u0000`)
 
 // decodeMsg is responsible for uncompressing msg and unmarshaling into v.
@@ -1183,7 +1178,7 @@ func (c *Direct) decodeMsg(compressedMsg []byte, v any) error {
 	if err != nil {
 		return err
 	}
-	if debugMap() {
+	if DevKnob.DumpNetMaps() {
 		var buf bytes.Buffer
 		json.Indent(&buf, b, "", "    ")
 		log.Printf("MapResponse: %s", buf.Bytes())
@@ -1205,7 +1200,7 @@ func encode(v any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if debugMap() {
+	if DevKnob.DumpNetMaps() {
 		if _, ok := v.(*tailcfg.MapRequest); ok {
 			log.Printf("MapRequest: %s", b)
 		}
@@ -1253,18 +1248,23 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 var DevKnob = initDevKnob()
 
 type devKnobs struct {
-	DumpNetMaps    func() bool
-	ForceProxyDNS  func() bool
-	StripEndpoints func() bool // strip endpoints from control (only use disco messages)
-	StripCaps      func() bool // strip all local node's control-provided capabilities
+	DumpRegister       func() bool
+	DumpNetMaps        func() bool
+	DumpNetMapsVerbose func() bool
+	ForceProxyDNS      func() bool
+	StripEndpoints     func() bool // strip endpoints from control (only use disco messages)
+	StripCaps          func() bool // strip all local node's control-provided capabilities
 }
 
 func initDevKnob() devKnobs {
+	nm := envknob.RegisterInt("TS_DEBUG_MAP")
 	return devKnobs{
-		DumpNetMaps:    envknob.RegisterBool("TS_DEBUG_NETMAP"),
-		ForceProxyDNS:  envknob.RegisterBool("TS_DEBUG_PROXY_DNS"),
-		StripEndpoints: envknob.RegisterBool("TS_DEBUG_STRIP_ENDPOINTS"),
-		StripCaps:      envknob.RegisterBool("TS_DEBUG_STRIP_CAPS"),
+		DumpNetMaps:        func() bool { return nm() > 0 },
+		DumpNetMapsVerbose: func() bool { return nm() > 1 },
+		DumpRegister:       envknob.RegisterBool("TS_DEBUG_REGISTER"),
+		ForceProxyDNS:      envknob.RegisterBool("TS_DEBUG_PROXY_DNS"),
+		StripEndpoints:     envknob.RegisterBool("TS_DEBUG_STRIP_ENDPOINTS"),
+		StripCaps:          envknob.RegisterBool("TS_DEBUG_STRIP_CAPS"),
 	}
 }
 
