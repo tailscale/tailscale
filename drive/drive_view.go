@@ -14,7 +14,7 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=Share
 
-// View returns a readonly view of Share.
+// View returns a read-only view of Share.
 func (p *Share) View() ShareView {
 	return ShareView{ж: p}
 }
@@ -30,7 +30,7 @@ type ShareView struct {
 	ж *Share
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v ShareView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with

@@ -17,7 +17,7 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Persist
 
-// View returns a readonly view of Persist.
+// View returns a read-only view of Persist.
 func (p *Persist) View() PersistView {
 	return PersistView{ж: p}
 }
@@ -33,7 +33,7 @@ type PersistView struct {
 	ж *Persist
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v PersistView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
