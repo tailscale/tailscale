@@ -394,11 +394,14 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 
 	onDone = func() {
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		delete(s.activeReqs, req)
-		remain := len(s.activeReqs)
-		s.mu.Unlock()
+		if len(s.activeReqs) != 0 {
+			// The server is not idle yet.
+			return
+		}
 
-		if remain == 0 && s.resetOnZero {
+		if s.resetOnZero {
 			if lb.InServerMode() {
 				s.logf("client disconnected; staying alive in server mode")
 			} else {
@@ -408,11 +411,7 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 		}
 
 		// Wake up callers waiting for the server to be idle:
-		if remain == 0 {
-			s.mu.Lock()
-			s.zeroReqWaiter.wakeAll()
-			s.mu.Unlock()
-		}
+		s.zeroReqWaiter.wakeAll()
 	}
 
 	return onDone, nil
