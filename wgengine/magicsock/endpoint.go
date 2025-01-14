@@ -1359,7 +1359,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 		})
 		de.resetLocked()
 	}
-	if n.DERP() == "" {
+	if n.HomeDERP() == 0 {
 		if de.derpAddr.IsValid() {
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
@@ -1369,7 +1369,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 		}
 		de.derpAddr = netip.AddrPort{}
 	} else {
-		newDerp, _ := netip.ParseAddrPort(n.DERP())
+		newDerp := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(n.HomeDERP()))
 		if de.derpAddr != newDerp {
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),

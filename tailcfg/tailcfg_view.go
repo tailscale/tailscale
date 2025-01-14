@@ -139,7 +139,8 @@ func (v NodeView) DiscoKey() key.DiscoPublic                { return v.ж.DiscoK
 func (v NodeView) Addresses() views.Slice[netip.Prefix]     { return views.SliceOf(v.ж.Addresses) }
 func (v NodeView) AllowedIPs() views.Slice[netip.Prefix]    { return views.SliceOf(v.ж.AllowedIPs) }
 func (v NodeView) Endpoints() views.Slice[netip.AddrPort]   { return views.SliceOf(v.ж.Endpoints) }
-func (v NodeView) DERP() string                             { return v.ж.DERP }
+func (v NodeView) LegacyDERPString() string                 { return v.ж.LegacyDERPString }
+func (v NodeView) HomeDERP() int                            { return v.ж.HomeDERP }
 func (v NodeView) Hostinfo() HostinfoView                   { return v.ж.Hostinfo }
 func (v NodeView) Created() time.Time                       { return v.ж.Created }
 func (v NodeView) Cap() CapabilityVersion                   { return v.ж.Cap }
@@ -192,7 +193,8 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	Addresses                     []netip.Prefix
 	AllowedIPs                    []netip.Prefix
 	Endpoints                     []netip.AddrPort
-	DERP                          string
+	LegacyDERPString              string
+	HomeDERP                      int
 	Hostinfo                      HostinfoView
 	Created                       time.Time
 	Cap                           CapabilityVersion

@@ -7381,15 +7381,7 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSug
 	}
 	distances := make([]nodeDistance, 0, len(candidates))
 	for _, c := range candidates {
-		if c.DERP() != "" {
-			ipp, err := netip.ParseAddrPort(c.DERP())
-			if err != nil {
-				continue
-			}
-			if ipp.Addr() != tailcfg.DerpMagicIPAddr {
-				continue
-			}
-			regionID := int(ipp.Port())
+		if regionID := c.HomeDERP(); regionID != 0 {
 			candidatesByRegion[regionID] = append(candidatesByRegion[regionID], c)
 			continue
 		}

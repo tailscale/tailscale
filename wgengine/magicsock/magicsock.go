@@ -2337,10 +2337,7 @@ func devPanicf(format string, a ...any) {
 
 func (c *Conn) logEndpointCreated(n tailcfg.NodeView) {
 	c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key().ShortString(), n.DiscoKey().ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
-		const derpPrefix = "127.3.3.40:"
-		if strings.HasPrefix(n.DERP(), derpPrefix) {
-			ipp, _ := netip.ParseAddrPort(n.DERP())
-			regionID := int(ipp.Port())
+		if regionID := n.HomeDERP(); regionID != 0 {
 			code := c.derpRegionCodeLocked(regionID)
 			if code != "" {
 				code = "(" + code + ")"

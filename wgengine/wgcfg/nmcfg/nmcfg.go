@@ -85,7 +85,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 	skippedSubnets := new(bytes.Buffer)
 
 	for _, peer := range nm.Peers {
-		if peer.DiscoKey().IsZero() && peer.DERP() == "" && !peer.IsWireGuardOnly() {
+		if peer.DiscoKey().IsZero() && peer.HomeDERP() == 0 && !peer.IsWireGuardOnly() {
 			// Peer predates both DERP and active discovery, we cannot
 			// communicate with it.
 			logf("[v1] wgcfg: skipped peer %s, doesn't offer DERP or disco", peer.Key().ShortString())

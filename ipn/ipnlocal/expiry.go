@@ -116,7 +116,7 @@ func (em *expiryManager) flagExpiredPeers(netmap *netmap.NetworkMap, localNow ti
 		// since we discover endpoints via DERP, and due to DERP return
 		// path optimization.
 		mut.Endpoints = nil
-		mut.DERP = ""
+		mut.HomeDERP = 0
 
 		// Defense-in-depth: break the node's public key as well, in
 		// case something tries to communicate.

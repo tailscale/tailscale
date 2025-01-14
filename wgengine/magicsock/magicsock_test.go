@@ -314,7 +314,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				Addresses:  addrs,
 				AllowedIPs: addrs,
 				Endpoints:  epFromTyped(eps[i]),
-				DERP:       "127.3.3.40:1",
+				HomeDERP:   1,
 			}
 			nm.Peers = append(nm.Peers, peer.View())
 		}
