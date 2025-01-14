@@ -154,7 +154,8 @@ type CapabilityVersion int
 //   - 109: 2024-11-18: Client supports filtertype.Match.SrcCaps (issue #12542)
 //   - 110: 2024-12-12: removed never-before-used Tailscale SSH public key support (#14373)
 //   - 111: 2025-01-14: Client supports a peer having Node.HomeDERP (issue #14636)
-const CurrentCapabilityVersion CapabilityVersion = 111
+//   - 112: 2025-01-14: Client interprets AllowedIPs of nil as meaning same as Addresses
+const CurrentCapabilityVersion CapabilityVersion = 112
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -343,9 +344,18 @@ type Node struct {
 	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
 	Machine      key.MachinePublic
 	DiscoKey     key.DiscoPublic
-	Addresses    []netip.Prefix   // IP addresses of this Node directly
-	AllowedIPs   []netip.Prefix   // range of IP addresses to route to this node
-	Endpoints    []netip.AddrPort `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+
+	// Addresses are the IP addresses of this Node directly.
+	Addresses []netip.Prefix
+
+	// AllowedIPs are the IP ranges to route to this node.
+	//
+	// As of CapabilityVersion 112, this may be nil (null or undefined) on the wire
+	// to mean the same as Addresses. Internally, it is always filled in with
+	// its possibly-implicit value.
+	AllowedIPs []netip.Prefix
+
+	Endpoints []netip.AddrPort `json:",omitempty"` // IP+port (public via STUN, and local LANs)
 
 	// LegacyDERPString is this node's home LegacyDERPString region ID integer, but shoved into an
 	// IP:port string for legacy reasons. The IP address is always "127.3.3.40"
