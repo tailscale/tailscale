@@ -367,7 +367,7 @@ func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{
 		"ID", "StableID", "Name", "User", "Sharer",
 		"Key", "KeyExpiry", "KeySignature", "Machine", "DiscoKey",
-		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
+		"Addresses", "AllowedIPs", "Endpoints", "LegacyDERPString", "HomeDERP", "Hostinfo",
 		"Created", "Cap", "Tags", "PrimaryRoutes",
 		"LastSeen", "Online", "MachineAuthorized",
 		"Capabilities", "CapMap",
@@ -530,8 +530,13 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{DERP: "foo"},
-			&Node{DERP: "bar"},
+			&Node{LegacyDERPString: "foo"},
+			&Node{LegacyDERPString: "bar"},
+			false,
+		},
+		{
+			&Node{HomeDERP: 1},
+			&Node{HomeDERP: 2},
 			false,
 		},
 		{

@@ -198,7 +198,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 			e.logf("open-conn-track: timeout opening %v; peer node %v running pre-0.100", flow, n.Key().ShortString())
 			return
 		}
-		if n.DERP() == "" {
+		if n.HomeDERP() == 0 {
 			e.logf("open-conn-track: timeout opening %v; peer node %v not connected to any DERP relay", flow, n.Key().ShortString())
 			return
 		}

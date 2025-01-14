@@ -805,7 +805,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 			node.Hostinfo = req.Hostinfo.View()
 			if ni := node.Hostinfo.NetInfo(); ni.Valid() {
 				if ni.PreferredDERP() != 0 {
-					node.DERP = fmt.Sprintf("127.3.3.40:%d", ni.PreferredDERP())
+					node.HomeDERP = ni.PreferredDERP()
 				}
 			}
 		}

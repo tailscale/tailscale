@@ -99,7 +99,8 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Addresses                     []netip.Prefix
 	AllowedIPs                    []netip.Prefix
 	Endpoints                     []netip.AddrPort
-	DERP                          string
+	LegacyDERPString              string
+	HomeDERP                      int
 	Hostinfo                      HostinfoView
 	Created                       time.Time
 	Cap                           CapabilityVersion

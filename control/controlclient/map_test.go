@@ -50,9 +50,9 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			n.LastSeen = &t
 		}
 	}
-	withDERP := func(d string) func(*tailcfg.Node) {
+	withDERP := func(regionID int) func(*tailcfg.Node) {
 		return func(n *tailcfg.Node) {
-			n.DERP = d
+			n.HomeDERP = regionID
 		}
 	}
 	withEP := func(ep string) func(*tailcfg.Node) {
@@ -189,14 +189,14 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 		},
 		{
 			name: "ep_change_derp",
-			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"))),
+			prev: peers(n(1, "foo", withDERP(3))),
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:     1,
 					DERPRegion: 4,
 				}},
 			},
-			want:      peers(n(1, "foo", withDERP("127.3.3.40:4"))),
+			want:      peers(n(1, "foo", withDERP(4))),
 			wantStats: updateStats{changed: 1},
 		},
 		{
@@ -213,19 +213,19 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 		},
 		{
 			name: "ep_change_udp_2",
-			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:111"))),
+			prev: peers(n(1, "foo", withDERP(3), withEP("1.2.3.4:111"))),
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:    1,
 					Endpoints: eps("1.2.3.4:56"),
 				}},
 			},
-			want:      peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:56"))),
+			want:      peers(n(1, "foo", withDERP(3), withEP("1.2.3.4:56"))),
 			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "ep_change_both",
-			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:111"))),
+			prev: peers(n(1, "foo", withDERP(3), withEP("1.2.3.4:111"))),
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:     1,
@@ -233,7 +233,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 					Endpoints:  eps("1.2.3.4:56"),
 				}},
 			},
-			want:      peers(n(1, "foo", withDERP("127.3.3.40:2"), withEP("1.2.3.4:56"))),
+			want:      peers(n(1, "foo", withDERP(2), withEP("1.2.3.4:56"))),
 			wantStats: updateStats{changed: 1},
 		},
 		{
@@ -744,8 +744,8 @@ func TestPeerChangeDiff(t *testing.T) {
 		},
 		{
 			name: "patch-derp",
-			a:    &tailcfg.Node{ID: 1, DERP: "127.3.3.40:1"},
-			b:    &tailcfg.Node{ID: 1, DERP: "127.3.3.40:2"},
+			a:    &tailcfg.Node{ID: 1, HomeDERP: 1},
+			b:    &tailcfg.Node{ID: 1, HomeDERP: 2},
 			want: &tailcfg.PeerChange{NodeID: 1, DERPRegion: 2},
 		},
 		{
@@ -929,23 +929,23 @@ func TestPatchifyPeersChanged(t *testing.T) {
 			mr0: &tailcfg.MapResponse{
 				Node: &tailcfg.Node{Name: "foo.bar.ts.net."},
 				Peers: []*tailcfg.Node{
-					{ID: 1, DERP: "127.3.3.40:1", Hostinfo: hi},
-					{ID: 2, DERP: "127.3.3.40:2", Hostinfo: hi},
-					{ID: 3, DERP: "127.3.3.40:3", Hostinfo: hi},
+					{ID: 1, HomeDERP: 1, Hostinfo: hi},
+					{ID: 2, HomeDERP: 2, Hostinfo: hi},
+					{ID: 3, HomeDERP: 3, Hostinfo: hi},
 				},
 			},
 			mr1: &tailcfg.MapResponse{
 				PeersChanged: []*tailcfg.Node{
-					{ID: 1, DERP: "127.3.3.40:11", Hostinfo: hi},
+					{ID: 1, HomeDERP: 11, Hostinfo: hi},
 					{ID: 2, StableID: "other-change", Hostinfo: hi},
-					{ID: 3, DERP: "127.3.3.40:33", Hostinfo: hi},
-					{ID: 4, DERP: "127.3.3.40:4", Hostinfo: hi},
+					{ID: 3, HomeDERP: 33, Hostinfo: hi},
+					{ID: 4, HomeDERP: 4, Hostinfo: hi},
 				},
 			},
 			want: &tailcfg.MapResponse{
 				PeersChanged: []*tailcfg.Node{
 					{ID: 2, StableID: "other-change", Hostinfo: hi},
-					{ID: 4, DERP: "127.3.3.40:4", Hostinfo: hi},
+					{ID: 4, HomeDERP: 4, Hostinfo: hi},
 				},
 				PeersChangedPatch: []*tailcfg.PeerChange{
 					{NodeID: 1, DERPRegion: 11},
@@ -1006,6 +1006,53 @@ func TestPatchifyPeersChanged(t *testing.T) {
 	}
 }
 
+func TestUpgradeNode(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *tailcfg.Node
+		want *tailcfg.Node
+	}{
+		{
+			name: "nil",
+			in:   nil,
+			want: nil,
+		},
+		{
+			name: "empty",
+			in:   new(tailcfg.Node),
+			want: new(tailcfg.Node),
+		},
+		{
+			name: "derp-both",
+			in:   &tailcfg.Node{HomeDERP: 1, LegacyDERPString: tailcfg.DerpMagicIP + ":2"},
+			want: &tailcfg.Node{HomeDERP: 1},
+		},
+		{
+			name: "derp-str-only",
+			in:   &tailcfg.Node{LegacyDERPString: tailcfg.DerpMagicIP + ":2"},
+			want: &tailcfg.Node{HomeDERP: 2},
+		},
+		{
+			name: "derp-int-only",
+			in:   &tailcfg.Node{HomeDERP: 2},
+			want: &tailcfg.Node{HomeDERP: 2},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got *tailcfg.Node
+			if tt.in != nil {
+				got = ptr.To(*tt.in) // shallow clone
+			}
+			upgradeNode(got)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("wrong result (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+}
+
 func BenchmarkMapSessionDelta(b *testing.B) {
 	for _, size := range []int{10, 100, 1_000, 10_000} {
 		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
@@ -1022,7 +1069,7 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 				res.Peers = append(res.Peers, &tailcfg.Node{
 					ID:         tailcfg.NodeID(i + 2),
 					Name:       fmt.Sprintf("peer%d.bar.ts.net.", i),
-					DERP:       "127.3.3.40:10",
+					HomeDERP:   10,
 					Addresses:  []netip.Prefix{netip.MustParsePrefix("100.100.2.3/32"), netip.MustParsePrefix("fd7a:115c:a1e0::123/128")},
 					AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.100.2.3/32"), netip.MustParsePrefix("fd7a:115c:a1e0::123/128")},
 					Endpoints:  eps("192.168.1.2:345", "192.168.1.3:678"),

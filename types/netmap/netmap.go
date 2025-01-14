@@ -287,11 +287,8 @@ func printPeerConcise(buf *strings.Builder, p tailcfg.NodeView) {
 		epStrs[i] = fmt.Sprintf("%21v", e+strings.Repeat(" ", spaces))
 	}
 
-	derp := p.DERP()
-	const derpPrefix = "127.3.3.40:"
-	if strings.HasPrefix(derp, derpPrefix) {
-		derp = "D" + derp[len(derpPrefix):]
-	}
+	derp := fmt.Sprintf("D%d", p.HomeDERP())
+
 	var discoShort string
 	if !p.DiscoKey().IsZero() {
 		discoShort = p.DiscoKey().ShortString() + " "
@@ -311,7 +308,7 @@ func printPeerConcise(buf *strings.Builder, p tailcfg.NodeView) {
 // nodeConciseEqual reports whether a and b are equal for the fields accessed by printPeerConcise.
 func nodeConciseEqual(a, b tailcfg.NodeView) bool {
 	return a.Key() == b.Key() &&
-		a.DERP() == b.DERP() &&
+		a.HomeDERP() == b.HomeDERP() &&
 		a.DiscoKey() == b.DiscoKey() &&
 		views.SliceEqual(a.AllowedIPs(), b.AllowedIPs()) &&
 		views.SliceEqual(a.Endpoints(), b.Endpoints())

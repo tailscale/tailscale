@@ -1007,8 +1007,8 @@ func TestUpdateNetmapDelta(t *testing.T) {
 
 	wants := []*tailcfg.Node{
 		{
-			ID:   1,
-			DERP: "127.3.3.40:1",
+			ID:       1,
+			HomeDERP: 1,
 		},
 		{
 			ID:     2,
@@ -2021,7 +2021,7 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 			netip.MustParsePrefix("100.64.1.1/32"),
 			netip.MustParsePrefix("fe70::1/128"),
 		},
-		DERP: "127.3.3.40:2",
+		HomeDERP: 2,
 	}
 	defaultDERPMap := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
@@ -2985,7 +2985,7 @@ func makePeer(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
 		ID:       id,
 		StableID: tailcfg.StableNodeID(fmt.Sprintf("stable%d", id)),
 		Name:     fmt.Sprintf("peer%d", id),
-		DERP:     fmt.Sprintf("127.3.3.40:%d", id),
+		HomeDERP: int(id),
 	}
 	for _, opt := range opts {
 		opt(node)
@@ -3001,13 +3001,13 @@ func withName(name string) peerOptFunc {
 
 func withDERP(region int) peerOptFunc {
 	return func(n *tailcfg.Node) {
-		n.DERP = fmt.Sprintf("127.3.3.40:%d", region)
+		n.HomeDERP = region
 	}
 }
 
 func withoutDERP() peerOptFunc {
 	return func(n *tailcfg.Node) {
-		n.DERP = ""
+		n.HomeDERP = 0
 	}
 }
 

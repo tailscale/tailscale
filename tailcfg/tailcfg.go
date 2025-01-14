@@ -153,7 +153,8 @@ type CapabilityVersion int
 //   - 108: 2024-11-08: Client sends ServicesHash in Hostinfo, understands c2n GET /vip-services.
 //   - 109: 2024-11-18: Client supports filtertype.Match.SrcCaps (issue #12542)
 //   - 110: 2024-12-12: removed never-before-used Tailscale SSH public key support (#14373)
-const CurrentCapabilityVersion CapabilityVersion = 110
+//   - 111: 2025-01-14: Client supports a peer having Node.HomeDERP (issue #14636)
+const CurrentCapabilityVersion CapabilityVersion = 111
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -346,15 +347,24 @@ type Node struct {
 	AllowedIPs   []netip.Prefix   // range of IP addresses to route to this node
 	Endpoints    []netip.AddrPort `json:",omitempty"` // IP+port (public via STUN, and local LANs)
 
-	// DERP is this node's home DERP region ID integer, but shoved into an
+	// LegacyDERPString is this node's home LegacyDERPString region ID integer, but shoved into an
 	// IP:port string for legacy reasons. The IP address is always "127.3.3.40"
 	// (a loopback address (127) followed by the digits over the letters DERP on
-	// a QWERTY keyboard (3.3.40)). The "port number" is the home DERP region ID
+	// a QWERTY keyboard (3.3.40)). The "port number" is the home LegacyDERPString region ID
 	// integer.
 	//
-	// TODO(bradfitz): simplify this legacy mess; add a new HomeDERPRegionID int
-	// field behind a new capver bump.
-	DERP string `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
+	// Deprecated: HomeDERP has replaced this, but old servers might still send
+	// this field. See tailscale/tailscale#14636. Do not use this field in code
+	// other than in the upgradeNode func, which canonicalizes it to HomeDERP
+	// if it arrives as a LegacyDERPString string on the wire.
+	LegacyDERPString string `json:"DERP,omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
+
+	// HomeDERP is the modern version of the DERP string field, with just an
+	// integer. The client advertises support for this as of capver 111.
+	//
+	// HomeDERP may be zero if not (yet) known, but ideally always be non-zero
+	// for magicsock connectivity to function normally.
+	HomeDERP int `json:",omitempty"` // DERP region ID of the node's home DERP
 
 	Hostinfo HostinfoView
 	Created  time.Time
@@ -2162,7 +2172,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		slicesx.EqualSameNil(n.AllowedIPs, n2.AllowedIPs) &&
 		slicesx.EqualSameNil(n.PrimaryRoutes, n2.PrimaryRoutes) &&
 		slicesx.EqualSameNil(n.Endpoints, n2.Endpoints) &&
-		n.DERP == n2.DERP &&
+		n.LegacyDERPString == n2.LegacyDERPString &&
+		n.HomeDERP == n2.HomeDERP &&
 		n.Cap == n2.Cap &&
 		n.Hostinfo.Equal(n2.Hostinfo) &&
 		n.Created.Equal(n2.Created) &&
