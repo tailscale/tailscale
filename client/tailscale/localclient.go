@@ -62,7 +62,7 @@ type LocalClient struct {
 	// machine's tailscaled or equivalent. If nil, a default is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 
-	// Transport optionally specified an alternate [http.RoundTripper]
+	// Transport optionally specifies an alternate [http.RoundTripper]
 	// used to execute HTTP requests. If nil, a default [http.Transport] is used,
 	// potentially with custom dialing logic from [Dial].
 	// It is primarily used for testing.
