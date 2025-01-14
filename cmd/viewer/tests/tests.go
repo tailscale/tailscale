@@ -140,7 +140,7 @@ func (c *Container[T]) Clone() *Container[T] {
 	panic(fmt.Errorf("%T contains pointers, but is not cloneable", c.Item))
 }
 
-// ContainerView is a pre-defined readonly view of a Container[T].
+// ContainerView is a pre-defined read-only view of a Container[T].
 type ContainerView[T views.ViewCloner[T, V], V views.StructView[T]] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
 	// character that looks pointy like a pointer.
@@ -178,7 +178,7 @@ func (c *MapContainer[K, V]) Clone() *MapContainer[K, V] {
 	return &MapContainer[K, V]{m}
 }
 
-// MapContainerView is a pre-defined readonly view of a [MapContainer][K, T].
+// MapContainerView is a pre-defined read-only view of a [MapContainer][K, T].
 type MapContainerView[K comparable, T views.ViewCloner[T, V], V views.StructView[T]] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
 	// character that looks pointy like a pointer.

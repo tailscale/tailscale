@@ -21,7 +21,7 @@ import (
 )
 
 const viewTemplateStr = `{{define "common"}}
-// View returns a readonly view of {{.StructName}}.
+// View returns a read-only view of {{.StructName}}.
 func (p *{{.StructName}}{{.TypeParamNames}}) View() {{.ViewName}}{{.TypeParamNames}} {
 	return {{.ViewName}}{{.TypeParamNames}}{ж: p}
 }
@@ -37,7 +37,7 @@ type {{.ViewName}}{{.TypeParams}} struct {
 	ж *{{.StructName}}{{.TypeParamNames}}
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v {{.ViewName}}{{.TypeParamNames}}) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -143,7 +143,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 		MapValueView string
 		MapFn        string
 
-		// MakeViewFnName is the name of the function that accepts a value and returns a readonly view of it.
+		// MakeViewFnName is the name of the function that accepts a value and returns a read-only view of it.
 		MakeViewFnName string
 	}{
 		StructName: typ.Obj().Name(),

@@ -89,8 +89,8 @@ type Server struct {
 type ServerMode string
 
 const (
-	// LoginServerMode serves a readonly login client for logging a
-	// node into a tailnet, and viewing a readonly interface of the
+	// LoginServerMode serves a read-only login client for logging a
+	// node into a tailnet, and viewing a read-only interface of the
 	// node's current Tailscale settings.
 	//
 	// In this mode, API calls are authenticated via platform auth.
@@ -110,7 +110,7 @@ const (
 	// This mode restricts the app to only being assessible over Tailscale,
 	// and API calls are authenticated via browser sessions associated with
 	// the source's Tailscale identity. If the source browser does not have
-	// a valid session, a readonly version of the app is displayed.
+	// a valid session, a read-only version of the app is displayed.
 	ManageServerMode ServerMode = "manage"
 )
 
@@ -695,16 +695,16 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case sErr != nil && errors.Is(sErr, errNotUsingTailscale):
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local", 1)
-		resp.Authorized = false // restricted to the readonly view
+		resp.Authorized = false // restricted to the read-only view
 	case sErr != nil && errors.Is(sErr, errNotOwner):
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_not_owner", 1)
-		resp.Authorized = false // restricted to the readonly view
+		resp.Authorized = false // restricted to the read-only view
 	case sErr != nil && errors.Is(sErr, errTaggedLocalSource):
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local_tag", 1)
-		resp.Authorized = false // restricted to the readonly view
+		resp.Authorized = false // restricted to the read-only view
 	case sErr != nil && errors.Is(sErr, errTaggedRemoteSource):
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_remote_tag", 1)
-		resp.Authorized = false // restricted to the readonly view
+		resp.Authorized = false // restricted to the read-only view
 	case sErr != nil && !errors.Is(sErr, errNoSession):
 		// Any other error.
 		http.Error(w, sErr.Error(), http.StatusInternalServerError)
