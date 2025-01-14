@@ -43,6 +43,13 @@ import (
 	"tailscale.com/util/syspolicy/setting"
 )
 
+// DialFunc is any function that dials the given address.
+type DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// h2cTransport returns nil on platforms where H2C ("cleartext" HTTP/2)
+// support for the LocalAPI is not implemented.
+var h2cTransport = func(DialFunc) http.RoundTripper { return nil }
+
 // defaultLocalClient is the default LocalClient when using the legacy
 // package-level functions.
 var defaultLocalClient LocalClient
@@ -60,7 +67,7 @@ var defaultLocalClient LocalClient
 type LocalClient struct {
 	// Dial optionally specifies an alternate func that connects to the local
 	// machine's tailscaled or equivalent. If nil, a default is used.
-	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	Dial DialFunc
 
 	// Socket specifies an alternate path to the local Tailscale socket.
 	// If empty, a platform-specific default is used.
@@ -79,6 +86,9 @@ type LocalClient struct {
 	// different operating system, such as in integration tests.
 	OmitAuth bool
 
+	// AllowH2C enables H2C ("cleartext" HTTP/2) if supported on the current platform.
+	AllowH2C bool
+
 	// tsClient does HTTP requests to the local Tailscale daemon.
 	// It's lazily initialized on first use.
 	tsClient     *http.Client
@@ -92,7 +102,7 @@ func (lc *LocalClient) socket() string {
 	return paths.DefaultTailscaledSocket()
 }
 
-func (lc *LocalClient) dialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
+func (lc *LocalClient) dialer() DialFunc {
 	if lc.Dial != nil {
 		return lc.Dial
 	}
@@ -116,6 +126,17 @@ func (lc *LocalClient) defaultDialer(ctx context.Context, network, addr string) 
 	return safesocket.ConnectContext(ctx, lc.socket())
 }
 
+// transport returns the HTTP transport to be used when making requests
+// to the local machine's Tailscale daemon.
+func (lc *LocalClient) transport() http.RoundTripper {
+	if lc.AllowH2C {
+		if t := h2cTransport(lc.dialer()); t != nil {
+			return t
+		}
+	}
+	return &http.Transport{DialContext: lc.dialer()}
+}
+
 // DoLocalRequest makes an HTTP request to the local machine's Tailscale daemon.
 //
 // URLs are of the form http://local-tailscaled.sock/localapi/v0/whois?ip=1.2.3.4.
@@ -128,11 +149,7 @@ func (lc *LocalClient) defaultDialer(ctx context.Context, network, addr string) 
 func (lc *LocalClient) DoLocalRequest(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Tailscale-Cap", strconv.Itoa(int(tailcfg.CurrentCapabilityVersion)))
 	lc.tsClientOnce.Do(func() {
-		lc.tsClient = &http.Client{
-			Transport: &http.Transport{
-				DialContext: lc.dialer(),
-			},
-		}
+		lc.tsClient = &http.Client{Transport: lc.transport()}
 	})
 	if !lc.OmitAuth {
 		if _, token, err := safesocket.LocalTCPPortAndToken(); err == nil {

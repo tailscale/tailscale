@@ -79,7 +79,8 @@ func CleanUpArgs(args []string) []string {
 }
 
 var localClient = tailscale.LocalClient{
-	Socket: paths.DefaultTailscaledSocket(),
+	AllowH2C: true,
+	Socket:   paths.DefaultTailscaledSocket(),
 }
 
 // Run runs the CLI. The args do not include the binary name.
