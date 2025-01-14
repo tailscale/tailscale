@@ -1007,10 +1007,16 @@ func TestPatchifyPeersChanged(t *testing.T) {
 }
 
 func TestUpgradeNode(t *testing.T) {
+	a1 := netip.MustParsePrefix("0.0.0.1/32")
+	a2 := netip.MustParsePrefix("0.0.0.2/32")
+	a3 := netip.MustParsePrefix("0.0.0.3/32")
+	a4 := netip.MustParsePrefix("0.0.0.4/32")
+
 	tests := []struct {
 		name string
 		in   *tailcfg.Node
 		want *tailcfg.Node
+		also func(t *testing.T, got *tailcfg.Node) // optional
 	}{
 		{
 			name: "nil",
@@ -1037,6 +1043,29 @@ func TestUpgradeNode(t *testing.T) {
 			in:   &tailcfg.Node{HomeDERP: 2},
 			want: &tailcfg.Node{HomeDERP: 2},
 		},
+		{
+			name: "implicit-allowed-ips-all-set",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a3, a4}},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a3, a4}},
+		},
+		{
+			name: "implicit-allowed-ips-only-address-set",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2}},
+			also: func(t *testing.T, got *tailcfg.Node) {
+				if t.Failed() {
+					return
+				}
+				if &got.Addresses[0] == &got.AllowedIPs[0] {
+					t.Error("Addresses and AllowIPs alias the same memory")
+				}
+			},
+		},
+		{
+			name: "implicit-allowed-ips-set-empty-slice",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{}},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1047,6 +1076,9 @@ func TestUpgradeNode(t *testing.T) {
 			upgradeNode(got)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("wrong result (-want +got):\n%s", diff)
+			}
+			if tt.also != nil {
+				tt.also(t, got)
 			}
 		})
 	}

@@ -241,6 +241,10 @@ func upgradeNode(n *tailcfg.Node) {
 		}
 		n.LegacyDERPString = ""
 	}
+
+	if n.AllowedIPs == nil {
+		n.AllowedIPs = slices.Clone(n.Addresses)
+	}
 }
 
 func (ms *mapSession) tryHandleIncrementally(res *tailcfg.MapResponse) bool {
