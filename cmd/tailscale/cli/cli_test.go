@@ -601,6 +601,19 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			goos: "linux",
 			want: "",
 		},
+		{
+			name:  "losing_posture_checking",
+			flags: []string{"--accept-dns"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:          ipn.DefaultControlURL,
+				WantRunning:         false,
+				CorpDNS:             true,
+				PostureChecking:     true,
+				NetfilterMode:       preftype.NetfilterOn,
+				NoStatefulFiltering: opt.NewBool(true),
+			},
+			want: accidentalUpPrefix + " --accept-dns --posture-checking",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1045,6 +1058,7 @@ func TestUpdatePrefs(t *testing.T) {
 				NoSNATSet:                 true,
 				NoStatefulFilteringSet:    true,
 				OperatorUserSet:           true,
+				PostureCheckingSet:        true,
 				RouteAllSet:               true,
 				RunSSHSet:                 true,
 				ShieldsUpSet:              true,
