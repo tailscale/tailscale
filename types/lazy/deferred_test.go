@@ -205,16 +205,38 @@ func TestDeferredErr(t *testing.T) {
 	}
 }
 
+// TestDeferAfterDo checks all of the following:
+// - Deferring a function before [DeferredInit.Do] is called should always succeed.
+// - All successfully deferred functions are executed by the time [DeferredInit.Do] completes.
+// - No functions can be deferred after [DeferredInit.Do] is called, meaning:
+//   - [DeferredInit.Defer] should return false.
+//   - The deferred function should not be executed.
+//
+// This test is intentionally racy as it attempts to defer functions from multiple goroutines
+// and then calls [DeferredInit.Do] without waiting for them to finish. Waiting would alter
+// the observable behavior and render the test pointless.
 func TestDeferAfterDo(t *testing.T) {
 	var di DeferredInit
 	var deferred, called atomic.Int32
 
+	// deferOnce defers a test function once and fails the test
+	// if [DeferredInit.Defer] returns true after [DeferredInit.Do]
+	// has already been called and any deferred functions have been executed.
+	// It's called concurrently by multiple goroutines.
 	deferOnce := func() bool {
+		// canDefer is whether it's acceptable for Defer to return true.
+		// (but not it necessarily must return true)
+		// If its func has run before, it's definitely not okay for it to
+		// accept more Defer funcs.
+		canDefer := called.Load() == 0
 		ok := di.Defer(func() error {
 			called.Add(1)
 			return nil
 		})
 		if ok {
+			if !canDefer {
+				t.Error("An init function was deferred after DeferredInit.Do() was already called")
+			}
 			deferred.Add(1)
 		}
 		return ok
@@ -242,19 +264,17 @@ func TestDeferAfterDo(t *testing.T) {
 	if err := di.Do(); err != nil {
 		t.Fatalf("DeferredInit.Do() failed: %v", err)
 	}
-	wantDeferred, wantCalled := deferred.Load(), called.Load()
+	// The number of called funcs should remain unchanged after [DeferredInit.Do] returns.
+	wantCalled := called.Load()
 
 	if deferOnce() {
 		t.Error("An init func was deferred after DeferredInit.Do() returned")
 	}
 
 	// Wait for the goroutines deferring init funcs to exit.
-	// No funcs should be deferred after DeferredInit.Do() has returned,
-	// so the deferred and called counters should remain unchanged.
+	// No funcs should be called after DeferredInit.Do() has returned,
+	// and the number of called funcs should be equal to the number of deferred funcs.
 	wg.Wait()
-	if gotDeferred := deferred.Load(); gotDeferred != wantDeferred {
-		t.Errorf("An init func was deferred after DeferredInit.Do() returned. Got %d, want %d", gotDeferred, wantDeferred)
-	}
 	if gotCalled := called.Load(); gotCalled != wantCalled {
 		t.Errorf("An init func was called after DeferredInit.Do() returned. Got %d, want %d", gotCalled, wantCalled)
 	}

@@ -22,7 +22,14 @@ type DeferredInit struct {
 // until the owner's [DeferredInit.Do] method is called
 // for the first time.
 //
-// DeferredFuncs is safe for concurrent use.
+// DeferredFuncs is safe for concurrent use. The execution
+// order of functions deferred by different goroutines is
+// unspecified and must not be relied upon.
+// However, functions deferred by the same goroutine are
+// executed in the same relative order they were deferred.
+// Warning: this is the opposite of the behavior of Go's
+// defer statement, which executes deferred functions in
+// reverse order.
 type DeferredFuncs struct {
 	m     sync.Mutex
 	funcs []func() error
