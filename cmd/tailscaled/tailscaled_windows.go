@@ -124,12 +124,44 @@ func isWindowsService() bool {
 // lifetime (such as slow shutdowns).
 var syslogf logger.Logf = logger.Discard
 
+// CheckIfServiceRunning checks if the Tailscale service is already running.
+// If the service is running, it logs the state and exits early.
+func CheckIfServiceRunning(serviceName string) {
+    mgr, err := mgr.Connect()
+    if err != nil {
+        log.Fatalf("Failed to connect to service manager: %v", err)
+    }
+    defer mgr.Disconnect()
+
+    service, err := mgr.OpenService(serviceName)
+    if err != nil {
+        if errors.Is(err, syscall.ERROR_SERVICE_DOES_NOT_EXIST) {
+            // Service does not exist; safe to proceed.
+            return
+        }
+        log.Fatalf("Failed to open service: %v", err)
+    }
+    defer service.Close()
+
+    status, err := service.Query()
+    if err != nil {
+        log.Fatalf("Failed to query service status: %v", err)
+    }
+
+    if status.State == svc.Running {
+        log.Fatalf("Tailscale service '%s' is already running. Exiting.", serviceName)
+    }
+}
+
+
 // runWindowsService starts running Tailscale under the Windows
 // Service environment.
 //
 // At this point we're still the parent process that
 // Windows started.
 func runWindowsService(pol *logpolicy.Policy) error {
+        CheckIfServiceRunning(serviceName) // Checking here
+	
 	go func() {
 		logger.Logf(log.Printf).JSON(1, "SupportInfo", osdiag.SupportInfo(osdiag.LogSupportInfoReasonStartup))
 	}()
