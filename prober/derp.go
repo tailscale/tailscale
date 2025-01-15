@@ -925,6 +925,7 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 
 		destinationAddrBytes := destinationAddr.AsSlice()
 		scratch := make([]byte, 4)
+		toPubDERPKey := toc.SelfPublicKey()
 		for {
 			n, err := dev.Read(bufs, sizes, tunStartOffset)
 			if err != nil {
@@ -953,7 +954,7 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 				copy(pkt[12:16], pkt[16:20])
 				copy(pkt[16:20], scratch)
 
-				if err := fromc.Send(toc.SelfPublicKey(), pkt); err != nil {
+				if err := fromc.Send(toPubDERPKey, pkt); err != nil {
 					tunReadErrC <- err
 					return
 				}
@@ -971,6 +972,7 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 		buf := make([]byte, mtu+tunStartOffset)
 		bufs := make([][]byte, 1)
 
+		fromDERPPubKey := fromc.SelfPublicKey()
 		for {
 			m, err := toc.Recv()
 			if err != nil {
@@ -979,7 +981,7 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 			}
 			switch v := m.(type) {
 			case derp.ReceivedPacket:
-				if v.Source != fromc.SelfPublicKey() {
+				if v.Source != fromDERPPubKey {
 					recvErrC <- fmt.Errorf("got data packet from unexpected source, %v", v.Source)
 					return
 				}
