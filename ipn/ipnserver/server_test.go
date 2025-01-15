@@ -251,6 +251,12 @@ func TestConcurrentOSUserSwitchingOnWindows(t *testing.T) {
 			}()
 		}
 		wg.Wait()
+
+		if err := server.blockWhileInUse(ctx); err != nil {
+			t.Fatalf("blockWhileInUse: %v", err)
+		}
+
+		server.checkCurrentUser(nil)
 	}
 }
 
@@ -346,7 +352,14 @@ func (s *testIPNServer) makeTestUser(name string, clientID string) *ipnauth.Test
 
 func (s *testIPNServer) blockWhileInUse(ctx context.Context) error {
 	ready, cleanup := s.zeroReqWaiter.add(&s.mu, ctx)
-	<-ready
+
+	s.mu.Lock()
+	busy := len(s.activeReqs) != 0
+	s.mu.Unlock()
+
+	if busy {
+		<-ready
+	}
 	cleanup()
 	return ctx.Err()
 }
