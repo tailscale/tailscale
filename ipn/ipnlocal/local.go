@@ -3406,9 +3406,30 @@ func (b *LocalBackend) State() ipn.State {
 //
 // TODO(bradfitz): rename to InWindowsUnattendedMode or something? Or make this
 // return true on Linux etc and always be called? It's kinda messy now.
+
+// ** Edits (Britton): I'm aware this is going to be altered later due to multi-user usage enhancements. 
+// BUT, quick fix and should save from the below...:
+// Checking if serverModeUid is the current user, and attemptng reset if it isn't. 
+// Why?: I've dived down numerous "rabbit holes" and noted various company's experiencing the
+// "Running in server mode" issue. ~50% of employees in my company as well have created tickets
+// for IT to correct. Most of the time requiring a complete uninstall & reinstall...
+// Regardless of the server-state.conf
+// Attempt to handle other platforms to basically ignore this if they don't use unattended mode.
+
 func (b *LocalBackend) InServerMode() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	// Validate server mode state.
+	serverModeUid := b.pm.CurrentUserID()
+	if serverModeUid != "" && serverModeUid != b.pm.CurrentUserID() {
+		// Reset server mode state if it’s inconsistent.
+		b.logf("InServerMode: resetting inconsistent serverModeUid: %q", serverModeUid)
+		b.pm.ClearServerMode()
+		return false
+	}
+
+	// Default to checking ForceDaemon for server mode.
 	return b.pm.CurrentPrefs().ForceDaemon()
 }
 
@@ -3422,12 +3443,11 @@ func (b *LocalBackend) CheckIPNConnectionAllowed(actor ipnauth.Actor) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	serverModeUid := b.pm.CurrentUserID()
-	if serverModeUid == "" {
+
+	// Should be or || to assist in allowing new user to "take over"
+	if serverModeUid == "" || !b.pm.CurrentPrefs().ForceDaemon() {
 		// Either this platform isn't a "multi-user" platform or we're not yet
 		// running as one.
-		return nil
-	}
-	if !b.pm.CurrentPrefs().ForceDaemon() {
 		return nil
 	}
 
@@ -3442,6 +3462,7 @@ func (b *LocalBackend) CheckIPNConnectionAllowed(actor ipnauth.Actor) error {
 		return errors.New("empty user uid in connection identity")
 	}
 	if uid != serverModeUid {
+		// Allows new user to "take over" if it is determined that the server mode is invalid
 		return fmt.Errorf("Tailscale running in server mode (%q); connection from %q not allowed", b.tryLookupUserName(string(serverModeUid)), b.tryLookupUserName(string(uid)))
 	}
 	return nil
