@@ -283,7 +283,18 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor ipnauth.Acto
 	for inUse() {
 		// Check whenever the connection count drops down to zero.
 		ready, cleanup := s.zeroReqWaiter.add(&s.mu, ctx)
-		<-ready
+		if inUse() {
+			// If the server was in use at the time of the initial check,
+			// but disconnected and was removed from the activeReqs map
+			// by the time we registered a waiter, the ready channel
+			// will never be closed, resulting in a deadlock. To avoid
+			// this, we can check again after registering the waiter.
+			//
+			// This method is planned for complete removal as part of the
+			// multi-user improvements in tailscale/corp#18342,
+			// and this approach should be fine as a temporary solution.
+			<-ready
+		}
 		cleanup()
 		if err := ctx.Err(); err != nil {
 			return err
