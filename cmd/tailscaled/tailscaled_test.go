@@ -29,8 +29,10 @@ func TestDeps(t *testing.T) {
 		GOOS:   "linux",
 		GOARCH: "arm64",
 		BadDeps: map[string]string{
-			"testing":                        "do not use testing package in production code",
-			"gvisor.dev/gvisor/pkg/hostarch": "will crash on non-4K page sizes; see https://github.com/tailscale/tailscale/issues/8658",
+			"testing":                                        "do not use testing package in production code",
+			"gvisor.dev/gvisor/pkg/hostarch":                 "will crash on non-4K page sizes; see https://github.com/tailscale/tailscale/issues/8658",
+			"google.golang.org/protobuf/proto":               "unexpected",
+			"github.com/prometheus/client_golang/prometheus": "use tailscale.com/metrics in tailscaled",
 		},
 	}.Check(t)
 }
