@@ -112,6 +112,14 @@ const (
 	disableFighters
 )
 
+// packetKind is the kind of packet being sent through DERP
+type packetKind string
+
+const (
+	packetKindDisco packetKind = "disco"
+	packetKindOther packetKind = "other"
+)
+
 type align64 [0]atomic.Int64 // for side effect of its 64-bit alignment
 
 // Server is a DERP server.
@@ -131,44 +139,37 @@ type Server struct {
 	debug       bool
 
 	// Counters:
-	packetsSent, bytesSent       expvar.Int
-	packetsRecv, bytesRecv       expvar.Int
-	packetsRecvByKind            metrics.LabelMap
-	packetsRecvDisco             *expvar.Int
-	packetsRecvOther             *expvar.Int
-	_                            align64
-	packetsDropped               expvar.Int
-	packetsDroppedReason         metrics.LabelMap
-	packetsDroppedReasonCounters []*expvar.Int // indexed by dropReason
-	packetsDroppedType           metrics.LabelMap
-	packetsDroppedTypeDisco      *expvar.Int
-	packetsDroppedTypeOther      *expvar.Int
-	_                            align64
-	packetsForwardedOut          expvar.Int
-	packetsForwardedIn           expvar.Int
-	peerGoneDisconnectedFrames   expvar.Int // number of peer disconnected frames sent
-	peerGoneNotHereFrames        expvar.Int // number of peer not here frames sent
-	gotPing                      expvar.Int // number of ping frames from client
-	sentPong                     expvar.Int // number of pong frames enqueued to client
-	accepts                      expvar.Int
-	curClients                   expvar.Int
-	curClientsNotIdeal           expvar.Int
-	curHomeClients               expvar.Int // ones with preferred
-	dupClientKeys                expvar.Int // current number of public keys we have 2+ connections for
-	dupClientConns               expvar.Int // current number of connections sharing a public key
-	dupClientConnTotal           expvar.Int // total number of accepted connections when a dup key existed
-	unknownFrames                expvar.Int
-	homeMovesIn                  expvar.Int // established clients announce home server moves in
-	homeMovesOut                 expvar.Int // established clients announce home server moves out
-	multiForwarderCreated        expvar.Int
-	multiForwarderDeleted        expvar.Int
-	removePktForwardOther        expvar.Int
-	sclientWriteTimeouts         expvar.Int
-	avgQueueDuration             *uint64          // In milliseconds; accessed atomically
-	tcpRtt                       metrics.LabelMap // histogram
-	meshUpdateBatchSize          *metrics.Histogram
-	meshUpdateLoopCount          *metrics.Histogram
-	bufferedWriteFrames          *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
+	packetsSent, bytesSent     expvar.Int
+	packetsRecv, bytesRecv     expvar.Int
+	packetsRecvByKind          metrics.LabelMap
+	packetsRecvDisco           *expvar.Int
+	packetsRecvOther           *expvar.Int
+	_                          align64
+	packetsForwardedOut        expvar.Int
+	packetsForwardedIn         expvar.Int
+	peerGoneDisconnectedFrames expvar.Int // number of peer disconnected frames sent
+	peerGoneNotHereFrames      expvar.Int // number of peer not here frames sent
+	gotPing                    expvar.Int // number of ping frames from client
+	sentPong                   expvar.Int // number of pong frames enqueued to client
+	accepts                    expvar.Int
+	curClients                 expvar.Int
+	curClientsNotIdeal         expvar.Int
+	curHomeClients             expvar.Int // ones with preferred
+	dupClientKeys              expvar.Int // current number of public keys we have 2+ connections for
+	dupClientConns             expvar.Int // current number of connections sharing a public key
+	dupClientConnTotal         expvar.Int // total number of accepted connections when a dup key existed
+	unknownFrames              expvar.Int
+	homeMovesIn                expvar.Int // established clients announce home server moves in
+	homeMovesOut               expvar.Int // established clients announce home server moves out
+	multiForwarderCreated      expvar.Int
+	multiForwarderDeleted      expvar.Int
+	removePktForwardOther      expvar.Int
+	sclientWriteTimeouts       expvar.Int
+	avgQueueDuration           *uint64          // In milliseconds; accessed atomically
+	tcpRtt                     metrics.LabelMap // histogram
+	meshUpdateBatchSize        *metrics.Histogram
+	meshUpdateLoopCount        *metrics.Histogram
+	bufferedWriteFrames        *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
@@ -351,6 +352,11 @@ type Conn interface {
 	SetWriteDeadline(time.Time) error
 }
 
+var packetsDropped = metrics.NewMultiLabelMap[dropReasonKindLabels](
+	"derp_packets_dropped",
+	"counter",
+	"DERP packets dropped by reason and by kind")
+
 // NewServer returns a new DERP server. It doesn't listen on its own.
 // Connections are given to it via Server.Accept.
 func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
@@ -358,61 +364,81 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 	runtime.ReadMemStats(&ms)
 
 	s := &Server{
-		debug:                envknob.Bool("DERP_DEBUG_LOGS"),
-		privateKey:           privateKey,
-		publicKey:            privateKey.Public(),
-		logf:                 logf,
-		limitedLogf:          logger.RateLimitedFn(logf, 30*time.Second, 5, 100),
-		packetsRecvByKind:    metrics.LabelMap{Label: "kind"},
-		packetsDroppedReason: metrics.LabelMap{Label: "reason"},
-		packetsDroppedType:   metrics.LabelMap{Label: "type"},
-		clients:              map[key.NodePublic]*clientSet{},
-		clientsMesh:          map[key.NodePublic]PacketForwarder{},
-		netConns:             map[Conn]chan struct{}{},
-		memSys0:              ms.Sys,
-		watchers:             set.Set[*sclient]{},
-		peerGoneWatchers:     map[key.NodePublic]set.HandleSet[func(key.NodePublic)]{},
-		avgQueueDuration:     new(uint64),
-		tcpRtt:               metrics.LabelMap{Label: "le"},
-		meshUpdateBatchSize:  metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}),
-		meshUpdateLoopCount:  metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100}),
-		bufferedWriteFrames:  metrics.NewHistogram([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100}),
-		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
-		clock:                tstime.StdClock{},
+		debug:               envknob.Bool("DERP_DEBUG_LOGS"),
+		privateKey:          privateKey,
+		publicKey:           privateKey.Public(),
+		logf:                logf,
+		limitedLogf:         logger.RateLimitedFn(logf, 30*time.Second, 5, 100),
+		packetsRecvByKind:   metrics.LabelMap{Label: "kind"},
+		clients:             map[key.NodePublic]*clientSet{},
+		clientsMesh:         map[key.NodePublic]PacketForwarder{},
+		netConns:            map[Conn]chan struct{}{},
+		memSys0:             ms.Sys,
+		watchers:            set.Set[*sclient]{},
+		peerGoneWatchers:    map[key.NodePublic]set.HandleSet[func(key.NodePublic)]{},
+		avgQueueDuration:    new(uint64),
+		tcpRtt:              metrics.LabelMap{Label: "le"},
+		meshUpdateBatchSize: metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}),
+		meshUpdateLoopCount: metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100}),
+		bufferedWriteFrames: metrics.NewHistogram([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100}),
+		keyOfAddr:           map[netip.AddrPort]key.NodePublic{},
+		clock:               tstime.StdClock{},
 	}
 	s.initMetacert()
-	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
-	s.packetsRecvOther = s.packetsRecvByKind.Get("other")
+	s.packetsRecvDisco = s.packetsRecvByKind.Get(string(packetKindDisco))
+	s.packetsRecvOther = s.packetsRecvByKind.Get(string(packetKindOther))
 
-	s.packetsDroppedReasonCounters = s.genPacketsDroppedReasonCounters()
-
-	s.packetsDroppedTypeDisco = s.packetsDroppedType.Get("disco")
-	s.packetsDroppedTypeOther = s.packetsDroppedType.Get("other")
+	genPacketsDroppedCounters()
 
 	s.perClientSendQueueDepth = getPerClientSendQueueDepth()
 	return s
 }
 
-func (s *Server) genPacketsDroppedReasonCounters() []*expvar.Int {
-	getMetric := s.packetsDroppedReason.Get
-	ret := []*expvar.Int{
-		dropReasonUnknownDest:      getMetric("unknown_dest"),
-		dropReasonUnknownDestOnFwd: getMetric("unknown_dest_on_fwd"),
-		dropReasonGoneDisconnected: getMetric("gone_disconnected"),
-		dropReasonQueueHead:        getMetric("queue_head"),
-		dropReasonQueueTail:        getMetric("queue_tail"),
-		dropReasonWriteError:       getMetric("write_error"),
-		dropReasonDupClient:        getMetric("dup_client"),
+func genPacketsDroppedCounters() {
+	initMetrics := func(reason dropReason) {
+		packetsDropped.Add(dropReasonKindLabels{
+			Kind:   string(packetKindDisco),
+			Reason: string(reason),
+		}, 0)
+		packetsDropped.Add(dropReasonKindLabels{
+			Kind:   string(packetKindOther),
+			Reason: string(reason),
+		}, 0)
 	}
-	if len(ret) != int(numDropReasons) {
-		panic("dropReason metrics out of sync")
+	getMetrics := func(reason dropReason) []expvar.Var {
+		return []expvar.Var{
+			packetsDropped.Get(dropReasonKindLabels{
+				Kind:   string(packetKindDisco),
+				Reason: string(reason),
+			}),
+			packetsDropped.Get(dropReasonKindLabels{
+				Kind:   string(packetKindOther),
+				Reason: string(reason),
+			}),
+		}
 	}
-	for i := range numDropReasons {
-		if ret[i] == nil {
+
+	dropReasons := []dropReason{
+		dropReasonUnknownDest,
+		dropReasonUnknownDestOnFwd,
+		dropReasonGoneDisconnected,
+		dropReasonQueueHead,
+		dropReasonQueueTail,
+		dropReasonWriteError,
+		dropReasonDupClient,
+	}
+
+	for _, dr := range dropReasons {
+		initMetrics(dr)
+		m := getMetrics(dr)
+		if len(m) != 2 {
+			panic("dropReason metrics out of sync")
+		}
+
+		if m[0] == nil || m[1] == nil {
 			panic("dropReason metrics out of sync")
 		}
 	}
-	return ret
 }
 
 // SetMesh sets the pre-shared key that regional DERP servers used to mesh
@@ -1152,31 +1178,36 @@ func (c *sclient) debugLogf(format string, v ...any) {
 	}
 }
 
-// dropReason is why we dropped a DERP frame.
-type dropReason int
+type dropReasonKindLabels struct {
+	Reason string // metric label corresponding to a given dropReason
+	Kind   string // either `disco` or `other`
+}
 
-//go:generate go run tailscale.com/cmd/addlicense -file dropreason_string.go go run golang.org/x/tools/cmd/stringer -type=dropReason -trimprefix=dropReason
+// dropReason is why we dropped a DERP frame.
+type dropReason string
 
 const (
-	dropReasonUnknownDest      dropReason = iota // unknown destination pubkey
-	dropReasonUnknownDestOnFwd                   // unknown destination pubkey on a derp-forwarded packet
-	dropReasonGoneDisconnected                   // destination tailscaled disconnected before we could send
-	dropReasonQueueHead                          // destination queue is full, dropped packet at queue head
-	dropReasonQueueTail                          // destination queue is full, dropped packet at queue tail
-	dropReasonWriteError                         // OS write() failed
-	dropReasonDupClient                          // the public key is connected 2+ times (active/active, fighting)
-	numDropReasons                               // unused; keep last
+	dropReasonUnknownDest      dropReason = "unknown_dest"        // unknown destination pubkey
+	dropReasonUnknownDestOnFwd dropReason = "unknown_dest_on_fwd" // unknown destination pubkey on a derp-forwarded packet
+	dropReasonGoneDisconnected dropReason = "gone_disconnected"   // destination tailscaled disconnected before we could send
+	dropReasonQueueHead        dropReason = "queue_head"          // destination queue is full, dropped packet at queue head
+	dropReasonQueueTail        dropReason = "queue_tail"          // destination queue is full, dropped packet at queue tail
+	dropReasonWriteError       dropReason = "write_error"         // OS write() failed
+	dropReasonDupClient        dropReason = "dup_client"          // the public key is connected 2+ times (active/active, fighting)
 )
 
 func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, reason dropReason) {
-	s.packetsDropped.Add(1)
-	s.packetsDroppedReasonCounters[reason].Add(1)
+	labels := dropReasonKindLabels{
+		Reason: string(reason),
+	}
 	looksDisco := disco.LooksLikeDiscoWrapper(packetBytes)
 	if looksDisco {
-		s.packetsDroppedTypeDisco.Add(1)
+		labels.Kind = string(packetKindDisco)
 	} else {
-		s.packetsDroppedTypeOther.Add(1)
+		labels.Kind = string(packetKindOther)
 	}
+	packetsDropped.Add(labels, 1)
+
 	if verboseDropKeys[dstKey] {
 		// Preformat the log string prior to calling limitedLogf. The
 		// limiter acts based on the format string, and we want to
@@ -2095,9 +2126,6 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("accepts", &s.accepts)
 	m.Set("bytes_received", &s.bytesRecv)
 	m.Set("bytes_sent", &s.bytesSent)
-	m.Set("packets_dropped", &s.packetsDropped)
-	m.Set("counter_packets_dropped_reason", &s.packetsDroppedReason)
-	m.Set("counter_packets_dropped_type", &s.packetsDroppedType)
 	m.Set("counter_packets_received_kind", &s.packetsRecvByKind)
 	m.Set("packets_sent", &s.packetsSent)
 	m.Set("packets_received", &s.packetsRecv)
