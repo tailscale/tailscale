@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unique"
 
 	"go4.org/mem"
 	"tailscale.com/derp"
@@ -974,7 +975,7 @@ func (c *Client) LocalAddr() (netip.AddrPort, error) {
 	return la, nil
 }
 
-func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
+func (c *Client) ForwardPacket(from, to unique.Handle[key.NodePublic], b []byte) error {
 	client, _, err := c.connect(c.newContext(), "derphttp.Client.ForwardPacket")
 	if err != nil {
 		return err

@@ -716,27 +716,27 @@ func TestWatch(t *testing.T) {
 
 type testFwd int
 
-func (testFwd) ForwardPacket(key.NodePublic, key.NodePublic, []byte) error {
+func (testFwd) ForwardPacket(NodeHandle, NodeHandle, []byte) error {
 	panic("not called in tests")
 }
 func (testFwd) String() string {
 	panic("not called in tests")
 }
 
-func pubAll(b byte) (ret key.NodePublic) {
+func pubAll(b byte) (ret NodeHandle) {
 	var bs [32]byte
 	for i := range bs {
 		bs[i] = b
 	}
-	return key.NodePublicFromRaw32(mem.B(bs[:]))
+	return key.NodePublicFromRaw32(mem.B(bs[:])).Handle()
 }
 
 func TestForwarderRegistration(t *testing.T) {
 	s := &Server{
-		clients:     make(map[key.NodePublic]*clientSet),
-		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clients:     make(map[NodeHandle]*clientSet),
+		clientsMesh: map[NodeHandle]PacketForwarder{},
 	}
-	want := func(want map[key.NodePublic]PacketForwarder) {
+	want := func(want map[NodeHandle]PacketForwarder) {
 		t.Helper()
 		if got := s.clientsMesh; !reflect.DeepEqual(got, want) {
 			t.Fatalf("mismatch\n got: %v\nwant: %v\n", got, want)
@@ -760,28 +760,28 @@ func TestForwarderRegistration(t *testing.T) {
 
 	s.AddPacketForwarder(u1, testFwd(1))
 	s.AddPacketForwarder(u2, testFwd(2))
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: testFwd(1),
 		u2: testFwd(2),
 	})
 
 	// Verify a remove of non-registered forwarder is no-op.
 	s.RemovePacketForwarder(u2, testFwd(999))
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: testFwd(1),
 		u2: testFwd(2),
 	})
 
 	// Verify a remove of non-registered user is no-op.
 	s.RemovePacketForwarder(u3, testFwd(1))
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: testFwd(1),
 		u2: testFwd(2),
 	})
 
 	// Actual removal.
 	s.RemovePacketForwarder(u2, testFwd(2))
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: testFwd(1),
 	})
 
@@ -789,14 +789,14 @@ func TestForwarderRegistration(t *testing.T) {
 	wantCounter(&s.multiForwarderCreated, 0)
 	s.AddPacketForwarder(u1, testFwd(100))
 	s.AddPacketForwarder(u1, testFwd(100)) // dup to trigger dup path
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: newMultiForwarder(testFwd(1), testFwd(100)),
 	})
 	wantCounter(&s.multiForwarderCreated, 1)
 
 	// Removing a forwarder in a multi set that doesn't exist; does nothing.
 	s.RemovePacketForwarder(u1, testFwd(55))
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: newMultiForwarder(testFwd(1), testFwd(100)),
 	})
 
@@ -804,7 +804,7 @@ func TestForwarderRegistration(t *testing.T) {
 	// from being a multiForwarder.
 	wantCounter(&s.multiForwarderDeleted, 0)
 	s.RemovePacketForwarder(u1, testFwd(1))
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: testFwd(100),
 	})
 	wantCounter(&s.multiForwarderDeleted, 1)
@@ -812,23 +812,24 @@ func TestForwarderRegistration(t *testing.T) {
 	// Removing an entry for a client that's still connected locally should result
 	// in a nil forwarder.
 	u1c := &sclient{
-		key:  u1,
-		logf: logger.Discard,
+		key:    u1.Value(),
+		handle: u1,
+		logf:   logger.Discard,
 	}
 	s.clients[u1] = singleClient(u1c)
 	s.RemovePacketForwarder(u1, testFwd(100))
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: nil,
 	})
 
 	// But once that client disconnects, it should go away.
 	s.unregisterClient(u1c)
-	want(map[key.NodePublic]PacketForwarder{})
+	want(map[NodeHandle]PacketForwarder{})
 
 	// But if it already has a forwarder, it's not removed.
 	s.AddPacketForwarder(u1, testFwd(2))
 	s.unregisterClient(u1c)
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: testFwd(2),
 	})
 
@@ -837,11 +838,11 @@ func TestForwarderRegistration(t *testing.T) {
 	// from nil to the new one, not a multiForwarder.
 	s.clients[u1] = singleClient(u1c)
 	s.clientsMesh[u1] = nil
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: nil,
 	})
 	s.AddPacketForwarder(u1, testFwd(3))
-	want(map[key.NodePublic]PacketForwarder{
+	want(map[NodeHandle]PacketForwarder{
 		u1: testFwd(3),
 	})
 }
@@ -855,7 +856,7 @@ type channelFwd struct {
 }
 
 func (f channelFwd) String() string { return "" }
-func (f channelFwd) ForwardPacket(_ key.NodePublic, _ key.NodePublic, packet []byte) error {
+func (f channelFwd) ForwardPacket(_ NodeHandle, _ NodeHandle, packet []byte) error {
 	f.c <- packet
 	return nil
 }
@@ -867,8 +868,8 @@ func TestMultiForwarder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{
-		clients:     make(map[key.NodePublic]*clientSet),
-		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clients:     make(map[NodeHandle]*clientSet),
+		clientsMesh: map[NodeHandle]PacketForwarder{},
 	}
 	u := pubAll(1)
 	s.AddPacketForwarder(u, channelFwd{1, ch})
@@ -1069,9 +1070,9 @@ func TestServerDupClients(t *testing.T) {
 	run := func(name string, dupPolicy dupPolicy, f func(t *testing.T)) {
 		s = NewServer(serverPriv, t.Logf)
 		s.dupPolicy = dupPolicy
-		c1 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c1: ")}
-		c2 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c2: ")}
-		c3 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c3: ")}
+		c1 = &sclient{key: clientPub, handle: clientPub.Handle(), logf: logger.WithPrefix(t.Logf, "c1: ")}
+		c2 = &sclient{key: clientPub, handle: clientPub.Handle(), logf: logger.WithPrefix(t.Logf, "c2: ")}
+		c3 = &sclient{key: clientPub, handle: clientPub.Handle(), logf: logger.WithPrefix(t.Logf, "c3: ")}
 		clientName = map[*sclient]string{
 			c1: "c1",
 			c2: "c2",
@@ -1085,7 +1086,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantSingleClient := func(t *testing.T, want *sclient) {
 		t.Helper()
-		got, ok := s.clients[want.key]
+		got, ok := s.clients[want.key.Handle()]
 		if !ok {
 			t.Error("no clients for key")
 			return
@@ -1108,7 +1109,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantNoClient := func(t *testing.T) {
 		t.Helper()
-		_, ok := s.clients[clientPub]
+		_, ok := s.clients[clientPub.Handle()]
 		if !ok {
 			// Good
 			return
@@ -1117,7 +1118,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantDupSet := func(t *testing.T) *dupClientSet {
 		t.Helper()
-		cs, ok := s.clients[clientPub]
+		cs, ok := s.clients[clientPub.Handle()]
 		if !ok {
 			t.Fatal("no set for key; want dup set")
 			return nil
@@ -1130,7 +1131,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantActive := func(t *testing.T, want *sclient) {
 		t.Helper()
-		set, ok := s.clients[clientPub]
+		set, ok := s.clients[clientPub.Handle()]
 		if !ok {
 			t.Error("no set for key")
 			return
