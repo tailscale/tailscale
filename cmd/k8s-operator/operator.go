@@ -88,6 +88,15 @@ func main() {
 	zlog := kzap.NewRaw(opts...).Sugar()
 	logf.SetLogger(zapr.NewLogger(zlog.Desugar()))
 
+	if tsNamespace == "" {
+		const namespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+		b, err := os.ReadFile(namespaceFile)
+		if err != nil {
+			zlog.Fatalf("Could not get operator namespace from OPERATOR_NAMESPACE environment variable or default projected volume: %v", err)
+		}
+		tsNamespace = strings.TrimSpace(string(b))
+	}
+
 	// The operator can run either as a plain operator or it can
 	// additionally act as api-server proxy
 	// https://tailscale.com/kb/1236/kubernetes-operator/?q=kubernetes#accessing-the-kubernetes-control-plane-using-an-api-server-proxy.
