@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/winutil/gp"
 )
@@ -27,6 +28,18 @@ var (
 	_ Lockable   = (*PlatformPolicyStore)(nil)
 	_ Changeable = (*PlatformPolicyStore)(nil)
 	_ Expirable  = (*PlatformPolicyStore)(nil)
+)
+
+// lockableCloser is a [Lockable] that can also be closed.
+// It is implemented by [gp.PolicyLock] and [optionalPolicyLock].
+type lockableCloser interface {
+	Lockable
+	Close() error
+}
+
+var (
+	_ lockableCloser = (*gp.PolicyLock)(nil)
+	_ lockableCloser = (*optionalPolicyLock)(nil)
 )
 
 // PlatformPolicyStore implements [Store] by providing read access to
@@ -55,7 +68,7 @@ type PlatformPolicyStore struct {
 	// they are being read.
 	//
 	// When both policyLock and mu need to be taken, mu must be taken before policyLock.
-	policyLock *gp.PolicyLock
+	policyLock lockableCloser
 
 	mu      sync.Mutex
 	tsKeys  []registry.Key        // or nil if the [PlatformPolicyStore] hasn't been locked.
@@ -108,7 +121,7 @@ func newPlatformPolicyStore(scope gp.Scope, softwareKey registry.Key, policyLock
 		scope:       scope,
 		softwareKey: softwareKey,
 		done:        make(chan struct{}),
-		policyLock:  policyLock,
+		policyLock:  &optionalPolicyLock{PolicyLock: policyLock},
 	}
 }
 
@@ -447,4 +460,69 @@ func tailscaleKeyNamesFor(scope gp.Scope) []string {
 	default:
 		panic("unreachable")
 	}
+}
+
+type gpLockState int
+
+const (
+	gpUnlocked = gpLockState(iota)
+	gpLocked
+	gpLockRestricted // the lock could not be acquired due to a restriction in place
+)
+
+// optionalPolicyLock is a wrapper around [gp.PolicyLock] that locks
+// and unlocks the underlying [gp.PolicyLock].
+//
+// If the [gp.PolicyLock.Lock] returns [gp.ErrLockRestricted], the error is ignored,
+// and calling [optionalPolicyLock.Unlock] is a no-op.
+//
+// The underlying GP lock is kinda optional: it is safe to read policy settings
+// from the Registry without acquiring it, but it is recommended to lock it anyway
+// when reading multiple policy settings to avoid potentially inconsistent results.
+//
+// It is not safe for concurrent use.
+type optionalPolicyLock struct {
+	*gp.PolicyLock
+	state gpLockState
+}
+
+// Lock acquires the underlying [gp.PolicyLock], returning an error on failure.
+// If the lock cannot be acquired due to a restriction in place
+// (e.g., attempting to acquire a lock while the service is starting),
+// the lock is considered to be held, the method returns nil, and a subsequent
+// call to [Unlock] is a no-op.
+// It is a runtime error to call Lock when the lock is already held.
+func (o *optionalPolicyLock) Lock() error {
+	if o.state != gpUnlocked {
+		panic("already locked")
+	}
+	switch err := o.PolicyLock.Lock(); err {
+	case nil:
+		o.state = gpLocked
+		return nil
+	case gp.ErrLockRestricted:
+		loggerx.Errorf("GP lock not acquired: %v", err)
+		o.state = gpLockRestricted
+		return nil
+	default:
+		return err
+	}
+}
+
+// Unlock releases the underlying [gp.PolicyLock], if it was previously acquired.
+// It is a runtime error to call Unlock when the lock is not held.
+func (o *optionalPolicyLock) Unlock() {
+	switch o.state {
+	case gpLocked:
+		o.PolicyLock.Unlock()
+	case gpLockRestricted:
+		// The GP lock wasn't acquired due to a restriction in place
+		// when [optionalPolicyLock.Lock] was called. Unlock is a no-op.
+	case gpUnlocked:
+		panic("not locked")
+	default:
+		panic("unreachable")
+	}
+
+	o.state = gpUnlocked
 }

@@ -48,9 +48,34 @@ type policyLockResult struct {
 }
 
 var (
-	// ErrInvalidLockState is returned by (*PolicyLock).Lock if the lock has a zero value or has already been closed.
+	// ErrInvalidLockState is returned by [PolicyLock.Lock] if the lock has a zero value or has already been closed.
 	ErrInvalidLockState = errors.New("the lock has not been created or has already been closed")
+	// ErrLockRestricted is returned by [PolicyLock.Lock] if the lock cannot be acquired due to a restriction in place,
+	// such as when [RestrictPolicyLocks] has been called.
+	ErrLockRestricted = errors.New("the lock cannot be acquired due to a restriction in place")
 )
+
+var policyLockRestricted atomic.Int32
+
+// RestrictPolicyLocks forces all [PolicyLock.Lock] calls to return [ErrLockRestricted]
+// until the returned function is called to remove the restriction.
+//
+// It is safe to call the returned function multiple times, but the restriction will only
+// be removed once. If [RestrictPolicyLocks] is called multiple times, each call must be
+// matched by a corresponding call to the returned function to fully remove the restrictions.
+//
+// It is primarily used to prevent certain deadlocks, such as when tailscaled attempts to acquire
+// a policy lock during startup. If the service starts due to Tailscale being installed by GPSI,
+// the write lock will be held by the Group Policy service throughout the installation,
+// preventing tailscaled from acquiring the read lock. Since Group Policy waits for the installation
+// to complete, and therefore for tailscaled to start, before releasing the write lock, this scenario
+// would result in a deadlock. See tailscale/tailscale#14416 for more information.
+func RestrictPolicyLocks() (removeRestriction func()) {
+	policyLockRestricted.Add(1)
+	return sync.OnceFunc(func() {
+		policyLockRestricted.Add(-1)
+	})
+}
 
 // NewMachinePolicyLock creates a PolicyLock that facilitates pausing the
 // application of computer policy. To avoid deadlocks when acquiring both
@@ -103,13 +128,18 @@ func NewUserPolicyLock(token windows.Token) (*PolicyLock, error) {
 }
 
 // Lock locks l.
-// It returns ErrNotInitialized if l has a zero value or has already been closed,
-// or an Errno if the underlying Group Policy lock cannot be acquired.
+// It returns [ErrInvalidLockState] if l has a zero value or has already been closed,
+// [ErrLockRestricted] if the lock cannot be acquired due to a restriction in place,
+// or a [syscall.Errno] if the underlying Group Policy lock cannot be acquired.
 //
-// As a special case, it fails with windows.ERROR_ACCESS_DENIED
+// As a special case, it fails with [windows.ERROR_ACCESS_DENIED]
 // if l is a user policy lock, and the corresponding user is not logged in
 // interactively at the time of the call.
 func (l *PolicyLock) Lock() error {
+	if policyLockRestricted.Load() > 0 {
+		return ErrLockRestricted
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.lockCnt.Add(2)&1 == 0 {
