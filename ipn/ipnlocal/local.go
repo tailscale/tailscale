@@ -1703,6 +1703,37 @@ func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID
 		anyChange = true
 	}
 
+	const sentinel = "HostnameDefaultValue"
+	hostnameFromPolicy, _ := syspolicy.GetString(syspolicy.Hostname, sentinel)
+	switch hostnameFromPolicy {
+	case sentinel:
+		// An empty string for this policy value means that the admin wants to delete
+		// the hostname stored in the ipn.Prefs. To make that work, we need to
+		// distinguish between an empty string and a policy that was not set.
+		// We cannot do that with the current implementation of syspolicy.GetString.
+		// It currently does not return an error if a policy was not configured.
+		// Instead, it returns the default value provided as the second argument.
+		// This behavior makes it impossible to distinguish between a policy that
+		// was not set and a policy that was set to an empty default value.
+		// Checking for sentinel here is a workaround to distinguish between
+		// the two cases. If we get it, we do nothing because the policy was not set.
+		//
+		// TODO(angott,nickkhyl): clean up this behavior once syspolicy.GetString starts
+		// properly returning errors.
+	case "":
+		// The policy was set to an empty string, which means the admin intends
+		// to clear the hostname stored in preferences.
+		prefs.Hostname = ""
+		anyChange = true
+	default:
+		// The policy was set to a non-empty string, which means the admin wants
+		// to override the hostname stored in preferences.
+		if prefs.Hostname != hostnameFromPolicy {
+			prefs.Hostname = hostnameFromPolicy
+			anyChange = true
+		}
+	}
+
 	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
 		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
 		if shouldAutoExitNode() && lastSuggestedExitNode != "" {
