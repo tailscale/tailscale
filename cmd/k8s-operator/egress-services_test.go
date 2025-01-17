@@ -96,7 +96,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 		expectReconciled(t, esr, "default", "test")
 		// Service should have EgressSvcValid condition set to Unknown.
 		svc.Status.Conditions = []metav1.Condition{condition(tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, clock)}
-		expectEqual(t, fc, svc, nil)
+		expectEqual(t, fc, svc)
 	})
 
 	t.Run("proxy_group_ready", func(t *testing.T) {
@@ -162,7 +162,7 @@ func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReco
 	expectEqual(t, fc, clusterIPSvc(name, svc), removeTargetPortsFromSvc)
 	clusterSvc := mustGetClusterIPSvc(t, fc, name)
 	// Verify that an EndpointSlice has been created.
-	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc), nil)
+	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc))
 	// Verify that ConfigMap contains configuration for the new egress service.
 	mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm)
 	r := svcConfiguredReason(svc, true, zl.Sugar())
@@ -174,7 +174,7 @@ func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReco
 	}
 	svc.ObjectMeta.Finalizers = []string{"tailscale.com/finalizer"}
 	svc.Spec.ExternalName = fmt.Sprintf("%s.operator-ns.svc.cluster.local", name)
-	expectEqual(t, fc, svc, nil)
+	expectEqual(t, fc, svc)
 
 }
 

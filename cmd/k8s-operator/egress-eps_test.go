@@ -112,7 +112,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 				Terminating: pointer.ToBool(false),
 			},
 		})
-		expectEqual(t, fc, eps, nil)
+		expectEqual(t, fc, eps)
 	})
 	t.Run("status_does_not_match_pod_ip", func(t *testing.T) {
 		_, stateS := podAndSecretForProxyGroup("foo")           // replica Pod has IP 10.0.0.1
@@ -122,7 +122,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		})
 		expectReconciled(t, er, "operator-ns", "foo")
 		eps.Endpoints = []discoveryv1.Endpoint{}
-		expectEqual(t, fc, eps, nil)
+		expectEqual(t, fc, eps)
 	})
 }
 
