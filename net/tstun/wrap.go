@@ -904,9 +904,23 @@ func (t *Wrapper) IdleDuration() time.Duration {
 	return mono.Since(t.lastActivityAtomic.LoadAtomic())
 }
 
+func (t *Wrapper) awaitStart() {
+	for {
+		select {
+		case <-t.startCh:
+			return
+		case <-time.After(1 * time.Second):
+			// Multiple times while remixing tailscaled I (Brad) have forgotten
+			// to call Start and then wasted far too much time debugging.
+			// I do not wish that debugging on anyone else. Hopefully this'll help:
+			t.logf("tstun: awaiting Wrapper.Start call")
+		}
+	}
+}
+
 func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	if !t.started.Load() {
-		<-t.startCh
+		t.awaitStart()
 	}
 	// packet from OS read and sent to WG
 	res, ok := <-t.vectorOutbound
