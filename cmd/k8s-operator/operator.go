@@ -159,9 +159,14 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 	tsClient.UserAgent = "tailscale-k8s-operator"
 	tsClient.HTTPClient = credentials.Client(context.Background())
 
+	configDir, err := os.MkdirTemp(os.TempDir(), "tsnet-config")
+	if err != nil {
+		startlog.Fatalf("error creating config directory for tsnet: %v", err)
+	}
 	s := &tsnet.Server{
 		Hostname: hostname,
 		Logf:     zlog.Named("tailscaled").Debugf,
+		Dir:      configDir,
 	}
 	if p := os.Getenv("TS_PORT"); p != "" {
 		port, err := strconv.ParseUint(p, 10, 16)
