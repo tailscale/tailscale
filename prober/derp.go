@@ -1048,6 +1048,7 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 		readConn, err := l.Accept()
 		if err != nil {
 			readFinishedC <- err
+			return
 		}
 		defer readConn.Close()
 		deadline, ok := ctx.Deadline()
@@ -1055,6 +1056,7 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 			// Don't try reading past our context's deadline.
 			if err := readConn.SetReadDeadline(deadline); err != nil {
 				readFinishedC <- fmt.Errorf("unable to set read deadline: %w", err)
+				return
 			}
 		}
 		n, err := io.CopyN(io.Discard, readConn, size)
