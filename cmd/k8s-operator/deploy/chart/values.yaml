@@ -67,6 +67,9 @@ operatorConfig:
   securityContext: {}
 
   extraEnv: []
+
+  tailscaleBaseURL: "https://login.tailscale.com"
+  
   # - name: EXTRA_VAR1
   #   value: "value1"
   # - name: EXTRA_VAR2

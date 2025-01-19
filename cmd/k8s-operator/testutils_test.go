@@ -740,10 +740,15 @@ type fakeTSClient struct {
 }
 type fakeTSNetServer struct {
 	certDomains []string
+	ControlURL  string
 }
 
 func (f *fakeTSNetServer) CertDomains() []string {
 	return f.certDomains
+}
+
+func (f *fakeTSNetServer) GetControlURL() string {
+	return f.ControlURL
 }
 
 func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error) {
