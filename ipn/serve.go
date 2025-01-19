@@ -63,12 +63,12 @@ type ServeConfig struct {
 	// traffic is allowed, from trusted ingress peers.
 	AllowFunnel map[HostPort]bool `json:",omitempty"`
 
-	// Foreground is a map of an IPN Bus session ID to an alternate foreground
-	// serve config that's valid for the life of that WatchIPNBus session ID.
-	// This. This allows the config to specify ephemeral configs that are
-	// used in the CLI's foreground mode to ensure ungraceful shutdowns
-	// of either the client or the LocalBackend does not expose ports
-	// that users are not aware of.
+	// Foreground is a map of an IPN Bus session ID to an alternate foreground serve config that's valid for the
+	// life of that WatchIPNBus session ID. This allows the config to specify ephemeral configs that are used
+	// in the CLI's foreground mode to ensure ungraceful shutdowns of either the client or the LocalBackend does not
+	// expose ports that users are not aware of. In practice this contains any serve config set via 'tailscale
+	// serve' command run without the '--bg' flag. ServeConfig contained by Foreground is not expected itself to contain
+	// another Foreground block.
 	Foreground map[string]*ServeConfig `json:",omitempty"`
 
 	// ETag is the checksum of the serve config that's populated
@@ -389,14 +389,18 @@ func (sc *ServeConfig) RemoveTCPForwarding(port uint16) {
 // View version of ServeConfig.IsFunnelOn.
 func (v ServeConfigView) IsFunnelOn() bool { return v.ж.IsFunnelOn() }
 
-// IsFunnelOn reports whether if ServeConfig is currently allowing funnel
-// traffic for any host:port.
+// IsFunnelOn reports whether any funnel endpoint is currently enabled for this node.
 func (sc *ServeConfig) IsFunnelOn() bool {
 	if sc == nil {
 		return false
 	}
 	for _, b := range sc.AllowFunnel {
 		if b {
+			return true
+		}
+	}
+	for _, conf := range sc.Foreground {
+		if conf.IsFunnelOn() {
 			return true
 		}
 	}

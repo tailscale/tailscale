@@ -182,3 +182,88 @@ func TestExpandProxyTargetDev(t *testing.T) {
 		})
 	}
 }
+
+func TestIsFunnelOn(t *testing.T) {
+	tests := []struct {
+		name string
+		sc   *ServeConfig
+		want bool
+	}{
+		{
+			name: "nil_config",
+		},
+		{
+			name: "empty_config",
+			sc:   &ServeConfig{},
+		},
+		{
+			name: "funnel_enabled_in_background",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "funnel_disabled_in_background",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+		},
+		{
+			name: "funnel_enabled_in_foreground",
+			sc: &ServeConfig{
+				Foreground: map[string]*ServeConfig{
+					"abc123": {
+						AllowFunnel: map[HostPort]bool{
+							"tailnet.xyz:443": true,
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "funnel_disabled_in_both",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+				Foreground: map[string]*ServeConfig{
+					"abc123": {
+						AllowFunnel: map[HostPort]bool{
+							"tailnet.xyz:8443": false,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "funnel_enabled_in_both",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+				Foreground: map[string]*ServeConfig{
+					"abc123": {
+						AllowFunnel: map[HostPort]bool{
+							"tailnet.xyz:8443": true,
+						},
+					},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sc.IsFunnelOn(); got != tt.want {
+				t.Errorf("ServeConfig.IsFunnelOn() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
