@@ -1,0 +1,13 @@
+% pwd
+/Users/bradfitz/Library/Application Support/Google/Chrome/NativeMessagingHosts
+
+% cat com.tailscale.chrome-ext.json
+{
+  "name": "com.tailscale.chrome-ext",
+  "description": "Tailscale Native Extension",
+  "path": "/Users/bradfitz/go/bin/ts-browser-native-ext",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://gdopnimobeboikkiagbnnbcijkjdjcad/"
+  ]
+}
