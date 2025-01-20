@@ -66,7 +66,7 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 			log.Fatalf("serve proxy: failed to read serve config: %v", err)
 		}
 		if sc == nil {
-			log.Printf("serve proxy: serve config is nil, skipping")
+			log.Printf("serve proxy: no serve config at %q, skipping", path)
 			continue
 		}
 		if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {

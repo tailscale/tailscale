@@ -120,7 +120,7 @@ func main() {
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
-func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClientI) {
+func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 	var (
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
 		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
@@ -544,7 +544,7 @@ func runReconcilers(opts reconcilerOpts) {
 type reconcilerOpts struct {
 	log                *zap.SugaredLogger
 	tsServer           *tsnet.Server
-	tsClient           tsClientI
+	tsClient           tsClient
 	tailscaleNamespace string       // namespace in which operator resources will be deployed
 	restConfig         *rest.Config // config for connecting to the kube API server
 	proxyImage         string       // <proxy-image-repo>:<proxy-image-tag>

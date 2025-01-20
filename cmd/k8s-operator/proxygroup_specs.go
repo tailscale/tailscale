@@ -57,6 +57,9 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 	tmpl.Spec.ServiceAccountName = pg.Name
 	tmpl.Spec.InitContainers[0].Image = image
 	proxyConfigVolName := pgEgressCMName(pg.Name)
+	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+		proxyConfigVolName = pgIngressCMName(pg.Name)
+	}
 	tmpl.Spec.Volumes = func() []corev1.Volume {
 		var volumes []corev1.Volume
 		for i := range pgReplicas(pg) {
@@ -68,9 +71,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 					},
 				},
 			})
-		}
-		if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
-			proxyConfigVolName = pgIngressCMName(pg.Name)
 		}
 
 		volumes = append(volumes, corev1.Volume{

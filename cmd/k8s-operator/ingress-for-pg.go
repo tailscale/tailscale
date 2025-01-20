@@ -55,7 +55,7 @@ type IngressPGReconciler struct {
 
 	recorder    record.EventRecorder
 	logger      *zap.SugaredLogger
-	tsClient    tsClientI
+	tsClient    tsClient
 	tsnetServer tsnetServer
 	tsNamespace string
 	lc          localClient
@@ -75,7 +75,7 @@ type IngressPGReconciler struct {
 // Ingress hostname change also results in the VIPService for the previous hostname being cleaned up and a new VIPService
 // being created for the new hostname.
 func (a *IngressPGReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
-	logger := a.logger.With("ingress-ns", req.Namespace, "ingress-name", req.Name)
+	logger := a.logger.With("Ingress", req.NamespacedName)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
 
@@ -91,11 +91,7 @@ func (a *IngressPGReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	// hostname is the name of the VIPService that will be created for this Ingress as well as the first label in
 	// the MagicDNS name of the Ingress.
-	hostname := ing.Namespace + "-" + ing.Name + "-ingress"
-	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
-		h := ing.Spec.TLS[0].Hosts[0]
-		hostname, _, _ = strings.Cut(h, ".")
-	}
+	hostname := hostnameForIngress(ing)
 	logger = logger.With("hostname", hostname)
 
 	if !ing.DeletionTimestamp.IsZero() || !a.shouldExpose(ing) {
@@ -111,7 +107,8 @@ func (a *IngressPGReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 // maybeProvision ensures that the VIPService and serve config for the Ingress are created or updated.
 func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger) error {
 	if err := validateIngressClass(ctx, a.Client); err != nil {
-		logger.Warnf("error validating tailscale IngressClass: %v. In future this might be a terminal error.", err)
+		logger.Infof("error validating tailscale IngressClass: %v.", err)
+		return nil
 	}
 
 	// Get and validate ProxyGroup readiness
@@ -121,7 +118,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		return nil
 	}
 	pg := &tsapi.ProxyGroup{}
-	if err := a.Get(ctx, client.ObjectKey{Name: pgName, Namespace: a.tsNamespace}, pg); err != nil {
+	if err := a.Get(ctx, client.ObjectKey{Name: pgName}, pg); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Infof("ProxyGroup %q does not exist", pgName)
 			return nil
@@ -129,13 +126,15 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		return fmt.Errorf("getting ProxyGroup %q: %w", pgName, err)
 	}
 	if !tsoperator.ProxyGroupIsReady(pg) {
+		// TODO(irbekrm): we need to reconcile ProxyGroup Ingresses on ProxyGroup changes to not miss the status update
+		// in this case.
 		logger.Infof("ProxyGroup %q is not ready", pgName)
 		return nil
 	}
 
 	// Validate Ingress configuration
 	if err := a.validateIngress(ing, pg); err != nil {
-		logger.Errorf("invalid Ingress configuration: %v", err)
+		logger.Infof("invalid Ingress configuration: %v", err)
 		a.recorder.Event(ing, corev1.EventTypeWarning, "InvalidIngressConfiguration", err.Error())
 		return nil
 	}
@@ -176,23 +175,22 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	// TODO(irbekrm): perhaps in future we could have record names being stored on VIPServices. I am not certain if
 	// there might not be edge cases (custom domains, etc?) where attempting to determine the DNS name of the
 	// VIPService in this way won't be incorrect.
-	dnsNameBase, err := a.dnsNameBaseForVIPService(ctx)
+	tcd, err := a.tailnetCertDomain(ctx)
 	if err != nil {
 		return fmt.Errorf("error determining DNS name base: %w", err)
 	}
-	dnsName := hostname + "." + dnsNameBase
-	svc, err := a.tsClient.getVIPServiceByName(ctx, hostname)
+	dnsName := hostname + "." + tcd
+	existingVIPSvc, err := a.tsClient.getVIPServiceByName(ctx, hostname)
 	// TODO(irbekrm): here and when creating the VIPService, verify if the error is not terminal (and therefore
 	// should not be reconciled). For example, if the hostname is already a hostname of a Tailscale node, the GET
 	// here will fail.
 	if err != nil {
 		errResp := &tailscale.ErrResponse{}
 		if ok := errors.As(err, errResp); ok && errResp.Status != http.StatusNotFound {
-			logger.Infof("error getting VIPService %q: %v", hostname, err)
 			return fmt.Errorf("error getting VIPService %q: %w", hostname, err)
 		}
 	}
-	if svc != nil && !isVIPServiceForIngress(svc, ing) {
+	if existingVIPSvc != nil && !isVIPServiceForIngress(existingVIPSvc, ing) {
 		logger.Infof("VIPService %q for MagicDNS name %q  already exists, but is not owned by this Ingress. Please delete it manually and recreate this Ingress to proceed or create an Ingress for a different MagicDNS name", hostname, dnsName)
 		a.recorder.Event(ing, corev1.EventTypeWarning, "ConflictingVIPServiceExists", fmt.Sprintf("VIPService %q for MagicDNS name %q already exists, but is not owned by this Ingress. Please delete it manually to proceed or create an Ingress for a different MagicDNS name", hostname, dnsName))
 		return nil
@@ -247,17 +245,18 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		tags = strings.Split(tstr, ",")
 	}
 
-	vipSVc := &VIPService{
+	vipSvc := &VIPService{
 		Name:    hostname,
 		Tags:    tags,
+		Ports:   []string{"443"}, // always 443 for Ingress
 		Comment: fmt.Sprintf(VIPSvcOwnerRef, ing.UID),
 	}
-	if svc != nil {
-		vipSVc.Addrs = svc.Addrs
+	if existingVIPSvc != nil {
+		vipSvc.Addrs = existingVIPSvc.Addrs
 	}
-	if svc == nil || !reflect.DeepEqual(vipSVc.Tags, svc.Tags) {
+	if existingVIPSvc == nil || !reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) {
 		logger.Infof("Ensuring VIPService %q exists and is up to date", hostname)
-		if err := a.tsClient.createOrUpdateVIPServiceByName(ctx, vipSVc); err != nil {
+		if err := a.tsClient.createOrUpdateVIPServiceByName(ctx, vipSvc); err != nil {
 			logger.Infof("error creating VIPService: %v", err)
 			return fmt.Errorf("error creating VIPService: %w", err)
 		}
@@ -309,12 +308,7 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 		// ...check if there is currently an Ingress with this hostname
 		found := false
 		for _, i := range ingList.Items {
-			var ingressHostname string
-			if i.Spec.TLS != nil && len(i.Spec.TLS) > 0 && len(i.Spec.TLS[0].Hosts) > 0 {
-				ingressHostname, _, _ = strings.Cut(i.Spec.TLS[0].Hosts[0], ".")
-			} else {
-				ingressHostname = i.Namespace + "-" + i.Name + "-ingress"
-			}
+			ingressHostname := hostnameForIngress(&i)
 			if ingressHostname == vipHostname {
 				found = true
 				break
@@ -390,15 +384,8 @@ func (a *IngressPGReconciler) maybeCleanup(ctx context.Context, hostname string,
 	logger.Infof("Ensuring that VIPService %q configuration is cleaned up", hostname)
 
 	// 2. Delete the VIPService.
-	svc, err := a.getVIPService(ctx, hostname, logger)
-	if err != nil {
-		return fmt.Errorf("error getting VIPService: %w", err)
-	}
-	if isVIPServiceForIngress(svc, ing) {
-		logger.Infof("Deleting VIPService %q", hostname)
-		if err = a.tsClient.deleteVIPServiceByName(ctx, hostname); err != nil {
-			return fmt.Errorf("error deleting VIPService: %w", err)
-		}
+	if err := a.deleteVIPServiceIfExists(ctx, hostname, ing, logger); err != nil {
+		return fmt.Errorf("error deleting VIPService: %w", err)
 	}
 
 	// 3. Remove the VIPService from the serve config for the ProxyGroup.
@@ -424,14 +411,18 @@ func (a *IngressPGReconciler) maybeCleanup(ctx context.Context, hostname string,
 }
 
 func (a *IngressPGReconciler) deleteFinalizer(ctx context.Context, ing *networkingv1.Ingress, logger *zap.SugaredLogger) error {
-	ix := slices.Index(ing.Finalizers, FinalizerNamePG)
-	if ix < 0 {
-		logger.Debugf("no finalizer, nothing to do")
+	found := false
+	ing.Finalizers = slices.DeleteFunc(ing.Finalizers, func(f string) bool {
+		found = true
+		return f == FinalizerNamePG
+	})
+	if !found {
 		return nil
 	}
-	ing.Finalizers = append(ing.Finalizers[:ix], ing.Finalizers[ix+1:]...)
+	logger.Debug("ensure %q finalizer is removed", FinalizerNamePG)
+
 	if err := a.Update(ctx, ing); err != nil {
-		return fmt.Errorf("failed to remove finalizer: %w", err)
+		return fmt.Errorf("failed to remove finalizer %q: %w", FinalizerNamePG, err)
 	}
 	return nil
 }
@@ -467,18 +458,13 @@ type localClient interface {
 	StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error)
 }
 
-func (a *IngressPGReconciler) dnsNameBaseForVIPService(ctx context.Context) (string, error) {
+// tailnetCertDomain returns the base domain (TCD) of the current tailnet.
+func (a *IngressPGReconciler) tailnetCertDomain(ctx context.Context) (string, error) {
 	st, err := a.lc.StatusWithoutPeers(ctx)
 	if err != nil {
 		return "", fmt.Errorf("error getting tailscale status: %w", err)
 	}
-	n := st.Self.DNSName
-	n = strings.TrimSuffix(n, ".")
-	i := strings.Index(n, ".")
-	if i == -1 {
-		return "", fmt.Errorf("invalid DNS name: %q", n)
-	}
-	return n[i+1:], nil
+	return st.CurrentTailnet.MagicDNSSuffix, nil
 }
 
 // shouldExpose returns true if the Ingress should be exposed over Tailscale in HA mode (on a ProxyGroup)
@@ -503,7 +489,7 @@ func (a *IngressPGReconciler) getVIPService(ctx context.Context, hostname string
 }
 
 func isVIPServiceForIngress(svc *VIPService, ing *networkingv1.Ingress) bool {
-	if svc == nil {
+	if svc == nil || ing == nil {
 		return false
 	}
 	return strings.EqualFold(svc.Comment, fmt.Sprintf(VIPSvcOwnerRef, ing.UID))
@@ -521,40 +507,61 @@ func isVIPServiceForAnyIngress(svc *VIPService) bool {
 // - Any tags provided via tailscale.com/tags annotation are valid Tailscale ACL tags
 // - The derived hostname is a valid DNS label
 // - The referenced ProxyGroup exists and is of type 'ingress'
+// - Ingress' TLS block is invalid
 func (a *IngressPGReconciler) validateIngress(ing *networkingv1.Ingress, pg *tsapi.ProxyGroup) error {
+	var errs []error
+
 	// Validate tags if present
 	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
 		tags := strings.Split(tstr, ",")
 		for _, tag := range tags {
 			tag = strings.TrimSpace(tag)
 			if err := tailcfg.CheckTag(tag); err != nil {
-				return fmt.Errorf("tailscale.com/tags annotation contains invalid tag %q: %w", tag, err)
+				errs = append(errs, fmt.Errorf("tailscale.com/tags annotation contains invalid tag %q: %w", tag, err))
 			}
 		}
 	}
 
+	// Validate TLS configuration
+	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && (len(ing.Spec.TLS) > 1 || len(ing.Spec.TLS[0].Hosts) > 1) {
+		errs = append(errs, fmt.Errorf("Ingress contains invalid TLS block %v: only a single TLS entry with a single host is allowed", ing.Spec.TLS))
+	}
+
 	// Validate that the hostname will be a valid DNS label
-	var hostname string
-	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
-		h := ing.Spec.TLS[0].Hosts[0]
-		hostname, _, _ = strings.Cut(h, ".")
-	} else {
-		hostname = ing.Namespace + "-" + ing.Name + "-ingress"
-	}
-
-	// TODO(irbekrm): link docs for how hostnames are derived
+	hostname := hostnameForIngress(ing)
 	if err := dnsname.ValidLabel(hostname); err != nil {
-		return fmt.Errorf("invalid hostname %q: %w. Ensure that the hostname is a valid DNS label", hostname, err)
+		errs = append(errs, fmt.Errorf("invalid hostname %q: %w. Ensure that the hostname is a valid DNS label", hostname, err))
 	}
 
+	// Validate ProxyGroup type
 	if pg.Spec.Type != tsapi.ProxyGroupTypeIngress {
-		return fmt.Errorf("ProxyGroup %q is of type %q but must be of type %q",
-			pg.Name, pg.Spec.Type, tsapi.ProxyGroupTypeIngress)
+		errs = append(errs, fmt.Errorf("ProxyGroup %q is of type %q but must be of type %q",
+			pg.Name, pg.Spec.Type, tsapi.ProxyGroupTypeIngress))
 	}
 
+	// Validate ProxyGroup readiness
 	if !tsoperator.ProxyGroupIsReady(pg) {
-		return fmt.Errorf("ProxyGroup %q is not ready", pg.Name)
+		errs = append(errs, fmt.Errorf("ProxyGroup %q is not ready", pg.Name))
 	}
 
+	return errors.Join(errs...)
+}
+
+// deleteVIPServiceIfExists attempts to delete the VIPService if it exists and is owned by the given Ingress.
+func (a *IngressPGReconciler) deleteVIPServiceIfExists(ctx context.Context, name string, ing *networkingv1.Ingress, logger *zap.SugaredLogger) error {
+	svc, err := a.getVIPService(ctx, name, logger)
+	if err != nil {
+		return fmt.Errorf("error getting VIPService: %w", err)
+	}
+
+	// isVIPServiceForIngress handles nil svc, so we don't need to check it here
+	if !isVIPServiceForIngress(svc, ing) {
+		return nil
+	}
+
+	logger.Infof("Deleting VIPService %q", name)
+	if err = a.tsClient.deleteVIPServiceByName(ctx, name); err != nil {
+		return fmt.Errorf("error deleting VIPService: %w", err)
+	}
 	return nil
 }

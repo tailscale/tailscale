@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,11 +25,9 @@ import (
 const (
 	defaultTailnet = "-"
 	defaultBaseURL = "https://api.tailscale.com"
-	// maxSize is the maximum read size (10MB) of responses from the server.
-	maxReadSize = 10 << 20
 )
 
-func newTSClient(ctx context.Context, clientIDPath, clientSecretPath string) (tsClientI, error) {
+func newTSClient(ctx context.Context, clientIDPath, clientSecretPath string) (tsClient, error) {
 	clientID, err := os.ReadFile(clientIDPath)
 	if err != nil {
 		return nil, fmt.Errorf("error reading client ID %q: %w", clientIDPath, err)
@@ -47,23 +44,27 @@ func newTSClient(ctx context.Context, clientIDPath, clientSecretPath string) (ts
 	c := tailscale.NewClient(defaultTailnet, nil)
 	c.UserAgent = "tailscale-k8s-operator"
 	c.HTTPClient = credentials.Client(ctx)
-	tsc := &tsClient{Client: c, baseURL: defaultBaseURL, tailnet: defaultTailnet}
+	tsc := &tsClientImpl{
+		Client:  c,
+		baseURL: defaultBaseURL,
+		tailnet: defaultTailnet,
+	}
 	return tsc, nil
 }
 
-type tsClient struct {
-	*tailscale.Client
-	baseURL string
-	tailnet string
-}
-
-type tsClientI interface {
+type tsClient interface {
 	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
 	Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error)
 	DeleteDevice(ctx context.Context, nodeStableID string) error
 	getVIPServiceByName(ctx context.Context, name string) (*VIPService, error)
 	createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPService) error
 	deleteVIPServiceByName(ctx context.Context, name string) error
+}
+
+type tsClientImpl struct {
+	*tailscale.Client
+	baseURL string
+	tailnet string
 }
 
 // VIPService is a Tailscale VIPService with Tailscale API JSON representation.
@@ -88,7 +89,7 @@ type VIPService struct {
 }
 
 // GetVIPServiceByName retrieves a VIPService by its name. It returns 404 if the VIPService is not found.
-func (c *tsClient) getVIPServiceByName(ctx context.Context, name string) (*VIPService, error) {
+func (c *tsClientImpl) getVIPServiceByName(ctx context.Context, name string) (*VIPService, error) {
 	path := fmt.Sprintf("%s/api/v2/tailnet/%s/vip-services/by-name/%s", c.baseURL, c.tailnet, url.PathEscape(name))
 	req, err := http.NewRequestWithContext(ctx, httpm.GET, path, nil)
 	if err != nil {
@@ -114,8 +115,7 @@ func (c *tsClient) getVIPServiceByName(ctx context.Context, name string) (*VIPSe
 // VIPService already exists, the VIPService is fetched first to ensure that any auto-allocated IP addresses are not
 // lost during the update. If the VIPService was created without any IP addresses explicitly set (so that they were
 // auto-allocated by Tailscale) any subsequent request to this function that does not set any IP addresses will error.
-func (c *tsClient) createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPService) error {
-
+func (c *tsClientImpl) createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPService) error {
 	data, err := json.Marshal(svc)
 	if err != nil {
 		return err
@@ -139,7 +139,7 @@ func (c *tsClient) createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPS
 
 // DeleteVIPServiceByName deletes a VIPService by its name. It returns an error if the VIPService
 // does not exist or if the deletion fails.
-func (c *tsClient) deleteVIPServiceByName(ctx context.Context, name string) error {
+func (c *tsClientImpl) deleteVIPServiceByName(ctx context.Context, name string) error {
 	path := fmt.Sprintf("%s/api/v2/tailnet/%s/vip-services/by-name/%s", c.baseURL, c.tailnet, url.PathEscape(name))
 	req, err := http.NewRequestWithContext(ctx, httpm.DELETE, path, nil)
 	if err != nil {
@@ -158,19 +158,15 @@ func (c *tsClient) deleteVIPServiceByName(ctx context.Context, name string) erro
 
 // sendRequest add the authentication key to the request and sends it. It
 // receives the response and reads up to 10MB of it.
-func (c *tsClient) sendRequest(req *http.Request) ([]byte, *http.Response, error) {
+func (c *tsClientImpl) sendRequest(req *http.Request) ([]byte, *http.Response, error) {
 	resp, err := c.Do(req)
 	if err != nil {
 		return nil, resp, fmt.Errorf("error actually doing request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Read response. Limit the response to 10MB.
-	body := io.LimitReader(resp.Body, maxReadSize+1)
-	b, err := io.ReadAll(body)
-	if len(b) > maxReadSize {
-		err = errors.New("API response too large")
-	}
+	// Read response
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		err = fmt.Errorf("error reading response body: %v", err)
 	}

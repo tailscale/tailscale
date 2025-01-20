@@ -62,7 +62,7 @@ type ProxyGroupReconciler struct {
 	l        *zap.SugaredLogger
 	recorder record.EventRecorder
 	clock    tstime.Clock
-	tsClient tsClientI
+	tsClient tsClient
 
 	// User-specified defaults from the helm installation.
 	tsNamespace       string

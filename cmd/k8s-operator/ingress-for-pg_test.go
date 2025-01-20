@@ -35,7 +35,6 @@ func TestIngressPGReconciler(t *testing.T) {
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test-pg",
-			Namespace:  "operator-ns",
 			Generation: 1,
 		},
 		Spec: tsapi.ProxyGroupSpec{
@@ -59,7 +58,7 @@ func TestIngressPGReconciler(t *testing.T) {
 		WithObjects(pg, pgConfigMap, tsIngressClass).
 		WithStatusSubresource(pg).
 		Build()
-	mustUpdateStatus(t, fc, "operator-ns", pg.Name, func(pg *tsapi.ProxyGroup) {
+	mustUpdateStatus(t, fc, "", pg.Name, func(pg *tsapi.ProxyGroup) {
 		pg.Status.Conditions = []metav1.Condition{
 			{
 				Type:               string(tsapi.ProxyGroupReady),
@@ -77,8 +76,8 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	lc := &fakeLocalClient{
 		status: &ipnstate.Status{
-			Self: &ipnstate.PeerStatus{
-				DNSName: "operator.tailnetxyz.ts.net.",
+			CurrentTailnet: &ipnstate.TailnetStatus{
+				MagicDNSSuffix: "ts.net",
 			},
 		},
 	}
@@ -200,5 +199,139 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	if len(cfg.Services) > 0 {
 		t.Error("serve config not cleaned up")
+	}
+}
+
+func TestValidateIngress(t *testing.T) {
+	baseIngress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+		},
+	}
+
+	readyProxyGroup := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-pg",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type: tsapi.ProxyGroupTypeIngress,
+		},
+		Status: tsapi.ProxyGroupStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               string(tsapi.ProxyGroupReady),
+					Status:             metav1.ConditionTrue,
+					ObservedGeneration: 1,
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		ing     *networkingv1.Ingress
+		pg      *tsapi.ProxyGroup
+		wantErr string
+	}{
+		{
+			name: "valid_ingress_with_hostname",
+			ing: &networkingv1.Ingress{
+				ObjectMeta: baseIngress.ObjectMeta,
+				Spec: networkingv1.IngressSpec{
+					TLS: []networkingv1.IngressTLS{
+						{Hosts: []string{"test.example.com"}},
+					},
+				},
+			},
+			pg: readyProxyGroup,
+		},
+		{
+			name: "valid_ingress_with_default_hostname",
+			ing:  baseIngress,
+			pg:   readyProxyGroup,
+		},
+		{
+			name: "invalid_tags",
+			ing: &networkingv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      baseIngress.Name,
+					Namespace: baseIngress.Namespace,
+					Annotations: map[string]string{
+						AnnotationTags: "tag:invalid!",
+					},
+				},
+			},
+			pg:      readyProxyGroup,
+			wantErr: "tailscale.com/tags annotation contains invalid tag \"tag:invalid!\": tag names can only contain numbers, letters, or dashes",
+		},
+		{
+			name: "multiple_TLS_entries",
+			ing: &networkingv1.Ingress{
+				ObjectMeta: baseIngress.ObjectMeta,
+				Spec: networkingv1.IngressSpec{
+					TLS: []networkingv1.IngressTLS{
+						{Hosts: []string{"test1.example.com"}},
+						{Hosts: []string{"test2.example.com"}},
+					},
+				},
+			},
+			pg:      readyProxyGroup,
+			wantErr: "Ingress contains invalid TLS block [{[test1.example.com] } {[test2.example.com] }]: only a single TLS entry with a single host is allowed",
+		},
+		{
+			name: "multiple_hosts_in_TLS_entry",
+			ing: &networkingv1.Ingress{
+				ObjectMeta: baseIngress.ObjectMeta,
+				Spec: networkingv1.IngressSpec{
+					TLS: []networkingv1.IngressTLS{
+						{Hosts: []string{"test1.example.com", "test2.example.com"}},
+					},
+				},
+			},
+			pg:      readyProxyGroup,
+			wantErr: "Ingress contains invalid TLS block [{[test1.example.com test2.example.com] }]: only a single TLS entry with a single host is allowed",
+		},
+		{
+			name: "wrong_proxy_group_type",
+			ing:  baseIngress,
+			pg: &tsapi.ProxyGroup{
+				ObjectMeta: readyProxyGroup.ObjectMeta,
+				Spec: tsapi.ProxyGroupSpec{
+					Type: tsapi.ProxyGroupType("foo"),
+				},
+				Status: readyProxyGroup.Status,
+			},
+			wantErr: "ProxyGroup \"test-pg\" is of type \"foo\" but must be of type \"ingress\"",
+		},
+		{
+			name: "proxy_group_not_ready",
+			ing:  baseIngress,
+			pg: &tsapi.ProxyGroup{
+				ObjectMeta: readyProxyGroup.ObjectMeta,
+				Spec:       readyProxyGroup.Spec,
+				Status: tsapi.ProxyGroupStatus{
+					Conditions: []metav1.Condition{
+						{
+							Type:               string(tsapi.ProxyGroupReady),
+							Status:             metav1.ConditionFalse,
+							ObservedGeneration: 1,
+						},
+					},
+				},
+			},
+			wantErr: "ProxyGroup \"test-pg\" is not ready",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &IngressPGReconciler{}
+			err := r.validateIngress(tt.ing, tt.pg)
+			if (err == nil && tt.wantErr != "") || (err != nil && err.Error() != tt.wantErr) {
+				t.Errorf("validateIngress() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }

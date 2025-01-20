@@ -59,7 +59,7 @@ var (
 )
 
 func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
-	logger := a.logger.With("ingress-ns", req.Namespace, "ingress-name", req.Name)
+	logger := a.logger.With("Ingress", req.NamespacedName)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
 
@@ -206,10 +206,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
 		tags = strings.Split(tstr, ",")
 	}
-	hostname := ing.Namespace + "-" + ing.Name + "-ingress"
-	if tlsHost != "" {
-		hostname, _, _ = strings.Cut(tlsHost, ".")
-	}
+	hostname := hostnameForIngress(ing)
 
 	sts := &tailscaleSTSConfig{
 		Hostname:            hostname,
@@ -279,12 +276,12 @@ func validateIngressClass(ctx context.Context, cl client.Client) error {
 		},
 	}
 	if err := cl.Get(ctx, client.ObjectKeyFromObject(ic), ic); apierrors.IsNotFound(err) {
-		return errors.New("Tailscale IngressClass not found in cluster. Latest installation manifests include a tailscale IngressClass - please update")
+		return errors.New("'tailscale' IngressClass not found in cluster.")
 	} else if err != nil {
 		return fmt.Errorf("error retrieving 'tailscale' IngressClass: %w", err)
 	}
 	if ic.Spec.Controller != tailscaleIngressControllerName {
-		return fmt.Errorf("Tailscale Ingress class controller name %s does not match tailscale Ingress controller name %s. Ensure that you are using 'tailscale' IngressClass from latest Tailscale installation manifests", ic.Spec.Controller, tailscaleIngressControllerName)
+		return fmt.Errorf("'tailscale' Ingress class controller name %s does not match tailscale Ingress controller name %s. Ensure that you are using 'tailscale' IngressClass from latest Tailscale installation manifests", ic.Spec.Controller, tailscaleIngressControllerName)
 	}
 	if ic.GetAnnotations()[ingressClassDefaultAnnotation] != "" {
 		return fmt.Errorf("%s annotation is set on 'tailscale' IngressClass, but Tailscale Ingress controller does not support default Ingress class. Ensure that you are using 'tailscale' IngressClass from latest Tailscale installation manifests", ingressClassDefaultAnnotation)
@@ -355,4 +352,16 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 		}
 	}
 	return handlers, nil
+}
+
+// hostnameForIngress returns the hostname for an Ingress resource.
+// If the Ingress has TLS configured with a host, it returns the first component of that host.
+// Otherwise, it returns a hostname derived from the Ingress name and namespace.
+func hostnameForIngress(ing *networkingv1.Ingress) string {
+	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
+		h := ing.Spec.TLS[0].Hosts[0]
+		hostname, _, _ := strings.Cut(h, ".")
+		return hostname
+	}
+	return ing.Namespace + "-" + ing.Name + "-ingress"
 }
