@@ -155,7 +155,8 @@ type CapabilityVersion int
 //   - 110: 2024-12-12: removed never-before-used Tailscale SSH public key support (#14373)
 //   - 111: 2025-01-14: Client supports a peer having Node.HomeDERP (issue #14636)
 //   - 112: 2025-01-14: Client interprets AllowedIPs of nil as meaning same as Addresses
-const CurrentCapabilityVersion CapabilityVersion = 112
+//   - 113: 2025-01-20: Client communicates to control whether funnel is enabled by sending Hostinfo.IngressEnabled (#14688)
+const CurrentCapabilityVersion CapabilityVersion = 113
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -869,6 +870,7 @@ type Hostinfo struct {
 	ShareeNode      bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
 	NoLogsNoSupport bool           `json:",omitempty"` // indicates that the user has opted out of sending logs and support
 	WireIngress     bool           `json:",omitempty"` // indicates that the node wants the option to receive ingress connections
+	IngressEnabled  bool           `json:",omitempty"` // if the node has any funnel endpoint enabled
 	AllowsUpdate    bool           `json:",omitempty"` // indicates that the node has opted-in to admin-console-drive remote updates
 	Machine         string         `json:",omitempty"` // the current host's machine type (uname -m)
 	GoArch          string         `json:",omitempty"` // GOARCH value (of the built binary)

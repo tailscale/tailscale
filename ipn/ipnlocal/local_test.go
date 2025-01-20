@@ -4838,3 +4838,154 @@ func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateIngressLocked(t *testing.T) {
+	tests := []struct {
+		name              string
+		hi                *tailcfg.Hostinfo
+		sc                *ipn.ServeConfig
+		wantIngress       bool
+		wantWireIngress   bool
+		wantControlUpdate bool
+	}{
+		{
+			name: "no_hostinfo_no_serve_config",
+			hi:   nil,
+		},
+		{
+			name: "empty_hostinfo_no_serve_config",
+			hi:   &tailcfg.Hostinfo{},
+		},
+		{
+			name: "empty_hostinfo_funnel_enabled",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantIngress:       true,
+			wantWireIngress:   true,
+			wantControlUpdate: true,
+		},
+		{
+			name: "empty_hostinfo_funnel_disabled",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress:   true, // true if there is any AllowFunnel block
+			wantControlUpdate: true,
+		},
+		{
+			name: "empty_hostinfo_no_funnel",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {HTTPS: true},
+				},
+			},
+		},
+		{
+			name: "funnel_enabled_no_change",
+			hi: &tailcfg.Hostinfo{
+				IngressEnabled: true,
+				WireIngress:    true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantIngress:     true,
+			wantWireIngress: true,
+		},
+		{
+			name: "funnel_disabled_no_change",
+			hi: &tailcfg.Hostinfo{
+				WireIngress: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress: true, // true if there is any AllowFunnel block
+		},
+		{
+			name: "funnel_changes_to_disabled",
+			hi: &tailcfg.Hostinfo{
+				IngressEnabled: true,
+				WireIngress:    true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress:   true, // true if there is any AllowFunnel block
+			wantControlUpdate: true,
+		},
+		{
+			name: "funnel_changes_to_enabled",
+			hi: &tailcfg.Hostinfo{
+				WireIngress: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantWireIngress:   true,
+			wantIngress:       true,
+			wantControlUpdate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			b.hostinfo = tt.hi
+			b.serveConfig = tt.sc.View()
+			allDone := make(chan bool, 1)
+			defer b.goTracker.AddDoneCallback(func() {
+				b.mu.Lock()
+				defer b.mu.Unlock()
+				if b.goTracker.RunningGoroutines() > 0 {
+					return
+				}
+				select {
+				case allDone <- true:
+				default:
+				}
+			})()
+
+			was := b.goTracker.StartedGoroutines()
+			b.updateIngressLocked()
+
+			if tt.hi != nil {
+				if tt.hi.IngressEnabled != tt.wantIngress {
+					t.Errorf("IngressEnabled = %v, want %v", tt.hi.IngressEnabled, tt.wantIngress)
+				}
+				if tt.hi.WireIngress != tt.wantWireIngress {
+					t.Errorf("WireIngress = %v, want %v", tt.hi.WireIngress, tt.wantWireIngress)
+				}
+			}
+
+			startedGoroutine := b.goTracker.StartedGoroutines() != was
+			if startedGoroutine != tt.wantControlUpdate {
+				t.Errorf("control update triggered = %v, want %v", startedGoroutine, tt.wantControlUpdate)
+			}
+
+			if startedGoroutine {
+				select {
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for goroutine to finish")
+				case <-allDone:
+				}
+			}
+		})
+	}
+}
