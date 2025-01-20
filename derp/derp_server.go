@@ -357,6 +357,12 @@ var packetsDropped = metrics.NewMultiLabelMap[dropReasonKindLabels](
 	"counter",
 	"DERP packets dropped by reason and by kind")
 
+var bytesDropped = metrics.NewMultiLabelMap[dropReasonKindLabels](
+	"derp_bytes_dropped",
+	"counter",
+	"DERP bytes dropped by reason and by kind",
+)
+
 // NewServer returns a new DERP server. It doesn't listen on its own.
 // Connections are given to it via Server.Accept.
 func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
@@ -388,19 +394,27 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 	s.packetsRecvDisco = s.packetsRecvByKind.Get(string(packetKindDisco))
 	s.packetsRecvOther = s.packetsRecvByKind.Get(string(packetKindOther))
 
-	genPacketsDroppedCounters()
+	genDroppedCounters()
 
 	s.perClientSendQueueDepth = getPerClientSendQueueDepth()
 	return s
 }
 
-func genPacketsDroppedCounters() {
+func genDroppedCounters() {
 	initMetrics := func(reason dropReason) {
 		packetsDropped.Add(dropReasonKindLabels{
 			Kind:   string(packetKindDisco),
 			Reason: string(reason),
 		}, 0)
 		packetsDropped.Add(dropReasonKindLabels{
+			Kind:   string(packetKindOther),
+			Reason: string(reason),
+		}, 0)
+		bytesDropped.Add(dropReasonKindLabels{
+			Kind:   string(packetKindDisco),
+			Reason: string(reason),
+		}, 0)
+		bytesDropped.Add(dropReasonKindLabels{
 			Kind:   string(packetKindOther),
 			Reason: string(reason),
 		}, 0)
@@ -412,6 +426,14 @@ func genPacketsDroppedCounters() {
 				Reason: string(reason),
 			}),
 			packetsDropped.Get(dropReasonKindLabels{
+				Kind:   string(packetKindOther),
+				Reason: string(reason),
+			}),
+			bytesDropped.Get(dropReasonKindLabels{
+				Kind:   string(packetKindDisco),
+				Reason: string(reason),
+			}),
+			bytesDropped.Get(dropReasonKindLabels{
 				Kind:   string(packetKindOther),
 				Reason: string(reason),
 			}),
@@ -431,12 +453,14 @@ func genPacketsDroppedCounters() {
 	for _, dr := range dropReasons {
 		initMetrics(dr)
 		m := getMetrics(dr)
-		if len(m) != 2 {
+		if len(m) != 4 {
 			panic("dropReason metrics out of sync")
 		}
 
-		if m[0] == nil || m[1] == nil {
-			panic("dropReason metrics out of sync")
+		for _, v := range m {
+			if v == nil {
+				panic("dropReason metrics out of sync")
+			}
 		}
 	}
 }
@@ -1207,6 +1231,7 @@ func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, r
 		labels.Kind = string(packetKindOther)
 	}
 	packetsDropped.Add(labels, 1)
+	bytesDropped.Add(labels, int64(len(packetBytes)))
 
 	if verboseDropKeys[dstKey] {
 		// Preformat the log string prior to calling limitedLogf. The
