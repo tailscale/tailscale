@@ -54,8 +54,9 @@ var ErrETagMismatch = errors.New("etag mismatch")
 var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 
 type serveHTTPContext struct {
-	SrcAddr  netip.AddrPort
-	DestPort uint16
+	SrcAddr       netip.AddrPort
+	ForVIPService bool
+	DestPort      uint16
 
 	// provides funnel-specific context, nil if not funneled
 	Funnel *funnelFlow
@@ -275,6 +276,12 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
 	}
 
+	if config != nil {
+		if err := config.CheckValidServicesConfig(); err != nil {
+			return err
+		}
+	}
+
 	nm := b.netMap
 	if nm == nil {
 		return errors.New("netMap is nil")
@@ -432,6 +439,105 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 	handler(c)
 }
 
+// tcpHandlerForVIPService returns a handler for a TCP connection to a VIP service
+// that is being served via the ipn.ServeConfig. It returns nil if the destination
+// address is not a VIP service or if the VIP service does not have a TCP handler set.
+func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) (handler func(net.Conn) error) {
+	b.mu.Lock()
+	sc := b.serveConfig
+	ipVIPServiceMap := b.ipVIPServiceMap
+	b.mu.Unlock()
+
+	if !sc.Valid() {
+		return nil
+	}
+
+	dport := dstAddr.Port()
+
+	dstSvc, ok := ipVIPServiceMap[dstAddr.Addr()]
+	if !ok {
+		return nil
+	}
+
+	tcph, ok := sc.FindServiceTCP(dstSvc, dstAddr.Port())
+	if !ok {
+		b.logf("The destination service doesn't have a TCP handler set.")
+		return nil
+	}
+
+	if tcph.HTTPS() || tcph.HTTP() {
+		hs := &http.Server{
+			Handler: http.HandlerFunc(b.serveWebHandler),
+			BaseContext: func(_ net.Listener) context.Context {
+				return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
+					SrcAddr:       srcAddr,
+					ForVIPService: true,
+					DestPort:      dport,
+				})
+			},
+		}
+		if tcph.HTTPS() {
+			// TODO(kevinliang10): just leaving this TLS cert creation as if we don't have other
+			// hostnames, but for services this getTLSServeCetForPort will need a version that also take
+			// in the hostname. How to store the TLS cert is still being discussed.
+			hs.TLSConfig = &tls.Config{
+				GetCertificate: b.getTLSServeCertForPort(dport, true),
+			}
+			return func(c net.Conn) error {
+				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
+			}
+		}
+
+		return func(c net.Conn) error {
+			return hs.Serve(netutil.NewOneConnListener(c, nil))
+		}
+	}
+
+	if backDst := tcph.TCPForward(); backDst != "" {
+		return func(conn net.Conn) error {
+			defer conn.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+			cancel()
+			if err != nil {
+				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				return nil
+			}
+			defer backConn.Close()
+			if sni := tcph.TerminateTLS(); sni != "" {
+				conn = tls.Server(conn, &tls.Config{
+					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+						ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+						defer cancel()
+						pair, err := b.GetCertPEM(ctx, sni)
+						if err != nil {
+							return nil, err
+						}
+						cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+						if err != nil {
+							return nil, err
+						}
+						return &cert, nil
+					},
+				})
+			}
+
+			errc := make(chan error, 1)
+			go func() {
+				_, err := io.Copy(backConn, conn)
+				errc <- err
+			}()
+			go func() {
+				_, err := io.Copy(conn, backConn)
+				errc <- err
+			}()
+			return <-errc
+		}
+	}
+
+	return nil
+}
+
 // tcpHandlerForServe returns a handler for a TCP connection to be served via
 // the ipn.ServeConfig. The funnelFlow can be nil if this is not a funneled
 // connection.
@@ -462,7 +568,7 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 		}
 		if tcph.HTTPS() {
 			hs.TLSConfig = &tls.Config{
-				GetCertificate: b.getTLSServeCertForPort(dport),
+				GetCertificate: b.getTLSServeCertForPort(dport, false),
 			}
 			return func(c net.Conn) error {
 				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
@@ -542,7 +648,7 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
 		return z, "", false
 	}
-	wsc, ok := b.webServerConfig(hostname, sctx.DestPort)
+	wsc, ok := b.webServerConfig(hostname, sctx.ForVIPService, sctx.DestPort)
 	if !ok {
 		return z, "", false
 	}
@@ -900,7 +1006,7 @@ func allNumeric(s string) bool {
 	return s != ""
 }
 
-func (b *LocalBackend) webServerConfig(hostname string, port uint16) (c ipn.WebServerConfigView, ok bool) {
+func (b *LocalBackend) webServerConfig(hostname string, forVIPService bool, port uint16) (c ipn.WebServerConfigView, ok bool) {
 	key := ipn.HostPort(fmt.Sprintf("%s:%v", hostname, port))
 
 	b.mu.Lock()
@@ -909,15 +1015,18 @@ func (b *LocalBackend) webServerConfig(hostname string, port uint16) (c ipn.WebS
 	if !b.serveConfig.Valid() {
 		return c, false
 	}
+	if forVIPService {
+		return b.serveConfig.FindServiceWeb(key)
+	}
 	return b.serveConfig.FindWeb(key)
 }
 
-func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService bool) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		if hi == nil || hi.ServerName == "" {
 			return nil, errors.New("no SNI ServerName")
 		}
-		_, ok := b.webServerConfig(hi.ServerName, port)
+		_, ok := b.webServerConfig(hi.ServerName, forVIPService, port)
 		if !ok {
 			return nil, errors.New("no webserver configured for name/port")
 		}

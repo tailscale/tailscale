@@ -2615,6 +2615,150 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 
 func TestTCPHandlerForDst(t *testing.T) {
 	b := newTestBackend(t)
+	tests := []struct {
+		desc      string
+		dst       string
+		intercept bool
+	}{
+		{
+			desc:      "intercept port 80 (Web UI) on quad100 IPv4",
+			dst:       "100.100.100.100:80",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 80 (Web UI) on quad100 IPv6",
+			dst:       "[fd7a:115c:a1e0::53]:80",
+			intercept: true,
+		},
+		{
+			desc:      "don't intercept port 80 on local ip",
+			dst:       "100.100.103.100:80",
+			intercept: false,
+		},
+		{
+			desc:      "intercept port 8080 (Taildrive) on quad100 IPv4",
+			dst:       "[fd7a:115c:a1e0::53]:8080",
+			intercept: true,
+		},
+		{
+			desc:      "don't intercept port 8080 on local ip",
+			dst:       "100.100.103.100:8080",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 9080 on quad100 IPv4",
+			dst:       "100.100.100.100:9080",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 9080 on quad100 IPv6",
+			dst:       "[fd7a:115c:a1e0::53]:9080",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 9080 on local ip",
+			dst:       "100.100.103.100:9080",
+			intercept: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dst, func(t *testing.T) {
+			t.Log(tt.desc)
+			src := netip.MustParseAddrPort("100.100.102.100:51234")
+			h, _ := b.TCPHandlerForDst(src, netip.MustParseAddrPort(tt.dst))
+			if !tt.intercept && h != nil {
+				t.Error("intercepted traffic we shouldn't have")
+			} else if tt.intercept && h == nil {
+				t.Error("failed to intercept traffic we should have")
+			}
+		})
+	}
+}
+
+func TestTCPHandlerForDstWithVIPService(t *testing.T) {
+	b := newTestBackend(t)
+	svcIPMap := tailcfg.ServiceIPMappings{
+		"svc:foo": []netip.Addr{
+			netip.MustParseAddr("100.101.101.101"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:6565:6565"),
+		},
+		"svc:bar": []netip.Addr{
+			netip.MustParseAddr("100.99.99.99"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:626b:628b"),
+		},
+		"svc:baz": []netip.Addr{
+			netip.MustParseAddr("100.133.133.133"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:8585:8585"),
+		},
+	}
+	svcIPMapJSON, err := json.Marshal(svcIPMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.setNetMapLocked(
+		&netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{
+				Name: "example.ts.net",
+				CapMap: tailcfg.NodeCapMap{
+					tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
+				},
+			}).View(),
+			UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
+				tailcfg.UserID(1): {
+					LoginName:     "someone@example.com",
+					DisplayName:   "Some One",
+					ProfilePicURL: "https://example.com/photo.jpg",
+				},
+			},
+		},
+	)
+
+	err = b.setServeConfigLocked(
+		&ipn.ServeConfig{
+			Services: map[string]*ipn.ServiceConfig{
+				"svc:foo": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						882: {HTTP: true},
+						883: {HTTPS: true},
+					},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.example.ts.net:882": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							},
+						},
+						"foo.example.ts.net:883": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "test"},
+							},
+						},
+					},
+				},
+				"svc:bar": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						990: {TCPForward: "127.0.0.1:8443"},
+						991: {TCPForward: "127.0.0.1:5432", TerminateTLS: "bar.test.ts.net"},
+					},
+				},
+				"svc:qux": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						600: {HTTPS: true},
+					},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"qux.example.ts.net:600": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "qux"},
+							},
+						},
+					},
+				},
+			},
+		},
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		desc      string
@@ -2664,6 +2808,77 @@ func TestTCPHandlerForDst(t *testing.T) {
 		{
 			desc:      "don't intercept port 9080 on local ip",
 			dst:       "100.100.103.100:9080",
+			intercept: false,
+		},
+		// VIP service destinations
+		{
+			desc:      "intercept port 882 (HTTP) on service foo IPv4",
+			dst:       "100.101.101.101:882",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 882 (HTTP) on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:882",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 883 (HTTPS) on service foo IPv4",
+			dst:       "100.101.101.101:883",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 883 (HTTPS) on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:883",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 990 (TCPForward) on service bar IPv4",
+			dst:       "100.99.99.99:990",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 990 (TCPForward) on service bar IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:990",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 991 (TCPForward with TerminateTLS) on service bar IPv4",
+			dst:       "100.99.99.99:990",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 991 (TCPForward with TerminateTLS) on service bar IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:990",
+			intercept: true,
+		},
+		{
+			desc:      "don't intercept port 4444 on service foo IPv4",
+			dst:       "100.101.101.101:4444",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 4444 on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:4444",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 600 on unknown service IPv4",
+			dst:       "100.22.22.22:883",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 600 on unknown service IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:883",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 600 (HTTPS) on service baz IPv4",
+			dst:       "100.133.133.133:600",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 600 (HTTPS) on service baz IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:8585:8585]:600",
 			intercept: false,
 		},
 	}

@@ -228,10 +228,11 @@ type LocalBackend struct {
 	// is never called.
 	getTCPHandlerForFunnelFlow func(srcAddr netip.AddrPort, dstPort uint16) (handler func(net.Conn))
 
-	filterAtomic                 atomic.Pointer[filter.Filter]
-	containsViaIPFuncAtomic      syncs.AtomicValue[func(netip.Addr) bool]
-	shouldInterceptTCPPortAtomic syncs.AtomicValue[func(uint16) bool]
-	numClientStatusCalls         atomic.Uint32
+	filterAtomic                            atomic.Pointer[filter.Filter]
+	containsViaIPFuncAtomic                 syncs.AtomicValue[func(netip.Addr) bool]
+	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]
+	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool]
+	numClientStatusCalls                    atomic.Uint32
 
 	// goTracker accounts for all goroutines started by LocalBacked, primarily
 	// for testing and graceful shutdown purposes.
@@ -317,8 +318,9 @@ type LocalBackend struct {
 	offlineAutoUpdateCancel func()
 
 	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
-	serveConfig       ipn.ServeConfigView // or !Valid if none
+	lastServeConfJSON mem.RO                   // last JSON that was parsed into serveConfig
+	serveConfig       ipn.ServeConfigView      // or !Valid if none
+	ipVIPServiceMap   netmap.IPServiceMappings // map of VIPService IPs to their corresponding service names
 
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
@@ -523,6 +525,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.e.SetJailedFilter(noneFilter)
 
 	b.setTCPPortsIntercepted(nil)
+	b.setVIPServicesTCPPortsIntercepted(nil)
 
 	b.statusChanged = sync.NewCond(&b.statusLock)
 	b.e.SetStatusCallback(b.setWgengineStatus)
@@ -3362,10 +3365,7 @@ func (b *LocalBackend) clearMachineKeyLocked() error {
 	return nil
 }
 
-// setTCPPortsIntercepted populates b.shouldInterceptTCPPortAtomic with an
-// efficient func for ShouldInterceptTCPPort to use, which is called on every
-// incoming packet.
-func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
+func generateInterceptTCPPortFunc(ports []uint16) func(uint16) bool {
 	slices.Sort(ports)
 	ports = slices.Compact(ports)
 	var f func(uint16) bool
@@ -3396,7 +3396,61 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 			}
 		}
 	}
-	b.shouldInterceptTCPPortAtomic.Store(f)
+	return f
+}
+
+// setTCPPortsIntercepted populates b.shouldInterceptTCPPortAtomic with an
+// efficient func for ShouldInterceptTCPPort to use, which is called on every
+// incoming packet.
+func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
+	b.shouldInterceptTCPPortAtomic.Store(generateInterceptTCPPortFunc(ports))
+}
+
+func generateInterceptVIPServicesTCPPortFunc(svcAddrPorts map[netip.Addr]func(uint16) bool) func(netip.AddrPort) bool {
+	return func(ap netip.AddrPort) bool {
+		if f, ok := svcAddrPorts[ap.Addr()]; ok {
+			return f(ap.Port())
+		}
+		return false
+	}
+}
+
+// setVIPServicesTCPPortsIntercepted populates b.shouldInterceptVIPServicesTCPPortAtomic with an
+// efficient func for ShouldInterceptTCPPort to use, which is called on every incoming packet.
+func (b *LocalBackend) setVIPServicesTCPPortsIntercepted(svcPorts map[string][]uint16) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.setVIPServicesTCPPortsInterceptedLocked(svcPorts)
+}
+
+func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[string][]uint16) {
+	if len(svcPorts) == 0 {
+		b.shouldInterceptVIPServicesTCPPortAtomic.Store(func(netip.AddrPort) bool { return false })
+		return
+	}
+	nm := b.netMap
+	if nm == nil {
+		b.logf("can't set intercept function for Service TCP Ports, netMap is nil")
+		return
+	}
+	vipServiceIPMap := nm.GetVIPServiceIPMap()
+	if len(vipServiceIPMap) == 0 {
+		// No approved VIP Services
+		return
+	}
+
+	svcAddrPorts := make(map[netip.Addr]func(uint16) bool)
+	// Only set the intercept function if the service has been assigned a VIP.
+	for svcName, ports := range svcPorts {
+		if addrs, ok := vipServiceIPMap[svcName]; ok {
+			interceptFn := generateInterceptTCPPortFunc(ports)
+			for _, addr := range addrs {
+				svcAddrPorts[addr] = interceptFn
+			}
+		}
+	}
+
+	b.shouldInterceptVIPServicesTCPPortAtomic.Store(generateInterceptVIPServicesTCPPortFunc(svcAddrPorts))
 }
 
 // setAtomicValuesFromPrefsLocked populates sshAtomicBool, containsViaIPFuncAtomic,
@@ -3409,6 +3463,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(ipset.FalseContainsIPFunc())
 		b.setTCPPortsIntercepted(nil)
+		b.setVIPServicesTCPPortsInterceptedLocked(nil)
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
 	} else {
@@ -4159,6 +4214,11 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		}
 	}
 
+	// TODO(corp#26001): Get handler for VIP services and Local IPs using
+	// the same function.
+	if handler := b.tcpHandlerForVIPService(dst, src); handler != nil {
+		return handler, opts
+	}
 	// Then handle external connections to the local IP.
 	if !b.isLocalIP(dst.Addr()) {
 		return nil, nil
@@ -5676,6 +5736,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	netns.SetDisableBindConnToInterface(nm.HasCap(tailcfg.CapabilityDebugDisableBindConnToInterface))
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
+	b.ipVIPServiceMap = nm.GetIPVIPServiceMap()
 	if nm == nil {
 		b.nodeByAddr = nil
 
@@ -5962,6 +6023,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 // b.mu must be held.
 func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.PrefsView) {
 	handlePorts := make([]uint16, 0, 4)
+	vipServicesPorts := make(map[string][]uint16)
 
 	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
 		handlePorts = append(handlePorts, 22)
@@ -5985,6 +6047,20 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		}
 		handlePorts = append(handlePorts, servePorts...)
 
+		for svc, cfg := range b.serveConfig.Services().All() {
+			servicePorts := make([]uint16, 0, 3)
+			for port := range cfg.TCP().All() {
+				if port > 0 {
+					servicePorts = append(servicePorts, uint16(port))
+				}
+			}
+			if _, ok := vipServicesPorts[svc]; !ok {
+				vipServicesPorts[svc] = servicePorts
+			} else {
+				vipServicesPorts[svc] = append(vipServicesPorts[svc], servicePorts...)
+			}
+		}
+
 		b.setServeProxyHandlersLocked()
 
 		// don't listen on netmap addresses if we're in userspace mode
@@ -5996,6 +6072,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	// Update funnel info in hostinfo and kick off control update if needed.
 	b.updateIngressLocked()
 	b.setTCPPortsIntercepted(handlePorts)
+	b.setVIPServicesTCPPortsInterceptedLocked(vipServicesPorts)
 }
 
 // updateIngressLocked updates the hostinfo.WireIngress and hostinfo.IngressEnabled fields and kicks off a Hostinfo
@@ -6852,6 +6929,12 @@ func (b *LocalBackend) SetDevStateStore(key, value string) error {
 // Tailscaled and handled in-process.
 func (b *LocalBackend) ShouldInterceptTCPPort(port uint16) bool {
 	return b.shouldInterceptTCPPortAtomic.Load()(port)
+}
+
+// ShouldInterceptVIPServiceTCPPort reports whether the given TCP port number
+// to a VIP service should be intercepted by Tailscaled and handled in-process.
+func (b *LocalBackend) ShouldInterceptVIPServiceTCPPort(ap netip.AddrPort) bool {
+	return b.shouldInterceptVIPServicesTCPPortAtomic.Load()(ap)
 }
 
 // SwitchProfile switches to the profile with the given id.
