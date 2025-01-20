@@ -55,8 +55,8 @@ type ServeConfig struct {
 	// keyed by mount point ("/", "/foo", etc)
 	Web map[HostPort]*WebServerConfig `json:",omitempty"`
 
-	// Services maps from service name to a ServiceConfig. Which describes the
-	// L3, L4, and L7 forwarding information for the service.
+	// Services maps from service name (in the form "svc:dns-label") to a ServiceConfig.
+	// Which describes the L3, L4, and L7 forwarding information for the service.
 	Services map[string]*ServiceConfig `json:",omitempty"`
 
 	// AllowFunnel is the set of SNI:port values for which funnel
@@ -607,7 +607,32 @@ func (v ServeConfigView) Webs() iter.Seq2[HostPort, WebServerConfigView] {
 				}
 			}
 		}
+		for _, service := range v.Services().All() {
+			for k, v := range service.Web().All() {
+				if !yield(k, v) {
+					return
+				}
+			}
+		}
 	}
+}
+
+// FindServiceTCP return the TCPPortHandlerView for the given service name and port.
+func (v ServeConfigView) FindServiceTCP(svcName string, port uint16) (res TCPPortHandlerView, ok bool) {
+	svcCfg, ok := v.Services().GetOk(svcName)
+	if !ok {
+		return res, ok
+	}
+	return svcCfg.TCP().GetOk(port)
+}
+
+func (v ServeConfigView) FindServiceWeb(hp HostPort) (res WebServerConfigView, ok bool) {
+	for _, service := range v.Services().All() {
+		if res, ok := service.Web().GetOk(hp); ok {
+			return res, ok
+		}
+	}
+	return res, ok
 }
 
 // FindTCP returns the first TCP that matches with the given port. It
@@ -662,6 +687,17 @@ func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
 	return false
 }
 
+// CheckValidServicesConfig reports whether the ServeConfig has
+// invalid service configurations.
+func (sc *ServeConfig) CheckValidServicesConfig() error {
+	for svcName, service := range sc.Services {
+		if err := service.checkValidConfig(); err != nil {
+			return fmt.Errorf("invalid service configuration for %q: %w", svcName, err)
+		}
+	}
+	return nil
+}
+
 // ServicePortRange returns the list of tailcfg.ProtoPortRange that represents
 // the proto/ports pairs that are being served by the service.
 //
@@ -698,4 +734,18 @@ func (v ServiceConfigView) ServicePortRange() []tailcfg.ProtoPortRange {
 		})
 	}
 	return ranges
+}
+
+// ErrServiceConfigHasBothTCPAndTun signals that a service
+// in Tun mode cannot also has TCP or Web handlers set.
+var ErrServiceConfigHasBothTCPAndTun = errors.New("the VIP Service configuration can not set TUN at the same time as TCP or Web")
+
+// checkValidConfig checks if the service configuration is valid.
+// Currently, the only invalid configuration is when the service is in Tun mode
+// and has TCP or Web handlers.
+func (v *ServiceConfig) checkValidConfig() error {
+	if v.Tun && (len(v.TCP) > 0 || len(v.Web) > 0) {
+		return ErrServiceConfigHasBothTCPAndTun
+	}
+	return nil
 }

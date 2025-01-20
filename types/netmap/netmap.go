@@ -101,6 +101,54 @@ func (nm *NetworkMap) GetAddresses() views.Slice[netip.Prefix] {
 	return nm.SelfNode.Addresses()
 }
 
+// GetVIPServiceIPMap returns a map of service names to the slice of
+// VIP addresses that correspond to the service. The service names are
+// with the prefix "svc:".
+//
+// TODO(corp##25997): cache the result of decoding the capmap so that
+// we don't have to decode it multiple times after each netmap update.
+func (nm *NetworkMap) GetVIPServiceIPMap() tailcfg.ServiceIPMappings {
+	if nm == nil {
+		return nil
+	}
+	if !nm.SelfNode.Valid() {
+		return nil
+	}
+
+	ipMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](nm.SelfNode.CapMap().AsMap(), tailcfg.NodeAttrServiceHost)
+	if len(ipMaps) != 1 || err != nil {
+		return nil
+	}
+
+	return ipMaps[0]
+}
+
+// GetIPVIPServiceMap returns a map of VIP addresses to the service
+// names that has the VIP address. The service names are with the
+// prefix "svc:".
+func (nm *NetworkMap) GetIPVIPServiceMap() IPServiceMappings {
+	var res IPServiceMappings
+	if nm == nil {
+		return res
+	}
+
+	if !nm.SelfNode.Valid() {
+		return res
+	}
+
+	serviceIPMap := nm.GetVIPServiceIPMap()
+	if serviceIPMap == nil {
+		return res
+	}
+	res = make(IPServiceMappings)
+	for svc, addrs := range serviceIPMap {
+		for _, addr := range addrs {
+			res[addr] = svc
+		}
+	}
+	return res
+}
+
 // AnyPeersAdvertiseRoutes reports whether any peer is advertising non-exit node routes.
 func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
 	for _, p := range nm.Peers {
