@@ -232,6 +232,46 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 	return s, status.TailscaleIPs[0], status.Self.PublicKey
 }
 
+func TestDialBlocks(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+
+	// Make one tsnet that blocks until it's up.
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	ln, err := s1.Listen("tcp", ":8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// Then make another tsnet node that will only be woken up
+	// upon the first dial.
+	tmp := filepath.Join(t.TempDir(), "s2")
+	os.MkdirAll(tmp, 0755)
+	s2 := &Server{
+		Dir:               tmp,
+		ControlURL:        controlURL,
+		Hostname:          "s2",
+		Store:             new(mem.Store),
+		Ephemeral:         true,
+		getCertForTesting: testCertRoot.getCert,
+	}
+	if *verboseNodes {
+		s2.Logf = log.Printf
+	}
+	t.Cleanup(func() { s2.Close() })
+
+	c, err := s2.Dial(ctx, "tcp", "s1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+}
+
 func TestConn(t *testing.T) {
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

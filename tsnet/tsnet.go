@@ -169,7 +169,39 @@ func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, e
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
+	if err := s.awaitRunning(ctx); err != nil {
+		return nil, err
+	}
 	return s.dialer.UserDial(ctx, network, address)
+}
+
+// awaitRunning waits until the backend is in state Running.
+// If the backend is in state Starting, it blocks until it reaches
+// a terminal state (such as Stopped, NeedsMachineAuth)
+// or the context expires.
+func (s *Server) awaitRunning(ctx context.Context) error {
+	st := s.lb.State()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		switch st {
+		case ipn.Running:
+			return nil
+		case ipn.NeedsLogin, ipn.Starting:
+			// Even after LocalBackend.Start, the state machine is still briefly
+			// in the "NeedsLogin" state. So treat that as also "Starting" and
+			// wait for us to get out of that state.
+			s.lb.WatchNotifications(ctx, ipn.NotifyInitialState, nil, func(n *ipn.Notify) (keepGoing bool) {
+				if n.State != nil {
+					st = *n.State
+				}
+				return st == ipn.NeedsLogin || st == ipn.Starting
+			})
+		default:
+			return fmt.Errorf("tsnet: backend in state %v", st)
+		}
+	}
 }
 
 // HTTPClient returns an HTTP client that is configured to connect over Tailscale.
