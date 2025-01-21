@@ -632,7 +632,7 @@ func (c *Conn) runDerpReader(ctx context.Context, regionID int, dc *derphttp.Cli
 				// Do nothing.
 			case derp.PeerGoneReasonNotHere:
 				metricRecvDiscoDERPPeerNotHere.Add(1)
-				c.logf("[unexpected] magicsock: derp-%d does not know about peer %s, removing route",
+				c.logf("magicsock: derp-%d does not know about peer %s, removing route",
 					regionID, key.NodePublic(m.Peer).ShortString())
 			default:
 				metricRecvDiscoDERPPeerGoneUnknown.Add(1)

@@ -79,8 +79,7 @@ const (
 	// framePeerGone to B so B can forget that a reverse path
 	// exists on that connection to get back to A. It is also sent
 	// if A tries to send a CallMeMaybe to B and the server has no
-	// record of B (which currently would only happen if there was
-	// a bug).
+	// record of B
 	framePeerGone = frameType(0x08) // 32B pub key of peer that's gone + 1 byte reason
 
 	// framePeerPresent is like framePeerGone, but for other members of the DERP
@@ -131,8 +130,8 @@ const (
 type PeerGoneReasonType byte
 
 const (
-	PeerGoneReasonDisconnected  = PeerGoneReasonType(0x00) // peer disconnected from this server
-	PeerGoneReasonNotHere       = PeerGoneReasonType(0x01) // server doesn't know about this peer, unexpected
+	PeerGoneReasonDisconnected  = PeerGoneReasonType(0x00) // is only sent when a peer disconnects from this server
+	PeerGoneReasonNotHere       = PeerGoneReasonType(0x01) // server doesn't know about this peer
 	PeerGoneReasonMeshConnBroke = PeerGoneReasonType(0xf0) // invented by Client.RunWatchConnectionLoop on disconnect; not sent on the wire
 )
 
