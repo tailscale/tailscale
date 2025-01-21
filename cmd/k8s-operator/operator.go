@@ -315,6 +315,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
+		Named("ingress-reconciler").
 		Watches(&appsv1.StatefulSet{}, ingressChildFilter).
 		Watches(&corev1.Secret{}, ingressChildFilter).
 		Watches(&corev1.Service{}, svcHandlerForIngress).
@@ -336,6 +337,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
+		Named("ingress-pg-reconciler").
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
 		Complete(&IngressPGReconciler{
 			recorder:    eventRecorder,
