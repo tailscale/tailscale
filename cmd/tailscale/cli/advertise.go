@@ -66,7 +66,7 @@ func parseServiceNames(servicesArg string) ([]string, error) {
 	if servicesArg != "" {
 		services = strings.Split(servicesArg, ",")
 		for _, svc := range services {
-			err := tailcfg.CheckServiceName(svc)
+			err := tailcfg.ServiceName(svc).Validate()
 			if err != nil {
 				return nil, fmt.Errorf("service %q: %s", svc, err)
 			}

@@ -195,7 +195,7 @@ func (v ServeConfigView) Web() views.MapFn[HostPort, *WebServerConfig, WebServer
 	})
 }
 
-func (v ServeConfigView) Services() views.MapFn[string, *ServiceConfig, ServiceConfigView] {
+func (v ServeConfigView) Services() views.MapFn[tailcfg.ServiceName, *ServiceConfig, ServiceConfigView] {
 	return views.MapFnOf(v.ж.Services, func(t *ServiceConfig) ServiceConfigView {
 		return t.View()
 	})
@@ -216,7 +216,7 @@ func (v ServeConfigView) ETag() string { return v.ж.ETag }
 var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
 	TCP         map[uint16]*TCPPortHandler
 	Web         map[HostPort]*WebServerConfig
-	Services    map[string]*ServiceConfig
+	Services    map[tailcfg.ServiceName]*ServiceConfig
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
 	ETag        string

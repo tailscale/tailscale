@@ -106,7 +106,7 @@ func (src *ServeConfig) Clone() *ServeConfig {
 		}
 	}
 	if dst.Services != nil {
-		dst.Services = map[string]*ServiceConfig{}
+		dst.Services = map[tailcfg.ServiceName]*ServiceConfig{}
 		for k, v := range src.Services {
 			if v == nil {
 				dst.Services[k] = nil
@@ -133,7 +133,7 @@ func (src *ServeConfig) Clone() *ServeConfig {
 var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
 	TCP         map[uint16]*TCPPortHandler
 	Web         map[HostPort]*WebServerConfig
-	Services    map[string]*ServiceConfig
+	Services    map[tailcfg.ServiceName]*ServiceConfig
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
 	ETag        string

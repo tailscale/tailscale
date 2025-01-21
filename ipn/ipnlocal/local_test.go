@@ -2715,7 +2715,7 @@ func TestTCPHandlerForDstWithVIPService(t *testing.T) {
 
 	err = b.setServeConfigLocked(
 		&ipn.ServeConfig{
-			Services: map[string]*ipn.ServiceConfig{
+			Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 				"svc:foo": {
 					TCP: map[uint16]*ipn.TCPPortHandler{
 						882: {HTTP: true},
@@ -4747,7 +4747,7 @@ func TestGetVIPServices(t *testing.T) {
 			"served-only",
 			[]string{},
 			&ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:abc": {Tun: true},
 				},
 			},
@@ -4762,7 +4762,7 @@ func TestGetVIPServices(t *testing.T) {
 			"served-and-advertised",
 			[]string{"svc:abc"},
 			&ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:abc": {Tun: true},
 				},
 			},
@@ -4778,7 +4778,7 @@ func TestGetVIPServices(t *testing.T) {
 			"served-and-advertised-different-service",
 			[]string{"svc:def"},
 			&ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:abc": {Tun: true},
 				},
 			},
@@ -4797,7 +4797,7 @@ func TestGetVIPServices(t *testing.T) {
 			"served-with-port-ranges-one-range-single",
 			[]string{},
 			&ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
 						80: {HTTPS: true},
 					}},
@@ -4814,7 +4814,7 @@ func TestGetVIPServices(t *testing.T) {
 			"served-with-port-ranges-one-range-multiple",
 			[]string{},
 			&ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
 						80: {HTTPS: true},
 						81: {HTTPS: true},
@@ -4833,7 +4833,7 @@ func TestGetVIPServices(t *testing.T) {
 			"served-with-port-ranges-multiple-ranges",
 			[]string{},
 			&ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
 						80:   {HTTPS: true},
 						81:   {HTTPS: true},
@@ -4866,7 +4866,7 @@ func TestGetVIPServices(t *testing.T) {
 			}
 			got := lb.vipServicesFromPrefsLocked(prefs.View())
 			slices.SortFunc(got, func(a, b *tailcfg.VIPService) int {
-				return strings.Compare(a.Name, b.Name)
+				return strings.Compare(a.Name.String(), b.Name.String())
 			})
 			if !reflect.DeepEqual(tt.want, got) {
 				t.Logf("want:")

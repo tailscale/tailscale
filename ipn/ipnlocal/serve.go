@@ -55,7 +55,7 @@ var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 
 type serveHTTPContext struct {
 	SrcAddr       netip.AddrPort
-	ForVIPService string // VIP service name, empty string means local
+	ForVIPService tailcfg.ServiceName // "" means local
 	DestPort      uint16
 
 	// provides funnel-specific context, nil if not funneled
@@ -1006,7 +1006,7 @@ func allNumeric(s string) bool {
 	return s != ""
 }
 
-func (b *LocalBackend) webServerConfig(hostname string, forVIPService string, port uint16) (c ipn.WebServerConfigView, ok bool) {
+func (b *LocalBackend) webServerConfig(hostname string, forVIPService tailcfg.ServiceName, port uint16) (c ipn.WebServerConfigView, ok bool) {
 	key := ipn.HostPort(fmt.Sprintf("%s:%v", hostname, port))
 
 	b.mu.Lock()
@@ -1021,7 +1021,7 @@ func (b *LocalBackend) webServerConfig(hostname string, forVIPService string, po
 	return b.serveConfig.FindWeb(key)
 }
 
-func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService string) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg.ServiceName) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		if hi == nil || hi.ServerName == "" {
 			return nil, errors.New("no SNI ServerName")
