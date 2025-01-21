@@ -379,7 +379,7 @@ func runReconcilers(opts reconcilerOpts) {
 	nameserverFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("nameserver"))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.DNSConfig{}).
-		Named("dnsconfig-reconciler").
+		Named("nameserver-reconciler").
 		Watches(&appsv1.Deployment{}, nameserverFilter).
 		Watches(&corev1.ConfigMap{}, nameserverFilter).
 		Watches(&corev1.Service{}, nameserverFilter).
@@ -388,11 +388,11 @@ func runReconcilers(opts reconcilerOpts) {
 			recorder:    eventRecorder,
 			tsNamespace: opts.tailscaleNamespace,
 			Client:      mgr.GetClient(),
-			logger:      opts.log.Named("dnsconfig-reconciler"),
+			logger:      opts.log.Named("nameserver-reconciler"),
 			clock:       tstime.DefaultClock{},
 		})
 	if err != nil {
-		startlog.Fatalf("could not create DNSConfig reconciler: %v", err)
+		startlog.Fatalf("could not create nameserver reconciler: %v", err)
 	}
 
 	egressSvcFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsHandler)
