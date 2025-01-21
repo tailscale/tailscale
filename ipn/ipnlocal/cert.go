@@ -40,6 +40,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/bakedroots"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
@@ -665,7 +666,7 @@ func acmeClient(cs certStore) (*acme.Client, error) {
 // validCertPEM reports whether the given certificate is valid for domain at now.
 //
 // If roots != nil, it is used instead of the system root pool. This is meant
-// to support testing, and production code should pass roots == nil.
+// to support testing; production code should pass roots == nil.
 func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, now time.Time) bool {
 	if len(keyPEM) == 0 || len(certPEM) == 0 {
 		return false
@@ -688,15 +689,29 @@ func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, n
 			intermediates.AddCert(cert)
 		}
 	}
+	return validateLeaf(leaf, intermediates, domain, now, roots)
+}
+
+// validateLeaf is a helper for [validCertPEM].
+//
+// If called with roots == nil, it will use the system root pool as well as the
+// baked-in roots. If non-nil, only those roots are used.
+func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain string, now time.Time, roots *x509.CertPool) bool {
 	if leaf == nil {
 		return false
 	}
-	_, err = leaf.Verify(x509.VerifyOptions{
+	_, err := leaf.Verify(x509.VerifyOptions{
 		DNSName:       domain,
 		CurrentTime:   now,
 		Roots:         roots,
 		Intermediates: intermediates,
 	})
+	if err != nil && roots == nil {
+		// If validation failed and they specified nil for roots (meaning to use
+		// the system roots), then give it another chance to validate using the
+		// binary's baked-in roots (LetsEncrypt). See tailscale/tailscale#14690.
+		return validateLeaf(leaf, intermediates, domain, now, bakedroots.Get())
+	}
 	return err == nil
 }
 
