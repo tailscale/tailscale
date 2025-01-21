@@ -3417,13 +3417,13 @@ func generateInterceptVIPServicesTCPPortFunc(svcAddrPorts map[netip.Addr]func(ui
 
 // setVIPServicesTCPPortsIntercepted populates b.shouldInterceptVIPServicesTCPPortAtomic with an
 // efficient func for ShouldInterceptTCPPort to use, which is called on every incoming packet.
-func (b *LocalBackend) setVIPServicesTCPPortsIntercepted(svcPorts map[string][]uint16) {
+func (b *LocalBackend) setVIPServicesTCPPortsIntercepted(svcPorts map[tailcfg.ServiceName][]uint16) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.setVIPServicesTCPPortsInterceptedLocked(svcPorts)
 }
 
-func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[string][]uint16) {
+func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[tailcfg.ServiceName][]uint16) {
 	if len(svcPorts) == 0 {
 		b.shouldInterceptVIPServicesTCPPortAtomic.Store(func(netip.AddrPort) bool { return false })
 		return
@@ -6025,7 +6025,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 // b.mu must be held.
 func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.PrefsView) {
 	handlePorts := make([]uint16, 0, 4)
-	var vipServicesPorts map[string][]uint16
+	var vipServicesPorts map[tailcfg.ServiceName][]uint16
 
 	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
 		handlePorts = append(handlePorts, 22)
@@ -7815,7 +7815,7 @@ func (b *LocalBackend) vipServiceHash(services []*tailcfg.VIPService) string {
 
 func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	// keyed by service name
-	var services map[string]*tailcfg.VIPService
+	var services map[tailcfg.ServiceName]*tailcfg.VIPService
 	if !b.serveConfig.Valid() {
 		return nil
 	}
@@ -7828,12 +7828,13 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 	}
 
 	for _, s := range prefs.AdvertiseServices().All() {
-		if services == nil || services[s] == nil {
-			mak.Set(&services, s, &tailcfg.VIPService{
-				Name: s,
+		sn := tailcfg.ServiceName(s)
+		if services == nil || services[sn] == nil {
+			mak.Set(&services, sn, &tailcfg.VIPService{
+				Name: sn,
 			})
 		}
-		services[s].Active = true
+		services[sn].Active = true
 	}
 
 	return slicesx.MapValues(services)

@@ -137,7 +137,7 @@ func TestIngressPGReconciler(t *testing.T) {
 		t.Fatalf("unmarshaling serve config: %v", err)
 	}
 
-	if cfg.Services["my-svc"] == nil {
+	if cfg.Services["svc:my-svc"] == nil {
 		t.Error("expected serve config to contain VIPService configuration")
 	}
 

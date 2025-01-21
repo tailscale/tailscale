@@ -222,13 +222,14 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 			},
 		},
 	}
+	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	var gotCfg *ipn.ServiceConfig
 	if cfg != nil && cfg.Services != nil {
-		gotCfg = cfg.Services[hostname]
+		gotCfg = cfg.Services[serviceName]
 	}
 	if !reflect.DeepEqual(gotCfg, ingCfg) {
 		logger.Infof("Updating serve config")
-		mak.Set(&cfg.Services, hostname, ingCfg)
+		mak.Set(&cfg.Services, serviceName, ingCfg)
 		cfgBytes, err := json.Marshal(cfg)
 		if err != nil {
 			return fmt.Errorf("error marshaling serve config: %w", err)
@@ -309,7 +310,7 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 		found := false
 		for _, i := range ingList.Items {
 			ingressHostname := hostnameForIngress(&i)
-			if ingressHostname == vipHostname {
+			if ingressHostname == vipHostname.WithoutPrefix() {
 				found = true
 				break
 			}
@@ -317,7 +318,7 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 
 		if !found {
 			logger.Infof("VIPService %q is not owned by any Ingress, cleaning up", vipHostname)
-			svc, err := a.getVIPService(ctx, vipHostname, logger)
+			svc, err := a.getVIPService(ctx, vipHostname.WithoutPrefix(), logger)
 			if err != nil {
 				errResp := &tailscale.ErrResponse{}
 				if errors.As(err, &errResp) && errResp.Status == http.StatusNotFound {
@@ -329,7 +330,7 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			}
 			if isVIPServiceForAnyIngress(svc) {
 				logger.Infof("cleaning up orphaned VIPService %q", vipHostname)
-				if err := a.tsClient.deleteVIPServiceByName(ctx, vipHostname); err != nil {
+				if err := a.tsClient.deleteVIPServiceByName(ctx, vipHostname.WithoutPrefix()); err != nil {
 					errResp := &tailscale.ErrResponse{}
 					if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
 						return fmt.Errorf("deleting VIPService %q: %w", vipHostname, err)
@@ -374,11 +375,12 @@ func (a *IngressPGReconciler) maybeCleanup(ctx context.Context, hostname string,
 	if err != nil {
 		return fmt.Errorf("error getting ProxyGroup serve config: %w", err)
 	}
+	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	// VIPService is always first added to serve config and only then created in the Tailscale API, so if it is not
 	// found in the serve config, we can assume that there is no VIPService. TODO(irbekrm): once we have ingress
 	// ProxyGroup, we will probably add currently exposed VIPServices to its status. At that point, we can use the
 	// status rather than checking the serve config each time.
-	if cfg == nil || cfg.Services == nil || cfg.Services[hostname] == nil {
+	if cfg == nil || cfg.Services == nil || cfg.Services[serviceName] == nil {
 		return nil
 	}
 	logger.Infof("Ensuring that VIPService %q configuration is cleaned up", hostname)
@@ -390,7 +392,7 @@ func (a *IngressPGReconciler) maybeCleanup(ctx context.Context, hostname string,
 
 	// 3. Remove the VIPService from the serve config for the ProxyGroup.
 	logger.Infof("Removing VIPService %q from serve config for ProxyGroup %q", hostname, pg)
-	delete(cfg.Services, hostname)
+	delete(cfg.Services, serviceName)
 	cfgBytes, err := json.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("error marshaling serve config: %w", err)

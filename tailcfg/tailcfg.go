@@ -717,21 +717,6 @@ func CheckTag(tag string) error {
 	return nil
 }
 
-// CheckServiceName validates svc for use as a service name.
-// We only allow valid DNS labels, since the expectation is that these will be
-// used as parts of domain names.
-func CheckServiceName(svc string) error {
-	var ok bool
-	svc, ok = strings.CutPrefix(svc, "svc:")
-	if !ok {
-		return errors.New("services must start with 'svc:'")
-	}
-	if svc == "" {
-		return errors.New("service names must not be empty")
-	}
-	return dnsname.ValidLabel(svc)
-}
-
 // CheckRequestTags checks that all of h.RequestTags are valid.
 func (h *Hostinfo) CheckRequestTags() error {
 	if h == nil {
@@ -897,16 +882,51 @@ type Hostinfo struct {
 	//       require changes to Hostinfo.Equal.
 }
 
+// ServiceName is the name of a service, of the form `svc:dns-label`. Services
+// represent some kind of application provided for users of the tailnet with a
+// MagicDNS name and possibly dedicated IP addresses. Currently (2024-01-21),
+// the only type of service is [VIPService].
+// This is not related to the older [Service] used in [Hostinfo.Services].
+type ServiceName string
+
+// Validate validates if the service name is formatted correctly.
+// We only allow valid DNS labels, since the expectation is that these will be
+// used as parts of domain names.
+func (sn ServiceName) Validate() error {
+	bareName, ok := strings.CutPrefix(string(sn), "svc:")
+	if !ok {
+		return errors.New("services must start with 'svc:'")
+	}
+	if bareName == "" {
+		return errors.New("service names must not be empty")
+	}
+	return dnsname.ValidLabel(bareName)
+}
+
+// String implements [fmt.Stringer].
+func (sn ServiceName) String() string {
+	return string(sn)
+}
+
+// WithoutPrefix is the name of the service without the `svc:` prefix, used for
+// DNS names. If the name does not include the prefix (which means
+// [ServiceName.Validate] would return an error) then it returns "".
+func (sn ServiceName) WithoutPrefix() string {
+	bareName, ok := strings.CutPrefix(string(sn), "svc:")
+	if !ok {
+		return ""
+	}
+	return bareName
+}
+
 // VIPService represents a service created on a tailnet from the
 // perspective of a node providing that service. These services
 // have an virtual IP (VIP) address pair distinct from the node's IPs.
 type VIPService struct {
-	// Name is the name of the service, of the form `svc:dns-label`.
-	// See CheckServiceName for a validation func.
-	// Name uniquely identifies a service on a particular tailnet,
-	// and so also corresponds uniquely to the pair of IP addresses
-	// belonging to the VIP service.
-	Name string
+	// Name is the name of the service. The Name uniquely identifies a service
+	// on a particular tailnet, and so also corresponds uniquely to the pair of
+	// IP addresses belonging to the VIP service.
+	Name ServiceName
 
 	// Ports specify which ProtoPorts are made available by this node
 	// on the service's IPs.
@@ -2972,10 +2992,10 @@ type EarlyNoise struct {
 // vs NodeKey)
 const LBHeader = "Ts-Lb"
 
-// ServiceIPMappings maps service names (strings that conform to
-// [CheckServiceName]) to lists of IP addresses. This is used as the value of
-// the [NodeAttrServiceHost] capability, to inform service hosts what IP
-// addresses they need to listen on for each service that they are advertising.
+// ServiceIPMappings maps ServiceName to lists of IP addresses. This is used
+// as the value of the [NodeAttrServiceHost] capability, to inform service hosts
+// what IP addresses they need to listen on for each service that they are
+// advertising.
 //
 // This is of the form:
 //
@@ -2988,4 +3008,4 @@ const LBHeader = "Ts-Lb"
 // provided in AllowedIPs, but this lets the client know which services
 // correspond to those IPs. Any services that don't correspond to a service
 // this client is hosting can be ignored.
-type ServiceIPMappings map[string][]netip.Addr
+type ServiceIPMappings map[ServiceName][]netip.Addr

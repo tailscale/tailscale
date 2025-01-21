@@ -354,7 +354,7 @@ func TestServeConfigServices(t *testing.T) {
 		{
 			name: "one-incorrectly-configured-service",
 			conf: &ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:foo": {
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							80: {HTTP: true},
@@ -369,7 +369,7 @@ func TestServeConfigServices(t *testing.T) {
 			// one correctly configured service with packet should be intercepted
 			name: "one-service-intercept-packet",
 			conf: &ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:foo": {
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							80: {HTTP: true},
@@ -388,7 +388,7 @@ func TestServeConfigServices(t *testing.T) {
 			// one correctly configured service with packet should not be intercepted
 			name: "one-service-not-intercept-packet",
 			conf: &ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:foo": {
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							80: {HTTP: true},
@@ -406,10 +406,10 @@ func TestServeConfigServices(t *testing.T) {
 			intercepted: false,
 		},
 		{
-			//multiple correctly configured service with packet should be intercepted
+			// multiple correctly configured service with packet should be intercepted
 			name: "multiple-service-intercept-packet",
 			conf: &ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:foo": {
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							80: {HTTP: true},
@@ -437,7 +437,7 @@ func TestServeConfigServices(t *testing.T) {
 			// multiple correctly configured service with packet should not be intercepted
 			name: "multiple-service-not-intercept-packet",
 			conf: &ipn.ServeConfig{
-				Services: map[string]*ipn.ServiceConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:foo": {
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							80: {HTTP: true},

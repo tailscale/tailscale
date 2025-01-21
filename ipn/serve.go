@@ -57,7 +57,7 @@ type ServeConfig struct {
 
 	// Services maps from service name (in the form "svc:dns-label") to a ServiceConfig.
 	// Which describes the L3, L4, and L7 forwarding information for the service.
-	Services map[string]*ServiceConfig `json:",omitempty"`
+	Services map[tailcfg.ServiceName]*ServiceConfig `json:",omitempty"`
 
 	// AllowFunnel is the set of SNI:port values for which funnel
 	// traffic is allowed, from trusted ingress peers.
@@ -618,7 +618,7 @@ func (v ServeConfigView) Webs() iter.Seq2[HostPort, WebServerConfigView] {
 }
 
 // FindServiceTCP return the TCPPortHandlerView for the given service name and port.
-func (v ServeConfigView) FindServiceTCP(svcName string, port uint16) (res TCPPortHandlerView, ok bool) {
+func (v ServeConfigView) FindServiceTCP(svcName tailcfg.ServiceName, port uint16) (res TCPPortHandlerView, ok bool) {
 	svcCfg, ok := v.Services().GetOk(svcName)
 	if !ok {
 		return res, ok
@@ -626,7 +626,7 @@ func (v ServeConfigView) FindServiceTCP(svcName string, port uint16) (res TCPPor
 	return svcCfg.TCP().GetOk(port)
 }
 
-func (v ServeConfigView) FindServiceWeb(svcName string, hp HostPort) (res WebServerConfigView, ok bool) {
+func (v ServeConfigView) FindServiceWeb(svcName tailcfg.ServiceName, hp HostPort) (res WebServerConfigView, ok bool) {
 	if svcCfg, ok := v.Services().GetOk(svcName); ok {
 		if res, ok := svcCfg.Web().GetOk(hp); ok {
 			return res, ok
