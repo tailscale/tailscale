@@ -258,7 +258,16 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			existing.ObjectMeta.Labels = cm.ObjectMeta.Labels
 			existing.ObjectMeta.OwnerReferences = cm.ObjectMeta.OwnerReferences
 		}); err != nil {
-			return fmt.Errorf("error provisioning ConfigMap: %w", err)
+			return fmt.Errorf("error provisioning egress ConfigMap %q: %w", cm.Name, err)
+		}
+	}
+	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+		cm := pgIngressCM(pg, r.tsNamespace)
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, cm, func(existing *corev1.ConfigMap) {
+			existing.ObjectMeta.Labels = cm.ObjectMeta.Labels
+			existing.ObjectMeta.OwnerReferences = cm.ObjectMeta.OwnerReferences
+		}); err != nil {
+			return fmt.Errorf("error provisioning ingress ConfigMap %q: %w", cm.Name, err)
 		}
 	}
 	ss, err := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode)

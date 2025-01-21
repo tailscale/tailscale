@@ -65,6 +65,10 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 		if err != nil {
 			log.Fatalf("serve proxy: failed to read serve config: %v", err)
 		}
+		if sc == nil {
+			log.Printf("serve proxy: no serve config at %q, skipping", path)
+			continue
+		}
 		if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {
 			continue
 		}
@@ -131,6 +135,9 @@ func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
 	}
 	j, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	// Serve config can be provided by users as well as the Kubernetes Operator (for its proxies). User-provided

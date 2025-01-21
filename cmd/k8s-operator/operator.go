@@ -18,7 +18,6 @@ import (
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/oauth2/clientcredentials"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -107,14 +106,14 @@ func main() {
 		hostinfo.SetApp(kubetypes.AppAPIServerProxy)
 	}
 
-	s, tsClient := initTSNet(zlog)
+	s, tsc := initTSNet(zlog)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
 	rOpts := reconcilerOpts{
 		log:                           zlog,
 		tsServer:                      s,
-		tsClient:                      tsClient,
+		tsClient:                      tsc,
 		tailscaleNamespace:            tsNamespace,
 		restConfig:                    restConfig,
 		proxyImage:                    image,
@@ -130,7 +129,7 @@ func main() {
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
-func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
+func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 	var (
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
 		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
@@ -142,23 +141,10 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 	if clientIDPath == "" || clientSecretPath == "" {
 		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
 	}
-	clientID, err := os.ReadFile(clientIDPath)
+	tsc, err := newTSClient(context.Background(), clientIDPath, clientSecretPath)
 	if err != nil {
-		startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
+		startlog.Fatalf("error creating Tailscale client: %v", err)
 	}
-	clientSecret, err := os.ReadFile(clientSecretPath)
-	if err != nil {
-		startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
-	}
-	credentials := clientcredentials.Config{
-		ClientID:     string(clientID),
-		ClientSecret: string(clientSecret),
-		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
-	}
-	tsClient := tailscale.NewClient("-", nil)
-	tsClient.UserAgent = "tailscale-k8s-operator"
-	tsClient.HTTPClient = credentials.Client(context.Background())
-
 	s := &tsnet.Server{
 		Hostname: hostname,
 		Logf:     zlog.Named("tailscaled").Debugf,
@@ -211,7 +197,7 @@ waitOnline:
 					},
 				},
 			}
-			authkey, _, err := tsClient.CreateKey(ctx, caps)
+			authkey, _, err := tsc.CreateKey(ctx, caps)
 			if err != nil {
 				startlog.Fatalf("creating operator authkey: %v", err)
 			}
@@ -235,7 +221,7 @@ waitOnline:
 		}
 		time.Sleep(time.Second)
 	}
-	return s, tsClient
+	return s, tsc
 }
 
 // runReconcilers starts the controller-runtime manager and registers the
@@ -342,6 +328,27 @@ func runReconcilers(opts reconcilerOpts) {
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ingress reconciler: %v", err)
+	}
+	lc, err := opts.tsServer.LocalClient()
+	if err != nil {
+		startlog.Fatalf("could not get local client: %v", err)
+	}
+	err = builder.
+		ControllerManagedBy(mgr).
+		For(&networkingv1.Ingress{}).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
+		Complete(&IngressPGReconciler{
+			recorder:    eventRecorder,
+			tsClient:    opts.tsClient,
+			tsnetServer: opts.tsServer,
+			defaultTags: strings.Split(opts.proxyTags, ","),
+			Client:      mgr.GetClient(),
+			logger:      opts.log.Named("ingress-pg-reconciler"),
+			lc:          lc,
+			tsNamespace: opts.tailscaleNamespace,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create ingress-pg-reconciler: %v", err)
 	}
 
 	connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("connector"))
@@ -514,6 +521,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}).
 		Watches(&appsv1.StatefulSet{}, ownedByProxyGroupFilter).
+		Watches(&corev1.ConfigMap{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ServiceAccount{}, ownedByProxyGroupFilter).
 		Watches(&corev1.Secret{}, ownedByProxyGroupFilter).
 		Watches(&rbacv1.Role{}, ownedByProxyGroupFilter).
@@ -545,7 +553,7 @@ func runReconcilers(opts reconcilerOpts) {
 type reconcilerOpts struct {
 	log                *zap.SugaredLogger
 	tsServer           *tsnet.Server
-	tsClient           *tailscale.Client
+	tsClient           tsClient
 	tailscaleNamespace string       // namespace in which operator resources will be deployed
 	restConfig         *rest.Config // config for connecting to the kube API server
 	proxyImage         string       // <proxy-image-repo>:<proxy-image-tag>
@@ -668,12 +676,6 @@ func dnsRecordsReconcilerIngressHandler(ns string, isDefaultLoadBalancer bool, c
 		}
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: headlessSvc.Namespace, Name: headlessSvc.Name}}}
 	}
-}
-
-type tsClient interface {
-	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
-	Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error)
-	DeleteDevice(ctx context.Context, nodeStableID string) error
 }
 
 func isManagedResource(o client.Object) bool {
@@ -810,6 +812,10 @@ func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handl
 		for _, ing := range ingList.Items {
 			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != tailscaleIngressClassName {
 				return nil
+			}
+			if hasProxyGroupAnnotation(&ing) {
+				// We don't want to reconcile backend Services for Ingresses for ProxyGroups.
+				continue
 			}
 			if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil && ing.Spec.DefaultBackend.Service.Name == o.GetName() {
 				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
@@ -1093,4 +1099,45 @@ func indexEgressServices(o client.Object) []string {
 		return nil
 	}
 	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
+}
+
+// serviceHandlerForIngressPG returns a handler for Service events that ensures that if the Service
+// associated with an event is a backend Service for a tailscale Ingress with ProxyGroup annotation,
+// the associated Ingress gets reconciled.
+func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		ingList := networkingv1.IngressList{}
+		if err := cl.List(ctx, &ingList, client.InNamespace(o.GetNamespace())); err != nil {
+			logger.Debugf("error listing Ingresses: %v", err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, ing := range ingList.Items {
+			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != tailscaleIngressClassName {
+				continue
+			}
+			if !hasProxyGroupAnnotation(&ing) {
+				continue
+			}
+			if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil && ing.Spec.DefaultBackend.Service.Name == o.GetName() {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
+			}
+			for _, rule := range ing.Spec.Rules {
+				if rule.HTTP == nil {
+					continue
+				}
+				for _, path := range rule.HTTP.Paths {
+					if path.Backend.Service != nil && path.Backend.Service.Name == o.GetName() {
+						reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
+					}
+				}
+			}
+		}
+		return reqs
+	}
+}
+
+func hasProxyGroupAnnotation(obj client.Object) bool {
+	ing := obj.(*networkingv1.Ingress)
+	return ing.Annotations[AnnotationProxyGroup] != ""
 }

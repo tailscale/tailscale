@@ -332,7 +332,8 @@ func TestProxyGroupTypes(t *testing.T) {
 				UID:  "test-ingress-uid",
 			},
 			Spec: tsapi.ProxyGroupSpec{
-				Type: tsapi.ProxyGroupTypeIngress,
+				Type:     tsapi.ProxyGroupTypeIngress,
+				Replicas: ptr.To[int32](0),
 			},
 		}
 		if err := fc.Create(context.Background(), pg); err != nil {
@@ -347,6 +348,34 @@ func TestProxyGroupTypes(t *testing.T) {
 			t.Fatalf("failed to get StatefulSet: %v", err)
 		}
 		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupIngress)
+		verifyEnvVar(t, sts, "TS_SERVE_CONFIG", "/etc/proxies/serve-config.json")
+
+		// Verify ConfigMap volume mount
+		cmName := fmt.Sprintf("%s-ingress-config", pg.Name)
+		expectedVolume := corev1.Volume{
+			Name: cmName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: cmName,
+					},
+				},
+			},
+		}
+
+		expectedVolumeMount := corev1.VolumeMount{
+			Name:      cmName,
+			MountPath: "/etc/proxies",
+			ReadOnly:  true,
+		}
+
+		if diff := cmp.Diff([]corev1.Volume{expectedVolume}, sts.Spec.Template.Spec.Volumes); diff != "" {
+			t.Errorf("unexpected volumes (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff([]corev1.VolumeMount{expectedVolumeMount}, sts.Spec.Template.Spec.Containers[0].VolumeMounts); diff != "" {
+			t.Errorf("unexpected volume mounts (-want +got):\n%s", diff)
+		}
 	})
 }
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
@@ -737,6 +739,7 @@ type fakeTSClient struct {
 	sync.Mutex
 	keyRequests []tailscale.KeyCapabilities
 	deleted     []string
+	vipServices map[string]*VIPService
 }
 type fakeTSNetServer struct {
 	certDomains []string
@@ -841,4 +844,51 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 			mak.Set(&secret.StringData, "cap-107.hujson", string(b))
 		}
 	}
+}
+
+func (c *fakeTSClient) getVIPServiceByName(ctx context.Context, name string) (*VIPService, error) {
+	c.Lock()
+	defer c.Unlock()
+	if c.vipServices == nil {
+		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
+	}
+	svc, ok := c.vipServices[name]
+	if !ok {
+		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
+	}
+	return svc, nil
+}
+
+func (c *fakeTSClient) createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPService) error {
+	c.Lock()
+	defer c.Unlock()
+	if c.vipServices == nil {
+		c.vipServices = make(map[string]*VIPService)
+	}
+	c.vipServices[svc.Name] = svc
+	return nil
+}
+
+func (c *fakeTSClient) deleteVIPServiceByName(ctx context.Context, name string) error {
+	c.Lock()
+	defer c.Unlock()
+	if c.vipServices != nil {
+		delete(c.vipServices, name)
+	}
+	return nil
+}
+
+type fakeLocalClient struct {
+	status *ipnstate.Status
+}
+
+func (f *fakeLocalClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
+	if f.status == nil {
+		return &ipnstate.Status{
+			Self: &ipnstate.PeerStatus{
+				DNSName: "test-node.test.ts.net.",
+			},
+		}, nil
+	}
+	return f.status, nil
 }
