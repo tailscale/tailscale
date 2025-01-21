@@ -1180,7 +1180,8 @@ func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, erro
 		keys: keys,
 		addr: addr,
 
-		conn: make(chan net.Conn),
+		closedc: make(chan struct{}),
+		conn:    make(chan net.Conn),
 	}
 	s.mu.Lock()
 	for _, key := range keys {
@@ -1243,11 +1244,12 @@ type listenKey struct {
 }
 
 type listener struct {
-	s      *Server
-	keys   []listenKey
-	addr   string
-	conn   chan net.Conn
-	closed bool // guarded by s.mu
+	s       *Server
+	keys    []listenKey
+	addr    string
+	conn    chan net.Conn // unbuffered, never closed
+	closedc chan struct{} // closed on [listener.Close]
+	closed  bool          // guarded by s.mu
 }
 
 func (ln *listener) Accept() (net.Conn, error) {
@@ -1277,21 +1279,22 @@ func (ln *listener) closeLocked() error {
 			delete(ln.s.listeners, key)
 		}
 	}
-	close(ln.conn)
+	close(ln.closedc)
 	ln.closed = true
 	return nil
 }
 
 func (ln *listener) handle(c net.Conn) {
-	t := time.NewTimer(time.Second)
-	defer t.Stop()
 	select {
 	case ln.conn <- c:
-	case <-t.C:
+		return
+	case <-ln.closedc:
+	case <-ln.s.shutdownCtx.Done():
+	case <-time.After(time.Second):
 		// TODO(bradfitz): this isn't ideal. Think about how
 		// we how we want to do pushback.
-		c.Close()
 	}
+	c.Close()
 }
 
 // Server returns the tsnet Server associated with the listener.

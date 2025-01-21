@@ -494,6 +494,25 @@ func TestListenerCleanup(t *testing.T) {
 	if err := ln.Close(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("second ln.Close error: %v, want net.ErrClosed", err)
 	}
+
+	// Verify that handling a connection from gVisor (from a packet arriving)
+	// after a listener closed doesn't panic (previously: sending on a closed
+	// channel) or hang.
+	c := &closeTrackConn{}
+	ln.(*listener).handle(c)
+	if !c.closed {
+		t.Errorf("c.closed = false, want true")
+	}
+}
+
+type closeTrackConn struct {
+	net.Conn
+	closed bool
+}
+
+func (wc *closeTrackConn) Close() error {
+	wc.closed = true
+	return nil
 }
 
 // tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
