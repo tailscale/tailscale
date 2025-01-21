@@ -51,6 +51,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"ShareeNode",
 		"NoLogsNoSupport",
 		"WireIngress",
+		"IngressEnabled",
 		"AllowsUpdate",
 		"Machine",
 		"GoArch",
@@ -249,6 +250,26 @@ func TestHostinfoEqual(t *testing.T) {
 		{
 			&Hostinfo{ServicesHash: "084c799cd551dd1d8d5c5f9a5d593b2e931f5e36122ee5c793c1d08a19839cc0"},
 			&Hostinfo{},
+			false,
+		},
+		{
+			&Hostinfo{IngressEnabled: true},
+			&Hostinfo{},
+			false,
+		},
+		{
+			&Hostinfo{IngressEnabled: true},
+			&Hostinfo{IngressEnabled: true},
+			true,
+		},
+		{
+			&Hostinfo{IngressEnabled: false},
+			&Hostinfo{},
+			true,
+		},
+		{
+			&Hostinfo{IngressEnabled: false},
+			&Hostinfo{IngressEnabled: true},
 			false,
 		},
 	}
