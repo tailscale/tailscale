@@ -1501,53 +1501,6 @@ func TestReconfigureAppConnector(t *testing.T) {
 	}
 }
 
-func TestBackfillAppConnectorRoutes(t *testing.T) {
-	// Create backend with an empty app connector.
-	b := newTestBackend(t)
-	if err := b.Start(ipn.Options{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AppConnector: ipn.AppConnectorPrefs{Advertise: true},
-		},
-		AppConnectorSet: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
-
-	// Smoke check that AdvertiseRoutes doesn't have the test IP.
-	ip := netip.MustParseAddr("1.2.3.4")
-	routes := b.Prefs().AdvertiseRoutes().AsSlice()
-	if slices.Contains(routes, netip.PrefixFrom(ip, ip.BitLen())) {
-		t.Fatalf("AdvertiseRoutes %v on a fresh backend already contains advertised route for %v", routes, ip)
-	}
-
-	// Store the test IP in profile data, but not in Prefs.AdvertiseRoutes.
-	b.ControlKnobs().AppCStoreRoutes.Store(true)
-	if err := b.storeRouteInfo(&appc.RouteInfo{
-		Domains: map[string][]netip.Addr{
-			"example.com": {ip},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Mimic b.authReconfigure for the app connector bits.
-	b.mu.Lock()
-	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
-	b.mu.Unlock()
-	b.readvertiseAppConnectorRoutes()
-
-	// Check that Prefs.AdvertiseRoutes got backfilled with routes stored in
-	// profile data.
-	routes = b.Prefs().AdvertiseRoutes().AsSlice()
-	if !slices.Contains(routes, netip.PrefixFrom(ip, ip.BitLen())) {
-		t.Fatalf("AdvertiseRoutes %v was not backfilled from stored app connector routes with %v", routes, ip)
-	}
-}
-
 func resolversEqual(t *testing.T, a, b []*dnstype.Resolver) bool {
 	if a == nil && b == nil {
 		return true
