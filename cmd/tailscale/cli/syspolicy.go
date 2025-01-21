@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_syspolicy
+
 package cli
 
 import (
@@ -16,42 +18,48 @@ import (
 	"tailscale.com/util/syspolicy/setting"
 )
 
+func init() {
+	syspolicyCmd = mkSyspolicyCmd
+}
+
 var syspolicyArgs struct {
 	json bool // JSON output mode
 }
 
-var syspolicyCmd = &ffcli.Command{
-	Name:       "syspolicy",
-	ShortHelp:  "Diagnose the MDM and system policy configuration",
-	LongHelp:   "The 'tailscale syspolicy' command provides tools for diagnosing the MDM and system policy configuration.",
-	ShortUsage: "tailscale syspolicy <subcommand>",
-	UsageFunc:  usageFuncNoDefaultValues,
-	Subcommands: []*ffcli.Command{
-		{
-			Name:       "list",
-			ShortUsage: "tailscale syspolicy list",
-			Exec:       runSysPolicyList,
-			ShortHelp:  "Prints effective policy settings",
-			LongHelp:   "The 'tailscale syspolicy list' subcommand displays the effective policy settings and their sources (e.g., MDM or environment variables).",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("syspolicy list")
-				fs.BoolVar(&syspolicyArgs.json, "json", false, "output in JSON format")
-				return fs
-			})(),
+func mkSyspolicyCmd() *ffcli.Command {
+	return &ffcli.Command{
+		Name:       "syspolicy",
+		ShortHelp:  "Diagnose the MDM and system policy configuration",
+		LongHelp:   "The 'tailscale syspolicy' command provides tools for diagnosing the MDM and system policy configuration.",
+		ShortUsage: "tailscale syspolicy <subcommand>",
+		UsageFunc:  usageFuncNoDefaultValues,
+		Subcommands: []*ffcli.Command{
+			{
+				Name:       "list",
+				ShortUsage: "tailscale syspolicy list",
+				Exec:       runSysPolicyList,
+				ShortHelp:  "Prints effective policy settings",
+				LongHelp:   "The 'tailscale syspolicy list' subcommand displays the effective policy settings and their sources (e.g., MDM or environment variables).",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("syspolicy list")
+					fs.BoolVar(&syspolicyArgs.json, "json", false, "output in JSON format")
+					return fs
+				})(),
+			},
+			{
+				Name:       "reload",
+				ShortUsage: "tailscale syspolicy reload",
+				Exec:       runSysPolicyReload,
+				ShortHelp:  "Forces a reload of policy settings, even if no changes are detected, and prints the result",
+				LongHelp:   "The 'tailscale syspolicy reload' subcommand forces a reload of policy settings, even if no changes are detected, and prints the result.",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("syspolicy reload")
+					fs.BoolVar(&syspolicyArgs.json, "json", false, "output in JSON format")
+					return fs
+				})(),
+			},
 		},
-		{
-			Name:       "reload",
-			ShortUsage: "tailscale syspolicy reload",
-			Exec:       runSysPolicyReload,
-			ShortHelp:  "Forces a reload of policy settings, even if no changes are detected, and prints the result",
-			LongHelp:   "The 'tailscale syspolicy reload' subcommand forces a reload of policy settings, even if no changes are detected, and prints the result.",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("syspolicy reload")
-				fs.BoolVar(&syspolicyArgs.json, "json", false, "output in JSON format")
-				return fs
-			})(),
-		},
-	},
+	}
 }
 
 func runSysPolicyList(ctx context.Context, args []string) error {

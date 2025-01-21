@@ -18,6 +18,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/syspolicy/policyclient"
 )
 
 const (
@@ -192,7 +193,7 @@ func (s *Server) controlSupportsCheckMode(ctx context.Context) bool {
 	if err != nil {
 		return true
 	}
-	controlURL, err := url.Parse(prefs.ControlURLOrDefault())
+	controlURL, err := url.Parse(prefs.ControlURLOrDefault(policyclient.NoPolicyClient{})) // XXX plumb
 	if err != nil {
 		return true
 	}

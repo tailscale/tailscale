@@ -14,8 +14,11 @@ import (
 	"strconv"
 	"testing"
 
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 )
+
+type Key = pkey.Key
 
 func TestKnownKeysRegistered(t *testing.T) {
 	keyConsts, err := listStringConsts[Key]("policy_keys.go")

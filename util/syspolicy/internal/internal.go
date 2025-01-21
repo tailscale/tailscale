@@ -35,6 +35,7 @@ type TB interface {
 	Errorf(format string, args ...any)
 	Fatal(args ...any)
 	Fatalf(format string, args ...any)
+	Skip(...any)
 }
 
 // EqualJSONForTest compares the JSON in j1 and j2 for semantic equality.

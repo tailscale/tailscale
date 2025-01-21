@@ -15,6 +15,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/tstest"
+	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/setting"
 
 	"tailscale.com/util/syspolicy/source"
@@ -80,7 +82,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 	type sourceConfig struct {
 		name          string
 		scope         setting.PolicyScope
-		settingKey    setting.Key
+		settingKey    pkey.Key
 		settingValue  string
 		wantEffective bool
 	}
@@ -113,7 +115,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: true,
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("TestValueA", nil, setting.NewNamedOrigin("TestSourceA", setting.DeviceScope)),
 			}, setting.NewNamedOrigin("TestSourceA", setting.DeviceScope)),
 		},
@@ -129,7 +131,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: true,
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("TestValueA", nil, setting.NewNamedOrigin("TestSourceA", setting.DeviceScope)),
 			}, setting.NewNamedOrigin("TestSourceA", setting.DeviceScope)),
 		},
@@ -159,7 +161,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: true,
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("TestValueA", nil, setting.NewNamedOrigin("TestSourceA", setting.DeviceScope)),
 				"TestKeyB": setting.RawItemWith("TestValueB", nil, setting.NewNamedOrigin("TestSourceB", setting.DeviceScope)),
 				"TestKeyC": setting.RawItemWith("TestValueC", nil, setting.NewNamedOrigin("TestSourceC", setting.DeviceScope)),
@@ -191,7 +193,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: true,
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("TestValueC", nil, setting.NewNamedOrigin("TestSourceC", setting.DeviceScope)),
 				"TestKeyB": setting.RawItemWith("TestValueB", nil, setting.NewNamedOrigin("TestSourceB", setting.DeviceScope)),
 			}, setting.DeviceScope),
@@ -245,7 +247,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: true,
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("TestValueF", nil, setting.NewNamedOrigin("TestSourceF", setting.DeviceScope)),
 				"TestKeyB": setting.RawItemWith("TestValueB", nil, setting.NewNamedOrigin("TestSourceB", setting.DeviceScope)),
 				"TestKeyC": setting.RawItemWith("TestValueE", nil, setting.NewNamedOrigin("TestSourceE", setting.DeviceScope)),
@@ -263,7 +265,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: true,
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("DeviceValue", nil, setting.NewNamedOrigin("TestSourceDevice", setting.DeviceScope)),
 			}, setting.CurrentUserScope, setting.NewNamedOrigin("TestSourceDevice", setting.DeviceScope)),
 		},
@@ -288,7 +290,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: true,
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("DeviceValue", nil, setting.NewNamedOrigin("TestSourceDevice", setting.DeviceScope)),
 				"TestKeyB": setting.RawItemWith("UserValue", nil, setting.NewNamedOrigin("TestSourceUser", setting.CurrentUserScope)),
 			}, setting.CurrentUserScope),
@@ -321,7 +323,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: true,
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("DeviceValue", nil, setting.NewNamedOrigin("TestSourceDevice", setting.DeviceScope)),
 				"TestKeyB": setting.RawItemWith("ProfileValue", nil, setting.NewNamedOrigin("TestSourceProfile", setting.CurrentProfileScope)),
 			}, setting.CurrentUserScope),
@@ -347,7 +349,7 @@ func TestRegisterSourceAndGetEffectivePolicy(t *testing.T) {
 					wantEffective: false, // Registering a user source should have no impact on the device policy.
 				},
 			},
-			wantSnapshot: setting.NewSnapshot(map[setting.Key]setting.RawItem{
+			wantSnapshot: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"TestKeyA": setting.RawItemWith("DeviceValue", nil, setting.NewNamedOrigin("TestSourceDevice", setting.DeviceScope)),
 			}, setting.NewNamedOrigin("TestSourceDevice", setting.DeviceScope)),
 		},
@@ -497,61 +499,61 @@ func TestPolicyFor(t *testing.T) {
 func TestPolicyChangeHasChanged(t *testing.T) {
 	tests := []struct {
 		name          string
-		old, new      map[setting.Key]setting.RawItem
-		wantChanged   []setting.Key
-		wantUnchanged []setting.Key
+		old, new      map[pkey.Key]setting.RawItem
+		wantChanged   []pkey.Key
+		wantUnchanged []pkey.Key
 	}{
 		{
 			name: "String-Settings",
-			old: map[setting.Key]setting.RawItem{
+			old: map[pkey.Key]setting.RawItem{
 				"ChangedSetting":   setting.RawItemOf("Old"),
 				"UnchangedSetting": setting.RawItemOf("Value"),
 			},
-			new: map[setting.Key]setting.RawItem{
+			new: map[pkey.Key]setting.RawItem{
 				"ChangedSetting":   setting.RawItemOf("New"),
 				"UnchangedSetting": setting.RawItemOf("Value"),
 			},
-			wantChanged:   []setting.Key{"ChangedSetting"},
-			wantUnchanged: []setting.Key{"UnchangedSetting"},
+			wantChanged:   []pkey.Key{"ChangedSetting"},
+			wantUnchanged: []pkey.Key{"UnchangedSetting"},
 		},
 		{
 			name: "UInt64-Settings",
-			old: map[setting.Key]setting.RawItem{
+			old: map[pkey.Key]setting.RawItem{
 				"ChangedSetting":   setting.RawItemOf(uint64(0)),
 				"UnchangedSetting": setting.RawItemOf(uint64(42)),
 			},
-			new: map[setting.Key]setting.RawItem{
+			new: map[pkey.Key]setting.RawItem{
 				"ChangedSetting":   setting.RawItemOf(uint64(1)),
 				"UnchangedSetting": setting.RawItemOf(uint64(42)),
 			},
-			wantChanged:   []setting.Key{"ChangedSetting"},
-			wantUnchanged: []setting.Key{"UnchangedSetting"},
+			wantChanged:   []pkey.Key{"ChangedSetting"},
+			wantUnchanged: []pkey.Key{"UnchangedSetting"},
 		},
 		{
 			name: "StringSlice-Settings",
-			old: map[setting.Key]setting.RawItem{
+			old: map[pkey.Key]setting.RawItem{
 				"ChangedSetting":   setting.RawItemOf([]string{"Chicago"}),
 				"UnchangedSetting": setting.RawItemOf([]string{"String1", "String2"}),
 			},
-			new: map[setting.Key]setting.RawItem{
+			new: map[pkey.Key]setting.RawItem{
 				"ChangedSetting":   setting.RawItemOf([]string{"New York"}),
 				"UnchangedSetting": setting.RawItemOf([]string{"String1", "String2"}),
 			},
-			wantChanged:   []setting.Key{"ChangedSetting"},
-			wantUnchanged: []setting.Key{"UnchangedSetting"},
+			wantChanged:   []pkey.Key{"ChangedSetting"},
+			wantUnchanged: []pkey.Key{"UnchangedSetting"},
 		},
 		{
 			name: "Int8-Settings", // We don't have actual int8 settings, but this should still work.
-			old: map[setting.Key]setting.RawItem{
+			old: map[pkey.Key]setting.RawItem{
 				"ChangedSetting":   setting.RawItemOf(int8(0)),
 				"UnchangedSetting": setting.RawItemOf(int8(42)),
 			},
-			new: map[setting.Key]setting.RawItem{
+			new: map[pkey.Key]setting.RawItem{
 				"ChangedSetting":   setting.RawItemOf(int8(1)),
 				"UnchangedSetting": setting.RawItemOf(int8(42)),
 			},
-			wantChanged:   []setting.Key{"ChangedSetting"},
-			wantUnchanged: []setting.Key{"UnchangedSetting"},
+			wantChanged:   []pkey.Key{"ChangedSetting"},
+			wantUnchanged: []pkey.Key{"UnchangedSetting"},
 		},
 	}
 	for _, tt := range tests {
@@ -601,8 +603,8 @@ func TestChangePolicySetting(t *testing.T) {
 	}
 
 	// Subscribe to the policy change callback...
-	policyChanged := make(chan *PolicyChange)
-	unregister := policy.RegisterChangeCallback(func(pc *PolicyChange) { policyChanged <- pc })
+	policyChanged := make(chan policyclient.PolicyChange)
+	unregister := policy.RegisterChangeCallback(func(pc policyclient.PolicyChange) { policyChanged <- pc })
 	t.Cleanup(unregister)
 
 	// ...make the change, and measure the time between initiating the change
@@ -629,10 +631,10 @@ func TestChangePolicySetting(t *testing.T) {
 	if change.HasChanged(settingB.Key()) {
 		t.Errorf("Policy setting %q was unexpectedly changed", settingB.Key())
 	}
-	if _, ok := change.Old().GetSetting(settingA.Key()); ok {
+	if _, ok := change.(*PolicyChange).Old().GetSetting(settingA.Key()); ok {
 		t.Fatalf("Policy setting %q unexpectedly exists", settingA.Key())
 	}
-	if gotValue := change.New().Get(settingA.Key()); gotValue != wantValueA {
+	if gotValue := change.(*PolicyChange).New().Get(settingA.Key()); gotValue != wantValueA {
 		t.Errorf("Policy setting %q: got %q; want %q", settingA.Key(), gotValue, wantValueA)
 	}
 
@@ -682,10 +684,10 @@ drain:
 	if change.HasChanged(settingA.Key()) {
 		t.Errorf("Policy setting %q was unexpectedly changed", settingA.Key())
 	}
-	if _, ok := change.Old().GetSetting(settingB.Key()); ok {
+	if _, ok := change.(*PolicyChange).Old().GetSetting(settingB.Key()); ok {
 		t.Fatalf("Policy setting %q unexpectedly exists", settingB.Key())
 	}
-	if gotValue := change.New().Get(settingB.Key()); gotValue != wantValueB {
+	if gotValue := change.(*PolicyChange).New().Get(settingB.Key()); gotValue != wantValueB {
 		t.Errorf("Policy setting %q: got %q; want %q", settingB.Key(), gotValue, wantValueB)
 	}
 
@@ -852,8 +854,8 @@ func TestReplacePolicySource(t *testing.T) {
 	}
 
 	// Subscribe to the policy change callback.
-	policyChanged := make(chan *PolicyChange, 1)
-	unregister := policy.RegisterChangeCallback(func(pc *PolicyChange) { policyChanged <- pc })
+	policyChanged := make(chan policyclient.PolicyChange, 1)
+	unregister := policy.RegisterChangeCallback(func(pc policyclient.PolicyChange) { policyChanged <- pc })
 	t.Cleanup(unregister)
 
 	// Now, let's replace the initial store with the new store.

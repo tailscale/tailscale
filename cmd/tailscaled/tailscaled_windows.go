@@ -53,7 +53,8 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/osdiag"
-	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/wf"
@@ -129,14 +130,17 @@ var syslogf logger.Logf = logger.Discard
 //
 // At this point we're still the parent process that
 // Windows started.
-func runWindowsService(pol *logpolicy.Policy) error {
+func runWindowsService(polc policyclient.Client, pol *logpolicy.Policy) error {
+	if polc == nil {
+		return errors.New("nil policy client")
+	}
 	go func() {
 		logger.Logf(log.Printf).JSON(1, "SupportInfo", osdiag.SupportInfo(osdiag.LogSupportInfoReasonStartup))
 	}()
 
 	if syslog, err := eventlog.Open(serviceName); err == nil {
 		syslogf = func(format string, args ...any) {
-			if logSCMInteractions, _ := syspolicy.GetBoolean(syspolicy.LogSCMInteractions, false); logSCMInteractions {
+			if logSCMInteractions, _ := polc.GetBoolean(pkey.LogSCMInteractions, false); logSCMInteractions {
 				syslog.Info(0, fmt.Sprintf(format, args...))
 			}
 		}
@@ -145,11 +149,15 @@ func runWindowsService(pol *logpolicy.Policy) error {
 
 	syslogf("Service entering svc.Run")
 	defer syslogf("Service exiting svc.Run")
-	return svc.Run(serviceName, &ipnService{Policy: pol})
+	return svc.Run(serviceName, &ipnService{
+		Policy: pol,
+		polc:   polc,
+	})
 }
 
 type ipnService struct {
-	Policy *logpolicy.Policy
+	Policy *logpolicy.Policy   // always non-nil
+	polc   policyclient.Client // always non-nil
 }
 
 // Called by Windows to execute the windows service.
@@ -196,7 +204,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 				changes <- cmd.CurrentStatus
 			case svc.SessionChange:
 				syslogf("Service session change notification")
-				handleSessionChange(cmd)
+				handleSessionChange(service.polc, cmd)
 				changes <- cmd.CurrentStatus
 			case cmdUninstallWinTun:
 				syslogf("Stopping tailscaled child process and uninstalling WinTun")
@@ -362,12 +370,12 @@ func beFirewallKillswitch() bool {
 	}
 }
 
-func handleSessionChange(chgRequest svc.ChangeRequest) {
+func handleSessionChange(polc policyclient.Client, chgRequest svc.ChangeRequest) {
 	if chgRequest.Cmd != svc.SessionChange || chgRequest.EventType != windows.WTS_SESSION_UNLOCK {
 		return
 	}
 
-	if flushDNSOnSessionUnlock, _ := syspolicy.GetBoolean(syspolicy.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
+	if flushDNSOnSessionUnlock, _ := polc.GetBoolean(pkey.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
 		log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
 		go func() {
 			err := dns.Flush()

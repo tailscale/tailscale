@@ -11,6 +11,8 @@ import (
 
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/internal/loggerx"
+	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -20,7 +22,7 @@ type Change[T any] struct {
 }
 
 // PolicyChangeCallback is a function called whenever a policy changes.
-type PolicyChangeCallback func(*PolicyChange)
+type PolicyChangeCallback func(policyclient.PolicyChange)
 
 // PolicyChange describes a policy change.
 type PolicyChange struct {
@@ -38,7 +40,7 @@ func (c PolicyChange) Old() *setting.Snapshot {
 }
 
 // HasChanged reports whether a policy setting with the specified [setting.Key], has changed.
-func (c PolicyChange) HasChanged(key setting.Key) bool {
+func (c PolicyChange) HasChanged(key pkey.Key) bool {
 	new, newErr := c.snapshots.New.GetErr(key)
 	old, oldErr := c.snapshots.Old.GetErr(key)
 	if newErr != nil && oldErr != nil {

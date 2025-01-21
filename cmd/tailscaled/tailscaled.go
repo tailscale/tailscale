@@ -334,11 +334,16 @@ func ipnServerOpts() (o serverOptions) {
 
 var logPol *logpolicy.Policy
 var debugMux *http.ServeMux
+var initSyspolicy func(*tsd.System) // nil if ts_omit_syspolicy
 
 func run() (err error) {
 	var logf logger.Logf = log.Printf
 
 	sys := new(tsd.System)
+
+	if initSyspolicy != nil {
+		initSyspolicy(sys)
+	}
 
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
@@ -379,7 +384,7 @@ func run() (err error) {
 	if isWinSvc {
 		// Run the IPN server from the Windows service manager.
 		log.Printf("Running service...")
-		if err := runWindowsService(pol); err != nil {
+		if err := runWindowsService(sys.PolicyClientOrDefault(), pol); err != nil {
 			log.Printf("runservice: %v", err)
 		}
 		log.Printf("Service ended.")

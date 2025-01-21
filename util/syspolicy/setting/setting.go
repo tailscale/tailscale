@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/types/lazy"
 	"tailscale.com/util/syspolicy/internal"
+	"tailscale.com/util/syspolicy/pkey"
 )
 
 // Scope indicates the broadest scope at which a policy setting may apply,
@@ -133,7 +134,7 @@ type ValueType interface {
 
 // Definition defines policy key, scope and value type.
 type Definition struct {
-	key       Key
+	key       pkey.Key
 	scope     Scope
 	typ       Type
 	platforms PlatformList
@@ -141,12 +142,12 @@ type Definition struct {
 
 // NewDefinition returns a new [Definition] with the specified
 // key, scope, type and supported platforms (see [PlatformList]).
-func NewDefinition(k Key, s Scope, t Type, platforms ...string) *Definition {
+func NewDefinition(k pkey.Key, s Scope, t Type, platforms ...string) *Definition {
 	return &Definition{key: k, scope: s, typ: t, platforms: platforms}
 }
 
 // Key returns a policy setting's identifier.
-func (d *Definition) Key() Key {
+func (d *Definition) Key() pkey.Key {
 	if d == nil {
 		return ""
 	}
@@ -207,7 +208,7 @@ func (d *Definition) Equal(d2 *Definition) bool {
 }
 
 // DefinitionMap is a map of setting [Definition] by [Key].
-type DefinitionMap map[Key]*Definition
+type DefinitionMap map[pkey.Key]*Definition
 
 var (
 	definitions lazy.SyncValue[DefinitionMap]
@@ -223,7 +224,7 @@ var (
 // invoking any functions that use the registered policy definitions. This
 // includes calling [Definitions] or [DefinitionOf] directly, or reading any
 // policy settings via syspolicy.
-func Register(k Key, s Scope, t Type, platforms ...string) {
+func Register(k pkey.Key, s Scope, t Type, platforms ...string) {
 	RegisterDefinition(NewDefinition(k, s, t, platforms...))
 }
 
@@ -289,7 +290,7 @@ func SetDefinitionsForTest(tb lazy.TB, ds ...*Definition) error {
 // DefinitionOf returns a setting definition by key,
 // or [ErrNoSuchKey] if the specified key does not exist,
 // or an error if there are conflicting policy definitions.
-func DefinitionOf(k Key) (*Definition, error) {
+func DefinitionOf(k pkey.Key) (*Definition, error) {
 	ds, err := settingDefinitions()
 	if err != nil {
 		return nil, err

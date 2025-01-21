@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"tailscale.com/logtail"
+	"tailscale.com/tstest/deptest"
 )
 
 func TestLogHost(t *testing.T) {
@@ -35,4 +36,12 @@ func TestLogHost(t *testing.T) {
 			t.Errorf("for env %q, got %q, want %q", tt.env, got, tt.want)
 		}
 	}
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		BadDeps: map[string]string{
+			"tailscale.com/util/syspolicy": "should only depend on syspolicy/policyclient",
+		},
+	}.Check(t)
 }
