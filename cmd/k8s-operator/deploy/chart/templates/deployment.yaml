@@ -26,7 +26,7 @@ spec:
     spec:
       {{- if .Values.operatorConfig.hostNetwork.enabled }}
       hostNetwork: true
-      dnsPolicy: {{ .Values.operatorConfig.hostNetwork.dnsPolicy }}
+      dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -50,7 +50,7 @@ spec:
           {{- if .Values.operatorConfig.port.enabled }}
           ports:
             - containerPort: {{ .Values.operatorConfig.port.containerPort }}
-              protocol: TCP
+              protocol: UDP
           {{- end }}
           {{- with .Values.operatorConfig.resources }}
           resources:
@@ -77,7 +77,7 @@ spec:
             - name: CLIENT_SECRET_FILE
               value: /oauth/client_secret
             {{- if .Values.operatorConfig.port.enabled }}
-            - name: PORT
+            - name: TS_PORT
               value: {{ .Values.operatorConfig.port.containerPort | quote }}
             {{- end }}
             {{- $proxyTag := printf ":%s" ( .Values.proxyConfig.image.tag | default .Chart.AppVersion )}}
