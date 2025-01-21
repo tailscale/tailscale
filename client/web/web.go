@@ -37,6 +37,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/httpm"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -884,7 +885,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		UnraidToken:      os.Getenv("UNRAID_CSRF_TOKEN"),
 		RunningSSHServer: prefs.RunSSH,
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
-		ControlAdminURL:  prefs.AdminPageURL(),
+		ControlAdminURL:  prefs.AdminPageURL(policyclient.NoPolicyClient{}), // XXX TODO: plumb
 		LicensesURL:      licenses.LicensesURL(),
 		Features:         availableFeatures(),
 

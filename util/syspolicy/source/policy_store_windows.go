@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/winutil/gp"
 )
@@ -238,7 +239,7 @@ func (ps *PlatformPolicyStore) onChange() {
 
 // ReadString retrieves a string policy with the specified key.
 // It returns [setting.ErrNotConfigured] if the policy setting does not exist.
-func (ps *PlatformPolicyStore) ReadString(key setting.Key) (val string, err error) {
+func (ps *PlatformPolicyStore) ReadString(key pkey.Key) (val string, err error) {
 	return getPolicyValue(ps, key,
 		func(key registry.Key, valueName string) (string, error) {
 			val, _, err := key.GetStringValue(valueName)
@@ -248,7 +249,7 @@ func (ps *PlatformPolicyStore) ReadString(key setting.Key) (val string, err erro
 
 // ReadUInt64 retrieves an integer policy with the specified key.
 // It returns [setting.ErrNotConfigured] if the policy setting does not exist.
-func (ps *PlatformPolicyStore) ReadUInt64(key setting.Key) (uint64, error) {
+func (ps *PlatformPolicyStore) ReadUInt64(key pkey.Key) (uint64, error) {
 	return getPolicyValue(ps, key,
 		func(key registry.Key, valueName string) (uint64, error) {
 			val, _, err := key.GetIntegerValue(valueName)
@@ -258,7 +259,7 @@ func (ps *PlatformPolicyStore) ReadUInt64(key setting.Key) (uint64, error) {
 
 // ReadBoolean retrieves a boolean policy with the specified key.
 // It returns [setting.ErrNotConfigured] if the policy setting does not exist.
-func (ps *PlatformPolicyStore) ReadBoolean(key setting.Key) (bool, error) {
+func (ps *PlatformPolicyStore) ReadBoolean(key pkey.Key) (bool, error) {
 	return getPolicyValue(ps, key,
 		func(key registry.Key, valueName string) (bool, error) {
 			val, _, err := key.GetIntegerValue(valueName)
@@ -271,7 +272,7 @@ func (ps *PlatformPolicyStore) ReadBoolean(key setting.Key) (bool, error) {
 
 // ReadString retrieves a multi-string policy with the specified key.
 // It returns [setting.ErrNotConfigured] if the policy setting does not exist.
-func (ps *PlatformPolicyStore) ReadStringArray(key setting.Key) ([]string, error) {
+func (ps *PlatformPolicyStore) ReadStringArray(key pkey.Key) ([]string, error) {
 	return getPolicyValue(ps, key,
 		func(key registry.Key, valueName string) ([]string, error) {
 			val, _, err := key.GetStringsValue(valueName)
@@ -318,16 +319,16 @@ func (ps *PlatformPolicyStore) ReadStringArray(key setting.Key) ([]string, error
 // while everything preceding it is considered a subpath (relative to the {HKLM,HKCU}\Software\Policies\Tailscale key).
 // If there are no [setting.KeyPathSeparator]s in the key, the policy setting value
 // is meant to be stored directly under {HKLM,HKCU}\Software\Policies\Tailscale.
-func splitSettingKey(key setting.Key) (path, valueName string) {
-	if idx := strings.LastIndexByte(string(key), setting.KeyPathSeparator); idx != -1 {
-		path = strings.ReplaceAll(string(key[:idx]), string(setting.KeyPathSeparator), `\`)
+func splitSettingKey(key pkey.Key) (path, valueName string) {
+	if idx := strings.LastIndexByte(string(key), pkey.KeyPathSeparator); idx != -1 {
+		path = strings.ReplaceAll(string(key[:idx]), string(pkey.KeyPathSeparator), `\`)
 		valueName = string(key[idx+1:])
 		return path, valueName
 	}
 	return "", string(key)
 }
 
-func getPolicyValue[T any](ps *PlatformPolicyStore, key setting.Key, getter registryValueGetter[T]) (T, error) {
+func getPolicyValue[T any](ps *PlatformPolicyStore, key pkey.Key, getter registryValueGetter[T]) (T, error) {
 	var zero T
 
 	ps.mu.Lock()

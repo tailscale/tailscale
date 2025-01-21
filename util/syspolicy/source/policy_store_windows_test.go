@@ -19,6 +19,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/gp"
@@ -31,7 +32,7 @@ import (
 type subkeyStrings []string
 
 type testPolicyValue struct {
-	name  setting.Key
+	name  pkey.Key
 	value any
 }
 
@@ -100,7 +101,7 @@ func TestReadPolicyStore(t *testing.T) {
 		t.Skipf("test requires running as elevated user")
 	}
 	tests := []struct {
-		name        setting.Key
+		name        pkey.Key
 		newValue    any
 		legacyValue any
 		want        any
@@ -269,7 +270,7 @@ func TestPolicyStoreChangeNotifications(t *testing.T) {
 func TestSplitSettingKey(t *testing.T) {
 	tests := []struct {
 		name      string
-		key       setting.Key
+		key       pkey.Key
 		wantPath  string
 		wantValue string
 	}{

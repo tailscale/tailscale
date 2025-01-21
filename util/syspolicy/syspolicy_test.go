@@ -12,6 +12,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/internal/metrics"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
 )
@@ -31,7 +32,7 @@ func TestGetString(t *testing.T) {
 	}{
 		{
 			name:         "read existing value",
-			key:          AdminConsoleVisibility,
+			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "hide",
 			wantValue:    "hide",
 			wantMetrics: []metrics.TestState{
@@ -41,13 +42,13 @@ func TestGetString(t *testing.T) {
 		},
 		{
 			name:         "read non-existing value",
-			key:          EnableServerMode,
+			key:          pkey.EnableServerMode,
 			handlerError: ErrNotConfigured,
 			wantError:    nil,
 		},
 		{
 			name:         "read non-existing value, non-blank default",
-			key:          EnableServerMode,
+			key:          pkey.EnableServerMode,
 			handlerError: ErrNotConfigured,
 			defaultValue: "test",
 			wantValue:    "test",
@@ -55,7 +56,7 @@ func TestGetString(t *testing.T) {
 		},
 		{
 			name:         "reading value returns other error",
-			key:          NetworkDevicesVisibility,
+			key:          pkey.NetworkDevicesVisibility,
 			handlerError: someOtherError,
 			wantError:    someOtherError,
 			wantMetrics: []metrics.TestState{
@@ -111,27 +112,27 @@ func TestGetUint64(t *testing.T) {
 	}{
 		{
 			name:         "read existing value",
-			key:          LogSCMInteractions,
+			key:          pkey.LogSCMInteractions,
 			handlerValue: 1,
 			wantValue:    1,
 		},
 		{
 			name:         "read non-existing value",
-			key:          LogSCMInteractions,
+			key:          pkey.LogSCMInteractions,
 			handlerValue: 0,
 			handlerError: ErrNotConfigured,
 			wantValue:    0,
 		},
 		{
 			name:         "read non-existing value, non-zero default",
-			key:          LogSCMInteractions,
+			key:          pkey.LogSCMInteractions,
 			defaultValue: 2,
 			handlerError: ErrNotConfigured,
 			wantValue:    2,
 		},
 		{
 			name:         "reading value returns other error",
-			key:          FlushDNSOnSessionUnlock,
+			key:          pkey.FlushDNSOnSessionUnlock,
 			handlerError: someOtherError,
 			wantError:    someOtherError,
 		},
@@ -178,7 +179,7 @@ func TestGetBoolean(t *testing.T) {
 	}{
 		{
 			name:         "read existing value",
-			key:          FlushDNSOnSessionUnlock,
+			key:          pkey.FlushDNSOnSessionUnlock,
 			handlerValue: true,
 			wantValue:    true,
 			wantMetrics: []metrics.TestState{
@@ -188,14 +189,14 @@ func TestGetBoolean(t *testing.T) {
 		},
 		{
 			name:         "read non-existing value",
-			key:          LogSCMInteractions,
+			key:          pkey.LogSCMInteractions,
 			handlerValue: false,
 			handlerError: ErrNotConfigured,
 			wantValue:    false,
 		},
 		{
 			name:         "reading value returns other error",
-			key:          FlushDNSOnSessionUnlock,
+			key:          pkey.FlushDNSOnSessionUnlock,
 			handlerError: someOtherError,
 			wantError:    someOtherError, // expect error...
 			defaultValue: true,
@@ -253,7 +254,7 @@ func TestGetPreferenceOption(t *testing.T) {
 	}{
 		{
 			name:         "always by policy",
-			key:          EnableIncomingConnections,
+			key:          pkey.EnableIncomingConnections,
 			handlerValue: "always",
 			wantValue:    setting.AlwaysByPolicy,
 			wantMetrics: []metrics.TestState{
@@ -263,7 +264,7 @@ func TestGetPreferenceOption(t *testing.T) {
 		},
 		{
 			name:         "never by policy",
-			key:          EnableIncomingConnections,
+			key:          pkey.EnableIncomingConnections,
 			handlerValue: "never",
 			wantValue:    setting.NeverByPolicy,
 			wantMetrics: []metrics.TestState{
@@ -273,7 +274,7 @@ func TestGetPreferenceOption(t *testing.T) {
 		},
 		{
 			name:         "use default",
-			key:          EnableIncomingConnections,
+			key:          pkey.EnableIncomingConnections,
 			handlerValue: "",
 			wantValue:    setting.ShowChoiceByPolicy,
 			wantMetrics: []metrics.TestState{
@@ -283,13 +284,13 @@ func TestGetPreferenceOption(t *testing.T) {
 		},
 		{
 			name:         "read non-existing value",
-			key:          EnableIncomingConnections,
+			key:          pkey.EnableIncomingConnections,
 			handlerError: ErrNotConfigured,
 			wantValue:    setting.ShowChoiceByPolicy,
 		},
 		{
 			name:         "other error is returned",
-			key:          EnableIncomingConnections,
+			key:          pkey.EnableIncomingConnections,
 			handlerError: someOtherError,
 			wantValue:    setting.ShowChoiceByPolicy,
 			wantError:    someOtherError,
@@ -346,7 +347,7 @@ func TestGetVisibility(t *testing.T) {
 	}{
 		{
 			name:         "hidden by policy",
-			key:          AdminConsoleVisibility,
+			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "hide",
 			wantValue:    setting.HiddenByPolicy,
 			wantMetrics: []metrics.TestState{
@@ -356,7 +357,7 @@ func TestGetVisibility(t *testing.T) {
 		},
 		{
 			name:         "visibility default",
-			key:          AdminConsoleVisibility,
+			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "show",
 			wantValue:    setting.VisibleByPolicy,
 			wantMetrics: []metrics.TestState{
@@ -366,14 +367,14 @@ func TestGetVisibility(t *testing.T) {
 		},
 		{
 			name:         "read non-existing value",
-			key:          AdminConsoleVisibility,
+			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "show",
 			handlerError: ErrNotConfigured,
 			wantValue:    setting.VisibleByPolicy,
 		},
 		{
 			name:         "other error is returned",
-			key:          AdminConsoleVisibility,
+			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "show",
 			handlerError: someOtherError,
 			wantValue:    setting.VisibleByPolicy,
@@ -432,7 +433,7 @@ func TestGetDuration(t *testing.T) {
 	}{
 		{
 			name:         "read existing value",
-			key:          KeyExpirationNoticeTime,
+			key:          pkey.KeyExpirationNoticeTime,
 			handlerValue: "2h",
 			wantValue:    2 * time.Hour,
 			defaultValue: 24 * time.Hour,
@@ -443,7 +444,7 @@ func TestGetDuration(t *testing.T) {
 		},
 		{
 			name:         "invalid duration value",
-			key:          KeyExpirationNoticeTime,
+			key:          pkey.KeyExpirationNoticeTime,
 			handlerValue: "-20",
 			wantValue:    24 * time.Hour,
 			wantError:    errors.New(`time: missing unit in duration "-20"`),
@@ -455,21 +456,21 @@ func TestGetDuration(t *testing.T) {
 		},
 		{
 			name:         "read non-existing value",
-			key:          KeyExpirationNoticeTime,
+			key:          pkey.KeyExpirationNoticeTime,
 			handlerError: ErrNotConfigured,
 			wantValue:    24 * time.Hour,
 			defaultValue: 24 * time.Hour,
 		},
 		{
 			name:         "read non-existing value different default",
-			key:          KeyExpirationNoticeTime,
+			key:          pkey.KeyExpirationNoticeTime,
 			handlerError: ErrNotConfigured,
 			wantValue:    0 * time.Second,
 			defaultValue: 0 * time.Second,
 		},
 		{
 			name:         "other error is returned",
-			key:          KeyExpirationNoticeTime,
+			key:          pkey.KeyExpirationNoticeTime,
 			handlerError: someOtherError,
 			wantValue:    24 * time.Hour,
 			wantError:    someOtherError,
@@ -528,7 +529,7 @@ func TestGetStringArray(t *testing.T) {
 	}{
 		{
 			name:         "read existing value",
-			key:          AllowedSuggestedExitNodes,
+			key:          pkey.AllowedSuggestedExitNodes,
 			handlerValue: []string{"foo", "bar"},
 			wantValue:    []string{"foo", "bar"},
 			wantMetrics: []metrics.TestState{
@@ -538,13 +539,13 @@ func TestGetStringArray(t *testing.T) {
 		},
 		{
 			name:         "read non-existing value",
-			key:          AllowedSuggestedExitNodes,
+			key:          pkey.AllowedSuggestedExitNodes,
 			handlerError: ErrNotConfigured,
 			wantError:    nil,
 		},
 		{
 			name:         "read non-existing value, non nil default",
-			key:          AllowedSuggestedExitNodes,
+			key:          pkey.AllowedSuggestedExitNodes,
 			handlerError: ErrNotConfigured,
 			defaultValue: []string{"foo", "bar"},
 			wantValue:    []string{"foo", "bar"},
@@ -552,7 +553,7 @@ func TestGetStringArray(t *testing.T) {
 		},
 		{
 			name:         "reading value returns other error",
-			key:          AllowedSuggestedExitNodes,
+			key:          pkey.AllowedSuggestedExitNodes,
 			handlerError: someOtherError,
 			wantError:    someOtherError,
 			wantMetrics: []metrics.TestState{
@@ -606,11 +607,11 @@ func BenchmarkGetString(b *testing.B) {
 	RegisterWellKnownSettingsForTest(b)
 
 	wantControlURL := "https://login.tailscale.com"
-	registerSingleSettingStoreForTest(b, source.TestSettingOf(ControlURL, wantControlURL))
+	registerSingleSettingStoreForTest(b, source.TestSettingOf(pkey.ControlURL, wantControlURL))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		gotControlURL, _ := GetString(ControlURL, "https://controlplane.tailscale.com")
+		gotControlURL, _ := GetString(pkey.ControlURL, "https://controlplane.tailscale.com")
 		if gotControlURL != wantControlURL {
 			b.Fatalf("got %v; want %v", gotControlURL, wantControlURL)
 		}

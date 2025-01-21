@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -22,7 +23,7 @@ var _ Store = (*EnvPolicyStore)(nil)
 type EnvPolicyStore struct{}
 
 // ReadString implements [Store].
-func (s *EnvPolicyStore) ReadString(key setting.Key) (string, error) {
+func (s *EnvPolicyStore) ReadString(key pkey.Key) (string, error) {
 	_, str, err := s.lookupSettingVariable(key)
 	if err != nil {
 		return "", err
@@ -31,7 +32,7 @@ func (s *EnvPolicyStore) ReadString(key setting.Key) (string, error) {
 }
 
 // ReadUInt64 implements [Store].
-func (s *EnvPolicyStore) ReadUInt64(key setting.Key) (uint64, error) {
+func (s *EnvPolicyStore) ReadUInt64(key pkey.Key) (uint64, error) {
 	name, str, err := s.lookupSettingVariable(key)
 	if err != nil {
 		return 0, err
@@ -47,7 +48,7 @@ func (s *EnvPolicyStore) ReadUInt64(key setting.Key) (uint64, error) {
 }
 
 // ReadBoolean implements [Store].
-func (s *EnvPolicyStore) ReadBoolean(key setting.Key) (bool, error) {
+func (s *EnvPolicyStore) ReadBoolean(key pkey.Key) (bool, error) {
 	name, str, err := s.lookupSettingVariable(key)
 	if err != nil {
 		return false, err
@@ -63,7 +64,7 @@ func (s *EnvPolicyStore) ReadBoolean(key setting.Key) (bool, error) {
 }
 
 // ReadStringArray implements [Store].
-func (s *EnvPolicyStore) ReadStringArray(key setting.Key) ([]string, error) {
+func (s *EnvPolicyStore) ReadStringArray(key pkey.Key) ([]string, error) {
 	_, str, err := s.lookupSettingVariable(key)
 	if err != nil || str == "" {
 		return nil, err
@@ -79,7 +80,7 @@ func (s *EnvPolicyStore) ReadStringArray(key setting.Key) ([]string, error) {
 	return res[0:dst], nil
 }
 
-func (s *EnvPolicyStore) lookupSettingVariable(key setting.Key) (name, value string, err error) {
+func (s *EnvPolicyStore) lookupSettingVariable(key pkey.Key) (name, value string, err error) {
 	name, err = keyToEnvVarName(key)
 	if err != nil {
 		return "", "", err
@@ -103,7 +104,7 @@ var (
 //
 // It's fine to use this in [EnvPolicyStore] without caching variable names since it's not a hot path.
 // [EnvPolicyStore] is not a [Changeable] policy store, so the conversion will only happen once.
-func keyToEnvVarName(key setting.Key) (string, error) {
+func keyToEnvVarName(key pkey.Key) (string, error) {
 	if len(key) == 0 {
 		return "", errEmptyKey
 	}
@@ -135,7 +136,7 @@ func keyToEnvVarName(key setting.Key) (string, error) {
 			}
 		case isDigit(c):
 			split = currentWord.Len() > 0 && !isDigit(key[i-1])
-		case c == setting.KeyPathSeparator:
+		case c == pkey.KeyPathSeparator:
 			words = append(words, currentWord.String())
 			currentWord.Reset()
 			continue

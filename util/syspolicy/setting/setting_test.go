@@ -11,7 +11,10 @@ import (
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/syspolicy/internal"
+	"tailscale.com/util/syspolicy/pkey"
 )
+
+type Key = pkey.Key
 
 func TestSettingDefinition(t *testing.T) {
 	tests := []struct {
