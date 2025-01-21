@@ -475,7 +475,8 @@ func proxyTCPConn(c net.Conn, dest string) {
 		},
 	}
 	p.AddRoute(addrPortStr, &tcpproxy.DialProxy{
-		Addr: fmt.Sprintf("%s:%s", dest, port),
+		Addr:            fmt.Sprintf("%s:%s", dest, port),
+		KeepAlivePeriod: time.Second,
 	})
 	p.Start()
 }
