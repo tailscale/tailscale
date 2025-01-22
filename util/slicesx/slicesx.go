@@ -95,6 +95,17 @@ func Filter[S ~[]T, T any](dst, src S, fn func(T) bool) S {
 	return dst
 }
 
+// AppendNonzero appends all non-zero elements of src to dst.
+func AppendNonzero[S ~[]T, T comparable](dst, src S) S {
+	var zero T
+	for _, v := range src {
+		if v != zero {
+			dst = append(dst, v)
+		}
+	}
+	return dst
+}
+
 // AppendMatching appends elements in ps to dst if f(x) is true.
 func AppendMatching[T any](dst, ps []T, f func(T) bool) []T {
 	for _, p := range ps {
