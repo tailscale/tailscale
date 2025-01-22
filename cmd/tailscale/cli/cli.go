@@ -242,7 +242,7 @@ change in the future.
 }
 
 func nonNilCmds(cmds ...*ffcli.Command) []*ffcli.Command {
-	return slicesx.Filter(cmds[:0], cmds, func(c *ffcli.Command) bool { return c != nil })
+	return slicesx.AppendNonzero(cmds[:0], cmds)
 }
 
 func fatalf(format string, a ...any) {
