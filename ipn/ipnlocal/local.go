@@ -4419,12 +4419,20 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 }
 
 func (b *LocalBackend) readvertiseAppConnectorRoutes() {
-	var domainRoutes map[string][]netip.Addr
+	// Note: we should never call b.appConnector methods while holding b.mu.
+	// This can lead to a deadlock, like
+	// https://github.com/tailscale/corp/issues/25965.
+	//
+	// Grab a copy of the field, since b.mu only guards access to the
+	// b.appConnector field itself.
 	b.mu.Lock()
-	if b.appConnector != nil {
-		domainRoutes = b.appConnector.DomainRoutes()
-	}
+	appConnector := b.appConnector
 	b.mu.Unlock()
+
+	if appConnector == nil {
+		return
+	}
+	domainRoutes := appConnector.DomainRoutes()
 	if domainRoutes == nil {
 		return
 	}
