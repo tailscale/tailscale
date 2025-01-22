@@ -10,19 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/kortschak/wol"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -66,9 +63,6 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 	req("GET /update"):  handleC2NUpdateGet,
 	req("POST /update"): handleC2NUpdatePost,
 
-	// Wake-on-LAN.
-	req("POST /wol"): handleC2NWoL,
-
 	// Device posture.
 	req("GET /posture/identity"): handleC2NPostureIdentityGet,
 
@@ -80,6 +74,18 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 
 	// VIP services.
 	req("GET /vip-services"): handleC2NVIPServicesGet,
+}
+
+// RegisterC2N registers a new c2n handler for the given pattern.
+//
+// A pattern is like "GET /foo" (specific to an HTTP method) or "/foo" (all
+// methods). It panics if the pattern is already registered.
+func RegisterC2N(pattern string, h func(*LocalBackend, http.ResponseWriter, *http.Request)) {
+	k := req(pattern)
+	if _, ok := c2nHandlers[k]; ok {
+		panic(fmt.Sprintf("c2n: duplicate handler for %q", pattern))
+	}
+	c2nHandlers[k] = h
 }
 
 type c2nHandler func(*LocalBackend, http.ResponseWriter, *http.Request)
@@ -501,55 +507,6 @@ func tailscaleUpdateCmd(cmdTS string) *exec.Cmd {
 func regularFileExists(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.Mode().IsRegular()
-}
-
-func handleC2NWoL(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	var macs []net.HardwareAddr
-	for _, macStr := range r.Form["mac"] {
-		mac, err := net.ParseMAC(macStr)
-		if err != nil {
-			http.Error(w, "bad 'mac' param", http.StatusBadRequest)
-			return
-		}
-		macs = append(macs, mac)
-	}
-	var res struct {
-		SentTo []string
-		Errors []string
-	}
-	st := b.sys.NetMon.Get().InterfaceState()
-	if st == nil {
-		res.Errors = append(res.Errors, "no interface state")
-		writeJSON(w, &res)
-		return
-	}
-	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
-	for _, mac := range macs {
-		for ifName, ips := range st.InterfaceIPs {
-			for _, ip := range ips {
-				if ip.Addr().IsLoopback() || ip.Addr().Is6() {
-					continue
-				}
-				local := &net.UDPAddr{
-					IP:   ip.Addr().AsSlice(),
-					Port: 0,
-				}
-				remote := &net.UDPAddr{
-					IP:   net.IPv4bcast,
-					Port: 0,
-				}
-				if err := wol.Wake(mac, password, local, remote); err != nil {
-					res.Errors = append(res.Errors, err.Error())
-				} else {
-					res.SentTo = append(res.SentTo, ifName)
-				}
-				break // one per interface is enough
-			}
-		}
-	}
-	sort.Strings(res.SentTo)
-	writeJSON(w, &res)
 }
 
 // handleC2NTLSCertStatus returns info about the last TLS certificate issued for the

@@ -35,6 +35,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+	_ "tailscale.com/feature/condregister"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"

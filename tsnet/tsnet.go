@@ -29,6 +29,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	_ "tailscale.com/feature/condregister"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
