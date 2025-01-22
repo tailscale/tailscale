@@ -55,7 +55,7 @@ var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 
 type serveHTTPContext struct {
 	SrcAddr       netip.AddrPort
-	ForVIPService bool
+	ForVIPService string // VIP service name, empty string means local
 	DestPort      uint16
 
 	// provides funnel-specific context, nil if not funneled
@@ -471,7 +471,7 @@ func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) 
 			BaseContext: func(_ net.Listener) context.Context {
 				return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
 					SrcAddr:       srcAddr,
-					ForVIPService: true,
+					ForVIPService: dstSvc,
 					DestPort:      dport,
 				})
 			},
@@ -481,7 +481,7 @@ func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) 
 			// hostnames, but for services this getTLSServeCetForPort will need a version that also take
 			// in the hostname. How to store the TLS cert is still being discussed.
 			hs.TLSConfig = &tls.Config{
-				GetCertificate: b.getTLSServeCertForPort(dport, true),
+				GetCertificate: b.getTLSServeCertForPort(dport, dstSvc),
 			}
 			return func(c net.Conn) error {
 				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
@@ -568,7 +568,7 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 		}
 		if tcph.HTTPS() {
 			hs.TLSConfig = &tls.Config{
-				GetCertificate: b.getTLSServeCertForPort(dport, false),
+				GetCertificate: b.getTLSServeCertForPort(dport, ""),
 			}
 			return func(c net.Conn) error {
 				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
@@ -1006,7 +1006,7 @@ func allNumeric(s string) bool {
 	return s != ""
 }
 
-func (b *LocalBackend) webServerConfig(hostname string, forVIPService bool, port uint16) (c ipn.WebServerConfigView, ok bool) {
+func (b *LocalBackend) webServerConfig(hostname string, forVIPService string, port uint16) (c ipn.WebServerConfigView, ok bool) {
 	key := ipn.HostPort(fmt.Sprintf("%s:%v", hostname, port))
 
 	b.mu.Lock()
@@ -1015,13 +1015,13 @@ func (b *LocalBackend) webServerConfig(hostname string, forVIPService bool, port
 	if !b.serveConfig.Valid() {
 		return c, false
 	}
-	if forVIPService {
-		return b.serveConfig.FindServiceWeb(key)
+	if forVIPService != "" {
+		return b.serveConfig.FindServiceWeb(forVIPService, key)
 	}
 	return b.serveConfig.FindWeb(key)
 }
 
-func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService bool) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService string) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		if hi == nil || hi.ServerName == "" {
 			return nil, errors.New("no SNI ServerName")

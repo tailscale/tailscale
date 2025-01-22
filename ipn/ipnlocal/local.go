@@ -3442,11 +3442,13 @@ func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[stri
 	svcAddrPorts := make(map[netip.Addr]func(uint16) bool)
 	// Only set the intercept function if the service has been assigned a VIP.
 	for svcName, ports := range svcPorts {
-		if addrs, ok := vipServiceIPMap[svcName]; ok {
-			interceptFn := generateInterceptTCPPortFunc(ports)
-			for _, addr := range addrs {
-				svcAddrPorts[addr] = interceptFn
-			}
+		addrs, ok := vipServiceIPMap[svcName]
+		if !ok {
+			continue
+		}
+		interceptFn := generateInterceptTCPPortFunc(ports)
+		for _, addr := range addrs {
+			svcAddrPorts[addr] = interceptFn
 		}
 	}
 
@@ -4214,7 +4216,7 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		}
 	}
 
-	// TODO(corp#26001): Get handler for VIP services and Local IPs using
+	// TODO(tailscale/corp#26001): Get handler for VIP services and Local IPs using
 	// the same function.
 	if handler := b.tcpHandlerForVIPService(dst, src); handler != nil {
 		return handler, opts
@@ -6023,7 +6025,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 // b.mu must be held.
 func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.PrefsView) {
 	handlePorts := make([]uint16, 0, 4)
-	vipServicesPorts := make(map[string][]uint16)
+	var vipServicesPorts map[string][]uint16
 
 	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
 		handlePorts = append(handlePorts, 22)
@@ -6055,9 +6057,9 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 				}
 			}
 			if _, ok := vipServicesPorts[svc]; !ok {
-				vipServicesPorts[svc] = servicePorts
+				mak.Set(&vipServicesPorts, svc, servicePorts)
 			} else {
-				vipServicesPorts[svc] = append(vipServicesPorts[svc], servicePorts...)
+				mak.Set(&vipServicesPorts, svc, append(vipServicesPorts[svc], servicePorts...))
 			}
 		}
 

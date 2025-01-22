@@ -626,9 +626,9 @@ func (v ServeConfigView) FindServiceTCP(svcName string, port uint16) (res TCPPor
 	return svcCfg.TCP().GetOk(port)
 }
 
-func (v ServeConfigView) FindServiceWeb(hp HostPort) (res WebServerConfigView, ok bool) {
-	for _, service := range v.Services().All() {
-		if res, ok := service.Web().GetOk(hp); ok {
+func (v ServeConfigView) FindServiceWeb(svcName string, hp HostPort) (res WebServerConfigView, ok bool) {
+	if svcCfg, ok := v.Services().GetOk(svcName); ok {
+		if res, ok := svcCfg.Web().GetOk(hp); ok {
 			return res, ok
 		}
 	}
