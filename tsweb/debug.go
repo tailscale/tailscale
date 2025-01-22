@@ -52,15 +52,15 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	ret.KV("Version", version.Long())
 	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
 	ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(promvarz.Handler))
+
+	// pprof.Index serves everything that runtime/pprof.Lookup finds:
+	// goroutine, threadcreate, heap, allocs, block, mutex
 	ret.Handle("pprof/", "pprof (index)", http.HandlerFunc(pprof.Index))
-	// the CPU profile handler is special because it responds
-	// streamily, unlike every other pprof handler. This means it's
-	// not made available through pprof.Index the way all the other
-	// pprof types are, you have to register the CPU profile handler
-	// separately. Use HandleSilent for that to not pollute the human
-	// debug list with a link that produces streaming line noise if
-	// you click it.
+	// But register the other ones from net/http/pprof directly:
+	ret.HandleSilent("pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
 	ret.HandleSilent("pprof/profile", http.HandlerFunc(pprof.Profile))
+	ret.HandleSilent("pprof/symbol", http.HandlerFunc(pprof.Symbol))
+	ret.HandleSilent("pprof/trace", http.HandlerFunc(pprof.Trace))
 	ret.URL("/debug/pprof/goroutine?debug=1", "Goroutines (collapsed)")
 	ret.URL("/debug/pprof/goroutine?debug=2", "Goroutines (full)")
 	ret.Handle("gc", "force GC", http.HandlerFunc(gcHandler))
