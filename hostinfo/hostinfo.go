@@ -32,11 +32,19 @@ import (
 
 var started = time.Now()
 
+var newHooks []func(*tailcfg.Hostinfo)
+
+// RegisterHostinfoNewHook registers a callback to be called on a non-nil
+// [tailcfg.Hostinfo] before it is returned by [New].
+func RegisterHostinfoNewHook(f func(*tailcfg.Hostinfo)) {
+	newHooks = append(newHooks, f)
+}
+
 // New returns a partially populated Hostinfo for the current host.
 func New() *tailcfg.Hostinfo {
 	hostname, _ := os.Hostname()
 	hostname = dnsname.FirstLabel(hostname)
-	return &tailcfg.Hostinfo{
+	hi := &tailcfg.Hostinfo{
 		IPNVersion:      version.Long(),
 		Hostname:        hostname,
 		App:             appTypeCached(),
@@ -57,8 +65,11 @@ func New() *tailcfg.Hostinfo {
 		Cloud:           string(cloudenv.Get()),
 		NoLogsNoSupport: envknob.NoLogsNoSupport(),
 		AllowsUpdate:    envknob.AllowsRemoteUpdate(),
-		WoLMACs:         getWoLMACs(),
 	}
+	for _, f := range newHooks {
+		f(hi)
+	}
+	return hi
 }
 
 // non-nil on some platforms
