@@ -927,13 +927,24 @@ func (hi *Hostinfo) TailscaleSSHEnabled() bool {
 
 func (v HostinfoView) TailscaleSSHEnabled() bool { return v.ж.TailscaleSSHEnabled() }
 
-// TailscaleFunnelEnabled reports whether or not this node has explicitly
-// enabled Funnel.
+// TailscaleFunnelEnabled reports whether or not this node has explicitly enabled Funnel.
 func (hi *Hostinfo) TailscaleFunnelEnabled() bool {
+	// TODO(irbekrm): once control uses TailscaleFunnelUsageDetected to determine whether funnel is enabled for
+	// clients with capver <= 112, use hi.IngressEnabled here.
 	return hi != nil && hi.WireIngress
 }
 
-func (v HostinfoView) TailscaleFunnelEnabled() bool { return v.ж.TailscaleFunnelEnabled() }
+// TailscaleFunnelUsageDetected reports whether the node has any funnel config applied to it, including one which
+// contains only disabled endpoints.
+func (hi *Hostinfo) TailscaleFunnelUsageDetected() bool {
+	// TODO(irbekrm): I am adding the hi.IngressEnabled check here so that this method keeps working once we change
+	// the logic to not send Hostinfo.WireIngress when Hostinfo.IngressEnabled is already true. Update this comment
+	// once we make that change.
+	return hi != nil && (hi.WireIngress || hi.IngressEnabled)
+}
+
+func (v HostinfoView) TailscaleFunnelEnabled() bool       { return v.ж.TailscaleFunnelEnabled() }
+func (v HostinfoView) TailscaleFunnelUsageDetected() bool { return v.ж.TailscaleFunnelUsageDetected() }
 
 // NetInfo contains information about the host's network state.
 type NetInfo struct {
