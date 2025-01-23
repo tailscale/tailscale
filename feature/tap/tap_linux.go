@@ -1,9 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !ts_omit_tap
-
-package tstun
+// Package tap registers Tailscale's experimental (demo) Linux TAP (Layer 2) support.
+package tap
 
 import (
 	"bytes"
@@ -26,6 +25,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
@@ -38,7 +38,11 @@ import (
 // For now just hard code it.
 var ourMAC = net.HardwareAddr{0x30, 0x2D, 0x66, 0xEC, 0x7A, 0x93}
 
-func init() { createTAP = createTAPLinux }
+const tapDebug = tstun.TAPDebug
+
+func init() {
+	tstun.CreateTAP.Set(createTAPLinux)
+}
 
 func createTAPLinux(logf logger.Logf, tapName, bridgeName string) (tun.Device, error) {
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR, 0)
@@ -87,7 +91,10 @@ var (
 	etherTypeIPv6 = etherType{0x86, 0xDD}
 )
 
-const ipv4HeaderLen = 20
+const (
+	ipv4HeaderLen     = 20
+	ethernetFrameSize = 14 // 2 six byte MACs, 2 bytes ethertype
+)
 
 const (
 	consumePacket = true
@@ -185,6 +192,11 @@ var (
 	// cgnatNetMask is the netmask of the 100.64.0.0/10 CGNAT range.
 	cgnatNetMask = net.IPMask(net.ParseIP("255.192.0.0").To4())
 )
+
+// parsedPacketPool holds a pool of Parsed structs for use in filtering.
+// This is needed because escape analysis cannot see that parsed packets
+// do not escape through {Pre,Post}Filter{In,Out}.
+var parsedPacketPool = sync.Pool{New: func() any { return new(packet.Parsed) }}
 
 // handleDHCPRequest handles receiving a raw TAP ethernet frame and reports whether
 // it's been handled as a DHCP request. That is, it reports whether the frame should
@@ -392,7 +404,7 @@ type tapDevice struct {
 	destMACAtomic syncs.AtomicValue[[6]byte]
 }
 
-var _ setIPer = (*tapDevice)(nil)
+var _ tstun.SetIPer = (*tapDevice)(nil)
 
 func (t *tapDevice) SetIP(ipV4, ipV6TODO netip.Addr) error {
 	t.clientIPv4.Store(ipV4.String())

@@ -53,7 +53,8 @@ const PacketStartOffset = device.MessageTransportHeaderSize
 // of a packet that can be injected into a tstun.Wrapper.
 const MaxPacketSize = device.MaxContentSize
 
-const tapDebug = false // for super verbose TAP debugging
+// TAPDebug is whether super verbose TAP debugging is enabled.
+const TAPDebug = false
 
 var (
 	// ErrClosed is returned when attempting an operation on a closed Wrapper.
@@ -459,7 +460,7 @@ func (t *Wrapper) pollVector() {
 				return
 			}
 			n, err = reader(t.vectorBuffer[:], sizes, readOffset)
-			if t.isTAP && tapDebug {
+			if t.isTAP && TAPDebug {
 				s := fmt.Sprintf("% x", t.vectorBuffer[0][:])
 				for strings.HasSuffix(s, " 00") {
 					s = strings.TrimSuffix(s, " 00")
@@ -792,7 +793,9 @@ func (pc *peerConfigTable) outboundPacketIsJailed(p *packet.Parsed) bool {
 	return c.jailed
 }
 
-type setIPer interface {
+// SetIPer is the interface expected to be implemented by the TAP implementation
+// of tun.Device.
+type SetIPer interface {
 	// SetIP sets the IP addresses of the TAP device.
 	SetIP(ipV4, ipV6 netip.Addr) error
 }
@@ -800,7 +803,7 @@ type setIPer interface {
 // SetWGConfig is called when a new NetworkMap is received.
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
 	if t.isTAP {
-		if sip, ok := t.tdev.(setIPer); ok {
+		if sip, ok := t.tdev.(SetIPer); ok {
 			sip.SetIP(findV4(wcfg.Addresses), findV6(wcfg.Addresses))
 		}
 	}
