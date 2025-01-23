@@ -190,7 +190,7 @@ change in the future.
 			loginCmd,
 			logoutCmd,
 			switchCmd,
-			configureCmd,
+			configureCmd(),
 			syspolicyCmd,
 			netcheckCmd,
 			ipCmd,
@@ -216,6 +216,7 @@ change in the future.
 			driveCmd,
 			idTokenCmd,
 			advertiseCmd(),
+			configureHostCmd(),
 		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
@@ -224,10 +225,6 @@ change in the future.
 			}
 			return flag.ErrHelp
 		},
-	}
-
-	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
-		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
 	}
 
 	walkCommands(rootCmd, func(w cmdWalk) bool {
