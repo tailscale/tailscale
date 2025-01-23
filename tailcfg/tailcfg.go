@@ -27,6 +27,7 @@ import (
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/vizerror"
 )
 
 // CapabilityVersion represents the client's capability level. That
@@ -891,14 +892,14 @@ type ServiceName string
 
 // Validate validates if the service name is formatted correctly.
 // We only allow valid DNS labels, since the expectation is that these will be
-// used as parts of domain names.
+// used as parts of domain names. All errors are [vizerror.Error].
 func (sn ServiceName) Validate() error {
 	bareName, ok := strings.CutPrefix(string(sn), "svc:")
 	if !ok {
-		return errors.New("services must start with 'svc:'")
+		return vizerror.Errorf("%q is not a valid service name: must start with 'svc:'", sn)
 	}
 	if bareName == "" {
-		return errors.New("service names must not be empty")
+		return vizerror.Errorf("%q is not a valid service name: must not be empty after the 'svc:' prefix", sn)
 	}
 	return dnsname.ValidLabel(bareName)
 }

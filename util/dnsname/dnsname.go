@@ -94,7 +94,8 @@ func (f FQDN) Contains(other FQDN) bool {
 	return strings.HasSuffix(other.WithTrailingDot(), cmp)
 }
 
-// ValidLabel reports whether label is a valid DNS label.
+// ValidLabel reports whether label is a valid DNS label. All errors are
+// [vizerror.Error].
 func ValidLabel(label string) error {
 	if len(label) == 0 {
 		return vizerror.New("empty DNS label")
