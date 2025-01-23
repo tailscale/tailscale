@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"unique"
 
 	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
@@ -98,9 +99,9 @@ func (k NodePrivate) Public() NodePublic {
 	if k.IsZero() {
 		panic("can't take the public key of a zero NodePrivate")
 	}
-	var ret NodePublic
-	curve25519.ScalarBaseMult(&ret.k, &k.k)
-	return ret
+	var pubk [32]byte
+	curve25519.ScalarBaseMult(&pubk, &k.k)
+	return nodePubFrom32(pubk)
 }
 
 // AppendText implements encoding.TextAppender.
@@ -130,7 +131,8 @@ func (k NodePrivate) SealTo(p NodePublic, cleartext []byte) (ciphertext []byte) 
 	}
 	var nonce [24]byte
 	rand(nonce[:])
-	return box.Seal(nonce[:], cleartext, &nonce, &p.k, &k.k)
+	pub := p.Raw32()
+	return box.Seal(nonce[:], cleartext, &nonce, &pub, &k.k)
 }
 
 // OpenFrom opens the NaCl box ciphertext, which must be a value
@@ -144,16 +146,28 @@ func (k NodePrivate) OpenFrom(p NodePublic, ciphertext []byte) (cleartext []byte
 		return nil, false
 	}
 	nonce := (*[24]byte)(ciphertext)
-	return box.Open(nil, ciphertext[len(nonce):], nonce, &p.k, &k.k)
+	pub := p.Raw32()
+	return box.Open(nil, ciphertext[len(nonce):], nonce, &pub, &k.k)
 }
 
 func (k NodePrivate) UntypedHexString() string {
 	return hex.EncodeToString(k.k[:])
 }
 
+// handleToZeros is a unique.Handle to a [32]byte of all zeros.
+// Per the [NodePublic] field docs, this value must never be set
+// in the 'h' field.
+var handleToZeros = unique.Make([32]byte{})
+
 // NodePublic is the public portion of a NodePrivate.
 type NodePublic struct {
-	k [32]byte
+	// h is either a zero value (for a NodePublic of 32 zero bytes) or a valid
+	// (non-nil) unique.Handle pointer to a 32-byte array.
+	//
+	// h must never be a pointer to the [32]byte zero value ([handleToZeros]),
+	// else there would be two valid representations of all zeros that wouldn't
+	// be equal
+	h unique.Handle[[32]byte]
 }
 
 // Shard returns a uint8 number from a public key with
@@ -164,14 +178,17 @@ func (p NodePublic) Shard() uint8 {
 	// But we don't need perfectly uniformly-random, we need
 	// good-enough-for-sharding random, so we haphazardly
 	// combine raw values of the key to give us something sufficient.
-	s := uint8(p.k[31]) + uint8(p.k[30]) + uint8(p.k[20])
-	return s ^ uint8(p.k[2]+p.k[12])
+	k := p.Raw32()
+	s := uint8(k[31]) + uint8(k[30]) + uint8(k[20])
+	return s ^ uint8(k[2]+k[12])
 }
 
 // Compare returns -1, 0, or 1, depending on whether p orders before p2,
 // using bytes.Compare on the bytes of the public key.
 func (p NodePublic) Compare(p2 NodePublic) int {
-	return bytes.Compare(p.k[:], p2.k[:])
+	k := p.Raw32()
+	k2 := p2.Raw32()
+	return bytes.Compare(k[:], k2[:])
 }
 
 // ParseNodePublicUntyped parses an untyped 64-character hex value
@@ -183,11 +200,19 @@ func (p NodePublic) Compare(p2 NodePublic) int {
 // uses that don't require backwards compatibility with the untyped
 // string format, please use MarshalText/UnmarshalText.
 func ParseNodePublicUntyped(raw mem.RO) (NodePublic, error) {
-	var ret NodePublic
-	if err := parseHex(ret.k[:], raw, mem.B(nil)); err != nil {
+	var a [32]byte
+	if err := parseHex(a[:], raw, mem.B(nil)); err != nil {
 		return NodePublic{}, err
 	}
-	return ret, nil
+	return nodePubFrom32(a), nil
+}
+
+func nodePubFrom32(a [32]byte) NodePublic {
+	h := unique.Make(a)
+	if h == handleToZeros {
+		return NodePublic{}
+	}
+	return NodePublic{h: h}
 }
 
 // NodePublicFromRaw32 parses a 32-byte raw value as a NodePublic.
@@ -198,9 +223,9 @@ func NodePublicFromRaw32(raw mem.RO) NodePublic {
 	if raw.Len() != 32 {
 		panic("input has wrong size")
 	}
-	var ret NodePublic
-	raw.Copy(ret.k[:])
-	return ret
+	var puba [32]byte
+	raw.Copy(puba[:])
+	return nodePubFrom32(puba)
 }
 
 // badOldPrefix is a nodekey/discokey prefix that, when base64'd, serializes
@@ -225,17 +250,24 @@ func (k NodePublic) IsZero() bool {
 	return k == NodePublic{}
 }
 
+var validZeroPublic = NodePublic{h: unique.Make([32]byte{})}
+
 // ShortString returns the Tailscale conventional debug representation
 // of a public key: the first five base64 digits of the key, in square
 // brackets.
 func (k NodePublic) ShortString() string {
-	return debug32(k.k)
+	var z NodePublic
+	if k == z {
+		k = validZeroPublic
+	}
+	return debug32(k.Raw32())
 }
 
 // AppendTo appends k, serialized as a 32-byte binary value, to
 // buf. Returns the new slice.
 func (k NodePublic) AppendTo(buf []byte) []byte {
-	return append(buf, k.k[:]...)
+	a := k.Raw32()
+	return append(buf, a[:]...)
 }
 
 // ReadRawWithoutAllocating initializes k with bytes read from br.
@@ -253,13 +285,15 @@ func (k *NodePublic) ReadRawWithoutAllocating(br *bufio.Reader) error {
 	//
 	// Dear future: if io.ReadFull stops causing stuff to escape, you
 	// should switch back to that.
-	for i := range k.k {
+	var a [32]byte
+	for i := range a {
 		b, err := br.ReadByte()
 		if err != nil {
 			return err
 		}
-		k.k[i] = b
+		a[i] = b
 	}
+	*k = nodePubFrom32(a)
 	return nil
 }
 
@@ -272,7 +306,7 @@ func (k NodePublic) WriteRawWithoutAllocating(bw *bufio.Writer) error {
 	//
 	// Dear future: if bw.Write(k.k[:]) stops causing stuff to escape,
 	// you should switch back to that.
-	for _, b := range k.k {
+	for _, b := range k.Raw32() {
 		err := bw.WriteByte(b)
 		if err != nil {
 			return err
@@ -287,13 +321,18 @@ func (k NodePublic) WriteRawWithoutAllocating(bw *bufio.Writer) error {
 // server and a few places in the wireguard-go API; don't add
 // more uses.
 func (k NodePublic) Raw32() [32]byte {
-	return k.k
+	if k.h == (unique.Handle[[32]byte]{}) {
+		// TODO(bradfitz): add an IsValid method to unique.Handle.
+		return [32]byte{}
+	}
+	return k.h.Value()
 }
 
 // Less reports whether k orders before other, using an undocumented
 // deterministic ordering.
 func (k NodePublic) Less(other NodePublic) bool {
-	return bytes.Compare(k.k[:], other.k[:]) < 0
+	a, a2 := k.Raw32(), other.Raw32()
+	return bytes.Compare(a[:], a2[:]) < 0
 }
 
 // UntypedHexString returns k, encoded as an untyped 64-character hex
@@ -306,7 +345,8 @@ func (k NodePublic) Less(other NodePublic) bool {
 // compatibility with the untyped string format, please use
 // MarshalText/UnmarshalText.
 func (k NodePublic) UntypedHexString() string {
-	return hex.EncodeToString(k.k[:])
+	a := k.Raw32()
+	return hex.EncodeToString(a[:])
 }
 
 // String returns k as a hex-encoded string with a type prefix.
@@ -321,7 +361,8 @@ func (k NodePublic) String() string {
 // AppendText implements encoding.TextAppender. It appends a typed prefix
 // followed by hex encoded represtation of k to b.
 func (k NodePublic) AppendText(b []byte) ([]byte, error) {
-	return appendHexKey(b, nodePublicHexPrefix, k.k[:]), nil
+	a := k.Raw32()
+	return appendHexKey(b, nodePublicHexPrefix, a[:]), nil
 }
 
 // MarshalText implements encoding.TextMarshaler. It returns a typed prefix
@@ -333,14 +374,20 @@ func (k NodePublic) MarshalText() ([]byte, error) {
 // UnmarshalText implements encoding.TextUnmarshaler. It expects a typed prefix
 // followed by a hex encoded representation of k.
 func (k *NodePublic) UnmarshalText(b []byte) error {
-	return parseHex(k.k[:], mem.B(b), mem.S(nodePublicHexPrefix))
+	var a [32]byte
+	if err := parseHex(a[:], mem.B(b), mem.S(nodePublicHexPrefix)); err != nil {
+		return err
+	}
+	*k = nodePubFrom32(a)
+	return nil
 }
 
 // MarshalBinary implements encoding.BinaryMarshaler.
 func (k NodePublic) MarshalBinary() (data []byte, err error) {
 	b := make([]byte, len(nodePublicBinaryPrefix)+NodePublicRawLen)
 	copy(b[:len(nodePublicBinaryPrefix)], nodePublicBinaryPrefix)
-	copy(b[len(nodePublicBinaryPrefix):], k.k[:])
+	a := k.Raw32()
+	copy(b[len(nodePublicBinaryPrefix):], a[:])
 	return b, nil
 }
 
@@ -353,8 +400,9 @@ func (k *NodePublic) UnmarshalBinary(in []byte) error {
 	if want, got := len(nodePublicBinaryPrefix)+NodePublicRawLen, data.Len(); want != got {
 		return fmt.Errorf("incorrect len for NodePublic (%d != %d)", got, want)
 	}
-
-	data.SliceFrom(len(nodePublicBinaryPrefix)).Copy(k.k[:])
+	var a [32]byte
+	data.SliceFrom(len(nodePublicBinaryPrefix)).Copy(a[:])
+	*k = nodePubFrom32(a)
 	return nil
 }
 
@@ -368,13 +416,14 @@ func (k NodePublic) WireGuardGoString() string {
 	b := []byte("peer(____…____)")
 	const first = len("peer(")
 	const second = len("peer(____…")
-	b[first+0] = b64((k.k[0] >> 2) & 63)
-	b[first+1] = b64(((k.k[0] << 4) | (k.k[1] >> 4)) & 63)
-	b[first+2] = b64(((k.k[1] << 2) | (k.k[2] >> 6)) & 63)
-	b[first+3] = b64(k.k[2] & 63)
-	b[second+0] = b64(k.k[29] & 63)
-	b[second+1] = b64((k.k[30] >> 2) & 63)
-	b[second+2] = b64(((k.k[30] << 4) | (k.k[31] >> 4)) & 63)
-	b[second+3] = b64((k.k[31] << 2) & 63)
+	a := k.Raw32()
+	b[first+0] = b64((a[0] >> 2) & 63)
+	b[first+1] = b64(((a[0] << 4) | (a[1] >> 4)) & 63)
+	b[first+2] = b64(((a[1] << 2) | (a[2] >> 6)) & 63)
+	b[first+3] = b64(a[2] & 63)
+	b[second+0] = b64(a[29] & 63)
+	b[second+1] = b64((a[30] >> 2) & 63)
+	b[second+2] = b64(((a[30] << 4) | (a[31] >> 4)) & 63)
+	b[second+3] = b64((a[31] << 2) & 63)
 	return string(b)
 }
