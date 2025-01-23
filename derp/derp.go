@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"time"
 )
 
@@ -253,4 +254,15 @@ func writeFrame(bw *bufio.Writer, t frameType, b []byte) error {
 		return err
 	}
 	return bw.Flush()
+}
+
+// Conn is the subset of the underlying net.Conn the DERP Server needs.
+// It is a defined type so that non-net connections can be used.
+type Conn interface {
+	io.WriteCloser
+	LocalAddr() net.Addr
+	// The *Deadline methods follow the semantics of net.Conn.
+	SetDeadline(time.Time) error
+	SetReadDeadline(time.Time) error
+	SetWriteDeadline(time.Time) error
 }
