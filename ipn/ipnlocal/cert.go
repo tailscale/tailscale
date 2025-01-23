@@ -24,6 +24,7 @@ import (
 	"log"
 	randv2 "math/rand/v2"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -550,12 +551,13 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 		return nil, err
 	}
 
-	csr, err := certRequest(certPrivKey, domain, nil)
+	csr, err := certRequest(certPrivKey, domain, nil, domain)
 	if err != nil {
 		return nil, err
 	}
 
 	logf("requesting cert...")
+	traceACME(csr)
 	der, _, err := ac.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
 		return nil, fmt.Errorf("CreateOrder: %v", err)
@@ -658,8 +660,16 @@ func acmeClient(cs certStore) (*acme.Client, error) {
 	// LetsEncrypt), we should make sure that they support ARI extension (see
 	// shouldStartDomainRenewalARI).
 	return &acme.Client{
-		Key:       key,
-		UserAgent: "tailscaled/" + version.Long(),
+		Key:          key,
+		UserAgent:    "tailscaled/" + version.Long(),
+		DirectoryURL: "https://localhost:14000/dir",
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		},
 	}, nil
 }
 
