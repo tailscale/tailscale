@@ -4418,6 +4418,41 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	b.appConnector.UpdateDomainsAndRoutes(domains, routes)
 }
 
+func (b *LocalBackend) readvertiseAppConnectorRoutes() {
+	// Note: we should never call b.appConnector methods while holding b.mu.
+	// This can lead to a deadlock, like
+	// https://github.com/tailscale/corp/issues/25965.
+	//
+	// Grab a copy of the field, since b.mu only guards access to the
+	// b.appConnector field itself.
+	b.mu.Lock()
+	appConnector := b.appConnector
+	b.mu.Unlock()
+
+	if appConnector == nil {
+		return
+	}
+	domainRoutes := appConnector.DomainRoutes()
+	if domainRoutes == nil {
+		return
+	}
+
+	// Re-advertise the stored routes, in case stored state got out of
+	// sync with previously advertised routes in prefs.
+	var prefixes []netip.Prefix
+	for _, ips := range domainRoutes {
+		for _, ip := range ips {
+			prefixes = append(prefixes, netip.PrefixFrom(ip, ip.BitLen()))
+		}
+	}
+	// Note: AdvertiseRoute will trim routes that are already
+	// advertised, so if everything is already being advertised this is
+	// a noop.
+	if err := b.AdvertiseRoute(prefixes...); err != nil {
+		b.logf("error advertising stored app connector routes: %v", err)
+	}
+}
+
 // authReconfig pushes a new configuration into wgengine, if engine
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
@@ -4496,6 +4531,7 @@ func (b *LocalBackend) authReconfig() {
 	}
 
 	b.initPeerAPIListener()
+	b.readvertiseAppConnectorRoutes()
 }
 
 // shouldUseOneCGNATRoute reports whether we should prefer to make one big
@@ -7261,7 +7297,7 @@ var ErrDisallowedAutoRoute = errors.New("route is not allowed")
 // If the route is disallowed, ErrDisallowedAutoRoute is returned.
 func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
 	finalRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
-	newRoutes := false
+	var newRoutes []netip.Prefix
 
 	for _, ipp := range ipps {
 		if !allowedAutoRoute(ipp) {
@@ -7277,13 +7313,14 @@ func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
 		}
 
 		finalRoutes = append(finalRoutes, ipp)
-		newRoutes = true
+		newRoutes = append(newRoutes, ipp)
 	}
 
-	if !newRoutes {
+	if len(newRoutes) == 0 {
 		return nil
 	}
 
+	b.logf("advertising new app connector routes: %v", newRoutes)
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: finalRoutes,
