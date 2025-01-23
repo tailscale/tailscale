@@ -315,6 +315,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
+		Named("ingress-reconciler").
 		Watches(&appsv1.StatefulSet{}, ingressChildFilter).
 		Watches(&corev1.Secret{}, ingressChildFilter).
 		Watches(&corev1.Service{}, svcHandlerForIngress).
@@ -336,6 +337,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
+		Named("ingress-pg-reconciler").
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
 		Complete(&IngressPGReconciler{
 			recorder:    eventRecorder,
@@ -357,6 +359,7 @@ func runReconcilers(opts reconcilerOpts) {
 	proxyClassFilterForConnector := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForConnector(mgr.GetClient(), startlog))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.Connector{}).
+		Named("connector-reconciler").
 		Watches(&appsv1.StatefulSet{}, connectorFilter).
 		Watches(&corev1.Secret{}, connectorFilter).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForConnector).
@@ -376,6 +379,7 @@ func runReconcilers(opts reconcilerOpts) {
 	nameserverFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("nameserver"))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.DNSConfig{}).
+		Named("nameserver-reconciler").
 		Watches(&appsv1.Deployment{}, nameserverFilter).
 		Watches(&corev1.ConfigMap{}, nameserverFilter).
 		Watches(&corev1.Service{}, nameserverFilter).
@@ -455,6 +459,7 @@ func runReconcilers(opts reconcilerOpts) {
 	serviceMonitorFilter := handler.EnqueueRequestsFromMapFunc(proxyClassesWithServiceMonitor(mgr.GetClient(), opts.log))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyClass{}).
+		Named("proxyclass-reconciler").
 		Watches(&apiextensionsv1.CustomResourceDefinition{}, serviceMonitorFilter).
 		Complete(&ProxyClassReconciler{
 			Client:   mgr.GetClient(),
@@ -498,6 +503,7 @@ func runReconcilers(opts reconcilerOpts) {
 	recorderFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.Recorder{})
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.Recorder{}).
+		Named("recorder-reconciler").
 		Watches(&appsv1.StatefulSet{}, recorderFilter).
 		Watches(&corev1.ServiceAccount{}, recorderFilter).
 		Watches(&corev1.Secret{}, recorderFilter).
@@ -520,6 +526,7 @@ func runReconcilers(opts reconcilerOpts) {
 	proxyClassFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForProxyGroup(mgr.GetClient(), startlog))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}).
+		Named("proxygroup-reconciler").
 		Watches(&appsv1.StatefulSet{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ConfigMap{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ServiceAccount{}, ownedByProxyGroupFilter).
