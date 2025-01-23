@@ -60,31 +60,34 @@ import (
 	"tailscale.com/wf"
 )
 
-func init() {
-	// Initialize COM process-wide.
-	comProcessType := com.Service
-	if !isWindowsService() {
-		comProcessType = com.ConsoleApp
-	}
-	if err := com.StartRuntime(comProcessType); err != nil {
-		log.Printf("wingoes.com.StartRuntime(%d) failed: %v", comProcessType, err)
-	}
-}
-
 // permitPolicyLocks is a function to be called to lift the restriction on acquiring
 // [gp.PolicyLock]s once the service is running.
 // It is safe to be called multiple times.
 var permitPolicyLocks = func() {}
 
 func init() {
-	if isWindowsService() {
-		// We prevent [gp.PolicyLock]s from being acquired until the service enters the running state.
-		// Otherwise, if tailscaled starts due to a GPSI policy installing Tailscale, it may deadlock
-		// while waiting for the write counterpart of the GP lock to be released by Group Policy,
-		// which is itself waiting for the installation to complete and tailscaled to start.
-		// See tailscale/tailscale#14416 for more information.
-		permitPolicyLocks = gp.RestrictPolicyLocks()
-	}
+	tailscaledInit.Defer(func() error {
+		// Initialize COM process-wide.
+		comProcessType := com.Service
+		isService := isWindowsService()
+		if !isService {
+			comProcessType = com.ConsoleApp
+		}
+		if err := com.StartRuntime(comProcessType); err != nil {
+			return errors.New(fmt.Sprintf("wingoes.com.StartRuntime(%d) failed: %v", comProcessType, err))
+		}
+
+		if isService {
+			// We prevent [gp.PolicyLock]s from being acquired until the service enters the running state.
+			// Otherwise, if tailscaled starts due to a GPSI policy installing Tailscale, it may deadlock
+			// while waiting for the write counterpart of the GP lock to be released by Group Policy,
+			// which is itself waiting for the installation to complete and tailscaled to start.
+			// See tailscale/tailscale#14416 for more information.
+			permitPolicyLocks = gp.RestrictPolicyLocks()
+		}
+
+		return nil
+	})
 }
 
 const serviceName = "Tailscale"

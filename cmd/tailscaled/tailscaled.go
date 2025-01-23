@@ -59,6 +59,7 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
@@ -153,6 +154,14 @@ var subCommands = map[string]*func([]string) error{
 
 var beCLI func() // non-nil if CLI is linked in
 
+// tailscaledInit facilitates the lazy initialization of tailscaled.
+// It defers potentially expensive and platform-specific
+// initialization steps until the main function is called and
+// determines that the current process is an actual tailscaled
+// process, rather than a CLI symlink, `tailscaled --version`, or
+// another subcommand that doesn't require full initialization.
+var tailscaledInit lazy.DeferredInit
+
 func main() {
 	envknob.PanicIfAnyEnvCheckedInInit()
 	envknob.ApplyDiskConfig()
@@ -225,6 +234,11 @@ func main() {
 	if args.birdSocketPath != "" && createBIRDClient == nil {
 		log.SetFlags(0)
 		log.Fatalf("--bird-socket is not supported on %s", runtime.GOOS)
+	}
+
+	if err := tailscaledInit.Do(); err != nil {
+		log.SetFlags(0)
+		log.Fatalf("tailscaled init failed: %v", err)
 	}
 
 	// Only apply a default statepath when neither have been provided, so that a
