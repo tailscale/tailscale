@@ -23,7 +23,6 @@ import (
 	"math"
 	"math/big"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -339,17 +338,6 @@ func (s *dupClientSet) removeClient(c *sclient) bool {
 type PacketForwarder interface {
 	ForwardPacket(src, dst key.NodePublic, payload []byte) error
 	String() string
-}
-
-// Conn is the subset of the underlying net.Conn the DERP Server needs.
-// It is a defined type so that non-net connections can be used.
-type Conn interface {
-	io.WriteCloser
-	LocalAddr() net.Addr
-	// The *Deadline methods follow the semantics of net.Conn.
-	SetDeadline(time.Time) error
-	SetReadDeadline(time.Time) error
-	SetWriteDeadline(time.Time) error
 }
 
 var packetsDropped = metrics.NewMultiLabelMap[dropReasonKindLabels](
