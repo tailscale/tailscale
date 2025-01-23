@@ -7276,17 +7276,17 @@ func (b *LocalBackend) DoSelfUpdate() {
 
 // ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
 // App Connector to enable route discovery.
-func (b *LocalBackend) ObserveDNSResponse(res []byte) {
+func (b *LocalBackend) ObserveDNSResponse(res []byte) error {
 	var appConnector *appc.AppConnector
 	b.mu.Lock()
 	if b.appConnector == nil {
 		b.mu.Unlock()
-		return
+		return nil
 	}
 	appConnector = b.appConnector
 	b.mu.Unlock()
 
-	appConnector.ObserveDNSResponse(res)
+	return appConnector.ObserveDNSResponse(res)
 }
 
 // ErrDisallowedAutoRoute is returned by AdvertiseRoute when a route that is not allowed is requested.

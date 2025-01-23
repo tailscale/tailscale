@@ -1372,7 +1372,9 @@ func TestObserveDNSResponse(t *testing.T) {
 		b := newTestBackend(t)
 
 		// ensure no error when no app connector is configured
-		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 
 		rc := &appctest.RouteCollector{}
 		if shouldStore {
@@ -1383,7 +1385,9 @@ func TestObserveDNSResponse(t *testing.T) {
 		b.appConnector.UpdateDomains([]string{"example.com"})
 		b.appConnector.Wait(context.Background())
 
-		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		b.appConnector.Wait(context.Background())
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {

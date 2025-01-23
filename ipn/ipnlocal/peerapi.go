@@ -932,7 +932,11 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 	// instead to avoid re-parsing the DNS response for improved performance in
 	// the future.
 	if h.ps.b.OfferingAppConnector() {
-		h.ps.b.ObserveDNSResponse(res)
+		if err := h.ps.b.ObserveDNSResponse(res); err != nil {
+			h.logf("ObserveDNSResponse error: %v", err)
+			// This is not fatal, we probably just failed to parse the upstream
+			// response. Return it to the caller anyway.
+		}
 	}
 
 	if pretty {
