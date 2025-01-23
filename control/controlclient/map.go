@@ -300,6 +300,15 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	if dm := resp.DERPMap; dm != nil {
 		ms.vlogf("netmap: new map contains DERP map")
 
+		// Guard against the control server accidentally sending
+		// a nil region definition, which at least Headscale was
+		// observed to send.
+		for rid, r := range dm.Regions {
+			if r == nil {
+				delete(dm.Regions, rid)
+			}
+		}
+
 		// Zero-valued fields in a DERPMap mean that we're not changing
 		// anything and are using the previous value(s).
 		if ldm := ms.lastDERPMap; ldm != nil {
