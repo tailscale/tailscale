@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/feature"
 	"tailscale.com/types/logger"
 )
 
-// createTAP is non-nil on Linux.
-var createTAP func(logf logger.Logf, tapName, bridgeName string) (tun.Device, error)
+// CrateTAP is the hook set by feature/tap.
+var CreateTAP feature.Hook[func(logf logger.Logf, tapName, bridgeName string) (tun.Device, error)]
 
 // New returns a tun.Device for the requested device name, along with
 // the OS-dependent name that was allocated to the device.
@@ -29,7 +30,7 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		if runtime.GOOS != "linux" {
 			return nil, "", errors.New("tap only works on Linux")
 		}
-		if createTAP == nil { // if the ts_omit_tap tag is used
+		if !CreateTAP.IsSet() { // if the ts_omit_tap tag is used
 			return nil, "", errors.New("tap is not supported in this build")
 		}
 		f := strings.Split(tunName, ":")
@@ -42,7 +43,7 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		default:
 			return nil, "", errors.New("bogus tap argument")
 		}
-		dev, err = createTAP(logf, tapName, bridgeName)
+		dev, err = CreateTAP.Get()(logf, tapName, bridgeName)
 	} else {
 		dev, err = tun.CreateTUN(tunName, int(DefaultTUNMTU()))
 	}
