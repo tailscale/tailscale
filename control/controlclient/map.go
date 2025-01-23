@@ -195,6 +195,10 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 
 	ms.updateStateFromResponse(resp)
 
+	// Occasionally clean up old userprofile if it grows too much
+	// from e.g. ephemeral tagged nodes.
+	ms.cleanLastUserProfile()
+
 	if ms.tryHandleIncrementally(resp) {
 		ms.occasionallyPrintSummary(ms.lastNetmapSummary)
 		return nil
@@ -292,7 +296,6 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	for _, up := range resp.UserProfiles {
 		ms.lastUserProfile[up.ID] = up
 	}
-	// TODO(bradfitz): clean up old user profiles? maybe not worth it.
 
 	if dm := resp.DERPMap; dm != nil {
 		ms.vlogf("netmap: new map contains DERP map")
@@ -529,6 +532,32 @@ func (ms *mapSession) addUserProfile(nm *netmap.NetworkMap, userID tailcfg.UserI
 	}
 	if up, ok := ms.lastUserProfile[userID]; ok {
 		nm.UserProfiles[userID] = up
+	}
+}
+
+// cleanLastUserProfile deletes any entries from lastUserProfile
+// that are not referenced by any peer or the self node.
+//
+// This is expensive enough that we don't do this on every message
+// from the server, but only when it's grown enough to matter.
+func (ms *mapSession) cleanLastUserProfile() {
+	if len(ms.lastUserProfile) < len(ms.peers)*2 {
+		// Hasn't grown enough to be worth cleaning.
+		return
+	}
+
+	keep := set.Set[tailcfg.UserID]{}
+	if node := ms.lastNode; node.Valid() {
+		keep.Add(node.User())
+	}
+	for _, n := range ms.peers {
+		keep.Add(n.User())
+		keep.Add(n.Sharer())
+	}
+	for userID := range ms.lastUserProfile {
+		if !keep.Contains(userID) {
+			delete(ms.lastUserProfile, userID)
+		}
 	}
 }
 
