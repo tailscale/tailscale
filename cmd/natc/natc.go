@@ -26,6 +26,8 @@ import (
 	"github.com/inetaf/tcpproxy"
 	"github.com/peterbourgon/ff/v3"
 	"golang.org/x/net/dns/dnsmessage"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
@@ -37,6 +39,7 @@ import (
 	"tailscale.com/tsweb"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
+	"tailscale.com/wgengine/netstack"
 )
 
 func main() {
@@ -112,6 +115,7 @@ func main() {
 		ts.Port = uint16(*wgPort)
 	}
 	defer ts.Close()
+
 	if *verboseTSNet {
 		ts.Logf = log.Printf
 	}
@@ -129,6 +133,33 @@ func main() {
 			log.Fatalf("debug serve: %v", http.Serve(dln, mux))
 		}()
 	}
+
+	if err := ts.Start(); err != nil {
+		log.Fatalf("ts.Start: %v", err)
+	}
+	// TODO(raggi): this is not a public interface or guarantee.
+	ns := ts.Sys().Netstack.Get().(*netstack.Impl)
+	tcpRXBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{
+		Min:     tcp.MinBufferSize,
+		Default: tcp.DefaultReceiveBufferSize,
+		Max:     tcp.MaxBufferSize,
+	}
+	if err := ns.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRXBufOpt); err != nil {
+		log.Fatalf("could not set TCP RX buf size: %v", err)
+	}
+	tcpTXBufOpt := tcpip.TCPSendBufferSizeRangeOption{
+		Min:     tcp.MinBufferSize,
+		Default: tcp.DefaultSendBufferSize,
+		Max:     tcp.MaxBufferSize,
+	}
+	if err := ns.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpTXBufOpt); err != nil {
+		log.Fatalf("could not set TCP TX buf size: %v", err)
+	}
+	mslOpt := tcpip.TCPTimeWaitTimeoutOption(5 * time.Second)
+	if err := ns.SetTransportProtocolOption(tcp.ProtocolNumber, &mslOpt); err != nil {
+		log.Fatalf("could not set TCP MSL: %v", err)
+	}
+
 	lc, err := ts.LocalClient()
 	if err != nil {
 		log.Fatalf("LocalClient() failed: %v", err)
