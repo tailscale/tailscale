@@ -68,12 +68,12 @@ import (
 	"tailscale.com/wgengine/magicsock"
 )
 
-type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
+type LocalAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
 
 // handler is the set of LocalAPI handlers, keyed by the part of the
 // Request.URL.Path after "/localapi/v0/". If the key ends with a trailing slash
 // then it's a prefix match.
-var handler = map[string]localAPIHandler{
+var handler = map[string]LocalAPIHandler{
 	// The prefix match handlers end with a slash:
 	"cert/":     (*Handler).serveCert,
 	"file-put/": (*Handler).serveFilePut,
@@ -90,7 +90,6 @@ var handler = map[string]localAPIHandler{
 	"check-udp-gro-forwarding":    (*Handler).serveCheckUDPGROForwarding,
 	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
 	"debug":                       (*Handler).serveDebug,
-	"debug-capture":               (*Handler).serveDebugCapture,
 	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
 	"debug-dial-types":            (*Handler).serveDebugDialTypes,
 	"debug-log":                   (*Handler).serveDebugLog,
@@ -152,6 +151,14 @@ var handler = map[string]localAPIHandler{
 	"whois":                       (*Handler).serveWhoIs,
 }
 
+// Register registers a new LocalAPI handler for the given name.
+func Register(name string, fn LocalAPIHandler) {
+	if _, ok := handler[name]; ok {
+		panic("duplicate LocalAPI handler registration: " + name)
+	}
+	handler[name] = fn
+}
+
 var (
 	// The clientmetrics package is stateful, but we want to expose a simple
 	// imperative API to local clients, so we need to keep track of
@@ -194,6 +201,10 @@ type Handler struct {
 	logf         logger.Logf
 	backendLogID logid.PublicID
 	clock        tstime.Clock
+}
+
+func (h *Handler) LocalBackend() *ipnlocal.LocalBackend {
+	return h.b
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +271,7 @@ func (h *Handler) validHost(hostname string) bool {
 
 // handlerForPath returns the LocalAPI handler for the provided Request.URI.Path.
 // (the path doesn't include any query parameters)
-func handlerForPath(urlPath string) (h localAPIHandler, ok bool) {
+func handlerForPath(urlPath string) (h LocalAPIHandler, ok bool) {
 	if urlPath == "/" {
 		return (*Handler).serveLocalAPIRoot, true
 	}
@@ -2687,21 +2698,6 @@ func defBool(a string, def bool) bool {
 		return def
 	}
 	return v
-}
-
-func (h *Handler) serveDebugCapture(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "debug access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
-	h.b.StreamDebugCapture(r.Context(), w)
 }
 
 func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {

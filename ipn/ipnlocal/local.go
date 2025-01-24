@@ -73,6 +73,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
@@ -115,7 +116,6 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
@@ -209,7 +209,7 @@ type LocalBackend struct {
 	// Tailscale on port 5252.
 	exposeRemoteWebClientAtomicBool atomic.Bool
 	shutdownCalled                  bool // if Shutdown has been called
-	debugSink                       *capture.Sink
+	debugSink                       packet.CaptureSink
 	sockstatLogger                  *sockstatlog.Logger
 
 	// getTCPHandlerForFunnelFlow returns a handler for an incoming TCP flow for
@@ -945,6 +945,40 @@ func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthySt
 		case b.needsCaptiveDetection <- false:
 		case <-ctx.Done():
 		}
+	}
+}
+
+// GetOrSetCaptureSink returns the current packet capture sink, creating it
+// with the provided newSink function if it does not already exist.
+func (b *LocalBackend) GetOrSetCaptureSink(newSink func() packet.CaptureSink) packet.CaptureSink {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.debugSink != nil {
+		return b.debugSink
+	}
+	s := newSink()
+	b.debugSink = s
+	b.e.InstallCaptureHook(s.CaptureCallback())
+	return s
+}
+
+func (b *LocalBackend) ClearCaptureSink() {
+	// Shut down & uninstall the sink if there are no longer
+	// any outputs on it.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	select {
+	case <-b.ctx.Done():
+		return
+	default:
+	}
+	if b.debugSink != nil && b.debugSink.NumOutputs() == 0 {
+		s := b.debugSink
+		b.e.InstallCaptureHook(nil)
+		b.debugSink = nil
+		s.Close()
 	}
 }
 
@@ -7152,48 +7186,6 @@ func (b *LocalBackend) ResetAuth() error {
 	}
 	b.resetDialPlan() // always reset if we're removing everything
 	return b.resetForProfileChangeLockedOnEntry(unlock)
-}
-
-// StreamDebugCapture writes a pcap stream of packets traversing
-// tailscaled to the provided response writer.
-func (b *LocalBackend) StreamDebugCapture(ctx context.Context, w io.Writer) error {
-	var s *capture.Sink
-
-	b.mu.Lock()
-	if b.debugSink == nil {
-		s = capture.New()
-		b.debugSink = s
-		b.e.InstallCaptureHook(s.LogPacket)
-	} else {
-		s = b.debugSink
-	}
-	b.mu.Unlock()
-
-	unregister := s.RegisterOutput(w)
-
-	select {
-	case <-ctx.Done():
-	case <-s.WaitCh():
-	}
-	unregister()
-
-	// Shut down & uninstall the sink if there are no longer
-	// any outputs on it.
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	select {
-	case <-b.ctx.Done():
-		return nil
-	default:
-	}
-	if b.debugSink != nil && b.debugSink.NumOutputs() == 0 {
-		s := b.debugSink
-		b.e.InstallCaptureHook(nil)
-		b.debugSink = nil
-		return s.Close()
-	}
-	return nil
 }
 
 func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr) ([]magicsock.EndpointChange, error) {

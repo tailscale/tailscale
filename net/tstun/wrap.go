@@ -36,7 +36,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/usermetric"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/netstack/gro"
 	"tailscale.com/wgengine/wgcfg"
@@ -208,7 +207,7 @@ type Wrapper struct {
 	// stats maintains per-connection counters.
 	stats atomic.Pointer[connstats.Statistics]
 
-	captureHook syncs.AtomicValue[capture.Callback]
+	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
 	metrics *metrics
 }
@@ -955,7 +954,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			}
 		}
 		if captHook != nil {
-			captHook(capture.FromLocal, t.now(), p.Buffer(), p.CaptureMeta)
+			captHook(packet.FromLocal, t.now(), p.Buffer(), p.CaptureMeta)
 		}
 		if !t.disableFilter {
 			var response filter.Response
@@ -1101,9 +1100,9 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	return n, err
 }
 
-func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook capture.Callback, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
+func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook packet.CaptureCallback, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if captHook != nil {
-		captHook(capture.FromPeer, t.now(), p.Buffer(), p.CaptureMeta)
+		captHook(packet.FromPeer, t.now(), p.Buffer(), p.CaptureMeta)
 	}
 
 	if p.IPProto == ipproto.TSMP {
@@ -1317,7 +1316,7 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer, buffs [][]b
 	p.Decode(buf)
 	captHook := t.captureHook.Load()
 	if captHook != nil {
-		captHook(capture.SynthesizedToLocal, t.now(), p.Buffer(), p.CaptureMeta)
+		captHook(packet.SynthesizedToLocal, t.now(), p.Buffer(), p.CaptureMeta)
 	}
 
 	invertGSOChecksum(buf, pkt.GSOOptions)
@@ -1449,7 +1448,7 @@ func (t *Wrapper) InjectOutboundPacketBuffer(pkt *stack.PacketBuffer) error {
 	}
 	if capt := t.captureHook.Load(); capt != nil {
 		b := pkt.ToBuffer()
-		capt(capture.SynthesizedToPeer, t.now(), b.Flatten(), packet.CaptureMeta{})
+		capt(packet.SynthesizedToPeer, t.now(), b.Flatten(), packet.CaptureMeta{})
 	}
 
 	t.injectOutbound(tunInjectedRead{packet: pkt})
@@ -1491,6 +1490,6 @@ var (
 	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
 )
 
-func (t *Wrapper) InstallCaptureHook(cb capture.Callback) {
+func (t *Wrapper) InstallCaptureHook(cb packet.CaptureCallback) {
 	t.captureHook.Store(cb)
 }

@@ -40,7 +40,6 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/must"
 	"tailscale.com/util/usermetric"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -871,14 +870,14 @@ func TestPeerCfg_NAT(t *testing.T) {
 // with the correct parameters when various packet operations are performed.
 func TestCaptureHook(t *testing.T) {
 	type captureRecord struct {
-		path capture.Path
+		path packet.CapturePath
 		now  time.Time
 		pkt  []byte
 		meta packet.CaptureMeta
 	}
 
 	var captured []captureRecord
-	hook := func(path capture.Path, now time.Time, pkt []byte, meta packet.CaptureMeta) {
+	hook := func(path packet.CapturePath, now time.Time, pkt []byte, meta packet.CaptureMeta) {
 		captured = append(captured, captureRecord{
 			path: path,
 			now:  now,
@@ -935,19 +934,19 @@ func TestCaptureHook(t *testing.T) {
 	// Assert that the right packets are captured.
 	want := []captureRecord{
 		{
-			path: capture.FromPeer,
+			path: packet.FromPeer,
 			pkt:  []byte("Write1"),
 		},
 		{
-			path: capture.FromPeer,
+			path: packet.FromPeer,
 			pkt:  []byte("Write2"),
 		},
 		{
-			path: capture.SynthesizedToLocal,
+			path: packet.SynthesizedToLocal,
 			pkt:  []byte("InjectInboundPacketBuffer"),
 		},
 		{
-			path: capture.SynthesizedToPeer,
+			path: packet.SynthesizedToPeer,
 			pkt:  []byte("InjectOutboundPacketBuffer"),
 		},
 	}
