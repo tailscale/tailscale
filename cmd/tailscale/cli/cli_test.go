@@ -17,6 +17,7 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
@@ -1524,4 +1525,46 @@ func TestHelpAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+}
+
+func TestDocs(t *testing.T) {
+	root := newRootCmd()
+	check := func(t *testing.T, c *ffcli.Command) {
+		shortVerb, _, ok := strings.Cut(c.ShortHelp, " ")
+		if !ok || shortVerb == "" {
+			t.Errorf("couldn't find verb+space in ShortHelp")
+		} else {
+			if strings.HasSuffix(shortVerb, ".") {
+				t.Errorf("ShortHelp shouldn't end in period; got %q", c.ShortHelp)
+			}
+			if b := shortVerb[0]; b >= 'a' && b <= 'z' {
+				t.Errorf("ShortHelp should start with upper-case letter; got %q", c.ShortHelp)
+			}
+			if strings.HasSuffix(shortVerb, "s") && shortVerb != "Does" {
+				t.Errorf("verb %q ending in 's' is unexpected, from %q", shortVerb, c.ShortHelp)
+			}
+		}
+
+		name := t.Name()
+		wantPfx := strings.ReplaceAll(strings.TrimPrefix(name, "TestDocs/"), "/", " ")
+		switch name {
+		case "TestDocs/tailscale/completion/bash",
+			"TestDocs/tailscale/completion/zsh":
+			wantPfx = "" // special-case exceptions
+		}
+		if !strings.HasPrefix(c.ShortUsage, wantPfx) {
+			t.Errorf("ShortUsage should start with %q; got %q", wantPfx, c.ShortUsage)
+		}
+	}
+
+	var walk func(t *testing.T, c *ffcli.Command)
+	walk = func(t *testing.T, c *ffcli.Command) {
+		t.Run(c.Name, func(t *testing.T) {
+			check(t, c)
+			for _, sub := range c.Subcommands {
+				walk(t, sub)
+			}
+		})
+	}
+	walk(t, root)
 }

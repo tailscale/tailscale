@@ -20,7 +20,7 @@ var dnsCmd = &ffcli.Command{
 			Name:       "status",
 			ShortUsage: "tailscale dns status [--all]",
 			Exec:       runDNSStatus,
-			ShortHelp:  "Prints the current DNS status and configuration",
+			ShortHelp:  "Print the current DNS status and configuration",
 			LongHelp:   dnsStatusLongHelp(),
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("status")

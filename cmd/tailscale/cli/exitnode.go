@@ -41,7 +41,7 @@ func exitNodeCmd() *ffcli.Command {
 			{
 				Name:       "suggest",
 				ShortUsage: "tailscale exit-node suggest",
-				ShortHelp:  "Suggests the best available exit node",
+				ShortHelp:  "Suggest the best available exit node",
 				Exec:       runExitNodeSuggest,
 			}},
 			(func() []*ffcli.Command {

@@ -191,8 +191,7 @@ var nlStatusArgs struct {
 var nlStatusCmd = &ffcli.Command{
 	Name:       "status",
 	ShortUsage: "tailscale lock status",
-	ShortHelp:  "Outputs the state of tailnet lock",
-	LongHelp:   "Outputs the state of tailnet lock",
+	ShortHelp:  "Output the state of tailnet lock",
 	Exec:       runNetworkLockStatus,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock status")
@@ -293,8 +292,7 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 var nlAddCmd = &ffcli.Command{
 	Name:       "add",
 	ShortUsage: "tailscale lock add <public-key>...",
-	ShortHelp:  "Adds one or more trusted signing keys to tailnet lock",
-	LongHelp:   "Adds one or more trusted signing keys to tailnet lock",
+	ShortHelp:  "Add one or more trusted signing keys to tailnet lock",
 	Exec: func(ctx context.Context, args []string) error {
 		return runNetworkLockModify(ctx, args, nil)
 	},
@@ -307,8 +305,7 @@ var nlRemoveArgs struct {
 var nlRemoveCmd = &ffcli.Command{
 	Name:       "remove",
 	ShortUsage: "tailscale lock remove [--re-sign=false] <public-key>...",
-	ShortHelp:  "Removes one or more trusted signing keys from tailnet lock",
-	LongHelp:   "Removes one or more trusted signing keys from tailnet lock",
+	ShortHelp:  "Remove one or more trusted signing keys from tailnet lock",
 	Exec:       runNetworkLockRemove,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock remove")
@@ -448,7 +445,7 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 var nlSignCmd = &ffcli.Command{
 	Name:       "sign",
 	ShortUsage: "tailscale lock sign <node-key> [<rotation-key>]\ntailscale lock sign <auth-key>",
-	ShortHelp:  "Signs a node or pre-approved auth key",
+	ShortHelp:  "Sign a node or pre-approved auth key",
 	LongHelp: `Either:
   - signs a node key and transmits the signature to the coordination
     server, or
@@ -510,7 +507,7 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 var nlDisableCmd = &ffcli.Command{
 	Name:       "disable",
 	ShortUsage: "tailscale lock disable <disablement-secret>",
-	ShortHelp:  "Consumes a disablement secret to shut down tailnet lock for the tailnet",
+	ShortHelp:  "Consume a disablement secret to shut down tailnet lock for the tailnet",
 	LongHelp: strings.TrimSpace(`
 
 The 'tailscale lock disable' command uses the specified disablement
@@ -539,7 +536,7 @@ func runNetworkLockDisable(ctx context.Context, args []string) error {
 var nlLocalDisableCmd = &ffcli.Command{
 	Name:       "local-disable",
 	ShortUsage: "tailscale lock local-disable",
-	ShortHelp:  "Disables tailnet lock for this node only",
+	ShortHelp:  "Disable tailnet lock for this node only",
 	LongHelp: strings.TrimSpace(`
 
 The 'tailscale lock local-disable' command disables tailnet lock for only
@@ -561,8 +558,8 @@ func runNetworkLockLocalDisable(ctx context.Context, args []string) error {
 var nlDisablementKDFCmd = &ffcli.Command{
 	Name:       "disablement-kdf",
 	ShortUsage: "tailscale lock disablement-kdf <hex-encoded-disablement-secret>",
-	ShortHelp:  "Computes a disablement value from a disablement secret (advanced users only)",
-	LongHelp:   "Computes a disablement value from a disablement secret (advanced users only)",
+	ShortHelp:  "Compute a disablement value from a disablement secret (advanced users only)",
+	LongHelp:   "Compute a disablement value from a disablement secret (advanced users only)",
 	Exec:       runNetworkLockDisablementKDF,
 }
 
