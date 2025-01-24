@@ -386,14 +386,32 @@ func SliceEqualAnyOrderFunc[T any, V comparable](a, b Slice[T], cmp func(T) V) b
 	// do the quadratic thing. We can also only check the items between
 	// diffStart and the end.
 	nRemain := a.Len() - diffStart
-	if nRemain <= 5 {
-		maxLen := a.Len() // same as b.Len()
-		for i := diffStart; i < maxLen; i++ {
-			av := cmp(a.At(i))
+	const shortOptLen = 5
+	if nRemain <= shortOptLen {
+		// These track which elements in a and b have been matched, so
+		// that we don't treat arrays with differing number of
+		// duplicate elements as equal (e.g. [1, 1, 2] and [1, 2, 2]).
+		var aMatched, bMatched [shortOptLen]bool
+
+		// Compare each element in a to each element in b
+		for i := range nRemain {
+			av := cmp(a.At(i + diffStart))
 			found := false
-			for j := diffStart; j < maxLen; j++ {
-				bv := cmp(b.At(j))
+			for j := range nRemain {
+				// Skip elements in b that have already been
+				// used to match an item in a.
+				if bMatched[j] {
+					continue
+				}
+
+				bv := cmp(b.At(j + diffStart))
 				if av == bv {
+					// Mark these elements as already
+					// matched, so that a future loop
+					// iteration (of a duplicate element)
+					// doesn't match it again.
+					aMatched[i] = true
+					bMatched[j] = true
 					found = true
 					break
 				}
@@ -402,6 +420,14 @@ func SliceEqualAnyOrderFunc[T any, V comparable](a, b Slice[T], cmp func(T) V) b
 				return false
 			}
 		}
+
+		// Verify all elements were matched exactly once.
+		for i := range nRemain {
+			if !aMatched[i] || !bMatched[i] {
+				return false
+			}
+		}
+
 		return true
 	}
 
