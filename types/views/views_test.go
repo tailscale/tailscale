@@ -197,6 +197,38 @@ func TestSliceEqualAnyOrderFunc(t *testing.T) {
 	// Long difference; past the quadratic limit
 	longDiff := ncFrom("b", "a", "c", "d", "e", "f", "g", "h", "i", "k") // differs at end
 	c.Check(SliceEqualAnyOrderFunc(longSlice, longDiff, cmp), qt.Equals, false)
+
+	// The short slice optimization had a bug where it wouldn't handle
+	// duplicate elements; test various cases here driven by code coverage.
+	shortTestCases := []struct {
+		name   string
+		s1, s2 Slice[nc]
+		want   bool
+	}{
+		{
+			name: "duplicates_same_length",
+			s1:   ncFrom("a", "a", "b"),
+			s2:   ncFrom("a", "b", "b"),
+			want: false,
+		},
+		{
+			name: "duplicates_different_matched",
+			s1:   ncFrom("x", "y", "a", "a", "b"),
+			s2:   ncFrom("x", "y", "b", "a", "a"),
+			want: true,
+		},
+		{
+			name: "item_in_a_not_b",
+			s1:   ncFrom("x", "y", "a", "b", "c"),
+			s2:   ncFrom("x", "y", "b", "c", "q"),
+			want: false,
+		},
+	}
+	for _, tc := range shortTestCases {
+		t.Run("short_"+tc.name, func(t *testing.T) {
+			c.Check(SliceEqualAnyOrderFunc(tc.s1, tc.s2, cmp), qt.Equals, tc.want)
+		})
+	}
 }
 
 func TestSliceEqual(t *testing.T) {
