@@ -46,6 +46,10 @@ type awsStore struct {
 	ssmClient awsSSMClient
 	ssmARN    arn.ARN
 
+	// kmsKeyArn is optional. If empty, the parameter is stored in plaintext.
+	// If non-empty, the parameter is encrypted with this KMS key.
+	kmsKeyArn string
+
 	memory mem.Store
 }
 
@@ -57,15 +61,19 @@ type awsStore struct {
 // Tailscaled to only only store new state in-memory and
 // restarting Tailscaled can fail until you delete your state
 // from the AWS Parameter Store.
-func New(_ logger.Logf, ssmARN string) (ipn.StateStore, error) {
-	return newStore(ssmARN, nil)
+//
+// kmsKeyId is optional. If non-empty, the parameter will be encrypted
+// with that KMS key. If empty, the parameter is stored in plaintext.
+func New(_ logger.Logf, ssmARN string, kmsKeyId string) (ipn.StateStore, error) {
+	return newStore(ssmARN, kmsKeyId, nil)
 }
 
 // newStore is NewStore, but for tests. If client is non-nil, it's
 // used instead of making one.
-func newStore(ssmARN string, client awsSSMClient) (ipn.StateStore, error) {
+func newStore(ssmARN string, kmsKeyId string, client awsSSMClient) (ipn.StateStore, error) {
 	s := &awsStore{
 		ssmClient: client,
+		kmsKeyArn: kmsKeyId,
 	}
 
 	var err error
@@ -101,16 +109,19 @@ func newStore(ssmARN string, client awsSSMClient) (ipn.StateStore, error) {
 		return nil, err
 	}
 	return s, nil
-
 }
 
 // LoadState attempts to read the state from AWS SSM parameter store key.
 func (s *awsStore) LoadState() error {
+	// If we're storing plaintext, we don't need decryption.
+	// But calling WithDecryption=true for a String parameter won't fail;
+	// it just won't do anything. So either approach is fine. For clarity:
+	withDecryption := s.kmsKeyArn != ""
 	param, err := s.ssmClient.GetParameter(
 		context.TODO(),
 		&ssm.GetParameterInput{
 			Name:           aws.String(s.ParameterName()),
-			WithDecryption: aws.Bool(true),
+			WithDecryption: aws.Bool(withDecryption),
 		},
 	)
 
@@ -118,10 +129,15 @@ func (s *awsStore) LoadState() error {
 		var pnf *ssmTypes.ParameterNotFound
 		if errors.As(err, &pnf) {
 			// Create the parameter as it does not exist yet
-			// and return directly as it is defacto empty
+			// and return directly as it is effectively empty
 			return s.persistState()
 		}
 		return err
+	}
+
+	if param.Parameter.Value == nil {
+		// No stored value yet (or empty string).
+		return nil
 	}
 
 	// Load the content in-memory
@@ -140,25 +156,27 @@ func (s *awsStore) ParameterName() (name string) {
 
 // String returns the awsStore and the ARN of the SSM parameter store
 // configured to store the state
-func (s *awsStore) String() string { return fmt.Sprintf("awsStore(%q)", s.ssmARN.String()) }
+func (s *awsStore) String() string {
+	return fmt.Sprintf("awsStore(%q)", s.ssmARN.String())
+}
 
 // ReadState implements the Store interface.
-func (s *awsStore) ReadState(id ipn.StateKey) (bs []byte, err error) {
+func (s *awsStore) ReadState(id ipn.StateKey) ([]byte, error) {
 	return s.memory.ReadState(id)
 }
 
 // WriteState implements the Store interface.
-func (s *awsStore) WriteState(id ipn.StateKey, bs []byte) (err error) {
+func (s *awsStore) WriteState(id ipn.StateKey, bs []byte) error {
 	// Write the state in-memory
-	if err = s.memory.WriteState(id, bs); err != nil {
-		return
+	if err := s.memory.WriteState(id, bs); err != nil {
+		return err
 	}
 
 	// Persist the state in AWS SSM parameter store
 	return s.persistState()
 }
 
-// PersistState saves the states into the AWS SSM parameter store
+// persistState saves the states into the AWS SSM parameter store
 func (s *awsStore) persistState() error {
 	// Generate JSON from in-memory cache
 	bs, err := s.memory.ExportToJSON()
@@ -172,15 +190,21 @@ func (s *awsStore) persistState() error {
 	// which is free. However, if it exceeds 4kb it switches the parameter to advanced tiering
 	// doubling the capacity to 8kb per the following docs:
 	// https://aws.amazon.com/about-aws/whats-new/2019/08/aws-systems-manager-parameter-store-announces-intelligent-tiering-to-enable-automatic-parameter-tier-selection/
-	_, err = s.ssmClient.PutParameter(
-		context.TODO(),
-		&ssm.PutParameterInput{
-			Name:      aws.String(s.ParameterName()),
-			Value:     aws.String(string(bs)),
-			Overwrite: aws.Bool(true),
-			Tier:      ssmTypes.ParameterTierIntelligentTiering,
-			Type:      ssmTypes.ParameterTypeSecureString,
-		},
-	)
+	in := &ssm.PutParameterInput{
+		Name:      aws.String(s.ParameterName()),
+		Value:     aws.String(string(bs)),
+		Overwrite: aws.Bool(true),
+		Tier:      ssmTypes.ParameterTierIntelligentTiering,
+	}
+
+	// If kmsKeyArn is specified, encrypt with that key; otherwise, store plaintext.
+	if s.kmsKeyArn != "" {
+		in.Type = ssmTypes.ParameterTypeSecureString
+		in.KeyId = aws.String(s.kmsKeyArn)
+	} else {
+		in.Type = ssmTypes.ParameterTypeString
+	}
+
+	_, err = s.ssmClient.PutParameter(context.TODO(), in)
 	return err
 }
