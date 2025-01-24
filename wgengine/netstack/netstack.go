@@ -405,6 +405,14 @@ func (ns *Impl) Close() error {
 	return nil
 }
 
+// SetTransportProtocolOption forwards to the underlying
+// [stack.Stack.SetTransportProtocolOption]. Callers are responsible for
+// ensuring that the options are valid, compatible and appropriate for their use
+// case. Compatibility may change at any version.
+func (ns *Impl) SetTransportProtocolOption(transport tcpip.TransportProtocolNumber, option tcpip.SettableTransportProtocolOption) tcpip.Error {
+	return ns.ipstack.SetTransportProtocolOption(transport, option)
+}
+
 // A single process might have several netstacks running at the same time.
 // Exported clientmetric counters will have a sum of counters of all of them.
 var stacksForMetrics syncs.Map[*Impl, struct{}]
