@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/control/controlknobs"
@@ -817,6 +818,8 @@ func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
 	return ret
 }
 
+var numNetmaps atomic.Int64
+
 // netmap returns a fully populated NetworkMap from the last state seen from
 // a call to updateStateFromResponse, filling in omitted
 // information from prior MapResponse values.
@@ -841,6 +844,10 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 		MaxKeyDuration:    ms.lastMaxExpiry,
 	}
+	ms.logf("XXX NetMap++ => %v", numNetmaps.Add(1))
+	runtime.SetFinalizer(nm, func(nm *netmap.NetworkMap) {
+		ms.logf("XXX NetMap-- => %v", numNetmaps.Add(-1))
+	})
 
 	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {
 		if err := nm.TKAHead.UnmarshalText([]byte(ms.lastTKAInfo.Head)); err != nil {
