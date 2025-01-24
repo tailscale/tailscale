@@ -46,6 +46,10 @@ type awsStore struct {
 	ssmClient awsSSMClient
 	ssmARN    arn.ARN
 
+	// kmsKeyArn is optional. If empty, the parameter is stored in plaintext.
+	// If non-empty, the parameter is encrypted with this KMS key.
+	kmsKeyArn string
+
 	memory mem.Store
 }
 
@@ -57,15 +61,19 @@ type awsStore struct {
 // Tailscaled to only only store new state in-memory and
 // restarting Tailscaled can fail until you delete your state
 // from the AWS Parameter Store.
-func New(_ logger.Logf, ssmARN string) (ipn.StateStore, error) {
-	return newStore(ssmARN, nil)
+//
+// kmsKeyId is optional. If non-empty, the parameter will be encrypted
+// with that KMS key. If empty, the parameter is stored in plaintext.
+func New(_ logger.Logf, ssmARN string, kmsKeyId string) (ipn.StateStore, error) {
+	return newStore(ssmARN, kmsKeyId, nil)
 }
 
 // newStore is NewStore, but for tests. If client is non-nil, it's
 // used instead of making one.
-func newStore(ssmARN string, client awsSSMClient) (ipn.StateStore, error) {
+func newStore(ssmARN string, kmsKeyId string, client awsSSMClient) (ipn.StateStore, error) {
 	s := &awsStore{
 		ssmClient: client,
+		kmsKeyArn: kmsKeyId,
 	}
 
 	var err error
@@ -101,7 +109,6 @@ func newStore(ssmARN string, client awsSSMClient) (ipn.StateStore, error) {
 		return nil, err
 	}
 	return s, nil
-
 }
 
 // LoadState attempts to read the state from AWS SSM parameter store key.
@@ -172,15 +179,19 @@ func (s *awsStore) persistState() error {
 	// which is free. However, if it exceeds 4kb it switches the parameter to advanced tiering
 	// doubling the capacity to 8kb per the following docs:
 	// https://aws.amazon.com/about-aws/whats-new/2019/08/aws-systems-manager-parameter-store-announces-intelligent-tiering-to-enable-automatic-parameter-tier-selection/
-	_, err = s.ssmClient.PutParameter(
-		context.TODO(),
-		&ssm.PutParameterInput{
-			Name:      aws.String(s.ParameterName()),
-			Value:     aws.String(string(bs)),
-			Overwrite: aws.Bool(true),
-			Tier:      ssmTypes.ParameterTierIntelligentTiering,
-			Type:      ssmTypes.ParameterTypeSecureString,
-		},
-	)
+	in := &ssm.PutParameterInput{
+		Name:      aws.String(s.ParameterName()),
+		Value:     aws.String(string(bs)),
+		Overwrite: aws.Bool(true),
+		Tier:      ssmTypes.ParameterTierIntelligentTiering,
+		Type:      ssmTypes.ParameterTypeSecureString,
+	}
+
+	// If kmsKeyArn is specified, encrypt with that key; otherwise, store plaintext.
+	if s.kmsKeyArn != "" {
+		in.KeyId = aws.String(s.kmsKeyArn)
+	}
+
+	_, err = s.ssmClient.PutParameter(context.TODO(), in)
 	return err
 }

@@ -25,7 +25,6 @@ func TestNewStore(t *testing.T) {
 		ipn.StateStore
 		path string
 	}
-
 	type store2 struct {
 		ipn.StateStore
 		path string
@@ -48,6 +47,13 @@ func TestNewStore(t *testing.T) {
 		t.Fatalf("%q: got: %T, want: %T", path, s, new(mem.Store))
 	}
 
+	path = "kube:abcd"
+	if s, err := New(t.Logf, path); err != nil {
+		t.Fatalf("%q: %v", path, err)
+	} else if _, ok := s.(*store2); !ok {
+		t.Fatalf("%q: got: %T, want: %T", path, s, new(store2))
+	}
+
 	path = "arn:foo"
 	if s, err := New(t.Logf, path); err != nil {
 		t.Fatalf("%q: %v", path, err)
@@ -55,11 +61,44 @@ func TestNewStore(t *testing.T) {
 		t.Fatalf("%q: got: %T, want: %T", path, s, new(store1))
 	}
 
-	path = "kube:abcd"
+	// No kmsKey parameter
+	path = "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam"
 	if s, err := New(t.Logf, path); err != nil {
 		t.Fatalf("%q: %v", path, err)
-	} else if _, ok := s.(*store2); !ok {
-		t.Fatalf("%q: got: %T, want: %T", path, s, new(store2))
+	} else if _, ok := s.(*store1); !ok {
+		t.Fatalf("%q: got: %T, want: %T", path, s, new(store1))
+	}
+
+	// kmsKey=alias/MyCustomKey
+	path = "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=alias/MyCustomKey"
+	if s, err := New(t.Logf, path); err != nil {
+		t.Fatalf("%q: %v", path, err)
+	} else if _, ok := s.(*store1); !ok {
+		t.Fatalf("%q: got: %T, want: %T", path, s, new(store1))
+	}
+
+	// kmsKey=MyCustomKey (bare name)
+	path = "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=MyCustomKey"
+	if s, err := New(t.Logf, path); err != nil {
+		t.Fatalf("%q: %v", path, err)
+	} else if _, ok := s.(*store1); !ok {
+		t.Fatalf("%q: got: %T, want: %T", path, s, new(store1))
+	}
+
+	// kmsKey=arn:aws:kms:us-east-1:123456789012:alias/MyCustomKey (full alias ARN)
+	path = "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=arn:aws:kms:us-east-1:123456789012:alias/MyCustomKey"
+	if s, err := New(t.Logf, path); err != nil {
+		t.Fatalf("%q: %v", path, err)
+	} else if _, ok := s.(*store1); !ok {
+		t.Fatalf("%q: got: %T, want: %T", path, s, new(store1))
+	}
+
+	// kmsKey=0aa2012f-885e-444e-b021-a5f724a76c7c (raw UUID)
+	path = "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=0aa2012f-885e-444e-b021-a5f724a76c7c"
+	if s, err := New(t.Logf, path); err != nil {
+		t.Fatalf("%q: %v", path, err)
+	} else if _, ok := s.(*store1); !ok {
+		t.Fatalf("%q: got: %T, want: %T", path, s, new(store1))
 	}
 
 	path = filepath.Join(t.TempDir(), "state")

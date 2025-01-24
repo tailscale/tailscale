@@ -13,6 +13,6 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func New(logger.Logf, string) (ipn.StateStore, error) {
+func New(_ logger.Logf, _ string, _ string) (ipn.StateStore, error) {
 	return nil, fmt.Errorf("AWS store is not supported on %v", runtime.GOOS)
 }
