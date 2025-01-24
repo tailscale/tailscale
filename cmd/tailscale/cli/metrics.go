@@ -33,13 +33,13 @@ https://tailscale.com/s/client-metrics
 			Name:       "print",
 			ShortUsage: "tailscale metrics print",
 			Exec:       runMetricsPrint,
-			ShortHelp:  "Prints current metric values in the Prometheus text exposition format",
+			ShortHelp:  "Print current metric values in Prometheus text format",
 		},
 		{
 			Name:       "write",
 			ShortUsage: "tailscale metrics write <path>",
 			Exec:       runMetricsWrite,
-			ShortHelp:  "Writes metric values to a file",
+			ShortHelp:  "Write metric values to a file",
 			LongHelp: strings.TrimSpace(`
 
 The 'tailscale metrics write' command writes metric values to a text file provided as its

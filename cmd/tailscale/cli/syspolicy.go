@@ -31,7 +31,7 @@ var syspolicyCmd = &ffcli.Command{
 			Name:       "list",
 			ShortUsage: "tailscale syspolicy list",
 			Exec:       runSysPolicyList,
-			ShortHelp:  "Prints effective policy settings",
+			ShortHelp:  "Print effective policy settings",
 			LongHelp:   "The 'tailscale syspolicy list' subcommand displays the effective policy settings and their sources (e.g., MDM or environment variables).",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("syspolicy list")
@@ -43,7 +43,7 @@ var syspolicyCmd = &ffcli.Command{
 			Name:       "reload",
 			ShortUsage: "tailscale syspolicy reload",
 			Exec:       runSysPolicyReload,
-			ShortHelp:  "Forces a reload of policy settings, even if no changes are detected, and prints the result",
+			ShortHelp:  "Force a reload of policy settings, even if no changes are detected, and prints the result",
 			LongHelp:   "The 'tailscale syspolicy reload' subcommand forces a reload of policy settings, even if no changes are detected, and prints the result.",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("syspolicy reload")

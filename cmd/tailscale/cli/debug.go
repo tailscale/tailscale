@@ -289,7 +289,7 @@ var debugCmd = &ffcli.Command{
 			Name:       "capture",
 			ShortUsage: "tailscale debug capture",
 			Exec:       runCapture,
-			ShortHelp:  "Streams pcaps for debugging",
+			ShortHelp:  "Stream pcaps for debugging",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("capture")
 				fs.StringVar(&captureArgs.outFile, "o", "", "path to stream the pcap (or - for stdout), leave empty to start wireshark")
@@ -315,13 +315,13 @@ var debugCmd = &ffcli.Command{
 			Name:       "peer-endpoint-changes",
 			ShortUsage: "tailscale debug peer-endpoint-changes <hostname-or-IP>",
 			Exec:       runPeerEndpointChanges,
-			ShortHelp:  "Prints debug information about a peer's endpoint changes",
+			ShortHelp:  "Print debug information about a peer's endpoint changes",
 		},
 		{
 			Name:       "dial-types",
 			ShortUsage: "tailscale debug dial-types <hostname-or-IP> <port>",
 			Exec:       runDebugDialTypes,
-			ShortHelp:  "Prints debug information about connecting to a given host or IP",
+			ShortHelp:  "Print debug information about connecting to a given host or IP",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("dial-types")
 				fs.StringVar(&debugDialTypesArgs.network, "network", "tcp", `network type to dial ("tcp", "udp", etc.)`)
@@ -342,7 +342,7 @@ var debugCmd = &ffcli.Command{
 		{
 			Name:       "go-buildinfo",
 			ShortUsage: "tailscale debug go-buildinfo",
-			ShortHelp:  "Prints Go's runtime/debug.BuildInfo",
+			ShortHelp:  "Print Go's runtime/debug.BuildInfo",
 			Exec:       runGoBuildInfo,
 		},
 	},
