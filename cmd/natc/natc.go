@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -158,6 +159,9 @@ func main() {
 	mslOpt := tcpip.TCPTimeWaitTimeoutOption(5 * time.Second)
 	if err := ns.SetTransportProtocolOption(tcp.ProtocolNumber, &mslOpt); err != nil {
 		log.Fatalf("could not set TCP MSL: %v", err)
+	}
+	if *debugPort != 0 {
+		expvar.Publish("netstack", ns.ExpVar())
 	}
 
 	lc, err := ts.LocalClient()
