@@ -556,6 +556,7 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 	}
 
 	logf("requesting cert...")
+	traceACME(csr)
 	der, _, err := ac.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
 		return nil, fmt.Errorf("CreateOrder: %v", err)
@@ -578,10 +579,10 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 }
 
 // certRequest generates a CSR for the given common name cn and optional SANs.
-func certRequest(key crypto.Signer, cn string, ext []pkix.Extension, san ...string) ([]byte, error) {
+func certRequest(key crypto.Signer, name string, ext []pkix.Extension) ([]byte, error) {
 	req := &x509.CertificateRequest{
-		Subject:         pkix.Name{CommonName: cn},
-		DNSNames:        san,
+		Subject:         pkix.Name{CommonName: name},
+		DNSNames:        []string{name},
 		ExtraExtensions: ext,
 	}
 	return x509.CreateCertificateRequest(rand.Reader, req, key)
