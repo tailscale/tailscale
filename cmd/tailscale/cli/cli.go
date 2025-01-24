@@ -212,7 +212,7 @@ change in the future.
 			exitNodeCmd(),
 			updateCmd,
 			whoisCmd,
-			debugCmd,
+			debugCmd(),
 			driveCmd,
 			idTokenCmd,
 			advertiseCmd(),
