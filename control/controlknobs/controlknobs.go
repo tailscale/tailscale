@@ -103,6 +103,11 @@ type Knobs struct {
 	// DisableCaptivePortalDetection is whether the node should not perform captive portal detection
 	// automatically when the network state changes.
 	DisableCaptivePortalDetection atomic.Bool
+
+	// DisableSkipStatusQueue is whether the node should disable skipping
+	// of queued netmap.NetworkMap between the controlclient and LocalBackend.
+	// See tailscale/tailscale#14768.
+	DisableSkipStatusQueue atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -132,6 +137,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableLocalDNSOverrideViaNRPT       = has(tailcfg.NodeAttrDisableLocalDNSOverrideViaNRPT)
 		disableCryptorouting                 = has(tailcfg.NodeAttrDisableMagicSockCryptoRouting)
 		disableCaptivePortalDetection        = has(tailcfg.NodeAttrDisableCaptivePortalDetection)
+		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -159,6 +165,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableLocalDNSOverrideViaNRPT.Store(disableLocalDNSOverrideViaNRPT)
 	k.DisableCryptorouting.Store(disableCryptorouting)
 	k.DisableCaptivePortalDetection.Store(disableCaptivePortalDetection)
+	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -187,5 +194,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"DisableLocalDNSOverrideViaNRPT":       k.DisableLocalDNSOverrideViaNRPT.Load(),
 		"DisableCryptorouting":                 k.DisableCryptorouting.Load(),
 		"DisableCaptivePortalDetection":        k.DisableCaptivePortalDetection.Load(),
+		"DisableSkipStatusQueue":               k.DisableSkipStatusQueue.Load(),
 	}
 }
