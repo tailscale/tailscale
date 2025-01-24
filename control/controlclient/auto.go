@@ -6,12 +6,14 @@ package controlclient
 import (
 	"context"
 	"errors"
+	"expvar"
 	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
@@ -130,6 +132,8 @@ type Auto struct {
 	// lastUpdateGen is the gen of last update we had an update worth sending to
 	// the server.
 	lastUpdateGen updateGen
+
+	lastStatus atomic.Pointer[Status]
 
 	paused         bool        // whether we should stop making HTTP requests
 	unpauseWaiters []chan bool // chans that gets sent true (once) on wake, or false on Shutdown
@@ -596,19 +600,59 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		// not logged in.
 		nm = nil
 	}
-	new := Status{
+	newSt := &Status{
 		URL:     url,
 		Persist: p,
 		NetMap:  nm,
 		Err:     err,
 		state:   state,
 	}
+	c.lastStatus.Store(newSt)
 
 	// Launch a new goroutine to avoid blocking the caller while the observer
 	// does its thing, which may result in a call back into the client.
 	c.observerQueue.Add(func() {
-		c.observer.SetControlClientStatus(c, new)
+		if c.canSkipStatus(newSt) {
+			metricSkippable.Add(1)
+			if debugSkipQueue() {
+				metricSkipped.Add(1)
+				return
+			}
+		}
+		c.observer.SetControlClientStatus(c, *newSt)
+		c.lastStatus.CompareAndSwap(newSt, nil)
 	})
+}
+
+var debugSkipQueue = envknob.RegisterBool("TS_DEBUG_SKIP_STATUS_QUEUE")
+
+var (
+	metricSkippable = expvar.NewInt("controlclient_auto_status_queue_skippable")
+	metricSkipped   = expvar.NewInt("controlclient_auto_status_queue_skipped")
+)
+
+func (c *Auto) canSkipStatus(s1 *Status) bool {
+	s2 := c.lastStatus.Load()
+	if s2 == nil {
+		return false
+	}
+	if s1 == s2 {
+		return false
+	}
+	if s1.Err != nil || s1.URL != "" {
+		return false
+	}
+	if !s1.Persist.Equals(s2.Persist) || s1.state != s2.state {
+		return false
+	}
+	if s1.NetMap != nil && s2.NetMap != nil {
+		// If s1 doesn't have an error and doesn't have a URL
+		// and is otherwise identical to the latest one
+		// other than the a different NetMap, then this is
+		// skippable.
+		return true
+	}
+	return false
 }
 
 func (c *Auto) Login(flags LoginFlags) {
