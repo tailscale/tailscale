@@ -469,19 +469,12 @@ func TestPrefsPretty(t *testing.T) {
 		},
 		{
 			Prefs{
-				Persist: &persist.Persist{},
-			},
-			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist{lm=, o=, n= u=""}}`,
-		},
-		{
-			Prefs{
 				Persist: &persist.Persist{
 					PrivateNodeKey: key.NodePrivateFromRaw32(mem.B([]byte{1: 1, 31: 0})),
 				},
 			},
 			"linux",
-			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist{lm=, o=, n=[B1VKl] u=""}}`,
+			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist{o=, n=[B1VKl] u=""}}`,
 		},
 		{
 			Prefs{

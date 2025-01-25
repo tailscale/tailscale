@@ -1082,7 +1082,6 @@ func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
 	}
 
 	p2 := p.AsStruct()
-	p2.Persist.LegacyFrontendPrivateMachineKey = key.MachinePrivate{}
 	p2.Persist.PrivateNodeKey = key.NodePrivate{}
 	p2.Persist.OldPrivateNodeKey = key.NodePrivate{}
 	p2.Persist.NetworkLockKey = key.NLPrivate{}
@@ -3343,11 +3342,6 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 		return nil
 	}
 
-	var legacyMachineKey key.MachinePrivate
-	if p := b.pm.CurrentPrefs().Persist(); p.Valid() {
-		legacyMachineKey = p.LegacyFrontendPrivateMachineKey()
-	}
-
 	keyText, err := b.store.ReadState(ipn.MachineKeyStateKey)
 	if err == nil {
 		if err := b.machinePrivKey.UnmarshalText(keyText); err != nil {
@@ -3355,9 +3349,6 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 		}
 		if b.machinePrivKey.IsZero() {
 			return fmt.Errorf("invalid zero key stored in %v key of %v", ipn.MachineKeyStateKey, b.store)
-		}
-		if !legacyMachineKey.IsZero() && !legacyMachineKey.Equal(b.machinePrivKey) {
-			b.logf("frontend-provided legacy machine key ignored; used value from server state")
 		}
 		return nil
 	}
@@ -3368,12 +3359,8 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	// If we didn't find one already on disk and the prefs already
 	// have a legacy machine key, use that. Otherwise generate a
 	// new one.
-	if !legacyMachineKey.IsZero() {
-		b.machinePrivKey = legacyMachineKey
-	} else {
-		b.logf("generating new machine key")
-		b.machinePrivKey = key.NewMachine()
-	}
+	b.logf("generating new machine key")
+	b.machinePrivKey = key.NewMachine()
 
 	keyText, _ = b.machinePrivKey.MarshalText()
 	if err := ipn.WriteState(b.store, ipn.MachineKeyStateKey, keyText); err != nil {
