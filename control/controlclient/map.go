@@ -77,7 +77,7 @@ type mapSession struct {
 	peers                  map[tailcfg.NodeID]tailcfg.NodeView
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
-	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
+	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfileView
 	lastPacketFilterRules  views.Slice[tailcfg.FilterRule] // concatenation of all namedPacketFilters
 	namedPacketFilters     map[string]views.Slice[tailcfg.FilterRule]
 	lastParsedPacketFilter []filter.Match
@@ -104,7 +104,7 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnob
 		privateNodeKey:  privateNodeKey,
 		publicNodeKey:   privateNodeKey.Public(),
 		lastDNSConfig:   new(tailcfg.DNSConfig),
-		lastUserProfile: map[tailcfg.UserID]tailcfg.UserProfile{},
+		lastUserProfile: map[tailcfg.UserID]tailcfg.UserProfileView{},
 
 		// Non-nil no-op defaults, to be optionally overridden by the caller.
 		logf:              logger.Discard,
@@ -294,7 +294,7 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 
 	for _, up := range resp.UserProfiles {
-		ms.lastUserProfile[up.ID] = up
+		ms.lastUserProfile[up.ID] = up.View()
 	}
 
 	if dm := resp.DERPMap; dm != nil {
@@ -837,7 +837,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		PrivateKey:        ms.privateNodeKey,
 		MachineKey:        ms.machinePubKey,
 		Peers:             peerViews,
-		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfile),
+		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfileView),
 		Domain:            ms.lastDomain,
 		DomainAuditLogID:  ms.lastDomainAuditLogID,
 		DNS:               *ms.lastDNSConfig,
