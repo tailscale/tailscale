@@ -1264,6 +1264,18 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
 	}
 }
 
+func profileFromView(v tailcfg.UserProfileView) tailcfg.UserProfile {
+	if v.Valid() {
+		return tailcfg.UserProfile{
+			ID:            v.ID(),
+			LoginName:     v.LoginName(),
+			DisplayName:   v.DisplayName(),
+			ProfilePicURL: v.ProfilePicURL(),
+		}
+	}
+	return tailcfg.UserProfile{}
+}
+
 // WhoIsNodeKey returns the peer info of given public key, if it exists.
 func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	b.mu.Lock()
@@ -1273,11 +1285,12 @@ func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tai
 		return n, u, false
 	}
 	if self := b.netMap.SelfNode; self.Valid() && self.Key() == k {
-		return self, b.netMap.UserProfiles[self.User()], true
+		return self, profileFromView(b.netMap.UserProfiles[self.User()]), true
 	}
 	for _, n := range b.peers {
 		if n.Key() == k {
-			u, ok = b.netMap.UserProfiles[n.User()]
+			up, ok := b.netMap.UserProfiles[n.User()]
+			u = profileFromView(up)
 			return n, u, ok
 		}
 	}
@@ -1347,11 +1360,11 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 		}
 		n = b.netMap.SelfNode
 	}
-	u, ok = b.netMap.UserProfiles[n.User()]
+	up, ok := b.netMap.UserProfiles[n.User()]
 	if !ok {
 		return failf("no userprofile for node %v", n.Key())
 	}
-	return n, u, true
+	return n, profileFromView(up), true
 }
 
 // PeerCaps returns the capabilities that remote src IP has to
@@ -4091,7 +4104,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 		}
 	}
 	if netMap != nil {
-		newProfile := netMap.UserProfiles[netMap.User()]
+		newProfile := profileFromView(netMap.UserProfiles[netMap.User()])
 		if newLoginName := newProfile.LoginName; newLoginName != "" {
 			if !oldp.Persist().Valid() {
 				b.logf("active login: %s", newLoginName)
@@ -5733,7 +5746,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	var login string
 	if nm != nil {
-		login = cmp.Or(nm.UserProfiles[nm.User()].LoginName, "<missing-profile>")
+		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
 	b.netMap = nm
 	b.updatePeersFromNetmapLocked(nm)
