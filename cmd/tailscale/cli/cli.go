@@ -217,6 +217,7 @@ change in the future.
 			idTokenCmd,
 			advertiseCmd(),
 			configureHostCmd(),
+			routeTableCmd,
 		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
