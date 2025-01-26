@@ -5,7 +5,9 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 
@@ -15,17 +17,27 @@ import (
 	"tailscale.com/paths"
 )
 
+var routeTableArgs struct {
+	includeTailnetIPs bool
+}
+
 var routeTableCmd = &ffcli.Command{
 	Name:       "route-table",
-	ShortUsage: "tailscale route-table",
+	ShortUsage: "tailscale route-table [--tailnet-ips]",
 	ShortHelp:  "Show the IP routing table",
-	LongHelp:   "Show the IP routing table",
-	Exec:       showRouteTable,
+	LongHelp:   "Show the IP routing table. Use --tailnet-ips to include Tailscale node IPs.",
+	FlagSet: (func() *flag.FlagSet {
+		fs := flag.NewFlagSet("route-table", flag.ExitOnError)
+		fs.BoolVar(&routeTableArgs.includeTailnetIPs, "tailnet-ips", false, "include Tailscale node IPs in the output")
+		return fs
+	})(),
+	Exec: showRouteTable,
 }
 
 type routeEntry struct {
-	prefix  string
-	nextHop string
+	prefix      string
+	nextHopIP   string
+	nextHopName string
 }
 
 func showRouteTable(ctx context.Context, args []string) error {
@@ -37,26 +49,31 @@ func showRouteTable(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 
-	routes := collectRoutes(tailscaleStatus)
+	routes := collectRoutes(tailscaleStatus, routeTableArgs.includeTailnetIPs)
 	printRouteTable(routes)
 	return nil
 }
 
-func collectRoutes(status *ipnstate.Status) []routeEntry {
+func collectRoutes(status *ipnstate.Status, includeTailnetIPs bool) []routeEntry {
 	var routes []routeEntry
 
 	for _, peer := range status.Peer {
 		if peer.TailscaleIPs == nil || len(peer.TailscaleIPs) == 0 {
 			continue
 		}
-		nextHop := peer.TailscaleIPs[0].String()
+		nextHopIP := peer.TailscaleIPs[0].String()
+		nextHopName := peer.HostName
 
 		if peer.AllowedIPs != nil {
 			for i := 0; i < peer.AllowedIPs.Len(); i++ {
-				prefix := peer.AllowedIPs.At(i).String()
+				prefix := peer.AllowedIPs.At(i)
+				if !includeTailnetIPs && isTailscaleNodeIP(prefix, peer.TailscaleIPs) {
+					continue
+				}
 				routes = append(routes, routeEntry{
-					prefix:  prefix,
-					nextHop: nextHop,
+					prefix:      prefix.String(),
+					nextHopIP:   nextHopIP,
+					nextHopName: nextHopName,
 				})
 			}
 		}
@@ -70,6 +87,15 @@ func collectRoutes(status *ipnstate.Status) []routeEntry {
 	return routes
 }
 
+func isTailscaleNodeIP(prefix netip.Prefix, tailscaleIPs []netip.Addr) bool {
+	for _, ip := range tailscaleIPs {
+		if prefix.Bits() == ip.BitLen() && prefix.Addr() == ip {
+			return true
+		}
+	}
+	return false
+}
+
 func printRouteTable(routes []routeEntry) {
 	fmt.Println("Tailscale IP Routing Table")
 	fmt.Println("Codes: T - Tailscale")
@@ -80,7 +106,6 @@ func printRouteTable(routes []routeEntry) {
 		network := prefix[0]
 		mask := prefix[1]
 
-		fmt.Printf("T    %s [1/0] via %s\n", network, route.nextHop)
-		fmt.Printf("         %s/%s\n", network, mask)
+		fmt.Printf("T    %s/%s via %s (%s)\n", network, mask, route.nextHopIP, route.nextHopName)
 	}
 }
