@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -19,7 +20,7 @@ import (
 
 var switchCmd = &ffcli.Command{
 	Name:       "switch",
-	ShortUsage: "tailscale switch <id>",
+	ShortUsage: "tailscale switch <id> [--list [--json]]",
 	ShortHelp:  "Switch to a different Tailscale account",
 	LongHelp: `"tailscale switch" switches between logged in accounts. You can
 use the ID that's returned from 'tailnet switch -list'
@@ -31,14 +32,17 @@ This command is currently in alpha and may change in the future.`,
 	FlagSet: func() *flag.FlagSet {
 		fs := flag.NewFlagSet("switch", flag.ExitOnError)
 		fs.BoolVar(&switchArgs.list, "list", false, "list available accounts")
+		fs.BoolVar(&switchArgs.json, "json", false, "output in JSON format")
 		return fs
 	}(),
 	Exec: switchProfile,
 }
 
+var LocalClientProfileStatus = localClient.ProfileStatus
+
 func init() {
 	ffcomplete.Args(switchCmd, func(s []string) (words []string, dir ffcomplete.ShellCompDirective, err error) {
-		_, all, err := localClient.ProfileStatus(context.Background())
+		_, all, err := LocalClientProfileStatus(context.Background())
 		if err != nil {
 			return nil, 0, err
 		}
@@ -66,13 +70,33 @@ func init() {
 
 var switchArgs struct {
 	list bool
+	json bool
 }
 
 func listProfiles(ctx context.Context) error {
-	curP, all, err := localClient.ProfileStatus(ctx)
+	curP, all, err := LocalClientProfileStatus(ctx)
 	if err != nil {
 		return err
 	}
+
+	if switchArgs.json {
+		type profiles struct {
+			Current  *ipn.LoginProfile
+			Profiles []ipn.LoginProfile
+		}
+		enc := json.NewEncoder(Stdout)
+		enc.SetIndent("", "  ")
+		profile := &profiles{}
+		profile.Profiles = all
+		if curP.ID != "" {
+			profile.Current = &curP
+		}
+		if err := enc.Encode(profile); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	tw := tabwriter.NewWriter(Stdout, 2, 2, 2, ' ', 0)
 	defer tw.Flush()
 	printRow := func(vals ...string) {
@@ -97,11 +121,15 @@ func switchProfile(ctx context.Context, args []string) error {
 	if switchArgs.list {
 		return listProfiles(ctx)
 	}
+	if !switchArgs.list && switchArgs.json {
+		outln("--json should be used with --list")
+		os.Exit(1)
+	}
 	if len(args) != 1 {
 		outln("usage: tailscale switch NAME")
 		os.Exit(1)
 	}
-	cp, all, err := localClient.ProfileStatus(ctx)
+	cp, all, err := LocalClientProfileStatus(ctx)
 	if err != nil {
 		errf("Failed to switch to account: %v\n", err)
 		os.Exit(1)
