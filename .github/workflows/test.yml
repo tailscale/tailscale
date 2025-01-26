@@ -481,7 +481,7 @@ jobs:
     - name: check depaware
       run: |
         export PATH=$(./tool/go env GOROOT)/bin:$PATH
-        find . -name 'depaware.txt' | xargs -n1 dirname | xargs ./tool/go run github.com/tailscale/depaware --check
+        find . -name 'depaware.txt' | xargs -n1 dirname | xargs ./tool/go run github.com/tailscale/depaware --check --internal
 
   go_generate:
     runs-on: ubuntu-22.04
