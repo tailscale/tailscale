@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
-	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
@@ -35,8 +34,8 @@ var routeTableCmd = &ffcli.Command{
 }
 
 type routeEntry struct {
-	prefix      string
-	nextHopIP   string
+	prefix      netip.Prefix
+	nextHopIP   netip.Addr
 	nextHopName string
 }
 
@@ -61,7 +60,7 @@ func collectRoutes(status *ipnstate.Status, includeTailnetIPs bool) []routeEntry
 		if peer.TailscaleIPs == nil || len(peer.TailscaleIPs) == 0 {
 			continue
 		}
-		nextHopIP := peer.TailscaleIPs[0].String()
+		nextHopIP := peer.TailscaleIPs[0]
 		nextHopName := peer.HostName
 
 		if peer.AllowedIPs != nil {
@@ -71,7 +70,7 @@ func collectRoutes(status *ipnstate.Status, includeTailnetIPs bool) []routeEntry
 					continue
 				}
 				routes = append(routes, routeEntry{
-					prefix:      prefix.String(),
+					prefix:      prefix,
 					nextHopIP:   nextHopIP,
 					nextHopName: nextHopName,
 				})
@@ -81,7 +80,10 @@ func collectRoutes(status *ipnstate.Status, includeTailnetIPs bool) []routeEntry
 
 	// Sort routes for consistent output
 	sort.Slice(routes, func(i, j int) bool {
-		return routes[i].prefix < routes[j].prefix
+		if routes[i].prefix.Addr().Compare(routes[j].prefix.Addr()) == 0 {
+			return routes[i].prefix.Bits() > routes[j].prefix.Bits()
+		}
+		return routes[i].prefix.Addr().Less(routes[j].prefix.Addr())
 	})
 
 	return routes
@@ -102,10 +104,6 @@ func printRouteTable(routes []routeEntry) {
 	fmt.Println()
 
 	for _, route := range routes {
-		prefix := strings.Split(route.prefix, "/")
-		network := prefix[0]
-		mask := prefix[1]
-
-		fmt.Printf("T    %s/%s via %s (%s)\n", network, mask, route.nextHopIP, route.nextHopName)
+		fmt.Printf("T    %s via %s (%s)\n", route.prefix, route.nextHopIP, route.nextHopName)
 	}
 }
