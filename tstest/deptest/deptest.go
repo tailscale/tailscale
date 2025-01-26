@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"tailscale.com/util/set"
@@ -54,9 +55,33 @@ func (c DepChecker) Check(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	tsRoot := sync.OnceValue(func() string {
+		out, err := exec.Command("go", "list", "-f", "{{.Dir}}", "tailscale.com").Output()
+		if err != nil {
+			t.Fatalf("failed to find tailscale.com root: %v", err)
+		}
+		return strings.TrimSpace(string(out))
+	})
+
 	for _, dep := range res.Deps {
 		if why, ok := c.BadDeps[dep]; ok {
 			t.Errorf("package %q is not allowed as a dependency (env: %q); reason: %s", dep, extraEnv, why)
+		}
+	}
+	// Make sure the BadDeps packages actually exists. If they got renamed or
+	// moved around, we should update the test referencing the old name.
+	// Doing this in the general case requires network access at runtime
+	// (resolving a package path to its module, possibly doing the ?go-get=1
+	// meta tag dance), so we just check the common case of
+	// "tailscale.com/*" packages for now, with the assumption that all
+	// "tailscale.com/*" packages are in the same module, which isn't
+	// necessarily true in the general case.
+	for dep := range c.BadDeps {
+		if suf, ok := strings.CutPrefix(dep, "tailscale.com/"); ok {
+			pkgDir := filepath.Join(tsRoot(), suf)
+			if _, err := os.Stat(pkgDir); err != nil {
+				t.Errorf("listed BadDep %q doesn't seem to exist anymore: %v", dep, err)
+			}
 		}
 	}
 	for dep := range c.WantDeps {
