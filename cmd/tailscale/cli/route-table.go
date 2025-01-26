@@ -8,8 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"net/netip"
+	"os"
 	"sort"
+	"text/tabwriter"
 
+	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn/ipnstate"
@@ -78,7 +81,6 @@ func collectRoutes(status *ipnstate.Status, includeTailnetIPs bool) []routeEntry
 		}
 	}
 
-	// Sort routes for consistent output
 	sort.Slice(routes, func(i, j int) bool {
 		if routes[i].prefix.Addr().Compare(routes[j].prefix.Addr()) == 0 {
 			return routes[i].prefix.Bits() > routes[j].prefix.Bits()
@@ -99,11 +101,28 @@ func isTailscaleNodeIP(prefix netip.Prefix, tailscaleIPs []netip.Addr) bool {
 }
 
 func printRouteTable(routes []routeEntry) {
-	fmt.Println("Tailscale IP Routing Table")
-	fmt.Println("Codes: T - Tailscale")
-	fmt.Println()
+	isTTY := isatty.IsTerminal(os.Stdout.Fd())
+
+	if isTTY {
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "Tailscale IP Routing Table")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Prefix\tNext Hop\tHostname")
+		fmt.Fprintln(w, "------\t--------\t--------")
 
 	for _, route := range routes {
-		fmt.Printf("T    %s via %s (%s)\n", route.prefix, route.nextHopIP, route.nextHopName)
+			fmt.Fprintf(w, "%s\t%s\t%s\n",
+				route.prefix,
+				route.nextHopIP,
+				route.nextHopName)
+	}
+		w.Flush()
+	} else {
+		fmt.Println("Tailscale IP Routing Table")
+		fmt.Println()
+
+		for _, route := range routes {
+			fmt.Printf("%s via %s (%s)\n", route.prefix, route.nextHopIP, route.nextHopName)
+}
 	}
 }
