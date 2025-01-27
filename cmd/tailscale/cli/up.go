@@ -780,6 +780,7 @@ func init() {
 	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("posture-checking", "PostureChecking")
+	addPrefFlagMapping("hide-health-warnings", "HideHealthWarnings")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {

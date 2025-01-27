@@ -10,6 +10,7 @@ import (
 	"net/netip"
 
 	"tailscale.com/drive"
+	"tailscale.com/health"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
@@ -38,6 +39,7 @@ func (src *Prefs) Clone() *Prefs {
 			}
 		}
 	}
+	dst.HideHealthWarnings = append(src.HideHealthWarnings[:0:0], src.HideHealthWarnings...)
 	dst.Persist = src.Persist.Clone()
 	return dst
 }
@@ -73,6 +75,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share
+	HideHealthWarnings     []health.WarnableCode
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})
