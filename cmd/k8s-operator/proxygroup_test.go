@@ -19,6 +19,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -97,7 +98,7 @@ func TestProxyGroup(t *testing.T) {
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass default-pc is not yet in a ready state, waiting...", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, false, "")
+		expectProxyGroupResources(t, fc, pg, false, "", pc)
 	})
 
 	t.Run("observe_ProxyGroupCreating_status_reason", func(t *testing.T) {
@@ -118,11 +119,11 @@ func TestProxyGroup(t *testing.T) {
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, "")
+		expectProxyGroupResources(t, fc, pg, true, "", pc)
 		if expected := 1; reconciler.egressProxyGroups.Len() != expected {
 			t.Fatalf("expected %d egress ProxyGroups, got %d", expected, reconciler.egressProxyGroups.Len())
 		}
-		expectProxyGroupResources(t, fc, pg, true, "")
+		expectProxyGroupResources(t, fc, pg, true, "", pc)
 		keyReq := tailscale.KeyCapabilities{
 			Devices: tailscale.KeyDeviceCapabilities{
 				Create: tailscale.KeyDeviceCreateCapabilities{
@@ -154,7 +155,7 @@ func TestProxyGroup(t *testing.T) {
 		}
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash)
+		expectProxyGroupResources(t, fc, pg, true, initialCfgHash, pc)
 	})
 
 	t.Run("scale_up_to_3", func(t *testing.T) {
@@ -165,7 +166,7 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash)
+		expectProxyGroupResources(t, fc, pg, true, initialCfgHash, pc)
 
 		addNodeIDToStateSecrets(t, fc, pg)
 		expectReconciled(t, reconciler, "", pg.Name)
@@ -175,7 +176,7 @@ func TestProxyGroup(t *testing.T) {
 			TailnetIPs: []string{"1.2.3.4", "::1"},
 		})
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash)
+		expectProxyGroupResources(t, fc, pg, true, initialCfgHash, pc)
 	})
 
 	t.Run("scale_down_to_1", func(t *testing.T) {
@@ -188,7 +189,7 @@ func TestProxyGroup(t *testing.T) {
 
 		pg.Status.Devices = pg.Status.Devices[:1] // truncate to only the first device.
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash)
+		expectProxyGroupResources(t, fc, pg, true, initialCfgHash, pc)
 	})
 
 	t.Run("trigger_config_change_and_observe_new_config_hash", func(t *testing.T) {
@@ -202,7 +203,7 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, "518a86e9fae64f270f8e0ec2a2ea6ca06c10f725035d3d6caca132cd61e42a74")
+		expectProxyGroupResources(t, fc, pg, true, "518a86e9fae64f270f8e0ec2a2ea6ca06c10f725035d3d6caca132cd61e42a74", pc)
 	})
 
 	t.Run("enable_metrics", func(t *testing.T) {
@@ -246,12 +247,29 @@ func TestProxyGroup(t *testing.T) {
 		// The fake client does not clean up objects whose owner has been
 		// deleted, so we can't test for the owned resources getting deleted.
 	})
+
 }
 
 func TestProxyGroupTypes(t *testing.T) {
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyClassSpec{},
+	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc).
+		WithStatusSubresource(pc).
 		Build()
+	mustUpdateStatus(t, fc, "", pc.Name, func(p *tsapi.ProxyClass) {
+		p.Status.Conditions = []metav1.Condition{{
+			Type:               string(tsapi.ProxyClassReady),
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: 1,
+		}}
+	})
 
 	zl, _ := zap.NewDevelopment()
 	reconciler := &ProxyGroupReconciler{
@@ -274,9 +292,7 @@ func TestProxyGroupTypes(t *testing.T) {
 				Replicas: ptr.To[int32](0),
 			},
 		}
-		if err := fc.Create(context.Background(), pg); err != nil {
-			t.Fatal(err)
-		}
+		mustCreate(t, fc, pg)
 
 		expectReconciled(t, reconciler, "", pg.Name)
 		verifyProxyGroupCounts(t, reconciler, 0, 1)
@@ -287,6 +303,8 @@ func TestProxyGroupTypes(t *testing.T) {
 		}
 		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupEgress)
 		verifyEnvVar(t, sts, "TS_EGRESS_SERVICES_CONFIG_PATH", fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices))
+		verifyEnvVar(t, sts, "TS_ENABLE_HEALTH_CHECK", "true")
+		verifyEnvVar(t, sts, "TS_EGRESS_PROXY_GROUP_REPLICA_COUNT_PATH", "/etc/proxies/replica-count")
 
 		// Verify that egress configuration has been set up.
 		cm := &corev1.ConfigMap{}
@@ -323,6 +341,57 @@ func TestProxyGroupTypes(t *testing.T) {
 		if diff := cmp.Diff(expectedVolumeMounts, sts.Spec.Template.Spec.Containers[0].VolumeMounts); diff != "" {
 			t.Errorf("unexpected volume mounts (-want +got):\n%s", diff)
 		}
+
+		expectedLifecycle := corev1.Lifecycle{
+			PreStop: &corev1.LifecycleHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: kubetypes.EgessServicesPreshutdownEP,
+					Port: intstr.FromInt(defaultLocalAddrPort),
+				},
+			},
+		}
+		if diff := cmp.Diff(expectedLifecycle, *sts.Spec.Template.Spec.Containers[0].Lifecycle); diff != "" {
+			t.Errorf("unexpected lifecycle (-want +got):\n%s", diff)
+		}
+		if *sts.Spec.Template.DeletionGracePeriodSeconds != deletionGracePeriodSeconds {
+			t.Errorf("unexpected deletion grace period seconds %d, want %d", *sts.Spec.Template.DeletionGracePeriodSeconds, deletionGracePeriodSeconds)
+		}
+	})
+	t.Run("egress_type_no_lifecycle_hook_when_local_addr_port_set", func(t *testing.T) {
+		pg := &tsapi.ProxyGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-egress-no-lifecycle",
+				UID:  "test-egress-no-lifecycle-uid",
+			},
+			Spec: tsapi.ProxyGroupSpec{
+				Type:       tsapi.ProxyGroupTypeEgress,
+				Replicas:   ptr.To[int32](0),
+				ProxyClass: "test",
+			},
+		}
+		mustCreate(t, fc, pg)
+		mustUpdate(t, fc, "", pc.Name, func(p *tsapi.ProxyClass) {
+			p.Spec.StatefulSet = &tsapi.StatefulSet{
+				Pod: &tsapi.Pod{
+					TailscaleContainer: &tsapi.Container{
+						Env: []tsapi.Env{{
+							Name:  "TS_LOCAL_ADDR_PORT",
+							Value: "127.0.0.1:8080",
+						}},
+					},
+				},
+			}
+		})
+		expectReconciled(t, reconciler, "", pg.Name)
+
+		sts := &appsv1.StatefulSet{}
+		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatalf("failed to get StatefulSet: %v", err)
+		}
+
+		if sts.Spec.Template.Spec.Containers[0].Lifecycle != nil {
+			t.Error("lifecycle hook was set when TS_LOCAL_ADDR_PORT was configured via ProxyClass")
+		}
 	})
 
 	t.Run("ingress_type", func(t *testing.T) {
@@ -341,7 +410,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		}
 
 		expectReconciled(t, reconciler, "", pg.Name)
-		verifyProxyGroupCounts(t, reconciler, 1, 1)
+		verifyProxyGroupCounts(t, reconciler, 1, 2)
 
 		sts := &appsv1.StatefulSet{}
 		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
@@ -402,13 +471,13 @@ func verifyEnvVar(t *testing.T, sts *appsv1.StatefulSet, name, expectedValue str
 	t.Errorf("%s environment variable not found", name)
 }
 
-func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup, shouldExist bool, cfgHash string) {
+func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup, shouldExist bool, cfgHash string, proxyClass *tsapi.ProxyClass) {
 	t.Helper()
 
 	role := pgRole(pg, tsNamespace)
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
-	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto")
+	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", proxyClass)
 	if err != nil {
 		t.Fatal(err)
 	}

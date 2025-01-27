@@ -13,9 +13,13 @@ import (
 	"net/netip"
 )
 
-// KeyEgressServices is name of the proxy state Secret field that contains the
-// currently applied egress proxy config.
-const KeyEgressServices = "egress-services"
+const (
+	// KeyEgressServices is name of the proxy state Secret field that contains the
+	// currently applied egress proxy config.
+	KeyEgressServices = "egress-services"
+
+	KeyProxyGroupReplicaCount = "replica-count"
+)
 
 // Configs contains the desired configuration for egress services keyed by
 // service name.
@@ -24,6 +28,7 @@ type Configs map[string]Config
 // Config is an egress service configuration.
 // TODO(irbekrm): version this?
 type Config struct {
+	HealthCheckEndpoint string `json:"healthCheckEndpoint"`
 	// TailnetTarget is the target to which cluster traffic for this service
 	// should be proxied.
 	TailnetTarget TailnetTarget `json:"tailnetTarget"`

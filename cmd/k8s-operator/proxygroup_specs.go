@@ -7,11 +7,13 @@ package main
 
 import (
 	"fmt"
+	"slices"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/yaml"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
@@ -19,9 +21,12 @@ import (
 	"tailscale.com/types/ptr"
 )
 
+// deletionGracePeriodSeconds is set to 6 minutes to ensure that the pre-stop hook of these proxies have enough chance to terminate gracefully.
+const deletionGracePeriodSeconds int64 = 360
+
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
-func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string) (*appsv1.StatefulSet, error) {
+func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -153,7 +158,14 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 					Name:  "TS_INTERNAL_APP",
 					Value: kubetypes.AppProxyGroupEgress,
 				},
-			)
+				corev1.EnvVar{
+					Name:  "TS_EGRESS_PROXY_GROUP_REPLICA_COUNT_PATH",
+					Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyProxyGroupReplicaCount),
+				},
+				corev1.EnvVar{
+					Name:  "TS_ENABLE_HEALTH_CHECK",
+					Value: "true",
+				})
 		} else { // ingress
 			envs = append(envs, corev1.EnvVar{
 				Name:  "TS_INTERNAL_APP",
@@ -167,6 +179,25 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		return append(c.Env, envs...)
 	}()
 
+	// The pre-stop hook is used to ensure that a replica does not get terminated while cluster traffic for egress
+	// services is still being routed to it.
+	//
+	// This mechanism currently (2025-01-26) rely on the local health check being accessible on the Pod's
+	// IP, so they are not supported for ProxyGroups where users have configured TS_LOCAL_ADDR_PORT to a custom
+	// value.
+	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress && !hasLocalAddrPortSet(proxyClass) {
+		c.Lifecycle = &corev1.Lifecycle{
+			PreStop: &corev1.LifecycleHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: kubetypes.EgessServicesPreshutdownEP,
+					Port: intstr.FromInt(defaultLocalAddrPort),
+				},
+			},
+		}
+		// Set the deletion grace period to 6 minutes to ensure that the pre-stop hook has enough time to terminate
+		// gracefully.
+		ss.Spec.Template.DeletionGracePeriodSeconds = ptr.To(deletionGracePeriodSeconds)
+	}
 	return ss, nil
 }
 
@@ -266,8 +297,10 @@ func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
+		Data: map[string]string{egressservices.KeyProxyGroupReplicaCount: fmt.Sprintf("%d", pgReplicas(pg))},
 	}
 }
+
 func pgIngressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -312,4 +345,15 @@ func pgReplicas(pg *tsapi.ProxyGroup) int32 {
 
 func pgEgressCMName(pg string) string {
 	return fmt.Sprintf("%s-egress-config", pg)
+}
+
+// hasLocalAddrPortSet returns true if the proxyclass has the TS_LOCAL_ADDR_PORT env var set. For egress ProxyGroups,
+// currently (2025-01-26) this means that the ProxyGroup does not support graceful failover.
+func hasLocalAddrPortSet(proxyClass *tsapi.ProxyClass) bool {
+	if proxyClass == nil || proxyClass.Spec.StatefulSet == nil || proxyClass.Spec.StatefulSet.Pod == nil || proxyClass.Spec.StatefulSet.Pod.TailscaleContainer == nil {
+		return false
+	}
+	return slices.ContainsFunc(proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Env, func(env tsapi.Env) bool {
+		return env.Name == envVarTSLocalAddrPort
+	})
 }

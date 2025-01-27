@@ -166,6 +166,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, err.Error())
 			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, err.Error())
 		}
+		validateProxyClassForPG(logger, pg, proxyClass)
 		if !tsoperator.ProxyClassIsReady(proxyClass) {
 			message := fmt.Sprintf("the ProxyGroup's ProxyClass %s is not yet in a ready state, waiting...", proxyClassName)
 			logger.Info(message)
@@ -202,6 +203,31 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 
 	logger.Info("ProxyGroup resources synced")
 	return setStatusReady(pg, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady)
+}
+
+// validateProxyClassForPG applies custom validation logic for ProxyClass applied to ProxyGroup.
+func validateProxyClassForPG(logger *zap.SugaredLogger, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) {
+	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+		return
+	}
+	// Our custom logic for ensuring minimum downtime ProxyGroup update rollouts relies on the local health check
+	// beig accessible on the replica Pod IP:9002. This address can also be modified by users, via
+	// TS_LOCAL_ADDR_PORT env var.
+	//
+	// Currently TS_LOCAL_ADDR_PORT controls Pod's health check and metrics address. _Probably_ there is no need for
+	// users to set this to a custom value. Users who want to consume metrics, should integrate with the metrics
+	// Service and/or ServiceMonitor, rather than Pods directly. The health check is likely not useful to integrate
+	// directly with for operator proxies (and we should aim for unified lifecycle logic in the operator, users
+	// shouldn't need to set their own).
+	//
+	// TODO(irbekrm): maybe disallow configuring this env var in future (in Tailscale 1.84 or later).
+	if hasLocalAddrPortSet(pc) {
+		msg := fmt.Sprintf("ProxyClass %s applied to an egress ProxyGroup has TS_LOCAL_ADDR_PORT env var set to a custom value."+
+			"This will disable the ProxyGroup graceful failover mechanism, so you might experience downtime when ProxyGroup pods are restarted."+
+			"In future we will remove the ability to set custom TS_LOCAL_ADDR_PORT for egress ProxyGroups."+
+			"Please raise an issue if you expect that this will cause issues for your workflow.", pc.Name)
+		logger.Warn(msg)
+	}
 }
 
 func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) error {
@@ -270,7 +296,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("error provisioning ingress ConfigMap %q: %w", cm.Name, err)
 		}
 	}
-	ss, err := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode)
+	ss, err := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode, proxyClass)
 	if err != nil {
 		return fmt.Errorf("error generating StatefulSet spec: %w", err)
 	}

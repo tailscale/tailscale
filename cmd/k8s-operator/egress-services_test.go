@@ -18,6 +18,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -78,41 +79,15 @@ func TestTailscaleEgressServices(t *testing.T) {
 			Selector:     nil,
 			Ports: []corev1.ServicePort{
 				{
-					Name:     "http",
 					Protocol: "TCP",
 					Port:     80,
-				},
-				{
-					Name:     "https",
-					Protocol: "TCP",
-					Port:     443,
 				},
 			},
 		},
 	}
 
-	t.Run("proxy_group_not_ready", func(t *testing.T) {
+	t.Run("service_one_unnamed_port", func(t *testing.T) {
 		mustCreate(t, fc, svc)
-		expectReconciled(t, esr, "default", "test")
-		// Service should have EgressSvcValid condition set to Unknown.
-		svc.Status.Conditions = []metav1.Condition{condition(tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, clock)}
-		expectEqual(t, fc, svc)
-	})
-
-	t.Run("proxy_group_ready", func(t *testing.T) {
-		mustUpdateStatus(t, fc, "", "foo", func(pg *tsapi.ProxyGroup) {
-			pg.Status.Conditions = []metav1.Condition{
-				condition(tsapi.ProxyGroupReady, metav1.ConditionTrue, "", "", clock),
-			}
-		})
-		expectReconciled(t, esr, "default", "test")
-		validateReadyService(t, fc, esr, svc, clock, zl, cm)
-	})
-	t.Run("service_retain_one_unnamed_port", func(t *testing.T) {
-		svc.Spec.Ports = []corev1.ServicePort{{Protocol: "TCP", Port: 80}}
-		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
-			s.Spec.Ports = svc.Spec.Ports
-		})
 		expectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
@@ -164,7 +139,7 @@ func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReco
 	// Verify that an EndpointSlice has been created.
 	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc))
 	// Verify that ConfigMap contains configuration for the new egress service.
-	mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm)
+	mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm, zl)
 	r := svcConfiguredReason(svc, true, zl.Sugar())
 	// Verify that the user-created ExternalName Service has Configured set to true and ExternalName pointing to the
 	// CluterIP Service.
@@ -203,6 +178,23 @@ func findGenNameForEgressSvcResources(t *testing.T, client client.Client, svc *c
 
 func clusterIPSvc(name string, extNSvc *corev1.Service) *corev1.Service {
 	labels := egressSvcChildResourceLabels(extNSvc)
+	ports := make([]corev1.ServicePort, len(extNSvc.Spec.Ports))
+	for i, port := range extNSvc.Spec.Ports {
+		ports[i] = corev1.ServicePort{ // Copy the port to avoid modifying the original.
+			Name:     port.Name,
+			Port:     port.Port,
+			Protocol: port.Protocol,
+		}
+		if port.Name == "" {
+			ports[i].Name = "tailscale-unnamed"
+		}
+	}
+	ports = append(ports, corev1.ServicePort{
+		Name:       "tailscale-health-check",
+		Port:       9002,
+		TargetPort: intstr.FromInt(9002),
+		Protocol:   "TCP",
+	})
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:         name,
@@ -212,7 +204,7 @@ func clusterIPSvc(name string, extNSvc *corev1.Service) *corev1.Service {
 		},
 		Spec: corev1.ServiceSpec{
 			Type:  corev1.ServiceTypeClusterIP,
-			Ports: extNSvc.Spec.Ports,
+			Ports: ports,
 		},
 	}
 }
@@ -257,9 +249,9 @@ func portsForEndpointSlice(svc *corev1.Service) []discoveryv1.EndpointPort {
 	return ports
 }
 
-func mustHaveConfigForSvc(t *testing.T, cl client.Client, extNSvc, clusterIPSvc *corev1.Service, cm *corev1.ConfigMap) {
+func mustHaveConfigForSvc(t *testing.T, cl client.Client, extNSvc, clusterIPSvc *corev1.Service, cm *corev1.ConfigMap, l *zap.Logger) {
 	t.Helper()
-	wantsCfg := egressSvcCfg(extNSvc, clusterIPSvc)
+	wantsCfg := egressSvcCfg(extNSvc, clusterIPSvc, clusterIPSvc.Namespace, l.Sugar())
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(cm), cm); err != nil {
 		t.Fatalf("Error retrieving ConfigMap: %v", err)
 	}
