@@ -4854,6 +4854,13 @@ rules:
         - get
         - list
         - watch
+        - update
+    - apiGroups:
+        - ""
+      resources:
+        - pods/status
+      verbs:
+        - update
     - apiGroups:
         - apps
       resources:
