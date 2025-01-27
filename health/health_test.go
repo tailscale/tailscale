@@ -257,9 +257,15 @@ func TestCheckDependsOnAppearsInUnhealthyState(t *testing.T) {
 	}
 	ht.SetUnhealthy(w2, Args{ArgError: "w2 is also unhealthy now"})
 	us2, ok := ht.CurrentState().Warnings[w2.Code]
-	if !ok {
-		t.Fatalf("Expected an UnhealthyState for w2, got nothing")
+	if ok {
+		t.Fatalf("Saw w2 being unhealthy but it shouldn't be, as it depends on unhealthy w1")
 	}
+	ht.SetHealthy(w1)
+	us2, ok = ht.CurrentState().Warnings[w2.Code]
+	if !ok {
+		t.Fatalf("w2 wasn't unhealthy; want it to be unhealthy now that w1 is back healthy")
+	}
+
 	wantDependsOn = slices.Concat([]WarnableCode{w1.Code}, wantDependsOn)
 	if !reflect.DeepEqual(us2.DependsOn, wantDependsOn) {
 		t.Fatalf("Expected DependsOn = %v in the unhealthy state, got: %v", wantDependsOn, us2.DependsOn)
