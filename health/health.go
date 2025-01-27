@@ -214,9 +214,11 @@ type Warnable struct {
 	// TODO(angott): turn this into a SeverityFunc, which allows the Warnable to change its severity based on
 	// the Args of the unhappy state, just like we do in the Text function.
 	Severity Severity
-	// DependsOn is a set of Warnables that this Warnable depends, on and need to be healthy
-	// before this Warnable can also be healthy again. The GUI can use this information to ignore
+	// DependsOn is a set of Warnables that this Warnable depends on and need to be healthy
+	// before this Warnable is relevant. The GUI can use this information to ignore
 	// this Warnable if one of its dependencies is unhealthy.
+	// That is, if any of these Warnables are unhealthy, then this Warnable is not relevant
+	// and should be considered healthy to bother the user about.
 	DependsOn []*Warnable
 
 	// MapDebugFlag is a MapRequest.DebugFlag that is sent to control when this Warnable is unhealthy
@@ -938,6 +940,9 @@ func (t *Tracker) stringsLocked() []string {
 	for w, ws := range t.warnableVal {
 		if !w.IsVisible(ws) {
 			// Do not append invisible warnings.
+			continue
+		}
+		if t.isEffectivelyHealthyLocked(w) {
 			continue
 		}
 		if ws.Args == nil {
