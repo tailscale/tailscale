@@ -59,6 +59,7 @@ jobs:
           # Check a few images with wget rather than curl.
           - { image: "debian:oldstable-slim", deps: "wget" }
           - { image: "debian:sid-slim", deps: "wget" }
+          - { image: "ubuntu:24.04", deps: "wget" }
     runs-on: ubuntu-latest
     container:
       image: ${{ matrix.image }}
