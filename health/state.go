@@ -86,7 +86,7 @@ func (t *Tracker) CurrentState() *State {
 	wm := map[WarnableCode]UnhealthyState{}
 
 	for w, ws := range t.warnableVal {
-		if !w.IsVisible(ws) {
+		if !w.IsVisible(ws, t.now) {
 			// Skip invisible Warnables.
 			continue
 		}
