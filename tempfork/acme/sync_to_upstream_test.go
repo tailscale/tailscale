@@ -55,7 +55,7 @@ func TestSyncedToUpstream(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			m[name] = string(b)
+			m[name] = strings.ReplaceAll(string(b), "\r", "")
 		}
 
 		return m
