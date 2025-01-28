@@ -18,7 +18,9 @@ const (
 	// currently applied egress proxy config.
 	KeyEgressServices = "egress-services"
 
-	KeyProxyGroupReplicaCount = "replica-count"
+	// KeyHEPPings is the number of times an egress service health check endpoint needs to be pinged to ensure that
+	// each currently configured backend is hit. In practice, it depends on the number of ProxyGroup replicas.
+	KeyHEPPings = "hep-pings"
 )
 
 // Configs contains the desired configuration for egress services keyed by

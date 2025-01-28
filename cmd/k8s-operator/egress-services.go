@@ -297,7 +297,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		}
 		healthCheckPort++
 		if healthCheckPort > 10002 {
-			return nil, false, fmt.Errorf("unable to find a free port for internal health check in range [9002, 10002)")
+			return nil, false, fmt.Errorf("unable to find a free port for internal health check in range [9002, 10002]")
 		}
 	}
 	clusterIPSvc.Spec.Ports = append(clusterIPSvc.Spec.Ports, corev1.ServicePort{
@@ -545,7 +545,10 @@ func egressSvcCfg(externalNameSvc, clusterIPSvc *corev1.Service, ns string, l *z
 	d := retrieveClusterDomain(ns, l)
 	tt := tailnetTargetFromSvc(externalNameSvc)
 	hep := healthCheckForSvc(clusterIPSvc, d)
-	cfg := egressservices.Config{TailnetTarget: tt, HealthCheckEndpoint: hep}
+	cfg := egressservices.Config{
+		TailnetTarget:       tt,
+		HealthCheckEndpoint: hep,
+	}
 	for _, svcPort := range clusterIPSvc.Spec.Ports {
 		if svcPort.Name == tsHealthCheckPortName {
 			continue // exclude healthcheck from egress svcs configs
@@ -649,7 +652,11 @@ func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, ts
 			Namespace: tsNamespace,
 		},
 	}
-	if err := cl.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil {
+	err = cl.Get(ctx, client.ObjectKeyFromObject(cm), cm)
+	if apierrors.IsNotFound(err) { // ProxyGroup resources have not been created (yet)
+		return nil, nil, nil
+	}
+	if err != nil {
 		return nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", name, err)
 	}
 	cfgs = &egressservices.Configs{}

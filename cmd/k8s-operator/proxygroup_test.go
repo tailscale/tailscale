@@ -26,7 +26,6 @@ import (
 	"tailscale.com/client/tailscale"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ptr"
@@ -302,9 +301,8 @@ func TestProxyGroupTypes(t *testing.T) {
 			t.Fatalf("failed to get StatefulSet: %v", err)
 		}
 		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupEgress)
-		verifyEnvVar(t, sts, "TS_EGRESS_SERVICES_CONFIG_PATH", fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices))
+		verifyEnvVar(t, sts, "TS_EGRESS_PROXIES_CONFIG_PATH", "/etc/proxies")
 		verifyEnvVar(t, sts, "TS_ENABLE_HEALTH_CHECK", "true")
-		verifyEnvVar(t, sts, "TS_EGRESS_PROXY_GROUP_REPLICA_COUNT_PATH", "/etc/proxies/replica-count")
 
 		// Verify that egress configuration has been set up.
 		cm := &corev1.ConfigMap{}

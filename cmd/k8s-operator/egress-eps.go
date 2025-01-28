@@ -85,6 +85,12 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	if err != nil {
 		return res, fmt.Errorf("error retrieving tailnet services configuration: %w", err)
 	}
+	if cfgs == nil {
+		// TODO(irbekrm): this path would be hit if egress service was once exposed on a ProxyGroup that later
+		// got deleted. Probably the EndpointSlices then need to be deleted too- need to rethink this flow.
+		l.Debugf("No egress config found, likely because ProxyGroup has not been created")
+		return res, nil
+	}
 	cfg, ok := (*cfgs)[tailnetSvc]
 	if !ok {
 		l.Infof("[unexpected] configuration for tailnet service %s not found", tailnetSvc)

@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
@@ -184,11 +183,6 @@ func Test_updatesForSvc(t *testing.T) {
 
 // A failure of this test will most likely look like a timeout.
 func TestWaitTillSafeToShutdown(t *testing.T) {
-
-	// No need to sleep in tests.
-	preShutdownSleep = time.Second * 0
-	inBetweenCallsSleep = time.Second * 0
-
 	podIP := "10.0.0.1"
 	anotherIP := "10.0.0.2"
 

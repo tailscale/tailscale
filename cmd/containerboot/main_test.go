@@ -56,22 +56,9 @@ func TestContainerBoot(t *testing.T) {
 	defer kube.Close()
 
 	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
-	tailscaledConfBytes, err := json.Marshal(tailscaledConf)
-	if err != nil {
-		t.Fatalf("error unmarshaling tailscaled config: %v", err)
-	}
 	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
-	serveConfBytes, err := json.Marshal(serveConf)
-	if err != nil {
-		t.Fatalf("error unmarshaling serve config: %v", err)
-	}
-	egressSvcsCfg := egressservices.Configs{"foo": {TailnetTarget: egressservices.TailnetTarget{FQDN: "foo.tailnetxyx.ts.net"}}}
-	egressSvcsCfgBytes, err := json.Marshal(egressSvcsCfg)
-	if err != nil {
-		t.Fatalf("error unmarshaling egress services config: %v", err)
-	}
-	// same as egressSvcCfg, but base64 encoded.
-	egressSvcsCfgBase64 := "eyJwb2RJUHY0IjoiIiwic2VydmljZXMiOnsiZm9vIjp7InBvcnRzIjpbXSwidGFpbG5ldFRhcmdldElQcyI6bnVsbCwidGFpbG5ldFRhcmdldCI6eyJpcCI6IiIsImZxZG4iOiJmb28udGFpbG5ldHh5eC50cy5uZXQifX19fQ=="
+	egressCfg := egressSvcConfig("foo", "foo.tailnetxyz.ts.net")
+	egressStatus := egressSvcStatus("foo", "foo.tailnetxyz.ts.net")
 
 	dirs := []string{
 		"var/lib",
@@ -88,17 +75,17 @@ func TestContainerBoot(t *testing.T) {
 		}
 	}
 	files := map[string][]byte{
-		"usr/bin/tailscaled":                           fakeTailscaled,
-		"usr/bin/tailscale":                            fakeTailscale,
-		"usr/bin/iptables":                             fakeTailscale,
-		"usr/bin/ip6tables":                            fakeTailscale,
-		"dev/net/tun":                                  []byte(""),
-		"proc/sys/net/ipv4/ip_forward":                 []byte("0"),
-		"proc/sys/net/ipv6/conf/all/forwarding":        []byte("0"),
-		"etc/tailscaled/cap-95.hujson":                 tailscaledConfBytes,
-		"etc/tailscaled/serve-config.json":             serveConfBytes,
-		"etc/tailscaled/egress-services-config.json":   egressSvcsCfgBytes,
-		"etc/tailscaled/egress-services-replica-count": []byte("4"),
+		"usr/bin/tailscaled":                    fakeTailscaled,
+		"usr/bin/tailscale":                     fakeTailscale,
+		"usr/bin/iptables":                      fakeTailscale,
+		"usr/bin/ip6tables":                     fakeTailscale,
+		"dev/net/tun":                           []byte(""),
+		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
+		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
+		"etc/tailscaled/cap-95.hujson":          mustJSON(t, tailscaledConf),
+		"etc/tailscaled/serve-config.json":      mustJSON(t, serveConf),
+		filepath.Join("etc/tailscaled/", egressservices.KeyEgressServices): mustJSON(t, egressCfg),
+		filepath.Join("etc/tailscaled/", egressservices.KeyHEPPings):       []byte("4"),
 	}
 	resetFiles := func() {
 		for path, content := range files {
@@ -904,11 +891,10 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "egress_svcs_config_kube",
 			Env: map[string]string{
-				"KUBERNETES_SERVICE_HOST":                  kube.Host,
-				"KUBERNETES_SERVICE_PORT_HTTPS":            kube.Port,
-				"TS_EGRESS_SERVICES_CONFIG_PATH":           filepath.Join(d, "etc/tailscaled/egress-services-config.json"),
-				"TS_EGRESS_PROXY_GROUP_REPLICA_COUNT_PATH": filepath.Join(d, "etc/tailscaled/egress-services-replica-count"),
-				"TS_LOCAL_ADDR_PORT":                       fmt.Sprintf("[::]:%d", localAddrPort),
+				"KUBERNETES_SERVICE_HOST":       kube.Host,
+				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
+				"TS_EGRESS_PROXIES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled"),
+				"TS_LOCAL_ADDR_PORT":            fmt.Sprintf("[::]:%d", localAddrPort),
 			},
 			KubeSecret: map[string]string{
 				"authkey": "tskey-key",
@@ -929,7 +915,7 @@ func TestContainerBoot(t *testing.T) {
 				{
 					Notify: runningNotify,
 					WantKubeSecret: map[string]string{
-						"egress-services":  egressSvcsCfgBase64,
+						"egress-services":  mustBase64(t, egressStatus),
 						"authkey":          "tskey-key",
 						"device_fqdn":      "test-node.test.ts.net",
 						"device_id":        "myID",
@@ -945,12 +931,12 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "egress_svcs_config_no_kube",
 			Env: map[string]string{
-				"TS_EGRESS_SERVICES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled/egress-services-config.json"),
-				"TS_AUTHKEY":                     "tskey-key",
+				"TS_EGRESS_PROXIES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled"),
+				"TS_AUTHKEY":                    "tskey-key",
 			},
 			Phases: []phase{
 				{
-					WantFatalLog: "TS_EGRESS_SERVICES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
+					WantFatalLog: "TS_EGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
 				},
 			},
 		},
@@ -1234,12 +1220,6 @@ func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Write([]byte("fake metrics"))
 		return
-	case "/localapi/v0/status":
-		if r.Method != "GET" {
-			panic(fmt.Sprintf("unsupported method %q", r.Method))
-		}
-		w.Write([]byte("{}"))
-		return
 	default:
 		panic(fmt.Sprintf("unsupported path %q", r.URL.Path))
 	}
@@ -1458,5 +1438,43 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 		}
 	default:
 		panic(fmt.Sprintf("unhandled HTTP method %q", r.Method))
+	}
+}
+
+func mustBase64(t *testing.T, v any) string {
+	b := mustJSON(t, v)
+	s := base64.StdEncoding.WithPadding('=').EncodeToString(b)
+	return s
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("error converting %v to json: %v", v, err)
+	}
+	return b
+}
+
+// egress services status given one named tailnet target specified by FQDN. As written by the proxy to its state Secret.
+func egressSvcStatus(name, fqdn string) egressservices.Status {
+	return egressservices.Status{
+		Services: map[string]*egressservices.ServiceStatus{
+			name: {
+				TailnetTarget: egressservices.TailnetTarget{
+					FQDN: fqdn,
+				},
+			},
+		},
+	}
+}
+
+// egress config given one named tailnet target specified by FQDN.
+func egressSvcConfig(name, fqdn string) egressservices.Configs {
+	return egressservices.Configs{
+		name: egressservices.Config{
+			TailnetTarget: egressservices.TailnetTarget{
+				FQDN: fqdn,
+			},
+		},
 	}
 }

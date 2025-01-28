@@ -43,8 +43,7 @@ const tailscaleTunInterface = "tailscale0"
 // egressProxy knows how to configure firewall rules to route cluster traffic to
 // one or more tailnet services.
 type egressProxy struct {
-	cfgPath          string // path to egress service config file
-	replicaCountPath string // path to a file that holds replica count for this ProxyGroup
+	cfgPath string // path to a directory with egress services config files
 
 	nfr linuxfw.NetfilterRunner // never nil
 
@@ -66,6 +65,12 @@ type egressProxy struct {
 
 	tailnetAddrs []netip.Prefix // tailnet IPs of this tailnet device
 
+	// shortSleep is the backoff sleep between healthcheck endpoint calls - can be overridden in tests.
+	shortSleep time.Duration
+	// longSleep is the time to sleep after the routing rules are updated to increase the chance that kube
+	// proxies on all nodes have updated their routing configuration. It can be configured to 0 in
+	// tests.
+	longSleep time.Duration
 	// client is a client that can send HTTP requests.
 	client httpClient
 }
@@ -80,7 +85,7 @@ type httpClient interface {
 // - the proxy's tailnet IP addresses have changed
 // - tailnet IPs have changed for any backend targets specified by tailnet FQDN
 func (ep *egressProxy) run(ctx context.Context, n ipn.Notify, opts egressProxyRunOpts) error {
-	ep.applyOpts(opts)
+	ep.configure(opts)
 	var tickChan <-chan time.Time
 	var eventChan <-chan fsnotify.Event
 	// TODO (irbekrm): take a look if this can be pulled into a single func
@@ -92,7 +97,7 @@ func (ep *egressProxy) run(ctx context.Context, n ipn.Notify, opts egressProxyRu
 		tickChan = ticker.C
 	} else {
 		defer w.Close()
-		if err := w.Add(filepath.Dir(ep.cfgPath)); err != nil {
+		if err := w.Add(ep.cfgPath); err != nil {
 			return fmt.Errorf("failed to add fsnotify watch: %w", err)
 		}
 		eventChan = w.Events
@@ -123,21 +128,19 @@ func (ep *egressProxy) run(ctx context.Context, n ipn.Notify, opts egressProxyRu
 }
 
 type egressProxyRunOpts struct {
-	egressSvcsCfgPath string
-	replicaCountPath  string
-	nfr               linuxfw.NetfilterRunner
-	kc                kubeclient.Client
-	tsClient          *tailscale.LocalClient
-	stateSecret       string
-	netmapChan        chan ipn.Notify
-	podIPv4           string
-	tailnetAddrs      []netip.Prefix
+	cfgPath      string
+	nfr          linuxfw.NetfilterRunner
+	kc           kubeclient.Client
+	tsClient     *tailscale.LocalClient
+	stateSecret  string
+	netmapChan   chan ipn.Notify
+	podIPv4      string
+	tailnetAddrs []netip.Prefix
 }
 
 // applyOpts configures egress proxy using the provided options.
-func (ep *egressProxy) applyOpts(opts egressProxyRunOpts) {
-	ep.cfgPath = opts.egressSvcsCfgPath
-	ep.replicaCountPath = opts.replicaCountPath
+func (ep *egressProxy) configure(opts egressProxyRunOpts) {
+	ep.cfgPath = opts.cfgPath
 	ep.nfr = opts.nfr
 	ep.kc = opts.kc
 	ep.tsClient = opts.tsClient
@@ -146,6 +149,8 @@ func (ep *egressProxy) applyOpts(opts egressProxyRunOpts) {
 	ep.podIPv4 = opts.podIPv4
 	ep.tailnetAddrs = opts.tailnetAddrs
 	ep.client = &http.Client{} // default HTTP client
+	ep.shortSleep = time.Second
+	ep.longSleep = time.Second * 10
 }
 
 // sync triggers an egress proxy config resync. The resync calculates the diff between config and status to determine if
@@ -368,7 +373,8 @@ func (ep *egressProxy) deleteUnnecessaryServices(cfgs *egressservices.Configs, s
 
 // getConfigs gets the mounted egress service configuration.
 func (ep *egressProxy) getConfigs() (*egressservices.Configs, error) {
-	j, err := os.ReadFile(ep.cfgPath)
+	svcsCfg := filepath.Join(ep.cfgPath, egressservices.KeyEgressServices)
+	j, err := os.ReadFile(svcsCfg)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -632,12 +638,12 @@ func (ep *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rc, err := ep.getReplicaCount()
+	hp, err := ep.getHEPPings()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("error determining ProxyGroup replica count: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("error determining the number of times health check endpoint should be pinged: %v", err), http.StatusInternalServerError)
 		return
 	}
-	ep.waitTillSafeToShutdown(r.Context(), cfgs, rc)
+	ep.waitTillSafeToShutdown(r.Context(), cfgs, hp)
 }
 
 // waitTillSafeToShutdown looks up all egress targets configured to be proxied via this instance and, for each target
@@ -646,7 +652,7 @@ func (ep *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // would normally be this Pod. When this Pod is being deleted, the operator should have removed it from the Service
 // backends and eventually kube proxy routing rules should be updated to no longer route traffic for the Service to this
 // Pod.
-func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egressservices.Configs, replicas int) {
+func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egressservices.Configs, hp int) {
 	if cfgs == nil || len(*cfgs) == 0 { // avoid sleeping if no services are configured
 		return
 	}
@@ -667,11 +673,7 @@ func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egresss
 					log.Printf("Cluster traffic for %s did not stop being routed to this Pod.", svc)
 					return
 				}
-				// Calls to healthcheck endpoint are routed round robin to available backend replicas, so in
-				// theory calling the endpoint replica-number-of-times should be sufficient to hit all available
-				// backends, but in practice we might want to add extra calls.
-				repeats := replicas * 3
-				found, err := lookupPodRoute(ctx, hep, ep.podIPv4, repeats, ep.client)
+				found, err := lookupPodRoute(ctx, hep, ep.podIPv4, hp, ep.client)
 				if err != nil {
 					log.Printf("unable to reach endpoint %q, assuming the routing rules for this Pod have been deleted: %v", hep, err)
 					break
@@ -681,7 +683,7 @@ func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egresss
 					break
 				}
 				log.Printf("service %q is still routed through this Pod, waiting...", svc)
-				time.Sleep(inBetweenCallsSleep)
+				time.Sleep(ep.shortSleep)
 			}
 		})
 	}
@@ -689,19 +691,9 @@ func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egresss
 	// The check above really only checked that the routing rules are updated on this node. Sleep for a bit to
 	// ensure that the routing rules are updated on other nodes. TODO(irbekrm): this may or may not be good enough.
 	// If it's not good enough, we'd probably want to do something more complex, where the proxies check each other.
-	log.Printf("Sleeping for %s before shutdown to ensure that kube proxies on all nodes have updated routing configuration", preShutdownSleep)
-	time.Sleep(preShutdownSleep)
+	log.Printf("Sleeping for %s before shutdown to ensure that kube proxies on all nodes have updated routing configuration", ep.longSleep)
+	time.Sleep(ep.longSleep)
 }
-
-var (
-	// preShutdownSleep is the time to sleep after the routing rules are updated to increase the chance that kube
-	// proxies on all nodes have updated their routing configuration. It can be configured to 0 in
-	// tests.
-	preShutdownSleep = 10 * time.Second
-	// inBetweenCallsSleep is the time to sleep between calls to the healthcheck endpoint.
-	// It can be configured to 0 in tests.
-	inBetweenCallsSleep = time.Second
-)
 
 // lookupPodRoute calls the healthcheck endpoint repeat times and returns true if the endpoint returns with the podIP
 // header at least once.
@@ -738,10 +730,12 @@ func lookup(ctx context.Context, hep, podIP string, client httpClient) (bool, er
 	return strings.EqualFold(podIP, gotIP), nil
 }
 
-// getReplicaCount gets the mounted replica count number. This is used to determine how many times an endpoint needs to
-// be pinged to ensure that all backends will be hit.
-func (ep *egressProxy) getReplicaCount() (int, error) {
-	j, err := os.ReadFile(ep.replicaCountPath)
+// getHEPPings gets the number of pings that should be sent to a health check endpoint to ensure that each configured
+// backend is hit. This assumes that a health check endpoint is a Kubernetes Service and traffic to backend Pods is
+// round robin load balanced.
+func (ep *egressProxy) getHEPPings() (int, error) {
+	hepPingsPath := filepath.Join(ep.cfgPath, egressservices.KeyHEPPings)
+	j, err := os.ReadFile(hepPingsPath)
 	if os.IsNotExist(err) {
 		return 0, nil
 	}
@@ -751,13 +745,13 @@ func (ep *egressProxy) getReplicaCount() (int, error) {
 	if len(j) == 0 || string(j) == "" {
 		return 0, nil
 	}
-	rc, err := strconv.Atoi(string(j))
+	hp, err := strconv.Atoi(string(j))
 	if err != nil {
-		return -1, fmt.Errorf("error parsing replica count: %v", err)
+		return -1, fmt.Errorf("error parsing hep pings as int: %v", err)
 	}
-	if rc < 0 {
-		log.Printf("[unexpected] replica count is negative: %d", rc)
+	if hp < 0 {
+		log.Printf("[unexpected] hep pings is negative: %d", hp)
 		return 0, nil
 	}
-	return rc, nil
+	return hp, nil
 }

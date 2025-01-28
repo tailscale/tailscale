@@ -8,6 +8,7 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -150,17 +151,20 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		}
 
 		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-			envs = append(envs, corev1.EnvVar{
-				Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
-				Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
-			},
+			envs = append(envs,
+				// TODO(irbekrm): in 1.80 we deprecated TS_EGRESS_SERVICES_CONFIG_PATH in favour of
+				// TS_EGRESS_PROXIES_CONFIG_PATH. Remove it in 1.84.
+				corev1.EnvVar{
+					Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
+					Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
+				},
+				corev1.EnvVar{
+					Name:  "TS_EGRESS_PROXIES_CONFIG_PATH",
+					Value: "/etc/proxies",
+				},
 				corev1.EnvVar{
 					Name:  "TS_INTERNAL_APP",
 					Value: kubetypes.AppProxyGroupEgress,
-				},
-				corev1.EnvVar{
-					Name:  "TS_EGRESS_PROXY_GROUP_REPLICA_COUNT_PATH",
-					Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyProxyGroupReplicaCount),
 				},
 				corev1.EnvVar{
 					Name:  "TS_ENABLE_HEALTH_CHECK",
@@ -289,7 +293,9 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 	return secrets
 }
 
-func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
+func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) (*corev1.ConfigMap, []byte) {
+	hp := hepPings(pg)
+	hpBs := []byte(strconv.Itoa(hp))
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pgEgressCMName(pg.Name),
@@ -297,8 +303,8 @@ func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
-		Data: map[string]string{egressservices.KeyProxyGroupReplicaCount: fmt.Sprintf("%d", pgReplicas(pg))},
-	}
+		BinaryData: map[string][]byte{egressservices.KeyHEPPings: hpBs},
+	}, hpBs
 }
 
 func pgIngressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
@@ -356,4 +362,13 @@ func hasLocalAddrPortSet(proxyClass *tsapi.ProxyClass) bool {
 	return slices.ContainsFunc(proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Env, func(env tsapi.Env) bool {
 		return env.Name == envVarTSLocalAddrPort
 	})
+}
+
+// hepPings returns the number of times a health check endpoint exposed by a Service fronting ProxyGroup replicas should
+// be pinged to ensure that all currently configured backend replicas are hit.
+func hepPings(pg *tsapi.ProxyGroup) int {
+	rc := pgReplicas(pg)
+	// Assuming a Service implemented using round robin load balancing, number-of-replica-times should be enough, but in
+	// practice, we cannot assume that the requests will be load balanced perfectly.
+	return int(rc) * 3
 }
