@@ -1,10 +1,9 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/netip"
 	"testing"
+	"time"
 
 	"tailscale.com/tailcfg"
 )
@@ -43,7 +42,10 @@ func TestIPForDomain(t *testing.T) {
 		v4Ranges: []netip.Prefix{pfx},
 		dnsAddr:  netip.MustParseAddr("100.64.0.0"),
 	}
-	a, err := ipp.applyCheckoutAddr(tailcfg.NodeID(1), "example.com")
+	now := time.Now()
+	deadline := now.Add(-2 * time.Hour)
+
+	a, err := ipp.applyCheckoutAddr(tailcfg.NodeID(1), "example.com", deadline, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +53,7 @@ func TestIPForDomain(t *testing.T) {
 		t.Fatalf("expected %v to be in the prefix %v", a, pfx)
 	}
 
-	b, err := ipp.applyCheckoutAddr(tailcfg.NodeID(1), "a.example.com")
+	b, err := ipp.applyCheckoutAddr(tailcfg.NodeID(1), "a.example.com", deadline, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +64,7 @@ func TestIPForDomain(t *testing.T) {
 		t.Fatalf("same address issued twice %v, %v", a, b)
 	}
 
-	c, err := ipp.applyCheckoutAddr(tailcfg.NodeID(1), "example.com")
+	c, err := ipp.applyCheckoutAddr(tailcfg.NodeID(1), "example.com", deadline, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,50 +82,19 @@ func TestDomainForIP(t *testing.T) {
 	ipp := (*ipPool)(&sm)
 	nid := tailcfg.NodeID(1)
 	domain := "example.com"
-	d := ipp.DomainForIP(nid, netip.MustParseAddr("100.64.0.1"))
+	now := time.Now()
+	deadline := now.Add(-2 * time.Hour)
+
+	d := ipp.DomainForIP(nid, netip.MustParseAddr("100.64.0.1"), now)
 	if d != "" {
 		t.Fatalf("expected an empty string if the addr is not found but got %s", d)
 	}
-	a, err := sm.applyCheckoutAddr(nid, domain)
+	a, err := sm.applyCheckoutAddr(nid, domain, deadline, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d2 := ipp.DomainForIP(nid, a)
+	d2 := ipp.DomainForIP(nid, a, now)
 	if d2 != domain {
 		t.Fatalf("expected %s but got %s", domain, d2)
 	}
-}
-
-func TestBlah(t *testing.T) {
-	type ecr interface {
-		getResult() interface{}
-		setResult(interface{})
-		toJSON() ([]byte, error)
-		fromJSON([]byte) err
-	}
-	type fran struct {
-		Result netip.Addr
-	}
-	func(f *fran) toJSON() string {
-		return json.Marshal(f)
-	}
-	func(f *fran) fromJSON(bs []byte) err {
-		return json.UnMarshal(bs, f)
-	}
-	thrujson := func(in ecr) ecr {
-		bs, err := json.Marshal(in)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out ecr
-		err = json.Unmarshal(bs, &out)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
-	a := netip.Addr{}
-	out := thrujson(ecr{Result: a}).Result
-	b := (out).(netip.Addr)
-	fmt.Println(b)
 }
