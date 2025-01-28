@@ -667,6 +667,37 @@ func TestFunnel(t *testing.T) {
 	}
 }
 
+func TestListenerClose(t *testing.T) {
+	ctx := context.Background()
+	controlURL, _ := startControl(t)
+
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	ln, err := s1.Listen("tcp", ":8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if c != nil {
+			c.Close()
+		}
+		errc <- err
+	}()
+
+	ln.Close()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("unexpected error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for Accept to return")
+	}
+}
+
 func dialIngressConn(from, to *Server, target string) (net.Conn, error) {
 	toLC := must.Get(to.LocalClient())
 	toStatus := must.Get(toLC.StatusWithoutPeers(context.Background()))

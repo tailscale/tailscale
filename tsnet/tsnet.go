@@ -1286,11 +1286,12 @@ type listener struct {
 }
 
 func (ln *listener) Accept() (net.Conn, error) {
-	c, ok := <-ln.conn
-	if !ok {
+	select {
+	case c := <-ln.conn:
+		return c, nil
+	case <-ln.closedc:
 		return nil, fmt.Errorf("tsnet: %w", net.ErrClosed)
 	}
-	return c, nil
 }
 
 func (ln *listener) Addr() net.Addr { return addr{ln} }
