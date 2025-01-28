@@ -46,9 +46,9 @@ type awsStore struct {
 	ssmClient awsSSMClient
 	ssmARN    arn.ARN
 
-	// kmsKeyArn is optional. If empty, the parameter is stored in plaintext.
+	// kmsKey is optional. If empty, the parameter is stored in plaintext.
 	// If non-empty, the parameter is encrypted with this KMS key.
-	kmsKeyArn string
+	kmsKey string
 
 	memory mem.Store
 }
@@ -62,18 +62,18 @@ type awsStore struct {
 // restarting Tailscaled can fail until you delete your state
 // from the AWS Parameter Store.
 //
-// kmsKeyId is optional. If non-empty, the parameter will be encrypted
+// kmsKey is optional. If non-empty, the parameter will be encrypted
 // with that KMS key. If empty, the parameter is stored in plaintext.
-func New(_ logger.Logf, ssmARN string, kmsKeyId string) (ipn.StateStore, error) {
-	return newStore(ssmARN, kmsKeyId, nil)
+func New(_ logger.Logf, ssmARN, kmsKey string) (ipn.StateStore, error) {
+	return newStore(ssmARN, kmsKey, nil)
 }
 
 // newStore is NewStore, but for tests. If client is non-nil, it's
 // used instead of making one.
-func newStore(ssmARN string, kmsKeyId string, client awsSSMClient) (ipn.StateStore, error) {
+func newStore(ssmARN, kmsKey string, client awsSSMClient) (ipn.StateStore, error) {
 	s := &awsStore{
 		ssmClient: client,
-		kmsKeyArn: kmsKeyId,
+		kmsKey:    kmsKey,
 	}
 
 	var err error
@@ -187,9 +187,11 @@ func (s *awsStore) persistState() error {
 		Type:      ssmTypes.ParameterTypeSecureString,
 	}
 
-	// If kmsKeyArn is specified, encrypt with that key; otherwise, store plaintext.
-	if s.kmsKeyArn != "" {
-		in.KeyId = aws.String(s.kmsKeyArn)
+	// If kmsKey is specified, encrypt with that key
+	// NOTE: this input allows any alias, keyID or ARN
+	// If this isn't specified, AWS will use the default KMS key
+	if s.kmsKey != "" {
+		in.KeyId = aws.String(s.kmsKey)
 	}
 
 	_, err = s.ssmClient.PutParameter(context.TODO(), in)
