@@ -27,7 +27,6 @@ func registerAWSStore() {
 
 		// Find where the query string begins, if at all.
 		if idx := strings.Index(arg, "?"); idx >= 0 {
-
 			ssmARN = arg[:idx]
 			queryString := arg[idx+1:]
 			q, err := url.ParseQuery(queryString)
@@ -47,6 +46,6 @@ func registerAWSStore() {
 			}
 		}
 
-		return awsstore.New(logf, ssmARN, kmsKey)
+		return awsstore.New(logf, ssmARN, awsstore.WithKeyID(kmsKey))
 	})
 }

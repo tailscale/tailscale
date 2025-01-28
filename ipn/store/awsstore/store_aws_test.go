@@ -65,7 +65,11 @@ func TestNewAWSStore(t *testing.T) {
 		Resource:  "parameter/foo",
 	}
 
-	s, err := newStore(storeParameterARN.String(), "arn:aws:kms:eu-west-1:123456789:key/MyCustomKey", mc)
+	so := &storeOptions{
+		kmsKey: "arn:aws:kms:eu-west-1:123456789:key/MyCustomKey",
+	}
+
+	s, err := newStore(storeParameterARN.String(), *so, mc)
 	if err != nil {
 		t.Fatalf("creating aws store failed: %v", err)
 	}
@@ -73,7 +77,7 @@ func TestNewAWSStore(t *testing.T) {
 
 	// Build a brand new file store and check that both IDs written
 	// above are still there.
-	s2, err := newStore(storeParameterARN.String(), "arn:aws:kms:eu-west-1:123456789:key/MyCustomKey", mc)
+	s2, err := newStore(storeParameterARN.String(), *so, mc)
 	if err != nil {
 		t.Fatalf("creating second aws store failed: %v", err)
 	}
