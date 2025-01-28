@@ -54,6 +54,10 @@ const (
 	// predates this option but is preserved for backwards compatibility.
 	EnableRunExitNode Key = "AdvertiseExitNode"
 
+	// RequireReasonToDisconnect is a boolean key that controls if the user is
+	// required to provide a reason when disconnecting Tailscale.
+	RequireReasonToDisconnect Key = "RequireReasonToDisconnect"
+
 	// Keys with a string value that controls visibility: "show", "hide".
 	// The default is "show" unless otherwise stated. Enforcement of these
 	// policies is typically performed by the UI code for the relevant operating
@@ -170,6 +174,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(ManagedByURL, setting.UserSetting, setting.StringValue),
 	setting.NewDefinition(NetworkDevicesVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(PreferencesMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(RequireReasonToDisconnect, setting.UserSetting, setting.BooleanValue),
 	setting.NewDefinition(ResetToDefaultsVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(RunExitNodeVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(SuggestedExitNodeVisibility, setting.UserSetting, setting.VisibilityValue),
