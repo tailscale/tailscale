@@ -777,7 +777,7 @@ func proxyClassHandlerForConnector(cl client.Client, logger *zap.SugaredLogger) 
 	}
 }
 
-// proxyClassHandlerForConnector returns a handler that, for a given ProxyClass,
+// proxyClassHandlerForProxyGroup returns a handler that, for a given ProxyClass,
 // returns a list of reconcile requests for all Connectors that have
 // .spec.proxyClass set.
 func proxyClassHandlerForProxyGroup(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
@@ -998,7 +998,7 @@ func reconcileRequestsForPG(pg string, cl client.Client, ns string) []reconcile.
 // egressSvcsFromEgressProxyGroup is an event handler for egress ProxyGroups. It returns reconcile requests for all
 // user-created ExternalName Services that should be exposed on this ProxyGroup.
 func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
-	return func(_ context.Context, o client.Object) []reconcile.Request {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		pg, ok := o.(*tsapi.ProxyGroup)
 		if !ok {
 			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
@@ -1008,7 +1008,7 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 			return nil
 		}
 		svcList := &corev1.ServiceList{}
-		if err := cl.List(context.Background(), svcList, client.MatchingFields{indexEgressProxyGroup: pg.Name}); err != nil {
+		if err := cl.List(ctx, svcList, client.MatchingFields{indexEgressProxyGroup: pg.Name}); err != nil {
 			logger.Infof("error listing Services: %v, skipping a reconcile for event on ProxyGroup %s", err, pg.Name)
 			return nil
 		}
@@ -1028,7 +1028,7 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 // epsFromExternalNameService is an event handler for ExternalName Services that define a Tailscale egress service that
 // should be exposed on a ProxyGroup. It returns reconcile requests for EndpointSlices created for this Service.
 func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns string) handler.MapFunc {
-	return func(_ context.Context, o client.Object) []reconcile.Request {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		svc, ok := o.(*corev1.Service)
 		if !ok {
 			logger.Infof("[unexpected] Service handler triggered for an object that is not a Service")
@@ -1038,7 +1038,7 @@ func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns 
 			return nil
 		}
 		epsList := &discoveryv1.EndpointSliceList{}
-		if err := cl.List(context.Background(), epsList, client.InNamespace(ns),
+		if err := cl.List(ctx, epsList, client.InNamespace(ns),
 			client.MatchingLabels(egressSvcChildResourceLabels(svc))); err != nil {
 			logger.Infof("error listing EndpointSlices: %v, skipping a reconcile for event on Service %s", err, svc.Name)
 			return nil

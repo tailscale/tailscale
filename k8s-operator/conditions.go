@@ -75,16 +75,6 @@ func RemoveServiceCondition(svc *corev1.Service, conditionType tsapi.ConditionTy
 	})
 }
 
-func EgressServiceIsValidAndConfigured(svc *corev1.Service) bool {
-	for _, typ := range []tsapi.ConditionType{tsapi.EgressSvcValid, tsapi.EgressSvcConfigured} {
-		cond := GetServiceCondition(svc, typ)
-		if cond == nil || cond.Status != metav1.ConditionTrue {
-			return false
-		}
-	}
-	return true
-}
-
 // SetRecorderCondition ensures that Recorder status has a condition with the
 // given attributes. LastTransitionTime gets set every time condition's status
 // changes.

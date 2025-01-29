@@ -101,6 +101,9 @@ const (
 	proxyTypeIngressResource = "ingress_resource"
 	proxyTypeConnector       = "connector"
 	proxyTypeProxyGroup      = "proxygroup"
+
+	envVarTSLocalAddrPort = "TS_LOCAL_ADDR_PORT"
+	defaultLocalAddrPort  = 9002 // metrics and health check port
 )
 
 var (

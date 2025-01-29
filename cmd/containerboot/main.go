@@ -191,17 +191,18 @@ func main() {
 	defer killTailscaled()
 
 	var healthCheck *healthz
+	ep := &egressProxy{}
 	if cfg.HealthCheckAddrPort != "" {
 		mux := http.NewServeMux()
 
 		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
-		healthCheck = healthHandlers(mux)
+		healthCheck = healthHandlers(mux, cfg.PodIPv4)
 
 		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
 		defer close()
 	}
 
-	if cfg.localMetricsEnabled() || cfg.localHealthEnabled() {
+	if cfg.localMetricsEnabled() || cfg.localHealthEnabled() || cfg.egressSvcsTerminateEPEnabled() {
 		mux := http.NewServeMux()
 
 		if cfg.localMetricsEnabled() {
@@ -211,7 +212,11 @@ func main() {
 
 		if cfg.localHealthEnabled() {
 			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
-			healthCheck = healthHandlers(mux)
+			healthCheck = healthHandlers(mux, cfg.PodIPv4)
+		}
+		if cfg.EgressProxiesCfgPath != "" {
+			log.Printf("Running preshutdown hook at %s%s", cfg.LocalAddrPort, kubetypes.EgessServicesPreshutdownEP)
+			ep.registerHandlers(mux)
 		}
 
 		close := runHTTPServer(mux, cfg.LocalAddrPort)
@@ -639,20 +644,21 @@ runLoop:
 					// will then continuously monitor the config file and netmap updates and
 					// reconfigure the firewall rules as needed. If any of its operations fail, it
 					// will crash this node.
-					if cfg.EgressSvcsCfgPath != "" {
-						log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressSvcsCfgPath)
+					if cfg.EgressProxiesCfgPath != "" {
+						log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressProxiesCfgPath)
 						egressSvcsNotify = make(chan ipn.Notify)
-						ep := egressProxy{
-							cfgPath:      cfg.EgressSvcsCfgPath,
+						opts := egressProxyRunOpts{
+							cfgPath:      cfg.EgressProxiesCfgPath,
 							nfr:          nfr,
 							kc:           kc,
+							tsClient:     client,
 							stateSecret:  cfg.KubeSecret,
 							netmapChan:   egressSvcsNotify,
 							podIPv4:      cfg.PodIPv4,
 							tailnetAddrs: addrs,
 						}
 						go func() {
-							if err := ep.run(ctx, n); err != nil {
+							if err := ep.run(ctx, n, opts); err != nil {
 								egressSvcsErrorChan <- err
 							}
 						}()

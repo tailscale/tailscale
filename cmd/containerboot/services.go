@@ -11,18 +11,24 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
+	"tailscale.com/kube/kubetypes"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/util/mak"
 )
@@ -37,12 +43,14 @@ const tailscaleTunInterface = "tailscale0"
 // egressProxy knows how to configure firewall rules to route cluster traffic to
 // one or more tailnet services.
 type egressProxy struct {
-	cfgPath string // path to egress service config file
+	cfgPath string // path to a directory with egress services config files
 
 	nfr linuxfw.NetfilterRunner // never nil
 
 	kc          kubeclient.Client // never nil
 	stateSecret string            // name of the kube state Secret
+
+	tsClient *tailscale.LocalClient // never nil
 
 	netmapChan chan ipn.Notify // chan to receive netmap updates on
 
@@ -55,15 +63,29 @@ type egressProxy struct {
 	// memory at all.
 	targetFQDNs map[string][]netip.Prefix
 
-	// used to configure firewall rules.
-	tailnetAddrs []netip.Prefix
+	tailnetAddrs []netip.Prefix // tailnet IPs of this tailnet device
+
+	// shortSleep is the backoff sleep between healthcheck endpoint calls - can be overridden in tests.
+	shortSleep time.Duration
+	// longSleep is the time to sleep after the routing rules are updated to increase the chance that kube
+	// proxies on all nodes have updated their routing configuration. It can be configured to 0 in
+	// tests.
+	longSleep time.Duration
+	// client is a client that can send HTTP requests.
+	client httpClient
+}
+
+// httpClient is a client that can send HTTP requests and can be mocked in tests.
+type httpClient interface {
+	Do(*http.Request) (*http.Response, error)
 }
 
 // run configures egress proxy firewall rules and ensures that the firewall rules are reconfigured when:
 // - the mounted egress config has changed
 // - the proxy's tailnet IP addresses have changed
 // - tailnet IPs have changed for any backend targets specified by tailnet FQDN
-func (ep *egressProxy) run(ctx context.Context, n ipn.Notify) error {
+func (ep *egressProxy) run(ctx context.Context, n ipn.Notify, opts egressProxyRunOpts) error {
+	ep.configure(opts)
 	var tickChan <-chan time.Time
 	var eventChan <-chan fsnotify.Event
 	// TODO (irbekrm): take a look if this can be pulled into a single func
@@ -75,7 +97,7 @@ func (ep *egressProxy) run(ctx context.Context, n ipn.Notify) error {
 		tickChan = ticker.C
 	} else {
 		defer w.Close()
-		if err := w.Add(filepath.Dir(ep.cfgPath)); err != nil {
+		if err := w.Add(ep.cfgPath); err != nil {
 			return fmt.Errorf("failed to add fsnotify watch: %w", err)
 		}
 		eventChan = w.Events
@@ -85,26 +107,50 @@ func (ep *egressProxy) run(ctx context.Context, n ipn.Notify) error {
 		return err
 	}
 	for {
-		var err error
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-tickChan:
-			err = ep.sync(ctx, n)
+			log.Printf("periodic sync, ensuring firewall config is up to date...")
 		case <-eventChan:
 			log.Printf("config file change detected, ensuring firewall config is up to date...")
-			err = ep.sync(ctx, n)
 		case n = <-ep.netmapChan:
 			shouldResync := ep.shouldResync(n)
-			if shouldResync {
-				log.Printf("netmap change detected, ensuring firewall config is up to date...")
-				err = ep.sync(ctx, n)
+			if !shouldResync {
+				continue
 			}
+			log.Printf("netmap change detected, ensuring firewall config is up to date...")
 		}
-		if err != nil {
+		if err := ep.sync(ctx, n); err != nil {
 			return fmt.Errorf("error syncing egress service config: %w", err)
 		}
 	}
+}
+
+type egressProxyRunOpts struct {
+	cfgPath      string
+	nfr          linuxfw.NetfilterRunner
+	kc           kubeclient.Client
+	tsClient     *tailscale.LocalClient
+	stateSecret  string
+	netmapChan   chan ipn.Notify
+	podIPv4      string
+	tailnetAddrs []netip.Prefix
+}
+
+// applyOpts configures egress proxy using the provided options.
+func (ep *egressProxy) configure(opts egressProxyRunOpts) {
+	ep.cfgPath = opts.cfgPath
+	ep.nfr = opts.nfr
+	ep.kc = opts.kc
+	ep.tsClient = opts.tsClient
+	ep.stateSecret = opts.stateSecret
+	ep.netmapChan = opts.netmapChan
+	ep.podIPv4 = opts.podIPv4
+	ep.tailnetAddrs = opts.tailnetAddrs
+	ep.client = &http.Client{} // default HTTP client
+	ep.shortSleep = time.Second
+	ep.longSleep = time.Second * 10
 }
 
 // sync triggers an egress proxy config resync. The resync calculates the diff between config and status to determine if
@@ -327,7 +373,8 @@ func (ep *egressProxy) deleteUnnecessaryServices(cfgs *egressservices.Configs, s
 
 // getConfigs gets the mounted egress service configuration.
 func (ep *egressProxy) getConfigs() (*egressservices.Configs, error) {
-	j, err := os.ReadFile(ep.cfgPath)
+	svcsCfg := filepath.Join(ep.cfgPath, egressservices.KeyEgressServices)
+	j, err := os.ReadFile(svcsCfg)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -568,4 +615,143 @@ func servicesStatusIsEqual(st, st1 *egressservices.Status) bool {
 	st.PodIPv4 = ""
 	st1.PodIPv4 = ""
 	return reflect.DeepEqual(*st, *st1)
+}
+
+// registerHandlers adds a new handler to the provided ServeMux that can be called as a Kubernetes prestop hook to
+// delay shutdown till it's safe to do so.
+func (ep *egressProxy) registerHandlers(mux *http.ServeMux) {
+	mux.Handle(fmt.Sprintf("GET %s", kubetypes.EgessServicesPreshutdownEP), ep)
+}
+
+// ServeHTTP serves /internal-egress-services-preshutdown endpoint, when it receives a request, it periodically polls
+// the configured health check endpoint for each egress service till it the health check endpoint no longer hits this
+// proxy Pod. It uses the Pod-IPv4 header to verify if health check response is received from this Pod.
+func (ep *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	cfgs, err := ep.getConfigs()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error retrieving egress services configs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if cfgs == nil {
+		if _, err := w.Write([]byte("safe to terminate")); err != nil {
+			http.Error(w, fmt.Sprintf("error writing termination status: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	hp, err := ep.getHEPPings()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error determining the number of times health check endpoint should be pinged: %v", err), http.StatusInternalServerError)
+		return
+	}
+	ep.waitTillSafeToShutdown(r.Context(), cfgs, hp)
+}
+
+// waitTillSafeToShutdown looks up all egress targets configured to be proxied via this instance and, for each target
+// whose configuration includes a healthcheck endpoint, pings the endpoint till none of the responses
+// are returned by this instance or till the HTTP request times out. In practice, the endpoint will be a Kubernetes Service for whom one of the backends
+// would normally be this Pod. When this Pod is being deleted, the operator should have removed it from the Service
+// backends and eventually kube proxy routing rules should be updated to no longer route traffic for the Service to this
+// Pod.
+func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egressservices.Configs, hp int) {
+	if cfgs == nil || len(*cfgs) == 0 { // avoid sleeping if no services are configured
+		return
+	}
+	log.Printf("Ensuring that cluster traffic for egress targets is no longer routed via this Pod...")
+	wg := syncs.WaitGroup{}
+
+	for s, cfg := range *cfgs {
+		hep := cfg.HealthCheckEndpoint
+		if hep == "" {
+			log.Printf("Tailnet target %q does not have a cluster healthcheck specified, unable to verify if cluster traffic for the target is still routed via this Pod", s)
+			continue
+		}
+		svc := s
+		wg.Go(func() {
+			log.Printf("Ensuring that cluster traffic is no longer routed to %q via this Pod...", svc)
+			for {
+				if ctx.Err() != nil { // kubelet's HTTP request timeout
+					log.Printf("Cluster traffic for %s did not stop being routed to this Pod.", svc)
+					return
+				}
+				found, err := lookupPodRoute(ctx, hep, ep.podIPv4, hp, ep.client)
+				if err != nil {
+					log.Printf("unable to reach endpoint %q, assuming the routing rules for this Pod have been deleted: %v", hep, err)
+					break
+				}
+				if !found {
+					log.Printf("service %q is no longer routed through this Pod", svc)
+					break
+				}
+				log.Printf("service %q is still routed through this Pod, waiting...", svc)
+				time.Sleep(ep.shortSleep)
+			}
+		})
+	}
+	wg.Wait()
+	// The check above really only checked that the routing rules are updated on this node. Sleep for a bit to
+	// ensure that the routing rules are updated on other nodes. TODO(irbekrm): this may or may not be good enough.
+	// If it's not good enough, we'd probably want to do something more complex, where the proxies check each other.
+	log.Printf("Sleeping for %s before shutdown to ensure that kube proxies on all nodes have updated routing configuration", ep.longSleep)
+	time.Sleep(ep.longSleep)
+}
+
+// lookupPodRoute calls the healthcheck endpoint repeat times and returns true if the endpoint returns with the podIP
+// header at least once.
+func lookupPodRoute(ctx context.Context, hep, podIP string, repeat int, client httpClient) (bool, error) {
+	for range repeat {
+		f, err := lookup(ctx, hep, podIP, client)
+		if err != nil {
+			return false, err
+		}
+		if f {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// lookup calls the healthcheck endpoint and returns true if the response contains the podIP header.
+func lookup(ctx context.Context, hep, podIP string, client httpClient) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, httpm.GET, hep, nil)
+	if err != nil {
+		return false, fmt.Errorf("error creating new HTTP request: %v", err)
+	}
+
+	// Close the TCP connection to ensure that the next request is routed to a different backend.
+	req.Close = true
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Endpoint %q can not be reached: %v, likely because there are no (more) healthy backends", hep, err)
+		return true, nil
+	}
+	defer resp.Body.Close()
+	gotIP := resp.Header.Get(kubetypes.PodIPv4Header)
+	return strings.EqualFold(podIP, gotIP), nil
+}
+
+// getHEPPings gets the number of pings that should be sent to a health check endpoint to ensure that each configured
+// backend is hit. This assumes that a health check endpoint is a Kubernetes Service and traffic to backend Pods is
+// round robin load balanced.
+func (ep *egressProxy) getHEPPings() (int, error) {
+	hepPingsPath := filepath.Join(ep.cfgPath, egressservices.KeyHEPPings)
+	j, err := os.ReadFile(hepPingsPath)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return -1, err
+	}
+	if len(j) == 0 || string(j) == "" {
+		return 0, nil
+	}
+	hp, err := strconv.Atoi(string(j))
+	if err != nil {
+		return -1, fmt.Errorf("error parsing hep pings as int: %v", err)
+	}
+	if hp < 0 {
+		log.Printf("[unexpected] hep pings is negative: %d", hp)
+		return 0, nil
+	}
+	return hp, nil
 }
