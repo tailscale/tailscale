@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/anmitsu/go-shlex"
-	gossh "golang.org/x/crypto/ssh"
+	gossh "github.com/tailscale/golang-x-crypto/ssh"
 )
 
 // Session provides access to information about an SSH session and methods
