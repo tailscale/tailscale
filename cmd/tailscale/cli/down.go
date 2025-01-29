@@ -23,11 +23,13 @@ var downCmd = &ffcli.Command{
 
 var downArgs struct {
 	acceptedRisks string
+	reason        string
 }
 
 func newDownFlagSet() *flag.FlagSet {
 	downf := newFlagSet("down")
 	registerAcceptRiskFlag(downf, &downArgs.acceptedRisks)
+	downf.StringVar(&downArgs.reason, "reason", "", "a reason for the disconnect, if required by a policy")
 	return downf
 }
 
@@ -50,11 +52,11 @@ func runDown(ctx context.Context, args []string) error {
 		fmt.Fprintf(Stderr, "Tailscale was already stopped.\n")
 		return nil
 	}
-	_, err = localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
+	_, err = localClient.EditPrefsWithReason(ctx, &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			WantRunning: false,
 		},
 		WantRunningSet: true,
-	})
+	}, downArgs.reason)
 	return err
 }
