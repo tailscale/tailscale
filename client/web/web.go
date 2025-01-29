@@ -211,15 +211,25 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	// The client is secured by limiting the interface it listens on,
 	// or by authenticating requests before they reach the web client.
 	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
+
+	// signal to the CSRF middleware that the request is being served over
+	// plaintext HTTP to skip TLS-only header checks.
+	withSetPlaintext := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r = csrf.PlaintextHTTPRequest(r)
+			h.ServeHTTP(w, r)
+		})
+	}
+
 	switch s.mode {
 	case LoginServerMode:
-		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveLoginAPI))
+		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveLoginAPI)))
 		metric = "web_login_client_initialization"
 	case ReadOnlyServerMode:
-		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveLoginAPI))
+		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveLoginAPI)))
 		metric = "web_readonly_client_initialization"
 	case ManageServerMode:
-		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
+		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveAPI)))
 		metric = "web_client_initialization"
 	}
 

@@ -318,6 +318,12 @@ func checkHandlerType(apiPattern, browserPattern string) handlerType {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// if we are not in a secure context, signal to the CSRF middleware that
+	// TLS-only header checks should be skipped
+	if !s.Config.SecureContext {
+		r = csrf.PlaintextHTTPRequest(r)
+	}
+
 	_, bp := s.BrowserMux.Handler(r)
 	_, ap := s.APIMux.Handler(r)
 	switch {
