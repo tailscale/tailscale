@@ -304,7 +304,6 @@ func (c *Consensus) serveCmdHttp(ts *tsnet.Server) (*http.Server, error) {
 	mux := c.makeCommandMux()
 	srv := &http.Server{Handler: mux}
 	go func() {
-		defer ln.Close()
 		err := srv.Serve(ln)
 		log.Printf("CmdHttp stopped serving with err: %v", err)
 	}()

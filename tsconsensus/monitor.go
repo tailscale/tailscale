@@ -50,7 +50,6 @@ func serveMonitor(c *Consensus, ts *tsnet.Server, listenAddr string) (*http.Serv
 	mux.HandleFunc("/dial", m.handleDial)
 	srv := &http.Server{Handler: mux}
 	go func() {
-		defer ln.Close()
 		err := srv.Serve(ln)
 		log.Printf("MonitorHTTP stopped serving with error: %v", err)
 	}()
