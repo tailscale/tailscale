@@ -38,6 +38,12 @@ const (
 	// for auditing purposes. It has no effect when [AlwaysOn] is false.
 	AllowDisconnectsWithReason Key = "AllowDisconnectsWithReason"
 
+	// ReconnectAfter is a string key that defines the duration after which
+	// the client should automatically reconnect to the Tailscale network
+	// following a user-initiated disconnect.
+	// An empty string or a zero duration disables automatic reconnection.
+	ReconnectAfter Key = "ReconnectAfter"
+
 	// ExitNodeID is the exit node's node id. default ""; if blank, no exit node is forced.
 	// Exit node ID takes precedence over exit node IP.
 	// To find the node ID, go to /api.md#device.
@@ -172,6 +178,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(LogTarget, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(MachineCertificateSubject, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(PostureChecking, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(ReconnectAfter, setting.DeviceSetting, setting.DurationValue),
 	setting.NewDefinition(Tailnet, setting.DeviceSetting, setting.StringValue),
 
 	// User policy settings (can be configured on a user- or device-basis):
