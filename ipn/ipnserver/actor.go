@@ -58,6 +58,14 @@ func newActor(logf logger.Logf, c net.Conn) (*actor, error) {
 	return &actor{logf: logf, ci: ci, clientID: clientID, isLocalSystem: connIsLocalSystem(ci)}, nil
 }
 
+// CheckProfileAccess implements [ipnauth.Actor].
+func (a *actor) CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ipnauth.ProfileAccess) error {
+	if profile.LocalUserID() != a.UserID() {
+		return errors.New("the target profile does not belong to the user")
+	}
+	return errors.New("the requested operation is not allowed")
+}
+
 // IsLocalSystem implements [ipnauth.Actor].
 func (a *actor) IsLocalSystem() bool {
 	return a.isLocalSystem
