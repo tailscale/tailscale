@@ -242,6 +242,22 @@ func (lc *LocalClient) send(ctx context.Context, method, path string, wantStatus
 	return slurp, err
 }
 
+// sendWithReason is like send but allows the caller to provide an optional
+// reason or justification for the request. If the requested operation
+// requires a reason, such as due to a policy setting, access may be granted
+// and the reason will be logged for auditing purposes.
+func (lc *LocalClient) sendWithReason(ctx context.Context, method, path string, wantStatus int, body io.Reader, reason string) ([]byte, error) {
+	var headers http.Header
+	if reason != "" {
+		headers = http.Header{apitype.RequestReasonHeader: {reason}}
+	}
+	slurp, _, err := lc.sendWithHeaders(ctx, method, path, wantStatus, body, headers)
+	if err != nil {
+		return nil, err
+	}
+	return slurp, err
+}
+
 func (lc *LocalClient) sendWithHeaders(
 	ctx context.Context,
 	method,
@@ -826,6 +842,18 @@ func (lc *LocalClient) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 
 func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	body, err := lc.send(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, jsonBody(mp))
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*ipn.Prefs](body)
+}
+
+// EditPrefsWithReason is like EditPrefs but allows the caller to provide
+// an optional reason or justification for the request. If the requested change
+// requires a reason, such as due to a policy setting, access may be granted
+// and the reason will be logged for auditing purposes.
+func (lc *LocalClient) EditPrefsWithReason(ctx context.Context, mp *ipn.MaskedPrefs, reason string) (*ipn.Prefs, error) {
+	body, err := lc.sendWithReason(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, jsonBody(mp), reason)
 	if err != nil {
 		return nil, err
 	}

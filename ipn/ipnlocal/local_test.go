@@ -1861,7 +1861,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
 
 			prefs := b.pm.prefs.AsStruct()
-			if changed := applySysPolicy(prefs, test.lastSuggestedExitNode) || setExitNodeID(prefs, test.nm); changed != test.prefsChanged {
+			if changed := applySysPolicy(prefs, test.lastSuggestedExitNode, false) || setExitNodeID(prefs, test.nm); changed != test.prefsChanged {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 
@@ -2421,7 +2421,7 @@ func TestApplySysPolicy(t *testing.T) {
 			t.Run("unit", func(t *testing.T) {
 				prefs := tt.prefs.Clone()
 
-				gotAnyChange := applySysPolicy(prefs, "")
+				gotAnyChange := applySysPolicy(prefs, "", false)
 
 				if gotAnyChange && prefs.Equals(&tt.prefs) {
 					t.Errorf("anyChange but prefs is unchanged: %v", prefs.Pretty())
@@ -2569,7 +2569,7 @@ func TestPreferencePolicyInfo(t *testing.T) {
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
 
-					gotAnyChange := applySysPolicy(prefs, "")
+					gotAnyChange := applySysPolicy(prefs, "", false)
 
 					if gotAnyChange != tt.wantChange {
 						t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantChange)

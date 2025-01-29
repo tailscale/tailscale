@@ -32,6 +32,12 @@ const (
 	// not be able to disconnect at their discretion.
 	AlwaysOn Key = "AlwaysOn"
 
+	// AllowDisconnectsWithReason is a boolean key that alters the behavior
+	// of [AlwaysOn]. When true, the user is allowed to disconnect Tailscale
+	// by providing a reason. The reason is logged and sent to the control
+	// for auditing purposes. It has no effect when [AlwaysOn] is false.
+	AllowDisconnectsWithReason Key = "AllowDisconnectsWithReason"
+
 	// ExitNodeID is the exit node's node id. default ""; if blank, no exit node is forced.
 	// Exit node ID takes precedence over exit node IP.
 	// To find the node ID, go to /api.md#device.
@@ -144,6 +150,7 @@ const (
 // This includes the first time a policy needs to be read from any source.
 var implicitDefinitions = []*setting.Definition{
 	// Device policy settings (can only be configured on a per-device basis):
+	setting.NewDefinition(AllowDisconnectsWithReason, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(AllowedSuggestedExitNodes, setting.DeviceSetting, setting.StringListValue),
 	setting.NewDefinition(AlwaysOn, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(ApplyUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),

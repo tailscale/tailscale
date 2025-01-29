@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
@@ -198,10 +199,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if actor, ok := ci.(*actor); ok {
 			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
 			lah.PermitCert = actor.CanFetchCerts()
+			lah.Actor = actorWithAccessOverride(actor, r.Header.Get(apitype.RequestReasonHeader))
 		} else if testenv.InTest() {
 			lah.PermitRead, lah.PermitWrite = true, true
 		}
-		lah.Actor = ci
+		if lah.Actor == nil {
+			lah.Actor = ci
+		}
 		lah.ServeHTTP(w, r)
 		return
 	}
