@@ -957,6 +957,7 @@ func TestContainerBoot(t *testing.T) {
 			Env: map[string]string{
 				"KUBERNETES_SERVICE_HOST":       kube.Host,
 				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
+				"TS_ENABLE_HEALTH_CHECK":        "true",
 			},
 			KubeSecret: map[string]string{
 				"authkey": "tskey-key",
@@ -1002,6 +1003,7 @@ func TestContainerBoot(t *testing.T) {
 						"profile-baff":     "foo",
 						"_current-profile": "foo",
 					},
+					WantLog:      "HTTP server at [::]:9002 closed",
 					WantExitCode: ptr.To(0),
 				},
 			},

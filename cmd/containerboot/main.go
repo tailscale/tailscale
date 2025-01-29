@@ -849,7 +849,11 @@ func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
 
 	go func() {
 		if err := srv.Serve(ln); err != nil {
-			log.Fatalf("failed running server: %v", err)
+			if err != http.ErrServerClosed {
+				log.Fatalf("failed running server: %v", err)
+			} else {
+				log.Printf("HTTP server at %s closed", addr)
+			}
 		}
 	}()
 

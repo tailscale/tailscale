@@ -42,14 +42,14 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 	log.Printf("Waiting for tailscaled socket")
 	for {
 		if ctx.Err() != nil {
-			log.Fatalf("Timed out waiting for tailscaled socket")
+			return nil, nil, errors.New("timed out waiting for tailscaled socket")
 		}
 		_, err := os.Stat(cfg.Socket)
 		if errors.Is(err, fs.ErrNotExist) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		} else if err != nil {
-			log.Fatalf("Waiting for tailscaled socket: %v", err)
+			return nil, nil, fmt.Errorf("error waiting for tailscaled socket: %w", err)
 		}
 		break
 	}
