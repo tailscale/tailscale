@@ -157,7 +157,8 @@ type CapabilityVersion int
 //   - 111: 2025-01-14: Client supports a peer having Node.HomeDERP (issue #14636)
 //   - 112: 2025-01-14: Client interprets AllowedIPs of nil as meaning same as Addresses
 //   - 113: 2025-01-20: Client communicates to control whether funnel is enabled by sending Hostinfo.IngressEnabled (#14688)
-const CurrentCapabilityVersion CapabilityVersion = 113
+//   - 114: 2025-01-29: Client understands max key expiry in capmap
+const CurrentCapabilityVersion CapabilityVersion = 114
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2487,6 +2488,11 @@ const (
 	// If multiple values of this key exist, they should be merged in sequence
 	// (replace conflicting keys).
 	NodeAttrServiceHost NodeCapability = "service-host"
+
+	// NodeAttrMaxKeyDuration represents the MaxKeyDuration setting on the
+	// tailnet. The value of this key in [NodeCapMap] will be only one entry of
+	// type [Duration]: an int64 representing the time in nanoseconds.
+	NodeAttrMaxKeyDuration NodeCapability = "max-key-duration"
 )
 
 // SetDNSRequest is a request to add a DNS record.
