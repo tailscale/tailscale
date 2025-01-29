@@ -6,9 +6,6 @@
 // highlight the unique parts of the Tailscale SSH server so SSH
 // client authors can hit it easily and fix their SSH clients without
 // needing to set up Tailscale and Tailscale SSH.
-//
-// Connections are allowed using any username except for "denyme". Connecting as
-// "denyme" will result in an authentication failure with error message.
 package main
 
 import (
@@ -19,7 +16,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -28,7 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
-	gossh "golang.org/x/crypto/ssh"
+	gossh "github.com/tailscale/golang-x-crypto/ssh"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 )
 
@@ -66,21 +62,13 @@ func main() {
 		Handler: handleSessionPostSSHAuth,
 		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
 			start := time.Now()
-			var spac gossh.ServerPreAuthConn
 			return &gossh.ServerConfig{
-				PreAuthConnCallback: func(conn gossh.ServerPreAuthConn) {
-					spac = conn
+				NextAuthMethodCallback: func(conn gossh.ConnMetadata, prevErrors []error) []string {
+					return []string{"tailscale"}
 				},
 				NoClientAuth: true, // required for the NoClientAuthCallback to run
 				NoClientAuthCallback: func(cm gossh.ConnMetadata) (*gossh.Permissions, error) {
-					spac.SendAuthBanner(fmt.Sprintf("# Banner: doing none auth at %v\r\n", time.Since(start)))
-
-					if cm.User() == "denyme" {
-						return nil, &gossh.BannerError{
-							Err:     errors.New("denying access"),
-							Message: "denyme is not allowed to access this machine\n",
-						}
-					}
+					cm.SendAuthBanner(fmt.Sprintf("# Banner: doing none auth at %v\r\n", time.Since(start)))
 
 					totalBanners := 2
 					if cm.User() == "banners" {
@@ -89,9 +77,9 @@ func main() {
 					for banner := 2; banner <= totalBanners; banner++ {
 						time.Sleep(time.Second)
 						if banner == totalBanners {
-							spac.SendAuthBanner(fmt.Sprintf("# Banner%d: access granted at %v\r\n", banner, time.Since(start)))
+							cm.SendAuthBanner(fmt.Sprintf("# Banner%d: access granted at %v\r\n", banner, time.Since(start)))
 						} else {
-							spac.SendAuthBanner(fmt.Sprintf("# Banner%d at %v\r\n", banner, time.Since(start)))
+							cm.SendAuthBanner(fmt.Sprintf("# Banner%d at %v\r\n", banner, time.Since(start)))
 						}
 					}
 					return nil, nil
