@@ -117,6 +117,10 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnob
 	return ms
 }
 
+func NewMapSessionForTestOnlyDoNotUse(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnobs *controlknobs.Knobs) *mapSession {
+	return newMapSession(privateNodeKey, nu, controlKnobs)
+}
+
 // occasionallyPrintSummary logs summary at most once very 5 minutes. The
 // summary is the Netmap.VeryConcise result from the last received map response.
 func (ms *mapSession) occasionallyPrintSummary(summary string) {

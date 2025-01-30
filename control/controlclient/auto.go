@@ -201,6 +201,21 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 
 }
 
+func NewForTest(direct *Direct, observer Observer, ctx context.Context) *Auto {
+	c := &Auto{
+		direct:     direct,
+		logf:       func(fmt string, args ...any) {},
+		updateCh:   make(chan struct{}, 1),
+		authDone:   make(chan struct{}),
+		mapDone:    make(chan struct{}),
+		updateDone: make(chan struct{}),
+		observer:   observer,
+		mapCtx:     ctx,
+	}
+
+	return c
+}
+
 // SetPaused controls whether HTTP activity should be paused.
 //
 // The client can be paused and unpaused repeatedly, unlike Start and Shutdown, which can only be used once.
@@ -466,6 +481,10 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 		ok = ndu.UpdateNetmapDelta(muts)
 	})
 	return err == nil && ok
+}
+
+func (c *Auto) MapRoutineForTest() {
+	c.mapRoutine()
 }
 
 // mapRoutine is responsible for keeping a read-only streaming connection to the

@@ -1044,6 +1044,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			vlogf("netmap: decode error: %v", err)
 			return err
 		}
+		vlogf("raw netmap: %+v", resp)
 		watchdogTimer.Stop()
 
 		metricMapResponseMessages.Add(1)
