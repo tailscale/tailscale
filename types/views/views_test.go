@@ -231,6 +231,83 @@ func TestSliceEqualAnyOrderFunc(t *testing.T) {
 	}
 }
 
+func TestSliceEqualAnyOrderAllocs(t *testing.T) {
+	ss := func(s ...string) Slice[string] { return SliceOf(s) }
+	cmp := func(s string) string { return s }
+
+	t.Run("no-allocs-short-unordered", func(t *testing.T) {
+		// No allocations for short comparisons
+		short1 := ss("a", "b", "c")
+		short2 := ss("c", "b", "a")
+		if n := testing.AllocsPerRun(1000, func() {
+			if !SliceEqualAnyOrder(short1, short2) {
+				t.Fatal("not equal")
+			}
+			if !SliceEqualAnyOrderFunc(short1, short2, cmp) {
+				t.Fatal("not equal")
+			}
+		}); n > 0 {
+			t.Fatalf("allocs = %v; want 0", n)
+		}
+	})
+
+	t.Run("no-allocs-long-match", func(t *testing.T) {
+		long1 := ss("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
+		long2 := ss("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
+
+		if n := testing.AllocsPerRun(1000, func() {
+			if !SliceEqualAnyOrder(long1, long2) {
+				t.Fatal("not equal")
+			}
+			if !SliceEqualAnyOrderFunc(long1, long2, cmp) {
+				t.Fatal("not equal")
+			}
+		}); n > 0 {
+			t.Fatalf("allocs = %v; want 0", n)
+		}
+	})
+
+	t.Run("allocs-long-unordered", func(t *testing.T) {
+		// We do unfortunately allocate for long comparisons.
+		long1 := ss("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
+		long2 := ss("c", "b", "a", "e", "d", "f", "g", "h", "i", "j")
+
+		if n := testing.AllocsPerRun(1000, func() {
+			if !SliceEqualAnyOrder(long1, long2) {
+				t.Fatal("not equal")
+			}
+			if !SliceEqualAnyOrderFunc(long1, long2, cmp) {
+				t.Fatal("not equal")
+			}
+		}); n == 0 {
+			t.Fatalf("unexpectedly didn't allocate")
+		}
+	})
+}
+
+func BenchmarkSliceEqualAnyOrder(b *testing.B) {
+	b.Run("short", func(b *testing.B) {
+		b.ReportAllocs()
+		s1 := SliceOf([]string{"foo", "bar"})
+		s2 := SliceOf([]string{"bar", "foo"})
+		for range b.N {
+			if !SliceEqualAnyOrder(s1, s2) {
+				b.Fatal()
+			}
+		}
+	})
+	b.Run("long", func(b *testing.B) {
+		b.ReportAllocs()
+		s1 := SliceOf([]string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"})
+		s2 := SliceOf([]string{"c", "b", "a", "e", "d", "f", "g", "h", "i", "j"})
+		for range b.N {
+			if !SliceEqualAnyOrder(s1, s2) {
+				b.Fatal()
+			}
+		}
+	})
+}
+
 func TestSliceEqual(t *testing.T) {
 	a := SliceOf([]string{"foo", "bar"})
 	b := SliceOf([]string{"foo", "bar"})
