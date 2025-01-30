@@ -4087,9 +4087,9 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	b := newTestBackend(t)
 	prof1 := ipn.LoginProfile{ID: "id1", Key: "key1"}
 	prof2 := ipn.LoginProfile{ID: "id2", Key: "key2"}
-	b.pm.knownProfiles["id1"] = &prof1
-	b.pm.knownProfiles["id2"] = &prof2
-	b.pm.currentProfile = &prof1
+	b.pm.knownProfiles["id1"] = prof1.View()
+	b.pm.knownProfiles["id2"] = prof2.View()
+	b.pm.currentProfile = prof1.View()
 
 	// set up routeInfo
 	ri1 := &appc.RouteInfo{}

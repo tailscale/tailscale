@@ -4045,7 +4045,7 @@ func (b *LocalBackend) checkProfileNameLocked(p *ipn.Prefs) error {
 		// No profile with that name exists. That's fine.
 		return nil
 	}
-	if id != b.pm.CurrentProfile().ID {
+	if id != b.pm.CurrentProfile().ID() {
 		// Name is already in use by another profile.
 		return fmt.Errorf("profile name %q already in use", p.ProfileName)
 	}
@@ -4127,7 +4127,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	}
 
 	prefs := newp.View()
-	np := b.pm.CurrentProfile().NetworkProfile
+	np := b.pm.CurrentProfile().NetworkProfile()
 	if netMap != nil {
 		np = ipn.NetworkProfile{
 			MagicDNSName: b.netMap.MagicDNSSuffix(),
@@ -5663,7 +5663,7 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 	unlock = b.lockAndGetUnlock()
 	defer unlock()
 
-	if err := b.pm.DeleteProfile(profile.ID); err != nil {
+	if err := b.pm.DeleteProfile(profile.ID()); err != nil {
 		b.logf("error deleting profile: %v", err)
 		return err
 	}
@@ -6039,7 +6039,7 @@ func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
 // the method to only run the reset-logic and not reload the store from memory to ensure
 // foreground sessions are not removed if they are not saved on disk.
 func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
-	if b.netMap == nil || !b.netMap.SelfNode.Valid() || !prefs.Valid() || b.pm.CurrentProfile().ID == "" {
+	if b.netMap == nil || !b.netMap.SelfNode.Valid() || !prefs.Valid() || b.pm.CurrentProfile().ID() == "" {
 		// We're not logged in, so we don't have a profile.
 		// Don't try to load the serve config.
 		b.lastServeConfJSON = mem.B(nil)
@@ -6047,7 +6047,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 		return
 	}
 
-	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID)
+	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID())
 	// TODO(maisem,bradfitz): prevent reading the config from disk
 	// if the profile has not changed.
 	confj, err := b.store.ReadState(confKey)
@@ -7000,7 +7000,7 @@ func (b *LocalBackend) ShouldInterceptVIPServiceTCPPort(ap netip.AddrPort) bool 
 // It will restart the backend on success.
 // If the profile is not known, it returns an errProfileNotFound.
 func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
-	if b.CurrentProfile().ID == profile {
+	if b.CurrentProfile().ID() == profile {
 		return nil
 	}
 	unlock := b.lockAndGetUnlock()
@@ -7023,12 +7023,12 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 
 func (b *LocalBackend) initTKALocked() error {
 	cp := b.pm.CurrentProfile()
-	if cp.ID == "" {
+	if cp.ID() == "" {
 		b.tka = nil
 		return nil
 	}
 	if b.tka != nil {
-		if b.tka.profile == cp.ID {
+		if b.tka.profile == cp.ID() {
 			// Already initialized.
 			return nil
 		}
@@ -7058,7 +7058,7 @@ func (b *LocalBackend) initTKALocked() error {
 		}
 
 		b.tka = &tkaState{
-			profile:   cp.ID,
+			profile:   cp.ID(),
 			authority: authority,
 			storage:   storage,
 		}
@@ -7111,7 +7111,7 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
-	needToRestart := b.pm.CurrentProfile().ID == p
+	needToRestart := b.pm.CurrentProfile().ID() == p
 	if err := b.pm.DeleteProfile(p); err != nil {
 		if err == errProfileNotFound {
 			return nil
@@ -7126,7 +7126,7 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 
 // CurrentProfile returns the current LoginProfile.
 // The value may be zero if the profile is not persisted.
-func (b *LocalBackend) CurrentProfile() ipn.LoginProfile {
+func (b *LocalBackend) CurrentProfile() ipn.LoginProfileView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.pm.CurrentProfile()
@@ -7147,7 +7147,7 @@ func (b *LocalBackend) NewProfile() error {
 }
 
 // ListProfiles returns a list of all LoginProfiles.
-func (b *LocalBackend) ListProfiles() []ipn.LoginProfile {
+func (b *LocalBackend) ListProfiles() []ipn.LoginProfileView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.pm.Profiles()
@@ -7353,7 +7353,7 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 
 // namespace a key with the profile manager's current profile key, if any
 func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.StateKey {
-	return pm.CurrentProfile().Key + "||" + key
+	return pm.CurrentProfile().Key() + "||" + key
 }
 
 const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
@@ -7361,7 +7361,7 @@ const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
 func (b *LocalBackend) storeRouteInfo(ri *appc.RouteInfo) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.pm.CurrentProfile().ID == "" {
+	if b.pm.CurrentProfile().ID() == "" {
 		return nil
 	}
 	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
@@ -7373,7 +7373,7 @@ func (b *LocalBackend) storeRouteInfo(ri *appc.RouteInfo) error {
 }
 
 func (b *LocalBackend) readRouteInfoLocked() (*appc.RouteInfo, error) {
-	if b.pm.CurrentProfile().ID == "" {
+	if b.pm.CurrentProfile().ID() == "" {
 		return &appc.RouteInfo{}, nil
 	}
 	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)

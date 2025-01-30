@@ -2601,8 +2601,8 @@ func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case httpm.GET:
 		profiles := h.b.ListProfiles()
-		profileIndex := slices.IndexFunc(profiles, func(p ipn.LoginProfile) bool {
-			return p.ID == profileID
+		profileIndex := slices.IndexFunc(profiles, func(p ipn.LoginProfileView) bool {
+			return p.ID() == profileID
 		})
 		if profileIndex == -1 {
 			http.Error(w, "Profile not found", http.StatusNotFound)

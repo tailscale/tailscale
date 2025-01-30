@@ -35,9 +35,9 @@ type profileManager struct {
 	health *health.Tracker
 
 	currentUserID  ipn.WindowsUserID
-	knownProfiles  map[ipn.ProfileID]*ipn.LoginProfile // always non-nil
-	currentProfile *ipn.LoginProfile                   // always non-nil
-	prefs          ipn.PrefsView                       // always Valid.
+	knownProfiles  map[ipn.ProfileID]ipn.LoginProfileView // always non-nil
+	currentProfile ipn.LoginProfileView                   // always Valid.
+	prefs          ipn.PrefsView                          // always Valid.
 }
 
 func (pm *profileManager) dlogf(format string, args ...any) {
@@ -89,7 +89,7 @@ func (pm *profileManager) DefaultUserProfileID(uid ipn.WindowsUserID) ipn.Profil
 			pm.dlogf("DefaultUserProfileID: windows: migrating from legacy preferences")
 			profile, err := pm.migrateFromLegacyPrefs(uid, false)
 			if err == nil {
-				return profile.ID
+				return profile.ID()
 			}
 			pm.logf("failed to migrate from legacy preferences: %v", err)
 		}
@@ -98,17 +98,17 @@ func (pm *profileManager) DefaultUserProfileID(uid ipn.WindowsUserID) ipn.Profil
 
 	pk := ipn.StateKey(string(b))
 	prof := pm.findProfileByKey(pk)
-	if prof == nil {
+	if !prof.Valid() {
 		pm.dlogf("DefaultUserProfileID: no profile found for key: %q", pk)
 		return ""
 	}
-	return prof.ID
+	return prof.ID()
 }
 
 // checkProfileAccess returns an [errProfileAccessDenied] if the current user
 // does not have access to the specified profile.
-func (pm *profileManager) checkProfileAccess(profile *ipn.LoginProfile) error {
-	if pm.currentUserID != "" && profile.LocalUserID != pm.currentUserID {
+func (pm *profileManager) checkProfileAccess(profile ipn.LoginProfileView) error {
+	if pm.currentUserID != "" && profile.LocalUserID() != pm.currentUserID {
 		return errProfileAccessDenied
 	}
 	return nil
@@ -116,21 +116,21 @@ func (pm *profileManager) checkProfileAccess(profile *ipn.LoginProfile) error {
 
 // allProfiles returns all profiles accessible to the current user.
 // The returned profiles are sorted by Name.
-func (pm *profileManager) allProfiles() (out []*ipn.LoginProfile) {
+func (pm *profileManager) allProfiles() (out []ipn.LoginProfileView) {
 	for _, p := range pm.knownProfiles {
 		if pm.checkProfileAccess(p) == nil {
 			out = append(out, p)
 		}
 	}
-	slices.SortFunc(out, func(a, b *ipn.LoginProfile) int {
-		return cmp.Compare(a.Name, b.Name)
+	slices.SortFunc(out, func(a, b ipn.LoginProfileView) int {
+		return cmp.Compare(a.Name(), b.Name())
 	})
 	return out
 }
 
 // matchingProfiles is like [profileManager.allProfiles], but returns only profiles
 // matching the given predicate.
-func (pm *profileManager) matchingProfiles(f func(*ipn.LoginProfile) bool) (out []*ipn.LoginProfile) {
+func (pm *profileManager) matchingProfiles(f func(ipn.LoginProfileView) bool) (out []ipn.LoginProfileView) {
 	all := pm.allProfiles()
 	out = all[:0]
 	for _, p := range all {
@@ -144,11 +144,11 @@ func (pm *profileManager) matchingProfiles(f func(*ipn.LoginProfile) bool) (out 
 // findMatchingProfiles returns all profiles accessible to the current user
 // that represent the same node/user as prefs.
 // The returned profiles are sorted by Name.
-func (pm *profileManager) findMatchingProfiles(prefs ipn.PrefsView) []*ipn.LoginProfile {
-	return pm.matchingProfiles(func(p *ipn.LoginProfile) bool {
-		return p.ControlURL == prefs.ControlURL() &&
-			(p.UserProfile.ID == prefs.Persist().UserProfile().ID ||
-				p.NodeID == prefs.Persist().NodeID())
+func (pm *profileManager) findMatchingProfiles(prefs ipn.PrefsView) []ipn.LoginProfileView {
+	return pm.matchingProfiles(func(p ipn.LoginProfileView) bool {
+		return p.ControlURL() == prefs.ControlURL() &&
+			(p.UserProfile().ID == prefs.Persist().UserProfile().ID ||
+				p.NodeID() == prefs.Persist().NodeID())
 	})
 }
 
@@ -157,18 +157,18 @@ func (pm *profileManager) findMatchingProfiles(prefs ipn.PrefsView) []*ipn.Login
 // accessible to the current user.
 func (pm *profileManager) ProfileIDForName(name string) ipn.ProfileID {
 	p := pm.findProfileByName(name)
-	if p == nil {
+	if !p.Valid() {
 		return ""
 	}
-	return p.ID
+	return p.ID()
 }
 
-func (pm *profileManager) findProfileByName(name string) *ipn.LoginProfile {
-	out := pm.matchingProfiles(func(p *ipn.LoginProfile) bool {
-		return p.Name == name
+func (pm *profileManager) findProfileByName(name string) ipn.LoginProfileView {
+	out := pm.matchingProfiles(func(p ipn.LoginProfileView) bool {
+		return p.Name() == name
 	})
 	if len(out) == 0 {
-		return nil
+		return ipn.LoginProfileView{}
 	}
 	if len(out) > 1 {
 		pm.logf("[unexpected] multiple profiles with the same name")
@@ -176,12 +176,12 @@ func (pm *profileManager) findProfileByName(name string) *ipn.LoginProfile {
 	return out[0]
 }
 
-func (pm *profileManager) findProfileByKey(key ipn.StateKey) *ipn.LoginProfile {
-	out := pm.matchingProfiles(func(p *ipn.LoginProfile) bool {
-		return p.Key == key
+func (pm *profileManager) findProfileByKey(key ipn.StateKey) ipn.LoginProfileView {
+	out := pm.matchingProfiles(func(p ipn.LoginProfileView) bool {
+		return p.Key() == key
 	})
 	if len(out) == 0 {
-		return nil
+		return ipn.LoginProfileView{}
 	}
 	if len(out) > 1 {
 		pm.logf("[unexpected] multiple profiles with the same key")
@@ -194,8 +194,8 @@ func (pm *profileManager) setUnattendedModeAsConfigured() error {
 		return nil
 	}
 
-	if pm.currentProfile.Key != "" && pm.prefs.ForceDaemon() {
-		return pm.WriteState(ipn.ServerModeStartKey, []byte(pm.currentProfile.Key))
+	if pm.currentProfile.Key() != "" && pm.prefs.ForceDaemon() {
+		return pm.WriteState(ipn.ServerModeStartKey, []byte(pm.currentProfile.Key()))
 	} else {
 		return pm.WriteState(ipn.ServerModeStartKey, nil)
 	}
@@ -229,29 +229,36 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 		existing = existing[1:]
 		for _, p := range existing {
 			// Clear the state.
-			if err := pm.store.WriteState(p.Key, nil); err != nil {
+			if err := pm.store.WriteState(p.Key(), nil); err != nil {
 				// We couldn't delete the state, so keep the profile around.
 				continue
 			}
 			// Remove the profile, knownProfiles will be persisted
 			// in [profileManager.setProfilePrefs] below.
-			delete(pm.knownProfiles, p.ID)
+			delete(pm.knownProfiles, p.ID())
 		}
 	}
 	pm.currentProfile = cp
-	if err := pm.SetProfilePrefs(cp, prefsIn, np); err != nil {
+	cp, err := pm.setProfilePrefs(nil, prefsIn, np)
+	if err != nil {
 		return err
 	}
 	return pm.setProfileAsUserDefault(cp)
 
 }
 
-// SetProfilePrefs is like [profileManager.SetPrefs], but sets prefs for the specified [ipn.LoginProfile]
-// which is not necessarily the [profileManager.CurrentProfile]. It returns an [errProfileAccessDenied]
-// if the specified profile is not accessible by the current user.
-func (pm *profileManager) SetProfilePrefs(lp *ipn.LoginProfile, prefsIn ipn.PrefsView, np ipn.NetworkProfile) error {
-	if err := pm.checkProfileAccess(lp); err != nil {
-		return err
+// setProfilePrefs is like [profileManager.SetPrefs], but sets prefs for the specified [ipn.LoginProfile],
+// returning a read-only view of the updated profile on success. If the specified profile is nil,
+// it defaults to the current profile. If the profile is not accessible by the current user,
+// the method returns an [errProfileAccessDenied].
+func (pm *profileManager) setProfilePrefs(lp *ipn.LoginProfile, prefsIn ipn.PrefsView, np ipn.NetworkProfile) (ipn.LoginProfileView, error) {
+	isCurrentProfile := lp == nil || (lp.ID != "" && lp.ID == pm.currentProfile.ID())
+	if isCurrentProfile {
+		lp = pm.CurrentProfile().AsStruct()
+	}
+
+	if err := pm.checkProfileAccess(lp.View()); err != nil {
+		return ipn.LoginProfileView{}, err
 	}
 
 	// An empty profile.ID indicates that the profile is new, the node info wasn't available,
@@ -291,23 +298,29 @@ func (pm *profileManager) SetProfilePrefs(lp *ipn.LoginProfile, prefsIn ipn.Pref
 	lp.UserProfile = up
 	lp.NetworkProfile = np
 
+	// Update the current profile view to reflect the changes
+	// if the specified profile is the current profile.
+	if isCurrentProfile {
+		pm.currentProfile = lp.View()
+	}
+
 	// An empty profile.ID indicates that the node info is not available yet,
 	// and the profile doesn't need to be saved on disk.
 	if lp.ID != "" {
-		pm.knownProfiles[lp.ID] = lp
+		pm.knownProfiles[lp.ID] = lp.View()
 		if err := pm.writeKnownProfiles(); err != nil {
-			return err
+			return ipn.LoginProfileView{}, err
 		}
 		// Clone prefsIn and create a read-only view as a safety measure to
 		// prevent accidental preference mutations, both externally and internally.
-		if err := pm.setProfilePrefsNoPermCheck(lp, prefsIn.AsStruct().View()); err != nil {
-			return err
+		if err := pm.setProfilePrefsNoPermCheck(lp.View(), prefsIn.AsStruct().View()); err != nil {
+			return ipn.LoginProfileView{}, err
 		}
 	}
-	return nil
+	return lp.View(), nil
 }
 
-func newUnusedID(knownProfiles map[ipn.ProfileID]*ipn.LoginProfile) (ipn.ProfileID, ipn.StateKey) {
+func newUnusedID(knownProfiles map[ipn.ProfileID]ipn.LoginProfileView) (ipn.ProfileID, ipn.StateKey) {
 	var idb [2]byte
 	for {
 		rand.Read(idb[:])
@@ -326,14 +339,14 @@ func newUnusedID(knownProfiles map[ipn.ProfileID]*ipn.LoginProfile) (ipn.Profile
 // The method does not perform any additional checks on the specified
 // profile, such as verifying the caller's access rights or checking
 // if another profile for the same node already exists.
-func (pm *profileManager) setProfilePrefsNoPermCheck(profile *ipn.LoginProfile, clonedPrefs ipn.PrefsView) error {
+func (pm *profileManager) setProfilePrefsNoPermCheck(profile ipn.LoginProfileView, clonedPrefs ipn.PrefsView) error {
 	isCurrentProfile := pm.currentProfile == profile
 	if isCurrentProfile {
 		pm.prefs = clonedPrefs
 		pm.updateHealth()
 	}
-	if profile.Key != "" {
-		if err := pm.writePrefsToStore(profile.Key, clonedPrefs); err != nil {
+	if profile.Key() != "" {
+		if err := pm.writePrefsToStore(profile.Key(), clonedPrefs); err != nil {
 			return err
 		}
 	} else if !isCurrentProfile {
@@ -362,11 +375,11 @@ func (pm *profileManager) writePrefsToStore(key ipn.StateKey, prefs ipn.PrefsVie
 }
 
 // Profiles returns the list of known profiles accessible to the current user.
-func (pm *profileManager) Profiles() []ipn.LoginProfile {
+func (pm *profileManager) Profiles() []ipn.LoginProfileView {
 	allProfiles := pm.allProfiles()
-	out := make([]ipn.LoginProfile, len(allProfiles))
+	out := make([]ipn.LoginProfileView, len(allProfiles))
 	for i, p := range allProfiles {
-		out[i] = *p
+		out[i] = p
 	}
 	return out
 }
@@ -374,26 +387,26 @@ func (pm *profileManager) Profiles() []ipn.LoginProfile {
 // ProfileByID returns a profile with the given id, if it is accessible to the current user.
 // If the profile exists but is not accessible to the current user, it returns an [errProfileAccessDenied].
 // If the profile does not exist, it returns an [errProfileNotFound].
-func (pm *profileManager) ProfileByID(id ipn.ProfileID) (ipn.LoginProfile, error) {
+func (pm *profileManager) ProfileByID(id ipn.ProfileID) (ipn.LoginProfileView, error) {
 	kp, err := pm.profileByIDNoPermCheck(id)
 	if err != nil {
-		return ipn.LoginProfile{}, err
+		return ipn.LoginProfileView{}, err
 	}
 	if err := pm.checkProfileAccess(kp); err != nil {
-		return ipn.LoginProfile{}, err
+		return ipn.LoginProfileView{}, err
 	}
-	return *kp, nil
+	return kp, nil
 }
 
 // profileByIDNoPermCheck is like [profileManager.ProfileByID], but it doesn't
 // check user's access rights to the profile.
-func (pm *profileManager) profileByIDNoPermCheck(id ipn.ProfileID) (*ipn.LoginProfile, error) {
-	if id == pm.currentProfile.ID {
+func (pm *profileManager) profileByIDNoPermCheck(id ipn.ProfileID) (ipn.LoginProfileView, error) {
+	if id == pm.currentProfile.ID() {
 		return pm.currentProfile, nil
 	}
 	kp, ok := pm.knownProfiles[id]
 	if !ok {
-		return nil, errProfileNotFound
+		return ipn.LoginProfileView{}, errProfileNotFound
 	}
 	return kp, nil
 }
@@ -412,11 +425,11 @@ func (pm *profileManager) ProfilePrefs(id ipn.ProfileID) (ipn.PrefsView, error) 
 	return pm.profilePrefs(kp)
 }
 
-func (pm *profileManager) profilePrefs(p *ipn.LoginProfile) (ipn.PrefsView, error) {
-	if p.ID == pm.currentProfile.ID {
+func (pm *profileManager) profilePrefs(p ipn.LoginProfileView) (ipn.PrefsView, error) {
+	if p.ID() == pm.currentProfile.ID() {
 		return pm.prefs, nil
 	}
-	return pm.loadSavedPrefs(p.Key)
+	return pm.loadSavedPrefs(p.Key())
 }
 
 // SwitchProfile switches to the profile with the given id.
@@ -429,14 +442,14 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 	if !ok {
 		return errProfileNotFound
 	}
-	if pm.currentProfile != nil && kp.ID == pm.currentProfile.ID && pm.prefs.Valid() {
+	if pm.currentProfile.Valid() && kp.ID() == pm.currentProfile.ID() && pm.prefs.Valid() {
 		return nil
 	}
 
 	if err := pm.checkProfileAccess(kp); err != nil {
 		return fmt.Errorf("%w: profile %q is not accessible to the current user", err, id)
 	}
-	prefs, err := pm.loadSavedPrefs(kp.Key)
+	prefs, err := pm.loadSavedPrefs(kp.Key())
 	if err != nil {
 		return err
 	}
@@ -459,8 +472,8 @@ func (pm *profileManager) SwitchToDefaultProfile() error {
 
 // setProfileAsUserDefault sets the specified profile as the default for the current user.
 // It returns an [errProfileAccessDenied] if the specified profile is not accessible to the current user.
-func (pm *profileManager) setProfileAsUserDefault(profile *ipn.LoginProfile) error {
-	if profile.Key == "" {
+func (pm *profileManager) setProfileAsUserDefault(profile ipn.LoginProfileView) error {
+	if profile.Key() == "" {
 		// The profile has not been persisted yet; ignore it for now.
 		return nil
 	}
@@ -468,7 +481,7 @@ func (pm *profileManager) setProfileAsUserDefault(profile *ipn.LoginProfile) err
 		return errProfileAccessDenied
 	}
 	k := ipn.CurrentProfileKey(string(pm.currentUserID))
-	return pm.WriteState(k, []byte(profile.Key))
+	return pm.WriteState(k, []byte(profile.Key()))
 }
 
 func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error) {
@@ -507,10 +520,10 @@ func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error
 	return savedPrefs.View(), nil
 }
 
-// CurrentProfile returns the current LoginProfile.
+// CurrentProfile returns a read-only [ipn.LoginProfileView] of the current profile.
 // The value may be zero if the profile is not persisted.
-func (pm *profileManager) CurrentProfile() ipn.LoginProfile {
-	return *pm.currentProfile
+func (pm *profileManager) CurrentProfile() ipn.LoginProfileView {
+	return pm.currentProfile
 }
 
 // errProfileNotFound is returned by methods that accept a ProfileID
@@ -533,7 +546,7 @@ var errProfileAccessDenied = errors.New("profile access denied")
 // recommended to call [profileManager.SwitchProfile] first.
 func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
 	metricDeleteProfile.Add(1)
-	if id == pm.currentProfile.ID {
+	if id == pm.currentProfile.ID() {
 		return pm.deleteCurrentProfile()
 	}
 	kp, ok := pm.knownProfiles[id]
@@ -550,7 +563,7 @@ func (pm *profileManager) deleteCurrentProfile() error {
 	if err := pm.checkProfileAccess(pm.currentProfile); err != nil {
 		return err
 	}
-	if pm.currentProfile.ID == "" {
+	if pm.currentProfile.ID() == "" {
 		// Deleting the in-memory only new profile, just create a new one.
 		pm.NewProfile()
 		return nil
@@ -560,14 +573,14 @@ func (pm *profileManager) deleteCurrentProfile() error {
 
 // deleteProfileNoPermCheck is like [profileManager.DeleteProfile],
 // but it doesn't check user's access rights to the profile.
-func (pm *profileManager) deleteProfileNoPermCheck(profile *ipn.LoginProfile) error {
-	if profile.ID == pm.currentProfile.ID {
+func (pm *profileManager) deleteProfileNoPermCheck(profile ipn.LoginProfileView) error {
+	if profile.ID() == pm.currentProfile.ID() {
 		pm.NewProfile()
 	}
-	if err := pm.WriteState(profile.Key, nil); err != nil {
+	if err := pm.WriteState(profile.Key(), nil); err != nil {
 		return err
 	}
-	delete(pm.knownProfiles, profile.ID)
+	delete(pm.knownProfiles, profile.ID())
 	return pm.writeKnownProfiles()
 }
 
@@ -578,7 +591,7 @@ func (pm *profileManager) DeleteAllProfilesForUser() error {
 
 	currentProfileDeleted := false
 	writeKnownProfiles := func() error {
-		if currentProfileDeleted || pm.currentProfile.ID == "" {
+		if currentProfileDeleted || pm.currentProfile.ID() == "" {
 			pm.NewProfile()
 		}
 		return pm.writeKnownProfiles()
@@ -589,14 +602,14 @@ func (pm *profileManager) DeleteAllProfilesForUser() error {
 			// Skip profiles we don't have access to.
 			continue
 		}
-		if err := pm.WriteState(kp.Key, nil); err != nil {
+		if err := pm.WriteState(kp.Key(), nil); err != nil {
 			// Write to remove references to profiles we've already deleted, but
 			// return the original error.
 			writeKnownProfiles()
 			return err
 		}
-		delete(pm.knownProfiles, kp.ID)
-		if kp.ID == pm.currentProfile.ID {
+		delete(pm.knownProfiles, kp.ID())
+		if kp.ID() == pm.currentProfile.ID() {
 			currentProfileDeleted = true
 		}
 	}
@@ -633,26 +646,27 @@ func (pm *profileManager) NewProfileForUser(uid ipn.WindowsUserID) {
 
 	pm.prefs = defaultPrefs
 	pm.updateHealth()
-	pm.currentProfile = &ipn.LoginProfile{LocalUserID: uid}
+	newProfile := &ipn.LoginProfile{LocalUserID: uid}
+	pm.currentProfile = newProfile.View()
 }
 
 // newProfileWithPrefs creates a new profile with the specified prefs and assigns
 // the specified uid as the profile owner. If switchNow is true, it switches to the
 // newly created profile immediately. It returns the newly created profile on success,
 // or an error on failure.
-func (pm *profileManager) newProfileWithPrefs(uid ipn.WindowsUserID, prefs ipn.PrefsView, switchNow bool) (*ipn.LoginProfile, error) {
+func (pm *profileManager) newProfileWithPrefs(uid ipn.WindowsUserID, prefs ipn.PrefsView, switchNow bool) (ipn.LoginProfileView, error) {
 	metricNewProfile.Add(1)
 
-	profile := &ipn.LoginProfile{LocalUserID: uid}
-	if err := pm.SetProfilePrefs(profile, prefs, ipn.NetworkProfile{}); err != nil {
-		return nil, err
+	profile, err := pm.setProfilePrefs(&ipn.LoginProfile{LocalUserID: uid}, prefs, ipn.NetworkProfile{})
+	if err != nil {
+		return ipn.LoginProfileView{}, err
 	}
 	if switchNow {
 		pm.currentProfile = profile
 		pm.prefs = prefs.AsStruct().View()
 		pm.updateHealth()
 		if err := pm.setProfileAsUserDefault(profile); err != nil {
-			return nil, err
+			return ipn.LoginProfileView{}, err
 		}
 	}
 	return profile, nil
@@ -711,8 +725,8 @@ func readAutoStartKey(store ipn.StateStore, goos string) (ipn.StateKey, error) {
 	return ipn.StateKey(autoStartKey), nil
 }
 
-func readKnownProfiles(store ipn.StateStore) (map[ipn.ProfileID]*ipn.LoginProfile, error) {
-	var knownProfiles map[ipn.ProfileID]*ipn.LoginProfile
+func readKnownProfiles(store ipn.StateStore) (map[ipn.ProfileID]ipn.LoginProfileView, error) {
+	var knownProfiles map[ipn.ProfileID]ipn.LoginProfileView
 	prfB, err := store.ReadState(ipn.KnownProfilesStateKey)
 	switch err {
 	case nil:
@@ -720,7 +734,7 @@ func readKnownProfiles(store ipn.StateStore) (map[ipn.ProfileID]*ipn.LoginProfil
 			return nil, fmt.Errorf("unmarshaling known profiles: %w", err)
 		}
 	case ipn.ErrStateNotExist:
-		knownProfiles = make(map[ipn.ProfileID]*ipn.LoginProfile)
+		knownProfiles = make(map[ipn.ProfileID]ipn.LoginProfileView)
 	default:
 		return nil, fmt.Errorf("calling ReadState on state store: %w", err)
 	}
@@ -749,17 +763,17 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 
 	if stateKey != "" {
 		for _, v := range knownProfiles {
-			if v.Key == stateKey {
+			if v.Key() == stateKey {
 				pm.currentProfile = v
 			}
 		}
-		if pm.currentProfile == nil {
+		if !pm.currentProfile.Valid() {
 			if suf, ok := strings.CutPrefix(string(stateKey), "user-"); ok {
 				pm.currentUserID = ipn.WindowsUserID(suf)
 			}
 			pm.NewProfile()
 		} else {
-			pm.currentUserID = pm.currentProfile.LocalUserID
+			pm.currentUserID = pm.currentProfile.LocalUserID()
 		}
 		prefs, err := pm.loadSavedPrefs(stateKey)
 		if err != nil {
@@ -788,18 +802,18 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 	return pm, nil
 }
 
-func (pm *profileManager) migrateFromLegacyPrefs(uid ipn.WindowsUserID, switchNow bool) (*ipn.LoginProfile, error) {
+func (pm *profileManager) migrateFromLegacyPrefs(uid ipn.WindowsUserID, switchNow bool) (ipn.LoginProfileView, error) {
 	metricMigration.Add(1)
 	sentinel, prefs, err := pm.loadLegacyPrefs(uid)
 	if err != nil {
 		metricMigrationError.Add(1)
-		return nil, fmt.Errorf("load legacy prefs: %w", err)
+		return ipn.LoginProfileView{}, fmt.Errorf("load legacy prefs: %w", err)
 	}
 	pm.dlogf("loaded legacy preferences; sentinel=%q", sentinel)
 	profile, err := pm.newProfileWithPrefs(uid, prefs, switchNow)
 	if err != nil {
 		metricMigrationError.Add(1)
-		return nil, fmt.Errorf("migrating _daemon profile: %w", err)
+		return ipn.LoginProfileView{}, fmt.Errorf("migrating _daemon profile: %w", err)
 	}
 	pm.completeMigration(sentinel)
 	pm.dlogf("completed legacy preferences migration with sentinel=%q", sentinel)
@@ -809,8 +823,8 @@ func (pm *profileManager) migrateFromLegacyPrefs(uid ipn.WindowsUserID, switchNo
 
 func (pm *profileManager) requiresBackfill() bool {
 	return pm != nil &&
-		pm.currentProfile != nil &&
-		pm.currentProfile.NetworkProfile.RequiresBackfill()
+		pm.currentProfile.Valid() &&
+		pm.currentProfile.NetworkProfile().RequiresBackfill()
 }
 
 var (
