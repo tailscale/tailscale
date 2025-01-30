@@ -2022,10 +2022,6 @@ type MapResponse struct {
 	// auto-update setting doesn't change if the tailnet admin flips the
 	// default after the node registered.
 	DefaultAutoUpdate opt.Bool `json:",omitempty"`
-
-	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
-	// If zero, the value is unchanged.
-	MaxKeyDuration time.Duration `json:",omitempty"`
 }
 
 // ClientVersion is information about the latest client version that's available
