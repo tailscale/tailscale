@@ -331,28 +331,6 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not create ingress reconciler: %v", err)
 	}
-	lc, err := opts.tsServer.LocalClient()
-	if err != nil {
-		startlog.Fatalf("could not get local client: %v", err)
-	}
-	err = builder.
-		ControllerManagedBy(mgr).
-		For(&networkingv1.Ingress{}).
-		Named("ingress-pg-reconciler").
-		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
-		Complete(&IngressPGReconciler{
-			recorder:    eventRecorder,
-			tsClient:    opts.tsClient,
-			tsnetServer: opts.tsServer,
-			defaultTags: strings.Split(opts.proxyTags, ","),
-			Client:      mgr.GetClient(),
-			logger:      opts.log.Named("ingress-pg-reconciler"),
-			lc:          lc,
-			tsNamespace: opts.tailscaleNamespace,
-		})
-	if err != nil {
-		startlog.Fatalf("could not create ingress-pg-reconciler: %v", err)
-	}
 
 	connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("connector"))
 	// If a ProxyClassChanges, enqueue all Connectors that have
@@ -1176,42 +1154,6 @@ func indexEgressServices(o client.Object) []string {
 		return nil
 	}
 	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
-}
-
-// serviceHandlerForIngressPG returns a handler for Service events that ensures that if the Service
-// associated with an event is a backend Service for a tailscale Ingress with ProxyGroup annotation,
-// the associated Ingress gets reconciled.
-func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
-	return func(ctx context.Context, o client.Object) []reconcile.Request {
-		ingList := networkingv1.IngressList{}
-		if err := cl.List(ctx, &ingList, client.InNamespace(o.GetNamespace())); err != nil {
-			logger.Debugf("error listing Ingresses: %v", err)
-			return nil
-		}
-		reqs := make([]reconcile.Request, 0)
-		for _, ing := range ingList.Items {
-			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != tailscaleIngressClassName {
-				continue
-			}
-			if !hasProxyGroupAnnotation(&ing) {
-				continue
-			}
-			if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil && ing.Spec.DefaultBackend.Service.Name == o.GetName() {
-				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
-			}
-			for _, rule := range ing.Spec.Rules {
-				if rule.HTTP == nil {
-					continue
-				}
-				for _, path := range rule.HTTP.Paths {
-					if path.Backend.Service != nil && path.Backend.Service.Name == o.GetName() {
-						reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
-					}
-				}
-			}
-		}
-		return reqs
-	}
 }
 
 func hasProxyGroupAnnotation(obj client.Object) bool {
