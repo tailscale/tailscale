@@ -330,6 +330,12 @@ func SliceEqual[T comparable](a, b Slice[T]) bool {
 	return slices.Equal(a.ж, b.ж)
 }
 
+// shortOOOLen (short Out-of-Order length) is the slice length at or
+// under which we attempt to compare two slices quadratically rather
+// than allocating memory for a map in SliceEqualAnyOrder and
+// SliceEqualAnyOrderFunc.
+const shortOOOLen = 5
+
 // SliceEqualAnyOrder reports whether a and b contain the same elements, regardless of order.
 // The underlying slices for a and b can be nil.
 func SliceEqualAnyOrder[T comparable](a, b Slice[T]) bool {
@@ -347,18 +353,15 @@ func SliceEqualAnyOrder[T comparable](a, b Slice[T]) bool {
 		return true
 	}
 
-	// count the occurrences of remaining values and compare
-	valueCount := make(map[T]int)
-	for i, n := diffStart, a.Len(); i < n; i++ {
-		valueCount[a.At(i)]++
-		valueCount[b.At(i)]--
+	a, b = a.SliceFrom(diffStart), b.SliceFrom(diffStart)
+	cmp := func(v T) T { return v }
+
+	// For a small number of items, avoid the allocation of a map and just
+	// do the quadratic thing.
+	if a.Len() <= shortOOOLen {
+		return unorderedSliceEqualAnyOrderSmall(a, b, cmp)
 	}
-	for _, count := range valueCount {
-		if count != 0 {
-			return false
-		}
-	}
-	return true
+	return unorderedSliceEqualAnyOrder(a, b, cmp)
 }
 
 // SliceEqualAnyOrderFunc reports whether a and b contain the same elements,
@@ -382,66 +385,89 @@ func SliceEqualAnyOrderFunc[T any, V comparable](a, b Slice[T], cmp func(T) V) b
 		return true
 	}
 
+	a, b = a.SliceFrom(diffStart), b.SliceFrom(diffStart)
 	// For a small number of items, avoid the allocation of a map and just
-	// do the quadratic thing. We can also only check the items between
-	// diffStart and the end.
-	nRemain := a.Len() - diffStart
-	const shortOptLen = 5
-	if nRemain <= shortOptLen {
-		// These track which elements in a and b have been matched, so
-		// that we don't treat arrays with differing number of
-		// duplicate elements as equal (e.g. [1, 1, 2] and [1, 2, 2]).
-		var aMatched, bMatched [shortOptLen]bool
+	// do the quadratic thing.
+	if a.Len() <= shortOOOLen {
+		return unorderedSliceEqualAnyOrderSmall(a, b, cmp)
+	}
+	return unorderedSliceEqualAnyOrder(a, b, cmp)
+}
 
-		// Compare each element in a to each element in b
-		for i := range nRemain {
-			av := cmp(a.At(i + diffStart))
-			found := false
-			for j := range nRemain {
-				// Skip elements in b that have already been
-				// used to match an item in a.
-				if bMatched[j] {
-					continue
-				}
-
-				bv := cmp(b.At(j + diffStart))
-				if av == bv {
-					// Mark these elements as already
-					// matched, so that a future loop
-					// iteration (of a duplicate element)
-					// doesn't match it again.
-					aMatched[i] = true
-					bMatched[j] = true
-					found = true
-					break
-				}
-			}
-			if !found {
-				return false
-			}
-		}
-
-		// Verify all elements were matched exactly once.
-		for i := range nRemain {
-			if !aMatched[i] || !bMatched[i] {
-				return false
-			}
-		}
-
+// unorderedSliceEqualAnyOrder reports whether a and b contain the same elements
+// using a map. The cmp function maps from a T slice element to a comparable
+// value.
+func unorderedSliceEqualAnyOrder[T any, V comparable](a, b Slice[T], cmp func(T) V) bool {
+	if a.Len() != b.Len() {
+		panic("internal error")
+	}
+	if a.Len() == 0 {
 		return true
 	}
-
-	// count the occurrences of remaining values and compare
-	valueCount := make(map[V]int)
-	for i, n := diffStart, a.Len(); i < n; i++ {
-		valueCount[cmp(a.At(i))]++
-		valueCount[cmp(b.At(i))]--
+	m := make(map[V]int)
+	for i := range a.Len() {
+		m[cmp(a.At(i))]++
+		m[cmp(b.At(i))]--
 	}
-	for _, count := range valueCount {
+	for _, count := range m {
 		if count != 0 {
 			return false
 		}
 	}
+	return true
+}
+
+// unorderedSliceEqualAnyOrderSmall reports whether a and b (which must be the
+// same length, and shortOOOLen or shorter) contain the same elements (using cmp
+// to map from T to a comparable value) in some order.
+//
+// This is the quadratic-time implementation for small slices that doesn't
+// allocate.
+func unorderedSliceEqualAnyOrderSmall[T any, V comparable](a, b Slice[T], cmp func(T) V) bool {
+	if a.Len() != b.Len() || a.Len() > shortOOOLen {
+		panic("internal error")
+	}
+
+	// These track which elements in a and b have been matched, so
+	// that we don't treat arrays with differing number of
+	// duplicate elements as equal (e.g. [1, 1, 2] and [1, 2, 2]).
+	var aMatched, bMatched [shortOOOLen]bool
+
+	// Compare each element in a to each element in b
+	for i := range a.Len() {
+		av := cmp(a.At(i))
+		found := false
+		for j := range a.Len() {
+			// Skip elements in b that have already been
+			// used to match an item in a.
+			if bMatched[j] {
+				continue
+			}
+
+			bv := cmp(b.At(j))
+			if av == bv {
+				// Mark these elements as already
+				// matched, so that a future loop
+				// iteration (of a duplicate element)
+				// doesn't match it again.
+				aMatched[i] = true
+				bMatched[j] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	// Verify all elements were matched exactly once.
+	for i := range a.Len() {
+		if !aMatched[i] || !bMatched[i] {
+			return false
+		}
+	}
+
 	return true
 }
 
