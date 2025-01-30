@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"sync"
 
-	gossh "golang.org/x/crypto/ssh"
+	gossh "github.com/tailscale/golang-x-crypto/ssh"
 )
 
 const (

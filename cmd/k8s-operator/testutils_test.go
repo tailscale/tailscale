@@ -583,6 +583,21 @@ func mustCreate(t *testing.T, client client.Client, obj client.Object) {
 		t.Fatalf("creating %q: %v", obj.GetName(), err)
 	}
 }
+func mustCreateAll(t *testing.T, client client.Client, objs ...client.Object) {
+	t.Helper()
+	for _, obj := range objs {
+		mustCreate(t, client, obj)
+	}
+}
+
+func mustDeleteAll(t *testing.T, client client.Client, objs ...client.Object) {
+	t.Helper()
+	for _, obj := range objs {
+		if err := client.Delete(context.Background(), obj); err != nil {
+			t.Fatalf("deleting %q: %v", obj.GetName(), err)
+		}
+	}
+}
 
 func mustUpdate[T any, O ptrObject[T]](t *testing.T, client client.Client, ns, name string, update func(O)) {
 	t.Helper()
@@ -704,6 +719,19 @@ func expectRequeue(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	}
 	if res.RequeueAfter == 0 {
 		t.Fatalf("expected timed requeue, got success")
+	}
+}
+func expectError(t *testing.T, sr reconcile.Reconciler, ns, name string) {
+	t.Helper()
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      name,
+			Namespace: ns,
+		},
+	}
+	_, err := sr.Reconcile(context.Background(), req)
+	if err == nil {
+		t.Error("Reconcile: expected error but did not get one")
 	}
 }
 

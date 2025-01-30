@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	gossh "golang.org/x/crypto/ssh"
+	gossh "github.com/tailscale/golang-x-crypto/ssh"
 )
 
 var sampleServerResponse = []byte("Hello world")

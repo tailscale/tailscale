@@ -6,11 +6,18 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"net/netip"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/kubetypes"
 )
 
 func Test_updatesForSvc(t *testing.T) {
@@ -172,4 +179,146 @@ func Test_updatesForSvc(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A failure of this test will most likely look like a timeout.
+func TestWaitTillSafeToShutdown(t *testing.T) {
+	podIP := "10.0.0.1"
+	anotherIP := "10.0.0.2"
+
+	tests := []struct {
+		name string
+		// services is a map of service name to the number of calls to make to the healthcheck endpoint before
+		// returning a response that does NOT contain this Pod's IP in headers.
+		services       map[string]int
+		replicas       int
+		healthCheckSet bool
+	}{
+		{
+			name: "no_configs",
+		},
+		{
+			name: "one_service_immediately_safe_to_shutdown",
+			services: map[string]int{
+				"svc1": 0,
+			},
+			replicas:       2,
+			healthCheckSet: true,
+		},
+		{
+			name: "multiple_services_immediately_safe_to_shutdown",
+			services: map[string]int{
+				"svc1": 0,
+				"svc2": 0,
+				"svc3": 0,
+			},
+			replicas:       2,
+			healthCheckSet: true,
+		},
+		{
+			name: "multiple_services_no_healthcheck_endpoints",
+			services: map[string]int{
+				"svc1": 0,
+				"svc2": 0,
+				"svc3": 0,
+			},
+			replicas: 2,
+		},
+		{
+			name: "one_service_eventually_safe_to_shutdown",
+			services: map[string]int{
+				"svc1": 3, // After 3 calls to health check endpoint, no longer returns this Pod's IP
+			},
+			replicas:       2,
+			healthCheckSet: true,
+		},
+		{
+			name: "multiple_services_eventually_safe_to_shutdown",
+			services: map[string]int{
+				"svc1": 1, // After 1 call to health check endpoint, no longer returns this Pod's IP
+				"svc2": 3, // After 3 calls to health check endpoint, no longer returns this Pod's IP
+				"svc3": 5, // After 5 calls to the health check endpoint, no longer returns this Pod's IP
+			},
+			replicas:       2,
+			healthCheckSet: true,
+		},
+		{
+			name: "multiple_services_eventually_safe_to_shutdown_with_higher_replica_count",
+			services: map[string]int{
+				"svc1": 7,
+				"svc2": 10,
+			},
+			replicas:       5,
+			healthCheckSet: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgs := &egressservices.Configs{}
+			switches := make(map[string]int)
+
+			for svc, callsToSwitch := range tt.services {
+				endpoint := fmt.Sprintf("http://%s.local", svc)
+				if tt.healthCheckSet {
+					(*cfgs)[svc] = egressservices.Config{
+						HealthCheckEndpoint: endpoint,
+					}
+				}
+				switches[endpoint] = callsToSwitch
+			}
+
+			ep := &egressProxy{
+				podIPv4: podIP,
+				client: &mockHTTPClient{
+					podIP:     podIP,
+					anotherIP: anotherIP,
+					switches:  switches,
+				},
+			}
+
+			ep.waitTillSafeToShutdown(context.Background(), cfgs, tt.replicas)
+		})
+	}
+}
+
+// mockHTTPClient is a client that receives an HTTP call for an egress service endpoint and returns a response with an
+// IP address in a 'Pod-IPv4' header. It can be configured to return one IP address for N calls, then switch to another
+// IP address to simulate a scenario where an IP is eventually no longer a backend for an endpoint.
+// TODO(irbekrm): to test this more thoroughly, we should have the client take into account the number of replicas and
+// return as if traffic was round robin load balanced across different Pods.
+type mockHTTPClient struct {
+	// podIP - initial IP address to return, that matches the current proxy's IP address.
+	podIP     string
+	anotherIP string
+	// after how many calls to an endpoint, the client should start returning 'anotherIP' instead of 'podIP.
+	switches map[string]int
+	mu       sync.Mutex // protects the following
+	// calls tracks the number of calls received.
+	calls map[string]int
+}
+
+func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	m.mu.Lock()
+	if m.calls == nil {
+		m.calls = make(map[string]int)
+	}
+
+	endpoint := req.URL.String()
+	m.calls[endpoint]++
+	calls := m.calls[endpoint]
+	m.mu.Unlock()
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+
+	if calls <= m.switches[endpoint] {
+		resp.Header.Set(kubetypes.PodIPv4Header, m.podIP) // Pod is still routable
+	} else {
+		resp.Header.Set(kubetypes.PodIPv4Header, m.anotherIP) // Pod is no longer routable
+	}
+	return resp, nil
 }
