@@ -17,6 +17,29 @@ import (
 	"tailscale.com/types/ptr"
 )
 
+// Clone makes a deep copy of LoginProfile.
+// The result aliases no memory with the original.
+func (src *LoginProfile) Clone() *LoginProfile {
+	if src == nil {
+		return nil
+	}
+	dst := new(LoginProfile)
+	*dst = *src
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _LoginProfileCloneNeedsRegeneration = LoginProfile(struct {
+	ID             ProfileID
+	Name           string
+	NetworkProfile NetworkProfile
+	Key            StateKey
+	UserProfile    tailcfg.UserProfile
+	NodeID         tailcfg.StableNodeID
+	LocalUserID    WindowsUserID
+	ControlURL     string
+}{})
+
 // Clone makes a deep copy of Prefs.
 // The result aliases no memory with the original.
 func (src *Prefs) Clone() *Prefs {

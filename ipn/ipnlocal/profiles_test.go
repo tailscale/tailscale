@@ -52,11 +52,11 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 	pm.SetCurrentUserID("user1")
 	newProfile(t, "user1")
 	cp := pm.currentProfile
-	pm.DeleteProfile(cp.ID)
-	if pm.currentProfile == nil {
+	pm.DeleteProfile(cp.ID())
+	if !pm.currentProfile.Valid() {
 		t.Fatal("currentProfile is nil")
-	} else if pm.currentProfile.ID != "" {
-		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID)
+	} else if pm.currentProfile.ID() != "" {
+		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID())
 	}
 	if !pm.CurrentPrefs().Equals(defaultPrefs) {
 		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
@@ -67,10 +67,10 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	pm.SetCurrentUserID("user1")
-	if pm.currentProfile == nil {
+	if !pm.currentProfile.Valid() {
 		t.Fatal("currentProfile is nil")
-	} else if pm.currentProfile.ID != "" {
-		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID)
+	} else if pm.currentProfile.ID() != "" {
+		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID())
 	}
 	if !pm.CurrentPrefs().Equals(defaultPrefs) {
 		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
@@ -110,8 +110,8 @@ func TestProfileList(t *testing.T) {
 			t.Fatalf("got %d profiles, want %d", len(got), len(want))
 		}
 		for i, w := range want {
-			if got[i].Name != w {
-				t.Errorf("got profile %d name %q, want %q", i, got[i].Name, w)
+			if got[i].Name() != w {
+				t.Errorf("got profile %d name %q, want %q", i, got[i].Name(), w)
 			}
 		}
 	}
@@ -129,10 +129,10 @@ func TestProfileList(t *testing.T) {
 
 	pm.SetCurrentUserID("user1")
 	checkProfiles(t, "alice", "bob")
-	if lp := pm.findProfileByKey(carol.Key); lp != nil {
+	if lp := pm.findProfileByKey(carol.Key()); lp.Valid() {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
-	if lp := pm.findProfileByName(carol.Name); lp != nil {
+	if lp := pm.findProfileByName(carol.Name()); lp.Valid() {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
 
@@ -294,7 +294,7 @@ func TestProfileDupe(t *testing.T) {
 			profs := pm.Profiles()
 			var got []*persist.Persist
 			for _, p := range profs {
-				prefs, err := pm.loadSavedPrefs(p.Key)
+				prefs, err := pm.loadSavedPrefs(p.Key())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -328,9 +328,9 @@ func TestProfileManagement(t *testing.T) {
 	checkProfiles := func(t *testing.T) {
 		t.Helper()
 		prof := pm.CurrentProfile()
-		t.Logf("\tCurrentProfile = %q", prof)
-		if prof.Name != wantCurProfile {
-			t.Fatalf("CurrentProfile = %q; want %q", prof, wantCurProfile)
+		t.Logf("\tCurrentProfile = %q", prof.Name())
+		if prof.Name() != wantCurProfile {
+			t.Fatalf("CurrentProfile = %q; want %q", prof.Name(), wantCurProfile)
 		}
 		profiles := pm.Profiles()
 		wantLen := len(wantProfiles)
@@ -349,13 +349,13 @@ func TestProfileManagement(t *testing.T) {
 			t.Fatalf("CurrentPrefs = %v; want %v", p.Pretty(), wantProfiles[wantCurProfile].Pretty())
 		}
 		for _, p := range profiles {
-			got, err := pm.loadSavedPrefs(p.Key)
+			got, err := pm.loadSavedPrefs(p.Key())
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Use Hostname as a proxy for all prefs.
-			if !got.Equals(wantProfiles[p.Name]) {
-				t.Fatalf("Prefs for profile %q =\n got=%+v\nwant=%v", p, got.Pretty(), wantProfiles[p.Name].Pretty())
+			if !got.Equals(wantProfiles[p.Name()]) {
+				t.Fatalf("Prefs for profile %q =\n got=%+v\nwant=%v", p.Name(), got.Pretty(), wantProfiles[p.Name()].Pretty())
 			}
 		}
 	}
@@ -422,7 +422,7 @@ func TestProfileManagement(t *testing.T) {
 	checkProfiles(t)
 
 	t.Logf("Delete default profile")
-	if err := pm.DeleteProfile(pm.findProfileByName("user@1.example.com").ID); err != nil {
+	if err := pm.DeleteProfile(pm.ProfileIDForName("user@1.example.com")); err != nil {
 		t.Fatal(err)
 	}
 	delete(wantProfiles, "user@1.example.com")
@@ -506,9 +506,9 @@ func TestProfileManagementWindows(t *testing.T) {
 	checkProfiles := func(t *testing.T) {
 		t.Helper()
 		prof := pm.CurrentProfile()
-		t.Logf("\tCurrentProfile = %q", prof)
-		if prof.Name != wantCurProfile {
-			t.Fatalf("CurrentProfile = %q; want %q", prof, wantCurProfile)
+		t.Logf("\tCurrentProfile = %q", prof.Name())
+		if prof.Name() != wantCurProfile {
+			t.Fatalf("CurrentProfile = %q; want %q", prof.Name(), wantCurProfile)
 		}
 		if p := pm.CurrentPrefs(); !p.Equals(wantProfiles[wantCurProfile]) {
 			t.Fatalf("CurrentPrefs = %+v; want %+v", p.Pretty(), wantProfiles[wantCurProfile].Pretty())

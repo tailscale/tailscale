@@ -318,7 +318,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		bs = j
 	}
 
-	profileID := b.pm.CurrentProfile().ID
+	profileID := b.pm.CurrentProfile().ID()
 	confKey := ipn.ServeConfigKey(profileID)
 	if err := b.store.WriteState(confKey, bs); err != nil {
 		return fmt.Errorf("writing ServeConfig to StateStore: %w", err)

@@ -407,7 +407,7 @@ func (b *LocalBackend) tkaApplyDisablementLocked(secret []byte) error {
 //
 // b.mu must be held.
 func (b *LocalBackend) chonkPathLocked() string {
-	return filepath.Join(b.TailscaleVarRoot(), "tka-profiles", string(b.pm.CurrentProfile().ID))
+	return filepath.Join(b.TailscaleVarRoot(), "tka-profiles", string(b.pm.CurrentProfile().ID()))
 }
 
 // tkaBootstrapFromGenesisLocked initializes the local (on-disk) state of the
@@ -455,7 +455,7 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 	}
 
 	b.tka = &tkaState{
-		profile:   b.pm.CurrentProfile().ID,
+		profile:   b.pm.CurrentProfile().ID(),
 		authority: authority,
 		storage:   chonk,
 	}
