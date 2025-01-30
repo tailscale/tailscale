@@ -625,7 +625,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		// We CAS here because the caller goroutine is
 		// doing a Store which we want to want to win
 		// a race. This is only a memory optimization
-		// and is for correctness:
+		// and is not for correctness:
 		c.lastStatus.CompareAndSwap(newSt, nil)
 	})
 }
