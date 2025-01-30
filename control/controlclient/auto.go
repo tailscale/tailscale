@@ -620,12 +620,17 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 			}
 		}
 		c.observer.SetControlClientStatus(c, *newSt)
-		// Best effort stop retaining the memory now that
-		// we've sent it to the observer (LocalBackend).
-		// We CAS here because the caller goroutine is
-		// doing a Store which we want to want to win
-		// a race. This is only a memory optimization
-		// and is not for correctness:
+
+		// Best effort stop retaining the memory now that we've sent it to the
+		// observer (LocalBackend). We CAS here because the caller goroutine is
+		// doing a Store which we want to win a race. This is only a memory
+		// optimization and is not for correctness.
+		//
+		// If the CAS fails, that means somebody else's Store replaced our
+		// pointer (so mission accomplished: our netmap is no longer retained in
+		// any case) and that Store caller will be responsible for removing
+		// their own netmap (or losing their race too, down the chain).
+		// Eventually the last caller will win this CAS and zero lastStatus.
 		c.lastStatus.CompareAndSwap(newSt, nil)
 	})
 }
