@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -50,9 +51,7 @@ func TestContainerBoot(t *testing.T) {
 	defer lapi.Close()
 
 	kube := kubeServer{FSRoot: d}
-	if err := kube.Start(); err != nil {
-		t.Fatal(err)
-	}
+	kube.Start(t)
 	defer kube.Close()
 
 	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
@@ -138,15 +137,29 @@ func TestContainerBoot(t *testing.T) {
 
 		// WantCmds is the commands that containerboot should run in this phase.
 		WantCmds []string
+
 		// WantKubeSecret is the secret keys/values that should exist in the
 		// kube secret.
 		WantKubeSecret map[string]string
+
+		// Update the kube secret with these keys/values at the beginning of the
+		// phase (simulates our fake tailscaled doing it).
+		UpdateKubeSecret map[string]string
+
 		// WantFiles files that should exist in the container and their
 		// contents.
 		WantFiles map[string]string
-		// WantFatalLog is the fatal log message we expect from containerboot.
-		// If set for a phase, the test will finish on that phase.
-		WantFatalLog string
+
+		// WantLog is a log message we expect from containerboot.
+		WantLog string
+
+		// If set for a phase, the test will expect containerboot to exit with
+		// this error code, and the test will finish on that phase without
+		// waiting for the successful startup log message.
+		WantExitCode *int
+
+		// The signal to send to containerboot at the start of the phase.
+		Signal *syscall.Signal
 
 		EndpointStatuses map[string]int
 	}
@@ -434,7 +447,8 @@ func TestContainerBoot(t *testing.T) {
 							},
 						},
 					},
-					WantFatalLog: "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
+					WantLog:      "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
+					WantExitCode: ptr.To(1),
 				},
 			},
 		},
@@ -936,7 +950,64 @@ func TestContainerBoot(t *testing.T) {
 			},
 			Phases: []phase{
 				{
-					WantFatalLog: "TS_EGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
+					WantLog:      "TS_EGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
+					WantExitCode: ptr.To(1),
+				},
+			},
+		},
+		{
+			Name: "kube_shutdown_during_state_write",
+			Env: map[string]string{
+				"KUBERNETES_SERVICE_HOST":       kube.Host,
+				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
+				"TS_ENABLE_HEALTH_CHECK":        "true",
+			},
+			KubeSecret: map[string]string{
+				"authkey": "tskey-key",
+			},
+			Phases: []phase{
+				{
+					// Normal startup.
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+					},
+					WantKubeSecret: map[string]string{
+						"authkey": "tskey-key",
+					},
+				},
+				{
+					// SIGTERM before state is finished writing, should wait for
+					// consistent state before propagating SIGTERM to tailscaled.
+					Signal: ptr.To(unix.SIGTERM),
+					UpdateKubeSecret: map[string]string{
+						"_machinekey":  "foo",
+						"_profiles":    "foo",
+						"profile-baff": "foo",
+						// Missing "_current-profile" key.
+					},
+					WantKubeSecret: map[string]string{
+						"authkey":      "tskey-key",
+						"_machinekey":  "foo",
+						"_profiles":    "foo",
+						"profile-baff": "foo",
+					},
+					WantLog: "Waiting for tailscaled to finish writing state to Secret \"tailscale\"",
+				},
+				{
+					// tailscaled has finished writing state, should propagate SIGTERM.
+					UpdateKubeSecret: map[string]string{
+						"_current-profile": "foo",
+					},
+					WantKubeSecret: map[string]string{
+						"authkey":          "tskey-key",
+						"_machinekey":      "foo",
+						"_profiles":        "foo",
+						"profile-baff":     "foo",
+						"_current-profile": "foo",
+					},
+					WantLog:      "HTTP server at [::]:9002 closed",
+					WantExitCode: ptr.To(0),
 				},
 			},
 		},
@@ -984,26 +1055,36 @@ func TestContainerBoot(t *testing.T) {
 
 			var wantCmds []string
 			for i, p := range test.Phases {
+				for k, v := range p.UpdateKubeSecret {
+					kube.SetSecret(k, v)
+				}
 				lapi.Notify(p.Notify)
-				if p.WantFatalLog != "" {
+				if p.Signal != nil {
+					cmd.Process.Signal(*p.Signal)
+				}
+				if p.WantLog != "" {
 					err := tstest.WaitFor(2*time.Second, func() error {
-						state, err := cmd.Process.Wait()
-						if err != nil {
-							return err
-						}
-						if state.ExitCode() != 1 {
-							return fmt.Errorf("process exited with code %d but wanted %d", state.ExitCode(), 1)
-						}
-						waitLogLine(t, time.Second, cbOut, p.WantFatalLog)
+						waitLogLine(t, time.Second, cbOut, p.WantLog)
 						return nil
 					})
 					if err != nil {
 						t.Fatal(err)
 					}
+				}
+
+				if p.WantExitCode != nil {
+					state, err := cmd.Process.Wait()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if state.ExitCode() != *p.WantExitCode {
+						t.Fatalf("phase %d: want exit code %d, got %d", i, *p.WantExitCode, state.ExitCode())
+					}
 
 					// Early test return, we don't expect the successful startup log message.
 					return
 				}
+
 				wantCmds = append(wantCmds, p.WantCmds...)
 				waitArgs(t, 2*time.Second, d, argFile, strings.Join(wantCmds, "\n"))
 				err := tstest.WaitFor(2*time.Second, func() error {
@@ -1059,6 +1140,9 @@ func TestContainerBoot(t *testing.T) {
 				}
 			}
 			waitLogLine(t, 2*time.Second, cbOut, "Startup complete, waiting for shutdown signal")
+			if cmd.ProcessState != nil {
+				t.Fatalf("containerboot should be running but exited with exit code %d", cmd.ProcessState.ExitCode())
+			}
 		})
 	}
 }
@@ -1290,18 +1374,18 @@ func (k *kubeServer) Reset() {
 	k.secret = map[string]string{}
 }
 
-func (k *kubeServer) Start() error {
+func (k *kubeServer) Start(t *testing.T) {
 	root := filepath.Join(k.FSRoot, "var/run/secrets/kubernetes.io/serviceaccount")
 
 	if err := os.MkdirAll(root, 0700); err != nil {
-		return err
+		t.Fatal(err)
 	}
 
 	if err := os.WriteFile(filepath.Join(root, "namespace"), []byte("default"), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "token"), []byte("bearer_token"), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
 
 	k.srv = httptest.NewTLSServer(k)
@@ -1310,13 +1394,11 @@ func (k *kubeServer) Start() error {
 
 	var cert bytes.Buffer
 	if err := pem.Encode(&cert, &pem.Block{Type: "CERTIFICATE", Bytes: k.srv.Certificate().Raw}); err != nil {
-		return err
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "ca.crt"), cert.Bytes(), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
-
-	return nil
 }
 
 func (k *kubeServer) Close() {
@@ -1365,6 +1447,7 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusInternalServerError)
 		return
 	}
+	defer r.Body.Close()
 
 	switch r.Method {
 	case "GET":
@@ -1397,12 +1480,13 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
 			for _, op := range req {
-				if op.Op == "remove" {
+				switch op.Op {
+				case "remove":
 					if !strings.HasPrefix(op.Path, "/data/") {
 						panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
 					}
 					delete(k.secret, strings.TrimPrefix(op.Path, "/data/"))
-				} else if op.Op == "replace" {
+				case "replace":
 					path, ok := strings.CutPrefix(op.Path, "/data/")
 					if !ok {
 						panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
@@ -1419,7 +1503,7 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 						}
 						k.secret[path] = val
 					}
-				} else {
+				default:
 					panic(fmt.Sprintf("unsupported json-patch op %q", op.Op))
 				}
 			}
@@ -1437,7 +1521,7 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 			panic(fmt.Sprintf("unknown content type %q", r.Header.Get("Content-Type")))
 		}
 	default:
-		panic(fmt.Sprintf("unhandled HTTP method %q", r.Method))
+		panic(fmt.Sprintf("unhandled HTTP request %s %s", r.Method, r.URL))
 	}
 }
 
