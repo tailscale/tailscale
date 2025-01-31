@@ -1381,7 +1381,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var err error
-		prefs, err = h.b.EditPrefs(mp)
+		prefs, err = h.b.EditPrefsAs(mp, h.Actor)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)

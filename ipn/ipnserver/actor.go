@@ -17,6 +17,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/osuser"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/version"
 )
 
@@ -63,7 +64,17 @@ func (a *actor) CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess
 	if profile.LocalUserID() != a.UserID() {
 		return errors.New("the target profile does not belong to the user")
 	}
-	return errors.New("the requested operation is not allowed")
+	switch requestedAccess {
+	case ipnauth.Disconnect:
+		if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); alwaysOn {
+			// TODO(nickkhyl): check if disconnecting with justifications is allowed
+			// and whether a justification is included in the request.
+			return errors.New("profile access denied: always-on mode is enabled")
+		}
+		return nil
+	default:
+		return errors.New("the requested operation is not allowed")
+	}
 }
 
 // IsLocalSystem implements [ipnauth.Actor].
