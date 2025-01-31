@@ -33,6 +33,7 @@ const (
 	//
 	// Warning: This policy setting is experimental and may change or be removed in the future.
 	// It may also not be fully supported by all Tailscale clients until it is out of experimental status.
+	// See tailscale/corp#26247, tailscale/corp#26248 and tailscale/corp#26249 for more information.
 	AlwaysOn Key = "AlwaysOn"
 
 	// ExitNodeID is the exit node's node id. default ""; if blank, no exit node is forced.
