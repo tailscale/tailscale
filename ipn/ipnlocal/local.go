@@ -1795,6 +1795,11 @@ func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID
 		}
 	}
 
+	if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); alwaysOn && !prefs.WantRunning {
+		prefs.WantRunning = true
+		anyChange = true
+	}
+
 	for _, opt := range preferencePolicies {
 		if po, err := syspolicy.GetPreferenceOption(opt.key); err == nil {
 			curVal := opt.get(prefs.View())
@@ -3984,7 +3989,15 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	return err
 }
 
+// EditPrefs applies the changes in mp to the current prefs,
+// acting as the tailscaled itself rather than a specific user.
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
+	return b.EditPrefsAs(mp, ipnauth.Self)
+}
+
+// EditPrefsAs is like EditPrefs, but makes the change as the specified actor.
+// It returns an error if the actor is not allowed to make the change.
+func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ipn.PrefsView, error) {
 	if mp.SetsInternal() {
 		return ipn.PrefsView{}, errors.New("can't set Internal fields")
 	}
@@ -3995,8 +4008,20 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 		mp.InternalExitNodePriorSet = true
 	}
 
+	// Acquire the lock before checking the profile access to prevent
+	// TOCTOU issues caused by the current profile changing between the
+	// check and the actual edit.
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
+	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect); err != nil {
+			return ipn.PrefsView{}, err
+		}
+
+		// TODO(nickkhyl): check the ReconnectAfter policy here. If configured,
+		// start a timer to automatically reconnect after the specified duration.
+	}
+
 	return b.editPrefsLockedOnEntry(mp, unlock)
 }
 
