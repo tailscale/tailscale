@@ -26,6 +26,24 @@ const (
 	ControlURL Key = "LoginURL"  // default ""; if blank, ipn uses ipn.DefaultControlURL.
 	LogTarget  Key = "LogTarget" // default ""; if blank logging uses logtail.DefaultHost.
 	Tailnet    Key = "Tailnet"   // default ""; if blank, no tailnet name is sent to the server.
+
+	// AlwaysOn is a boolean key that controls whether Tailscale
+	// should always remain in a connected state, and the user should
+	// not be able to disconnect at their discretion.
+	AlwaysOn Key = "AlwaysOn"
+
+	// AllowDisconnectsWithReason is a boolean key that alters the behavior
+	// of [AlwaysOn]. When true, the user is allowed to disconnect Tailscale
+	// by providing a reason. The reason is logged and sent to the control
+	// for auditing purposes. It has no effect when [AlwaysOn] is false.
+	AllowDisconnectsWithReason Key = "AllowDisconnectsWithReason"
+
+	// ReconnectAfter is a string key that defines the duration after which
+	// the client should automatically reconnect to the Tailscale network
+	// following a user-initiated disconnect.
+	// An empty string or a zero duration disables automatic reconnection.
+	ReconnectAfter Key = "ReconnectAfter"
+
 	// ExitNodeID is the exit node's node id. default ""; if blank, no exit node is forced.
 	// Exit node ID takes precedence over exit node IP.
 	// To find the node ID, go to /api.md#device.
@@ -138,7 +156,9 @@ const (
 // This includes the first time a policy needs to be read from any source.
 var implicitDefinitions = []*setting.Definition{
 	// Device policy settings (can only be configured on a per-device basis):
+	setting.NewDefinition(AllowDisconnectsWithReason, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(AllowedSuggestedExitNodes, setting.DeviceSetting, setting.StringListValue),
+	setting.NewDefinition(AlwaysOn, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(ApplyUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(AuthKey, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(CheckUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
@@ -158,6 +178,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(LogTarget, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(MachineCertificateSubject, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(PostureChecking, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(ReconnectAfter, setting.DeviceSetting, setting.DurationValue),
 	setting.NewDefinition(Tailnet, setting.DeviceSetting, setting.StringValue),
 
 	// User policy settings (can be configured on a user- or device-basis):

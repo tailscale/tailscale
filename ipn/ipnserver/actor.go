@@ -17,6 +17,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/osuser"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/version"
 )
 
@@ -31,8 +32,12 @@ type actor struct {
 	logf logger.Logf
 	ci   *ipnauth.ConnIdentity
 
-	clientID      ipnauth.ClientID
-	isLocalSystem bool // whether the actor is the Windows' Local System identity.
+	clientID ipnauth.ClientID
+	// accessOverrideReason specifies the reason for overriding certain access restrictions,
+	// such as permitting a user to disconnect when the always-on mode is enabled,
+	// provided that such justification is allowed by the policy.
+	accessOverrideReason string
+	isLocalSystem        bool // whether the actor is the Windows' Local System identity.
 }
 
 func newActor(logf logger.Logf, c net.Conn) (*actor, error) {
@@ -56,6 +61,48 @@ func newActor(logf logger.Logf, c net.Conn) (*actor, error) {
 		clientID = ipnauth.ClientIDFrom(pid)
 	}
 	return &actor{logf: logf, ci: ci, clientID: clientID, isLocalSystem: connIsLocalSystem(ci)}, nil
+}
+
+// actorWithAccessOverride returns a new actor that carries the specified
+// reason for overriding certain access restrictions, if permitted by the
+// policy. If the reason is "", it returns the base actor.
+func actorWithAccessOverride(baseActor *actor, reason string) *actor {
+	if reason == "" {
+		return baseActor
+	}
+	return &actor{
+		logf:                 baseActor.logf,
+		ci:                   baseActor.ci,
+		clientID:             baseActor.clientID,
+		accessOverrideReason: reason,
+		isLocalSystem:        baseActor.isLocalSystem,
+	}
+}
+
+// CheckProfileAccess implements [ipnauth.Actor].
+func (a *actor) CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ipnauth.ProfileAccess) error {
+	// TODO(nickkhyl): return errors of more specific types and have them
+	// translated to the appropriate HTTP status codes in the API handler.
+	if profile.LocalUserID() != a.UserID() {
+		return errors.New("the target profile does not belong to the user")
+	}
+	switch requestedAccess {
+	case ipnauth.Disconnect:
+		if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); alwaysOn {
+			if allowWithReason, _ := syspolicy.GetBoolean(syspolicy.AllowDisconnectsWithReason, false); !allowWithReason {
+				return errors.New("disconnect not allowed: always-on mode is enabled")
+			}
+			if a.accessOverrideReason == "" {
+				return errors.New("disconnect not allowed: reason required")
+			}
+			maybeUsername, _ := a.Username() // best-effort
+			a.logf("Tailscale (%q) is being disconnected by %q: %v", profile.Name, maybeUsername, a.accessOverrideReason)
+			// TODO(nickkhyl): Log the reason to the audit log once we have one.
+		}
+		return nil // disconnect is allowed
+	default:
+		return errors.New("the requested operation is not allowed")
+	}
 }
 
 // IsLocalSystem implements [ipnauth.Actor].
