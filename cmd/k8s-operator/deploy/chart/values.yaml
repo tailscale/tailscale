@@ -37,7 +37,7 @@ operatorConfig:
   defaultTags:
     - "tag:k8s-operator"
 
-  # Manual configuration of Tailscaled port
+  # Manual configuration of tsnet port. If unset, a random port is selected.
   port:
     enabled: false
     containerPort: 8080
