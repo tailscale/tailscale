@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 )
 
@@ -23,10 +24,12 @@ var downCmd = &ffcli.Command{
 
 var downArgs struct {
 	acceptedRisks string
+	reason        string
 }
 
 func newDownFlagSet() *flag.FlagSet {
 	downf := newFlagSet("down")
+	downf.StringVar(&downArgs.reason, "reason", "", "reason for the disconnect, if required by a policy")
 	registerAcceptRiskFlag(downf, &downArgs.acceptedRisks)
 	return downf
 }
@@ -50,6 +53,7 @@ func runDown(ctx context.Context, args []string) error {
 		fmt.Fprintf(Stderr, "Tailscale was already stopped.\n")
 		return nil
 	}
+	ctx = apitype.RequestReasonKey.WithValue(ctx, downArgs.reason)
 	_, err = localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			WantRunning: false,
