@@ -76,6 +76,10 @@ operatorConfig:
 ingressClass:
   enabled: true
 
+# In the case that you already have a tailscale gatewayclass in your cluster (or vcluster), you can disable the creation here
+gatewayClass:
+  enabled: false
+
 # proxyConfig contains configuraton that will be applied to any ingress/egress
 # proxies created by the operator.
 # https://tailscale.com/kb/1439/kubernetes-operator-cluster-ingress

@@ -38,6 +38,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -306,6 +308,32 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not create service reconciler: %v", err)
 	}
+
+	gatewayChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("gateway"))
+	// If a ProxyClassChanges, enqueue all Ingresses labeled with that
+	// ProxyClass's name.
+	proxyClassFilterForGateway := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForGateway(mgr.GetClient(), startlog))
+	// Enque Gateway if a managed Service or backend Service associated with a tailscale Gateway changes.
+	svcHandlerForGateway := handler.EnqueueRequestsFromMapFunc(serviceHandlerForGateway(mgr.GetClient(), startlog))
+
+	err = builder.
+		ControllerManagedBy(mgr).
+		For(&gatewayv1.Gateway{}).
+		Watches(&appsv1.StatefulSet{}, gatewayChildFilter).
+		Watches(&corev1.Secret{}, gatewayChildFilter).
+		Watches(&corev1.Service{}, svcHandlerForGateway).
+		Watches(&tsapi.ProxyClass{}, proxyClassFilterForGateway).
+		Complete(&GatewayReconciler{
+			ssr:               ssr,
+			recorder:          eventRecorder,
+			Client:            mgr.GetClient(),
+			logger:            opts.log.Named("gateway-reconciler"),
+			defaultProxyClass: opts.defaultProxyClass,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create ingress reconciler: %v", err)
+	}
+
 	ingressChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("ingress"))
 	// If a ProxyClassChanges, enqueue all Ingresses labeled with that
 	// ProxyClass's name.
@@ -756,6 +784,24 @@ func proxyClassHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) ha
 	}
 }
 
+func proxyClassHandlerForGateway(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		gwList := new(gatewayv1.GatewayList)
+		labels := map[string]string{
+			LabelProxyClass: o.GetName(),
+		}
+		if err := cl.List(ctx, gwList, client.MatchingLabels(labels)); err != nil {
+			logger.Debugf("error listing Gateways for ProxyClass: %v", err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, gw := range gwList.Items {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&gw)})
+		}
+		return reqs
+	}
+}
+
 // proxyClassHandlerForConnector returns a handler that, for a given ProxyClass,
 // returns a list of reconcile requests for all Connectors that have
 // .spec.proxyClass set.
@@ -838,6 +884,64 @@ func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handl
 				}
 			}
 		}
+		return reqs
+	}
+}
+
+func serviceHandlerForGateway(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		httpRouteList := gatewayv1.HTTPRouteList{}
+		if err := cl.List(ctx, &httpRouteList, client.InNamespace(o.GetNamespace())); err != nil {
+			logger.Debugf("error listing HTTPRoutes: %v", err)
+			return nil
+		}
+
+		reqs := make([]reconcile.Request, 0)
+		for _, route := range httpRouteList.Items {
+			for _, parent := range route.Spec.ParentRefs {
+				if *parent.Kind == gatewayv1.Kind("Gateway") {
+					for _, rule := range route.Spec.Rules {
+						for _, backend := range rule.BackendRefs {
+							if backend.Name == gatewayv1.ObjectName(o.GetName()) {
+								reqs = append(reqs, reconcile.Request{
+									NamespacedName: types.NamespacedName{
+										Namespace: o.GetNamespace(),
+										Name:      string(parent.Name),
+									},
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Check TCPRoutes
+		tcpRouteList := gatewayv1alpha2.TCPRouteList{}
+		if err := cl.List(ctx, &tcpRouteList, client.InNamespace(o.GetNamespace())); err != nil {
+			logger.Debugf("error listing TCPRoutes: %v", err)
+			return nil
+		}
+
+		for _, route := range tcpRouteList.Items {
+			for _, parent := range route.Spec.ParentRefs {
+				if *parent.Kind == gatewayv1.Kind("Gateway") {
+					for _, rule := range route.Spec.Rules {
+						for _, backend := range rule.BackendRefs {
+							if backend.Name == gatewayv1.ObjectName(o.GetName()) {
+								reqs = append(reqs, reconcile.Request{
+									NamespacedName: types.NamespacedName{
+										Namespace: o.GetNamespace(),
+										Name:      string(parent.Name),
+									},
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+
 		return reqs
 	}
 }

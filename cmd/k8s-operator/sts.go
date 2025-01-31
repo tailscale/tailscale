@@ -99,6 +99,7 @@ const (
 	proxyTypeEgress          = "egress_service"
 	proxyTypeIngressService  = "ingress_service"
 	proxyTypeIngressResource = "ingress_resource"
+	proxyTypeGatewayResource = "gateway_resource"
 	proxyTypeConnector       = "connector"
 	proxyTypeProxyGroup      = "proxygroup"
 )

@@ -1,0 +1,8 @@
+{{- if .Values.gatewayClass.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: tailscale
+spec:
+  controllerName: tailscale.com/ts-gateway
+{{- end }}
