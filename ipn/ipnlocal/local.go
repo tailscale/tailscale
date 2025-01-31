@@ -2368,6 +2368,29 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	return nil
 }
 
+// addServiceIPs adds the IP addresses of any VIP Services sent from the
+// coordination server to the list of addresses that we expect to handle.
+func addServiceIPs(localNetsB *netipx.IPSetBuilder, selfNode tailcfg.NodeView) error {
+	if !selfNode.Valid() {
+		return nil
+	}
+
+	serviceMap, err := tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceIPMappings](selfNode.CapMap(), tailcfg.NodeAttrServiceHost)
+	if err != nil {
+		return err
+	}
+
+	for _, sm := range serviceMap { // typically there will be exactly one of these
+		for _, serviceAddrs := range sm {
+			for _, addr := range serviceAddrs { // typically there will be exactly two of these
+				localNetsB.Add(addr)
+			}
+		}
+	}
+
+	return nil
+}
+
 // invalidPacketFilterWarnable is a Warnable to warn the user that the control server sent an invalid packet filter.
 var invalidPacketFilterWarnable = health.Register(&health.Warnable{
 	Code:     "invalid-packet-filter",
@@ -2410,6 +2433,10 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 			packetFilter = nil
 		} else {
 			b.health.SetHealthy(invalidPacketFilterWarnable)
+		}
+
+		if err := addServiceIPs(&localNetsB, netMap.SelfNode); err != nil {
+			b.logf("addServiceIPs: %v", err)
 		}
 	}
 	if prefs.Valid() {
