@@ -1307,6 +1307,28 @@ func TestBucket(t *testing.T) {
 	}
 }
 
+func TestGenerateRequestID(t *testing.T) {
+	t0 := time.Now()
+	got := GenerateRequestID()
+	t.Logf("Got: %q", got)
+	if !strings.HasPrefix(string(got), "REQ-2") {
+		t.Errorf("expect REQ-2 prefix; got %q", got)
+	}
+	const wantLen = len("REQ-2024112022140896f8ead3d3f3be27")
+	if len(got) != wantLen {
+		t.Fatalf("len = %d; want %d", len(got), wantLen)
+	}
+	d := got[len("REQ-"):][:14]
+	timeBack, err := time.Parse("20060102150405", string(d))
+	if err != nil {
+		t.Fatalf("parsing time back: %v", err)
+	}
+	elapsed := timeBack.Sub(t0)
+	if elapsed > 3*time.Second { // allow for slow github actions runners :)
+		t.Fatalf("time back was %v; want within 3s", elapsed)
+	}
+}
+
 func ExampleMiddlewareStack() {
 	// setHeader returns a middleware that sets header k = vs.
 	setHeader := func(k string, vs ...string) Middleware {

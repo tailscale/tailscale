@@ -237,7 +237,7 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		for _, goos := range []string{"linux", "windows", "darwin"} {
+		for _, goos := range []string{"linux", "windows", "darwin", "illumos", "solaris"} {
 			t.Run(goos+"-"+tt.name, func(t *testing.T) {
 				err := authorizeServeConfigForGOOSAndUserContext(goos, tt.configIn, tt.h)
 				gotErr := err != nil
@@ -349,6 +349,7 @@ func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(lb.Shutdown)
 	return lb
 }
 

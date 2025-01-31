@@ -21,23 +21,21 @@ var advertiseArgs struct {
 
 // TODO(naman): This flag may move to set.go or serve_v2.go after the WIPCode
 // envknob is not needed.
-var advertiseCmd = &ffcli.Command{
-	Name:       "advertise",
-	ShortUsage: "tailscale advertise --services=<services>",
-	ShortHelp:  "Advertise this node as a destination for a service",
-	Exec:       runAdvertise,
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("advertise")
-		fs.StringVar(&advertiseArgs.services, "services", "", "comma-separated services to advertise; each must start with \"svc:\" (e.g. \"svc:idp,svc:nas,svc:database\")")
-		return fs
-	})(),
-}
-
-func maybeAdvertiseCmd() []*ffcli.Command {
+func advertiseCmd() *ffcli.Command {
 	if !envknob.UseWIPCode() {
 		return nil
 	}
-	return []*ffcli.Command{advertiseCmd}
+	return &ffcli.Command{
+		Name:       "advertise",
+		ShortUsage: "tailscale advertise --services=<services>",
+		ShortHelp:  "Advertise this node as a destination for a service",
+		Exec:       runAdvertise,
+		FlagSet: (func() *flag.FlagSet {
+			fs := newFlagSet("advertise")
+			fs.StringVar(&advertiseArgs.services, "services", "", "comma-separated services to advertise; each must start with \"svc:\" (e.g. \"svc:idp,svc:nas,svc:database\")")
+			return fs
+		})(),
+	}
 }
 
 func runAdvertise(ctx context.Context, args []string) error {
@@ -68,7 +66,7 @@ func parseServiceNames(servicesArg string) ([]string, error) {
 	if servicesArg != "" {
 		services = strings.Split(servicesArg, ",")
 		for _, svc := range services {
-			err := tailcfg.CheckServiceName(svc)
+			err := tailcfg.ServiceName(svc).Validate()
 			if err != nil {
 				return nil, fmt.Errorf("service %q: %s", svc, err)
 			}

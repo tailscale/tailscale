@@ -15,7 +15,7 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=Resolver
 
-// View returns a readonly view of Resolver.
+// View returns a read-only view of Resolver.
 func (p *Resolver) View() ResolverView {
 	return ResolverView{ж: p}
 }
@@ -31,7 +31,7 @@ type ResolverView struct {
 	ж *Resolver
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v ResolverView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with

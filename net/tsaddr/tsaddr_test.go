@@ -222,3 +222,71 @@ func TestContainsExitRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestIsTailscaleIPv4(t *testing.T) {
+	tests := []struct {
+		in   netip.Addr
+		want bool
+	}{
+		{
+			in:   netip.MustParseAddr("100.67.19.57"),
+			want: true,
+		},
+		{
+			in:   netip.MustParseAddr("10.10.10.10"),
+			want: false,
+		},
+		{
+
+			in:   netip.MustParseAddr("fd7a:115c:a1e0:3f2b:7a1d:4e88:9c2b:7f01"),
+			want: false,
+		},
+		{
+			in:   netip.MustParseAddr("bc9d:0aa0:1f0a:69ab:eb5c:28e0:5456:a518"),
+			want: false,
+		},
+		{
+			in:   netip.MustParseAddr("100.115.92.157"),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		if got := IsTailscaleIPv4(tt.in); got != tt.want {
+			t.Errorf("IsTailscaleIPv4(%v) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestIsTailscaleIP(t *testing.T) {
+	tests := []struct {
+		in   netip.Addr
+		want bool
+	}{
+		{
+			in:   netip.MustParseAddr("100.67.19.57"),
+			want: true,
+		},
+		{
+			in:   netip.MustParseAddr("10.10.10.10"),
+			want: false,
+		},
+		{
+
+			in:   netip.MustParseAddr("fd7a:115c:a1e0:3f2b:7a1d:4e88:9c2b:7f01"),
+			want: true,
+		},
+		{
+			in:   netip.MustParseAddr("bc9d:0aa0:1f0a:69ab:eb5c:28e0:5456:a518"),
+			want: false,
+		},
+		{
+			in:   netip.MustParseAddr("100.115.92.157"),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		if got := IsTailscaleIP(tt.in); got != tt.want {
+			t.Errorf("IsTailscaleIP(%v) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}

@@ -13,7 +13,7 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=TestPrefs,TestBundle,TestValueStruct,TestGenericStruct,TestPrefsGroup -tags=test
 
-// View returns a readonly view of TestPrefs.
+// View returns a read-only view of TestPrefs.
 func (p *TestPrefs) View() TestPrefsView {
 	return TestPrefsView{ж: p}
 }
@@ -29,7 +29,7 @@ type TestPrefsView struct {
 	ж *TestPrefs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v TestPrefsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -117,7 +117,7 @@ var _TestPrefsViewNeedsRegeneration = TestPrefs(struct {
 	Group           TestPrefsGroup
 }{})
 
-// View returns a readonly view of TestBundle.
+// View returns a read-only view of TestBundle.
 func (p *TestBundle) View() TestBundleView {
 	return TestBundleView{ж: p}
 }
@@ -133,7 +133,7 @@ type TestBundleView struct {
 	ж *TestBundle
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v TestBundleView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -162,15 +162,8 @@ func (v *TestBundleView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v TestBundleView) Name() string { return v.ж.Name }
-func (v TestBundleView) Nested() *TestValueStruct {
-	if v.ж.Nested == nil {
-		return nil
-	}
-	x := *v.ж.Nested
-	return &x
-}
-
+func (v TestBundleView) Name() string                 { return v.ж.Name }
+func (v TestBundleView) Nested() TestValueStructView  { return v.ж.Nested.View() }
 func (v TestBundleView) Equal(v2 TestBundleView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -179,7 +172,7 @@ var _TestBundleViewNeedsRegeneration = TestBundle(struct {
 	Nested *TestValueStruct
 }{})
 
-// View returns a readonly view of TestValueStruct.
+// View returns a read-only view of TestValueStruct.
 func (p *TestValueStruct) View() TestValueStructView {
 	return TestValueStructView{ж: p}
 }
@@ -195,7 +188,7 @@ type TestValueStructView struct {
 	ж *TestValueStruct
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v TestValueStructView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -232,7 +225,7 @@ var _TestValueStructViewNeedsRegeneration = TestValueStruct(struct {
 	Value int
 }{})
 
-// View returns a readonly view of TestGenericStruct.
+// View returns a read-only view of TestGenericStruct.
 func (p *TestGenericStruct[T]) View() TestGenericStructView[T] {
 	return TestGenericStructView[T]{ж: p}
 }
@@ -248,7 +241,7 @@ type TestGenericStructView[T ImmutableType] struct {
 	ж *TestGenericStruct[T]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v TestGenericStructView[T]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -287,7 +280,7 @@ func _TestGenericStructViewNeedsRegeneration[T ImmutableType](TestGenericStruct[
 	}{})
 }
 
-// View returns a readonly view of TestPrefsGroup.
+// View returns a read-only view of TestPrefsGroup.
 func (p *TestPrefsGroup) View() TestPrefsGroupView {
 	return TestPrefsGroupView{ж: p}
 }
@@ -303,7 +296,7 @@ type TestPrefsGroupView struct {
 	ж *TestPrefsGroup
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v TestPrefsGroupView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with

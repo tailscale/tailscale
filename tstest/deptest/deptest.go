@@ -13,14 +13,19 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+
+	"tailscale.com/util/set"
 )
 
 type DepChecker struct {
-	GOOS    string            // optional
-	GOARCH  string            // optional
-	BadDeps map[string]string // package => why
+	GOOS     string            // optional
+	GOARCH   string            // optional
+	BadDeps  map[string]string // package => why
+	WantDeps set.Set[string]   // packages expected
+	Tags     string            // comma-separated
 }
 
 func (c DepChecker) Check(t *testing.T) {
@@ -29,7 +34,7 @@ func (c DepChecker) Check(t *testing.T) {
 		t.Skip("skipping dep tests on windows hosts")
 	}
 	t.Helper()
-	cmd := exec.Command("go", "list", "-json", ".")
+	cmd := exec.Command("go", "list", "-json", "-tags="+c.Tags, ".")
 	var extraEnv []string
 	if c.GOOS != "" {
 		extraEnv = append(extraEnv, "GOOS="+c.GOOS)
@@ -52,6 +57,11 @@ func (c DepChecker) Check(t *testing.T) {
 	for _, dep := range res.Deps {
 		if why, ok := c.BadDeps[dep]; ok {
 			t.Errorf("package %q is not allowed as a dependency (env: %q); reason: %s", dep, extraEnv, why)
+		}
+	}
+	for dep := range c.WantDeps {
+		if !slices.Contains(res.Deps, dep) {
+			t.Errorf("expected package %q to be a dependency (env: %q)", dep, extraEnv)
 		}
 	}
 	t.Logf("got %d dependencies", len(res.Deps))

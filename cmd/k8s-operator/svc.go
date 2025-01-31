@@ -121,7 +121,15 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
 
-	return reconcile.Result{}, a.maybeProvision(ctx, logger, svc)
+	if err := a.maybeProvision(ctx, logger, svc); err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+		} else {
+			return reconcile.Result{}, err
+		}
+	}
+
+	return reconcile.Result{}, nil
 }
 
 // maybeCleanup removes any existing resources related to serving svc over tailscale.
@@ -131,7 +139,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (err error) {
 	oldSvcStatus := svc.Status.DeepCopy()
 	defer func() {
-		if !apiequality.Semantic.DeepEqual(oldSvcStatus, svc.Status) {
+		if !apiequality.Semantic.DeepEqual(oldSvcStatus, &svc.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			err = errors.Join(err, a.Client.Status().Update(ctx, svc))
 		}
@@ -152,7 +160,12 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		return nil
 	}
 
-	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc.Name, svc.Namespace, "svc")); err != nil {
+	proxyTyp := proxyTypeEgress
+	if a.shouldExpose(svc) {
+		proxyTyp = proxyTypeIngressService
+	}
+
+	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc.Name, svc.Namespace, "svc"), proxyTyp); err != nil {
 		return fmt.Errorf("failed to cleanup: %w", err)
 	} else if !done {
 		logger.Debugf("cleanup not done yet, waiting for next reconcile")
@@ -191,7 +204,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (err error) {
 	oldSvcStatus := svc.Status.DeepCopy()
 	defer func() {
-		if !apiequality.Semantic.DeepEqual(oldSvcStatus, svc.Status) {
+		if !apiequality.Semantic.DeepEqual(oldSvcStatus, &svc.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			err = errors.Join(err, a.Client.Status().Update(ctx, svc))
 		}
@@ -256,6 +269,10 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		ChildResourceLabels: crl,
 		ProxyClassName:      proxyClass,
 	}
+	sts.proxyType = proxyTypeEgress
+	if a.shouldExpose(svc) {
+		sts.proxyType = proxyTypeIngressService
+	}
 
 	a.mu.Lock()
 	if a.shouldExposeClusterIP(svc) {
@@ -311,11 +328,11 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	_, tsHost, tsIPs, err := a.ssr.DeviceInfo(ctx, crl)
+	dev, err := a.ssr.DeviceInfo(ctx, crl, logger)
 	if err != nil {
 		return fmt.Errorf("failed to get device ID: %w", err)
 	}
-	if tsHost == "" {
+	if dev == nil || dev.hostname == "" {
 		msg := "no Tailscale hostname known yet, waiting for proxy pod to finish auth"
 		logger.Debug(msg)
 		// No hostname yet. Wait for the proxy pod to auth.
@@ -324,9 +341,9 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	logger.Debugf("setting Service LoadBalancer status to %q, %s", tsHost, strings.Join(tsIPs, ", "))
+	logger.Debugf("setting Service LoadBalancer status to %q, %s", dev.hostname, strings.Join(dev.ips, ", "))
 	ingress := []corev1.LoadBalancerIngress{
-		{Hostname: tsHost},
+		{Hostname: dev.hostname},
 	}
 	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
 	if err != nil {
@@ -334,7 +351,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
 		return errors.New(msg)
 	}
-	for _, ip := range tsIPs {
+	for _, ip := range dev.ips {
 		addr, err := netip.ParseAddr(ip)
 		if err != nil {
 			continue

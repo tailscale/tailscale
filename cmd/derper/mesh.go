@@ -10,7 +10,6 @@ import (
 	"log"
 	"net"
 	"strings"
-	"time"
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
@@ -25,15 +24,28 @@ func startMesh(s *derp.Server) error {
 	if !s.HasMeshKey() {
 		return errors.New("--mesh-with requires --mesh-psk-file")
 	}
-	for _, host := range strings.Split(*meshWith, ",") {
-		if err := startMeshWithHost(s, host); err != nil {
+	for _, hostTuple := range strings.Split(*meshWith, ",") {
+		if err := startMeshWithHost(s, hostTuple); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func startMeshWithHost(s *derp.Server, host string) error {
+func startMeshWithHost(s *derp.Server, hostTuple string) error {
+	var host string
+	var dialHost string
+	hostParts := strings.Split(hostTuple, "/")
+	if len(hostParts) > 2 {
+		return fmt.Errorf("too many components in host tuple %q", hostTuple)
+	}
+	host = hostParts[0]
+	if len(hostParts) == 2 {
+		dialHost = hostParts[1]
+	} else {
+		dialHost = hostParts[0]
+	}
+
 	logf := logger.WithPrefix(log.Printf, fmt.Sprintf("mesh(%q): ", host))
 	netMon := netmon.NewStatic() // good enough for cmd/derper; no need for netns fanciness
 	c, err := derphttp.NewClient(s.PrivateKey(), "https://"+host+"/derp", logf, netMon)
@@ -43,31 +55,20 @@ func startMeshWithHost(s *derp.Server, host string) error {
 	c.MeshKey = s.MeshKey()
 	c.WatchConnectionChanges = true
 
-	// For meshed peers within a region, connect via VPC addresses.
-	c.SetURLDialer(func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, err
-		}
+	logf("will dial %q for %q", dialHost, host)
+	if dialHost != host {
 		var d net.Dialer
-		var r net.Resolver
-		if base, ok := strings.CutSuffix(host, ".tailscale.com"); ok && port == "443" {
-			subCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			defer cancel()
-			vpcHost := base + "-vpc.tailscale.com"
-			ips, _ := r.LookupIP(subCtx, "ip", vpcHost)
-			if len(ips) > 0 {
-				vpcAddr := net.JoinHostPort(ips[0].String(), port)
-				c, err := d.DialContext(subCtx, network, vpcAddr)
-				if err == nil {
-					log.Printf("connected to %v (%v) instead of %v", vpcHost, ips[0], base)
-					return c, nil
-				}
-				log.Printf("failed to connect to %v (%v): %v; trying non-VPC route", vpcHost, ips[0], err)
+		c.SetURLDialer(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				logf("failed to split %q: %v", addr, err)
+				return nil, err
 			}
-		}
-		return d.DialContext(ctx, network, addr)
-	})
+			dialAddr := net.JoinHostPort(dialHost, port)
+			logf("dialing %q instead of %q", dialAddr, addr)
+			return d.DialContext(ctx, network, dialAddr)
+		})
+	}
 
 	add := func(m derp.PeerPresentMessage) { s.AddPacketForwarder(m.Key, c) }
 	remove := func(m derp.PeerGoneMessage) { s.RemovePacketForwarder(m.Peer, c) }

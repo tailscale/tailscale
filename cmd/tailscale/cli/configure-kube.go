@@ -20,33 +20,31 @@ import (
 	"tailscale.com/version"
 )
 
-func init() {
-	configureCmd.Subcommands = append(configureCmd.Subcommands, configureKubeconfigCmd)
-}
-
-var configureKubeconfigCmd = &ffcli.Command{
-	Name:       "kubeconfig",
-	ShortHelp:  "[ALPHA] Connect to a Kubernetes cluster using a Tailscale Auth Proxy",
-	ShortUsage: "tailscale configure kubeconfig <hostname-or-fqdn>",
-	LongHelp: strings.TrimSpace(`
+func configureKubeconfigCmd() *ffcli.Command {
+	return &ffcli.Command{
+		Name:       "kubeconfig",
+		ShortHelp:  "[ALPHA] Connect to a Kubernetes cluster using a Tailscale Auth Proxy",
+		ShortUsage: "tailscale configure kubeconfig <hostname-or-fqdn>",
+		LongHelp: strings.TrimSpace(`
 Run this command to configure kubectl to connect to a Kubernetes cluster over Tailscale.
 
 The hostname argument should be set to the Tailscale hostname of the peer running as an auth proxy in the cluster.
 
 See: https://tailscale.com/s/k8s-auth-proxy
 `),
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("kubeconfig")
-		return fs
-	})(),
-	Exec: runConfigureKubeconfig,
+		FlagSet: (func() *flag.FlagSet {
+			fs := newFlagSet("kubeconfig")
+			return fs
+		})(),
+		Exec: runConfigureKubeconfig,
+	}
 }
 
 // kubeconfigPath returns the path to the kubeconfig file for the current user.
 func kubeconfigPath() (string, error) {
 	if kubeconfig := os.Getenv("KUBECONFIG"); kubeconfig != "" {
 		if version.IsSandboxedMacOS() {
-			return "", errors.New("$KUBECONFIG is incompatible with the App Store version")
+			return "", errors.New("cannot read $KUBECONFIG on GUI builds of the macOS client: this requires the open-source tailscaled distribution")
 		}
 		var out string
 		for _, out = range filepath.SplitList(kubeconfig) {

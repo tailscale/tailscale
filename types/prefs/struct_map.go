@@ -83,7 +83,7 @@ type StructMapView[K MapKeyType, T views.ViewCloner[T, V], V views.StructView[T]
 	ж *StructMap[K, T]
 }
 
-// StructMapViewOf returns a readonly view of m.
+// StructMapViewOf returns a read-only view of m.
 // It is used by [tailscale.com/cmd/viewer].
 func StructMapViewOf[K MapKeyType, T views.ViewCloner[T, V], V views.StructView[T]](m *StructMap[K, T]) StructMapView[K, T, V] {
 	return StructMapView[K, T, V]{m}

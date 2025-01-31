@@ -28,6 +28,22 @@ const (
 	// ReasonACL means that the packet was not permitted by ACL.
 	ReasonACL DropReason = "acl"
 
+	// ReasonMulticast means that the packet was dropped because it was a multicast packet.
+	ReasonMulticast DropReason = "multicast"
+
+	// ReasonLinkLocalUnicast means that the packet was dropped because it was a link-local unicast packet.
+	ReasonLinkLocalUnicast DropReason = "link_local_unicast"
+
+	// ReasonTooShort means that the packet was dropped because it was a bad packet,
+	// this could be due to a short packet.
+	ReasonTooShort DropReason = "too_short"
+
+	// ReasonFragment means that the packet was dropped because it was an IP fragment.
+	ReasonFragment DropReason = "fragment"
+
+	// ReasonUnknownProtocol means that the packet was dropped because it was an unknown protocol.
+	ReasonUnknownProtocol DropReason = "unknown_protocol"
+
 	// ReasonError means that the packet was dropped because of an error.
 	ReasonError DropReason = "error"
 )

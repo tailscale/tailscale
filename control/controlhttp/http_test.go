@@ -23,12 +23,16 @@ import (
 	"time"
 
 	"tailscale.com/control/controlbase"
+	"tailscale.com/control/controlhttp/controlhttpcommon"
+	"tailscale.com/control/controlhttp/controlhttpserver"
+	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -158,7 +162,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 				return err
 			}
 		}
-		conn, err := AcceptHTTP(context.Background(), w, r, server, earlyWriteFn)
+		conn, err := controlhttpserver.AcceptHTTP(context.Background(), w, r, server, earlyWriteFn)
 		if err != nil {
 			log.Print(err)
 		}
@@ -225,6 +229,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		omitCertErrorLogging: true,
 		testFallbackDelay:    fallbackDelay,
 		Clock:                clock,
+		HealthTracker:        new(health.Tracker),
 	}
 
 	if param.httpInDial {
@@ -529,7 +534,7 @@ EKTcWGekdmdDPsHloRNtsiCa697B2O9IFA==
 
 func brokenMITMHandler(clock tstime.Clock) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Upgrade", upgradeHeaderValue)
+		w.Header().Set("Upgrade", controlhttpcommon.UpgradeHeaderValue)
 		w.Header().Set("Connection", "upgrade")
 		w.WriteHeader(http.StatusSwitchingProtocols)
 		w.(http.Flusher).Flush()
@@ -574,7 +579,7 @@ func TestDialPlan(t *testing.T) {
 			close(done)
 		})
 		var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			conn, err := AcceptHTTP(context.Background(), w, r, server, nil)
+			conn, err := controlhttpserver.AcceptHTTP(context.Background(), w, r, server, nil)
 			if err != nil {
 				log.Print(err)
 			} else {
@@ -726,6 +731,7 @@ func TestDialPlan(t *testing.T) {
 				omitCertErrorLogging: true,
 				testFallbackDelay:    50 * time.Millisecond,
 				Clock:                clock,
+				HealthTracker:        new(health.Tracker),
 			}
 
 			conn, err := a.dial(ctx)
@@ -815,4 +821,15 @@ type closeTrackConn struct {
 func (c *closeTrackConn) Close() error {
 	c.d.noteClose(c)
 	return c.Conn.Close()
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "darwin",
+		GOARCH: "arm64",
+		BadDeps: map[string]string{
+			// Only the controlhttpserver needs WebSockets...
+			"github.com/coder/websocket": "controlhttp client shouldn't need websockets",
+		},
+	}.Check(t)
 }

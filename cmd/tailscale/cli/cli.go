@@ -25,6 +25,7 @@ import (
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/envknob"
 	"tailscale.com/paths"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/version/distro"
 )
 
@@ -84,17 +85,22 @@ var localClient = tailscale.LocalClient{
 
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) (err error) {
-	if runtime.GOOS == "linux" && os.Getenv("GOKRAZY_FIRST_START") == "1" && distro.Get() == distro.Gokrazy && os.Getppid() == 1 {
-		// We're running on gokrazy and it's the first start.
-		// Don't run the tailscale CLI as a service; just exit.
+	if runtime.GOOS == "linux" && os.Getenv("GOKRAZY_FIRST_START") == "1" && distro.Get() == distro.Gokrazy && os.Getppid() == 1 && len(args) == 0 {
+		// We're running on gokrazy and the user did not specify 'up'.
+		// Don't run the tailscale CLI and spam logs with usage; just exit.
 		// See https://gokrazy.org/development/process-interface/
 		os.Exit(0)
 	}
 
 	args = CleanUpArgs(args)
 
-	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
-		args = []string{"version"}
+	if len(args) == 1 {
+		switch args[0] {
+		case "-V", "--version":
+			args = []string{"version"}
+		case "help":
+			args = []string{"--help"}
+		}
 	}
 
 	var warnOnce sync.Once
@@ -177,14 +183,14 @@ For help on subcommands, add --help after: "tailscale status --help".
 This CLI is still under active development. Commands and flags will
 change in the future.
 `),
-		Subcommands: append([]*ffcli.Command{
+		Subcommands: nonNilCmds(
 			upCmd,
 			downCmd,
 			setCmd,
 			loginCmd,
 			logoutCmd,
 			switchCmd,
-			configureCmd,
+			configureCmd(),
 			syspolicyCmd,
 			netcheckCmd,
 			ipCmd,
@@ -209,7 +215,9 @@ change in the future.
 			debugCmd,
 			driveCmd,
 			idTokenCmd,
-		}, maybeAdvertiseCmd()...),
+			advertiseCmd(),
+			configureHostCmd(),
+		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
 			if len(args) > 0 {
@@ -217,10 +225,6 @@ change in the future.
 			}
 			return flag.ErrHelp
 		},
-	}
-
-	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
-		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
 	}
 
 	walkCommands(rootCmd, func(w cmdWalk) bool {
@@ -232,6 +236,10 @@ change in the future.
 
 	ffcomplete.Inject(rootCmd, func(c *ffcli.Command) { c.LongHelp = hidden + c.LongHelp }, usageFunc)
 	return rootCmd
+}
+
+func nonNilCmds(cmds ...*ffcli.Command) []*ffcli.Command {
+	return slicesx.AppendNonzero(cmds[:0], cmds)
 }
 
 func fatalf(format string, a ...any) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -62,6 +63,39 @@ func TestAtomicValue(t *testing.T) {
 		if got != nil || !gotOk {
 			t.Fatalf("LoadOk = (%v, %v), want (nil, true)", got, gotOk)
 		}
+	}
+}
+
+func TestMutexValue(t *testing.T) {
+	var v MutexValue[time.Time]
+	if n := int(testing.AllocsPerRun(1000, func() {
+		v.Store(v.Load())
+		v.WithLock(func(*time.Time) {})
+	})); n != 0 {
+		t.Errorf("AllocsPerRun = %d, want 0", n)
+	}
+
+	now := time.Now()
+	v.Store(now)
+	if !v.Load().Equal(now) {
+		t.Errorf("Load = %v, want %v", v.Load(), now)
+	}
+
+	var group WaitGroup
+	var v2 MutexValue[int]
+	var sum int
+	for i := range 10 {
+		group.Go(func() {
+			old1 := v2.Load()
+			old2 := v2.Swap(old1 + i)
+			delta := old2 - old1
+			v2.WithLock(func(p *int) { *p += delta })
+		})
+		sum += i
+	}
+	group.Wait()
+	if v2.Load() != sum {
+		t.Errorf("Load = %v, want %v", v2.Load(), sum)
 	}
 }
 

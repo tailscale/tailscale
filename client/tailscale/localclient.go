@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build go1.19
+//go:build go1.22
 
 package tailscale
 
@@ -61,6 +61,12 @@ type LocalClient struct {
 	// Dial optionally specifies an alternate func that connects to the local
 	// machine's tailscaled or equivalent. If nil, a default is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// Transport optionally specifies an alternate [http.RoundTripper]
+	// used to execute HTTP requests. If nil, a default [http.Transport] is used,
+	// potentially with custom dialing logic from [Dial].
+	// It is primarily used for testing.
+	Transport http.RoundTripper
 
 	// Socket specifies an alternate path to the local Tailscale socket.
 	// If empty, a platform-specific default is used.
@@ -129,9 +135,9 @@ func (lc *LocalClient) DoLocalRequest(req *http.Request) (*http.Response, error)
 	req.Header.Set("Tailscale-Cap", strconv.Itoa(int(tailcfg.CurrentCapabilityVersion)))
 	lc.tsClientOnce.Do(func() {
 		lc.tsClient = &http.Client{
-			Transport: &http.Transport{
-				DialContext: lc.dialer(),
-			},
+			Transport: cmp.Or(lc.Transport, http.RoundTripper(
+				&http.Transport{DialContext: lc.dialer()}),
+			),
 		}
 	})
 	if !lc.OmitAuth {
@@ -487,6 +493,17 @@ func (lc *LocalClient) BugReport(ctx context.Context, note string) (string, erro
 // These are development tools and subject to change or removal over time.
 func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
+	if err != nil {
+		return fmt.Errorf("error %w: %s", err, body)
+	}
+	return nil
+}
+
+// DebugActionBody invokes a debug action with a body parameter, such as
+// "debug-force-prefer-derp".
+// These are development tools and subject to change or removal over time.
+func (lc *LocalClient) DebugActionBody(ctx context.Context, action string, rbody io.Reader) error {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, rbody)
 	if err != nil {
 		return fmt.Errorf("error %w: %s", err, body)
 	}
@@ -1323,6 +1340,17 @@ func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConf
 	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/serve-config", 200, jsonBody(config), h)
 	if err != nil {
 		return fmt.Errorf("sending serve config: %w", err)
+	}
+	return nil
+}
+
+// DisconnectControl shuts down all connections to control, thus making control consider this node inactive. This can be
+// run on HA subnet router or app connector replicas before shutting them down to ensure peers get told to switch over
+// to another replica whilst there is still some grace period for the existing connections to terminate.
+func (lc *LocalClient) DisconnectControl(ctx context.Context) error {
+	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/disconnect-control", 200, nil, nil)
+	if err != nil {
+		return fmt.Errorf("error disconnecting control: %w", err)
 	}
 	return nil
 }

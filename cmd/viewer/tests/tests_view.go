@@ -16,7 +16,7 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct
 
-// View returns a readonly view of StructWithPtrs.
+// View returns a read-only view of StructWithPtrs.
 func (p *StructWithPtrs) View() StructWithPtrsView {
 	return StructWithPtrsView{ж: p}
 }
@@ -32,7 +32,7 @@ type StructWithPtrsView struct {
 	ж *StructWithPtrs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithPtrsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -61,20 +61,11 @@ func (v *StructWithPtrsView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v StructWithPtrsView) Value() *StructWithoutPtrs {
-	if v.ж.Value == nil {
-		return nil
-	}
-	x := *v.ж.Value
-	return &x
-}
+func (v StructWithPtrsView) Value() StructWithoutPtrsView { return v.ж.Value.View() }
+func (v StructWithPtrsView) Int() views.ValuePointer[int] { return views.ValuePointerOf(v.ж.Int) }
 
-func (v StructWithPtrsView) Int() *int {
-	if v.ж.Int == nil {
-		return nil
-	}
-	x := *v.ж.Int
-	return &x
+func (v StructWithPtrsView) NoView() views.ValuePointer[StructWithNoView] {
+	return views.ValuePointerOf(v.ж.NoView)
 }
 
 func (v StructWithPtrsView) NoCloneValue() *StructWithoutPtrs { return v.ж.NoCloneValue }
@@ -85,10 +76,11 @@ func (v StructWithPtrsView) Equal(v2 StructWithPtrsView) bool { return v.ж.Equa
 var _StructWithPtrsViewNeedsRegeneration = StructWithPtrs(struct {
 	Value        *StructWithoutPtrs
 	Int          *int
+	NoView       *StructWithNoView
 	NoCloneValue *StructWithoutPtrs
 }{})
 
-// View returns a readonly view of StructWithoutPtrs.
+// View returns a read-only view of StructWithoutPtrs.
 func (p *StructWithoutPtrs) View() StructWithoutPtrsView {
 	return StructWithoutPtrsView{ж: p}
 }
@@ -104,7 +96,7 @@ type StructWithoutPtrsView struct {
 	ж *StructWithoutPtrs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithoutPtrsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -142,7 +134,7 @@ var _StructWithoutPtrsViewNeedsRegeneration = StructWithoutPtrs(struct {
 	Pfx netip.Prefix
 }{})
 
-// View returns a readonly view of Map.
+// View returns a read-only view of Map.
 func (p *Map) View() MapView {
 	return MapView{ж: p}
 }
@@ -158,7 +150,7 @@ type MapView struct {
 	ж *Map
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v MapView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -248,7 +240,7 @@ var _MapViewNeedsRegeneration = Map(struct {
 	StructWithPtrKey    map[StructWithPtrs]int
 }{})
 
-// View returns a readonly view of StructWithSlices.
+// View returns a read-only view of StructWithSlices.
 func (p *StructWithSlices) View() StructWithSlicesView {
 	return StructWithSlicesView{ж: p}
 }
@@ -264,7 +256,7 @@ type StructWithSlicesView struct {
 	ж *StructWithSlices
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithSlicesView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -322,7 +314,7 @@ var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
 	Ints           []*int
 }{})
 
-// View returns a readonly view of StructWithEmbedded.
+// View returns a read-only view of StructWithEmbedded.
 func (p *StructWithEmbedded) View() StructWithEmbeddedView {
 	return StructWithEmbeddedView{ж: p}
 }
@@ -338,7 +330,7 @@ type StructWithEmbeddedView struct {
 	ж *StructWithEmbedded
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithEmbeddedView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -378,7 +370,7 @@ var _StructWithEmbeddedViewNeedsRegeneration = StructWithEmbedded(struct {
 	StructWithSlices
 }{})
 
-// View returns a readonly view of GenericIntStruct.
+// View returns a read-only view of GenericIntStruct.
 func (p *GenericIntStruct[T]) View() GenericIntStructView[T] {
 	return GenericIntStructView[T]{ж: p}
 }
@@ -394,7 +386,7 @@ type GenericIntStructView[T constraints.Integer] struct {
 	ж *GenericIntStruct[T]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v GenericIntStructView[T]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -424,12 +416,8 @@ func (v *GenericIntStructView[T]) UnmarshalJSON(b []byte) error {
 }
 
 func (v GenericIntStructView[T]) Value() T { return v.ж.Value }
-func (v GenericIntStructView[T]) Pointer() *T {
-	if v.ж.Pointer == nil {
-		return nil
-	}
-	x := *v.ж.Pointer
-	return &x
+func (v GenericIntStructView[T]) Pointer() views.ValuePointer[T] {
+	return views.ValuePointerOf(v.ж.Pointer)
 }
 
 func (v GenericIntStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
@@ -454,7 +442,7 @@ func _GenericIntStructViewNeedsRegeneration[T constraints.Integer](GenericIntStr
 	}{})
 }
 
-// View returns a readonly view of GenericNoPtrsStruct.
+// View returns a read-only view of GenericNoPtrsStruct.
 func (p *GenericNoPtrsStruct[T]) View() GenericNoPtrsStructView[T] {
 	return GenericNoPtrsStructView[T]{ж: p}
 }
@@ -470,7 +458,7 @@ type GenericNoPtrsStructView[T StructWithoutPtrs | netip.Prefix | BasicType] str
 	ж *GenericNoPtrsStruct[T]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v GenericNoPtrsStructView[T]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -500,12 +488,8 @@ func (v *GenericNoPtrsStructView[T]) UnmarshalJSON(b []byte) error {
 }
 
 func (v GenericNoPtrsStructView[T]) Value() T { return v.ж.Value }
-func (v GenericNoPtrsStructView[T]) Pointer() *T {
-	if v.ж.Pointer == nil {
-		return nil
-	}
-	x := *v.ж.Pointer
-	return &x
+func (v GenericNoPtrsStructView[T]) Pointer() views.ValuePointer[T] {
+	return views.ValuePointerOf(v.ж.Pointer)
 }
 
 func (v GenericNoPtrsStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
@@ -530,7 +514,7 @@ func _GenericNoPtrsStructViewNeedsRegeneration[T StructWithoutPtrs | netip.Prefi
 	}{})
 }
 
-// View returns a readonly view of GenericCloneableStruct.
+// View returns a read-only view of GenericCloneableStruct.
 func (p *GenericCloneableStruct[T, V]) View() GenericCloneableStructView[T, V] {
 	return GenericCloneableStructView[T, V]{ж: p}
 }
@@ -546,7 +530,7 @@ type GenericCloneableStructView[T views.ViewCloner[T, V], V views.StructView[T]]
 	ж *GenericCloneableStruct[T, V]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v GenericCloneableStructView[T, V]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -605,7 +589,7 @@ func _GenericCloneableStructViewNeedsRegeneration[T views.ViewCloner[T, V], V vi
 	}{})
 }
 
-// View returns a readonly view of StructWithContainers.
+// View returns a read-only view of StructWithContainers.
 func (p *StructWithContainers) View() StructWithContainersView {
 	return StructWithContainersView{ж: p}
 }
@@ -621,7 +605,7 @@ type StructWithContainersView struct {
 	ж *StructWithContainers
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithContainersView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -677,7 +661,7 @@ var _StructWithContainersViewNeedsRegeneration = StructWithContainers(struct {
 	CloneableGenericMap       MapContainer[int, *GenericNoPtrsStruct[int]]
 }{})
 
-// View returns a readonly view of StructWithTypeAliasFields.
+// View returns a read-only view of StructWithTypeAliasFields.
 func (p *StructWithTypeAliasFields) View() StructWithTypeAliasFieldsView {
 	return StructWithTypeAliasFieldsView{ж: p}
 }
@@ -693,7 +677,7 @@ type StructWithTypeAliasFieldsView struct {
 	ж *StructWithTypeAliasFields
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v StructWithTypeAliasFieldsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -722,19 +706,14 @@ func (v *StructWithTypeAliasFieldsView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v StructWithTypeAliasFieldsView) WithPtr() StructWithPtrsView        { return v.ж.WithPtr.View() }
+func (v StructWithTypeAliasFieldsView) WithPtr() StructWithPtrsAliasView   { return v.ж.WithPtr.View() }
 func (v StructWithTypeAliasFieldsView) WithoutPtr() StructWithoutPtrsAlias { return v.ж.WithoutPtr }
 func (v StructWithTypeAliasFieldsView) WithPtrByPtr() StructWithPtrsAliasView {
 	return v.ж.WithPtrByPtr.View()
 }
-func (v StructWithTypeAliasFieldsView) WithoutPtrByPtr() *StructWithoutPtrsAlias {
-	if v.ж.WithoutPtrByPtr == nil {
-		return nil
-	}
-	x := *v.ж.WithoutPtrByPtr
-	return &x
+func (v StructWithTypeAliasFieldsView) WithoutPtrByPtr() StructWithoutPtrsAliasView {
+	return v.ж.WithoutPtrByPtr.View()
 }
-
 func (v StructWithTypeAliasFieldsView) SliceWithPtrs() views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
 	return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](v.ж.SliceWithPtrs)
 }
@@ -780,7 +759,7 @@ var _StructWithTypeAliasFieldsViewNeedsRegeneration = StructWithTypeAliasFields(
 	MapOfSlicesWithoutPtrs map[string][]*StructWithoutPtrsAlias
 }{})
 
-// View returns a readonly view of GenericTypeAliasStruct.
+// View returns a read-only view of GenericTypeAliasStruct.
 func (p *GenericTypeAliasStruct[T, T2, V2]) View() GenericTypeAliasStructView[T, T2, V2] {
 	return GenericTypeAliasStructView[T, T2, V2]{ж: p}
 }
@@ -796,7 +775,7 @@ type GenericTypeAliasStructView[T integer, T2 views.ViewCloner[T2, V2], V2 views
 	ж *GenericTypeAliasStruct[T, T2, V2]
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v GenericTypeAliasStructView[T, T2, V2]) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with

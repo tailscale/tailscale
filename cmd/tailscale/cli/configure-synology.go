@@ -21,34 +21,49 @@ import (
 // configureHostCmd is the "tailscale configure-host" command which was once
 // used to configure Synology devices, but is now a compatibility alias to
 // "tailscale configure synology".
-var configureHostCmd = &ffcli.Command{
-	Name:       "configure-host",
-	Exec:       runConfigureSynology,
-	ShortUsage: "tailscale configure-host\n" + synologyConfigureCmd.ShortUsage,
-	ShortHelp:  synologyConfigureCmd.ShortHelp,
-	LongHelp:   hidden + synologyConfigureCmd.LongHelp,
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("configure-host")
-		return fs
-	})(),
+//
+// It returns nil if the actual "tailscale configure synology" command is not
+// available.
+func configureHostCmd() *ffcli.Command {
+	synologyConfigureCmd := synologyConfigureCmd()
+	if synologyConfigureCmd == nil {
+		// No need to offer this compatibility alias if the actual command is not available.
+		return nil
+	}
+	return &ffcli.Command{
+		Name:       "configure-host",
+		Exec:       runConfigureSynology,
+		ShortUsage: "tailscale configure-host\n" + synologyConfigureCmd.ShortUsage,
+		ShortHelp:  synologyConfigureCmd.ShortHelp,
+		LongHelp:   hidden + synologyConfigureCmd.LongHelp,
+		FlagSet: (func() *flag.FlagSet {
+			fs := newFlagSet("configure-host")
+			return fs
+		})(),
+	}
 }
 
-var synologyConfigureCmd = &ffcli.Command{
-	Name:       "synology",
-	Exec:       runConfigureSynology,
-	ShortUsage: "tailscale configure synology",
-	ShortHelp:  "Configure Synology to enable outbound connections",
-	LongHelp: strings.TrimSpace(`
+func synologyConfigureCmd() *ffcli.Command {
+	if runtime.GOOS != "linux" || distro.Get() != distro.Synology {
+		return nil
+	}
+	return &ffcli.Command{
+		Name:       "synology",
+		Exec:       runConfigureSynology,
+		ShortUsage: "tailscale configure synology",
+		ShortHelp:  "Configure Synology to enable outbound connections",
+		LongHelp: strings.TrimSpace(`
 This command is intended to run at boot as root on a Synology device to
 create the /dev/net/tun device and give the tailscaled binary permission
 to use it.
 
 See: https://tailscale.com/s/synology-outbound
 `),
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("synology")
-		return fs
-	})(),
+		FlagSet: (func() *flag.FlagSet {
+			fs := newFlagSet("synology")
+			return fs
+		})(),
+	}
 }
 
 func runConfigureSynology(ctx context.Context, args []string) error {

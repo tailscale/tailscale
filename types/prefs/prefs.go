@@ -29,8 +29,8 @@ import (
 var (
 	// ErrManaged is the error returned when attempting to modify a managed preference.
 	ErrManaged = errors.New("cannot modify a managed preference")
-	// ErrReadOnly is the error returned when attempting to modify a readonly preference.
-	ErrReadOnly = errors.New("cannot modify a readonly preference")
+	// ErrReadOnly is the error returned when attempting to modify a read-only preference.
+	ErrReadOnly = errors.New("cannot modify a read-only preference")
 )
 
 // metadata holds type-agnostic preference metadata.

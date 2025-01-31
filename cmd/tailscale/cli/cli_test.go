@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
@@ -600,6 +602,19 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			goos: "linux",
 			want: "",
 		},
+		{
+			name:  "losing_posture_checking",
+			flags: []string{"--accept-dns"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:          ipn.DefaultControlURL,
+				WantRunning:         false,
+				CorpDNS:             true,
+				PostureChecking:     true,
+				NetfilterMode:       preftype.NetfilterOn,
+				NoStatefulFiltering: opt.NewBool(true),
+			},
+			want: accidentalUpPrefix + " --accept-dns --posture-checking",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1044,6 +1059,7 @@ func TestUpdatePrefs(t *testing.T) {
 				NoSNATSet:                 true,
 				NoStatefulFilteringSet:    true,
 				OperatorUserSet:           true,
+				PostureCheckingSet:        true,
 				RouteAllSet:               true,
 				RunSSHSet:                 true,
 				ShieldsUpSet:              true,
@@ -1479,4 +1495,76 @@ func TestParseNLArgs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHelpAlias(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	tstest.Replace[io.Writer](t, &Stdout, &stdout)
+	tstest.Replace[io.Writer](t, &Stderr, &stderr)
+
+	gotExit0 := false
+	defer func() {
+		if !gotExit0 {
+			t.Error("expected os.Exit(0) to be called")
+			return
+		}
+		if !strings.Contains(stderr.String(), "SUBCOMMANDS") {
+			t.Errorf("expected help output to contain SUBCOMMANDS; got stderr=%q; stdout=%q", stderr.String(), stdout.String())
+		}
+	}()
+	defer func() {
+		if e := recover(); e != nil {
+			if strings.Contains(fmt.Sprint(e), "unexpected call to os.Exit(0)") {
+				gotExit0 = true
+			} else {
+				t.Errorf("unexpected panic: %v", e)
+			}
+		}
+	}()
+	err := Run([]string{"help"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestDocs(t *testing.T) {
+	root := newRootCmd()
+	check := func(t *testing.T, c *ffcli.Command) {
+		shortVerb, _, ok := strings.Cut(c.ShortHelp, " ")
+		if !ok || shortVerb == "" {
+			t.Errorf("couldn't find verb+space in ShortHelp")
+		} else {
+			if strings.HasSuffix(shortVerb, ".") {
+				t.Errorf("ShortHelp shouldn't end in period; got %q", c.ShortHelp)
+			}
+			if b := shortVerb[0]; b >= 'a' && b <= 'z' {
+				t.Errorf("ShortHelp should start with upper-case letter; got %q", c.ShortHelp)
+			}
+			if strings.HasSuffix(shortVerb, "s") && shortVerb != "Does" {
+				t.Errorf("verb %q ending in 's' is unexpected, from %q", shortVerb, c.ShortHelp)
+			}
+		}
+
+		name := t.Name()
+		wantPfx := strings.ReplaceAll(strings.TrimPrefix(name, "TestDocs/"), "/", " ")
+		switch name {
+		case "TestDocs/tailscale/completion/bash",
+			"TestDocs/tailscale/completion/zsh":
+			wantPfx = "" // special-case exceptions
+		}
+		if !strings.HasPrefix(c.ShortUsage, wantPfx) {
+			t.Errorf("ShortUsage should start with %q; got %q", wantPfx, c.ShortUsage)
+		}
+	}
+
+	var walk func(t *testing.T, c *ffcli.Command)
+	walk = func(t *testing.T, c *ffcli.Command) {
+		t.Run(c.Name, func(t *testing.T) {
+			check(t, c)
+			for _, sub := range c.Subcommands {
+				walk(t, sub)
+			}
+		})
+	}
+	walk(t, root)
 }

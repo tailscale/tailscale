@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package logtail sends logs to log.tailscale.io.
+// Package logtail sends logs to log.tailscale.com.
 package logtail
 
 import (
@@ -55,7 +55,7 @@ const bufferSize = 4 << 10
 
 // DefaultHost is the default host name to upload logs to when
 // Config.BaseURL isn't provided.
-const DefaultHost = "log.tailscale.io"
+const DefaultHost = "log.tailscale.com"
 
 const defaultFlushDelay = 2 * time.Second
 
@@ -69,7 +69,7 @@ type Config struct {
 	Collection     string          // collection name, a domain name
 	PrivateID      logid.PrivateID // private ID for the primary log stream
 	CopyPrivateID  logid.PrivateID // private ID for a log stream that is a superset of this log stream
-	BaseURL        string          // if empty defaults to "https://log.tailscale.io"
+	BaseURL        string          // if empty defaults to "https://log.tailscale.com"
 	HTTPC          *http.Client    // if empty defaults to http.DefaultClient
 	SkipClientTime bool            // if true, client_time is not written to logs
 	LowMemory      bool            // if true, logtail minimizes memory use
@@ -213,6 +213,7 @@ type Logger struct {
 	procSequence uint64
 	flushTimer   tstime.TimerController // used when flushDelay is >0
 	writeBuf     [bufferSize]byte       // owned by Write for reuse
+	bytesBuf     bytes.Buffer           // owned by appendTextOrJSONLocked for reuse
 	jsonDec      jsontext.Decoder       // owned by appendTextOrJSONLocked for reuse
 
 	shutdownStartMu sync.Mutex    // guards the closing of shutdownStart
@@ -506,7 +507,7 @@ func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAft
 	}
 	if runtime.GOOS == "js" {
 		// We once advertised we'd accept optional client certs (for internal use)
-		// on log.tailscale.io but then Tailscale SSH js/wasm clients prompted
+		// on log.tailscale.com but then Tailscale SSH js/wasm clients prompted
 		// users (on some browsers?) to pick a client cert. We'll fix the server's
 		// TLS ServerHello, but we can also fix it client side for good measure.
 		//
@@ -725,9 +726,16 @@ func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 	// whether it contains the reserved "logtail" name at the top-level.
 	var logtailKeyOffset, logtailValOffset, logtailValLength int
 	validJSON := func() bool {
-		// TODO(dsnet): Avoid allocation of bytes.Buffer struct.
+		// The jsontext.NewDecoder API operates on an io.Reader, for which
+		// bytes.Buffer provides a means to convert a []byte into an io.Reader.
+		// However, bytes.NewBuffer normally allocates unless
+		// we immediately shallow copy it into a pre-allocated Buffer struct.
+		// See https://go.dev/issue/67004.
+		l.bytesBuf = *bytes.NewBuffer(src)
+		defer func() { l.bytesBuf = bytes.Buffer{} }() // avoid pinning src
+
 		dec := &l.jsonDec
-		dec.Reset(bytes.NewBuffer(src))
+		dec.Reset(&l.bytesBuf)
 		if tok, err := dec.ReadToken(); tok.Kind() != '{' || err != nil {
 			return false
 		}

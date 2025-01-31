@@ -25,14 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
-      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: golangci-lint
-        # Note: this is the 'v6.1.0' tag as of 2024-08-21
-        uses: golangci/golangci-lint-action@aaa42aa0628b4ae2578232a66b541047968fac86
+        uses: golangci/golangci-lint-action@ec5d18412c0aeab7936cb16880d708ba2a64e1ae # v6.2.0
         with:
           version: v1.60
 

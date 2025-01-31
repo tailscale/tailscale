@@ -29,8 +29,8 @@ import (
 	"github.com/dave/courtney/tester"
 	"github.com/dave/patsy"
 	"github.com/dave/patsy/vos"
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/util/slicesx"
 )
 
 const (
@@ -350,7 +350,7 @@ func main() {
 		if len(toRetry) == 0 {
 			continue
 		}
-		pkgs := xmaps.Keys(toRetry)
+		pkgs := slicesx.MapKeys(toRetry)
 		sort.Strings(pkgs)
 		nextRun := &nextRun{
 			attempt: thisRun.attempt + 1,

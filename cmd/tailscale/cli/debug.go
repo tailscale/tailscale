@@ -36,6 +36,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/internal/noiseconn"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
@@ -175,6 +176,12 @@ var debugCmd = &ffcli.Command{
 			ShortHelp:  "Switch to some other random DERP home region for a short time",
 		},
 		{
+			Name:       "force-prefer-derp",
+			ShortUsage: "tailscale debug force-prefer-derp",
+			Exec:       forcePreferDERP,
+			ShortHelp:  "Prefer the given region ID if reachable (until restart, or 0 to clear)",
+		},
+		{
 			Name:       "force-netmap-update",
 			ShortUsage: "tailscale debug force-netmap-update",
 			Exec:       localAPIAction("force-netmap-update"),
@@ -213,6 +220,7 @@ var debugCmd = &ffcli.Command{
 				fs := newFlagSet("watch-ipn")
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 				fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
+				fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messags")
 				fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
 				fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 				return fs
@@ -281,7 +289,7 @@ var debugCmd = &ffcli.Command{
 			Name:       "capture",
 			ShortUsage: "tailscale debug capture",
 			Exec:       runCapture,
-			ShortHelp:  "Streams pcaps for debugging",
+			ShortHelp:  "Stream pcaps for debugging",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("capture")
 				fs.StringVar(&captureArgs.outFile, "o", "", "path to stream the pcap (or - for stdout), leave empty to start wireshark")
@@ -307,13 +315,13 @@ var debugCmd = &ffcli.Command{
 			Name:       "peer-endpoint-changes",
 			ShortUsage: "tailscale debug peer-endpoint-changes <hostname-or-IP>",
 			Exec:       runPeerEndpointChanges,
-			ShortHelp:  "Prints debug information about a peer's endpoint changes",
+			ShortHelp:  "Print debug information about a peer's endpoint changes",
 		},
 		{
 			Name:       "dial-types",
 			ShortUsage: "tailscale debug dial-types <hostname-or-IP> <port>",
 			Exec:       runDebugDialTypes,
-			ShortHelp:  "Prints debug information about connecting to a given host or IP",
+			ShortHelp:  "Print debug information about connecting to a given host or IP",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("dial-types")
 				fs.StringVar(&debugDialTypesArgs.network, "network", "tcp", `network type to dial ("tcp", "udp", etc.)`)
@@ -334,7 +342,7 @@ var debugCmd = &ffcli.Command{
 		{
 			Name:       "go-buildinfo",
 			ShortUsage: "tailscale debug go-buildinfo",
-			ShortHelp:  "Prints Go's runtime/debug.BuildInfo",
+			ShortHelp:  "Print Go's runtime/debug.BuildInfo",
 			Exec:       runGoBuildInfo,
 		},
 	},
@@ -500,6 +508,7 @@ var watchIPNArgs struct {
 	netmap         bool
 	initial        bool
 	showPrivateKey bool
+	rateLimit      bool
 	count          int
 }
 
@@ -510,6 +519,9 @@ func runWatchIPN(ctx context.Context, args []string) error {
 	}
 	if !watchIPNArgs.showPrivateKey {
 		mask |= ipn.NotifyNoPrivateKeys
+	}
+	if watchIPNArgs.rateLimit {
+		mask |= ipn.NotifyRateLimit
 	}
 	watcher, err := localClient.WatchIPNBus(ctx, mask)
 	if err != nil {
@@ -568,6 +580,25 @@ func runDERPMap(ctx context.Context, args []string) error {
 	enc := json.NewEncoder(Stdout)
 	enc.SetIndent("", "\t")
 	enc.Encode(dm)
+	return nil
+}
+
+func forcePreferDERP(ctx context.Context, args []string) error {
+	var n int
+	if len(args) != 1 {
+		return errors.New("expected exactly one integer argument")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("expected exactly one integer argument: %w", err)
+	}
+	b, err := json.Marshal(n)
+	if err != nil {
+		return fmt.Errorf("failed to marshal DERP region: %w", err)
+	}
+	if err := localClient.DebugActionBody(ctx, "force-prefer-derp", bytes.NewReader(b)); err != nil {
+		return fmt.Errorf("failed to force preferred DERP: %w", err)
+	}
 	return nil
 }
 
@@ -845,6 +876,11 @@ func runTS2021(ctx context.Context, args []string) error {
 		logf = log.Printf
 	}
 
+	netMon, err := netmon.New(logger.WithPrefix(logf, "netmon: "))
+	if err != nil {
+		return fmt.Errorf("creating netmon: %w", err)
+	}
+
 	noiseDialer := &controlhttp.Dialer{
 		Hostname:        ts2021Args.host,
 		HTTPPort:        "80",
@@ -854,6 +890,7 @@ func runTS2021(ctx context.Context, args []string) error {
 		ProtocolVersion: uint16(ts2021Args.version),
 		Dialer:          dialFunc,
 		Logf:            logf,
+		NetMon:          netMon,
 	}
 	const tries = 2
 	for i := range tries {

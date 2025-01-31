@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
+    controller-gen.kubebuilder.io/version: v0.17.0
   name: proxygroups.tailscale.com
 spec:
   group: tailscale.com
@@ -20,9 +20,24 @@ spec:
           jsonPath: .status.conditions[?(@.type == "ProxyGroupReady")].reason
           name: Status
           type: string
+        - description: ProxyGroup type.
+          jsonPath: .spec.type
+          name: Type
+          type: string
       name: v1alpha1
       schema:
         openAPIV3Schema:
+          description: |-
+            ProxyGroup defines a set of Tailscale devices that will act as proxies.
+            Currently only egress ProxyGroups are supported.
+
+            Use the tailscale.com/proxy-group annotation on a Service to specify that
+            the egress proxy should be implemented by a ProxyGroup instead of a single
+            dedicated proxy. In addition to running a highly available set of proxies,
+            ProxyGroup also allows for serving many annotated Services from a single
+            set of proxies to minimise resource consumption.
+
+            More info: https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
           type: object
           required:
             - spec
@@ -73,6 +88,7 @@ spec:
                     Defaults to 2.
                   type: integer
                   format: int32
+                  minimum: 0
                 tags:
                   description: |-
                     Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].
@@ -86,10 +102,16 @@ spec:
                     type: string
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                 type:
-                  description: Type of the ProxyGroup proxies. Currently the only supported type is egress.
+                  description: |-
+                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
+                    Type is immutable once a ProxyGroup is created.
                   type: string
                   enum:
                     - egress
+                    - ingress
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: ProxyGroup type is immutable
             status:
               description: |-
                 ProxyGroupStatus describes the status of the ProxyGroup resources. This is

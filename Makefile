@@ -100,7 +100,7 @@ publishdevoperator: ## Build and publish k8s-operator image to location specifie
 	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
 	@test "${REPO}" != "tailscale/k8s-operator" || (echo "REPO=... must not be tailscale/k8s-operator" && exit 1)
 	@test "${REPO}" != "ghcr.io/tailscale/k8s-operator" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-operator" && exit 1)
-	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=operator ./build_docker.sh
+	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-operator ./build_docker.sh
 
 publishdevnameserver: ## Build and publish k8s-nameserver image to location specified by ${REPO}
 	@test -n "${REPO}" || (echo "REPO=... required; e.g. REPO=ghcr.io/${USER}/tailscale" && exit 1)
@@ -116,7 +116,6 @@ sshintegrationtest: ## Run the SSH integration tests in various Docker container
 	GOOS=linux GOARCH=amd64 ./tool/go build -o ssh/tailssh/testcontainers/tailscaled ./cmd/tailscaled && \
 	echo "Testing on ubuntu:focal" && docker build --build-arg="BASE=ubuntu:focal" -t ssh-ubuntu-focal ssh/tailssh/testcontainers && \
 	echo "Testing on ubuntu:jammy" && docker build --build-arg="BASE=ubuntu:jammy" -t ssh-ubuntu-jammy ssh/tailssh/testcontainers && \
-	echo "Testing on ubuntu:mantic" && docker build --build-arg="BASE=ubuntu:mantic" -t ssh-ubuntu-mantic ssh/tailssh/testcontainers && \
 	echo "Testing on ubuntu:noble" && docker build --build-arg="BASE=ubuntu:noble" -t ssh-ubuntu-noble ssh/tailssh/testcontainers && \
 	echo "Testing on alpine:latest" && docker build --build-arg="BASE=alpine:latest" -t ssh-alpine-latest ssh/tailssh/testcontainers
 

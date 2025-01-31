@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -291,11 +290,11 @@ func (e *AppConnector) updateDomains(domains []string) {
 			}
 		}
 		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-			e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", xmaps.Keys(oldDomains), toRemove, err)
+			e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
 		}
 	}
 
-	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
+	e.logf("handling domains: %v and wildcards: %v", slicesx.MapKeys(e.domains), e.wildcards)
 }
 
 // updateRoutes merges the supplied routes into the currently configured routes. The routes supplied
@@ -354,7 +353,7 @@ func (e *AppConnector) Domains() views.Slice[string] {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	return views.SliceOf(xmaps.Keys(e.domains))
+	return views.SliceOf(slicesx.MapKeys(e.domains))
 }
 
 // DomainRoutes returns a map of domains to resolved IP
@@ -375,13 +374,13 @@ func (e *AppConnector) DomainRoutes() map[string][]netip.Addr {
 // response is being returned over the PeerAPI. The response is parsed and
 // matched against the configured domains, if matched the routeAdvertiser is
 // advised to advertise the discovered route.
-func (e *AppConnector) ObserveDNSResponse(res []byte) {
+func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 	var p dnsmessage.Parser
 	if _, err := p.Start(res); err != nil {
-		return
+		return err
 	}
 	if err := p.SkipAllQuestions(); err != nil {
-		return
+		return err
 	}
 
 	// cnameChain tracks a chain of CNAMEs for a given query in order to reverse
@@ -400,12 +399,12 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 			break
 		}
 		if err != nil {
-			return
+			return err
 		}
 
 		if h.Class != dnsmessage.ClassINET {
 			if err := p.SkipAnswer(); err != nil {
-				return
+				return err
 			}
 			continue
 		}
@@ -414,7 +413,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		case dnsmessage.TypeCNAME, dnsmessage.TypeA, dnsmessage.TypeAAAA:
 		default:
 			if err := p.SkipAnswer(); err != nil {
-				return
+				return err
 			}
 			continue
 
@@ -428,7 +427,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		if h.Type == dnsmessage.TypeCNAME {
 			res, err := p.CNAMEResource()
 			if err != nil {
-				return
+				return err
 			}
 			cname := strings.TrimSuffix(strings.ToLower(res.CNAME.String()), ".")
 			if len(cname) == 0 {
@@ -442,20 +441,20 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		case dnsmessage.TypeA:
 			r, err := p.AResource()
 			if err != nil {
-				return
+				return err
 			}
 			addr := netip.AddrFrom4(r.A)
 			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
 		case dnsmessage.TypeAAAA:
 			r, err := p.AAAAResource()
 			if err != nil {
-				return
+				return err
 			}
 			addr := netip.AddrFrom16(r.AAAA)
 			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
 		default:
 			if err := p.SkipAnswer(); err != nil {
-				return
+				return err
 			}
 			continue
 		}
@@ -486,6 +485,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 			e.scheduleAdvertisement(domain, toAdvertise...)
 		}
 	}
+	return nil
 }
 
 // starting from the given domain that resolved to an address, find it, or any

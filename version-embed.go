@@ -26,6 +26,7 @@ var AlpineDockerTag string
 //go:embed go.toolchain.rev
 var GoToolchainRev string
 
+//lint:ignore U1000 used by tests + assert_ts_toolchain_match.go w/ right build tags
 func tailscaleToolchainRev() (gitHash string, ok bool) {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {

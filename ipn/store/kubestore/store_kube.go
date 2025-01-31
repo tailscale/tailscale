@@ -7,6 +7,7 @@ package kubestore
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -19,8 +20,18 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// TODO(irbekrm): should we bump this? should we have retries? See tailscale/tailscale#13024
-const timeout = 5 * time.Second
+const (
+	// timeout is the timeout for a single state update that includes calls to the API server to write or read a
+	// state Secret and emit an Event.
+	timeout = 30 * time.Second
+
+	reasonTailscaleStateUpdated      = "TailscaledStateUpdated"
+	reasonTailscaleStateLoaded       = "TailscaleStateLoaded"
+	reasonTailscaleStateUpdateFailed = "TailscaleStateUpdateFailed"
+	reasonTailscaleStateLoadFailed   = "TailscaleStateLoadFailed"
+	eventTypeWarning                 = "Warning"
+	eventTypeNormal                  = "Normal"
+)
 
 // Store is an ipn.StateStore that uses a Kubernetes Secret for persistence.
 type Store struct {
@@ -35,7 +46,7 @@ type Store struct {
 
 // New returns a new Store that persists to the named Secret.
 func New(_ logger.Logf, secretName string) (*Store, error) {
-	c, err := kubeclient.New()
+	c, err := kubeclient.New("tailscale-state-store")
 	if err != nil {
 		return nil, err
 	}
@@ -72,13 +83,22 @@ func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
 
 // WriteState implements the StateStore interface.
 func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer func() {
 		if err == nil {
 			s.memory.WriteState(ipn.StateKey(sanitizeKey(id)), bs)
 		}
+		if err != nil {
+			if err := s.client.Event(ctx, eventTypeWarning, reasonTailscaleStateUpdateFailed, err.Error()); err != nil {
+				log.Printf("kubestore: error creating tailscaled state update Event: %v", err)
+			}
+		} else {
+			if err := s.client.Event(ctx, eventTypeNormal, reasonTailscaleStateUpdated, "Successfully updated tailscaled state Secret"); err != nil {
+				log.Printf("kubestore: error creating tailscaled state Event: %v", err)
+			}
+		}
+		cancel()
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)
 	if err != nil {
@@ -107,7 +127,7 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
 					Value: map[string][]byte{sanitizeKey(id): bs},
 				},
 			}
-			if err := s.client.JSONPatchSecret(ctx, s.secretName, m); err != nil {
+			if err := s.client.JSONPatchResource(ctx, s.secretName, kubeclient.TypeSecrets, m); err != nil {
 				return fmt.Errorf("error patching Secret %s with a /data field: %v", s.secretName, err)
 			}
 			return nil
@@ -119,8 +139,8 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
 				Value: bs,
 			},
 		}
-		if err := s.client.JSONPatchSecret(ctx, s.secretName, m); err != nil {
-			return fmt.Errorf("error patching Secret %s with /data/%s field", s.secretName, sanitizeKey(id))
+		if err := s.client.JSONPatchResource(ctx, s.secretName, kubeclient.TypeSecrets, m); err != nil {
+			return fmt.Errorf("error patching Secret %s with /data/%s field: %v", s.secretName, sanitizeKey(id), err)
 		}
 		return nil
 	}
@@ -131,7 +151,7 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
 	return err
 }
 
-func (s *Store) loadState() error {
+func (s *Store) loadState() (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -140,7 +160,13 @@ func (s *Store) loadState() error {
 		if st, ok := err.(*kubeapi.Status); ok && st.Code == 404 {
 			return ipn.ErrStateNotExist
 		}
+		if err := s.client.Event(ctx, eventTypeWarning, reasonTailscaleStateLoadFailed, err.Error()); err != nil {
+			log.Printf("kubestore: error creating Event: %v", err)
+		}
 		return err
+	}
+	if err := s.client.Event(ctx, eventTypeNormal, reasonTailscaleStateLoaded, "Successfully loaded tailscaled state from Secret"); err != nil {
+		log.Printf("kubestore: error creating Event: %v", err)
 	}
 	s.memory.LoadFromMap(secret.Data)
 	return nil

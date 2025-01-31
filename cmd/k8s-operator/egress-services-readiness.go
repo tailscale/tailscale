@@ -64,7 +64,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	oldStatus := svc.Status.DeepCopy()
 	defer func() {
 		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, st, reason, msg, esrr.clock, l)
-		if !apiequality.Semantic.DeepEqual(oldStatus, svc.Status) {
+		if !apiequality.Semantic.DeepEqual(oldStatus, &svc.Status) {
 			err = errors.Join(err, esrr.Status().Update(ctx, svc))
 		}
 	}()

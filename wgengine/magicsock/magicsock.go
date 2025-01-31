@@ -17,11 +17,11 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
@@ -60,7 +60,6 @@ import (
 	"tailscale.com/util/ringbuffer"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
-	"tailscale.com/util/uniq"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/wgint"
@@ -365,9 +364,9 @@ type Conn struct {
 	// wireguard state by its public key. If nil, it's not used.
 	getPeerByKey func(key.NodePublic) (_ wgint.Peer, ok bool)
 
-	// lastEPERMRebind tracks the last time a rebind was performed
-	// after experiencing a syscall.EPERM.
-	lastEPERMRebind syncs.AtomicValue[time.Time]
+	// lastErrRebind tracks the last time a rebind was performed after
+	// experiencing a write error, and is used to throttle the rate of rebinds.
+	lastErrRebind syncs.AtomicValue[time.Time]
 
 	// staticEndpoints are user set endpoints that this node should
 	// advertise amongst its wireguard endpoints. It is user's
@@ -1120,8 +1119,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	// re-run.
 	eps = c.endpointTracker.update(time.Now(), eps)
 
-	for i := range c.staticEndpoints.Len() {
-		addAddr(c.staticEndpoints.At(i), tailcfg.EndpointExplicitConf)
+	for _, ep := range c.staticEndpoints.All() {
+		addAddr(ep, tailcfg.EndpointExplicitConf)
 	}
 
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
@@ -1259,7 +1258,7 @@ func (c *Conn) sendUDPBatch(addr netip.AddrPort, buffs [][]byte) (sent bool, err
 			c.logf("magicsock: %s", errGSO.Error())
 			err = errGSO.RetryErr
 		} else {
-			_ = c.maybeRebindOnError(runtime.GOOS, err)
+			c.maybeRebindOnError(err)
 		}
 	}
 	return err == nil, err
@@ -1267,16 +1266,16 @@ func (c *Conn) sendUDPBatch(addr netip.AddrPort, buffs [][]byte) (sent bool, err
 
 // sendUDP sends UDP packet b to ipp.
 // See sendAddr's docs on the return value meanings.
-func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
+func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool) (sent bool, err error) {
 	if runtime.GOOS == "js" {
 		return false, errNoUDP
 	}
 	sent, err = c.sendUDPStd(ipp, b)
 	if err != nil {
 		metricSendUDPError.Add(1)
-		_ = c.maybeRebindOnError(runtime.GOOS, err)
+		c.maybeRebindOnError(err)
 	} else {
-		if sent {
+		if sent && !isDisco {
 			switch {
 			case ipp.Addr().Is4():
 				c.metrics.outboundPacketsIPv4Total.Add(1)
@@ -1290,32 +1289,21 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 	return
 }
 
-// maybeRebindOnError performs a rebind and restun if the error is defined and
-// any conditionals are met.
-func (c *Conn) maybeRebindOnError(os string, err error) bool {
-	switch {
-	case errors.Is(err, syscall.EPERM):
-		why := "operation-not-permitted-rebind"
-		switch os {
-		// We currently will only rebind and restun on a syscall.EPERM if it is experienced
-		// on a client running darwin.
-		// TODO(charlotte, raggi): expand os options if required.
-		case "darwin":
-			// TODO(charlotte): implement a backoff, so we don't end up in a rebind loop for persistent
-			// EPERMs.
-			if c.lastEPERMRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
-				c.logf("magicsock: performing %q", why)
-				c.lastEPERMRebind.Store(time.Now())
-				c.Rebind()
-				go c.ReSTUN(why)
-				return true
-			}
-		default:
-			c.logf("magicsock: not performing %q", why)
-			return false
-		}
+// maybeRebindOnError performs a rebind and restun if the error is one that is
+// known to be healed by a rebind, and the rebind is not throttled.
+func (c *Conn) maybeRebindOnError(err error) {
+	ok, reason := shouldRebind(err)
+	if !ok {
+		return
 	}
-	return false
+
+	if c.lastErrRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
+		c.logf("magicsock: performing rebind due to %q", reason)
+		c.Rebind()
+		go c.ReSTUN(reason)
+	} else {
+		c.logf("magicsock: not performing %q rebind due to throttle", reason)
+	}
 }
 
 // sendUDPNetcheck sends b via UDP to addr. It is used exclusively by netcheck.
@@ -1371,7 +1359,7 @@ func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) 
 // returns (false, nil); it's not an error, but nothing was sent.
 func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, isDisco bool) (sent bool, err error) {
 	if addr.Addr() != tailcfg.DerpMagicIPAddr {
-		return c.sendUDP(addr, b)
+		return c.sendUDP(addr, b, isDisco)
 	}
 
 	regionID := int(addr.Port())
@@ -2349,10 +2337,7 @@ func devPanicf(format string, a ...any) {
 
 func (c *Conn) logEndpointCreated(n tailcfg.NodeView) {
 	c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key().ShortString(), n.DiscoKey().ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
-		const derpPrefix = "127.3.3.40:"
-		if strings.HasPrefix(n.DERP(), derpPrefix) {
-			ipp, _ := netip.ParseAddrPort(n.DERP())
-			regionID := int(ipp.Port())
+		if regionID := n.HomeDERP(); regionID != 0 {
 			code := c.derpRegionCodeLocked(regionID)
 			if code != "" {
 				code = "(" + code + ")"
@@ -2360,16 +2345,14 @@ func (c *Conn) logEndpointCreated(n tailcfg.NodeView) {
 			fmt.Fprintf(w, "derp=%v%s ", regionID, code)
 		}
 
-		for i := range n.AllowedIPs().Len() {
-			a := n.AllowedIPs().At(i)
+		for _, a := range n.AllowedIPs().All() {
 			if a.IsSingleIP() {
 				fmt.Fprintf(w, "aip=%v ", a.Addr())
 			} else {
 				fmt.Fprintf(w, "aip=%v ", a)
 			}
 		}
-		for i := range n.Endpoints().Len() {
-			ep := n.Endpoints().At(i)
+		for _, ep := range n.Endpoints().All() {
 			fmt.Fprintf(w, "ep=%v ", ep)
 		}
 	}))
@@ -2680,7 +2663,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	}
 	ports = append(ports, 0)
 	// Remove duplicates. (All duplicates are consecutive.)
-	uniq.ModifySlice(&ports)
+	ports = slices.Compact(ports)
 
 	if debugBindSocket() {
 		c.logf("magicsock: bindSocket: candidate ports: %+v", ports)
@@ -3013,6 +2996,14 @@ func (c *Conn) DebugPickNewDERP() error {
 		return nil
 	}
 	return errors.New("too few regions")
+}
+
+func (c *Conn) DebugForcePreferDERP(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.logf("magicsock: [debug] force preferred DERP set to: %d", n)
+	c.netChecker.SetForcePreferredDERP(n)
 }
 
 // portableTrySetSocketBuffer sets SO_SNDBUF and SO_RECVBUF on pconn to socketBufferSize,

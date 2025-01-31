@@ -35,6 +35,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+	_ "tailscale.com/feature/condregister"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
@@ -81,7 +82,7 @@ func defaultTunName() string {
 		// "utun" is recognized by wireguard-go/tun/tun_darwin.go
 		// as a magic value that uses/creates any free number.
 		return "utun"
-	case "plan9", "aix":
+	case "plan9", "aix", "solaris", "illumos":
 		return "userspace-networking"
 	case "linux":
 		switch distro.Get() {
@@ -665,7 +666,7 @@ func handleSubnetsInNetstack() bool {
 		return true
 	}
 	switch runtime.GOOS {
-	case "windows", "darwin", "freebsd", "openbsd":
+	case "windows", "darwin", "freebsd", "openbsd", "solaris", "illumos":
 		// Enable on Windows and tailscaled-on-macOS (this doesn't
 		// affect the GUI clients), and on FreeBSD.
 		return true
@@ -788,7 +789,6 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	tfs, _ := sys.DriveForLocal.GetOK()
 	ret, err := netstack.Create(logf,
 		sys.Tun.Get(),
 		sys.Engine.Get(),
@@ -796,7 +796,6 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 		sys.Dialer.Get(),
 		sys.DNSManager.Get(),
 		sys.ProxyMapper(),
-		tfs,
 	)
 	if err != nil {
 		return nil, err

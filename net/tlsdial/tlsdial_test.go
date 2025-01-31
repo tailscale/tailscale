@@ -4,37 +4,22 @@
 package tlsdial
 
 import (
-	"crypto/x509"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"sync/atomic"
 	"testing"
 
 	"tailscale.com/health"
+	"tailscale.com/net/bakedroots"
 )
 
-func resetOnce() {
-	rv := reflect.ValueOf(&bakedInRootsOnce).Elem()
-	rv.Set(reflect.Zero(rv.Type()))
-}
-
-func TestBakedInRoots(t *testing.T) {
-	resetOnce()
-	p := bakedInRoots()
-	got := p.Subjects()
-	if len(got) != 1 {
-		t.Errorf("subjects = %v; want 1", len(got))
-	}
-}
-
 func TestFallbackRootWorks(t *testing.T) {
-	defer resetOnce()
+	defer bakedroots.ResetForTest(t, nil)
 
 	const debug = false
 	if runtime.GOOS != "linux" {
@@ -69,14 +54,7 @@ func TestFallbackRootWorks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resetOnce()
-	bakedInRootsOnce.Do(func() {
-		p := x509.NewCertPool()
-		if !p.AppendCertsFromPEM(caPEM) {
-			t.Fatal("failed to add")
-		}
-		bakedInRootsOnce.p = p
-	})
+	bakedroots.ResetForTest(t, caPEM)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -53,8 +54,9 @@ func certProviderByCertMode(mode, dir, hostname string) (certProvider, error) {
 }
 
 type manualCertManager struct {
-	cert     *tls.Certificate
-	hostname string
+	cert       *tls.Certificate
+	hostname   string // hostname or IP address of server
+	noHostname bool   // whether hostname is an IP address
 }
 
 // NewManualCertManager returns a cert provider which read certificate by given hostname on create.
@@ -74,7 +76,11 @@ func NewManualCertManager(certdir, hostname string) (certProvider, error) {
 	if err := x509Cert.VerifyHostname(hostname); err != nil {
 		return nil, fmt.Errorf("cert invalid for hostname %q: %w", hostname, err)
 	}
-	return &manualCertManager{cert: &cert, hostname: hostname}, nil
+	return &manualCertManager{
+		cert:       &cert,
+		hostname:   hostname,
+		noHostname: net.ParseIP(hostname) != nil,
+	}, nil
 }
 
 func (m *manualCertManager) TLSConfig() *tls.Config {
@@ -88,7 +94,7 @@ func (m *manualCertManager) TLSConfig() *tls.Config {
 }
 
 func (m *manualCertManager) getCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	if hi.ServerName != m.hostname {
+	if hi.ServerName != m.hostname && !m.noHostname {
 		return nil, fmt.Errorf("cert mismatch with hostname: %q", hi.ServerName)
 	}
 

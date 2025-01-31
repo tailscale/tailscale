@@ -836,6 +836,76 @@ func TestManager(t *testing.T) {
 			},
 			goos: "darwin",
 		},
+		{
+			name: "populate-hosts-magicdns",
+			in: Config{
+				Routes: upstreams(
+					"corp.com", "2.2.2.2",
+					"ts.com", ""),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				SearchDomains: fqdns("ts.com", "universe.tf"),
+			},
+			split: true,
+			os: OSConfig{
+				Hosts: []*HostEntry{
+					{
+						Addr: netip.MustParseAddr("2.3.4.5"),
+						Hosts: []string{
+							"bradfitz.ts.com.",
+							"bradfitz",
+						},
+					},
+					{
+						Addr: netip.MustParseAddr("1.2.3.4"),
+						Hosts: []string{
+							"dave.ts.com.",
+							"dave",
+						},
+					},
+				},
+				Nameservers:   mustIPs("100.100.100.100"),
+				SearchDomains: fqdns("ts.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com", "ts.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams("corp.com.", "2.2.2.2"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				LocalDomains: fqdns("ts.com."),
+			},
+			goos: "windows",
+		},
+		{
+			// Regression test for https://github.com/tailscale/tailscale/issues/14428
+			name: "nopopulate-hosts-nomagicdns",
+			in: Config{
+				Routes: upstreams(
+					"corp.com", "2.2.2.2",
+					"ts.com", "1.1.1.1"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				SearchDomains: fqdns("ts.com", "universe.tf"),
+			},
+			split: true,
+			os: OSConfig{
+				Nameservers:   mustIPs("100.100.100.100"),
+				SearchDomains: fqdns("ts.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com", "ts.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					"corp.com.", "2.2.2.2",
+					"ts.com", "1.1.1.1"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+			},
+			goos: "windows",
+		},
 	}
 
 	trIP := cmp.Transformer("ipStr", func(ip netip.Addr) string { return ip.String() })

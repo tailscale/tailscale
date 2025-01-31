@@ -19,6 +19,7 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"math"
@@ -57,12 +58,12 @@ var (
 	configPath  = flag.String("c", "", "config file path")
 	certMode    = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
 	certDir     = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
-	hostname    = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
+	hostname    = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443. When --certmode=manual, this can be an IP address to avoid SNI checks")
 	runSTUN     = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
 	runDERP     = flag.Bool("derp", true, "whether to run a DERP server. The only reason to set this false is if you're decommissioning a server but want to keep its bootstrap DNS functionality still running.")
 
 	meshPSKFile     = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
-	meshWith        = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
+	meshWith        = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list. If an entry contains a slash, the second part names a hostname to be used when dialing the target.")
 	bootstrapDNS    = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
 	unpublishedDNS  = flag.String("unpublished-bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns and not publish in the list. If an entry contains a slash, the second part names a DNS record to poll for its TXT record with a `0` to `100` value for rollout percentage.")
 	verifyClients   = flag.Bool("verify-clients", false, "verify clients to this DERP server through a local tailscaled instance.")
@@ -76,6 +77,8 @@ var (
 	tcpKeepAlive = flag.Duration("tcp-keepalive-time", 10*time.Minute, "TCP keepalive time")
 	// tcpUserTimeout is intentionally short, so that hung connections are cleaned up promptly. DERPs should be nearby users.
 	tcpUserTimeout = flag.Duration("tcp-user-timeout", 15*time.Second, "TCP user timeout")
+	// tcpWriteTimeout is the timeout for writing to client TCP connections. It does not apply to mesh connections.
+	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derp.DefaultTCPWiteTimeout, "TCP write timeout; 0 results in no timeout being set on writes")
 )
 
 var (
@@ -172,6 +175,7 @@ func main() {
 	s.SetVerifyClient(*verifyClients)
 	s.SetVerifyClientURL(*verifyClientURL)
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
+	s.SetTCPWriteTimeout(*tcpWriteTimeout)
 
 	if *meshPSKFile != "" {
 		b, err := os.ReadFile(*meshPSKFile)
@@ -212,25 +216,16 @@ func main() {
 		tsweb.AddBrowserHeaders(w)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(200)
-		io.WriteString(w, `<html><body>
-<h1>DERP</h1>
-<p>
-  This is a <a href="https://tailscale.com/">Tailscale</a> DERP server.
-</p>
-<p>
-  Documentation:
-</p>
-<ul>
-  <li><a href="https://tailscale.com/kb/1232/derp-servers">About DERP</a></li>
-  <li><a href="https://pkg.go.dev/tailscale.com/derp">Protocol & Go docs</a></li>
-  <li><a href="https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp">How to run a DERP server</a></li>
-</ul>
-`)
-		if !*runDERP {
-			io.WriteString(w, `<p>Status: <b>disabled</b></p>`)
-		}
-		if tsweb.AllowDebugAccess(r) {
-			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
+		err := homePageTemplate.Execute(w, templateData{
+			ShowAbuseInfo: validProdHostname.MatchString(*hostname),
+			Disabled:      !*runDERP,
+			AllowDebug:    tsweb.AllowDebugAccess(r),
+		})
+		if err != nil {
+			if r.Context().Err() == nil {
+				log.Printf("homePageTemplate.Execute: %v", err)
+			}
+			return
 		}
 	}))
 	mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -468,3 +463,52 @@ func init() {
 		return 0
 	}))
 }
+
+type templateData struct {
+	ShowAbuseInfo bool
+	Disabled      bool
+	AllowDebug    bool
+}
+
+// homePageTemplate renders the home page using [templateData].
+var homePageTemplate = template.Must(template.New("home").Parse(`<html><body>
+<h1>DERP</h1>
+<p>
+  This is a <a href="https://tailscale.com/">Tailscale</a> DERP server.
+</p>
+
+<p>
+  It provides STUN, interactive connectivity establishment, and relaying of end-to-end encrypted traffic
+  for Tailscale clients.
+</p>
+
+{{if .ShowAbuseInfo }}
+<p>
+  If you suspect abuse, please contact <a href="mailto:security@tailscale.com">security@tailscale.com</a>.
+</p>
+{{end}}
+
+<p>
+  Documentation:
+</p>
+
+<ul>
+{{if .ShowAbuseInfo }}
+  <li><a href="https://tailscale.com/security-policies">Tailscale Security Policies</a></li>
+  <li><a href="https://tailscale.com/tailscale-aup">Tailscale Acceptable Use Policies</a></li>
+{{end}}
+  <li><a href="https://tailscale.com/kb/1232/derp-servers">About DERP</a></li>
+  <li><a href="https://pkg.go.dev/tailscale.com/derp">Protocol & Go docs</a></li>
+  <li><a href="https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp">How to run a DERP server</a></li>
+</ul>
+
+{{if .Disabled}}
+<p>Status: <b>disabled</b></p>
+{{end}}
+
+{{if .AllowDebug}}
+<p>Debug info at <a href='/debug/'>/debug/</a>.</p>
+{{end}}
+</body>
+</html>
+`))

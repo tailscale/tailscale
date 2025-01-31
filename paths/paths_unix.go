@@ -22,7 +22,7 @@ func init() {
 
 func statePath() string {
 	switch runtime.GOOS {
-	case "linux":
+	case "linux", "illumos", "solaris":
 		return "/var/lib/tailscale/tailscaled.state"
 	case "freebsd", "openbsd":
 		return "/var/db/tailscale/tailscaled.state"

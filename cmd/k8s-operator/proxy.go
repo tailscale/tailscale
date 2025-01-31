@@ -311,7 +311,7 @@ func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 
 	// Now add the impersonation headers that we want.
 	if err := addImpersonationHeaders(r, h.log); err != nil {
-		log.Printf("failed to add impersonation headers: " + err.Error())
+		log.Print("failed to add impersonation headers: ", err.Error())
 	}
 }
 

@@ -20,10 +20,10 @@ import (
 )
 
 func BenchmarkHandleBootstrapDNS(b *testing.B) {
-	tstest.Replace(b, bootstrapDNS, "log.tailscale.io,login.tailscale.com,controlplane.tailscale.com,login.us.tailscale.com")
+	tstest.Replace(b, bootstrapDNS, "log.tailscale.com,login.tailscale.com,controlplane.tailscale.com,login.us.tailscale.com")
 	refreshBootstrapDNS()
 	w := new(bitbucketResponseWriter)
-	req, _ := http.NewRequest("GET", "https://localhost/bootstrap-dns?q="+url.QueryEscape("log.tailscale.io"), nil)
+	req, _ := http.NewRequest("GET", "https://localhost/bootstrap-dns?q="+url.QueryEscape("log.tailscale.com"), nil)
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(b *testing.PB) {
@@ -63,7 +63,7 @@ func TestUnpublishedDNS(t *testing.T) {
 	nettest.SkipIfNoNetwork(t)
 
 	const published = "login.tailscale.com"
-	const unpublished = "log.tailscale.io"
+	const unpublished = "log.tailscale.com"
 
 	prev1, prev2 := *bootstrapDNS, *unpublishedDNS
 	*bootstrapDNS = published
@@ -119,18 +119,18 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 
 	unpublishedDNSCache.Store(&dnsEntryMap{
 		IPs: map[string][]net.IP{
-			"log.tailscale.io":           {},
+			"log.tailscale.com":          {},
 			"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)},
 		},
 		Percent: map[string]float64{
-			"log.tailscale.io":           1.0,
+			"log.tailscale.com":          1.0,
 			"controlplane.tailscale.com": 1.0,
 		},
 	})
 
 	t.Run("CacheMiss", func(t *testing.T) {
 		// One domain in map but empty, one not in map at all
-		for _, q := range []string{"log.tailscale.io", "login.tailscale.com"} {
+		for _, q := range []string{"log.tailscale.com", "login.tailscale.com"} {
 			resetMetrics()
 			ips := getBootstrapDNS(t, q)
 

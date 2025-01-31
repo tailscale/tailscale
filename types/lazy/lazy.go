@@ -120,41 +120,6 @@ func (z *SyncValue[T]) PeekErr() (v T, err error, ok bool) {
 	return zero, nil, false
 }
 
-// SyncFunc wraps a function to make it lazy.
-//
-// The returned function calls fill the first time it's called, and returns
-// fill's result on every subsequent call.
-//
-// The returned function is safe for concurrent use.
-func SyncFunc[T any](fill func() T) func() T {
-	var (
-		once sync.Once
-		v    T
-	)
-	return func() T {
-		once.Do(func() { v = fill() })
-		return v
-	}
-}
-
-// SyncFuncErr wraps a function to make it lazy.
-//
-// The returned function calls fill the first time it's called, and returns
-// fill's results on every subsequent call.
-//
-// The returned function is safe for concurrent use.
-func SyncFuncErr[T any](fill func() (T, error)) func() (T, error) {
-	var (
-		once sync.Once
-		v    T
-		err  error
-	)
-	return func() (T, error) {
-		once.Do(func() { v, err = fill() })
-		return v, err
-	}
-}
-
 // TB is a subset of testing.TB that we use to set up test helpers.
 // It's defined here to avoid pulling in the testing package.
 type TB interface {

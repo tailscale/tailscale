@@ -22,22 +22,27 @@ import (
 	"tailscale.com/version/distro"
 )
 
-var synologyConfigureCertCmd = &ffcli.Command{
-	Name:       "synology-cert",
-	Exec:       runConfigureSynologyCert,
-	ShortHelp:  "Configure Synology with a TLS certificate for your tailnet",
-	ShortUsage: "synology-cert [--domain <domain>]",
-	LongHelp: strings.TrimSpace(`
+func synologyConfigureCertCmd() *ffcli.Command {
+	if runtime.GOOS != "linux" || distro.Get() != distro.Synology {
+		return nil
+	}
+	return &ffcli.Command{
+		Name:       "synology-cert",
+		Exec:       runConfigureSynologyCert,
+		ShortHelp:  "Configure Synology with a TLS certificate for your tailnet",
+		ShortUsage: "synology-cert [--domain <domain>]",
+		LongHelp: strings.TrimSpace(`
 This command is intended to run periodically as root on a Synology device to
 create or refresh the TLS certificate for the tailnet domain.
 
 See: https://tailscale.com/kb/1153/enabling-https
 `),
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("synology-cert")
-		fs.StringVar(&synologyConfigureCertArgs.domain, "domain", "", "Tailnet domain to create or refresh certificates for. Ignored if only one domain exists.")
-		return fs
-	})(),
+		FlagSet: (func() *flag.FlagSet {
+			fs := newFlagSet("synology-cert")
+			fs.StringVar(&synologyConfigureCertArgs.domain, "domain", "", "Tailnet domain to create or refresh certificates for. Ignored if only one domain exists.")
+			return fs
+		})(),
+	}
 }
 
 var synologyConfigureCertArgs struct {

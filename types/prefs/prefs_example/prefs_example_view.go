@@ -20,7 +20,7 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs,AutoUpdatePrefs,AppConnectorPrefs
 
-// View returns a readonly view of Prefs.
+// View returns a read-only view of Prefs.
 func (p *Prefs) View() PrefsView {
 	return PrefsView{ж: p}
 }
@@ -36,7 +36,7 @@ type PrefsView struct {
 	ж *Prefs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v PrefsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -132,7 +132,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Persist                *persist.Persist
 }{})
 
-// View returns a readonly view of AutoUpdatePrefs.
+// View returns a read-only view of AutoUpdatePrefs.
 func (p *AutoUpdatePrefs) View() AutoUpdatePrefsView {
 	return AutoUpdatePrefsView{ж: p}
 }
@@ -148,7 +148,7 @@ type AutoUpdatePrefsView struct {
 	ж *AutoUpdatePrefs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v AutoUpdatePrefsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -186,7 +186,7 @@ var _AutoUpdatePrefsViewNeedsRegeneration = AutoUpdatePrefs(struct {
 	Apply prefs.Item[opt.Bool]
 }{})
 
-// View returns a readonly view of AppConnectorPrefs.
+// View returns a read-only view of AppConnectorPrefs.
 func (p *AppConnectorPrefs) View() AppConnectorPrefsView {
 	return AppConnectorPrefsView{ж: p}
 }
@@ -202,7 +202,7 @@ type AppConnectorPrefsView struct {
 	ж *AppConnectorPrefs
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v AppConnectorPrefsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with

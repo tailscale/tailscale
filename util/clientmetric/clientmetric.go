@@ -270,7 +270,7 @@ func (c *AggregateCounter) UnregisterAll() {
 // a sum of expvar variables registered with it.
 func NewAggregateCounter(name string) *AggregateCounter {
 	c := &AggregateCounter{counters: set.Set[*expvar.Int]{}}
-	NewGaugeFunc(name, c.Value)
+	NewCounterFunc(name, c.Value)
 	return c
 }
 

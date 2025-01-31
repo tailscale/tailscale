@@ -52,11 +52,17 @@
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
 //     It cannot be used in conjunction with TS_DEST_IP. The file is watched for changes,
 //     and will be re-applied when it changes.
-//   - TS_HEALTHCHECK_ADDR_PORT: if specified, an HTTP health endpoint will be
-//     served at /healthz at the provided address, which should be in form [<address>]:<port>.
-//     If not set, no health check will be run. If set to :<port>, addr will default to 0.0.0.0
-//     The health endpoint will return 200 OK if this node has at least one tailnet IP address,
-//     otherwise returns 503.
+//   - TS_HEALTHCHECK_ADDR_PORT: deprecated, use TS_ENABLE_HEALTH_CHECK instead and optionally
+//     set TS_LOCAL_ADDR_PORT. Will be removed in 1.82.0.
+//   - TS_LOCAL_ADDR_PORT: the address and port to serve local metrics and health
+//     check endpoints if enabled via TS_ENABLE_METRICS and/or TS_ENABLE_HEALTH_CHECK.
+//     Defaults to [::]:9002, serving on all available interfaces.
+//   - TS_ENABLE_METRICS: if true, a metrics endpoint will be served at /metrics on
+//     the address specified by TS_LOCAL_ADDR_PORT. See https://tailscale.com/kb/1482/client-metrics
+//     for more information on the metrics exposed.
+//   - TS_ENABLE_HEALTH_CHECK: if true, a health check endpoint will be served at /healthz on
+//     the address specified by TS_LOCAL_ADDR_PORT. The health endpoint will return 200
+//     OK if this node has at least one tailnet IP address, otherwise returns 503.
 //     NB: the health criteria might change in the future.
 //   - TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR: if specified, a path to a
 //     directory that containers tailscaled config in file. The config file needs to be
@@ -99,10 +105,10 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -115,6 +121,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -161,9 +168,13 @@ func main() {
 	bootCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	var kc *kubeClient
 	if cfg.InKubernetes {
-		initKubeClient(cfg.Root)
-		if err := cfg.setupKube(bootCtx); err != nil {
+		kc, err = newKubeClient(cfg.Root, cfg.KubeSecret)
+		if err != nil {
+			log.Fatalf("error initializing kube client: %v", err)
+		}
+		if err := cfg.setupKube(bootCtx, kc); err != nil {
 			log.Fatalf("error setting up for running on Kubernetes: %v", err)
 		}
 	}
@@ -178,6 +189,34 @@ func main() {
 		}
 	}
 	defer killTailscaled()
+
+	var healthCheck *healthz
+	if cfg.HealthCheckAddrPort != "" {
+		mux := http.NewServeMux()
+
+		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
+		healthCheck = healthHandlers(mux)
+
+		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
+		defer close()
+	}
+
+	if cfg.localMetricsEnabled() || cfg.localHealthEnabled() {
+		mux := http.NewServeMux()
+
+		if cfg.localMetricsEnabled() {
+			log.Printf("Running metrics endpoint at %s/metrics", cfg.LocalAddrPort)
+			metricsHandlers(mux, client, cfg.DebugAddrPort)
+		}
+
+		if cfg.localHealthEnabled() {
+			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
+			healthCheck = healthHandlers(mux)
+		}
+
+		close := runHTTPServer(mux, cfg.LocalAddrPort)
+		defer close()
+	}
 
 	if cfg.EnableForwardingOptimizations {
 		if err := client.SetUDPGROForwarding(bootCtx); err != nil {
@@ -285,11 +324,17 @@ authLoop:
 		}
 	}
 
+	// Remove any serve config and advertised HTTPS endpoint that may have been set by a previous run of
+	// containerboot, but only if we're providing a new one.
 	if cfg.ServeConfigPath != "" {
-		// Remove any serve config that may have been set by a previous run of
-		// containerboot, but only if we're providing a new one.
+		log.Printf("serve proxy: unsetting previous config")
 		if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
 			log.Fatalf("failed to unset serve config: %v", err)
+		}
+		if hasKubeStateStore(cfg) {
+			if err := kc.storeHTTPSEndpoint(ctx, ""); err != nil {
+				log.Fatalf("failed to update HTTPS endpoint in tailscale state: %v", err)
+			}
 		}
 	}
 
@@ -298,14 +343,26 @@ authLoop:
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
 		log.Printf("Deleting authkey from kube secret")
-		if err := deleteAuthKey(ctx, cfg.KubeSecret); err != nil {
+		if err := kc.deleteAuthKey(ctx); err != nil {
 			log.Fatalf("deleting authkey from kube secret: %v", err)
+		}
+	}
+
+	if hasKubeStateStore(cfg) {
+		if err := kc.storeCapVerUID(ctx, cfg.PodUID); err != nil {
+			log.Fatalf("storing capability version and UID: %v", err)
 		}
 	}
 
 	w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
 	if err != nil {
 		log.Fatalf("rewatching tailscaled for updates after auth: %v", err)
+	}
+
+	// If tailscaled config was read from a mounted file, watch the file for updates and reload.
+	cfgWatchErrChan := make(chan error)
+	if cfg.TailscaledConfigFilePath != "" {
+		go watchTailscaledConfigChanges(ctx, cfg.TailscaledConfigFilePath, client, cfgWatchErrChan)
 	}
 
 	var (
@@ -322,12 +379,9 @@ authLoop:
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
 
-		h             = &healthz{} // http server for the healthz endpoint
-		healthzRunner = sync.OnceFunc(func() { runHealthz(cfg.HealthCheckAddrPort, h) })
+		triggerWatchServeConfigChanges sync.Once
 	)
-	if cfg.ServeConfigPath != "" {
-		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
-	}
+
 	var nfr linuxfw.NetfilterRunner
 	if isL3Proxy(cfg) {
 		nfr, err = newNetfilterRunner(log.Printf)
@@ -404,6 +458,8 @@ runLoop:
 			break runLoop
 		case err := <-errChan:
 			log.Fatalf("failed to read from tailscaled: %v", err)
+		case err := <-cfgWatchErrChan:
+			log.Fatalf("failed to watch tailscaled config: %v", err)
 		case n := <-notifyChan:
 			if n.State != nil && *n.State != ipn.Running {
 				// Something's gone wrong and we've left the authenticated state.
@@ -428,7 +484,7 @@ runLoop:
 				// fails.
 				deviceID := n.NetMap.SelfNode.StableID()
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
-					if err := storeDeviceID(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID()); err != nil {
+					if err := kc.storeDeviceID(ctx, n.NetMap.SelfNode.StableID()); err != nil {
 						log.Fatalf("storing device ID in Kubernetes Secret: %v", err)
 					}
 				}
@@ -501,8 +557,11 @@ runLoop:
 					resetTimer(false)
 					backendAddrs = newBackendAddrs
 				}
-				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) != 0 {
-					cd := n.NetMap.DNS.CertDomains[0]
+				if cfg.ServeConfigPath != "" {
+					cd := certDomainFromNetmap(n.NetMap)
+					if cd == "" {
+						cd = kubetypes.ValueNoHTTPS
+					}
 					prev := certDomain.Swap(ptr.To(cd))
 					if prev == nil || *prev != cd {
 						select {
@@ -544,17 +603,21 @@ runLoop:
 				// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
 				deviceEndpoints := []any{n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses()}
 				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
-					if err := storeDeviceEndpoints(ctx, cfg.KubeSecret, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
+					if err := kc.storeDeviceEndpoints(ctx, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
 						log.Fatalf("storing device IPs and FQDN in Kubernetes Secret: %v", err)
 					}
 				}
 
-				if cfg.HealthCheckAddrPort != "" {
-					h.Lock()
-					h.hasAddrs = len(addrs) != 0
-					h.Unlock()
-					healthzRunner()
+				if healthCheck != nil {
+					healthCheck.update(len(addrs) != 0)
 				}
+
+				if cfg.ServeConfigPath != "" {
+					triggerWatchServeConfigChanges.Do(func() {
+						go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client, kc)
+					})
+				}
+
 				if egressSvcsNotify != nil {
 					egressSvcsNotify <- n
 				}
@@ -731,7 +794,6 @@ func tailscaledConfigFilePath() string {
 		}
 		cv, err := kubeutils.CapVerFromFileName(e.Name())
 		if err != nil {
-			log.Printf("skipping file %q in tailscaled config directory %q: %v", e.Name(), dir, err)
 			continue
 		}
 		if cv > maxCompatVer && cv <= tailcfg.CurrentCapabilityVersion {
@@ -739,8 +801,28 @@ func tailscaledConfigFilePath() string {
 		}
 	}
 	if maxCompatVer == -1 {
-		log.Fatalf("no tailscaled config file found in %q for current capability version %q", dir, tailcfg.CurrentCapabilityVersion)
+		log.Fatalf("no tailscaled config file found in %q for current capability version %d", dir, tailcfg.CurrentCapabilityVersion)
 	}
-	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
-	return path.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
+	filePath := filepath.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
+	log.Printf("Using tailscaled config file %q to match current capability version %d", filePath, tailcfg.CurrentCapabilityVersion)
+	return filePath
+}
+
+func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("failed to listen on addr %q: %v", addr, err)
+	}
+	srv := &http.Server{Handler: mux}
+
+	go func() {
+		if err := srv.Serve(ln); err != nil {
+			log.Fatalf("failed running server: %v", err)
+		}
+	}()
+
+	return func() error {
+		err := srv.Shutdown(context.Background())
+		return errors.Join(err, ln.Close())
+	}
 }

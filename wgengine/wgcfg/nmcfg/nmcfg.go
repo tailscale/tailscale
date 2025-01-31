@@ -40,8 +40,7 @@ func cidrIsSubnet(node tailcfg.NodeView, cidr netip.Prefix) bool {
 	if !cidr.IsSingleIP() {
 		return true
 	}
-	for i := range node.Addresses().Len() {
-		selfCIDR := node.Addresses().At(i)
+	for _, selfCIDR := range node.Addresses().All() {
 		if cidr == selfCIDR {
 			return false
 		}
@@ -86,7 +85,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 	skippedSubnets := new(bytes.Buffer)
 
 	for _, peer := range nm.Peers {
-		if peer.DiscoKey().IsZero() && peer.DERP() == "" && !peer.IsWireGuardOnly() {
+		if peer.DiscoKey().IsZero() && peer.HomeDERP() == 0 && !peer.IsWireGuardOnly() {
 			// Peer predates both DERP and active discovery, we cannot
 			// communicate with it.
 			logf("[v1] wgcfg: skipped peer %s, doesn't offer DERP or disco", peer.Key().ShortString())
@@ -107,11 +106,10 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		cpeer := &cfg.Peers[len(cfg.Peers)-1]
 
 		didExitNodeWarn := false
-		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer()
-		cpeer.V6MasqAddr = peer.SelfNodeV6MasqAddrForThisPeer()
+		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer().Clone()
+		cpeer.V6MasqAddr = peer.SelfNodeV6MasqAddrForThisPeer().Clone()
 		cpeer.IsJailed = peer.IsJailed()
-		for i := range peer.AllowedIPs().Len() {
-			allowedIP := peer.AllowedIPs().At(i)
+		for _, allowedIP := range peer.AllowedIPs().All() {
 			if allowedIP.Bits() == 0 && peer.StableID() != exitNode {
 				if didExitNodeWarn {
 					// Don't log about both the IPv4 /0 and IPv6 /0.

@@ -289,7 +289,7 @@ func newSettingMetric(key setting.Key, scope setting.Scope, suffix string, typ c
 }
 
 func newMetric(nameParts []string, typ clientmetric.Type) metric {
-	name := strings.Join(slicesx.Filter([]string{internal.OS(), "syspolicy"}, nameParts, isNonEmpty), "_")
+	name := strings.Join(slicesx.AppendNonzero([]string{internal.OS(), "syspolicy"}, nameParts), "_")
 	switch {
 	case !ShouldReport():
 		return &funcMetric{name: name, typ: typ}
@@ -303,8 +303,6 @@ func newMetric(nameParts []string, typ clientmetric.Type) metric {
 		panic("unreachable")
 	}
 }
-
-func isNonEmpty(s string) bool { return s != "" }
 
 func metricScopeName(scope setting.Scope) string {
 	switch scope {

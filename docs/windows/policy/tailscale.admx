@@ -50,6 +50,10 @@
                   displayName="$(string.SINCE_V1_74)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_78"
+                  displayName="$(string.SINCE_V1_78)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -94,7 +98,14 @@
       <parentCategory ref="Settings_Category" />
       <supportedOn ref="SINCE_V1_56" />
       <elements>
-        <text id="ExitNodeIDPrompt" valueName="ExitNodeID" required="true" />
+        <text id="ExitNodeIDPrompt" valueName="ExitNodeID" required="true" />>
+      </elements>
+    </policy>
+    <policy name="AllowedSuggestedExitNodes" class="Machine" displayName="$(string.AllowedSuggestedExitNodes)" explainText="$(string.AllowedSuggestedExitNodes_Help)" presentation="$(presentation.AllowedSuggestedExitNodes)" key="Software\Policies\Tailscale\AllowedSuggestedExitNodes">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="SINCE_V1_78" />
+      <elements>
+        <list id="AllowedSuggestedExitNodesList" />
       </elements>
     </policy>
     <policy name="AllowIncomingConnections" class="Machine" displayName="$(string.AllowIncomingConnections)" explainText="$(string.AllowIncomingConnections_Help)" key="Software\Policies\Tailscale" valueName="AllowIncomingConnections">
@@ -197,7 +208,7 @@
         <decimal value="0" />
       </disabledValue>
     </policy>
-    <policy name="AdminPanel" class="Machine" displayName="$(string.AdminPanel)" explainText="$(string.AdminPanel_Help)" key="Software\Policies\Tailscale" valueName="AdminPanel">
+    <policy name="AdminConsole" class="Both" displayName="$(string.AdminConsole)" explainText="$(string.AdminConsole_Help)" key="Software\Policies\Tailscale" valueName="AdminConsole">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
       <enabledValue>
@@ -207,7 +218,7 @@
         <string>hide</string>
       </disabledValue>
     </policy>
-    <policy name="NetworkDevices" class="Machine" displayName="$(string.NetworkDevices)" explainText="$(string.NetworkDevices_Help)" key="Software\Policies\Tailscale" valueName="NetworkDevices">
+    <policy name="NetworkDevices" class="Both" displayName="$(string.NetworkDevices)" explainText="$(string.NetworkDevices_Help)" key="Software\Policies\Tailscale" valueName="NetworkDevices">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
       <enabledValue>
@@ -217,7 +228,7 @@
         <string>hide</string>
       </disabledValue>
     </policy>
-    <policy name="TestMenu" class="Machine" displayName="$(string.TestMenu)" explainText="$(string.TestMenu_Help)" key="Software\Policies\Tailscale" valueName="TestMenu">
+    <policy name="TestMenu" class="Both" displayName="$(string.TestMenu)" explainText="$(string.TestMenu_Help)" key="Software\Policies\Tailscale" valueName="TestMenu">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
       <enabledValue>
@@ -227,7 +238,7 @@
         <string>hide</string>
       </disabledValue>
     </policy>
-    <policy name="UpdateMenu" class="Machine" displayName="$(string.UpdateMenu)" explainText="$(string.UpdateMenu_Help)" key="Software\Policies\Tailscale" valueName="UpdateMenu">
+    <policy name="UpdateMenu" class="Both" displayName="$(string.UpdateMenu)" explainText="$(string.UpdateMenu_Help)" key="Software\Policies\Tailscale" valueName="UpdateMenu">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
       <enabledValue>
@@ -237,7 +248,7 @@
         <string>hide</string>
       </disabledValue>
     </policy>
-    <policy name="RunExitNode" class="Machine" displayName="$(string.RunExitNode)" explainText="$(string.RunExitNode_Help)" key="Software\Policies\Tailscale" valueName="RunExitNode">
+    <policy name="RunExitNode" class="Both" displayName="$(string.RunExitNode)" explainText="$(string.RunExitNode_Help)" key="Software\Policies\Tailscale" valueName="RunExitNode">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
       <enabledValue>
@@ -247,7 +258,7 @@
         <string>hide</string>
       </disabledValue>
     </policy>
-    <policy name="PreferencesMenu" class="Machine" displayName="$(string.PreferencesMenu)" explainText="$(string.PreferencesMenu_Help)" key="Software\Policies\Tailscale" valueName="PreferencesMenu">
+    <policy name="PreferencesMenu" class="Both" displayName="$(string.PreferencesMenu)" explainText="$(string.PreferencesMenu_Help)" key="Software\Policies\Tailscale" valueName="PreferencesMenu">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
       <enabledValue>
@@ -257,7 +268,7 @@
         <string>hide</string>
       </disabledValue>
     </policy>
-    <policy name="ExitNodesPicker" class="Machine" displayName="$(string.ExitNodesPicker)" explainText="$(string.ExitNodesPicker_Help)" key="Software\Policies\Tailscale" valueName="ExitNodesPicker">
+    <policy name="ExitNodesPicker" class="Both" displayName="$(string.ExitNodesPicker)" explainText="$(string.ExitNodesPicker_Help)" key="Software\Policies\Tailscale" valueName="ExitNodesPicker">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
       <enabledValue>
@@ -267,7 +278,7 @@
         <string>hide</string>
       </disabledValue>
     </policy>
-    <policy name="ManagedBy" class="Machine" displayName="$(string.ManagedBy)" explainText="$(string.ManagedBy_Help)" presentation="$(presentation.ManagedBy)" key="Software\Policies\Tailscale">
+    <policy name="ManagedBy" class="Both" displayName="$(string.ManagedBy)" explainText="$(string.ManagedBy_Help)" presentation="$(presentation.ManagedBy)" key="Software\Policies\Tailscale">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_62" />
       <elements>
@@ -276,7 +287,7 @@
         <text id="ManagedBySupportURL" valueName="ManagedByURL" />
       </elements>
     </policy>
-    <policy name="KeyExpirationNotice" class="Machine" displayName="$(string.KeyExpirationNotice)" explainText="$(string.KeyExpirationNotice_Help)" presentation="$(presentation.KeyExpirationNotice)" key="Software\Policies\Tailscale">
+    <policy name="KeyExpirationNotice" class="Both" displayName="$(string.KeyExpirationNotice)" explainText="$(string.KeyExpirationNotice_Help)" presentation="$(presentation.KeyExpirationNotice)" key="Software\Policies\Tailscale">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_50" />
       <elements>

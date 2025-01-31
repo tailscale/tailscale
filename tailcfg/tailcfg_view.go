@@ -21,7 +21,7 @@ import (
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile
 
-// View returns a readonly view of User.
+// View returns a read-only view of User.
 func (p *User) View() UserView {
 	return UserView{ж: p}
 }
@@ -37,7 +37,7 @@ type UserView struct {
 	ж *User
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v UserView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -66,24 +66,20 @@ func (v *UserView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v UserView) ID() UserID                   { return v.ж.ID }
-func (v UserView) LoginName() string            { return v.ж.LoginName }
-func (v UserView) DisplayName() string          { return v.ж.DisplayName }
-func (v UserView) ProfilePicURL() string        { return v.ж.ProfilePicURL }
-func (v UserView) Logins() views.Slice[LoginID] { return views.SliceOf(v.ж.Logins) }
-func (v UserView) Created() time.Time           { return v.ж.Created }
+func (v UserView) ID() UserID            { return v.ж.ID }
+func (v UserView) DisplayName() string   { return v.ж.DisplayName }
+func (v UserView) ProfilePicURL() string { return v.ж.ProfilePicURL }
+func (v UserView) Created() time.Time    { return v.ж.Created }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _UserViewNeedsRegeneration = User(struct {
 	ID            UserID
-	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Logins        []LoginID
 	Created       time.Time
 }{})
 
-// View returns a readonly view of Node.
+// View returns a read-only view of Node.
 func (p *Node) View() NodeView {
 	return NodeView{ж: p}
 }
@@ -99,7 +95,7 @@ type NodeView struct {
 	ж *Node
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v NodeView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -143,27 +139,18 @@ func (v NodeView) DiscoKey() key.DiscoPublic                { return v.ж.DiscoK
 func (v NodeView) Addresses() views.Slice[netip.Prefix]     { return views.SliceOf(v.ж.Addresses) }
 func (v NodeView) AllowedIPs() views.Slice[netip.Prefix]    { return views.SliceOf(v.ж.AllowedIPs) }
 func (v NodeView) Endpoints() views.Slice[netip.AddrPort]   { return views.SliceOf(v.ж.Endpoints) }
-func (v NodeView) DERP() string                             { return v.ж.DERP }
+func (v NodeView) LegacyDERPString() string                 { return v.ж.LegacyDERPString }
+func (v NodeView) HomeDERP() int                            { return v.ж.HomeDERP }
 func (v NodeView) Hostinfo() HostinfoView                   { return v.ж.Hostinfo }
 func (v NodeView) Created() time.Time                       { return v.ж.Created }
 func (v NodeView) Cap() CapabilityVersion                   { return v.ж.Cap }
 func (v NodeView) Tags() views.Slice[string]                { return views.SliceOf(v.ж.Tags) }
 func (v NodeView) PrimaryRoutes() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.PrimaryRoutes) }
-func (v NodeView) LastSeen() *time.Time {
-	if v.ж.LastSeen == nil {
-		return nil
-	}
-	x := *v.ж.LastSeen
-	return &x
+func (v NodeView) LastSeen() views.ValuePointer[time.Time] {
+	return views.ValuePointerOf(v.ж.LastSeen)
 }
 
-func (v NodeView) Online() *bool {
-	if v.ж.Online == nil {
-		return nil
-	}
-	x := *v.ж.Online
-	return &x
-}
+func (v NodeView) Online() views.ValuePointer[bool] { return views.ValuePointerOf(v.ж.Online) }
 
 func (v NodeView) MachineAuthorized() bool                   { return v.ж.MachineAuthorized }
 func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.SliceOf(v.ж.Capabilities) }
@@ -176,20 +163,12 @@ func (v NodeView) ComputedName() string         { return v.ж.ComputedName }
 func (v NodeView) ComputedNameWithHost() string { return v.ж.ComputedNameWithHost }
 func (v NodeView) DataPlaneAuditLogID() string  { return v.ж.DataPlaneAuditLogID }
 func (v NodeView) Expired() bool                { return v.ж.Expired }
-func (v NodeView) SelfNodeV4MasqAddrForThisPeer() *netip.Addr {
-	if v.ж.SelfNodeV4MasqAddrForThisPeer == nil {
-		return nil
-	}
-	x := *v.ж.SelfNodeV4MasqAddrForThisPeer
-	return &x
+func (v NodeView) SelfNodeV4MasqAddrForThisPeer() views.ValuePointer[netip.Addr] {
+	return views.ValuePointerOf(v.ж.SelfNodeV4MasqAddrForThisPeer)
 }
 
-func (v NodeView) SelfNodeV6MasqAddrForThisPeer() *netip.Addr {
-	if v.ж.SelfNodeV6MasqAddrForThisPeer == nil {
-		return nil
-	}
-	x := *v.ж.SelfNodeV6MasqAddrForThisPeer
-	return &x
+func (v NodeView) SelfNodeV6MasqAddrForThisPeer() views.ValuePointer[netip.Addr] {
+	return views.ValuePointerOf(v.ж.SelfNodeV6MasqAddrForThisPeer)
 }
 
 func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
@@ -214,7 +193,8 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	Addresses                     []netip.Prefix
 	AllowedIPs                    []netip.Prefix
 	Endpoints                     []netip.AddrPort
-	DERP                          string
+	LegacyDERPString              string
+	HomeDERP                      int
 	Hostinfo                      HostinfoView
 	Created                       time.Time
 	Cap                           CapabilityVersion
@@ -238,7 +218,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 
-// View returns a readonly view of Hostinfo.
+// View returns a read-only view of Hostinfo.
 func (p *Hostinfo) View() HostinfoView {
 	return HostinfoView{ж: p}
 }
@@ -254,7 +234,7 @@ type HostinfoView struct {
 	ж *Hostinfo
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v HostinfoView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -303,6 +283,7 @@ func (v HostinfoView) ShieldsUp() bool                        { return v.ж.Shie
 func (v HostinfoView) ShareeNode() bool                       { return v.ж.ShareeNode }
 func (v HostinfoView) NoLogsNoSupport() bool                  { return v.ж.NoLogsNoSupport }
 func (v HostinfoView) WireIngress() bool                      { return v.ж.WireIngress }
+func (v HostinfoView) IngressEnabled() bool                   { return v.ж.IngressEnabled }
 func (v HostinfoView) AllowsUpdate() bool                     { return v.ж.AllowsUpdate }
 func (v HostinfoView) Machine() string                        { return v.ж.Machine }
 func (v HostinfoView) GoArch() string                         { return v.ж.GoArch }
@@ -318,15 +299,9 @@ func (v HostinfoView) Cloud() string                          { return v.ж.Clou
 func (v HostinfoView) Userspace() opt.Bool                    { return v.ж.Userspace }
 func (v HostinfoView) UserspaceRouter() opt.Bool              { return v.ж.UserspaceRouter }
 func (v HostinfoView) AppConnector() opt.Bool                 { return v.ж.AppConnector }
-func (v HostinfoView) Location() *Location {
-	if v.ж.Location == nil {
-		return nil
-	}
-	x := *v.ж.Location
-	return &x
-}
-
-func (v HostinfoView) Equal(v2 HostinfoView) bool { return v.ж.Equal(v2.ж) }
+func (v HostinfoView) ServicesHash() string                   { return v.ж.ServicesHash }
+func (v HostinfoView) Location() LocationView                 { return v.ж.Location.View() }
+func (v HostinfoView) Equal(v2 HostinfoView) bool             { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
@@ -350,6 +325,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	ShareeNode      bool
 	NoLogsNoSupport bool
 	WireIngress     bool
+	IngressEnabled  bool
 	AllowsUpdate    bool
 	Machine         string
 	GoArch          string
@@ -365,10 +341,11 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
 	AppConnector    opt.Bool
+	ServicesHash    string
 	Location        *Location
 }{})
 
-// View returns a readonly view of NetInfo.
+// View returns a read-only view of NetInfo.
 func (p *NetInfo) View() NetInfoView {
 	return NetInfoView{ж: p}
 }
@@ -384,7 +361,7 @@ type NetInfoView struct {
 	ж *NetInfo
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v NetInfoView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -448,7 +425,7 @@ var _NetInfoViewNeedsRegeneration = NetInfo(struct {
 	FirewallMode          string
 }{})
 
-// View returns a readonly view of Login.
+// View returns a read-only view of Login.
 func (p *Login) View() LoginView {
 	return LoginView{ж: p}
 }
@@ -464,7 +441,7 @@ type LoginView struct {
 	ж *Login
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v LoginView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -509,7 +486,7 @@ var _LoginViewNeedsRegeneration = Login(struct {
 	ProfilePicURL string
 }{})
 
-// View returns a readonly view of DNSConfig.
+// View returns a read-only view of DNSConfig.
 func (p *DNSConfig) View() DNSConfigView {
 	return DNSConfigView{ж: p}
 }
@@ -525,7 +502,7 @@ type DNSConfigView struct {
 	ж *DNSConfig
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v DNSConfigView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -590,7 +567,7 @@ var _DNSConfigViewNeedsRegeneration = DNSConfig(struct {
 	TempCorpIssue13969  string
 }{})
 
-// View returns a readonly view of RegisterResponse.
+// View returns a read-only view of RegisterResponse.
 func (p *RegisterResponse) View() RegisterResponseView {
 	return RegisterResponseView{ж: p}
 }
@@ -606,7 +583,7 @@ type RegisterResponseView struct {
 	ж *RegisterResponse
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v RegisterResponseView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -635,7 +612,7 @@ func (v *RegisterResponseView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v RegisterResponseView) User() UserView          { return v.ж.User.View() }
+func (v RegisterResponseView) User() User              { return v.ж.User }
 func (v RegisterResponseView) Login() Login            { return v.ж.Login }
 func (v RegisterResponseView) NodeKeyExpired() bool    { return v.ж.NodeKeyExpired }
 func (v RegisterResponseView) MachineAuthorized() bool { return v.ж.MachineAuthorized }
@@ -656,7 +633,7 @@ var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
 	Error             string
 }{})
 
-// View returns a readonly view of RegisterResponseAuth.
+// View returns a read-only view of RegisterResponseAuth.
 func (p *RegisterResponseAuth) View() RegisterResponseAuthView {
 	return RegisterResponseAuthView{ж: p}
 }
@@ -672,7 +649,7 @@ type RegisterResponseAuthView struct {
 	ж *RegisterResponseAuth
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v RegisterResponseAuthView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -701,12 +678,8 @@ func (v *RegisterResponseAuthView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v RegisterResponseAuthView) Oauth2Token() *Oauth2Token {
-	if v.ж.Oauth2Token == nil {
-		return nil
-	}
-	x := *v.ж.Oauth2Token
-	return &x
+func (v RegisterResponseAuthView) Oauth2Token() views.ValuePointer[Oauth2Token] {
+	return views.ValuePointerOf(v.ж.Oauth2Token)
 }
 
 func (v RegisterResponseAuthView) AuthKey() string { return v.ж.AuthKey }
@@ -718,7 +691,7 @@ var _RegisterResponseAuthViewNeedsRegeneration = RegisterResponseAuth(struct {
 	AuthKey     string
 }{})
 
-// View returns a readonly view of RegisterRequest.
+// View returns a read-only view of RegisterRequest.
 func (p *RegisterRequest) View() RegisterRequestView {
 	return RegisterRequestView{ж: p}
 }
@@ -734,7 +707,7 @@ type RegisterRequestView struct {
 	ж *RegisterRequest
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v RegisterRequestView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -776,12 +749,8 @@ func (v RegisterRequestView) NodeKeySignature() views.ByteSlice[tkatype.Marshale
 	return views.ByteSliceOf(v.ж.NodeKeySignature)
 }
 func (v RegisterRequestView) SignatureType() SignatureType { return v.ж.SignatureType }
-func (v RegisterRequestView) Timestamp() *time.Time {
-	if v.ж.Timestamp == nil {
-		return nil
-	}
-	x := *v.ж.Timestamp
-	return &x
+func (v RegisterRequestView) Timestamp() views.ValuePointer[time.Time] {
+	return views.ValuePointerOf(v.ж.Timestamp)
 }
 
 func (v RegisterRequestView) DeviceCert() views.ByteSlice[[]byte] {
@@ -812,7 +781,7 @@ var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
 	Tailnet          string
 }{})
 
-// View returns a readonly view of DERPHomeParams.
+// View returns a read-only view of DERPHomeParams.
 func (p *DERPHomeParams) View() DERPHomeParamsView {
 	return DERPHomeParamsView{ж: p}
 }
@@ -828,7 +797,7 @@ type DERPHomeParamsView struct {
 	ж *DERPHomeParams
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v DERPHomeParamsView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -866,7 +835,7 @@ var _DERPHomeParamsViewNeedsRegeneration = DERPHomeParams(struct {
 	RegionScore map[int]float64
 }{})
 
-// View returns a readonly view of DERPRegion.
+// View returns a read-only view of DERPRegion.
 func (p *DERPRegion) View() DERPRegionView {
 	return DERPRegionView{ж: p}
 }
@@ -882,7 +851,7 @@ type DERPRegionView struct {
 	ж *DERPRegion
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v DERPRegionView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -932,7 +901,7 @@ var _DERPRegionViewNeedsRegeneration = DERPRegion(struct {
 	Nodes      []*DERPNode
 }{})
 
-// View returns a readonly view of DERPMap.
+// View returns a read-only view of DERPMap.
 func (p *DERPMap) View() DERPMapView {
 	return DERPMapView{ж: p}
 }
@@ -948,7 +917,7 @@ type DERPMapView struct {
 	ж *DERPMap
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v DERPMapView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -993,7 +962,7 @@ var _DERPMapViewNeedsRegeneration = DERPMap(struct {
 	OmitDefaultRegions bool
 }{})
 
-// View returns a readonly view of DERPNode.
+// View returns a read-only view of DERPNode.
 func (p *DERPNode) View() DERPNodeView {
 	return DERPNodeView{ж: p}
 }
@@ -1009,7 +978,7 @@ type DERPNodeView struct {
 	ж *DERPNode
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v DERPNodeView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -1067,7 +1036,7 @@ var _DERPNodeViewNeedsRegeneration = DERPNode(struct {
 	CanPort80        bool
 }{})
 
-// View returns a readonly view of SSHRule.
+// View returns a read-only view of SSHRule.
 func (p *SSHRule) View() SSHRuleView {
 	return SSHRuleView{ж: p}
 }
@@ -1083,7 +1052,7 @@ type SSHRuleView struct {
 	ж *SSHRule
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v SSHRuleView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -1112,12 +1081,8 @@ func (v *SSHRuleView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v SSHRuleView) RuleExpires() *time.Time {
-	if v.ж.RuleExpires == nil {
-		return nil
-	}
-	x := *v.ж.RuleExpires
-	return &x
+func (v SSHRuleView) RuleExpires() views.ValuePointer[time.Time] {
+	return views.ValuePointerOf(v.ж.RuleExpires)
 }
 
 func (v SSHRuleView) Principals() views.SliceView[*SSHPrincipal, SSHPrincipalView] {
@@ -1137,7 +1102,7 @@ var _SSHRuleViewNeedsRegeneration = SSHRule(struct {
 	AcceptEnv   []string
 }{})
 
-// View returns a readonly view of SSHAction.
+// View returns a read-only view of SSHAction.
 func (p *SSHAction) View() SSHActionView {
 	return SSHActionView{ж: p}
 }
@@ -1153,7 +1118,7 @@ type SSHActionView struct {
 	ж *SSHAction
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v SSHActionView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -1191,12 +1156,8 @@ func (v SSHActionView) HoldAndDelegate() string                { return v.ж.Hol
 func (v SSHActionView) AllowLocalPortForwarding() bool         { return v.ж.AllowLocalPortForwarding }
 func (v SSHActionView) AllowRemotePortForwarding() bool        { return v.ж.AllowRemotePortForwarding }
 func (v SSHActionView) Recorders() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Recorders) }
-func (v SSHActionView) OnRecordingFailure() *SSHRecorderFailureAction {
-	if v.ж.OnRecordingFailure == nil {
-		return nil
-	}
-	x := *v.ж.OnRecordingFailure
-	return &x
+func (v SSHActionView) OnRecordingFailure() views.ValuePointer[SSHRecorderFailureAction] {
+	return views.ValuePointerOf(v.ж.OnRecordingFailure)
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -1213,7 +1174,7 @@ var _SSHActionViewNeedsRegeneration = SSHAction(struct {
 	OnRecordingFailure        *SSHRecorderFailureAction
 }{})
 
-// View returns a readonly view of SSHPrincipal.
+// View returns a read-only view of SSHPrincipal.
 func (p *SSHPrincipal) View() SSHPrincipalView {
 	return SSHPrincipalView{ж: p}
 }
@@ -1229,7 +1190,7 @@ type SSHPrincipalView struct {
 	ж *SSHPrincipal
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v SSHPrincipalView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -1258,22 +1219,24 @@ func (v *SSHPrincipalView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v SSHPrincipalView) Node() StableNodeID           { return v.ж.Node }
-func (v SSHPrincipalView) NodeIP() string               { return v.ж.NodeIP }
-func (v SSHPrincipalView) UserLogin() string            { return v.ж.UserLogin }
-func (v SSHPrincipalView) Any() bool                    { return v.ж.Any }
-func (v SSHPrincipalView) PubKeys() views.Slice[string] { return views.SliceOf(v.ж.PubKeys) }
+func (v SSHPrincipalView) Node() StableNodeID { return v.ж.Node }
+func (v SSHPrincipalView) NodeIP() string     { return v.ж.NodeIP }
+func (v SSHPrincipalView) UserLogin() string  { return v.ж.UserLogin }
+func (v SSHPrincipalView) Any() bool          { return v.ж.Any }
+func (v SSHPrincipalView) UnusedPubKeys() views.Slice[string] {
+	return views.SliceOf(v.ж.UnusedPubKeys)
+}
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHPrincipalViewNeedsRegeneration = SSHPrincipal(struct {
-	Node      StableNodeID
-	NodeIP    string
-	UserLogin string
-	Any       bool
-	PubKeys   []string
+	Node          StableNodeID
+	NodeIP        string
+	UserLogin     string
+	Any           bool
+	UnusedPubKeys []string
 }{})
 
-// View returns a readonly view of ControlDialPlan.
+// View returns a read-only view of ControlDialPlan.
 func (p *ControlDialPlan) View() ControlDialPlanView {
 	return ControlDialPlanView{ж: p}
 }
@@ -1289,7 +1252,7 @@ type ControlDialPlanView struct {
 	ж *ControlDialPlan
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v ControlDialPlanView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -1327,7 +1290,7 @@ var _ControlDialPlanViewNeedsRegeneration = ControlDialPlan(struct {
 	Candidates []ControlIPCandidate
 }{})
 
-// View returns a readonly view of Location.
+// View returns a read-only view of Location.
 func (p *Location) View() LocationView {
 	return LocationView{ж: p}
 }
@@ -1343,7 +1306,7 @@ type LocationView struct {
 	ж *Location
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v LocationView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
@@ -1391,7 +1354,7 @@ var _LocationViewNeedsRegeneration = Location(struct {
 	Priority    int
 }{})
 
-// View returns a readonly view of UserProfile.
+// View returns a read-only view of UserProfile.
 func (p *UserProfile) View() UserProfileView {
 	return UserProfileView{ж: p}
 }
@@ -1407,7 +1370,7 @@ type UserProfileView struct {
 	ж *UserProfile
 }
 
-// Valid reports whether underlying value is non-nil.
+// Valid reports whether v's underlying value is non-nil.
 func (v UserProfileView) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with

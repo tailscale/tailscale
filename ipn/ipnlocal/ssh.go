@@ -27,7 +27,7 @@ import (
 	"github.com/tailscale/golang-x-crypto/ssh"
 	"go4.org/mem"
 	"tailscale.com/tailcfg"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 	"tailscale.com/util/mak"
 )
 
@@ -80,30 +80,32 @@ func (b *LocalBackend) getSSHUsernames(req *tailcfg.C2NSSHUsernamesRequest) (*ta
 		if err != nil {
 			return nil, err
 		}
-		lineread.Reader(bytes.NewReader(out), func(line []byte) error {
+		for line := range lineiter.Bytes(out) {
 			line = bytes.TrimSpace(line)
 			if len(line) == 0 || line[0] == '_' {
-				return nil
+				continue
 			}
 			add(string(line))
-			return nil
-		})
+		}
 	default:
-		lineread.File("/etc/passwd", func(line []byte) error {
+		for lr := range lineiter.File("/etc/passwd") {
+			line, err := lr.Value()
+			if err != nil {
+				break
+			}
 			line = bytes.TrimSpace(line)
 			if len(line) == 0 || line[0] == '#' || line[0] == '_' {
-				return nil
+				continue
 			}
 			if mem.HasSuffix(mem.B(line), mem.S("/nologin")) ||
 				mem.HasSuffix(mem.B(line), mem.S("/false")) {
-				return nil
+				continue
 			}
 			colon := bytes.IndexByte(line, ':')
 			if colon != -1 {
 				add(string(line[:colon]))
 			}
-			return nil
-		})
+		}
 	}
 	return res, nil
 }

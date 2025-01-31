@@ -95,6 +95,17 @@ func Filter[S ~[]T, T any](dst, src S, fn func(T) bool) S {
 	return dst
 }
 
+// AppendNonzero appends all non-zero elements of src to dst.
+func AppendNonzero[S ~[]T, T comparable](dst, src S) S {
+	var zero T
+	for _, v := range src {
+		if v != zero {
+			dst = append(dst, v)
+		}
+	}
+	return dst
+}
+
 // AppendMatching appends elements in ps to dst if f(x) is true.
 func AppendMatching[T any](dst, ps []T, f func(T) bool) []T {
 	for _, p := range ps {
@@ -147,4 +158,44 @@ func FirstEqual[T comparable](s []T, v T) bool {
 // its last element == v.
 func LastEqual[T comparable](s []T, v T) bool {
 	return len(s) > 0 && s[len(s)-1] == v
+}
+
+// MapKeys returns the values of the map m.
+//
+// The keys will be in an indeterminate order.
+//
+// It's equivalent to golang.org/x/exp/maps.Keys, which
+// unfortunately has the package name "maps", shadowing
+// the std "maps" package. This version exists for clarity
+// when reading call sites.
+//
+// As opposed to slices.Collect(maps.Keys(m)), this allocates
+// the returned slice once to exactly the right size, rather than
+// appending larger backing arrays as it goes.
+func MapKeys[M ~map[K]V, K comparable, V any](m M) []K {
+	r := make([]K, 0, len(m))
+	for k := range m {
+		r = append(r, k)
+	}
+	return r
+}
+
+// MapValues returns the values of the map m.
+//
+// The values will be in an indeterminate order.
+//
+// It's equivalent to golang.org/x/exp/maps.Values, which
+// unfortunately has the package name "maps", shadowing
+// the std "maps" package. This version exists for clarity
+// when reading call sites.
+//
+// As opposed to slices.Collect(maps.Values(m)), this allocates
+// the returned slice once to exactly the right size, rather than
+// appending larger backing arrays as it goes.
+func MapValues[M ~map[K]V, K comparable, V any](m M) []V {
+	r := make([]V, 0, len(m))
+	for _, v := range m {
+		r = append(r, v)
+	}
+	return r
 }

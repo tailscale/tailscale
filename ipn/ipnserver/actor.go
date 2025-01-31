@@ -96,7 +96,7 @@ func (a *actor) Username() (string, error) {
 		}
 		defer tok.Close()
 		return tok.Username()
-	case "darwin", "linux":
+	case "darwin", "linux", "illumos", "solaris":
 		uid, ok := a.ci.Creds().UserID()
 		if !ok {
 			return "", errors.New("missing user ID")
@@ -112,11 +112,11 @@ func (a *actor) Username() (string, error) {
 }
 
 type actorOrError struct {
-	actor *actor
+	actor ipnauth.Actor
 	err   error
 }
 
-func (a actorOrError) unwrap() (*actor, error) {
+func (a actorOrError) unwrap() (ipnauth.Actor, error) {
 	return a.actor, a.err
 }
 
@@ -131,9 +131,9 @@ func contextWithActor(ctx context.Context, logf logger.Logf, c net.Conn) context
 	return actorKey.WithValue(ctx, actorOrError{actor: actor, err: err})
 }
 
-// actorFromContext returns an [actor] associated with ctx,
+// actorFromContext returns an [ipnauth.Actor] associated with ctx,
 // or an error if the context does not carry an actor's identity.
-func actorFromContext(ctx context.Context) (*actor, error) {
+func actorFromContext(ctx context.Context) (ipnauth.Actor, error) {
 	return actorKey.Value(ctx).unwrap()
 }
 

@@ -852,8 +852,7 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackNodes []key.NodePublic, 
 // hasOverlap checks if there is a IPPrefix which is common amongst the two
 // provided slices.
 func hasOverlap(aips, rips views.Slice[netip.Prefix]) bool {
-	for i := range aips.Len() {
-		aip := aips.At(i)
+	for _, aip := range aips.All() {
 		if views.SliceContains(rips, aip) {
 			return true
 		}
@@ -1236,7 +1235,7 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	// and Apple platforms.
 	if changed {
 		switch runtime.GOOS {
-		case "linux", "android", "ios", "darwin":
+		case "linux", "android", "ios", "darwin", "openbsd":
 			e.wgLock.Lock()
 			dnsCfg := e.lastDNSConfig
 			e.wgLock.Unlock()
@@ -1329,9 +1328,9 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netip.Addr) (src netip.Addr
 	if addrs.Len() == 0 {
 		return zero, errors.New("no self address in netmap")
 	}
-	for i := range addrs.Len() {
-		if a := addrs.At(i); a.IsSingleIP() && a.Addr().BitLen() == dst.BitLen() {
-			return a.Addr(), nil
+	for _, p := range addrs.All() {
+		if p.IsSingleIP() && p.Addr().BitLen() == dst.BitLen() {
+			return p.Addr(), nil
 		}
 	}
 	return zero, errors.New("no self address in netmap matching address family")

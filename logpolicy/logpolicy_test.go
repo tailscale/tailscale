@@ -7,6 +7,8 @@ import (
 	"os"
 	"reflect"
 	"testing"
+
+	"tailscale.com/logtail"
 )
 
 func TestLogHost(t *testing.T) {
@@ -20,7 +22,7 @@ func TestLogHost(t *testing.T) {
 		env  string
 		want string
 	}{
-		{"", "log.tailscale.io"},
+		{"", logtail.DefaultHost},
 		{"http://foo.com", "foo.com"},
 		{"https://foo.com", "foo.com"},
 		{"https://foo.com/", "foo.com"},

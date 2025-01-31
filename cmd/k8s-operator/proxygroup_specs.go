@@ -15,12 +15,13 @@ import (
 	"sigs.k8s.io/yaml"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/ptr"
 )
 
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
-func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHash string) (*appsv1.StatefulSet, error) {
+func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -52,12 +53,13 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 		Namespace:                  namespace,
 		Labels:                     pgLabels(pg.Name, nil),
 		DeletionGracePeriodSeconds: ptr.To[int64](10),
-		Annotations: map[string]string{
-			podAnnotationLastSetConfigFileHash: cfgHash,
-		},
 	}
 	tmpl.Spec.ServiceAccountName = pg.Name
 	tmpl.Spec.InitContainers[0].Image = image
+	proxyConfigVolName := pgEgressCMName(pg.Name)
+	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+		proxyConfigVolName = pgIngressCMName(pg.Name)
+	}
 	tmpl.Spec.Volumes = func() []corev1.Volume {
 		var volumes []corev1.Volume
 		for i := range pgReplicas(pg) {
@@ -71,18 +73,16 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			})
 		}
 
-		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-			volumes = append(volumes, corev1.Volume{
-				Name: pgEgressCMName(pg.Name),
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: pgEgressCMName(pg.Name),
-						},
+		volumes = append(volumes, corev1.Volume{
+			Name: proxyConfigVolName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: proxyConfigVolName,
 					},
 				},
-			})
-		}
+			},
+		})
 
 		return volumes
 	}()
@@ -92,6 +92,10 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 	c.Image = image
 	c.VolumeMounts = func() []corev1.VolumeMount {
 		var mounts []corev1.VolumeMount
+
+		// TODO(tomhjp): Read config directly from the secret instead. The
+		// mounts change on scaling up/down which causes unnecessary restarts
+		// for pods that haven't meaningfully changed.
 		for i := range pgReplicas(pg) {
 			mounts = append(mounts, corev1.VolumeMount{
 				Name:      fmt.Sprintf("tailscaledconfig-%d", i),
@@ -100,13 +104,11 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			})
 		}
 
-		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-			mounts = append(mounts, corev1.VolumeMount{
-				Name:      pgEgressCMName(pg.Name),
-				MountPath: "/etc/proxies",
-				ReadOnly:  true,
-			})
-		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      proxyConfigVolName,
+			MountPath: "/etc/proxies",
+			ReadOnly:  true,
+		})
 
 		return mounts
 	}()
@@ -122,15 +124,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 				},
 			},
 			{
-				Name: "POD_NAME",
-				ValueFrom: &corev1.EnvVarSource{
-					FieldRef: &corev1.ObjectFieldSelector{
-						// Secret is named after the pod.
-						FieldPath: "metadata.name",
-					},
-				},
-			},
-			{
 				Name:  "TS_KUBE_SECRET",
 				Value: "$(POD_NAME)",
 			},
@@ -141,10 +134,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			{
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
-			},
-			{
-				Name:  "TS_USERSPACE",
-				Value: "false",
 			},
 		}
 
@@ -159,10 +148,23 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 			envs = append(envs, corev1.EnvVar{
 				Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
 				Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
-			})
+			},
+				corev1.EnvVar{
+					Name:  "TS_INTERNAL_APP",
+					Value: kubetypes.AppProxyGroupEgress,
+				},
+			)
+		} else { // ingress
+			envs = append(envs, corev1.EnvVar{
+				Name:  "TS_INTERNAL_APP",
+				Value: kubetypes.AppProxyGroupIngress,
+			},
+				corev1.EnvVar{
+					Name:  "TS_SERVE_CONFIG",
+					Value: fmt.Sprintf("/etc/proxies/%s", serveConfigKey),
+				})
 		}
-
-		return envs
+		return append(c.Env, envs...)
 	}()
 
 	return ss, nil
@@ -205,6 +207,15 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 					}
 					return secrets
 				}(),
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"events"},
+				Verbs: []string{
+					"create",
+					"patch",
+					"get",
+				},
 			},
 		},
 	}
@@ -251,6 +262,16 @@ func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pgEgressCMName(pg.Name),
+			Namespace:       namespace,
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+	}
+}
+func pgIngressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pgIngressCMName(pg.Name),
 			Namespace:       namespace,
 			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),

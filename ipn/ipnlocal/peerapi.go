@@ -20,13 +20,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/kortschak/wol"
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/http/httpguts"
 	"tailscale.com/drive"
@@ -226,6 +224,23 @@ type peerAPIHandler struct {
 	peerUser   tailcfg.UserProfile // profile of peerNode
 }
 
+// PeerAPIHandler is the interface implemented by [peerAPIHandler] and needed by
+// module features registered via tailscale.com/feature/*.
+type PeerAPIHandler interface {
+	Peer() tailcfg.NodeView
+	PeerCaps() tailcfg.PeerCapMap
+	Self() tailcfg.NodeView
+	LocalBackend() *LocalBackend
+	IsSelfUntagged() bool // whether the peer is untagged and the same as this user
+}
+
+func (h *peerAPIHandler) IsSelfUntagged() bool {
+	return !h.selfNode.IsTagged() && !h.peerNode.IsTagged() && h.isSelf
+}
+func (h *peerAPIHandler) Peer() tailcfg.NodeView      { return h.peerNode }
+func (h *peerAPIHandler) Self() tailcfg.NodeView      { return h.selfNode }
+func (h *peerAPIHandler) LocalBackend() *LocalBackend { return h.ps.b }
+
 func (h *peerAPIHandler) logf(format string, a ...any) {
 	h.ps.b.logf("peerapi: "+format, a...)
 }
@@ -233,11 +248,13 @@ func (h *peerAPIHandler) logf(format string, a ...any) {
 // isAddressValid reports whether addr is a valid destination address for this
 // node originating from the peer.
 func (h *peerAPIHandler) isAddressValid(addr netip.Addr) bool {
-	if v := h.peerNode.SelfNodeV4MasqAddrForThisPeer(); v != nil {
-		return *v == addr
+	if !addr.IsValid() {
+		return false
 	}
-	if v := h.peerNode.SelfNodeV6MasqAddrForThisPeer(); v != nil {
-		return *v == addr
+	v4MasqAddr, hasMasqV4 := h.peerNode.SelfNodeV4MasqAddrForThisPeer().GetOk()
+	v6MasqAddr, hasMasqV6 := h.peerNode.SelfNodeV6MasqAddrForThisPeer().GetOk()
+	if hasMasqV4 || hasMasqV6 {
+		return addr == v4MasqAddr || addr == v6MasqAddr
 	}
 	pfx := netip.PrefixFrom(addr, addr.BitLen())
 	return views.SliceContains(h.selfNode.Addresses(), pfx)
@@ -300,6 +317,20 @@ func peerAPIRequestShouldGetSecurityHeaders(r *http.Request) bool {
 	return false
 }
 
+// RegisterPeerAPIHandler registers a PeerAPI handler.
+//
+// The path should be of the form "/v0/foo".
+//
+// It panics if the path is already registered.
+func RegisterPeerAPIHandler(path string, f func(PeerAPIHandler, http.ResponseWriter, *http.Request)) {
+	if _, ok := peerAPIHandlers[path]; ok {
+		panic(fmt.Sprintf("duplicate PeerAPI handler %q", path))
+	}
+	peerAPIHandlers[path] = f
+}
+
+var peerAPIHandlers = map[string]func(PeerAPIHandler, http.ResponseWriter, *http.Request){} // by URL.Path
+
 func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.validatePeerAPIRequest(r); err != nil {
 		metricInvalidRequests.Add(1)
@@ -344,10 +375,6 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/dnsfwd":
 		h.handleServeDNSFwd(w, r)
 		return
-	case "/v0/wol":
-		metricWakeOnLANCalls.Add(1)
-		h.handleWakeOnLAN(w, r)
-		return
 	case "/v0/interfaces":
 		h.handleServeInterfaces(w, r)
 		return
@@ -360,6 +387,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/ingress":
 		metricIngressCalls.Add(1)
 		h.handleServeIngress(w, r)
+		return
+	}
+	if ph, ok := peerAPIHandlers[r.URL.Path]; ok {
+		ph(h, w, r)
 		return
 	}
 	who := h.peerUser.DisplayName
@@ -622,14 +653,6 @@ func (h *peerAPIHandler) canDebug() bool {
 	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityDebugPeer)
 }
 
-// canWakeOnLAN reports whether h can send a Wake-on-LAN packet from this node.
-func (h *peerAPIHandler) canWakeOnLAN() bool {
-	if h.peerNode.UnsignedPeerAPIOnly() {
-		return false
-	}
-	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityWakeOnLAN)
-}
-
 var allowSelfIngress = envknob.RegisterBool("TS_ALLOW_SELF_INGRESS")
 
 // canIngress reports whether h can send ingress requests to this node.
@@ -638,10 +661,10 @@ func (h *peerAPIHandler) canIngress() bool {
 }
 
 func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
-	return h.peerCaps().HasCapability(wantCap)
+	return h.PeerCaps().HasCapability(wantCap)
 }
 
-func (h *peerAPIHandler) peerCaps() tailcfg.PeerCapMap {
+func (h *peerAPIHandler) PeerCaps() tailcfg.PeerCapMap {
 	return h.ps.b.PeerCaps(h.remoteAddr.Addr())
 }
 
@@ -815,61 +838,6 @@ func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Reques
 	dh.ServeHTTP(w, r)
 }
 
-func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request) {
-	if !h.canWakeOnLAN() {
-		http.Error(w, "no WoL access", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "bad method", http.StatusMethodNotAllowed)
-		return
-	}
-	macStr := r.FormValue("mac")
-	if macStr == "" {
-		http.Error(w, "missing 'mac' param", http.StatusBadRequest)
-		return
-	}
-	mac, err := net.ParseMAC(macStr)
-	if err != nil {
-		http.Error(w, "bad 'mac' param", http.StatusBadRequest)
-		return
-	}
-	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
-	st := h.ps.b.sys.NetMon.Get().InterfaceState()
-	if st == nil {
-		http.Error(w, "failed to get interfaces state", http.StatusInternalServerError)
-		return
-	}
-	var res struct {
-		SentTo []string
-		Errors []string
-	}
-	for ifName, ips := range st.InterfaceIPs {
-		for _, ip := range ips {
-			if ip.Addr().IsLoopback() || ip.Addr().Is6() {
-				continue
-			}
-			local := &net.UDPAddr{
-				IP:   ip.Addr().AsSlice(),
-				Port: 0,
-			}
-			remote := &net.UDPAddr{
-				IP:   net.IPv4bcast,
-				Port: 0,
-			}
-			if err := wol.Wake(mac, password, local, remote); err != nil {
-				res.Errors = append(res.Errors, err.Error())
-			} else {
-				res.SentTo = append(res.SentTo, ifName)
-			}
-			break // one per interface is enough
-		}
-	}
-	sort.Strings(res.SentTo)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
 func (h *peerAPIHandler) replyToDNSQueries() bool {
 	if h.isSelf {
 		// If the peer is owned by the same user, just allow it
@@ -964,7 +932,11 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 	// instead to avoid re-parsing the DNS response for improved performance in
 	// the future.
 	if h.ps.b.OfferingAppConnector() {
-		h.ps.b.ObserveDNSResponse(res)
+		if err := h.ps.b.ObserveDNSResponse(res); err != nil {
+			h.logf("ObserveDNSResponse error: %v", err)
+			// This is not fatal, we probably just failed to parse the upstream
+			// response. Return it to the caller anyway.
+		}
 	}
 
 	if pretty {
@@ -1148,7 +1120,7 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	capsMap := h.peerCaps()
+	capsMap := h.PeerCaps()
 	driveCaps, ok := capsMap[tailcfg.PeerCapabilityTaildrive]
 	if !ok {
 		h.logf("taildrive: not permitted")
@@ -1272,8 +1244,7 @@ var (
 	metricInvalidRequests = clientmetric.NewCounter("peerapi_invalid_requests")
 
 	// Non-debug PeerAPI endpoints.
-	metricPutCalls       = clientmetric.NewCounter("peerapi_put")
-	metricDNSCalls       = clientmetric.NewCounter("peerapi_dns")
-	metricWakeOnLANCalls = clientmetric.NewCounter("peerapi_wol")
-	metricIngressCalls   = clientmetric.NewCounter("peerapi_ingress")
+	metricPutCalls     = clientmetric.NewCounter("peerapi_put")
+	metricDNSCalls     = clientmetric.NewCounter("peerapi_dns")
+	metricIngressCalls = clientmetric.NewCounter("peerapi_ingress")
 )

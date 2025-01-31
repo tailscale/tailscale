@@ -68,6 +68,14 @@ main() {
 				if [ -z "${VERSION_ID:-}" ]; then
 					# rolling release. If you haven't kept current, that's on you.
 					APT_KEY_TYPE="keyring"
+				# Parrot Security is a special case that uses ID=debian
+				elif [ "$NAME" = "Parrot Security" ]; then
+					# All versions new enough to have this behaviour prefer keyring
+					# and their VERSION_ID is not consistent with Debian.
+					APT_KEY_TYPE="keyring"
+					# They don't specify the Debian version they're based off in os-release
+					# but Parrot 6 is based on Debian 12 Bookworm.
+					VERSION=bookworm
 				elif [ "$VERSION_ID" -lt 11 ]; then
 					APT_KEY_TYPE="legacy"
 				else
@@ -154,7 +162,7 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
-			Deepin)  # https://github.com/tailscale/tailscale/issues/7862
+			Deepin|deepin)  # https://github.com/tailscale/tailscale/issues/7862
 				OS="debian"
 				PACKAGETYPE="apt"
 				if [ "$VERSION_ID" -lt 20 ]; then
@@ -163,6 +171,19 @@ main() {
 				else
 					APT_KEY_TYPE="keyring"
 					VERSION="bullseye"
+				fi
+				;;
+			pika)
+				PACKAGETYPE="apt"
+				# All versions of PikaOS are new enough to prefer keyring
+				APT_KEY_TYPE="keyring"
+				# Older versions of PikaOS are based on Ubuntu rather than Debian
+				if [ "$VERSION_ID" -lt 4 ]; then
+					OS="ubuntu"
+					VERSION="$UBUNTU_CODENAME"
+				else
+					OS="debian"
+					VERSION="$DEBIAN_CODENAME"
 				fi
 				;;
 			centos)
@@ -224,7 +245,7 @@ main() {
 				VERSION="leap/15.4"
 				PACKAGETYPE="zypper"
 				;;
-			arch|archarm|endeavouros|blendos|garuda|archcraft)
+			arch|archarm|endeavouros|blendos|garuda|archcraft|cachyos)
 				OS="arch"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"

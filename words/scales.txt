@@ -391,3 +391,11 @@ godzilla
 sirius
 vector
 cherimoya
+shilling
+kettle
+kitchen
+fahrenheit
+rankine
+piano
+ruler
+scoville

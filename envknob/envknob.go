@@ -411,7 +411,7 @@ func TKASkipSignatureCheck() bool { return Bool("TS_UNSAFE_SKIP_NKS_VERIFICATION
 // Kubernetes Operator components.
 func App() string {
 	a := os.Getenv("TS_INTERNAL_APP")
-	if a == kubetypes.AppConnector || a == kubetypes.AppEgressProxy || a == kubetypes.AppIngressProxy || a == kubetypes.AppIngressResource {
+	if a == kubetypes.AppConnector || a == kubetypes.AppEgressProxy || a == kubetypes.AppIngressProxy || a == kubetypes.AppIngressResource || a == kubetypes.AppProxyGroupEgress || a == kubetypes.AppProxyGroupIngress {
 		return a
 	}
 	return ""

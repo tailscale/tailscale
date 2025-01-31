@@ -51,6 +51,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"ShareeNode",
 		"NoLogsNoSupport",
 		"WireIngress",
+		"IngressEnabled",
 		"AllowsUpdate",
 		"Machine",
 		"GoArch",
@@ -66,6 +67,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"Userspace",
 		"UserspaceRouter",
 		"AppConnector",
+		"ServicesHash",
 		"Location",
 	}
 	if have := fieldsOf(reflect.TypeFor[Hostinfo]()); !reflect.DeepEqual(have, hiHandles) {
@@ -240,6 +242,36 @@ func TestHostinfoEqual(t *testing.T) {
 			&Hostinfo{AppConnector: opt.Bool("false")},
 			false,
 		},
+		{
+			&Hostinfo{ServicesHash: "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"},
+			&Hostinfo{ServicesHash: "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"},
+			true,
+		},
+		{
+			&Hostinfo{ServicesHash: "084c799cd551dd1d8d5c5f9a5d593b2e931f5e36122ee5c793c1d08a19839cc0"},
+			&Hostinfo{},
+			false,
+		},
+		{
+			&Hostinfo{IngressEnabled: true},
+			&Hostinfo{},
+			false,
+		},
+		{
+			&Hostinfo{IngressEnabled: true},
+			&Hostinfo{IngressEnabled: true},
+			true,
+		},
+		{
+			&Hostinfo{IngressEnabled: false},
+			&Hostinfo{},
+			true,
+		},
+		{
+			&Hostinfo{IngressEnabled: false},
+			&Hostinfo{IngressEnabled: true},
+			false,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.a.Equal(tt.b)
@@ -356,7 +388,7 @@ func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{
 		"ID", "StableID", "Name", "User", "Sharer",
 		"Key", "KeyExpiry", "KeySignature", "Machine", "DiscoKey",
-		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
+		"Addresses", "AllowedIPs", "Endpoints", "LegacyDERPString", "HomeDERP", "Hostinfo",
 		"Created", "Cap", "Tags", "PrimaryRoutes",
 		"LastSeen", "Online", "MachineAuthorized",
 		"Capabilities", "CapMap",
@@ -519,8 +551,13 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{DERP: "foo"},
-			&Node{DERP: "bar"},
+			&Node{LegacyDERPString: "foo"},
+			&Node{LegacyDERPString: "bar"},
+			false,
+		},
+		{
+			&Node{HomeDERP: 1},
+			&Node{HomeDERP: 2},
 			false,
 		},
 		{
@@ -655,7 +692,6 @@ func TestCloneUser(t *testing.T) {
 		u    *User
 	}{
 		{"nil_logins", &User{}},
-		{"zero_logins", &User{Logins: make([]LoginID, 0)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

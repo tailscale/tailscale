@@ -22,6 +22,7 @@ var ConnectorKind = "Connector"
 // +kubebuilder:resource:scope=Cluster,shortName=cn
 // +kubebuilder:printcolumn:name="SubnetRoutes",type="string",JSONPath=`.status.subnetRoutes`,description="CIDR ranges exposed to tailnet by a subnet router defined via this Connector instance."
 // +kubebuilder:printcolumn:name="IsExitNode",type="string",JSONPath=`.status.isExitNode`,description="Whether this Connector instance defines an exit node."
+// +kubebuilder:printcolumn:name="IsAppConnector",type="string",JSONPath=`.status.isAppConnector`,description="Whether this Connector instance is an app connector."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ConnectorReady")].reason`,description="Status of the deployed Connector resources."
 
 // Connector defines a Tailscale node that will be deployed in the cluster. The
@@ -55,7 +56,8 @@ type ConnectorList struct {
 }
 
 // ConnectorSpec describes a Tailscale node to be deployed in the cluster.
-// +kubebuilder:validation:XValidation:rule="has(self.subnetRouter) || self.exitNode == true",message="A Connector needs to be either an exit node or a subnet router, or both."
+// +kubebuilder:validation:XValidation:rule="has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true) || has(self.appConnector)",message="A Connector needs to have at least one of exit node, subnet router or app connector configured."
+// +kubebuilder:validation:XValidation:rule="!((has(self.subnetRouter) || (has(self.exitNode)  && self.exitNode == true)) && has(self.appConnector))",message="The appConnector field is mutually exclusive with exitNode and subnetRouter fields."
 type ConnectorSpec struct {
 	// Tags that the Tailscale node will be tagged with.
 	// Defaults to [tag:k8s].
@@ -82,13 +84,31 @@ type ConnectorSpec struct {
 	// create resources with the default configuration.
 	// +optional
 	ProxyClass string `json:"proxyClass,omitempty"`
-	// SubnetRouter defines subnet routes that the Connector node should
-	// expose to tailnet. If unset, none are exposed.
+	// SubnetRouter defines subnet routes that the Connector device should
+	// expose to tailnet as a Tailscale subnet router.
 	// https://tailscale.com/kb/1019/subnets/
+	// If this field is unset, the device does not get configured as a Tailscale subnet router.
+	// This field is mutually exclusive with the appConnector field.
 	// +optional
-	SubnetRouter *SubnetRouter `json:"subnetRouter"`
-	// ExitNode defines whether the Connector node should act as a
-	// Tailscale exit node. Defaults to false.
+	SubnetRouter *SubnetRouter `json:"subnetRouter,omitempty"`
+	// AppConnector defines whether the Connector device should act as a Tailscale app connector. A Connector that is
+	// configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the
+	// Connector does not act as an app connector.
+	// Note that you will need to manually configure the permissions and the domains for the app connector via the
+	// Admin panel.
+	// Note also that the main tested and supported use case of this config option is to deploy an app connector on
+	// Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose
+	// cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have
+	// tested or optimised for.
+	// If you are using the app connector to access SaaS applications because you need a predictable egress IP that
+	// can be whitelisted, it is also your responsibility to ensure that cluster traffic from the connector flows
+	// via that predictable IP, for example by enforcing that cluster egress traffic is routed via an egress NAT
+	// device with a static IP address.
+	// https://tailscale.com/kb/1281/app-connectors
+	// +optional
+	AppConnector *AppConnector `json:"appConnector,omitempty"`
+	// ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.
+	// This field is mutually exclusive with the appConnector field.
 	// https://tailscale.com/kb/1103/exit-nodes
 	// +optional
 	ExitNode bool `json:"exitNode"`
@@ -102,6 +122,17 @@ type SubnetRouter struct {
 	// or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes.
 	// https://tailscale.com/kb/1201/4via6-subnets/
 	AdvertiseRoutes Routes `json:"advertiseRoutes"`
+}
+
+// AppConnector defines a Tailscale app connector node configured via Connector.
+type AppConnector struct {
+	// Routes are optional preconfigured routes for the domains routed via the app connector.
+	// If not set, routes for the domains will be discovered dynamically.
+	// If set, the app connector will immediately be able to route traffic using the preconfigured routes, but may
+	// also dynamically discover other routes.
+	// https://tailscale.com/kb/1332/apps-best-practices#preconfiguration
+	// +optional
+	Routes Routes `json:"routes"`
 }
 
 type Tags []Tag
@@ -156,6 +187,9 @@ type ConnectorStatus struct {
 	// IsExitNode is set to true if the Connector acts as an exit node.
 	// +optional
 	IsExitNode bool `json:"isExitNode"`
+	// IsAppConnector is set to true if the Connector acts as an app connector.
+	// +optional
+	IsAppConnector bool `json:"isAppConnector"`
 	// TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
 	// assigned to the Connector node.
 	// +optional

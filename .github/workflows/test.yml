@@ -80,7 +80,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -153,13 +153,13 @@ jobs:
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
     - name: Install Go
-      uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+      uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
       with:
         go-version-file: go.mod
         cache: false
 
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -260,7 +260,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -313,13 +313,19 @@ jobs:
           # AIX
           - goos: aix
             goarch: ppc64
+          # Solaris
+          - goos: solaris
+            goarch: amd64
+          # illumos
+          - goos: illumos
+            goarch: amd64
 
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -367,7 +373,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -461,7 +467,7 @@ jobs:
       run: |
         echo "artifacts_path=$(realpath .)" >> $GITHUB_ENV
     - name: upload crash
-      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
       with:
         name: artifacts
@@ -563,8 +569,10 @@ jobs:
       # By having the job always run, but skipping its only step as needed, we
       # let the CI output collapse nicely in PRs.
       if: failure() && github.event_name == 'push'
-      uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v1.27.0
+      uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
       with:
+        webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+        webhook-type: incoming-webhook
         payload: |
           {
             "attachments": [{
@@ -576,9 +584,6 @@ jobs:
               "color": "danger"
             }]
           }
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
 
   check_mergeability:
     if: always()

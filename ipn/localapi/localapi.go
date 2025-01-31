@@ -83,6 +83,7 @@ var handler = map[string]localAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
+	"alpha-set-device-attrs":      (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
 	"bugreport":                   (*Handler).serveBugReport,
 	"check-ip-forwarding":         (*Handler).serveCheckIPForwarding,
 	"check-prefs":                 (*Handler).serveCheckPrefs,
@@ -100,6 +101,7 @@ var handler = map[string]localAPIHandler{
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"dial":                        (*Handler).serveDial,
+	"disconnect-control":          (*Handler).disconnectControl,
 	"dns-osconfig":                (*Handler).serveDNSOSConfig,
 	"dns-query":                   (*Handler).serveDNSQuery,
 	"drive/fileserver-address":    (*Handler).serveDriveServerAddr,
@@ -445,6 +447,33 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 	h.serveWhoIsWithBackend(w, r, h.b)
 }
 
+// serveSetDeviceAttrs is (as of 2024-12-30) an experimental LocalAPI handler to
+// set device attributes via the control plane.
+//
+// See tailscale/corp#24690.
+func (h *Handler) serveSetDeviceAttrs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !h.PermitWrite {
+		http.Error(w, "set-device-attrs access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "PATCH" {
+		http.Error(w, "only PATCH allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.b.SetDeviceAttrs(ctx, req); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, "{}\n")
+}
+
 // localBackendWhoIsMethods is the subset of ipn.LocalBackend as needed
 // by the localapi WhoIs method.
 type localBackendWhoIsMethods interface {
@@ -562,6 +591,7 @@ func (h *Handler) serveLogTap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
+	metricDebugMetricsCalls.Add(1)
 	// Require write access out of paranoia that the metrics
 	// might contain something sensitive.
 	if !h.PermitWrite {
@@ -575,6 +605,7 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 // serveUserMetrics returns user-facing metrics in Prometheus text
 // exposition format.
 func (h *Handler) serveUserMetrics(w http.ResponseWriter, r *http.Request) {
+	metricUserMetricsCalls.Add(1)
 	h.b.UserMetricsRegistry().Handler(w, r)
 }
 
@@ -631,6 +662,13 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		}
 	case "pick-new-derp":
 		err = h.b.DebugPickNewDERP()
+	case "force-prefer-derp":
+		var n int
+		err = json.NewDecoder(r.Body).Decode(&n)
+		if err != nil {
+			break
+		}
+		h.b.DebugForcePreferDERP(n)
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:
@@ -952,6 +990,22 @@ func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 	servePprofFunc(w, r)
 }
 
+// disconnectControl is the handler for local API /disconnect-control endpoint that shuts down control client, so that
+// node no longer communicates with control. Doing this makes control consider this node inactive. This can be used
+// before shutting down a replica of HA subnet  router or app connector deployments to ensure that control tells the
+// peers to switch over to another replica whilst still maintaining th existing peer connections.
+func (h *Handler) disconnectControl(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	h.b.DisconnectControl()
+}
+
 func (h *Handler) reloadConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "access denied", http.StatusForbidden)
@@ -1043,7 +1097,7 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 
 func authorizeServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeConfig, h *Handler) error {
 	switch goos {
-	case "windows", "linux", "darwin":
+	case "windows", "linux", "darwin", "illumos", "solaris":
 	default:
 		return nil
 	}
@@ -1063,7 +1117,7 @@ func authorizeServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeC
 	switch goos {
 	case "windows":
 		return errors.New("must be a Windows local admin to serve a path")
-	case "linux", "darwin":
+	case "linux", "darwin", "illumos", "solaris":
 		return errors.New("must be root, or be an operator and able to run 'sudo tailscale' to serve a path")
 	default:
 		// We filter goos at the start of the func, this default case
@@ -2955,7 +3009,9 @@ var (
 	metricInvalidRequests = clientmetric.NewCounter("localapi_invalid_requests")
 
 	// User-visible LocalAPI endpoints.
-	metricFilePutCalls = clientmetric.NewCounter("localapi_file_put")
+	metricFilePutCalls      = clientmetric.NewCounter("localapi_file_put")
+	metricDebugMetricsCalls = clientmetric.NewCounter("localapi_debugmetric_requests")
+	metricUserMetricsCalls  = clientmetric.NewCounter("localapi_usermetric_requests")
 )
 
 // serveSuggestExitNode serves a POST endpoint for returning a suggested exit node.

@@ -31,7 +31,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
+        controller-gen.kubebuilder.io/version: v0.17.0
     name: connectors.tailscale.com
 spec:
     group: tailscale.com
@@ -52,6 +52,10 @@ spec:
             - description: Whether this Connector instance defines an exit node.
               jsonPath: .status.isExitNode
               name: IsExitNode
+              type: string
+            - description: Whether this Connector instance is an app connector.
+              jsonPath: .status.isAppConnector
+              name: IsAppConnector
               type: string
             - description: Status of the deployed Connector resources.
               jsonPath: .status.conditions[?(@.type == "ConnectorReady")].reason
@@ -91,10 +95,40 @@ spec:
                             More info:
                             https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
                         properties:
+                            appConnector:
+                                description: |-
+                                    AppConnector defines whether the Connector device should act as a Tailscale app connector. A Connector that is
+                                    configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the
+                                    Connector does not act as an app connector.
+                                    Note that you will need to manually configure the permissions and the domains for the app connector via the
+                                    Admin panel.
+                                    Note also that the main tested and supported use case of this config option is to deploy an app connector on
+                                    Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose
+                                    cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have
+                                    tested or optimised for.
+                                    If you are using the app connector to access SaaS applications because you need a predictable egress IP that
+                                    can be whitelisted, it is also your responsibility to ensure that cluster traffic from the connector flows
+                                    via that predictable IP, for example by enforcing that cluster egress traffic is routed via an egress NAT
+                                    device with a static IP address.
+                                    https://tailscale.com/kb/1281/app-connectors
+                                properties:
+                                    routes:
+                                        description: |-
+                                            Routes are optional preconfigured routes for the domains routed via the app connector.
+                                            If not set, routes for the domains will be discovered dynamically.
+                                            If set, the app connector will immediately be able to route traffic using the preconfigured routes, but may
+                                            also dynamically discover other routes.
+                                            https://tailscale.com/kb/1332/apps-best-practices#preconfiguration
+                                        items:
+                                            format: cidr
+                                            type: string
+                                        minItems: 1
+                                        type: array
+                                type: object
                             exitNode:
                                 description: |-
-                                    ExitNode defines whether the Connector node should act as a
-                                    Tailscale exit node. Defaults to false.
+                                    ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.
+                                    This field is mutually exclusive with the appConnector field.
                                     https://tailscale.com/kb/1103/exit-nodes
                                 type: boolean
                             hostname:
@@ -115,9 +149,11 @@ spec:
                                 type: string
                             subnetRouter:
                                 description: |-
-                                    SubnetRouter defines subnet routes that the Connector node should
-                                    expose to tailnet. If unset, none are exposed.
+                                    SubnetRouter defines subnet routes that the Connector device should
+                                    expose to tailnet as a Tailscale subnet router.
                                     https://tailscale.com/kb/1019/subnets/
+                                    If this field is unset, the device does not get configured as a Tailscale subnet router.
+                                    This field is mutually exclusive with the appConnector field.
                                 properties:
                                     advertiseRoutes:
                                         description: |-
@@ -151,8 +187,10 @@ spec:
                                 type: array
                         type: object
                         x-kubernetes-validations:
-                            - message: A Connector needs to be either an exit node or a subnet router, or both.
-                              rule: has(self.subnetRouter) || self.exitNode == true
+                            - message: A Connector needs to have at least one of exit node, subnet router or app connector configured.
+                              rule: has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true) || has(self.appConnector)
+                            - message: The appConnector field is mutually exclusive with exitNode and subnetRouter fields.
+                              rule: '!((has(self.subnetRouter) || (has(self.exitNode)  && self.exitNode == true)) && has(self.appConnector))'
                     status:
                         description: |-
                             ConnectorStatus describes the status of the Connector. This is set
@@ -225,6 +263,9 @@ spec:
                                     If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
                                     node.
                                 type: string
+                            isAppConnector:
+                                description: IsAppConnector is set to true if the Connector acts as an app connector.
+                                type: boolean
                             isExitNode:
                                 description: IsExitNode is set to true if the Connector acts as an exit node.
                                 type: boolean
@@ -253,7 +294,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
+        controller-gen.kubebuilder.io/version: v0.17.0
     name: dnsconfigs.tailscale.com
 spec:
     group: tailscale.com
@@ -435,7 +476,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
+        controller-gen.kubebuilder.io/version: v0.17.0
     name: proxyclasses.tailscale.com
 spec:
     group: tailscale.com
@@ -499,12 +540,48 @@ spec:
                                     enable:
                                         description: |-
                                             Setting enable to true will make the proxy serve Tailscale metrics
-                                            at <pod-ip>:9001/debug/metrics.
+                                            at <pod-ip>:9002/metrics.
+                                            A metrics Service named <proxy-statefulset>-metrics will also be created in the operator's namespace and will
+                                            serve the metrics at <service-ip>:9002/metrics.
+
+                                            In 1.78.x and 1.80.x, this field also serves as the default value for
+                                            .spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both
+                                            fields will independently default to false.
+
                                             Defaults to false.
                                         type: boolean
+                                    serviceMonitor:
+                                        description: |-
+                                            Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.
+                                            The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.
+                                            The ingested metrics for each Service monitor will have labels to identify the proxy:
+                                            ts_proxy_type: ingress_service|ingress_resource|connector|proxygroup
+                                            ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)
+                                            ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)
+                                            job: ts_<proxy type>_[<parent namespace>]_<parent_name>
+                                        properties:
+                                            enable:
+                                                description: If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled.
+                                                type: boolean
+                                            labels:
+                                                additionalProperties:
+                                                    maxLength: 63
+                                                    pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
+                                                    type: string
+                                                description: |-
+                                                    Labels to add to the ServiceMonitor.
+                                                    Labels must be valid Kubernetes labels.
+                                                    https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+                                                type: object
+                                        required:
+                                            - enable
+                                        type: object
                                 required:
                                     - enable
                                 type: object
+                                x-kubernetes-validations:
+                                    - message: ServiceMonitor can only be enabled if metrics are enabled
+                                      rule: '!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)'
                             statefulSet:
                                 description: |-
                                     Configuration parameters for the proxy's StatefulSet. Tailscale
@@ -525,6 +602,8 @@ spec:
                                         type: object
                                     labels:
                                         additionalProperties:
+                                            maxLength: 63
+                                            pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                                             type: string
                                         description: |-
                                             Labels that will be added to the StatefulSet created for the proxy.
@@ -807,7 +886,7 @@ spec:
                                                                                         pod labels will be ignored. The default value is empty.
                                                                                         The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                                                                         Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                        This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                                     items:
                                                                                         type: string
                                                                                     type: array
@@ -822,7 +901,7 @@ spec:
                                                                                         pod labels will be ignored. The default value is empty.
                                                                                         The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                                                                         Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                        This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                                     items:
                                                                                         type: string
                                                                                     type: array
@@ -983,7 +1062,7 @@ spec:
                                                                                 pod labels will be ignored. The default value is empty.
                                                                                 The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                                                                 Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                             items:
                                                                                 type: string
                                                                             type: array
@@ -998,7 +1077,7 @@ spec:
                                                                                 pod labels will be ignored. The default value is empty.
                                                                                 The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                                                                 Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                             items:
                                                                                 type: string
                                                                             type: array
@@ -1152,7 +1231,7 @@ spec:
                                                                                         pod labels will be ignored. The default value is empty.
                                                                                         The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                                                                         Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                        This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                                     items:
                                                                                         type: string
                                                                                     type: array
@@ -1167,7 +1246,7 @@ spec:
                                                                                         pod labels will be ignored. The default value is empty.
                                                                                         The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                                                                         Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                        This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                                     items:
                                                                                         type: string
                                                                                     type: array
@@ -1328,7 +1407,7 @@ spec:
                                                                                 pod labels will be ignored. The default value is empty.
                                                                                 The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                                                                 Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                             items:
                                                                                 type: string
                                                                             type: array
@@ -1343,7 +1422,7 @@ spec:
                                                                                 pod labels will be ignored. The default value is empty.
                                                                                 The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                                                                 Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                             items:
                                                                                 type: string
                                                                             type: array
@@ -1455,6 +1534,8 @@ spec:
                                                 type: array
                                             labels:
                                                 additionalProperties:
+                                                    maxLength: 63
+                                                    pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
                                                     type: string
                                                 description: |-
                                                     Labels that will be added to the proxy Pod.
@@ -1560,6 +1641,32 @@ spec:
                                                             Note that this field cannot be set when spec.os.name is windows.
                                                         format: int64
                                                         type: integer
+                                                    seLinuxChangePolicy:
+                                                        description: |-
+                                                            seLinuxChangePolicy defines how the container's SELinux label is applied to all volumes used by the Pod.
+                                                            It has no effect on nodes that do not support SELinux or to volumes does not support SELinux.
+                                                            Valid values are "MountOption" and "Recursive".
+
+                                                            "Recursive" means relabeling of all files on all Pod volumes by the container runtime.
+                                                            This may be slow for large volumes, but allows mixing privileged and unprivileged Pods sharing the same volume on the same node.
+
+                                                            "MountOption" mounts all eligible Pod volumes with `-o context` mount option.
+                                                            This requires all Pods that share the same volume to use the same SELinux label.
+                                                            It is not possible to share the same volume among privileged and unprivileged Pods.
+                                                            Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
+                                                            whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
+                                                            CSIDriver instance. Other volumes are always re-labelled recursively.
+                                                            "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
+
+                                                            If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
+                                                            If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
+                                                            and "Recursive" for all other volumes.
+
+                                                            This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
+
+                                                            All Pods that use the same volume should use the same seLinuxChangePolicy, otherwise some pods can get stuck in ContainerCreating state.
+                                                            Note that this field cannot be set when spec.os.name is windows.
+                                                        type: string
                                                     seLinuxOptions:
                                                         description: |-
                                                             The SELinux context to be applied to all containers.
@@ -1608,18 +1715,28 @@ spec:
                                                         type: object
                                                     supplementalGroups:
                                                         description: |-
-                                                            A list of groups applied to the first process run in each container, in addition
-                                                            to the container's primary GID, the fsGroup (if specified), and group memberships
-                                                            defined in the container image for the uid of the container process. If unspecified,
-                                                            no additional groups are added to any container. Note that group memberships
-                                                            defined in the container image for the uid of the container process are still effective,
-                                                            even if they are not included in this list.
+                                                            A list of groups applied to the first process run in each container, in
+                                                            addition to the container's primary GID and fsGroup (if specified).  If
+                                                            the SupplementalGroupsPolicy feature is enabled, the
+                                                            supplementalGroupsPolicy field determines whether these are in addition
+                                                            to or instead of any group memberships defined in the container image.
+                                                            If unspecified, no additional groups are added, though group memberships
+                                                            defined in the container image may still be used, depending on the
+                                                            supplementalGroupsPolicy field.
                                                             Note that this field cannot be set when spec.os.name is windows.
                                                         items:
                                                             format: int64
                                                             type: integer
                                                         type: array
                                                         x-kubernetes-list-type: atomic
+                                                    supplementalGroupsPolicy:
+                                                        description: |-
+                                                            Defines how supplemental groups of the first container processes are calculated.
+                                                            Valid values are "Merge" and "Strict". If not specified, "Merge" is used.
+                                                            (Alpha) Using the field requires the SupplementalGroupsPolicy feature gate to be enabled
+                                                            and the container runtime must implement support for this feature.
+                                                            Note that this field cannot be set when spec.os.name is windows.
+                                                        type: string
                                                     sysctls:
                                                         description: |-
                                                             Sysctls hold a list of namespaced sysctls used for the pod. Pods with unsupported
@@ -1675,6 +1792,25 @@ spec:
                                             tailscaleContainer:
                                                 description: Configuration for the proxy container running tailscale.
                                                 properties:
+                                                    debug:
+                                                        description: |-
+                                                            Configuration for enabling extra debug information in the container.
+                                                            Not recommended for production use.
+                                                        properties:
+                                                            enable:
+                                                                description: |-
+                                                                    Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/
+                                                                    and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where
+                                                                    9001 is a container port named "debug". The endpoints and their responses
+                                                                    may change in backwards incompatible ways in the future, and should not
+                                                                    be considered stable.
+
+                                                                    In 1.78.x and 1.80.x, this setting will default to the value of
+                                                                    .spec.metrics.enable, and requests to the "metrics" port matching the
+                                                                    mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+                                                                    this setting will default to false, and no requests will be proxied.
+                                                                type: boolean
+                                                        type: object
                                                     env:
                                                         description: |-
                                                             List of environment variables to set in the container.
@@ -1751,6 +1887,12 @@ spec:
                                                                                 the Pod where this field is used. It makes that resource available
                                                                                 inside a container.
                                                                             type: string
+                                                                        request:
+                                                                            description: |-
+                                                                                Request is the name chosen for a request in the referenced claim.
+                                                                                If empty, everything from the claim is made available, otherwise
+                                                                                only the result of this request.
+                                                                            type: string
                                                                     required:
                                                                         - name
                                                                     type: object
@@ -1786,11 +1928,12 @@ spec:
                                                     securityContext:
                                                         description: |-
                                                             Container security context.
-                                                            Security context specified here will override the security context by the operator.
-                                                            By default the operator:
-                                                            - sets 'privileged: true' for the init container
-                                                            - set NET_ADMIN capability for tailscale container for proxies that
-                                                            are created for Services or Connector.
+                                                            Security context specified here will override the security context set by the operator.
+                                                            By default the operator sets the Tailscale container and the Tailscale init container to privileged
+                                                            for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.
+                                                            You can reduce the permissions of the Tailscale container to cap NET_ADMIN by
+                                                            installing device plugin in your cluster and configuring the proxies tun device to be created
+                                                            by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
                                                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
                                                         properties:
                                                             allowPrivilegeEscalation:
@@ -1858,7 +2001,7 @@ spec:
                                                             procMount:
                                                                 description: |-
                                                                     procMount denotes the type of proc mount to use for the containers.
-                                                                    The default is DefaultProcMount which uses the container runtime defaults for
+                                                                    The default value is Default which uses the container runtime defaults for
                                                                     readonly paths and masked paths.
                                                                     This requires the ProcMountType feature flag to be enabled.
                                                                     Note that this field cannot be set when spec.os.name is windows.
@@ -1979,6 +2122,25 @@ spec:
                                             tailscaleInitContainer:
                                                 description: Configuration for the proxy init container that enables forwarding.
                                                 properties:
+                                                    debug:
+                                                        description: |-
+                                                            Configuration for enabling extra debug information in the container.
+                                                            Not recommended for production use.
+                                                        properties:
+                                                            enable:
+                                                                description: |-
+                                                                    Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/
+                                                                    and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where
+                                                                    9001 is a container port named "debug". The endpoints and their responses
+                                                                    may change in backwards incompatible ways in the future, and should not
+                                                                    be considered stable.
+
+                                                                    In 1.78.x and 1.80.x, this setting will default to the value of
+                                                                    .spec.metrics.enable, and requests to the "metrics" port matching the
+                                                                    mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+                                                                    this setting will default to false, and no requests will be proxied.
+                                                                type: boolean
+                                                        type: object
                                                     env:
                                                         description: |-
                                                             List of environment variables to set in the container.
@@ -2055,6 +2217,12 @@ spec:
                                                                                 the Pod where this field is used. It makes that resource available
                                                                                 inside a container.
                                                                             type: string
+                                                                        request:
+                                                                            description: |-
+                                                                                Request is the name chosen for a request in the referenced claim.
+                                                                                If empty, everything from the claim is made available, otherwise
+                                                                                only the result of this request.
+                                                                            type: string
                                                                     required:
                                                                         - name
                                                                     type: object
@@ -2090,11 +2258,12 @@ spec:
                                                     securityContext:
                                                         description: |-
                                                             Container security context.
-                                                            Security context specified here will override the security context by the operator.
-                                                            By default the operator:
-                                                            - sets 'privileged: true' for the init container
-                                                            - set NET_ADMIN capability for tailscale container for proxies that
-                                                            are created for Services or Connector.
+                                                            Security context specified here will override the security context set by the operator.
+                                                            By default the operator sets the Tailscale container and the Tailscale init container to privileged
+                                                            for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.
+                                                            You can reduce the permissions of the Tailscale container to cap NET_ADMIN by
+                                                            installing device plugin in your cluster and configuring the proxies tun device to be created
+                                                            by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
                                                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
                                                         properties:
                                                             allowPrivilegeEscalation:
@@ -2162,7 +2331,7 @@ spec:
                                                             procMount:
                                                                 description: |-
                                                                     procMount denotes the type of proc mount to use for the containers.
-                                                                    The default is DefaultProcMount which uses the container runtime defaults for
+                                                                    The default value is Default which uses the container runtime defaults for
                                                                     readonly paths and masked paths.
                                                                     This requires the ProcMountType feature flag to be enabled.
                                                                     Note that this field cannot be set when spec.os.name is windows.
@@ -2596,7 +2765,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
+        controller-gen.kubebuilder.io/version: v0.17.0
     name: proxygroups.tailscale.com
 spec:
     group: tailscale.com
@@ -2614,9 +2783,24 @@ spec:
               jsonPath: .status.conditions[?(@.type == "ProxyGroupReady")].reason
               name: Status
               type: string
+            - description: ProxyGroup type.
+              jsonPath: .spec.type
+              name: Type
+              type: string
           name: v1alpha1
           schema:
             openAPIV3Schema:
+                description: |-
+                    ProxyGroup defines a set of Tailscale devices that will act as proxies.
+                    Currently only egress ProxyGroups are supported.
+
+                    Use the tailscale.com/proxy-group annotation on a Service to specify that
+                    the egress proxy should be implemented by a ProxyGroup instead of a single
+                    dedicated proxy. In addition to running a highly available set of proxies,
+                    ProxyGroup also allows for serving many annotated Services from a single
+                    set of proxies to minimise resource consumption.
+
+                    More info: https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
                 properties:
                     apiVersion:
                         description: |-
@@ -2660,6 +2844,7 @@ spec:
                                     Replicas specifies how many replicas to create the StatefulSet with.
                                     Defaults to 2.
                                 format: int32
+                                minimum: 0
                                 type: integer
                             tags:
                                 description: |-
@@ -2674,10 +2859,16 @@ spec:
                                     type: string
                                 type: array
                             type:
-                                description: Type of the ProxyGroup proxies. Currently the only supported type is egress.
+                                description: |-
+                                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
+                                    Type is immutable once a ProxyGroup is created.
                                 enum:
                                     - egress
+                                    - ingress
                                 type: string
+                                x-kubernetes-validations:
+                                    - message: ProxyGroup type is immutable
+                                      rule: self == oldSelf
                         required:
                             - type
                         type: object
@@ -2784,7 +2975,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
+        controller-gen.kubebuilder.io/version: v0.17.0
     name: recorders.tailscale.com
 spec:
     group: tailscale.com
@@ -2809,6 +3000,12 @@ spec:
           name: v1alpha1
           schema:
             openAPIV3Schema:
+                description: |-
+                    Recorder defines a tsrecorder device for recording SSH sessions. By default,
+                    it will store recordings in a local ephemeral volume. If you want to persist
+                    recordings, you can configure an S3-compatible API for storage.
+
+                    More info: https://tailscale.com/kb/1484/kubernetes-operator-deploying-tsrecorder
                 properties:
                     apiVersion:
                         description: |-
@@ -3132,7 +3329,7 @@ spec:
                                                                                         pod labels will be ignored. The default value is empty.
                                                                                         The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                                                                         Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                        This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                                     items:
                                                                                         type: string
                                                                                     type: array
@@ -3147,7 +3344,7 @@ spec:
                                                                                         pod labels will be ignored. The default value is empty.
                                                                                         The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                                                                         Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                        This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                                     items:
                                                                                         type: string
                                                                                     type: array
@@ -3308,7 +3505,7 @@ spec:
                                                                                 pod labels will be ignored. The default value is empty.
                                                                                 The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                                                                 Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                             items:
                                                                                 type: string
                                                                             type: array
@@ -3323,7 +3520,7 @@ spec:
                                                                                 pod labels will be ignored. The default value is empty.
                                                                                 The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                                                                 Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                             items:
                                                                                 type: string
                                                                             type: array
@@ -3477,7 +3674,7 @@ spec:
                                                                                         pod labels will be ignored. The default value is empty.
                                                                                         The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                                                                         Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                        This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                                     items:
                                                                                         type: string
                                                                                     type: array
@@ -3492,7 +3689,7 @@ spec:
                                                                                         pod labels will be ignored. The default value is empty.
                                                                                         The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                                                                         Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                        This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                        This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                                     items:
                                                                                         type: string
                                                                                     type: array
@@ -3653,7 +3850,7 @@ spec:
                                                                                 pod labels will be ignored. The default value is empty.
                                                                                 The same key is forbidden to exist in both matchLabelKeys and labelSelector.
                                                                                 Also, matchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                             items:
                                                                                 type: string
                                                                             type: array
@@ -3668,7 +3865,7 @@ spec:
                                                                                 pod labels will be ignored. The default value is empty.
                                                                                 The same key is forbidden to exist in both mismatchLabelKeys and labelSelector.
                                                                                 Also, mismatchLabelKeys cannot be set when labelSelector isn't set.
-                                                                                This is an alpha field and requires enabling MatchLabelKeysInPodAffinity feature gate.
+                                                                                This is a beta field and requires enabling MatchLabelKeysInPodAffinity feature gate (enabled by default).
                                                                             items:
                                                                                 type: string
                                                                             type: array
@@ -3830,6 +4027,12 @@ spec:
                                                                                 the Pod where this field is used. It makes that resource available
                                                                                 inside a container.
                                                                             type: string
+                                                                        request:
+                                                                            description: |-
+                                                                                Request is the name chosen for a request in the referenced claim.
+                                                                                If empty, everything from the claim is made available, otherwise
+                                                                                only the result of this request.
+                                                                            type: string
                                                                     required:
                                                                         - name
                                                                     type: object
@@ -3933,7 +4136,7 @@ spec:
                                                             procMount:
                                                                 description: |-
                                                                     procMount denotes the type of proc mount to use for the containers.
-                                                                    The default is DefaultProcMount which uses the container runtime defaults for
+                                                                    The default value is Default which uses the container runtime defaults for
                                                                     readonly paths and masked paths.
                                                                     This requires the ProcMountType feature flag to be enabled.
                                                                     Note that this field cannot be set when spec.os.name is windows.
@@ -4170,6 +4373,32 @@ spec:
                                                             Note that this field cannot be set when spec.os.name is windows.
                                                         format: int64
                                                         type: integer
+                                                    seLinuxChangePolicy:
+                                                        description: |-
+                                                            seLinuxChangePolicy defines how the container's SELinux label is applied to all volumes used by the Pod.
+                                                            It has no effect on nodes that do not support SELinux or to volumes does not support SELinux.
+                                                            Valid values are "MountOption" and "Recursive".
+
+                                                            "Recursive" means relabeling of all files on all Pod volumes by the container runtime.
+                                                            This may be slow for large volumes, but allows mixing privileged and unprivileged Pods sharing the same volume on the same node.
+
+                                                            "MountOption" mounts all eligible Pod volumes with `-o context` mount option.
+                                                            This requires all Pods that share the same volume to use the same SELinux label.
+                                                            It is not possible to share the same volume among privileged and unprivileged Pods.
+                                                            Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
+                                                            whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
+                                                            CSIDriver instance. Other volumes are always re-labelled recursively.
+                                                            "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
+
+                                                            If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
+                                                            If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
+                                                            and "Recursive" for all other volumes.
+
+                                                            This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
+
+                                                            All Pods that use the same volume should use the same seLinuxChangePolicy, otherwise some pods can get stuck in ContainerCreating state.
+                                                            Note that this field cannot be set when spec.os.name is windows.
+                                                        type: string
                                                     seLinuxOptions:
                                                         description: |-
                                                             The SELinux context to be applied to all containers.
@@ -4218,18 +4447,28 @@ spec:
                                                         type: object
                                                     supplementalGroups:
                                                         description: |-
-                                                            A list of groups applied to the first process run in each container, in addition
-                                                            to the container's primary GID, the fsGroup (if specified), and group memberships
-                                                            defined in the container image for the uid of the container process. If unspecified,
-                                                            no additional groups are added to any container. Note that group memberships
-                                                            defined in the container image for the uid of the container process are still effective,
-                                                            even if they are not included in this list.
+                                                            A list of groups applied to the first process run in each container, in
+                                                            addition to the container's primary GID and fsGroup (if specified).  If
+                                                            the SupplementalGroupsPolicy feature is enabled, the
+                                                            supplementalGroupsPolicy field determines whether these are in addition
+                                                            to or instead of any group memberships defined in the container image.
+                                                            If unspecified, no additional groups are added, though group memberships
+                                                            defined in the container image may still be used, depending on the
+                                                            supplementalGroupsPolicy field.
                                                             Note that this field cannot be set when spec.os.name is windows.
                                                         items:
                                                             format: int64
                                                             type: integer
                                                         type: array
                                                         x-kubernetes-list-type: atomic
+                                                    supplementalGroupsPolicy:
+                                                        description: |-
+                                                            Defines how supplemental groups of the first container processes are calculated.
+                                                            Valid values are "Merge" and "Strict". If not specified, "Merge" is used.
+                                                            (Alpha) Using the field requires the SupplementalGroupsPolicy feature gate to be enabled
+                                                            and the container runtime must implement support for this feature.
+                                                            Note that this field cannot be set when spec.os.name is windows.
+                                                        type: string
                                                     sysctls:
                                                         description: |-
                                                             Sysctls hold a list of namespaced sysctls used for the pod. Pods with unsupported
@@ -4562,6 +4801,16 @@ rules:
         - list
         - watch
         - update
+    - apiGroups:
+        - apiextensions.k8s.io
+      resourceNames:
+        - servicemonitors.monitoring.coreos.com
+      resources:
+        - customresourcedefinitions
+      verbs:
+        - get
+        - list
+        - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -4642,6 +4891,16 @@ rules:
         - update
         - list
         - watch
+    - apiGroups:
+        - monitoring.coreos.com
+      resources:
+        - servicemonitors
+      verbs:
+        - get
+        - list
+        - update
+        - create
+        - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -4662,6 +4921,14 @@ rules:
         - patch
         - update
         - watch
+    - apiGroups:
+        - ""
+      resources:
+        - events
+      verbs:
+        - create
+        - patch
+        - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -4734,6 +5001,14 @@ spec:
                       value: "false"
                     - name: PROXY_FIREWALL_MODE
                       value: auto
+                    - name: POD_NAME
+                      valueFrom:
+                        fieldRef:
+                            fieldPath: metadata.name
+                    - name: POD_UID
+                      valueFrom:
+                        fieldRef:
+                            fieldPath: metadata.uid
                   image: tailscale/k8s-operator:unstable
                   imagePullPolicy: Always
                   name: operator

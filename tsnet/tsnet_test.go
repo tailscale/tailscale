@@ -38,7 +38,6 @@ import (
 	"golang.org/x/net/proxy"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/testwrapper/flakytest"
-	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
@@ -231,6 +230,46 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 		t.Fatal(err)
 	}
 	return s, status.TailscaleIPs[0], status.Self.PublicKey
+}
+
+func TestDialBlocks(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+
+	// Make one tsnet that blocks until it's up.
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	ln, err := s1.Listen("tcp", ":8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// Then make another tsnet node that will only be woken up
+	// upon the first dial.
+	tmp := filepath.Join(t.TempDir(), "s2")
+	os.MkdirAll(tmp, 0755)
+	s2 := &Server{
+		Dir:               tmp,
+		ControlURL:        controlURL,
+		Hostname:          "s2",
+		Store:             new(mem.Store),
+		Ephemeral:         true,
+		getCertForTesting: testCertRoot.getCert,
+	}
+	if *verboseNodes {
+		s2.Logf = log.Printf
+	}
+	t.Cleanup(func() { s2.Close() })
+
+	c, err := s2.Dial(ctx, "tcp", "s1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
 }
 
 func TestConn(t *testing.T) {
@@ -495,6 +534,25 @@ func TestListenerCleanup(t *testing.T) {
 	if err := ln.Close(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("second ln.Close error: %v, want net.ErrClosed", err)
 	}
+
+	// Verify that handling a connection from gVisor (from a packet arriving)
+	// after a listener closed doesn't panic (previously: sending on a closed
+	// channel) or hang.
+	c := &closeTrackConn{}
+	ln.(*listener).handle(c)
+	if !c.closed {
+		t.Errorf("c.closed = false, want true")
+	}
+}
+
+type closeTrackConn struct {
+	net.Conn
+	closed bool
+}
+
+func (wc *closeTrackConn) Close() error {
+	wc.closed = true
+	return nil
 }
 
 // tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
@@ -822,16 +880,6 @@ func TestUDPConn(t *testing.T) {
 	}
 }
 
-// testWarnable is a Warnable that is used within this package for testing purposes only.
-var testWarnable = health.Register(&health.Warnable{
-	Code:     "test-warnable-tsnet",
-	Title:    "Test warnable",
-	Severity: health.SeverityLow,
-	Text: func(args health.Args) string {
-		return args[health.ArgError]
-	},
-})
-
 func parseMetrics(m []byte) (map[string]float64, error) {
 	metrics := make(map[string]float64)
 
@@ -905,9 +953,11 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 		for {
 			got := make([]byte, bytesCount)
 			n, err := conn.Read(got)
-			if n != bytesCount {
-				logf("read %d bytes, want %d", n, bytesCount)
+			if err != nil {
+				allReceived <- fmt.Errorf("failed reading packet, %s", err)
+				return
 			}
+			got = got[:n]
 
 			select {
 			case <-stopReceive:
@@ -915,13 +965,17 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 			default:
 			}
 
-			if err != nil {
-				allReceived <- fmt.Errorf("failed reading packet, %s", err)
-				return
-			}
-
 			total += n
 			logf("received %d/%d bytes, %.2f %%", total, bytesCount, (float64(total) / (float64(bytesCount)) * 100))
+
+			// Validate the received bytes to be the same as the sent bytes.
+			for _, b := range string(got) {
+				if b != 'A' {
+					allReceived <- fmt.Errorf("received unexpected byte: %c", b)
+					return
+				}
+			}
+
 			if total == bytesCount {
 				break
 			}
@@ -947,15 +1001,135 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 	return nil
 }
 
-func TestUserMetrics(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
-	tstest.ResourceCheck(t)
+func TestUserMetricsByteCounters(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+	defer s1.Close()
+	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
+	defer s2.Close()
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Force an update to the netmap to ensure that the metrics are up-to-date.
+	s1.lb.DebugForceNetmapUpdate()
+	s2.lb.DebugForceNetmapUpdate()
+
+	// Wait for both nodes to have a peer in their netmap.
+	waitForCondition(t, "waiting for netmaps to contain peer", 90*time.Second, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status1, err := lc1.Status(ctx)
+		if err != nil {
+			t.Logf("getting status: %s", err)
+			return false
+		}
+		status2, err := lc2.Status(ctx)
+		if err != nil {
+			t.Logf("getting status: %s", err)
+			return false
+		}
+		return len(status1.Peers()) > 0 && len(status2.Peers()) > 0
+	})
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatalf("pinging: %s", err)
+	}
+	t.Logf("ping success: %#+v", res)
+
+	mustDirect(t, t.Logf, lc1, lc2)
+
+	// 1 megabytes
+	bytesToSend := 1 * 1024 * 1024
+
+	// This asserts generates some traffic, it is factored out
+	// of TestUDPConn.
+	start := time.Now()
+	err = sendData(t.Logf, ctx, bytesToSend, s1, s2, s1ip, s2ip)
+	if err != nil {
+		t.Fatalf("Failed to send packets: %v", err)
+	}
+	t.Logf("Sent %d bytes from s1 to s2 in %s", bytesToSend, time.Since(start).String())
+
+	ctxLc, cancelLc := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLc()
+	metrics1, err := lc1.UserMetrics(ctxLc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics1, err := parseMetrics(metrics1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Allow the metrics for the bytes sent to be off by 15%.
+	bytesSentTolerance := 1.15
+
+	t.Logf("Metrics1:\n%s\n", metrics1)
+
+	// Verify that the amount of data recorded in bytes is higher or equal to the data sent
+	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
+	if inboundBytes1 < float64(bytesToSend) {
+		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, inboundBytes1)
+	}
+
+	// But ensure that it is not too much higher than the data sent.
+	if inboundBytes1 > float64(bytesToSend)*bytesSentTolerance {
+		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, inboundBytes1)
+	}
+
+	metrics2, err := lc2.UserMetrics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics2, err := parseMetrics(metrics2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Metrics2:\n%s\n", metrics2)
+
+	// Verify that the amount of data recorded in bytes is higher or equal than the data sent.
+	outboundBytes2 := parsedMetrics2[`tailscaled_outbound_bytes_total{path="direct_ipv4"}`]
+	if outboundBytes2 < float64(bytesToSend) {
+		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, outboundBytes2)
+	}
+
+	// But ensure that it is not too much higher than the data sent.
+	if outboundBytes2 > float64(bytesToSend)*bytesSentTolerance {
+		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, outboundBytes2)
+	}
+}
+
+func TestUserMetricsRouteGauges(t *testing.T) {
+	// Windows does not seem to support or report back routes when running in
+	// userspace via tsnet. So, we skip this check on Windows.
+	// TODO(kradalby): Figure out if this is correct.
+	if runtime.GOOS == "windows" {
+		t.Skipf("skipping on windows")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	controlURL, c := startControl(t)
-	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
-	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
+	s1, _, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	defer s1.Close()
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+	defer s2.Close()
 
 	s1.lb.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
@@ -984,24 +1158,11 @@ func TestUserMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
-	if err != nil {
-		t.Fatalf("pinging: %s", err)
-	}
-	t.Logf("ping success: %#+v", res)
-
-	ht := s1.lb.HealthTracker()
-	ht.SetUnhealthy(testWarnable, health.Args{"Text": "Hello world 1"})
-
 	// Force an update to the netmap to ensure that the metrics are up-to-date.
 	s1.lb.DebugForceNetmapUpdate()
 	s2.lb.DebugForceNetmapUpdate()
 
 	wantRoutes := float64(2)
-	if runtime.GOOS == "windows" {
-		wantRoutes = 0
-	}
 
 	// Wait for the routes to be propagated to node 1 to ensure
 	// that the metrics are up-to-date.
@@ -1013,30 +1174,10 @@ func TestUserMetrics(t *testing.T) {
 			t.Logf("getting status: %s", err)
 			return false
 		}
-		if runtime.GOOS == "windows" {
-			// Windows does not seem to support or report back routes when running in
-			// userspace via tsnet. So, we skip this check on Windows.
-			// TODO(kradalby): Figure out if this is correct.
-			return true
-		}
 		// Wait for the primary routes to reach our desired routes, which is wantRoutes + 1, because
 		// the PrimaryRoutes list will contain a exit node route, which the metric does not count.
 		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == int(wantRoutes)+1
 	})
-
-	mustDirect(t, t.Logf, lc1, lc2)
-
-	// 10 megabytes
-	bytesToSend := 10 * 1024 * 1024
-
-	// This asserts generates some traffic, it is factored out
-	// of TestUDPConn.
-	start := time.Now()
-	err = sendData(t.Logf, ctx, bytesToSend, s1, s2, s1ip, s2ip)
-	if err != nil {
-		t.Fatalf("Failed to send packets: %v", err)
-	}
-	t.Logf("Sent %d bytes from s1 to s2 in %s", bytesToSend, time.Since(start).String())
 
 	ctxLc, cancelLc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelLc()
@@ -1045,18 +1186,10 @@ func TestUserMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status1, err := lc1.Status(ctxLc)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	parsedMetrics1, err := parseMetrics(metrics1)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Allow the metrics for the bytes sent to be off by 15%.
-	bytesSentTolerance := 1.15
 
 	t.Logf("Metrics1:\n%s\n", metrics1)
 
@@ -1075,29 +1208,7 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
 	}
 
-	// Validate the health counter metric against the status of the node
-	if got, want := parsedMetrics1[`tailscaled_health_messages{type="warning"}`], float64(len(status1.Health)); got != want {
-		t.Errorf("metrics1, tailscaled_health_messages: got %v, want %v", got, want)
-	}
-
-	// Verify that the amount of data recorded in bytes is higher or equal to the
-	// 10 megabytes sent.
-	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
-	if inboundBytes1 < float64(bytesToSend) {
-		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, inboundBytes1)
-	}
-
-	// But ensure that it is not too much higher than the 10 megabytes sent.
-	if inboundBytes1 > float64(bytesToSend)*bytesSentTolerance {
-		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, inboundBytes1)
-	}
-
 	metrics2, err := lc2.UserMetrics(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	status2, err := lc2.Status(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1117,23 +1228,6 @@ func TestUserMetrics(t *testing.T) {
 	// The control has approved 0 routes
 	if got, want := parsedMetrics2["tailscaled_approved_routes"], 0.0; got != want {
 		t.Errorf("metrics2, tailscaled_approved_routes: got %v, want %v", got, want)
-	}
-
-	// Validate the health counter metric against the status of the node
-	if got, want := parsedMetrics2[`tailscaled_health_messages{type="warning"}`], float64(len(status2.Health)); got != want {
-		t.Errorf("metrics2, tailscaled_health_messages: got %v, want %v", got, want)
-	}
-
-	// Verify that the amount of data recorded in bytes is higher or equal than the
-	// 10 megabytes sent.
-	outboundBytes2 := parsedMetrics2[`tailscaled_outbound_bytes_total{path="direct_ipv4"}`]
-	if outboundBytes2 < float64(bytesToSend) {
-		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, outboundBytes2)
-	}
-
-	// But ensure that it is not too much higher than the 10 megabytes sent.
-	if outboundBytes2 > float64(bytesToSend)*bytesSentTolerance {
-		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, outboundBytes2)
 	}
 }
 

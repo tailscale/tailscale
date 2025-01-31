@@ -347,16 +347,14 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// TODO(oxtoacart): for some reason, this correctly
 				// catches when a node goes from offline to online,
 				// but not the other way around...
-				online := peer.Online()
-				if online == nil || !*online {
+				if !peer.Online().Get() {
 					return false
 				}
 
 				// Check that the peer is allowed to share with us.
 				addresses := peer.Addresses()
-				for i := range addresses.Len() {
-					addr := addresses.At(i)
-					capsMap := b.PeerCaps(addr.Addr())
+				for _, p := range addresses.All() {
+					capsMap := b.PeerCaps(p.Addr())
 					if capsMap.HasCapability(tailcfg.PeerCapabilityTaildriveSharer) {
 						return true
 					}

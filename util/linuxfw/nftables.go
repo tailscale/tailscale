@@ -8,6 +8,7 @@ package linuxfw
 
 import (
 	"cmp"
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,7 +16,6 @@ import (
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
 	"github.com/google/nftables/xt"
-	"github.com/josharian/native"
 	"golang.org/x/sys/unix"
 	"tailscale.com/types/logger"
 )
@@ -235,8 +235,8 @@ func printMatchInfo(name string, info xt.InfoAny) string {
 			break
 		}
 
-		pkttype := int(native.Endian.Uint32(data[0:4]))
-		invert := int(native.Endian.Uint32(data[4:8]))
+		pkttype := int(binary.NativeEndian.Uint32(data[0:4]))
+		invert := int(binary.NativeEndian.Uint32(data[4:8]))
 		var invertPrefix string
 		if invert != 0 {
 			invertPrefix = "!"

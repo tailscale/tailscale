@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gaissmai/bart"
@@ -15,7 +16,6 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/ipproto"
-	"tailscale.com/types/lazy"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
 )
@@ -91,7 +91,7 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 
 var (
 	appleIPRange = netip.MustParsePrefix("17.0.0.0/8")
-	canonicalIPs = lazy.SyncFunc(func() (checkIPFunc func(netip.Addr) bool) {
+	canonicalIPs = sync.OnceValue(func() (checkIPFunc func(netip.Addr) bool) {
 		// https://bgp.he.net/AS41231#_prefixes
 		t := &bart.Table[bool]{}
 		for _, s := range strings.Fields(`
@@ -198,7 +198,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 			e.logf("open-conn-track: timeout opening %v; peer node %v running pre-0.100", flow, n.Key().ShortString())
 			return
 		}
-		if n.DERP() == "" {
+		if n.HomeDERP() == 0 {
 			e.logf("open-conn-track: timeout opening %v; peer node %v not connected to any DERP relay", flow, n.Key().ShortString())
 			return
 		}
@@ -207,8 +207,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	ps, found := e.getPeerStatusLite(n.Key())
 	if !found {
 		onlyZeroRoute := true // whether peerForIP returned n only because its /0 route matched
-		for i := range n.AllowedIPs().Len() {
-			r := n.AllowedIPs().At(i)
+		for _, r := range n.AllowedIPs().All() {
 			if r.Bits() != 0 && r.Contains(flow.DstAddr()) {
 				onlyZeroRoute = false
 				break
@@ -240,15 +239,15 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	if n.IsWireGuardOnly() {
 		online = "wg"
 	} else {
-		if v := n.Online(); v != nil {
-			if *v {
+		if v, ok := n.Online().GetOk(); ok {
+			if v {
 				online = "yes"
 			} else {
 				online = "no"
 			}
 		}
-		if n.LastSeen() != nil && online != "yes" {
-			online += fmt.Sprintf(", lastseen=%v", durFmt(*n.LastSeen()))
+		if lastSeen, ok := n.LastSeen().GetOk(); ok && online != "yes" {
+			online += fmt.Sprintf(", lastseen=%v", durFmt(lastSeen))
 		}
 	}
 	e.logf("open-conn-track: timeout opening %v to node %v; online=%v, lastRecv=%v",

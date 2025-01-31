@@ -201,6 +201,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		steps       []step
 		homeParams  *tailcfg.DERPHomeParams
 		opts        *GetReportOpts
+		forcedDERP  int // if non-zero, force this DERP to be the preferred one
 		wantDERP    int // want PreferredDERP on final step
 		wantPrevLen int // wanted len(c.prev)
 	}{
@@ -357,12 +358,74 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 3,
 			wantDERP:    2, // moved to d2 since d1 is gone
 		},
+		{
+			name: "preferred_derp_hysteresis_no_switch_pct",
+			steps: []step{
+				{0 * time.Second, report("d1", 34*time.Millisecond, "d2", 35*time.Millisecond)},
+				{1 * time.Second, report("d1", 34*time.Millisecond, "d2", 23*time.Millisecond)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    1, // diff is 11ms, but d2 is greater than 2/3s of d1
+		},
+		{
+			name: "forced_two",
+			steps: []step{
+				{time.Second, report("d1", 2, "d2", 3)},
+				{2 * time.Second, report("d1", 4, "d2", 3)},
+			},
+			forcedDERP:  2,
+			wantPrevLen: 2,
+			wantDERP:    2,
+		},
+		{
+			name: "forced_two_unavailable",
+			steps: []step{
+				{time.Second, report("d1", 2, "d2", 1)},
+				{2 * time.Second, report("d1", 4)},
+			},
+			forcedDERP:  2,
+			wantPrevLen: 2,
+			wantDERP:    1,
+		},
+		{
+			name: "forced_two_no_probe_recent_activity",
+			steps: []step{
+				{time.Second, report("d1", 2)},
+				{2 * time.Second, report("d1", 4)},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+					1: startTime,
+					2: startTime.Add(time.Second),
+				}),
+			},
+			forcedDERP:  2,
+			wantPrevLen: 2,
+			wantDERP:    2,
+		},
+		{
+			name: "forced_two_no_probe_no_recent_activity",
+			steps: []step{
+				{time.Second, report("d1", 2)},
+				{PreferredDERPFrameTime + time.Second, report("d1", 4)},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+					1: startTime,
+					2: startTime,
+				}),
+			},
+			forcedDERP:  2,
+			wantPrevLen: 2,
+			wantDERP:    1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeTime := startTime
 			c := &Client{
-				TimeNow: func() time.Time { return fakeTime },
+				TimeNow:            func() time.Time { return fakeTime },
+				ForcePreferredDERP: tt.forcedDERP,
 			}
 			dm := &tailcfg.DERPMap{HomeParams: tt.homeParams}
 			rs := &reportState{
@@ -878,8 +941,8 @@ func TestNodeAddrResolve(t *testing.T) {
 			c.UseDNSCache = tt
 
 			t.Run("IPv4", func(t *testing.T) {
-				ap := c.nodeAddr(ctx, dn, probeIPv4)
-				if !ap.IsValid() {
+				ap, ok := c.nodeAddrPort(ctx, dn, dn.STUNPort, probeIPv4)
+				if !ok {
 					t.Fatal("expected valid AddrPort")
 				}
 				if !ap.Addr().Is4() {
@@ -893,8 +956,8 @@ func TestNodeAddrResolve(t *testing.T) {
 					t.Skipf("IPv6 may not work on this machine")
 				}
 
-				ap := c.nodeAddr(ctx, dn, probeIPv6)
-				if !ap.IsValid() {
+				ap, ok := c.nodeAddrPort(ctx, dn, dn.STUNPort, probeIPv6)
+				if !ok {
 					t.Fatal("expected valid AddrPort")
 				}
 				if !ap.Addr().Is6() {
@@ -903,8 +966,8 @@ func TestNodeAddrResolve(t *testing.T) {
 				t.Logf("got IPv6 addr: %v", ap)
 			})
 			t.Run("IPv6 Failure", func(t *testing.T) {
-				ap := c.nodeAddr(ctx, dnV4Only, probeIPv6)
-				if ap.IsValid() {
+				ap, ok := c.nodeAddrPort(ctx, dnV4Only, dn.STUNPort, probeIPv6)
+				if ok {
 					t.Fatalf("expected no addr but got: %v", ap)
 				}
 				t.Logf("correctly got invalid addr")

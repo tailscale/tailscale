@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +32,8 @@ import (
 	"time"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
@@ -48,7 +49,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cibuild"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 	"tailscale.com/util/must"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -227,7 +228,7 @@ func TestMatchRule(t *testing.T) {
 				info: tt.ci,
 				srv:  &server{logf: t.Logf},
 			}
-			got, gotUser, gotAcceptEnv, err := c.matchRule(tt.rule, nil)
+			got, gotUser, gotAcceptEnv, err := c.matchRule(tt.rule)
 			if err != tt.wantErr {
 				t.Errorf("err = %v; want %v", err, tt.wantErr)
 			}
@@ -346,7 +347,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 				info: tt.ci,
 				srv:  &server{logf: t.Logf},
 			}
-			got, gotUser, gotAcceptEnv, match := c.evalSSHPolicy(tt.policy, nil)
+			got, gotUser, gotAcceptEnv, match := c.evalSSHPolicy(tt.policy)
 			if match != tt.wantMatch {
 				t.Errorf("match = %v; want %v", match, tt.wantMatch)
 			}
@@ -481,10 +482,9 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 	}
 
 	var handler http.HandlerFunc
-	recordingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		handler(w, r)
-	}))
-	defer recordingServer.Close()
+	})
 
 	s := &server{
 		logf: t.Logf,
@@ -533,9 +533,10 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 		{
 			name: "upload-fails-after-starting",
 			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
 				r.Body.Read(make([]byte, 1))
 				time.Sleep(100 * time.Millisecond)
-				w.WriteHeader(http.StatusInternalServerError)
 			},
 			sshCommand:       "echo hello && sleep 1 && echo world",
 			wantClientOutput: "\r\n\r\nsession terminated\r\n\r\n",
@@ -548,6 +549,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			s.logf = t.Logf
 			tstest.Replace(t, &handler, tt.handler)
 			sc, dc := memnet.NewTCPConn(src, dst, 1024)
 			var wg sync.WaitGroup
@@ -597,12 +599,12 @@ func TestMultipleRecorders(t *testing.T) {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
 	done := make(chan struct{})
-	recordingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		defer close(done)
-		io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
-	}))
-	defer recordingServer.Close()
+		w.(http.Flusher).Flush()
+		io.ReadAll(r.Body)
+	})
 	badRecorder, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatal(err)
@@ -610,15 +612,9 @@ func TestMultipleRecorders(t *testing.T) {
 	badRecorderAddr := badRecorder.Addr().String()
 	badRecorder.Close()
 
-	badRecordingServer500 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-	}))
-	defer badRecordingServer500.Close()
-
-	badRecordingServer200 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
-	}))
-	defer badRecordingServer200.Close()
+	badRecordingServer500 := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
 
 	s := &server{
 		logf: t.Logf,
@@ -630,7 +626,6 @@ func TestMultipleRecorders(t *testing.T) {
 					Recorders: []netip.AddrPort{
 						netip.MustParseAddrPort(badRecorderAddr),
 						netip.MustParseAddrPort(badRecordingServer500.Listener.Addr().String()),
-						netip.MustParseAddrPort(badRecordingServer200.Listener.Addr().String()),
 						netip.MustParseAddrPort(recordingServer.Listener.Addr().String()),
 					},
 					OnRecordingFailure: &tailcfg.SSHRecorderFailureAction{
@@ -701,19 +696,21 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	}
 	var recording []byte
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	recordingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+
 		var err error
 		recording, err = io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
 			return
 		}
-	}))
-	defer recordingServer.Close()
+	})
 
 	s := &server{
-		logf: logger.Discard,
+		logf: t.Logf,
 		lb: &localState{
 			sshEnabled: true,
 			matchingRule: newSSHRule(
@@ -1123,98 +1120,12 @@ func TestSSH(t *testing.T) {
 
 func parseEnv(out []byte) map[string]string {
 	e := map[string]string{}
-	lineread.Reader(bytes.NewReader(out), func(line []byte) error {
-		i := bytes.IndexByte(line, '=')
-		if i == -1 {
-			return nil
+	for line := range lineiter.Bytes(out) {
+		if i := bytes.IndexByte(line, '='); i != -1 {
+			e[string(line[:i])] = string(line[i+1:])
 		}
-		e[string(line[:i])] = string(line[i+1:])
-		return nil
-	})
+	}
 	return e
-}
-
-func TestPublicKeyFetching(t *testing.T) {
-	var reqsTotal, reqsIfNoneMatchHit, reqsIfNoneMatchMiss int32
-	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32((&reqsTotal), 1)
-		etag := fmt.Sprintf("W/%q", sha256.Sum256([]byte(r.URL.Path)))
-		w.Header().Set("Etag", etag)
-		if v := r.Header.Get("If-None-Match"); v != "" {
-			if v == etag {
-				atomic.AddInt32(&reqsIfNoneMatchHit, 1)
-				w.WriteHeader(304)
-				return
-			}
-			atomic.AddInt32(&reqsIfNoneMatchMiss, 1)
-		}
-		io.WriteString(w, "foo\nbar\n"+string(r.URL.Path)+"\n")
-	}))
-	ts.StartTLS()
-	defer ts.Close()
-	keys := ts.URL
-
-	clock := &tstest.Clock{}
-	srv := &server{
-		pubKeyHTTPClient: ts.Client(),
-		timeNow:          clock.Now,
-	}
-	for range 2 {
-		got, err := srv.fetchPublicKeysURL(keys + "/alice.keys")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := []string{"foo", "bar", "/alice.keys"}; !reflect.DeepEqual(got, want) {
-			t.Errorf("got %q; want %q", got, want)
-		}
-	}
-	if got, want := atomic.LoadInt32(&reqsTotal), int32(1); got != want {
-		t.Errorf("got %d requests; want %d", got, want)
-	}
-	if got, want := atomic.LoadInt32(&reqsIfNoneMatchHit), int32(0); got != want {
-		t.Errorf("got %d etag hits; want %d", got, want)
-	}
-	clock.Advance(5 * time.Minute)
-	got, err := srv.fetchPublicKeysURL(keys + "/alice.keys")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"foo", "bar", "/alice.keys"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("got %q; want %q", got, want)
-	}
-	if got, want := atomic.LoadInt32(&reqsTotal), int32(2); got != want {
-		t.Errorf("got %d requests; want %d", got, want)
-	}
-	if got, want := atomic.LoadInt32(&reqsIfNoneMatchHit), int32(1); got != want {
-		t.Errorf("got %d etag hits; want %d", got, want)
-	}
-	if got, want := atomic.LoadInt32(&reqsIfNoneMatchMiss), int32(0); got != want {
-		t.Errorf("got %d etag misses; want %d", got, want)
-	}
-
-}
-
-func TestExpandPublicKeyURL(t *testing.T) {
-	c := &conn{
-		info: &sshConnInfo{
-			uprof: tailcfg.UserProfile{
-				LoginName: "bar@baz.tld",
-			},
-		},
-	}
-	if got, want := c.expandPublicKeyURL("foo"), "foo"; got != want {
-		t.Errorf("basic: got %q; want %q", got, want)
-	}
-	if got, want := c.expandPublicKeyURL("https://example.com/$LOGINNAME_LOCALPART.keys"), "https://example.com/bar.keys"; got != want {
-		t.Errorf("localpart: got %q; want %q", got, want)
-	}
-	if got, want := c.expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email=bar@baz.tld"; got != want {
-		t.Errorf("email: got %q; want %q", got, want)
-	}
-	c.info = new(sshConnInfo)
-	if got, want := c.expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email="; got != want {
-		t.Errorf("on empty: got %q; want %q", got, want)
-	}
 }
 
 func TestAcceptEnvPair(t *testing.T) {
@@ -1301,4 +1212,23 @@ func TestStdOsUserUserAssumptions(t *testing.T) {
 	if got, want := v.NumField(), 5; got != want {
 		t.Errorf("os/user.User has %v fields; this package assumes %v", got, want)
 	}
+}
+
+func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /record", func(http.ResponseWriter, *http.Request) {
+		t.Errorf("v1 recording endpoint called")
+	})
+	mux.HandleFunc("HEAD /v2/record", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("POST /v2/record", handleRecord)
+
+	h2s := &http2.Server{}
+	srv := httptest.NewUnstartedServer(h2c.NewHandler(mux, h2s))
+	if err := http2.ConfigureServer(srv.Config, h2s); err != nil {
+		t.Errorf("configuring HTTP/2 support in recording server: %v", err)
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv
 }

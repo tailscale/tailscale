@@ -6,11 +6,13 @@ on:
       - "main"
     paths:
       - scripts/installer.sh
+      - .github/workflows/installer.yml
   pull_request:
     branches:
       - "*"
     paths:
       - scripts/installer.sh
+      - .github/workflows/installer.yml
 
 jobs:
   test:
@@ -29,10 +31,9 @@ jobs:
           - "debian:stable-slim"
           - "debian:testing-slim"
           - "debian:sid-slim"
-          - "ubuntu:18.04"
           - "ubuntu:20.04"
           - "ubuntu:22.04"
-          - "ubuntu:23.04"
+          - "ubuntu:24.04"
           - "elementary/docker:stable"
           - "elementary/docker:unstable"
           - "parrotsec/core:lts-amd64"
@@ -48,7 +49,7 @@ jobs:
           - "opensuse/leap:latest"
           - "opensuse/tumbleweed:latest"
           - "archlinux:latest"
-          - "alpine:3.14"
+          - "alpine:3.21"
           - "alpine:latest"
           - "alpine:edge"
         deps:
@@ -58,10 +59,6 @@ jobs:
           # Check a few images with wget rather than curl.
           - { image: "debian:oldstable-slim", deps: "wget" }
           - { image: "debian:sid-slim", deps: "wget" }
-          - { image: "ubuntu:23.04", deps: "wget" }
-          # Ubuntu 16.04 also needs apt-transport-https installed.
-          - { image: "ubuntu:16.04", deps: "curl apt-transport-https" }
-          - { image: "ubuntu:16.04", deps: "wget apt-transport-https" }
     runs-on: ubuntu-latest
     container:
       image: ${{ matrix.image }}

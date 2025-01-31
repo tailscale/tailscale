@@ -14,7 +14,7 @@ import (
 )
 
 // handleProxyConnectConn handles a CONNECT request to
-// log.tailscale.io (or whatever the configured log server is). This
+// log.tailscale.com (or whatever the configured log server is). This
 // is intended for use by the Windows GUI client to log via when an
 // exit node is in use, so the logs don't go out via the exit node and
 // instead go directly, like tailscaled's. The dialer tried to do that

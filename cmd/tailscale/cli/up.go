@@ -116,6 +116,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
+	upf.BoolVar(&upArgs.postureChecking, "posture-checking", false, hidden+"allow management plane to gather device posture information")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -194,6 +195,7 @@ type upArgsT struct {
 	timeout                time.Duration
 	acceptedRisks          string
 	profileName            string
+	postureChecking        bool
 }
 
 func (a upArgsT) getAuthKey() (string, error) {
@@ -304,6 +306,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.OperatorUser = upArgs.opUser
 	prefs.ProfileName = upArgs.profileName
 	prefs.AppConnector.Advertise = upArgs.advertiseConnector
+	prefs.PostureChecking = upArgs.postureChecking
 
 	if goos == "linux" {
 		prefs.NoSNAT = !upArgs.snat
@@ -377,6 +380,12 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	wantSSH, haveSSH := env.upArgs.runSSH, curPrefs.RunSSH
 	if err := presentSSHToggleRisk(wantSSH, haveSSH, env.upArgs.acceptedRisks); err != nil {
 		return false, nil, err
+	}
+
+	if env.goos == "darwin" && env.upArgs.advertiseConnector {
+		if err := presentRiskToUser(riskMacAppConnector, riskMacAppConnectorMessage, env.upArgs.acceptedRisks); err != nil {
+			return false, nil, err
+		}
 	}
 
 	if env.upArgs.forceReauth && isSSHOverTailscale() {
@@ -1047,6 +1056,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(prefs.NetfilterMode.String())
 		case "unattended":
 			set(prefs.ForceDaemon)
+		case "posture-checking":
+			set(prefs.PostureChecking)
 		}
 	})
 	return ret
@@ -1151,7 +1162,6 @@ func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 		ClientID:     "some-client-id", // ignored
 		ClientSecret: clientSecret,
 		TokenURL:     baseURL + "/api/v2/oauth/token",
-		Scopes:       []string{"device"},
 	}
 
 	tsClient := tailscale.NewClient("-", nil)

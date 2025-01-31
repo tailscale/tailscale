@@ -21,7 +21,7 @@ import (
 	"unicode"
 
 	"tailscale.com/envknob"
-	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/netmon"
@@ -30,6 +30,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
+	"tailscale.com/util/testenv"
 )
 
 // Server is an IPN backend and its set of 0 or more active localhost
@@ -49,8 +50,7 @@ type Server struct {
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
-	lastUserID    ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
-	activeReqs    map[*http.Request]*actor
+	activeReqs    map[*http.Request]ipnauth.Actor
 	backendWaiter waiterSet // of LocalBackend waiters
 	zeroReqWaiter waiterSet // of blockUntilZeroConnections waiters
 }
@@ -195,8 +195,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
 		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
-		lah.PermitRead, lah.PermitWrite = ci.Permissions(lb.OperatorUserID())
-		lah.PermitCert = ci.CanFetchCerts()
+		if actor, ok := ci.(*actor); ok {
+			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
+			lah.PermitCert = actor.CanFetchCerts()
+		} else if testenv.InTest() {
+			lah.PermitRead, lah.PermitWrite = true, true
+		}
 		lah.Actor = ci
 		lah.ServeHTTP(w, r)
 		return
@@ -230,11 +234,11 @@ func (e inUseOtherUserError) Unwrap() error { return e.error }
 // The returned error, when non-nil, will be of type inUseOtherUserError.
 //
 // s.mu must be held.
-func (s *Server) checkConnIdentityLocked(ci *actor) error {
+func (s *Server) checkConnIdentityLocked(ci ipnauth.Actor) error {
 	// If clients are already connected, verify they're the same user.
 	// This mostly matters on Windows at the moment.
 	if len(s.activeReqs) > 0 {
-		var active *actor
+		var active ipnauth.Actor
 		for _, active = range s.activeReqs {
 			break
 		}
@@ -251,7 +255,9 @@ func (s *Server) checkConnIdentityLocked(ci *actor) error {
 				if username, err := active.Username(); err == nil {
 					fmt.Fprintf(&b, " by %s", username)
 				}
-				fmt.Fprintf(&b, ", pid %d", active.pid())
+				if active, ok := active.(*actor); ok {
+					fmt.Fprintf(&b, ", pid %d", active.pid())
+				}
 				return inUseOtherUserError{errors.New(b.String())}
 			}
 		}
@@ -267,7 +273,7 @@ func (s *Server) checkConnIdentityLocked(ci *actor) error {
 //
 // This is primarily used for the Windows GUI, to block until one user's done
 // controlling the tailscaled process.
-func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor *actor) error {
+func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor ipnauth.Actor) error {
 	inUse := func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -277,7 +283,18 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor *actor) erro
 	for inUse() {
 		// Check whenever the connection count drops down to zero.
 		ready, cleanup := s.zeroReqWaiter.add(&s.mu, ctx)
-		<-ready
+		if inUse() {
+			// If the server was in use at the time of the initial check,
+			// but disconnected and was removed from the activeReqs map
+			// by the time we registered a waiter, the ready channel
+			// will never be closed, resulting in a deadlock. To avoid
+			// this, we can check again after registering the waiter.
+			//
+			// This method is planned for complete removal as part of the
+			// multi-user improvements in tailscale/corp#18342,
+			// and this approach should be fine as a temporary solution.
+			<-ready
+		}
 		cleanup()
 		if err := ctx.Err(); err != nil {
 			return err
@@ -361,22 +378,12 @@ func (a *actor) CanFetchCerts() bool {
 // The returned error may be of type [inUseOtherUserError].
 //
 // onDone must be called when the HTTP request is done.
-func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone func(), err error) {
+func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (onDone func(), err error) {
 	if actor == nil {
 		return nil, errors.New("internal error: nil actor")
 	}
 
 	lb := s.mustBackend()
-
-	// If the connected user changes, reset the backend server state to make
-	// sure node keys don't leak between users.
-	var doReset bool
-	defer func() {
-		if doReset {
-			s.logf("identity changed; resetting server")
-			lb.ResetForClientDisconnect()
-		}
-	}()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -392,26 +399,20 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone f
 			// Tell the LocalBackend about the identity we're now running as,
 			// unless its the SYSTEM user. That user is not a real account and
 			// doesn't have a home directory.
-			uid, err := lb.SetCurrentUser(actor)
-			if err != nil {
-				return nil, err
-			}
-			if s.lastUserID != uid {
-				if s.lastUserID != "" {
-					doReset = true
-				}
-				s.lastUserID = uid
-			}
+			lb.SetCurrentUser(actor)
 		}
 	}
 
 	onDone = func() {
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		delete(s.activeReqs, req)
-		remain := len(s.activeReqs)
-		s.mu.Unlock()
+		if len(s.activeReqs) != 0 {
+			// The server is not idle yet.
+			return
+		}
 
-		if remain == 0 && s.resetOnZero {
+		if s.resetOnZero {
 			if lb.InServerMode() {
 				s.logf("client disconnected; staying alive in server mode")
 			} else {
@@ -421,11 +422,7 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone f
 		}
 
 		// Wake up callers waiting for the server to be idle:
-		if remain == 0 {
-			s.mu.Lock()
-			s.zeroReqWaiter.wakeAll()
-			s.mu.Unlock()
-		}
+		s.zeroReqWaiter.wakeAll()
 	}
 
 	return onDone, nil

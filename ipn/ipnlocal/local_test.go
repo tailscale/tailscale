@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
@@ -432,20 +434,30 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func newTestLocalBackend(t testing.TB) *LocalBackend {
+	return newTestLocalBackendWithSys(t, new(tsd.System))
+}
+
+// newTestLocalBackendWithSys creates a new LocalBackend with the given tsd.System.
+// If the state store or engine are not set in sys, they will be set to a new
+// in-memory store and fake userspace engine, respectively.
+func newTestLocalBackendWithSys(t testing.TB, sys *tsd.System) *LocalBackend {
 	var logf logger.Logf = logger.Discard
-	sys := new(tsd.System)
-	store := new(mem.Store)
-	sys.Set(store)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
-	if err != nil {
-		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	if _, ok := sys.StateStore.GetOK(); !ok {
+		sys.Set(new(mem.Store))
 	}
-	t.Cleanup(eng.Close)
-	sys.Set(eng)
+	if _, ok := sys.Engine.GetOK(); !ok {
+		eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+		if err != nil {
+			t.Fatalf("NewFakeUserspaceEngine: %v", err)
+		}
+		t.Cleanup(eng.Close)
+		sys.Set(eng)
+	}
 	lb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(lb.Shutdown)
 	return lb
 }
 
@@ -995,8 +1007,8 @@ func TestUpdateNetmapDelta(t *testing.T) {
 
 	wants := []*tailcfg.Node{
 		{
-			ID:   1,
-			DERP: "127.3.3.40:1",
+			ID:       1,
+			HomeDERP: 1,
 		},
 		{
 			ID:     2,
@@ -1360,7 +1372,9 @@ func TestObserveDNSResponse(t *testing.T) {
 		b := newTestBackend(t)
 
 		// ensure no error when no app connector is configured
-		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 
 		rc := &appctest.RouteCollector{}
 		if shouldStore {
@@ -1371,7 +1385,9 @@ func TestObserveDNSResponse(t *testing.T) {
 		b.appConnector.UpdateDomains([]string{"example.com"})
 		b.appConnector.Wait(context.Background())
 
-		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
 		b.appConnector.Wait(context.Background())
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {
@@ -1486,6 +1502,53 @@ func TestReconfigureAppConnector(t *testing.T) {
 	}
 	if v, _ := b.hostinfo.AppConnector.Get(); v {
 		t.Fatalf("expected no app connector service")
+	}
+}
+
+func TestBackfillAppConnectorRoutes(t *testing.T) {
+	// Create backend with an empty app connector.
+	b := newTestBackend(t)
+	if err := b.Start(ipn.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AppConnector: ipn.AppConnectorPrefs{Advertise: true},
+		},
+		AppConnectorSet: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+
+	// Smoke check that AdvertiseRoutes doesn't have the test IP.
+	ip := netip.MustParseAddr("1.2.3.4")
+	routes := b.Prefs().AdvertiseRoutes().AsSlice()
+	if slices.Contains(routes, netip.PrefixFrom(ip, ip.BitLen())) {
+		t.Fatalf("AdvertiseRoutes %v on a fresh backend already contains advertised route for %v", routes, ip)
+	}
+
+	// Store the test IP in profile data, but not in Prefs.AdvertiseRoutes.
+	b.ControlKnobs().AppCStoreRoutes.Store(true)
+	if err := b.storeRouteInfo(&appc.RouteInfo{
+		Domains: map[string][]netip.Addr{
+			"example.com": {ip},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mimic b.authReconfigure for the app connector bits.
+	b.mu.Lock()
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+	b.mu.Unlock()
+	b.readvertiseAppConnectorRoutes()
+
+	// Check that Prefs.AdvertiseRoutes got backfilled with routes stored in
+	// profile data.
+	routes = b.Prefs().AdvertiseRoutes().AsSlice()
+	if !slices.Contains(routes, netip.PrefixFrom(ip, ip.BitLen())) {
+		t.Fatalf("AdvertiseRoutes %v was not backfilled from stored app connector routes with %v", routes, ip)
 	}
 }
 
@@ -1776,10 +1839,13 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			b := newTestBackend(t)
 
-			policyStore := source.NewTestStoreOf(t,
-				source.TestSettingOf(syspolicy.ExitNodeID, test.exitNodeID),
-				source.TestSettingOf(syspolicy.ExitNodeIP, test.exitNodeIP),
-			)
+			policyStore := source.NewTestStore(t)
+			if test.exitNodeIDKey {
+				policyStore.SetStrings(source.TestSettingOf(syspolicy.ExitNodeID, test.exitNodeID))
+			}
+			if test.exitNodeIPKey {
+				policyStore.SetStrings(source.TestSettingOf(syspolicy.ExitNodeIP, test.exitNodeIP))
+			}
 			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 
 			if test.nm == nil {
@@ -1793,7 +1859,16 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.netMap = test.nm
 			b.pm = pm
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
-			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm, tailcfg.StableNodeID(test.lastSuggestedExitNode))
+
+			prefs := b.pm.prefs.AsStruct()
+			if changed := applySysPolicy(prefs, test.lastSuggestedExitNode) || setExitNodeID(prefs, test.nm); changed != test.prefsChanged {
+				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
+			}
+
+			// Both [LocalBackend.SetPrefsForTest] and [LocalBackend.EditPrefs]
+			// apply syspolicy settings to the current profile's preferences. Therefore,
+			// we pass the current, unmodified preferences and expect the effective
+			// preferences to change.
 			b.SetPrefsForTest(pm.CurrentPrefs().AsStruct())
 
 			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
@@ -1805,10 +1880,6 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				}
 			} else if got.String() != test.exitNodeIPWant {
 				t.Errorf("got %v want %v", got, test.exitNodeIPWant)
-			}
-
-			if changed != test.prefsChanged {
-				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 		})
 	}
@@ -1846,16 +1917,16 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 		PreferredDERP: 2,
 	}
 	tests := []struct {
-		name                      string
-		lastSuggestedExitNode     tailcfg.StableNodeID
-		netmap                    *netmap.NetworkMap
-		muts                      []*tailcfg.PeerChange
-		exitNodeIDWant            tailcfg.StableNodeID
-		updateNetmapDeltaResponse bool
-		report                    *netcheck.Report
+		name                  string
+		lastSuggestedExitNode tailcfg.StableNodeID
+		netmap                *netmap.NetworkMap
+		muts                  []*tailcfg.PeerChange
+		exitNodeIDWant        tailcfg.StableNodeID
+		report                *netcheck.Report
 	}{
 		{
-			name:                  "selected auto exit node goes offline",
+			// selected auto exit node goes offline
+			name:                  "exit-node-goes-offline",
 			lastSuggestedExitNode: peer1.StableID(),
 			netmap: &netmap.NetworkMap{
 				Peers: []tailcfg.NodeView{
@@ -1874,12 +1945,12 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 					Online: ptr.To(true),
 				},
 			},
-			exitNodeIDWant:            peer2.StableID(),
-			updateNetmapDeltaResponse: false,
-			report:                    report,
+			exitNodeIDWant: peer2.StableID(),
+			report:         report,
 		},
 		{
-			name:                  "other exit node goes offline doesn't change selected auto exit node that's still online",
+			// other exit node goes offline doesn't change selected auto exit node that's still online
+			name:                  "other-node-goes-offline",
 			lastSuggestedExitNode: peer2.StableID(),
 			netmap: &netmap.NetworkMap{
 				Peers: []tailcfg.NodeView{
@@ -1898,9 +1969,8 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 					Online: ptr.To(true),
 				},
 			},
-			exitNodeIDWant:            peer2.StableID(),
-			updateNetmapDeltaResponse: true,
-			report:                    report,
+			exitNodeIDWant: peer2.StableID(),
+			report:         report,
 		},
 	}
 
@@ -1918,6 +1988,20 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			b.lastSuggestedExitNode = tt.lastSuggestedExitNode
 			b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, tt.report)
 			b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
+
+			allDone := make(chan bool, 1)
+			defer b.goTracker.AddDoneCallback(func() {
+				b.mu.Lock()
+				defer b.mu.Unlock()
+				if b.goTracker.RunningGoroutines() > 0 {
+					return
+				}
+				select {
+				case allDone <- true:
+				default:
+				}
+			})()
+
 			someTime := time.Unix(123, 0)
 			muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
 				PeersChangedPatch: tt.muts,
@@ -1925,16 +2009,34 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			if !ok {
 				t.Fatal("netmap.MutationsFromMapResponse failed")
 			}
+
 			if b.pm.prefs.ExitNodeID() != tt.lastSuggestedExitNode {
 				t.Fatalf("did not set exit node ID to last suggested exit node despite auto policy")
 			}
 
+			was := b.goTracker.StartedGoroutines()
 			got := b.UpdateNetmapDelta(muts)
-			if got != tt.updateNetmapDeltaResponse {
-				t.Fatalf("got %v expected %v from UpdateNetmapDelta", got, tt.updateNetmapDeltaResponse)
+			if !got {
+				t.Error("got false from UpdateNetmapDelta")
 			}
-			if b.pm.prefs.ExitNodeID() != tt.exitNodeIDWant {
-				t.Fatalf("did not get expected exit node id after UpdateNetmapDelta")
+			startedGoroutine := b.goTracker.StartedGoroutines() != was
+
+			wantChange := tt.exitNodeIDWant != tt.lastSuggestedExitNode
+			if startedGoroutine != wantChange {
+				t.Errorf("got startedGoroutine %v, want %v", startedGoroutine, wantChange)
+			}
+			if startedGoroutine {
+				select {
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for goroutine to finish")
+				case <-allDone:
+				}
+			}
+			b.mu.Lock()
+			gotExitNode := b.pm.prefs.ExitNodeID()
+			b.mu.Unlock()
+			if gotExitNode != tt.exitNodeIDWant {
+				t.Fatalf("exit node ID after UpdateNetmapDelta = %v; want %v", gotExitNode, tt.exitNodeIDWant)
 			}
 		})
 	}
@@ -1970,7 +2072,7 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 			netip.MustParsePrefix("100.64.1.1/32"),
 			netip.MustParsePrefix("fe70::1/128"),
 		},
-		DERP: "127.3.3.40:2",
+		HomeDERP: 2,
 	}
 	defaultDERPMap := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
@@ -2319,7 +2421,7 @@ func TestApplySysPolicy(t *testing.T) {
 			t.Run("unit", func(t *testing.T) {
 				prefs := tt.prefs.Clone()
 
-				gotAnyChange := applySysPolicy(prefs)
+				gotAnyChange := applySysPolicy(prefs, "")
 
 				if gotAnyChange && prefs.Equals(&tt.prefs) {
 					t.Errorf("anyChange but prefs is unchanged: %v", prefs.Pretty())
@@ -2467,7 +2569,7 @@ func TestPreferencePolicyInfo(t *testing.T) {
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
 
-					gotAnyChange := applySysPolicy(prefs)
+					gotAnyChange := applySysPolicy(prefs, "")
 
 					if gotAnyChange != tt.wantChange {
 						t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantChange)
@@ -2564,6 +2666,150 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 
 func TestTCPHandlerForDst(t *testing.T) {
 	b := newTestBackend(t)
+	tests := []struct {
+		desc      string
+		dst       string
+		intercept bool
+	}{
+		{
+			desc:      "intercept port 80 (Web UI) on quad100 IPv4",
+			dst:       "100.100.100.100:80",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 80 (Web UI) on quad100 IPv6",
+			dst:       "[fd7a:115c:a1e0::53]:80",
+			intercept: true,
+		},
+		{
+			desc:      "don't intercept port 80 on local ip",
+			dst:       "100.100.103.100:80",
+			intercept: false,
+		},
+		{
+			desc:      "intercept port 8080 (Taildrive) on quad100 IPv4",
+			dst:       "[fd7a:115c:a1e0::53]:8080",
+			intercept: true,
+		},
+		{
+			desc:      "don't intercept port 8080 on local ip",
+			dst:       "100.100.103.100:8080",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 9080 on quad100 IPv4",
+			dst:       "100.100.100.100:9080",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 9080 on quad100 IPv6",
+			dst:       "[fd7a:115c:a1e0::53]:9080",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 9080 on local ip",
+			dst:       "100.100.103.100:9080",
+			intercept: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dst, func(t *testing.T) {
+			t.Log(tt.desc)
+			src := netip.MustParseAddrPort("100.100.102.100:51234")
+			h, _ := b.TCPHandlerForDst(src, netip.MustParseAddrPort(tt.dst))
+			if !tt.intercept && h != nil {
+				t.Error("intercepted traffic we shouldn't have")
+			} else if tt.intercept && h == nil {
+				t.Error("failed to intercept traffic we should have")
+			}
+		})
+	}
+}
+
+func TestTCPHandlerForDstWithVIPService(t *testing.T) {
+	b := newTestBackend(t)
+	svcIPMap := tailcfg.ServiceIPMappings{
+		"svc:foo": []netip.Addr{
+			netip.MustParseAddr("100.101.101.101"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:6565:6565"),
+		},
+		"svc:bar": []netip.Addr{
+			netip.MustParseAddr("100.99.99.99"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:626b:628b"),
+		},
+		"svc:baz": []netip.Addr{
+			netip.MustParseAddr("100.133.133.133"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:8585:8585"),
+		},
+	}
+	svcIPMapJSON, err := json.Marshal(svcIPMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.setNetMapLocked(
+		&netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{
+				Name: "example.ts.net",
+				CapMap: tailcfg.NodeCapMap{
+					tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
+				},
+			}).View(),
+			UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
+				tailcfg.UserID(1): {
+					LoginName:     "someone@example.com",
+					DisplayName:   "Some One",
+					ProfilePicURL: "https://example.com/photo.jpg",
+				},
+			},
+		},
+	)
+
+	err = b.setServeConfigLocked(
+		&ipn.ServeConfig{
+			Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+				"svc:foo": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						882: {HTTP: true},
+						883: {HTTPS: true},
+					},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.example.ts.net:882": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							},
+						},
+						"foo.example.ts.net:883": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "test"},
+							},
+						},
+					},
+				},
+				"svc:bar": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						990: {TCPForward: "127.0.0.1:8443"},
+						991: {TCPForward: "127.0.0.1:5432", TerminateTLS: "bar.test.ts.net"},
+					},
+				},
+				"svc:qux": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						600: {HTTPS: true},
+					},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"qux.example.ts.net:600": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "qux"},
+							},
+						},
+					},
+				},
+			},
+		},
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		desc      string
@@ -2613,6 +2859,77 @@ func TestTCPHandlerForDst(t *testing.T) {
 		{
 			desc:      "don't intercept port 9080 on local ip",
 			dst:       "100.100.103.100:9080",
+			intercept: false,
+		},
+		// VIP service destinations
+		{
+			desc:      "intercept port 882 (HTTP) on service foo IPv4",
+			dst:       "100.101.101.101:882",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 882 (HTTP) on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:882",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 883 (HTTPS) on service foo IPv4",
+			dst:       "100.101.101.101:883",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 883 (HTTPS) on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:883",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 990 (TCPForward) on service bar IPv4",
+			dst:       "100.99.99.99:990",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 990 (TCPForward) on service bar IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:990",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 991 (TCPForward with TerminateTLS) on service bar IPv4",
+			dst:       "100.99.99.99:990",
+			intercept: true,
+		},
+		{
+			desc:      "intercept port 991 (TCPForward with TerminateTLS) on service bar IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:990",
+			intercept: true,
+		},
+		{
+			desc:      "don't intercept port 4444 on service foo IPv4",
+			dst:       "100.101.101.101:4444",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 4444 on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:4444",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 600 on unknown service IPv4",
+			dst:       "100.22.22.22:883",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 600 on unknown service IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:883",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 600 (HTTPS) on service baz IPv4",
+			dst:       "100.133.133.133:600",
+			intercept: false,
+		},
+		{
+			desc:      "don't intercept port 600 (HTTPS) on service baz IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:8585:8585]:600",
 			intercept: false,
 		},
 	}
@@ -2934,7 +3251,7 @@ func makePeer(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
 		ID:       id,
 		StableID: tailcfg.StableNodeID(fmt.Sprintf("stable%d", id)),
 		Name:     fmt.Sprintf("peer%d", id),
-		DERP:     fmt.Sprintf("127.3.3.40:%d", id),
+		HomeDERP: int(id),
 	}
 	for _, opt := range opts {
 		opt(node)
@@ -2950,13 +3267,13 @@ func withName(name string) peerOptFunc {
 
 func withDERP(region int) peerOptFunc {
 	return func(n *tailcfg.Node) {
-		n.DERP = fmt.Sprintf("127.3.3.40:%d", region)
+		n.HomeDERP = region
 	}
 }
 
 func withoutDERP() peerOptFunc {
 	return func(n *tailcfg.Node) {
-		n.DERP = ""
+		n.HomeDERP = 0
 	}
 }
 
@@ -3030,12 +3347,10 @@ func deterministicNodeForTest(t testing.TB, want views.Slice[tailcfg.StableNodeI
 		var ret tailcfg.NodeView
 
 		gotIDs := make([]tailcfg.StableNodeID, got.Len())
-		for i := range got.Len() {
-			nv := got.At(i)
+		for i, nv := range got.All() {
 			if !nv.Valid() {
 				t.Fatalf("invalid node at index %v", i)
 			}
-
 			gotIDs[i] = nv.StableID()
 			if nv.StableID() == use {
 				ret = nv
@@ -4099,6 +4414,7 @@ func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	t.Cleanup(b.Shutdown)
 	b.DisablePortMapperForTest()
 
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
@@ -4420,6 +4736,475 @@ func TestLoginNotifications(t *testing.T) {
 				}()
 			}
 			wg.Wait()
+		})
+	}
+}
+
+// TestConfigFileReload tests that the LocalBackend reloads its configuration
+// when the configuration file changes.
+func TestConfigFileReload(t *testing.T) {
+	cfg1 := `{"Hostname": "foo", "Version": "alpha0"}`
+	f := filepath.Join(t.TempDir(), "cfg")
+	must.Do(os.WriteFile(f, []byte(cfg1), 0600))
+	sys := new(tsd.System)
+	sys.InitialConfig = must.Get(conffile.Load(f))
+	lb := newTestLocalBackendWithSys(t, sys)
+	must.Do(lb.Start(ipn.Options{}))
+
+	lb.mu.Lock()
+	hn := lb.hostinfo.Hostname
+	lb.mu.Unlock()
+	if hn != "foo" {
+		t.Fatalf("got %q; want %q", hn, "foo")
+	}
+
+	cfg2 := `{"Hostname": "bar", "Version": "alpha0"}`
+	must.Do(os.WriteFile(f, []byte(cfg2), 0600))
+	if !must.Get(lb.ReloadConfig()) {
+		t.Fatal("reload failed")
+	}
+
+	lb.mu.Lock()
+	hn = lb.hostinfo.Hostname
+	lb.mu.Unlock()
+	if hn != "bar" {
+		t.Fatalf("got %q; want %q", hn, "bar")
+	}
+}
+
+func TestGetVIPServices(t *testing.T) {
+	tests := []struct {
+		name        string
+		advertised  []string
+		serveConfig *ipn.ServeConfig
+		want        []*tailcfg.VIPService
+	}{
+		{
+			"advertised-only",
+			[]string{"svc:abc", "svc:def"},
+			&ipn.ServeConfig{},
+			[]*tailcfg.VIPService{
+				{
+					Name:   "svc:abc",
+					Active: true,
+				},
+				{
+					Name:   "svc:def",
+					Active: true,
+				},
+			},
+		},
+		{
+			"served-only",
+			[]string{},
+			&ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+			},
+		},
+		{
+			"served-and-advertised",
+			[]string{"svc:abc"},
+			&ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name:   "svc:abc",
+					Active: true,
+					Ports:  []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+			},
+		},
+		{
+			"served-and-advertised-different-service",
+			[]string{"svc:def"},
+			&ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+				},
+				{
+					Name:   "svc:def",
+					Active: true,
+				},
+			},
+		},
+		{
+			"served-with-port-ranges-one-range-single",
+			[]string{},
+			&ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
+						80: {HTTPS: true},
+					}},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 80, Last: 80}}},
+				},
+			},
+		},
+		{
+			"served-with-port-ranges-one-range-multiple",
+			[]string{},
+			&ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
+						80: {HTTPS: true},
+						81: {HTTPS: true},
+						82: {HTTPS: true},
+					}},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name:  "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{{Proto: 6, Ports: tailcfg.PortRange{First: 80, Last: 82}}},
+				},
+			},
+		},
+		{
+			"served-with-port-ranges-multiple-ranges",
+			[]string{},
+			&ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{
+						80:   {HTTPS: true},
+						81:   {HTTPS: true},
+						82:   {HTTPS: true},
+						1212: {HTTPS: true},
+						1213: {HTTPS: true},
+						1214: {HTTPS: true},
+					}},
+				},
+			},
+			[]*tailcfg.VIPService{
+				{
+					Name: "svc:abc",
+					Ports: []tailcfg.ProtoPortRange{
+						{Proto: 6, Ports: tailcfg.PortRange{First: 80, Last: 82}},
+						{Proto: 6, Ports: tailcfg.PortRange{First: 1212, Last: 1214}},
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+				return newClient(tb, opts)
+			})
+			lb.serveConfig = tt.serveConfig.View()
+			prefs := &ipn.Prefs{
+				AdvertiseServices: tt.advertised,
+			}
+			got := lb.vipServicesFromPrefsLocked(prefs.View())
+			slices.SortFunc(got, func(a, b *tailcfg.VIPService) int {
+				return strings.Compare(a.Name.String(), b.Name.String())
+			})
+			if !reflect.DeepEqual(tt.want, got) {
+				t.Logf("want:")
+				for _, s := range tt.want {
+					t.Logf("%+v", s)
+				}
+				t.Logf("got:")
+				for _, s := range got {
+					t.Logf("%+v", s)
+				}
+				t.Fail()
+				return
+			}
+		})
+	}
+}
+
+func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
+	const enableLogging = false
+
+	type fieldChange struct {
+		name string
+		want any
+	}
+
+	wantPrefsChanges := func(want ...fieldChange) *wantedNotification {
+		return &wantedNotification{
+			name: "Prefs",
+			cond: func(t testing.TB, actor ipnauth.Actor, n *ipn.Notify) bool {
+				if n.Prefs != nil {
+					prefs := reflect.Indirect(reflect.ValueOf(n.Prefs.AsStruct()))
+					for _, f := range want {
+						got := prefs.FieldByName(f.name).Interface()
+						if !reflect.DeepEqual(got, f.want) {
+							t.Errorf("%v: got %v; want %v", f.name, got, f.want)
+						}
+					}
+				}
+				return n.Prefs != nil
+			},
+		}
+	}
+
+	unexpectedPrefsChange := func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+		if n.Prefs != nil {
+			t.Errorf("Unexpected Prefs: %v", n.Prefs.Pretty())
+			return true
+		}
+		return false
+	}
+
+	tests := []struct {
+		name           string
+		initialPrefs   *ipn.Prefs
+		stringSettings []source.TestSetting[string]
+		want           *wantedNotification
+	}{
+		{
+			name:           "ShieldsUp/True",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableIncomingConnections, "never")},
+			want:           wantPrefsChanges(fieldChange{"ShieldsUp", true}),
+		},
+		{
+			name:           "ShieldsUp/False",
+			initialPrefs:   &ipn.Prefs{ShieldsUp: true},
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableIncomingConnections, "always")},
+			want:           wantPrefsChanges(fieldChange{"ShieldsUp", false}),
+		},
+		{
+			name:           "ExitNodeID",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.ExitNodeID, "foo")},
+			want:           wantPrefsChanges(fieldChange{"ExitNodeID", tailcfg.StableNodeID("foo")}),
+		},
+		{
+			name:           "EnableRunExitNode",
+			stringSettings: []source.TestSetting[string]{source.TestSettingOf(syspolicy.EnableRunExitNode, "always")},
+			want:           wantPrefsChanges(fieldChange{"AdvertiseRoutes", []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()}}),
+		},
+		{
+			name: "Multiple",
+			initialPrefs: &ipn.Prefs{
+				ExitNodeAllowLANAccess: true,
+			},
+			stringSettings: []source.TestSetting[string]{
+				source.TestSettingOf(syspolicy.EnableServerMode, "always"),
+				source.TestSettingOf(syspolicy.ExitNodeAllowLANAccess, "never"),
+				source.TestSettingOf(syspolicy.ExitNodeIP, "127.0.0.1"),
+			},
+			want: wantPrefsChanges(
+				fieldChange{"ForceDaemon", true},
+				fieldChange{"ExitNodeAllowLANAccess", false},
+				fieldChange{"ExitNodeIP", netip.MustParseAddr("127.0.0.1")},
+			),
+		},
+		{
+			name: "NoChange",
+			initialPrefs: &ipn.Prefs{
+				CorpDNS:         true,
+				ExitNodeID:      "foo",
+				AdvertiseRoutes: []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
+			},
+			stringSettings: []source.TestSetting[string]{
+				source.TestSettingOf(syspolicy.EnableTailscaleDNS, "always"),
+				source.TestSettingOf(syspolicy.ExitNodeID, "foo"),
+				source.TestSettingOf(syspolicy.EnableRunExitNode, "always"),
+			},
+			want: nil, // syspolicy settings match the preferences; no change notification is expected.
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			syspolicy.RegisterWellKnownSettingsForTest(t)
+			store := source.NewTestStoreOf[string](t)
+			syspolicy.MustRegisterStoreForTest(t, "TestSource", setting.DeviceScope, store)
+
+			lb := newLocalBackendWithTestControl(t, enableLogging, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+				return newClient(tb, opts)
+			})
+			if tt.initialPrefs != nil {
+				lb.SetPrefsForTest(tt.initialPrefs)
+			}
+			if err := lb.Start(ipn.Options{}); err != nil {
+				t.Fatalf("(*LocalBackend).Start(): %v", err)
+			}
+
+			nw := newNotificationWatcher(t, lb, &ipnauth.TestActor{})
+			if tt.want != nil {
+				nw.watch(0, []wantedNotification{*tt.want})
+			} else {
+				nw.watch(0, nil, unexpectedPrefsChange)
+			}
+
+			store.SetStrings(tt.stringSettings...)
+
+			nw.check()
+		})
+	}
+}
+
+func TestUpdateIngressLocked(t *testing.T) {
+	tests := []struct {
+		name              string
+		hi                *tailcfg.Hostinfo
+		sc                *ipn.ServeConfig
+		wantIngress       bool
+		wantWireIngress   bool
+		wantControlUpdate bool
+	}{
+		{
+			name: "no_hostinfo_no_serve_config",
+			hi:   nil,
+		},
+		{
+			name: "empty_hostinfo_no_serve_config",
+			hi:   &tailcfg.Hostinfo{},
+		},
+		{
+			name: "empty_hostinfo_funnel_enabled",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantIngress:       true,
+			wantWireIngress:   true,
+			wantControlUpdate: true,
+		},
+		{
+			name: "empty_hostinfo_funnel_disabled",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress:   true, // true if there is any AllowFunnel block
+			wantControlUpdate: true,
+		},
+		{
+			name: "empty_hostinfo_no_funnel",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {HTTPS: true},
+				},
+			},
+		},
+		{
+			name: "funnel_enabled_no_change",
+			hi: &tailcfg.Hostinfo{
+				IngressEnabled: true,
+				WireIngress:    true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantIngress:     true,
+			wantWireIngress: true,
+		},
+		{
+			name: "funnel_disabled_no_change",
+			hi: &tailcfg.Hostinfo{
+				WireIngress: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress: true, // true if there is any AllowFunnel block
+		},
+		{
+			name: "funnel_changes_to_disabled",
+			hi: &tailcfg.Hostinfo{
+				IngressEnabled: true,
+				WireIngress:    true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress:   true, // true if there is any AllowFunnel block
+			wantControlUpdate: true,
+		},
+		{
+			name: "funnel_changes_to_enabled",
+			hi: &tailcfg.Hostinfo{
+				WireIngress: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantWireIngress:   true,
+			wantIngress:       true,
+			wantControlUpdate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			b.hostinfo = tt.hi
+			b.serveConfig = tt.sc.View()
+			allDone := make(chan bool, 1)
+			defer b.goTracker.AddDoneCallback(func() {
+				b.mu.Lock()
+				defer b.mu.Unlock()
+				if b.goTracker.RunningGoroutines() > 0 {
+					return
+				}
+				select {
+				case allDone <- true:
+				default:
+				}
+			})()
+
+			was := b.goTracker.StartedGoroutines()
+			b.updateIngressLocked()
+
+			if tt.hi != nil {
+				if tt.hi.IngressEnabled != tt.wantIngress {
+					t.Errorf("IngressEnabled = %v, want %v", tt.hi.IngressEnabled, tt.wantIngress)
+				}
+				if tt.hi.WireIngress != tt.wantWireIngress {
+					t.Errorf("WireIngress = %v, want %v", tt.hi.WireIngress, tt.wantWireIngress)
+				}
+			}
+
+			startedGoroutine := b.goTracker.StartedGoroutines() != was
+			if startedGoroutine != tt.wantControlUpdate {
+				t.Errorf("control update triggered = %v, want %v", startedGoroutine, tt.wantControlUpdate)
+			}
+
+			if startedGoroutine {
+				select {
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for goroutine to finish")
+				case <-allDone:
+				}
+			}
 		})
 	}
 }

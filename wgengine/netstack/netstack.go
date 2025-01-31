@@ -32,7 +32,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
-	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/metrics"
@@ -51,6 +50,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/set"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -174,19 +174,18 @@ type Impl struct {
 	// It can only be set before calling Start.
 	ProcessSubnets bool
 
-	ipstack       *stack.Stack
-	linkEP        *linkEndpoint
-	tundev        *tstun.Wrapper
-	e             wgengine.Engine
-	pm            *proxymap.Mapper
-	mc            *magicsock.Conn
-	logf          logger.Logf
-	dialer        *tsdial.Dialer
-	ctx           context.Context        // alive until Close
-	ctxCancel     context.CancelFunc     // called on Close
-	lb            *ipnlocal.LocalBackend // or nil
-	dns           *dns.Manager
-	driveForLocal drive.FileSystemForLocal // or nil
+	ipstack   *stack.Stack
+	linkEP    *linkEndpoint
+	tundev    *tstun.Wrapper
+	e         wgengine.Engine
+	pm        *proxymap.Mapper
+	mc        *magicsock.Conn
+	logf      logger.Logf
+	dialer    *tsdial.Dialer
+	ctx       context.Context        // alive until Close
+	ctxCancel context.CancelFunc     // called on Close
+	lb        *ipnlocal.LocalBackend // or nil
+	dns       *dns.Manager
 
 	// loopbackPort, if non-nil, will enable Impl to loop back (dnat to
 	// <address-family-loopback>:loopbackPort) TCP & UDP flows originally
@@ -201,6 +200,8 @@ type Impl struct {
 	// machine. It's always a non-nil func. It's changed on netmap
 	// updates.
 	atomicIsLocalIPFunc syncs.AtomicValue[func(netip.Addr) bool]
+
+	atomicIsVIPServiceIPFunc syncs.AtomicValue[func(netip.Addr) bool]
 
 	// forwardDialFunc, if non-nil, is the net.Dialer.DialContext-style
 	// function that is used to make outgoing connections when forwarding a
@@ -288,7 +289,7 @@ func setTCPBufSizes(ipstack *stack.Stack) error {
 }
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, driveForLocal drive.FileSystemForLocal) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -382,7 +383,6 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		connsInFlightByClient: make(map[netip.Addr]int),
 		packetsInFlight:       make(map[stack.TransportEndpointID]struct{}),
 		dns:                   dns,
-		driveForLocal:         driveForLocal,
 	}
 	loopbackPort, ok := envknob.LookupInt("TS_DEBUG_NETSTACK_LOOPBACK_PORT")
 	if ok && loopbackPort >= 0 && loopbackPort <= math.MaxUint16 {
@@ -390,6 +390,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
+	ns.atomicIsVIPServiceIPFunc.Store(ipset.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
@@ -535,7 +536,7 @@ func (ns *Impl) wrapTCPProtocolHandler(h protocolHandlerFunc) protocolHandlerFun
 
 		// Dynamically reconfigure ns's subnet addresses as needed for
 		// outbound traffic.
-		if !ns.isLocalIP(localIP) {
+		if !ns.isLocalIP(localIP) && !ns.isVIPServiceIP(localIP) {
 			ns.addSubnetAddress(localIP)
 		}
 
@@ -624,10 +625,17 @@ var v4broadcast = netaddr.IPv4(255, 255, 255, 255)
 func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	var selfNode tailcfg.NodeView
 	if nm != nil {
+		vipServiceIPMap := nm.GetVIPServiceIPMap()
+		serviceAddrSet := set.Set[netip.Addr]{}
+		for _, addrs := range vipServiceIPMap {
+			serviceAddrSet.AddSlice(addrs)
+		}
 		ns.atomicIsLocalIPFunc.Store(ipset.NewContainsIPFunc(nm.GetAddresses()))
+		ns.atomicIsVIPServiceIPFunc.Store(serviceAddrSet.Contains)
 		selfNode = nm.SelfNode
 	} else {
 		ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
+		ns.atomicIsVIPServiceIPFunc.Store(ipset.FalseContainsIPFunc())
 	}
 
 	oldPfx := make(map[netip.Prefix]bool)
@@ -646,13 +654,11 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	newPfx := make(map[netip.Prefix]bool)
 
 	if selfNode.Valid() {
-		for i := range selfNode.Addresses().Len() {
-			p := selfNode.Addresses().At(i)
+		for _, p := range selfNode.Addresses().All() {
 			newPfx[p] = true
 		}
 		if ns.ProcessSubnets {
-			for i := range selfNode.AllowedIPs().Len() {
-				p := selfNode.AllowedIPs().At(i)
+			for _, p := range selfNode.AllowedIPs().All() {
 				newPfx[p] = true
 			}
 		}
@@ -957,6 +963,12 @@ func (ns *Impl) isLocalIP(ip netip.Addr) bool {
 	return ns.atomicIsLocalIPFunc.Load()(ip)
 }
 
+// isVIPServiceIP reports whether ip is an IP address that's
+// assigned to a VIP service.
+func (ns *Impl) isVIPServiceIP(ip netip.Addr) bool {
+	return ns.atomicIsVIPServiceIPFunc.Load()(ip)
+}
+
 func (ns *Impl) peerAPIPortAtomic(ip netip.Addr) *atomic.Uint32 {
 	if ip.Is4() {
 		return &ns.peerapiPort4Atomic
@@ -973,6 +985,7 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	// Handle incoming peerapi connections in netstack.
 	dstIP := p.Dst.Addr()
 	isLocal := ns.isLocalIP(dstIP)
+	isService := ns.isVIPServiceIP(dstIP)
 
 	// Handle TCP connection to the Tailscale IP(s) in some cases:
 	if ns.lb != nil && p.IPProto == ipproto.TCP && isLocal {
@@ -992,6 +1005,13 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 		}
 		// Also handle SSH connections, webserver, etc, if enabled:
 		if ns.lb.ShouldInterceptTCPPort(dport) {
+			return true
+		}
+	}
+	if ns.lb != nil && p.IPProto == ipproto.TCP && isService {
+		// An assumption holds for this to work: when tun mode is on for a service,
+		// its tcp and web are not set. This is enforced in b.setServeConfigLocked.
+		if ns.lb.ShouldInterceptVIPServiceTCPPort(p.Dst) {
 			return true
 		}
 	}

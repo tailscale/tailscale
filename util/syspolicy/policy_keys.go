@@ -77,6 +77,9 @@ const (
 	// SuggestedExitNodeVisibility controls the visibility of suggested exit nodes in the client GUI.
 	// When this system policy is set to 'hide', an exit node suggestion won't be presented to the user as part of the exit nodes picker.
 	SuggestedExitNodeVisibility Key = "SuggestedExitNode"
+	// OnboardingFlowVisibility controls the visibility of the onboarding flow in the client GUI.
+	// When this system policy is set to 'hide', the onboarding flow is never shown to the user.
+	OnboardingFlowVisibility Key = "OnboardingFlow"
 
 	// Keys with a string value formatted for use with time.ParseDuration().
 	KeyExpirationNoticeTime Key = "KeyExpirationNotice" // default 24 hours
@@ -120,6 +123,11 @@ const (
 	// Example: "CN=Tailscale Inc Test Root CA,OU=Tailscale Inc Test Certificate Authority,O=Tailscale Inc,ST=ON,C=CA"
 	MachineCertificateSubject Key = "MachineCertificateSubject"
 
+	// Hostname is the hostname of the device that is running Tailscale.
+	// When this policy is set, it overrides the hostname that the client
+	// would otherwise obtain from the OS, e.g. by calling os.Hostname().
+	Hostname Key = "Hostname"
+
 	// Keys with a string array value.
 	// AllowedSuggestedExitNodes's string array value is a list of exit node IDs that restricts which exit nodes are considered when generating suggestions for exit nodes.
 	AllowedSuggestedExitNodes Key = "AllowedSuggestedExitNodes"
@@ -145,6 +153,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(ExitNodeID, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(ExitNodeIP, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(FlushDNSOnSessionUnlock, setting.DeviceSetting, setting.BooleanValue),
+	setting.NewDefinition(Hostname, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(LogSCMInteractions, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(LogTarget, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(MachineCertificateSubject, setting.DeviceSetting, setting.StringValue),
@@ -166,6 +175,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(SuggestedExitNodeVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(TestMenuVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(UpdateMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(OnboardingFlowVisibility, setting.UserSetting, setting.VisibilityValue),
 }
 
 func init() {

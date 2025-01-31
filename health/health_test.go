@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/usermetric"
+	"tailscale.com/version"
 )
 
 func TestAppendWarnableDebugFlags(t *testing.T) {
@@ -273,7 +276,7 @@ func TestShowUpdateWarnable(t *testing.T) {
 		wantShow     bool
 	}{
 		{
-			desc:         "nil CientVersion",
+			desc:         "nil ClientVersion",
 			check:        true,
 			cv:           nil,
 			wantWarnable: nil,
@@ -344,6 +347,55 @@ func TestShowUpdateWarnable(t *testing.T) {
 			}
 			if gotShow != tt.wantShow {
 				t.Errorf("got show: %v, want: %v", gotShow, tt.wantShow)
+			}
+		})
+	}
+}
+
+func TestHealthMetric(t *testing.T) {
+	unstableBuildWarning := 0
+	if version.IsUnstableBuild() {
+		unstableBuildWarning = 1
+	}
+
+	tests := []struct {
+		desc            string
+		check           bool
+		apply           opt.Bool
+		cv              *tailcfg.ClientVersion
+		wantMetricCount int
+	}{
+		// When running in dev, and not initialising the client, there will be two warnings
+		// by default:
+		// - is-using-unstable-version (except on the release branch)
+		// - wantrunning-false
+		{
+			desc:            "base-warnings",
+			check:           true,
+			cv:              nil,
+			wantMetricCount: unstableBuildWarning + 1,
+		},
+		// with: update-available
+		{
+			desc:            "update-warning",
+			check:           true,
+			cv:              &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
+			wantMetricCount: unstableBuildWarning + 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			tr := &Tracker{
+				checkForUpdates: tt.check,
+				applyUpdates:    tt.apply,
+				latestVersion:   tt.cv,
+			}
+			tr.SetMetricsRegistry(&usermetric.Registry{})
+			if val := tr.metricHealthMessage.Get(metricHealthMessageLabel{Type: MetricLabelWarning}).String(); val != strconv.Itoa(tt.wantMetricCount) {
+				t.Fatalf("metric value: %q, want: %q", val, strconv.Itoa(tt.wantMetricCount))
+			}
+			for _, w := range tr.CurrentState().Warnings {
+				t.Logf("warning: %v", w)
 			}
 		})
 	}

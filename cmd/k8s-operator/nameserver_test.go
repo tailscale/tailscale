@@ -69,7 +69,7 @@ func TestNameserverReconciler(t *testing.T) {
 	wantsDeploy.Namespace = "tailscale"
 	labels := nameserverResourceLabels("test", "tailscale")
 	wantsDeploy.ObjectMeta.Labels = labels
-	expectEqual(t, fc, wantsDeploy, nil)
+	expectEqual(t, fc, wantsDeploy)
 
 	// Verify that DNSConfig advertizes the nameserver's Service IP address,
 	// has the ready status condition and tailscale finalizer.
@@ -88,7 +88,7 @@ func TestNameserverReconciler(t *testing.T) {
 		Message:            reasonNameserverCreated,
 		LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 	})
-	expectEqual(t, fc, dnsCfg, nil)
+	expectEqual(t, fc, dnsCfg)
 
 	// // Verify that nameserver image gets updated to match DNSConfig spec.
 	mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
@@ -96,7 +96,7 @@ func TestNameserverReconciler(t *testing.T) {
 	})
 	expectReconciled(t, nr, "", "test")
 	wantsDeploy.Spec.Template.Spec.Containers[0].Image = "test:v0.0.2"
-	expectEqual(t, fc, wantsDeploy, nil)
+	expectEqual(t, fc, wantsDeploy)
 
 	// Verify that when another actor sets ConfigMap data, it does not get
 	// overwritten by nameserver reconciler.
@@ -114,7 +114,7 @@ func TestNameserverReconciler(t *testing.T) {
 		TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"},
 		Data:     map[string]string{"records.json": string(bs)},
 	}
-	expectEqual(t, fc, wantCm, nil)
+	expectEqual(t, fc, wantCm)
 
 	// Verify that if dnsconfig.spec.nameserver.image.{repo,tag} are unset,
 	// the nameserver image defaults to tailscale/k8s-nameserver:unstable.
@@ -123,5 +123,5 @@ func TestNameserverReconciler(t *testing.T) {
 	})
 	expectReconciled(t, nr, "", "test")
 	wantsDeploy.Spec.Template.Spec.Containers[0].Image = "tailscale/k8s-nameserver:unstable"
-	expectEqual(t, fc, wantsDeploy, nil)
+	expectEqual(t, fc, wantsDeploy)
 }

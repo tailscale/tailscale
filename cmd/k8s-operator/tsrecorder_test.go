@@ -57,7 +57,7 @@ func TestRecorder(t *testing.T) {
 
 		msg := "Recorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
 		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, metav1.ConditionFalse, reasonRecorderInvalid, msg, 0, cl, zl.Sugar())
-		expectEqual(t, fc, tsr, nil)
+		expectEqual(t, fc, tsr)
 		if expected := 0; reconciler.recorders.Len() != expected {
 			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
 		}
@@ -76,7 +76,7 @@ func TestRecorder(t *testing.T) {
 		expectReconciled(t, reconciler, "", tsr.Name)
 
 		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, metav1.ConditionTrue, reasonRecorderCreated, reasonRecorderCreated, 0, cl, zl.Sugar())
-		expectEqual(t, fc, tsr, nil)
+		expectEqual(t, fc, tsr)
 		if expected := 1; reconciler.recorders.Len() != expected {
 			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
 		}
@@ -112,7 +112,7 @@ func TestRecorder(t *testing.T) {
 				URL:        "https://test-0.example.ts.net",
 			},
 		}
-		expectEqual(t, fc, tsr, nil)
+		expectEqual(t, fc, tsr)
 	})
 
 	t.Run("delete the Recorder and observe cleanup", func(t *testing.T) {
@@ -145,12 +145,12 @@ func expectRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.Recor
 	statefulSet := tsrStatefulSet(tsr, tsNamespace)
 
 	if shouldExist {
-		expectEqual(t, fc, auth, nil)
-		expectEqual(t, fc, state, nil)
-		expectEqual(t, fc, role, nil)
-		expectEqual(t, fc, roleBinding, nil)
-		expectEqual(t, fc, serviceAccount, nil)
-		expectEqual(t, fc, statefulSet, nil)
+		expectEqual(t, fc, auth)
+		expectEqual(t, fc, state)
+		expectEqual(t, fc, role)
+		expectEqual(t, fc, roleBinding)
+		expectEqual(t, fc, serviceAccount)
+		expectEqual(t, fc, statefulSet, removeResourceReqs)
 	} else {
 		expectMissing[corev1.Secret](t, fc, auth.Namespace, auth.Name)
 		expectMissing[corev1.Secret](t, fc, state.Namespace, state.Name)
