@@ -98,6 +98,7 @@ func ServeNoContent(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(NoContentResponseHeader, "response "+challenge)
 		}
 	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, no-transform, max-age=0")
 	w.WriteHeader(http.StatusNoContent)
 }
 
