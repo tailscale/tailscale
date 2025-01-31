@@ -45,7 +45,6 @@ operatorConfig:
   # Optional host network configuration. Likely only needed for public Kubernetes nodes
   hostNetwork:
     enabled: false
-    dnsPolicy: ClusterFirstWithHostNet  # Common options: ClusterFirst, ClusterFirstWithHostNet, Default
 
   image:
     # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/k8s-operator.
