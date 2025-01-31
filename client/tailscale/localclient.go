@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -238,7 +239,12 @@ func SetVersionMismatchHandler(f func(clientVer, serverVer string)) {
 }
 
 func (lc *LocalClient) send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
-	slurp, _, err := lc.sendWithHeaders(ctx, method, path, wantStatus, body, nil)
+	var headers http.Header
+	if reason := apitype.RequestReasonKey.Value(ctx); reason != "" {
+		reasonBase64 := base64.StdEncoding.EncodeToString([]byte(reason))
+		headers = http.Header{apitype.RequestReasonHeader: {reasonBase64}}
+	}
+	slurp, _, err := lc.sendWithHeaders(ctx, method, path, wantStatus, body, headers)
 	return slurp, err
 }
 
@@ -824,6 +830,11 @@ func (lc *LocalClient) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 	return &p, nil
 }
 
+// EditPrefs updates the [ipn.Prefs] of the current Tailscale profile, applying the changes in mp.
+// It returns an error if the changes cannot be applied, such as due to the caller's access rights
+// or a policy restriction. An optional reason or justification for the request can be
+// provided as a context value using [apitype.RequestReasonKey]. If permitted by policy,
+// access may be granted, and the reason will be logged for auditing purposes.
 func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	body, err := lc.send(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, jsonBody(mp))
 	if err != nil {

@@ -386,6 +386,14 @@ type LocalBackend struct {
 	// backend is healthy and captive portal detection is not required
 	// (sending false).
 	needsCaptiveDetection chan bool
+
+	// overrideAlwaysOn is whether [syspolicy.AlwaysOn] is overridden by the user
+	// and should have no impact on the WantRunning state until the policy changes,
+	// or the user re-connects manually, switches to a different profile, etc.
+	// Notably, this is true when [syspolicy.AlwaysOnOverrideWithReason] is enabled,
+	// and the user has disconnected with a reason.
+	// See tailscale/corp#26146.
+	overrideAlwaysOn bool
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -1564,7 +1572,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
 		}
 	}
-	if applySysPolicy(prefs, b.lastSuggestedExitNode) {
+	if applySysPolicy(prefs, b.lastSuggestedExitNode, b.overrideAlwaysOn) {
 		prefsChanged = true
 	}
 	if setExitNodeID(prefs, curNetMap) {
@@ -1733,7 +1741,7 @@ var preferencePolicies = []preferencePolicyInfo{
 
 // applySysPolicy overwrites configured preferences with policies that may be
 // configured by the system administrator in an OS-specific way.
-func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID) (anyChange bool) {
+func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID, overrideAlwaysOn bool) (anyChange bool) {
 	if controlURL, err := syspolicy.GetString(syspolicy.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
 		prefs.ControlURL = controlURL
 		anyChange = true
@@ -1795,7 +1803,7 @@ func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID
 		}
 	}
 
-	if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); alwaysOn && !prefs.WantRunning {
+	if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); alwaysOn && !overrideAlwaysOn && !prefs.WantRunning {
 		prefs.WantRunning = true
 		anyChange = true
 	}
@@ -1834,7 +1842,7 @@ func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
 func (b *LocalBackend) applySysPolicy() (_ ipn.PrefsView, anyChange bool) {
 	unlock := b.lockAndGetUnlock()
 	prefs := b.pm.CurrentPrefs().AsStruct()
-	if !applySysPolicy(prefs, b.lastSuggestedExitNode) {
+	if !applySysPolicy(prefs, b.lastSuggestedExitNode, b.overrideAlwaysOn) {
 		unlock.UnlockEarly()
 		return prefs.View(), false
 	}
@@ -1844,6 +1852,15 @@ func (b *LocalBackend) applySysPolicy() (_ ipn.PrefsView, anyChange bool) {
 // sysPolicyChanged is a callback triggered by syspolicy when it detects
 // a change in one or more syspolicy settings.
 func (b *LocalBackend) sysPolicyChanged(policy *rsop.PolicyChange) {
+	if policy.HasChanged(syspolicy.AlwaysOn) || policy.HasChanged(syspolicy.AlwaysOnOverrideWithReason) {
+		// If the AlwaysOn or the AlwaysOnOverrideWithReason policy has changed,
+		// we should reset the overrideAlwaysOn flag, as the override might
+		// no longer be valid.
+		b.mu.Lock()
+		b.overrideAlwaysOn = false
+		b.mu.Unlock()
+	}
+
 	if policy.HasChanged(syspolicy.AllowedSuggestedExitNodes) {
 		b.refreshAllowedSuggestions()
 		// Re-evaluate exit node suggestion now that the policy setting has changed.
@@ -4018,11 +4035,21 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 			return ipn.PrefsView{}, err
 		}
 
+		// If a user has enough rights to disconnect, such as when [syspolicy.AlwaysOn]
+		// is disabled, or [syspolicy.AlwaysOnOverrideWithReason] is also set and the user
+		// provides a reason for disconnecting, then we should not force the "always on"
+		// mode on them until the policy changes, they switch to a different profile, etc.
+		b.overrideAlwaysOn = true
+
 		// TODO(nickkhyl): check the ReconnectAfter policy here. If configured,
 		// start a timer to automatically reconnect after the specified duration.
 	}
 
 	return b.editPrefsLockedOnEntry(mp, unlock)
+}
+
+func (b *LocalBackend) resetAlwaysOnOverrideLocked() {
+	b.overrideAlwaysOn = false
 }
 
 // Warning: b.mu must be held on entry, but it unlocks it on the way out.
@@ -4113,7 +4140,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	// applySysPolicyToPrefsLocked returns whether it updated newp,
 	// but everything in this function treats b.prefs as completely new
 	// anyway, so its return value can be ignored here.
-	applySysPolicy(newp, b.lastSuggestedExitNode)
+	applySysPolicy(newp, b.lastSuggestedExitNode, b.overrideAlwaysOn)
 	// setExitNodeID does likewise. No-op if no exit node resolution is needed.
 	setExitNodeID(newp, netMap)
 	// We do this to avoid holding the lock while doing everything else.
@@ -4161,6 +4188,11 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	}
 	if err := b.pm.SetPrefs(prefs, np); err != nil {
 		b.logf("failed to save new controlclient state: %v", err)
+	} else if prefs.WantRunning() {
+		// Reset the always-on override if WantRunning is true in the new prefs,
+		// such as when the user toggles the Connected switch in the GUI
+		// or runs `tailscale up`.
+		b.resetAlwaysOnOverrideLocked()
 	}
 
 	if newp.AutoUpdate.Apply.EqualBool(true) {
@@ -5587,6 +5619,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.resetAuthURLLocked()
 	b.activeLogin = ""
 	b.resetDialPlan()
+	b.resetAlwaysOnOverrideLocked()
 	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
 	b.enterStateLockedOnEntry(ipn.Stopped, unlock)
 }
@@ -7125,6 +7158,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
+	b.resetAlwaysOnOverrideLocked()
 	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
 	b.health.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})
