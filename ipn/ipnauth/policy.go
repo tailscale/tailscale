@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/syspolicy"
 )
 
@@ -39,8 +40,7 @@ func CheckDisconnectPolicy(actor Actor, profile ipn.LoginProfileView, reason str
 		} else {
 			details = fmt.Sprintf("%q is being disconnected: %v", profile.Name(), reason)
 		}
-		// TODO(nickkhyl,barnstar): use a const for DISCONNECT_NODE.
-		auditLogger("DISCONNECT_NODE", details)
+		auditLogger(profile.ID(), tailcfg.AuditNodeDisconnect, details)
 	}
 	return nil
 }

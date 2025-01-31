@@ -12,6 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"crypto/rand"
+	"encoding/hex"
+
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
@@ -141,13 +144,16 @@ type Auto struct {
 	inMapPoll      bool        // true once we get the first MapResponse in a stream; false when HTTP response ends
 	state          State       // TODO(bradfitz): delete this, make it computed by method from other state
 
-	authCtx    context.Context // context used for auth requests
-	mapCtx     context.Context // context used for netmap and update requests
-	authCancel func()          // cancel authCtx
-	mapCancel  func()          // cancel mapCtx
-	authDone   chan struct{}   // when closed, authRoutine is done
-	mapDone    chan struct{}   // when closed, mapRoutine is done
-	updateDone chan struct{}   // when closed, updateRoutine is done
+	authCtx        context.Context // context used for auth requests
+	mapCtx         context.Context // context used for netmap and update requests
+	auditLogCtx    context.Context
+	authCancel     func()            // cancel authCtx
+	mapCancel      func()            // cancel mapCtx
+	auditLogCancel func()            // cancel auditLogCtx
+	authDone       chan struct{}     // when closed, authRoutine is done
+	mapDone        chan struct{}     // when closed, mapRoutine is done
+	updateDone     chan struct{}     // when closed, updateRoutine is done
+	auditLogger    queuedAuditLogger // queue to ensure delivery of audit logs
 }
 
 // New creates and starts a new Auto.
@@ -196,9 +202,19 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
 	c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
-	c.unregisterHealthWatch = opts.HealthTracker.RegisterWatcher(direct.ReportHealthChange)
-	return c, nil
+	c.auditLogCtx, c.auditLogCancel = context.WithCancel(context.Background())
 
+	c.unregisterHealthWatch = opts.HealthTracker.RegisterWatcher(direct.ReportHealthChange)
+
+	c.auditLogger = *newQueuedAuditLogger(queuedAuditLoggerOpts{
+		Ctx:        c.auditLogCtx,
+		RetryDelay: 10 * time.Second,
+		RetryCount: 5,
+		SendFunc:   direct.sendAuditLog,
+		Logf:       c.logf,
+	})
+
+	return c, nil
 }
 
 // SetPaused controls whether HTTP activity should be paused.
@@ -213,6 +229,8 @@ func (c *Auto) SetPaused(paused bool) {
 	c.logf("setPaused(%v)", paused)
 	c.paused = paused
 	if paused {
+		c.cancelAuditLogCtxLocked()
+		c.auditLogger.stopAndFlush()
 		c.cancelMapCtxLocked()
 		c.cancelAuthCtxLocked()
 		return
@@ -221,6 +239,7 @@ func (c *Auto) SetPaused(paused bool) {
 		ch <- true
 	}
 	c.unpauseWaiters = nil
+	c.auditLogger.start()
 }
 
 // Start starts the client's goroutines.
@@ -230,6 +249,7 @@ func (c *Auto) Start() {
 	go c.authRoutine()
 	go c.mapRoutine()
 	go c.updateRoutine()
+	c.auditLogger.start()
 }
 
 // updateControl sends a new OmitPeers, non-streaming map request (to just send
@@ -273,6 +293,15 @@ func (c *Auto) cancelMapCtxLocked() {
 	if !c.closed {
 		c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
 		c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, c.logf)
+	}
+}
+
+func (c *Auto) cancelAuditLogCtxLocked() {
+	if c.authCancel != nil {
+		c.auditLogCancel()
+	}
+	if !c.closed {
+		c.auditLogCtx, c.auditLogCancel = context.WithCancel(context.Background())
 	}
 }
 
@@ -698,6 +727,8 @@ func (c *Auto) Login(flags LoginFlags) {
 	c.loginGoal = &LoginGoal{
 		flags: flags,
 	}
+	c.cancelAuditLogCtxLocked()
+	c.auditLogger.stopAndFlush()
 	c.cancelMapCtxLocked()
 	c.cancelAuthCtxLocked()
 }
@@ -723,8 +754,11 @@ func (c *Auto) Logout(ctx context.Context) error {
 		return err
 	}
 	c.mu.Lock()
+
 	c.loggedIn = false
 	c.state = StateNotAuthenticated
+	c.cancelAuditLogCtxLocked()
+	c.auditLogger.stopAndFlush()
 	c.cancelAuthCtxLocked()
 	c.cancelMapCtxLocked()
 	c.mu.Unlock()
@@ -755,10 +789,11 @@ func (c *Auto) Shutdown() {
 		return
 	}
 	c.logf("client.Shutdown ...")
-
 	direct := c.direct
 	c.closed = true
 	c.observerQueue.Shutdown()
+	c.cancelAuditLogCtxLocked()
+	c.auditLogger.stopAndFlush()
 	c.cancelAuthCtxLocked()
 	c.cancelMapCtxLocked()
 	for _, w := range c.unpauseWaiters {
@@ -805,6 +840,39 @@ func (c *Auto) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
 
 func (c *Auto) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	return c.direct.DoNoiseRequest(req)
+}
+
+// EnqueueAuditLog queues an audit log to be sent to the control plane.
+// The log will be sent immediately and retried if possible based
+// on the parameters of the audit log queue.
+func (c *Auto) EnqueueAuditLog(profileId string, action tailcfg.ClientAuditAction, details string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.logf("EnqueueAuditLog: %s %s %s", profileId, action, details)
+
+	nodeKey, ok := c.direct.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return errors.New("no node key")
+	}
+
+	// Some suitably random event identifier
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return err
+	}
+	eventID := fmt.Sprintf("%d", time.Now().Unix()) + hex.EncodeToString(bytes)
+
+	auditLog := tailcfg.ClientAuditLog{
+		EventID:   eventID,
+		NodeKey:   nodeKey,
+		ProfileID: profileId,
+		Action:    action,
+		Details:   details,
+	}
+
+	c.auditLogger.enqueue(auditLog)
+	return nil
 }
 
 // GetSingleUseNoiseRoundTripper returns a RoundTripper that can be only be used

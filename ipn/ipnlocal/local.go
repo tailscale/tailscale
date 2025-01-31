@@ -4033,6 +4033,14 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	return err
 }
 
+// QueueAuditLogLocked enqueues an audit log entry for the specified action and details.
+// b.mu must be held.
+func (b *LocalBackend) EnqueueAuditLogLocked(id ipn.ProfileID, action tailcfg.ClientAuditAction, details string) {
+	if b.netMap.HasCap(tailcfg.NodeAttrAuditLogs) {
+		b.ccAuto.EnqueueAuditLog(string(id), action, details)
+	}
+}
+
 // EditPrefs applies the changes in mp to the current prefs,
 // acting as the tailscaled itself rather than a specific user.
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
@@ -4058,9 +4066,7 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		// TODO(barnstar,nickkhyl): replace loggerFn with the actual audit logger.
-		loggerFn := func(action, details string) { b.logf("[audit]: %s: %s", action, details) }
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, loggerFn); err != nil {
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.EnqueueAuditLogLocked); err != nil {
 			return ipn.PrefsView{}, err
 		}
 
