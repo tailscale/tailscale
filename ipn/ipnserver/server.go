@@ -7,6 +7,7 @@ package ipnserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
@@ -198,10 +200,18 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if actor, ok := ci.(*actor); ok {
 			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
 			lah.PermitCert = actor.CanFetchCerts()
+			reason, err := base64.StdEncoding.DecodeString(r.Header.Get(apitype.RequestReasonHeader))
+			if err != nil {
+				http.Error(w, "invalid reason header", http.StatusBadRequest)
+				return
+			}
+			lah.Actor = actorWithAccessOverride(actor, string(reason))
 		} else if testenv.InTest() {
 			lah.PermitRead, lah.PermitWrite = true, true
 		}
-		lah.Actor = ci
+		if lah.Actor == nil {
+			lah.Actor = ci
+		}
 		lah.ServeHTTP(w, r)
 		return
 	}
