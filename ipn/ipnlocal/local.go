@@ -4181,7 +4181,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 		b.MagicConn().SetDERPMap(netMap.DERPMap)
 	}
 
-	if !oldp.WantRunning() && newp.WantRunning {
+	if !oldp.WantRunning() && newp.WantRunning && cc != nil {
 		b.logf("transitioning to running; doing Login...")
 		cc.Login(controlclient.LoginDefault)
 	}
