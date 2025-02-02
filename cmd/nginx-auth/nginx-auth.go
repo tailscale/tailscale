@@ -18,9 +18,9 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 
-	"golang.org/x/exp/slices"
 	"github.com/coreos/go-systemd/activation"
 	"tailscale.com/client/tailscale"
 )
@@ -63,37 +63,21 @@ func main() {
 			return
 		}
 
-		// tailnet of connected node. When accessing shared nodes, this
-		// will be empty because the tailnet of the sharee is not exposed.
-		var tailnet string
-
-		if !info.Node.Hostinfo.ShareeNode() {
-			var ok bool
-			_, tailnet, ok = strings.Cut(info.Node.Name, info.Node.ComputedName+".")
-			if !ok {
-				w.WriteHeader(http.StatusUnauthorized)
-				log.Printf("can't extract tailnet name from hostname %q", info.Node.Name)
-				return
-			}
-			tailnet = strings.TrimSuffix(tailnet, ".beta.tailscale.net")
-		}
-
-		if expectedTailnet := r.Header.Get("Expected-Tailnet"); expectedTailnet != "" && expectedTailnet != tailnet {
-			w.WriteHeader(http.StatusForbidden)
-			log.Printf("user is part of tailnet %s, wanted: %s", tailnet, url.QueryEscape(expectedTailnet))
-			return
-		}
-
 		if expectedCap := r.Header.Get("Expected-Cap"); expectedCap != "" {
-			if info.Caps == nil {
+			if info.CapMap == nil {
 				w.WriteHeader(http.StatusForbidden)
-				log.Printf("user does not have any caps, wanted: %s", url.QueryEscape(expectedCap))
+				log.Printf("user %s does not have any caps, wanted: %s", info.Node.Name, url.QueryEscape(expectedCap))
 				return
 			}
 
-			if !slices.Contains(info.Caps, expectedCap) {
+			caps := make([]string, 0, len(info.CapMap))
+			for k := range info.CapMap {
+				caps = append(caps, string(k))
+			}
+
+			if !slices.Contains(caps, expectedCap) {
 				w.WriteHeader(http.StatusForbidden)
-				log.Printf("user is missing expected cap, has: %s, wanted: %s", strings.Join(info.Caps[:], ","), url.QueryEscape(expectedCap))
+				log.Printf("user is missing expected cap, has: %s, wanted: %s", strings.Join(caps[:], ","), url.QueryEscape(expectedCap))
 				return
 			}
 		}
@@ -103,7 +87,6 @@ func main() {
 		h.Set("Tailscale-User", info.UserProfile.LoginName)
 		h.Set("Tailscale-Name", info.UserProfile.DisplayName)
 		h.Set("Tailscale-Profile-Picture", info.UserProfile.ProfilePicURL)
-		h.Set("Tailscale-Tailnet", tailnet)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
