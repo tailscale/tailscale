@@ -157,10 +157,8 @@ func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, pro
 
 		// NetMap contains app-connector configuration
 		if nm := msg.NetMap; nm != nil && nm.SelfNode.Valid() {
-			sn := nm.SelfNode.AsStruct()
-
 			var c appctype.AppConnectorConfig
-			nmConf, err := tailcfg.UnmarshalNodeCapJSON[appctype.AppConnectorConfig](sn.CapMap, configCapKey)
+			nmConf, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorConfig](nm.SelfNode.CapMap(), configCapKey)
 			if err != nil {
 				log.Printf("failed to read app connector configuration from coordination server: %v", err)
 			} else if len(nmConf) > 0 {

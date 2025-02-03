@@ -4463,10 +4463,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		return
 	}
 
-	// TODO(raggi): rework the view infrastructure so the large deep clone is no
-	// longer required
-	sn := nm.SelfNode.AsStruct()
-	attrs, err := tailcfg.UnmarshalNodeCapJSON[appctype.AppConnectorAttr](sn.CapMap, appConnectorCapName)
+	attrs, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](nm.SelfNode.CapMap(), appConnectorCapName)
 	if err != nil {
 		b.logf("[unexpected] error parsing app connector mapcap: %v", err)
 		return

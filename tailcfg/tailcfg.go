@@ -25,6 +25,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/vizerror"
@@ -1547,12 +1548,19 @@ func (c NodeCapMap) Equal(c2 NodeCapMap) bool {
 // If cap does not exist in cm, it returns (nil, nil).
 // It returns an error if the values cannot be unmarshaled into the provided type.
 func UnmarshalNodeCapJSON[T any](cm NodeCapMap, cap NodeCapability) ([]T, error) {
-	vals, ok := cm[cap]
+	return UnmarshalNodeCapViewJSON[T](views.MapSliceOf(cm), cap)
+}
+
+// UnmarshalNodeCapViewJSON unmarshals each JSON value in cm.Get(cap) as T.
+// If cap does not exist in cm, it returns (nil, nil).
+// It returns an error if the values cannot be unmarshaled into the provided type.
+func UnmarshalNodeCapViewJSON[T any](cm views.MapSlice[NodeCapability, RawMessage], cap NodeCapability) ([]T, error) {
+	vals, ok := cm.GetOk(cap)
 	if !ok {
 		return nil, nil
 	}
-	out := make([]T, 0, len(vals))
-	for _, v := range vals {
+	out := make([]T, 0, vals.Len())
+	for _, v := range vals.All() {
 		var t T
 		if err := json.Unmarshal([]byte(v), &t); err != nil {
 			return nil, err
@@ -1582,12 +1590,19 @@ type PeerCapMap map[PeerCapability][]RawMessage
 // If cap does not exist in cm, it returns (nil, nil).
 // It returns an error if the values cannot be unmarshaled into the provided type.
 func UnmarshalCapJSON[T any](cm PeerCapMap, cap PeerCapability) ([]T, error) {
-	vals, ok := cm[cap]
+	return UnmarshalCapViewJSON[T](views.MapSliceOf(cm), cap)
+}
+
+// UnmarshalCapViewJSON unmarshals each JSON value in cm.Get(cap) as T.
+// If cap does not exist in cm, it returns (nil, nil).
+// It returns an error if the values cannot be unmarshaled into the provided type.
+func UnmarshalCapViewJSON[T any](cm views.MapSlice[PeerCapability, RawMessage], cap PeerCapability) ([]T, error) {
+	vals, ok := cm.GetOk(cap)
 	if !ok {
 		return nil, nil
 	}
-	out := make([]T, 0, len(vals))
-	for _, v := range vals {
+	out := make([]T, 0, vals.Len())
+	for _, v := range vals.All() {
 		var t T
 		if err := json.Unmarshal([]byte(v), &t); err != nil {
 			return nil, err
