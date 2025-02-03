@@ -1089,6 +1089,10 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 
 func shellArgs(isShell bool, cmd string) []string {
 	if isShell {
+		if runtime.GOOS == "freebsd" {
+			// freebsd's shells don't support the "-l" option, so we can't run as a login shell
+			return []string{}
+		}
 		return []string{"-l"}
 	} else {
 		return []string{"-c", cmd}
