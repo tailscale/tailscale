@@ -35,11 +35,11 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 	}
 	log.Printf("Starting tailscaled")
 	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("starting tailscaled failed: %v", err)
+		return nil, nil, fmt.Errorf("starting tailscaled failed: %w", err)
 	}
 
 	// Wait for the socket file to appear, otherwise API ops will racily fail.
-	log.Printf("Waiting for tailscaled socket")
+	log.Printf("Waiting for tailscaled socket at %s", cfg.Socket)
 	for {
 		if ctx.Err() != nil {
 			return nil, nil, errors.New("timed out waiting for tailscaled socket")
