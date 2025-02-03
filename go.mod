@@ -49,7 +49,7 @@ require (
 	github.com/goreleaser/nfpm/v2 v2.33.1
 	github.com/hdevalence/ed25519consensus v0.2.0
 	github.com/illarion/gonotify/v2 v2.0.3
-	github.com/inetaf/tcpproxy v0.0.0-20250121183218-48c7e53d7ac4
+	github.com/inetaf/tcpproxy v0.0.0-20250203165043-ded522cbd03f
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2
 	github.com/jellydator/ttlcache/v3 v3.1.0
 	github.com/jsimonetti/rtnetlink v1.4.0
