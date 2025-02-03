@@ -331,6 +331,33 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not create ingress reconciler: %v", err)
 	}
+	lc, err := opts.tsServer.LocalClient()
+	if err != nil {
+		startlog.Fatalf("could not get local client: %v", err)
+	}
+	ingressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(ingressesFromIngressProxyGroup(mgr.GetClient(), opts.log))
+	err = builder.
+		ControllerManagedBy(mgr).
+		For(&networkingv1.Ingress{}).
+		Named("ingress-pg-reconciler").
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
+		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
+		Complete(&IngressPGReconciler{
+			recorder:    eventRecorder,
+			tsClient:    opts.tsClient,
+			tsnetServer: opts.tsServer,
+			defaultTags: strings.Split(opts.proxyTags, ","),
+			Client:      mgr.GetClient(),
+			logger:      opts.log.Named("ingress-pg-reconciler"),
+			lc:          lc,
+			tsNamespace: opts.tailscaleNamespace,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create ingress-pg-reconciler: %v", err)
+	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(networkingv1.Ingress), indexIngressProxyGroup, indexPGIngresses); err != nil {
+		startlog.Fatalf("failed setting up indexer for HA Ingresses: %v", err)
+	}
 
 	connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("connector"))
 	// If a ProxyClassChanges, enqueue all Connectors that have
@@ -1036,6 +1063,36 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 	}
 }
 
+// ingressesFromIngressProxyGroup is an event handler for ingress ProxyGroups. It returns reconcile requests for all
+// user-created Ingresses that should be exposed on this ProxyGroup.
+func ingressesFromIngressProxyGroup(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		pg, ok := o.(*tsapi.ProxyGroup)
+		if !ok {
+			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
+			return nil
+		}
+		if pg.Spec.Type != tsapi.ProxyGroupTypeIngress {
+			return nil
+		}
+		ingList := &networkingv1.IngressList{}
+		if err := cl.List(ctx, ingList, client.MatchingFields{indexIngressProxyGroup: pg.Name}); err != nil {
+			logger.Infof("error listing Ingresses: %v, skipping a reconcile for event on ProxyGroup %s", err, pg.Name)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, svc := range ingList.Items {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: svc.Namespace,
+					Name:      svc.Name,
+				},
+			})
+		}
+		return reqs
+	}
+}
+
 // epsFromExternalNameService is an event handler for ExternalName Services that define a Tailscale egress service that
 // should be exposed on a ProxyGroup. It returns reconcile requests for EndpointSlices created for this Service.
 func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns string) handler.MapFunc {
@@ -1154,6 +1211,51 @@ func indexEgressServices(o client.Object) []string {
 		return nil
 	}
 	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
+}
+
+// indexPGIngresses adds a local index to a cached Tailscale Ingresses meant to be exposed on a ProxyGroup. The index is
+// used a list filter.
+func indexPGIngresses(o client.Object) []string {
+	if !hasProxyGroupAnnotation(o) {
+		return nil
+	}
+	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
+}
+
+// serviceHandlerForIngressPG returns a handler for Service events that ensures that if the Service
+// associated with an event is a backend Service for a tailscale Ingress with ProxyGroup annotation,
+// the associated Ingress gets reconciled.
+func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		ingList := networkingv1.IngressList{}
+		if err := cl.List(ctx, &ingList, client.InNamespace(o.GetNamespace())); err != nil {
+			logger.Debugf("error listing Ingresses: %v", err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, ing := range ingList.Items {
+			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != tailscaleIngressClassName {
+				continue
+			}
+			if !hasProxyGroupAnnotation(&ing) {
+				continue
+			}
+			if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil && ing.Spec.DefaultBackend.Service.Name == o.GetName() {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
+			}
+			for _, rule := range ing.Spec.Rules {
+				if rule.HTTP == nil {
+					continue
+				}
+				for _, path := range rule.HTTP.Paths {
+					if path.Backend.Service != nil && path.Backend.Service.Name == o.GetName() {
+						reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
+					}
+				}
+			}
+		}
+		return reqs
+	}
 }
 
 func hasProxyGroupAnnotation(obj client.Object) bool {
