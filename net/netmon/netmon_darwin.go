@@ -56,7 +56,19 @@ func (m *darwinRouteMon) Receive() (message, error) {
 		if err != nil {
 			return nil, err
 		}
-		msgs, err := route.ParseRIB(route.RIBTypeRoute, m.buf[:n])
+		msgs, err := func() (msgs []route.Message, err error) {
+			defer func() {
+				// #14201: permanent panic protection, as we have been burned by
+				// ParseRIB panics too many times.
+				msg := recover()
+				if msg != nil {
+					msgs = nil
+					m.logf("[unexpected] netmon: panic in route.ParseRIB from % 02x", m.buf[:n])
+					err = fmt.Errorf("panic in route.ParseRIB: %s", msg)
+				}
+			}()
+			return route.ParseRIB(route.RIBTypeRoute, m.buf[:n])
+		}()
 		if err != nil {
 			if debugRouteMessages {
 				m.logf("read %d bytes (% 02x), failed to parse RIB: %v", n, m.buf[:n], err)
