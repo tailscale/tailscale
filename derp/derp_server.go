@@ -1827,6 +1827,14 @@ func (c *sclient) setWriteDeadline() {
 		// of connected peers.
 		d = privilegedWriteTimeout
 	}
+	if d == 0 {
+		// A zero value should disable the write deadline per
+		// --tcp-write-timeout docs. The flag should only be applicable for
+		// non-mesh connections, again per its docs. If mesh happened to use a
+		// zero value constant above it would be a bug, so we don't bother
+		// with a condition on c.canMesh.
+		return
+	}
 	// Ignore the error from setting the write deadline. In practice,
 	// setting the deadline will only fail if the connection is closed
 	// or closing, so the subsequent Write() will fail anyway.
