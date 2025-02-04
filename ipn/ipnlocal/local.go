@@ -4058,7 +4058,9 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect); err != nil {
+		// TODO(barnstar,nickkhyl): replace loggerFn with the actual audit logger.
+		loggerFn := func(action, details string) { b.logf("[audit]: %s: %s", action, details) }
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, loggerFn); err != nil {
 			return ipn.PrefsView{}, err
 		}
 
