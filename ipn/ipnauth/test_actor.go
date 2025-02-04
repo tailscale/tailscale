@@ -31,7 +31,7 @@ func (a *TestActor) Username() (string, error) { return a.Name, a.NameErr }
 func (a *TestActor) ClientID() (_ ClientID, ok bool) { return a.CID, a.CID != NoClientID }
 
 // CheckProfileAccess implements [Actor].
-func (a *TestActor) CheckProfileAccess(profile ipn.LoginProfileView, _ ProfileAccess) error {
+func (a *TestActor) CheckProfileAccess(profile ipn.LoginProfileView, _ ProfileAccess, _ AuditLogFunc) error {
 	return errors.New("profile access denied")
 }
 

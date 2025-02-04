@@ -17,7 +17,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/osuser"
-	"tailscale.com/util/syspolicy"
 	"tailscale.com/version"
 )
 
@@ -80,7 +79,7 @@ func actorWithAccessOverride(baseActor *actor, reason string) *actor {
 }
 
 // CheckProfileAccess implements [ipnauth.Actor].
-func (a *actor) CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ipnauth.ProfileAccess) error {
+func (a *actor) CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ipnauth.ProfileAccess, auditLogger ipnauth.AuditLogFunc) error {
 	// TODO(nickkhyl): return errors of more specific types and have them
 	// translated to the appropriate HTTP status codes in the API handler.
 	if profile.LocalUserID() != a.UserID() {
@@ -88,18 +87,8 @@ func (a *actor) CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess
 	}
 	switch requestedAccess {
 	case ipnauth.Disconnect:
-		if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); alwaysOn {
-			if allowWithReason, _ := syspolicy.GetBoolean(syspolicy.AlwaysOnOverrideWithReason, false); !allowWithReason {
-				return errors.New("disconnect not allowed: always-on mode is enabled")
-			}
-			if a.accessOverrideReason == "" {
-				return errors.New("disconnect not allowed: reason required")
-			}
-			maybeUsername, _ := a.Username() // best-effort
-			a.logf("Tailscale (%q) is being disconnected by %q: %v", profile.Name(), maybeUsername, a.accessOverrideReason)
-			// TODO(nickkhyl): Log the reason to the audit log once we have one.
-		}
-		return nil // disconnect is allowed
+		// Disconnect is allowed if a user owns the profile and the policy permits it.
+		return ipnauth.CheckDisconnectPolicy(a, profile, a.accessOverrideReason, auditLogger)
 	default:
 		return errors.New("the requested operation is not allowed")
 	}

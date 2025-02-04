@@ -28,7 +28,7 @@ func (u unrestricted) Username() (string, error) { return "", nil }
 func (u unrestricted) ClientID() (_ ClientID, ok bool) { return NoClientID, false }
 
 // CheckProfileAccess implements [Actor].
-func (u unrestricted) CheckProfileAccess(_ ipn.LoginProfileView, _ ProfileAccess) error {
+func (u unrestricted) CheckProfileAccess(_ ipn.LoginProfileView, _ ProfileAccess, _ AuditLogFunc) error {
 	// Unrestricted access to all profiles.
 	return nil
 }
