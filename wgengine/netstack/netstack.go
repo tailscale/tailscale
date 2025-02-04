@@ -317,16 +317,14 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not enable TCP SACK: %v", tcpipErr)
 	}
-	if runtime.GOOS == "windows" {
-		// See https://github.com/tailscale/tailscale/issues/9707
-		// Windows w/RACK performs poorly. ACKs do not appear to be handled in a
-		// timely manner, leading to spurious retransmissions and a reduced
-		// congestion window.
-		tcpRecoveryOpt := tcpip.TCPRecovery(0)
-		tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRecoveryOpt)
-		if tcpipErr != nil {
-			return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
-		}
+	// See https://github.com/tailscale/tailscale/issues/9707
+	// gVisor's RACK performs poorly. ACKs do not appear to be handled in a
+	// timely manner, leading to spurious retransmissions and a reduced
+	// congestion window.
+	tcpRecoveryOpt := tcpip.TCPRecovery(0)
+	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRecoveryOpt)
+	if tcpipErr != nil {
+		return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
 	}
 	err := setTCPBufSizes(ipstack)
 	if err != nil {
