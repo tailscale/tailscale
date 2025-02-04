@@ -103,7 +103,7 @@ spec:
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                 type:
                   description: |-
-                    Type of the ProxyGroup proxies. Currently the only supported type is egress.
+                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
                     Type is immutable once a ProxyGroup is created.
                   type: string
                   enum:

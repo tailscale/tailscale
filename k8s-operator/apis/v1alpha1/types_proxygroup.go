@@ -48,7 +48,7 @@ type ProxyGroupList struct {
 }
 
 type ProxyGroupSpec struct {
-	// Type of the ProxyGroup proxies. Currently the only supported type is egress.
+	// Type of the ProxyGroup proxies. Supported types are egress and ingress.
 	// Type is immutable once a ProxyGroup is created.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ProxyGroup type is immutable"
 	Type ProxyGroupType `json:"type"`

@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
 )
 
@@ -56,9 +57,9 @@ type tsClient interface {
 	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
 	Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error)
 	DeleteDevice(ctx context.Context, nodeStableID string) error
-	getVIPServiceByName(ctx context.Context, name string) (*VIPService, error)
-	createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPService) error
-	deleteVIPServiceByName(ctx context.Context, name string) error
+	getVIPService(ctx context.Context, name tailcfg.ServiceName) (*VIPService, error)
+	createOrUpdateVIPService(ctx context.Context, svc *VIPService) error
+	deleteVIPService(ctx context.Context, name tailcfg.ServiceName) error
 }
 
 type tsClientImpl struct {
@@ -69,9 +70,8 @@ type tsClientImpl struct {
 
 // VIPService is a Tailscale VIPService with Tailscale API JSON representation.
 type VIPService struct {
-	// Name is the leftmost label of the DNS name of the VIP service.
-	// Name is required.
-	Name string `json:"name,omitempty"`
+	// Name is a VIPService name in form svc:<leftmost-label-of-service-DNS-name>.
+	Name tailcfg.ServiceName `json:"name,omitempty"`
 	// Addrs are the IP addresses of the VIP Service. There are two addresses:
 	// the first is IPv4 and the second is IPv6.
 	// When creating a new VIP Service, the IP addresses are optional: if no
@@ -89,8 +89,8 @@ type VIPService struct {
 }
 
 // GetVIPServiceByName retrieves a VIPService by its name. It returns 404 if the VIPService is not found.
-func (c *tsClientImpl) getVIPServiceByName(ctx context.Context, name string) (*VIPService, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/vip-services/by-name/%s", c.baseURL, c.tailnet, url.PathEscape(name))
+func (c *tsClientImpl) getVIPService(ctx context.Context, name tailcfg.ServiceName) (*VIPService, error) {
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/vip-services/%s", c.baseURL, c.tailnet, url.PathEscape(name.String()))
 	req, err := http.NewRequestWithContext(ctx, httpm.GET, path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating new HTTP request: %w", err)
@@ -111,16 +111,16 @@ func (c *tsClientImpl) getVIPServiceByName(ctx context.Context, name string) (*V
 	return svc, nil
 }
 
-// CreateOrUpdateVIPServiceByName creates or updates a VIPService by its name. Caller must ensure that, if the
+// createOrUpdateVIPService creates or updates a VIPService by its name. Caller must ensure that, if the
 // VIPService already exists, the VIPService is fetched first to ensure that any auto-allocated IP addresses are not
 // lost during the update. If the VIPService was created without any IP addresses explicitly set (so that they were
 // auto-allocated by Tailscale) any subsequent request to this function that does not set any IP addresses will error.
-func (c *tsClientImpl) createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPService) error {
+func (c *tsClientImpl) createOrUpdateVIPService(ctx context.Context, svc *VIPService) error {
 	data, err := json.Marshal(svc)
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/vip-services/by-name/%s", c.baseURL, c.tailnet, url.PathEscape(svc.Name))
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/vip-services/%s", c.baseURL, c.tailnet, url.PathEscape(svc.Name.String()))
 	req, err := http.NewRequestWithContext(ctx, httpm.PUT, path, bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("error creating new HTTP request: %w", err)
@@ -139,8 +139,8 @@ func (c *tsClientImpl) createOrUpdateVIPServiceByName(ctx context.Context, svc *
 
 // DeleteVIPServiceByName deletes a VIPService by its name. It returns an error if the VIPService
 // does not exist or if the deletion fails.
-func (c *tsClientImpl) deleteVIPServiceByName(ctx context.Context, name string) error {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/vip-services/by-name/%s", c.baseURL, c.tailnet, url.PathEscape(name))
+func (c *tsClientImpl) deleteVIPService(ctx context.Context, name tailcfg.ServiceName) error {
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/vip-services/%s", c.baseURL, c.tailnet, url.PathEscape(name.String()))
 	req, err := http.NewRequestWithContext(ctx, httpm.DELETE, path, nil)
 	if err != nil {
 		return fmt.Errorf("error creating new HTTP request: %w", err)
