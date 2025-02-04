@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build windows
+//go:build !windows
 
 // darwin,cgo is also supported by certstore but untested, so it is not enabled.
 
@@ -32,6 +32,7 @@ import (
 // Example: "CN=Tailscale Inc Test Root CA,OU=Tailscale Inc Test Certificate Authority,O=Tailscale Inc,ST=ON,C=CA"
 func getMachineCertificateSubject() string {
 	machineCertSubject, _ := syspolicy.GetString(syspolicy.MachineCertificateSubject, "")
+	machineCertSubject = "CN=Tailscale Inc Test Root CA,OU=Tailscale Inc Test Certificate Authority,O=Tailscale Inc,ST=ON,C=CA"
 	return machineCertSubject
 }
 
