@@ -196,21 +196,21 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer onDone()
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
-		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
 		if actor, ok := ci.(*actor); ok {
-			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
-			lah.PermitCert = actor.CanFetchCerts()
 			reason, err := base64.StdEncoding.DecodeString(r.Header.Get(apitype.RequestReasonHeader))
 			if err != nil {
 				http.Error(w, "invalid reason header", http.StatusBadRequest)
 				return
 			}
-			lah.Actor = actorWithAccessOverride(actor, string(reason))
+			ci = actorWithAccessOverride(actor, string(reason))
+		}
+
+		lah := localapi.NewHandler(ci, lb, s.logf, s.backendLogID)
+		if actor, ok := ci.(*actor); ok {
+			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
+			lah.PermitCert = actor.CanFetchCerts()
 		} else if testenv.InTest() {
 			lah.PermitRead, lah.PermitWrite = true, true
-		}
-		if lah.Actor == nil {
-			lah.Actor = ci
 		}
 		lah.ServeHTTP(w, r)
 		return

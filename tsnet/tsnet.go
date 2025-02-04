@@ -33,6 +33,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/localapi"
@@ -272,7 +273,7 @@ func (s *Server) Loopback() (addr string, proxyCred, localAPICred string, err er
 		// out the CONNECT code from tailscaled/proxy.go that uses
 		// httputil.ReverseProxy and adding auth support.
 		go func() {
-			lah := localapi.NewHandler(s.lb, s.logf, s.logid)
+			lah := localapi.NewHandler(ipnauth.Self, s.lb, s.logf, s.logid)
 			lah.PermitWrite = true
 			lah.PermitRead = true
 			lah.RequiredPassword = s.localAPICred
@@ -667,7 +668,7 @@ func (s *Server) start() (reterr error) {
 	go s.printAuthURLLoop()
 
 	// Run the localapi handler, to allow fetching LetsEncrypt certs.
-	lah := localapi.NewHandler(lb, tsLogf, s.logid)
+	lah := localapi.NewHandler(ipnauth.Self, lb, tsLogf, s.logid)
 	lah.PermitWrite = true
 	lah.PermitRead = true
 
