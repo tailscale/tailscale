@@ -30,8 +30,8 @@ import (
 	"time"
 
 	"tailscale.com/atomicfile"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"

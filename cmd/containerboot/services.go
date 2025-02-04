@@ -21,11 +21,11 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"

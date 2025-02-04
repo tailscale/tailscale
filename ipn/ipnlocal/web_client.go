@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/client/tailscale"
 	"tailscale.com/client/web"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"

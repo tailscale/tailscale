@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/client/tailscale"
+	remoteclient "tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	_ "tailscale.com/feature/condregister"
@@ -38,6 +38,7 @@ import (
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
@@ -928,7 +929,7 @@ func getTSNetDir(logf logger.Logf, confDir, prog string) (string, error) {
 // APIClient returns a tailscale.Client that can be used to make authenticated
 // requests to the Tailscale control server.
 // It requires the user to set tailscale.I_Acknowledge_This_API_Is_Unstable.
-func (s *Server) APIClient() (*tailscale.Client, error) {
+func (s *Server) APIClient() (*remoteclient.Client, error) {
 	if !tailscale.I_Acknowledge_This_API_Is_Unstable {
 		return nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
 	}
@@ -936,7 +937,7 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 		return nil, err
 	}
 
-	c := tailscale.NewClient("-", nil)
+	c := remoteclient.NewClient("-", nil)
 	c.UserAgent = "tailscale-tsnet"
 	c.HTTPClient = &http.Client{Transport: s.lb.KeyProvingNoiseRoundTripper()}
 	return c, nil

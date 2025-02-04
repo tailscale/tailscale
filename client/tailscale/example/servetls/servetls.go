@@ -11,7 +11,7 @@ import (
 	"log"
 	"net/http"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/localclient/tailscale"
 )
 
 func main() {

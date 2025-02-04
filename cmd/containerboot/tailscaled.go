@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/localclient/tailscale"
 )
 
 func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient, *os.Process, error) {

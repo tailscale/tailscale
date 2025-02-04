@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/tailcfg"
 )
 

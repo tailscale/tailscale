@@ -39,12 +39,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"tailscale.com/client/tailscale"
+	remoteclient "tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -189,9 +190,9 @@ waitOnline:
 			if loginDone {
 				break
 			}
-			caps := tailscale.KeyCapabilities{
-				Devices: tailscale.KeyDeviceCapabilities{
-					Create: tailscale.KeyDeviceCreateCapabilities{
+			caps := remoteclient.KeyCapabilities{
+				Devices: remoteclient.KeyDeviceCapabilities{
+					Create: remoteclient.KeyDeviceCreateCapabilities{
 						Reusable:      false,
 						Preauthorized: true,
 						Tags:          strings.Split(operatorTags, ","),

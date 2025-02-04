@@ -23,9 +23,9 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"

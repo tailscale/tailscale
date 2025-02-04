@@ -3,6 +3,10 @@
 
 //go:build go1.22
 
+// Package tailscale contains a Go client for the Tailscale LocalAPI.
+//
+// Warning: this package is in development and makes no API compatibility
+// promises as of 2022-04-29. It is subject to change at any time.
 package tailscale
 
 import (
@@ -28,11 +32,11 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/localclient/tailscale/apitype"
 	"tailscale.com/net/netutil"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -43,6 +47,13 @@ import (
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/syspolicy/setting"
 )
+
+// I_Acknowledge_This_API_Is_Unstable must be set true to use this package
+// for now. It was added 2022-04-29 when it was moved to this git repo
+// and will be removed when the public API has settled.
+//
+// TODO(bradfitz): remove this after the we're happy with the public API.
+var I_Acknowledge_This_API_Is_Unstable = false
 
 // defaultLocalClient is the default LocalClient when using the legacy
 // package-level functions.

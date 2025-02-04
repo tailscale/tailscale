@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/k8s-operator/sessionrecording/fakes"
+	"tailscale.com/localclient/tailscale/apitype"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"

@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/client/tailscale"
-	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/localclient/tailscale"
+	"tailscale.com/localclient/tailscale/apitype"
 )
 
 var (

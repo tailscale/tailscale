@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
@@ -41,6 +40,7 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/localclient/tailscale/apitype"
 	"tailscale.com/logtail"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"

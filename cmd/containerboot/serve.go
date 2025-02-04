@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/types/netmap"
 )
 

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/localclient/tailscale/apitype"
 	"tailscale.com/tailcfg"
 )
 

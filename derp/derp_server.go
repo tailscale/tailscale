@@ -36,9 +36,9 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/metrics"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"

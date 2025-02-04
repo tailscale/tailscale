@@ -21,7 +21,7 @@ import (
 	"strings"
 
 	"github.com/coreos/go-systemd/activation"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/localclient/tailscale"
 )
 
 var (

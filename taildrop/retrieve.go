@@ -14,7 +14,7 @@ import (
 	"sort"
 	"time"
 
-	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/localclient/tailscale/apitype"
 	"tailscale.com/logtail/backoff"
 )
 

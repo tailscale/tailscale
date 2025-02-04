@@ -22,8 +22,8 @@ import (
 	"log"
 	"time"
 
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 )

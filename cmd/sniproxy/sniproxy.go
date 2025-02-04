@@ -22,9 +22,9 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/localclient/tailscale"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tsweb"

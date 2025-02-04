@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
-	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/localclient/tailscale/apitype"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/must"
 )

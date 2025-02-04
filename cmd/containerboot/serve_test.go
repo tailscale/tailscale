@@ -12,9 +12,9 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/localclient/tailscale"
 )
 
 func TestUpdateServeConfig(t *testing.T) {

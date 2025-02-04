@@ -3,11 +3,10 @@
 
 //go:build go1.19
 
-// Package tailscale contains Go clients for the Tailscale LocalAPI and
-// Tailscale control plane API.
+// Package tailscale contains a Go client for the Tailscale control plane API.
 //
-// Warning: this package is in development and makes no API compatibility
-// promises as of 2022-04-29. It is subject to change at any time.
+// Deprecated: This package is no longer maintained. Use
+// tailscale.com/client/tailscale/v2 instead.
 package tailscale
 
 import (
@@ -36,6 +35,8 @@ const maxReadSize = 10 << 20
 //
 // Use NewClient to instantiate one. Exported fields should be set before
 // the client is used and not changed thereafter.
+//
+// Deprecated: use tailscale.com/client/tailscale/v2 instead.
 type Client struct {
 	// tailnet is the globally unique identifier for a Tailscale network, such
 	// as "example.com" or "user@gmail.com".

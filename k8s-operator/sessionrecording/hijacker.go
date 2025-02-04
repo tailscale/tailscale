@@ -21,10 +21,10 @@ import (
 
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
-	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/k8s-operator/sessionrecording/spdy"
 	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
 	"tailscale.com/k8s-operator/sessionrecording/ws"
+	"tailscale.com/localclient/tailscale/apitype"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"

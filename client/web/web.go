@@ -22,8 +22,6 @@ import (
 	"time"
 
 	"github.com/gorilla/csrf"
-	"tailscale.com/client/tailscale"
-	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/envknob/featureknob"
@@ -31,6 +29,8 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/licenses"
+	"tailscale.com/localclient/tailscale"
+	"tailscale.com/localclient/tailscale/apitype"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
