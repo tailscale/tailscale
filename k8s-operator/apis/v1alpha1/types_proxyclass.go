@@ -76,6 +76,13 @@ type TailscaleConfig struct {
 	// https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices
 	// Defaults to false.
 	AcceptRoutes bool `json:"acceptRoutes,omitempty"`
+	// Endpoints allows configuring the Tailscale endpoints that the proxy can can be reached on.
+	Endpoints *Endpoints `json:"endpoints,omitempty"`
+}
+
+type Endpoints struct {
+	// StaticEndpoints can be set to a list IP:Port that the proxy can be reached on.
+	StaticEndpoints []string `json:"staticEndpoints,omitempty"`
 }
 
 type StatefulSet struct {

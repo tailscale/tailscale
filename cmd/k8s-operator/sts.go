@@ -12,7 +12,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"slices"
 	"strconv"
@@ -937,6 +939,19 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 		Hostname:            &stsC.Hostname,
 		NoStatefulFiltering: "true", // Explicitly enforce default value, see #14216
 		AppConnector:        &ipn.AppConnectorPrefs{Advertise: false},
+	}
+
+	if stsC.ProxyClass != nil && stsC.ProxyClass.Spec.TailscaleConfig != nil && stsC.ProxyClass.Spec.TailscaleConfig.Endpoints != nil {
+		eps := make([]netip.AddrPort, 0, len(stsC.ProxyClass.Spec.TailscaleConfig.Endpoints.StaticEndpoints))
+		for _, ep := range stsC.ProxyClass.Spec.TailscaleConfig.Endpoints.StaticEndpoints {
+			e, err := netip.ParseAddrPort(ep)
+			if err != nil {
+				log.Printf("error parsing static endpoint %q: %v", ep, err)
+				continue
+			}
+			eps = append(eps, e)
+		}
+		conf.StaticEndpoints = eps
 	}
 
 	if stsC.Connector != nil {

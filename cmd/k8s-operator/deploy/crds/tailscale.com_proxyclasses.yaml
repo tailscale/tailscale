@@ -2215,6 +2215,15 @@ spec:
                         https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices
                         Defaults to false.
                       type: boolean
+                    endpoints:
+                      description: Endpoints allows configuring the Tailscale endpoints that the proxy can can be reached on.
+                      type: object
+                      properties:
+                        staticEndpoints:
+                          description: StaticEndpoints can be set to a list IP:Port that the proxy can be reached on.
+                          type: array
+                          items:
+                            type: string
             status:
               description: |-
                 Status of the ProxyClass. This is set and managed automatically.
