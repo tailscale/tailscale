@@ -9,6 +9,7 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/ipn/ipnstate"
 )
 
 // ErrPeerNotFound is an alias for tailscale.com/client/local.
@@ -74,4 +75,32 @@ func IsPreconditionsFailedError(err error) bool {
 // Deprecated: import tailscale.com/client/local instead.
 func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	return local.WhoIs(ctx, remoteAddr)
+}
+
+// Status is an alias for tailscale.com/client/local.
+//
+// Deprecated: import tailscale.com/client/local instead.
+func Status(ctx context.Context) (*ipnstate.Status, error) {
+	return local.Status(ctx)
+}
+
+// StatusWithoutPeers is an alias for tailscale.com/client/local.
+//
+// Deprecated: import tailscale.com/client/local instead.
+func StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
+	return local.StatusWithoutPeers(ctx)
+}
+
+// CertPair is an alias for tailscale.com/client/local.
+//
+// Deprecated: import tailscale.com/client/local instead.
+func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
+	return local.CertPair(ctx, domain)
+}
+
+// ExpandSNIName is an alias for tailscale.com/client/local.
+//
+// Deprecated: import tailscale.com/client/local instead.
+func ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
+	return local.ExpandSNIName(ctx, name)
 }
