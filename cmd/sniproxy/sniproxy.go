@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
@@ -183,7 +183,7 @@ func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, pro
 type sniproxy struct {
 	srv Server
 	ts  *tsnet.Server
-	lc  *tailscale.LocalClient
+	lc  *local.Client
 }
 
 func (s *sniproxy) advertiseRoutesFromConfig(ctx context.Context, c *appctype.AppConnectorConfig) error {

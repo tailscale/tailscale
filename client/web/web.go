@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/gorilla/csrf"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
@@ -50,7 +50,7 @@ type Server struct {
 	mode ServerMode
 
 	logf    logger.Logf
-	lc      *tailscale.LocalClient
+	lc      *local.Client
 	timeNow func() time.Time
 
 	// devMode indicates that the server run with frontend assets
@@ -125,9 +125,9 @@ type ServerOpts struct {
 	// PathPrefix is the URL prefix added to requests by CGI or reverse proxy.
 	PathPrefix string
 
-	// LocalClient is the tailscale.LocalClient to use for this web server.
+	// LocalClient is the local.Client to use for this web server.
 	// If nil, a new one will be created.
-	LocalClient *tailscale.LocalClient
+	LocalClient *local.Client
 
 	// TimeNow optionally provides a time function.
 	// time.Now is used as default.
@@ -166,7 +166,7 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 		return nil, fmt.Errorf("invalid Mode provided")
 	}
 	if opts.LocalClient == nil {
-		opts.LocalClient = &tailscale.LocalClient{}
+		opts.LocalClient = &local.Client{}
 	}
 	s = &Server{
 		mode:        opts.Mode,

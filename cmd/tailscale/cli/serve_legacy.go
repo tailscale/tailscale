@@ -130,7 +130,7 @@ func (e *serveEnv) newFlags(name string, setup func(fs *flag.FlagSet)) *flag.Fla
 }
 
 // localServeClient is an interface conforming to the subset of
-// tailscale.LocalClient. It includes only the methods used by the
+// local.Client. It includes only the methods used by the
 // serve command.
 //
 // The purpose of this interface is to allow tests to provide a mock.

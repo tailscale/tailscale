@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -120,7 +120,7 @@ func TestServeAPI(t *testing.T) {
 
 	s := &Server{
 		mode:    ManageServerMode,
-		lc:      &tailscale.LocalClient{Dial: lal.Dial},
+		lc:      &local.Client{Dial: lal.Dial},
 		timeNow: time.Now,
 	}
 
@@ -288,7 +288,7 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 
 	s := &Server{
 		timeNow: time.Now,
-		lc:      &tailscale.LocalClient{Dial: lal.Dial},
+		lc:      &local.Client{Dial: lal.Dial},
 	}
 
 	// Add some browser sessions to cache state.
@@ -457,7 +457,7 @@ func TestAuthorizeRequest(t *testing.T) {
 
 	s := &Server{
 		mode:    ManageServerMode,
-		lc:      &tailscale.LocalClient{Dial: lal.Dial},
+		lc:      &local.Client{Dial: lal.Dial},
 		timeNow: time.Now,
 	}
 	validCookie := "ts-cookie"
@@ -572,7 +572,7 @@ func TestServeAuth(t *testing.T) {
 
 	s := &Server{
 		mode:        ManageServerMode,
-		lc:          &tailscale.LocalClient{Dial: lal.Dial},
+		lc:          &local.Client{Dial: lal.Dial},
 		timeNow:     func() time.Time { return timeNow },
 		newAuthURL:  mockNewAuthURL,
 		waitAuthURL: mockWaitAuthURL,
@@ -914,7 +914,7 @@ func TestServeAPIAuthMetricLogging(t *testing.T) {
 
 	s := &Server{
 		mode:        ManageServerMode,
-		lc:          &tailscale.LocalClient{Dial: lal.Dial},
+		lc:          &local.Client{Dial: lal.Dial},
 		timeNow:     func() time.Time { return timeNow },
 		newAuthURL:  mockNewAuthURL,
 		waitAuthURL: mockWaitAuthURL,
@@ -1126,7 +1126,7 @@ func TestRequireTailscaleIP(t *testing.T) {
 
 	s := &Server{
 		mode:    ManageServerMode,
-		lc:      &tailscale.LocalClient{Dial: lal.Dial},
+		lc:      &local.Client{Dial: lal.Dial},
 		timeNow: time.Now,
 		logf:    t.Logf,
 	}

@@ -26,7 +26,7 @@ import (
 	"github.com/atotto/clipboard"
 	dbus "github.com/godbus/dbus/v5"
 	"github.com/toqueteos/webbrowser"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -67,7 +67,7 @@ func (menu *Menu) Run() {
 type Menu struct {
 	mu sync.Mutex // protects the entire Menu
 
-	lc          tailscale.LocalClient
+	lc          local.Client
 	status      *ipnstate.Status
 	curProfile  ipn.LoginProfile
 	allProfiles []ipn.LoginProfile

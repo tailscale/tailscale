@@ -850,7 +850,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 	}
 }
 
-// fakeLocalServeClient is a fake tailscale.LocalClient for tests.
+// fakeLocalServeClient is a fake local.Client for tests.
 // It's not a full implementation, just enough to test the serve command.
 //
 // The fake client is stateful, and is used to test manipulating

@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -135,11 +136,11 @@ type Server struct {
 	hostname         string
 	shutdownCtx      context.Context
 	shutdownCancel   context.CancelFunc
-	proxyCred        string                 // SOCKS5 proxy auth for loopbackListener
-	localAPICred     string                 // basic auth password for loopbackListener
-	loopbackListener net.Listener           // optional loopback for localapi and proxies
-	localAPIListener net.Listener           // in-memory, used by localClient
-	localClient      *tailscale.LocalClient // in-memory
+	proxyCred        string        // SOCKS5 proxy auth for loopbackListener
+	localAPICred     string        // basic auth password for loopbackListener
+	loopbackListener net.Listener  // optional loopback for localapi and proxies
+	localAPIListener net.Listener  // in-memory, used by localClient
+	localClient      *local.Client // in-memory
 	localAPIServer   *http.Server
 	logbuffer        *filch.Filch
 	logtail          *logtail.Logger
@@ -222,7 +223,7 @@ func (s *Server) HTTPClient() *http.Client {
 //
 // It will start the server if it has not been started yet. If the server's
 // already been started successfully, it doesn't return an error.
-func (s *Server) LocalClient() (*tailscale.LocalClient, error) {
+func (s *Server) LocalClient() (*local.Client, error) {
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
@@ -676,7 +677,7 @@ func (s *Server) start() (reterr error) {
 	// nettest.Listen provides a in-memory pipe based implementation for net.Conn.
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	s.localAPIListener = lal
-	s.localClient = &tailscale.LocalClient{Dial: lal.Dial}
+	s.localClient = &local.Client{Dial: lal.Dial}
 	s.localAPIServer = &http.Server{Handler: lah}
 	s.lb.ConfigureWebClient(s.localClient)
 	go func() {

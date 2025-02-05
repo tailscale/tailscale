@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/netmap"
@@ -28,7 +28,7 @@ import (
 // applies it to lc. It exits when ctx is canceled. cdChanged is a channel that
 // is written to when the certDomain changes, causing the serve config to be
 // re-read and applied.
-func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *tailscale.LocalClient, kc *kubeClient) {
+func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *local.Client, kc *kubeClient) {
 	if certDomainAtomic == nil {
 		panic("certDomainAtomic must not be nil")
 	}
@@ -91,7 +91,7 @@ func certDomainFromNetmap(nm *netmap.NetworkMap) string {
 	return nm.DNS.CertDomains[0]
 }
 
-// localClient is a subset of tailscale.LocalClient that can be mocked for testing.
+// localClient is a subset of [local.Client] that can be mocked for testing.
 type localClient interface {
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
 }

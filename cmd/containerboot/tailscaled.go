@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 )
 
-func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient, *os.Process, error) {
+func startTailscaled(ctx context.Context, cfg *settings) (*local.Client, *os.Process, error) {
 	args := tailscaledArgs(cfg)
 	// tailscaled runs without context, since it needs to persist
 	// beyond the startup timeout in ctx.
@@ -54,7 +54,7 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 		break
 	}
 
-	tsClient := &tailscale.LocalClient{
+	tsClient := &local.Client{
 		Socket:        cfg.Socket,
 		UseSocketOnly: true,
 	}
@@ -170,7 +170,7 @@ func tailscaleSet(ctx context.Context, cfg *settings) error {
 	return nil
 }
 
-func watchTailscaledConfigChanges(ctx context.Context, path string, lc *tailscale.LocalClient, errCh chan<- error) {
+func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Client, errCh chan<- error) {
 	var (
 		tickChan          <-chan time.Time
 		tailscaledCfgDir  = filepath.Dir(path)
