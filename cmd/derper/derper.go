@@ -155,7 +155,7 @@ func writeNewConfig() config {
 func checkMeshKey(key string) (string, error) {
 	key = strings.TrimSpace(key)
 	if !validMeshKey.MatchString(key) {
-		return "", fmt.Errorf("key in %q must contain 64+ hex digits", key)
+		return "", errors.New("key must contain exactly 64 hex digits")
 	}
 	return key, nil
 }
@@ -210,6 +210,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("NewFileCache: %v", err)
 		}
+		log.Printf("Setting up setec store from %q", *secretsURL)
 		st, err := setec.NewStore(ctx,
 			setec.StoreConfig{
 				Client: setec.Client{Server: *secretsURL},
