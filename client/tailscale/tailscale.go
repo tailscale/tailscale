@@ -3,8 +3,7 @@
 
 //go:build go1.19
 
-// Package tailscale contains Go clients for the Tailscale LocalAPI and
-// Tailscale control plane API.
+// Package tailscale contains a Go client for the Tailscale control plane API.
 //
 // Warning: this package is in development and makes no API compatibility
 // promises as of 2022-04-29. It is subject to change at any time.
