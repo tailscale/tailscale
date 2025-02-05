@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -36,6 +37,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tailscale/setec/client/setec"
 	"golang.org/x/time/rate"
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
@@ -64,6 +66,9 @@ var (
 
 	meshPSKFile     = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
 	meshWith        = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list. If an entry contains a slash, the second part names a hostname to be used when dialing the target.")
+	secretsURL      = flag.String("secrets-url", "", "SETEC server URL for secrets retrieval of mesh key")
+	secretPrefix    = flag.String("secrets-path-prefix", "prod/derp", "setec path prefix for \""+setecMeshKeyName+"\" secret for DERP mesh key")
+	secretsCacheDir = flag.String("secrets-cache-dir", defaultSetecCacheDir(), "directory to cache setec secrets in (required if --secrets-url is set)")
 	bootstrapDNS    = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
 	unpublishedDNS  = flag.String("unpublished-bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns and not publish in the list. If an entry contains a slash, the second part names a DNS record to poll for its TXT record with a `0` to `100` value for rollout percentage.")
 	verifyClients   = flag.Bool("verify-clients", false, "verify clients to this DERP server through a local tailscaled instance.")
@@ -84,7 +89,13 @@ var (
 var (
 	tlsRequestVersion = &metrics.LabelMap{Label: "version"}
 	tlsActiveVersion  = &metrics.LabelMap{Label: "version"}
+
+	// Exactly 64 hexadecimal lowercase digits.
+	validMeshKey = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
+
+const setecMeshKeyName = "meshkey"
+const meshKeyEnvVar = "TAILSCALE_DERPER_MESH_KEY"
 
 func init() {
 	expvar.Publish("derper_tls_request_version", tlsRequestVersion)
@@ -141,6 +152,14 @@ func writeNewConfig() config {
 	return cfg
 }
 
+func checkMeshKey(key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if !validMeshKey.MatchString(key) {
+		return "", fmt.Errorf("key in %q must contain 64+ hex digits", key)
+	}
+	return key, nil
+}
+
 func main() {
 	flag.Parse()
 	if *versionFlag {
@@ -177,18 +196,51 @@ func main() {
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
 	s.SetTCPWriteTimeout(*tcpWriteTimeout)
 
-	if *meshPSKFile != "" {
-		b, err := os.ReadFile(*meshPSKFile)
+	var meshKey string
+	if *dev {
+		meshKey = os.Getenv(meshKeyEnvVar)
+		if meshKey == "" {
+			log.Printf("No mesh key specified for dev via %s\n", meshKeyEnvVar)
+		} else {
+			log.Printf("Set mesh key from %s\n", meshKeyEnvVar)
+		}
+	} else if *secretsURL != "" {
+		meshKeySecret := path.Join(*secretPrefix, setecMeshKeyName)
+		fc, err := setec.NewFileCache(*secretsCacheDir)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("NewFileCache: %v", err)
 		}
-		key := strings.TrimSpace(string(b))
-		if matched, _ := regexp.MatchString(`(?i)^[0-9a-f]{64,}$`, key); !matched {
-			log.Fatalf("key in %s must contain 64+ hex digits", *meshPSKFile)
+		st, err := setec.NewStore(ctx,
+			setec.StoreConfig{
+				Client: setec.Client{Server: *secretsURL},
+				Secrets: []string{
+					meshKeySecret,
+				},
+				Cache: fc,
+			})
+		if err != nil {
+			log.Fatalf("NewStore: %v", err)
 		}
-		s.SetMeshKey(key)
-		log.Printf("DERP mesh key configured")
+		meshKey = st.Secret(meshKeySecret).GetString()
+		log.Println("Got mesh key from setec store")
+	} else if *meshPSKFile != "" {
+		b, err := setec.StaticFile(*meshPSKFile)
+		if err != nil {
+			log.Fatalf("StaticFile failed to get key: %v", err)
+		}
+		log.Println("Got mesh key from static file")
+		meshKey = b.GetString()
 	}
+
+	if meshKey == "" && *dev {
+		log.Printf("No mesh key configured for --dev mode")
+	} else if key, err := checkMeshKey(meshKey); err != nil {
+		log.Fatalf("invalid mesh key: %v", err)
+	} else {
+		s.SetMeshKey(key)
+		log.Println("DERP mesh key configured")
+	}
+
 	if err := startMesh(s); err != nil {
 		log.Fatalf("startMesh: %v", err)
 	}
@@ -380,6 +432,10 @@ func prodAutocertHostPolicy(_ context.Context, host string) error {
 		return nil
 	}
 	return errors.New("invalid hostname")
+}
+
+func defaultSetecCacheDir() string {
+	return filepath.Join(os.Getenv("HOME"), ".cache", "derper-secrets")
 }
 
 func defaultMeshPSKFile() string {
