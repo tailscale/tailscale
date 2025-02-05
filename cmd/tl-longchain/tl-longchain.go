@@ -22,7 +22,7 @@ import (
 	"log"
 	"time"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -37,7 +37,7 @@ var (
 func main() {
 	flag.Parse()
 
-	lc := tailscale.LocalClient{Socket: *flagSocket}
+	lc := local.Client{Socket: *flagSocket}
 	if lc.Socket != "" {
 		lc.UseSocketOnly = true
 	}

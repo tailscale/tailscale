@@ -9,14 +9,14 @@ import (
 	"errors"
 	"net"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 )
 
 const webClientPort = 5252
 
 type webClient struct{}
 
-func (b *LocalBackend) ConfigureWebClient(lc *tailscale.LocalClient) {}
+func (b *LocalBackend) ConfigureWebClient(lc *local.Client) {}
 
 func (b *LocalBackend) webClientGetOrInit() error {
 	return errors.New("not implemented")

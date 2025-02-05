@@ -36,6 +36,7 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
@@ -1319,7 +1320,7 @@ func (c *sclient) requestMeshUpdate() {
 	}
 }
 
-var localClient tailscale.LocalClient
+var localClient local.Client
 
 // isMeshPeer reports whether the client is a trusted mesh peer
 // node in the DERP region.

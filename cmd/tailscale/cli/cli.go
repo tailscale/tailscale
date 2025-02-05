@@ -21,6 +21,7 @@ import (
 	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/envknob"
@@ -79,7 +80,7 @@ func CleanUpArgs(args []string) []string {
 	return out
 }
 
-var localClient = tailscale.LocalClient{
+var localClient = local.Client{
 	Socket: paths.DefaultTailscaledSocket(),
 }
 

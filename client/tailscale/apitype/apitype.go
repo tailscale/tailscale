@@ -24,7 +24,7 @@ const LocalAPIHost = "local-tailscaled.sock"
 const RequestReasonHeader = "X-Tailscale-Reason"
 
 // RequestReasonKey is the context key used to pass the request reason
-// when making a LocalAPI request via [tailscale.LocalClient].
+// when making a LocalAPI request via [local.Client].
 // It's value is a raw string. An empty string means no reason was provided.
 //
 // See tailscale/corp#26146.

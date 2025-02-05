@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
@@ -50,7 +50,7 @@ type egressProxy struct {
 	kc          kubeclient.Client // never nil
 	stateSecret string            // name of the kube state Secret
 
-	tsClient *tailscale.LocalClient // never nil
+	tsClient *local.Client // never nil
 
 	netmapChan chan ipn.Notify // chan to receive netmap updates on
 
@@ -131,7 +131,7 @@ type egressProxyRunOpts struct {
 	cfgPath      string
 	nfr          linuxfw.NetfilterRunner
 	kc           kubeclient.Client
-	tsClient     *tailscale.LocalClient
+	tsClient     *local.Client
 	stateSecret  string
 	netmapChan   chan ipn.Notify
 	podIPv4      string

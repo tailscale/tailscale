@@ -29,7 +29,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -186,9 +186,9 @@ func main() {
 type connector struct {
 	// ts is the tsnet.Server used to host the connector.
 	ts *tsnet.Server
-	// lc is the LocalClient used to interact with the tsnet.Server hosting this
+	// lc is the local.Client used to interact with the tsnet.Server hosting this
 	// connector.
-	lc *tailscale.LocalClient
+	lc *local.Client
 
 	// dnsAddr is the IPv4 address to listen on for DNS requests. It is used to
 	// prevent the app connector from assigning it to a domain.

@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"tailscale.com/atomicfile"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/hostinfo"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
@@ -64,7 +64,7 @@ func serveCmd(w http.ResponseWriter, cmd string, args ...string) {
 }
 
 type localClientRoundTripper struct {
-	lc tailscale.LocalClient
+	lc local.Client
 }
 
 func (rt *localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {

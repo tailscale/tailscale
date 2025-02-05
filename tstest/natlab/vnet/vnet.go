@@ -50,7 +50,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netutil"
@@ -2123,7 +2123,7 @@ func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 }
 
 type NodeAgentClient struct {
-	*tailscale.LocalClient
+	*local.Client
 	HTTPClient *http.Client
 }
 
@@ -2148,7 +2148,7 @@ func (s *Server) NodeAgentDialer(n *Node) DialFunc {
 func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {
 	d := s.NodeAgentDialer(n)
 	return &NodeAgentClient{
-		LocalClient: &tailscale.LocalClient{
+		Client: &local.Client{
 			UseSocketOnly: true,
 			OmitAuth:      true,
 			Dial:          d,
