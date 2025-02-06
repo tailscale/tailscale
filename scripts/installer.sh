@@ -250,7 +250,7 @@ main() {
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
 				;;
-			manjaro|manjaro-arm)
+			manjaro|manjaro-arm|biglinux)
 				OS="manjaro"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
