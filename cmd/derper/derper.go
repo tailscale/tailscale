@@ -224,6 +224,7 @@ func main() {
 		}
 		meshKey = st.Secret(meshKeySecret).GetString()
 		log.Println("Got mesh key from setec store")
+		st.Close()
 	} else if *meshPSKFile != "" {
 		b, err := setec.StaticFile(*meshPSKFile)
 		if err != nil {
