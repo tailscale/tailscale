@@ -6,8 +6,11 @@ package safesocket
 import (
 	"bufio"
 	"bytes"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -17,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"tailscale.com/version"
 )
 
@@ -24,17 +28,245 @@ func init() {
 	localTCPPortAndToken = localTCPPortAndTokenDarwin
 }
 
-// localTCPPortAndTokenMacsys returns the localhost TCP port number and auth token
-// from /Library/Tailscale.
+const sameUserProofTokenLength = 10
+
+type safesocketDarwin struct {
+	mu              sync.Mutex
+	token           string   // safesocket auth token
+	port            int      // safesocket port
+	sameuserproofFD *os.File // file descriptor for macos app store sameuserproof file
+	sharedDir       string   // shared directory for location of sameuserproof file
+
+	checkConn   bool        // Check macsys safesocket port before returning it
+	isMacSysExt func() bool // For testing only to force macsys
+}
+
+var ssd = safesocketDarwin{
+	isMacSysExt: version.IsMacSysExt,
+	checkConn:   true,
+	sharedDir:   "/Library/Tailscale",
+}
+
+// There are three ways a Darwin binary can be run: as the Mac App Store (macOS)
+// standalone notarized (macsys), or a separate CLI (tailscale) that was
+// built or downloaded.
+//
+// The macOS and macsys binaries can communicate directly via XPC with
+// the NEPacketTunnelProvider managed tailscaled process and are responsible for
+// calling SetCredentials when they need to operate as a CLI.
+
+// A built/downloaded CLI binary will not be managing the NEPacketTunnelProvider
+// hosting tailscaled directly and must source the credentials from a 'sameuserproof' file.
+// This file is written to sharedDir when tailscaled/NEPacketTunnelProvider
+// calls InitListenerDarwin.
+
+// localTCPPortAndTokenDarwin returns the localhost TCP port number and auth token
+// either generated, or sourced from the NEPacketTunnelProvider managed tailscaled process.
+func localTCPPortAndTokenDarwin() (port int, token string, err error) {
+	ssd.mu.Lock()
+	defer ssd.mu.Unlock()
+
+	if ssd.port != 0 && ssd.token != "" {
+		return ssd.port, ssd.token, nil
+	}
+
+	// Credentials were not explicitly, this is likely a standalone CLI binary.
+	// Fallback to reading the sameuserproof file.
+	return portAndTokenFromSameUserProof()
+}
+
+// SetCredentials sets an token and port used to authenticate safesocket generated
+// by the NEPacketTunnelProvider tailscaled process.  This is only used when running
+// the CLI via Tailscale.app.
+func SetCredentials(token string, port int) {
+	ssd.mu.Lock()
+	defer ssd.mu.Unlock()
+
+	if ssd.token != "" || ssd.port != 0 {
+		// Not fatal, but likely programmer error.  Credentials do not change.
+		log.Printf("warning: SetCredentials credentials already set")
+	}
+
+	ssd.token = token
+	ssd.port = port
+}
+
+// InitListenerDarwin initializes the listener for the CLI commands
+// and localapi HTTP server and sets the port/token.  This will override
+// any credentials set explicitly via SetCredentials().  Calling this mulitple times
+// has no effect.  The listener and it's corresponding token/port is initialized only once.
+func InitListenerDarwin(sharedDir string) (*net.Listener, error) {
+	ssd.mu.Lock()
+	defer ssd.mu.Unlock()
+
+	ln := onceListener.ln
+	if ln != nil {
+		return ln, nil
+	}
+
+	var err error
+	ln, err = localhostListener()
+	if err != nil {
+		log.Printf("InitListenerDarwin: listener initialization failed")
+		return nil, err
+	}
+
+	port, err := localhostTCPPort()
+	if err != nil {
+		log.Printf("localhostTCPPort: listener initialization failed")
+		return nil, err
+	}
+
+	token, err := getToken()
+	if err != nil {
+		log.Printf("localhostTCPPort: getToken failed")
+		return nil, err
+	}
+
+	if port == 0 || token == "" {
+		log.Printf("localhostTCPPort: Invalid token or port")
+		return nil, fmt.Errorf("invalid localhostTCPPort: returned 0")
+	}
+
+	ssd.sharedDir = sharedDir
+	ssd.token = token
+	ssd.port = port
+
+	// Write the port and token to a sameuserproof file
+	err = initSameUserProofToken(sharedDir, port, token)
+	if err != nil {
+		// Not fatal
+		log.Printf("initSameUserProofToken: failed: %v", err)
+	}
+
+	return ln, nil
+}
+
+var onceListener struct {
+	once sync.Once
+	ln   *net.Listener
+}
+
+func localhostTCPPort() (int, error) {
+	if onceListener.ln == nil {
+		return 0, fmt.Errorf("listener not initialized")
+	}
+
+	ln, err := localhostListener()
+	if err != nil {
+		return 0, err
+	}
+
+	return (*ln).Addr().(*net.TCPAddr).Port, nil
+}
+
+func localhostListener() (*net.Listener, error) {
+	onceListener.once.Do(func() {
+		ln, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			return
+		}
+		onceListener.ln = &ln
+	})
+	if onceListener.ln == nil {
+		return nil, fmt.Errorf("failed to get TCP listener")
+	}
+	return onceListener.ln, nil
+}
+
+var onceToken struct {
+	once  sync.Once
+	token string
+}
+
+func getToken() (string, error) {
+	onceToken.once.Do(func() {
+		buf := make([]byte, sameUserProofTokenLength)
+		if _, err := crand.Read(buf); err != nil {
+			return
+		}
+		t := fmt.Sprintf("%x", buf)
+		onceToken.token = t
+	})
+	if onceToken.token == "" {
+		return "", fmt.Errorf("failed to generate token")
+	}
+
+	return onceToken.token, nil
+}
+
+// initSameUserProofToken writes the port and token to a sameuserproof
+// file owned by the current user.  We leave the file open to allow us
+// to discover it via lsof.
+//
+// "sameuserproof" is intended to convey that the user attempting to read
+// the credentials from the file is the same user that wrote them.  For
+// standalone macsys where tailscaled is running as root, we set group
+// permissions to allow users in the admin group to read the file.
+func initSameUserProofToken(sharedDir string, port int, token string) error {
+	var err error
+
+	// Guard against bad sharedDir
+	old, err := os.ReadDir(sharedDir)
+	if err == os.ErrNotExist {
+		log.Printf("failed to read shared dir %s: %v", sharedDir, err)
+		return err
+	}
+
+	// Remove all old sameuserproof files
+	for _, fi := range old {
+		if name := fi.Name(); strings.HasPrefix(name, "sameuserproof-") {
+			err := os.Remove(filepath.Join(sharedDir, name))
+			if err != nil {
+				log.Printf("failed to remove %s: %v", name, err)
+			}
+		}
+	}
+
+	var baseFile string
+	var perm fs.FileMode
+	if ssd.isMacSysExt() {
+		perm = 0640 // allow wheel to read
+		baseFile = fmt.Sprintf("sameuserproof-%d", port)
+		portFile := filepath.Join(sharedDir, "ipnport")
+		err := os.Remove(portFile)
+		if err != nil {
+			log.Printf("failed to remove portfile %s: %v", portFile, err)
+		}
+		symlinkErr := os.Symlink(fmt.Sprint(port), portFile)
+		if symlinkErr != nil {
+			log.Printf("failed to symlink portfile: %v", symlinkErr)
+		}
+	} else {
+		perm = 0666
+		baseFile = fmt.Sprintf("sameuserproof-%d-%s", port, token)
+	}
+
+	path := filepath.Join(sharedDir, baseFile)
+	ssd.sameuserproofFD, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
+	log.Printf("initSameUserProofToken : done=%v", err == nil)
+
+	if ssd.isMacSysExt() && err == nil {
+		fmt.Fprintf(ssd.sameuserproofFD, "%s\n", token)
+
+		// Macsys runs as root so ownership of this file will be
+		// root/wheel.  Change ownership to root/admin which will let all members
+		// of the admin group to read it.
+		unix.Fchown(int(ssd.sameuserproofFD.Fd()), 0, 80 /* admin */)
+	}
+
+	return err
+}
+
+// readMacsysSameuserproof returns the localhost TCP port number and auth token
+// from a sameuserproof file written to /Library/Tailscale.
 //
 // In that case the files are:
 //
 //	/Library/Tailscale/ipnport => $port (symlink with localhost port number target)
-//	/Library/Tailscale/sameuserproof-$port is a file with auth
-func localTCPPortAndTokenMacsys() (port int, token string, err error) {
-
-	const dir = "/Library/Tailscale"
-	portStr, err := os.Readlink(filepath.Join(dir, "ipnport"))
+//	/Library/Tailscale/sameuserproof-$port is a file containing only the auth token as a hex string.
+func readMacsysSameUserProof() (port int, token string, err error) {
+	portStr, err := os.Readlink(filepath.Join(ssd.sharedDir, "ipnport"))
 	if err != nil {
 		return 0, "", err
 	}
@@ -42,7 +274,7 @@ func localTCPPortAndTokenMacsys() (port int, token string, err error) {
 	if err != nil {
 		return 0, "", err
 	}
-	authb, err := os.ReadFile(filepath.Join(dir, "sameuserproof-"+portStr))
+	authb, err := os.ReadFile(filepath.Join(ssd.sharedDir, "sameuserproof-"+portStr))
 	if err != nil {
 		return 0, "", err
 	}
@@ -51,69 +283,23 @@ func localTCPPortAndTokenMacsys() (port int, token string, err error) {
 		return 0, "", errors.New("empty auth token in sameuserproof file")
 	}
 
-	// The above files exist forever after the first run of
-	// /Applications/Tailscale.app, so check we can connect to avoid returning a
-	// port nothing is listening on. Connect to "127.0.0.1" rather than
-	// "localhost" due to #7851.
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+portStr, time.Second)
-	if err != nil {
-		return 0, "", err
+	if ssd.checkConn {
+		// Files may be stale and there is no guarantee that the  sameuserproof
+		// derived port is open and valid. Check it before returning it.
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:"+portStr, time.Second)
+		if err != nil {
+			return 0, "", err
+		}
+		conn.Close()
 	}
-	conn.Close()
 
 	return port, auth, nil
 }
 
-var warnAboutRootOnce sync.Once
-
-func localTCPPortAndTokenDarwin() (port int, token string, err error) {
-	// There are two ways this binary can be run: as the Mac App Store sandboxed binary,
-	// or a normal binary that somebody built or download and are being run from outside
-	// the sandbox. Detect which way we're running and then figure out how to connect
-	// to the local daemon.
-
-	if dir := os.Getenv("TS_MACOS_CLI_SHARED_DIR"); dir != "" {
-		// First see if we're running as the non-AppStore "macsys" variant.
-		if version.IsMacSys() {
-			if port, token, err := localTCPPortAndTokenMacsys(); err == nil {
-				return port, token, nil
-			}
-		}
-
-		// The current binary (this process) is sandboxed. The user is
-		// running the CLI via /Applications/Tailscale.app/Contents/MacOS/Tailscale
-		// which sets the TS_MACOS_CLI_SHARED_DIR environment variable.
-		fis, err := os.ReadDir(dir)
-		if err != nil {
-			return 0, "", err
-		}
-		for _, fi := range fis {
-			name := filepath.Base(fi.Name())
-			// Look for name like "sameuserproof-61577-2ae2ec9e0aa2005784f1"
-			// to extract out the port number and token.
-			if strings.HasPrefix(name, "sameuserproof-") {
-				f := strings.SplitN(name, "-", 3)
-				if len(f) == 3 {
-					if port, err := strconv.Atoi(f[1]); err == nil {
-						return port, f[2], nil
-					}
-				}
-			}
-		}
-		if os.Geteuid() == 0 {
-			// Log a warning as the clue to the user, in case the error
-			// message is swallowed. Only do this once since we may retry
-			// multiple times to connect, and don't want to spam.
-			warnAboutRootOnce.Do(func() {
-				fmt.Fprintf(os.Stderr, "Warning: The CLI is running as root from within a sandboxed binary. It cannot reach the local tailscaled, please try again as a regular user.\n")
-			})
-		}
-		return 0, "", fmt.Errorf("failed to find sandboxed sameuserproof-* file in TS_MACOS_CLI_SHARED_DIR %q", dir)
-	}
-
-	// The current process is running outside the sandbox, so use
-	// lsof to find the IPNExtension (the Mac App Store variant).
-
+// readMacosSameUserProof searches for open sameuserproof files belonging
+// to the current user and the IPNExtension (macOS App Store) process and returns a
+// port and token.
+func readMacosSameUserProof() (port int, token string, err error) {
 	cmd := exec.Command("lsof",
 		"-n",                             // numeric sockets; don't do DNS lookups, etc
 		"-a",                             // logical AND remaining options
@@ -122,39 +308,40 @@ func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 		"-F", // machine-readable output
 	)
 	out, err := cmd.Output()
-	if err != nil {
-		// Before returning an error, see if we're running the
-		// macsys variant at the normal location.
-		if port, token, err := localTCPPortAndTokenMacsys(); err == nil {
+
+	if err == nil {
+		bs := bufio.NewScanner(bytes.NewReader(out))
+		subStr := []byte(".tailscale.ipn.macos/sameuserproof-")
+		for bs.Scan() {
+			line := bs.Bytes()
+			i := bytes.Index(line, subStr)
+			if i == -1 {
+				continue
+			}
+			f := strings.SplitN(string(line[i+len(subStr):]), "-", 2)
+			if len(f) != 2 {
+				continue
+			}
+			portStr, token := f[0], f[1]
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				return 0, "", fmt.Errorf("invalid port %q found in lsof", portStr)
+			}
+
 			return port, token, nil
 		}
-
-		return 0, "", fmt.Errorf("failed to run '%s' looking for IPNExtension: %w", cmd, err)
-	}
-	bs := bufio.NewScanner(bytes.NewReader(out))
-	subStr := []byte(".tailscale.ipn.macos/sameuserproof-")
-	for bs.Scan() {
-		line := bs.Bytes()
-		i := bytes.Index(line, subStr)
-		if i == -1 {
-			continue
-		}
-		f := strings.SplitN(string(line[i+len(subStr):]), "-", 2)
-		if len(f) != 2 {
-			continue
-		}
-		portStr, token := f[0], f[1]
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			return 0, "", fmt.Errorf("invalid port %q found in lsof", portStr)
-		}
-		return port, token, nil
-	}
-
-	// Before returning an error, see if we're running the
-	// macsys variant at the normal location.
-	if port, token, err := localTCPPortAndTokenMacsys(); err == nil {
-		return port, token, nil
 	}
 	return 0, "", ErrTokenNotFound
+}
+
+func portAndTokenFromSameUserProof() (port int, token string, err error) {
+	if port, token, err := readMacosSameUserProof(); err == nil {
+		return port, token, nil
+	}
+
+	if port, token, err := readMacsysSameUserProof(); err == nil {
+		return port, token, nil
+	}
+
+	return 0, "", err
 }

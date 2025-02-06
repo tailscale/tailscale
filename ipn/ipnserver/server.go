@@ -318,6 +318,13 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor ipnauth.Acto
 // Unix-like platforms and specifies the ID of a local user
 // (in the os/user.User.Uid string form) who is allowed
 // to operate tailscaled without being root or using sudo.
+//
+// Sandboxed macos clients must directly supply, or be able to read,
+// an explicit token. Permission is inferred by validating that
+// token. Sandboxed macos clients also don't use ipnserver.actor at all
+// (and prior to that, they didn't use ipnauth.ConnIdentity)
+//
+// See safesocket and safesocket_darwin.
 func (a *actor) Permissions(operatorUID string) (read, write bool) {
 	switch envknob.GOOS() {
 	case "windows":
