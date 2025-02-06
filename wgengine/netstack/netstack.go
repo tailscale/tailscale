@@ -326,6 +326,11 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
 	}
+	cubicOpt := tcpip.CongestionControlOption("cubic")
+	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &cubicOpt)
+	if tcpipErr != nil {
+		return nil, fmt.Errorf("could not set cubic congestion control: %v", tcpipErr)
+	}
 	err := setTCPBufSizes(ipstack)
 	if err != nil {
 		return nil, err
