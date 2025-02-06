@@ -236,6 +236,8 @@ func main() {
 
 	if meshKey == "" && *dev {
 		log.Printf("No mesh key configured for --dev mode")
+	} else if meshKey == "" {
+		log.Printf("No mesh key configured")
 	} else if key, err := checkMeshKey(meshKey); err != nil {
 		log.Fatalf("invalid mesh key: %v", err)
 	} else {
