@@ -200,7 +200,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	// 3. Ensure that the serve config for the ProxyGroup contains the VIPService
-	cm, cfg, err := a.proxyGroupServeConfig(ctx, pgName)
+	cm, cfg, err := proxyGroupServeConfig(ctx, a.Client, a.tsNamespace, pgName)
 	if err != nil {
 		return fmt.Errorf("error getting ingress serve config: %w", err)
 	}
@@ -293,7 +293,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 // VIPServices that are associated with the provided ProxyGroup and no longer owned by an Ingress are cleaned up.
 func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyGroupName string, logger *zap.SugaredLogger) error {
 	// Get serve config for the ProxyGroup
-	cm, cfg, err := a.proxyGroupServeConfig(ctx, proxyGroupName)
+	cm, cfg, err := proxyGroupServeConfig(ctx, a.Client, a.tsNamespace, proxyGroupName)
 	if err != nil {
 		return fmt.Errorf("getting serve config: %w", err)
 	}
@@ -373,7 +373,7 @@ func (a *IngressPGReconciler) maybeCleanup(ctx context.Context, hostname string,
 
 	// 1. Check if there is a VIPService created for this Ingress.
 	pg := ing.Annotations[AnnotationProxyGroup]
-	cm, cfg, err := a.proxyGroupServeConfig(ctx, pg)
+	cm, cfg, err := proxyGroupServeConfig(ctx, a.Client, a.tsNamespace, pg)
 	if err != nil {
 		return fmt.Errorf("error getting ProxyGroup serve config: %w", err)
 	}
@@ -435,15 +435,15 @@ func pgIngressCMName(pg string) string {
 	return fmt.Sprintf("%s-ingress-config", pg)
 }
 
-func (a *IngressPGReconciler) proxyGroupServeConfig(ctx context.Context, pg string) (cm *corev1.ConfigMap, cfg *ipn.ServeConfig, err error) {
+func proxyGroupServeConfig(ctx context.Context, cl client.Client, tsNamespace string, pg string) (cm *corev1.ConfigMap, cfg *ipn.ServeConfig, err error) {
 	name := pgIngressCMName(pg)
 	cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: a.tsNamespace,
+			Namespace: tsNamespace,
 		},
 	}
-	if err := a.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil && !apierrors.IsNotFound(err) {
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil && !apierrors.IsNotFound(err) {
 		return nil, nil, fmt.Errorf("error retrieving ingress serve config ConfigMap %s: %v", name, err)
 	}
 	if apierrors.IsNotFound(err) {
