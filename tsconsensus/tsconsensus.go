@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"time"
 
@@ -82,7 +83,8 @@ func DefaultConfig() Config {
 // It does the raft interprocess communication via tailscale.
 type StreamLayer struct {
 	net.Listener
-	s *tsnet.Server
+	s   *tsnet.Server
+	tag string
 }
 
 // Dial implements the raft.StreamLayer interface with the tsnet.Server's Dial.
@@ -91,8 +93,102 @@ func (sl StreamLayer) Dial(address raft.ServerAddress, timeout time.Duration) (n
 	return sl.s.Dial(ctx, "tcp", string(address))
 }
 
+func allowedPeer(remoteAddr string, tag string, s *tsnet.Server) (bool, error) {
+	sAddr, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false, err
+	}
+	a, err := netip.ParseAddr(sAddr)
+	if err != nil {
+		return false, err
+	}
+	ctx := context.Background() // TODO very much a sign I shouldn't be doing this here
+	peers, err := taggedNodesFromStatus(ctx, tag, s)
+	if err != nil {
+		return false, err
+	}
+	return peers.has(a), nil
+}
+
+func (sl StreamLayer) Accept() (net.Conn, error) {
+	for {
+		conn, err := sl.Listener.Accept()
+		if err != nil || conn == nil {
+			return conn, err
+		}
+		allowed, err := allowedPeer(conn.RemoteAddr().String(), sl.tag, sl.s)
+		if err != nil {
+			// TODO should we stay alive here?
+			return nil, err
+		}
+		if !allowed {
+			continue
+		}
+		return conn, err
+	}
+}
+
+type allowedPeers struct {
+	self            *ipnstate.PeerStatus
+	peers           []*ipnstate.PeerStatus
+	peerByIPAddress map[netip.Addr]*ipnstate.PeerStatus
+	clusterTag      string
+}
+
+func (ap *allowedPeers) allowed(n *ipnstate.PeerStatus) bool {
+	return n.Tags != nil && slices.Contains(n.Tags.AsSlice(), ap.clusterTag)
+}
+
+func (ap *allowedPeers) addPeerIfAllowed(p *ipnstate.PeerStatus) {
+	if !ap.allowed(p) {
+		return
+	}
+	ap.peers = append(ap.peers, p)
+	for _, addr := range p.TailscaleIPs {
+		ap.peerByIPAddress[addr] = p
+	}
+}
+
+func (ap *allowedPeers) addSelfIfAllowed(n *ipnstate.PeerStatus) {
+	if ap.allowed(n) {
+		ap.self = n
+	}
+}
+
+func (ap *allowedPeers) has(a netip.Addr) bool {
+	_, ok := ap.peerByIPAddress[a]
+	return ok
+}
+
+func taggedNodesFromStatus(ctx context.Context, clusterTag string, ts *tsnet.Server) (*allowedPeers, error) {
+	lc, err := ts.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+	tStatus, err := lc.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ap := newAllowedPeers(clusterTag)
+	for _, v := range tStatus.Peer {
+		ap.addPeerIfAllowed(v)
+	}
+	ap.addSelfIfAllowed(tStatus.Self)
+	return ap, nil
+}
+
+func newAllowedPeers(tag string) *allowedPeers {
+	return &allowedPeers{
+		peerByIPAddress: map[netip.Addr]*ipnstate.PeerStatus{},
+		clusterTag:      tag,
+	}
+}
+
 // Start returns a pointer to a running Consensus instance.
-func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, targetTag string, cfg Config) (*Consensus, error) {
+func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag string, cfg Config) (*Consensus, error) {
+	if clusterTag == "" {
+		return nil, errors.New("cluster tag must be provided")
+	}
 	v4, _ := ts.TailscaleIPs()
 	cc := commandClient{
 		port:       cfg.CommandPort,
@@ -108,26 +204,12 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, targetTag string
 		Config:        cfg,
 	}
 
-	lc, err := ts.LocalClient()
-	if err != nil {
-		return nil, err
-	}
-	tStatus, err := lc.Status(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var targets []*ipnstate.PeerStatus
-	if targetTag != "" && tStatus.Self.Tags != nil && slices.Contains(tStatus.Self.Tags.AsSlice(), targetTag) {
-		for _, v := range tStatus.Peer {
-			if v.Tags != nil && slices.Contains(v.Tags.AsSlice(), targetTag) {
-				targets = append(targets, v)
-			}
-		}
-	} else {
-		return nil, errors.New("targetTag empty, or this node is not tagged with it")
+	tnfs, err := taggedNodesFromStatus(ctx, clusterTag, ts)
+	if tnfs.self == nil {
+		return nil, errors.New("this node is not tagged with the cluster tag")
 	}
 
-	r, err := startRaft(ts, &fsm, c.Self, cfg)
+	r, err := startRaft(ts, &fsm, c.Self, clusterTag, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +219,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, targetTag string
 		return nil, err
 	}
 	c.cmdHttpServer = srv
-	c.bootstrap(targets)
+	c.bootstrap(tnfs.peers)
 	srv, err = serveMonitor(&c, ts, addr(c.Self.Host, cfg.MonitorPort))
 	if err != nil {
 		return nil, err
@@ -146,7 +228,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, targetTag string
 	return &c, nil
 }
 
-func startRaft(ts *tsnet.Server, fsm *raft.FSM, self SelfRaftNode, cfg Config) (*raft.Raft, error) {
+func startRaft(ts *tsnet.Server, fsm *raft.FSM, self SelfRaftNode, clusterTag string, cfg Config) (*raft.Raft, error) {
 	config := cfg.Raft
 	config.LocalID = raft.ServerID(self.ID)
 
@@ -164,6 +246,7 @@ func startRaft(ts *tsnet.Server, fsm *raft.FSM, self SelfRaftNode, cfg Config) (
 	transport := raft.NewNetworkTransport(StreamLayer{
 		s:        ts,
 		Listener: ln,
+		tag:      clusterTag,
 	},
 		cfg.MaxConnPool,
 		cfg.ConnTimeout,

@@ -1,15 +1,18 @@
 package tsconsensus
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
+	"net"
 	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +28,7 @@ import (
 	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 )
 
 type fsm struct {
@@ -119,29 +123,29 @@ func startNode(t *testing.T, ctx context.Context, controlURL, hostname string) (
 	return s, status.Self.PublicKey, status.TailscaleIPs[0]
 }
 
-func pingNode(t *testing.T, control *testcontrol.Server, nodeKey key.NodePublic) {
-	t.Helper()
-	gotPing := make(chan bool, 1)
-	waitPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPing <- true
-	}))
-	defer waitPing.Close()
-
-	for try := 0; try < 5; try++ {
-		pr := &tailcfg.PingRequest{URL: fmt.Sprintf("%s/ping-%d", waitPing.URL, try), Log: true}
-		if !control.AddPingRequest(nodeKey, pr) {
-			t.Fatalf("failed to AddPingRequest")
+func waitForNodesToBeTaggedInStatus(t *testing.T, ctx context.Context, ts *tsnet.Server, nodeKeys []key.NodePublic, tag string) {
+	waitFor(t, "nodes tagged in status", func() bool {
+		lc, err := ts.LocalClient()
+		if err != nil {
+			t.Fatal(err)
 		}
-		pingTimeout := time.NewTimer(2 * time.Second)
-		defer pingTimeout.Stop()
-		select {
-		case <-gotPing:
-			// ok! the machinery that refreshes the netmap has been nudged
-			return
-		case <-pingTimeout.C:
-			t.Logf("waiting for ping timed out: %d", try)
+		status, err := lc.Status(ctx)
+		if err != nil {
+			t.Fatalf("error getting status: %v", err)
 		}
-	}
+		for _, k := range nodeKeys {
+			var tags *views.Slice[string]
+			if k == status.Self.PublicKey {
+				tags = status.Self.Tags
+			} else {
+				tags = status.Peer[k].Tags
+			}
+			if tags == nil || !slices.Contains(tags.AsSlice(), tag) {
+				return false
+			}
+		}
+		return true
+	}, 5, 1*time.Second)
 }
 
 func tagNodes(t *testing.T, control *testcontrol.Server, nodeKeys []key.NodePublic, tag string) {
@@ -152,13 +156,6 @@ func tagNodes(t *testing.T, control *testcontrol.Server, nodeKeys []key.NodePubl
 		b := true
 		n.Online = &b
 		control.UpdateNode(n)
-	}
-
-	// all this ping stuff is only to prod the netmap to get updated with the tag we just added to the node
-	// ie to actually get the netmap issued to clients that represents the current state of the nodes
-	// there _must_ be a better way to do this, but I looked all day and this was the first thing I found that worked.
-	for _, key := range nodeKeys {
-		pingNode(t, control, key)
 	}
 }
 
@@ -173,6 +170,7 @@ func TestStart(t *testing.T) {
 	clusterTag := "tag:whatever"
 	// nodes must be tagged with the cluster tag, to find each other
 	tagNodes(t, control, []key.NodePublic{k}, clusterTag)
+	waitForNodesToBeTaggedInStatus(t, ctx, one, []key.NodePublic{k}, clusterTag)
 
 	sm := &fsm{}
 	r, err := Start(ctx, one, (*fsm)(sm), clusterTag, DefaultConfig())
@@ -219,6 +217,7 @@ func startNodesAndWaitForPeerStatus(t *testing.T, ctx context.Context, clusterTa
 		localClients[i] = lc
 	}
 	tagNodes(t, control, keysToTag, clusterTag)
+	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, keysToTag, clusterTag)
 	fxCameOnline := func() bool {
 		// all the _other_ nodes see the first as online
 		for i := 1; i < nNodes; i++ {
@@ -443,6 +442,7 @@ func TestRejoin(t *testing.T) {
 
 	tsJoiner, keyJoiner, _ := startNode(t, ctx, controlURL, "node: joiner")
 	tagNodes(t, control, []key.NodePublic{keyJoiner}, clusterTag)
+	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, []key.NodePublic{keyJoiner}, clusterTag)
 	smJoiner := &fsm{}
 	cJoiner, err := Start(ctx, tsJoiner, (*fsm)(smJoiner), clusterTag, cfg)
 	if err != nil {
@@ -456,4 +456,67 @@ func TestRejoin(t *testing.T) {
 	})
 
 	assertCommandsWorkOnAnyNode(t, ps)
+}
+
+func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	clusterTag := "tag:whatever"
+	ps, control, controlURL := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
+	cfg := DefaultConfig()
+	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
+	for _, p := range ps {
+		defer p.c.Stop(ctx)
+	}
+	assertCommandsWorkOnAnyNode(t, ps)
+
+	untaggedNode, _, _ := startNode(t, ctx, controlURL, "untagged node")
+
+	taggedNode, taggedKey, _ := startNode(t, ctx, controlURL, "untagged node")
+	tagNodes(t, control, []key.NodePublic{taggedKey}, clusterTag)
+	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, []key.NodePublic{taggedKey}, clusterTag)
+
+	// surface area: command http, peer tcp
+	//untagged
+	ipv4, _ := ps[0].ts.TailscaleIPs()
+	sAddr := fmt.Sprintf("%s:%d", ipv4, cfg.RaftPort)
+
+	isNetTimeoutErr := func(err error) bool {
+		var netErr net.Error
+		if !errors.As(err, &netErr) {
+			return false
+		}
+		return netErr.Timeout()
+	}
+
+	getErrorFromTryingToSend := func(s *tsnet.Server) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		conn, err := s.Dial(ctx, "tcp", sAddr)
+		if err != nil {
+			t.Fatalf("unexpected Dial err: %v", err)
+		}
+		conn.SetDeadline(time.Now().Add(1 * time.Second))
+		fmt.Fprintf(conn, "hellllllloooooo")
+		status, err := bufio.NewReader(conn).ReadString('\n')
+		if status != "" {
+			t.Fatalf("node sending non-raft message should get empty response, got: '%s' for: %s", status, s.Hostname)
+		}
+		if err == nil {
+			t.Fatalf("node sending non-raft message should get an error but got nil err for: %s", s.Hostname)
+		}
+		return err
+	}
+
+	err := getErrorFromTryingToSend(untaggedNode)
+	if !isNetTimeoutErr(err) {
+		t.Fatalf("untagged node trying to send should time out, got: %v", err)
+	}
+	// we still get an error trying to send but it's EOF the target node was happy to talk
+	// to us but couldn't understand what we said.
+	err = getErrorFromTryingToSend(taggedNode)
+	if isNetTimeoutErr(err) {
+		t.Fatalf("tagged node trying to send should not time out, got: %v", err)
+	}
 }
