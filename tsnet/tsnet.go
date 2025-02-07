@@ -931,8 +931,7 @@ func getTSNetDir(logf logger.Logf, confDir, prog string) (string, error) {
 // requests to the Tailscale control server.
 // It requires the user to set tailscale.I_Acknowledge_This_API_Is_Unstable.
 //
-// TODO: (percy) provide a way to use Noise for the official API at
-// tailscale.com/client/tailscale/v2.
+// Deprecated: use AuthenticatedAPITransport with tailscale.com/client/tailscale/v2 instead.
 func (s *Server) APIClient() (*tailscale.Client, error) {
 	if !tailscale.I_Acknowledge_This_API_Is_Unstable {
 		return nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
@@ -945,6 +944,32 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 	c.UserAgent = "tailscale-tsnet"
 	c.HTTPClient = &http.Client{Transport: s.lb.KeyProvingNoiseRoundTripper()}
 	return c, nil
+}
+
+// AuthenticatedAPITransport provides an HTTP transport that can be used with
+// the control server API without needing additional authentication details. It
+// authenticates using the current client's nodekey.
+//
+// For example:
+//
+//	import "net/http"
+//	import "tailscale.com/client/tailscale/v2"
+//	import "tailscale.com/tsnet"
+//
+//	var s *tsnet.Server
+//	...
+//	rt, err := s.AuthenticatedAPITransport()
+//	// handler err ...
+//	var client tailscale.Client{HTTP: http.Client{
+//	    Timeout: 1*time.Minute,
+//	    UserAgent: "your-useragent-here",
+//	    Transport: rt,
+//	}}
+func (s *Server) AuthenticatedAPITransport() (http.RoundTripper, error) {
+	if err := s.Start(); err != nil {
+		return nil, err
+	}
+	return s.lb.KeyProvingNoiseRoundTripper(), nil
 }
 
 // Listen announces only on the Tailscale network.
