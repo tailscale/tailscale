@@ -394,6 +394,9 @@ type LocalBackend struct {
 	// and the user has disconnected with a reason.
 	// See tailscale/corp#26146.
 	overrideAlwaysOn bool
+
+	// auditLogger a queue-based logger that sends audit logs to the control server.
+	auditLogger ipn.AuditLogger
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -475,6 +478,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			"tailscaled_approved_routes", "Number of approved network routes (e.g. by a subnet router)"),
 	}
 
+	auditLogger := ipn.NewAuditLogger(ipn.AuditLoggerOpts{
+		RetryCount: 5,
+		Logf:       logf,
+	})
+
 	b := &LocalBackend{
 		ctx:                   ctx,
 		ctxCancel:             cancel,
@@ -499,6 +507,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCtx:            captiveCtx,
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
+		auditLogger:           auditLogger,
 	}
 	mConn.SetNetInfoCallback(b.setNetInfo)
 
@@ -4033,6 +4042,20 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	return err
 }
 
+// EnqueueAuditLogLocked enqueues an audit log entry for the specified action and details, keyed
+// to the specified profile ID.
+// b.mu must be held.
+func (b *LocalBackend) EnqueueAuditLogLocked(id ipn.ProfileID, action tailcfg.ClientAuditAction, details string) {
+	if b.netMap.HasCap(tailcfg.NodeAttrAuditLogs) {
+		auditLog := tailcfg.ClientAuditLog{
+			ProfileID: string(id),
+			Action:    action,
+			Details:   details,
+		}
+		b.auditLogger.EnqueueAuditLog(b.ccAuto, auditLog, time.Second*2, nil)
+	}
+}
+
 // EditPrefs applies the changes in mp to the current prefs,
 // acting as the tailscaled itself rather than a specific user.
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
@@ -4058,9 +4081,7 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		// TODO(barnstar,nickkhyl): replace loggerFn with the actual audit logger.
-		loggerFn := func(action, details string) { b.logf("[audit]: %s: %s", action, details) }
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, loggerFn); err != nil {
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.EnqueueAuditLogLocked); err != nil {
 			return ipn.PrefsView{}, err
 		}
 
@@ -5571,6 +5592,24 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.logf("requestEngineStatusAndWait: got status update.")
 }
 
+func (b *LocalBackend) flushAuditLogsLocked() {
+	// We're about to destroy the control client or switch user contexts,
+	// we need to flush any pending audit logs (shutdown itself is logged).
+
+	// The timeout here needs to be balanced.  This is normally an extremely
+	// fast operation, but there needs to be a ~reasonable guarantee that we
+	// will send the audit logs (or at least attempt to send them) before
+	// we return from this function.
+	if b.ccAuto != nil {
+		flushed := make(chan int, 1)
+		b.auditLogger.Flush(b.ccAuto, time.Second*2, flushed)
+		failed := <-flushed
+		if failed != 0 {
+			b.logf("audit log flush on flush incomplete: %v", failed)
+		}
+	}
+}
+
 // setControlClientLocked sets the control client to cc,
 // which may be nil.
 //
@@ -5587,7 +5626,7 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	if b.cc == nil {
 		return nil
 	}
-
+	b.flushAuditLogsLocked()
 	b.resetAuthURLLocked()
 
 	// When we clear the control client, stop any outstanding netmap expiry
@@ -7169,6 +7208,10 @@ func (b *LocalBackend) resetDialPlan() {
 func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) error {
 	defer unlock()
 
+	b.flushAuditLogsLocked()
+	// When switching users, we need to discard all queued audit logs.
+	b.auditLogger.DiscardAndPersist()
+
 	if b.shutdownCalled {
 		// Prevent a call back to Start during Shutdown, which calls Logout for
 		// ephemeral nodes, which can then call back here. But we're shutting
@@ -7203,6 +7246,9 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 		}
 		return err
 	}
+
+	b.auditLogger.DestroyUnflushedLogs(p)
+
 	if !needToRestart {
 		return nil
 	}
