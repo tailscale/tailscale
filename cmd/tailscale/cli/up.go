@@ -27,8 +27,8 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/oauth2/clientcredentials"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/health/healthmsg"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
@@ -1095,12 +1095,6 @@ func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 		}
 	}
 	return
-}
-
-func init() {
-	// Required to use our client API. We're fine with the instability since the
-	// client lives in the same repo as this code.
-	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 }
 
 // resolveAuthKey either returns v unchanged (in the common case) or, if it
