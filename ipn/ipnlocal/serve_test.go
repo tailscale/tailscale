@@ -327,12 +327,12 @@ func TestServeConfigServices(t *testing.T) {
 				tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
 			},
 		}).View(),
-		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
-			tailcfg.UserID(1): {
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			tailcfg.UserID(1): (&tailcfg.UserProfile{
 				LoginName:     "someone@example.com",
 				DisplayName:   "Some One",
 				ProfilePicURL: "https://example.com/photo.jpg",
-			},
+			}).View(),
 		},
 	}
 
@@ -905,12 +905,12 @@ func newTestBackend(t *testing.T) *LocalBackend {
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
 		}).View(),
-		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
-			tailcfg.UserID(1): {
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			tailcfg.UserID(1): (&tailcfg.UserProfile{
 				LoginName:     "someone@example.com",
 				DisplayName:   "Some One",
 				ProfilePicURL: "https://example.com/photo.jpg",
-			},
+			}).View(),
 		},
 	}
 	b.peers = map[tailcfg.NodeID]tailcfg.NodeView{
