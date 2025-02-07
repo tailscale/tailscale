@@ -930,6 +930,9 @@ func getTSNetDir(logf logger.Logf, confDir, prog string) (string, error) {
 // APIClient returns a tailscale.Client that can be used to make authenticated
 // requests to the Tailscale control server.
 // It requires the user to set tailscale.I_Acknowledge_This_API_Is_Unstable.
+//
+// TODO: (percy) provide a way to use Noise for the official API at
+// tailscale.com/client/tailscale/v2.
 func (s *Server) APIClient() (*tailscale.Client, error) {
 	if !tailscale.I_Acknowledge_This_API_Is_Unstable {
 		return nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
