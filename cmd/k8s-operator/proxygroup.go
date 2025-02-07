@@ -480,7 +480,18 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			}
 		}
 
-		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, existingCfgSecret)
+		var serveConfig *ipn.ServeConfig
+		if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+			_, serveConfig, err = proxyGroupServeConfig(ctx, r.Client, r.tsNamespace, pg.Name)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					logger.Debugf("no ConfigMap found for ProxyGroup %s, will not advertise services yet", pg.Name)
+				} else {
+					return "", fmt.Errorf("error getting ServeConfig for ProxyGroup %s: %w", pg.Name, err)
+				}
+			}
+		}
+		configs, err := pgTailscaledConfig(pg, proxyClass, serveConfig, i, authKey, existingCfgSecret)
 		if err != nil {
 			return "", fmt.Errorf("error creating tailscaled config: %w", err)
 		}
@@ -561,13 +572,24 @@ func (r *ProxyGroupReconciler) ensureRemovedFromGaugeForProxyGroup(pg *tsapi.Pro
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 }
 
-func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32, authKey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
+func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, serveConfig *ipn.ServeConfig, idx int32, authKey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
 	conf := &ipn.ConfigVAlpha{
 		Version:      "alpha0",
 		AcceptDNS:    "false",
 		AcceptRoutes: "false", // AcceptRoutes defaults to true
 		Locked:       "false",
 		Hostname:     ptr.To(fmt.Sprintf("%s-%d", pg.Name, idx)),
+		AdvertiseServices: func() []string {
+			if pg.Spec.Type == tsapi.ProxyGroupTypeEgress || serveConfig == nil || serveConfig.Services == nil {
+				return nil
+			}
+
+			services := make([]string, 0, len(serveConfig.Services))
+			for key := range serveConfig.Services {
+				services = append(services, string(key))
+			}
+			return services
+		}(),
 	}
 
 	if pg.Spec.HostnamePrefix != "" {
