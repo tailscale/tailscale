@@ -118,6 +118,9 @@ func (a *actor) ClientID() (_ ipnauth.ClientID, ok bool) {
 	return a.clientID, a.clientID != ipnauth.NoClientID
 }
 
+// Context implements [ipnauth.Actor].
+func (a *actor) Context() context.Context { return context.Background() }
+
 // Username implements [ipnauth.Actor].
 func (a *actor) Username() (string, error) {
 	if a.ci == nil {
