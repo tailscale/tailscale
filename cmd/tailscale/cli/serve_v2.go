@@ -44,8 +44,12 @@ var serveHelpCommon = strings.TrimSpace(`
 <target> can be a file, directory, text, or most commonly the location to a service running on the
 local machine. The location to the location service can be expressed as a port number (e.g., 3000),
 a partial URL (e.g., localhost:3000), or a full URL including a path (e.g., http://localhost:3000/foo).
+Files and  directories must be specified as absolute paths, relative paths are not supported.
 
 EXAMPLES
+  - Expose an HTML file by giving its absolute path:
+    $ tailscale %[1]s /tmp/test/index.html
+
   - Expose an HTTP server running at 127.0.0.1:3000 in the foreground:
     $ tailscale %[1]s 3000
 
