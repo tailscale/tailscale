@@ -5615,41 +5615,6 @@ func (b *LocalBackend) resetAuthURLLocked() {
 	b.authActor = nil
 }
 
-// ResetForClientDisconnect resets the backend for GUI clients running
-// in interactive (non-headless) mode. This is currently used only by
-// Windows. This causes all state to be cleared, lest an unrelated user
-// connect to tailscaled next. But it does not trigger a logout; we
-// don't want to the user to have to reauthenticate in the future
-// when they restart the GUI.
-func (b *LocalBackend) ResetForClientDisconnect() {
-	b.logf("LocalBackend.ResetForClientDisconnect")
-
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
-
-	prevCC := b.resetControlClientLocked()
-	if prevCC != nil {
-		// Needs to happen without b.mu held.
-		defer prevCC.Shutdown()
-	}
-
-	b.setNetMapLocked(nil)
-	b.pm.Reset()
-	if b.currentUser != nil {
-		if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
-			c.Close()
-		}
-		b.currentUser = nil
-	}
-	b.keyExpired = false
-	b.resetAuthURLLocked()
-	b.activeLogin = ""
-	b.resetDialPlan()
-	b.resetAlwaysOnOverrideLocked()
-	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
-	b.enterStateLockedOnEntry(ipn.Stopped, unlock)
-}
-
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
 // ShouldRunWebClient reports whether the web client is being run
@@ -7178,13 +7143,19 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	b.setNetMapLocked(nil) // Reset netmap.
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
+	if prevCC := b.resetControlClientLocked(); prevCC != nil {
+		// Needs to happen without b.mu held.
+		defer prevCC.Shutdown()
+	}
 	if err := b.initTKALocked(); err != nil {
 		return err
 	}
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
+	b.keyExpired = false
 	b.resetAlwaysOnOverrideLocked()
+	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
 	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
 	b.health.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})

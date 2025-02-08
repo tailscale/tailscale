@@ -434,7 +434,7 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 				s.logf("client disconnected; staying alive in server mode")
 			} else {
 				s.logf("client disconnected; stopping server")
-				lb.ResetForClientDisconnect()
+				lb.SetCurrentUser(nil)
 			}
 		}
 
