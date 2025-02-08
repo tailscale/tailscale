@@ -21,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/internal/client/tailscale"
 )
 
 const (
@@ -64,7 +64,6 @@ func TestMain(m *testing.M) {
 func runTests(m *testing.M) (int, error) {
 	zlog := kzap.NewRaw([]kzap.Opts{kzap.UseDevMode(true), kzap.Level(zapcore.DebugLevel)}...).Sugar()
 	logf.SetLogger(zapr.NewLogger(zlog.Desugar()))
-	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	if clientID := os.Getenv("TS_API_CLIENT_ID"); clientID != "" {
 		cleanup, err := setupClientAndACLs()

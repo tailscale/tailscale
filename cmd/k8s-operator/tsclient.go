@@ -16,7 +16,7 @@ import (
 	"os"
 
 	"golang.org/x/oauth2/clientcredentials"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
 )
