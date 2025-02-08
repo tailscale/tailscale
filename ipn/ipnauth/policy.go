@@ -7,9 +7,35 @@ import (
 	"errors"
 	"fmt"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/util/syspolicy"
 )
+
+type actorWithPolicyChecks struct{ Actor }
+
+// WithPolicyChecks returns an [Actor] that wraps the given actor and
+// performs additional policy checks on top of the access checks
+// implemented by the wrapped actor.
+func WithPolicyChecks(actor Actor) Actor {
+	// TODO(nickkhyl): We should probably exclude the Windows Local System
+	// account from policy checks as well.
+	switch actor.(type) {
+	case unrestricted:
+		return actor
+	default:
+		return &actorWithPolicyChecks{Actor: actor}
+	}
+}
+
+// CheckProfileAccess implements [Actor].
+func (a actorWithPolicyChecks) CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ProfileAccess, auditLogger AuditLogFunc) error {
+	if err := a.Actor.CheckProfileAccess(profile, requestedAccess, auditLogger); err != nil {
+		return err
+	}
+	requestReason := apitype.RequestReasonKey.Value(a.Context())
+	return CheckDisconnectPolicy(a.Actor, profile, requestReason, auditLogger)
+}
 
 // CheckDisconnectPolicy checks if the policy allows the specified actor to disconnect
 // Tailscale with the given optional reason. It returns nil if the operation is allowed,
