@@ -97,7 +97,7 @@ func (pm *profileManager) DefaultUserProfileID(uid ipn.WindowsUserID) ipn.Profil
 	}
 
 	pk := ipn.StateKey(string(b))
-	prof := pm.findProfileByKey(pk)
+	prof := pm.findProfileByKey(uid, pk)
 	if !prof.Valid() {
 		pm.dlogf("DefaultUserProfileID: no profile found for key: %q", pk)
 		return ""
@@ -108,17 +108,24 @@ func (pm *profileManager) DefaultUserProfileID(uid ipn.WindowsUserID) ipn.Profil
 // checkProfileAccess returns an [errProfileAccessDenied] if the current user
 // does not have access to the specified profile.
 func (pm *profileManager) checkProfileAccess(profile ipn.LoginProfileView) error {
-	if pm.currentUserID != "" && profile.LocalUserID() != pm.currentUserID {
+	return pm.checkProfileAccessAs(pm.currentUserID, profile)
+}
+
+// checkProfileAccessAs returns an [errProfileAccessDenied] if the specified user
+// does not have access to the specified profile.
+func (pm *profileManager) checkProfileAccessAs(uid ipn.WindowsUserID, profile ipn.LoginProfileView) error {
+	if uid != "" && profile.LocalUserID() != uid {
 		return errProfileAccessDenied
 	}
 	return nil
 }
 
-// allProfiles returns all profiles accessible to the current user.
+// allProfilesFor returns all profiles accessible to the specified user.
 // The returned profiles are sorted by Name.
-func (pm *profileManager) allProfiles() (out []ipn.LoginProfileView) {
+func (pm *profileManager) allProfilesFor(uid ipn.WindowsUserID) []ipn.LoginProfileView {
+	out := make([]ipn.LoginProfileView, 0, len(pm.knownProfiles))
 	for _, p := range pm.knownProfiles {
-		if pm.checkProfileAccess(p) == nil {
+		if pm.checkProfileAccessAs(uid, p) == nil {
 			out = append(out, p)
 		}
 	}
@@ -128,10 +135,10 @@ func (pm *profileManager) allProfiles() (out []ipn.LoginProfileView) {
 	return out
 }
 
-// matchingProfiles is like [profileManager.allProfiles], but returns only profiles
+// matchingProfiles is like [profileManager.allProfilesFor], but returns only profiles
 // matching the given predicate.
-func (pm *profileManager) matchingProfiles(f func(ipn.LoginProfileView) bool) (out []ipn.LoginProfileView) {
-	all := pm.allProfiles()
+func (pm *profileManager) matchingProfiles(uid ipn.WindowsUserID, f func(ipn.LoginProfileView) bool) (out []ipn.LoginProfileView) {
+	all := pm.allProfilesFor(uid)
 	out = all[:0]
 	for _, p := range all {
 		if f(p) {
@@ -144,8 +151,8 @@ func (pm *profileManager) matchingProfiles(f func(ipn.LoginProfileView) bool) (o
 // findMatchingProfiles returns all profiles accessible to the current user
 // that represent the same node/user as prefs.
 // The returned profiles are sorted by Name.
-func (pm *profileManager) findMatchingProfiles(prefs ipn.PrefsView) []ipn.LoginProfileView {
-	return pm.matchingProfiles(func(p ipn.LoginProfileView) bool {
+func (pm *profileManager) findMatchingProfiles(uid ipn.WindowsUserID, prefs ipn.PrefsView) []ipn.LoginProfileView {
+	return pm.matchingProfiles(uid, func(p ipn.LoginProfileView) bool {
 		return p.ControlURL() == prefs.ControlURL() &&
 			(p.UserProfile().ID == prefs.Persist().UserProfile().ID ||
 				p.NodeID() == prefs.Persist().NodeID())
@@ -156,16 +163,16 @@ func (pm *profileManager) findMatchingProfiles(prefs ipn.PrefsView) []ipn.LoginP
 // given name. It returns "" if no such profile exists among profiles
 // accessible to the current user.
 func (pm *profileManager) ProfileIDForName(name string) ipn.ProfileID {
-	p := pm.findProfileByName(name)
+	p := pm.findProfileByName(pm.currentUserID, name)
 	if !p.Valid() {
 		return ""
 	}
 	return p.ID()
 }
 
-func (pm *profileManager) findProfileByName(name string) ipn.LoginProfileView {
-	out := pm.matchingProfiles(func(p ipn.LoginProfileView) bool {
-		return p.Name() == name
+func (pm *profileManager) findProfileByName(uid ipn.WindowsUserID, name string) ipn.LoginProfileView {
+	out := pm.matchingProfiles(uid, func(p ipn.LoginProfileView) bool {
+		return p.Name() == name && pm.checkProfileAccessAs(uid, p) == nil
 	})
 	if len(out) == 0 {
 		return ipn.LoginProfileView{}
@@ -176,9 +183,9 @@ func (pm *profileManager) findProfileByName(name string) ipn.LoginProfileView {
 	return out[0]
 }
 
-func (pm *profileManager) findProfileByKey(key ipn.StateKey) ipn.LoginProfileView {
-	out := pm.matchingProfiles(func(p ipn.LoginProfileView) bool {
-		return p.Key() == key
+func (pm *profileManager) findProfileByKey(uid ipn.WindowsUserID, key ipn.StateKey) ipn.LoginProfileView {
+	out := pm.matchingProfiles(uid, func(p ipn.LoginProfileView) bool {
+		return p.Key() == key && pm.checkProfileAccessAs(uid, p) == nil
 	})
 	if len(out) == 0 {
 		return ipn.LoginProfileView{}
@@ -222,7 +229,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 	}
 
 	// Check if we already have an existing profile that matches the user/node.
-	if existing := pm.findMatchingProfiles(prefsIn); len(existing) > 0 {
+	if existing := pm.findMatchingProfiles(pm.currentUserID, prefsIn); len(existing) > 0 {
 		// We already have a profile for this user/node we should reuse it. Also
 		// cleanup any other duplicate profiles.
 		cp = existing[0]
@@ -376,12 +383,7 @@ func (pm *profileManager) writePrefsToStore(key ipn.StateKey, prefs ipn.PrefsVie
 
 // Profiles returns the list of known profiles accessible to the current user.
 func (pm *profileManager) Profiles() []ipn.LoginProfileView {
-	allProfiles := pm.allProfiles()
-	out := make([]ipn.LoginProfileView, len(allProfiles))
-	for i, p := range allProfiles {
-		out[i] = p
-	}
-	return out
+	return pm.allProfilesFor(pm.currentUserID)
 }
 
 // ProfileByID returns a profile with the given id, if it is accessible to the current user.

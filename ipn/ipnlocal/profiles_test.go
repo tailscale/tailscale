@@ -129,10 +129,10 @@ func TestProfileList(t *testing.T) {
 
 	pm.SetCurrentUserID("user1")
 	checkProfiles(t, "alice", "bob")
-	if lp := pm.findProfileByKey(carol.Key()); lp.Valid() {
+	if lp := pm.findProfileByKey("user1", carol.Key()); lp.Valid() {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
-	if lp := pm.findProfileByName(carol.Name()); lp.Valid() {
+	if lp := pm.findProfileByName("user1", carol.Name()); lp.Valid() {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
 
