@@ -27,6 +27,10 @@
             }
         }
     },
+    "Environment": [
+        "GOOS=linux",
+        "GOARCH=amd64"
+    ],
     "KernelPackage": "github.com/tailscale/gokrazy-kernel",
     "FirmwarePackage": "github.com/tailscale/gokrazy-kernel",
     "InternalCompatibilityFlags": {}
