@@ -1,0 +1,30 @@
+# Run some natlab integration tests.
+# See https://github.com/tailscale/tailscale/issues/13038
+name: "natlab-integrationtest"
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "tailcfg/**"
+      - "wgengine/**"
+      - "ipn/ipnlocal/**"
+      - ".github/workflows/natlab-integrationtest.yml"
+jobs:
+  natlab-integrationtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install qemu
+        run: |
+          sudo rm /var/lib/man-db/auto-update
+          sudo apt-get -y update
+          sudo apt-get -y remove man-db
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: Run natlab integration tests
+        run: |
+          ./tool/go test -v -run=^TestEasyEasy$ -timeout=3m -count=1 ./tstest/integration/nat  --run-vm-tests

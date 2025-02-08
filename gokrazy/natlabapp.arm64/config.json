@@ -20,6 +20,10 @@
             }
         }
     },
+    "Environment": [
+        "GOOS=linux",
+        "GOARCH=arm64"
+    ],
     "KernelPackage": "github.com/gokrazy/kernel.arm64",
     "FirmwarePackage": "github.com/gokrazy/kernel.arm64",
     "EEPROMPackage": "",
