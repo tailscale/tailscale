@@ -573,7 +573,7 @@ main() {
 			;;
 		pkg)
 			set -x
-			$SUDO pkg install tailscale --yes
+			$SUDO pkg install --yes tailscale
 			$SUDO service tailscaled enable
 			$SUDO service tailscaled start
 			set +x
