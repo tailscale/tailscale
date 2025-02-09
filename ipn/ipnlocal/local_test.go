@@ -5084,7 +5084,6 @@ func TestUpdateIngressLocked(t *testing.T) {
 				},
 			},
 			wantIngress:       true,
-			wantWireIngress:   true,
 			wantControlUpdate: true,
 		},
 		{
@@ -5111,15 +5110,13 @@ func TestUpdateIngressLocked(t *testing.T) {
 			name: "funnel_enabled_no_change",
 			hi: &tailcfg.Hostinfo{
 				IngressEnabled: true,
-				WireIngress:    true,
 			},
 			sc: &ipn.ServeConfig{
 				AllowFunnel: map[ipn.HostPort]bool{
 					"tailnet.xyz:443": true,
 				},
 			},
-			wantIngress:     true,
-			wantWireIngress: true,
+			wantIngress: true,
 		},
 		{
 			name: "funnel_disabled_no_change",
@@ -5137,7 +5134,6 @@ func TestUpdateIngressLocked(t *testing.T) {
 			name: "funnel_changes_to_disabled",
 			hi: &tailcfg.Hostinfo{
 				IngressEnabled: true,
-				WireIngress:    true,
 			},
 			sc: &ipn.ServeConfig{
 				AllowFunnel: map[ipn.HostPort]bool{
@@ -5157,7 +5153,6 @@ func TestUpdateIngressLocked(t *testing.T) {
 					"tailnet.xyz:443": true,
 				},
 			},
-			wantWireIngress:   true,
 			wantIngress:       true,
 			wantControlUpdate: true,
 		},
