@@ -239,6 +239,14 @@ type ClientConfig struct {
 	//
 	// A Timeout of zero means no timeout.
 	Timeout time.Duration
+
+	// SkipNoneAuth allows skipping the initial "none" auth request. This is unusual
+	// behavior, but it is allowed by [RFC4252 5.2](https://datatracker.ietf.org/doc/html/rfc4252#section-5.2),
+	// and some clients in the wild behave like this. One such client is the paramiko Python
+	// library, which is used in pgadmin4 via the sshtunnel library.
+	// When SkipNoneAuth is true, the client will attempt all configured
+	// [AuthMethod]s until one works, or it runs out.
+	SkipNoneAuth bool
 }
 
 // InsecureIgnoreHostKey returns a function that can be used for

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //go:build integrationtest
-// +build integrationtest
 
 package tailssh
 
@@ -407,6 +406,48 @@ func TestSSHAgentForwarding(t *testing.T) {
 	o, err := s.CombinedOutput(fmt.Sprintf(`ssh -T -o StrictHostKeyChecking=no -p %s upstreamuser@%s "true"`, upstreamPort, upstreamHost))
 	if err != nil {
 		t.Fatalf("unable to call true command: %s\n%s\n-------------------------", err, o)
+	}
+}
+
+// TestIntegrationParamiko attempts to connect to Tailscale SSH using the
+// paramiko Python library. This library does not request 'none' auth. This
+// test ensures that Tailscale SSH can correctly handle clients that don't
+// request 'none' auth and instead immediately authenticate with a public key
+// or password.
+func TestIntegrationParamiko(t *testing.T) {
+	debugTest.Store(true)
+	t.Cleanup(func() {
+		debugTest.Store(false)
+	})
+
+	addr := testServer(t, "testuser", true, false)
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("Failed to split addr %q: %s", addr, err)
+	}
+
+	out, err := exec.Command("python3", "-c", fmt.Sprintf(`
+import paramiko.client as pm
+from paramiko.ecdsakey import ECDSAKey
+client = pm.SSHClient()
+client.set_missing_host_key_policy(pm.AutoAddPolicy)
+client.connect('%s', port=%s, username='testuser', pkey=ECDSAKey.generate(), allow_agent=False, look_for_keys=False)
+client.exec_command('pwd')
+`, host, port)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("failed to connect with Paramiko using public key auth: %s\n%q", err, string(out))
+	}
+
+	out, err = exec.Command("python3", "-c", fmt.Sprintf(`
+import paramiko.client as pm
+from paramiko.ecdsakey import ECDSAKey
+client = pm.SSHClient()
+client.set_missing_host_key_policy(pm.AutoAddPolicy)
+client.connect('%s', port=%s, username='testuser', password='doesntmatter', allow_agent=False, look_for_keys=False)
+client.exec_command('pwd')
+`, host, port)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("failed to connect with Paramiko using password auth: %s\n%q", err, string(out))
 	}
 }
 
