@@ -156,6 +156,11 @@ type Options struct {
 	// If we receive a new DialPlan from the server, this value will be
 	// updated.
 	DialPlan ControlDialPlanner
+
+	// Shutdown is an optional function that will be called before client shutdown is
+	// attempted. It is used to allow the client to clean up any resources or complete any
+	// tasks that are dependent on a live client.
+	Shutdown func()
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -1660,11 +1665,11 @@ func (c *Auto) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) err
 func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
 	nc, err := c.getNoiseClient()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrNoNoiseClient, err)
 	}
 	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
 	if !ok {
-		return errors.New("no node key")
+		return ErrNoNodeKey
 	}
 	if c.panicOnUse {
 		panic("tainted client")
@@ -1691,6 +1696,48 @@ func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) e
 	all, _ := io.ReadAll(res.Body)
 	if res.StatusCode != 200 {
 		return fmt.Errorf("HTTP error from control plane: %v: %s", res.Status, all)
+	}
+	return nil
+}
+
+// SendAuditLog does a synchronous call to the control plane submit an audit log.
+//
+// Errors should be evaluated for retriability.  See [auditlog.errorEvaluator]
+//
+// Auto implements [auditlog.Transport].
+func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	return c.direct.sendAuditLog(ctx, auditLog)
+}
+
+func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrNoNoiseClient, err)
+	}
+
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return ErrNoNodeKey
+	}
+
+	req := &tailcfg.AuditLogRequest{
+		NodeKey: nodeKey,
+		Action:  auditLog.Action,
+		Details: auditLog.Details,
+	}
+
+	if c.panicOnUse {
+		panic("tainted client")
+	}
+
+	res, err := nc.post(ctx, "/machine/audit-log", nodeKey, req)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrHTTPPostFailure, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		all, _ := io.ReadAll(res.Body)
+		return ErrBadHTTPResponseWithDetails(res.StatusCode, all)
 	}
 	return nil
 }
@@ -1749,3 +1796,23 @@ var (
 	metricSetDNS      = clientmetric.NewCounter("controlclient_setdns")
 	metricSetDNSError = clientmetric.NewCounter("controlclient_setdns_error")
 )
+
+// ErrBadHTTPResponse wraps a generic HTTP error response from controlclient
+type ErrBadHTTPResponse struct {
+	errStr   string
+	response string
+	httpCode int
+}
+
+func (e ErrBadHTTPResponse) Error() string {
+	return e.errStr
+}
+
+var ErrHTTPFailure error = errors.New("HTTP Error")
+var ErrNoNodeKey error = errors.New("No Node Key")
+var ErrNoNoiseClient error = errors.New("No Noise Client")
+var ErrHTTPPostFailure error = errors.New("HTTP Post Failure")
+
+func ErrBadHTTPResponseWithDetails(errCode int, response []byte) error {
+	return ErrBadHTTPResponse{ErrHTTPFailure.Error(), string(response), errCode}
+}
