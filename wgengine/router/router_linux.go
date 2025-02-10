@@ -1183,8 +1183,8 @@ var (
 	tailscaleRouteTable = newRouteTable("tailscale", 52)
 )
 
-// baseIPRules are the policy routing rules that Tailscale uses, when not
-// running on a UBNT device.
+// oldIPRules are the policy routing rules that Tailscale uses, when not
+// using newIPRule.
 //
 // The priority is the value represented here added to r.ipPolicyPrefBase,
 // which is usually 5200.
@@ -1200,7 +1200,7 @@ var (
 // and 'ip rule' implementations (including busybox), don't support
 // checking for the lack of a fwmark, only the presence. The technique
 // below works even on very old kernels.
-var baseIPRules = []netlink.Rule{
+var oldIPRules = []netlink.Rule{
 	// Packets from us, tagged with our fwmark, first try the kernel's
 	// main routing table.
 	{
@@ -1236,15 +1236,15 @@ var baseIPRules = []netlink.Rule{
 	// usual rules (pref 32766 and 32767, ie. main and default).
 }
 
-// ubntIPRules are the policy routing rules that Tailscale uses, when running
-// on a UBNT device.
+var forceNewIPRules = envknob.RegisterBool("TS_FORCE_NEW_IP_RULES")
+
+// newIPRules is new the single routing rule that that Tailscale uses. In
+// in contrast to the oldIPRules it uses rule with negation that direct
+// unmarked traffic to the Tailscale routing table.
 //
 // The priority is the value represented here added to
 // r.ipPolicyPrefBase, which is usually 5200.
-//
-// This represents an experiment that will be used to gather more information.
-// If this goes well, Tailscale may opt to use this for all of Linux.
-var ubntIPRules = []netlink.Rule{
+var newIPRules = []netlink.Rule{
 	// non-fwmark packets fall through to the usual rules (pref 32766 and 32767,
 	// ie. main and default).
 	{
@@ -1256,12 +1256,17 @@ var ubntIPRules = []netlink.Rule{
 }
 
 // ipRules returns the appropriate list of ip rules to be used by Tailscale. See
-// comments on baseIPRules and ubntIPRules for more details.
+// comments on oldIPRules and newIPRules for more details.
 func ipRules() []netlink.Rule {
-	if getDistroFunc() == distro.UBNT {
-		return ubntIPRules
+	// Use singe rule in case of UBNT devices or if user requested it using
+	// TS_FORCE_NEW_IP_RULES env variable.
+	//
+	// This represents an experiment that will be used to gather more information.
+	// If this goes well, Tailscale may opt to use this for all of Linux.
+	if getDistroFunc() == distro.UBNT || forceNewIPRules() {
+		return newIPRules
 	}
-	return baseIPRules
+	return oldIPRules
 }
 
 // justAddIPRules adds policy routing rule without deleting any first.
