@@ -6,9 +6,10 @@
 package store
 
 import (
-	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"net/url"
 	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/awsstore"
 	"tailscale.com/types/logger"

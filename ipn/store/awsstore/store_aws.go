@@ -33,7 +33,7 @@ type Option func(*storeOptions)
 
 // storeOptions holds optional settings for creating a new awsStore.
 type storeOptions struct {
-    kmsKey string
+	kmsKey string
 }
 
 // awsSSMClient is an interface allowing us to mock the couple of
@@ -70,64 +70,62 @@ type awsStore struct {
 // restarting Tailscaled can fail until you delete your state
 // from the AWS Parameter Store.
 //
-//
 // If you want to specify an optional KMS key,
 // pass one or more Option objects, e.g. awsstore.WithKeyID("alias/my-key").
 func New(_ logger.Logf, ssmARN string, opts ...Option) (ipn.StateStore, error) {
-    // Apply all options to an empty storeOptions
-    var so storeOptions
-    for _, opt := range opts {
-        opt(&so)
-    }
+	// Apply all options to an empty storeOptions
+	var so storeOptions
+	for _, opt := range opts {
+		opt(&so)
+	}
 
-    return newStore(ssmARN, so, nil)
+	return newStore(ssmARN, so, nil)
 }
 
 // WithKeyID sets the KMS key to be used for encryption. It can be
 // a KeyID, an alias ("alias/my-key"), or a full ARN.
 func WithKeyID(kmsKey string) Option {
-    return func(o *storeOptions) {
-        o.kmsKey = kmsKey
-    }
+	return func(o *storeOptions) {
+		o.kmsKey = kmsKey
+	}
 }
 
 // newStore is NewStore, but for tests. If client is non-nil, it's
 // used instead of making one.
 func newStore(ssmARN string, so storeOptions, client awsSSMClient) (ipn.StateStore, error) {
-    s := &awsStore{
-        ssmClient: client,
-        kmsKey:    so.kmsKey,
-    }
+	s := &awsStore{
+		ssmClient: client,
+		kmsKey:    so.kmsKey,
+	}
 
-    var err error
-    if s.ssmARN, err = arn.Parse(ssmARN); err != nil {
-        return nil, fmt.Errorf("unable to parse the ARN correctly: %v", err)
-    }
-    if s.ssmARN.Service != "ssm" {
-        return nil, fmt.Errorf("invalid service %q, expected 'ssm'", s.ssmARN.Service)
-    }
-    if !parameterNameRx.MatchString(s.ssmARN.Resource) {
-        return nil, fmt.Errorf("invalid resource %q, expected to match %v", s.ssmARN.Resource, parameterNameRxStr)
-    }
+	var err error
+	if s.ssmARN, err = arn.Parse(ssmARN); err != nil {
+		return nil, fmt.Errorf("unable to parse the ARN correctly: %v", err)
+	}
+	if s.ssmARN.Service != "ssm" {
+		return nil, fmt.Errorf("invalid service %q, expected 'ssm'", s.ssmARN.Service)
+	}
+	if !parameterNameRx.MatchString(s.ssmARN.Resource) {
+		return nil, fmt.Errorf("invalid resource %q, expected to match %v", s.ssmARN.Resource, parameterNameRxStr)
+	}
 
-    if s.ssmClient == nil {
-        var cfg aws.Config
-        if cfg, err = config.LoadDefaultConfig(
-            context.TODO(),
-            config.WithRegion(s.ssmARN.Region),
-        ); err != nil {
-            return nil, err
-        }
-        s.ssmClient = ssm.NewFromConfig(cfg)
-    }
+	if s.ssmClient == nil {
+		var cfg aws.Config
+		if cfg, err = config.LoadDefaultConfig(
+			context.TODO(),
+			config.WithRegion(s.ssmARN.Region),
+		); err != nil {
+			return nil, err
+		}
+		s.ssmClient = ssm.NewFromConfig(cfg)
+	}
 
-    // Preload existing state, if any
-    if err := s.LoadState(); err != nil {
-        return nil, err
-    }
-    return s, nil
+	// Preload existing state, if any
+	if err := s.LoadState(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
-
 
 // LoadState attempts to read the state from AWS SSM parameter store key.
 func (s *awsStore) LoadState() error {
