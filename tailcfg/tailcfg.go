@@ -2991,6 +2991,6 @@ type AuditLogRequest struct {
 	// Details is an opaque string, specific to the action being logged.  Empty strings may not
 	// be valid depending on the action being logged.
 	Details string `json:",omitempty"`
-	// Timestamp is the time at which the audit log was generated on the node
+	// Timestamp is the time at which the audit log was generated on the node.
 	Timestamp time.Time `json:",omitzero"`
 }

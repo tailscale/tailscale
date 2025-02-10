@@ -1695,6 +1695,53 @@ func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) e
 	return nil
 }
 
+// SendAuditLog does a synchronous call to the control plane submit an audit log.
+//
+// Returned errors maybe be fatal or retriable. If retriable is true, the caller may
+// retry the operation at a later time.
+func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error, retriable bool) {
+	return c.direct.SendAuditLog(ctx, auditLog)
+}
+
+// SendAuditLog does a synchronous call to the control plane submit an audit log.
+//
+// Returned errors maybe be fatal or retriable. If retriable is true, the caller may
+// retry the operation at a later time.
+func (c *Direct) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error, retriable bool) {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return err, true
+	}
+
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return errors.New("no node key"), true
+	}
+
+	req := &tailcfg.AuditLogRequest{
+		NodeKey: nodeKey,
+		Action:  auditLog.Action,
+		Details: auditLog.Details,
+	}
+
+	if c.panicOnUse {
+		panic("tainted client")
+	}
+
+	res, err := nc.post(ctx, "/machine/audit-log", nodeKey, req)
+	if err != nil {
+		return err, true
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		all, _ := io.ReadAll(res.Body)
+		// Errors reaching the control plane are generally retriable.  Errors
+		// from the control plane are assumed to be non-retriable.
+		return fmt.Errorf("HTTP error from control plane: %v, %s", res.Status, all), false
+	}
+	return nil, false
+}
+
 func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
 	if !nodeKey.IsZero() {
 		req.Header.Add(tailcfg.LBHeader, nodeKey.String())

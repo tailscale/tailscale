@@ -57,6 +57,7 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/auditlog"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
@@ -478,7 +479,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b := &LocalBackend{
 		ctx:                   ctx,
 		ctxCancel:             cancel,
-		logf:                  logf,
+		logf:                  logger.WithPrefix(logf, "LocalBackend: "),
 		keyLogf:               logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:                   sys,
@@ -831,7 +832,22 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 		return
 	}
 	networkUp := b.prevIfState.AnyInterfaceUp()
-	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
+	pause := ((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
+
+	// Before we pause the control client, stop the audit logger if it's running.  This
+	// will flush the queue and persist any unflushed logs to disk
+	logger := b.pm.AuditLogger()
+	if logger != nil && pause {
+		b.pm.auditLogger.Stop()
+	}
+
+	b.cc.SetPaused(pause)
+
+	// Restart the logger and flush the queue when the control client is unpaused
+	if logger != nil && !pause {
+		b.pm.AuditLogger().Start(b.ccAuto)
+	}
+
 }
 
 // DisconnectControl shuts down control client. This can be run before node shutdown to force control to consider this ndoe
@@ -999,6 +1015,10 @@ func (b *LocalBackend) Shutdown() {
 		return
 	}
 	b.shutdownCalled = true
+
+	if b.pm.AuditLogger() != nil {
+		b.pm.AuditLogger().Stop()
+	}
 
 	if b.captiveCancel != nil {
 		b.logf("canceling captive portal context")
@@ -2365,6 +2385,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
 	b.sendToLocked(ipn.Notify{Prefs: &prefs}, allClients)
+
+	b.pm.ResetAuditLogger()
 
 	if !loggedOut && (b.hasNodeKeyLocked() || confWantRunning) {
 		// If we know that we're either logged in or meant to be
@@ -4140,6 +4162,24 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	return err
 }
 
+// EnqueueAuditLogLocked enqueues an audit log entry for the specified action and details
+// b.mu must be held.
+func (b *LocalBackend) enqueueAuditLogLocked(id ipn.ProfileID, action tailcfg.ClientAuditAction, details string) error {
+	auditLog := auditlog.PendingAuditLog{
+		ProfileID: string(id),
+		Action:    action,
+		Details:   details,
+		TimeStamp: time.Now(),
+	}
+	if b.pm.AuditLogger() != nil {
+		_, err := b.pm.AuditLogger().EnqueueAuditLog(auditLog)
+		// We don't want to return an error here, because it will get propagated to localAPI, but
+		// we still want to log it.
+		b.logf("failed to enqueue audit log: %w", err)
+	}
+	return nil
+}
+
 // EditPrefs applies the changes in mp to the current prefs,
 // acting as the tailscaled itself rather than a specific user.
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
@@ -4165,9 +4205,7 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		// TODO(barnstar,nickkhyl): replace loggerFn with the actual audit logger.
-		loggerFn := func(action, details string) { b.logf("[audit]: %s: %s", action, details) }
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, loggerFn); err != nil {
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.enqueueAuditLogLocked); err != nil {
 			return ipn.PrefsView{}, err
 		}
 
@@ -5693,6 +5731,12 @@ func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	if b.cc == nil {
 		return nil
+	}
+
+	if b.pm.AuditLogger() != nil {
+		result := b.pm.AuditLogger().Flush(time.Second, b.ccAuto)
+		<-result
+		b.pm.auditLogger.Stop()
 	}
 
 	b.resetAuthURLLocked()
