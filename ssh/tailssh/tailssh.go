@@ -199,7 +199,8 @@ func (srv *server) OnPolicyChange() {
 //   - ServerConfigCallback
 //
 // Do the user auth
-//   - NoClientAuthHandler
+//   - NoClientAuthHandler or publicKeyHandler
+//   - fakePasswordHandler if forcing password auth with the `+password` username suffix
 //
 // Once auth is done, the conn can be multiplexed with multiple sessions and
 // channels concurrently. At which point any of the following can be called
@@ -337,6 +338,21 @@ func (c *conn) fakePasswordHandler(ctx ssh.Context, password string) bool {
 	return c.anyPasswordIsOkay
 }
 
+// publicKeyHandler is our implementation of the PublicKeyHandler hook that
+// checks whether the user's public key is correct. It exists for clients that
+// don't support "none" auth and instead insist on supplying a public key.
+// This ignores the supplied public key and authenticates with Tailscale auth
+// in the same way as NoClientAuthCallback.
+func (c *conn) publicKeyHandler(ctx ssh.Context, pubKey ssh.PublicKey) error {
+	if err := c.doPolicyAuth(ctx); err != nil {
+		return err
+	}
+	if err := c.isAuthorized(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
 // doPolicyAuth verifies that conn can proceed.
 // It returns nil if the matching policy action is Accept or
 // HoldAndDelegate. Otherwise, it returns errDenied.
@@ -412,6 +428,14 @@ func (srv *server) newConn() (*conn, error) {
 
 		NoClientAuthHandler: c.NoClientAuthCallback,
 		PasswordHandler:     c.fakePasswordHandler,
+
+		// The below handler exists for clients that don't support "none" auth
+		// and insist on supplying a public key. It ignores the supplied key
+		// and instead uses the same Tailscale auth as NoClientAuthCallback.
+		//
+		// As of 2025-02-10, tailssh_integration_test does not exercise this functionality.
+		// See tailscale/tailscale#14969.
+		PublicKeyHandler: c.publicKeyHandler,
 
 		Handler:                       c.handleSessionPostSSHAuth,
 		LocalPortForwardingCallback:   c.mayForwardLocalPortTo,
