@@ -119,6 +119,7 @@ type Auto struct {
 	updateCh      chan struct{} // readable when we should inform the server of a change
 	observer      Observer      // called to update Client status; always non-nil
 	observerQueue execqueue.ExecQueue
+	shutdownFn    func() // to be called prior to shutdown or nil
 
 	unregisterHealthWatch func()
 
@@ -189,6 +190,7 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		mapDone:    make(chan struct{}),
 		updateDone: make(chan struct{}),
 		observer:   opts.Observer,
+		shutdownFn: opts.Shutdown,
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, opts.Logf)
@@ -755,6 +757,7 @@ func (c *Auto) Shutdown() {
 		return
 	}
 	c.logf("client.Shutdown ...")
+	shutdownFn := c.shutdownFn
 
 	direct := c.direct
 	c.closed = true
@@ -766,6 +769,10 @@ func (c *Auto) Shutdown() {
 	}
 	c.unpauseWaiters = nil
 	c.mu.Unlock()
+
+	if shutdownFn != nil {
+		shutdownFn()
+	}
 
 	c.unregisterHealthWatch()
 	<-c.authDone
