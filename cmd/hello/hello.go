@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 )
 
@@ -31,7 +31,7 @@ var (
 //go:embed hello.tmpl.html
 var embeddedTemplate string
 
-var localClient tailscale.LocalClient
+var localClient local.Client
 
 func main() {
 	flag.Parse()

@@ -7,6 +7,7 @@ package ipnserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
@@ -194,14 +196,22 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer onDone()
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
-		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
+		if actor, ok := ci.(*actor); ok {
+			reason, err := base64.StdEncoding.DecodeString(r.Header.Get(apitype.RequestReasonHeader))
+			if err != nil {
+				http.Error(w, "invalid reason header", http.StatusBadRequest)
+				return
+			}
+			ci = actorWithAccessOverride(actor, string(reason))
+		}
+
+		lah := localapi.NewHandler(ci, lb, s.logf, s.backendLogID)
 		if actor, ok := ci.(*actor); ok {
 			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
 			lah.PermitCert = actor.CanFetchCerts()
 		} else if testenv.InTest() {
 			lah.PermitRead, lah.PermitWrite = true, true
 		}
-		lah.Actor = ci
 		lah.ServeHTTP(w, r)
 		return
 	}
@@ -308,6 +318,13 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor ipnauth.Acto
 // Unix-like platforms and specifies the ID of a local user
 // (in the os/user.User.Uid string form) who is allowed
 // to operate tailscaled without being root or using sudo.
+//
+// Sandboxed macos clients must directly supply, or be able to read,
+// an explicit token. Permission is inferred by validating that
+// token. Sandboxed macos clients also don't use ipnserver.actor at all
+// (and prior to that, they didn't use ipnauth.ConnIdentity)
+//
+// See safesocket and safesocket_darwin.
 func (a *actor) Permissions(operatorUID string) (read, write bool) {
 	switch envknob.GOOS() {
 	case "windows":

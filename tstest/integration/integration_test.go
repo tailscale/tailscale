@@ -32,6 +32,7 @@ import (
 
 	"github.com/miekg/dns"
 	"go4.org/mem"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/testwrapper/flakytest"
@@ -755,11 +756,11 @@ func TestClientSideJailing(t *testing.T) {
 	defer ln.Close()
 	port := uint16(ln.Addr().(*net.TCPAddr).Port)
 
-	lc1 := &tailscale.LocalClient{
+	lc1 := &local.Client{
 		Socket:        n1.sockFile,
 		UseSocketOnly: true,
 	}
-	lc2 := &tailscale.LocalClient{
+	lc2 := &local.Client{
 		Socket:        n2.sockFile,
 		UseSocketOnly: true,
 	}
@@ -789,7 +790,7 @@ func TestClientSideJailing(t *testing.T) {
 		},
 	}
 
-	testDial := func(t *testing.T, lc *tailscale.LocalClient, ip netip.Addr, port uint16, shouldFail bool) {
+	testDial := func(t *testing.T, lc *local.Client, ip netip.Addr, port uint16, shouldFail bool) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

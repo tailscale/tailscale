@@ -13,21 +13,44 @@ import (
 	"sync"
 	"time"
 
-	_ "embed"
-
+	"tailscale.com/feature"
+	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/packet"
 	"tailscale.com/util/set"
 )
 
-//go:embed ts-dissector.lua
-var DissectorLua string
+func init() {
+	feature.Register("capture")
+	localapi.Register("debug-capture", serveLocalAPIDebugCapture)
+}
 
-// Callback describes a function which is called to
-// record packets when debugging packet-capture.
-// Such callbacks must not take ownership of the
-// provided data slice: it may only copy out of it
-// within the lifetime of the function.
-type Callback func(Path, time.Time, []byte, packet.CaptureMeta)
+func serveLocalAPIDebugCapture(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.(http.Flusher).Flush()
+
+	b := h.LocalBackend()
+	s := b.GetOrSetCaptureSink(newSink)
+
+	unregister := s.RegisterOutput(w)
+
+	select {
+	case <-ctx.Done():
+	case <-s.WaitCh():
+	}
+	unregister()
+
+	b.ClearCaptureSink()
+}
 
 var bufferPool = sync.Pool{
 	New: func() any {
@@ -57,29 +80,8 @@ func writePktHeader(w *bytes.Buffer, when time.Time, length int) {
 	binary.Write(w, binary.LittleEndian, uint32(length)) // total length
 }
 
-// Path describes where in the data path the packet was captured.
-type Path uint8
-
-// Valid Path values.
-const (
-	// FromLocal indicates the packet was logged as it traversed the FromLocal path:
-	// i.e.: A packet from the local system into the TUN.
-	FromLocal Path = 0
-	// FromPeer indicates the packet was logged upon reception from a remote peer.
-	FromPeer Path = 1
-	// SynthesizedToLocal indicates the packet was generated from within tailscaled,
-	// and is being routed to the local machine's network stack.
-	SynthesizedToLocal Path = 2
-	// SynthesizedToPeer indicates the packet was generated from within tailscaled,
-	// and is being routed to a remote Wireguard peer.
-	SynthesizedToPeer Path = 3
-
-	// PathDisco indicates the packet is information about a disco frame.
-	PathDisco Path = 254
-)
-
-// New creates a new capture sink.
-func New() *Sink {
+// newSink creates a new capture sink.
+func newSink() packet.CaptureSink {
 	ctx, c := context.WithCancel(context.Background())
 	return &Sink{
 		ctx:       ctx,
@@ -124,6 +126,10 @@ func (s *Sink) RegisterOutput(w io.Writer) (unregister func()) {
 		defer s.mu.Unlock()
 		delete(s.outputs, hnd)
 	}
+}
+
+func (s *Sink) CaptureCallback() packet.CaptureCallback {
+	return s.LogPacket
 }
 
 // NumOutputs returns the number of outputs registered with the sink.
@@ -174,7 +180,7 @@ func customDataLen(meta packet.CaptureMeta) int {
 // LogPacket is called to insert a packet into the capture.
 //
 // This function does not take ownership of the provided data slice.
-func (s *Sink) LogPacket(path Path, when time.Time, data []byte, meta packet.CaptureMeta) {
+func (s *Sink) LogPacket(path packet.CapturePath, when time.Time, data []byte, meta packet.CaptureMeta) {
 	select {
 	case <-s.ctx.Done():
 		return

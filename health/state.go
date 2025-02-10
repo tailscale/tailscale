@@ -86,8 +86,13 @@ func (t *Tracker) CurrentState() *State {
 	wm := map[WarnableCode]UnhealthyState{}
 
 	for w, ws := range t.warnableVal {
-		if !w.IsVisible(ws) {
+		if !w.IsVisible(ws, t.now) {
 			// Skip invisible Warnables.
+			continue
+		}
+		if t.isEffectivelyHealthyLocked(w) {
+			// Skip Warnables that are unhealthy if they have dependencies
+			// that are unhealthy.
 			continue
 		}
 		wm[w.Code] = *w.unhealthyState(ws)
@@ -96,4 +101,24 @@ func (t *Tracker) CurrentState() *State {
 	return &State{
 		Warnings: wm,
 	}
+}
+
+// isEffectivelyHealthyLocked reports whether w is effectively healthy.
+// That means it's either actually healthy or it has a dependency that
+// that's unhealthy, so we should treat w as healthy to not spam users
+// with multiple warnings when only the root cause is relevant.
+func (t *Tracker) isEffectivelyHealthyLocked(w *Warnable) bool {
+	if _, ok := t.warnableVal[w]; !ok {
+		// Warnable not found in the tracker. So healthy.
+		return true
+	}
+	for _, d := range w.DependsOn {
+		if !t.isEffectivelyHealthyLocked(d) {
+			// If one of our deps is unhealthy, we're healthy.
+			return true
+		}
+	}
+	// If we have no unhealthy deps and had warnableVal set,
+	// we're unhealthy.
+	return false
 }

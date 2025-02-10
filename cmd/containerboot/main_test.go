@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/kubeclient"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
@@ -48,26 +51,13 @@ func TestContainerBoot(t *testing.T) {
 	defer lapi.Close()
 
 	kube := kubeServer{FSRoot: d}
-	if err := kube.Start(); err != nil {
-		t.Fatal(err)
-	}
+	kube.Start(t)
 	defer kube.Close()
 
 	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
-	tailscaledConfBytes, err := json.Marshal(tailscaledConf)
-	if err != nil {
-		t.Fatalf("error unmarshaling tailscaled config: %v", err)
-	}
 	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
-	serveConfBytes, err := json.Marshal(serveConf)
-	if err != nil {
-		t.Fatalf("error unmarshaling serve config: %v", err)
-	}
-	egressSvcsCfg := egressservices.Configs{"foo": {TailnetTarget: egressservices.TailnetTarget{FQDN: "foo.tailnetxyx.ts.net"}}}
-	egressSvcsCfgBytes, err := json.Marshal(egressSvcsCfg)
-	if err != nil {
-		t.Fatalf("error unmarshaling egress services config: %v", err)
-	}
+	egressCfg := egressSvcConfig("foo", "foo.tailnetxyz.ts.net")
+	egressStatus := egressSvcStatus("foo", "foo.tailnetxyz.ts.net")
 
 	dirs := []string{
 		"var/lib",
@@ -84,16 +74,17 @@ func TestContainerBoot(t *testing.T) {
 		}
 	}
 	files := map[string][]byte{
-		"usr/bin/tailscaled":                         fakeTailscaled,
-		"usr/bin/tailscale":                          fakeTailscale,
-		"usr/bin/iptables":                           fakeTailscale,
-		"usr/bin/ip6tables":                          fakeTailscale,
-		"dev/net/tun":                                []byte(""),
-		"proc/sys/net/ipv4/ip_forward":               []byte("0"),
-		"proc/sys/net/ipv6/conf/all/forwarding":      []byte("0"),
-		"etc/tailscaled/cap-95.hujson":               tailscaledConfBytes,
-		"etc/tailscaled/serve-config.json":           serveConfBytes,
-		"etc/tailscaled/egress-services-config.json": egressSvcsCfgBytes,
+		"usr/bin/tailscaled":                    fakeTailscaled,
+		"usr/bin/tailscale":                     fakeTailscale,
+		"usr/bin/iptables":                      fakeTailscale,
+		"usr/bin/ip6tables":                     fakeTailscale,
+		"dev/net/tun":                           []byte(""),
+		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
+		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
+		"etc/tailscaled/cap-95.hujson":          mustJSON(t, tailscaledConf),
+		"etc/tailscaled/serve-config.json":      mustJSON(t, serveConf),
+		filepath.Join("etc/tailscaled/", egressservices.KeyEgressServices): mustJSON(t, egressCfg),
+		filepath.Join("etc/tailscaled/", egressservices.KeyHEPPings):       []byte("4"),
 	}
 	resetFiles := func() {
 		for path, content := range files {
@@ -132,6 +123,9 @@ func TestContainerBoot(t *testing.T) {
 	healthURL := func(port int) string {
 		return fmt.Sprintf("http://127.0.0.1:%d/healthz", port)
 	}
+	egressSvcTerminateURL := func(port int) string {
+		return fmt.Sprintf("http://127.0.0.1:%d%s", port, kubetypes.EgessServicesPreshutdownEP)
+	}
 
 	capver := fmt.Sprintf("%d", tailcfg.CurrentCapabilityVersion)
 
@@ -143,15 +137,29 @@ func TestContainerBoot(t *testing.T) {
 
 		// WantCmds is the commands that containerboot should run in this phase.
 		WantCmds []string
+
 		// WantKubeSecret is the secret keys/values that should exist in the
 		// kube secret.
 		WantKubeSecret map[string]string
+
+		// Update the kube secret with these keys/values at the beginning of the
+		// phase (simulates our fake tailscaled doing it).
+		UpdateKubeSecret map[string]string
+
 		// WantFiles files that should exist in the container and their
 		// contents.
 		WantFiles map[string]string
-		// WantFatalLog is the fatal log message we expect from containerboot.
-		// If set for a phase, the test will finish on that phase.
-		WantFatalLog string
+
+		// WantLog is a log message we expect from containerboot.
+		WantLog string
+
+		// If set for a phase, the test will expect containerboot to exit with
+		// this error code, and the test will finish on that phase without
+		// waiting for the successful startup log message.
+		WantExitCode *int
+
+		// The signal to send to containerboot at the start of the phase.
+		Signal *syscall.Signal
 
 		EndpointStatuses map[string]int
 	}
@@ -439,7 +447,8 @@ func TestContainerBoot(t *testing.T) {
 							},
 						},
 					},
-					WantFatalLog: "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
+					WantLog:      "no forwarding rules for egress addresses [::1/128], host supports IPv6: false",
+					WantExitCode: ptr.To(1),
 				},
 			},
 		},
@@ -896,9 +905,10 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "egress_svcs_config_kube",
 			Env: map[string]string{
-				"KUBERNETES_SERVICE_HOST":        kube.Host,
-				"KUBERNETES_SERVICE_PORT_HTTPS":  kube.Port,
-				"TS_EGRESS_SERVICES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled/egress-services-config.json"),
+				"KUBERNETES_SERVICE_HOST":       kube.Host,
+				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
+				"TS_EGRESS_PROXIES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled"),
+				"TS_LOCAL_ADDR_PORT":            fmt.Sprintf("[::]:%d", localAddrPort),
 			},
 			KubeSecret: map[string]string{
 				"authkey": "tskey-key",
@@ -912,15 +922,22 @@ func TestContainerBoot(t *testing.T) {
 					WantKubeSecret: map[string]string{
 						"authkey": "tskey-key",
 					},
+					EndpointStatuses: map[string]int{
+						egressSvcTerminateURL(localAddrPort): 200,
+					},
 				},
 				{
 					Notify: runningNotify,
 					WantKubeSecret: map[string]string{
+						"egress-services":  mustBase64(t, egressStatus),
 						"authkey":          "tskey-key",
 						"device_fqdn":      "test-node.test.ts.net",
 						"device_id":        "myID",
 						"device_ips":       `["100.64.0.1"]`,
 						"tailscale_capver": capver,
+					},
+					EndpointStatuses: map[string]int{
+						egressSvcTerminateURL(localAddrPort): 200,
 					},
 				},
 			},
@@ -928,12 +945,69 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "egress_svcs_config_no_kube",
 			Env: map[string]string{
-				"TS_EGRESS_SERVICES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled/egress-services-config.json"),
-				"TS_AUTHKEY":                     "tskey-key",
+				"TS_EGRESS_PROXIES_CONFIG_PATH": filepath.Join(d, "etc/tailscaled"),
+				"TS_AUTHKEY":                    "tskey-key",
 			},
 			Phases: []phase{
 				{
-					WantFatalLog: "TS_EGRESS_SERVICES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
+					WantLog:      "TS_EGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes",
+					WantExitCode: ptr.To(1),
+				},
+			},
+		},
+		{
+			Name: "kube_shutdown_during_state_write",
+			Env: map[string]string{
+				"KUBERNETES_SERVICE_HOST":       kube.Host,
+				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
+				"TS_ENABLE_HEALTH_CHECK":        "true",
+			},
+			KubeSecret: map[string]string{
+				"authkey": "tskey-key",
+			},
+			Phases: []phase{
+				{
+					// Normal startup.
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+					},
+					WantKubeSecret: map[string]string{
+						"authkey": "tskey-key",
+					},
+				},
+				{
+					// SIGTERM before state is finished writing, should wait for
+					// consistent state before propagating SIGTERM to tailscaled.
+					Signal: ptr.To(unix.SIGTERM),
+					UpdateKubeSecret: map[string]string{
+						"_machinekey":  "foo",
+						"_profiles":    "foo",
+						"profile-baff": "foo",
+						// Missing "_current-profile" key.
+					},
+					WantKubeSecret: map[string]string{
+						"authkey":      "tskey-key",
+						"_machinekey":  "foo",
+						"_profiles":    "foo",
+						"profile-baff": "foo",
+					},
+					WantLog: "Waiting for tailscaled to finish writing state to Secret \"tailscale\"",
+				},
+				{
+					// tailscaled has finished writing state, should propagate SIGTERM.
+					UpdateKubeSecret: map[string]string{
+						"_current-profile": "foo",
+					},
+					WantKubeSecret: map[string]string{
+						"authkey":          "tskey-key",
+						"_machinekey":      "foo",
+						"_profiles":        "foo",
+						"profile-baff":     "foo",
+						"_current-profile": "foo",
+					},
+					WantLog:      "HTTP server at [::]:9002 closed",
+					WantExitCode: ptr.To(0),
 				},
 			},
 		},
@@ -981,26 +1055,36 @@ func TestContainerBoot(t *testing.T) {
 
 			var wantCmds []string
 			for i, p := range test.Phases {
+				for k, v := range p.UpdateKubeSecret {
+					kube.SetSecret(k, v)
+				}
 				lapi.Notify(p.Notify)
-				if p.WantFatalLog != "" {
+				if p.Signal != nil {
+					cmd.Process.Signal(*p.Signal)
+				}
+				if p.WantLog != "" {
 					err := tstest.WaitFor(2*time.Second, func() error {
-						state, err := cmd.Process.Wait()
-						if err != nil {
-							return err
-						}
-						if state.ExitCode() != 1 {
-							return fmt.Errorf("process exited with code %d but wanted %d", state.ExitCode(), 1)
-						}
-						waitLogLine(t, time.Second, cbOut, p.WantFatalLog)
+						waitLogLine(t, time.Second, cbOut, p.WantLog)
 						return nil
 					})
 					if err != nil {
 						t.Fatal(err)
 					}
+				}
+
+				if p.WantExitCode != nil {
+					state, err := cmd.Process.Wait()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if state.ExitCode() != *p.WantExitCode {
+						t.Fatalf("phase %d: want exit code %d, got %d", i, *p.WantExitCode, state.ExitCode())
+					}
 
 					// Early test return, we don't expect the successful startup log message.
 					return
 				}
+
 				wantCmds = append(wantCmds, p.WantCmds...)
 				waitArgs(t, 2*time.Second, d, argFile, strings.Join(wantCmds, "\n"))
 				err := tstest.WaitFor(2*time.Second, func() error {
@@ -1056,6 +1140,9 @@ func TestContainerBoot(t *testing.T) {
 				}
 			}
 			waitLogLine(t, 2*time.Second, cbOut, "Startup complete, waiting for shutdown signal")
+			if cmd.ProcessState != nil {
+				t.Fatalf("containerboot should be running but exited with exit code %d", cmd.ProcessState.ExitCode())
+			}
 		})
 	}
 }
@@ -1287,18 +1374,18 @@ func (k *kubeServer) Reset() {
 	k.secret = map[string]string{}
 }
 
-func (k *kubeServer) Start() error {
+func (k *kubeServer) Start(t *testing.T) {
 	root := filepath.Join(k.FSRoot, "var/run/secrets/kubernetes.io/serviceaccount")
 
 	if err := os.MkdirAll(root, 0700); err != nil {
-		return err
+		t.Fatal(err)
 	}
 
 	if err := os.WriteFile(filepath.Join(root, "namespace"), []byte("default"), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "token"), []byte("bearer_token"), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
 
 	k.srv = httptest.NewTLSServer(k)
@@ -1307,13 +1394,11 @@ func (k *kubeServer) Start() error {
 
 	var cert bytes.Buffer
 	if err := pem.Encode(&cert, &pem.Block{Type: "CERTIFICATE", Bytes: k.srv.Certificate().Raw}); err != nil {
-		return err
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "ca.crt"), cert.Bytes(), 0600); err != nil {
-		return err
+		t.Fatal(err)
 	}
-
-	return nil
 }
 
 func (k *kubeServer) Close() {
@@ -1362,6 +1447,7 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusInternalServerError)
 		return
 	}
+	defer r.Body.Close()
 
 	switch r.Method {
 	case "GET":
@@ -1394,13 +1480,32 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
 			for _, op := range req {
-				if op.Op != "remove" {
+				switch op.Op {
+				case "remove":
+					if !strings.HasPrefix(op.Path, "/data/") {
+						panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
+					}
+					delete(k.secret, strings.TrimPrefix(op.Path, "/data/"))
+				case "replace":
+					path, ok := strings.CutPrefix(op.Path, "/data/")
+					if !ok {
+						panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
+					}
+					req := make([]kubeclient.JSONPatch, 0)
+					if err := json.Unmarshal(bs, &req); err != nil {
+						panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
+					}
+
+					for _, patch := range req {
+						val, ok := patch.Value.(string)
+						if !ok {
+							panic(fmt.Sprintf("unsupported json patch value %v: cannot be converted to string", patch.Value))
+						}
+						k.secret[path] = val
+					}
+				default:
 					panic(fmt.Sprintf("unsupported json-patch op %q", op.Op))
 				}
-				if !strings.HasPrefix(op.Path, "/data/") {
-					panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
-				}
-				delete(k.secret, strings.TrimPrefix(op.Path, "/data/"))
 			}
 		case "application/strategic-merge-patch+json":
 			req := struct {
@@ -1416,6 +1521,44 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 			panic(fmt.Sprintf("unknown content type %q", r.Header.Get("Content-Type")))
 		}
 	default:
-		panic(fmt.Sprintf("unhandled HTTP method %q", r.Method))
+		panic(fmt.Sprintf("unhandled HTTP request %s %s", r.Method, r.URL))
+	}
+}
+
+func mustBase64(t *testing.T, v any) string {
+	b := mustJSON(t, v)
+	s := base64.StdEncoding.WithPadding('=').EncodeToString(b)
+	return s
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("error converting %v to json: %v", v, err)
+	}
+	return b
+}
+
+// egress services status given one named tailnet target specified by FQDN. As written by the proxy to its state Secret.
+func egressSvcStatus(name, fqdn string) egressservices.Status {
+	return egressservices.Status{
+		Services: map[string]*egressservices.ServiceStatus{
+			name: {
+				TailnetTarget: egressservices.TailnetTarget{
+					FQDN: fqdn,
+				},
+			},
+		},
+	}
+}
+
+// egress config given one named tailnet target specified by FQDN.
+func egressSvcConfig(name, fqdn string) egressservices.Configs {
+	return egressservices.Configs{
+		name: egressservices.Config{
+			TailnetTarget: egressservices.TailnetTarget{
+				FQDN: fqdn,
+			},
+		},
 	}
 }

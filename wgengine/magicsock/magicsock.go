@@ -61,7 +61,6 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
-	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/wgint"
 )
 
@@ -238,7 +237,7 @@ type Conn struct {
 	stats atomic.Pointer[connstats.Statistics]
 
 	// captureHook, if non-nil, is the pcap logging callback when capturing.
-	captureHook syncs.AtomicValue[capture.Callback]
+	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
 	// discoPrivate is the private naclbox key used for active
 	// discovery traffic. It is always present, and immutable.
@@ -655,7 +654,7 @@ func deregisterMetrics(m *metrics) {
 // log debug information into the pcap stream. This function
 // can be called with a nil argument to uninstall the capture
 // hook.
-func (c *Conn) InstallCaptureHook(cb capture.Callback) {
+func (c *Conn) InstallCaptureHook(cb packet.CaptureCallback) {
 	c.captureHook.Store(cb)
 }
 
@@ -1709,7 +1708,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	// Emit information about the disco frame into the pcap stream
 	// if a capture hook is installed.
 	if cb := c.captureHook.Load(); cb != nil {
-		cb(capture.PathDisco, time.Now(), disco.ToPCAPFrame(src, derpNodeSrc, payload), packet.CaptureMeta{})
+		cb(packet.PathDisco, time.Now(), disco.ToPCAPFrame(src, derpNodeSrc, payload), packet.CaptureMeta{})
 	}
 
 	dm, err := disco.Parse(payload)

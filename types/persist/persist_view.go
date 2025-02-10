@@ -62,9 +62,6 @@ func (v *PersistView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v PersistView) LegacyFrontendPrivateMachineKey() key.MachinePrivate {
-	return v.ж.LegacyFrontendPrivateMachineKey
-}
 func (v PersistView) PrivateNodeKey() key.NodePrivate    { return v.ж.PrivateNodeKey }
 func (v PersistView) OldPrivateNodeKey() key.NodePrivate { return v.ж.OldPrivateNodeKey }
 func (v PersistView) UserProfile() tailcfg.UserProfile   { return v.ж.UserProfile }
@@ -76,12 +73,11 @@ func (v PersistView) DisallowedTKAStateIDs() views.Slice[string] {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PersistViewNeedsRegeneration = Persist(struct {
-	_                               structs.Incomparable
-	LegacyFrontendPrivateMachineKey key.MachinePrivate
-	PrivateNodeKey                  key.NodePrivate
-	OldPrivateNodeKey               key.NodePrivate
-	UserProfile                     tailcfg.UserProfile
-	NetworkLockKey                  key.NLPrivate
-	NodeID                          tailcfg.StableNodeID
-	DisallowedTKAStateIDs           []string
+	_                     structs.Incomparable
+	PrivateNodeKey        key.NodePrivate
+	OldPrivateNodeKey     key.NodePrivate
+	UserProfile           tailcfg.UserProfile
+	NetworkLockKey        key.NLPrivate
+	NodeID                tailcfg.StableNodeID
+	DisallowedTKAStateIDs []string
 }{})

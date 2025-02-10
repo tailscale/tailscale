@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
 )
@@ -197,7 +197,7 @@ func TestReadServeConfig(t *testing.T) {
 }
 
 type fakeLocalClient struct {
-	*tailscale.LocalClient
+	*local.Client
 	setServeCalled bool
 }
 

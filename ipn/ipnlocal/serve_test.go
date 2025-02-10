@@ -898,7 +898,7 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	b.SetVarRoot(dir)
 
 	pm := must.Get(newProfileManager(new(mem.Store), logf, new(health.Tracker)))
-	pm.currentProfile = &ipn.LoginProfile{ID: "id0"}
+	pm.currentProfile = (&ipn.LoginProfile{ID: "id0"}).View()
 	b.pm = pm
 
 	b.netMap = &netmap.NetworkMap{

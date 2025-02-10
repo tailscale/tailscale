@@ -43,6 +43,13 @@ import (
 	"tailscale.com/version/distro"
 )
 
+const (
+	linux   = "linux"
+	darwin  = "darwin"
+	freebsd = "freebsd"
+	openbsd = "openbsd"
+)
+
 func init() {
 	childproc.Add("ssh", beIncubator)
 	childproc.Add("sftp", beSFTP)
@@ -126,7 +133,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 	// We have to check the below outside of the incubator process, because it
 	// relies on the "getenforce" command being on the PATH, which it is not
 	// when in the incubator.
-	if runtime.GOOS == "linux" && hostinfo.IsSELinuxEnforcing() {
+	if runtime.GOOS == linux && hostinfo.IsSELinuxEnforcing() {
 		incubatorArgs = append(incubatorArgs, "--is-selinux-enforcing")
 	}
 
@@ -428,13 +435,13 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	// Only the macOS version of the login command supports executing a
 	// command, all other versions only support launching a shell without
 	// taking any arguments.
-	if !ia.isShell && runtime.GOOS != "darwin" {
+	if !ia.isShell && runtime.GOOS != darwin {
 		dlogf("won't use login because we're not in a shell or on macOS")
 		return nil
 	}
 
 	switch runtime.GOOS {
-	case "linux", "freebsd", "openbsd":
+	case linux, freebsd, openbsd:
 		if !ia.hasTTY {
 			dlogf("can't use login because of missing TTY")
 			// We can only use the login command if a shell was requested with
@@ -523,7 +530,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 	// Currently, we only support falling back to su on Linux. This
 	// potentially could work on BSDs as well, but requires testing.
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != linux {
 		return ""
 	}
 
@@ -659,7 +666,7 @@ func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGrou
 	euid := os.Geteuid()
 	egid := os.Getegid()
 
-	if runtime.GOOS == "darwin" || runtime.GOOS == "freebsd" {
+	if runtime.GOOS == darwin || runtime.GOOS == freebsd {
 		// On FreeBSD and Darwin, the first entry returned from the
 		// getgroups(2) syscall is the egid, and changing it with
 		// setgroups(2) changes the egid of the process. This is
@@ -1051,7 +1058,7 @@ func fileExists(path string) bool {
 // loginArgs returns the arguments to use to exec the login binary.
 func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 	switch runtime.GOOS {
-	case "darwin":
+	case darwin:
 		args := []string{
 			loginCmdPath,
 			"-f", // already authenticated
@@ -1071,7 +1078,7 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 		}
 
 		return args
-	case "linux":
+	case linux:
 		if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
 			// See https://github.com/tailscale/tailscale/issues/4924
 			//
@@ -1081,7 +1088,7 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 			return []string{loginCmdPath, "-f", ia.localUser, "-p"}
 		}
 		return []string{loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
-	case "freebsd", "openbsd":
+	case freebsd, openbsd:
 		return []string{loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
 	}
 	panic("unimplemented")
@@ -1089,6 +1096,10 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 
 func shellArgs(isShell bool, cmd string) []string {
 	if isShell {
+		if runtime.GOOS == freebsd || runtime.GOOS == openbsd {
+			// bsd shells don't support the "-l" option, so we can't run as a login shell
+			return []string{}
+		}
 		return []string{"-l"}
 	} else {
 		return []string{"-c", cmd}
@@ -1096,7 +1107,7 @@ func shellArgs(isShell bool, cmd string) []string {
 }
 
 func setGroups(groupIDs []int) error {
-	if runtime.GOOS == "darwin" && len(groupIDs) > 16 {
+	if runtime.GOOS == darwin && len(groupIDs) > 16 {
 		// darwin returns "invalid argument" if more than 16 groups are passed to syscall.Setgroups
 		// some info can be found here:
 		// https://opensource.apple.com/source/samba/samba-187.8/patches/support-darwin-initgroups-syscall.auto.html

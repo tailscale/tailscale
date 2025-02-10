@@ -10,7 +10,7 @@ import (
 	"io"
 	"net/http"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 )
 
@@ -18,7 +18,7 @@ import (
 // the tailscaled's LocalAPI usermetrics endpoint at /localapi/v0/usermetrics.
 type metrics struct {
 	debugEndpoint string
-	lc            *tailscale.LocalClient
+	lc            *local.Client
 }
 
 func proxy(w http.ResponseWriter, r *http.Request, url string, do func(*http.Request) (*http.Response, error)) {
@@ -68,7 +68,7 @@ func (m *metrics) handleDebug(w http.ResponseWriter, r *http.Request) {
 // In 1.78.x and 1.80.x, it also proxies debug paths to tailscaled's debug
 // endpoint if configured to ease migration for a breaking change serving user
 // metrics instead of debug metrics on the "metrics" port.
-func metricsHandlers(mux *http.ServeMux, lc *tailscale.LocalClient, debugAddrPort string) {
+func metricsHandlers(mux *http.ServeMux, lc *local.Client, debugAddrPort string) {
 	m := &metrics{
 		lc:            lc,
 		debugEndpoint: debugAddrPort,

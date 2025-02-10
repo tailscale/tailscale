@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
@@ -257,9 +258,15 @@ func TestCheckDependsOnAppearsInUnhealthyState(t *testing.T) {
 	}
 	ht.SetUnhealthy(w2, Args{ArgError: "w2 is also unhealthy now"})
 	us2, ok := ht.CurrentState().Warnings[w2.Code]
-	if !ok {
-		t.Fatalf("Expected an UnhealthyState for w2, got nothing")
+	if ok {
+		t.Fatalf("Saw w2 being unhealthy but it shouldn't be, as it depends on unhealthy w1")
 	}
+	ht.SetHealthy(w1)
+	us2, ok = ht.CurrentState().Warnings[w2.Code]
+	if !ok {
+		t.Fatalf("w2 wasn't unhealthy; want it to be unhealthy now that w1 is back healthy")
+	}
+
 	wantDependsOn = slices.Concat([]WarnableCode{w1.Code}, wantDependsOn)
 	if !reflect.DeepEqual(us2.DependsOn, wantDependsOn) {
 		t.Fatalf("Expected DependsOn = %v in the unhealthy state, got: %v", wantDependsOn, us2.DependsOn)
@@ -398,5 +405,49 @@ func TestHealthMetric(t *testing.T) {
 				t.Logf("warning: %v", w)
 			}
 		})
+	}
+}
+
+// TestNoDERPHomeWarnable checks that we don't
+// complain about no DERP home if we're not in a
+// map poll.
+func TestNoDERPHomeWarnable(t *testing.T) {
+	t.Skip("TODO: fix https://github.com/tailscale/tailscale/issues/14798 to make this test not deadlock")
+	clock := tstest.NewClock(tstest.ClockOpts{
+		Start:          time.Unix(123, 0),
+		FollowRealTime: false,
+	})
+	ht := &Tracker{
+		testClock: clock,
+	}
+	ht.SetIPNState("NeedsLogin", true)
+
+	// Advance 30 seconds to get past the "recentlyLoggedIn" check.
+	clock.Advance(30 * time.Second)
+	ht.updateBuiltinWarnablesLocked()
+
+	// Advance to get past the the TimeToVisible delay.
+	clock.Advance(noDERPHomeWarnable.TimeToVisible * 2)
+
+	ht.updateBuiltinWarnablesLocked()
+	if ws, ok := ht.CurrentState().Warnings[noDERPHomeWarnable.Code]; ok {
+		t.Fatalf("got unexpected noDERPHomeWarnable warnable: %v", ws)
+	}
+}
+
+// TestNoDERPHomeWarnableManual is like TestNoDERPHomeWarnable
+// but doesn't use tstest.Clock so avoids the deadlock
+// I hit: https://github.com/tailscale/tailscale/issues/14798
+func TestNoDERPHomeWarnableManual(t *testing.T) {
+	ht := &Tracker{}
+	ht.SetIPNState("NeedsLogin", true)
+
+	// Avoid wantRunning:
+	ht.ipnWantRunningLastTrue = ht.ipnWantRunningLastTrue.Add(-10 * time.Second)
+	ht.updateBuiltinWarnablesLocked()
+
+	ws, ok := ht.warnableVal[noDERPHomeWarnable]
+	if ok {
+		t.Fatalf("got unexpected noDERPHomeWarnable warnable: %v", ws)
 	}
 }

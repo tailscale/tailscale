@@ -34,14 +34,6 @@ const (
 	TCPECNBits TCPFlag = TCPECNEcho | TCPCWR
 )
 
-// CaptureMeta contains metadata that is used when debugging.
-type CaptureMeta struct {
-	DidSNAT     bool           // SNAT was performed & the address was updated.
-	OriginalSrc netip.AddrPort // The source address before SNAT was performed.
-	DidDNAT     bool           // DNAT was performed & the address was updated.
-	OriginalDst netip.AddrPort // The destination address before DNAT was performed.
-}
-
 // Parsed is a minimal decoding of a packet suitable for use in filters.
 type Parsed struct {
 	// b is the byte buffer that this decodes.

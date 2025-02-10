@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/gorilla/csrf"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
@@ -50,7 +50,7 @@ type Server struct {
 	mode ServerMode
 
 	logf    logger.Logf
-	lc      *tailscale.LocalClient
+	lc      *local.Client
 	timeNow func() time.Time
 
 	// devMode indicates that the server run with frontend assets
@@ -125,9 +125,9 @@ type ServerOpts struct {
 	// PathPrefix is the URL prefix added to requests by CGI or reverse proxy.
 	PathPrefix string
 
-	// LocalClient is the tailscale.LocalClient to use for this web server.
+	// LocalClient is the local.Client to use for this web server.
 	// If nil, a new one will be created.
-	LocalClient *tailscale.LocalClient
+	LocalClient *local.Client
 
 	// TimeNow optionally provides a time function.
 	// time.Now is used as default.
@@ -166,7 +166,7 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 		return nil, fmt.Errorf("invalid Mode provided")
 	}
 	if opts.LocalClient == nil {
-		opts.LocalClient = &tailscale.LocalClient{}
+		opts.LocalClient = &local.Client{}
 	}
 	s = &Server{
 		mode:        opts.Mode,
@@ -211,15 +211,25 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	// The client is secured by limiting the interface it listens on,
 	// or by authenticating requests before they reach the web client.
 	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
+
+	// signal to the CSRF middleware that the request is being served over
+	// plaintext HTTP to skip TLS-only header checks.
+	withSetPlaintext := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r = csrf.PlaintextHTTPRequest(r)
+			h.ServeHTTP(w, r)
+		})
+	}
+
 	switch s.mode {
 	case LoginServerMode:
-		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveLoginAPI))
+		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveLoginAPI)))
 		metric = "web_login_client_initialization"
 	case ReadOnlyServerMode:
-		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveLoginAPI))
+		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveLoginAPI)))
 		metric = "web_readonly_client_initialization"
 	case ManageServerMode:
-		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
+		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveAPI)))
 		metric = "web_client_initialization"
 	}
 

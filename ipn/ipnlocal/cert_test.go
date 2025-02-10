@@ -199,3 +199,19 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 		})
 	}
 }
+
+func TestDebugACMEDirectoryURL(t *testing.T) {
+	for _, tc := range []string{"", "https://acme-staging-v02.api.letsencrypt.org/directory"} {
+		const setting = "TS_DEBUG_ACME_DIRECTORY_URL"
+		t.Run(tc, func(t *testing.T) {
+			t.Setenv(setting, tc)
+			ac, err := acmeClient(certStateStore{StateStore: new(mem.Store)})
+			if err != nil {
+				t.Fatalf("acmeClient creation err: %v", err)
+			}
+			if ac.DirectoryURL != tc {
+				t.Fatalf("acmeClient.DirectoryURL = %q, want %q", ac.DirectoryURL, tc)
+			}
+		})
+	}
+}

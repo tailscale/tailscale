@@ -24,6 +24,7 @@ func TestDeps(t *testing.T) {
 			"github.com/google/uuid":              "see tailscale/tailscale#13760",
 			"tailscale.com/clientupdate/distsign": "downloads via AppStore, not distsign",
 			"github.com/tailscale/hujson":         "no config file support on iOS",
+			"tailscale.com/feature/capture":       "no debug packet capture on iOS",
 		},
 	}.Check(t)
 }

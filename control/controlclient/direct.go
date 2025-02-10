@@ -15,7 +15,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"os"
@@ -42,6 +41,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tempfork/httprec"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -1384,7 +1384,7 @@ func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr
 	handlerCtx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
 	defer cancel()
 	hreq = hreq.WithContext(handlerCtx)
-	rec := httptest.NewRecorder()
+	rec := httprec.NewRecorder()
 	c2nHandler.ServeHTTP(rec, hreq)
 	cancel()
 

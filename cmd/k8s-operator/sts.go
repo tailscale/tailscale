@@ -101,6 +101,9 @@ const (
 	proxyTypeIngressResource = "ingress_resource"
 	proxyTypeConnector       = "connector"
 	proxyTypeProxyGroup      = "proxygroup"
+
+	envVarTSLocalAddrPort = "TS_LOCAL_ADDR_PORT"
+	defaultLocalAddrPort  = 9002 // metrics and health check port
 )
 
 var (
@@ -694,7 +697,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		// being created, there is no need for a restart.
 		// TODO(irbekrm): remove this in 1.84.
 		hash := tsConfigHash
-		if dev != nil && dev.capver >= 110 {
+		if dev == nil || dev.capver >= 110 {
 			hash = s.Spec.Template.GetAnnotations()[podAnnotationLastSetConfigFileHash]
 		}
 		s.Spec = ss.Spec

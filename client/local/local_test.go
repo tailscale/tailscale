@@ -3,7 +3,7 @@
 
 //go:build go1.19
 
-package tailscale
+package local
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func TestWhoIsPeerNotFound(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	lc := &LocalClient{
+	lc := &Client{
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			var std net.Dialer
 			return std.DialContext(ctx, network, ts.Listener.Addr().(*net.TCPAddr).String())

@@ -36,6 +36,7 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
@@ -1319,7 +1320,7 @@ func (c *sclient) requestMeshUpdate() {
 	}
 }
 
-var localClient tailscale.LocalClient
+var localClient local.Client
 
 // isMeshPeer reports whether the client is a trusted mesh peer
 // node in the DERP region.
@@ -1826,6 +1827,14 @@ func (c *sclient) setWriteDeadline() {
 		// and might hit throttling and need more time to get the initial dump
 		// of connected peers.
 		d = privilegedWriteTimeout
+	}
+	if d == 0 {
+		// A zero value should disable the write deadline per
+		// --tcp-write-timeout docs. The flag should only be applicable for
+		// non-mesh connections, again per its docs. If mesh happened to use a
+		// zero value constant above it would be a bug, so we don't bother
+		// with a condition on c.canMesh.
+		return
 	}
 	// Ignore the error from setting the write deadline. In practice,
 	// setting the deadline will only fail if the connection is closed

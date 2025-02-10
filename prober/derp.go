@@ -30,7 +30,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netmon"
@@ -534,7 +534,7 @@ func (d *derpProber) getNodePair(n1, n2 string) (ret1, ret2 *tailcfg.DERPNode, _
 	return ret1, ret2, nil
 }
 
-var tsLocalClient tailscale.LocalClient
+var tsLocalClient local.Client
 
 // updateMap refreshes the locally-cached DERP map.
 func (d *derpProber) updateMap(ctx context.Context) error {

@@ -6,6 +6,8 @@ package controlknobs
 import (
 	"reflect"
 	"testing"
+
+	"tailscale.com/types/logger"
 )
 
 func TestAsDebugJSON(t *testing.T) {
@@ -18,4 +20,5 @@ func TestAsDebugJSON(t *testing.T) {
 	if want := reflect.TypeFor[Knobs]().NumField(); len(got) != want {
 		t.Errorf("AsDebugJSON map has %d fields; want %v", len(got), want)
 	}
+	t.Logf("Got: %v", logger.AsJSON(got))
 }

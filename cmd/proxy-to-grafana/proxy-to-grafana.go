@@ -36,7 +36,7 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
@@ -127,7 +127,7 @@ func main() {
 	log.Fatal(http.Serve(ln, proxy))
 }
 
-func modifyRequest(req *http.Request, localClient *tailscale.LocalClient) {
+func modifyRequest(req *http.Request, localClient *local.Client) {
 	// with enable_login_token set to true, we get a cookie that handles
 	// auth for paths that are not /login
 	if req.URL.Path != "/login" {
@@ -144,7 +144,7 @@ func modifyRequest(req *http.Request, localClient *tailscale.LocalClient) {
 	req.Header.Set("X-Webauth-Name", user.DisplayName)
 }
 
-func getTailscaleUser(ctx context.Context, localClient *tailscale.LocalClient, ipPort string) (*tailcfg.UserProfile, error) {
+func getTailscaleUser(ctx context.Context, localClient *local.Client, ipPort string) (*tailcfg.UserProfile, error) {
 	whois, err := localClient.WhoIs(ctx, ipPort)
 	if err != nil {
 		return nil, fmt.Errorf("failed to identify remote host: %w", err)

@@ -17,7 +17,6 @@ func TestOmitSSH(t *testing.T) {
 		Tags:   "ts_omit_ssh",
 		BadDeps: map[string]string{
 			"tailscale.com/ssh/tailssh":            msg,
-			"golang.org/x/crypto/ssh":              msg,
 			"tailscale.com/sessionrecording":       msg,
 			"github.com/anmitsu/go-shlex":          msg,
 			"github.com/creack/pty":                msg,

@@ -20,7 +20,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -45,307 +44,302 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
-	"tailscale.com/wgengine/capture"
 )
 
-var debugCmd = &ffcli.Command{
-	Name:       "debug",
-	Exec:       runDebug,
-	ShortUsage: "tailscale debug <debug-flags | subcommand>",
-	ShortHelp:  "Debug commands",
-	LongHelp:   hidden + `"tailscale debug" contains misc debug facilities; it is not a stable interface.`,
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("debug")
-		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
-		fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-seconds seconds and write it to this file; - for stdout")
-		fs.StringVar(&debugArgs.memFile, "mem-profile", "", "if non-empty, grab a memory profile and write it to this file; - for stdout")
-		fs.IntVar(&debugArgs.cpuSec, "profile-seconds", 15, "number of seconds to run a CPU profile for, when --cpu-profile is non-empty")
-		return fs
-	})(),
-	Subcommands: []*ffcli.Command{
-		{
-			Name:       "derp-map",
-			ShortUsage: "tailscale debug derp-map",
-			Exec:       runDERPMap,
-			ShortHelp:  "Print DERP map",
-		},
-		{
-			Name:       "component-logs",
-			ShortUsage: "tailscale debug component-logs [" + strings.Join(ipn.DebuggableComponents, "|") + "]",
-			Exec:       runDebugComponentLogs,
-			ShortHelp:  "Enable/disable debug logs for a component",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("component-logs")
-				fs.DurationVar(&debugComponentLogsArgs.forDur, "for", time.Hour, "how long to enable debug logs for; zero or negative means to disable")
-				return fs
-			})(),
-		},
-		{
-			Name:       "daemon-goroutines",
-			ShortUsage: "tailscale debug daemon-goroutines",
-			Exec:       runDaemonGoroutines,
-			ShortHelp:  "Print tailscaled's goroutines",
-		},
-		{
-			Name:       "daemon-logs",
-			ShortUsage: "tailscale debug daemon-logs",
-			Exec:       runDaemonLogs,
-			ShortHelp:  "Watch tailscaled's server logs",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("daemon-logs")
-				fs.IntVar(&daemonLogsArgs.verbose, "verbose", 0, "verbosity level")
-				fs.BoolVar(&daemonLogsArgs.time, "time", false, "include client time")
-				return fs
-			})(),
-		},
-		{
-			Name:       "metrics",
-			ShortUsage: "tailscale debug metrics",
-			Exec:       runDaemonMetrics,
-			ShortHelp:  "Print tailscaled's metrics",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("metrics")
-				fs.BoolVar(&metricsArgs.watch, "watch", false, "print JSON dump of delta values")
-				return fs
-			})(),
-		},
-		{
-			Name:       "env",
-			ShortUsage: "tailscale debug env",
-			Exec:       runEnv,
-			ShortHelp:  "Print cmd/tailscale environment",
-		},
-		{
-			Name:       "stat",
-			ShortUsage: "tailscale debug stat <files...>",
-			Exec:       runStat,
-			ShortHelp:  "Stat a file",
-		},
-		{
-			Name:       "hostinfo",
-			ShortUsage: "tailscale debug hostinfo",
-			Exec:       runHostinfo,
-			ShortHelp:  "Print hostinfo",
-		},
-		{
-			Name:       "local-creds",
-			ShortUsage: "tailscale debug local-creds",
-			Exec:       runLocalCreds,
-			ShortHelp:  "Print how to access Tailscale LocalAPI",
-		},
-		{
-			Name:       "restun",
-			ShortUsage: "tailscale debug restun",
-			Exec:       localAPIAction("restun"),
-			ShortHelp:  "Force a magicsock restun",
-		},
-		{
-			Name:       "rebind",
-			ShortUsage: "tailscale debug rebind",
-			Exec:       localAPIAction("rebind"),
-			ShortHelp:  "Force a magicsock rebind",
-		},
-		{
-			Name:       "derp-set-on-demand",
-			ShortUsage: "tailscale debug derp-set-on-demand",
-			Exec:       localAPIAction("derp-set-homeless"),
-			ShortHelp:  "Enable DERP on-demand mode (breaks reachability)",
-		},
-		{
-			Name:       "derp-unset-on-demand",
-			ShortUsage: "tailscale debug derp-unset-on-demand",
-			Exec:       localAPIAction("derp-unset-homeless"),
-			ShortHelp:  "Disable DERP on-demand mode",
-		},
-		{
-			Name:       "break-tcp-conns",
-			ShortUsage: "tailscale debug break-tcp-conns",
-			Exec:       localAPIAction("break-tcp-conns"),
-			ShortHelp:  "Break any open TCP connections from the daemon",
-		},
-		{
-			Name:       "break-derp-conns",
-			ShortUsage: "tailscale debug break-derp-conns",
-			Exec:       localAPIAction("break-derp-conns"),
-			ShortHelp:  "Break any open DERP connections from the daemon",
-		},
-		{
-			Name:       "pick-new-derp",
-			ShortUsage: "tailscale debug pick-new-derp",
-			Exec:       localAPIAction("pick-new-derp"),
-			ShortHelp:  "Switch to some other random DERP home region for a short time",
-		},
-		{
-			Name:       "force-prefer-derp",
-			ShortUsage: "tailscale debug force-prefer-derp",
-			Exec:       forcePreferDERP,
-			ShortHelp:  "Prefer the given region ID if reachable (until restart, or 0 to clear)",
-		},
-		{
-			Name:       "force-netmap-update",
-			ShortUsage: "tailscale debug force-netmap-update",
-			Exec:       localAPIAction("force-netmap-update"),
-			ShortHelp:  "Force a full no-op netmap update (for load testing)",
-		},
-		{
-			// TODO(bradfitz,maisem): eventually promote this out of debug
-			Name:       "reload-config",
-			ShortUsage: "tailscale debug reload-config",
-			Exec:       reloadConfig,
-			ShortHelp:  "Reload config",
-		},
-		{
-			Name:       "control-knobs",
-			ShortUsage: "tailscale debug control-knobs",
-			Exec:       debugControlKnobs,
-			ShortHelp:  "See current control knobs",
-		},
-		{
-			Name:       "prefs",
-			ShortUsage: "tailscale debug prefs",
-			Exec:       runPrefs,
-			ShortHelp:  "Print prefs",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("prefs")
-				fs.BoolVar(&prefsArgs.pretty, "pretty", false, "If true, pretty-print output")
-				return fs
-			})(),
-		},
-		{
-			Name:       "watch-ipn",
-			ShortUsage: "tailscale debug watch-ipn",
-			Exec:       runWatchIPN,
-			ShortHelp:  "Subscribe to IPN message bus",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("watch-ipn")
-				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
-				fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
-				fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messags")
-				fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
-				fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
-				return fs
-			})(),
-		},
-		{
-			Name:       "netmap",
-			ShortUsage: "tailscale debug netmap",
-			Exec:       runNetmap,
-			ShortHelp:  "Print the current network map",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("netmap")
-				fs.BoolVar(&netmapArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
-				return fs
-			})(),
-		},
-		{
-			Name: "via",
-			ShortUsage: "tailscale debug via <site-id> <v4-cidr>\n" +
-				"tailscale debug via <v6-route>",
-			Exec:      runVia,
-			ShortHelp: "Convert between site-specific IPv4 CIDRs and IPv6 'via' routes",
-		},
-		{
-			Name:       "ts2021",
-			ShortUsage: "tailscale debug ts2021",
-			Exec:       runTS2021,
-			ShortHelp:  "Debug ts2021 protocol connectivity",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("ts2021")
-				fs.StringVar(&ts2021Args.host, "host", "controlplane.tailscale.com", "hostname of control plane")
-				fs.IntVar(&ts2021Args.version, "version", int(tailcfg.CurrentCapabilityVersion), "protocol version")
-				fs.BoolVar(&ts2021Args.verbose, "verbose", false, "be extra verbose")
-				return fs
-			})(),
-		},
-		{
-			Name:       "set-expire",
-			ShortUsage: "tailscale debug set-expire --in=1m",
-			Exec:       runSetExpire,
-			ShortHelp:  "Manipulate node key expiry for testing",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("set-expire")
-				fs.DurationVar(&setExpireArgs.in, "in", 0, "if non-zero, set node key to expire this duration from now")
-				return fs
-			})(),
-		},
-		{
-			Name:       "dev-store-set",
-			ShortUsage: "tailscale debug dev-store-set",
-			Exec:       runDevStoreSet,
-			ShortHelp:  "Set a key/value pair during development",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("store-set")
-				fs.BoolVar(&devStoreSetArgs.danger, "danger", false, "accept danger")
-				return fs
-			})(),
-		},
-		{
-			Name:       "derp",
-			ShortUsage: "tailscale debug derp",
-			Exec:       runDebugDERP,
-			ShortHelp:  "Test a DERP configuration",
-		},
-		{
-			Name:       "capture",
-			ShortUsage: "tailscale debug capture",
-			Exec:       runCapture,
-			ShortHelp:  "Stream pcaps for debugging",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("capture")
-				fs.StringVar(&captureArgs.outFile, "o", "", "path to stream the pcap (or - for stdout), leave empty to start wireshark")
-				return fs
-			})(),
-		},
-		{
-			Name:       "portmap",
-			ShortUsage: "tailscale debug portmap",
-			Exec:       debugPortmap,
-			ShortHelp:  "Run portmap debugging",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("portmap")
-				fs.DurationVar(&debugPortmapArgs.duration, "duration", 5*time.Second, "timeout for port mapping")
-				fs.StringVar(&debugPortmapArgs.ty, "type", "", `portmap debug type (one of "", "pmp", "pcp", or "upnp")`)
-				fs.StringVar(&debugPortmapArgs.gatewayAddr, "gateway-addr", "", `override gateway IP (must also pass --self-addr)`)
-				fs.StringVar(&debugPortmapArgs.selfAddr, "self-addr", "", `override self IP (must also pass --gateway-addr)`)
-				fs.BoolVar(&debugPortmapArgs.logHTTP, "log-http", false, `print all HTTP requests and responses to the log`)
-				return fs
-			})(),
-		},
-		{
-			Name:       "peer-endpoint-changes",
-			ShortUsage: "tailscale debug peer-endpoint-changes <hostname-or-IP>",
-			Exec:       runPeerEndpointChanges,
-			ShortHelp:  "Print debug information about a peer's endpoint changes",
-		},
-		{
-			Name:       "dial-types",
-			ShortUsage: "tailscale debug dial-types <hostname-or-IP> <port>",
-			Exec:       runDebugDialTypes,
-			ShortHelp:  "Print debug information about connecting to a given host or IP",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("dial-types")
-				fs.StringVar(&debugDialTypesArgs.network, "network", "tcp", `network type to dial ("tcp", "udp", etc.)`)
-				return fs
-			})(),
-		},
-		{
-			Name:       "resolve",
-			ShortUsage: "tailscale debug resolve <hostname>",
-			Exec:       runDebugResolve,
-			ShortHelp:  "Does a DNS lookup",
-			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("resolve")
-				fs.StringVar(&resolveArgs.net, "net", "ip", "network type to resolve (ip, ip4, ip6)")
-				return fs
-			})(),
-		},
-		{
-			Name:       "go-buildinfo",
-			ShortUsage: "tailscale debug go-buildinfo",
-			ShortHelp:  "Print Go's runtime/debug.BuildInfo",
-			Exec:       runGoBuildInfo,
-		},
-	},
+var (
+	debugCaptureCmd func() *ffcli.Command // or nil
+)
+
+func debugCmd() *ffcli.Command {
+	return &ffcli.Command{
+		Name:       "debug",
+		Exec:       runDebug,
+		ShortUsage: "tailscale debug <debug-flags | subcommand>",
+		ShortHelp:  "Debug commands",
+		LongHelp:   hidden + `"tailscale debug" contains misc debug facilities; it is not a stable interface.`,
+		FlagSet: (func() *flag.FlagSet {
+			fs := newFlagSet("debug")
+			fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
+			fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-seconds seconds and write it to this file; - for stdout")
+			fs.StringVar(&debugArgs.memFile, "mem-profile", "", "if non-empty, grab a memory profile and write it to this file; - for stdout")
+			fs.IntVar(&debugArgs.cpuSec, "profile-seconds", 15, "number of seconds to run a CPU profile for, when --cpu-profile is non-empty")
+			return fs
+		})(),
+		Subcommands: nonNilCmds([]*ffcli.Command{
+			{
+				Name:       "derp-map",
+				ShortUsage: "tailscale debug derp-map",
+				Exec:       runDERPMap,
+				ShortHelp:  "Print DERP map",
+			},
+			{
+				Name:       "component-logs",
+				ShortUsage: "tailscale debug component-logs [" + strings.Join(ipn.DebuggableComponents, "|") + "]",
+				Exec:       runDebugComponentLogs,
+				ShortHelp:  "Enable/disable debug logs for a component",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("component-logs")
+					fs.DurationVar(&debugComponentLogsArgs.forDur, "for", time.Hour, "how long to enable debug logs for; zero or negative means to disable")
+					return fs
+				})(),
+			},
+			{
+				Name:       "daemon-goroutines",
+				ShortUsage: "tailscale debug daemon-goroutines",
+				Exec:       runDaemonGoroutines,
+				ShortHelp:  "Print tailscaled's goroutines",
+			},
+			{
+				Name:       "daemon-logs",
+				ShortUsage: "tailscale debug daemon-logs",
+				Exec:       runDaemonLogs,
+				ShortHelp:  "Watch tailscaled's server logs",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("daemon-logs")
+					fs.IntVar(&daemonLogsArgs.verbose, "verbose", 0, "verbosity level")
+					fs.BoolVar(&daemonLogsArgs.time, "time", false, "include client time")
+					return fs
+				})(),
+			},
+			{
+				Name:       "metrics",
+				ShortUsage: "tailscale debug metrics",
+				Exec:       runDaemonMetrics,
+				ShortHelp:  "Print tailscaled's metrics",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("metrics")
+					fs.BoolVar(&metricsArgs.watch, "watch", false, "print JSON dump of delta values")
+					return fs
+				})(),
+			},
+			{
+				Name:       "env",
+				ShortUsage: "tailscale debug env",
+				Exec:       runEnv,
+				ShortHelp:  "Print cmd/tailscale environment",
+			},
+			{
+				Name:       "stat",
+				ShortUsage: "tailscale debug stat <files...>",
+				Exec:       runStat,
+				ShortHelp:  "Stat a file",
+			},
+			{
+				Name:       "hostinfo",
+				ShortUsage: "tailscale debug hostinfo",
+				Exec:       runHostinfo,
+				ShortHelp:  "Print hostinfo",
+			},
+			{
+				Name:       "local-creds",
+				ShortUsage: "tailscale debug local-creds",
+				Exec:       runLocalCreds,
+				ShortHelp:  "Print how to access Tailscale LocalAPI",
+			},
+			{
+				Name:       "restun",
+				ShortUsage: "tailscale debug restun",
+				Exec:       localAPIAction("restun"),
+				ShortHelp:  "Force a magicsock restun",
+			},
+			{
+				Name:       "rebind",
+				ShortUsage: "tailscale debug rebind",
+				Exec:       localAPIAction("rebind"),
+				ShortHelp:  "Force a magicsock rebind",
+			},
+			{
+				Name:       "derp-set-on-demand",
+				ShortUsage: "tailscale debug derp-set-on-demand",
+				Exec:       localAPIAction("derp-set-homeless"),
+				ShortHelp:  "Enable DERP on-demand mode (breaks reachability)",
+			},
+			{
+				Name:       "derp-unset-on-demand",
+				ShortUsage: "tailscale debug derp-unset-on-demand",
+				Exec:       localAPIAction("derp-unset-homeless"),
+				ShortHelp:  "Disable DERP on-demand mode",
+			},
+			{
+				Name:       "break-tcp-conns",
+				ShortUsage: "tailscale debug break-tcp-conns",
+				Exec:       localAPIAction("break-tcp-conns"),
+				ShortHelp:  "Break any open TCP connections from the daemon",
+			},
+			{
+				Name:       "break-derp-conns",
+				ShortUsage: "tailscale debug break-derp-conns",
+				Exec:       localAPIAction("break-derp-conns"),
+				ShortHelp:  "Break any open DERP connections from the daemon",
+			},
+			{
+				Name:       "pick-new-derp",
+				ShortUsage: "tailscale debug pick-new-derp",
+				Exec:       localAPIAction("pick-new-derp"),
+				ShortHelp:  "Switch to some other random DERP home region for a short time",
+			},
+			{
+				Name:       "force-prefer-derp",
+				ShortUsage: "tailscale debug force-prefer-derp",
+				Exec:       forcePreferDERP,
+				ShortHelp:  "Prefer the given region ID if reachable (until restart, or 0 to clear)",
+			},
+			{
+				Name:       "force-netmap-update",
+				ShortUsage: "tailscale debug force-netmap-update",
+				Exec:       localAPIAction("force-netmap-update"),
+				ShortHelp:  "Force a full no-op netmap update (for load testing)",
+			},
+			{
+				// TODO(bradfitz,maisem): eventually promote this out of debug
+				Name:       "reload-config",
+				ShortUsage: "tailscale debug reload-config",
+				Exec:       reloadConfig,
+				ShortHelp:  "Reload config",
+			},
+			{
+				Name:       "control-knobs",
+				ShortUsage: "tailscale debug control-knobs",
+				Exec:       debugControlKnobs,
+				ShortHelp:  "See current control knobs",
+			},
+			{
+				Name:       "prefs",
+				ShortUsage: "tailscale debug prefs",
+				Exec:       runPrefs,
+				ShortHelp:  "Print prefs",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("prefs")
+					fs.BoolVar(&prefsArgs.pretty, "pretty", false, "If true, pretty-print output")
+					return fs
+				})(),
+			},
+			{
+				Name:       "watch-ipn",
+				ShortUsage: "tailscale debug watch-ipn",
+				Exec:       runWatchIPN,
+				ShortHelp:  "Subscribe to IPN message bus",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("watch-ipn")
+					fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
+					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
+					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messags")
+					fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
+					fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
+					return fs
+				})(),
+			},
+			{
+				Name:       "netmap",
+				ShortUsage: "tailscale debug netmap",
+				Exec:       runNetmap,
+				ShortHelp:  "Print the current network map",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("netmap")
+					fs.BoolVar(&netmapArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
+					return fs
+				})(),
+			},
+			{
+				Name: "via",
+				ShortUsage: "tailscale debug via <site-id> <v4-cidr>\n" +
+					"tailscale debug via <v6-route>",
+				Exec:      runVia,
+				ShortHelp: "Convert between site-specific IPv4 CIDRs and IPv6 'via' routes",
+			},
+			{
+				Name:       "ts2021",
+				ShortUsage: "tailscale debug ts2021",
+				Exec:       runTS2021,
+				ShortHelp:  "Debug ts2021 protocol connectivity",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("ts2021")
+					fs.StringVar(&ts2021Args.host, "host", "controlplane.tailscale.com", "hostname of control plane")
+					fs.IntVar(&ts2021Args.version, "version", int(tailcfg.CurrentCapabilityVersion), "protocol version")
+					fs.BoolVar(&ts2021Args.verbose, "verbose", false, "be extra verbose")
+					return fs
+				})(),
+			},
+			{
+				Name:       "set-expire",
+				ShortUsage: "tailscale debug set-expire --in=1m",
+				Exec:       runSetExpire,
+				ShortHelp:  "Manipulate node key expiry for testing",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("set-expire")
+					fs.DurationVar(&setExpireArgs.in, "in", 0, "if non-zero, set node key to expire this duration from now")
+					return fs
+				})(),
+			},
+			{
+				Name:       "dev-store-set",
+				ShortUsage: "tailscale debug dev-store-set",
+				Exec:       runDevStoreSet,
+				ShortHelp:  "Set a key/value pair during development",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("store-set")
+					fs.BoolVar(&devStoreSetArgs.danger, "danger", false, "accept danger")
+					return fs
+				})(),
+			},
+			{
+				Name:       "derp",
+				ShortUsage: "tailscale debug derp",
+				Exec:       runDebugDERP,
+				ShortHelp:  "Test a DERP configuration",
+			},
+			ccall(debugCaptureCmd),
+			{
+				Name:       "portmap",
+				ShortUsage: "tailscale debug portmap",
+				Exec:       debugPortmap,
+				ShortHelp:  "Run portmap debugging",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("portmap")
+					fs.DurationVar(&debugPortmapArgs.duration, "duration", 5*time.Second, "timeout for port mapping")
+					fs.StringVar(&debugPortmapArgs.ty, "type", "", `portmap debug type (one of "", "pmp", "pcp", or "upnp")`)
+					fs.StringVar(&debugPortmapArgs.gatewayAddr, "gateway-addr", "", `override gateway IP (must also pass --self-addr)`)
+					fs.StringVar(&debugPortmapArgs.selfAddr, "self-addr", "", `override self IP (must also pass --gateway-addr)`)
+					fs.BoolVar(&debugPortmapArgs.logHTTP, "log-http", false, `print all HTTP requests and responses to the log`)
+					return fs
+				})(),
+			},
+			{
+				Name:       "peer-endpoint-changes",
+				ShortUsage: "tailscale debug peer-endpoint-changes <hostname-or-IP>",
+				Exec:       runPeerEndpointChanges,
+				ShortHelp:  "Print debug information about a peer's endpoint changes",
+			},
+			{
+				Name:       "dial-types",
+				ShortUsage: "tailscale debug dial-types <hostname-or-IP> <port>",
+				Exec:       runDebugDialTypes,
+				ShortHelp:  "Print debug information about connecting to a given host or IP",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("dial-types")
+					fs.StringVar(&debugDialTypesArgs.network, "network", "tcp", `network type to dial ("tcp", "udp", etc.)`)
+					return fs
+				})(),
+			},
+			{
+				Name:       "resolve",
+				ShortUsage: "tailscale debug resolve <hostname>",
+				Exec:       runDebugResolve,
+				ShortHelp:  "Does a DNS lookup",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("resolve")
+					fs.StringVar(&resolveArgs.net, "net", "ip", "network type to resolve (ip, ip4, ip6)")
+					return fs
+				})(),
+			},
+			{
+				Name:       "go-buildinfo",
+				ShortUsage: "tailscale debug go-buildinfo",
+				ShortHelp:  "Print Go's runtime/debug.BuildInfo",
+				Exec:       runGoBuildInfo,
+			},
+		}...),
+	}
 }
 
 func runGoBuildInfo(ctx context.Context, args []string) error {
@@ -1034,50 +1028,6 @@ func runSetExpire(ctx context.Context, args []string) error {
 		return errors.New("usage: tailscale debug set-expire --in=<duration>")
 	}
 	return localClient.DebugSetExpireIn(ctx, setExpireArgs.in)
-}
-
-var captureArgs struct {
-	outFile string
-}
-
-func runCapture(ctx context.Context, args []string) error {
-	stream, err := localClient.StreamDebugCapture(ctx)
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
-
-	switch captureArgs.outFile {
-	case "-":
-		fmt.Fprintln(Stderr, "Press Ctrl-C to stop the capture.")
-		_, err = io.Copy(os.Stdout, stream)
-		return err
-	case "":
-		lua, err := os.CreateTemp("", "ts-dissector")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(lua.Name())
-		lua.Write([]byte(capture.DissectorLua))
-		if err := lua.Close(); err != nil {
-			return err
-		}
-
-		wireshark := exec.CommandContext(ctx, "wireshark", "-X", "lua_script:"+lua.Name(), "-k", "-i", "-")
-		wireshark.Stdin = stream
-		wireshark.Stdout = os.Stdout
-		wireshark.Stderr = os.Stderr
-		return wireshark.Run()
-	}
-
-	f, err := os.OpenFile(captureArgs.outFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fmt.Fprintln(Stderr, "Press Ctrl-C to stop the capture.")
-	_, err = io.Copy(f, stream)
-	return err
 }
 
 var debugPortmapArgs struct {

@@ -48,11 +48,12 @@ type egressSvcsReadinessReconciler struct {
 // service to determine how many replicas are currently able to route traffic.
 func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	l := esrr.logger.With("Service", req.NamespacedName)
-	defer l.Info("reconcile finished")
+	l.Debugf("starting reconcile")
+	defer l.Debugf("reconcile finished")
 
 	svc := new(corev1.Service)
 	if err = esrr.Get(ctx, req.NamespacedName, svc); apierrors.IsNotFound(err) {
-		l.Info("Service not found")
+		l.Debugf("Service not found")
 		return res, nil
 	} else if err != nil {
 		return res, fmt.Errorf("failed to get Service: %w", err)
@@ -127,16 +128,16 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 			return res, err
 		}
 		if pod == nil {
-			l.Infof("[unexpected] ProxyGroup is ready, but replica %d was not found", i)
+			l.Warnf("[unexpected] ProxyGroup is ready, but replica %d was not found", i)
 			reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 			return res, nil
 		}
-		l.Infof("looking at Pod with IPs %v", pod.Status.PodIPs)
+		l.Debugf("looking at Pod with IPs %v", pod.Status.PodIPs)
 		ready := false
 		for _, ep := range eps.Endpoints {
-			l.Infof("looking at endpoint with addresses %v", ep.Addresses)
+			l.Debugf("looking at endpoint with addresses %v", ep.Addresses)
 			if endpointReadyForPod(&ep, pod, l) {
-				l.Infof("endpoint is ready for Pod")
+				l.Debugf("endpoint is ready for Pod")
 				ready = true
 				break
 			}
@@ -165,7 +166,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 func endpointReadyForPod(ep *discoveryv1.Endpoint, pod *corev1.Pod, l *zap.SugaredLogger) bool {
 	podIP, err := podIPv4(pod)
 	if err != nil {
-		l.Infof("[unexpected] error retrieving Pod's IPv4 address: %v", err)
+		l.Warnf("[unexpected] error retrieving Pod's IPv4 address: %v", err)
 		return false
 	}
 	// Currently we only ever set a single address on and Endpoint and nothing else is meant to modify this.

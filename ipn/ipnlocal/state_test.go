@@ -949,8 +949,6 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 		Persist: &persist.Persist{
 			PrivateNodeKey:    key.NewNode(),
 			OldPrivateNodeKey: key.NewNode(),
-
-			LegacyFrontendPrivateMachineKey: key.NewMachine(),
 		},
 	}).View(), ipn.NetworkProfile{})
 	if p := b.pm.CurrentPrefs().Persist(); !p.Valid() || p.PrivateNodeKey().IsZero() {
@@ -975,10 +973,6 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 
 	if !p.Persist().OldPrivateNodeKey().IsZero() {
 		t.Errorf("OldPrivateNodeKey = %v; want zero", p.Persist().OldPrivateNodeKey())
-	}
-
-	if !p.Persist().LegacyFrontendPrivateMachineKey().IsZero() {
-		t.Errorf("LegacyFrontendPrivateMachineKey = %v; want zero", p.Persist().LegacyFrontendPrivateMachineKey())
 	}
 
 	if !p.Persist().NetworkLockKey().IsZero() {

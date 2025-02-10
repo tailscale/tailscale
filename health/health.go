@@ -22,6 +22,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/mak"
@@ -73,6 +74,8 @@ type Tracker struct {
 	// mu should not be held during init.
 	initOnce sync.Once
 
+	testClock tstime.Clock // nil means use time.Now / tstime.StdClock{}
+
 	// mu guards everything that follows.
 	mu sync.Mutex
 
@@ -80,13 +83,13 @@ type Tracker struct {
 	warnableVal map[*Warnable]*warningState
 	// pendingVisibleTimers contains timers for Warnables that are unhealthy, but are
 	// not visible to the user yet, because they haven't been unhealthy for TimeToVisible
-	pendingVisibleTimers map[*Warnable]*time.Timer
+	pendingVisibleTimers map[*Warnable]tstime.TimerController
 
 	// sysErr maps subsystems to their current error (or nil if the subsystem is healthy)
 	// Deprecated: using Warnables should be preferred
 	sysErr   map[Subsystem]error
 	watchers set.HandleSet[func(*Warnable, *UnhealthyState)] // opt func to run if error state changes
-	timer    *time.Timer
+	timer    tstime.TimerController
 
 	latestVersion   *tailcfg.ClientVersion // or nil
 	checkForUpdates bool
@@ -113,6 +116,20 @@ type Tracker struct {
 	localLogConfigErr       error
 	tlsConnectionErrors     map[string]error // map[ServerName]error
 	metricHealthMessage     *metrics.MultiLabelMap[metricHealthMessageLabel]
+}
+
+func (t *Tracker) now() time.Time {
+	if t.testClock != nil {
+		return t.testClock.Now()
+	}
+	return time.Now()
+}
+
+func (t *Tracker) clock() tstime.Clock {
+	if t.testClock != nil {
+		return t.testClock
+	}
+	return tstime.StdClock{}
 }
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -214,9 +231,11 @@ type Warnable struct {
 	// TODO(angott): turn this into a SeverityFunc, which allows the Warnable to change its severity based on
 	// the Args of the unhappy state, just like we do in the Text function.
 	Severity Severity
-	// DependsOn is a set of Warnables that this Warnable depends, on and need to be healthy
-	// before this Warnable can also be healthy again. The GUI can use this information to ignore
+	// DependsOn is a set of Warnables that this Warnable depends on and need to be healthy
+	// before this Warnable is relevant. The GUI can use this information to ignore
 	// this Warnable if one of its dependencies is unhealthy.
+	// That is, if any of these Warnables are unhealthy, then this Warnable is not relevant
+	// and should be considered healthy to bother the user about.
 	DependsOn []*Warnable
 
 	// MapDebugFlag is a MapRequest.DebugFlag that is sent to control when this Warnable is unhealthy
@@ -309,11 +328,11 @@ func (ws *warningState) Equal(other *warningState) bool {
 
 // IsVisible returns whether the Warnable should be visible to the user, based on the TimeToVisible
 // field of the Warnable and the BrokenSince time when the Warnable became unhealthy.
-func (w *Warnable) IsVisible(ws *warningState) bool {
+func (w *Warnable) IsVisible(ws *warningState, clockNow func() time.Time) bool {
 	if ws == nil || w.TimeToVisible == 0 {
 		return true
 	}
-	return time.Since(ws.BrokenSince) >= w.TimeToVisible
+	return clockNow().Sub(ws.BrokenSince) >= w.TimeToVisible
 }
 
 // SetMetricsRegistry sets up the metrics for the Tracker. It takes
@@ -363,7 +382,7 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 
 	// If we already have a warningState for this Warnable with an earlier BrokenSince time, keep that
 	// BrokenSince time.
-	brokenSince := time.Now()
+	brokenSince := t.now()
 	if existingWS := t.warnableVal[w]; existingWS != nil {
 		brokenSince = existingWS.BrokenSince
 	}
@@ -382,15 +401,15 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 			// If the Warnable has been unhealthy for more than its TimeToVisible, the callback should be
 			// executed immediately. Otherwise, the callback should be enqueued to run once the Warnable
 			// becomes visible.
-			if w.IsVisible(ws) {
+			if w.IsVisible(ws, t.now) {
 				go cb(w, w.unhealthyState(ws))
 				continue
 			}
 
 			// The time remaining until the Warnable will be visible to the user is the TimeToVisible
 			// minus the time that has already passed since the Warnable became unhealthy.
-			visibleIn := w.TimeToVisible - time.Since(brokenSince)
-			mak.Set(&t.pendingVisibleTimers, w, time.AfterFunc(visibleIn, func() {
+			visibleIn := w.TimeToVisible - t.now().Sub(brokenSince)
+			var tc tstime.TimerController = t.clock().AfterFunc(visibleIn, func() {
 				t.mu.Lock()
 				defer t.mu.Unlock()
 				// Check if the Warnable is still unhealthy, as it could have become healthy between the time
@@ -399,7 +418,8 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 					go cb(w, w.unhealthyState(ws))
 					delete(t.pendingVisibleTimers, w)
 				}
-			}))
+			})
+			mak.Set(&t.pendingVisibleTimers, w, tc)
 		}
 	}
 }
@@ -474,7 +494,7 @@ func (t *Tracker) RegisterWatcher(cb func(w *Warnable, r *UnhealthyState)) (unre
 	}
 	handle := t.watchers.Add(cb)
 	if t.timer == nil {
-		t.timer = time.AfterFunc(time.Minute, t.timerSelfCheck)
+		t.timer = t.clock().AfterFunc(time.Minute, t.timerSelfCheck)
 	}
 	return func() {
 		t.mu.Lock()
@@ -638,10 +658,10 @@ func (t *Tracker) GotStreamedMapResponse() {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.lastStreamedMapResponse = time.Now()
+	t.lastStreamedMapResponse = t.now()
 	if !t.inMapPoll {
 		t.inMapPoll = true
-		t.inMapPollSince = time.Now()
+		t.inMapPollSince = t.now()
 	}
 	t.selfCheckLocked()
 }
@@ -658,7 +678,7 @@ func (t *Tracker) SetOutOfPollNetMap() {
 		return
 	}
 	t.inMapPoll = false
-	t.lastMapPollEndedAt = time.Now()
+	t.lastMapPollEndedAt = t.now()
 	t.selfCheckLocked()
 }
 
@@ -700,7 +720,7 @@ func (t *Tracker) NoteMapRequestHeard(mr *tailcfg.MapRequest) {
 	// against SetMagicSockDERPHome and
 	// SetDERPRegionConnectedState
 
-	t.lastMapRequestHeard = time.Now()
+	t.lastMapRequestHeard = t.now()
 	t.selfCheckLocked()
 }
 
@@ -738,7 +758,7 @@ func (t *Tracker) NoteDERPRegionReceivedFrame(region int) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	mak.Set(&t.derpRegionLastFrame, region, time.Now())
+	mak.Set(&t.derpRegionLastFrame, region, t.now())
 	t.selfCheckLocked()
 }
 
@@ -797,9 +817,9 @@ func (t *Tracker) SetIPNState(state string, wantRunning bool) {
 		// The first time we see wantRunning=true and it used to be false, it means the user requested
 		// the backend to start. We store this timestamp and use it to silence some warnings that are
 		// expected during startup.
-		t.ipnWantRunningLastTrue = time.Now()
+		t.ipnWantRunningLastTrue = t.now()
 		t.setUnhealthyLocked(warmingUpWarnable, nil)
-		time.AfterFunc(warmingUpWarnableDuration, func() {
+		t.clock().AfterFunc(warmingUpWarnableDuration, func() {
 			t.mu.Lock()
 			t.updateWarmingUpWarnableLocked()
 			t.mu.Unlock()
@@ -936,8 +956,11 @@ func (t *Tracker) Strings() []string {
 func (t *Tracker) stringsLocked() []string {
 	result := []string{}
 	for w, ws := range t.warnableVal {
-		if !w.IsVisible(ws) {
+		if !w.IsVisible(ws, t.now) {
 			// Do not append invisible warnings.
+			continue
+		}
+		if t.isEffectivelyHealthyLocked(w) {
 			continue
 		}
 		if ws.Args == nil {
@@ -1005,7 +1028,7 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		t.setHealthyLocked(localLogWarnable)
 	}
 
-	now := time.Now()
+	now := t.now()
 
 	// How long we assume we'll have heard a DERP frame or a MapResponse
 	// KeepAlive by.
@@ -1015,8 +1038,10 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	recentlyOn := now.Sub(t.ipnWantRunningLastTrue) < 5*time.Second
 
 	homeDERP := t.derpHomeRegion
-	if recentlyOn {
+	if recentlyOn || !t.inMapPoll {
 		// If user just turned Tailscale on, don't warn for a bit.
+		// Also, if we're not in a map poll, that means we don't yet
+		// have a DERPMap or aren't in a state where we even want
 		t.setHealthyLocked(noDERPHomeWarnable)
 		t.setHealthyLocked(noDERPConnectionWarnable)
 		t.setHealthyLocked(derpTimeoutWarnable)
@@ -1165,7 +1190,7 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 // updateWarmingUpWarnableLocked ensures the warmingUpWarnable is healthy if wantRunning has been set to true
 // for more than warmingUpWarnableDuration.
 func (t *Tracker) updateWarmingUpWarnableLocked() {
-	if !t.ipnWantRunningLastTrue.IsZero() && time.Now().After(t.ipnWantRunningLastTrue.Add(warmingUpWarnableDuration)) {
+	if !t.ipnWantRunningLastTrue.IsZero() && t.now().After(t.ipnWantRunningLastTrue.Add(warmingUpWarnableDuration)) {
 		t.setHealthyLocked(warmingUpWarnable)
 	}
 }
@@ -1277,7 +1302,7 @@ func (t *Tracker) LastNoiseDialWasRecent() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	now := time.Now()
+	now := t.now()
 	dur := now.Sub(t.lastNoiseDial)
 	t.lastNoiseDial = now
 	return dur < 2*time.Minute

@@ -250,7 +250,7 @@ main() {
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
 				;;
-			manjaro|manjaro-arm)
+			manjaro|manjaro-arm|biglinux)
 				OS="manjaro"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
@@ -390,7 +390,8 @@ main() {
 			;;
 		freebsd)
 			if [ "$VERSION" != "12" ] && \
-			   [ "$VERSION" != "13" ]
+			   [ "$VERSION" != "13" ] && \
+			   [ "$VERSION" != "14" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
@@ -572,7 +573,7 @@ main() {
 			;;
 		pkg)
 			set -x
-			$SUDO pkg install tailscale
+			$SUDO pkg install --yes tailscale
 			$SUDO service tailscaled enable
 			$SUDO service tailscaled start
 			set +x

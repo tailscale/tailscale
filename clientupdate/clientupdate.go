@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tailscale.com/hostinfo"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpver"
 	"tailscale.com/version"
@@ -169,6 +170,12 @@ func NewUpdater(args Arguments) (*Updater, error) {
 type updateFunction func() error
 
 func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
+	hi := hostinfo.New()
+	// We don't know how to update custom tsnet binaries, it's up to the user.
+	if hi.Package == "tsnet" {
+		return nil, false
+	}
+
 	switch runtime.GOOS {
 	case "windows":
 		return up.updateWindows, true

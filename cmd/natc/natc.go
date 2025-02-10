@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -26,7 +27,7 @@ import (
 	"github.com/inetaf/tcpproxy"
 	"github.com/peterbourgon/ff/v3"
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -37,6 +38,7 @@ import (
 	"tailscale.com/tsweb"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
+	"tailscale.com/wgengine/netstack"
 )
 
 func main() {
@@ -112,6 +114,7 @@ func main() {
 		ts.Port = uint16(*wgPort)
 	}
 	defer ts.Close()
+
 	if *verboseTSNet {
 		ts.Logf = log.Printf
 	}
@@ -129,6 +132,16 @@ func main() {
 			log.Fatalf("debug serve: %v", http.Serve(dln, mux))
 		}()
 	}
+
+	if err := ts.Start(); err != nil {
+		log.Fatalf("ts.Start: %v", err)
+	}
+	// TODO(raggi): this is not a public interface or guarantee.
+	ns := ts.Sys().Netstack.Get().(*netstack.Impl)
+	if *debugPort != 0 {
+		expvar.Publish("netstack", ns.ExpVar())
+	}
+
 	lc, err := ts.LocalClient()
 	if err != nil {
 		log.Fatalf("LocalClient() failed: %v", err)
@@ -151,9 +164,9 @@ func main() {
 type connector struct {
 	// ts is the tsnet.Server used to host the connector.
 	ts *tsnet.Server
-	// lc is the LocalClient used to interact with the tsnet.Server hosting this
+	// lc is the local.Client used to interact with the tsnet.Server hosting this
 	// connector.
-	lc *tailscale.LocalClient
+	lc *local.Client
 
 	// dnsAddr is the IPv4 address to listen on for DNS requests. It is used to
 	// prevent the app connector from assigning it to a domain.

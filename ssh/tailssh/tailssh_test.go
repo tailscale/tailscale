@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"tailscale.com/ipn/ipnlocal"
@@ -805,7 +805,8 @@ func TestSSHAuthFlow(t *testing.T) {
 			state: &localState{
 				sshEnabled: true,
 			},
-			authErr: true,
+			authErr:     true,
+			wantBanners: []string{"tailscale: failed to evaluate SSH policy"},
 		},
 		{
 			name: "accept",

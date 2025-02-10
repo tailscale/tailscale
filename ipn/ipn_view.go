@@ -18,7 +18,73 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,WebServerConfig
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=LoginProfile,Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,WebServerConfig
+
+// View returns a read-only view of LoginProfile.
+func (p *LoginProfile) View() LoginProfileView {
+	return LoginProfileView{ж: p}
+}
+
+// LoginProfileView provides a read-only view over LoginProfile.
+//
+// Its methods should only be called if `Valid()` returns true.
+type LoginProfileView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *LoginProfile
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v LoginProfileView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v LoginProfileView) AsStruct() *LoginProfile {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v LoginProfileView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *LoginProfileView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x LoginProfile
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v LoginProfileView) ID() ProfileID                    { return v.ж.ID }
+func (v LoginProfileView) Name() string                     { return v.ж.Name }
+func (v LoginProfileView) NetworkProfile() NetworkProfile   { return v.ж.NetworkProfile }
+func (v LoginProfileView) Key() StateKey                    { return v.ж.Key }
+func (v LoginProfileView) UserProfile() tailcfg.UserProfile { return v.ж.UserProfile }
+func (v LoginProfileView) NodeID() tailcfg.StableNodeID     { return v.ж.NodeID }
+func (v LoginProfileView) LocalUserID() WindowsUserID       { return v.ж.LocalUserID }
+func (v LoginProfileView) ControlURL() string               { return v.ж.ControlURL }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _LoginProfileViewNeedsRegeneration = LoginProfile(struct {
+	ID             ProfileID
+	Name           string
+	NetworkProfile NetworkProfile
+	Key            StateKey
+	UserProfile    tailcfg.UserProfile
+	NodeID         tailcfg.StableNodeID
+	LocalUserID    WindowsUserID
+	ControlURL     string
+}{})
 
 // View returns a read-only view of Prefs.
 func (p *Prefs) View() PrefsView {

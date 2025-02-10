@@ -20,7 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	tsoperator "tailscale.com/k8s-operator"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/types/ptr"
 )
@@ -71,24 +70,26 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	if err != nil {
 		return res, fmt.Errorf("error retrieving ExternalName Service: %w", err)
 	}
-	if !tsoperator.EgressServiceIsValidAndConfigured(svc) {
-		l.Infof("Cluster resources for ExternalName Service %s/%s are not yet configured", svc.Namespace, svc.Name)
-		return res, nil
-	}
 
 	// TODO(irbekrm): currently this reconcile loop runs all the checks every time it's triggered, which is
 	// wasteful. Once we have a Ready condition for ExternalName Services for ProxyGroup, use the condition to
 	// determine if a reconcile is needed.
 
 	oldEps := eps.DeepCopy()
-	proxyGroupName := eps.Labels[labelProxyGroup]
 	tailnetSvc := tailnetSvcName(svc)
 	l = l.With("tailnet-service-name", tailnetSvc)
 
 	// Retrieve the desired tailnet service configuration from the ConfigMap.
+	proxyGroupName := eps.Labels[labelProxyGroup]
 	_, cfgs, err := egressSvcsConfigs(ctx, er.Client, proxyGroupName, er.tsNamespace)
 	if err != nil {
 		return res, fmt.Errorf("error retrieving tailnet services configuration: %w", err)
+	}
+	if cfgs == nil {
+		// TODO(irbekrm): this path would be hit if egress service was once exposed on a ProxyGroup that later
+		// got deleted. Probably the EndpointSlices then need to be deleted too- need to rethink this flow.
+		l.Debugf("No egress config found, likely because ProxyGroup has not been created")
+		return res, nil
 	}
 	cfg, ok := (*cfgs)[tailnetSvc]
 	if !ok {

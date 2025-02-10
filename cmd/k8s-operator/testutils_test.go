@@ -32,6 +32,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
@@ -583,6 +584,21 @@ func mustCreate(t *testing.T, client client.Client, obj client.Object) {
 		t.Fatalf("creating %q: %v", obj.GetName(), err)
 	}
 }
+func mustCreateAll(t *testing.T, client client.Client, objs ...client.Object) {
+	t.Helper()
+	for _, obj := range objs {
+		mustCreate(t, client, obj)
+	}
+}
+
+func mustDeleteAll(t *testing.T, client client.Client, objs ...client.Object) {
+	t.Helper()
+	for _, obj := range objs {
+		if err := client.Delete(context.Background(), obj); err != nil {
+			t.Fatalf("deleting %q: %v", obj.GetName(), err)
+		}
+	}
+}
 
 func mustUpdate[T any, O ptrObject[T]](t *testing.T, client client.Client, ns, name string, update func(O)) {
 	t.Helper()
@@ -706,6 +722,19 @@ func expectRequeue(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 		t.Fatalf("expected timed requeue, got success")
 	}
 }
+func expectError(t *testing.T, sr reconcile.Reconciler, ns, name string) {
+	t.Helper()
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      name,
+			Namespace: ns,
+		},
+	}
+	_, err := sr.Reconcile(context.Background(), req)
+	if err == nil {
+		t.Error("Reconcile: expected error but did not get one")
+	}
+}
 
 // expectEvents accepts a test recorder and a list of events, tests that expected
 // events are sent down the recorder's channel. Waits for 5s for each event.
@@ -739,7 +768,7 @@ type fakeTSClient struct {
 	sync.Mutex
 	keyRequests []tailscale.KeyCapabilities
 	deleted     []string
-	vipServices map[string]*VIPService
+	vipServices map[tailcfg.ServiceName]*VIPService
 }
 type fakeTSNetServer struct {
 	certDomains []string
@@ -846,7 +875,7 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 	}
 }
 
-func (c *fakeTSClient) getVIPServiceByName(ctx context.Context, name string) (*VIPService, error) {
+func (c *fakeTSClient) getVIPService(ctx context.Context, name tailcfg.ServiceName) (*VIPService, error) {
 	c.Lock()
 	defer c.Unlock()
 	if c.vipServices == nil {
@@ -859,17 +888,17 @@ func (c *fakeTSClient) getVIPServiceByName(ctx context.Context, name string) (*V
 	return svc, nil
 }
 
-func (c *fakeTSClient) createOrUpdateVIPServiceByName(ctx context.Context, svc *VIPService) error {
+func (c *fakeTSClient) createOrUpdateVIPService(ctx context.Context, svc *VIPService) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.vipServices == nil {
-		c.vipServices = make(map[string]*VIPService)
+		c.vipServices = make(map[tailcfg.ServiceName]*VIPService)
 	}
 	c.vipServices[svc.Name] = svc
 	return nil
 }
 
-func (c *fakeTSClient) deleteVIPServiceByName(ctx context.Context, name string) error {
+func (c *fakeTSClient) deleteVIPService(ctx context.Context, name tailcfg.ServiceName) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.vipServices != nil {

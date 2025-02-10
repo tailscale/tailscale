@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -33,6 +34,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/localapi"
@@ -134,11 +136,11 @@ type Server struct {
 	hostname         string
 	shutdownCtx      context.Context
 	shutdownCancel   context.CancelFunc
-	proxyCred        string                 // SOCKS5 proxy auth for loopbackListener
-	localAPICred     string                 // basic auth password for loopbackListener
-	loopbackListener net.Listener           // optional loopback for localapi and proxies
-	localAPIListener net.Listener           // in-memory, used by localClient
-	localClient      *tailscale.LocalClient // in-memory
+	proxyCred        string        // SOCKS5 proxy auth for loopbackListener
+	localAPICred     string        // basic auth password for loopbackListener
+	loopbackListener net.Listener  // optional loopback for localapi and proxies
+	localAPIListener net.Listener  // in-memory, used by localClient
+	localClient      *local.Client // in-memory
 	localAPIServer   *http.Server
 	logbuffer        *filch.Filch
 	logtail          *logtail.Logger
@@ -221,7 +223,7 @@ func (s *Server) HTTPClient() *http.Client {
 //
 // It will start the server if it has not been started yet. If the server's
 // already been started successfully, it doesn't return an error.
-func (s *Server) LocalClient() (*tailscale.LocalClient, error) {
+func (s *Server) LocalClient() (*local.Client, error) {
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
@@ -272,7 +274,7 @@ func (s *Server) Loopback() (addr string, proxyCred, localAPICred string, err er
 		// out the CONNECT code from tailscaled/proxy.go that uses
 		// httputil.ReverseProxy and adding auth support.
 		go func() {
-			lah := localapi.NewHandler(s.lb, s.logf, s.logid)
+			lah := localapi.NewHandler(ipnauth.Self, s.lb, s.logf, s.logid)
 			lah.PermitWrite = true
 			lah.PermitRead = true
 			lah.RequiredPassword = s.localAPICred
@@ -667,7 +669,7 @@ func (s *Server) start() (reterr error) {
 	go s.printAuthURLLoop()
 
 	// Run the localapi handler, to allow fetching LetsEncrypt certs.
-	lah := localapi.NewHandler(lb, tsLogf, s.logid)
+	lah := localapi.NewHandler(ipnauth.Self, lb, tsLogf, s.logid)
 	lah.PermitWrite = true
 	lah.PermitRead = true
 
@@ -675,7 +677,7 @@ func (s *Server) start() (reterr error) {
 	// nettest.Listen provides a in-memory pipe based implementation for net.Conn.
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	s.localAPIListener = lal
-	s.localClient = &tailscale.LocalClient{Dial: lal.Dial}
+	s.localClient = &local.Client{Dial: lal.Dial}
 	s.localAPIServer = &http.Server{Handler: lah}
 	s.lb.ConfigureWebClient(s.localClient)
 	go func() {
@@ -1286,11 +1288,12 @@ type listener struct {
 }
 
 func (ln *listener) Accept() (net.Conn, error) {
-	c, ok := <-ln.conn
-	if !ok {
+	select {
+	case c := <-ln.conn:
+		return c, nil
+	case <-ln.closedc:
 		return nil, fmt.Errorf("tsnet: %w", net.ErrClosed)
 	}
-	return c, nil
 }
 
 func (ln *listener) Addr() net.Addr { return addr{ln} }

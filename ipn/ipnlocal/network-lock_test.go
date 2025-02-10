@@ -202,7 +202,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	}).View(), ipn.NetworkProfile{}))
 
 	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
 	os.Mkdir(tkaPath, 0755)
 	chonk, err := tka.ChonkDir(tkaPath)
 	if err != nil {
@@ -410,7 +410,7 @@ func TestTKASync(t *testing.T) {
 			}
 
 			temp := t.TempDir()
-			tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+			tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
 			os.Mkdir(tkaPath, 0755)
 			// Setup the TKA authority on the node.
 			nodeStorage, err := tka.ChonkDir(tkaPath)
@@ -710,7 +710,7 @@ func TestTKADisable(t *testing.T) {
 	}).View(), ipn.NetworkProfile{}))
 
 	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
 	os.Mkdir(tkaPath, 0755)
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	chonk, err := tka.ChonkDir(tkaPath)
@@ -770,7 +770,7 @@ func TestTKADisable(t *testing.T) {
 		ccAuto:  cc,
 		logf:    t.Logf,
 		tka: &tkaState{
-			profile:   pm.CurrentProfile().ID,
+			profile:   pm.CurrentProfile().ID(),
 			authority: authority,
 			storage:   chonk,
 		},
@@ -805,7 +805,7 @@ func TestTKASign(t *testing.T) {
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
 	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
 	os.Mkdir(tkaPath, 0755)
 	chonk, err := tka.ChonkDir(tkaPath)
 	if err != nil {
@@ -890,7 +890,7 @@ func TestTKAForceDisable(t *testing.T) {
 	}).View(), ipn.NetworkProfile{}))
 
 	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
 	os.Mkdir(tkaPath, 0755)
 	chonk, err := tka.ChonkDir(tkaPath)
 	if err != nil {
@@ -989,7 +989,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 	tkaKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
 	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
 	os.Mkdir(tkaPath, 0755)
 	chonk, err := tka.ChonkDir(tkaPath)
 	if err != nil {
@@ -1124,7 +1124,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 	compromisedKey := tka.Key{Kind: tka.Key25519, Public: compromisedPriv.Public().Verifier(), Votes: 1}
 
 	temp := t.TempDir()
-	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID()))
 	os.Mkdir(tkaPath, 0755)
 	chonk, err := tka.ChonkDir(tkaPath)
 	if err != nil {

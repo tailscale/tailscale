@@ -98,7 +98,7 @@
       <parentCategory ref="Settings_Category" />
       <supportedOn ref="SINCE_V1_56" />
       <elements>
-        <text id="ExitNodeIDPrompt" valueName="ExitNodeID" required="true" />>
+        <text id="ExitNodeIDPrompt" valueName="ExitNodeID" required="true" />
       </elements>
     </policy>
     <policy name="AllowedSuggestedExitNodes" class="Machine" displayName="$(string.AllowedSuggestedExitNodes)" explainText="$(string.AllowedSuggestedExitNodes_Help)" presentation="$(presentation.AllowedSuggestedExitNodes)" key="Software\Policies\Tailscale\AllowedSuggestedExitNodes">

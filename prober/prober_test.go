@@ -149,6 +149,74 @@ func TestProberTimingSpread(t *testing.T) {
 	notCalled()
 }
 
+func TestProberTimeout(t *testing.T) {
+	clk := newFakeTime()
+	p := newForTest(clk.Now, clk.NewTicker)
+
+	var done sync.WaitGroup
+	done.Add(1)
+	pfunc := FuncProbe(func(ctx context.Context) error {
+		defer done.Done()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	pfunc.Timeout = time.Microsecond
+	probe := p.Run("foo", 30*time.Second, nil, pfunc)
+	waitActiveProbes(t, p, clk, 1)
+	done.Wait()
+	probe.mu.Lock()
+	info := probe.probeInfoLocked()
+	probe.mu.Unlock()
+	wantInfo := ProbeInfo{
+		Name:            "foo",
+		Interval:        30 * time.Second,
+		Labels:          map[string]string{"class": "", "name": "foo"},
+		Status:          ProbeStatusFailed,
+		Error:           "context deadline exceeded",
+		RecentResults:   []bool{false},
+		RecentLatencies: nil,
+	}
+	if diff := cmp.Diff(wantInfo, info, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Latency")); diff != "" {
+		t.Fatalf("unexpected ProbeInfo (-want +got):\n%s", diff)
+	}
+	if got := info.Latency; got > time.Second {
+		t.Errorf("info.Latency = %v, want at most 1s", got)
+	}
+}
+
+func TestProberConcurrency(t *testing.T) {
+	clk := newFakeTime()
+	p := newForTest(clk.Now, clk.NewTicker)
+
+	var ran atomic.Int64
+	stopProbe := make(chan struct{})
+	pfunc := FuncProbe(func(ctx context.Context) error {
+		ran.Add(1)
+		<-stopProbe
+		return nil
+	})
+	pfunc.Timeout = time.Hour
+	pfunc.Concurrency = 3
+	p.Run("foo", time.Second, nil, pfunc)
+	waitActiveProbes(t, p, clk, 1)
+
+	for range 50 {
+		clk.Advance(time.Second)
+	}
+
+	if err := tstest.WaitFor(convergenceTimeout, func() error {
+		if got, want := ran.Load(), int64(3); got != want {
+			return fmt.Errorf("expected %d probes to run concurrently, got %d", want, got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(stopProbe)
+}
+
 func TestProberRun(t *testing.T) {
 	clk := newFakeTime()
 	p := newForTest(clk.Now, clk.NewTicker)
@@ -450,9 +518,11 @@ func TestProbeInfoRecent(t *testing.T) {
 			for _, r := range tt.results {
 				probe.recordStart()
 				clk.Advance(r.latency)
-				probe.recordEnd(r.err)
+				probe.recordEndLocked(r.err)
 			}
+			probe.mu.Lock()
 			info := probe.probeInfoLocked()
+			probe.mu.Unlock()
 			if diff := cmp.Diff(tt.wantProbeInfo, info, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Interval")); diff != "" {
 				t.Fatalf("unexpected ProbeInfo (-want +got):\n%s", diff)
 			}

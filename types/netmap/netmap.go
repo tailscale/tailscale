@@ -115,7 +115,7 @@ func (nm *NetworkMap) GetVIPServiceIPMap() tailcfg.ServiceIPMappings {
 		return nil
 	}
 
-	ipMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](nm.SelfNode.CapMap().AsMap(), tailcfg.NodeAttrServiceHost)
+	ipMaps, err := tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceIPMappings](nm.SelfNode.CapMap(), tailcfg.NodeAttrServiceHost)
 	if len(ipMaps) != 1 || err != nil {
 		return nil
 	}

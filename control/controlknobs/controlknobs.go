@@ -6,6 +6,8 @@
 package controlknobs
 
 import (
+	"fmt"
+	"reflect"
 	"sync/atomic"
 
 	"tailscale.com/syncs"
@@ -103,6 +105,11 @@ type Knobs struct {
 	// DisableCaptivePortalDetection is whether the node should not perform captive portal detection
 	// automatically when the network state changes.
 	DisableCaptivePortalDetection atomic.Bool
+
+	// DisableSkipStatusQueue is whether the node should disable skipping
+	// of queued netmap.NetworkMap between the controlclient and LocalBackend.
+	// See tailscale/tailscale#14768.
+	DisableSkipStatusQueue atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -132,6 +139,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableLocalDNSOverrideViaNRPT       = has(tailcfg.NodeAttrDisableLocalDNSOverrideViaNRPT)
 		disableCryptorouting                 = has(tailcfg.NodeAttrDisableMagicSockCryptoRouting)
 		disableCaptivePortalDetection        = has(tailcfg.NodeAttrDisableCaptivePortalDetection)
+		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -159,6 +167,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableLocalDNSOverrideViaNRPT.Store(disableLocalDNSOverrideViaNRPT)
 	k.DisableCryptorouting.Store(disableCryptorouting)
 	k.DisableCaptivePortalDetection.Store(disableCaptivePortalDetection)
+	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -167,25 +176,19 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 	if k == nil {
 		return nil
 	}
-	return map[string]any{
-		"DisableUPnP":                          k.DisableUPnP.Load(),
-		"KeepFullWGConfig":                     k.KeepFullWGConfig.Load(),
-		"RandomizeClientPort":                  k.RandomizeClientPort.Load(),
-		"OneCGNAT":                             k.OneCGNAT.Load(),
-		"ForceBackgroundSTUN":                  k.ForceBackgroundSTUN.Load(),
-		"DisableDeltaUpdates":                  k.DisableDeltaUpdates.Load(),
-		"PeerMTUEnable":                        k.PeerMTUEnable.Load(),
-		"DisableDNSForwarderTCPRetries":        k.DisableDNSForwarderTCPRetries.Load(),
-		"SilentDisco":                          k.SilentDisco.Load(),
-		"LinuxForceIPTables":                   k.LinuxForceIPTables.Load(),
-		"LinuxForceNfTables":                   k.LinuxForceNfTables.Load(),
-		"SeamlessKeyRenewal":                   k.SeamlessKeyRenewal.Load(),
-		"ProbeUDPLifetime":                     k.ProbeUDPLifetime.Load(),
-		"AppCStoreRoutes":                      k.AppCStoreRoutes.Load(),
-		"UserDialUseRoutes":                    k.UserDialUseRoutes.Load(),
-		"DisableSplitDNSWhenNoCustomResolvers": k.DisableSplitDNSWhenNoCustomResolvers.Load(),
-		"DisableLocalDNSOverrideViaNRPT":       k.DisableLocalDNSOverrideViaNRPT.Load(),
-		"DisableCryptorouting":                 k.DisableCryptorouting.Load(),
-		"DisableCaptivePortalDetection":        k.DisableCaptivePortalDetection.Load(),
+	ret := map[string]any{}
+	rt := reflect.TypeFor[Knobs]()
+	rv := reflect.ValueOf(k).Elem() // of *k
+	for i := 0; i < rt.NumField(); i++ {
+		name := rt.Field(i).Name
+		switch v := rv.Field(i).Addr().Interface().(type) {
+		case *atomic.Bool:
+			ret[name] = v.Load()
+		case *syncs.AtomicValue[opt.Bool]:
+			ret[name] = v.Load()
+		default:
+			panic(fmt.Sprintf("unknown field type %T for %v", v, name))
+		}
 	}
+	return ret
 }

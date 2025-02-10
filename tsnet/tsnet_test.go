@@ -36,7 +36,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"golang.org/x/net/proxy"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -667,6 +667,37 @@ func TestFunnel(t *testing.T) {
 	}
 }
 
+func TestListenerClose(t *testing.T) {
+	ctx := context.Background()
+	controlURL, _ := startControl(t)
+
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	ln, err := s1.Listen("tcp", ":8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if c != nil {
+			c.Close()
+		}
+		errc <- err
+	}()
+
+	ln.Close()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("unexpected error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for Accept to return")
+	}
+}
+
 func dialIngressConn(from, to *Server, target string) (net.Conn, error) {
 	toLC := must.Get(to.LocalClient())
 	toStatus := must.Get(toLC.StatusWithoutPeers(context.Background()))
@@ -1242,7 +1273,7 @@ func waitForCondition(t *testing.T, msg string, waitTime time.Duration, f func()
 }
 
 // mustDirect ensures there is a direct connection between LocalClient 1 and 2
-func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *tailscale.LocalClient) {
+func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *local.Client) {
 	t.Helper()
 	lastLog := time.Now().Add(-time.Minute)
 	// See https://github.com/tailscale/tailscale/issues/654

@@ -6,6 +6,7 @@ package logtail
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -78,6 +79,7 @@ type Config struct {
 	StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
 	Buffer         Buffer          // temp storage, if nil a MemoryBuffer
 	CompressLogs   bool            // whether to compress the log uploads
+	MaxUploadSize  int             // maximum upload size; 0 means using the default
 
 	// MetricsDelta, if non-nil, is a func that returns an encoding
 	// delta in clientmetrics to upload alongside existing logs.
@@ -157,6 +159,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		url:            cfg.BaseURL + "/c/" + cfg.Collection + "/" + cfg.PrivateID.String() + urlSuffix,
 		lowMem:         cfg.LowMemory,
 		buffer:         cfg.Buffer,
+		maxUploadSize:  cfg.MaxUploadSize,
 		skipClientTime: cfg.SkipClientTime,
 		drainWake:      make(chan struct{}, 1),
 		sentinel:       make(chan int32, 16),
@@ -192,6 +195,7 @@ type Logger struct {
 	skipClientTime bool
 	netMonitor     *netmon.Monitor
 	buffer         Buffer
+	maxUploadSize  int
 	drainWake      chan struct{}        // signal to speed up drain
 	drainBuf       []byte               // owned by drainPending for reuse
 	flushDelayFn   func() time.Duration // negative or zero return value to upload aggressively, or >0 to batch at this delay
@@ -325,7 +329,7 @@ func (l *Logger) drainPending() (b []byte) {
 		}
 	}()
 
-	maxLen := maxSize
+	maxLen := cmp.Or(l.maxUploadSize, maxSize)
 	if l.lowMem {
 		// When operating in a low memory environment, it is better to upload
 		// in multiple operations than it is to allocate a large body and OOM.
@@ -775,9 +779,10 @@ func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 	// That's okay as the Tailscale log service limit is actually 2*maxSize.
 	// However, so long as logging applications aim to target the maxSize limit,
 	// there should be no trouble eventually uploading logs.
-	if len(src) > maxSize {
+	maxLen := cmp.Or(l.maxUploadSize, maxSize)
+	if len(src) > maxLen {
 		errDetail := fmt.Sprintf("entry too large: %d bytes", len(src))
-		errData := appendTruncatedString(nil, src, maxSize/len(`\uffff`)) // escaping could increase size
+		errData := appendTruncatedString(nil, src, maxLen/len(`\uffff`)) // escaping could increase size
 
 		dst = append(dst, '{')
 		dst = l.appendMetadata(dst, l.skipClientTime, true, l.procID, l.procSequence, errDetail, errData, level)

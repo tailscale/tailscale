@@ -7,6 +7,7 @@
 package prober
 
 import (
+	"cmp"
 	"container/ring"
 	"context"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"tailscale.com/syncs"
 	"tailscale.com/tsweb"
 )
 
@@ -43,6 +45,14 @@ type ProbeClass struct {
 	// Labels defines a set of metric labels that will be added to all metrics
 	// exposed by this probe class.
 	Labels Labels
+
+	// Timeout is the maximum time the probe function is allowed to run before
+	// its context is cancelled. Defaults to 80% of the scheduling interval.
+	Timeout time.Duration
+
+	// Concurrency is the maximum number of concurrent probe executions
+	// allowed for this probe class. Defaults to 1.
+	Concurrency int
 
 	// Metrics allows a probe class to export custom Metrics. Can be nil.
 	Metrics func(prometheus.Labels) []prometheus.Metric
@@ -131,9 +141,12 @@ func newProbe(p *Prober, name string, interval time.Duration, l prometheus.Label
 		cancel:  cancel,
 		stopped: make(chan struct{}),
 
+		runSema: syncs.NewSemaphore(cmp.Or(pc.Concurrency, 1)),
+
 		name:         name,
 		probeClass:   pc,
 		interval:     interval,
+		timeout:      cmp.Or(pc.Timeout, time.Duration(float64(interval)*0.8)),
 		initialDelay: initialDelay(name, interval),
 		successHist:  ring.New(recentHistSize),
 		latencyHist:  ring.New(recentHistSize),
@@ -226,11 +239,12 @@ type Probe struct {
 	ctx     context.Context
 	cancel  context.CancelFunc // run to initiate shutdown
 	stopped chan struct{}      // closed when shutdown is complete
-	runMu   sync.Mutex         // ensures only one probe runs at a time
+	runSema syncs.Semaphore    // restricts concurrency per probe
 
 	name         string
 	probeClass   ProbeClass
 	interval     time.Duration
+	timeout      time.Duration
 	initialDelay time.Duration
 	tick         ticker
 
@@ -282,17 +296,15 @@ func (p *Probe) loop() {
 		t := p.prober.newTicker(p.initialDelay)
 		select {
 		case <-t.Chan():
-			p.run()
 		case <-p.ctx.Done():
 			t.Stop()
 			return
 		}
 		t.Stop()
-	} else {
-		p.run()
 	}
 
 	if p.prober.once {
+		p.run()
 		return
 	}
 
@@ -315,9 +327,12 @@ func (p *Probe) loop() {
 	p.tick = p.prober.newTicker(p.interval)
 	defer p.tick.Stop()
 	for {
+		// Run the probe in a new goroutine every tick. Default concurrency & timeout
+		// settings will ensure that only one probe is running at a time.
+		go p.run()
+
 		select {
 		case <-p.tick.Chan():
-			p.run()
 		case <-p.ctx.Done():
 			return
 		}
@@ -331,8 +346,13 @@ func (p *Probe) loop() {
 // that the probe either succeeds or fails before the next cycle is scheduled to
 // start.
 func (p *Probe) run() (pi ProbeInfo, err error) {
-	p.runMu.Lock()
-	defer p.runMu.Unlock()
+	// Probes are scheduled each p.interval, so we don't wait longer than that.
+	semaCtx, cancel := context.WithTimeout(p.ctx, p.interval)
+	defer cancel()
+	if !p.runSema.AcquireContext(semaCtx) {
+		return pi, fmt.Errorf("probe %s: context cancelled", p.name)
+	}
+	defer p.runSema.Release()
 
 	p.recordStart()
 	defer func() {
@@ -344,19 +364,21 @@ func (p *Probe) run() (pi ProbeInfo, err error) {
 		if r := recover(); r != nil {
 			log.Printf("probe %s panicked: %v", p.name, r)
 			err = fmt.Errorf("panic: %v", r)
-			p.recordEnd(err)
+			p.recordEndLocked(err)
 		}
 	}()
 	ctx := p.ctx
 	if !p.IsContinuous() {
-		timeout := time.Duration(float64(p.interval) * 0.8)
 		var cancel func()
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		ctx, cancel = context.WithTimeout(ctx, p.timeout)
 		defer cancel()
 	}
 
 	err = p.probeClass.Probe(ctx)
-	p.recordEnd(err)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.recordEndLocked(err)
 	if err != nil {
 		log.Printf("probe %s: %v", p.name, err)
 	}
@@ -370,10 +392,8 @@ func (p *Probe) recordStart() {
 	p.mu.Unlock()
 }
 
-func (p *Probe) recordEnd(err error) {
+func (p *Probe) recordEndLocked(err error) {
 	end := p.prober.now()
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.end = end
 	p.succeeded = err == nil
 	p.lastErr = err

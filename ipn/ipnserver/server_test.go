@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
@@ -330,7 +331,7 @@ func newTestIPNServer(tb testing.TB, lb *ipnlocal.LocalBackend, enableLogging bo
 
 type testIPNClient struct {
 	tb testing.TB
-	*tailscale.LocalClient
+	*local.Client
 	User *ipnauth.TestActor
 }
 
@@ -338,7 +339,7 @@ func (c *testIPNClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt
 	c.tb.Helper()
 	ctx, cancelWatcher := context.WithCancel(ctx)
 	c.tb.Cleanup(cancelWatcher)
-	watcher, err := c.LocalClient.WatchIPNBus(ctx, mask)
+	watcher, err := c.Client.WatchIPNBus(ctx, mask)
 	if err != nil {
 		c.tb.Fatalf("WatchIPNBus(%q): %v", c.User.Name, err)
 	}
@@ -359,7 +360,7 @@ type testIPNServer struct {
 	tb testing.TB
 	*Server
 	clientID  atomic.Int64
-	getClient func(*ipnauth.TestActor) *tailscale.LocalClient
+	getClient func(*ipnauth.TestActor) *local.Client
 
 	actorsMu sync.Mutex
 	actors   map[string]*ipnauth.TestActor
@@ -369,9 +370,9 @@ func (s *testIPNServer) getClientAs(name string) *testIPNClient {
 	clientID := fmt.Sprintf("Client-%d", 1+s.clientID.Add(1))
 	user := s.makeTestUser(name, clientID)
 	return &testIPNClient{
-		tb:          s.tb,
-		LocalClient: s.getClient(user),
-		User:        user,
+		tb:     s.tb,
+		Client: s.getClient(user),
+		User:   user,
 	}
 }
 
@@ -427,7 +428,7 @@ func (s *testIPNServer) checkCurrentUser(want *ipnauth.TestActor) {
 
 // startTestIPNServer starts a [httptest.Server] that hosts the specified IPN server for the
 // duration of the test, using the specified base context for incoming requests.
-// It returns a function that creates a [tailscale.LocalClient] as a given [ipnauth.TestActor].
+// It returns a function that creates a [local.Client] as a given [ipnauth.TestActor].
 func startTestIPNServer(tb testing.TB, baseContext context.Context, server *Server) *testIPNServer {
 	tb.Helper()
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -448,8 +449,8 @@ func startTestIPNServer(tb testing.TB, baseContext context.Context, server *Serv
 	return &testIPNServer{
 		tb:     tb,
 		Server: server,
-		getClient: func(actor *ipnauth.TestActor) *tailscale.LocalClient {
-			return &tailscale.LocalClient{Transport: newTestRoundTripper(ts, actor)}
+		getClient: func(actor *ipnauth.TestActor) *local.Client {
+			return &local.Client{Transport: newTestRoundTripper(ts, actor)}
 		},
 	}
 }

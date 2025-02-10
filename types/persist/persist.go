@@ -21,17 +21,6 @@ import (
 type Persist struct {
 	_ structs.Incomparable
 
-	// LegacyFrontendPrivateMachineKey is here temporarily
-	// (starting 2020-09-28) during migration of Windows users'
-	// machine keys from frontend storage to the backend. On the
-	// first LocalBackend.Start call, the backend will initialize
-	// the real (backend-owned) machine key from the frontend's
-	// provided value (if non-zero), picking a new random one if
-	// needed. This field should be considered read-only from GUI
-	// frontends. The real value should not be written back in
-	// this field, lest the frontend persist it to disk.
-	LegacyFrontendPrivateMachineKey key.MachinePrivate `json:"PrivateMachineKey"`
-
 	PrivateNodeKey    key.NodePrivate
 	OldPrivateNodeKey key.NodePrivate // needed to request key rotation
 	UserProfile       tailcfg.UserProfile
@@ -95,8 +84,7 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		return false
 	}
 
-	return p.LegacyFrontendPrivateMachineKey.Equal(p2.LegacyFrontendPrivateMachineKey) &&
-		p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
+	return p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.UserProfile.Equal(&p2.UserProfile) &&
 		p.NetworkLockKey.Equal(p2.NetworkLockKey) &&
@@ -106,18 +94,14 @@ func (p *Persist) Equals(p2 *Persist) bool {
 
 func (p *Persist) Pretty() string {
 	var (
-		mk     key.MachinePublic
 		ok, nk key.NodePublic
 	)
-	if !p.LegacyFrontendPrivateMachineKey.IsZero() {
-		mk = p.LegacyFrontendPrivateMachineKey.Public()
-	}
 	if !p.OldPrivateNodeKey.IsZero() {
 		ok = p.OldPrivateNodeKey.Public()
 	}
 	if !p.PrivateNodeKey.IsZero() {
 		nk = p.PublicNodeKey()
 	}
-	return fmt.Sprintf("Persist{lm=%v, o=%v, n=%v u=%#v}",
-		mk.ShortString(), ok.ShortString(), nk.ShortString(), p.UserProfile.LoginName)
+	return fmt.Sprintf("Persist{o=%v, n=%v u=%#v}",
+		ok.ShortString(), nk.ShortString(), p.UserProfile.LoginName)
 }

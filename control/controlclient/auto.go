@@ -21,6 +21,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/execqueue"
 )
 
@@ -130,6 +131,8 @@ type Auto struct {
 	// lastUpdateGen is the gen of last update we had an update worth sending to
 	// the server.
 	lastUpdateGen updateGen
+
+	lastStatus atomic.Pointer[Status]
 
 	paused         bool        // whether we should stop making HTTP requests
 	unpauseWaiters []chan bool // chans that gets sent true (once) on wake, or false on Shutdown
@@ -596,19 +599,88 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		// not logged in.
 		nm = nil
 	}
-	new := Status{
+	newSt := &Status{
 		URL:     url,
 		Persist: p,
 		NetMap:  nm,
 		Err:     err,
 		state:   state,
 	}
+	c.lastStatus.Store(newSt)
 
 	// Launch a new goroutine to avoid blocking the caller while the observer
 	// does its thing, which may result in a call back into the client.
+	metricQueued.Add(1)
 	c.observerQueue.Add(func() {
-		c.observer.SetControlClientStatus(c, new)
+		if canSkipStatus(newSt, c.lastStatus.Load()) {
+			metricSkippable.Add(1)
+			if !c.direct.controlKnobs.DisableSkipStatusQueue.Load() {
+				metricSkipped.Add(1)
+				return
+			}
+		}
+		c.observer.SetControlClientStatus(c, *newSt)
+
+		// Best effort stop retaining the memory now that we've sent it to the
+		// observer (LocalBackend). We CAS here because the caller goroutine is
+		// doing a Store which we want to win a race. This is only a memory
+		// optimization and is not for correctness.
+		//
+		// If the CAS fails, that means somebody else's Store replaced our
+		// pointer (so mission accomplished: our netmap is no longer retained in
+		// any case) and that Store caller will be responsible for removing
+		// their own netmap (or losing their race too, down the chain).
+		// Eventually the last caller will win this CAS and zero lastStatus.
+		c.lastStatus.CompareAndSwap(newSt, nil)
 	})
+}
+
+var (
+	metricQueued    = clientmetric.NewCounter("controlclient_auto_status_queued")
+	metricSkippable = clientmetric.NewCounter("controlclient_auto_status_queue_skippable")
+	metricSkipped   = clientmetric.NewCounter("controlclient_auto_status_queue_skipped")
+)
+
+// canSkipStatus reports whether we can skip sending s1, knowing
+// that s2 is enqueued sometime in the future after s1.
+//
+// s1 must be non-nil. s2 may be nil.
+func canSkipStatus(s1, s2 *Status) bool {
+	if s2 == nil {
+		// Nothing in the future.
+		return false
+	}
+	if s1 == s2 {
+		// If the last item in the queue is the same as s1,
+		// we can't skip it.
+		return false
+	}
+	if s1.Err != nil || s1.URL != "" {
+		// If s1 has an error or a URL, we shouldn't skip it, lest the error go
+		// away in s2 or in-between. We want to make sure all the subsystems see
+		// it. Plus there aren't many of these, so not worth skipping.
+		return false
+	}
+	if !s1.Persist.Equals(s2.Persist) || s1.state != s2.state {
+		// If s1 has a different Persist or state than s2,
+		// don't skip it. We only care about skipping the typical
+		// entries where the only difference is the NetMap.
+		return false
+	}
+	// If nothing above precludes it, and both s1 and s2 have NetMaps, then
+	// we can skip it, because s2's NetMap is a newer version and we can
+	// jump straight from whatever state we had before to s2's state,
+	// without passing through s1's state first. A NetMap is regrettably a
+	// full snapshot of the state, not an incremental delta. We're slowly
+	// moving towards passing around only deltas around internally at all
+	// layers, but this is explicitly the case where we didn't have a delta
+	// path for the message we received over the wire and had to resort
+	// to the legacy full NetMap path. And then we can get behind processing
+	// these full NetMap snapshots in LocalBackend/wgengine/magicsock/netstack
+	// and this path (when it returns true) lets us skip over useless work
+	// and not get behind in the queue. This matters in particular for tailnets
+	// that are both very large + very churny.
+	return s1.NetMap != nil && s2.NetMap != nil
 }
 
 func (c *Auto) Login(flags LoginFlags) {

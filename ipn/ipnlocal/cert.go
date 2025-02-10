@@ -32,7 +32,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tailscale/golang-x-crypto/acme"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
@@ -41,6 +40,7 @@ import (
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/bakedroots"
+	"tailscale.com/tempfork/acme"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
@@ -556,6 +556,7 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 	}
 
 	logf("requesting cert...")
+	traceACME(csr)
 	der, _, err := ac.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
 		return nil, fmt.Errorf("CreateOrder: %v", err)
@@ -578,10 +579,10 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 }
 
 // certRequest generates a CSR for the given common name cn and optional SANs.
-func certRequest(key crypto.Signer, cn string, ext []pkix.Extension, san ...string) ([]byte, error) {
+func certRequest(key crypto.Signer, name string, ext []pkix.Extension) ([]byte, error) {
 	req := &x509.CertificateRequest{
-		Subject:         pkix.Name{CommonName: cn},
-		DNSNames:        san,
+		Subject:         pkix.Name{CommonName: name},
+		DNSNames:        []string{name},
 		ExtraExtensions: ext,
 	}
 	return x509.CreateCertificateRequest(rand.Reader, req, key)
@@ -658,8 +659,9 @@ func acmeClient(cs certStore) (*acme.Client, error) {
 	// LetsEncrypt), we should make sure that they support ARI extension (see
 	// shouldStartDomainRenewalARI).
 	return &acme.Client{
-		Key:       key,
-		UserAgent: "tailscaled/" + version.Long(),
+		Key:          key,
+		UserAgent:    "tailscaled/" + version.Long(),
+		DirectoryURL: envknob.String("TS_DEBUG_ACME_DIRECTORY_URL"),
 	}, nil
 }
 

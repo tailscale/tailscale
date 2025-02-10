@@ -25,10 +25,12 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/deptest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/set"
 	"tailscale.com/version/distro"
 )
 
@@ -1567,4 +1569,32 @@ func TestDocs(t *testing.T) {
 		})
 	}
 	walk(t, root)
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "arm64",
+		WantDeps: set.Of(
+			"tailscale.com/feature/capture/dissector", // want the Lua by default
+		),
+		BadDeps: map[string]string{
+			"tailscale.com/feature/capture": "don't link capture code",
+			"tailscale.com/net/packet":      "why we passing packets in the CLI?",
+			"tailscale.com/net/flowtrack":   "why we tracking flows in the CLI?",
+		},
+	}.Check(t)
+}
+
+func TestDepsNoCapture(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "arm64",
+		Tags:   "ts_omit_capture",
+		BadDeps: map[string]string{
+			"tailscale.com/feature/capture":           "don't link capture code",
+			"tailscale.com/feature/capture/dissector": "don't like the Lua",
+		},
+	}.Check(t)
+
 }

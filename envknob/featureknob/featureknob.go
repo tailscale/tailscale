@@ -55,8 +55,7 @@ func CanRunTailscaleSSH() error {
 func CanUseExitNode() error {
 	switch dist := distro.Get(); dist {
 	case distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
-		distro.QNAP,
-		distro.Unraid:
+		distro.QNAP:
 		return errors.New("Tailscale exit nodes cannot be used on " + string(dist))
 	}
 

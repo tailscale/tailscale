@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 
 // Detector checks whether the system is behind a captive portal.
 type Detector struct {
+	clock func() time.Time
 
 	// httpClient is the HTTP client that is used for captive portal detection. It is configured
 	// to not follow redirects, have a short timeout and no keep-alive.
@@ -50,6 +52,13 @@ func NewDetector(logf logger.Logf) *Detector {
 		Timeout: Timeout,
 	}
 	return d
+}
+
+func (d *Detector) Now() time.Time {
+	if d.clock != nil {
+		return d.clock()
+	}
+	return time.Now()
 }
 
 // Timeout is the timeout for captive portal detection requests. Because the captive portal intercepting our requests
@@ -187,10 +196,16 @@ func (d *Detector) verifyCaptivePortalEndpoint(ctx context.Context, e Endpoint, 
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", e.URL.String(), nil)
+	u := *e.URL
+	v := u.Query()
+	v.Add("t", strconv.Itoa(int(d.Now().Unix())))
+	u.RawQuery = v.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
 		return false, err
 	}
+	req.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate, no-transform, max-age=0")
 
 	// Attach the Tailscale challenge header if the endpoint supports it. Not all captive portal detection endpoints
 	// support this, so we only attach it if the endpoint does.
