@@ -1409,7 +1409,7 @@ var PortRangeAny = PortRange{0, 65535}
 type NetPortRange struct {
 	_     structs.Incomparable
 	IP    string // IP, CIDR, Range, or "*" (same formats as FilterRule.SrcIPs)
-	Bits  *int   // deprecated; the 2020 way to turn IP into a CIDR. See FilterRule.SrcBits.
+	Bits  *int   `json:",omitempty"` // deprecated; the 2020 way to turn IP into a CIDR. See FilterRule.SrcBits.
 	Ports PortRange
 }
 
