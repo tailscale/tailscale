@@ -77,6 +77,48 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) {
 	}
 }
 
+// SetCurrentUserAndProfile sets the current user ID and switches the specified
+// profile, if it is accessible to the user. If the profile does not exist,
+// or is not accessible, it switches to the user's default profile,
+// creating a new one if necessary.
+//
+// It is a shorthand for [profileManager.SetCurrentUserID] followed by
+// [profileManager.SwitchProfile], but it is more efficient as it switches
+// directly to the specified profile rather than switching to the user's
+// default profile first.
+//
+// As a special case, if the specified profile ID "", it creates a new
+// profile for the user and switches to it, unless the current profile
+// is already a new, empty profile owned by the user.
+//
+// It reports whether the call resulted in a profile switch.
+func (pm *profileManager) SetCurrentUserAndProfile(uid ipn.WindowsUserID, profileID ipn.ProfileID) (changed bool) {
+	pm.currentUserID = uid
+
+	if profileID == "" {
+		if pm.currentProfile.ID() == "" && pm.currentProfile.LocalUserID() == uid {
+			return false
+		}
+		pm.NewProfileForUser(uid)
+		return true
+	}
+
+	if profile, err := pm.ProfileByID(profileID); err == nil {
+		if pm.CurrentProfile().ID() == profileID {
+			return false
+		}
+		if err := pm.SwitchProfile(profile.ID()); err == nil {
+			return true
+		}
+	}
+
+	if err := pm.SwitchToDefaultProfile(); err != nil {
+		pm.logf("%q's default profile cannot be used; creating a new one: %v", uid, err)
+		pm.NewProfile()
+	}
+	return true
+}
+
 // DefaultUserProfileID returns [ipn.ProfileID] of the default (last used) profile for the specified user,
 // or an empty string if the specified user does not have a default profile.
 func (pm *profileManager) DefaultUserProfileID(uid ipn.WindowsUserID) ipn.ProfileID {

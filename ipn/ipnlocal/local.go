@@ -3566,23 +3566,6 @@ func (b *LocalBackend) State() ipn.State {
 	return b.state
 }
 
-// InServerMode reports whether the Tailscale backend is explicitly running in
-// "server mode" where it continues to run despite whatever the platform's
-// default is. In practice, this is only used on Windows, where the default
-// tailscaled behavior is to shut down whenever the GUI disconnects.
-//
-// On non-Windows platforms, this usually returns false (because people don't
-// set unattended mode on other platforms) and also isn't checked on other
-// platforms.
-//
-// TODO(bradfitz): rename to InWindowsUnattendedMode or something? Or make this
-// return true on Linux etc and always be called? It's kinda messy now.
-func (b *LocalBackend) InServerMode() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.pm.CurrentPrefs().ForceDaemon()
-}
-
 // CheckIPNConnectionAllowed returns an error if the specified actor should not
 // be allowed to connect or make requests to the LocalAPI currently.
 //
@@ -3592,16 +3575,10 @@ func (b *LocalBackend) InServerMode() bool {
 func (b *LocalBackend) CheckIPNConnectionAllowed(actor ipnauth.Actor) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	serverModeUid := b.pm.CurrentUserID()
-	if serverModeUid == "" {
-		// Either this platform isn't a "multi-user" platform or we're not yet
-		// running as one.
+	if b.pm.CurrentUserID() == "" {
+		// There's no "current user" yet; allow the connection.
 		return nil
 	}
-	if !b.pm.CurrentPrefs().ForceDaemon() {
-		return nil
-	}
-
 	// Always allow Windows SYSTEM user to connect,
 	// even if Tailscale is currently being used by another user.
 	if actor.IsLocalSystem() {
@@ -3612,10 +3589,21 @@ func (b *LocalBackend) CheckIPNConnectionAllowed(actor ipnauth.Actor) error {
 	if uid == "" {
 		return errors.New("empty user uid in connection identity")
 	}
-	if uid != serverModeUid {
-		return fmt.Errorf("Tailscale running in server mode (%q); connection from %q not allowed", b.tryLookupUserName(string(serverModeUid)), b.tryLookupUserName(string(uid)))
+	if uid == b.pm.CurrentUserID() {
+		// The connection is from the current user; allow it.
+		return nil
 	}
-	return nil
+
+	// The connection is from a different user; block it.
+	var reason string
+	if b.pm.CurrentPrefs().ForceDaemon() {
+		reason = "running in server mode"
+	} else {
+		reason = "already in use"
+	}
+	return fmt.Errorf("Tailscale %s (%q); connection from %q not allowed",
+		reason, b.tryLookupUserName(string(b.pm.CurrentUserID())),
+		b.tryLookupUserName(string(uid)))
 }
 
 // tryLookupUserName tries to look up the username for the uid.
@@ -3822,10 +3810,53 @@ func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) {
 		b.currentUser = actor
 	}
 
-	if b.pm.CurrentUserID() != uid {
-		b.pm.SetCurrentUserID(uid)
-		b.resetForProfileChangeLockedOnEntry(unlock)
+	if b.pm.CurrentUserID() == uid {
+		return
 	}
+
+	var profileID ipn.ProfileID
+	if actor != nil {
+		profileID = b.pm.DefaultUserProfileID(uid)
+	} else if uid, profileID = b.getBackgroundProfileIDLocked(); profileID != "" {
+		b.logf("client disconnected; staying alive in server mode")
+	} else {
+		b.logf("client disconnected; stopping server")
+	}
+
+	if err := b.switchProfileLockedOnEntry(uid, profileID, unlock); err != nil {
+		b.logf("failed switching profile to %q: %v", profileID, err)
+	}
+}
+
+// switchProfileLockedOnEntry is like [LocalBackend.SwitchProfile],
+// but b.mu must held on entry, but it is released on exit.
+func (b *LocalBackend) switchProfileLockedOnEntry(uid ipn.WindowsUserID, profileID ipn.ProfileID, unlock unlockOnce) error {
+	defer unlock()
+	if b.pm.CurrentUserID() == uid && b.pm.CurrentProfile().ID() == profileID {
+		return nil
+	}
+	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
+	if changed := b.pm.SetCurrentUserAndProfile(uid, profileID); !changed {
+		return nil
+	}
+	// As an optimization, only reset the dialPlan if the control URL changed.
+	if newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(); oldControlURL != newControlURL {
+		b.resetDialPlan()
+	}
+	return b.resetForProfileChangeLockedOnEntry(unlock)
+}
+
+// getBackgroundProfileIDLocked returns the profile ID to use when no GUI/CLI
+// client is connected, or "" if Tailscale should not run in the background.
+// As of 2025-02-07, it is only used on Windows.
+func (b *LocalBackend) getBackgroundProfileIDLocked() (ipn.WindowsUserID, ipn.ProfileID) {
+	// If Unattended Mode is enabled for the current profile, keep using it.
+	if b.pm.CurrentPrefs().ForceDaemon() {
+		return b.pm.CurrentProfile().LocalUserID(), b.pm.CurrentProfile().ID()
+	}
+	// Otherwise, switch to an empty profile and disconnect Tailscale
+	// until a GUI or CLI client connects.
+	return "", ""
 }
 
 // CurrentUserForTest returns the current user and the associated WindowsUserID.
@@ -7062,21 +7093,20 @@ func (b *LocalBackend) ShouldInterceptVIPServiceTCPPort(ap netip.AddrPort) bool 
 // It will restart the backend on success.
 // If the profile is not known, it returns an errProfileNotFound.
 func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
-	if b.CurrentProfile().ID() == profile {
-		return nil
-	}
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
+
+	if b.pm.CurrentProfile().ID() == profile {
+		return nil
+	}
 
 	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
 	if err := b.pm.SwitchProfile(profile); err != nil {
 		return err
 	}
 
-	// As an optimization, only reset the dialPlan if the control URL
-	// changed; we treat an empty URL as "unknown" and always reset.
-	newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
-	if oldControlURL != newControlURL || oldControlURL == "" || newControlURL == "" {
+	// As an optimization, only reset the dialPlan if the control URL changed.
+	if newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(); oldControlURL != newControlURL {
 		b.resetDialPlan()
 	}
 
