@@ -6,20 +6,28 @@ package dns
 import (
 	"bytes"
 	"context"
+	"fmt"
 
 	"github.com/illarion/gonotify/v2"
 	"tailscale.com/health"
 )
 
 func (m *directManager) runFileWatcher() {
-	ctx, cancel := context.WithCancel(m.ctx)
+	if err := watchFile(m.ctx, "/etc/", resolvConf, m.checkForFileTrample); err != nil {
+		// This is all best effort for now, so surface warnings to users.
+		m.logf("dns: inotify: %s", err)
+	}
+}
+
+// watchFile sets up an inotify watch for a given directory and
+// calls the callback function every time a particular file is changed.
+// The filename should be located in the provided directory.
+func watchFile(ctx context.Context, dir, filename string, cb func()) error {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	in, err := gonotify.NewInotify(ctx)
 	if err != nil {
-		// Oh well, we tried. This is all best effort for now, to
-		// surface warnings to users.
-		m.logf("dns: inotify new: %v", err)
-		return
+		return fmt.Errorf("NewInotify: %w", err)
 	}
 
 	const events = gonotify.IN_ATTRIB |
@@ -29,22 +37,20 @@ func (m *directManager) runFileWatcher() {
 		gonotify.IN_MODIFY |
 		gonotify.IN_MOVE
 
-	if err := in.AddWatch("/etc/", events); err != nil {
-		m.logf("dns: inotify addwatch: %v", err)
-		return
+	if err := in.AddWatch(dir, events); err != nil {
+		return fmt.Errorf("AddWatch: %w", err)
 	}
 	for {
 		events, err := in.Read()
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
 		if err != nil {
-			m.logf("dns: inotify read: %v", err)
-			return
+			return fmt.Errorf("Read: %w", err)
 		}
 		var match bool
 		for _, ev := range events {
-			if ev.Name == resolvConf {
+			if ev.Name == filename {
 				match = true
 				break
 			}
@@ -52,7 +58,7 @@ func (m *directManager) runFileWatcher() {
 		if !match {
 			continue
 		}
-		m.checkForFileTrample()
+		cb()
 	}
 }
 
