@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/illarion/gonotify/v2"
+	"github.com/illarion/gonotify/v3"
 	"tailscale.com/health"
 )
 
@@ -25,10 +25,6 @@ func (m *directManager) runFileWatcher() {
 func watchFile(ctx context.Context, dir, filename string, cb func()) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	in, err := gonotify.NewInotify(ctx)
-	if err != nil {
-		return fmt.Errorf("NewInotify: %w", err)
-	}
 
 	const events = gonotify.IN_ATTRIB |
 		gonotify.IN_CLOSE_WRITE |
@@ -37,28 +33,20 @@ func watchFile(ctx context.Context, dir, filename string, cb func()) error {
 		gonotify.IN_MODIFY |
 		gonotify.IN_MOVE
 
-	if err := in.AddWatch(dir, events); err != nil {
-		return fmt.Errorf("AddWatch: %w", err)
+	watcher, err := gonotify.NewDirWatcher(ctx, events, dir)
+	if err != nil {
+		return fmt.Errorf("NewDirWatcher: %w", err)
 	}
+
 	for {
-		events, err := in.Read()
-		if ctx.Err() != nil {
+		select {
+		case event := <-watcher.C:
+			if event.Name == filename {
+				cb()
+			}
+		case <-ctx.Done():
 			return ctx.Err()
 		}
-		if err != nil {
-			return fmt.Errorf("Read: %w", err)
-		}
-		var match bool
-		for _, ev := range events {
-			if ev.Name == filename {
-				match = true
-				break
-			}
-		}
-		if !match {
-			continue
-		}
-		cb()
 	}
 }
 
