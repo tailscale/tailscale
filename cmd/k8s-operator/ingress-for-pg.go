@@ -46,6 +46,9 @@ const (
 	FinalizerNamePG = "tailscale.com/ingress-pg-finalizer"
 
 	indexIngressProxyGroup = ".metadata.annotations.ingress-proxy-group"
+	// annotationHTTPEndpoint can be used to configure the Ingress to expose an HTTP endpoint to tailnet (as
+	// well as the default HTTPS endpoint).
+	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
 )
 
 var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
@@ -202,16 +205,16 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	// 3. Ensure that the serve config for the ProxyGroup contains the VIPService
 	cm, cfg, err := a.proxyGroupServeConfig(ctx, pgName)
 	if err != nil {
-		return fmt.Errorf("error getting ingress serve config: %w", err)
+		return fmt.Errorf("error getting Ingress serve config: %w", err)
 	}
 	if cm == nil {
-		logger.Infof("no ingress serve config ConfigMap found, unable to update serve config. Ensure that ProxyGroup is healthy.")
+		logger.Infof("no Ingress serve config ConfigMap found, unable to update serve config. Ensure that ProxyGroup is healthy.")
 		return nil
 	}
 	ep := ipn.HostPort(fmt.Sprintf("%s:443", dnsName))
 	handlers, err := handlersForIngress(ctx, ing, a.Client, a.recorder, dnsName, logger)
 	if err != nil {
-		return fmt.Errorf("failed to get handlers for ingress: %w", err)
+		return fmt.Errorf("failed to get handlers for Ingress: %w", err)
 	}
 	ingCfg := &ipn.ServiceConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{
@@ -225,6 +228,19 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 			},
 		},
 	}
+
+	// Add HTTP endpoint if configured.
+	if isHTTPEndpointEnabled(ing) {
+		logger.Infof("exposing Ingress over HTTP")
+		epHTTP := ipn.HostPort(fmt.Sprintf("%s:80", dnsName))
+		ingCfg.TCP[80] = &ipn.TCPPortHandler{
+			HTTP: true,
+		}
+		ingCfg.Web[epHTTP] = &ipn.WebServerConfig{
+			Handlers: handlers,
+		}
+	}
+
 	var gotCfg *ipn.ServiceConfig
 	if cfg != nil && cfg.Services != nil {
 		gotCfg = cfg.Services[serviceName]
@@ -248,16 +264,23 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		tags = strings.Split(tstr, ",")
 	}
 
+	vipPorts := []string{"443"} // always 443 for Ingress
+	if isHTTPEndpointEnabled(ing) {
+		vipPorts = append(vipPorts, "80")
+	}
+
 	vipSvc := &VIPService{
 		Name:    serviceName,
 		Tags:    tags,
-		Ports:   []string{"443"}, // always 443 for Ingress
+		Ports:   vipPorts,
 		Comment: fmt.Sprintf(VIPSvcOwnerRef, ing.UID),
 	}
 	if existingVIPSvc != nil {
 		vipSvc.Addrs = existingVIPSvc.Addrs
 	}
-	if existingVIPSvc == nil || !reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) {
+	if existingVIPSvc == nil ||
+		!reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) ||
+		!reflect.DeepEqual(vipSvc.Ports, existingVIPSvc.Ports) {
 		logger.Infof("Ensuring VIPService %q exists and is up to date", hostname)
 		if err := a.tsClient.createOrUpdateVIPService(ctx, vipSvc); err != nil {
 			logger.Infof("error creating VIPService: %v", err)
@@ -267,16 +290,22 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 
 	// 5. Update Ingress status
 	oldStatus := ing.Status.DeepCopy()
-	// TODO(irbekrm): once we have ingress ProxyGroup, we can determine if instances are ready to route traffic to the VIPService
+	ports := []networkingv1.IngressPortStatus{
+		{
+			Protocol: "TCP",
+			Port:     443,
+		},
+	}
+	if isHTTPEndpointEnabled(ing) {
+		ports = append(ports, networkingv1.IngressPortStatus{
+			Protocol: "TCP",
+			Port:     80,
+		})
+	}
 	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
 		{
 			Hostname: dnsName,
-			Ports: []networkingv1.IngressPortStatus{
-				{
-					Protocol: "TCP",
-					Port:     443,
-				},
-			},
+			Ports:    ports,
 		},
 	}
 	if apiequality.Semantic.DeepEqual(oldStatus, ing.Status) {
@@ -568,4 +597,12 @@ func (a *IngressPGReconciler) deleteVIPServiceIfExists(ctx context.Context, name
 		return fmt.Errorf("error deleting VIPService: %w", err)
 	}
 	return nil
+}
+
+// isHTTPEndpointEnabled returns true if the Ingress has been configured to expose an HTTP endpoint to tailnet.
+func isHTTPEndpointEnabled(ing *networkingv1.Ingress) bool {
+	if ing == nil {
+		return false
+	}
+	return ing.Annotations[annotationHTTPEndpoint] == "enabled"
 }

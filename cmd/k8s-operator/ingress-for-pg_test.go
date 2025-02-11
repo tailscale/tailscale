@@ -8,6 +8,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"reflect"
 	"testing"
 
 	"slices"
@@ -18,81 +20,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ptr"
 )
 
 func TestIngressPGReconciler(t *testing.T) {
-	tsIngressClass := &networkingv1.IngressClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
-		Spec:       networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},
-	}
+	ingPGR, fc, ft := setupIngressTest(t)
 
-	// Pre-create the ProxyGroup
-	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test-pg",
-			Generation: 1,
-		},
-		Spec: tsapi.ProxyGroupSpec{
-			Type: tsapi.ProxyGroupTypeIngress,
-		},
-	}
-
-	// Pre-create the ConfigMap for the ProxyGroup
-	pgConfigMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-ingress-config",
-			Namespace: "operator-ns",
-		},
-		BinaryData: map[string][]byte{
-			"serve-config.json": []byte(`{"Services":{}}`),
-		},
-	}
-
-	fc := fake.NewClientBuilder().
-		WithScheme(tsapi.GlobalScheme).
-		WithObjects(pg, pgConfigMap, tsIngressClass).
-		WithStatusSubresource(pg).
-		Build()
-	mustUpdateStatus(t, fc, "", pg.Name, func(pg *tsapi.ProxyGroup) {
-		pg.Status.Conditions = []metav1.Condition{
-			{
-				Type:               string(tsapi.ProxyGroupReady),
-				Status:             metav1.ConditionTrue,
-				ObservedGeneration: 1,
-			},
-		}
-	})
-	ft := &fakeTSClient{}
-	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
-	zl, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	lc := &fakeLocalClient{
-		status: &ipnstate.Status{
-			CurrentTailnet: &ipnstate.TailnetStatus{
-				MagicDNSSuffix: "ts.net",
-			},
-		},
-	}
-	ingPGR := &IngressPGReconciler{
-		Client:      fc,
-		tsClient:    ft,
-		tsnetServer: fakeTsnetServer,
-		defaultTags: []string{"tag:k8s"},
-		tsNamespace: "operator-ns",
-		logger:      zl.Sugar(),
-		recorder:    record.NewFakeRecorder(10),
-		lc:          lc,
-	}
-
-	// Test 1: Default tags
 	ing := &networkingv1.Ingress{
 		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -122,8 +61,74 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Verify initial reconciliation
 	expectReconciled(t, ingPGR, "default", "test-ingress")
+	verifyServeConfig(t, fc, "svc:my-svc", false)
+	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
 
-	// Get and verify the ConfigMap was updated
+	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
+		ing.Annotations["tailscale.com/tags"] = "tag:custom,tag:test"
+	})
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+
+	// Verify VIPService uses custom tags
+	vipSvc, err := ft.getVIPService(context.Background(), "svc:my-svc")
+	if err != nil {
+		t.Fatalf("getting VIPService: %v", err)
+	}
+	if vipSvc == nil {
+		t.Fatal("VIPService not created")
+	}
+	wantTags := []string{"tag:custom", "tag:test"} // custom tags only
+	gotTags := slices.Clone(vipSvc.Tags)
+	slices.Sort(gotTags)
+	slices.Sort(wantTags)
+	if !slices.Equal(gotTags, wantTags) {
+		t.Errorf("incorrect VIPService tags: got %v, want %v", gotTags, wantTags)
+	}
+
+	// Create second Ingress
+	ing2 := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-other-ingress",
+			Namespace: "default",
+			UID:       types.UID("5678-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-other-svc.tailnetxyz.ts.net"}},
+			},
+		},
+	}
+	mustCreate(t, fc, ing2)
+
+	// Verify second Ingress reconciliation
+	expectReconciled(t, ingPGR, "default", "my-other-ingress")
+	verifyServeConfig(t, fc, "svc:my-other-svc", false)
+	verifyVIPService(t, ft, "svc:my-other-svc", []string{"443"})
+
+	// Verify first Ingress is still working
+	verifyServeConfig(t, fc, "svc:my-svc", false)
+	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
+
+	// Delete second Ingress
+	if err := fc.Delete(context.Background(), ing2); err != nil {
+		t.Fatalf("deleting second Ingress: %v", err)
+	}
+	expectReconciled(t, ingPGR, "default", "my-other-ingress")
+
+	// Verify second Ingress cleanup
 	cm := &corev1.ConfigMap{}
 	if err := fc.Get(context.Background(), types.NamespacedName{
 		Name:      "test-pg-ingress-config",
@@ -137,46 +142,16 @@ func TestIngressPGReconciler(t *testing.T) {
 		t.Fatalf("unmarshaling serve config: %v", err)
 	}
 
+	// Verify first Ingress is still configured
 	if cfg.Services["svc:my-svc"] == nil {
-		t.Error("expected serve config to contain VIPService configuration")
+		t.Error("first Ingress service config was incorrectly removed")
+	}
+	// Verify second Ingress was cleaned up
+	if cfg.Services["svc:my-other-svc"] != nil {
+		t.Error("second Ingress service config was not cleaned up")
 	}
 
-	// Verify VIPService uses default tags
-	vipSvc, err := ft.getVIPService(context.Background(), "svc:my-svc")
-	if err != nil {
-		t.Fatalf("getting VIPService: %v", err)
-	}
-	if vipSvc == nil {
-		t.Fatal("VIPService not created")
-	}
-	wantTags := []string{"tag:k8s"} // default tags
-	if !slices.Equal(vipSvc.Tags, wantTags) {
-		t.Errorf("incorrect VIPService tags: got %v, want %v", vipSvc.Tags, wantTags)
-	}
-
-	// Test 2: Custom tags
-	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
-		ing.Annotations["tailscale.com/tags"] = "tag:custom,tag:test"
-	})
-	expectReconciled(t, ingPGR, "default", "test-ingress")
-
-	// Verify VIPService uses custom tags
-	vipSvc, err = ft.getVIPService(context.Background(), "svc:my-svc")
-	if err != nil {
-		t.Fatalf("getting VIPService: %v", err)
-	}
-	if vipSvc == nil {
-		t.Fatal("VIPService not created")
-	}
-	wantTags = []string{"tag:custom", "tag:test"} // custom tags only
-	gotTags := slices.Clone(vipSvc.Tags)
-	slices.Sort(gotTags)
-	slices.Sort(wantTags)
-	if !slices.Equal(gotTags, wantTags) {
-		t.Errorf("incorrect VIPService tags: got %v, want %v", gotTags, wantTags)
-	}
-
-	// Delete the Ingress and verify cleanup
+	// Delete the first Ingress and verify cleanup
 	if err := fc.Delete(context.Background(), ing); err != nil {
 		t.Fatalf("deleting Ingress: %v", err)
 	}
@@ -334,4 +309,234 @@ func TestValidateIngress(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
+	ingPGR, fc, ft := setupIngressTest(t)
+
+	// Create test Ingress with HTTP endpoint enabled
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group":   "test-pg",
+				"tailscale.com/http-endpoint": "enabled",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+		},
+	}
+	if err := fc.Create(context.Background(), ing); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify initial reconciliation with HTTP enabled
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	verifyVIPService(t, ft, "svc:my-svc", []string{"80", "443"})
+	verifyServeConfig(t, fc, "svc:my-svc", true)
+
+	// Verify Ingress status
+	ing = &networkingv1.Ingress{}
+	if err := fc.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingress",
+		Namespace: "default",
+	}, ing); err != nil {
+		t.Fatal(err)
+	}
+
+	wantStatus := []networkingv1.IngressPortStatus{
+		{Port: 443, Protocol: "TCP"},
+		{Port: 80, Protocol: "TCP"},
+	}
+	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus) {
+		t.Errorf("incorrect status ports: got %v, want %v",
+			ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus)
+	}
+
+	// Remove HTTP endpoint annotation
+	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
+		delete(ing.Annotations, "tailscale.com/http-endpoint")
+	})
+
+	// Verify reconciliation after removing HTTP
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
+	verifyServeConfig(t, fc, "svc:my-svc", false)
+
+	// Verify Ingress status
+	ing = &networkingv1.Ingress{}
+	if err := fc.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingress",
+		Namespace: "default",
+	}, ing); err != nil {
+		t.Fatal(err)
+	}
+
+	wantStatus = []networkingv1.IngressPortStatus{
+		{Port: 443, Protocol: "TCP"},
+	}
+	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus) {
+		t.Errorf("incorrect status ports: got %v, want %v",
+			ing.Status.LoadBalancer.Ingress[0].Ports, wantStatus)
+	}
+}
+
+func verifyVIPService(t *testing.T, ft *fakeTSClient, serviceName string, wantPorts []string) {
+	t.Helper()
+	vipSvc, err := ft.getVIPService(context.Background(), tailcfg.ServiceName(serviceName))
+	if err != nil {
+		t.Fatalf("getting VIPService %q: %v", serviceName, err)
+	}
+	if vipSvc == nil {
+		t.Fatalf("VIPService %q not created", serviceName)
+	}
+	gotPorts := slices.Clone(vipSvc.Ports)
+	slices.Sort(gotPorts)
+	slices.Sort(wantPorts)
+	if !slices.Equal(gotPorts, wantPorts) {
+		t.Errorf("incorrect ports for VIPService %q: got %v, want %v", serviceName, gotPorts, wantPorts)
+	}
+}
+
+func verifyServeConfig(t *testing.T, fc client.Client, serviceName string, wantHTTP bool) {
+	t.Helper()
+
+	cm := &corev1.ConfigMap{}
+	if err := fc.Get(context.Background(), types.NamespacedName{
+		Name:      "test-pg-ingress-config",
+		Namespace: "operator-ns",
+	}, cm); err != nil {
+		t.Fatalf("getting ConfigMap: %v", err)
+	}
+
+	cfg := &ipn.ServeConfig{}
+	if err := json.Unmarshal(cm.BinaryData["serve-config.json"], cfg); err != nil {
+		t.Fatalf("unmarshaling serve config: %v", err)
+	}
+
+	t.Logf("Looking for service %q in config: %+v", serviceName, cfg)
+
+	svc := cfg.Services[tailcfg.ServiceName(serviceName)]
+	if svc == nil {
+		t.Fatalf("service %q not found in serve config, services: %+v", serviceName, maps.Keys(cfg.Services))
+	}
+
+	wantHandlers := 1
+	if wantHTTP {
+		wantHandlers = 2
+	}
+
+	// Check TCP handlers
+	if len(svc.TCP) != wantHandlers {
+		t.Errorf("incorrect number of TCP handlers for service %q: got %d, want %d", serviceName, len(svc.TCP), wantHandlers)
+	}
+	if wantHTTP {
+		if h, ok := svc.TCP[uint16(80)]; !ok {
+			t.Errorf("HTTP (port 80) handler not found for service %q", serviceName)
+		} else if !h.HTTP {
+			t.Errorf("HTTP not enabled for port 80 handler for service %q", serviceName)
+		}
+	}
+	if h, ok := svc.TCP[uint16(443)]; !ok {
+		t.Errorf("HTTPS (port 443) handler not found for service %q", serviceName)
+	} else if !h.HTTPS {
+		t.Errorf("HTTPS not enabled for port 443 handler for service %q", serviceName)
+	}
+
+	// Check Web handlers
+	if len(svc.Web) != wantHandlers {
+		t.Errorf("incorrect number of Web handlers for service %q: got %d, want %d", serviceName, len(svc.Web), wantHandlers)
+	}
+}
+
+func setupIngressTest(t *testing.T) (*IngressPGReconciler, client.Client, *fakeTSClient) {
+	t.Helper()
+
+	tsIngressClass := &networkingv1.IngressClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
+		Spec:       networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},
+	}
+
+	// Pre-create the ProxyGroup
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-pg",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type: tsapi.ProxyGroupTypeIngress,
+		},
+	}
+
+	// Pre-create the ConfigMap for the ProxyGroup
+	pgConfigMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pg-ingress-config",
+			Namespace: "operator-ns",
+		},
+		BinaryData: map[string][]byte{
+			"serve-config.json": []byte(`{"Services":{}}`),
+		},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg, pgConfigMap, tsIngressClass).
+		WithStatusSubresource(pg).
+		Build()
+
+	// Set ProxyGroup status to ready
+	pg.Status.Conditions = []metav1.Condition{
+		{
+			Type:               string(tsapi.ProxyGroupReady),
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: 1,
+		},
+	}
+	if err := fc.Status().Update(context.Background(), pg); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := &fakeTSClient{}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lc := &fakeLocalClient{
+		status: &ipnstate.Status{
+			CurrentTailnet: &ipnstate.TailnetStatus{
+				MagicDNSSuffix: "ts.net",
+			},
+		},
+	}
+
+	ingPGR := &IngressPGReconciler{
+		Client:      fc,
+		tsClient:    ft,
+		tsnetServer: fakeTsnetServer,
+		defaultTags: []string{"tag:k8s"},
+		tsNamespace: "operator-ns",
+		logger:      zl.Sugar(),
+		recorder:    record.NewFakeRecorder(10),
+		lc:          lc,
+	}
+
+	return ingPGR, fc, ft
 }
