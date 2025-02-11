@@ -41,6 +41,7 @@ import (
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
+	sshtest "tailscale.com/tempfork/sshtest/ssh"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
@@ -54,6 +55,8 @@ import (
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 )
+
+type _ = sshtest.Client // TODO(bradfitz,percy): sshtest; delete this line
 
 func TestMatchRule(t *testing.T) {
 	someAction := new(tailcfg.SSHAction)
