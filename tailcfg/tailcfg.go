@@ -1092,68 +1092,6 @@ func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
 	return reflect.DeepEqual(h, h2)
 }
 
-// HowUnequal returns a list of paths through Hostinfo where h and h2 differ.
-// If they differ in nil-ness, the path is "nil", otherwise the path is like
-// "ShieldsUp" or "NetInfo.nil" or "NetInfo.PCP".
-func (h *Hostinfo) HowUnequal(h2 *Hostinfo) (path []string) {
-	return appendStructPtrDiff(nil, "", reflect.ValueOf(h), reflect.ValueOf(h2))
-}
-
-func appendStructPtrDiff(base []string, pfx string, p1, p2 reflect.Value) (ret []string) {
-	ret = base
-	if p1.IsNil() && p2.IsNil() {
-		return base
-	}
-	mkPath := func(b string) string {
-		if pfx == "" {
-			return b
-		}
-		return pfx + "." + b
-	}
-	if p1.IsNil() || p2.IsNil() {
-		return append(base, mkPath("nil"))
-	}
-	v1, v2 := p1.Elem(), p2.Elem()
-	t := v1.Type()
-	for i, n := 0, t.NumField(); i < n; i++ {
-		sf := t.Field(i)
-		switch sf.Type.Kind() {
-		case reflect.String:
-			if v1.Field(i).String() != v2.Field(i).String() {
-				ret = append(ret, mkPath(sf.Name))
-			}
-			continue
-		case reflect.Bool:
-			if v1.Field(i).Bool() != v2.Field(i).Bool() {
-				ret = append(ret, mkPath(sf.Name))
-			}
-			continue
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			if v1.Field(i).Int() != v2.Field(i).Int() {
-				ret = append(ret, mkPath(sf.Name))
-			}
-			continue
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-			if v1.Field(i).Uint() != v2.Field(i).Uint() {
-				ret = append(ret, mkPath(sf.Name))
-			}
-			continue
-		case reflect.Slice, reflect.Map:
-			if !reflect.DeepEqual(v1.Field(i).Interface(), v2.Field(i).Interface()) {
-				ret = append(ret, mkPath(sf.Name))
-			}
-			continue
-		case reflect.Ptr:
-			if sf.Type.Elem().Kind() == reflect.Struct {
-				ret = appendStructPtrDiff(ret, sf.Name, v1.Field(i), v2.Field(i))
-				continue
-			}
-		}
-		panic(fmt.Sprintf("unsupported type at %s: %s", mkPath(sf.Name), sf.Type.String()))
-	}
-	return ret
-}
-
 // SignatureType specifies a scheme for signing RegisterRequest messages. It
 // specifies the crypto algorithms to use, the contents of what is signed, and
 // any other relevant details. Historically, requests were unsigned so the zero
@@ -1234,11 +1172,11 @@ type RegisterResponseAuth struct {
 	AuthKey     string       `json:",omitempty"`
 }
 
-// RegisterRequest is sent by a client to register the key for a node.
-// It is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
-// using the local machine key, and sent to:
+// RegisterRequest is a request to register a key for a node.
 //
-//	https://login.tailscale.com/machine/<mkey hex>
+// This is JSON-encoded and sent over the control plane connection to:
+//
+//	POST https://<control-plane>/machine/register.
 type RegisterRequest struct {
 	_ structs.Incomparable
 
@@ -1354,10 +1292,9 @@ type Endpoint struct {
 // The request includes a copy of the client's current set of WireGuard
 // endpoints and general host information.
 //
-// The request is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
-// using the local machine key, and sent to:
+// This is JSON-encoded and sent over the control plane connection to:
 //
-//	https://login.tailscale.com/machine/<mkey hex>/map
+//	POST https://<control-plane>/machine/map
 type MapRequest struct {
 	// Version is incremented whenever the client code changes enough that
 	// we want to signal to the control server that we're capable of something
@@ -1797,9 +1734,14 @@ const (
 	PingPeerAPI PingType = "peerapi"
 )
 
-// PingRequest with no IP and Types is a request to send an HTTP request to prove the
-// long-polling client is still connected.
-// PingRequest with Types and IP, will send a ping to the IP and send a POST
+// PingRequest is a request from the control plane to the local node to probe
+// something.
+//
+// A PingRequest with no IP and Types is a request from the control plane to the
+// local node to send an HTTP request to a URL to prove the long-polling client
+// is still connected.
+//
+// A PingRequest with Types and IP, will send a ping to the IP and send a POST
 // request containing a PingResponse to the URL containing results.
 type PingRequest struct {
 	// URL is the URL to reply to the PingRequest to.
@@ -2506,13 +2448,13 @@ const (
 
 // SetDNSRequest is a request to add a DNS record.
 //
-// This is used for ACME DNS-01 challenges (so people can use
-// LetsEncrypt, etc).
+// This is used to let tailscaled clients complete their ACME DNS-01 challenges
+// (so people can use LetsEncrypt, etc) to get TLS certificates for
+// their foo.bar.ts.net MagicDNS names.
 //
-// The request is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
-// using the local machine key, and sent to:
+// This is JSON-encoded and sent over the control plane connection to:
 //
-//	https://login.tailscale.com/machine/<mkey hex>/set-dns
+//	POST https://<control-plane>/machine/set-dns
 type SetDNSRequest struct {
 	// Version is the client's capabilities
 	// (CurrentCapabilityVersion) when using the Noise transport.
@@ -2542,7 +2484,9 @@ type SetDNSRequest struct {
 type SetDNSResponse struct{}
 
 // HealthChangeRequest is the JSON request body type used to report
-// node health changes to https://<control>/machine/<mkey hex>/update-health.
+// node health changes to:
+//
+//	POST https://<control-plane>/machine/update-health.
 type HealthChangeRequest struct {
 	Subsys string // a health.Subsystem value in string form
 	Error  string // or empty if cleared
@@ -2557,6 +2501,10 @@ type HealthChangeRequest struct {
 //
 // As of 2024-12-30, this is an experimental dev feature
 // for internal testing. See tailscale/corp#24690.
+//
+// This is JSON-encoded and sent over the control plane connection to:
+//
+//	PATCH https://<control-plane>/machine/set-device-attr
 type SetDeviceAttributesRequest struct {
 	// Version is the current binary's [CurrentCapabilityVersion].
 	Version CapabilityVersion
@@ -2746,6 +2694,8 @@ type SSHRecorderFailureAction struct {
 
 // SSHEventNotifyRequest is the JSON payload sent to the NotifyURL
 // for an SSH event.
+//
+//	POST https://<control-plane>/[...varies, sent in SSH policy...]
 type SSHEventNotifyRequest struct {
 	// EventType is the type of notify request being sent.
 	EventType SSHEventType
@@ -2806,9 +2756,9 @@ type SSHRecordingAttempt struct {
 	FailureMessage string
 }
 
-// QueryFeatureRequest is a request sent to "/machine/feature/query"
-// to get instructions on how to enable a feature, such as Funnel,
-// for the node's tailnet.
+// QueryFeatureRequest is a request sent to "POST /machine/feature/query" to get
+// instructions on how to enable a feature, such as Funnel, for the node's
+// tailnet.
 //
 // See QueryFeatureResponse for response structure.
 type QueryFeatureRequest struct {
@@ -2897,7 +2847,7 @@ type OverTLSPublicKeyResponse struct {
 // The token can be presented to any resource provider which offers OIDC
 // Federation.
 //
-// It is JSON-encoded and sent over Noise to "/machine/id-token".
+// It is JSON-encoded and sent over Noise to "POST /machine/id-token".
 type TokenRequest struct {
 	// CapVersion is the client's current CapabilityVersion.
 	CapVersion CapabilityVersion
