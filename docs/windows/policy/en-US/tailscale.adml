@@ -16,9 +16,12 @@
             <string id="SINCE_V1_62">Tailscale version 1.62.0 and later</string>
             <string id="SINCE_V1_74">Tailscale version 1.74.0 and later</string>
             <string id="SINCE_V1_78">Tailscale version 1.78.0 and later</string>
+            <string id="SINCE_V1_82">Tailscale version 1.82.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
+            <string id="AllowedWithAudit">Allowed (with audit)</string>
+            <string id="NotAllowed">Not Allowed</string>
             <string id="LoginURL">Require using a specific Tailscale coordination server</string>
             <string id="LoginURL_Help"><![CDATA[This policy can be used to require the use of a particular Tailscale coordination server.
 
@@ -98,6 +101,14 @@ If you disable this policy, then Run Unattended is always disabled and the menu 
 If you do not configure this policy, then Run Unattended depends on what is selected in the Preferences submenu.
 
 See https://tailscale.com/kb/1315/mdm-keys#set-unattended-mode and https://tailscale.com/kb/1088/run-unattended for more details.]]></string>
+            <string id="AlwaysOn">Restrict users from disconnecting Tailscale (always-on mode)</string>
+            <string id="AlwaysOn_Help"><![CDATA[This policy setting controls whether a user can disconnect Tailscale.
+
+If you enable this policy setting, users will not be allowed to disconnect Tailscale, and it will remain in a connected state as long as they are logged in, even if they close or terminate the GUI. Optionally, you can allow users to temporarily disconnect Tailscale by requiring them to provide a reason, which will be logged for auditing purposes.
+
+If necessary, it can be used along with Unattended Mode to keep Tailscale connected regardless of whether a user is logged in. This can be used to facilitate remote access to a device or ensure connectivity to a Domain Controller before a user logs in.
+
+If you disable or don't configure this policy setting, users will be allowed to disconnect Tailscale at their will.]]></string>
             <string id="ExitNodeAllowLANAccess">Allow Local Network Access when an Exit Node is in use</string>
             <string id="ExitNodeAllowLANAccess_Help"><![CDATA[This policy can be used to require that the Allow Local Network Access setting is configured a certain way.
 
@@ -264,6 +275,10 @@ See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more d
                 <textBox refId="AuthKeyPrompt">
                     <label>Auth Key:</label>
                 </textBox>
+            </presentation>
+            <presentation id="AlwaysOn">
+                <text>The options below allow configuring exceptions where disconnecting Tailscale is permitted.</text>
+                <dropdownList refId="AlwaysOn_OverrideWithReason" noSort="true" defaultItem="0">Disconnects with reason:</dropdownList>
             </presentation>
             <presentation id="ExitNodeID">
                 <textBox refId="ExitNodeIDPrompt">
