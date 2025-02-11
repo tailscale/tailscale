@@ -259,11 +259,7 @@ type UserProfile struct {
 	ID            UserID
 	LoginName     string // "alice@smith.com"; for display purposes only (provider is not listed)
 	DisplayName   string // "Alice Smith"
-	ProfilePicURL string
-
-	// Roles exists for legacy reasons, to keep old macOS clients
-	// happy. It JSON marshals as [].
-	Roles emptyStructJSONSlice
+	ProfilePicURL string `json:",omitempty"`
 }
 
 func (p *UserProfile) Equal(p2 *UserProfile) bool {
@@ -278,16 +274,6 @@ func (p *UserProfile) Equal(p2 *UserProfile) bool {
 		p.DisplayName == p2.DisplayName &&
 		p.ProfilePicURL == p2.ProfilePicURL
 }
-
-type emptyStructJSONSlice struct{}
-
-var emptyJSONSliceBytes = []byte("[]")
-
-func (emptyStructJSONSlice) MarshalJSON() ([]byte, error) {
-	return emptyJSONSliceBytes, nil
-}
-
-func (emptyStructJSONSlice) UnmarshalJSON([]byte) error { return nil }
 
 // RawMessage is a raw encoded JSON value. It implements Marshaler and
 // Unmarshaler and can be used to delay JSON decoding or precompute a JSON
