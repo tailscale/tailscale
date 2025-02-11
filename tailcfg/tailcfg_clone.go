@@ -623,7 +623,6 @@ var _UserProfileCloneNeedsRegeneration = UserProfile(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Roles         emptyStructJSONSlice
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
