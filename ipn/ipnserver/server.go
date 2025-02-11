@@ -42,12 +42,6 @@ type Server struct {
 	logf         logger.Logf
 	netMon       *netmon.Monitor // must be non-nil
 	backendLogID logid.PublicID
-	// resetOnZero is whether to call bs.Reset on transition from
-	// 1->0 active HTTP requests. That is, this is whether the backend is
-	// being run in "client mode" that requires an active GUI
-	// connection (such as on Windows by default). Even if this
-	// is true, the ForceDaemon pref can override this.
-	resetOnZero bool
 
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
@@ -429,13 +423,8 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 			return
 		}
 
-		if s.resetOnZero {
-			if lb.InServerMode() {
-				s.logf("client disconnected; staying alive in server mode")
-			} else {
-				s.logf("client disconnected; stopping server")
-				lb.SetCurrentUser(nil)
-			}
+		if envknob.GOOS() == "windows" && !actor.IsLocalSystem() {
+			lb.SetCurrentUser(nil)
 		}
 
 		// Wake up callers waiting for the server to be idle:
@@ -459,7 +448,6 @@ func New(logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) *Server
 		backendLogID: logID,
 		logf:         logf,
 		netMon:       netMon,
-		resetOnZero:  envknob.GOOS() == "windows",
 	}
 }
 
