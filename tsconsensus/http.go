@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"tailscale.com/tsnet"
 )
 
 type joinRequest struct {
@@ -77,9 +79,24 @@ func (rac *commandClient) ExecuteCommand(host string, bs []byte) (CommandResult,
 	return cr, nil
 }
 
-func (c *Consensus) makeCommandMux() *http.ServeMux {
+func taggedOnly(ts *tsnet.Server, tag string, fx func(http.ResponseWriter, *http.Request)) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		allowed, err := allowedPeer(r.RemoteAddr, tag, ts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !allowed {
+			http.Error(w, "peer not allowed", http.StatusBadRequest)
+			return
+		}
+		fx(w, r)
+	}
+}
+
+func (c *Consensus) makeCommandMux(ts *tsnet.Server, tag string) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/join", taggedOnly(ts, tag, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
@@ -104,8 +121,8 @@ func (c *Consensus) makeCommandMux() *http.ServeMux {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	})
-	mux.HandleFunc("/executeCommand", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/executeCommand", taggedOnly(ts, tag, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
@@ -122,6 +139,6 @@ func (c *Consensus) makeCommandMux() *http.ServeMux {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	})
+	}))
 	return mux
 }

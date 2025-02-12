@@ -2,12 +2,15 @@ package tsconsensus
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
@@ -585,7 +588,6 @@ func TestOnlyTaggedPeersCanBeDialed(t *testing.T) {
 	}
 
 	fxOneEventSent := func() bool {
-		fmt.Println(len(ps[0].sm.events), len(ps[1].sm.events), len(ps[2].sm.events))
 		return len(ps[0].sm.events) == 4 && len(ps[1].sm.events) == 4 && len(ps[2].sm.events) == 3
 	}
 	waitFor(t, "after untagging first and second node get events, but third does not", fxOneEventSent, 10, time.Second*1)
@@ -602,4 +604,48 @@ func TestOnlyTaggedPeersCanBeDialed(t *testing.T) {
 		return len(ps[0].sm.events) == 5 && len(ps[1].sm.events) == 5 && len(ps[2].sm.events) == 3
 	}
 	waitFor(t, "after untagging first and second node get events, but third does not", fxTwoEventsSent, 10, time.Second*1)
+}
+
+func TestOnlyTaggedPeersCanJoin(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	clusterTag := "tag:whatever"
+	ps, _, controlURL := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
+	cfg := DefaultConfig()
+	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
+	for _, p := range ps {
+		defer p.c.Stop(ctx)
+	}
+
+	tsJoiner, _, _ := startNode(t, ctx, controlURL, "joiner node")
+
+	ipv4, _ := tsJoiner.TailscaleIPs()
+	url := fmt.Sprintf("http://%s/join", ps[0].c.commandAddr(ps[0].c.Self.Host))
+	payload, err := json.Marshal(joinRequest{
+		RemoteHost: ipv4.String(),
+		RemoteID:   "node joiner",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBuffer(payload)
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := tsJoiner.HTTPClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("join req when not tagged, expected status: %d, got: %d", http.StatusBadRequest, resp.StatusCode)
+	}
+	rBody, _ := io.ReadAll(resp.Body)
+	sBody := strings.TrimSpace(string(rBody))
+	expected := "peer not allowed"
+	if sBody != expected {
+		t.Fatalf("join req when not tagged, expected body: %s, got: %s", expected, sBody)
+	}
 }
