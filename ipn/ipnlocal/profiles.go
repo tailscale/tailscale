@@ -91,24 +91,25 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) {
 // profile for the user and switches to it, unless the current profile
 // is already a new, empty profile owned by the user.
 //
-// It reports whether the call resulted in a profile switch.
-func (pm *profileManager) SetCurrentUserAndProfile(uid ipn.WindowsUserID, profileID ipn.ProfileID) (changed bool) {
+// It returns the current profile and whether the call resulted
+// in a profile switch.
+func (pm *profileManager) SetCurrentUserAndProfile(uid ipn.WindowsUserID, profileID ipn.ProfileID) (cp ipn.LoginProfileView, changed bool) {
 	pm.currentUserID = uid
 
 	if profileID == "" {
 		if pm.currentProfile.ID() == "" && pm.currentProfile.LocalUserID() == uid {
-			return false
+			return pm.currentProfile, false
 		}
 		pm.NewProfileForUser(uid)
-		return true
+		return pm.currentProfile, true
 	}
 
 	if profile, err := pm.ProfileByID(profileID); err == nil {
 		if pm.CurrentProfile().ID() == profileID {
-			return false
+			return pm.currentProfile, false
 		}
 		if err := pm.SwitchProfile(profile.ID()); err == nil {
-			return true
+			return pm.currentProfile, true
 		}
 	}
 
@@ -116,7 +117,7 @@ func (pm *profileManager) SetCurrentUserAndProfile(uid ipn.WindowsUserID, profil
 		pm.logf("%q's default profile cannot be used; creating a new one: %v", uid, err)
 		pm.NewProfile()
 	}
-	return true
+	return pm.currentProfile, true
 }
 
 // DefaultUserProfileID returns [ipn.ProfileID] of the default (last used) profile for the specified user,
