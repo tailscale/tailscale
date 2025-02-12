@@ -83,7 +83,7 @@ func (c *Client) ACL(ctx context.Context) (acl *ACL, err error) {
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl", c.baseURL(), c.tailnet)
+	path := c.BuildTailnetURL("acl")
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -97,7 +97,7 @@ func (c *Client) ACL(ctx context.Context) (acl *ACL, err error) {
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 
 	// Otherwise, try to decode the response.
@@ -126,7 +126,7 @@ func (c *Client) ACLHuJSON(ctx context.Context) (acl *ACLHuJSON, err error) {
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl?details=1", c.baseURL(), c.tailnet)
+	path := c.BuildTailnetURL("acl?details=1")
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -138,7 +138,7 @@ func (c *Client) ACLHuJSON(ctx context.Context) (acl *ACLHuJSON, err error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 
 	data := struct {
@@ -184,7 +184,7 @@ func (e ACLTestError) Error() string {
 }
 
 func (c *Client) aclPOSTRequest(ctx context.Context, body []byte, avoidCollisions bool, etag, acceptHeader string) ([]byte, string, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl", c.baseURL(), c.tailnet)
+	path := c.BuildTailnetURL("acl")
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, "", err
@@ -328,7 +328,7 @@ type ACLPreview struct {
 }
 
 func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, previewType string, previewFor string) (res *ACLPreviewResponse, err error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl/preview", c.baseURL(), c.tailnet)
+	path := c.BuildTailnetURL("acl/preview")
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
@@ -350,7 +350,7 @@ func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, preview
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 	if err = json.Unmarshal(b, &res); err != nil {
 		return nil, err
@@ -488,7 +488,7 @@ func (c *Client) ValidateACLJSON(ctx context.Context, source, dest string) (test
 		return nil, err
 	}
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl/validate", c.baseURL(), c.tailnet)
+	path := c.BuildTailnetURL("acl/validate")
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(postData))
 	if err != nil {
 		return nil, err

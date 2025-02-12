@@ -40,7 +40,7 @@ type KeyDeviceCreateCapabilities struct {
 
 // Keys returns the list of keys for the current user.
 func (c *Client) Keys(ctx context.Context) ([]string, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/keys", c.baseURL(), c.tailnet)
+	path := c.BuildTailnetURL("keys")
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -51,7 +51,7 @@ func (c *Client) Keys(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 
 	var keys struct {
@@ -99,7 +99,7 @@ func (c *Client) CreateKeyWithExpiry(ctx context.Context, caps KeyCapabilities, 
 		return "", nil, err
 	}
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/keys", c.baseURL(), c.tailnet)
+	path := c.BuildTailnetURL("keys")
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewReader(bs))
 	if err != nil {
 		return "", nil, err
@@ -110,7 +110,7 @@ func (c *Client) CreateKeyWithExpiry(ctx context.Context, caps KeyCapabilities, 
 		return "", nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", nil, handleErrorResponse(b, resp)
+		return "", nil, HandleErrorResponse(b, resp)
 	}
 
 	var key struct {
@@ -126,7 +126,7 @@ func (c *Client) CreateKeyWithExpiry(ctx context.Context, caps KeyCapabilities, 
 // Key returns the metadata for the given key ID. Currently, capabilities are
 // only returned for auth keys, API keys only return general metadata.
 func (c *Client) Key(ctx context.Context, id string) (*Key, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/keys/%s", c.baseURL(), c.tailnet, id)
+	path := c.BuildTailnetURL("keys", id)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func (c *Client) Key(ctx context.Context, id string) (*Key, error) {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 
 	var key Key
@@ -149,7 +149,7 @@ func (c *Client) Key(ctx context.Context, id string) (*Key, error) {
 
 // DeleteKey deletes the key with the given ID.
 func (c *Client) DeleteKey(ctx context.Context, id string) error {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/keys/%s", c.baseURL(), c.tailnet, id)
+	path := c.BuildTailnetURL("keys", id)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", path, nil)
 	if err != nil {
 		return err
@@ -160,7 +160,7 @@ func (c *Client) DeleteKey(ctx context.Context, id string) error {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return handleErrorResponse(b, resp)
+		return HandleErrorResponse(b, resp)
 	}
 	return nil
 }
