@@ -3795,13 +3795,14 @@ func (b *LocalBackend) shouldUploadServices() bool {
 //
 // On non-multi-user systems, the actor should be set to nil.
 func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) {
-	var uid ipn.WindowsUserID
-	if actor != nil {
-		uid = actor.UserID()
-	}
-
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
+
+	var userIdentifier string
+	if user := cmp.Or(actor, b.currentUser); user != nil {
+		maybeUsername, _ := user.Username()
+		userIdentifier = cmp.Or(maybeUsername, string(user.UserID()))
+	}
 
 	if actor != b.currentUser {
 		if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
@@ -3810,46 +3811,108 @@ func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) {
 		b.currentUser = actor
 	}
 
-	if b.pm.CurrentUserID() == uid {
-		return
-	}
-
-	var profileID ipn.ProfileID
-	if actor != nil {
-		profileID = b.pm.DefaultUserProfileID(uid)
-	} else if uid, profileID = b.getBackgroundProfileIDLocked(); profileID != "" {
-		b.logf("client disconnected; staying alive in server mode")
+	var action string
+	if actor == nil {
+		action = "disconnected"
 	} else {
-		b.logf("client disconnected; stopping server")
+		action = "connected"
 	}
-
-	if err := b.switchProfileLockedOnEntry(uid, profileID, unlock); err != nil {
-		b.logf("failed switching profile to %q: %v", profileID, err)
-	}
+	reason := fmt.Sprintf("client %s (%s)", action, userIdentifier)
+	b.switchToBestProfileLockedOnEntry(reason, unlock)
 }
 
-// switchProfileLockedOnEntry is like [LocalBackend.SwitchProfile],
-// but b.mu must held on entry, but it is released on exit.
-func (b *LocalBackend) switchProfileLockedOnEntry(uid ipn.WindowsUserID, profileID ipn.ProfileID, unlock unlockOnce) error {
+// switchToBestProfileLockedOnEntry selects the best profile to use,
+// as reported by [LocalBackend.resolveBestProfileLocked], and switches
+// to it, unless it's already the current profile. The reason indicates
+// why the profile is being switched, such as due to a client connecting
+// or disconnecting and is used for logging.
+//
+// b.mu must held on entry. It is released on exit.
+func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock unlockOnce) {
 	defer unlock()
-	if b.pm.CurrentUserID() == uid && b.pm.CurrentProfile().ID() == profileID {
-		return nil
-	}
 	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
-	if changed := b.pm.SetCurrentUserAndProfile(uid, profileID); !changed {
-		return nil
+	uid, profileID, background := b.resolveBestProfileLocked()
+	cp, switched := b.pm.SetCurrentUserAndProfile(uid, profileID)
+	switch {
+	case !switched && cp.ID() == "":
+		b.logf("%s: staying on empty profile", reason)
+	case !switched:
+		b.logf("%s: staying on profile %q (%s)", reason, cp.UserProfile().LoginName, cp.ID())
+	case cp.ID() == "":
+		b.logf("%s: disconnecting Tailscale", reason)
+	case background:
+		b.logf("%s: switching to background profile %q (%s)", reason, cp.UserProfile().LoginName, cp.ID())
+	default:
+		b.logf("%s: switching to profile %q (%s)", reason, cp.UserProfile().LoginName, cp.ID())
+	}
+	if !switched {
+		return
 	}
 	// As an optimization, only reset the dialPlan if the control URL changed.
 	if newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(); oldControlURL != newControlURL {
 		b.resetDialPlan()
 	}
-	return b.resetForProfileChangeLockedOnEntry(unlock)
+	if err := b.resetForProfileChangeLockedOnEntry(unlock); err != nil {
+		// TODO(nickkhyl): The actual reset cannot fail. However,
+		// the TKA initialization or [LocalBackend.Start] can fail.
+		// These errors are not critical as far as we're concerned.
+		// But maybe we should post a notification to the API watchers?
+		b.logf("failed switching profile to %q: %v", profileID, err)
+	}
 }
 
-// getBackgroundProfileIDLocked returns the profile ID to use when no GUI/CLI
-// client is connected, or "" if Tailscale should not run in the background.
+// resolveBestProfileLocked returns the best profile to use based on the current
+// state of the backend, such as whether a GUI/CLI client is connected and whether
+// the unattended mode is enabled.
+//
+// It returns the user ID, profile ID, and whether the returned profile is
+// considered a background profile. A background profile is used when no OS user
+// is actively using Tailscale, such as when no GUI/CLI client is connected
+// and Unattended Mode is enabled (see also [LocalBackend.getBackgroundProfileLocked]).
+// An empty profile ID indicates that Tailscale should switch to an empty profile.
+//
+// b.mu must be held.
+func (b *LocalBackend) resolveBestProfileLocked() (userID ipn.WindowsUserID, profileID ipn.ProfileID, isBackground bool) {
+	// If a GUI/CLI client is connected, use the connected user's profile, which means
+	// either the current profile if owned by the user, or their default profile.
+	if b.currentUser != nil {
+		cp := b.pm.CurrentProfile()
+		uid := b.currentUser.UserID()
+
+		var profileID ipn.ProfileID
+		// TODO(nickkhyl): check if the current profile is allowed on the device,
+		// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
+		// See tailscale/corp#26249.
+		if cp.LocalUserID() == uid {
+			profileID = cp.ID()
+		} else {
+			profileID = b.pm.DefaultUserProfileID(uid)
+		}
+		return uid, profileID, false
+	}
+
+	// Otherwise, if on Windows, use the background profile if one is set.
+	// This includes staying on the current profile if Unattended Mode is enabled.
+	// If the returned background profileID is "", Tailscale will disconnect
+	// and remain idle until a GUI or CLI client connects.
+	if goos := envknob.GOOS(); goos == "windows" {
+		uid, profileID := b.getBackgroundProfileLocked()
+		return uid, profileID, true
+	}
+
+	// On other platforms, however, Tailscale continues to run in the background
+	// using the current profile.
+	//
+	// TODO(nickkhyl): check if the current profile is allowed on the device,
+	// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
+	// See tailscale/corp#26249.
+	return b.pm.CurrentUserID(), b.pm.CurrentProfile().ID(), false
+}
+
+// getBackgroundProfileLocked returns the user and profile ID to use when no GUI/CLI
+// client is connected, or "","" if Tailscale should not run in the background.
 // As of 2025-02-07, it is only used on Windows.
-func (b *LocalBackend) getBackgroundProfileIDLocked() (ipn.WindowsUserID, ipn.ProfileID) {
+func (b *LocalBackend) getBackgroundProfileLocked() (ipn.WindowsUserID, ipn.ProfileID) {
 	// If Unattended Mode is enabled for the current profile, keep using it.
 	if b.pm.CurrentPrefs().ForceDaemon() {
 		return b.pm.CurrentProfile().LocalUserID(), b.pm.CurrentProfile().ID()
@@ -7190,9 +7253,9 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		// Needs to happen without b.mu held.
 		defer prevCC.Shutdown()
 	}
-	if err := b.initTKALocked(); err != nil {
-		return err
-	}
+	// TKA errors should not prevent resetting the backend state.
+	// However, we should still return the error to the caller.
+	tkaErr := b.initTKALocked()
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
@@ -7201,6 +7264,9 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
 	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
 	b.health.SetLocalLogConfigHealth(nil)
+	if tkaErr != nil {
+		return tkaErr
+	}
 	return b.Start(ipn.Options{})
 }
 
