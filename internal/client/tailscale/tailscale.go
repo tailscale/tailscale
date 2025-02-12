@@ -15,9 +15,6 @@ func init() {
 	tsclient.I_Acknowledge_This_API_Is_Unstable = true
 }
 
-// Client is an alias to tailscale.com/client/tailscale.
-type Client = tsclient.Client
-
 // AuthMethod is an alias to tailscale.com/client/tailscale.
 type AuthMethod = tsclient.AuthMethod
 
@@ -44,5 +41,12 @@ type ErrResponse = tsclient.ErrResponse
 
 // NewClient is an alias to tailscale.com/client/tailscale.
 func NewClient(tailnet string, auth AuthMethod) *Client {
-	return tsclient.NewClient(tailnet, auth)
+	return &Client{
+		Client: tsclient.NewClient(tailnet, auth),
+	}
+}
+
+// Client is a wrapper of tailscale.com/client/tailscale.
+type Client struct {
+	*tsclient.Client
 }
