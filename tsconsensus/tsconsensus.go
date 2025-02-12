@@ -89,6 +89,13 @@ type StreamLayer struct {
 
 // Dial implements the raft.StreamLayer interface with the tsnet.Server's Dial.
 func (sl StreamLayer) Dial(address raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
+	allowed, err := allowedPeer(string(address), sl.tag, sl.s)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, errors.New("peer is not allowed")
+	}
 	ctx, _ := context.WithTimeout(context.Background(), timeout)
 	return sl.s.Dial(ctx, "tcp", string(address))
 }
