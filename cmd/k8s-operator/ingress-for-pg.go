@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
@@ -183,7 +183,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 	dnsName := hostname + "." + tcd
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
-	existingVIPSvc, err := a.tsClient.getVIPService(ctx, serviceName)
+	existingVIPSvc, err := a.tsClient.GetVIPService(ctx, serviceName)
 	// TODO(irbekrm): here and when creating the VIPService, verify if the error is not terminal (and therefore
 	// should not be reconciled). For example, if the hostname is already a hostname of a Tailscale node, the GET
 	// here will fail.
@@ -248,7 +248,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		tags = strings.Split(tstr, ",")
 	}
 
-	vipSvc := &VIPService{
+	vipSvc := &tailscale.VIPService{
 		Name:    serviceName,
 		Tags:    tags,
 		Ports:   []string{"443"}, // always 443 for Ingress
@@ -259,7 +259,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 	if existingVIPSvc == nil || !reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) {
 		logger.Infof("Ensuring VIPService %q exists and is up to date", hostname)
-		if err := a.tsClient.createOrUpdateVIPService(ctx, vipSvc); err != nil {
+		if err := a.tsClient.CreateOrUpdateVIPService(ctx, vipSvc); err != nil {
 			logger.Infof("error creating VIPService: %v", err)
 			return fmt.Errorf("error creating VIPService: %w", err)
 		}
@@ -332,7 +332,7 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			}
 			if isVIPServiceForAnyIngress(svc) {
 				logger.Infof("cleaning up orphaned VIPService %q", vipServiceName)
-				if err := a.tsClient.deleteVIPService(ctx, vipServiceName); err != nil {
+				if err := a.tsClient.DeleteVIPService(ctx, vipServiceName); err != nil {
 					errResp := &tailscale.ErrResponse{}
 					if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
 						return fmt.Errorf("deleting VIPService %q: %w", vipServiceName, err)
@@ -480,8 +480,8 @@ func (a *IngressPGReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 	return isTSIngress && pgAnnot != ""
 }
 
-func (a *IngressPGReconciler) getVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (*VIPService, error) {
-	svc, err := a.tsClient.getVIPService(ctx, name)
+func (a *IngressPGReconciler) getVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (*tailscale.VIPService, error) {
+	svc, err := a.tsClient.GetVIPService(ctx, name)
 	if err != nil {
 		errResp := &tailscale.ErrResponse{}
 		if ok := errors.As(err, errResp); ok && errResp.Status != http.StatusNotFound {
@@ -492,14 +492,14 @@ func (a *IngressPGReconciler) getVIPService(ctx context.Context, name tailcfg.Se
 	return svc, nil
 }
 
-func isVIPServiceForIngress(svc *VIPService, ing *networkingv1.Ingress) bool {
+func isVIPServiceForIngress(svc *tailscale.VIPService, ing *networkingv1.Ingress) bool {
 	if svc == nil || ing == nil {
 		return false
 	}
 	return strings.EqualFold(svc.Comment, fmt.Sprintf(VIPSvcOwnerRef, ing.UID))
 }
 
-func isVIPServiceForAnyIngress(svc *VIPService) bool {
+func isVIPServiceForAnyIngress(svc *tailscale.VIPService) bool {
 	if svc == nil {
 		return false
 	}
@@ -564,7 +564,7 @@ func (a *IngressPGReconciler) deleteVIPServiceIfExists(ctx context.Context, name
 	}
 
 	logger.Infof("Deleting VIPService %q", name)
-	if err = a.tsClient.deleteVIPService(ctx, name); err != nil {
+	if err = a.tsClient.DeleteVIPService(ctx, name); err != nil {
 		return fmt.Errorf("error deleting VIPService: %w", err)
 	}
 	return nil

@@ -142,7 +142,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	}
 
 	// Verify VIPService uses default tags
-	vipSvc, err := ft.getVIPService(context.Background(), "svc:my-svc")
+	vipSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting VIPService: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
 	// Verify VIPService uses custom tags
-	vipSvc, err = ft.getVIPService(context.Background(), "svc:my-svc")
+	vipSvc, err = ft.GetVIPService(context.Background(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting VIPService: %v", err)
 	}

@@ -28,7 +28,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -768,7 +768,7 @@ type fakeTSClient struct {
 	sync.Mutex
 	keyRequests []tailscale.KeyCapabilities
 	deleted     []string
-	vipServices map[tailcfg.ServiceName]*VIPService
+	vipServices map[tailcfg.ServiceName]*tailscale.VIPService
 }
 type fakeTSNetServer struct {
 	certDomains []string
@@ -875,7 +875,7 @@ func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 	}
 }
 
-func (c *fakeTSClient) getVIPService(ctx context.Context, name tailcfg.ServiceName) (*VIPService, error) {
+func (c *fakeTSClient) GetVIPService(ctx context.Context, name tailcfg.ServiceName) (*tailscale.VIPService, error) {
 	c.Lock()
 	defer c.Unlock()
 	if c.vipServices == nil {
@@ -888,17 +888,17 @@ func (c *fakeTSClient) getVIPService(ctx context.Context, name tailcfg.ServiceNa
 	return svc, nil
 }
 
-func (c *fakeTSClient) createOrUpdateVIPService(ctx context.Context, svc *VIPService) error {
+func (c *fakeTSClient) CreateOrUpdateVIPService(ctx context.Context, svc *tailscale.VIPService) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.vipServices == nil {
-		c.vipServices = make(map[tailcfg.ServiceName]*VIPService)
+		c.vipServices = make(map[tailcfg.ServiceName]*tailscale.VIPService)
 	}
 	c.vipServices[svc.Name] = svc
 	return nil
 }
 
-func (c *fakeTSClient) deleteVIPService(ctx context.Context, name tailcfg.ServiceName) error {
+func (c *fakeTSClient) DeleteVIPService(ctx context.Context, name tailcfg.ServiceName) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.vipServices != nil {
