@@ -8,8 +8,15 @@
 package tailscale
 
 import (
+	"errors"
+	"io"
+	"net/http"
+
 	tsclient "tailscale.com/client/tailscale"
 )
+
+// maxSize is the maximum read size (10MB) of responses from the server.
+const maxReadSize = 10 << 20
 
 func init() {
 	tsclient.I_Acknowledge_This_API_Is_Unstable = true
@@ -49,4 +56,28 @@ func NewClient(tailnet string, auth AuthMethod) *Client {
 // Client is a wrapper of tailscale.com/client/tailscale.
 type Client struct {
 	*tsclient.Client
+}
+
+// HandleErrorResponse is an alias to tailscale.com/client/tailscale.
+func HandleErrorResponse(b []byte, resp *http.Response) error {
+	return tsclient.HandleErrorResponse(b, resp)
+}
+
+// SendRequest add the authentication key to the request and sends it. It
+// receives the response and reads up to 10MB of it.
+func SendRequest(c *Client, req *http.Request) ([]byte, *http.Response, error) {
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, resp, err
+	}
+	defer resp.Body.Close()
+
+	// Read response. Limit the response to 10MB.
+	// This limit is carried over from client/tailscale/tailscale.go.
+	body := io.LimitReader(resp.Body, maxReadSize+1)
+	b, err := io.ReadAll(body)
+	if len(b) > maxReadSize {
+		err = errors.New("API response too large")
+	}
+	return b, resp, err
 }
