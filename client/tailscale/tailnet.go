@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 
 	"tailscale.com/util/httpm"
 )
@@ -22,7 +21,7 @@ func (c *Client) TailnetDeleteRequest(ctx context.Context, tailnetID string) (er
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s", c.baseURL(), url.PathEscape(string(tailnetID)))
+	path := c.BuildTailnetURL("tailnet")
 	req, err := http.NewRequestWithContext(ctx, httpm.DELETE, path, nil)
 	if err != nil {
 		return err
@@ -35,7 +34,7 @@ func (c *Client) TailnetDeleteRequest(ctx context.Context, tailnetID string) (er
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return handleErrorResponse(b, resp)
+		return HandleErrorResponse(b, resp)
 	}
 
 	return nil

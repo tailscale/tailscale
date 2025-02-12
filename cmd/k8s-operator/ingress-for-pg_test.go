@@ -70,7 +70,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
 	// Verify VIPService uses custom tags
-	vipSvc, err := ft.getVIPService(context.Background(), "svc:my-svc")
+	vipSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting VIPService: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 
 func verifyVIPService(t *testing.T, ft *fakeTSClient, serviceName string, wantPorts []string) {
 	t.Helper()
-	vipSvc, err := ft.getVIPService(context.Background(), tailcfg.ServiceName(serviceName))
+	vipSvc, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName(serviceName))
 	if err != nil {
 		t.Fatalf("getting VIPService %q: %v", serviceName, err)
 	}

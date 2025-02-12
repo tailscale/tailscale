@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
 )
 
 // I_Acknowledge_This_API_Is_Unstable must be set true to use this package
@@ -61,6 +63,36 @@ func (c *Client) httpClient() *http.Client {
 		return c.HTTPClient
 	}
 	return http.DefaultClient
+}
+
+// BuildURL builds a url to http(s)://<apiserver>/api/v2/<slash-separated-pathElements>
+// using the given pathElements. It url escapes each path element, so the caller
+// doesn't need to worry about that.
+//
+// For example, BuildURL(devices, 5) with the default server URL would result in
+// https://api.tailscale.com/api/v2/devices/5.
+func (c *Client) BuildURL(pathElements ...any) string {
+	elem := make([]string, 2, len(pathElements)+1)
+	elem[0] = c.baseURL()
+	elem[1] = "/api/v2"
+	for _, pathElement := range pathElements {
+		elem = append(elem, url.PathEscape(fmt.Sprint(pathElement)))
+	}
+	return path.Join(elem...)
+}
+
+// BuildTailnetURL builds a url to http(s)://<apiserver>/api/v2/tailnet/<tailnet>/<slash-separated-pathElements>
+// using the given pathElements.  It url escapes each path element, so the
+// caller doesn't need to worry about that.
+//
+// For example, BuildTailnetURL(policy, validate) with the default server URL and a tailnet of "example.com"
+// would result in https://api.tailscale.com/api/v2/tailnet/example.com/policy/validate.
+func (c *Client) BuildTailnetURL(pathElements ...any) string {
+	allElements := make([]any, 3, len(pathElements)+2)
+	allElements[0] = "tailnet"
+	allElements[1] = c.Tailnet
+	allElements = append(allElements, pathElements...)
+	return c.BuildURL(allElements...)
 }
 
 func (c *Client) baseURL() string {
@@ -150,9 +182,11 @@ func (e ErrResponse) Error() string {
 	return fmt.Sprintf("Status: %d, Message: %q", e.Status, e.Message)
 }
 
-// handleErrorResponse decodes the error message from the server and returns
+// HandleErrorResponse decodes the error message from the server and returns
 // an ErrResponse from it.
-func handleErrorResponse(b []byte, resp *http.Response) error {
+//
+// Deprecated: use tailscale.com/client/tailscale/v2 instead.
+func HandleErrorResponse(b []byte, resp *http.Response) error {
 	var errResp ErrResponse
 	if err := json.Unmarshal(b, &errResp); err != nil {
 		return err
