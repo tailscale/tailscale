@@ -1241,21 +1241,24 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
 		}
+		can, reason := b.taildropEligibility(p)
 		ps := &ipnstate.PeerStatus{
-			InNetworkMap:    true,
-			UserID:          p.User(),
-			AltSharerUserID: p.Sharer(),
-			TailscaleIPs:    tailscaleIPs,
-			HostName:        p.Hostinfo().Hostname(),
-			DNSName:         p.Name(),
-			OS:              p.Hostinfo().OS(),
-			LastSeen:        p.LastSeen().Get(),
-			Online:          p.Online().Get(),
-			ShareeNode:      p.Hostinfo().ShareeNode(),
-			ExitNode:        p.StableID() != "" && p.StableID() == exitNodeID,
-			SSH_HostKeys:    p.Hostinfo().SSH_HostKeys().AsSlice(),
-			Location:        p.Hostinfo().Location().AsStruct(),
-			Capabilities:    p.Capabilities().AsSlice(),
+			InNetworkMap:        true,
+			UserID:              p.User(),
+			AltSharerUserID:     p.Sharer(),
+			TailscaleIPs:        tailscaleIPs,
+			HostName:            p.Hostinfo().Hostname(),
+			DNSName:             p.Name(),
+			OS:                  p.Hostinfo().OS(),
+			LastSeen:            p.LastSeen().Get(),
+			Online:              p.Online().Get(),
+			ShareeNode:          p.Hostinfo().ShareeNode(),
+			ExitNode:            p.StableID() != "" && p.StableID() == exitNodeID,
+			SSH_HostKeys:        p.Hostinfo().SSH_HostKeys().AsSlice(),
+			Location:            p.Hostinfo().Location().AsStruct(),
+			Capabilities:        p.Capabilities().AsSlice(),
+			CanReceiveFiles:     can,
+			NoFileSharingReason: reason,
 		}
 		if cm := p.CapMap(); cm.Len() > 0 {
 			ps.CapMap = make(tailcfg.NodeCapMap, cm.Len())
@@ -6516,6 +6519,29 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		return cmp.Compare(a.Node.Name, b.Node.Name)
 	})
 	return ret, nil
+}
+
+func (b *LocalBackend) taildropEligibility(p tailcfg.NodeView) (can bool, reason string) {
+	if b.state != ipn.Running {
+		return false, "local node is not in Running state"
+	}
+	if b.netMap == nil {
+		return false, "no network map available"
+	}
+	if !b.capFileSharing {
+		return false, "file sharing disabled by admin"
+	}
+	if !b.peerIsTaildropTargetLocked(p) {
+		return false, "peer does not meet taildrop target criteria"
+	}
+	if p.Hostinfo().OS() == "tvOS" {
+		return false, "tvOS is not supported"
+	}
+	base := peerAPIBase(b.netMap, p)
+	if base == "" {
+		return false, "no usable PeerAPI (empty peerAPIBase)"
+	}
+	return true, ""
 }
 
 // peerIsTaildropTargetLocked reports whether p is a valid Taildrop file
