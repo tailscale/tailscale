@@ -5,8 +5,10 @@
 
 // Package tailscale contains a Go client for the Tailscale control plane API.
 //
-// Warning: this package is in development and makes no API compatibility
-// promises as of 2022-04-29. It is subject to change at any time.
+// This package is only intended for internal and transitional use.
+//
+// Deprecated: the official control plane client is available at
+// tailscale.com/client/tailscale/v2.
 package tailscale
 
 import (
@@ -18,10 +20,7 @@ import (
 )
 
 // I_Acknowledge_This_API_Is_Unstable must be set true to use this package
-// for now. It was added 2022-04-29 when it was moved to this git repo
-// and will be removed when the public API has settled.
-//
-// TODO(bradfitz): remove this after the we're happy with the public API.
+// for now. This package is being replaced by tailscale.com/client/tailscale/v2.
 var I_Acknowledge_This_API_Is_Unstable = false
 
 // TODO: use url.PathEscape() for deviceID and tailnets when constructing requests.
@@ -35,6 +34,8 @@ const maxReadSize = 10 << 20
 //
 // Use NewClient to instantiate one. Exported fields should be set before
 // the client is used and not changed thereafter.
+//
+// Deprecated: use tailscale.com/client/tailscale/v2 instead.
 type Client struct {
 	// tailnet is the globally unique identifier for a Tailscale network, such
 	// as "example.com" or "user@gmail.com".
@@ -97,6 +98,8 @@ func (c *Client) setAuth(r *http.Request) {
 // If httpClient is nil, then http.DefaultClient is used.
 // "api.tailscale.com" is set as the BaseURL for the returned client
 // and can be changed manually by the user.
+//
+// Deprecated: use tailscale.com/client/tailscale/v2 instead.
 func NewClient(tailnet string, auth AuthMethod) *Client {
 	return &Client{
 		tailnet:   tailnet,
