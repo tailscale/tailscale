@@ -270,6 +270,12 @@ type PeerStatus struct {
 	// PeerAPIURL are the URLs of the node's PeerAPI servers.
 	PeerAPIURL []string
 
+	// CanReceiveFiles indicates this peer is a valid file-transfer target.
+	CanReceiveFiles bool
+
+	// Reason why this peer cannot receive files. Empty if CanReceiveFiles=true
+	NoFileSharingReason string
+
 	// Capabilities are capabilities that the node has.
 	// They're free-form strings, but should be in the form of URLs/URIs
 	// such as:

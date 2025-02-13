@@ -268,46 +268,39 @@ func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNode
 	if err != nil {
 		return "", false, err
 	}
-	fts, err := localClient.FileTargets(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return "", false, err
 	}
-	for _, ft := range fts {
-		n := ft.Node
-		for _, a := range n.Addresses {
-			if a.Addr() != ip {
-				continue
-			}
-			isOffline = n.Online != nil && !*n.Online
-			return n.StableID, isOffline, nil
-		}
+	if st.Self == nil {
+		return "", false, errors.New("no local node info")
 	}
-	return "", false, fileTargetErrorDetail(ctx, ip)
-}
 
-// fileTargetErrorDetail returns a non-nil error saying why ip is an
-// invalid file sharing target.
-func fileTargetErrorDetail(ctx context.Context, ip netip.Addr) error {
-	found := false
-	if st, err := localClient.Status(ctx); err == nil && st.Self != nil {
-		for _, peer := range st.Peer {
-			for _, pip := range peer.TailscaleIPs {
-				if pip == ip {
-					found = true
-					if peer.UserID != st.Self.UserID {
-						return errors.New("owned by different user; can only send files to your own devices")
-					}
+	var found bool
+	for _, ps := range st.Peer {
+		for _, pip := range ps.TailscaleIPs {
+			if pip == ip {
+				found = true
+				if ps.UserID != st.Self.UserID {
+					return "", false, errors.New("owned by different user; can only send files to your own devices")
 				}
+				isOffline = !ps.Online
+				if !ps.CanReceiveFiles {
+					return "", isOffline, fmt.Errorf("cannot send file: %s", ps.NoFileSharingReason)
+				}
+				return ps.ID, isOffline, nil
 			}
 		}
 	}
+
 	if found {
-		return errors.New("target seems to be running an old Tailscale version")
+		// Found the IP in some peer, but apparently not a valid file target for a reason not captured above
+		return "", false, errors.New("peer cannot receive files (reason unknown)")
 	}
 	if !tsaddr.IsTailscaleIP(ip) {
-		return fmt.Errorf("unknown target; %v is not a Tailscale IP address", ip)
+		return "", false, fmt.Errorf("unknown target; %v is not a Tailscale IP address", ip)
 	}
-	return errors.New("unknown target; not in your Tailnet")
+	return "", false, errors.New("unknown target; not in your Tailnet")
 }
 
 const maxSniff = 4 << 20
