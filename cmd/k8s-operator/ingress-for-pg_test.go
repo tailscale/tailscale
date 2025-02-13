@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/types/ptr"
 )
@@ -42,6 +43,18 @@ func TestIngressPGReconciler(t *testing.T) {
 		},
 	}
 
+	// Pre-create a config Secret for the ProxyGroup
+	pgCfgSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgConfigSecretName("test-pg", 0),
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels("test-pg", "config"),
+		},
+		Data: map[string][]byte{
+			tsoperator.TailscaledConfigFileName(106): []byte("{}"),
+		},
+	}
+
 	// Pre-create the ConfigMap for the ProxyGroup
 	pgConfigMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -55,7 +68,7 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
-		WithObjects(pg, pgConfigMap, tsIngressClass).
+		WithObjects(pg, pgCfgSecret, pgConfigMap, tsIngressClass).
 		WithStatusSubresource(pg).
 		Build()
 	mustUpdateStatus(t, fc, "", pg.Name, func(pg *tsapi.ProxyGroup) {
@@ -141,6 +154,10 @@ func TestIngressPGReconciler(t *testing.T) {
 		t.Error("expected serve config to contain VIPService configuration")
 	}
 
+	expectedPGCfgSecret := pgCfgSecret.DeepCopy()
+	expectedPGCfgSecret.Data[tsoperator.TailscaledConfigFileName(106)] = []byte(`{"Version":"","AdvertiseServices":["my-svc"]}`)
+	expectEqual(t, fc, expectedPGCfgSecret)
+
 	// Verify VIPService uses default tags
 	vipSvc, err := ft.getVIPService(context.Background(), "svc:my-svc")
 	if err != nil {
@@ -200,6 +217,9 @@ func TestIngressPGReconciler(t *testing.T) {
 	if len(cfg.Services) > 0 {
 		t.Error("serve config not cleaned up")
 	}
+
+	expectedPGCfgSecret.Data[tsoperator.TailscaledConfigFileName(106)] = []byte(`{"Version":""}`)
+	expectEqual(t, fc, expectedPGCfgSecret)
 }
 
 func TestValidateIngress(t *testing.T) {

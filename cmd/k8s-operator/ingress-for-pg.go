@@ -96,7 +96,7 @@ func (a *IngressPGReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	hostname := hostnameForIngress(ing)
 	logger = logger.With("hostname", hostname)
 
-	if !ing.DeletionTimestamp.IsZero() || !a.shouldExpose(ing) {
+	if !ing.DeletionTimestamp.IsZero() || !shouldExpose(ing) {
 		return res, a.maybeCleanup(ctx, hostname, ing, logger)
 	}
 
@@ -144,8 +144,6 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	if !IsHTTPSEnabledOnTailnet(a.tsnetServer) {
 		a.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
 	}
-
-	logger = logger.With("proxy-group", pg)
 
 	if !slices.Contains(ing.Finalizers, FinalizerNamePG) {
 		// This log line is printed exactly once during initial provisioning,
@@ -265,7 +263,17 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 	}
 
-	// 5. Update Ingress status
+	// 5. Update tailscaled's AdvertiseServices config, which should add the VIPService
+	// IPs to the ProxyGroup Pods' AllowedIPs in the next netmap update if approved.
+	ingList := &networkingv1.IngressList{}
+	if err := a.List(ctx, ingList); err != nil {
+		return fmt.Errorf("failed to list Ingresses: %w", err)
+	}
+	if err = a.updateTailscaledConfigWithServices(ctx, pg.Name, ingList, logger); err != nil {
+		return fmt.Errorf("failed to update tailscaled config: %w", err)
+	}
+
+	// 6. Update Ingress status
 	oldStatus := ing.Status.DeepCopy()
 	// TODO(irbekrm): once we have ingress ProxyGroup, we can determine if instances are ready to route traffic to the VIPService
 	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
@@ -354,6 +362,12 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			return fmt.Errorf("updating serve config: %w", err)
 		}
 	}
+
+	// 3. Unadvertise the VIPService in tailscaled config.
+	if err = a.updateTailscaledConfigWithServices(ctx, proxyGroupName, ingList, logger); err != nil {
+		return fmt.Errorf("failed to update tailscaled config services: %w", err)
+	}
+
 	return nil
 }
 
@@ -392,7 +406,16 @@ func (a *IngressPGReconciler) maybeCleanup(ctx context.Context, hostname string,
 		return fmt.Errorf("error deleting VIPService: %w", err)
 	}
 
-	// 3. Remove the VIPService from the serve config for the ProxyGroup.
+	// 3. Unadvertise the VIPService in tailscaled config.
+	ingList := &networkingv1.IngressList{}
+	if err := a.List(ctx, ingList); err != nil {
+		return fmt.Errorf("failed to list Ingresses: %w", err)
+	}
+	if err = a.updateTailscaledConfigWithServices(ctx, pg, ingList, logger); err != nil {
+		return fmt.Errorf("failed to update tailscaled config services: %w", err)
+	}
+
+	// 4. Remove the VIPService from the serve config for the ProxyGroup.
 	logger.Infof("Removing VIPService %q from serve config for ProxyGroup %q", hostname, pg)
 	delete(cfg.Services, serviceName)
 	cfgBytes, err := json.Marshal(cfg)
@@ -472,7 +495,7 @@ func (a *IngressPGReconciler) tailnetCertDomain(ctx context.Context) (string, er
 }
 
 // shouldExpose returns true if the Ingress should be exposed over Tailscale in HA mode (on a ProxyGroup)
-func (a *IngressPGReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
+func shouldExpose(ing *networkingv1.Ingress) bool {
 	isTSIngress := ing != nil &&
 		ing.Spec.IngressClassName != nil &&
 		*ing.Spec.IngressClassName == tailscaleIngressClassName
@@ -567,5 +590,46 @@ func (a *IngressPGReconciler) deleteVIPServiceIfExists(ctx context.Context, name
 	if err = a.tsClient.deleteVIPService(ctx, name); err != nil {
 		return fmt.Errorf("error deleting VIPService: %w", err)
 	}
+	return nil
+}
+
+func (a *IngressPGReconciler) updateTailscaledConfigWithServices(ctx context.Context, pgName string, ingList *networkingv1.IngressList, logger *zap.SugaredLogger) error {
+	var servicesToAdvertise []string
+	for _, i := range ingList.Items {
+		if i.DeletionTimestamp.IsZero() && shouldExpose(&i) {
+			// TODO(tomhjp): Also check that it's ready.
+			servicesToAdvertise = append(servicesToAdvertise, hostnameForIngress(&i))
+		}
+	}
+	logger.Debugf("setting services to advertise: %q", servicesToAdvertise)
+
+	// Get all config Secrets for this ProxyGroup.
+	secrets := &corev1.SecretList{}
+	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "config"))); err != nil {
+		return fmt.Errorf("failed to list config Secrets: %w", err)
+	}
+
+	for _, secret := range secrets.Items {
+		for fileName, confB := range secret.Data {
+			var conf ipn.ConfigVAlpha
+			if err := json.Unmarshal(confB, &conf); err != nil {
+				return fmt.Errorf("error unmarshalling ProxyGroup config: %w", err)
+			}
+
+			// Set the new data.
+			conf.AdvertiseServices = servicesToAdvertise
+
+			// Update the Secret.
+			confB, err := json.Marshal(conf)
+			if err != nil {
+				return fmt.Errorf("error marshalling ProxyGroup config: %w", err)
+			}
+			mak.Set(&secret.Data, fileName, confB)
+			if err := a.Update(ctx, &secret); err != nil {
+				return fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
+			}
+		}
+	}
+
 	return nil
 }

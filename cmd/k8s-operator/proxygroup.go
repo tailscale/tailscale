@@ -452,7 +452,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 	for i := range pgReplicas(pg) {
 		cfgSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            fmt.Sprintf("%s-%d-config", pg.Name, i),
+				Name:            pgConfigSecretName(pg.Name, i),
 				Namespace:       r.tsNamespace,
 				Labels:          pgSecretLabels(pg.Name, "config"),
 				OwnerReferences: pgOwnerReference(pg),
@@ -596,8 +596,33 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32
 		conf.AuthKey = key
 	}
 	capVerConfigs := make(map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha)
+
+	// AdvertiseServices config is set by ingress-pg-reconciler, so make sure we
+	// don't overwrite it here.
+	if err := copyAdvertiseServicesConfig(conf, oldSecret, 106); err != nil {
+		return nil, err
+	}
 	capVerConfigs[106] = *conf
 	return capVerConfigs, nil
+}
+
+func copyAdvertiseServicesConfig(conf *ipn.ConfigVAlpha, oldSecret *corev1.Secret, capVer tailcfg.CapabilityVersion) error {
+	if oldSecret == nil {
+		return nil
+	}
+
+	oldConfB := oldSecret.Data[tsoperator.TailscaledConfigFileName(capVer)]
+	if len(oldConfB) == 0 {
+		return nil
+	}
+
+	var oldConf ipn.ConfigVAlpha
+	if err := json.Unmarshal(oldConfB, &oldConf); err != nil {
+		return fmt.Errorf("error unmarshalling existing config: %w", err)
+	}
+	conf.AdvertiseServices = oldConf.AdvertiseServices
+
+	return nil
 }
 
 func (r *ProxyGroupReconciler) validate(_ *tsapi.ProxyGroup) error {
