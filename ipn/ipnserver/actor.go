@@ -81,6 +81,7 @@ func actorWithAccessOverride(baseActor *actor, reason string) *actor {
 		logf:                 baseActor.logf,
 		ci:                   baseActor.ci,
 		clientID:             baseActor.clientID,
+		userID:               baseActor.userID,
 		accessOverrideReason: reason,
 		isLocalSystem:        baseActor.isLocalSystem,
 	}
