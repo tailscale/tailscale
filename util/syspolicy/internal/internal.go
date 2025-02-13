@@ -56,10 +56,10 @@ func EqualJSONForTest(tb TB, j1, j2 jsontext.Value) (s1, s2 string, equal bool) 
 		return "", "", true
 	}
 	// Otherwise, format the values for display and return false.
-	if err := j1.Indent("", "\t"); err != nil {
+	if err := j1.Indent(); err != nil {
 		tb.Fatal(err)
 	}
-	if err := j2.Indent("", "\t"); err != nil {
+	if err := j2.Indent(); err != nil {
 		tb.Fatal(err)
 	}
 	return j1.String(), j2.String(), false
