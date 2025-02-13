@@ -5,9 +5,11 @@ package netmon
 
 import (
 	"fmt"
+	"io"
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -25,34 +27,87 @@ type unspecifiedMessage struct{}
 func (unspecifiedMessage) ignore() bool { return false }
 
 func newOSMon(logf logger.Logf, _ *Monitor) (osMon, error) {
-	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, 0)
-	if err != nil {
+	m := &darwinRouteMon{
+		logf: logf,
+	}
+	m.fd.Store(fdNeedReopen)
+	if err := m.reopen(); err != nil {
 		return nil, err
 	}
-	return &darwinRouteMon{
-		logf: logf,
-		fd:   fd,
-	}, nil
+	return m, nil
 }
 
+const (
+	fdNeedReopen = -1
+	fdClosed     = -2
+)
+
 type darwinRouteMon struct {
-	logf      logger.Logf
-	fd        int // AF_ROUTE socket
-	buf       [2 << 10]byte
-	closeOnce sync.Once
+	logf logger.Logf
+	buf  [2 << 10]byte
+	mu   sync.Mutex   // synchronizes reopen and read
+	fd   atomic.Int64 // AF_ROUTE socket, -1 when not open, -2 when closed
+}
+
+func (m *darwinRouteMon) reopen() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fd := m.fd.Swap(fdNeedReopen)
+	if fd == fdClosed {
+		return io.EOF
+	}
+	if fd >= 0 {
+		unix.Close(int(fd))
+	}
+	nfd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, 0)
+	if err != nil {
+		return err
+	}
+	m.fd.Store(int64(nfd))
+	return nil
+}
+
+func (m *darwinRouteMon) closeForReopen() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fd := m.fd.Swap(fdNeedReopen)
+	if fd >= 0 {
+		unix.Close(int(fd))
+	}
+}
+
+func (m *darwinRouteMon) read(buf []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fd := m.fd.Load()
+	if fd == fdNeedReopen {
+		if err := m.reopen(); err != nil {
+			return 0, err
+		}
+	}
+	if fd == fdClosed {
+		return 0, io.EOF
+	}
+	n, err := unix.Read(int(fd), buf)
+	return n, err
 }
 
 func (m *darwinRouteMon) Close() error {
-	var err error
-	m.closeOnce.Do(func() {
-		err = unix.Close(m.fd)
-	})
-	return err
+	// close can not take m.mu, otherwise it could be blocked by reopen or read.
+	fd := m.fd.Swap(fdClosed)
+	if fd >= 0 {
+		return unix.Close(int(fd))
+	}
+	return nil
 }
 
 func (m *darwinRouteMon) Receive() (message, error) {
+	// Future hazard: the reopen logic assumes that the receive caller has some
+	// kind of back-off. At the time of writing it will spam this at most at
+	// 1hz. If changed carelessly, the reopen logic here can turn this into a
+	// hot loop instead.
 	for {
-		n, err := unix.Read(m.fd, m.buf[:])
+		n, err := m.read(m.buf[:])
 		if err != nil {
 			return nil, err
 		}
@@ -73,6 +128,7 @@ func (m *darwinRouteMon) Receive() (message, error) {
 			if debugRouteMessages {
 				m.logf("read %d bytes (% 02x), failed to parse RIB: %v", n, m.buf[:n], err)
 			}
+			m.closeForReopen()
 			return unspecifiedMessage{}, nil
 		}
 		if len(msgs) == 0 {
