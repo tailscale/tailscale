@@ -12,11 +12,14 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/auditlog"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -38,6 +41,9 @@ type profileManager struct {
 	knownProfiles  map[ipn.ProfileID]ipn.LoginProfileView // always non-nil
 	currentProfile ipn.LoginProfileView                   // always Valid.
 	prefs          ipn.PrefsView                          // always Valid.
+
+	mu          sync.Mutex
+	auditLogger *auditlog.AuditLogger
 }
 
 func (pm *profileManager) dlogf(format string, args ...any) {
@@ -57,7 +63,7 @@ func (pm *profileManager) CurrentUserID() ipn.WindowsUserID {
 	return pm.currentUserID
 }
 
-// SetCurrentUserID sets the current user ID and switches to that user's default (last used) profile.
+// SetCurrentUserID sets the cu rrent user ID and switches to that user's default (last used) profile.
 // If the specified user does not have a default profile, or the default profile could not be loaded,
 // it creates a new one and switches to it. The uid is only non-empty on Windows where we have a multi-user system.
 func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) {
@@ -75,6 +81,7 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) {
 		pm.logf("%q's default profile cannot be used; creating a new one: %v", uid, err)
 		pm.NewProfileForUser(uid)
 	}
+	//pm.ResetAuditLogger()
 }
 
 // SetCurrentUserAndProfile sets the current user ID and switches the specified
@@ -501,7 +508,44 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 	pm.prefs = prefs
 	pm.updateHealth()
 	pm.currentProfile = kp
+
+	pm.logf("SwitchProfile(%q): %v", id, kp)
+	pm.ResetAuditLogger()
+
 	return pm.setProfileAsUserDefault(kp)
+}
+
+// ResetAuditLogger resets the audit logger to the current profile.
+// All pending transactions will be cancelled and persisted to disk and
+// a new logger will be created.   If the current audit logger is already
+// associated with the current profile ID, this method is a no-op.
+func (pm *profileManager) ResetAuditLogger() {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if pm.auditLogger != nil && pm.currentProfile.ID() == pm.auditLogger.ProfileID() {
+		return
+	}
+
+	if pm.auditLogger != nil {
+		result := pm.auditLogger.Flush(time.Second, nil)
+		<-result
+		pm.auditLogger.Stop()
+	}
+
+	pm.auditLogger = auditlog.NewAuditLogger(auditlog.AuditLoggerOpts{
+		RetryLimit: 100,
+		Logf:       pm.logf,
+		Store:      auditlog.NewAuditLogStateStore(pm.store, pm.logf),
+		ProfileID:  pm.currentProfile.ID(),
+	})
+}
+
+// AuditLogger returns the audit logger associated with the currently active profile.
+// This may be nil.
+func (pm *profileManager) AuditLogger() *auditlog.AuditLogger {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.auditLogger
 }
 
 // SwitchToDefaultProfile switches to the default (last used) profile for the current user.
@@ -622,6 +666,11 @@ func (pm *profileManager) deleteProfileNoPermCheck(profile ipn.LoginProfileView)
 	if profile.ID() == pm.currentProfile.ID() {
 		pm.NewProfile()
 	}
+
+	if pm.auditLogger != nil {
+		pm.auditLogger.Stop()
+	}
+
 	if err := pm.WriteState(profile.Key(), nil); err != nil {
 		return err
 	}
