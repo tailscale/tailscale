@@ -359,7 +359,7 @@ func (sw *sessionWatcher) Start() error {
 	sw.doneCh = make(chan error, 1)
 
 	startedCh := make(chan error, 1)
-	go sw.run(startedCh)
+	go sw.run(startedCh, sw.doneCh)
 	if err := <-startedCh; err != nil {
 		return err
 	}
@@ -372,11 +372,11 @@ func (sw *sessionWatcher) Start() error {
 	return nil
 }
 
-func (sw *sessionWatcher) run(started chan<- error) {
+func (sw *sessionWatcher) run(started, done chan<- error) {
 	runtime.LockOSThread()
 	defer func() {
 		runtime.UnlockOSThread()
-		close(sw.doneCh)
+		close(done)
 	}()
 	err := sw.createMessageWindow()
 	started <- err

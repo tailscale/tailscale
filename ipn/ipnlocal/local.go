@@ -168,6 +168,49 @@ type watchSession struct {
 	cancel    context.CancelFunc // to shut down the session
 }
 
+// localBackendExtension extends [LocalBackend] with additional functionality.
+type localBackendExtension interface {
+	// Init is called to initialize the extension when the [LocalBackend] is created
+	// and before it starts running. If the extension cannot be initialized,
+	// it must return an error, and the Shutdown method will not be called.
+	// Any returned errors are not fatal; they are used for logging.
+	// TODO(nickkhyl): should we allow returning a fatal error?
+	Init(*LocalBackend) error
+
+	// Shutdown is called when the [LocalBackend] is shutting down,
+	// if the extension was initialized. Any returned errors are not fatal;
+	// they are used for logging.
+	Shutdown() error
+}
+
+// newLocalBackendExtension is a function that instantiates a [localBackendExtension].
+type newLocalBackendExtension func(logger.Logf, *tsd.System) (localBackendExtension, error)
+
+// registeredExtensions is a map of registered local backend extensions,
+// where the key is the name of the extension and the value is the function
+// that instantiates the extension.
+var registeredExtensions map[string]newLocalBackendExtension
+
+// RegisterExtension registers a function that creates a [localBackendExtension].
+// It panics if newExt is nil or if an extension with the same name has already been registered.
+func RegisterExtension(name string, newExt newLocalBackendExtension) {
+	if newExt == nil {
+		panic(fmt.Sprintf("lb: newExt is nil: %q", name))
+	}
+	if _, ok := registeredExtensions[name]; ok {
+		panic(fmt.Sprintf("lb: duplicate extensions: %q", name))
+	}
+	mak.Set(&registeredExtensions, name, newExt)
+}
+
+// profileResolver is any function that returns user and profile IDs
+// along with a flag indicating whether it succeeded. Since an empty
+// profile ID ("") represents an empty profile, the ok return parameter
+// distinguishes between an empty profile and no profile.
+//
+// It is called with [LocalBackend.mu] held.
+type profileResolver func() (_ ipn.WindowsUserID, _ ipn.ProfileID, ok bool)
+
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -302,8 +345,12 @@ type LocalBackend struct {
 	directFileRoot    string
 	componentLogUntil map[string]componentLogState
 	// c2nUpdateStatus is the status of c2n-triggered client update.
-	c2nUpdateStatus     updateStatus
-	currentUser         ipnauth.Actor
+	c2nUpdateStatus updateStatus
+	currentUser     ipnauth.Actor
+
+	// backgroundProfileResolvers are optional background profile resolvers.
+	backgroundProfileResolvers set.HandleSet[profileResolver]
+
 	selfUpdateProgress  []ipnstate.UpdateProgress
 	lastSelfUpdateState ipnstate.SelfUpdateStatus
 	// capForcedNetfilter is the netfilter that control instructs Linux clients
@@ -394,6 +441,11 @@ type LocalBackend struct {
 	// and the user has disconnected with a reason.
 	// See tailscale/corp#26146.
 	overrideAlwaysOn bool
+
+	// shutdownCbs are the callbacks to be called when the backend is shutting down.
+	// Each callback is called exactly once in unspecified order and without b.mu held.
+	// Returned errors are logged but otherwise ignored and do not affect the shutdown process.
+	shutdownCbs set.HandleSet[func() error]
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -573,6 +625,19 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			}
 			fs.SetShares(shares)
 		}
+	}
+
+	for name, newFn := range registeredExtensions {
+		ext, err := newFn(logf, sys)
+		if err != nil {
+			b.logf("lb: failed to create %q extension: %v", name, err)
+			continue
+		}
+		if err := ext.Init(b); err != nil {
+			b.logf("lb: failed to initialize %q extension: %v", name, err)
+			continue
+		}
+		b.shutdownCbs.Add(ext.Shutdown)
 	}
 
 	return b, nil
@@ -1033,8 +1098,16 @@ func (b *LocalBackend) Shutdown() {
 	if b.notifyCancel != nil {
 		b.notifyCancel()
 	}
+	shutdownCbs := slices.Collect(maps.Values(b.shutdownCbs))
+	b.shutdownCbs = nil
 	b.mu.Unlock()
 	b.webClientShutdown()
+
+	for _, cb := range shutdownCbs {
+		if err := cb(); err != nil {
+			b.logf("shutdown callback failed: %v", err)
+		}
+	}
 
 	if b.sockstatLogger != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -3826,13 +3899,18 @@ func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) {
 	b.switchToBestProfileLockedOnEntry(reason, unlock)
 }
 
-// switchToBestProfileLockedOnEntry selects the best profile to use,
+// SwitchToBestProfile selects the best profile to use,
 // as reported by [LocalBackend.resolveBestProfileLocked], and switches
 // to it, unless it's already the current profile. The reason indicates
 // why the profile is being switched, such as due to a client connecting
-// or disconnecting and is used for logging.
-//
-// b.mu must held on entry. It is released on exit.
+// or disconnecting, or a change in the desktop session state, and is used
+// for logging.
+func (b *LocalBackend) SwitchToBestProfile(reason string) {
+	b.switchToBestProfileLockedOnEntry(reason, b.lockAndGetUnlock())
+}
+
+// switchToBestProfileLockedOnEntry is like [LocalBackend.SwitchToBestProfile],
+// but b.mu must held on entry. It is released on exit.
 func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock unlockOnce) {
 	defer unlock()
 	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
@@ -3867,8 +3945,9 @@ func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock un
 }
 
 // resolveBestProfileLocked returns the best profile to use based on the current
-// state of the backend, such as whether a GUI/CLI client is connected and whether
-// the unattended mode is enabled.
+// state of the backend, such as whether a GUI/CLI client is connected, whether
+// the unattended mode is enabled, the current state of the desktop sessions,
+// and other factors.
 //
 // It returns the user ID, profile ID, and whether the returned profile is
 // considered a background profile. A background profile is used when no OS user
@@ -3897,7 +3976,8 @@ func (b *LocalBackend) resolveBestProfileLocked() (userID ipn.WindowsUserID, pro
 	}
 
 	// Otherwise, if on Windows, use the background profile if one is set.
-	// This includes staying on the current profile if Unattended Mode is enabled.
+	// This includes staying on the current profile if Unattended Mode is enabled
+	// or if AlwaysOn mode is enabled and the current user is still signed in.
 	// If the returned background profileID is "", Tailscale will disconnect
 	// and remain idle until a GUI or CLI client connects.
 	if goos := envknob.GOOS(); goos == "windows" {
@@ -3914,14 +3994,41 @@ func (b *LocalBackend) resolveBestProfileLocked() (userID ipn.WindowsUserID, pro
 	return b.pm.CurrentUserID(), b.pm.CurrentProfile().ID(), false
 }
 
+// RegisterBackgroundProfileResolver registers a function to be used when
+// resolving the background profile, until the returned unregister function is called.
+func (b *LocalBackend) RegisterBackgroundProfileResolver(resolver profileResolver) (unregister func()) {
+	// TODO(nickkhyl): should we allow specifying some kind of priority/altitude for the resolver?
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	handle := b.backgroundProfileResolvers.Add(resolver)
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		delete(b.backgroundProfileResolvers, handle)
+	}
+}
+
 // getBackgroundProfileLocked returns the user and profile ID to use when no GUI/CLI
 // client is connected, or "","" if Tailscale should not run in the background.
 // As of 2025-02-07, it is only used on Windows.
 func (b *LocalBackend) getBackgroundProfileLocked() (ipn.WindowsUserID, ipn.ProfileID) {
+	// TODO(nickkhyl): check if the returned profile is allowed on the device,
+	// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
+	// See tailscale/corp#26249.
+
 	// If Unattended Mode is enabled for the current profile, keep using it.
 	if b.pm.CurrentPrefs().ForceDaemon() {
 		return b.pm.CurrentProfile().LocalUserID(), b.pm.CurrentProfile().ID()
 	}
+
+	// Otherwise, attempt to resolve the background profile using the background
+	// profile resolvers available on the current platform.
+	for _, resolver := range b.backgroundProfileResolvers {
+		if uid, profileID, ok := resolver(); ok {
+			return uid, profileID
+		}
+	}
+
 	// Otherwise, switch to an empty profile and disconnect Tailscale
 	// until a GUI or CLI client connects.
 	return "", ""
