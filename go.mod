@@ -1,6 +1,8 @@
 module tailscale.com
 
-go 1.23.6
+go 1.24
+
+toolchain go1.24.0
 
 require (
 	filippo.io/mkcert v1.4.4
@@ -34,7 +36,7 @@ require (
 	github.com/frankban/quicktest v1.14.6
 	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/gaissmai/bart v0.18.0
-	github.com/go-json-experiment/json v0.0.0-20250103232110-6a9a0fde9288
+	github.com/go-json-experiment/json v0.0.0-20250213060926-925ba3f173fa
 	github.com/go-logr/zapr v1.3.0
 	github.com/go-ole/go-ole v1.3.0
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
