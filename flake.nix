@@ -111,6 +111,10 @@
         tailscale = ts;
       };
       devShell = pkgs.mkShell {
+        shellHook = ''
+          export PATH=$PWD/tool:$PATH
+        '';
+
         packages = with pkgs; [
           curl
           git
@@ -118,8 +122,6 @@
           gotools
           graphviz
           perl
-          go_1_23
-          yarn
 
           # qemu and e2fsprogs are needed for natlab
           qemu
