@@ -1,6 +1,6 @@
 module tailscale.com
 
-go 1.23.1
+go 1.23.6
 
 require (
 	filippo.io/mkcert v1.4.4
@@ -33,7 +33,7 @@ require (
 	github.com/fogleman/gg v1.3.0
 	github.com/frankban/quicktest v1.14.6
 	github.com/fxamacker/cbor/v2 v2.7.0
-	github.com/gaissmai/bart v0.11.1
+	github.com/gaissmai/bart v0.18.0
 	github.com/go-json-experiment/json v0.0.0-20250103232110-6a9a0fde9288
 	github.com/go-logr/zapr v1.3.0
 	github.com/go-ole/go-ole v1.3.0
@@ -129,7 +129,6 @@ require (
 	github.com/OpenPeeDeeP/depguard/v2 v2.2.0 // indirect
 	github.com/alecthomas/go-check-sumtype v0.1.4 // indirect
 	github.com/alexkohler/nakedret/v2 v2.0.4 // indirect
-	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/bombsimon/wsl/v4 v4.2.1 // indirect
 	github.com/butuzov/mirror v1.1.0 // indirect
 	github.com/catenacyber/perfsprint v0.7.1 // indirect
