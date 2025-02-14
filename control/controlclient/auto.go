@@ -112,13 +112,14 @@ type updateGen int64
 // Auto connects to a tailcontrol server for a node.
 // It's a concrete implementation of the Client interface.
 type Auto struct {
-	direct        *Direct // our interface to the server APIs
-	clock         tstime.Clock
-	logf          logger.Logf
-	closed        bool
-	updateCh      chan struct{} // readable when we should inform the server of a change
-	observer      Observer      // called to update Client status; always non-nil
-	observerQueue execqueue.ExecQueue
+	direct           *Direct // our interface to the server APIs
+	clock            tstime.Clock
+	logf             logger.Logf
+	closed           bool
+	updateCh         chan struct{} // readable when we should inform the server of a change
+	observer         Observer      // called to update Client status; always non-nil
+	observerQueue    execqueue.ExecQueue
+	auditLogShutdown func(time.Duration) // or nil
 
 	unregisterHealthWatch func()
 
@@ -181,14 +182,15 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		opts.Clock = tstime.StdClock{}
 	}
 	c := &Auto{
-		direct:     direct,
-		clock:      opts.Clock,
-		logf:       opts.Logf,
-		updateCh:   make(chan struct{}, 1),
-		authDone:   make(chan struct{}),
-		mapDone:    make(chan struct{}),
-		updateDone: make(chan struct{}),
-		observer:   opts.Observer,
+		direct:           direct,
+		clock:            opts.Clock,
+		logf:             opts.Logf,
+		updateCh:         make(chan struct{}, 1),
+		authDone:         make(chan struct{}),
+		mapDone:          make(chan struct{}),
+		updateDone:       make(chan struct{}),
+		observer:         opts.Observer,
+		auditLogShutdown: opts.AuditLogShutdown,
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, opts.Logf)
@@ -755,6 +757,11 @@ func (c *Auto) Shutdown() {
 		return
 	}
 	c.logf("client.Shutdown ...")
+
+	// Shutdown and flush the audit logger
+	if c.auditLogShutdown != nil {
+		c.auditLogShutdown(2 * time.Second)
+	}
 
 	direct := c.direct
 	c.closed = true

@@ -57,6 +57,7 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/auditlog"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
@@ -394,6 +395,8 @@ type LocalBackend struct {
 	// and the user has disconnected with a reason.
 	// See tailscale/corp#26146.
 	overrideAlwaysOn bool
+
+	auditLogger *auditlog.AuditLogger
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -831,7 +834,8 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 		return
 	}
 	networkUp := b.prevIfState.AnyInterfaceUp()
-	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
+	pause := ((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
+	b.cc.SetPaused(pause)
 }
 
 // DisconnectControl shuts down control client. This can be run before node shutdown to force control to consider this ndoe
@@ -2312,6 +2316,13 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		debugFlags = append([]string{"netstack"}, debugFlags...)
 	}
 
+	al := auditlog.NewAuditLogger(auditlog.Opts{
+		Logf:       b.logf,
+		RetryLimit: 100,
+		Store:      auditlog.NewStateStore(b.store, b.logf),
+	})
+	b.auditLogger = al
+
 	// TODO(apenwarr): The only way to change the ServerURL is to
 	// re-run b.Start, because this is the only place we create a
 	// new controlclient. EditPrefs allows you to overwrite ServerURL,
@@ -2337,6 +2348,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		C2NHandler:                 http.HandlerFunc(b.handleC2N),
 		DialPlan:                   &b.dialPlan, // pointer because it can't be copied
 		ControlKnobs:               b.sys.ControlKnobs(),
+		AuditLogShutdown:           al.FlushAndStop,
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -4145,6 +4157,26 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	return err
 }
 
+// enqueueAuditLogLocked enqueues an audit log entry for the specified action and details
+// b.mu must be held.
+func (b *LocalBackend) enqueueAuditLogLocked(id ipn.ProfileID, action tailcfg.ClientAuditAction, details string) {
+	log := auditlog.PendingAuditLog{
+		Action:    action,
+		Details:   details,
+		TimeStamp: time.Now(),
+	}
+	if b.auditLogger != nil {
+		_, err := b.auditLogger.Enqueue(log)
+		// We don't want to return an error here, because it will get propagated to localAPI, and prevent
+		// things like disconnections and user switches - but we do want to log it.
+		if err != nil {
+			b.logf("failed to enqueue audit log %v: %w", log, err)
+		}
+	} else {
+		b.logf("failed to enqueue audit log %v: no audit logger configred", log)
+	}
+}
+
 // EditPrefs applies the changes in mp to the current prefs,
 // acting as the tailscaled itself rather than a specific user.
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
@@ -4170,9 +4202,7 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		// TODO(barnstar,nickkhyl): replace loggerFn with the actual audit logger.
-		loggerFn := func(action, details string) { b.logf("[audit]: %s: %s", action, details) }
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, loggerFn); err != nil {
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.enqueueAuditLogLocked); err != nil {
 			return ipn.PrefsView{}, err
 		}
 
@@ -5690,6 +5720,8 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
+	pid := b.pm.CurrentProfile().ID()
+	b.auditLogger.SetTransport(b.ccAuto, string(pid))
 }
 
 // resetControlClientLocked sets b.cc to nil and returns the old value. If the
@@ -5699,7 +5731,6 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	if b.cc == nil {
 		return nil
 	}
-
 	b.resetAuthURLLocked()
 
 	// When we clear the control client, stop any outstanding netmap expiry
