@@ -946,9 +946,15 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 	return c, nil
 }
 
+// I_Acknowledge_This_API_Is_Experimental must be set true to use AuthenticatedAPITransport()
+// for now.
+var I_Acknowledge_This_API_Is_Experimental = false
+
 // AuthenticatedAPITransport provides an HTTP transport that can be used with
 // the control server API without needing additional authentication details. It
 // authenticates using the current client's nodekey.
+//
+// It requires the user to set I_Acknowledge_This_API_Is_Experimental.
 //
 // For example:
 //
@@ -966,6 +972,9 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 //	    Transport: rt,
 //	}}
 func (s *Server) AuthenticatedAPITransport() (http.RoundTripper, error) {
+	if !I_Acknowledge_This_API_Is_Experimental {
+		return nil, errors.New("use of AuthenticatedAPITransport without setting I_Acknowledge_This_API_Is_Experimental")
+	}
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
