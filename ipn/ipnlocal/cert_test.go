@@ -83,7 +83,7 @@ func TestCertStoreRoundTrip(t *testing.T) {
 		debugACMEURL bool
 	}{
 		{"FileStore", certFileStore{dir: t.TempDir(), testRoots: roots}, false},
-		{"FileStore_UnknownCA", certFileStore{dir: t.TempDir(), testRoots: roots}, true},
+		{"FileStore_UnknownCA", certFileStore{dir: t.TempDir()}, true},
 		{"StateStore", certStateStore{StateStore: new(mem.Store), testRoots: roots}, false},
 		{"StateStore_UnknownCA", certStateStore{StateStore: new(mem.Store)}, true},
 	}
