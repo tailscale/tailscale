@@ -1256,6 +1256,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			SSH_HostKeys:    p.Hostinfo().SSH_HostKeys().AsSlice(),
 			Location:        p.Hostinfo().Location().AsStruct(),
 			Capabilities:    p.Capabilities().AsSlice(),
+			TaildropTarget:  b.taildropTargetStatus(p),
 		}
 		if cm := p.CapMap(); cm.Len() > 0 {
 			ps.CapMap = make(tailcfg.NodeCapMap, cm.Len())
@@ -6520,6 +6521,41 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		return cmp.Compare(a.Node.Name, b.Node.Name)
 	})
 	return ret, nil
+}
+
+func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.TaildropTargetStatus {
+	if b.netMap == nil || b.state != ipn.Running {
+		return ipnstate.TaildropTargetIpnStateNotRunning
+	}
+	if b.netMap == nil {
+		return ipnstate.TaildropTargetNoNetmapAvailable
+	}
+	if !b.capFileSharing {
+		return ipnstate.TaildropTargetMissingCap
+	}
+
+	if !p.Online().Get() {
+		return ipnstate.TaildropTargetOffline
+	}
+
+	if !p.Valid() {
+		return ipnstate.TaildropTargetNoPeerInfo
+	}
+	if b.netMap.User() != p.User() {
+		// Different user must have the explicit file sharing target capability
+		if p.Addresses().Len() == 0 ||
+			!b.peerHasCapLocked(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+			return ipnstate.TaildropTargetOwnedByOtherUser
+		}
+	}
+
+	if p.Hostinfo().OS() == "tvOS" {
+		return ipnstate.TaildropTargetUnsupportedOS
+	}
+	if peerAPIBase(b.netMap, p) == "" {
+		return ipnstate.TaildropTargetNoPeerAPI
+	}
+	return ipnstate.TaildropTargetAvailable
 }
 
 // peerIsTaildropTargetLocked reports whether p is a valid Taildrop file

@@ -270,6 +270,12 @@ type PeerStatus struct {
 	// PeerAPIURL are the URLs of the node's PeerAPI servers.
 	PeerAPIURL []string
 
+	// TaildropTargetStatus represents the node's eligibility to have files shared to it.
+	TaildropTarget TaildropTargetStatus
+
+	// Reason why this peer cannot receive files. Empty if CanReceiveFiles=true
+	NoFileSharingReason string
+
 	// Capabilities are capabilities that the node has.
 	// They're free-form strings, but should be in the form of URLs/URIs
 	// such as:
@@ -317,6 +323,21 @@ type PeerStatus struct {
 
 	Location *tailcfg.Location `json:",omitempty"`
 }
+
+type TaildropTargetStatus int
+
+const (
+	TaildropTargetUnknown TaildropTargetStatus = iota
+	TaildropTargetAvailable
+	TaildropTargetNoNetmapAvailable
+	TaildropTargetIpnStateNotRunning
+	TaildropTargetMissingCap
+	TaildropTargetOffline
+	TaildropTargetNoPeerInfo
+	TaildropTargetUnsupportedOS
+	TaildropTargetNoPeerAPI
+	TaildropTargetOwnedByOtherUser
+)
 
 // HasCap reports whether ps has the given capability.
 func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
