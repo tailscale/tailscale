@@ -445,7 +445,19 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 		return nil, err
 	}
 
+	// Add a short timeout since this should be super quick
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		switch ctxErr {
+		case context.DeadlineExceeded:
+			return nil, fmt.Errorf("timed out getting ACME registration (5s): %w", err)
+		case context.Canceled:
+			return nil, fmt.Errorf("ACME registration request canceled: %w", err)
+		}
+	}
+
 	switch {
 	case err == nil:
 		// Great, already registered.
