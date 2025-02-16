@@ -4372,6 +4372,12 @@ func (b *LocalBackend) hasIngressEnabledLocked() bool {
 	return b.serveConfig.Valid() && b.serveConfig.IsFunnelOn()
 }
 
+// shouldWireInactiveIngressLocked reports whether the node is in a state where funnel is not actively enabled, but it
+// seems that it is intended to be used with funnel.
+func (b *LocalBackend) shouldWireInactiveIngressLocked() bool {
+	return b.serveConfig.Valid() && !b.hasIngressEnabledLocked() && b.wantIngressLocked()
+}
+
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
 // unlocks b.mu when done. newp ownership passes to this function.
 // It returns a read-only copy of the new prefs.
@@ -5479,18 +5485,18 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 
 	hi.ServicesHash = b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
 
-	// The Hostinfo.WantIngress field tells control whether this node wants to
-	// be wired up for ingress connections. If harmless if it's accidentally
-	// true; the actual policy is controlled in tailscaled by ServeConfig. But
-	// if this is accidentally false, then control may not configure DNS
-	// properly. This exists as an optimization to control to program fewer DNS
-	// records that have ingress enabled but are not actually being used.
-	// TODO(irbekrm): once control knows that if hostinfo.IngressEnabled is true,
-	// then wireIngress can be considered true, don't send wireIngress in that case.
-	hi.WireIngress = b.wantIngressLocked()
 	// The Hostinfo.IngressEnabled field is used to communicate to control whether
-	// the funnel is actually enabled.
+	// the node has funnel enabled.
 	hi.IngressEnabled = b.hasIngressEnabledLocked()
+	// The Hostinfo.WantIngress field tells control whether the user intends
+	// to use funnel with this node even though it is not currently enabled.
+	// This is an optimization to control- Funnel requires creation of DNS
+	// records and because DNS propagation can take time, we want to ensure
+	// that the records exist for any node that intends to use funnel even
+	// if it's not enabled. If hi.IngressEnabled is true, control knows that
+	// DNS records are needed, so we can save bandwidth and not send
+	// WireIngress.
+	hi.WireIngress = b.shouldWireInactiveIngressLocked()
 	hi.AppConnector.Set(prefs.AppConnector().Advertise)
 }
 
@@ -6404,8 +6410,6 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 
 // updateIngressLocked updates the hostinfo.WireIngress and hostinfo.IngressEnabled fields and kicks off a Hostinfo
 // update if the values have changed.
-// TODO(irbekrm): once control knows that if hostinfo.IngressEnabled is true, then wireIngress can be considered true,
-// we can stop sending hostinfo.WireIngress in that case.
 //
 // b.mu must be held.
 func (b *LocalBackend) updateIngressLocked() {
@@ -6413,14 +6417,14 @@ func (b *LocalBackend) updateIngressLocked() {
 		return
 	}
 	hostInfoChanged := false
-	if wire := b.wantIngressLocked(); b.hostinfo.WireIngress != wire {
-		b.logf("Hostinfo.WireIngress changed to %v", wire)
-		b.hostinfo.WireIngress = wire
-		hostInfoChanged = true
-	}
 	if ie := b.hasIngressEnabledLocked(); b.hostinfo.IngressEnabled != ie {
 		b.logf("Hostinfo.IngressEnabled changed to %v", ie)
 		b.hostinfo.IngressEnabled = ie
+		hostInfoChanged = true
+	}
+	if wire := b.shouldWireInactiveIngressLocked(); b.hostinfo.WireIngress != wire {
+		b.logf("Hostinfo.WireIngress changed to %v", wire)
+		b.hostinfo.WireIngress = wire
 		hostInfoChanged = true
 	}
 	// Kick off a Hostinfo update to control if ingress status has changed.
