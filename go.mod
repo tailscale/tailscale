@@ -21,8 +21,6 @@ require (
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/creack/pty v1.1.23
-	github.com/dave/courtney v0.4.0
-	github.com/dave/patsy v0.0.0-20210517141501-957256f50cba
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
 	github.com/distribution/reference v0.6.0
@@ -135,8 +133,6 @@ require (
 	github.com/ccojocar/zxcvbn-go v1.0.2 // indirect
 	github.com/ckaznocha/intrange v0.1.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.3.6 // indirect
-	github.com/dave/astrid v0.0.0-20170323122508-8c2895878b14 // indirect
-	github.com/dave/brenda v1.1.0 // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect

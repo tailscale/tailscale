@@ -240,14 +240,6 @@ github.com/cyphar/filepath-securejoin v0.3.6 h1:4d9N5ykBnSp5Xn2JkhocYDkOpURL/18C
 github.com/cyphar/filepath-securejoin v0.3.6/go.mod h1:Sdj7gXlvMcPZsbhwhQ33GguGLDGQL7h7bg04C/+u9jI=
 github.com/daixiang0/gci v0.12.3 h1:yOZI7VAxAGPQmkb1eqt5g/11SUlwoat1fSblGLmdiQc=
 github.com/daixiang0/gci v0.12.3/go.mod h1:xtHP9N7AHdNvtRNfcx9gwTDfw7FRJx4bZUsiEfiNNAI=
-github.com/dave/astrid v0.0.0-20170323122508-8c2895878b14 h1:YI1gOOdmMk3xodBao7fehcvoZsEeOyy/cfhlpCSPgM4=
-github.com/dave/astrid v0.0.0-20170323122508-8c2895878b14/go.mod h1:Sth2QfxfATb/nW4EsrSi2KyJmbcniZ8TgTaji17D6ms=
-github.com/dave/brenda v1.1.0 h1:Sl1LlwXnbw7xMhq3y2x11McFu43AjDcwkllxxgZ3EZw=
-github.com/dave/brenda v1.1.0/go.mod h1:4wCUr6gSlu5/1Tk7akE5X7UorwiQ8Rij0SKH3/BGMOM=
-github.com/dave/courtney v0.4.0 h1:Vb8hi+k3O0h5++BR96FIcX0x3NovRbnhGd/dRr8inBk=
-github.com/dave/courtney v0.4.0/go.mod h1:3WSU3yaloZXYAxRuWt8oRyVb9SaRiMBt5Kz/2J227tM=
-github.com/dave/patsy v0.0.0-20210517141501-957256f50cba h1:1o36L4EKbZzazMk8iGC4kXpVnZ6TPxR2mZ9qVKjNNAs=
-github.com/dave/patsy v0.0.0-20210517141501-957256f50cba/go.mod h1:qfR88CgEGLoiqDaE+xxDCi5QA5v4vUoW0UCX2Nd5Tlc=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
