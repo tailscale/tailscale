@@ -191,7 +191,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 	return nil
 }
 
-func main() {
+func _main() {
 	goTestArgs, packages, testArgs, err := splitArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)

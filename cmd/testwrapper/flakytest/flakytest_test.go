@@ -41,3 +41,32 @@ func TestFlakeRun(t *testing.T) {
 		t.Fatal("First run in testwrapper, failing so that test is retried. This is expected.")
 	}
 }
+
+// TestFlakePanic is a test that panics when run in the testwrapper
+// for the first time, but succeeds on the second run.
+// It's used to test whether the testwrapper retries flaky tests.
+func TestFlakeExit(t *testing.T) {
+	Mark(t, "https://github.com/tailscale/tailscale/issues/0") // random issue
+	e := os.Getenv(FlakeAttemptEnv)
+	if e == "" {
+		t.Skip("not running in testwrapper")
+	}
+	if e == "1" {
+		t.Log("First run in testwrapper, failing so exiting so test is retried. This is expected.")
+		os.Exit(0)
+	}
+}
+
+// TestFlakePanic is a test that panics when run in the testwrapper
+// for the first time, but succeeds on the second run.
+// It's used to test whether the testwrapper retries flaky tests.
+func TestFlakePanic(t *testing.T) {
+	Mark(t, "https://github.com/tailscale/tailscale/issues/0") // random issue
+	e := os.Getenv(FlakeAttemptEnv)
+	if e == "" {
+		t.Skip("not running in testwrapper")
+	}
+	if e == "1" {
+		panic("First run in testwrapper, failing so that test is retried. This is expected.")
+	}
+}

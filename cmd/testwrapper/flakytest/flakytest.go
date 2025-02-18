@@ -7,9 +7,9 @@
 package flakytest
 
 import (
-	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +38,14 @@ func Mark(t testing.TB, issue string) {
 		// We're being run under cmd/testwrapper so send our sentinel message
 		// to stderr. (We avoid doing this when the env is absent to avoid
 		// spamming people running tests without the wrapper)
-		fmt.Fprintf(os.Stderr, "%s: %s\n", FlakyTestLogMessage, issue)
+		t.Cleanup(func() {
+			if t.Failed() {
+				// FIXME: this won't catch panics because t.Failed() won't yet
+				// be correctly set. https://github.com/golang/go/issues/49929
+				root, _, _ := strings.Cut(t.Name(), "/")
+				t.Logf("flakytest: retry: %s %s", root, strings.Join(os.Args, " "))
+			}
+		})
 	}
 	t.Logf("flakytest: issue tracking this flaky test: %s", issue)
 }
