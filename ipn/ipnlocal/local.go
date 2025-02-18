@@ -2341,12 +2341,20 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		}); err != nil {
 			b.logf("failed to save UpdatePrefs state: %v", err)
 		}
-		b.setAtomicValuesFromPrefsLocked(pv)
-	} else {
-		b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
 	}
 
+	// Reset the always-on override whenever Start is called.
+	b.resetAlwaysOnOverrideLocked()
+	// And also apply syspolicy settings to the current profile.
+	// This is important in two cases: when opts.UpdatePrefs is not nil,
+	// and when Always Mode is enabled and we need to set WantRunning to true.
+	if newp := b.pm.CurrentPrefs().AsStruct(); applySysPolicy(newp, b.lastSuggestedExitNode, b.overrideAlwaysOn) {
+		setExitNodeID(newp, b.netMap)
+		b.pm.setPrefsNoPermCheck(newp.View())
+	}
 	prefs := b.pm.CurrentPrefs()
+	b.setAtomicValuesFromPrefsLocked(prefs)
+
 	wantRunning := prefs.WantRunning()
 	if wantRunning {
 		if err := b.initMachineKeyLocked(); err != nil {
