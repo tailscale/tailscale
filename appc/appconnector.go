@@ -289,9 +289,11 @@ func (e *AppConnector) updateDomains(domains []string) {
 				toRemove = append(toRemove, netip.PrefixFrom(a, a.BitLen()))
 			}
 		}
-		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-			e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
-		}
+		e.queue.Add(func() {
+			if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+				e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
+			}
+		})
 	}
 
 	e.logf("handling domains: %v and wildcards: %v", slicesx.MapKeys(e.domains), e.wildcards)
@@ -307,11 +309,6 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 
 	// If there was no change since the last update, no work to do.
 	if slices.Equal(e.controlRoutes, routes) {
-		return
-	}
-
-	if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
-		e.logf("failed to advertise routes: %v: %v", routes, err)
 		return
 	}
 
@@ -338,9 +335,14 @@ nextRoute:
 		}
 	}
 
-	if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-		e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
-	}
+	e.queue.Add(func() {
+		if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
+			e.logf("failed to advertise routes: %v: %v", routes, err)
+		}
+		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+			e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
+		}
+	})
 
 	e.controlRoutes = routes
 	if err := e.storeRoutesLocked(); err != nil {
