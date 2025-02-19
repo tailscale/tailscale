@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"net/url"
 )
 
 // ACLRow defines a rule that grants access by a set of users or groups to a set
@@ -126,7 +127,7 @@ func (c *Client) ACLHuJSON(ctx context.Context) (acl *ACLHuJSON, err error) {
 		}
 	}()
 
-	path := c.BuildTailnetURL("acl?details=1")
+	path := c.BuildTailnetURL("acl", url.Values{"details": {"1"}})
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -146,7 +147,7 @@ func (c *Client) ACLHuJSON(ctx context.Context) (acl *ACLHuJSON, err error) {
 		Warnings []string `json:"warnings"`
 	}{}
 	if err := json.Unmarshal(b, &data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("json.Unmarshal %q: %w", b, err)
 	}
 
 	acl = &ACLHuJSON{
@@ -328,7 +329,7 @@ type ACLPreview struct {
 }
 
 func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, previewType string, previewFor string) (res *ACLPreviewResponse, err error) {
-	path := c.BuildTailnetURL("acl/preview")
+	path := c.BuildTailnetURL("acl", "preview")
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
@@ -488,7 +489,7 @@ func (c *Client) ValidateACLJSON(ctx context.Context, source, dest string) (test
 		return nil, err
 	}
 
-	path := c.BuildTailnetURL("acl/validate")
+	path := c.BuildTailnetURL("acl", "validate")
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(postData))
 	if err != nil {
 		return nil, err
