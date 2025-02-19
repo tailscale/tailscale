@@ -324,6 +324,9 @@ func main() {
 		Control:   ktimeout.UserTimeout(*tcpUserTimeout),
 		KeepAlive: *tcpKeepAlive,
 	}
+	// As of 2025-02-19, MPTCP does not support TCP_USER_TIMEOUT socket option
+	// set in ktimeout.UserTimeout above.
+	lc.SetMultipathTCP(false)
 
 	quietLogger := log.New(logger.HTTPServerLogFilter{Inner: log.Printf}, "", 0)
 	httpsrv := &http.Server{
