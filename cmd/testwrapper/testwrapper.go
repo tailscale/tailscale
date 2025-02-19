@@ -10,6 +10,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -59,11 +60,12 @@ type packageTests struct {
 }
 
 type goTestOutput struct {
-	Time    time.Time
-	Action  string
-	Package string
-	Test    string
-	Output  string
+	Time       time.Time
+	Action     string
+	ImportPath string
+	Package    string
+	Test       string
+	Output     string
 }
 
 var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
@@ -111,42 +113,43 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 	for s.Scan() {
 		var goOutput goTestOutput
 		if err := json.Unmarshal(s.Bytes(), &goOutput); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
-				break
-			}
-
-			// `go test -json` outputs invalid JSON when a build fails.
-			// In that case, discard the the output and start reading again.
-			// The build error will be printed to stderr.
-			// See: https://github.com/golang/go/issues/35169
-			if _, ok := err.(*json.SyntaxError); ok {
-				fmt.Println(s.Text())
-				continue
-			}
-			panic(err)
+			return fmt.Errorf("failed to parse go test output %q: %w", s.Bytes(), err)
 		}
-		pkg := goOutput.Package
+		pkg := cmp.Or(
+			goOutput.Package,
+			"build:"+goOutput.ImportPath, // can be "./cmd" while Package is "tailscale.com/cmd" so use separate namespace
+		)
 		pkgTests := resultMap[pkg]
 		if pkgTests == nil {
-			pkgTests = make(map[string]*testAttempt)
+			pkgTests = map[string]*testAttempt{
+				"": {}, // Used for start time and build logs.
+			}
 			resultMap[pkg] = pkgTests
 		}
 		if goOutput.Test == "" {
 			switch goOutput.Action {
 			case "start":
-				pkgTests[""] = &testAttempt{start: goOutput.Time}
-			case "fail", "pass", "skip":
+				pkgTests[""].start = goOutput.Time
+			case "build-output":
+				pkgTests[""].logs.WriteString(goOutput.Output)
+			case "build-fail", "fail", "pass", "skip":
 				for _, test := range pkgTests {
 					if test.testName != "" && test.outcome == "" {
 						test.outcome = "fail"
 						ch <- test
 					}
 				}
+				outcome := goOutput.Action
+				if outcome == "build-fail" {
+					outcome = "FAIL"
+				}
+				pkgTests[""].logs.WriteString(goOutput.Output)
 				ch <- &testAttempt{
 					pkg:         goOutput.Package,
-					outcome:     goOutput.Action,
+					outcome:     outcome,
 					start:       pkgTests[""].start,
 					end:         goOutput.Time,
+					logs:        pkgTests[""].logs,
 					pkgFinished: true,
 				}
 			}
@@ -215,6 +218,9 @@ func main() {
 	}
 	toRun := []*nextRun{firstRun}
 	printPkgOutcome := func(pkg, outcome string, attempt int, runtime time.Duration) {
+		if pkg == "" {
+			return // We reach this path on a build error.
+		}
 		if outcome == "skip" {
 			fmt.Printf("?\t%s [skipped/no tests] \n", pkg)
 			return
@@ -270,6 +276,7 @@ func main() {
 						// when a package times out.
 						failed = true
 					}
+					os.Stdout.ReadFrom(&tr.logs)
 					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt, tr.end.Sub(tr.start))
 					continue
 				}
