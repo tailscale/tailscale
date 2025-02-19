@@ -875,7 +875,7 @@ func TestTLSALPN01ChallengeCert(t *testing.T) {
 }
 
 func TestTLSChallengeCertOpt(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 512)
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
