@@ -66,31 +66,41 @@ func (c *Client) httpClient() *http.Client {
 }
 
 // BuildURL builds a url to http(s)://<apiserver>/api/v2/<slash-separated-pathElements>
-// using the given pathElements. It url escapes each path element, so the caller
-// doesn't need to worry about that.
+// using the given pathElements. It url escapes each path element, so the
+// caller doesn't need to worry about that. The last item of pathElements can
+// be of type url.Values to add a query string to the URL.
 //
 // For example, BuildURL(devices, 5) with the default server URL would result in
 // https://api.tailscale.com/api/v2/devices/5.
 func (c *Client) BuildURL(pathElements ...any) string {
-	elem := make([]string, 2, len(pathElements)+1)
-	elem[0] = c.baseURL()
-	elem[1] = "/api/v2"
-	for _, pathElement := range pathElements {
-		elem = append(elem, url.PathEscape(fmt.Sprint(pathElement)))
+	elem := make([]string, 1, len(pathElements)+1)
+	elem[0] = "/api/v2"
+	var query string
+	for i, pathElement := range pathElements {
+		if uv, ok := pathElement.(url.Values); ok && i == len(pathElements)-1 {
+			query = uv.Encode()
+		} else {
+			elem = append(elem, url.PathEscape(fmt.Sprint(pathElement)))
+		}
 	}
-	return path.Join(elem...)
+	url := c.baseURL() + path.Join(elem...)
+	if query != "" {
+		url += "?" + query
+	}
+	return url
 }
 
 // BuildTailnetURL builds a url to http(s)://<apiserver>/api/v2/tailnet/<tailnet>/<slash-separated-pathElements>
-// using the given pathElements.  It url escapes each path element, so the
-// caller doesn't need to worry about that.
+// using the given pathElements. It url escapes each path element, so the
+// caller doesn't need to worry about that. The last item of pathElements can
+// be of type url.Values to add a query string to the URL.
 //
 // For example, BuildTailnetURL(policy, validate) with the default server URL and a tailnet of "example.com"
 // would result in https://api.tailscale.com/api/v2/tailnet/example.com/policy/validate.
 func (c *Client) BuildTailnetURL(pathElements ...any) string {
-	allElements := make([]any, 3, len(pathElements)+2)
+	allElements := make([]any, 2, len(pathElements)+2)
 	allElements[0] = "tailnet"
-	allElements[1] = c.Tailnet
+	allElements[1] = c.tailnet
 	allElements = append(allElements, pathElements...)
 	return c.BuildURL(allElements...)
 }
@@ -189,7 +199,7 @@ func (e ErrResponse) Error() string {
 func HandleErrorResponse(b []byte, resp *http.Response) error {
 	var errResp ErrResponse
 	if err := json.Unmarshal(b, &errResp); err != nil {
-		return err
+		return fmt.Errorf("json.Unmarshal %q: %w", b, err)
 	}
 	errResp.Status = resp.StatusCode
 	return errResp
