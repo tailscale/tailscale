@@ -9,8 +9,6 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"tailscale.com/tsnet"
 )
 
 type joinRequest struct {
@@ -79,13 +77,19 @@ func (rac *commandClient) ExecuteCommand(host string, bs []byte) (CommandResult,
 	return cr, nil
 }
 
-func taggedOnly(ts *tsnet.Server, tag string, fx func(http.ResponseWriter, *http.Request)) func(http.ResponseWriter, *http.Request) {
+func authorized(auth *authorization, fx func(http.ResponseWriter, *http.Request)) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		allowed, err := allowedPeer(r.RemoteAddr, tag, ts)
+		err := auth.refresh(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		a, err := addrFromServerAddress(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		allowed := auth.allowsHost(a)
 		if !allowed {
 			http.Error(w, "peer not allowed", http.StatusBadRequest)
 			return
@@ -94,9 +98,9 @@ func taggedOnly(ts *tsnet.Server, tag string, fx func(http.ResponseWriter, *http
 	}
 }
 
-func (c *Consensus) makeCommandMux(ts *tsnet.Server, tag string) *http.ServeMux {
+func (c *Consensus) makeCommandMux(auth *authorization) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/join", taggedOnly(ts, tag, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/join", authorized(auth, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
@@ -122,7 +126,7 @@ func (c *Consensus) makeCommandMux(ts *tsnet.Server, tag string) *http.ServeMux 
 			return
 		}
 	}))
-	mux.HandleFunc("/executeCommand", taggedOnly(ts, tag, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/executeCommand", authorized(auth, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return

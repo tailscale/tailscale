@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"slices"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -79,42 +78,39 @@ func DefaultConfig() Config {
 	}
 }
 
+func addrFromServerAddress(sa string) (netip.Addr, error) {
+	sAddr, _, err := net.SplitHostPort(sa)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	return netip.ParseAddr(sAddr)
+}
+
 // StreamLayer implements an interface asked for by raft.NetworkTransport.
 // It does the raft interprocess communication via tailscale.
 type StreamLayer struct {
 	net.Listener
-	s   *tsnet.Server
-	tag string
+	auth *authorization
+	s    *tsnet.Server
 }
 
 // Dial implements the raft.StreamLayer interface with the tsnet.Server's Dial.
 func (sl StreamLayer) Dial(address raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
-	allowed, err := allowedPeer(string(address), sl.tag, sl.s)
+	ctx, _ := context.WithTimeout(context.Background(), timeout)
+	err := sl.auth.refresh(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if !allowed {
+
+	addr, err := addrFromServerAddress(string(address))
+	if err != nil {
+		return nil, err
+	}
+
+	if !sl.auth.allowsHost(addr) {
 		return nil, errors.New("peer is not allowed")
 	}
-	ctx, _ := context.WithTimeout(context.Background(), timeout)
 	return sl.s.Dial(ctx, "tcp", string(address))
-}
-
-func allowedPeer(remoteAddr string, tag string, s *tsnet.Server) (bool, error) {
-	sAddr, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return false, err
-	}
-	a, err := netip.ParseAddr(sAddr)
-	if err != nil {
-		return false, err
-	}
-	ctx := context.Background() // TODO very much a sign I shouldn't be doing this here
-	peers, err := taggedNodesFromStatus(ctx, tag, s)
-	if err != nil {
-		return false, err
-	}
-	return peers.has(a), nil
 }
 
 func (sl StreamLayer) Accept() (net.Conn, error) {
@@ -123,71 +119,23 @@ func (sl StreamLayer) Accept() (net.Conn, error) {
 		if err != nil || conn == nil {
 			return conn, err
 		}
-		allowed, err := allowedPeer(conn.RemoteAddr().String(), sl.tag, sl.s)
+		ctx := context.Background() // TODO
+		err = sl.auth.refresh(ctx)
 		if err != nil {
 			// TODO should we stay alive here?
 			return nil, err
 		}
-		if !allowed {
+
+		addr, err := addrFromServerAddress(conn.RemoteAddr().String())
+		if err != nil {
+			// TODO should we stay alive here?
+			return nil, err
+		}
+
+		if !sl.auth.allowsHost(addr) {
 			continue
 		}
 		return conn, err
-	}
-}
-
-type allowedPeers struct {
-	self            *ipnstate.PeerStatus
-	peers           []*ipnstate.PeerStatus
-	peerByIPAddress map[netip.Addr]*ipnstate.PeerStatus
-	clusterTag      string
-}
-
-func (ap *allowedPeers) allowed(n *ipnstate.PeerStatus) bool {
-	return n.Tags != nil && slices.Contains(n.Tags.AsSlice(), ap.clusterTag)
-}
-
-func (ap *allowedPeers) addPeerIfAllowed(p *ipnstate.PeerStatus) {
-	if !ap.allowed(p) {
-		return
-	}
-	ap.peers = append(ap.peers, p)
-	for _, addr := range p.TailscaleIPs {
-		ap.peerByIPAddress[addr] = p
-	}
-}
-
-func (ap *allowedPeers) addSelfIfAllowed(n *ipnstate.PeerStatus) {
-	if ap.allowed(n) {
-		ap.self = n
-	}
-}
-
-func (ap *allowedPeers) has(a netip.Addr) bool {
-	_, ok := ap.peerByIPAddress[a]
-	return ok
-}
-
-func taggedNodesFromStatus(ctx context.Context, clusterTag string, ts *tsnet.Server) (*allowedPeers, error) {
-	lc, err := ts.LocalClient()
-	if err != nil {
-		return nil, err
-	}
-	tStatus, err := lc.Status(ctx)
-	if err != nil {
-		return nil, err
-	}
-	ap := newAllowedPeers(clusterTag)
-	for _, v := range tStatus.Peer {
-		ap.addPeerIfAllowed(v)
-	}
-	ap.addSelfIfAllowed(tStatus.Self)
-	return ap, nil
-}
-
-func newAllowedPeers(tag string) *allowedPeers {
-	return &allowedPeers{
-		peerByIPAddress: map[netip.Addr]*ipnstate.PeerStatus{},
-		clusterTag:      tag,
 	}
 }
 
@@ -211,22 +159,30 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 		Config:        cfg,
 	}
 
-	tnfs, err := taggedNodesFromStatus(ctx, clusterTag, ts)
-	if tnfs.self == nil {
+	auth := &authorization{
+		tag: clusterTag,
+		ts:  ts,
+	}
+	err := auth.refresh(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if !auth.selfAllowed() {
 		return nil, errors.New("this node is not tagged with the cluster tag")
 	}
 
-	r, err := startRaft(ts, &fsm, c.Self, clusterTag, cfg)
+	r, err := startRaft(ts, &fsm, c.Self, auth, cfg)
 	if err != nil {
 		return nil, err
 	}
 	c.Raft = r
-	srv, err := c.serveCmdHttp(ts, clusterTag)
+	srv, err := c.serveCmdHttp(ts, auth)
 	if err != nil {
 		return nil, err
 	}
 	c.cmdHttpServer = srv
-	c.bootstrap(tnfs.peers)
+	c.bootstrap(auth.allowedPeers())
 	srv, err = serveMonitor(&c, ts, addr(c.Self.Host, cfg.MonitorPort))
 	if err != nil {
 		return nil, err
@@ -235,7 +191,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	return &c, nil
 }
 
-func startRaft(ts *tsnet.Server, fsm *raft.FSM, self SelfRaftNode, clusterTag string, cfg Config) (*raft.Raft, error) {
+func startRaft(ts *tsnet.Server, fsm *raft.FSM, self SelfRaftNode, auth *authorization, cfg Config) (*raft.Raft, error) {
 	config := cfg.Raft
 	config.LocalID = raft.ServerID(self.ID)
 
@@ -251,9 +207,9 @@ func startRaft(ts *tsnet.Server, fsm *raft.FSM, self SelfRaftNode, clusterTag st
 	}
 
 	transport := raft.NewNetworkTransport(StreamLayer{
-		s:        ts,
 		Listener: ln,
-		tag:      clusterTag,
+		auth:     auth,
+		s:        ts,
 	},
 		cfg.MaxConnPool,
 		cfg.ConnTimeout,
@@ -386,12 +342,12 @@ func (e lookElsewhereError) Error() string {
 
 var ErrLeaderUnknown = errors.New("Leader Unknown")
 
-func (c *Consensus) serveCmdHttp(ts *tsnet.Server, tag string) (*http.Server, error) {
+func (c *Consensus) serveCmdHttp(ts *tsnet.Server, auth *authorization) (*http.Server, error) {
 	ln, err := ts.Listen("tcp", c.commandAddr(c.Self.Host))
 	if err != nil {
 		return nil, err
 	}
-	mux := c.makeCommandMux(ts, tag)
+	mux := c.makeCommandMux(auth)
 	srv := &http.Server{Handler: mux}
 	go func() {
 		err := srv.Serve(ln)
