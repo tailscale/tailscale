@@ -186,6 +186,12 @@ main() {
 					VERSION="$DEBIAN_CODENAME"
 				fi
 				;;
+			sparky)
+				OS="debian"
+				PACKAGETYPE="apt"
+				VERSION="$DEBIAN_CODENAME"
+				APT_KEY_TYPE="keyring"
+				;;
 			centos)
 				OS="$ID"
 				VERSION="$VERSION_ID"
