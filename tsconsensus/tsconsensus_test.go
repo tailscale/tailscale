@@ -1,10 +1,15 @@
 package tsconsensus
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -25,6 +30,7 @@ import (
 	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 )
 
 type fsm struct {
@@ -112,47 +118,61 @@ func startNode(t *testing.T, ctx context.Context, controlURL, hostname string) (
 	return s, status.Self.PublicKey, status.TailscaleIPs[0]
 }
 
-// pingNode sends a tailscale ping between two nodes. But that's not really relevant here
-// doing this has a side effect of causing the testcontrol.Server to recalculate and reissue
-// netmaps.
-func pingNode(t *testing.T, control *testcontrol.Server, nodeKey key.NodePublic) {
-	t.Helper()
-	gotPing := make(chan bool, 1)
-	waitPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPing <- true
-	}))
-	defer waitPing.Close()
-
-	for try := 0; try < 5; try++ {
-		pr := &tailcfg.PingRequest{URL: fmt.Sprintf("%s/ping-%d", waitPing.URL, try), Log: true}
-		if !control.AddPingRequest(nodeKey, pr) {
-			t.Fatalf("failed to AddPingRequest")
+func waitForNodesToBeTaggedInStatus(t *testing.T, ctx context.Context, ts *tsnet.Server, nodeKeys []key.NodePublic, tag string) {
+	waitFor(t, "nodes tagged in status", func() bool {
+		lc, err := ts.LocalClient()
+		if err != nil {
+			t.Fatal(err)
 		}
-		pingTimeout := time.NewTimer(2 * time.Second)
-		defer pingTimeout.Stop()
-		select {
-		case <-gotPing:
-			// ok! the machinery that refreshes the netmap has been nudged
-			return
-		case <-pingTimeout.C:
-			t.Logf("waiting for ping timed out: %d", try)
+		status, err := lc.Status(ctx)
+		if err != nil {
+			t.Fatalf("error getting status: %v", err)
 		}
-	}
+		for _, k := range nodeKeys {
+			var tags *views.Slice[string]
+			if k == status.Self.PublicKey {
+				tags = status.Self.Tags
+			} else {
+				tags = status.Peer[k].Tags
+			}
+			if tag == "" {
+				if tags != nil && tags.Len() != 0 {
+					return false
+				}
+			} else {
+				if tags == nil {
+					return false
+				}
+				sliceTags := tags.AsSlice()
+				if len(sliceTags) != 1 || sliceTags[0] != tag {
+					return false
+				}
+			}
+		}
+		return true
+	}, 10, 2*time.Second)
 }
 
 func tagNodes(t *testing.T, control *testcontrol.Server, nodeKeys []key.NodePublic, tag string) {
 	t.Helper()
 	for _, key := range nodeKeys {
 		n := control.Node(key)
-		n.Tags = append(n.Tags, tag)
+		if tag == "" {
+			if len(n.Tags) != 1 {
+				t.Fatalf("expected tags to have one tag")
+			}
+			n.Tags = nil
+		} else {
+			if len(n.Tags) != 0 {
+				// if we want this to work with multiple tags we'll have to change the logic
+				// for checking if a tag got removed yet.
+				t.Fatalf("expected tags to be empty")
+			}
+			n.Tags = append(n.Tags, tag)
+		}
 		b := true
 		n.Online = &b
 		control.UpdateNode(n)
-	}
-
-	// Cause the netmap to be recalculated and reissued, so we don't have to wait for it.
-	for _, key := range nodeKeys {
-		pingNode(t, control, key)
 	}
 }
 
@@ -166,6 +186,7 @@ func TestStart(t *testing.T) {
 	clusterTag := "tag:whatever"
 	// nodes must be tagged with the cluster tag, to find each other
 	tagNodes(t, control, []key.NodePublic{k}, clusterTag)
+	waitForNodesToBeTaggedInStatus(t, ctx, one, []key.NodePublic{k}, clusterTag)
 
 	sm := &fsm{}
 	r, err := Start(ctx, one, (*fsm)(sm), clusterTag, DefaultConfig())
@@ -212,6 +233,7 @@ func startNodesAndWaitForPeerStatus(t *testing.T, ctx context.Context, clusterTa
 		localClients[i] = lc
 	}
 	tagNodes(t, control, keysToTag, clusterTag)
+	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, keysToTag, clusterTag)
 	fxCameOnline := func() bool {
 		// all the _other_ nodes see the first as online
 		for i := 1; i < nNodes; i++ {
@@ -437,6 +459,7 @@ func TestRejoin(t *testing.T) {
 
 	tsJoiner, keyJoiner, _ := startNode(t, ctx, controlURL, "node: joiner")
 	tagNodes(t, control, []key.NodePublic{keyJoiner}, clusterTag)
+	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, []key.NodePublic{keyJoiner}, clusterTag)
 	smJoiner := &fsm{}
 	cJoiner, err := Start(ctx, tsJoiner, (*fsm)(smJoiner), clusterTag, cfg)
 	if err != nil {
@@ -450,4 +473,172 @@ func TestRejoin(t *testing.T) {
 	})
 
 	assertCommandsWorkOnAnyNode(t, ps)
+}
+
+func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	clusterTag := "tag:whatever"
+	ps, control, controlURL := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
+	cfg := DefaultConfig()
+	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
+	for _, p := range ps {
+		defer p.c.Stop(ctx)
+	}
+	assertCommandsWorkOnAnyNode(t, ps)
+
+	untaggedNode, _, _ := startNode(t, ctx, controlURL, "untagged node")
+
+	taggedNode, taggedKey, _ := startNode(t, ctx, controlURL, "untagged node")
+	tagNodes(t, control, []key.NodePublic{taggedKey}, clusterTag)
+	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, []key.NodePublic{taggedKey}, clusterTag)
+
+	// surface area: command http, peer tcp
+	//untagged
+	ipv4, _ := ps[0].ts.TailscaleIPs()
+	sAddr := fmt.Sprintf("%s:%d", ipv4, cfg.RaftPort)
+
+	isNetTimeoutErr := func(err error) bool {
+		var netErr net.Error
+		if !errors.As(err, &netErr) {
+			return false
+		}
+		return netErr.Timeout()
+	}
+
+	getErrorFromTryingToSend := func(s *tsnet.Server) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		conn, err := s.Dial(ctx, "tcp", sAddr)
+		if err != nil {
+			t.Fatalf("unexpected Dial err: %v", err)
+		}
+		conn.SetDeadline(time.Now().Add(1 * time.Second))
+		fmt.Fprintf(conn, "hellllllloooooo")
+		status, err := bufio.NewReader(conn).ReadString('\n')
+		if status != "" {
+			t.Fatalf("node sending non-raft message should get empty response, got: '%s' for: %s", status, s.Hostname)
+		}
+		if err == nil {
+			t.Fatalf("node sending non-raft message should get an error but got nil err for: %s", s.Hostname)
+		}
+		return err
+	}
+
+	err := getErrorFromTryingToSend(untaggedNode)
+	if !isNetTimeoutErr(err) {
+		t.Fatalf("untagged node trying to send should time out, got: %v", err)
+	}
+	// we still get an error trying to send but it's EOF the target node was happy to talk
+	// to us but couldn't understand what we said.
+	err = getErrorFromTryingToSend(taggedNode)
+	if isNetTimeoutErr(err) {
+		t.Fatalf("tagged node trying to send should not time out, got: %v", err)
+	}
+}
+
+func TestOnlyTaggedPeersCanBeDialed(t *testing.T) {
+	t.Skip("flaky test, need to figure out how to actually cause a Dial if we want to test this")
+	nettest.SkipIfNoNetwork(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	clusterTag := "tag:whatever"
+	ps, control, _ := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
+	cfg := DefaultConfig()
+	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
+	for _, p := range ps {
+		defer p.c.Stop(ctx)
+	}
+	assertCommandsWorkOnAnyNode(t, ps)
+
+	tagNodes(t, control, []key.NodePublic{ps[2].key}, "")
+	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, []key.NodePublic{ps[2].key}, "")
+
+	// now when we try to communicate there's an open conn we can talk over still, but
+	// we won't dial a fresh one
+	// get Raft to redial by removing and readding
+	// TODO although this doesn't actually cause redialing apparently, at least not for the command rpc stuff.
+	fut := ps[0].c.raft.RemoveServer(raft.ServerID(ps[2].c.self.id), 0, 5*time.Second)
+	err := fut.Error()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fut = ps[0].c.raft.AddVoter(raft.ServerID(ps[2].c.self.id), raft.ServerAddress(raftAddr(ps[2].c.self.host, cfg)), 0, 5*time.Second)
+	err = fut.Error()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ps[2] doesn't get updates any more
+	res, err := ps[0].c.ExecuteCommand(Command{Args: []byte{byte(1)}})
+	if err != nil {
+		t.Fatalf("Error ExecuteCommand: %v", err)
+	}
+	if res.Err != nil {
+		t.Fatalf("Result Error ExecuteCommand: %v", res.Err)
+	}
+
+	fxOneEventSent := func() bool {
+		return len(ps[0].sm.events) == 4 && len(ps[1].sm.events) == 4 && len(ps[2].sm.events) == 3
+	}
+	waitFor(t, "after untagging first and second node get events, but third does not", fxOneEventSent, 10, time.Second*1)
+
+	res, err = ps[1].c.ExecuteCommand(Command{Args: []byte{byte(1)}})
+	if err != nil {
+		t.Fatalf("Error ExecuteCommand: %v", err)
+	}
+	if res.Err != nil {
+		t.Fatalf("Result Error ExecuteCommand: %v", res.Err)
+	}
+
+	fxTwoEventsSent := func() bool {
+		return len(ps[0].sm.events) == 5 && len(ps[1].sm.events) == 5 && len(ps[2].sm.events) == 3
+	}
+	waitFor(t, "after untagging first and second node get events, but third does not", fxTwoEventsSent, 10, time.Second*1)
+}
+
+func TestOnlyTaggedPeersCanJoin(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	clusterTag := "tag:whatever"
+	ps, _, controlURL := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
+	cfg := DefaultConfig()
+	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
+	for _, p := range ps {
+		defer p.c.Stop(ctx)
+	}
+
+	tsJoiner, _, _ := startNode(t, ctx, controlURL, "joiner node")
+
+	ipv4, _ := tsJoiner.TailscaleIPs()
+	url := fmt.Sprintf("http://%s/join", ps[0].c.commandAddr(ps[0].c.self.host))
+	payload, err := json.Marshal(joinRequest{
+		RemoteHost: ipv4.String(),
+		RemoteID:   "node joiner",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBuffer(payload)
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := tsJoiner.HTTPClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("join req when not tagged, expected status: %d, got: %d", http.StatusBadRequest, resp.StatusCode)
+	}
+	rBody, _ := io.ReadAll(resp.Body)
+	sBody := strings.TrimSpace(string(rBody))
+	expected := "peer not allowed"
+	if sBody != expected {
+		t.Fatalf("join req when not tagged, expected body: %s, got: %s", expected, sBody)
+	}
 }

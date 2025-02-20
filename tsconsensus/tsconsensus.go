@@ -8,7 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"slices"
+	"net/netip"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -47,6 +47,14 @@ func raftAddr(host string, cfg Config) string {
 	return addr(host, cfg.RaftPort)
 }
 
+func addrFromServerAddress(sa string) (netip.Addr, error) {
+	sAddr, _, err := net.SplitHostPort(sa)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	return netip.ParseAddr(sAddr)
+}
+
 // A selfRaftNode is the info we need to talk to hashicorp/raft about our node.
 // We specify the ID and Addr on Consensus Start, and then use it later for raft
 // operations such as BootstrapCluster and AddVoter.
@@ -82,18 +90,61 @@ func DefaultConfig() Config {
 // It does the raft interprocess communication via tailscale.
 type StreamLayer struct {
 	net.Listener
-	s *tsnet.Server
+	s    *tsnet.Server
+	auth *authorization
 }
 
 // Dial implements the raft.StreamLayer interface with the tsnet.Server's Dial.
 func (sl StreamLayer) Dial(address raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	err := sl.auth.refresh(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	addr, err := addrFromServerAddress(string(address))
+	if err != nil {
+		return nil, err
+	}
+
+	if !sl.auth.allowsHost(addr) {
+		return nil, errors.New("peer is not allowed")
+	}
 	return sl.s.Dial(ctx, "tcp", string(address))
 }
 
+func (sl StreamLayer) Accept() (net.Conn, error) {
+	for {
+		conn, err := sl.Listener.Accept()
+		if err != nil || conn == nil {
+			return conn, err
+		}
+		ctx := context.Background() // TODO
+		err = sl.auth.refresh(ctx)
+		if err != nil {
+			// TODO should we stay alive here?
+			return nil, err
+		}
+
+		addr, err := addrFromServerAddress(conn.RemoteAddr().String())
+		if err != nil {
+			// TODO should we stay alive here?
+			return nil, err
+		}
+
+		if !sl.auth.allowsHost(addr) {
+			continue
+		}
+		return conn, err
+	}
+}
+
 // Start returns a pointer to a running Consensus instance.
-func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, targetTag string, cfg Config) (*Consensus, error) {
+func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag string, cfg Config) (*Consensus, error) {
+	if clusterTag == "" {
+		return nil, errors.New("cluster tag must be provided")
+	}
 	v4, _ := ts.TailscaleIPs()
 	cc := commandClient{
 		port:       cfg.CommandPort,
@@ -109,36 +160,29 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, targetTag string
 		config:        cfg,
 	}
 
-	lc, err := ts.LocalClient()
+	auth := &authorization{
+		tag: clusterTag,
+		ts:  ts,
+	}
+	err := auth.refresh(ctx)
 	if err != nil {
 		return nil, err
 	}
-	tStatus, err := lc.Status(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var targets []*ipnstate.PeerStatus
-	if targetTag != "" && tStatus.Self.Tags != nil && slices.Contains(tStatus.Self.Tags.AsSlice(), targetTag) {
-		for _, v := range tStatus.Peer {
-			if v.Tags != nil && slices.Contains(v.Tags.AsSlice(), targetTag) {
-				targets = append(targets, v)
-			}
-		}
-	} else {
-		return nil, errors.New("targetTag empty, or this node is not tagged with it")
+	if !auth.selfAllowed() {
+		return nil, errors.New("this node is not tagged with the cluster tag")
 	}
 
-	r, err := startRaft(ts, &fsm, c.self, cfg)
+	r, err := startRaft(ts, &fsm, c.self, auth, cfg)
 	if err != nil {
 		return nil, err
 	}
 	c.raft = r
-	srv, err := c.serveCmdHttp(ts)
+	srv, err := c.serveCmdHttp(ts, auth)
 	if err != nil {
 		return nil, err
 	}
 	c.cmdHttpServer = srv
-	c.bootstrap(targets)
+	c.bootstrap(auth.allowedPeers())
 	srv, err = serveMonitor(&c, ts, addr(c.self.host, cfg.MonitorPort))
 	if err != nil {
 		return nil, err
@@ -147,7 +191,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, targetTag string
 	return &c, nil
 }
 
-func startRaft(ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, cfg Config) (*raft.Raft, error) {
+func startRaft(ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, auth *authorization, cfg Config) (*raft.Raft, error) {
 	config := cfg.Raft
 	config.LocalID = raft.ServerID(self.id)
 
@@ -165,6 +209,7 @@ func startRaft(ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, cfg Config) (
 	transport := raft.NewNetworkTransport(StreamLayer{
 		s:        ts,
 		Listener: ln,
+		auth:     auth,
 	},
 		cfg.MaxConnPool,
 		cfg.ConnTimeout,
@@ -297,15 +342,14 @@ func (e lookElsewhereError) Error() string {
 
 var errLeaderUnknown = errors.New("Leader Unknown")
 
-func (c *Consensus) serveCmdHttp(ts *tsnet.Server) (*http.Server, error) {
+func (c *Consensus) serveCmdHttp(ts *tsnet.Server, auth *authorization) (*http.Server, error) {
 	ln, err := ts.Listen("tcp", c.commandAddr(c.self.host))
 	if err != nil {
 		return nil, err
 	}
-	mux := c.makeCommandMux()
+	mux := c.makeCommandMux(auth)
 	srv := &http.Server{Handler: mux}
 	go func() {
-		defer ln.Close()
 		err := srv.Serve(ln)
 		log.Printf("CmdHttp stopped serving with err: %v", err)
 	}()

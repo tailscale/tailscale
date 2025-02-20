@@ -127,11 +127,7 @@ require (
 	github.com/OpenPeeDeeP/depguard/v2 v2.2.0 // indirect
 	github.com/alecthomas/go-check-sumtype v0.1.4 // indirect
 	github.com/alexkohler/nakedret/v2 v2.0.4 // indirect
-<<<<<<< HEAD
-=======
 	github.com/armon/go-metrics v0.4.1 // indirect
-	github.com/bits-and-blooms/bitset v1.13.0 // indirect
->>>>>>> 348d01d82 (tsconsensus: add a tsconsensus package)
 	github.com/bombsimon/wsl/v4 v4.2.1 // indirect
 	github.com/butuzov/mirror v1.1.0 // indirect
 	github.com/catenacyber/perfsprint v0.7.1 // indirect

@@ -78,9 +78,30 @@ func (rac *commandClient) executeCommand(host string, bs []byte) (CommandResult,
 	return cr, nil
 }
 
-func (c *Consensus) makeCommandMux() *http.ServeMux {
+func authorized(auth *authorization, fx func(http.ResponseWriter, *http.Request)) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		err := auth.refresh(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		a, err := addrFromServerAddress(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		allowed := auth.allowsHost(a)
+		if !allowed {
+			http.Error(w, "peer not allowed", http.StatusBadRequest)
+			return
+		}
+		fx(w, r)
+	}
+}
+
+func (c *Consensus) makeCommandMux(auth *authorization) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/join", authorized(auth, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
@@ -106,8 +127,8 @@ func (c *Consensus) makeCommandMux() *http.ServeMux {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	})
-	mux.HandleFunc("/executeCommand", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/executeCommand", authorized(auth, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
@@ -125,6 +146,6 @@ func (c *Consensus) makeCommandMux() *http.ServeMux {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	})
+	}))
 	return mux
 }
