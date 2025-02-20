@@ -32,7 +32,8 @@ func fixTailscaledConnectError(origErr error) error {
 			foundProc = proc
 			break
 		}
-		if runtime.GOOS == "darwin" && base == "IPNExtension" {
+		// go-ps might trim process names to 16 chars, macsys tailscaled binary is named io.tailscale.ipn.macsys.network-extension
+		if runtime.GOOS == "darwin" && (base == "IPNExtension" || strings.HasPrefix(base, "io.tailscale.ipn")) {
 			foundProc = proc
 			break
 		}
