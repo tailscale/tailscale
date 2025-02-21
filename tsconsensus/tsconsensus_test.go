@@ -539,64 +539,70 @@ func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
 }
 
 func TestOnlyTaggedPeersCanBeDialed(t *testing.T) {
-	t.Skip("flaky test, need to figure out how to actually cause a Dial if we want to test this")
 	nettest.SkipIfNoNetwork(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	clusterTag := "tag:whatever"
 	ps, control, _ := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
-	cfg := DefaultConfig()
-	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
-	for _, p := range ps {
-		defer p.c.Stop(ctx)
-	}
-	assertCommandsWorkOnAnyNode(t, ps)
 
+	// make a StreamLayer for ps[0]
+	ts := ps[0].ts
+	auth := &authorization{
+		tag: clusterTag,
+		ts:  ts,
+	}
+
+	port := 19841
+	lns := make([]net.Listener, 3)
+	for i, p := range ps {
+		ln, err := p.ts.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lns[i] = ln
+	}
+
+	sl := StreamLayer{
+		s:        ts,
+		Listener: lns[0],
+		auth:     auth,
+	}
+
+	ip1, _ := ps[1].ts.TailscaleIPs()
+	a1 := raft.ServerAddress(fmt.Sprintf("%s:%d", ip1, port))
+
+	ip2, _ := ps[2].ts.TailscaleIPs()
+	a2 := raft.ServerAddress(fmt.Sprintf("%s:%d", ip2, port))
+
+	// both can be dialed...
+	conn, err := sl.Dial(a1, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	conn, err = sl.Dial(a2, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	// untag ps[2]
 	tagNodes(t, control, []key.NodePublic{ps[2].key}, "")
 	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, []key.NodePublic{ps[2].key}, "")
 
-	// now when we try to communicate there's an open conn we can talk over still, but
-	// we won't dial a fresh one
-	// get Raft to redial by removing and readding
-	// TODO although this doesn't actually cause redialing apparently, at least not for the command rpc stuff.
-	fut := ps[0].c.raft.RemoveServer(raft.ServerID(ps[2].c.self.id), 0, 5*time.Second)
-	err := fut.Error()
+	// now only ps[1] can be dialed
+	conn, err = sl.Dial(a1, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
+	conn.Close()
 
-	fut = ps[0].c.raft.AddVoter(raft.ServerID(ps[2].c.self.id), raft.ServerAddress(raftAddr(ps[2].c.self.host, cfg)), 0, 5*time.Second)
-	err = fut.Error()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// ps[2] doesn't get updates any more
-	res, err := ps[0].c.ExecuteCommand(Command{Args: []byte{byte(1)}})
-	if err != nil {
-		t.Fatalf("Error ExecuteCommand: %v", err)
-	}
-	if res.Err != nil {
-		t.Fatalf("Result Error ExecuteCommand: %v", res.Err)
+	_, err = sl.Dial(a2, 2*time.Second)
+	if err.Error() != "peer is not allowed" {
+		t.Fatalf("expected peer is not allowed, got: %v", err)
 	}
 
-	fxOneEventSent := func() bool {
-		return len(ps[0].sm.events) == 4 && len(ps[1].sm.events) == 4 && len(ps[2].sm.events) == 3
-	}
-	waitFor(t, "after untagging first and second node get events, but third does not", fxOneEventSent, 10, time.Second*1)
-
-	res, err = ps[1].c.ExecuteCommand(Command{Args: []byte{byte(1)}})
-	if err != nil {
-		t.Fatalf("Error ExecuteCommand: %v", err)
-	}
-	if res.Err != nil {
-		t.Fatalf("Result Error ExecuteCommand: %v", res.Err)
-	}
-
-	fxTwoEventsSent := func() bool {
-		return len(ps[0].sm.events) == 5 && len(ps[1].sm.events) == 5 && len(ps[2].sm.events) == 3
-	}
-	waitFor(t, "after untagging first and second node get events, but third does not", fxTwoEventsSent, 10, time.Second*1)
 }
 
 func TestOnlyTaggedPeersCanJoin(t *testing.T) {
