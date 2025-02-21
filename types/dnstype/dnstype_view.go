@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net/netip"
 
+	jsonexpv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/views"
 )
 
@@ -44,6 +46,10 @@ func (v ResolverView) AsStruct() *Resolver {
 }
 
 func (v ResolverView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v ResolverView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *ResolverView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {

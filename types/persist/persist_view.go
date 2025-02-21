@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	jsonexpv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
@@ -46,6 +48,10 @@ func (v PersistView) AsStruct() *Persist {
 }
 
 func (v PersistView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v PersistView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *PersistView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {

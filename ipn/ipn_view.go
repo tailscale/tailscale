@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net/netip"
 
+	jsonexpv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
@@ -49,6 +51,10 @@ func (v LoginProfileView) AsStruct() *LoginProfile {
 }
 
 func (v LoginProfileView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v LoginProfileView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *LoginProfileView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -115,6 +121,10 @@ func (v PrefsView) AsStruct() *Prefs {
 }
 
 func (v PrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v PrefsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *PrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -234,6 +244,10 @@ func (v ServeConfigView) AsStruct() *ServeConfig {
 
 func (v ServeConfigView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v ServeConfigView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *ServeConfigView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -318,6 +332,10 @@ func (v ServiceConfigView) AsStruct() *ServiceConfig {
 
 func (v ServiceConfigView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v ServiceConfigView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *ServiceConfigView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -383,6 +401,10 @@ func (v TCPPortHandlerView) AsStruct() *TCPPortHandler {
 
 func (v TCPPortHandlerView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v TCPPortHandlerView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *TCPPortHandlerView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -441,6 +463,10 @@ func (v HTTPHandlerView) AsStruct() *HTTPHandler {
 
 func (v HTTPHandlerView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v HTTPHandlerView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *HTTPHandlerView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -496,6 +522,10 @@ func (v WebServerConfigView) AsStruct() *WebServerConfig {
 }
 
 func (v WebServerConfigView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v WebServerConfigView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *WebServerConfigView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {

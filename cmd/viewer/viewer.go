@@ -42,7 +42,7 @@ func (v {{.ViewName}}{{.TypeParamNames}}) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
 // the original.
-func (v {{.ViewName}}{{.TypeParamNames}}) AsStruct() *{{.StructName}}{{.TypeParamNames}}{ 
+func (v {{.ViewName}}{{.TypeParamNames}}) AsStruct() *{{.StructName}}{{.TypeParamNames}}{
 	if v.ж == nil {
 		return nil
 	}
@@ -50,6 +50,8 @@ func (v {{.ViewName}}{{.TypeParamNames}}) AsStruct() *{{.StructName}}{{.TypePara
 }
 
 func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error { return jsonexpv2.MarshalEncode(e, v.ж, opt) }
 
 func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -127,6 +129,8 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 	}
 	it.Import("encoding/json")
 	it.Import("errors")
+	it.ImportAs("github.com/go-json-experiment/json", "jsonexpv2")
+	it.Import("github.com/go-json-experiment/json/jsontext")
 
 	args := struct {
 		StructName     string

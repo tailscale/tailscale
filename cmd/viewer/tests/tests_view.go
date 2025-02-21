@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net/netip"
 
+	jsonexpv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"golang.org/x/exp/constraints"
 	"tailscale.com/types/views"
 )
@@ -45,6 +47,10 @@ func (v StructWithPtrsView) AsStruct() *StructWithPtrs {
 }
 
 func (v StructWithPtrsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v StructWithPtrsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *StructWithPtrsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -110,6 +116,10 @@ func (v StructWithoutPtrsView) AsStruct() *StructWithoutPtrs {
 
 func (v StructWithoutPtrsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v StructWithoutPtrsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *StructWithoutPtrsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -163,6 +173,10 @@ func (v MapView) AsStruct() *Map {
 }
 
 func (v MapView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v MapView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *MapView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -270,6 +284,10 @@ func (v StructWithSlicesView) AsStruct() *StructWithSlices {
 
 func (v StructWithSlicesView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v StructWithSlicesView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *StructWithSlicesView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -344,6 +362,10 @@ func (v StructWithEmbeddedView) AsStruct() *StructWithEmbedded {
 
 func (v StructWithEmbeddedView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v StructWithEmbeddedView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *StructWithEmbeddedView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -399,6 +421,10 @@ func (v GenericIntStructView[T]) AsStruct() *GenericIntStruct[T] {
 }
 
 func (v GenericIntStructView[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v GenericIntStructView[T]) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *GenericIntStructView[T]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -472,6 +498,10 @@ func (v GenericNoPtrsStructView[T]) AsStruct() *GenericNoPtrsStruct[T] {
 
 func (v GenericNoPtrsStructView[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v GenericNoPtrsStructView[T]) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *GenericNoPtrsStructView[T]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -543,6 +573,10 @@ func (v GenericCloneableStructView[T, V]) AsStruct() *GenericCloneableStruct[T, 
 }
 
 func (v GenericCloneableStructView[T, V]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v GenericCloneableStructView[T, V]) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *GenericCloneableStructView[T, V]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -619,6 +653,10 @@ func (v StructWithContainersView) AsStruct() *StructWithContainers {
 
 func (v StructWithContainersView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v StructWithContainersView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *StructWithContainersView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -690,6 +728,10 @@ func (v StructWithTypeAliasFieldsView) AsStruct() *StructWithTypeAliasFields {
 }
 
 func (v StructWithTypeAliasFieldsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v StructWithTypeAliasFieldsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *StructWithTypeAliasFieldsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -789,6 +831,10 @@ func (v GenericTypeAliasStructView[T, T2, V2]) AsStruct() *GenericTypeAliasStruc
 
 func (v GenericTypeAliasStructView[T, T2, V2]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.ж)
+}
+
+func (v GenericTypeAliasStructView[T, T2, V2]) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
 }
 
 func (v *GenericTypeAliasStructView[T, T2, V2]) UnmarshalJSON(b []byte) error {

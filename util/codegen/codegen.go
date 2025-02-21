@@ -6,6 +6,7 @@ package codegen
 
 import (
 	"bytes"
+	"cmp"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -88,27 +89,34 @@ func NewImportTracker(thisPkg *types.Package) *ImportTracker {
 // ImportTracker provides a mechanism to track and build import paths.
 type ImportTracker struct {
 	thisPkg  *types.Package
-	packages map[string]bool
+	packages map[string]string // import path => qualified import name
 }
 
 func (it *ImportTracker) Import(pkg string) {
-	if pkg != "" && !it.packages[pkg] {
-		mak.Set(&it.packages, pkg, true)
+	if pkg != "" && !it.Has(pkg) {
+		mak.Set(&it.packages, pkg, "")
+	}
+}
+
+func (it *ImportTracker) ImportAs(pkg, as string) {
+	if pkg != "" && !it.Has(pkg) {
+		mak.Set(&it.packages, pkg, as)
 	}
 }
 
 // Has reports whether the specified package has been imported.
 func (it *ImportTracker) Has(pkg string) bool {
-	return it.packages[pkg]
+	_, ok := it.packages[pkg]
+	return ok
 }
 
 func (it *ImportTracker) qualifier(pkg *types.Package) string {
 	if it.thisPkg == pkg {
 		return ""
 	}
-	it.Import(pkg.Path())
-	// TODO(maisem): handle conflicts?
-	return pkg.Name()
+	path := pkg.Path()
+	it.Import(path)
+	return cmp.Or(it.packages[path], pkg.Name())
 }
 
 // QualifiedName returns the string representation of t in the package.
@@ -127,8 +135,12 @@ func (it *ImportTracker) PackagePrefix(pkg *types.Package) string {
 // Write prints all the tracked imports in a single import block to w.
 func (it *ImportTracker) Write(w io.Writer) {
 	fmt.Fprintf(w, "import (\n")
-	for s := range it.packages {
-		fmt.Fprintf(w, "\t%q\n", s)
+	for s, q := range it.packages {
+		if q != "" {
+			fmt.Fprintf(w, "\t%s %q\n", q, s)
+		} else {
+			fmt.Fprintf(w, "\t%q\n", s)
+		}
 	}
 	fmt.Fprintf(w, ")\n\n")
 }

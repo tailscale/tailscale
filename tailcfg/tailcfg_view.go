@@ -11,6 +11,8 @@ import (
 	"net/netip"
 	"time"
 
+	jsonexpv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -50,6 +52,10 @@ func (v UserView) AsStruct() *User {
 }
 
 func (v UserView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v UserView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *UserView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -108,6 +114,10 @@ func (v NodeView) AsStruct() *Node {
 }
 
 func (v NodeView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v NodeView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *NodeView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -248,6 +258,10 @@ func (v HostinfoView) AsStruct() *Hostinfo {
 
 func (v HostinfoView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v HostinfoView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *HostinfoView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -375,6 +389,10 @@ func (v NetInfoView) AsStruct() *NetInfo {
 
 func (v NetInfoView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v NetInfoView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *NetInfoView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -455,6 +473,10 @@ func (v LoginView) AsStruct() *Login {
 
 func (v LoginView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v LoginView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *LoginView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -515,6 +537,10 @@ func (v DNSConfigView) AsStruct() *DNSConfig {
 }
 
 func (v DNSConfigView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v DNSConfigView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *DNSConfigView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -597,6 +623,10 @@ func (v RegisterResponseView) AsStruct() *RegisterResponse {
 
 func (v RegisterResponseView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v RegisterResponseView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *RegisterResponseView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -663,6 +693,10 @@ func (v RegisterResponseAuthView) AsStruct() *RegisterResponseAuth {
 
 func (v RegisterResponseAuthView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v RegisterResponseAuthView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *RegisterResponseAuthView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -720,6 +754,10 @@ func (v RegisterRequestView) AsStruct() *RegisterRequest {
 }
 
 func (v RegisterRequestView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v RegisterRequestView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *RegisterRequestView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -811,6 +849,10 @@ func (v DERPHomeParamsView) AsStruct() *DERPHomeParams {
 
 func (v DERPHomeParamsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v DERPHomeParamsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *DERPHomeParamsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -864,6 +906,10 @@ func (v DERPRegionView) AsStruct() *DERPRegion {
 }
 
 func (v DERPRegionView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v DERPRegionView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *DERPRegionView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -931,6 +977,10 @@ func (v DERPMapView) AsStruct() *DERPMap {
 
 func (v DERPMapView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v DERPMapView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *DERPMapView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -991,6 +1041,10 @@ func (v DERPNodeView) AsStruct() *DERPNode {
 }
 
 func (v DERPNodeView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v DERPNodeView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *DERPNodeView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -1066,6 +1120,10 @@ func (v SSHRuleView) AsStruct() *SSHRule {
 
 func (v SSHRuleView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v SSHRuleView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *SSHRuleView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -1131,6 +1189,10 @@ func (v SSHActionView) AsStruct() *SSHAction {
 }
 
 func (v SSHActionView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v SSHActionView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *SSHActionView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -1204,6 +1266,10 @@ func (v SSHPrincipalView) AsStruct() *SSHPrincipal {
 
 func (v SSHPrincipalView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v SSHPrincipalView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *SSHPrincipalView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -1266,6 +1332,10 @@ func (v ControlDialPlanView) AsStruct() *ControlDialPlan {
 
 func (v ControlDialPlanView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v ControlDialPlanView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *ControlDialPlanView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -1319,6 +1389,10 @@ func (v LocationView) AsStruct() *Location {
 }
 
 func (v LocationView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v LocationView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *LocationView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -1383,6 +1457,10 @@ func (v UserProfileView) AsStruct() *UserProfile {
 }
 
 func (v UserProfileView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v UserProfileView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *UserProfileView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {

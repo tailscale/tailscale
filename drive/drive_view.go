@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	jsonexpv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/views"
 )
 
@@ -43,6 +45,10 @@ func (v ShareView) AsStruct() *Share {
 }
 
 func (v ShareView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v ShareView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *ShareView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {

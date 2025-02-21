@@ -9,6 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+
+	jsonexpv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=TestPrefs,TestBundle,TestValueStruct,TestGenericStruct,TestPrefsGroup -tags=test
@@ -42,6 +45,10 @@ func (v TestPrefsView) AsStruct() *TestPrefs {
 }
 
 func (v TestPrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v TestPrefsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *TestPrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -147,6 +154,10 @@ func (v TestBundleView) AsStruct() *TestBundle {
 
 func (v TestBundleView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v TestBundleView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *TestBundleView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -202,6 +213,10 @@ func (v TestValueStructView) AsStruct() *TestValueStruct {
 
 func (v TestValueStructView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v TestValueStructView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *TestValueStructView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -254,6 +269,10 @@ func (v TestGenericStructView[T]) AsStruct() *TestGenericStruct[T] {
 }
 
 func (v TestGenericStructView[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v TestGenericStructView[T]) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *TestGenericStructView[T]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -309,6 +328,10 @@ func (v TestPrefsGroupView) AsStruct() *TestPrefsGroup {
 }
 
 func (v TestPrefsGroupView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v TestPrefsGroupView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *TestPrefsGroupView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {

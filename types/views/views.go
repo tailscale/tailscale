@@ -15,6 +15,8 @@ import (
 	"reflect"
 	"slices"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"go4.org/mem"
 	"tailscale.com/types/ptr"
 )
@@ -96,6 +98,11 @@ func (v ByteSlice[T]) Slice(i, j int) ByteSlice[T] { return ByteSlice[T]{v.ж[i:
 // MarshalJSON implements json.Marshaler.
 func (v ByteSlice[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+// MarshalJSONV2 implements jsonv2.MarshalerV2.
+func (v ByteSlice[T]) MarshalJSONV2(e *jsontext.Encoder, opt jsonv2.Options) error {
+	return jsonv2.MarshalEncode(e, v.ж, opt)
+}
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *ByteSlice[T]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -161,6 +168,11 @@ func (v SliceView[T, V]) All() iter.Seq2[int, V] {
 
 // MarshalJSON implements json.Marshaler.
 func (v SliceView[T, V]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+// MarshalJSONV2 implements jsonv2.MarshalerV2.
+func (v SliceView[T, V]) MarshalJSONV2(e *jsontext.Encoder, opt jsonv2.Options) error {
+	return jsonv2.MarshalEncode(e, v.ж, opt)
+}
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *SliceView[T, V]) UnmarshalJSON(b []byte) error { return unmarshalSliceFromJSON(b, &v.ж) }
@@ -255,6 +267,11 @@ func SliceOf[T any](x []T) Slice[T] {
 // MarshalJSON implements json.Marshaler.
 func (v Slice[T]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.ж)
+}
+
+// MarshalJSONV2 implements jsonv2.MarshalerV2.
+func (v Slice[T]) MarshalJSONV2(e *jsontext.Encoder, opt jsonv2.Options) error {
+	return jsonv2.MarshalEncode(e, v.ж, opt)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -517,6 +534,11 @@ func (m MapSlice[K, V]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m.ж)
 }
 
+// MarshalJSONV2 implements jsonv2.MarshalerV2.
+func (m MapSlice[K, v]) MarshalJSONV2(e *jsontext.Encoder, opt jsonv2.Options) error {
+	return jsonv2.MarshalEncode(e, m.ж, opt)
+}
+
 // UnmarshalJSON implements json.Unmarshaler.
 // It should only be called on an uninitialized Map.
 func (m *MapSlice[K, V]) UnmarshalJSON(b []byte) error {
@@ -603,6 +625,11 @@ func (m Map[K, V]) GetOk(k K) (V, bool) {
 // MarshalJSON implements json.Marshaler.
 func (m Map[K, V]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m.ж)
+}
+
+// MarshalJSONV2 implements jsonv2.MarshalerV2.
+func (m Map[K, V]) MarshalJSONV2(e *jsontext.Encoder, opt jsonv2.Options) error {
+	return jsonv2.MarshalEncode(e, m.ж, opt)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -812,6 +839,11 @@ func ValuePointerOf[T any](v *T) ValuePointer[T] {
 // MarshalJSON implements [json.Marshaler].
 func (p ValuePointer[T]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(p.ж)
+}
+
+// MarshalJSONV2 implements jsonv2.MarshalerV2.
+func (p ValuePointer[T]) MarshalJSONV2(e *jsontext.Encoder, opt jsonv2.Options) error {
+	return jsonv2.MarshalEncode(e, p.ж, opt)
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net/netip"
 
+	jsonexpv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
@@ -49,6 +51,10 @@ func (v PrefsView) AsStruct() *Prefs {
 }
 
 func (v PrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v PrefsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *PrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -162,6 +168,10 @@ func (v AutoUpdatePrefsView) AsStruct() *AutoUpdatePrefs {
 
 func (v AutoUpdatePrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
+func (v AutoUpdatePrefsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
+
 func (v *AutoUpdatePrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -215,6 +225,10 @@ func (v AppConnectorPrefsView) AsStruct() *AppConnectorPrefs {
 }
 
 func (v AppConnectorPrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v AppConnectorPrefsView) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error {
+	return jsonexpv2.MarshalEncode(e, v.ж, opt)
+}
 
 func (v *AppConnectorPrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
