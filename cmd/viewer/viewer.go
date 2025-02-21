@@ -42,7 +42,7 @@ func (v {{.ViewName}}{{.TypeParamNames}}) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
 // the original.
-func (v {{.ViewName}}{{.TypeParamNames}}) AsStruct() *{{.StructName}}{{.TypeParamNames}}{ 
+func (v {{.ViewName}}{{.TypeParamNames}}) AsStruct() *{{.StructName}}{{.TypeParamNames}}{
 	if v.ж == nil {
 		return nil
 	}
@@ -50,6 +50,8 @@ func (v {{.ViewName}}{{.TypeParamNames}}) AsStruct() *{{.StructName}}{{.TypePara
 }
 
 func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+{{if .JSONV2}}func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSONV2(e *jsontext.Encoder, opt jsonexpv2.Options) error { return jsonexpv2.MarshalEncode(e, v.ж, opt) }{{end}}
 
 func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
@@ -120,13 +122,17 @@ func requiresCloning(t types.Type) (shallow, deep bool, base types.Type) {
 	return p, p, t
 }
 
-func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *types.Package) {
+func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *types.Package, jsonv2 bool) {
 	t, ok := typ.Underlying().(*types.Struct)
 	if !ok || codegen.IsViewType(t) {
 		return
 	}
 	it.Import("encoding/json")
 	it.Import("errors")
+	if jsonv2 {
+		it.ImportAs("github.com/go-json-experiment/json", "jsonexpv2")
+		it.Import("github.com/go-json-experiment/json/jsontext")
+	}
 
 	args := struct {
 		StructName     string
@@ -145,9 +151,14 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 
 		// MakeViewFnName is the name of the function that accepts a value and returns a read-only view of it.
 		MakeViewFnName string
+
+		// JSONV2 enables the addition of MarshalJSONV2 methods which depend on
+		// github.com/go-json-experiment/json.
+		JSONV2 bool
 	}{
 		StructName: typ.Obj().Name(),
 		ViewName:   typ.Origin().Obj().Name() + "View",
+		JSONV2:     jsonv2,
 	}
 
 	typeParams := typ.Origin().TypeParams()
@@ -574,6 +585,7 @@ var (
 	flagTypes     = flag.String("type", "", "comma-separated list of types; required")
 	flagBuildTags = flag.String("tags", "", "compiler build tags to apply")
 	flagCloneFunc = flag.Bool("clonefunc", false, "add a top-level Clone func")
+	flagJSONV2    = flag.Bool("jsonv2", false, "add jsonv2 Marshal methods")
 
 	flagCloneOnlyTypes = flag.String("clone-only-type", "", "comma-separated list of types (a subset of --type) that should only generate a go:generate clone line and not actual views")
 
@@ -630,7 +642,7 @@ func main() {
 		if !hasClone {
 			runCloner = true
 		}
-		genView(buf, it, typ, pkg.Types)
+		genView(buf, it, typ, pkg.Types, *flagJSONV2)
 	}
 	out := pkg.Name + "_view"
 	if *flagBuildTags == "test" {

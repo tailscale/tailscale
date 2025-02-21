@@ -17,10 +17,12 @@ import (
 
 func TestViewerImports(t *testing.T) {
 	tests := []struct {
-		name        string
-		content     string
-		typeNames   []string
-		wantImports []string
+		name          string
+		content       string
+		jsonv2        bool
+		typeNames     []string
+		wantImports   []string
+		wantNoImports []string
 	}{
 		{
 			name:        "Map",
@@ -33,6 +35,20 @@ func TestViewerImports(t *testing.T) {
 			content:     `type Test struct { Slice []int }`,
 			typeNames:   []string{"Test"},
 			wantImports: []string{"tailscale.com/types/views"},
+		},
+		{
+			name:        "withJSONV2",
+			content:     `type Test struct { }`,
+			jsonv2:      true,
+			typeNames:   []string{"Test"},
+			wantImports: []string{"github.com/go-json-experiment/json"},
+		},
+		{
+			name:          "withoutJSONV2",
+			content:       `type Test struct { }`,
+			jsonv2:        false,
+			typeNames:     []string{"Test"},
+			wantNoImports: []string{"github.com/go-json-experiment/json"},
 		},
 	}
 	for _, tt := range tests {
@@ -65,12 +81,17 @@ func TestViewerImports(t *testing.T) {
 				if !ok {
 					t.Fatalf("%q is not a named type", tt.typeNames[i])
 				}
-				genView(&output, tracker, namedType, pkg)
+				genView(&output, tracker, namedType, pkg, tt.jsonv2)
 			}
 
 			for _, pkgName := range tt.wantImports {
 				if !tracker.Has(pkgName) {
 					t.Errorf("missing import %q", pkgName)
+				}
+			}
+			for _, pkgName := range tt.wantNoImports {
+				if tracker.Has(pkgName) {
+					t.Errorf("unwanted import %q", pkgName)
 				}
 			}
 		})
