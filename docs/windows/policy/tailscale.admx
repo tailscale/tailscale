@@ -156,6 +156,13 @@
         </enum>
       </elements>
     </policy>
+    <policy name="ReconnectAfter" class="Machine" displayName="$(string.ReconnectAfter)" explainText="$(string.ReconnectAfter_Help)" presentation="$(presentation.ReconnectAfter)" key="Software\Policies\Tailscale">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="SINCE_V1_82" />
+      <elements>
+        <text id="ReconnectAfterDelay" valueName="ReconnectAfter" required="true" />
+      </elements>
+    </policy>
     <policy name="ExitNodeAllowLANAccess" class="Machine" displayName="$(string.ExitNodeAllowLANAccess)" explainText="$(string.ExitNodeAllowLANAccess_Help)" key="Software\Policies\Tailscale" valueName="ExitNodeAllowLANAccess">
       <parentCategory ref="Settings_Category" />
       <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
