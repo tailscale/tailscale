@@ -32,6 +32,7 @@ import (
 )
 
 var (
+	runVMTests    = flag.Bool("run-vm-tests", false, "run tests that require a VM")
 	logTailscaled = flag.Bool("log-tailscaled", false, "log tailscaled output")
 	pcapFile      = flag.String("pcap", "", "write pcap to file")
 )
@@ -59,8 +60,25 @@ func newNatTest(tb testing.TB) *natTest {
 		base:    filepath.Join(modRoot, "gokrazy/natlabapp.qcow2"),
 	}
 
+	if !*runVMTests {
+		tb.Skip("skipping heavy test; set --run-vm-tests to run")
+	}
+
 	if _, err := os.Stat(nt.base); err != nil {
-		tb.Skipf("skipping test; base image %q not found", nt.base)
+		if !os.IsNotExist(err) {
+			tb.Fatal(err)
+		}
+		tb.Logf("building VM image...")
+		cmd := exec.Command("make", "natlab")
+		cmd.Dir = filepath.Join(modRoot, "gokrazy")
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = os.Stdout
+		if err := cmd.Run(); err != nil {
+			tb.Fatalf("Error running 'make natlab' in gokrazy directory")
+		}
+		if _, err := os.Stat(nt.base); err != nil {
+			tb.Skipf("still can't find VM image: %v", err)
+		}
 	}
 
 	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "gokrazy/natlabapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
