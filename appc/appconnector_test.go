@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,6 +87,7 @@ func TestUpdateRoutes(t *testing.T) {
 
 		routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("192.0.0.1/32")}
 		a.updateRoutes(routes)
+		a.Wait(ctx)
 
 		slices.SortFunc(rc.Routes(), prefixCompare)
 		rc.SetRoutes(slices.Compact(rc.Routes()))
@@ -105,6 +107,7 @@ func TestUpdateRoutes(t *testing.T) {
 }
 
 func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
+	ctx := context.Background()
 	for _, shouldStore := range []bool{false, true} {
 		rc := &appctest.RouteCollector{}
 		var a *AppConnector
@@ -117,6 +120,7 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 		rc.SetRoutes([]netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")})
 		routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
 		a.updateRoutes(routes)
+		a.Wait(ctx)
 
 		if !slices.EqualFunc(routes, rc.Routes(), prefixEqual) {
 			t.Fatalf("got %v, want %v", rc.Routes(), routes)
@@ -634,5 +638,59 @@ func TestMetricBucketsAreSorted(t *testing.T) {
 	}
 	if !slices.IsSorted(metricStoreRoutesNBuckets) {
 		t.Errorf("metricStoreRoutesNBuckets must be in order")
+	}
+}
+
+// TestUpdateRoutesDeadlock is a regression test for a deadlock in
+// LocalBackend<->AppConnector interaction. When using real LocalBackend as the
+// routeAdvertiser, calls to Advertise/UnadvertiseRoutes can end up calling
+// back into AppConnector via authReconfig. If everything is called
+// synchronously, this results in a deadlock on AppConnector.mu.
+func TestUpdateRoutesDeadlock(t *testing.T) {
+	ctx := context.Background()
+	rc := &appctest.RouteCollector{}
+	a := NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+
+	advertiseCalled := new(atomic.Bool)
+	unadvertiseCalled := new(atomic.Bool)
+	rc.AdvertiseCallback = func() {
+		// Call something that requires a.mu to be held.
+		a.DomainRoutes()
+		advertiseCalled.Store(true)
+	}
+	rc.UnadvertiseCallback = func() {
+		// Call something that requires a.mu to be held.
+		a.DomainRoutes()
+		unadvertiseCalled.Store(true)
+	}
+
+	a.updateDomains([]string{"example.com"})
+	a.Wait(ctx)
+
+	// Trigger rc.AdveriseRoute.
+	a.updateRoutes(
+		[]netip.Prefix{
+			netip.MustParsePrefix("127.0.0.1/32"),
+			netip.MustParsePrefix("127.0.0.2/32"),
+		},
+	)
+	a.Wait(ctx)
+	// Trigger rc.UnadveriseRoute.
+	a.updateRoutes(
+		[]netip.Prefix{
+			netip.MustParsePrefix("127.0.0.1/32"),
+		},
+	)
+	a.Wait(ctx)
+
+	if !advertiseCalled.Load() {
+		t.Error("AdvertiseRoute was not called")
+	}
+	if !unadvertiseCalled.Load() {
+		t.Error("UnadvertiseRoute was not called")
+	}
+
+	if want := []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}; !slices.Equal(slices.Compact(rc.Routes()), want) {
+		t.Fatalf("got %v, want %v", rc.Routes(), want)
 	}
 }
