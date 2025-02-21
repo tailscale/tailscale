@@ -141,15 +141,20 @@ func (sl StreamLayer) Accept() (net.Conn, error) {
 }
 
 // Start returns a pointer to a running Consensus instance.
+// Calling it with a *tsnet.Server will cause that server to join or start a consensus cluster
+// with other nodes on the tailnet tagged with the clusterTag. The *tsnet.Server will run the state
+// machine defined by the raft.FSM also provided, and keep it in sync with the other cluster members'
+// state machines using Raft.
 func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag string, cfg Config) (*Consensus, error) {
 	if clusterTag == "" {
 		return nil, errors.New("cluster tag must be provided")
 	}
-	v4, _ := ts.TailscaleIPs()
+
 	cc := commandClient{
 		port:       cfg.CommandPort,
 		httpClient: ts.HTTPClient(),
 	}
+	v4, _ := ts.TailscaleIPs()
 	self := selfRaftNode{
 		id:   v4.String(),
 		host: v4.String(),
@@ -172,22 +177,29 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 		return nil, errors.New("this node is not tagged with the cluster tag")
 	}
 
+	// after startRaft it's possible some other raft node that has us in their configuration will get
+	// in contact, so by the time we do anything else we may already be a functioning member
+	// of a consensus
 	r, err := startRaft(ts, &fsm, c.self, auth, cfg)
 	if err != nil {
 		return nil, err
 	}
 	c.raft = r
+
 	srv, err := c.serveCmdHttp(ts, auth)
 	if err != nil {
 		return nil, err
 	}
 	c.cmdHttpServer = srv
+
 	c.bootstrap(auth.allowedPeers())
+
 	srv, err = serveMonitor(&c, ts, addr(c.self.host, cfg.MonitorPort))
 	if err != nil {
 		return nil, err
 	}
 	c.monitorHttpServer = srv
+
 	return &c, nil
 }
 
@@ -215,9 +227,6 @@ func startRaft(ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, auth *authori
 		cfg.ConnTimeout,
 		nil) // TODO pass in proper logging
 
-	// after NewRaft it's possible some other raft node that has us in their configuration will get
-	// in contact, so by the time we do anything else we may already be a functioning member
-	// of a consensus
 	return raft.NewRaft(config, *fsm, logStore, stableStore, snapshots, transport)
 }
 
