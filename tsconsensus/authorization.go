@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"slices"
+	"sync"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
@@ -13,6 +14,7 @@ type authorization struct {
 	ts    *tsnet.Server
 	tag   string
 	peers *peers
+	mu    sync.Mutex
 }
 
 func (a *authorization) refresh(ctx context.Context) error {
@@ -24,19 +26,27 @@ func (a *authorization) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.peers = newPeers(tStatus)
 	return nil
 }
 
 func (a *authorization) allowsHost(addr netip.Addr) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.peers.peerExists(addr, a.tag)
 }
 
 func (a *authorization) selfAllowed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.peers.status.Self.Tags != nil && slices.Contains(a.peers.status.Self.Tags.AsSlice(), a.tag)
 }
 
 func (a *authorization) allowedPeers() []*ipnstate.PeerStatus {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.peers.allowedPeers == nil {
 		return []*ipnstate.PeerStatus{}
 	}
