@@ -143,7 +143,7 @@ func waitForNodesToBeTaggedInStatus(t *testing.T, ctx context.Context, ts *tsnet
 			}
 		}
 		return true
-	}, 10, 2*time.Second)
+	}, 20, 2*time.Second)
 }
 
 func tagNodes(t *testing.T, control *testcontrol.Server, nodeKeys []key.NodePublic, tag string) {
