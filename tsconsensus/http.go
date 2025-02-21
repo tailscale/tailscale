@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"tailscale.com/util/httpm"
 )
 
 type joinRequest struct {
@@ -35,7 +37,7 @@ func (rac *commandClient) join(host string, jr joinRequest) error {
 		return err
 	}
 	url := rac.Url(host, "/join")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rBs))
+	req, err := http.NewRequestWithContext(ctx, httpm.POST, url, bytes.NewReader(rBs))
 	if err != nil {
 		return err
 	}
@@ -58,7 +60,7 @@ func (rac *commandClient) executeCommand(host string, bs []byte) (CommandResult,
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	url := rac.Url(host, "/executeCommand")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bs))
+	req, err := http.NewRequestWithContext(ctx, httpm.POST, url, bytes.NewReader(bs))
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -105,7 +107,7 @@ func authorized(auth *authorization, fx func(http.ResponseWriter, *http.Request)
 func (c *Consensus) makeCommandMux(auth *authorization) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/join", authorized(auth, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
+		if r.Method != httpm.POST {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
 		}
@@ -132,7 +134,7 @@ func (c *Consensus) makeCommandMux(auth *authorization) *http.ServeMux {
 		}
 	}))
 	mux.HandleFunc("/executeCommand", authorized(auth, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
+		if r.Method != httpm.POST {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
 		}
