@@ -37,7 +37,6 @@ type fsm struct {
 	events []map[string]any
 	count  int
 }
-type fsmSnapshot struct{}
 
 func (f *fsm) Apply(l *raft.Log) any {
 	f.count++
@@ -57,12 +56,6 @@ func (f *fsm) Snapshot() (raft.FSMSnapshot, error) {
 func (f *fsm) Restore(rc io.ReadCloser) error {
 	return nil
 }
-
-func (f *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
-	return nil
-}
-
-func (f *fsmSnapshot) Release() {}
 
 var verboseDERP = false
 var verboseNodes = false
