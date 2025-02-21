@@ -35,6 +35,8 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 	var tickChan <-chan time.Time
 	var eventChan <-chan fsnotify.Event
 	if w, err := fsnotify.NewWatcher(); err != nil {
+		// Creating a new fsnotify watcher would fail for example if inotify was not able to create a new file descriptor.
+		// See https://github.com/tailscale/tailscale/issues/15081
 		log.Printf("serve proxy: failed to create fsnotify watcher, timer-only mode: %v", err)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
