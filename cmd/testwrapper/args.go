@@ -89,6 +89,7 @@ func newTestFlagSet() *flag.FlagSet {
 	// TODO(maisem): figure out what other flags we need to register explicitly.
 	fs.String("exec", "", "Command to run tests with")
 	fs.Bool("race", false, "build with race detector")
+	fs.Bool("json", false, "json output")
 	return fs
 }
 
@@ -112,3 +113,12 @@ var testingVerbose = func() bool {
 	}
 	return verbose
 }()
+
+func testingJson(goTestArgs []string) bool {
+	for _, arg := range goTestArgs {
+		if arg == "-json" {
+			return true
+		}
+	}
+	return false
+}

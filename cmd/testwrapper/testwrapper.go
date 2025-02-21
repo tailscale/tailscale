@@ -79,7 +79,7 @@ var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 // set to true. Package build errors will not emit a testAttempt (as no valid
 // JSON is produced) but the [os/exec.ExitError] will be returned.
 // It calls close(ch) when it's done.
-func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, testArgs []string, ch chan<- *testAttempt) error {
+func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, testArgs []string, ch chan<- *testAttempt, jsonOutput chan<- []string) error {
 	defer close(ch)
 	args := []string{"test"}
 	args = append(args, goTestArgs...)
@@ -91,7 +91,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 	args = append(args, testArgs...)
 	args = append(args, "-json")
 	if debug {
-		fmt.Println("running", strings.Join(args, " "))
+		log.Println("running", strings.Join(args, " "))
 	}
 	cmd := exec.CommandContext(ctx, "go", args...)
 	if len(pt.Tests) > 0 {
@@ -114,7 +114,23 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 
 	s := bufio.NewScanner(r)
 	resultMap := make(map[string]map[string]*testAttempt) // pkg -> test -> testAttempt
+	var jsonResults []string
 	for s.Scan() {
+		if jsonOutput != nil {
+			var goOutput map[string]interface{}
+			if err := json.Unmarshal(s.Bytes(), &goOutput); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
+					break
+				}
+				panic(err)
+			}
+			goOutput["attempt"] = attempt
+			bytes, err := json.Marshal(goOutput)
+			if err != nil {
+				panic(err)
+			}
+			jsonResults = append(jsonResults, string(bytes))
+		}
 		var goOutput goTestOutput
 		if err := json.Unmarshal(s.Bytes(), &goOutput); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
@@ -126,7 +142,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			// The build error will be printed to stderr.
 			// See: https://github.com/golang/go/issues/35169
 			if _, ok := err.(*json.SyntaxError); ok {
-				fmt.Println(s.Text())
+				log.Println(s.Text())
 				continue
 			}
 			panic(err)
@@ -188,6 +204,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			}
 		}
 	}
+	if jsonOutput != nil {
+		jsonOutput <- jsonResults
+	}
 	if err := cmd.Wait(); err != nil {
 		return err
 	}
@@ -204,8 +223,12 @@ func main() {
 		return
 	}
 	if len(packages) == 0 {
-		fmt.Println("testwrapper: no packages specified")
+		log.Fatal("testwrapper: no packages specified")
 		return
+	}
+	var jsonOutput chan []string
+	if testingJson(goTestArgs) {
+		jsonOutput = make(chan []string, 1)
 	}
 
 	ctx := context.Background()
@@ -222,7 +245,7 @@ func main() {
 	toRun := []*nextRun{firstRun}
 	printPkgOutcome := func(pkg, outcome string, attempt int, runtime time.Duration) {
 		if outcome == "skip" {
-			fmt.Printf("?\t%s [skipped/no tests] \n", pkg)
+			log.Printf("?\t%s [skipped/no tests] \n", pkg)
 			return
 		}
 		if outcome == "pass" {
@@ -232,10 +255,10 @@ func main() {
 			outcome = "FAIL"
 		}
 		if attempt > 1 {
-			fmt.Printf("%s\t%s\t%.3fs\t[attempt=%d]\n", outcome, pkg, runtime.Seconds(), attempt)
+			log.Printf("%s\t%s\t%.3fs\t[attempt=%d]\n", outcome, pkg, runtime.Seconds(), attempt)
 			return
 		}
-		fmt.Printf("%s\t%s\t%.3fs\n", outcome, pkg, runtime.Seconds())
+		log.Printf("%s\t%s\t%.3fs\n", outcome, pkg, runtime.Seconds())
 	}
 
 	// Check for -coverprofile argument and filter it out
@@ -256,7 +279,7 @@ func main() {
 
 	runningWithCoverage := combinedCoverageFilename != ""
 	if runningWithCoverage {
-		fmt.Printf("Will log coverage to %v\n", combinedCoverageFilename)
+		log.Printf("Will log coverage to %v\n", combinedCoverageFilename)
 	}
 
 	// Keep track of all test coverage files. With each retry, we'll end up
@@ -267,15 +290,15 @@ func main() {
 		thisRun, toRun = toRun[0], toRun[1:]
 
 		if thisRun.attempt > maxAttempts {
-			fmt.Println("max attempts reached")
+			log.Println("max attempts reached")
 			os.Exit(1)
 		}
 		if thisRun.attempt > 1 {
 			j, _ := json.Marshal(thisRun.tests)
-			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\nflakytest failures JSON: %s\n\n", thisRun.attempt, j)
+			log.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\nflakytest failures JSON: %s\n\n", thisRun.attempt, j)
 		}
 
-		goTestArgsWithCoverage := testArgs
+		goTestArgsWithCoverage := goTestArgs
 		if runningWithCoverage {
 			coverageFile := fmt.Sprintf("/tmp/coverage_%d.out", thisRun.attempt)
 			coverageFiles = append(coverageFiles, coverageFile)
@@ -293,9 +316,10 @@ func main() {
 		for _, pt := range thisRun.tests {
 			ch := make(chan *testAttempt)
 			runErr := make(chan error, 1)
+
 			go func() {
 				defer close(runErr)
-				runErr <- runTests(ctx, thisRun.attempt, pt, goTestArgsWithCoverage, testArgs, ch)
+				runErr <- runTests(ctx, thisRun.attempt, pt, goTestArgsWithCoverage, testArgs, ch, jsonOutput)
 			}()
 
 			var failed bool
@@ -318,7 +342,7 @@ func main() {
 					continue
 				}
 				if testingVerbose || tr.outcome == "fail" {
-					io.Copy(os.Stdout, &tr.logs)
+					io.Copy(os.Stderr, &tr.logs)
 				}
 				if tr.outcome != "fail" {
 					continue
@@ -330,7 +354,7 @@ func main() {
 				}
 			}
 			if failed {
-				fmt.Println("\n\nNot retrying flaky tests because non-flaky tests failed.")
+				log.Println("\n\nNot retrying flaky tests because non-flaky tests failed.")
 				os.Exit(1)
 			}
 
@@ -346,6 +370,10 @@ func main() {
 				log.Printf("testwrapper: %s", err)
 				os.Exit(1)
 			}
+		}
+		if jsonOutput != nil {
+			j := <-jsonOutput
+			fmt.Printf("%s\n", j)
 		}
 		if len(toRetry) == 0 {
 			continue
@@ -376,16 +404,16 @@ func main() {
 	if runningWithCoverage {
 		intermediateCoverageFilename := "/tmp/coverage.out_intermediate"
 		if err := combineCoverageFiles(intermediateCoverageFilename, coverageFiles); err != nil {
-			fmt.Printf("error combining coverage files: %v\n", err)
+			log.Printf("error combining coverage files: %v\n", err)
 			os.Exit(2)
 		}
 
 		if err := processCoverageWithCourtney(intermediateCoverageFilename, combinedCoverageFilename, testArgs); err != nil {
-			fmt.Printf("error processing coverage with courtney: %v\n", err)
+			log.Printf("error processing coverage with courtney: %v\n", err)
 			os.Exit(3)
 		}
 
-		fmt.Printf("Wrote combined coverage to %v\n", combinedCoverageFilename)
+		log.Printf("Wrote combined coverage to %v\n", combinedCoverageFilename)
 	}
 }
 
