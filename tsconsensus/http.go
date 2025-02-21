@@ -142,6 +142,10 @@ func (c *Consensus) makeCommandMux(auth *authorization) *http.ServeMux {
 			return
 		}
 		result, err := c.executeCommandLocally(cmd)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		if err := json.NewEncoder(w).Encode(result); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
