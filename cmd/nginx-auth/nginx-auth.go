@@ -57,11 +57,11 @@ func main() {
 			return
 		}
 
-		if info.Node.IsTagged() {
-			w.WriteHeader(http.StatusForbidden)
-			log.Printf("node %s is tagged", info.Node.Hostinfo.Hostname())
-			return
-		}
+		// if info.Node.IsTagged() {
+		// 	w.WriteHeader(http.StatusForbidden)
+		// 	log.Printf("node %s is tagged", info.Node.Hostinfo.Hostname())
+		// 	return
+		// }
 
 		if expectedCap := r.Header.Get("Expected-Cap"); expectedCap != "" {
 			if info.CapMap == nil {
