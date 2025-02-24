@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -39,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -335,6 +337,10 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not get local client: %v", err)
 	}
+	id, err := id(context.Background(), lc)
+	if err != nil {
+		startlog.Fatalf("error determining stable ID of the operator's Tailscale device: %v", err)
+	}
 	ingressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(ingressesFromIngressProxyGroup(mgr.GetClient(), opts.log))
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -342,7 +348,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Named("ingress-pg-reconciler").
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
-		Complete(&IngressPGReconciler{
+		Complete(&HAIngressReconciler{
 			recorder:    eventRecorder,
 			tsClient:    opts.tsClient,
 			tsnetServer: opts.tsServer,
@@ -350,6 +356,7 @@ func runReconcilers(opts reconcilerOpts) {
 			Client:      mgr.GetClient(),
 			logger:      opts.log.Named("ingress-pg-reconciler"),
 			lc:          lc,
+			operatorID:  id,
 			tsNamespace: opts.tailscaleNamespace,
 		})
 	if err != nil {
@@ -1261,4 +1268,15 @@ func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) han
 func hasProxyGroupAnnotation(obj client.Object) bool {
 	ing := obj.(*networkingv1.Ingress)
 	return ing.Annotations[AnnotationProxyGroup] != ""
+}
+
+func id(ctx context.Context, lc *local.Client) (string, error) {
+	st, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("error getting tailscale status: %w", err)
+	}
+	if st.Self == nil {
+		return "", fmt.Errorf("unexpected: device's status does not contain node's metadata")
+	}
+	return string(st.Self.ID), nil
 }
