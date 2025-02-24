@@ -130,7 +130,7 @@ func (sl StreamLayer) Accept() (net.Conn, error) {
 			return nil, err
 		}
 
-		if conn == nil || conn.RemoteAddr() == nil {
+		if conn.RemoteAddr() == nil {
 			continue
 		}
 		addr, err := addrFromServerAddress(conn.RemoteAddr().String())
