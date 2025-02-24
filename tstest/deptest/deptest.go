@@ -27,6 +27,7 @@ type DepChecker struct {
 	BadDeps  map[string]string // package => why
 	WantDeps set.Set[string]   // packages expected
 	Tags     string            // comma-separated
+	ExtraEnv []string          // extra environment for "go list" (e.g. CGO_ENABLED=1)
 }
 
 func (c DepChecker) Check(t *testing.T) {
@@ -43,6 +44,7 @@ func (c DepChecker) Check(t *testing.T) {
 	if c.GOARCH != "" {
 		extraEnv = append(extraEnv, "GOARCH="+c.GOARCH)
 	}
+	extraEnv = append(extraEnv, c.ExtraEnv...)
 	cmd.Env = append(os.Environ(), extraEnv...)
 	out, err := cmd.Output()
 	if err != nil {
