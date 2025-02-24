@@ -36,6 +36,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
@@ -223,14 +224,20 @@ func startRaft(ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, auth *authori
 		return nil, err
 	}
 
-	transport := raft.NewNetworkTransport(StreamLayer{
+	logger := hclog.New(&hclog.LoggerOptions{
+		Name:   "raft-net",
+		Output: cfg.Raft.LogOutput,
+		Level:  hclog.LevelFromString(cfg.Raft.LogLevel),
+	})
+
+	transport := raft.NewNetworkTransportWithLogger(StreamLayer{
 		s:        ts,
 		Listener: ln,
 		auth:     auth,
 	},
 		cfg.MaxConnPool,
 		cfg.ConnTimeout,
-		nil) // TODO pass in proper logging
+		logger)
 
 	return raft.NewRaft(config, *fsm, logStore, stableStore, snapshots, transport)
 }

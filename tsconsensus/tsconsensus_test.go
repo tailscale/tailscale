@@ -182,6 +182,12 @@ func tagNodes(t *testing.T, control *testcontrol.Server, nodeKeys []key.NodePubl
 	}
 }
 
+func warnLogConfig() Config {
+	c := DefaultConfig()
+	c.Raft.LogLevel = "WARN"
+	return c
+}
+
 func TestStart(t *testing.T) {
 	nettest.SkipIfNoNetwork(t)
 	control, controlURL := startControl(t)
@@ -195,7 +201,7 @@ func TestStart(t *testing.T) {
 	waitForNodesToBeTaggedInStatus(t, ctx, one, []key.NodePublic{k}, clusterTag)
 
 	sm := &fsm{}
-	r, err := Start(ctx, one, (*fsm)(sm), clusterTag, DefaultConfig())
+	r, err := Start(ctx, one, (*fsm)(sm), clusterTag, warnLogConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +309,7 @@ func TestApply(t *testing.T) {
 	defer cancel()
 	clusterTag := "tag:whatever"
 	ps, _, _ := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 2)
-	cfg := DefaultConfig()
+	cfg := warnLogConfig()
 	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
 
 	fut := ps[0].c.raft.Apply([]byte("woo"), 2*time.Second)
@@ -353,7 +359,7 @@ func TestConfig(t *testing.T) {
 	defer cancel()
 	clusterTag := "tag:whatever"
 	ps, _, _ := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
-	cfg := DefaultConfig()
+	cfg := warnLogConfig()
 	// test all is well with non default ports
 	cfg.CommandPort = 12347
 	cfg.RaftPort = 11882
@@ -389,7 +395,7 @@ func TestFollowerFailover(t *testing.T) {
 	defer cancel()
 	clusterTag := "tag:whatever"
 	ps, _, _ := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
-	cfg := DefaultConfig()
+	cfg := warnLogConfig()
 	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
 
 	smThree := ps[2].sm
@@ -431,7 +437,7 @@ func TestFollowerFailover(t *testing.T) {
 
 	// follower comes back
 	smThreeAgain := &fsm{}
-	rThreeAgain, err := Start(ctx, ps[2].ts, (*fsm)(smThreeAgain), clusterTag, DefaultConfig())
+	rThreeAgain, err := Start(ctx, ps[2].ts, (*fsm)(smThreeAgain), clusterTag, warnLogConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +457,7 @@ func TestRejoin(t *testing.T) {
 	defer cancel()
 	clusterTag := "tag:whatever"
 	ps, control, controlURL := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
-	cfg := DefaultConfig()
+	cfg := warnLogConfig()
 	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
 	for _, p := range ps {
 		defer p.c.Stop(ctx)
@@ -487,7 +493,7 @@ func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
 	defer cancel()
 	clusterTag := "tag:whatever"
 	ps, control, controlURL := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
-	cfg := DefaultConfig()
+	cfg := warnLogConfig()
 	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
 	for _, p := range ps {
 		defer p.c.Stop(ctx)
@@ -617,7 +623,7 @@ func TestOnlyTaggedPeersCanJoin(t *testing.T) {
 	defer cancel()
 	clusterTag := "tag:whatever"
 	ps, _, controlURL := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
-	cfg := DefaultConfig()
+	cfg := warnLogConfig()
 	createConsensusCluster(t, ctx, clusterTag, ps, cfg)
 	for _, p := range ps {
 		defer p.c.Stop(ctx)
