@@ -1,6 +1,28 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+/*
+Package tsconsensus implements a consensus algorithm for a group of tsnet.Servers
+
+The Raft consensus algorithm relies on you implementing a state machine that will give the same
+result to a give command as long as the same logs have been applied in the same order.
+
+tsconsensus uses the hashicorp/raft library to implement leader elections and log application.
+
+tsconsensus provides:
+  - cluster peer discovery based on tailscale tags
+  - executing a command on the leader
+  - communication between cluster peers over tailscale using tsnet
+
+Users implement a state machine that satisfies the raft.FSM interface, with the business logic they desire.
+When changes to state are needed any node may
+  - create a Command instance with serialized Args.
+  - call ExecuteCommand with the Command instance
+    this will propagate the command to the leader,
+    and then from the reader to every node via raft.
+  - the state machine then can implement raft.Apply, and dispatch commands via the Command.Name
+    returning a CommandResult with an Err or a serialized Result.
+*/
 package tsconsensus
 
 import (
@@ -18,29 +40,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
-
-/*
-Package tsconsensus implements a consensus algorithm for a group of tsnet.Servers
-
-The Raft consensus algorithm relies on you implementing a state machine that will give the same
-result to a give command as long as the same logs have been applied in the same order.
-
-tsconsensus uses the hashicorp/raft library to implement leader elections and log application.
-
-tsconsensus provides:
- * cluster peer discovery based on tailscale tags
- * executing a command on the leader
- * communication between cluster peers over tailscale using tsnet
-
-Users implement a state machine that satisfies the raft.FSM interface, with the business logic they desire.
-When changes to state are needed any node may
- * create a Command instance with serialized Args.
- * call ExecuteCommand with the Command instance
-   this will propagate the command to the leader,
-   and then from the reader to every node via raft.
- * the state machine then can implement raft.Apply, and dispatch commands via the Command.Name
-   returning a CommandResult with an Err or a serialized Result.
-*/
 
 func addr(host string, port uint16) string {
 	return fmt.Sprintf("%s:%d", host, port)
