@@ -431,7 +431,7 @@ func TestFollowerFailover(t *testing.T) {
 		t.Fatalf("Apply Raft error %v", err)
 	}
 	fxAliveMachinesHaveTheApplies := func() bool {
-		return len(ps[0].sm.events) == 4 && len(ps[1].sm.events) == 4 && len(smThree.events) == 2
+		return ps[0].sm.numEvents() == 4 && ps[1].sm.numEvents() == 4 && smThree.numEvents() == 2
 	}
 	waitFor(t, "the apply events made it into eligible state machines", fxAliveMachinesHaveTheApplies, 10, time.Second*1)
 
