@@ -442,6 +442,10 @@ type LocalBackend struct {
 	// See tailscale/corp#26146.
 	overrideAlwaysOn bool
 
+	// reconnectTimer is used to schedule a reconnect by setting [ipn.Prefs.WantRunning]
+	// to true after a delay, or nil if no reconnect is scheduled.
+	reconnectTimer tstime.TimerController
+
 	// shutdownCbs are the callbacks to be called when the backend is shutting down.
 	// Each callback is called exactly once in unspecified order and without b.mu held.
 	// Returned errors are logged but otherwise ignored and do not affect the shutdown process.
@@ -1069,6 +1073,8 @@ func (b *LocalBackend) Shutdown() {
 		b.logf("canceling captive portal context")
 		b.captiveCancel()
 	}
+
+	b.stopReconnectTimerLocked()
 
 	if b.loginFlags&controlclient.LoginEphemeral != 0 {
 		b.mu.Unlock()
@@ -4297,15 +4303,75 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 		// mode on them until the policy changes, they switch to a different profile, etc.
 		b.overrideAlwaysOn = true
 
-		// TODO(nickkhyl): check the ReconnectAfter policy here. If configured,
-		// start a timer to automatically reconnect after the specified duration.
+		if reconnectAfter, _ := syspolicy.GetDuration(syspolicy.ReconnectAfter, 0); reconnectAfter > 0 {
+			b.startReconnectTimerLocked(reconnectAfter)
+		}
 	}
 
 	return b.editPrefsLockedOnEntry(mp, unlock)
 }
 
+// startReconnectTimerLocked sets a timer to automatically set WantRunning to true
+// after the specified duration.
+func (b *LocalBackend) startReconnectTimerLocked(d time.Duration) {
+	if b.reconnectTimer != nil {
+		// Stop may return false if the timer has already fired,
+		// and the function has been called in its own goroutine,
+		// but lost the race to acquire b.mu. In this case, it'll
+		// end up as a no-op due to a reconnectTimer mismatch
+		// once it manages to acquire the lock. This is fine, and we
+		// don't need to check the return value.
+		b.reconnectTimer.Stop()
+	}
+	profileID := b.pm.CurrentProfile().ID()
+	var reconnectTimer tstime.TimerController
+	reconnectTimer = b.clock.AfterFunc(d, func() {
+		unlock := b.lockAndGetUnlock()
+		defer unlock()
+
+		if b.reconnectTimer != reconnectTimer {
+			// We're either not the most recent timer, or we lost the race when
+			// the timer was stopped. No need to reconnect.
+			return
+		}
+		b.reconnectTimer = nil
+
+		cp := b.pm.CurrentProfile()
+		if cp.ID() != profileID {
+			// The timer fired before the profile changed but we lost the race
+			// and acquired the lock shortly after.
+			// No need to reconnect.
+			return
+		}
+
+		mp := &ipn.MaskedPrefs{WantRunningSet: true, Prefs: ipn.Prefs{WantRunning: true}}
+		if _, err := b.editPrefsLockedOnEntry(mp, unlock); err != nil {
+			b.logf("failed to automatically reconnect as %q after %v: %v", cp.Name(), d, err)
+		} else {
+			b.logf("automatically reconnected as %q after %v", cp.Name(), d)
+		}
+	})
+	b.reconnectTimer = reconnectTimer
+	b.logf("reconnect for %q has been scheduled and will be performed in %v", b.pm.CurrentProfile().Name(), d)
+}
+
 func (b *LocalBackend) resetAlwaysOnOverrideLocked() {
 	b.overrideAlwaysOn = false
+	b.stopReconnectTimerLocked()
+}
+
+func (b *LocalBackend) stopReconnectTimerLocked() {
+	if b.reconnectTimer != nil {
+		// Stop may return false if the timer has already fired,
+		// and the function has been called in its own goroutine,
+		// but lost the race to acquire b.mu.
+		// In this case, it'll end up as a no-op due to a reconnectTimer
+		// mismatch (see [LocalBackend.startReconnectTimerLocked])
+		// once it manages to acquire the lock. This is fine, and we
+		// don't need to check the return value.
+		b.reconnectTimer.Stop()
+		b.reconnectTimer = nil
+	}
 }
 
 // Warning: b.mu must be held on entry, but it unlocks it on the way out.
@@ -4399,7 +4465,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// applySysPolicyToPrefsLocked returns whether it updated newp,
+	// applySysPolicy returns whether it updated newp,
 	// but everything in this function treats b.prefs as completely new
 	// anyway, so its return value can be ignored here.
 	applySysPolicy(newp, b.lastSuggestedExitNode, b.overrideAlwaysOn)
