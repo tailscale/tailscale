@@ -129,6 +129,9 @@ func (sl StreamLayer) Accept() (net.Conn, error) {
 			return nil, err
 		}
 
+		if conn == nil || conn.RemoteAddr() == nil {
+			continue
+		}
 		addr, err := addrFromServerAddress(conn.RemoteAddr().String())
 		if err != nil {
 			// TODO should we stay alive here?
