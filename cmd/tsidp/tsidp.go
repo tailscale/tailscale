@@ -498,10 +498,23 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: tagged nodes not supported", http.StatusBadRequest)
 		return
 	}
+
+	rules, err := tailcfg.UnmarshalCapJSON[capRule](ar.remoteUser.CapMap, tailcfg.PeerCapabilityTsIDP)
+	if err != nil {
+		http.Error(w, "tsidp: failed to unmarshal capability: %v", http.StatusBadRequest)
+		return
+	}
+
+	groups := make([]string, 0)
+	for _, rule := range rules {
+		groups = append(groups, rule.Groups...)
+	}
+
 	ui.Sub = ar.remoteUser.Node.User.String()
 	ui.Name = ar.remoteUser.UserProfile.DisplayName
 	ui.Email = ar.remoteUser.UserProfile.LoginName
 	ui.Picture = ar.remoteUser.UserProfile.ProfilePicURL
+	ui.Groups = groups
 
 	// TODO(maisem): not sure if this is the right thing to do
 	ui.UserName, _, _ = strings.Cut(ar.remoteUser.UserProfile.LoginName, "@")
@@ -513,11 +526,16 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 type userInfo struct {
-	Sub      string `json:"sub"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Picture  string `json:"picture"`
-	UserName string `json:"username"`
+	Sub      string   `json:"sub"`
+	Name     string   `json:"name"`
+	Email    string   `json:"email"`
+	Picture  string   `json:"picture"`
+	UserName string   `json:"username"`
+	Groups   []string `json:"groups,omitempty"`
+}
+
+type capRule struct {
+	Groups []string `json:"groups,omitempty"` // list of features peer is allowed to edit
 }
 
 func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
@@ -570,6 +588,17 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, tailcfg.PeerCapabilityTsIDP)
+	if err != nil {
+		http.Error(w, "tsidp: failed to unmarshal capability: %v", http.StatusBadRequest)
+		return
+	}
+
+	groups := make([]string, 0)
+	for _, rule := range rules {
+		groups = append(groups, rule.Groups...)
+	}
+
 	now := time.Now()
 	_, tcd, _ := strings.Cut(n.Name(), ".")
 	tsClaims := tailscaleClaims{
@@ -591,6 +620,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		UserID:    n.User(),
 		Email:     who.UserProfile.LoginName,
 		UserName:  userName,
+		Groups:    groups,
 	}
 	if ar.localRP {
 		tsClaims.Issuer = s.loopbackURL
@@ -739,6 +769,9 @@ type tailscaleClaims struct {
 	// It is a temporary (2023-11-15) hack during development.
 	// We should probably let this be configured via grants.
 	UserName string `json:"username,omitempty"`
+
+	// Groups are group memberships controlled via grants
+	Groups []string `json:"groups,omitempty"`
 }
 
 var (
@@ -747,7 +780,7 @@ var (
 		"sub", "aud", "exp", "iat", "iss", "jti", "nbf", "username", "email",
 
 		// Tailscale claims, these correspond to fields in tailscaleClaims.
-		"key", "addresses", "nid", "node", "tailnet", "tags", "user", "uid",
+		"key", "addresses", "nid", "node", "tailnet", "tags", "user", "uid", "groups",
 	})
 
 	// As defined in the OpenID spec this should be "openid".
