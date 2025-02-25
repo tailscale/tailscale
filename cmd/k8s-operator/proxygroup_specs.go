@@ -25,6 +25,12 @@ import (
 // deletionGracePeriodSeconds is set to 6 minutes to ensure that the pre-stop hook of these proxies have enough chance to terminate gracefully.
 const deletionGracePeriodSeconds int64 = 360
 
+// Add this constant at the top with other constants
+const (
+	// ... existing constants ...
+	certSecretSuffix = "-certs"
+)
+
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
 func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
@@ -178,7 +184,32 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				corev1.EnvVar{
 					Name:  "TS_SERVE_CONFIG",
 					Value: fmt.Sprintf("/etc/proxies/%s", serveConfigKey),
+				},
+				corev1.EnvVar{
+					Name:  "TS_KUBE_CERT_SECRET",
+					Value: pg.Name + certSecretSuffix,
+				},
+				corev1.EnvVar{
+					Name:  "TS_KUBE_CERT_DIR",
+					Value: "/var/run/tailscale/certs",
 				})
+
+			// Add cert secret volume
+			tmpl.Spec.Volumes = append(tmpl.Spec.Volumes, corev1.Volume{
+				Name: "certs",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: pg.Name + certSecretSuffix,
+					},
+				},
+			})
+
+			// Add cert volume mount
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+				Name:      "certs",
+				MountPath: "/var/run/tailscale/certs",
+				ReadOnly:  true,
+			})
 		}
 		return append(c.Env, envs...)
 	}()
@@ -217,7 +248,7 @@ func pgServiceAccount(pg *tsapi.ProxyGroup, namespace string) *corev1.ServiceAcc
 }
 
 func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
-	return &rbacv1.Role{
+	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
@@ -240,6 +271,9 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 							fmt.Sprintf("%s-%d", pg.Name, i),        // State.
 						)
 					}
+					if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+						secrets = append(secrets, pg.Name+certSecretSuffix) // Cert secret
+					}
 					return secrets
 				}(),
 			},
@@ -254,6 +288,7 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 			},
 		},
 	}
+	return role
 }
 
 func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
@@ -285,6 +320,18 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 				Name:            fmt.Sprintf("%s-%d", pg.Name, i),
 				Namespace:       namespace,
 				Labels:          pgSecretLabels(pg.Name, "state"),
+				OwnerReferences: pgOwnerReference(pg),
+			},
+		})
+	}
+
+	// For ingress ProxyGroups, create an additional secret for certificates
+	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+		secrets = append(secrets, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            pg.Name + certSecretSuffix,
+				Namespace:       namespace,
+				Labels:          pgSecretLabels(pg.Name, "cert"),
 				OwnerReferences: pgOwnerReference(pg),
 			},
 		})

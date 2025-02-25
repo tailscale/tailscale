@@ -250,15 +250,13 @@ type certStore interface {
 	// for now. If they're expired, it returns errCertExpired.
 	// If they don't exist, it returns ipn.ErrStateNotExist.
 	Read(domain string, now time.Time) (*TLSCertKeyPair, error)
-	// WriteCert writes the cert for domain.
-	WriteCert(domain string, cert []byte) error
-	// WriteKey writes the key for domain.
-	WriteKey(domain string, key []byte) error
 	// ACMEKey returns the value previously stored via WriteACMEKey.
 	// It is a PEM encoded ECDSA key.
 	ACMEKey() ([]byte, error)
 	// WriteACMEKey stores the provided PEM encoded ECDSA key.
 	WriteACMEKey([]byte) error
+	// WriteTLSCertAndKey writes the cert and key for domain.
+	WriteTLSCertAndKey(domain string, cert, key []byte) error
 }
 
 var errCertExpired = errors.New("cert expired")
@@ -344,6 +342,13 @@ func (f certFileStore) WriteKey(domain string, key []byte) error {
 	return atomicfile.WriteFile(keyFile(f.dir, domain), key, 0600)
 }
 
+func (f certFileStore) WriteTLSCertAndKey(domain string, cert, key []byte) error {
+	if err := f.WriteKey(domain, key); err != nil {
+		return err
+	}
+	return f.WriteCert(domain, cert)
+}
+
 // certStateStore implements certStore by storing the cert & key files in an ipn.StateStore.
 type certStateStore struct {
 	ipn.StateStore
@@ -382,6 +387,23 @@ func (s certStateStore) ACMEKey() ([]byte, error) {
 
 func (s certStateStore) WriteACMEKey(key []byte) error {
 	return ipn.WriteState(s.StateStore, ipn.StateKey(acmePEMName), key)
+}
+
+// atomicCertWriter is an interface for stores that can write cert and key atomically.
+type atomicCertWriter interface {
+	WriteTLSCertAndKey(domain string, cert, key []byte) error
+}
+
+func (s certStateStore) WriteTLSCertAndKey(domain string, cert, key []byte) error {
+	// If we're using a store that supports atomic writes, use that
+	if aw, ok := s.StateStore.(atomicCertWriter); ok {
+		return aw.WriteTLSCertAndKey(domain, cert, key)
+	}
+	// Otherwise fall back to separate writes
+	if err := s.WriteKey(domain, key); err != nil {
+		return err
+	}
+	return s.WriteCert(domain, cert)
 }
 
 // TLSCertKeyPair is a TLS public and private key, and whether they were obtained
@@ -546,9 +568,6 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 	if err := encodeECDSAKey(&privPEM, certPrivKey); err != nil {
 		return nil, err
 	}
-	if err := cs.WriteKey(domain, privPEM.Bytes()); err != nil {
-		return nil, err
-	}
 
 	csr, err := certRequest(certPrivKey, domain, nil)
 	if err != nil {
@@ -570,7 +589,7 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 			return nil, err
 		}
 	}
-	if err := cs.WriteCert(domain, certPEM.Bytes()); err != nil {
+	if err := cs.WriteTLSCertAndKey(domain, certPEM.Bytes(), privPEM.Bytes()); err != nil {
 		return nil, err
 	}
 	b.domainRenewed(domain)
