@@ -177,7 +177,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	}
 	err := auth.refresh(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("auth refresh: %w", err)
 	}
 	if !auth.selfAllowed() {
 		return nil, errors.New("this node is not tagged with the cluster tag")
