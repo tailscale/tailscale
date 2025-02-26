@@ -117,8 +117,13 @@ func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", 500)
 		return
 	}
-	j, _ := json.MarshalIndent(n.NetMap, "", "\t")
-	w.Write([]byte(j))
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "\t")
+	if err := encoder.Encode(n); err != nil {
+		log.Printf("monitor: error encoding netmap: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
 	return
 }
 
