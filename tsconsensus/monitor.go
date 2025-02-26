@@ -124,7 +124,6 @@ func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	return
 }
 
 func (m *monitor) handleDial(w http.ResponseWriter, r *http.Request) {
@@ -152,5 +151,4 @@ func (m *monitor) handleDial(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 	w.Write([]byte("ok\n"))
-	return
 }
