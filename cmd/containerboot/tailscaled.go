@@ -173,11 +173,15 @@ func tailscaleSet(ctx context.Context, cfg *settings) error {
 func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Client, errCh chan<- error) {
 	var (
 		tickChan          <-chan time.Time
+		eventChan         <-chan fsnotify.Event
+		errChan           <-chan error
 		tailscaledCfgDir  = filepath.Dir(path)
 		prevTailscaledCfg []byte
 	)
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
+		// Creating a new fsnotify watcher would fail for example if inotify was not able to create a new file descriptor.
+		// See https://github.com/tailscale/tailscale/issues/15081
 		log.Printf("tailscaled config watch: failed to create fsnotify watcher, timer-only mode: %v", err)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
@@ -188,6 +192,8 @@ func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Cl
 			errCh <- fmt.Errorf("failed to add fsnotify watch: %w", err)
 			return
 		}
+		eventChan = w.Events
+		errChan = w.Errors
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -205,11 +211,11 @@ func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Cl
 		select {
 		case <-ctx.Done():
 			return
-		case err := <-w.Errors:
+		case err := <-errChan:
 			errCh <- fmt.Errorf("watcher error: %w", err)
 			return
 		case <-tickChan:
-		case event := <-w.Events:
+		case event := <-eventChan:
 			if event.Name != toWatch {
 				continue
 			}
