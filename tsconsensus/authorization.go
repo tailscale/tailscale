@@ -5,10 +5,12 @@ package tsconsensus
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"slices"
 	"sync"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
@@ -28,6 +30,9 @@ func (a *authorization) refresh(ctx context.Context) error {
 	tStatus, err := lc.Status(ctx)
 	if err != nil {
 		return err
+	}
+	if tStatus.BackendState != ipn.Running.String() {
+		return errors.New("ts Server is not running")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
