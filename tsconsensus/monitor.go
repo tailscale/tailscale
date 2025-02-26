@@ -149,6 +149,6 @@ func (m *monitor) handleDial(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", 500)
 		return
 	}
-	defer c.Close()
+	c.Close()
 	w.Write([]byte("ok\n"))
 }
