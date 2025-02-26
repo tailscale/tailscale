@@ -6709,37 +6709,47 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 }
 
 func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.TaildropTargetStatus {
-	if b.netMap == nil || b.state != ipn.Running {
+	if b.state != ipn.Running {
+		b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetIpnStateNotRunning (b.netMap=%v, b.state=%v)",
+			p.StableID(), b.netMap, b.state)
 		return ipnstate.TaildropTargetIpnStateNotRunning
 	}
 	if b.netMap == nil {
+		b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetNoNetmapAvailable", p.StableID())
 		return ipnstate.TaildropTargetNoNetmapAvailable
 	}
 	if !b.capFileSharing {
+		b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetMissingCap (capFileSharing=false)", p.StableID())
 		return ipnstate.TaildropTargetMissingCap
 	}
 
 	if !p.Online().Get() {
+		b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetOffline", p.StableID())
 		return ipnstate.TaildropTargetOffline
 	}
 
 	if !p.Valid() {
+		b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetNoPeerInfo (!Valid())", p.StableID())
 		return ipnstate.TaildropTargetNoPeerInfo
 	}
 	if b.netMap.User() != p.User() {
 		// Different user must have the explicit file sharing target capability
 		if p.Addresses().Len() == 0 ||
 			!b.peerHasCapLocked(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+			b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetOwnedByOtherUser", p.StableID())
 			return ipnstate.TaildropTargetOwnedByOtherUser
 		}
 	}
 
 	if p.Hostinfo().OS() == "tvOS" {
+		b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetUnsupportedOS (tvOS)", p.StableID())
 		return ipnstate.TaildropTargetUnsupportedOS
 	}
 	if peerAPIBase(b.netMap, p) == "" {
+		b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetNoPeerAPI (peerAPIBase returned empty)", p.StableID())
 		return ipnstate.TaildropTargetNoPeerAPI
 	}
+	b.logf("Taildrop: taildropTargetStatus for peer %v => TaildropTargetAvailable", p.StableID())
 	return ipnstate.TaildropTargetAvailable
 }
 

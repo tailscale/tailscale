@@ -307,6 +307,8 @@ peerLoop:
 	// We found a peer. Decide whether we can send files to it:
 	isOffline = !foundPeer.Online
 
+	log.Printf("Taildrop: getTargetStableID peer=%v, TaildropTarget=%v, isOffline=%v", foundPeer.ID, foundPeer.TaildropTarget, isOffline)
+
 	switch foundPeer.TaildropTarget {
 	case ipnstate.TaildropTargetAvailable:
 		return foundPeer.ID, isOffline, nil
