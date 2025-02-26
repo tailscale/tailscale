@@ -151,7 +151,7 @@ func (sl StreamLayer) Accept() (net.Conn, error) {
 // with other nodes on the tailnet tagged with the clusterTag. The *tsnet.Server will run the state
 // machine defined by the raft.FSM also provided, and keep it in sync with the other cluster members'
 // state machines using Raft.
-func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag string, cfg Config) (*Consensus, error) {
+func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag string, cfg Config, serveDebugMonitor bool) (*Consensus, error) {
 	if clusterTag == "" {
 		return nil, errors.New("cluster tag must be provided")
 	}
@@ -200,11 +200,13 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 
 	c.bootstrap(auth.allowedPeers())
 
-	srv, err = serveMonitor(&c, ts, addr(c.self.host, cfg.MonitorPort))
-	if err != nil {
-		return nil, err
+	if serveDebugMonitor {
+		srv, err = serveMonitor(&c, ts, addr(c.self.host, cfg.MonitorPort))
+		if err != nil {
+			return nil, err
+		}
+		c.monitorHttpServer = srv
 	}
-	c.monitorHttpServer = srv
 
 	return &c, nil
 }
@@ -328,9 +330,11 @@ func (c *Consensus) Stop(ctx context.Context) error {
 	if err != nil {
 		log.Printf("Stop: Error in command HTTP Shutdown: %v", err)
 	}
-	err = c.monitorHttpServer.Shutdown(ctx)
-	if err != nil {
-		log.Printf("Stop: Error in monitor HTTP Shutdown: %v", err)
+	if c.monitorHttpServer != nil {
+		err = c.monitorHttpServer.Shutdown(ctx)
+		if err != nil {
+			log.Printf("Stop: Error in monitor HTTP Shutdown: %v", err)
+		}
 	}
 	return nil
 }
