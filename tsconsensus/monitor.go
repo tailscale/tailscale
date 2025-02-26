@@ -16,6 +16,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
+	"tailscale.com/util/dnsname"
 )
 
 type status struct {
@@ -80,7 +81,8 @@ func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 	lines := []string{}
 	for _, p := range s.Status.Peer {
 		if p.Online {
-			lines = append(lines, fmt.Sprintf("%s\t\t%d\t%d\t%t", strings.Split(p.DNSName, ".")[0], p.RxBytes, p.TxBytes, p.Active))
+			name := dnsname.FirstLabel(p.DNSName)
+			lines = append(lines, fmt.Sprintf("%s\t\t%d\t%d\t%t", name, p.RxBytes, p.TxBytes, p.Active))
 		}
 	}
 	slices.Sort(lines)
