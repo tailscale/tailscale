@@ -78,7 +78,7 @@ func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 	s, err := m.getStatus(r.Context())
 	if err != nil {
 		log.Printf("monitor: error getStatus: %v", err)
-		http.Error(w, "", 500)
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	lines := []string{}
@@ -100,13 +100,13 @@ func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
 	lc, err := m.ts.LocalClient()
 	if err != nil {
 		log.Printf("monitor: error LocalClient: %v", err)
-		http.Error(w, "", 500)
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	watcher, err := lc.WatchIPNBus(r.Context(), mask)
 	if err != nil {
 		log.Printf("monitor: error WatchIPNBus: %v", err)
-		http.Error(w, "", 500)
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	defer watcher.Close()
@@ -114,7 +114,7 @@ func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
 	n, err := watcher.Next()
 	if err != nil {
 		log.Printf("monitor: error watcher.Next: %v", err)
-		http.Error(w, "", 500)
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	encoder := json.NewEncoder(w)
@@ -134,19 +134,19 @@ func (m *monitor) handleDial(w http.ResponseWriter, r *http.Request) {
 	bs, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("monitor: error reading body: %v", err)
-		http.Error(w, "", 500)
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	err = json.Unmarshal(bs, &dialParams)
 	if err != nil {
 		log.Printf("monitor: error unmarshalling json: %v", err)
-		http.Error(w, "", 500)
+		http.Error(w, "", http.StatusBadRequest)
 		return
 	}
 	c, err := m.ts.Dial(r.Context(), "tcp", dialParams.Addr)
 	if err != nil {
 		log.Printf("monitor: error dialing: %v", err)
-		http.Error(w, "", 500)
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	c.Close()
