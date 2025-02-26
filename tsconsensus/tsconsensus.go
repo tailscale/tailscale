@@ -40,6 +40,7 @@ import (
 	"github.com/hashicorp/raft"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
+	"tailscale.com/types/views"
 )
 
 func addr(host string, port uint16) string {
@@ -268,9 +269,9 @@ type Consensus struct {
 //   - We want to handle machines joining after start anyway.
 //   - Not all tagged nodes tailscale believes are active are necessarily actually responsive right now,
 //     so let each node opt in when able.
-func (c *Consensus) bootstrap(targets []*ipnstate.PeerStatus) error {
-	log.Printf("Trying to find cluster: num targets to try: %d", len(targets))
-	for _, p := range targets {
+func (c *Consensus) bootstrap(targets views.Slice[*ipnstate.PeerStatus]) error {
+	log.Printf("Trying to find cluster: num targets to try: %d", targets.Len())
+	for _, p := range targets.All() {
 		if !p.Online {
 			log.Printf("Trying to find cluster: tailscale reports not online: %s", p.TailscaleIPs[0])
 		} else {

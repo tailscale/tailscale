@@ -13,6 +13,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
+	"tailscale.com/types/views"
 	"tailscale.com/util/set"
 )
 
@@ -84,16 +85,13 @@ func (a *authorization) selfAllowed() bool {
 	return a.peers.status.Self.Tags != nil && slices.Contains(a.peers.status.Self.Tags.AsSlice(), a.tag)
 }
 
-func (a *authorization) allowedPeers() []*ipnstate.PeerStatus {
+func (a *authorization) allowedPeers() views.Slice[*ipnstate.PeerStatus] {
 	if a.peers == nil {
-		return nil
+		return views.SliceOf([]*ipnstate.PeerStatus{})
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.peers.allowedPeers == nil {
-		return []*ipnstate.PeerStatus{}
-	}
-	return a.peers.allowedPeers
+	return views.SliceOf(a.peers.allowedPeers)
 }
 
 type peers struct {

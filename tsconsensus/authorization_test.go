@@ -93,7 +93,7 @@ func TestAuthUnrefreshed(t *testing.T) {
 		t.Fatalf("never refreshed authorization, allowsHost: expected false, got true")
 	}
 	gotAllowedPeers := a.allowedPeers()
-	if gotAllowedPeers != nil {
+	if gotAllowedPeers.Len() != 0 {
 		t.Fatalf("never refreshed authorization, allowedPeers: expected [], got %v", gotAllowedPeers)
 	}
 	if a.selfAllowed() != false {
@@ -144,8 +144,8 @@ func TestAuthAllowedPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps := a.allowedPeers()
-	if len(ps) != 2 {
-		t.Fatalf("expected: 2, got: %d", len(ps))
+	if ps.Len() != 2 {
+		t.Fatalf("expected: 2, got: %d", ps.Len())
 	}
 }
 
