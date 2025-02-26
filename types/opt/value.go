@@ -6,9 +6,6 @@ package opt
 import (
 	"fmt"
 	"reflect"
-
-	jsonv2 "github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // Value is an optional value to be JSON-encoded.
@@ -98,33 +95,4 @@ func (o Value[T]) Equal(v Value[T]) bool {
 		return ov == any(v.value)
 	}
 	return false
-}
-
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (o Value[T]) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
-	if !o.set {
-		return enc.WriteToken(jsontext.Null)
-	}
-	return jsonv2.MarshalEncode(enc, &o.value, opts)
-}
-
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (o *Value[T]) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
-	if dec.PeekKind() == 'n' {
-		*o = Value[T]{}
-		_, err := dec.ReadToken() // read null
-		return err
-	}
-	o.set = true
-	return jsonv2.UnmarshalDecode(dec, &o.value, opts)
-}
-
-// MarshalJSON implements [json.Marshaler].
-func (o Value[T]) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(o) // uses MarshalJSONV2
-}
-
-// UnmarshalJSON implements [json.Unmarshaler].
-func (o *Value[T]) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, o) // uses UnmarshalJSONV2
 }
