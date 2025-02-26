@@ -16,10 +16,11 @@ import (
 )
 
 type authorization struct {
-	ts    *tsnet.Server
-	tag   string
-	peers *peers
+	ts  *tsnet.Server
+	tag string
+
 	mu    sync.Mutex
+	peers *peers // protected by mu
 }
 
 func (a *authorization) refresh(ctx context.Context) error {
