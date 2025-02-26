@@ -13,47 +13,81 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
+	"tailscale.com/util/set"
 )
 
+type statusGetter interface {
+	getStatus(context.Context) (*ipnstate.Status, error)
+}
+
+type tailscaleStatusGetter struct {
+	ts *tsnet.Server
+}
+
+func (sg tailscaleStatusGetter) getStatus(ctx context.Context) (*ipnstate.Status, error) {
+	lc, err := sg.ts.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+	return lc.Status(ctx)
+}
+
 type authorization struct {
-	ts  *tsnet.Server
+	sg  statusGetter
 	tag string
 
 	mu    sync.Mutex
 	peers *peers // protected by mu
 }
 
+func newAuthorization(ts *tsnet.Server, tag string) *authorization {
+	return &authorization{
+		sg: tailscaleStatusGetter{
+			ts: ts,
+		},
+		tag: tag,
+	}
+}
+
 func (a *authorization) refresh(ctx context.Context) error {
-	lc, err := a.ts.LocalClient()
+	tStatus, err := a.sg.getStatus(ctx)
 	if err != nil {
 		return err
 	}
-	tStatus, err := lc.Status(ctx)
-	if err != nil {
-		return err
+	if tStatus == nil {
+		return errors.New("no status")
 	}
 	if tStatus.BackendState != ipn.Running.String() {
 		return errors.New("ts Server is not running")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.peers = newPeers(tStatus)
+	a.peers = newPeers(tStatus, a.tag)
 	return nil
 }
 
 func (a *authorization) allowsHost(addr netip.Addr) bool {
+	if a.peers == nil {
+		return false
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.peers.peerExists(addr, a.tag)
 }
 
 func (a *authorization) selfAllowed() bool {
+	if a.peers == nil {
+		return false
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.peers.status.Self.Tags != nil && slices.Contains(a.peers.status.Self.Tags.AsSlice(), a.tag)
 }
 
 func (a *authorization) allowedPeers() []*ipnstate.PeerStatus {
+	if a.peers == nil {
+		return nil
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.peers.allowedPeers == nil {
@@ -63,35 +97,27 @@ func (a *authorization) allowedPeers() []*ipnstate.PeerStatus {
 }
 
 type peers struct {
-	status                *ipnstate.Status
-	peerByIPAddressAndTag map[netip.Addr]map[string]*ipnstate.PeerStatus
-	allowedPeers          []*ipnstate.PeerStatus
+	status             *ipnstate.Status
+	allowedRemoteAddrs set.Set[netip.Addr]
+	allowedPeers       []*ipnstate.PeerStatus
 }
 
 func (ps *peers) peerExists(a netip.Addr, tag string) bool {
-	byTag, ok := ps.peerByIPAddressAndTag[a]
-	if !ok {
-		return false
-	}
-	_, ok = byTag[tag]
-	return ok
+	return ps.allowedRemoteAddrs.Contains(a)
 }
 
-func newPeers(status *ipnstate.Status) *peers {
+func newPeers(status *ipnstate.Status, tag string) *peers {
 	ps := &peers{
-		peerByIPAddressAndTag: map[netip.Addr]map[string]*ipnstate.PeerStatus{},
-		status:                status,
+		status:             status,
+		allowedRemoteAddrs: set.Set[netip.Addr]{},
 	}
 	for _, p := range status.Peer {
-		for _, addr := range p.TailscaleIPs {
-			if ps.peerByIPAddressAndTag[addr] == nil {
-				ps.peerByIPAddressAndTag[addr] = map[string]*ipnstate.PeerStatus{}
-			}
-			if p.Tags != nil {
-				for _, tag := range p.Tags.AsSlice() {
-					ps.peerByIPAddressAndTag[addr][tag] = p
-					ps.allowedPeers = append(ps.allowedPeers, p)
-				}
+		if p.Tags != nil && p.Tags.ContainsFunc(func(s string) bool {
+			return s == tag
+		}) {
+			ps.allowedPeers = append(ps.allowedPeers, p)
+			for _, addr := range p.TailscaleIPs {
+				ps.allowedRemoteAddrs.Add(addr)
 			}
 		}
 	}

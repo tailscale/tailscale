@@ -171,10 +171,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 		config:        cfg,
 	}
 
-	auth := &authorization{
-		tag: clusterTag,
-		ts:  ts,
-	}
+	auth := newAuthorization(ts, clusterTag)
 	err := auth.refresh(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("auth refresh: %w", err)

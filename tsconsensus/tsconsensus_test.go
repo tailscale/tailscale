@@ -594,10 +594,7 @@ func TestOnlyTaggedPeersCanBeDialed(t *testing.T) {
 
 	// make a StreamLayer for ps[0]
 	ts := ps[0].ts
-	auth := &authorization{
-		tag: clusterTag,
-		ts:  ts,
-	}
+	auth := newAuthorization(ts, clusterTag)
 
 	port := 19841
 	lns := make([]net.Listener, 3)
