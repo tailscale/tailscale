@@ -25,7 +25,7 @@ type commandClient struct {
 	httpClient *http.Client
 }
 
-func (rac *commandClient) Url(host string, path string) string {
+func (rac *commandClient) url(host string, path string) string {
 	return fmt.Sprintf("http://%s:%d%s", host, rac.port, path)
 }
 
@@ -36,7 +36,7 @@ func (rac *commandClient) join(host string, jr joinRequest) error {
 	if err != nil {
 		return err
 	}
-	url := rac.Url(host, "/join")
+	url := rac.url(host, "/join")
 	req, err := http.NewRequestWithContext(ctx, httpm.POST, url, bytes.NewReader(rBs))
 	if err != nil {
 		return err
@@ -59,7 +59,7 @@ func (rac *commandClient) join(host string, jr joinRequest) error {
 func (rac *commandClient) executeCommand(host string, bs []byte) (CommandResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	url := rac.Url(host, "/executeCommand")
+	url := rac.url(host, "/executeCommand")
 	req, err := http.NewRequestWithContext(ctx, httpm.POST, url, bytes.NewReader(bs))
 	if err != nil {
 		return CommandResult{}, err
