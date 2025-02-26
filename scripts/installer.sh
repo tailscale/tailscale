@@ -7,6 +7,14 @@
 
 set -eu
 
+# Ensure that this script runs with the default umask for Linux. In practice,
+# this means that files created by this script (such as keyring files) will be
+# created with 644 permissions. This ensures that keyrings and other files
+# created by this script are readable by installers on systems where the
+# umask is set to a more restrictive value.
+# See https://github.com/tailscale/tailscale/issues/15133
+umask 022
+
 # All the code is wrapped in a main function that gets called at the
 # bottom of the file, so that a truncated partial download doesn't end
 # up executing half a script.
