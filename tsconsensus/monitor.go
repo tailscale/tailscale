@@ -63,11 +63,13 @@ func serveMonitor(c *Consensus, ts *tsnet.Server, listenAddr string) (*http.Serv
 func (m *monitor) handleFullStatus(w http.ResponseWriter, r *http.Request) {
 	s, err := m.getStatus(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("monitor: error getStatus: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	if err := json.NewEncoder(w).Encode(s); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("monitor: error encoding full status: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 }
@@ -75,7 +77,8 @@ func (m *monitor) handleFullStatus(w http.ResponseWriter, r *http.Request) {
 func (m *monitor) handleSummaryStatus(w http.ResponseWriter, r *http.Request) {
 	s, err := m.getStatus(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("monitor: error getStatus: %v", err)
+		http.Error(w, "", 500)
 		return
 	}
 	lines := []string{}
@@ -96,19 +99,22 @@ func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
 	mask |= ipn.NotifyNoPrivateKeys
 	lc, err := m.ts.LocalClient()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("monitor: error LocalClient: %v", err)
+		http.Error(w, "", 500)
 		return
 	}
 	watcher, err := lc.WatchIPNBus(r.Context(), mask)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("monitor: error WatchIPNBus: %v", err)
+		http.Error(w, "", 500)
 		return
 	}
 	defer watcher.Close()
 
 	n, err := watcher.Next()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("monitor: error watcher.Next: %v", err)
+		http.Error(w, "", 500)
 		return
 	}
 	j, _ := json.MarshalIndent(n.NetMap, "", "\t")
@@ -123,17 +129,20 @@ func (m *monitor) handleDial(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	bs, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("monitor: error reading body: %v", err)
+		http.Error(w, "", 500)
 		return
 	}
 	err = json.Unmarshal(bs, &dialParams)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("monitor: error unmarshalling json: %v", err)
+		http.Error(w, "", 500)
 		return
 	}
 	c, err := m.ts.Dial(r.Context(), "tcp", dialParams.Addr)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		log.Printf("monitor: error dialing: %v", err)
+		http.Error(w, "", 500)
 		return
 	}
 	defer c.Close()
