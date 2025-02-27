@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -118,11 +119,16 @@ func (c *Consensus) makeCommandMux() *http.ServeMux {
 			return
 		}
 		defer r.Body.Close()
-		decoder := json.NewDecoder(r.Body)
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024))
 		var jr joinRequest
 		err := decoder.Decode(&jr)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_, err = decoder.Token()
+		if !errors.Is(err, io.EOF) {
+			http.Error(w, "Request body must only contain a single JSON object", http.StatusBadRequest)
 			return
 		}
 		if jr.RemoteHost == "" {
@@ -135,7 +141,8 @@ func (c *Consensus) makeCommandMux() *http.ServeMux {
 		}
 		err = c.handleJoin(jr)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("join handler error: %v", err)
+			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
 	})
