@@ -158,6 +158,11 @@ func (p *preference[T]) SetReadOnly(readonly bool) {
 	p.s.Metadata.ReadOnly = readonly
 }
 
+var (
+	_ jsonv2.MarshalerTo     = (*preference[struct{}])(nil)
+	_ jsonv2.UnmarshalerFrom = (*preference[struct{}])(nil)
+)
+
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (p preference[T]) MarshalJSONTo(out *jsontext.Encoder) error {
 	return jsonv2.MarshalEncode(out, &p.s)

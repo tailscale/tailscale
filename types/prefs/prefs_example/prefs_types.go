@@ -128,6 +128,11 @@ type AppConnectorPrefs struct {
 	Advertise prefs.Item[bool] `json:",omitzero"`
 }
 
+var (
+	_ jsonv2.MarshalerTo     = (*Prefs)(nil)
+	_ jsonv2.UnmarshalerFrom = (*Prefs)(nil)
+)
+
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 // It is implemented as a performance improvement and to enable omission of
 // unconfigured preferences from the JSON output. See the [Prefs] doc for details.

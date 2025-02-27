@@ -54,6 +54,11 @@ func (s Summary) String() string {
 	return s.data.Scope.String()
 }
 
+var (
+	_ jsonv2.MarshalerTo     = (*Summary)(nil)
+	_ jsonv2.UnmarshalerFrom = (*Summary)(nil)
+)
+
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (s Summary) MarshalJSONTo(out *jsontext.Encoder) error {
 	return jsonv2.MarshalEncode(out, &s.data)

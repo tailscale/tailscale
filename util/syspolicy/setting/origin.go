@@ -50,6 +50,11 @@ func (s Origin) String() string {
 	return s.Scope().String()
 }
 
+var (
+	_ jsonv2.MarshalerTo     = (*Origin)(nil)
+	_ jsonv2.UnmarshalerFrom = (*Origin)(nil)
+)
+
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (s Origin) MarshalJSONTo(out *jsontext.Encoder) error {
 	return jsonv2.MarshalEncode(out, &s.data)

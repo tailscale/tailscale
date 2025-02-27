@@ -147,6 +147,11 @@ type snapshotJSON struct {
 	Settings map[Key]RawItem `json:",omitempty"`
 }
 
+var (
+	_ jsonv2.MarshalerTo     = (*Snapshot)(nil)
+	_ jsonv2.UnmarshalerFrom = (*Snapshot)(nil)
+)
+
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (s *Snapshot) MarshalJSONTo(out *jsontext.Encoder) error {
 	data := &snapshotJSON{}
