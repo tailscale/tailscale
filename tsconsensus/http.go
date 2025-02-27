@@ -91,7 +91,7 @@ type authedHandler struct {
 }
 
 func (h authedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	err := h.auth.refresh(r.Context())
+	err := h.auth.Refresh(r.Context())
 	if err != nil {
 		log.Printf("error authedHandler ServeHTTP refresh auth: %v", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -103,7 +103,7 @@ func (h authedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	allowed := h.auth.allowsHost(a)
+	allowed := h.auth.AllowsHost(a)
 	if !allowed {
 		http.Error(w, "peer not allowed", http.StatusForbidden)
 		return

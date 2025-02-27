@@ -96,7 +96,7 @@ type StreamLayer struct {
 func (sl StreamLayer) Dial(address raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	err := sl.auth.refresh(ctx)
+	err := sl.auth.Refresh(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (sl StreamLayer) Dial(address raft.ServerAddress, timeout time.Duration) (n
 		return nil, err
 	}
 
-	if !sl.auth.allowsHost(addr) {
+	if !sl.auth.AllowsHost(addr) {
 		return nil, errors.New("peer is not allowed")
 	}
 	return sl.s.Dial(ctx, "tcp", string(address))
@@ -122,12 +122,12 @@ func (sl StreamLayer) connAuthorized(conn net.Conn) (bool, error) {
 		return false, nil
 	}
 	ctx := context.Background() // TODO
-	err = sl.auth.refresh(ctx)
+	err = sl.auth.Refresh(ctx)
 	if err != nil {
 		// might be authorized, we couldn't tell
 		return false, err
 	}
-	return sl.auth.allowsHost(addr), nil
+	return sl.auth.AllowsHost(addr), nil
 }
 
 func (sl StreamLayer) Accept() (net.Conn, error) {
@@ -175,11 +175,11 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	}
 
 	auth := newAuthorization(ts, clusterTag)
-	err := auth.refresh(ctx)
+	err := auth.Refresh(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("auth refresh: %w", err)
 	}
-	if !auth.selfAllowed() {
+	if !auth.SelfAllowed() {
 		return nil, errors.New("this node is not tagged with the cluster tag")
 	}
 
@@ -198,7 +198,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	}
 	c.cmdHttpServer = srv
 
-	c.bootstrap(auth.allowedPeers())
+	c.bootstrap(auth.AllowedPeers())
 
 	if serveDebugMonitor {
 		srv, err = serveMonitor(&c, ts, netip.AddrPortFrom(c.self.hostAddr, cfg.MonitorPort).String())

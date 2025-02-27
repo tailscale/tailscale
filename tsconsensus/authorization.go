@@ -70,7 +70,7 @@ func newAuthorization(ts *tsnet.Server, tag string) *authorization {
 	}
 }
 
-func (a *authorization) refresh(ctx context.Context) error {
+func (a *authorization) Refresh(ctx context.Context) error {
 	tStatus, err := a.sg.getStatus(ctx)
 	if err != nil {
 		return err
@@ -87,7 +87,7 @@ func (a *authorization) refresh(ctx context.Context) error {
 	return nil
 }
 
-func (a *authorization) allowsHost(addr netip.Addr) bool {
+func (a *authorization) AllowsHost(addr netip.Addr) bool {
 	if a.peers == nil {
 		return false
 	}
@@ -96,7 +96,7 @@ func (a *authorization) allowsHost(addr netip.Addr) bool {
 	return a.peers.peerExists(addr, a.tag)
 }
 
-func (a *authorization) selfAllowed() bool {
+func (a *authorization) SelfAllowed() bool {
 	if a.peers == nil {
 		return false
 	}
@@ -105,7 +105,7 @@ func (a *authorization) selfAllowed() bool {
 	return a.peers.status.Self.Tags != nil && slices.Contains(a.peers.status.Self.Tags.AsSlice(), a.tag)
 }
 
-func (a *authorization) allowedPeers() views.Slice[*ipnstate.PeerStatus] {
+func (a *authorization) AllowedPeers() views.Slice[*ipnstate.PeerStatus] {
 	if a.peers == nil {
 		return views.SliceOf([]*ipnstate.PeerStatus{})
 	}

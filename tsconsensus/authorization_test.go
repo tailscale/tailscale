@@ -65,7 +65,7 @@ func TestAuthRefreshErrorsNotRunning(t *testing.T) {
 	ctx := context.Background()
 
 	a := authForStatus(nil)
-	err := a.refresh(ctx)
+	err := a.Refresh(ctx)
 	if err == nil {
 		t.Fatalf("expected err to be non-nil")
 	}
@@ -77,7 +77,7 @@ func TestAuthRefreshErrorsNotRunning(t *testing.T) {
 	a = authForStatus(&ipnstate.Status{
 		BackendState: "NeedsMachineAuth",
 	})
-	err = a.refresh(ctx)
+	err = a.Refresh(ctx)
 	if err == nil {
 		t.Fatalf("expected err to be non-nil")
 	}
@@ -89,14 +89,14 @@ func TestAuthRefreshErrorsNotRunning(t *testing.T) {
 
 func TestAuthUnrefreshed(t *testing.T) {
 	a := authForStatus(nil)
-	if a.allowsHost(netip.MustParseAddr("100.0.0.1")) {
+	if a.AllowsHost(netip.MustParseAddr("100.0.0.1")) {
 		t.Fatalf("never refreshed authorization, allowsHost: expected false, got true")
 	}
-	gotAllowedPeers := a.allowedPeers()
+	gotAllowedPeers := a.AllowedPeers()
 	if gotAllowedPeers.Len() != 0 {
 		t.Fatalf("never refreshed authorization, allowedPeers: expected [], got %v", gotAllowedPeers)
 	}
-	if a.selfAllowed() != false {
+	if a.SelfAllowed() != false {
 		t.Fatalf("never refreshed authorization, selfAllowed: expected false got true")
 	}
 }
@@ -116,14 +116,14 @@ func TestAuthAllowsHost(t *testing.T) {
 		true,
 	}
 	a := authForTags(nil, peerTags)
-	err := a.refresh(ctx)
+	err := a.Refresh(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for i, tags := range peerTags {
 		for _, addr := range addrsForIndex(i) {
-			got := a.allowsHost(addr)
+			got := a.AllowsHost(addr)
 			if got != expected[i] {
 				t.Fatalf("allowed %v, expected: %t, got %t", tags, expected[i], got)
 			}
@@ -139,11 +139,11 @@ func TestAuthAllowedPeers(t *testing.T) {
 		[]string{"woo", testTag},
 		[]string{testTag},
 	})
-	err := a.refresh(ctx)
+	err := a.Refresh(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ps := a.allowedPeers()
+	ps := a.AllowedPeers()
 	if ps.Len() != 2 {
 		t.Fatalf("expected: 2, got: %d", ps.Len())
 	}
@@ -153,21 +153,21 @@ func TestAuthSelfAllowed(t *testing.T) {
 	ctx := context.Background()
 
 	a := authForTags([]string{"woo"}, nil)
-	err := a.refresh(ctx)
+	err := a.Refresh(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := a.selfAllowed()
+	got := a.SelfAllowed()
 	if got {
 		t.Fatalf("expected: false, got: %t", got)
 	}
 
 	a = authForTags([]string{"woo", testTag}, nil)
-	err = a.refresh(ctx)
+	err = a.Refresh(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got = a.selfAllowed()
+	got = a.SelfAllowed()
 	if !got {
 		t.Fatalf("expected: true, got: %t", got)
 	}
