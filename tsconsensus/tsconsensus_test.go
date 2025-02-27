@@ -399,7 +399,7 @@ func TestConfig(t *testing.T) {
 	}
 	assertCommandsWorkOnAnyNode(t, ps)
 
-	url := fmt.Sprintf("http://%s:%d/", ps[0].c.self.host, mp)
+	url := fmt.Sprintf("http://%s:%d/", ps[0].c.self.hostAddr.String(), mp)
 	httpClientOnTailnet := ps[1].ts.HTTPClient()
 	rsp, err := httpClientOnTailnet.Get(url)
 	if err != nil {
@@ -500,7 +500,7 @@ func TestRejoin(t *testing.T) {
 
 	// 1st node gets a redundant second join request from the second node
 	ps[0].c.handleJoin(joinRequest{
-		RemoteHost: ps[1].c.self.host,
+		RemoteHost: ps[1].c.self.hostAddr.String(),
 		RemoteID:   ps[1].c.self.id,
 	})
 
@@ -664,7 +664,7 @@ func TestOnlyTaggedPeersCanJoin(t *testing.T) {
 	tsJoiner, _, _ := startNode(t, ctx, controlURL, "joiner node")
 
 	ipv4, _ := tsJoiner.TailscaleIPs()
-	url := fmt.Sprintf("http://%s/join", ps[0].c.commandAddr(ps[0].c.self.host))
+	url := fmt.Sprintf("http://%s/join", ps[0].c.commandAddr(ps[0].c.self.hostAddr))
 	payload, err := json.Marshal(joinRequest{
 		RemoteHost: ipv4.String(),
 		RemoteID:   "node joiner",

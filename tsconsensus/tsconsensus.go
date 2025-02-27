@@ -41,12 +41,8 @@ import (
 	"tailscale.com/types/views"
 )
 
-func addr(host string, port uint16) string {
-	return fmt.Sprintf("%s:%d", host, port)
-}
-
-func raftAddr(host string, cfg Config) string {
-	return addr(host, cfg.RaftPort)
+func raftAddr(host netip.Addr, cfg Config) string {
+	return netip.AddrPortFrom(host, cfg.RaftPort).String()
 }
 
 func addrFromServerAddress(sa string) (netip.Addr, error) {
@@ -61,8 +57,8 @@ func addrFromServerAddress(sa string) (netip.Addr, error) {
 // We specify the ID and Addr on Consensus Start, and then use it later for raft
 // operations such as BootstrapCluster and AddVoter.
 type selfRaftNode struct {
-	id   string
-	host string
+	id       string
+	hostAddr netip.Addr
 }
 
 // A Config holds configurable values such as ports and timeouts.
@@ -161,8 +157,8 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	}
 	v4, _ := ts.TailscaleIPs()
 	self := selfRaftNode{
-		id:   v4.String(),
-		host: v4.String(),
+		id:       v4.String(),
+		hostAddr: v4,
 	}
 	c := Consensus{
 		commandClient: &cc,
@@ -197,7 +193,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	c.bootstrap(auth.allowedPeers())
 
 	if serveDebugMonitor {
-		srv, err = serveMonitor(&c, ts, addr(c.self.host, cfg.MonitorPort))
+		srv, err = serveMonitor(&c, ts, netip.AddrPortFrom(c.self.hostAddr, cfg.MonitorPort).String())
 		if err != nil {
 			return nil, err
 		}
@@ -217,7 +213,7 @@ func startRaft(ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, auth *authori
 	snapshots := raft.NewInmemSnapshotStore()
 
 	// opens the listener on the raft port, raft will close it when it thinks it's appropriate
-	ln, err := ts.Listen("tcp", raftAddr(self.host, cfg))
+	ln, err := ts.Listen("tcp", raftAddr(self.hostAddr, cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +271,7 @@ func (c *Consensus) bootstrap(targets views.Slice[*ipnstate.PeerStatus]) error {
 		} else {
 			log.Printf("Trying to find cluster: trying %s", p.TailscaleIPs[0])
 			err := c.commandClient.join(p.TailscaleIPs[0].String(), joinRequest{
-				RemoteHost: c.self.host,
+				RemoteHost: c.self.hostAddr.String(),
 				RemoteID:   c.self.id,
 			})
 			if err != nil {
@@ -287,13 +283,13 @@ func (c *Consensus) bootstrap(targets views.Slice[*ipnstate.PeerStatus]) error {
 		}
 	}
 
-	log.Printf("Trying to find cluster: unsuccessful, starting as leader: %s", c.self.host)
+	log.Printf("Trying to find cluster: unsuccessful, starting as leader: %s", c.self.hostAddr.String())
 	f := c.raft.BootstrapCluster(
 		raft.Configuration{
 			Servers: []raft.Server{
 				{
 					ID:      raft.ServerID(c.self.id),
-					Address: raft.ServerAddress(c.raftAddr(c.self.host)),
+					Address: raft.ServerAddress(c.raftAddr(c.self.hostAddr)),
 				},
 			},
 		})
@@ -364,7 +360,7 @@ func (e lookElsewhereError) Error() string {
 var errLeaderUnknown = errors.New("Leader Unknown")
 
 func (c *Consensus) serveCmdHttp(ts *tsnet.Server, auth *authorization) (*http.Server, error) {
-	ln, err := ts.Listen("tcp", c.commandAddr(c.self.host))
+	ln, err := ts.Listen("tcp", c.commandAddr(c.self.hostAddr))
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +407,11 @@ func (c *Consensus) executeCommandLocally(cmd Command) (CommandResult, error) {
 }
 
 func (c *Consensus) handleJoin(jr joinRequest) error {
-	remoteAddr := c.raftAddr(jr.RemoteHost)
+	addr, err := netip.ParseAddr(jr.RemoteHost)
+	if err != nil {
+		return err
+	}
+	remoteAddr := c.raftAddr(addr)
 	f := c.raft.AddVoter(raft.ServerID(jr.RemoteID), raft.ServerAddress(remoteAddr), 0, 0)
 	if f.Error() != nil {
 		return f.Error()
@@ -419,10 +419,10 @@ func (c *Consensus) handleJoin(jr joinRequest) error {
 	return nil
 }
 
-func (c *Consensus) raftAddr(host string) string {
+func (c *Consensus) raftAddr(host netip.Addr) string {
 	return raftAddr(host, c.config)
 }
 
-func (c *Consensus) commandAddr(host string) string {
-	return addr(host, c.config.CommandPort)
+func (c *Consensus) commandAddr(host netip.Addr) string {
+	return netip.AddrPortFrom(host, c.config.CommandPort).String()
 }
