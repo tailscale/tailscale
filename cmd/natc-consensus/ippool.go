@@ -122,7 +122,7 @@ func (ipp *fsm) applyMarkLastUsed(from tailcfg.NodeID, addr netip.Addr, domain s
 }
 
 func (ipp *ipPool) StartConsensus(ctx context.Context, ts *tsnet.Server, clusterTag string) error {
-	cns, err := tsconsensus.Start(ctx, ts, (*fsm)(ipp), clusterTag, tsconsensus.DefaultConfig())
+	cns, err := tsconsensus.Start(ctx, ts, (*fsm)(ipp), clusterTag, tsconsensus.DefaultConfig(), true)
 	if err != nil {
 		return err
 	}
