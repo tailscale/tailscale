@@ -104,7 +104,7 @@ func (h authedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	allowed := h.auth.allowsHost(a)
 	if !allowed {
-		http.Error(w, "peer not allowed", http.StatusUnauthorized)
+		http.Error(w, "peer not allowed", http.StatusForbidden)
 		return
 	}
 	h.mux.ServeHTTP(w, r)

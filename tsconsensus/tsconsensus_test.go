@@ -682,8 +682,8 @@ func TestOnlyTaggedPeersCanJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("join req when not tagged, expected status: %d, got: %d", http.StatusUnauthorized, resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("join req when not tagged, expected status: %d, got: %d", http.StatusForbidden, resp.StatusCode)
 	}
 	rBody, _ := io.ReadAll(resp.Body)
 	sBody := strings.TrimSpace(string(rBody))
