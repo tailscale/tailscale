@@ -69,7 +69,6 @@ func (m *monitor) handleFullStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewEncoder(w).Encode(s); err != nil {
 		log.Printf("monitor: error encoding full status: %v", err)
-		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 }
@@ -121,7 +120,6 @@ func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
 	encoder.SetIndent("", "\t")
 	if err := encoder.Encode(n); err != nil {
 		log.Printf("monitor: error encoding netmap: %v", err)
-		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 }

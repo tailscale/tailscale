@@ -165,7 +165,7 @@ func (c *Consensus) makeCommandMux() *http.ServeMux {
 			return
 		}
 		if err := json.NewEncoder(w).Encode(result); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("error encoding execute command result: %v", err)
 			return
 		}
 	})
