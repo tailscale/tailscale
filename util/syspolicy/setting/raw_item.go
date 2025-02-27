@@ -75,6 +75,11 @@ func (i RawItem) String() string {
 	return fmt.Sprintf("%v%s", i.data.Value.Value, suffix)
 }
 
+var (
+	_ jsonv2.MarshalerTo     = (*RawItem)(nil)
+	_ jsonv2.UnmarshalerFrom = (*RawItem)(nil)
+)
+
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (i RawItem) MarshalJSONTo(out *jsontext.Encoder) error {
 	return jsonv2.MarshalEncode(out, &i.data)
@@ -113,6 +118,11 @@ type RawValueType interface {
 func RawValueOf[T RawValueType](v T) RawValue {
 	return RawValue{opt.ValueOf[any](v)}
 }
+
+var (
+	_ jsonv2.MarshalerTo     = (*RawValue)(nil)
+	_ jsonv2.UnmarshalerFrom = (*RawValue)(nil)
+)
 
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (v RawValue) MarshalJSONTo(out *jsontext.Encoder) error {

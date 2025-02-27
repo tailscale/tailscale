@@ -157,6 +157,11 @@ func (lv ListView[T]) Equal(lv2 ListView[T]) bool {
 	return lv.ж.Equal(*lv2.ж)
 }
 
+var (
+	_ jsonv2.MarshalerTo     = (*ListView[bool])(nil)
+	_ jsonv2.UnmarshalerFrom = (*ListView[bool])(nil)
+)
+
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (lv ListView[T]) MarshalJSONTo(out *jsontext.Encoder) error {
 	return lv.ж.MarshalJSONTo(out)

@@ -19,6 +19,20 @@ import (
 
 //go:generate go run tailscale.com/cmd/viewer --tags=test --type=TestPrefs,TestBundle,TestValueStruct,TestGenericStruct,TestPrefsGroup
 
+var (
+	_ jsonv2.MarshalerTo     = (*ItemView[*TestBundle, TestBundleView])(nil)
+	_ jsonv2.UnmarshalerFrom = (*ItemView[*TestBundle, TestBundleView])(nil)
+
+	_ jsonv2.MarshalerTo     = (*MapView[string, string])(nil)
+	_ jsonv2.UnmarshalerFrom = (*MapView[string, string])(nil)
+
+	_ jsonv2.MarshalerTo     = (*StructListView[*TestBundle, TestBundleView])(nil)
+	_ jsonv2.UnmarshalerFrom = (*StructListView[*TestBundle, TestBundleView])(nil)
+
+	_ jsonv2.MarshalerTo     = (*StructMapView[string, *TestBundle, TestBundleView])(nil)
+	_ jsonv2.UnmarshalerFrom = (*StructMapView[string, *TestBundle, TestBundleView])(nil)
+)
+
 type TestPrefs struct {
 	Int32Item   Item[int32]  `json:",omitzero"`
 	UInt64Item  Item[uint64] `json:",omitzero"`
@@ -52,6 +66,11 @@ type TestPrefs struct {
 	// Preference groups should be included directly rather than by pointers.
 	Group TestPrefsGroup `json:",omitzero"`
 }
+
+var (
+	_ jsonv2.MarshalerTo     = (*TestPrefs)(nil)
+	_ jsonv2.UnmarshalerFrom = (*TestPrefs)(nil)
+)
 
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (p TestPrefs) MarshalJSONTo(out *jsontext.Encoder) error {
