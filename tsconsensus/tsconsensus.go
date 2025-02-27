@@ -52,11 +52,11 @@ func raftAddr(host string, cfg Config) string {
 }
 
 func addrFromServerAddress(sa string) (netip.Addr, error) {
-	sAddr, _, err := net.SplitHostPort(sa)
+	addrPort, err := netip.ParseAddrPort(sa)
 	if err != nil {
 		return netip.Addr{}, err
 	}
-	return netip.ParseAddr(sAddr)
+	return addrPort.Addr(), nil
 }
 
 // A selfRaftNode is the info we need to talk to hashicorp/raft about our node.
