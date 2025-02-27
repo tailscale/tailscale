@@ -114,7 +114,7 @@ func (c *Consensus) makeCommandMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/join", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != httpm.POST {
-			http.Error(w, "Bad Request", http.StatusBadRequest)
+			http.Error(w, "Method must be POST", http.StatusMethodNotAllowed)
 			return
 		}
 		defer r.Body.Close()
