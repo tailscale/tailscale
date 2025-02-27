@@ -134,7 +134,9 @@ func newPeers(status *ipnstate.Status, tag string) *peers {
 			return s == tag
 		}) {
 			ps.allowedPeers = append(ps.allowedPeers, p)
-			for _, addr := range p.TailscaleIPs {
+			//for _, addr := range p.TailscaleIPs {
+			for _, pfx := range p.AllowedIPs.All() { // TODO not this! switch back
+				addr := pfx.Addr()
 				ps.allowedRemoteAddrs.Add(addr)
 			}
 		}
