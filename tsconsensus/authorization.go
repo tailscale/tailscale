@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -23,14 +24,33 @@ type statusGetter interface {
 
 type tailscaleStatusGetter struct {
 	ts *tsnet.Server
+
+	mu             sync.Mutex // protects the following
+	lastStatus     *ipnstate.Status
+	lastStatusTime time.Time
 }
 
-func (sg tailscaleStatusGetter) getStatus(ctx context.Context) (*ipnstate.Status, error) {
+func (sg *tailscaleStatusGetter) fetchStatus(ctx context.Context) (*ipnstate.Status, error) {
 	lc, err := sg.ts.LocalClient()
 	if err != nil {
 		return nil, err
 	}
 	return lc.Status(ctx)
+}
+
+func (sg *tailscaleStatusGetter) getStatus(ctx context.Context) (*ipnstate.Status, error) {
+	sg.mu.Lock()
+	defer sg.mu.Unlock()
+	if sg.lastStatus != nil && time.Since(sg.lastStatusTime) < 1*time.Second {
+		return sg.lastStatus, nil
+	}
+	status, err := sg.fetchStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sg.lastStatus = status
+	sg.lastStatusTime = time.Now()
+	return status, nil
 }
 
 type authorization struct {
@@ -43,7 +63,7 @@ type authorization struct {
 
 func newAuthorization(ts *tsnet.Server, tag string) *authorization {
 	return &authorization{
-		sg: tailscaleStatusGetter{
+		sg: &tailscaleStatusGetter{
 			ts: ts,
 		},
 		tag: tag,
