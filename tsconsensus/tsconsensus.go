@@ -212,8 +212,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 }
 
 func startRaft(ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, auth *authorization, cfg Config) (*raft.Raft, error) {
-	config := cfg.Raft
-	config.LocalID = raft.ServerID(self.id)
+	cfg.Raft.LocalID = raft.ServerID(self.id)
 
 	// no persistence (for now?)
 	logStore := raft.NewInmemStore()
@@ -241,7 +240,7 @@ func startRaft(ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, auth *authori
 		cfg.ConnTimeout,
 		logger)
 
-	return raft.NewRaft(config, *fsm, logStore, stableStore, snapshots, transport)
+	return raft.NewRaft(cfg.Raft, *fsm, logStore, stableStore, snapshots, transport)
 }
 
 // A Consensus is the consensus algorithm for a tsnet.Server
