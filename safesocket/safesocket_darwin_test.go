@@ -17,6 +17,7 @@ import (
 func TestSetCredentials(t *testing.T) {
 	wantPort := 123
 	wantToken := "token"
+	tstest.Replace(t, &ssd.isSandboxedMacos, func() bool { return true })
 	SetCredentials(wantToken, wantPort)
 
 	gotPort, gotToken, err := LocalTCPPortAndToken()
@@ -37,6 +38,8 @@ func TestSetCredentials(t *testing.T) {
 // returns a listener and a non-zero port and non-empty token.
 func TestInitListenerDarwin(t *testing.T) {
 	temp := t.TempDir()
+	tstest.Replace(t, &ssd.isSandboxedMacos, func() bool { return true })
+
 	ln, err := InitListenerDarwin(temp)
 	if err != nil || ln == nil {
 		t.Fatalf("InitListenerDarwin failed: %v", err)
