@@ -546,14 +546,6 @@ func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
 	ipv4, _ := ps[0].ts.TailscaleIPs()
 	sAddr := fmt.Sprintf("%s:%d", ipv4, cfg.RaftPort)
 
-	isNetTimeoutErr := func(err error) bool {
-		var netErr net.Error
-		if !errors.As(err, &netErr) {
-			return false
-		}
-		return netErr.Timeout()
-	}
-
 	getErrorFromTryingToSend := func(s *tsnet.Server) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -561,7 +553,6 @@ func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected Dial err: %v", err)
 		}
-		conn.SetDeadline(time.Now().Add(5 * time.Second))
 		fmt.Fprintf(conn, "hellllllloooooo")
 		status, err := bufio.NewReader(conn).ReadString('\n')
 		if status != "" {
@@ -573,15 +564,20 @@ func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
 		return err
 	}
 
+	isNetErr := func(err error) bool {
+		var netErr net.Error
+		return errors.As(err, &netErr)
+	}
+
 	err := getErrorFromTryingToSend(untaggedNode)
-	if !isNetTimeoutErr(err) {
-		t.Fatalf("untagged node trying to send should time out, got: %v", err)
+	if !isNetErr(err) {
+		t.Fatalf("untagged node trying to send should get a net.Error, got: %v", err)
 	}
 	// we still get an error trying to send but it's EOF the target node was happy to talk
 	// to us but couldn't understand what we said.
 	err = getErrorFromTryingToSend(taggedNode)
-	if isNetTimeoutErr(err) {
-		t.Fatalf("tagged node trying to send should not time out, got: %v", err)
+	if isNetErr(err) {
+		t.Fatalf("tagged node trying to send should not get a net.Error, got: %v", err)
 	}
 }
 

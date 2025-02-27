@@ -112,29 +112,37 @@ func (sl StreamLayer) Dial(address raft.ServerAddress, timeout time.Duration) (n
 	return sl.s.Dial(ctx, "tcp", string(address))
 }
 
+func (sl StreamLayer) connAuthorized(conn net.Conn) (bool, error) {
+	if conn.RemoteAddr() == nil {
+		return false, nil
+	}
+	addr, err := addrFromServerAddress(conn.RemoteAddr().String())
+	if err != nil {
+		// bad RemoteAddr is not authorized
+		return false, nil
+	}
+	ctx := context.Background() // TODO
+	err = sl.auth.refresh(ctx)
+	if err != nil {
+		// might be authorized, we couldn't tell
+		return false, err
+	}
+	return sl.auth.allowsHost(addr), nil
+}
+
 func (sl StreamLayer) Accept() (net.Conn, error) {
 	for {
 		conn, err := sl.Listener.Accept()
 		if err != nil || conn == nil {
 			return conn, err
 		}
-		ctx := context.Background() // TODO
-		err = sl.auth.refresh(ctx)
+		authorized, err := sl.connAuthorized(conn)
 		if err != nil {
-			// TODO should we stay alive here?
+			conn.Close()
 			return nil, err
 		}
-
-		if conn.RemoteAddr() == nil {
-			continue
-		}
-		addr, err := addrFromServerAddress(conn.RemoteAddr().String())
-		if err != nil {
-			// TODO should we stay alive here?
-			return nil, err
-		}
-
-		if !sl.auth.allowsHost(addr) {
+		if !authorized {
+			conn.Close()
 			continue
 		}
 		return conn, err
