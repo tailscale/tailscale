@@ -283,6 +283,7 @@ func (c *Consensus) bootstrap(targets views.Slice[*ipnstate.PeerStatus]) error {
 			})
 			if err != nil {
 				log.Printf("Trying to find cluster: could not join %s: %v", p.TailscaleIPs[0], err)
+				continue
 			} else {
 				log.Printf("Trying to find cluster: joined %s", p.TailscaleIPs[0])
 				return nil
