@@ -370,8 +370,7 @@ func (c *Consensus) serveCmdHttp(ts *tsnet.Server, auth *authorization) (*http.S
 	if err != nil {
 		return nil, err
 	}
-	mux := c.makeCommandMux(auth)
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{Handler: c.makeCommandHandler(auth)}
 	go func() {
 		err := srv.Serve(ln)
 		log.Printf("CmdHttp stopped serving with err: %v", err)
