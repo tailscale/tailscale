@@ -18,6 +18,7 @@ import (
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 )
 
 const (
@@ -83,10 +84,22 @@ func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
 
 // WriteState implements the StateStore interface.
 func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
+	return s.updateStateSecret(map[string][]byte{string(id): bs})
+}
+
+// WriteTLSCertAndKey writes a TLS cert and key to domain.crt, domain.key fields of a Tailscale Kubernetes node's state
+// Secret.
+func (s *Store) WriteTLSCertAndKey(domain string, cert, key []byte) error {
+	return s.updateStateSecret(map[string][]byte{domain + ".crt": cert, domain + ".key": key})
+}
+
+func (s *Store) updateStateSecret(data map[string][]byte) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer func() {
 		if err == nil {
-			s.memory.WriteState(ipn.StateKey(sanitizeKey(id)), bs)
+			for id, bs := range data {
+				s.memory.WriteState(ipn.StateKey(id), bs)
+			}
 		}
 		if err != nil {
 			if err := s.client.Event(ctx, eventTypeWarning, reasonTailscaleStateUpdateFailed, err.Error()); err != nil {
@@ -99,9 +112,9 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
 		}
 		cancel()
 	}()
-
 	secret, err := s.client.GetSecret(ctx, s.secretName)
 	if err != nil {
+		// If the Secret does not exist, create it with the required data.
 		if kubeclient.IsNotFoundErr(err) {
 			return s.client.CreateSecret(ctx, &kubeapi.Secret{
 				TypeMeta: kubeapi.TypeMeta{
@@ -111,40 +124,53 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
 				ObjectMeta: kubeapi.ObjectMeta{
 					Name: s.secretName,
 				},
-				Data: map[string][]byte{
-					sanitizeKey(id): bs,
-				},
+				Data: func(m map[string][]byte) map[string][]byte {
+					d := make(map[string][]byte, len(m))
+					for key, val := range m {
+						d[sanitizeKey(key)] = val
+					}
+					return d
+				}(data),
 			})
 		}
 		return err
 	}
 	if s.canPatch {
-		if len(secret.Data) == 0 { // if user has pre-created a blank Secret
-			m := []kubeclient.JSONPatch{
+		var m []kubeclient.JSONPatch
+		// If the user has pre-created a Secret with no data, we need to ensure the top level /data field.
+		if len(secret.Data) == 0 {
+			m = []kubeclient.JSONPatch{
 				{
-					Op:    "add",
-					Path:  "/data",
-					Value: map[string][]byte{sanitizeKey(id): bs},
+					Op:   "add",
+					Path: "/data",
+					Value: func(m map[string][]byte) map[string][]byte {
+						d := make(map[string][]byte, len(m))
+						for key, val := range m {
+							d[sanitizeKey(key)] = val
+						}
+						return d
+					}(data),
 				},
 			}
-			if err := s.client.JSONPatchResource(ctx, s.secretName, kubeclient.TypeSecrets, m); err != nil {
-				return fmt.Errorf("error patching Secret %s with a /data field: %v", s.secretName, err)
+			// If the Secret has data, patch it with the new data.
+		} else {
+			for key, val := range data {
+				m = append(m, kubeclient.JSONPatch{
+					Op:    "add",
+					Path:  "/data/" + sanitizeKey(key),
+					Value: val,
+				})
 			}
-			return nil
-		}
-		m := []kubeclient.JSONPatch{
-			{
-				Op:    "add",
-				Path:  "/data/" + sanitizeKey(id),
-				Value: bs,
-			},
 		}
 		if err := s.client.JSONPatchResource(ctx, s.secretName, kubeclient.TypeSecrets, m); err != nil {
-			return fmt.Errorf("error patching Secret %s with /data/%s field: %v", s.secretName, sanitizeKey(id), err)
+			return fmt.Errorf("error patching Secret %s: %w", s.secretName, err)
 		}
 		return nil
 	}
-	secret.Data[sanitizeKey(id)] = bs
+	// No patch permissions, use UPDATE instead.
+	for key, val := range data {
+		mak.Set(&secret.Data, sanitizeKey(key), val)
+	}
 	if err := s.client.UpdateSecret(ctx, secret); err != nil {
 		return err
 	}
@@ -172,9 +198,9 @@ func (s *Store) loadState() (err error) {
 	return nil
 }
 
-func sanitizeKey(k ipn.StateKey) string {
-	// The only valid characters in a Kubernetes secret key are alphanumeric, -,
-	// _, and .
+// sanitizeKey converts any value that can be converted to a string into a valid Kubernetes secret key.
+// Valid characters are alphanumeric, -, _, and .
+func sanitizeKey[T ~string](k T) string {
 	return strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
 			return r
