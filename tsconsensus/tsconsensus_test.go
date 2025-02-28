@@ -53,8 +53,12 @@ func (f *fsm) Apply(l *raft.Log) any {
 		"type": "Apply",
 		"l":    l,
 	})
+	result, err := json.Marshal(f.count)
+	if err != nil {
+		panic("should be able to Marshal that?")
+	}
 	return CommandResult{
-		Result: []byte{byte(f.count)},
+		Result: result,
 	}
 }
 
@@ -355,14 +359,22 @@ func TestApply(t *testing.T) {
 // calls ExecuteCommand on each participant and checks that all participants get all commands
 func assertCommandsWorkOnAnyNode(t *testing.T, participants []*participant) {
 	for i, p := range participants {
-		res, err := p.c.ExecuteCommand(Command{Args: []byte{byte(i)}})
+		bs, err := json.Marshal(i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := p.c.ExecuteCommand(Command{Args: bs})
 		if err != nil {
 			t.Fatalf("%d: Error ExecuteCommand: %v", i, err)
 		}
 		if res.Err != nil {
 			t.Fatalf("%d: Result Error ExecuteCommand: %v", i, res.Err)
 		}
-		retVal := int(res.Result[0])
+		var retVal int
+		err = json.Unmarshal(res.Result, &retVal)
+		if err != nil {
+			t.Fatal(err)
+		}
 		// the test implementation of the fsm returns the count of events that have been received
 		if retVal != i+1 {
 			t.Fatalf("Result, want %d, got %d", i+1, retVal)

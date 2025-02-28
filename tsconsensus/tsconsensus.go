@@ -344,7 +344,7 @@ type Command struct {
 	// The Name can be used to dispatch the command when received.
 	Name string
 	// The Args are serialized for transport.
-	Args []byte
+	Args json.RawMessage
 }
 
 // A CommandResult is a representation of the result of a state
@@ -354,7 +354,7 @@ type CommandResult struct {
 	// including any error from the underlying operation and deserialization problems etc.
 	Err error
 	// Result is serialized for transport.
-	Result []byte
+	Result json.RawMessage
 }
 
 type lookElsewhereError struct {
