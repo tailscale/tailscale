@@ -340,20 +340,20 @@ func (c *Consensus) Stop(ctx context.Context) error {
 }
 
 // A Command is a representation of a state machine action.
-// The Name can be used to dispatch the command when received.
-// The Args are serialized for transport.
 type Command struct {
+	// The Name can be used to dispatch the command when received.
 	Name string
+	// The Args are serialized for transport.
 	Args []byte
 }
 
 // A CommandResult is a representation of the result of a state
 // machine action.
-// Err is any error that occurred on the node that tried to execute the command,
-// including any error from the underlying operation and deserialization problems etc.
-// Result is serialized for transport.
 type CommandResult struct {
-	Err    error
+	// Err is any error that occurred on the node that tried to execute the command,
+	// including any error from the underlying operation and deserialization problems etc.
+	Err error
+	// Result is serialized for transport.
 	Result []byte
 }
 
@@ -365,7 +365,7 @@ func (e lookElsewhereError) Error() string {
 	return fmt.Sprintf("not the leader, try: %s", e.where)
 }
 
-var errLeaderUnknown = errors.New("Leader Unknown")
+var errLeaderUnknown = errors.New("leader unknown")
 
 func (c *Consensus) serveCmdHttp(ts *tsnet.Server, auth *authorization) (*http.Server, error) {
 	ln, err := ts.Listen("tcp", c.commandAddr(c.self.hostAddr))
