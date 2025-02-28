@@ -156,6 +156,11 @@ type Options struct {
 	// If we receive a new DialPlan from the server, this value will be
 	// updated.
 	DialPlan ControlDialPlanner
+
+	// Shutdown is an optional function that will be called before client shutdown is
+	// attempted. It is used to allow the client to clean up any resources or complete any
+	// tasks that are dependent on a live client.
+	Shutdown func()
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -1695,6 +1700,46 @@ func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) e
 	return nil
 }
 
+// SendAuditLog does a synchronous call to the control plane submit an audit log.
+//
+// Auto implements [auditlog.Transport].
+func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	return c.direct.sendAuditLog(ctx, auditLog)
+}
+
+func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return ErrNoNoiseClient
+	}
+
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return ErrNoNodeKey
+	}
+
+	req := &tailcfg.AuditLogRequest{
+		NodeKey: nodeKey,
+		Action:  auditLog.Action,
+		Details: auditLog.Details,
+	}
+
+	if c.panicOnUse {
+		panic("tainted client")
+	}
+
+	res, err := nc.post(ctx, "/machine/audit-log", nodeKey, req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		all, _ := io.ReadAll(res.Body)
+		return ErrBadHTTPResponseWithDetails(res.StatusCode, all)
+	}
+	return nil
+}
+
 func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
 	if !nodeKey.IsZero() {
 		req.Header.Add(tailcfg.LBHeader, nodeKey.String())
@@ -1749,3 +1794,21 @@ var (
 	metricSetDNS      = clientmetric.NewCounter("controlclient_setdns")
 	metricSetDNSError = clientmetric.NewCounter("controlclient_setdns_error")
 )
+
+type ErrBadHTTPResponse struct {
+	errStr   string
+	response []byte
+	httpCode int
+}
+
+func (e ErrBadHTTPResponse) Error() string {
+	return e.errStr
+}
+
+var ErrHTTPFailure error = errors.New("HTTP Error")
+var ErrNoNodeKey error = errors.New("No Node Key")
+var ErrNoNoiseClient error = errors.New("No Noise Client")
+
+func ErrBadHTTPResponseWithDetails(errCode int, response []byte) error {
+	return ErrBadHTTPResponse{ErrHTTPFailure.Error(), response, errCode}
+}
