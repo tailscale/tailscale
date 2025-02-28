@@ -8222,15 +8222,13 @@ func (b *LocalBackend) vipServiceHash(services []*tailcfg.VIPService) string {
 func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	// keyed by service name
 	var services map[tailcfg.ServiceName]*tailcfg.VIPService
-	if !b.serveConfig.Valid() {
-		return nil
-	}
-
-	for svc, config := range b.serveConfig.Services().All() {
-		mak.Set(&services, svc, &tailcfg.VIPService{
-			Name:  svc,
-			Ports: config.ServicePortRange(),
-		})
+	if b.serveConfig.Valid() {
+		for svc, config := range b.serveConfig.Services().All() {
+			mak.Set(&services, svc, &tailcfg.VIPService{
+				Name:  svc,
+				Ports: config.ServicePortRange(),
+			})
+		}
 	}
 
 	for _, s := range prefs.AdvertiseServices().All() {
