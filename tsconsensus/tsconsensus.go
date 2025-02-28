@@ -192,7 +192,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	}
 	c.raft = r
 
-	srv, err := c.serveCmdHttp(ts, auth)
+	srv, err := c.serveCommandHTTP(ts, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +367,7 @@ func (e lookElsewhereError) Error() string {
 
 var errLeaderUnknown = errors.New("leader unknown")
 
-func (c *Consensus) serveCmdHttp(ts *tsnet.Server, auth *authorization) (*http.Server, error) {
+func (c *Consensus) serveCommandHTTP(ts *tsnet.Server, auth *authorization) (*http.Server, error) {
 	ln, err := ts.Listen("tcp", c.commandAddr(c.self.hostAddr))
 	if err != nil {
 		return nil, err
