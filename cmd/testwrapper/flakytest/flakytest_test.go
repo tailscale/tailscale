@@ -41,3 +41,49 @@ func TestFlakeRun(t *testing.T) {
 		t.Fatal("First run in testwrapper, failing so that test is retried. This is expected.")
 	}
 }
+
+func TestMarked_Root(t *testing.T) {
+	Mark(t, "https://github.com/tailscale/tailscale/issues/0")
+
+	t.Run("child", func(t *testing.T) {
+		t.Run("grandchild", func(t *testing.T) {
+			if got, want := Marked(t), true; got != want {
+				t.Fatalf("Marked(t) = %t, want %t", got, want)
+			}
+		})
+
+		if got, want := Marked(t), true; got != want {
+			t.Fatalf("Marked(t) = %t, want %t", got, want)
+		}
+	})
+
+	if got, want := Marked(t), true; got != want {
+		t.Fatalf("Marked(t) = %t, want %t", got, want)
+	}
+}
+
+func TestMarked_Subtest(t *testing.T) {
+	t.Run("flaky", func(t *testing.T) {
+		Mark(t, "https://github.com/tailscale/tailscale/issues/0")
+
+		t.Run("child", func(t *testing.T) {
+			t.Run("grandchild", func(t *testing.T) {
+				if got, want := Marked(t), true; got != want {
+					t.Fatalf("Marked(t) = %t, want %t", got, want)
+				}
+			})
+
+			if got, want := Marked(t), true; got != want {
+				t.Fatalf("Marked(t) = %t, want %t", got, want)
+			}
+		})
+
+		if got, want := Marked(t), true; got != want {
+			t.Fatalf("Marked(t) = %t, want %t", got, want)
+		}
+	})
+
+	if got, want := Marked(t), false; got != want {
+		t.Fatalf("Marked(t) = %t, want %t", got, want)
+	}
+}

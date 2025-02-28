@@ -10,6 +10,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,13 +23,7 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
-	"github.com/dave/courtney/scanner"
-	"github.com/dave/courtney/shared"
-	"github.com/dave/courtney/tester"
-	"github.com/dave/patsy"
-	"github.com/dave/patsy/vos"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/util/slicesx"
 )
@@ -65,11 +60,12 @@ type packageTests struct {
 }
 
 type goTestOutput struct {
-	Time    time.Time
-	Action  string
-	Package string
-	Test    string
-	Output  string
+	Time       time.Time
+	Action     string
+	ImportPath string
+	Package    string
+	Test       string
+	Output     string
 }
 
 var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
@@ -117,42 +113,43 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 	for s.Scan() {
 		var goOutput goTestOutput
 		if err := json.Unmarshal(s.Bytes(), &goOutput); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
-				break
-			}
-
-			// `go test -json` outputs invalid JSON when a build fails.
-			// In that case, discard the the output and start reading again.
-			// The build error will be printed to stderr.
-			// See: https://github.com/golang/go/issues/35169
-			if _, ok := err.(*json.SyntaxError); ok {
-				fmt.Println(s.Text())
-				continue
-			}
-			panic(err)
+			return fmt.Errorf("failed to parse go test output %q: %w", s.Bytes(), err)
 		}
-		pkg := goOutput.Package
+		pkg := cmp.Or(
+			goOutput.Package,
+			"build:"+goOutput.ImportPath, // can be "./cmd" while Package is "tailscale.com/cmd" so use separate namespace
+		)
 		pkgTests := resultMap[pkg]
 		if pkgTests == nil {
-			pkgTests = make(map[string]*testAttempt)
+			pkgTests = map[string]*testAttempt{
+				"": {}, // Used for start time and build logs.
+			}
 			resultMap[pkg] = pkgTests
 		}
 		if goOutput.Test == "" {
 			switch goOutput.Action {
 			case "start":
-				pkgTests[""] = &testAttempt{start: goOutput.Time}
-			case "fail", "pass", "skip":
+				pkgTests[""].start = goOutput.Time
+			case "build-output":
+				pkgTests[""].logs.WriteString(goOutput.Output)
+			case "build-fail", "fail", "pass", "skip":
 				for _, test := range pkgTests {
 					if test.testName != "" && test.outcome == "" {
 						test.outcome = "fail"
 						ch <- test
 					}
 				}
+				outcome := goOutput.Action
+				if outcome == "build-fail" {
+					outcome = "FAIL"
+				}
+				pkgTests[""].logs.WriteString(goOutput.Output)
 				ch <- &testAttempt{
 					pkg:         goOutput.Package,
-					outcome:     goOutput.Action,
+					outcome:     outcome,
 					start:       pkgTests[""].start,
 					end:         goOutput.Time,
+					logs:        pkgTests[""].logs,
 					pkgFinished: true,
 				}
 			}
@@ -221,6 +218,9 @@ func main() {
 	}
 	toRun := []*nextRun{firstRun}
 	printPkgOutcome := func(pkg, outcome string, attempt int, runtime time.Duration) {
+		if pkg == "" {
+			return // We reach this path on a build error.
+		}
 		if outcome == "skip" {
 			fmt.Printf("?\t%s [skipped/no tests] \n", pkg)
 			return
@@ -238,30 +238,6 @@ func main() {
 		fmt.Printf("%s\t%s\t%.3fs\n", outcome, pkg, runtime.Seconds())
 	}
 
-	// Check for -coverprofile argument and filter it out
-	combinedCoverageFilename := ""
-	filteredGoTestArgs := make([]string, 0, len(goTestArgs))
-	preceededByCoverProfile := false
-	for _, arg := range goTestArgs {
-		if arg == "-coverprofile" {
-			preceededByCoverProfile = true
-		} else if preceededByCoverProfile {
-			combinedCoverageFilename = strings.TrimSpace(arg)
-			preceededByCoverProfile = false
-		} else {
-			filteredGoTestArgs = append(filteredGoTestArgs, arg)
-		}
-	}
-	goTestArgs = filteredGoTestArgs
-
-	runningWithCoverage := combinedCoverageFilename != ""
-	if runningWithCoverage {
-		fmt.Printf("Will log coverage to %v\n", combinedCoverageFilename)
-	}
-
-	// Keep track of all test coverage files. With each retry, we'll end up
-	// with additional coverage files that will be combined when we finish.
-	coverageFiles := make([]string, 0)
 	for len(toRun) > 0 {
 		var thisRun *nextRun
 		thisRun, toRun = toRun[0], toRun[1:]
@@ -275,27 +251,13 @@ func main() {
 			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\nflakytest failures JSON: %s\n\n", thisRun.attempt, j)
 		}
 
-		goTestArgsWithCoverage := testArgs
-		if runningWithCoverage {
-			coverageFile := fmt.Sprintf("/tmp/coverage_%d.out", thisRun.attempt)
-			coverageFiles = append(coverageFiles, coverageFile)
-			goTestArgsWithCoverage = make([]string, len(goTestArgs), len(goTestArgs)+2)
-			copy(goTestArgsWithCoverage, goTestArgs)
-			goTestArgsWithCoverage = append(
-				goTestArgsWithCoverage,
-				fmt.Sprintf("-coverprofile=%v", coverageFile),
-				"-covermode=set",
-				"-coverpkg=./...",
-			)
-		}
-
 		toRetry := make(map[string][]*testAttempt) // pkg -> tests to retry
 		for _, pt := range thisRun.tests {
 			ch := make(chan *testAttempt)
 			runErr := make(chan error, 1)
 			go func() {
 				defer close(runErr)
-				runErr <- runTests(ctx, thisRun.attempt, pt, goTestArgsWithCoverage, testArgs, ch)
+				runErr <- runTests(ctx, thisRun.attempt, pt, goTestArgs, testArgs, ch)
 			}()
 
 			var failed bool
@@ -314,6 +276,7 @@ func main() {
 						// when a package times out.
 						failed = true
 					}
+					os.Stdout.ReadFrom(&tr.logs)
 					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt, tr.end.Sub(tr.start))
 					continue
 				}
@@ -372,107 +335,4 @@ func main() {
 		}
 		toRun = append(toRun, nextRun)
 	}
-
-	if runningWithCoverage {
-		intermediateCoverageFilename := "/tmp/coverage.out_intermediate"
-		if err := combineCoverageFiles(intermediateCoverageFilename, coverageFiles); err != nil {
-			fmt.Printf("error combining coverage files: %v\n", err)
-			os.Exit(2)
-		}
-
-		if err := processCoverageWithCourtney(intermediateCoverageFilename, combinedCoverageFilename, testArgs); err != nil {
-			fmt.Printf("error processing coverage with courtney: %v\n", err)
-			os.Exit(3)
-		}
-
-		fmt.Printf("Wrote combined coverage to %v\n", combinedCoverageFilename)
-	}
-}
-
-func combineCoverageFiles(intermediateCoverageFilename string, coverageFiles []string) error {
-	combinedCoverageFile, err := os.OpenFile(intermediateCoverageFilename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("create /tmp/coverage.out: %w", err)
-	}
-	defer combinedCoverageFile.Close()
-	w := bufio.NewWriter(combinedCoverageFile)
-	defer w.Flush()
-
-	for fileNumber, coverageFile := range coverageFiles {
-		f, err := os.Open(coverageFile)
-		if err != nil {
-			return fmt.Errorf("open %v: %w", coverageFile, err)
-		}
-		defer f.Close()
-		in := bufio.NewReader(f)
-		line := 0
-		for {
-			r, _, err := in.ReadRune()
-			if err != nil {
-				if err != io.EOF {
-					return fmt.Errorf("read %v: %w", coverageFile, err)
-				}
-				break
-			}
-
-			// On all but the first coverage file, skip the coverage file header
-			if fileNumber > 0 && line == 0 {
-				continue
-			}
-			if r == '\n' {
-				line++
-			}
-
-			// filter for only printable characters because coverage file sometimes includes junk on 2nd line
-			if unicode.IsPrint(r) || r == '\n' {
-				if _, err := w.WriteRune(r); err != nil {
-					return fmt.Errorf("write %v: %w", combinedCoverageFile.Name(), err)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// processCoverageWithCourtney post-processes code coverage to exclude less
-// meaningful sections like 'if err != nil { return err}', as well as
-// anything marked with a '// notest' comment.
-//
-// instead of running the courtney as a separate program, this embeds
-// courtney for easier integration.
-func processCoverageWithCourtney(intermediateCoverageFilename, combinedCoverageFilename string, testArgs []string) error {
-	env := vos.Os()
-
-	setup := &shared.Setup{
-		Env:      vos.Os(),
-		Paths:    patsy.NewCache(env),
-		TestArgs: testArgs,
-		Load:     intermediateCoverageFilename,
-		Output:   combinedCoverageFilename,
-	}
-	if err := setup.Parse(testArgs); err != nil {
-		return fmt.Errorf("parse args: %w", err)
-	}
-
-	s := scanner.New(setup)
-	if err := s.LoadProgram(); err != nil {
-		return fmt.Errorf("load program: %w", err)
-	}
-	if err := s.ScanPackages(); err != nil {
-		return fmt.Errorf("scan packages: %w", err)
-	}
-
-	t := tester.New(setup)
-	if err := t.Load(); err != nil {
-		return fmt.Errorf("load: %w", err)
-	}
-	if err := t.ProcessExcludes(s.Excludes); err != nil {
-		return fmt.Errorf("process excludes: %w", err)
-	}
-	if err := t.Save(); err != nil {
-		return fmt.Errorf("save: %w", err)
-	}
-
-	return nil
 }

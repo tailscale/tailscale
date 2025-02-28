@@ -13,6 +13,11 @@ import (
 	"tailscale.com/util/must"
 )
 
+var (
+	_ jsonv2.MarshalerTo     = (*Value[bool])(nil)
+	_ jsonv2.UnmarshalerFrom = (*Value[bool])(nil)
+)
+
 type testStruct struct {
 	Int int    `json:",omitempty,omitzero"`
 	Str string `json:",omitempty"`

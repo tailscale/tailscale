@@ -15,6 +15,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -271,8 +272,26 @@ func (c *Client) httpClient() *http.Client {
 }
 
 // packageVersion is the version of the module that contains this package, for
-// sending as part of the User-Agent header. It's set in version_go112.go.
+// sending as part of the User-Agent header.
 var packageVersion string
+
+func init() {
+	// Set packageVersion if the binary was built in modules mode and x/crypto
+	// was not replaced with a different module.
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	for _, m := range info.Deps {
+		if m.Path != "golang.org/x/crypto" {
+			continue
+		}
+		if m.Replace == nil {
+			packageVersion = m.Version
+		}
+		break
+	}
+}
 
 // userAgent returns the User-Agent header value. It includes the package name,
 // the module version (if available), and the c.UserAgent value (if set).

@@ -44,7 +44,7 @@ type DNSPreferences struct {
 }
 
 func (c *Client) dnsGETRequest(ctx context.Context, endpoint string) ([]byte, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/dns/%s", c.baseURL(), c.tailnet, endpoint)
+	path := c.BuildTailnetURL("dns", endpoint)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -57,14 +57,14 @@ func (c *Client) dnsGETRequest(ctx context.Context, endpoint string) ([]byte, er
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 
 	return b, nil
 }
 
 func (c *Client) dnsPOSTRequest(ctx context.Context, endpoint string, postData any) ([]byte, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/dns/%s", c.baseURL(), c.tailnet, endpoint)
+	path := c.BuildTailnetURL("dns", endpoint)
 	data, err := json.Marshal(&postData)
 	if err != nil {
 		return nil, err
@@ -84,7 +84,7 @@ func (c *Client) dnsPOSTRequest(ctx context.Context, endpoint string, postData a
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 
 	return b, nil

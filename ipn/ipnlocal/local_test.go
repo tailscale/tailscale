@@ -1052,13 +1052,13 @@ func TestWhoIs(t *testing.T) {
 				Addresses: []netip.Prefix{netip.MustParsePrefix("100.200.200.200/32")},
 			}).View(),
 		},
-		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
-			10: {
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			10: (&tailcfg.UserProfile{
 				DisplayName: "Myself",
-			},
-			20: {
+			}).View(),
+			20: (&tailcfg.UserProfile{
 				DisplayName: "Peer",
-			},
+			}).View(),
 		},
 	})
 	tests := []struct {
@@ -2754,12 +2754,12 @@ func TestTCPHandlerForDstWithVIPService(t *testing.T) {
 					tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
 				},
 			}).View(),
-			UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
-				tailcfg.UserID(1): {
+			UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+				tailcfg.UserID(1): (&tailcfg.UserProfile{
 					LoginName:     "someone@example.com",
 					DisplayName:   "Some One",
 					ProfilePicURL: "https://example.com/photo.jpg",
-				},
+				}).View(),
 			},
 		},
 	)
@@ -5084,7 +5084,7 @@ func TestUpdateIngressLocked(t *testing.T) {
 				},
 			},
 			wantIngress:       true,
-			wantWireIngress:   true,
+			wantWireIngress:   false, // implied by wantIngress
 			wantControlUpdate: true,
 		},
 		{
@@ -5111,7 +5111,6 @@ func TestUpdateIngressLocked(t *testing.T) {
 			name: "funnel_enabled_no_change",
 			hi: &tailcfg.Hostinfo{
 				IngressEnabled: true,
-				WireIngress:    true,
 			},
 			sc: &ipn.ServeConfig{
 				AllowFunnel: map[ipn.HostPort]bool{
@@ -5119,7 +5118,7 @@ func TestUpdateIngressLocked(t *testing.T) {
 				},
 			},
 			wantIngress:     true,
-			wantWireIngress: true,
+			wantWireIngress: false, // implied by wantIngress
 		},
 		{
 			name: "funnel_disabled_no_change",
@@ -5137,7 +5136,6 @@ func TestUpdateIngressLocked(t *testing.T) {
 			name: "funnel_changes_to_disabled",
 			hi: &tailcfg.Hostinfo{
 				IngressEnabled: true,
-				WireIngress:    true,
 			},
 			sc: &ipn.ServeConfig{
 				AllowFunnel: map[ipn.HostPort]bool{
@@ -5157,8 +5155,8 @@ func TestUpdateIngressLocked(t *testing.T) {
 					"tailnet.xyz:443": true,
 				},
 			},
-			wantWireIngress:   true,
 			wantIngress:       true,
+			wantWireIngress:   false, // implied by wantIngress
 			wantControlUpdate: true,
 		},
 	}

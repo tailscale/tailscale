@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
@@ -46,6 +46,9 @@ const (
 	FinalizerNamePG = "tailscale.com/ingress-pg-finalizer"
 
 	indexIngressProxyGroup = ".metadata.annotations.ingress-proxy-group"
+	// annotationHTTPEndpoint can be used to configure the Ingress to expose an HTTP endpoint to tailnet (as
+	// well as the default HTTPS endpoint).
+	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
 )
 
 var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
@@ -183,7 +186,7 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 	dnsName := hostname + "." + tcd
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
-	existingVIPSvc, err := a.tsClient.getVIPService(ctx, serviceName)
+	existingVIPSvc, err := a.tsClient.GetVIPService(ctx, serviceName)
 	// TODO(irbekrm): here and when creating the VIPService, verify if the error is not terminal (and therefore
 	// should not be reconciled). For example, if the hostname is already a hostname of a Tailscale node, the GET
 	// here will fail.
@@ -202,16 +205,16 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	// 3. Ensure that the serve config for the ProxyGroup contains the VIPService
 	cm, cfg, err := a.proxyGroupServeConfig(ctx, pgName)
 	if err != nil {
-		return fmt.Errorf("error getting ingress serve config: %w", err)
+		return fmt.Errorf("error getting Ingress serve config: %w", err)
 	}
 	if cm == nil {
-		logger.Infof("no ingress serve config ConfigMap found, unable to update serve config. Ensure that ProxyGroup is healthy.")
+		logger.Infof("no Ingress serve config ConfigMap found, unable to update serve config. Ensure that ProxyGroup is healthy.")
 		return nil
 	}
 	ep := ipn.HostPort(fmt.Sprintf("%s:443", dnsName))
 	handlers, err := handlersForIngress(ctx, ing, a.Client, a.recorder, dnsName, logger)
 	if err != nil {
-		return fmt.Errorf("failed to get handlers for ingress: %w", err)
+		return fmt.Errorf("failed to get handlers for Ingress: %w", err)
 	}
 	ingCfg := &ipn.ServiceConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{
@@ -225,6 +228,19 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 			},
 		},
 	}
+
+	// Add HTTP endpoint if configured.
+	if isHTTPEndpointEnabled(ing) {
+		logger.Infof("exposing Ingress over HTTP")
+		epHTTP := ipn.HostPort(fmt.Sprintf("%s:80", dnsName))
+		ingCfg.TCP[80] = &ipn.TCPPortHandler{
+			HTTP: true,
+		}
+		ingCfg.Web[epHTTP] = &ipn.WebServerConfig{
+			Handlers: handlers,
+		}
+	}
+
 	var gotCfg *ipn.ServiceConfig
 	if cfg != nil && cfg.Services != nil {
 		gotCfg = cfg.Services[serviceName]
@@ -248,18 +264,25 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		tags = strings.Split(tstr, ",")
 	}
 
-	vipSvc := &VIPService{
+	vipPorts := []string{"443"} // always 443 for Ingress
+	if isHTTPEndpointEnabled(ing) {
+		vipPorts = append(vipPorts, "80")
+	}
+
+	vipSvc := &tailscale.VIPService{
 		Name:    serviceName,
 		Tags:    tags,
-		Ports:   []string{"443"}, // always 443 for Ingress
+		Ports:   vipPorts,
 		Comment: fmt.Sprintf(VIPSvcOwnerRef, ing.UID),
 	}
 	if existingVIPSvc != nil {
 		vipSvc.Addrs = existingVIPSvc.Addrs
 	}
-	if existingVIPSvc == nil || !reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) {
+	if existingVIPSvc == nil ||
+		!reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) ||
+		!reflect.DeepEqual(vipSvc.Ports, existingVIPSvc.Ports) {
 		logger.Infof("Ensuring VIPService %q exists and is up to date", hostname)
-		if err := a.tsClient.createOrUpdateVIPService(ctx, vipSvc); err != nil {
+		if err := a.tsClient.CreateOrUpdateVIPService(ctx, vipSvc); err != nil {
 			logger.Infof("error creating VIPService: %v", err)
 			return fmt.Errorf("error creating VIPService: %w", err)
 		}
@@ -273,16 +296,22 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 
 	// 6. Update Ingress status
 	oldStatus := ing.Status.DeepCopy()
-	// TODO(irbekrm): once we have ingress ProxyGroup, we can determine if instances are ready to route traffic to the VIPService
+	ports := []networkingv1.IngressPortStatus{
+		{
+			Protocol: "TCP",
+			Port:     443,
+		},
+	}
+	if isHTTPEndpointEnabled(ing) {
+		ports = append(ports, networkingv1.IngressPortStatus{
+			Protocol: "TCP",
+			Port:     80,
+		})
+	}
 	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
 		{
 			Hostname: dnsName,
-			Ports: []networkingv1.IngressPortStatus{
-				{
-					Protocol: "TCP",
-					Port:     443,
-				},
-			},
+			Ports:    ports,
 		},
 	}
 	if apiequality.Semantic.DeepEqual(oldStatus, ing.Status) {
@@ -334,7 +363,7 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, pgName
 			}
 			if exists && isVIPServiceForAnyIngress(svc) {
 				logger.Infof("cleaning up orphaned VIPService %q", vipServiceName)
-				if err := a.tsClient.deleteVIPService(ctx, vipServiceName); err != nil {
+				if err := a.tsClient.DeleteVIPService(ctx, vipServiceName); err != nil {
 					errResp := &tailscale.ErrResponse{}
 					if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
 						return fmt.Errorf("deleting VIPService %q: %w", vipServiceName, err)
@@ -493,8 +522,8 @@ func shouldExpose(ing *networkingv1.Ingress) bool {
 	return isTSIngress && pgAnnot != ""
 }
 
-func (a *IngressPGReconciler) tryGetVIPService(ctx context.Context, name tailcfg.ServiceName) (_ *VIPService, exists bool, _ error) {
-	svc, err := a.tsClient.getVIPService(ctx, name)
+func (a *IngressPGReconciler) tryGetVIPService(ctx context.Context, name tailcfg.ServiceName) (_ *tailscale.VIPService, exists bool, _ error) {
+	svc, err := a.tsClient.GetVIPService(ctx, name)
 	if err != nil {
 		errResp := &tailscale.ErrResponse{}
 		if ok := errors.As(err, errResp); ok && errResp.Status == http.StatusNotFound {
@@ -506,14 +535,14 @@ func (a *IngressPGReconciler) tryGetVIPService(ctx context.Context, name tailcfg
 	return svc, true, nil
 }
 
-func isVIPServiceForIngress(svc *VIPService, ing *networkingv1.Ingress) bool {
+func isVIPServiceForIngress(svc *tailscale.VIPService, ing *networkingv1.Ingress) bool {
 	if svc == nil || ing == nil {
 		return false
 	}
 	return strings.EqualFold(svc.Comment, fmt.Sprintf(VIPSvcOwnerRef, ing.UID))
 }
 
-func isVIPServiceForAnyIngress(svc *VIPService) bool {
+func isVIPServiceForAnyIngress(svc *tailscale.VIPService) bool {
 	if svc == nil {
 		return false
 	}
@@ -580,10 +609,18 @@ func (a *IngressPGReconciler) deleteVIPServiceIfExists(ctx context.Context, name
 	}
 
 	logger.Infof("Deleting VIPService %q", name)
-	if err = a.tsClient.deleteVIPService(ctx, name); err != nil {
+	if err = a.tsClient.DeleteVIPService(ctx, name); err != nil {
 		return fmt.Errorf("error deleting VIPService: %w", err)
 	}
 	return nil
+}
+
+// isHTTPEndpointEnabled returns true if the Ingress has been configured to expose an HTTP endpoint to tailnet.
+func isHTTPEndpointEnabled(ing *networkingv1.Ingress) bool {
+	if ing == nil {
+		return false
+	}
+	return ing.Annotations[annotationHTTPEndpoint] == "enabled"
 }
 
 func (a *IngressPGReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, shouldBeAdvertised bool, logger *zap.SugaredLogger) (err error) {

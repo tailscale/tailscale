@@ -270,6 +270,12 @@ type PeerStatus struct {
 	// PeerAPIURL are the URLs of the node's PeerAPI servers.
 	PeerAPIURL []string
 
+	// TaildropTargetStatus represents the node's eligibility to have files shared to it.
+	TaildropTarget TaildropTargetStatus
+
+	// Reason why this peer cannot receive files. Empty if CanReceiveFiles=true
+	NoFileSharingReason string
+
 	// Capabilities are capabilities that the node has.
 	// They're free-form strings, but should be in the form of URLs/URIs
 	// such as:
@@ -317,6 +323,21 @@ type PeerStatus struct {
 
 	Location *tailcfg.Location `json:",omitempty"`
 }
+
+type TaildropTargetStatus int
+
+const (
+	TaildropTargetUnknown TaildropTargetStatus = iota
+	TaildropTargetAvailable
+	TaildropTargetNoNetmapAvailable
+	TaildropTargetIpnStateNotRunning
+	TaildropTargetMissingCap
+	TaildropTargetOffline
+	TaildropTargetNoPeerInfo
+	TaildropTargetUnsupportedOS
+	TaildropTargetNoPeerAPI
+	TaildropTargetOwnedByOtherUser
+)
 
 // HasCap reports whether ps has the given capability.
 func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
@@ -367,7 +388,7 @@ func (sb *StatusBuilder) MutateSelfStatus(f func(*PeerStatus)) {
 }
 
 // AddUser adds a user profile to the status.
-func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
+func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfileView) {
 	if sb.locked {
 		log.Printf("[unexpected] ipnstate: AddUser after Locked")
 		return
@@ -377,7 +398,7 @@ func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
 		sb.st.User = make(map[tailcfg.UserID]tailcfg.UserProfile)
 	}
 
-	sb.st.User[id] = up
+	sb.st.User[id] = *up.AsStruct()
 }
 
 // AddIP adds a Tailscale IP address to the status.

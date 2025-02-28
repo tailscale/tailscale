@@ -100,31 +100,31 @@ func (o Value[T]) Equal(v Value[T]) bool {
 	return false
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (o Value[T]) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (o Value[T]) MarshalJSONTo(enc *jsontext.Encoder) error {
 	if !o.set {
 		return enc.WriteToken(jsontext.Null)
 	}
-	return jsonv2.MarshalEncode(enc, &o.value, opts)
+	return jsonv2.MarshalEncode(enc, &o.value)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (o *Value[T]) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (o *Value[T]) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	if dec.PeekKind() == 'n' {
 		*o = Value[T]{}
 		_, err := dec.ReadToken() // read null
 		return err
 	}
 	o.set = true
-	return jsonv2.UnmarshalDecode(dec, &o.value, opts)
+	return jsonv2.UnmarshalDecode(dec, &o.value)
 }
 
 // MarshalJSON implements [json.Marshaler].
 func (o Value[T]) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(o) // uses MarshalJSONV2
+	return jsonv2.Marshal(o) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (o *Value[T]) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, o) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, o) // uses UnmarshalJSONFrom
 }

@@ -1,8 +1,17 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package bools contains the [Compare] and [Select] functions.
+// Package bools contains the [Int], [Compare], and [IfElse] functions.
 package bools
+
+// Int returns 1 for true and 0 for false.
+func Int(v bool) int {
+	if v {
+		return 1
+	} else {
+		return 0
+	}
+}
 
 // Compare compares two boolean values as if false is ordered before true.
 func Compare[T ~bool](x, y T) int {

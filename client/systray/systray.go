@@ -72,6 +72,11 @@ type Menu struct {
 	curProfile  ipn.LoginProfile
 	allProfiles []ipn.LoginProfile
 
+	// readonly is whether the systray app is running in read-only mode.
+	// This is set if LocalAPI returns a permission error,
+	// typically because the user needs to run `tailscale set --operator=$USER`.
+	readonly bool
+
 	bgCtx    context.Context // ctx for background tasks not involving menu item clicks
 	bgCancel context.CancelFunc
 
@@ -153,6 +158,8 @@ func (menu *Menu) updateState() {
 	defer menu.mu.Unlock()
 	menu.init()
 
+	menu.readonly = false
+
 	var err error
 	menu.status, err = menu.lc.Status(menu.bgCtx)
 	if err != nil {
@@ -160,6 +167,9 @@ func (menu *Menu) updateState() {
 	}
 	menu.curProfile, menu.allProfiles, err = menu.lc.ProfileStatus(menu.bgCtx)
 	if err != nil {
+		if local.IsAccessDeniedError(err) {
+			menu.readonly = true
+		}
 		log.Print(err)
 	}
 }
@@ -181,6 +191,15 @@ func (menu *Menu) rebuild() {
 	ctx, menu.eventCancel = context.WithCancel(ctx)
 
 	systray.ResetMenu()
+
+	if menu.readonly {
+		const readonlyMsg = "No permission to manage Tailscale.\nSee tailscale.com/s/cli-operator"
+		m := systray.AddMenuItem(readonlyMsg, "")
+		onClick(ctx, m, func(_ context.Context) {
+			webbrowser.Open("https://tailscale.com/s/cli-operator")
+		})
+		systray.AddSeparator()
+	}
 
 	menu.connect = systray.AddMenuItem("Connect", "")
 	menu.disconnect = systray.AddMenuItem("Disconnect", "")
@@ -222,28 +241,35 @@ func (menu *Menu) rebuild() {
 		setAppIcon(disconnected)
 	}
 
+	if menu.readonly {
+		menu.connect.Disable()
+		menu.disconnect.Disable()
+	}
+
 	account := "Account"
 	if pt := profileTitle(menu.curProfile); pt != "" {
 		account = pt
 	}
-	accounts := systray.AddMenuItem(account, "")
-	setRemoteIcon(accounts, menu.curProfile.UserProfile.ProfilePicURL)
-	time.Sleep(newMenuDelay)
-	for _, profile := range menu.allProfiles {
-		title := profileTitle(profile)
-		var item *systray.MenuItem
-		if profile.ID == menu.curProfile.ID {
-			item = accounts.AddSubMenuItemCheckbox(title, "", true)
-		} else {
-			item = accounts.AddSubMenuItem(title, "")
-		}
-		setRemoteIcon(item, profile.UserProfile.ProfilePicURL)
-		onClick(ctx, item, func(ctx context.Context) {
-			select {
-			case <-ctx.Done():
-			case menu.accountsCh <- profile.ID:
+	if !menu.readonly {
+		accounts := systray.AddMenuItem(account, "")
+		setRemoteIcon(accounts, menu.curProfile.UserProfile.ProfilePicURL)
+		time.Sleep(newMenuDelay)
+		for _, profile := range menu.allProfiles {
+			title := profileTitle(profile)
+			var item *systray.MenuItem
+			if profile.ID == menu.curProfile.ID {
+				item = accounts.AddSubMenuItemCheckbox(title, "", true)
+			} else {
+				item = accounts.AddSubMenuItem(title, "")
 			}
-		})
+			setRemoteIcon(item, profile.UserProfile.ProfilePicURL)
+			onClick(ctx, item, func(ctx context.Context) {
+				select {
+				case <-ctx.Done():
+				case menu.accountsCh <- profile.ID:
+				}
+			})
+		}
 	}
 
 	if menu.status != nil && menu.status.Self != nil && len(menu.status.Self.TailscaleIPs) > 0 {
@@ -255,7 +281,9 @@ func (menu *Menu) rebuild() {
 	}
 	systray.AddSeparator()
 
-	menu.rebuildExitNodeMenu(ctx)
+	if !menu.readonly {
+		menu.rebuildExitNodeMenu(ctx)
+	}
 
 	if menu.status != nil {
 		menu.more = systray.AddMenuItem("More settings", "")

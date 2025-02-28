@@ -9,8 +9,12 @@ package flakytest
 import (
 	"fmt"
 	"os"
+	"path"
 	"regexp"
+	"sync"
 	"testing"
+
+	"tailscale.com/util/mak"
 )
 
 // FlakyTestLogMessage is a sentinel value that is printed to stderr when a
@@ -24,6 +28,11 @@ const FlakyTestLogMessage = "flakytest: this is a known flaky test"
 const FlakeAttemptEnv = "TS_TESTWRAPPER_ATTEMPT"
 
 var issueRegexp = regexp.MustCompile(`\Ahttps://github\.com/tailscale/[a-zA-Z0-9_.-]+/issues/\d+\z`)
+
+var (
+	rootFlakesMu sync.Mutex
+	rootFlakes   map[string]bool
+)
 
 // Mark sets the current test as a flaky test, such that if it fails, it will
 // be retried a few times on failure. issue must be a GitHub issue that tracks
@@ -41,4 +50,24 @@ func Mark(t testing.TB, issue string) {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", FlakyTestLogMessage, issue)
 	}
 	t.Logf("flakytest: issue tracking this flaky test: %s", issue)
+
+	// Record the root test name as flakey.
+	rootFlakesMu.Lock()
+	defer rootFlakesMu.Unlock()
+	mak.Set(&rootFlakes, t.Name(), true)
+}
+
+// Marked reports whether the current test or one of its parents was marked flaky.
+func Marked(t testing.TB) bool {
+	n := t.Name()
+	for {
+		if rootFlakes[n] {
+			return true
+		}
+		n = path.Dir(n)
+		if n == "." || n == "/" {
+			break
+		}
+	}
+	return false
 }

@@ -172,23 +172,12 @@ func (r *Report) Clone() *Report {
 		return nil
 	}
 	r2 := *r
-	r2.RegionLatency = cloneDurationMap(r2.RegionLatency)
-	r2.RegionV4Latency = cloneDurationMap(r2.RegionV4Latency)
-	r2.RegionV6Latency = cloneDurationMap(r2.RegionV6Latency)
+	r2.RegionLatency = maps.Clone(r2.RegionLatency)
+	r2.RegionV4Latency = maps.Clone(r2.RegionV4Latency)
+	r2.RegionV6Latency = maps.Clone(r2.RegionV6Latency)
 	r2.GlobalV4Counters = maps.Clone(r2.GlobalV4Counters)
 	r2.GlobalV6Counters = maps.Clone(r2.GlobalV6Counters)
 	return &r2
-}
-
-func cloneDurationMap(m map[int]time.Duration) map[int]time.Duration {
-	if m == nil {
-		return nil
-	}
-	m2 := make(map[int]time.Duration, len(m))
-	for k, v := range m {
-		m2[k] = v
-	}
-	return m2
 }
 
 // Client generates Reports describing the result of both passive and active
