@@ -40,9 +40,9 @@ import (
 )
 
 type fsm struct {
+	mu     sync.Mutex // protects events and count
 	events []map[string]any
 	count  int
-	mu     sync.Mutex
 }
 
 func (f *fsm) Apply(l *raft.Log) any {
