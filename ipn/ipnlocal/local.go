@@ -6709,7 +6709,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 }
 
 func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.TaildropTargetStatus {
-	if b.netMap == nil || b.state != ipn.Running {
+	if b.state != ipn.Running {
 		return ipnstate.TaildropTargetIpnStateNotRunning
 	}
 	if b.netMap == nil {
