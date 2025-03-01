@@ -40,7 +40,7 @@ func CanRunTailscaleSSH() error {
 		if version.IsSandboxedMacOS() {
 			return errors.New("The Tailscale SSH server does not run in sandboxed Tailscale GUI builds.")
 		}
-	case "freebsd", "openbsd":
+	case "freebsd", "openbsd", "plan9":
 	default:
 		return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
 	}

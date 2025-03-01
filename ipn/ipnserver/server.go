@@ -331,7 +331,7 @@ func (a *actor) Permissions(operatorUID string) (read, write bool) {
 		// checks here. Note that this permission model is being changed in
 		// tailscale/corp#18342.
 		return true, true
-	case "js":
+	case "js", "plan9":
 		return true, true
 	}
 	if a.ci.IsUnixSock() {
