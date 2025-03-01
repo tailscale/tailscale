@@ -110,6 +110,10 @@ publishdevnameserver: ## Build and publish k8s-nameserver image to location spec
 	@test "${REPO}" != "ghcr.io/tailscale/k8s-nameserver" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-nameserver" && exit 1)
 	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-nameserver ./build_docker.sh
 
+plan9:
+	GOOS=plan9 GOARCH=386 go build -o ${HOME}/hack/rsc-plan9/td ./cmd/tailscaled
+	GOOS=plan9 GOARCH=386 go build -o ${HOME}/hack/rsc-plan9/ts ./cmd/tailscale
+
 .PHONY: sshintegrationtest
 sshintegrationtest: ## Run the SSH integration tests in various Docker containers
 	@GOOS=linux GOARCH=amd64 ./tool/go test -tags integrationtest -c ./ssh/tailssh -o ssh/tailssh/testcontainers/tailssh.test && \
