@@ -627,7 +627,7 @@ func (opts Options) New() *Policy {
 		conf.IncludeProcSequence = true
 	}
 
-	if envknob.NoLogsNoSupport() || testenv.InTest() {
+	if envknob.NoLogsNoSupport() || testenv.InTest() || runtime.GOOS == "plan9" {
 		opts.Logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
 	} else {
