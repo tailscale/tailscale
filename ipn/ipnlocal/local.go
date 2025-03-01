@@ -618,19 +618,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		}
 	}
 
-	// initialize Taildrive shares from saved state
-	fs, ok := b.sys.DriveForRemote.GetOK()
-	if ok {
-		currentShares := b.pm.prefs.DriveShares()
-		if currentShares.Len() > 0 {
-			var shares []*drive.Share
-			for _, share := range currentShares.All() {
-				shares = append(shares, share.AsStruct())
-			}
-			fs.SetShares(shares)
-		}
-	}
-
 	for name, newFn := range registeredExtensions {
 		ext, err := newFn(logf, sys)
 		if err != nil {
@@ -2457,6 +2444,16 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
 	b.sendToLocked(ipn.Notify{Prefs: &prefs}, allClients)
+
+	// initialize Taildrive shares from saved state
+	if fs, ok := b.sys.DriveForRemote.GetOK(); ok {
+		currentShares := b.pm.CurrentPrefs().DriveShares()
+		var shares []*drive.Share
+		for _, share := range currentShares.All() {
+			shares = append(shares, share.AsStruct())
+		}
+		fs.SetShares(shares)
+	}
 
 	if !loggedOut && (b.hasNodeKeyLocked() || confWantRunning) {
 		// If we know that we're either logged in or meant to be
