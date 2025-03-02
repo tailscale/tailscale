@@ -169,7 +169,7 @@ func TestUpdateStateSecret(t *testing.T) {
 
 			// Verify memory store was updated
 			for k, v := range tt.updates {
-				got, err := s.memory.ReadState(ipn.StateKey(k))
+				got, err := s.memory.ReadState(ipn.StateKey(sanitizeKey(k)))
 				if err != nil {
 					t.Errorf("reading from memory store: %v", err)
 					continue

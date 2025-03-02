@@ -98,7 +98,11 @@ func (s *Store) updateStateSecret(data map[string][]byte) (err error) {
 	defer func() {
 		if err == nil {
 			for id, bs := range data {
-				s.memory.WriteState(ipn.StateKey(id), bs)
+				// The in-memory store does not distinguish between values read from state Secret on
+				// init and values written to afterwards. Values read from the state
+				// Secret will always be sanitized, so we also need to sanitize values written to store
+				// later, so that the Read logic can just lookup keys in sanitized form.
+				s.memory.WriteState(ipn.StateKey(sanitizeKey(id)), bs)
 			}
 		}
 		if err != nil {
@@ -198,8 +202,9 @@ func (s *Store) loadState() (err error) {
 	return nil
 }
 
-// sanitizeKey converts any value that can be converted to a string into a valid Kubernetes secret key.
+// sanitizeKey converts any value that can be converted to a string into a valid Kubernetes Secret key.
 // Valid characters are alphanumeric, -, _, and .
+// https://kubernetes.io/docs/concepts/configuration/secret/#restriction-names-data.
 func sanitizeKey[T ~string](k T) string {
 	return strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
