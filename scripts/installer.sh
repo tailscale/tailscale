@@ -7,14 +7,6 @@
 
 set -eu
 
-# Ensure that this script runs with the default umask for Linux. In practice,
-# this means that files created by this script (such as keyring files) will be
-# created with 644 permissions. This ensures that keyrings and other files
-# created by this script are readable by installers on systems where the
-# umask is set to a more restrictive value.
-# See https://github.com/tailscale/tailscale/issues/15133
-umask 022
-
 # All the code is wrapped in a main function that gets called at the
 # bottom of the file, so that a truncated partial download doesn't end
 # up executing half a script.
@@ -501,10 +493,13 @@ main() {
 				legacy)
 					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.asc" | $SUDO apt-key add -
 					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+					$SUDO chmod 0644 /etc/apt/sources.list.d/tailscale.list
 				;;
 				keyring)
 					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.noarmor.gpg" | $SUDO tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+					$SUDO chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
 					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.tailscale-keyring.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+					$SUDO chmod 0644 /etc/apt/sources.list.d/tailscale.list
 				;;
 			esac
 			$SUDO apt-get update
