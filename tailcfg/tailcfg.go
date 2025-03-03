@@ -2440,6 +2440,11 @@ const (
 	// type float64 representing the duration in seconds. This cap will be
 	// omitted if the tailnet's MaxKeyDuration is the default.
 	NodeAttrMaxKeyDuration NodeCapability = "tailnet.maxKeyDuration"
+
+	// NodeAttrNativeIPV4 contains the IPV4 address of the node in its
+	// native tailnet. This is currently only sent to Hello, in its
+	// peer node list.
+	NodeAttrNativeIPV4 NodeCapability = "native-ipv4"
 )
 
 // SetDNSRequest is a request to add a DNS record.
