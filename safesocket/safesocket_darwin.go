@@ -37,16 +37,16 @@ type safesocketDarwin struct {
 	sameuserproofFD *os.File // file descriptor for macos app store sameuserproof file
 	sharedDir       string   // shared directory for location of sameuserproof file
 
-	checkConn        bool        // Check macsys safesocket port before returning it
-	isMacSysExt      func() bool // For testing only to force macsys
-	isSandboxedMacos func() bool // For testing only to force macOS sandbox
+	checkConn   bool        // Check macsys safesocket port before returning it
+	isMacSysExt func() bool // For testing only to force macsys
+	isMacGUIApp func() bool // For testing only to force macOS sandbox
 }
 
 var ssd = safesocketDarwin{
-	isMacSysExt:      version.IsMacSysExt,
-	isSandboxedMacos: version.IsSandboxedMacOS,
-	checkConn:        true,
-	sharedDir:        "/Library/Tailscale",
+	isMacSysExt: version.IsMacSysExt,
+	isMacGUIApp: func() bool { return version.IsMacAppStore() || version.IsMacSysApp() },
+	checkConn:   true,
+	sharedDir:   "/Library/Tailscale",
 }
 
 // There are three ways a Darwin binary can be run: as the Mac App Store (macOS)
@@ -68,7 +68,7 @@ func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 	ssd.mu.Lock()
 	defer ssd.mu.Unlock()
 
-	if !ssd.isSandboxedMacos() {
+	if !ssd.isMacGUIApp() {
 		return 0, "", ErrNoTokenOnOS
 	}
 
