@@ -160,7 +160,7 @@ type Options struct {
 	// Shutdown is an optional function that will be called before client shutdown is
 	// attempted. It is used to allow the client to clean up any resources or complete any
 	// tasks that are dependent on a live client.
-	Shutdown func()
+	Shutdown func() // or nil
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a

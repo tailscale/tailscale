@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -22,7 +21,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
-	"tailscale.com/version"
 )
 
 const (
@@ -94,12 +92,13 @@ type AuditLogger struct {
 
 	// mu protects the fields below.
 	mu              sync.Mutex
-	transport       Transport          // transport used to send logs
-	flusher         chan flushOp       // channel used to signal a flush operation
-	flushWorkerDone chan struct{}      // signal to to stop the flush worker
-	flusherStopped  chan struct{}      // signal to indicate the flush worker has stopped.  nil when the worker is not running.
-	flushCancel     context.CancelFunc // cancel function for the current flush operation's context
-	flushCtx        context.Context    // context for the current flush
+	transport       Transport     // transport used to send logs
+	flusher         chan flushOp  // channel used to signal a flush operation
+	flushWorkerDone chan struct{} // close to stop the worker
+	flusherStopped  chan struct{} // closed when the flush worker has stopped.  nil when the worker is not running.
+
+	flushCancel context.CancelFunc // cancel function for the current flush operation's context
+	flushCtx    context.Context    // context for the current flush
 
 	retryBackoff time.Duration // geometric backoff time for retry operations
 }
@@ -190,12 +189,6 @@ func (al *AuditLogger) SetTransport(t Transport, logID ipn.ProfileID) {
 // Returns a receive-only channel that will be sent a single value indicating the number of
 // retriable transactions that remain in the queue once flushed.
 func (al *AuditLogger) Enqueue(action tailcfg.ClientAuditAction, details string) error {
-	// On apple platforms, we support audit logging on standalone macsys only.  The other platforms
-	// utilize the keychain as their persistent store and will require a separate file-based implementation.
-	if runtime.GOOS == "ios" || (runtime.GOOS == "darwin" && version.IsMacAppStore()) {
-		return errors.New("audit logging is not supported on this platform")
-	}
-
 	txn := auditLogTxn{
 		Action:    action,
 		Details:   details,
@@ -523,7 +516,7 @@ func NewLogStateStore(store ipn.StateStore, logf logger.Logf) LogStore {
 
 // generateKey generates a human-readable key for the given profileID.
 func (s *LogStateStore) generateKey(key ipn.ProfileID) string {
-	return "auditlog-logs-" + string(key)
+	return "auditlog-" + string(key)
 }
 
 // Save saves the given logs to an ipn.StateStore. This overwrites

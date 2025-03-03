@@ -1690,7 +1690,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// Update the audit logger with the current profile ID and reset the transport to
 	// reload and flush cached logs.
 	if b.auditLogger != nil {
-		b.logf("Updating audit logger with profile ID %v", b.pm.CurrentProfile().ID())
 		pid := b.pm.CurrentProfile().ID()
 		b.auditLogger.SetTransport(b.ccAuto, pid)
 	}
@@ -2402,12 +2401,21 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		debugFlags = append([]string{"netstack"}, debugFlags...)
 	}
 
-	al := auditlog.NewAuditLogger(auditlog.Opts{
-		Logf:       b.logf,
-		RetryLimit: 32,
-		Store:      auditlog.NewLogStateStore(b.store, b.logf),
-	})
-	b.auditLogger = al
+	var auditLogShutdown func()
+	// Audit logging is only available if the client has set up a proper persistent
+	// store for the logs in sys.
+	logstore, ok := b.sys.AuditLogStore.GetOK()
+	if ok && logstore != nil {
+		al := auditlog.NewAuditLogger(auditlog.Opts{
+			Logf:       b.logf,
+			RetryLimit: 32,
+			Store:      logstore,
+		})
+		b.auditLogger = al
+		auditLogShutdown = func() { al.FlushAndStop(2 * time.Second) }
+	} else {
+		b.logf("auditlog: no audit log storage configured.  client audit logging disabled.")
+	}
 
 	// TODO(apenwarr): The only way to change the ServerURL is to
 	// re-run b.Start, because this is the only place we create a
@@ -2434,7 +2442,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		C2NHandler:                 http.HandlerFunc(b.handleC2N),
 		DialPlan:                   &b.dialPlan, // pointer because it can't be copied
 		ControlKnobs:               b.sys.ControlKnobs(),
-		Shutdown:                   func() { al.FlushAndStop(2 * time.Second) },
+		Shutdown:                   auditLogShutdown,
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -5921,7 +5929,9 @@ func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
 	pid := b.pm.CurrentProfile().ID()
-	b.auditLogger.SetTransport(b.ccAuto, pid)
+	if b.auditLogger != nil {
+		b.auditLogger.SetTransport(b.ccAuto, pid)
+	}
 }
 
 // resetControlClientLocked sets b.cc to nil and returns the old value. If the
