@@ -676,7 +676,9 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	addLBHeader(req, request.OldNodeKey)
 	addLBHeader(req, request.NodeKey)
 
+	start := time.Now()
 	res, err := httpc.Do(req)
+	loginLatencies.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return regen, opt.URL, nil, fmt.Errorf("register request: %w", err)
 	}
@@ -964,7 +966,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	}
 	addLBHeader(req, nodeKey)
 
+	start := time.Now()
 	res, err := httpc.Do(req)
+	initialMapRequestLatencies.Observe(time.Since(start).Seconds())
 	if err != nil {
 		vlogf("netmap: Do: %v", err)
 		return err
@@ -1322,6 +1326,7 @@ func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 		c.logf("invalid PingRequest with no URL")
 		return
 	}
+	start := time.Now()
 	switch pr.Types {
 	case "":
 		answerHeadPing(c.logf, httpc, pr)
@@ -1334,6 +1339,7 @@ func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 		answerC2NPing(c.logf, c.c2nHandler, httpc, pr)
 		return
 	}
+	answerPingLatencies.Observe(time.Since(start).Seconds())
 	for _, t := range strings.Split(pr.Types, ",") {
 		switch pt := tailcfg.PingType(t); pt {
 		case tailcfg.PingTSMP, tailcfg.PingDisco, tailcfg.PingICMP, tailcfg.PingPeerAPI:
@@ -1638,7 +1644,9 @@ func (c *Direct) ReportHealthChange(w *health.Warnable, us *health.UnhealthyStat
 	// Best effort, no logging:
 	ctx, cancel := context.WithTimeout(c.closedCtx, 5*time.Second)
 	defer cancel()
+	start := time.Now()
 	res, err := np.post(ctx, "/machine/update-health", nodeKey, req)
+	updateHealthLatencies.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return
 	}

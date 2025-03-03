@@ -239,7 +239,9 @@ func (nc *NoiseClient) getConn(ctx context.Context) (*noiseconn.Conn, error) {
 		// which was canceled is our context and retry if our context is still
 		// valid.
 		conn, err, _ := nc.sfDial.Do(struct{}{}, func() (*noiseconn.Conn, error) {
+			start := time.Now()
 			c, err := nc.dial(ctx)
+			dialLatencies.Observe(time.Since(start).Seconds())
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil, contextErr{ctx.Err()}
