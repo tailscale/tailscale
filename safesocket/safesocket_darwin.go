@@ -44,7 +44,7 @@ type safesocketDarwin struct {
 
 var ssd = safesocketDarwin{
 	isMacSysExt: version.IsMacSysExt,
-	isMacGUIApp: func() bool { return version.IsMacAppStore() || version.IsMacSysApp() },
+	isMacGUIApp: func() bool { return version.IsMacAppStore() || version.IsMacSysApp() || version.IsMacSysExt() },
 	checkConn:   true,
 	sharedDir:   "/Library/Tailscale",
 }
