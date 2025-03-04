@@ -139,6 +139,12 @@ type DERPNode struct {
 	// name. If empty, HostName is used. If CertName is non-empty,
 	// HostName is only used for the TCP dial (if IPv4/IPv6 are
 	// not present) + TLS ClientHello.
+	//
+	// As a special case, if CertName starts with "sha256-raw:",
+	// then the rest of the string is a hex-encoded SHA256 of the
+	// cert to expect. This is used for self-signed certs.
+	// In this case, the HostName field will typically be an IP
+	// address literal.
 	CertName string `json:",omitempty"`
 
 	// IPv4 optionally forces an IPv4 address to use, instead of using DNS.

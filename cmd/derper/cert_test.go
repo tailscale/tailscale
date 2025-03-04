@@ -4,19 +4,29 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"tailscale.com/derp"
+	"tailscale.com/derp/derphttp"
+	"tailscale.com/net/netmon"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 // Verify that in --certmode=manual mode, we can use a bare IP address
@@ -94,4 +104,67 @@ func TestCertIP(t *testing.T) {
 	if back == nil {
 		t.Fatalf("GetCertificate returned nil")
 	}
+}
+
+// Test that we can dial a raw IP without using a hostname and without a WebPKI
+// cert, validating the cert against the signature of the cert in the DERP map's
+// DERPNode.
+//
+// See https://github.com/tailscale/tailscale/issues/11776.
+func TestPinnedCertRawIP(t *testing.T) {
+	td := t.TempDir()
+	cp, err := NewManualCertManager(td, "127.0.0.1")
+	if err != nil {
+		t.Fatalf("NewManualCertManager: %v", err)
+	}
+
+	cert, err := cp.TLSConfig().GetCertificate(&tls.ClientHelloInfo{
+		ServerName: "127.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("GetCertificate: %v", err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer ln.Close()
+
+	ds := derp.NewServer(key.NewNode(), t.Logf)
+
+	derpHandler := derphttp.Handler(ds)
+	mux := http.NewServeMux()
+	mux.Handle("/derp", derpHandler)
+
+	var hs http.Server
+	hs.Handler = mux
+	hs.TLSConfig = cp.TLSConfig()
+	go hs.ServeTLS(ln, "", "")
+
+	lnPort := ln.Addr().(*net.TCPAddr).Port
+
+	reg := &tailcfg.DERPRegion{
+		RegionID: 900,
+		Nodes: []*tailcfg.DERPNode{
+			{
+				RegionID: 900,
+				HostName: "127.0.0.1",
+				CertName: fmt.Sprintf("sha256-raw:%-02x", sha256.Sum256(cert.Leaf.Raw)),
+				DERPPort: lnPort,
+			},
+		},
+	}
+
+	netMon := netmon.NewStatic()
+	dc := derphttp.NewRegionClient(key.NewNode(), t.Logf, netMon, func() *tailcfg.DERPRegion {
+		return reg
+	})
+	defer dc.Close()
+
+	_, connClose, _, err := dc.DialRegionTLS(context.Background(), reg)
+	if err != nil {
+		t.Fatalf("DialRegionTLS: %v", err)
+	}
+	defer connClose.Close()
 }
