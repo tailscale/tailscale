@@ -141,7 +141,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 				}
 				outcome := goOutput.Action
 				if outcome == "build-fail" {
-					outcome = "FAIL"
+					outcome = "fail"
 				}
 				pkgTests[""].logs.WriteString(goOutput.Output)
 				ch <- &testAttempt{
@@ -152,7 +152,15 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 					logs:        pkgTests[""].logs,
 					pkgFinished: true,
 				}
+			case "output":
+				// Capture all output from the package except for the final
+				// "FAIL    tailscale.io/control    0.684s" line, as
+				// printPkgOutcome will output a similar line
+				if !strings.HasPrefix(goOutput.Output, fmt.Sprintf("FAIL\t%s\t", goOutput.Package)) {
+					pkgTests[""].logs.WriteString(goOutput.Output)
+				}
 			}
+
 			continue
 		}
 		testName := goOutput.Test
@@ -276,7 +284,11 @@ func main() {
 						// when a package times out.
 						failed = true
 					}
-					os.Stdout.ReadFrom(&tr.logs)
+					if testingVerbose || tr.outcome == "fail" {
+						// Output package-level output which is where e.g.
+						// panics outside tests will be printed
+						io.Copy(os.Stdout, &tr.logs)
+					}
 					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt, tr.end.Sub(tr.start))
 					continue
 				}
