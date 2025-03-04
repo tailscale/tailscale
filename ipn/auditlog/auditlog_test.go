@@ -17,7 +17,7 @@ import (
 	"tailscale.com/tstest"
 )
 
-func TestErrorEvaluator(t *testing.T) {
+func TestRetryableErrors(t *testing.T) {
 	errors := []struct {
 		err  error
 		want bool
@@ -27,14 +27,13 @@ func TestErrorEvaluator(t *testing.T) {
 		{fmt.Errorf("%w: %w", controlclient.ErrNoNoiseClient, errors.New("boom")), true},
 		{fmt.Errorf("%w: %w", controlclient.ErrHTTPPostFailure, errors.New("boom")), true},
 		{controlclient.ErrNoNodeKey, true},
-		{context.Canceled, true},
-		{fmt.Errorf("%w: %w", context.Canceled, errors.New("boom")), true},
-		{context.DeadlineExceeded, true},
-		{controlclient.ErrBadHTTPResponseWithDetails(500, []byte("server melted")), false},
+		{context.Canceled, false},
+		{fmt.Errorf("%w: %w", context.Canceled, errors.New("boom")), false},
+		{controlclient.ErrAuditLogHTTPFailure(500, []byte("server melted")), false},
 	}
 
 	for _, e := range errors {
-		if errorEvaluator(e.err) != e.want {
+		if isRetryableError(e.err) != e.want {
 			t.Fatalf("error evaluator failed for %v", e.err)
 		}
 	}
@@ -42,7 +41,7 @@ func TestErrorEvaluator(t *testing.T) {
 
 // TestEnqueueAndFlush enqueues n logs and flushes them.
 // We expect all logs to be flushed and for no
-// logs to remain in the persitent store.g
+// logs to remain in the store.
 func TestEnqueueAndFlush(t *testing.T) {
 	mockTransport := &mockAuditLogTransport{t: t}
 	mockStore := NewLogStateStore(&mem.Store{}, t.Logf)
@@ -52,44 +51,67 @@ func TestEnqueueAndFlush(t *testing.T) {
 		Logf:       t.Logf,
 		Store:      mockStore,
 	})
-	al.errorEvaluator = testErrorEvaluator
 
 	t.Cleanup(func() {
-		al.FlushAndStop(1 * time.Second)
+		al.FlushAndStop(5 * time.Second)
 	})
 	tstest.ResourceCheck(t)
 
-	al.SetTransport(mockTransport, "test")
-	mockTransport.fail = false
-	mockTransport.err = retriableError
+	al.SetProfileID("test")
+	al.Start(mockTransport)
 
-	wantSent := 16
+	mockTransport.fail = false
+	mockTransport.err = &retriableError
+
+	wantSent := 10
 
 	var err error
-	for i := 0; i < wantSent; i++ {
+	for i := range wantSent {
 		err = al.Enqueue(tailcfg.AuditNodeDisconnect, fmt.Sprintf("log %d", i))
 		if err != nil {
 			t.Fatalf("failed to enqueue audit log: %v", err)
 		}
 	}
 
-	al.FlushAndStop(1 * time.Second)
+	al.FlushAndStop(5 * time.Second)
 	al.mu.Lock()
 	defer al.mu.Unlock()
+	gotStored, err := al.storedCountLocked()
 
-	gotPersisted, wantPersisted := al.storedCountLocked(), 0
-	if wantPersisted != gotPersisted {
-		t.Fatalf("want %d persisted, got %d", wantPersisted, gotPersisted)
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
 	}
 
-	gotSent, wantSent := mockTransport.sendCount, wantSent
-	if wantSent != gotSent {
-		t.Fatalf("want %d sent, got %d", wantSent, gotSent)
+	wantStored := 0
+	if gotStored != wantStored {
+		t.Fatalf("want %d stored, got %d", wantStored, gotStored)
+	}
+
+	gotSent := mockTransport.sendCount
+	if gotSent != wantSent {
+		t.Fatalf("want %d stored, got %d", wantSent, gotSent)
 	}
 }
 
-// TestSendOnRestore pushes a pair of logs to the persistent store, and ensures they
-// are sent as soon as SetTransport is called then checks to ensure the sent logs no
+func TestChangeProfileId(t *testing.T) {
+	al := NewAuditLogger(Opts{
+		RetryLimit: 100,
+		Logf:       t.Logf,
+	})
+	err := al.SetProfileID("test")
+	if err != nil {
+		t.Fatalf("failed to set profileID: %v", err)
+	}
+
+	// Changing a profile ID must fail
+	err = al.SetProfileID("test")
+	if err == nil {
+		t.Fatalf("expected error when setting profileID")
+	}
+}
+
+// TestSendOnRestore pushes a n logs to the persistent store, and ensures they
+// are sent as soon as Start is called then checks to ensure the sent logs no
 // longer exist in the store.
 func TestSendOnRestore(t *testing.T) {
 	mockTransport := &mockAuditLogTransport{t: t}
@@ -100,100 +122,101 @@ func TestSendOnRestore(t *testing.T) {
 		Logf:       t.Logf,
 		Store:      mockStore,
 	})
-	al.errorEvaluator = testErrorEvaluator
-	t.Cleanup(func() {
-		al.FlushAndStop(1 * time.Second)
-	})
 	tstest.ResourceCheck(t)
+	al.SetProfileID("test")
 
-	mockStore.Save("test", []auditLogTxn{
-		{Details: "log 1", EventID: "1"},
-		{Details: "log 2", EventID: "2"}})
+	wantTotal := 10
 
-	al.SetTransport(mockTransport, "test")
-	al.SetTransport(mockTransport, "test")
-
-	al.FlushAndStop(1 * time.Second)
-	al.mu.Lock()
-	defer al.mu.Unlock()
-
-	gotPersisted, wantPersisted := al.storedCountLocked(), 0
-	if wantPersisted != gotPersisted {
-		t.Fatalf("want %d persisted, got %d", wantPersisted, gotPersisted)
-	}
-
-	gotSent, wantSent := mockTransport.sendCount, 2
-	if wantSent != gotSent {
-		t.Fatalf("want %d sent, got %d", wantSent, gotSent)
-	}
-}
-
-// TestFailureExhaustion enqueues 3 logs, all of which will fail to flush. We then call Flush
-// several times to exhaust the retries and expect and expect permanent failure.
-func TestFailureExhaustion(t *testing.T) {
-	mockTransport := &mockAuditLogTransport{
-		t:     t,
-		delay: 10 * time.Millisecond,
-		err:   retriableError,
-		fail:  true,
-	}
-	mockStore := NewLogStateStore(&mem.Store{}, t.Logf)
-
-	al := NewAuditLogger(Opts{
-		RetryLimit: 2,
-		Logf:       t.Logf,
-		Store:      mockStore,
-	})
-	al.errorEvaluator = testErrorEvaluator
-	t.Cleanup(func() {
-		al.FlushAndStop(1 * time.Second)
-	})
-	tstest.ResourceCheck(t)
-
-	al.SetTransport(mockTransport, "test")
-
-	for i := 0; i < 5; i++ {
-		log := auditLogTxn{
-			Retries:   1,
-			Details:   fmt.Sprintf("log %d", i),
-			TimeStamp: time.Now(),
-			EventID:   fmt.Sprintf("%d", i),
-		}
-		err := al.enqueue(log, true)
+	for range wantTotal {
+		err := al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 		if err != nil {
 			t.Fatalf("failed to enqueue audit log: %v", err)
 		}
 	}
 
-	for i := 0; i < 8; i++ {
-		// Flush a 8 times to exhaust all of the retries on all of the the queued logs.
-		al.scheduleFlush(5*time.Second, mockTransport)
-	}
+	al.Start(mockTransport)
+	al.FlushAndStop(5 * time.Second)
 
-	al.FlushAndStop(1 * time.Second)
 	al.mu.Lock()
 	defer al.mu.Unlock()
+	gotStored, err := al.storedCountLocked()
 
-	wantRequeued, gotRequeued := 0, al.storedCountLocked()
-
-	if wantRequeued != gotRequeued {
-		t.Fatalf("want %d failed, got %d", wantRequeued, gotRequeued)
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
 	}
 
-	gotSent, wantSent := mockTransport.sendCount, 0
-	if wantSent != gotSent {
+	wantStored := 0
+	if gotStored != wantStored {
+		t.Fatalf("want %d stored, got %d", wantStored, gotStored)
+	}
+
+	gotSent, wantSent := mockTransport.sendCount, wantTotal
+	if gotSent != wantSent {
 		t.Fatalf("want %d sent, got %d", wantSent, gotSent)
 	}
 }
 
-// TestEnqueueAndFailNoRetry enqueues a set of logs , both of which will fail and are not
-// retriable. We then call Flush and expect all to be unsent.
+// TestFailureExhaustion enqueues n logs,  with the transport in a failable state.
+// We then set it to a non-failing state, call FlushAndStop and expect all logs to be sent.
+func TestFailureExhaustion(t *testing.T) {
+	mockTransport := &mockAuditLogTransport{
+		t:     t,
+		delay: 10 * time.Millisecond,
+		err:   &retriableError,
+		fail:  true,
+	}
+	mockStore := NewLogStateStore(&mem.Store{}, t.Logf)
+
+	al := NewAuditLogger(Opts{
+		RetryLimit: 1,
+		Logf:       t.Logf,
+		Store:      mockStore,
+	})
+	t.Cleanup(func() {
+		al.FlushAndStop(5 * time.Second)
+	})
+	tstest.ResourceCheck(t)
+
+	al.SetProfileID("test")
+	al.Start(mockTransport)
+
+	for range 10 {
+		err := al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
+		if err != nil {
+			t.Fatalf("failed to enqueue audit log: %v", err)
+		}
+	}
+
+	al.FlushAndStop(5 * time.Second)
+	al.mu.Lock()
+	defer al.mu.Unlock()
+	gotStored, err := al.storedCountLocked()
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
+	}
+
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
+	}
+	wantStored := 0
+	if gotStored != wantStored {
+		t.Fatalf("want %d stored, got %d", gotStored, wantStored)
+	}
+
+	gotSent, wantSent := mockTransport.sendCount, 0
+	if gotSent != wantSent {
+		t.Fatalf("want %d sent, got %d", wantSent, gotSent)
+	}
+}
+
+// TestEnqueueAndFailNoRetry enqueues a set of logs, all of which will fail and are not
+// retriable. We then call FlushAndStop and expect all to be unsent.
 func TestEnqueueAndFailNoRetry(t *testing.T) {
 	mockTransport := &mockAuditLogTransport{
 		t:     t,
 		delay: 10 * time.Millisecond,
 		fail:  true,
-		err:   nonRetriableError,
+		err:   &nonRetriableError,
 	}
 	mockStore := NewLogStateStore(&mem.Store{}, t.Logf)
 
@@ -202,48 +225,58 @@ func TestEnqueueAndFailNoRetry(t *testing.T) {
 		Logf:       t.Logf,
 		Store:      mockStore,
 	})
-	al.errorEvaluator = testErrorEvaluator
 	t.Cleanup(func() {
-		al.FlushAndStop(1 * time.Second)
+		al.FlushAndStop(5 * time.Second)
 	})
 	tstest.ResourceCheck(t)
 
-	al.SetTransport(mockTransport, "test")
+	al.SetProfileID("test")
+	al.Start(mockTransport)
 
-	for i := 0; i < 2; i++ {
+	for i := range 10 {
 		log := auditLogTxn{
 			Details:   fmt.Sprintf("log %d", i),
 			TimeStamp: time.Now(),
 			EventID:   fmt.Sprintf("%d", i),
 		}
-		err := al.enqueue(log, true)
+		err := al.enqueue(log)
 		if err != nil {
 			t.Fatalf("failed to enqueue audit log: %v", err)
 		}
 	}
 
-	al.FlushAndStop(1 * time.Second)
+	al.FlushAndStop(5 * time.Second)
 	al.mu.Lock()
 	defer al.mu.Unlock()
+	gotStored, err := al.storedCountLocked()
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
+	}
 
-	gotUnsent, wantUnsent := al.storedCountLocked(), 0
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
+	}
+	wantStored := 0
 
-	if wantUnsent != gotUnsent {
-		t.Fatalf("want %d unsent, got %d", wantUnsent, gotUnsent)
+	if gotStored != wantStored {
+		t.Fatalf("want %d stored, got %d", gotStored, wantStored)
 	}
 
 	gotSent, wantSent := mockTransport.sendCount, 0
-	if wantSent != gotSent {
+	if gotSent != wantSent {
 		t.Fatalf("want %d sent, got %d", wantSent, gotSent)
 	}
 }
 
+// TestEnqueueAndRetry enqueues a set of logs, all of which will fail and are retriable.
+// Mid-test, we set the transport to not-fail and expect the queue to flush properly
+// We set the backoff parameters to 0 seconds so retries are immediate.
 func TestEnqueueAndRetry(t *testing.T) {
 	mockTransport := &mockAuditLogTransport{
 		t:     t,
 		delay: 0 * time.Millisecond,
 		fail:  true,
-		err:   retriableError,
+		err:   &retriableError,
 	}
 	mockStore := NewLogStateStore(&mem.Store{}, t.Logf)
 
@@ -252,101 +285,54 @@ func TestEnqueueAndRetry(t *testing.T) {
 		Logf:       t.Logf,
 		Store:      mockStore,
 	})
-	al.errorEvaluator = testErrorEvaluator
+
+	// Set our backoff parameters to 0 seconds to avoid the
+	// need for any sleeps
+	al.backoffOpts = backoffOpts{
+		min:       0,
+		max:       0,
+		mutiplier: 0.0,
+	}
+
 	t.Cleanup(func() {
-		al.FlushAndStop(1 * time.Second)
+		al.FlushAndStop(5 * time.Second)
 	})
 	tstest.ResourceCheck(t)
 
-	al.SetTransport(mockTransport, "test")
+	al.SetProfileID("test")
+	al.Start(mockTransport)
 
-	for i := 0; i < 2; i++ {
-		log := auditLogTxn{
-			Details:   fmt.Sprintf("log %d", i),
-			TimeStamp: time.Now(),
-			EventID:   fmt.Sprintf("%d", i),
-		}
-		err := al.enqueue(log, true)
+	for range 10 {
+		err := al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 		if err != nil {
 			t.Fatalf("failed to enqueue audit log: %v", err)
 		}
 	}
 
-	// Wait slightly less than our retry interval, and set the transport
-	// to stop failing.
-	time.Sleep(minBackoff - 50*time.Millisecond)
 	mockTransport.mu.Lock()
 	mockTransport.fail = false
 	mockTransport.mu.Unlock()
 
-	// Now wait until after the retry
-	time.Sleep(100 * time.Millisecond)
-
-	// And make sure the retry happened
-	al.mu.Lock()
-	gotUnsent, wantUnsent := al.storedCountLocked(), 0
-	al.mu.Unlock()
-
-	if wantUnsent != gotUnsent {
-		t.Fatalf("want %d unsent, got %d", wantUnsent, gotUnsent)
-	}
-
-	gotSent, wantSent := mockTransport.sendCount, 2
-	if wantSent != gotSent {
-		t.Fatalf("want %d sent, got %d", wantSent, gotSent)
-	}
-
-	al.FlushAndStop(1 * time.Second)
-}
-
-// TestEnqueueAndFailTimeout enqueues a set of logs, all of which will fail to flush due to context
-// timeouts. With the retry limit set to zero, we expect 0 to be sent to the result
-// channel.
-func TestEnqueueAndFailTimeout(t *testing.T) {
-	mockTransport := &mockAuditLogTransport{
-		t:     t,
-		delay: 2 * time.Second,
-		fail:  true,
-		err:   retriableError,
-	}
-	mockStore := NewLogStateStore(&mem.Store{}, t.Logf)
-
-	al := NewAuditLogger(Opts{
-		RetryLimit: 10,
-		Logf:       t.Logf,
-		Store:      mockStore,
-	})
-	al.errorEvaluator = testErrorEvaluator
-	t.Cleanup(func() {
-		al.FlushAndStop(1 * time.Second)
-	})
-	tstest.ResourceCheck(t)
-
-	// Set the default timeout on the queue to a single millisecond, much less
-	// than the 2 second delay on the transport.
-	al.timeout = time.Millisecond
-	al.SetTransport(mockTransport, "test")
-
-	for i := 0; i < 2; i++ {
-		log := auditLogTxn{
-			Details:   fmt.Sprintf("log %d", i),
-			TimeStamp: time.Now(),
-			EventID:   fmt.Sprintf("%d", i),
-		}
-		err := al.enqueue(log, true)
-		if err != nil {
-			t.Fatalf("failed to enqueue audit log: %v", err)
-		}
-	}
-
-	al.FlushAndStop(1 * time.Second)
+	al.FlushAndStop(5 * time.Second)
 	al.mu.Lock()
 	defer al.mu.Unlock()
+	gotStored, err := al.storedCountLocked()
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
+	}
 
-	gotFailed, wantUnsent := al.storedCountLocked(), 2
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
+	}
+	wantStored := 0
 
-	if wantUnsent != gotFailed {
-		t.Fatalf("want %d unsent, got %d", wantUnsent, gotFailed)
+	if gotStored != wantStored {
+		t.Fatalf("want %d stored, got %d", wantStored, gotStored)
+	}
+
+	gotSent, wantSent := mockTransport.sendCount, 10
+	if gotSent != wantSent {
+		t.Fatalf("want %d sent, got %d", wantSent, gotSent)
 	}
 }
 
@@ -357,7 +343,7 @@ func TestStart(t *testing.T) {
 	mockTransport := &mockAuditLogTransport{
 		t:    t,
 		fail: true,
-		err:  retriableError,
+		err:  &retriableError,
 	}
 	mockStore := NewLogStateStore(&mem.Store{}, t.Logf)
 
@@ -366,50 +352,64 @@ func TestStart(t *testing.T) {
 		Logf:       t.Logf,
 		Store:      mockStore,
 	})
-	al.errorEvaluator = testErrorEvaluator
 	t.Cleanup(func() {
-		al.FlushAndStop(1 * time.Second)
+		al.FlushAndStop(5 * time.Second)
 	})
 	tstest.ResourceCheck(t)
 
-	log := auditLogTxn{
-		Details:   "log",
-		EventID:   "1",
-		TimeStamp: time.Now(),
-	}
-	err := al.enqueue(log, true)
+	err := al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 	if err == nil {
 		t.Fatalf("enqueue should have failed")
 	}
 
-	al.FlushAndStop(time.Second)
-	al.mu.Lock()
+	al.FlushAndStop(5 * time.Second)
 
-	// We have not started the transport, so we have no way to persist the logs.
-	wantPending, gotPending := 0, al.storedCountLocked()
-	if wantPending != gotPending {
-		t.Fatalf("want %d pending, got %d", wantPending, gotPending)
+	al.mu.Lock()
+	gotStored, err := al.storedCountLocked()
+	if err == nil {
+		t.Fatalf("expected Enqueue failure")
 	}
 	al.mu.Unlock()
+	wantStored := 0
+
+	if wantStored != gotStored {
+		t.Fatalf("want %d stored, got %d", wantStored, gotStored)
+	}
 
 	// This second stop should no-op
-	al.FlushAndStop(time.Second)
+	al.FlushAndStop(5 * time.Second)
 
 	mockTransport.fail = false
-	al.SetTransport(mockTransport, "valid")
 
-	err = al.enqueue(log, true)
+	al.SetProfileID("test")
+	al.Start(mockTransport)
+	// This must no-op
+	al.Start(mockTransport)
+
+	err = al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 	if err != nil {
 		t.Fatalf("enqueue should not have failed %v", err)
 	}
 
-	al.FlushAndStop(time.Second)
+	al.FlushAndStop(5 * time.Second)
+	// This must no-op safely
+	al.FlushAndStop(5 * time.Second)
+
 	al.mu.Lock()
 	defer al.mu.Unlock()
+	gotStored, err = al.storedCountLocked()
+	if err != nil {
+		t.Fatalf("failed to restore logs: %v", err)
+	}
+	wantStored = 0
 
-	gotFailed, wantFailed := al.storedCountLocked(), 0
-	if wantFailed != gotFailed {
-		t.Fatalf("want %d failed, got %d", wantFailed, gotFailed)
+	if gotStored != wantStored {
+		t.Fatalf("want %d persisted, got %d", gotStored, wantStored)
+	}
+
+	gotSent, wantSent := mockTransport.sendCount, 1
+	if gotSent != wantSent {
+		t.Fatalf("want %d sent, got %d", wantSent, gotSent)
 	}
 }
 
@@ -429,8 +429,6 @@ func TestLogSorting(t *testing.T) {
 		{Details: "log 2"},
 		{Details: "log 3"},
 	}
-
-	t.Logf("logs: %v", logs)
 
 	mockStore.Save("test", logs)
 
@@ -465,7 +463,7 @@ func (m *mockAuditLogTransport) SendAuditLog(ctx context.Context, _ tailcfg.Audi
 	defer m.mu.Unlock()
 	select {
 	case <-ctx.Done():
-		return m.err
+		return ctx.Err()
 	case <-time.After(m.delay):
 	}
 
@@ -477,9 +475,17 @@ func (m *mockAuditLogTransport) SendAuditLog(ctx context.Context, _ tailcfg.Audi
 	}
 }
 
-var retriableError = errors.New("retriable error")
-var nonRetriableError = errors.New("permenent failure error")
+type mockError struct {
+	err error
+}
 
-func testErrorEvaluator(err error) bool {
-	return errors.Is(err, retriableError)
+func (e *mockError) Error() string {
+	return e.err.Error()
+}
+
+var retriableError = mockError{errors.New("retriable error")}
+var nonRetriableError = mockError{errors.New("permenent failure error")}
+
+func (e *mockError) Retryable() bool {
+	return errors.Is(e, &retriableError)
 }

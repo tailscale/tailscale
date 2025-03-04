@@ -1737,7 +1737,7 @@ func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequ
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		all, _ := io.ReadAll(res.Body)
-		return ErrBadHTTPResponseWithDetails(res.StatusCode, all)
+		return ErrAuditLogHTTPFailure(res.StatusCode, all)
 	}
 	return nil
 }
@@ -1796,23 +1796,3 @@ var (
 	metricSetDNS      = clientmetric.NewCounter("controlclient_setdns")
 	metricSetDNSError = clientmetric.NewCounter("controlclient_setdns_error")
 )
-
-// ErrBadHTTPResponse wraps a generic HTTP error response from controlclient
-type ErrBadHTTPResponse struct {
-	errStr   string
-	response string
-	httpCode int
-}
-
-func (e ErrBadHTTPResponse) Error() string {
-	return e.errStr
-}
-
-var ErrHTTPFailure error = errors.New("HTTP Error")
-var ErrNoNodeKey error = errors.New("No Node Key")
-var ErrNoNoiseClient error = errors.New("No Noise Client")
-var ErrHTTPPostFailure error = errors.New("HTTP Post Failure")
-
-func ErrBadHTTPResponseWithDetails(errCode int, response []byte) error {
-	return ErrBadHTTPResponse{ErrHTTPFailure.Error(), string(response), errCode}
-}

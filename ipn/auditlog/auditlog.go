@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package auditlog provides a reliable mechanism for logging client events to the control plane.
+// Package auditlog logs client auditlog events to the control plane.
 package auditlog
 
 import (
@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"sync"
 	"time"
@@ -21,11 +20,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
-)
-
-const (
-	// defaultTimeout is the default timeout for a flush operation.
-	defaultTimeout = time.Second * 5
 )
 
 // auditLogTxn represents an audit log that has not yet been sent to the control plane.
@@ -76,112 +70,122 @@ type Opts struct {
 	Logf logger.Logf
 }
 
-type State string
+type maybeRetryable interface {
+	Retryable() bool
+}
+
+func isRetryableError(err error) bool {
+	var ae maybeRetryable
+	if errors.As(err, &ae) {
+		return ae.Retryable()
+	}
+	return false
+}
+
+type backoffOpts struct {
+	min, max  time.Duration
+	mutiplier float64
+}
+
+// .5, 1, 2, 4, 8, 10, 10, 10, 10, 10...
+var defaultBackoffOpts = backoffOpts{
+	min:       time.Millisecond * 500,
+	max:       10 * time.Second,
+	mutiplier: 2,
+}
 
 // AuditLogger provides a reliable queue-based mechanism for submitting audit logs to the control plane - or
 // another suitable consumer. Logs are persisted to disk and retried until they are successfully sent.
 //
 // Each individual profile/controlclient tuple should constuct and managed a unique [AuditLogger] instance.
 type AuditLogger struct {
-	logf           logger.Logf
-	retryLimit     int
-	timeout        time.Duration
-	logID          ipn.ProfileID
-	store          LogStore
-	errorEvaluator func(error) bool // errorEvaluator determines whether an error returned from a [Transport] is retr
+	// these fields are immutable
+	logf        logger.Logf
+	retryLimit  int                // the maximum number of attempts we'll make to send a log
+	flusher     chan struct{}      // channel used to signal a flush operation
+	ctx         context.Context    // canceled when the logger is stopped
+	ctxCancel   context.CancelFunc // cancels ctx
+	store       LogStore           // persistent storage for unsent logs
+	backoffOpts                    // backoff settings for retry operations
 
 	// mu protects the fields below.
-	mu              sync.Mutex
-	transport       Transport     // transport used to send logs
-	flusher         chan flushOp  // channel used to signal a flush operation
-	flushWorkerDone chan struct{} // close to stop the worker
-	flusherStopped  chan struct{} // closed when the flush worker has stopped.  nil when the worker is not running.
-
-	flushCancel context.CancelFunc // cancel function for the current flush operation's context
-	flushCtx    context.Context    // context for the current flush
-
-	retryBackoff time.Duration // geometric backoff time for retry operations
+	mu   sync.Mutex
+	done chan struct{} // close to stop the worker goroutine.  nil if the worker is not running.
+	// profileID is the profileID of the user associated with the logger instance
+	// profileID will be "" until SetProfileId is called.  The profileID must be set
+	// or Enqueue will return an error.
+	profileID ipn.ProfileID
+	transport Transport // nil until SetTransport is called.
 }
 
-type flushOp struct {
-	timeout   time.Duration // non-zero.  the http timeout for each individual transaction
-	transport Transport     // non-nil
-	isRetry   bool          // force flush even if stopped
-}
-
-// NewAuditLogger creates a new AuditLogger with the given options.
+// NewAuditLogger creates a new [AuditLogger] with the given options.
 func NewAuditLogger(opts Opts) *AuditLogger {
-	logger := logger.WithPrefix(opts.Logf, "auditlog: ")
+	ctx, cancel := context.WithCancel(context.Background())
+
 	q := &AuditLogger{
-		retryLimit:     opts.RetryLimit,
-		logf:           logger,
-		timeout:        defaultTimeout,
-		store:          opts.Store,
-		flusher:        make(chan flushOp),
-		retryBackoff:   backoffForever,
-		errorEvaluator: errorEvaluator,
+		retryLimit:  opts.RetryLimit,
+		logf:        logger.WithPrefix(opts.Logf, "auditlog: "),
+		store:       opts.Store,
+		flusher:     make(chan struct{}, 1),
+		ctx:         ctx,
+		ctxCancel:   cancel,
+		backoffOpts: defaultBackoffOpts,
 	}
 	q.logf("created")
 	return q
 }
 
-// errorEvaluator determines whether an error returned from a [Transport] is
-// retriable.  This is the default implementation used by the [AuditLogger].
-func errorEvaluator(err error) bool {
-	if errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, controlclient.ErrNoNodeKey) ||
-		errors.Is(err, controlclient.ErrHTTPPostFailure) ||
-		errors.Is(err, controlclient.ErrNoNoiseClient) {
-		return true
-	}
-
-	// We're treating all HTTP errors as non-retriable here, but this could be made more sophisticated.
-	// Notably, HTTP 500's are often retriable.
-	// (barnstar) TODO: make this more sophisticated. See: https://github.com/tailscale/corp/issues/26811
-	if errors.Is(err, controlclient.ErrHTTPFailure) {
-		return false
-	}
-
-	return false
-}
-
 // FlushAndStop synchronously flushes all pending logs and stops the audit logger.
 // This will block until the flush operation completes or the timeout is reached.
 // If the logger is already stopped, this will return immediately.
-// If the logger is in the started state, this will stop the logger and flush any pending logs and
-// leave the logger in the stopped state.
 func (al *AuditLogger) FlushAndStop(timeout time.Duration) {
-	al.scheduleFlush(timeout, nil)
 	al.stop()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	al.flush(ctx)
 }
 
-// SetTransport starts the audit logger, resets the transport to the given value,
-// restores any persisted logs and immediately flushes the queue if it
-// was in the stopped state. Returns a read-only channel with a buffer
-// size of one that will be sent a value indicating the number of retriable transactions
-// that remain in the queue.  This will be sent immediately if the logger is in the started state.
-func (al *AuditLogger) SetTransport(t Transport, logID ipn.ProfileID) {
+// SetProfileID sets the profileID for the logger. This must be called before any logs can be enqueued.
+// If the profileID is already set, this will return an error.
+func (al *AuditLogger) SetProfileID(profileID ipn.ProfileID) error {
 	al.mu.Lock()
-	al.transport = t
-	al.logID = logID
+	defer al.mu.Unlock()
+	if al.profileID != "" {
+		al.logf("profileID already set: %v", al.profileID)
+		return errors.New("profileID already set")
+	}
 
-	if al.flusherStopped != nil {
-		al.mu.Unlock()
+	al.profileID = profileID
+	return nil
+}
+
+// Start starts the audit logger with the given transport.
+// If the logger is already started (it has a transport), this will return an error and no-op.
+// If the logger is stopped, this will start the logger and begin processing logs.
+func (al *AuditLogger) Start(t Transport) {
+	al.mu.Lock()
+	oldTransport := al.transport
+	al.mu.Unlock()
+
+	if oldTransport != nil {
 		return
 	}
 
-	timeout := al.timeout
-
-	al.logf("started for logID: %v", al.logID)
-
-	al.flushWorkerDone = make(chan struct{})
-	al.flusherStopped = make(chan struct{})
-
+	al.mu.Lock()
+	al.transport = t
+	al.done = make(chan struct{})
+	done := al.done
+	pending, err := al.storedCountLocked()
 	al.mu.Unlock()
 
-	go al.flushWorker()
-	al.scheduleFlush(timeout, t)
+	go al.flushWorker(al.ctx, done)
+	if err != nil {
+		al.logf("[unexpected] failed to restore logs: %v", err)
+	}
+
+	if pending > 0 {
+		al.flushAsync()
+	}
 }
 
 // Enqueue queues an audit log to be sent to the control plane (or another suitable consumer/transport).
@@ -201,136 +205,86 @@ func (al *AuditLogger) Enqueue(action tailcfg.ClientAuditAction, details string)
 	if _, err := rand.Read(bytes); err != nil {
 		return err
 	}
-	eventID := fmt.Sprintf("%d", time.Now().Unix()) + hex.EncodeToString(bytes)
-
-	txn.EventID = eventID
-	return al.enqueue(txn, true)
+	txn.EventID = fmt.Sprint(txn.TimeStamp, hex.EncodeToString(bytes))
+	return al.enqueue(txn)
 }
 
-// scheduleFlush queues a flush operation for the flush worker.
+// flushAsync queues a flush operation for the flush worker.
 
-// The flush operation will be cancelled after the given timeout.
-// If t is nil, the loggers current transport (if any) will be used.
-func (al *AuditLogger) scheduleFlush(timeout time.Duration, t Transport) {
-	al.mu.Lock()
-	if al.flusherStopped == nil {
-		al.mu.Unlock()
-		return
+// flushAsync requests an asynchronous flush.
+// It is a no-op if a flush is already pending.
+func (al *AuditLogger) flushAsync() {
+	select {
+	case al.flusher <- struct{}{}:
+	default:
 	}
-
-	f := al.flusher
-	if t == nil {
-		t = al.transport
-	}
-	al.mu.Unlock()
-
-	f <- flushOp{timeout, t, false}
 }
 
-func (al *AuditLogger) flushWorker() {
+func (al *AuditLogger) flushWorker(ctx context.Context, done chan struct{}) {
+	defer close(done)
+
+	var retryDelay time.Duration
+	retry := time.NewTimer(0)
+	retry.Stop()
+
 	for {
 		select {
-		case <-al.flushWorkerDone:
-			defer close(al.flusherStopped)
+		case <-ctx.Done():
 			return
-		case op := <-al.flusher:
-			al.flush(op)
-		case <-func() <-chan time.Time {
-			al.mu.Lock()
-			defer al.mu.Unlock()
-			return time.After(al.retryBackoff)
-		}():
-			al.mu.Lock()
-			al.logf("retrying after %v", al.retryBackoff)
-			op := flushOp{timeout: al.timeout, transport: al.transport, isRetry: true}
-			al.mu.Unlock()
-			al.flush(op)
+		case <-al.flusher:
+			err := al.flush(ctx)
+			switch {
+			case errors.Is(err, context.Canceled):
+				// The logger was stopped, no need to retry.
+				return
+			case err != nil:
+				retryDelay = max(al.backoffOpts.min, min(retryDelay*time.Duration(al.backoffOpts.mutiplier), al.backoffOpts.max))
+				al.logf("retrying after %v, %v", retryDelay, err)
+				retry.Reset(retryDelay)
+			default:
+				retryDelay = 0
+				retry.Stop()
+			}
+		case <-retry.C:
+			al.flushAsync()
 		}
 	}
-
 }
 
 // flush sends all pending logs to the control plane.
 //
-// timeout is the maximum time we will permit for the flush operation to complete.
-// result should be a 1-buffered chan that will always be sent a single value indicating
-// the number of retriable transactions that remain in the queue once the flush completes.
-//
 // al.mu must not be held.
-func (al *AuditLogger) flush(op flushOp) {
+func (al *AuditLogger) flush(ctx context.Context) error {
 	al.mu.Lock()
-
-	if al.flushCancel != nil {
-		al.flushCancel()
-	}
-
-	// Early exit if we're stopped or have no logs to flush.
-	if (al.flusherStopped == nil) || op.transport == nil || al.logID == "" {
-		al.mu.Unlock()
-		return
-	}
-
-	pending, err := al.store.Load(al.logID)
-	if err != nil {
-		al.logf("[unexpected] failed to restore pending logs: %w", err)
-		al.mu.Unlock()
-		return
-	}
-
-	if len(pending) == 0 {
-		al.mu.Unlock()
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), op.timeout)
-	al.flushCancel = cancel
-	al.flushCtx = ctx
-	defer cancel()
+	pending, err := al.store.Load(al.profileID)
+	t := al.transport
 	al.mu.Unlock()
 
-	requeued := al.sendToTransport(pending, op.transport, ctx)
-
-	al.retryIfNeeded(requeued, op.isRetry)
-}
-
-const (
-	//.5, 1, 2, 4, 8, 10, 10 ,10, 10s....
-	backoffMultiplier = 2
-	maxBackoff        = 10 * time.Second
-	minBackoff        = time.Millisecond * 500
-	backoffForever    = time.Duration(math.MaxInt64)
-)
-
-func (al *AuditLogger) retryIfNeeded(requeued int, isRetry bool) {
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	// Nothing to retry, just reset the backoff timer.
-	if requeued == 0 {
-		al.retryBackoff = backoffForever
-		return
+	if err != nil {
+		// This will catch nil profileIDs
+		return fmt.Errorf("failed to restore pending logs: %w", err)
+	}
+	if len(pending) == 0 {
+		return nil
 	}
 
-	// We're at forever or this flush was not a retry attempt, so set our
-	// retry backoff to the minimum.
-	if al.retryBackoff > maxBackoff || !isRetry {
-		al.retryBackoff = minBackoff
-	} else {
-		al.retryBackoff = min(al.retryBackoff*backoffMultiplier, maxBackoff)
+	complete, unsent := al.sendToTransport(ctx, pending, t)
+	al.markTransactionsDone(complete)
+	if len(unsent) != 0 {
+		return fmt.Errorf("failed to send %d logs", len(unsent))
 	}
+	if len(complete) != 0 {
+		al.logf("complete %d audit log transactions", len(complete))
+	}
+	return nil
 }
 
-// sendToTransport sends all pending logs to the control plane. Returns the number of logs that
-// were requeued. Persists all pending logs to the store before returning.
+// sendToTransport sends all pending logs to the control plane. Returns a pair of slices
+// containing the logs that were successfully sent and those that were not.
 //
 // This may require multiple round trips to the control plane and can be a long running transaction.
 // al.mu must be not be held.
-func (al *AuditLogger) sendToTransport(pending []auditLogTxn, t Transport, ctx context.Context) (requeued int) {
-	failed, successful, requeued := 0, 0, 0
-
-	// removeable is a set of eventIDs that have been successfully sent to the control plane.
-	// These transactions can be removed from the persisted store.
-	removeable := set.Set[string]{}
-
+func (al *AuditLogger) sendToTransport(ctx context.Context, pending []auditLogTxn, t Transport) (complete []auditLogTxn, unsent []auditLogTxn) {
 	for _, txn := range pending {
 		var err error
 
@@ -342,15 +296,19 @@ func (al *AuditLogger) sendToTransport(pending []auditLogTxn, t Transport, ctx c
 
 		err = t.SendAuditLog(ctx, req)
 		if err == nil {
-			successful++
-			removeable.Add(txn.EventID)
+			complete = append(complete, txn)
+			continue
+		}
+
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// Context cancellations are, by definition, retriable errors.
+			unsent = append(unsent, txn)
 			continue
 		}
 
 		txn.Retries++
-		failed++
-		if !al.errorEvaluator(err) {
-			removeable.Add(txn.EventID)
+		if !isRetryableError(err) {
+			complete = append(complete, txn)
 			al.logf("failed permanently: %w", err)
 			continue
 		}
@@ -359,52 +317,30 @@ func (al *AuditLogger) sendToTransport(pending []auditLogTxn, t Transport, ctx c
 		// errors should be transient and we should be able to send the log eventually, but
 		// we don't want logs to be persisted indefinitely.
 		if txn.Retries < al.retryLimit {
-			// enqueue the log for retry, but do not request an immediate flush.
-			al.enqueue(txn, false)
-			requeued++
+			unsent = append(unsent, txn)
 		} else {
 			al.logf("failed permanently after %d retries: %w", txn.Retries, err)
-			removeable.Add(txn.EventID)
+			complete = append(complete, txn)
 		}
 	}
 
-	al.setSent(removeable)
-	return requeued
+	return complete, unsent
 }
 
-// stop synchronously waits for the current flushCtx to complete operations,
-// stops the audit logger, stops the worker and persists any pending logs to the store.
-//
-// New transactions will be persisted to the store until the logger is started again.
 func (al *AuditLogger) stop() {
 	al.mu.Lock()
+	done := al.done
+	al.done = nil
+	c, _ := al.storedCountLocked()
+	al.mu.Unlock()
 
-	if al.flusherStopped == nil {
-		al.mu.Unlock()
+	if done == nil {
 		return
 	}
 
-	if al.flushCtx != nil {
-		<-al.flushCtx.Done()
-		al.flushCtx = nil
-	}
-
-	close(al.flushWorkerDone)
-	stopped := al.flusherStopped
-	al.mu.Unlock()
-
-	<-stopped
-
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	al.flushWorkerDone = nil
-	al.flusherStopped = nil
-	al.transport = nil
-
-	al.retryBackoff = backoffForever
-
-	c := al.storedCountLocked()
-	al.logf("stopped for profileID: %v persisted: %d", al.logID, c)
+	al.ctxCancel()
+	<-done
+	al.logf("stopped for profileID: %v persisted: %d", al.profileID, c)
 }
 
 // appendToStoreLocked persists logs to the store.  This will deduplicate
@@ -417,11 +353,11 @@ func (al *AuditLogger) appendToStoreLocked(txns []auditLogTxn) error {
 		return nil
 	}
 
-	if al.logID == "" {
+	if al.profileID == "" {
 		return errors.New("no logId set")
 	}
 
-	persisted, err := al.store.Load(al.logID)
+	persisted, err := al.store.Load(al.profileID)
 	if err != nil {
 		al.logf("[unexpected] append failed to restore logs: %w", err)
 	}
@@ -429,26 +365,30 @@ func (al *AuditLogger) appendToStoreLocked(txns []auditLogTxn) error {
 	txnsOut := append(persisted, txns...)
 	txnsOut = deduplicateAndSort(txnsOut)
 
-	return al.store.Save(al.logID, txnsOut)
+	return al.store.Save(al.profileID, txnsOut)
 }
 
 // storedCountLocked returns the number of logs persisted to the store.
-// This is best effort only and may return 0 for incorrectly configured
-// al.logId.
 //
 // al.mu must be held
-func (al *AuditLogger) storedCountLocked() int {
-	persisted, _ := al.store.Load(al.logID)
-	return len(persisted)
+func (al *AuditLogger) storedCountLocked() (int, error) {
+	persisted, err := al.store.Load(al.profileID)
+	return len(persisted), err
 }
 
-// setSent removes logs from the store that have been successfully sent to the control plane.
+// markTransactionsDone removes logs from the store that have been successfully sent to the control plane or
+// have failed permanently.
 // al.mu must not be held.
-func (al *AuditLogger) setSent(ids set.Set[string]) {
+func (al *AuditLogger) markTransactionsDone(sent []auditLogTxn) {
 	al.mu.Lock()
 	defer al.mu.Unlock()
 
-	persisted, err := al.store.Load(al.logID)
+	ids := set.Set[string]{}
+	for _, txn := range sent {
+		ids.Add(txn.EventID)
+	}
+
+	persisted, err := al.store.Load(al.profileID)
 	if err != nil {
 		al.logf("[unexpected] setSent failed to restore logs: %w", err)
 	}
@@ -458,7 +398,7 @@ func (al *AuditLogger) setSent(ids set.Set[string]) {
 			unsent = append(unsent, txn)
 		}
 	}
-	al.store.Save(al.logID, unsent)
+	al.store.Save(al.profileID, unsent)
 }
 
 func deduplicateAndSort(txns []auditLogTxn) []auditLogTxn {
@@ -478,23 +418,21 @@ func deduplicateAndSort(txns []auditLogTxn) []auditLogTxn {
 	return deduped
 }
 
-func (al *AuditLogger) enqueue(txn auditLogTxn, flush bool) error {
+func (al *AuditLogger) enqueue(txn auditLogTxn) error {
 	al.mu.Lock()
+	defer al.mu.Unlock()
 
 	err := al.appendToStoreLocked([]auditLogTxn{txn})
-
-	// If our flushWorker is stopped or there's no transport, exit early.
-	if !flush || al.flusherStopped == nil || al.transport == nil {
-		al.mu.Unlock()
+	if err != nil {
 		return err
 	}
 
-	// ...otherwise, schedule a flush operation.
-	timeout := al.timeout
-	transport := al.transport
-	al.mu.Unlock()
-	al.scheduleFlush(timeout, transport)
+	// al.done is nil if the logger is stopped.  There is no need to trigger a flush
+	if al.done == nil {
+		return nil
+	}
 
+	al.flushAsync()
 	return err
 }
 
@@ -522,6 +460,10 @@ func (s *LogStateStore) generateKey(key ipn.ProfileID) string {
 // Save saves the given logs to an ipn.StateStore. This overwrites
 // any existing entries for the given key.
 func (s *LogStateStore) Save(key ipn.ProfileID, txns []auditLogTxn) error {
+	if key == "" {
+		return errors.New("empty key")
+	}
+
 	data, err := json.Marshal(txns)
 	if err != nil {
 		return err
@@ -536,6 +478,9 @@ func (s *LogStateStore) Save(key ipn.ProfileID, txns []auditLogTxn) error {
 
 // Load retrieves the logs from an ipn.StateStore.
 func (s *LogStateStore) Load(key ipn.ProfileID) ([]auditLogTxn, error) {
+	if key == "" {
+		return nil, errors.New("empty key")
+	}
 
 	k := ipn.StateKey(s.generateKey(key))
 	data, err := s.store.ReadState(k)

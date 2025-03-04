@@ -1687,11 +1687,10 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		}
 	}
 
-	// Update the audit logger with the current profile ID and reset the transport to
-	// reload and flush cached logs.
+	// Update the audit logger with the current profile ID
 	if b.auditLogger != nil {
 		pid := b.pm.CurrentProfile().ID()
-		b.auditLogger.SetTransport(b.ccAuto, pid)
+		b.auditLogger.SetProfileID(pid)
 	}
 
 	// initTKALocked is dependent on CurrentProfile.ID, which is initialized
@@ -2412,7 +2411,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			Store:      logstore,
 		})
 		b.auditLogger = al
-		auditLogShutdown = func() { al.FlushAndStop(2 * time.Second) }
+		auditLogShutdown = func() { al.FlushAndStop(5 * time.Second) }
 	} else {
 		b.logf("auditlog: no audit log storage configured.  client audit logging disabled.")
 	}
@@ -4299,7 +4298,7 @@ func (b *LocalBackend) auditLoggerShutdown() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.auditLogger != nil {
-		b.auditLogger.FlushAndStop(2 * time.Second)
+		b.auditLogger.FlushAndStop(5 * time.Second)
 		b.auditLogger = nil
 	}
 }
@@ -5928,9 +5927,8 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
-	pid := b.pm.CurrentProfile().ID()
 	if b.auditLogger != nil {
-		b.auditLogger.SetTransport(b.ccAuto, pid)
+		b.auditLogger.Start(b.ccAuto)
 	}
 }
 
