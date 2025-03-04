@@ -4,7 +4,6 @@
 package eventbus
 
 import (
-	"context"
 	"reflect"
 )
 
@@ -17,17 +16,13 @@ type publisher interface {
 
 // A Publisher publishes typed events on a bus.
 type Publisher[T any] struct {
-	client  *Client
-	stopCtx context.Context
-	stop    context.CancelFunc
+	client *Client
+	stop   stopFlag
 }
 
 func newPublisher[T any](c *Client) *Publisher[T] {
-	ctx, cancel := context.WithCancel(context.Background())
 	ret := &Publisher[T]{
-		client:  c,
-		stopCtx: ctx,
-		stop:    cancel,
+		client: c,
 	}
 	c.addPublisher(ret)
 	return ret
@@ -39,7 +34,7 @@ func newPublisher[T any](c *Client) *Publisher[T] {
 func (p *Publisher[T]) Close() {
 	// Just unblocks any active calls to Publish, no other
 	// synchronization needed.
-	p.stop()
+	p.stop.Stop()
 	p.client.deletePublisher(p)
 }
 
@@ -52,14 +47,14 @@ func (p *Publisher[T]) Publish(v T) {
 	// Check for just a stopped publisher or bus before trying to
 	// write, so that once closed Publish consistently does nothing.
 	select {
-	case <-p.stopCtx.Done():
+	case <-p.stop.Done():
 		return
 	default:
 	}
 
 	select {
 	case p.client.publish() <- v:
-	case <-p.stopCtx.Done():
+	case <-p.stop.Done():
 	}
 }
 
