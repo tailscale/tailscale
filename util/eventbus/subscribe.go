@@ -27,7 +27,7 @@ type subscriber interface {
 	// processing other potential sources of wakeups, which is how we end
 	// up at this awkward type signature and sharing of internal state
 	// through dispatch.
-	dispatch(vals *queue, stop goroutineShutdownWorker, acceptCh func() chan any) bool
+	dispatch(ctx context.Context, vals *queue, acceptCh func() chan any) bool
 	Close()
 }
 
@@ -35,29 +35,26 @@ type subscriber interface {
 type subscribeState struct {
 	client *Client
 
-	write    chan any
-	stop     goroutineShutdownControl
-	snapshot chan chan []any
+	dispatcher *worker
+	write      chan any
+	snapshot   chan chan []any
 
 	outputsMu sync.Mutex
 	outputs   map[reflect.Type]subscriber
 }
 
 func newSubscribeState(c *Client) *subscribeState {
-	stopCtl, stopWorker := newGoroutineShutdown()
 	ret := &subscribeState{
 		client:   c,
 		write:    make(chan any),
-		stop:     stopCtl,
 		snapshot: make(chan chan []any),
 		outputs:  map[reflect.Type]subscriber{},
 	}
-	go ret.pump(stopWorker)
+	ret.dispatcher = runWorker(ret.pump)
 	return ret
 }
 
-func (q *subscribeState) pump(stop goroutineShutdownWorker) {
-	defer stop.Done()
+func (q *subscribeState) pump(ctx context.Context) {
 	var vals queue
 	acceptCh := func() chan any {
 		if vals.Full() {
@@ -74,7 +71,7 @@ func (q *subscribeState) pump(stop goroutineShutdownWorker) {
 				vals.Drop()
 				continue
 			}
-			if !sub.dispatch(&vals, stop, acceptCh) {
+			if !sub.dispatch(ctx, &vals, acceptCh) {
 				return
 			}
 		} else {
@@ -85,7 +82,7 @@ func (q *subscribeState) pump(stop goroutineShutdownWorker) {
 			select {
 			case val := <-q.write:
 				vals.Add(val)
-			case <-stop.Stop():
+			case <-ctx.Done():
 				return
 			case ch := <-q.snapshot:
 				ch <- vals.Snapshot()
@@ -120,7 +117,7 @@ func (q *subscribeState) subscriberFor(val any) subscriber {
 // Close closes the subscribeState. Implicitly closes all Subscribers
 // linked to this state, and any pending events are discarded.
 func (s *subscribeState) close() {
-	s.stop.StopAndWait()
+	s.dispatcher.StopAndWait()
 
 	var subs map[reflect.Type]subscriber
 	s.outputsMu.Lock()
@@ -131,23 +128,23 @@ func (s *subscribeState) close() {
 	}
 }
 
+func (s *subscribeState) closed() <-chan struct{} {
+	return s.dispatcher.Done()
+}
+
 // A Subscriber delivers one type of event from a [Client].
 type Subscriber[T any] struct {
-	doneCtx context.Context
-	done    context.CancelFunc
-	recv    *subscribeState
-	read    chan T
+	stop stopFlag
+	recv *subscribeState
+	read chan T
 }
 
 func newSubscriber[T any](r *subscribeState) *Subscriber[T] {
 	t := reflect.TypeFor[T]()
 
-	ctx, cancel := context.WithCancel(context.Background())
 	ret := &Subscriber[T]{
-		doneCtx: ctx,
-		done:    cancel,
-		recv:    r,
-		read:    make(chan T),
+		recv: r,
+		read: make(chan T),
 	}
 	r.addSubscriber(t, ret)
 
@@ -158,7 +155,7 @@ func (s *Subscriber[T]) subscribeType() reflect.Type {
 	return reflect.TypeFor[T]()
 }
 
-func (s *Subscriber[T]) dispatch(vals *queue, stop goroutineShutdownWorker, acceptCh func() chan any) bool {
+func (s *Subscriber[T]) dispatch(ctx context.Context, vals *queue, acceptCh func() chan any) bool {
 	t := vals.Peek().(T)
 	for {
 		// Keep the cases in this select in sync with subscribeState.pump
@@ -170,7 +167,7 @@ func (s *Subscriber[T]) dispatch(vals *queue, stop goroutineShutdownWorker, acce
 			return true
 		case val := <-acceptCh():
 			vals.Add(val)
-		case <-stop.Stop():
+		case <-ctx.Done():
 			return false
 		case ch := <-s.recv.snapshot:
 			ch <- vals.Snapshot()
@@ -187,13 +184,13 @@ func (s *Subscriber[T]) Events() <-chan T {
 // Done returns a channel that is closed when the subscriber is
 // closed.
 func (s *Subscriber[T]) Done() <-chan struct{} {
-	return s.doneCtx.Done()
+	return s.stop.Done()
 }
 
 // Close closes the Subscriber, indicating the caller no longer wishes
 // to receive this event type. After Close, receives on
 // [Subscriber.Events] block for ever.
 func (s *Subscriber[T]) Close() {
-	s.done() // unblock receivers
+	s.stop.Stop() // unblock receivers
 	s.recv.deleteSubscriber(reflect.TypeFor[T]())
 }
