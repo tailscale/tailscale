@@ -672,7 +672,6 @@ type sshSession struct {
 	wrStdin  io.WriteCloser
 	rdStdout io.ReadCloser
 	rdStderr io.ReadCloser // rdStderr is nil for pty sessions
-	ptyReq   *ssh.Pty      // non-nil for pty sessions
 
 	// childPipes is a list of pipes that need to be closed when the process exits.
 	// For pty sessions, this is the tty fd.
@@ -903,7 +902,7 @@ func (ss *sshSession) run() {
 		defer t.Stop()
 	}
 
-	if euid := os.Geteuid(); euid != 0 {
+	if euid := os.Geteuid(); euid != 0 && runtime.GOOS != "plan9" {
 		if lu.Uid != fmt.Sprint(euid) {
 			ss.logf("can't switch to user %q from process euid %v", lu.Username, euid)
 			fmt.Fprintf(ss, "can't switch user\r\n")

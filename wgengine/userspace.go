@@ -569,6 +569,18 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 			return filter.Drop
 		}
 	}
+	if runtime.GOOS == "plan9" {
+		isLocalAddr, ok := e.isLocalAddr.LoadOk()
+		if ok {
+			if isLocalAddr(p.Dst.Addr()) {
+				e.logf("XXX plan9 inject inbound")
+				// On Plan9's "tun" equivalent, everything goes back in and out
+				// the tun, even when the kernel's replying to itself.
+				t.InjectInboundCopy(p.Buffer())
+				return filter.Drop
+			}
+		}
+	}
 
 	return filter.Accept
 }
