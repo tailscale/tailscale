@@ -26,14 +26,16 @@ func TestBus(t *testing.T) {
 	b := eventbus.New()
 	defer b.Close()
 
-	q := b.Queue("TestBus")
-	defer q.Close()
-	s := eventbus.Subscribe[EventA](q)
+	c := b.Client("TestSub")
+	defer c.Close()
+	s := eventbus.Subscribe[EventA](c)
 
 	go func() {
-		pa := eventbus.PublisherOf[EventA](b, "TestBusA")
+		p := b.Client("TestPub")
+		defer p.Close()
+		pa := eventbus.Publish[EventA](p)
 		defer pa.Close()
-		pb := eventbus.PublisherOf[EventB](b, "TestBusB")
+		pb := eventbus.Publish[EventB](p)
 		defer pb.Close()
 		pa.Publish(EventA{1})
 		pb.Publish(EventB{2})
@@ -45,7 +47,7 @@ func TestBus(t *testing.T) {
 		select {
 		case got := <-s.Events():
 			want.Got(got)
-		case <-q.Done():
+		case <-s.Done():
 			t.Fatalf("queue closed unexpectedly")
 		case <-time.After(time.Second):
 			t.Fatalf("timed out waiting for event")
@@ -57,19 +59,21 @@ func TestBusMultipleConsumers(t *testing.T) {
 	b := eventbus.New()
 	defer b.Close()
 
-	q1 := b.Queue("TestBusA")
-	defer q1.Close()
-	s1 := eventbus.Subscribe[EventA](q1)
+	c1 := b.Client("TestSubA")
+	defer c1.Close()
+	s1 := eventbus.Subscribe[EventA](c1)
 
-	q2 := b.Queue("TestBusAB")
-	defer q2.Close()
-	s2A := eventbus.Subscribe[EventA](q2)
-	s2B := eventbus.Subscribe[EventB](q2)
+	c2 := b.Client("TestSubB")
+	defer c2.Close()
+	s2A := eventbus.Subscribe[EventA](c2)
+	s2B := eventbus.Subscribe[EventB](c2)
 
 	go func() {
-		pa := eventbus.PublisherOf[EventA](b, "TestBusA")
+		p := b.Client("TestPub")
+		defer p.Close()
+		pa := eventbus.Publish[EventA](p)
 		defer pa.Close()
-		pb := eventbus.PublisherOf[EventB](b, "TestBusB")
+		pb := eventbus.Publish[EventB](p)
 		defer pb.Close()
 		pa.Publish(EventA{1})
 		pb.Publish(EventB{2})
@@ -86,9 +90,11 @@ func TestBusMultipleConsumers(t *testing.T) {
 			wantB.Got(got)
 		case got := <-s2B.Events():
 			wantB.Got(got)
-		case <-q1.Done():
+		case <-s1.Done():
 			t.Fatalf("queue closed unexpectedly")
-		case <-q2.Done():
+		case <-s2A.Done():
+			t.Fatalf("queue closed unexpectedly")
+		case <-s2B.Done():
 			t.Fatalf("queue closed unexpectedly")
 		case <-time.After(time.Second):
 			t.Fatalf("timed out waiting for event")
@@ -111,15 +117,15 @@ func TestSpam(t *testing.T) {
 
 	received := make([][]EventA, subscribers)
 	for i := range subscribers {
-		q := b.Queue(fmt.Sprintf("Subscriber%d", i))
-		defer q.Close()
-		s := eventbus.Subscribe[EventA](q)
+		c := b.Client(fmt.Sprintf("Subscriber%d", i))
+		defer c.Close()
+		s := eventbus.Subscribe[EventA](c)
 		g.Go(func() error {
 			for range wantEvents {
 				select {
 				case evt := <-s.Events():
 					received[i] = append(received[i], evt)
-				case <-q.Done():
+				case <-s.Done():
 					t.Errorf("queue done before expected number of events received")
 					return errors.New("queue prematurely closed")
 				case <-time.After(5 * time.Second):
@@ -134,7 +140,8 @@ func TestSpam(t *testing.T) {
 	published := make([][]EventA, publishers)
 	for i := range publishers {
 		g.Run(func() {
-			p := eventbus.PublisherOf[EventA](b, fmt.Sprintf("Publisher%d", i))
+			c := b.Client(fmt.Sprintf("Publisher%d", i))
+			p := eventbus.Publish[EventA](c)
 			for j := range eventsPerPublisher {
 				evt := EventA{i*eventsPerPublisher + j}
 				p.Publish(evt)

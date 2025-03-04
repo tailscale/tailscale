@@ -20,12 +20,11 @@ type Bus struct {
 	snapshot chan chan []any
 
 	topicsMu sync.Mutex // guards everything below.
-	topics   map[reflect.Type][]*Queue
+	topics   map[reflect.Type][]*subscribeState
 
 	// Used for introspection/debugging only, not in the normal event
 	// publishing path.
-	publishers set.Set[publisher]
-	queues     set.Set[*Queue]
+	clients set.Set[*Client]
 }
 
 // New returns a new bus. Use [PublisherOf] to make event publishers,
@@ -33,15 +32,51 @@ type Bus struct {
 func New() *Bus {
 	stopCtl, stopWorker := newGoroutineShutdown()
 	ret := &Bus{
-		write:      make(chan any),
-		stop:       stopCtl,
-		snapshot:   make(chan chan []any),
-		topics:     map[reflect.Type][]*Queue{},
-		publishers: set.Set[publisher]{},
-		queues:     set.Set[*Queue]{},
+		write:    make(chan any),
+		stop:     stopCtl,
+		snapshot: make(chan chan []any),
+		topics:   map[reflect.Type][]*subscribeState{},
+		clients:  set.Set[*Client]{},
 	}
 	go ret.pump(stopWorker)
 	return ret
+}
+
+// Client returns a new client with no subscriptions. Use [Subscribe]
+// to receive events, and [Publish] to emit events.
+//
+// The client's name is used only for debugging, to tell humans what
+// piece of code a publisher/subscriber belongs to. Aim for something
+// short but unique, for example "kernel-route-monitor" or "taildrop",
+// not "watcher".
+func (b *Bus) Client(name string) *Client {
+	ret := &Client{
+		name: name,
+		bus:  b,
+		pub:  set.Set[publisher]{},
+	}
+	b.topicsMu.Lock()
+	defer b.topicsMu.Unlock()
+	b.clients.Add(ret)
+	return ret
+}
+
+// Close closes the bus. Implicitly closes all clients, publishers and
+// subscribers attached to the bus.
+//
+// Close blocks until the bus is fully shut down. The bus is
+// permanently unusable after closing.
+func (b *Bus) Close() {
+	b.stop.StopAndWait()
+
+	var clients set.Set[*Client]
+	b.topicsMu.Lock()
+	clients, b.clients = b.clients, set.Set[*Client]{}
+	b.topicsMu.Unlock()
+
+	for c := range clients {
+		c.Close()
+	}
 }
 
 func (b *Bus) pump(stop goroutineShutdownWorker) {
@@ -98,13 +133,19 @@ func (b *Bus) pump(stop goroutineShutdownWorker) {
 	}
 }
 
-func (b *Bus) dest(t reflect.Type) []*Queue {
+func (b *Bus) dest(t reflect.Type) []*subscribeState {
 	b.topicsMu.Lock()
 	defer b.topicsMu.Unlock()
 	return b.topics[t]
 }
 
-func (b *Bus) subscribe(t reflect.Type, q *Queue) (cancel func()) {
+func (b *Bus) shouldPublish(t reflect.Type) bool {
+	b.topicsMu.Lock()
+	defer b.topicsMu.Unlock()
+	return len(b.topics[t]) > 0
+}
+
+func (b *Bus) subscribe(t reflect.Type, q *subscribeState) (cancel func()) {
 	b.topicsMu.Lock()
 	defer b.topicsMu.Unlock()
 	b.topics[t] = append(b.topics[t], q)
@@ -113,7 +154,7 @@ func (b *Bus) subscribe(t reflect.Type, q *Queue) (cancel func()) {
 	}
 }
 
-func (b *Bus) unsubscribe(t reflect.Type, q *Queue) {
+func (b *Bus) unsubscribe(t reflect.Type, q *subscribeState) {
 	b.topicsMu.Lock()
 	defer b.topicsMu.Unlock()
 	// Topic slices are accessed by pump without holding a lock, so we
@@ -125,44 +166,6 @@ func (b *Bus) unsubscribe(t reflect.Type, q *Queue) {
 		return
 	}
 	b.topics[t] = slices.Delete(slices.Clone(b.topics[t]), i, i+1)
-}
-
-func (b *Bus) Close() {
-	b.stop.StopAndWait()
-}
-
-// Queue returns a new queue with no subscriptions. Use [Subscribe] to
-// atach subscriptions to it.
-//
-// The queue's name should be a short, human-readable string that
-// identifies this queue. The name is only visible through debugging
-// APIs.
-func (b *Bus) Queue(name string) *Queue {
-	return newQueue(b, name)
-}
-
-func (b *Bus) addQueue(q *Queue) {
-	b.topicsMu.Lock()
-	defer b.topicsMu.Unlock()
-	b.queues.Add(q)
-}
-
-func (b *Bus) deleteQueue(q *Queue) {
-	b.topicsMu.Lock()
-	defer b.topicsMu.Unlock()
-	b.queues.Delete(q)
-}
-
-func (b *Bus) addPublisher(p publisher) {
-	b.topicsMu.Lock()
-	defer b.topicsMu.Unlock()
-	b.publishers.Add(p)
-}
-
-func (b *Bus) deletePublisher(p publisher) {
-	b.topicsMu.Lock()
-	defer b.topicsMu.Unlock()
-	b.publishers.Delete(p)
 }
 
 func newGoroutineShutdown() (goroutineShutdownControl, goroutineShutdownWorker) {
