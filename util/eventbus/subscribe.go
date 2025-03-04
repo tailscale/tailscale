@@ -4,46 +4,59 @@
 package eventbus
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sync"
 )
 
-type dispatchFn func(vals *queue, stop goroutineShutdownWorker, acceptCh func() chan any) bool
+// subscriber is a uniformly typed wrapper around Subscriber[T], so
+// that debugging facilities can look at active subscribers.
+type subscriber interface {
+	subscribeType() reflect.Type
+	// dispatch is a function that dispatches the head value in vals to
+	// a subscriber, while also handling stop and incoming queue write
+	// events.
+	//
+	// dispatch exists because of the strongly typed Subscriber[T]
+	// wrapper around subscriptions: within the bus events are boxed in an
+	// 'any', and need to be unpacked to their full type before delivery
+	// to the subscriber. This involves writing to a strongly-typed
+	// channel, so subscribeState cannot handle that dispatch by itself -
+	// but if that strongly typed send blocks, we also need to keep
+	// processing other potential sources of wakeups, which is how we end
+	// up at this awkward type signature and sharing of internal state
+	// through dispatch.
+	dispatch(vals *queue, stop goroutineShutdownWorker, acceptCh func() chan any) bool
+	Close()
+}
 
-// A Queue receives events from a Bus.
-//
-// To receive events through the queue, see [Subscribe]. Subscribers
-// that share the same Queue receive events one at time, in the order
-// they were published.
-type Queue struct {
-	bus  *Bus
-	name string
+// subscribeState handles dispatching of events received from a Bus.
+type subscribeState struct {
+	client *Client
 
 	write    chan any
 	stop     goroutineShutdownControl
 	snapshot chan chan []any
 
 	outputsMu sync.Mutex
-	outputs   map[reflect.Type]dispatchFn
+	outputs   map[reflect.Type]subscriber
 }
 
-func newQueue(b *Bus, name string) *Queue {
+func newSubscribeState(c *Client) *subscribeState {
 	stopCtl, stopWorker := newGoroutineShutdown()
-	ret := &Queue{
-		bus:      b,
-		name:     name,
+	ret := &subscribeState{
+		client:   c,
 		write:    make(chan any),
 		stop:     stopCtl,
 		snapshot: make(chan chan []any),
-		outputs:  map[reflect.Type]dispatchFn{},
+		outputs:  map[reflect.Type]subscriber{},
 	}
-	b.addQueue(ret)
 	go ret.pump(stopWorker)
 	return ret
 }
 
-func (q *Queue) pump(stop goroutineShutdownWorker) {
+func (q *subscribeState) pump(stop goroutineShutdownWorker) {
 	defer stop.Done()
 	var vals queue
 	acceptCh := func() chan any {
@@ -55,13 +68,13 @@ func (q *Queue) pump(stop goroutineShutdownWorker) {
 	for {
 		if !vals.Empty() {
 			val := vals.Peek()
-			fn := q.dispatchFn(val)
-			if fn == nil {
+			sub := q.subscriberFor(val)
+			if sub == nil {
 				// Raced with unsubscribe.
 				vals.Drop()
 				continue
 			}
-			if !fn(&vals, stop, acceptCh) {
+			if !sub.dispatch(&vals, stop, acceptCh) {
 				return
 			}
 		} else {
@@ -81,16 +94,74 @@ func (q *Queue) pump(stop goroutineShutdownWorker) {
 	}
 }
 
-// A Subscriber delivers one type of event from a [Queue].
+func (s *subscribeState) addSubscriber(t reflect.Type, sub subscriber) {
+	s.outputsMu.Lock()
+	defer s.outputsMu.Unlock()
+	if s.outputs[t] != nil {
+		panic(fmt.Errorf("double subscription for event %s", t))
+	}
+	s.outputs[t] = sub
+	s.client.addSubscriber(t, s)
+}
+
+func (s *subscribeState) deleteSubscriber(t reflect.Type) {
+	s.outputsMu.Lock()
+	defer s.outputsMu.Unlock()
+	delete(s.outputs, t)
+	s.client.deleteSubscriber(t, s)
+}
+
+func (q *subscribeState) subscriberFor(val any) subscriber {
+	q.outputsMu.Lock()
+	defer q.outputsMu.Unlock()
+	return q.outputs[reflect.TypeOf(val)]
+}
+
+// Close closes the subscribeState. Implicitly closes all Subscribers
+// linked to this state, and any pending events are discarded.
+func (s *subscribeState) close() {
+	s.stop.StopAndWait()
+
+	var subs map[reflect.Type]subscriber
+	s.outputsMu.Lock()
+	subs, s.outputs = s.outputs, nil
+	s.outputsMu.Unlock()
+	for _, sub := range subs {
+		sub.Close()
+	}
+}
+
+// A Subscriber delivers one type of event from a [Client].
 type Subscriber[T any] struct {
-	recv *Queue
-	read chan T
+	doneCtx context.Context
+	done    context.CancelFunc
+	recv    *subscribeState
+	read    chan T
+}
+
+func newSubscriber[T any](r *subscribeState) *Subscriber[T] {
+	t := reflect.TypeFor[T]()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ret := &Subscriber[T]{
+		doneCtx: ctx,
+		done:    cancel,
+		recv:    r,
+		read:    make(chan T),
+	}
+	r.addSubscriber(t, ret)
+
+	return ret
+}
+
+func (s *Subscriber[T]) subscribeType() reflect.Type {
+	return reflect.TypeFor[T]()
 }
 
 func (s *Subscriber[T]) dispatch(vals *queue, stop goroutineShutdownWorker, acceptCh func() chan any) bool {
 	t := vals.Peek().(T)
 	for {
-		// Keep the cases in this select in sync with Queue.pump
+		// Keep the cases in this select in sync with subscribeState.pump
 		// above. The only different should be that this select
 		// delivers a value on s.read.
 		select {
@@ -113,58 +184,16 @@ func (s *Subscriber[T]) Events() <-chan T {
 	return s.read
 }
 
-// Close shuts down the Subscriber, indicating the caller no longer
-// wishes to receive these events. After Close, receives on
-// [Subscriber.Chan] block for ever.
+// Done returns a channel that is closed when the subscriber is
+// closed.
+func (s *Subscriber[T]) Done() <-chan struct{} {
+	return s.doneCtx.Done()
+}
+
+// Close closes the Subscriber, indicating the caller no longer wishes
+// to receive this event type. After Close, receives on
+// [Subscriber.Events] block for ever.
 func (s *Subscriber[T]) Close() {
-	t := reflect.TypeFor[T]()
-	s.recv.bus.unsubscribe(t, s.recv)
-	s.recv.deleteDispatchFn(t)
-}
-
-func (q *Queue) dispatchFn(val any) dispatchFn {
-	q.outputsMu.Lock()
-	defer q.outputsMu.Unlock()
-	return q.outputs[reflect.ValueOf(val).Type()]
-}
-
-func (q *Queue) addDispatchFn(t reflect.Type, fn dispatchFn) {
-	q.outputsMu.Lock()
-	defer q.outputsMu.Unlock()
-	if q.outputs[t] != nil {
-		panic(fmt.Errorf("double subscription for event %s", t))
-	}
-	q.outputs[t] = fn
-}
-
-func (q *Queue) deleteDispatchFn(t reflect.Type) {
-	q.outputsMu.Lock()
-	defer q.outputsMu.Unlock()
-	delete(q.outputs, t)
-}
-
-// Done returns a channel that is closed when the Queue is closed.
-func (q *Queue) Done() <-chan struct{} {
-	return q.stop.WaitChan()
-}
-
-// Close closes the queue. All Subscribers attached to the queue are
-// implicitly closed, and any pending events are discarded.
-func (q *Queue) Close() {
-	q.stop.StopAndWait()
-	q.bus.deleteQueue(q)
-}
-
-// Subscribe requests delivery of events of type T through the given
-// Queue. Panics if the queue already has a subscriber for T.
-func Subscribe[T any](r *Queue) Subscriber[T] {
-	t := reflect.TypeFor[T]()
-	ret := Subscriber[T]{
-		recv: r,
-		read: make(chan T),
-	}
-	r.addDispatchFn(t, ret.dispatch)
-	r.bus.subscribe(t, r)
-
-	return ret
+	s.done() // unblock receivers
+	s.recv.deleteSubscriber(reflect.TypeFor[T]())
 }
