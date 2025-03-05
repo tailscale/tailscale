@@ -9,10 +9,7 @@ concurrency:
 on:
   pull_request:
     paths:
-      - "tailcfg/**"
-      - "wgengine/**"
-      - "ipn/ipnlocal/**"
-      - ".github/workflows/natlab-integrationtest.yml"
+      - "tstest/integration/nat/nat_test.go"
 jobs:
   natlab-integrationtest:
     runs-on: ubuntu-latest
