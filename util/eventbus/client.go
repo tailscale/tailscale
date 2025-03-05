@@ -75,7 +75,7 @@ func (c *Client) deleteSubscriber(t reflect.Type, s *subscribeState) {
 	c.bus.unsubscribe(t, s)
 }
 
-func (c *Client) publish() chan<- any {
+func (c *Client) publish() chan<- publishedEvent {
 	return c.bus.write
 }
 
