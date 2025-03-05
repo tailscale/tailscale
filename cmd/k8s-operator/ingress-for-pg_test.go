@@ -336,7 +336,7 @@ func TestValidateIngress(t *testing.T) {
 					},
 				},
 			}},
-			wantErr: `Found duplicate Ingress "existing-ingress" for hostname "test" - multiple Ingresses for the same hostname in the same cluster are not allowed`,
+			wantErr: `found duplicate Ingress "existing-ingress" for hostname "test" - multiple Ingresses for the same hostname in the same cluster are not allowed`,
 		},
 	}
 
@@ -667,12 +667,12 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 		t.Fatalf("parsing comment: %v", err)
 	}
 
-	wantOwnerRefs := []Ownerref{
+	wantOwnerRefs := []OwnerRef{
 		{OperatorID: "operator-2"},
 		{OperatorID: "operator-1"},
 	}
-	if !reflect.DeepEqual(c.Ownerrefs, wantOwnerRefs) {
-		t.Errorf("incorrect owner refs\ngot:  %+v\nwant: %+v", c.Ownerrefs, wantOwnerRefs)
+	if !reflect.DeepEqual(c.OwnerRefs, wantOwnerRefs) {
+		t.Errorf("incorrect owner refs\ngot:  %+v\nwant: %+v", c.OwnerRefs, wantOwnerRefs)
 	}
 
 	// Delete the Ingress and verify VIPService still exists with one owner ref
@@ -694,10 +694,10 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 		t.Fatalf("parsing comment after deletion: %v", err)
 	}
 
-	wantOwnerRefs = []Ownerref{
+	wantOwnerRefs = []OwnerRef{
 		{OperatorID: "operator-2"},
 	}
-	if !reflect.DeepEqual(c.Ownerrefs, wantOwnerRefs) {
-		t.Errorf("incorrect owner refs after deletion\ngot:  %+v\nwant: %+v", c.Ownerrefs, wantOwnerRefs)
+	if !reflect.DeepEqual(c.OwnerRefs, wantOwnerRefs) {
+		t.Errorf("incorrect owner refs after deletion\ngot:  %+v\nwant: %+v", c.OwnerRefs, wantOwnerRefs)
 	}
 }

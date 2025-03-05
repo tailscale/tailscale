@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"math/rand/v2"
+
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -52,16 +54,10 @@ const (
 	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
 )
 
-var (
-	gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
-	// ingressRequeue is the period of time after HA Ingress, whose VIPService has been newly created or changed,
-	// needs to be requeued. This is to protect against VIPService owner references being overwritten as a result of
-	// concurrent updates during multi-clutster Ingress create/update operations.
-	ingressRequeue = time.Minute * 15
-)
+var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
 
-// HAIngressReconciler is a controller that reconciles Tailscale Ingresses should be exposed on an ingress ProxyGroup
-// (in HA mode).
+// HAIngressReconciler is a controller that reconciles Tailscale Ingresses
+// should be exposed on an ingress ProxyGroup (in HA mode).
 type HAIngressReconciler struct {
 	client.Client
 
@@ -80,17 +76,22 @@ type HAIngressReconciler struct {
 	managedIngresses set.Slice[types.UID]
 }
 
-// Reconcile reconciles Ingresses that should be exposed over Tailscale in HA mode (on a ProxyGroup). It looks at all
-// Ingresses with tailscale.com/proxy-group annotation. For each such Ingress, it ensures that a VIPService named after
-// the hostname of the Ingress exists and is up to date. It also ensures that the serve config for the ingress
-// ProxyGroup is updated to route traffic for the VIPService to the Ingress's backend Services.
-// Ingress hostname change also results in the VIPService for the previous hostname being cleaned up and a new VIPService
-// being created for the new hostname.
+// Reconcile reconciles Ingresses that should be exposed over Tailscale in HA
+// mode (on a ProxyGroup). It looks at all Ingresses with
+// tailscale.com/proxy-group annotation. For each such Ingress, it ensures that
+// a VIPService named after the hostname of the Ingress exists and is up to
+// date. It also ensures that the serve config for the ingress ProxyGroup is
+// updated to route traffic for the VIPService to the Ingress's backend
+// Services.  Ingress hostname change also results in the VIPService for the
+// previous hostname being cleaned up and a new VIPService being created for the
+// new hostname.
 // HA Ingresses support multi-cluster Ingress setup.
-// Each VIPService contains a list of owner references that uniquely identify the Ingress resource and the operator.
-// When an Ingress that acts as a backend is being deleted, the corresponding VIPService is only deleted if the only
-// owner reference that it contains is for this Ingress. If other owner references are found, then cleanup operation
-// only removes this Ingress' owner reference.
+// Each VIPService contains a list of owner references that uniquely identify
+// the Ingress resource and the operator.  When an Ingress that acts as a
+// backend is being deleted, the corresponding VIPService is only deleted if the
+// only owner reference that it contains is for this Ingress. If other owner
+// references are found, then cleanup operation only removes this Ingress' owner
+// reference.
 func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	logger := r.logger.With("Ingress", req.NamespacedName)
 	logger.Debugf("starting reconcile")
@@ -124,7 +125,7 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		return res, err
 	}
 	if needsRequeue {
-		res = reconcile.Result{RequeueAfter: ingressRequeue}
+		res = reconcile.Result{RequeueAfter: requeueInterval()}
 	}
 	return res, nil
 }
@@ -192,21 +193,25 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		r.mu.Unlock()
 	}
 
-	// 1. Ensure that if Ingress' hostname has changed, any VIPService resources corresponding to the old hostname
-	// are cleaned up.
-	// In practice, this function will ensure that any VIPServices that are associated with the provided ProxyGroup
-	// and no longer owned by an Ingress are cleaned up. This is fine- it is not expensive and ensures that in edge
-	// cases (a single update changed both hostname and removed ProxyGroup annotation) the VIPService is more likely
-	// to be (eventually) removed.
+	// 1. Ensure that if Ingress' hostname has changed, any VIPService
+	// resources corresponding to the old hostname are cleaned up.
+	// In practice, this function will ensure that any VIPServices that are
+	// associated with the provided ProxyGroup and no longer owned by an
+	// Ingress are cleaned up. This is fine- it is not expensive and ensures
+	// that in edge cases (a single update changed both hostname and removed
+	// ProxyGroup annotation) the VIPService is more likely to be
+	// (eventually) removed.
 	svcsChanged, err = r.maybeCleanupProxyGroup(ctx, pgName, logger)
 	if err != nil {
 		return false, fmt.Errorf("failed to cleanup VIPService resources for ProxyGroup: %w", err)
 	}
 
-	// 2. Ensure that there isn't a VIPService with the same hostname already created and not owned by this Ingress.
-	// TODO(irbekrm): perhaps in future we could have record names being stored on VIPServices. I am not certain if
-	// there might not be edge cases (custom domains, etc?) where attempting to determine the DNS name of the
-	// VIPService in this way won't be incorrect.
+	// 2. Ensure that there isn't a VIPService with the same hostname
+	// already created and not owned by this Ingress.
+	// TODO(irbekrm): perhaps in future we could have record names being
+	// stored on VIPServices. I am not certain if there might not be edge
+	// cases (custom domains, etc?) where attempting to determine the DNS
+	// name of the VIPService in this way won't be incorrect.
 	tcd, err := r.tailnetCertDomain(ctx)
 	if err != nil {
 		return false, fmt.Errorf("error determining DNS name base: %w", err)
@@ -214,24 +219,28 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	dnsName := hostname + "." + tcd
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	existingVIPSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
-	// TODO(irbekrm): here and when creating the VIPService, verify if the error is not terminal (and therefore
-	// should not be reconciled). For example, if the hostname is already a hostname of a Tailscale node, the GET
-	// here will fail.
+	// TODO(irbekrm): here and when creating the VIPService, verify if the
+	// error is not terminal (and therefore should not be reconciled). For
+	// example, if the hostname is already a hostname of a Tailscale node,
+	// the GET here will fail.
 	if err != nil {
 		errResp := &tailscale.ErrResponse{}
 		if ok := errors.As(err, errResp); ok && errResp.Status != http.StatusNotFound {
 			return false, fmt.Errorf("error getting VIPService %q: %w", hostname, err)
 		}
 	}
-	// Generate the VIPService comment for new or existing VIPService. This checks and ensures that VIPService's
-	// owner references are updated for this Ingress and errors if that is not possible (i.e. because it appears
-	// that the VIPService has been created by a non-operator actor).
-	c, err := r.svcComment(existingVIPSvc)
+	// Generate the VIPService comment for new or existing VIPService. This
+	// checks and ensures that VIPService's owner references are updated for
+	// this Ingress and errors if that is not possible (i.e. because it
+	// appears that the VIPService has been created by a non-operator
+	// actor).
+	svcComment, err := r.ownerRefsComment(existingVIPSvc)
 	if err != nil {
-		instr := "To proceed, you can either manually delete any existing VIPService for %s or create an Ingress for a different MagicDNS name"
+		const instr = "To proceed, you can either manually delete the existing VIPService or choose a different MagicDNS name at `.spec.tls.hosts[0] in the Ingress definition"
 		msg := fmt.Sprintf("error ensuring ownership of VIPService %s: %v. %s", hostname, err, instr)
-		logger.Infof(msg)
+		logger.Warn(msg)
 		r.recorder.Event(ing, corev1.EventTypeWarning, "InvalidVIPService", msg)
+		return false, nil
 	}
 
 	// 3. Ensure that the serve config for the ProxyGroup contains the VIPService.
@@ -305,7 +314,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		Name:    serviceName,
 		Tags:    tags,
 		Ports:   vipPorts,
-		Comment: c,
+		Comment: svcComment,
 	}
 	if existingVIPSvc != nil {
 		vipSvc.Addrs = existingVIPSvc.Addrs
@@ -319,7 +328,6 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		!strings.EqualFold(vipSvc.Comment, existingVIPSvc.Comment) {
 		logger.Infof("Ensuring VIPService %q exists and is up to date", hostname)
 		if err := r.tsClient.CreateOrUpdateVIPService(ctx, vipSvc); err != nil {
-			logger.Infof("error creating VIPService: %v", err)
 			return false, fmt.Errorf("error creating VIPService: %w", err)
 		}
 	}
@@ -394,16 +402,10 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			logger.Infof("VIPService %q is not owned by any Ingress, cleaning up", vipServiceName)
 
 			// Delete the VIPService from control if necessary.
-			svc, err := r.tsClient.GetVIPService(ctx, vipServiceName)
-			if err != nil {
-				errResp := &tailscale.ErrResponse{}
-				if ok := errors.As(err, errResp); !ok || errResp.Status != http.StatusNotFound {
-					return false, err
-				}
-			}
+			svc, _ := r.tsClient.GetVIPService(ctx, vipServiceName)
 			if svc != nil && isVIPServiceForAnyIngress(svc) {
 				logger.Infof("cleaning up orphaned VIPService %q", vipServiceName)
-				svcsChanged, err = r.maybeDeleteVIPService(ctx, vipServiceName, logger)
+				svcsChanged, err = r.cleanupVIPService(ctx, vipServiceName, logger)
 				if err != nil {
 					errResp := &tailscale.ErrResponse{}
 					if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
@@ -474,7 +476,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 2. Clean up the VIPService resources.
-	svcChanged, err = r.maybeDeleteVIPService(ctx, serviceName, logger)
+	svcChanged, err = r.cleanupVIPService(ctx, serviceName, logger)
 	if err != nil {
 		return false, fmt.Errorf("error deleting VIPService: %w", err)
 	}
@@ -568,13 +570,6 @@ func (r *HAIngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 	return isTSIngress && pgAnnot != ""
 }
 
-func isVIPServiceForIngress(svc *tailscale.VIPService, ing *networkingv1.Ingress) bool {
-	if svc == nil || ing == nil {
-		return false
-	}
-	return strings.EqualFold(svc.Comment, fmt.Sprintf(VIPSvcOwnerRef, ing.UID))
-}
-
 func isVIPServiceForAnyIngress(svc *tailscale.VIPService) bool {
 	if svc == nil {
 		return false
@@ -632,17 +627,17 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	}
 	for _, i := range ingList.Items {
 		if r.shouldExpose(&i) && hostnameForIngress(&i) == hostname && i.Name != ing.Name {
-			errs = append(errs, fmt.Errorf("Found duplicate Ingress %q for hostname %q - multiple Ingresses for the same hostname in the same cluster are not allowed", i.Name, hostname))
+			errs = append(errs, fmt.Errorf("found duplicate Ingress %q for hostname %q - multiple Ingresses for the same hostname in the same cluster are not allowed", i.Name, hostname))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// maybeDeleteVIPService deletes any VIPService by the provided name if it is not owned by operator instances other than this one.
+// cleanupVIPService deletes any VIPService by the provided name if it is not owned by operator instances other than this one.
 // If a VIPService is found, but contains other owner references, only removes this operator's owner reference.
 // If a VIPService by the given name is not found or does not contain this operator's owner reference, do nothing.
 // It returns true if an existing VIPService was updated to remove owner reference, as well as any error that occurred.
-func (r *HAIngressReconciler) maybeDeleteVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (bool, error) {
+func (r *HAIngressReconciler) cleanupVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, _ error) {
 	svc, err := r.tsClient.GetVIPService(ctx, name)
 	if err != nil {
 		errResp := &tailscale.ErrResponse{}
@@ -659,23 +654,24 @@ func (r *HAIngressReconciler) maybeDeleteVIPService(ctx context.Context, name ta
 	if err != nil {
 		return false, fmt.Errorf("error parsing VIPService comment")
 	}
-	if c == nil || len(c.Ownerrefs) == 0 {
+	if c == nil || len(c.OwnerRefs) == 0 {
 		return false, nil
 	}
-	// Comparing with the operatorID only means that we will not be able to clean up VIPServices in cases where the
-	// operator was deleted from the cluster before deleting the Ingress. Perhaps the comparison could be 'if
-	// or.OperatorID === r.operatorID || or.ingressUID == r.ingressUID'.
-	ix := slices.IndexFunc(c.Ownerrefs, func(or Ownerref) bool {
+	// Comparing with the operatorID only means that we will not be able to
+	// clean up VIPServices in cases where the operator was deleted from the
+	// cluster before deleting the Ingress. Perhaps the comparison could be
+	// 'if or.OperatorID === r.operatorID || or.ingressUID == r.ingressUID'.
+	ix := slices.IndexFunc(c.OwnerRefs, func(or OwnerRef) bool {
 		return or.OperatorID == r.operatorID
 	})
 	if ix == -1 {
 		return false, nil
 	}
-	if len(c.Ownerrefs) == 1 {
+	if len(c.OwnerRefs) == 1 {
 		logger.Infof("Deleting VIPService %q", name)
 		return false, r.tsClient.DeleteVIPService(ctx, name)
 	}
-	c.Ownerrefs = slices.Delete(c.Ownerrefs, ix, ix+1)
+	c.OwnerRefs = slices.Delete(c.OwnerRefs, ix, ix+1)
 	logger.Infof("Deleting VIPService %q", name)
 	json, err := json.Marshal(c)
 	if err != nil {
@@ -744,29 +740,33 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	return nil
 }
 
-// Ownerref is an owner reference that uniquely identifies a Tailscale Kubernetes operator instance.
-type Ownerref struct {
+// OwnerRef is an owner reference that uniquely identifies a Tailscale
+// Kubernetes operator instance.
+type OwnerRef struct {
 	// OperatorID is the stable ID of the operator's Tailscale device.
 	OperatorID string `json:"operatorID,omitempty"`
 }
 
 // comment is the content of the VIPService.Comment field.
 type comment struct {
-	// Ownerrefs is a list of owner references that identify all operator instances that manage this VIPService.
-	Ownerrefs []Ownerref `json:"ownerrefs,omitempty"`
+	// OwnerRefs is a list of owner references that identify all operator
+	// instances that manage this VIPService.
+	OwnerRefs []OwnerRef `json:"ownerRefs,omitempty"`
 }
 
-// svcComment return VIPService comment that includes owner reference for this operator instance for the provided
-// VIPService. If the VIPService is nil, a new comment with owner ref is returned. If the VIPService is not nil, the
-// existing comment is returned with the owner reference added, if not already present. If the VIPService is not nil,
-// but does not contain a comment we return an error as this likely means that the VIPService was created by somthing
-// other than a Tailscale Kubernetes operator.
-func (r *HAIngressReconciler) svcComment(svc *tailscale.VIPService) (string, error) {
-	ref := Ownerref{
+// ownerRefsComment return VIPService Comment that includes owner reference for this
+// operator instance for the provided VIPService. If the VIPService is nil, a
+// new comment with owner ref is returned. If the VIPService is not nil, the
+// existing comment is returned with the owner reference added, if not already
+// present. If the VIPService is not nil, but does not contain a comment we
+// return an error as this likely means that the VIPService was created by
+// somthing other than a Tailscale Kubernetes operator.
+func (r *HAIngressReconciler) ownerRefsComment(svc *tailscale.VIPService) (string, error) {
+	ref := OwnerRef{
 		OperatorID: r.operatorID,
 	}
 	if svc == nil {
-		c := &comment{Ownerrefs: []Ownerref{ref}}
+		c := &comment{OwnerRefs: []OwnerRef{ref}}
 		json, err := json.Marshal(c)
 		if err != nil {
 			return "", fmt.Errorf("[unexpected] unable to marshal VIPService comment contents: %w, please report this", err)
@@ -777,13 +777,13 @@ func (r *HAIngressReconciler) svcComment(svc *tailscale.VIPService) (string, err
 	if err != nil {
 		return "", fmt.Errorf("error parsing existing VIPService comment: %w", err)
 	}
-	if c == nil || len(c.Ownerrefs) == 0 {
+	if c == nil || len(c.OwnerRefs) == 0 {
 		return "", fmt.Errorf("VIPService %s exists, but does not contain Comment field with owner references- not proceeding as this is likely a resource created by something other than a Tailscale Kubernetes Operator", svc.Name)
 	}
-	if slices.Contains(c.Ownerrefs, ref) { // up to date
+	if slices.Contains(c.OwnerRefs, ref) { // up to date
 		return svc.Comment, nil
 	}
-	c.Ownerrefs = append(c.Ownerrefs, ref)
+	c.OwnerRefs = append(c.OwnerRefs, ref)
 	json, err := json.Marshal(c)
 	if err != nil {
 		return "", fmt.Errorf("error marshalling updated owner references: %w", err)
@@ -801,4 +801,13 @@ func parseComment(vipSvc *tailscale.VIPService) (*comment, error) {
 		return nil, fmt.Errorf("error parsing VIPService Comment field %q: %w", vipSvc.Comment, err)
 	}
 	return c, nil
+}
+
+// requeueInterval returns a time duration between 5 and 10 minutes, which is
+// the period of time after which an HA Ingress, whose VIPService has been newly
+// created or changed, needs to be requeued. This is to protect against
+// VIPService owner references being overwritten as a result of concurrent
+// updates during multi-clutster Ingress create/update operations.
+func requeueInterval() time.Duration {
+	return time.Duration(rand.N(5)+5) * time.Minute
 }
