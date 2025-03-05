@@ -27,7 +27,7 @@ type subscriber interface {
 	// processing other potential sources of wakeups, which is how we end
 	// up at this awkward type signature and sharing of internal state
 	// through dispatch.
-	dispatch(ctx context.Context, vals *queue, acceptCh func() chan any) bool
+	dispatch(ctx context.Context, vals *queue[any], acceptCh func() chan any) bool
 	Close()
 }
 
@@ -55,7 +55,7 @@ func newSubscribeState(c *Client) *subscribeState {
 }
 
 func (q *subscribeState) pump(ctx context.Context) {
-	var vals queue
+	var vals queue[any]
 	acceptCh := func() chan any {
 		if vals.Full() {
 			return nil
@@ -155,7 +155,7 @@ func (s *Subscriber[T]) subscribeType() reflect.Type {
 	return reflect.TypeFor[T]()
 }
 
-func (s *Subscriber[T]) dispatch(ctx context.Context, vals *queue, acceptCh func() chan any) bool {
+func (s *Subscriber[T]) dispatch(ctx context.Context, vals *queue[any], acceptCh func() chan any) bool {
 	t := vals.Peek().(T)
 	for {
 		// Keep the cases in this select in sync with subscribeState.pump

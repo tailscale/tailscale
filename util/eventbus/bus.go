@@ -78,7 +78,7 @@ func (b *Bus) Close() {
 }
 
 func (b *Bus) pump(ctx context.Context) {
-	var vals queue
+	var vals queue[any]
 	acceptCh := func() chan any {
 		if vals.Full() {
 			return nil
