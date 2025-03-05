@@ -43,13 +43,13 @@ func auditLoggerForTest(t *testing.T, opts Opts) *AuditLogger {
 		t.Fatalf("opts.Store must be set")
 	}
 
-	al := NewAuditLogger(opts)
+	a := NewAuditLogger(opts)
 
 	t.Cleanup(func() {
-		al.FlushAndStop(5 * time.Second)
+		a.FlushAndStop(5 * time.Second)
 	})
 	tstest.ResourceCheck(t)
-	return al
+	return a
 }
 
 func TestRetryableErrors(t *testing.T) {
@@ -79,14 +79,14 @@ func TestRetryableErrors(t *testing.T) {
 // logs to remain in the store once FlushAndStop returns.
 func TestEnqueueAndFlush(t *testing.T) {
 	mockTransport := &mockAuditLogTransport{t: t}
-	al := auditLoggerForTest(t, Opts{
+	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 200,
 		Logf:       t.Logf,
 		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
 	})
 
-	al.SetProfileID("test")
-	al.Start(mockTransport)
+	a.SetProfileID("test")
+	a.Start(mockTransport)
 
 	mockTransport.fail = false
 	mockTransport.err = &retriableError
@@ -94,15 +94,15 @@ func TestEnqueueAndFlush(t *testing.T) {
 	wantSent := 10
 
 	for i := range wantSent {
-		err := al.Enqueue(tailcfg.AuditNodeDisconnect, fmt.Sprintf("log %d", i))
+		err := a.Enqueue(tailcfg.AuditNodeDisconnect, fmt.Sprintf("log %d", i))
 		expectNoError(t, err)
 	}
 
-	al.FlushAndStop(5 * time.Second)
+	a.FlushAndStop(5 * time.Second)
 
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	gotStored, err := al.storedCountLocked()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	gotStored, err := a.storedCountLocked()
 	expectNoError(t, err)
 
 	wantStored := 0
@@ -118,26 +118,26 @@ func TestEnqueueAndFlush(t *testing.T) {
 
 // TestDeduplicateAndSort tests that the most recent log is kept when deduplicating logs
 func TestDeduplicateAndSort(t *testing.T) {
-	al := auditLoggerForTest(t, Opts{
+	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
 		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
 	})
-	al.SetProfileID("test")
+	a.SetProfileID("test")
 
 	logs := []*transaction{
 		{EventID: "1", Details: "log 1", TimeStamp: time.Now().Add(-time.Minute * 1), Retries: 1},
 	}
 
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	al.appendToStoreLocked(logs)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.appendToStoreLocked(logs)
 
 	// Update the transaction and re-append it
 	logs[0].Retries = 2
-	al.appendToStoreLocked(logs)
+	a.appendToStoreLocked(logs)
 
-	fromStore, err := al.store.Load("test")
+	fromStore, err := a.store.Load("test")
 	expectNoError(t, err)
 
 	// We should see only one transaction
@@ -155,15 +155,15 @@ func TestDeduplicateAndSort(t *testing.T) {
 }
 
 func TestChangeProfileId(t *testing.T) {
-	al := auditLoggerForTest(t, Opts{
+	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
 		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
 	})
-	expectNoError(t, al.SetProfileID("test"))
+	expectNoError(t, a.SetProfileID("test"))
 
 	// Changing a profile ID must fail
-	expectError(t, al.SetProfileID("test"))
+	expectError(t, a.SetProfileID("test"))
 }
 
 // TestSendOnRestore pushes a n logs to the persistent store, and ensures they
@@ -171,25 +171,25 @@ func TestChangeProfileId(t *testing.T) {
 // longer exist in the store.
 func TestSendOnRestore(t *testing.T) {
 	mockTransport := &mockAuditLogTransport{t: t}
-	al := auditLoggerForTest(t, Opts{
+	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
 		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
 	})
-	al.SetProfileID("test")
+	a.SetProfileID("test")
 
 	wantTotal := 10
 
 	for range wantTotal {
-		al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
+		a.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 	}
 
-	al.Start(mockTransport)
-	al.FlushAndStop(5 * time.Second)
+	a.Start(mockTransport)
+	a.FlushAndStop(5 * time.Second)
 
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	gotStored, err := al.storedCountLocked()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	gotStored, err := a.storedCountLocked()
 	expectNoError(t, err)
 
 	wantStored := 0
@@ -212,24 +212,24 @@ func TestFailureExhaustion(t *testing.T) {
 		fail: true,
 	}
 
-	al := auditLoggerForTest(t, Opts{
+	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 1,
 		Logf:       t.Logf,
 		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
 	})
 
-	al.SetProfileID("test")
-	al.Start(mockTransport)
+	a.SetProfileID("test")
+	a.Start(mockTransport)
 
 	for range 10 {
-		err := al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
+		err := a.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 		expectNoError(t, err)
 	}
 
-	al.FlushAndStop(5 * time.Second)
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	gotStored, err := al.storedCountLocked()
+	a.FlushAndStop(5 * time.Second)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	gotStored, err := a.storedCountLocked()
 	expectNoError(t, err)
 
 	wantStored := 0
@@ -252,24 +252,24 @@ func TestEnqueueAndFailNoRetry(t *testing.T) {
 		err:  &nonRetriableError,
 	}
 
-	al := auditLoggerForTest(t, Opts{
+	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
 		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
 	})
 
-	al.SetProfileID("test")
-	al.Start(mockTransport)
+	a.SetProfileID("test")
+	a.Start(mockTransport)
 
 	for i := range 10 {
-		err := al.Enqueue(tailcfg.AuditNodeDisconnect, fmt.Sprintf("log %d", i))
+		err := a.Enqueue(tailcfg.AuditNodeDisconnect, fmt.Sprintf("log %d", i))
 		expectNoError(t, err)
 	}
 
-	al.FlushAndStop(5 * time.Second)
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	gotStored, err := al.storedCountLocked()
+	a.FlushAndStop(5 * time.Second)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	gotStored, err := a.storedCountLocked()
 	expectNoError(t, err)
 
 	wantStored := 0
@@ -294,7 +294,7 @@ func TestEnqueueAndRetry(t *testing.T) {
 		err:  &retriableError,
 	}
 
-	al := auditLoggerForTest(t, Opts{
+	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
 		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
@@ -302,17 +302,17 @@ func TestEnqueueAndRetry(t *testing.T) {
 
 	// Set our backoff parameters to 0 seconds to avoid the
 	// need for any sleeps
-	al.backoffOpts = backoffOpts{
-		min:       0,
-		max:       0,
-		mutiplier: 0.0,
+	a.backoffOpts = backoffOpts{
+		min:        0,
+		max:        0,
+		multiplier: 0.0,
 	}
 
-	al.SetProfileID("test")
-	al.Start(mockTransport)
+	a.SetProfileID("test")
+	a.Start(mockTransport)
 
 	for range 10 {
-		err := al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
+		err := a.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 		expectNoError(t, err)
 	}
 
@@ -320,10 +320,10 @@ func TestEnqueueAndRetry(t *testing.T) {
 	mockTransport.fail = false
 	mockTransport.mu.Unlock()
 
-	al.FlushAndStop(5 * time.Second)
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	gotStored, err := al.storedCountLocked()
+	a.FlushAndStop(5 * time.Second)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	gotStored, err := a.storedCountLocked()
 	expectNoError(t, err)
 
 	wantStored := 0
@@ -347,21 +347,21 @@ func TestStart(t *testing.T) {
 		err:  &retriableError,
 	}
 
-	al := auditLoggerForTest(t, Opts{
+	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
 		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
 	})
 
-	err := al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
+	err := a.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 	expectError(t, err)
 
-	al.FlushAndStop(5 * time.Second)
+	a.FlushAndStop(5 * time.Second)
 
-	al.mu.Lock()
-	gotStored, err := al.storedCountLocked()
+	a.mu.Lock()
+	gotStored, err := a.storedCountLocked()
 	expectError(t, err)
-	al.mu.Unlock()
+	a.mu.Unlock()
 	wantStored := 0
 
 	if !cmp.Equal(wantStored, gotStored) {
@@ -369,25 +369,25 @@ func TestStart(t *testing.T) {
 	}
 
 	// This second stop should no-op
-	al.FlushAndStop(5 * time.Second)
+	a.FlushAndStop(5 * time.Second)
 
 	mockTransport.fail = false
 
-	al.SetProfileID("test")
-	al.Start(mockTransport)
+	a.SetProfileID("test")
+	a.Start(mockTransport)
 	// This must no-op
-	al.Start(mockTransport)
+	a.Start(mockTransport)
 
-	err = al.Enqueue(tailcfg.AuditNodeDisconnect, "log")
+	err = a.Enqueue(tailcfg.AuditNodeDisconnect, "log")
 	expectNoError(t, err)
 
-	al.FlushAndStop(5 * time.Second)
+	a.FlushAndStop(5 * time.Second)
 	// This must no-op safely
-	al.FlushAndStop(5 * time.Second)
+	a.FlushAndStop(5 * time.Second)
 
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	gotStored, err = al.storedCountLocked()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	gotStored, err = a.storedCountLocked()
 	expectNoError(t, err)
 	wantStored = 0
 
