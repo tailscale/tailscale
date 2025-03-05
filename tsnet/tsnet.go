@@ -49,6 +49,7 @@ import (
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tsd"
+	"tailscale.com/types/bools"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
@@ -601,7 +602,9 @@ func (s *Server) start() (reterr error) {
 		// Note: don't just return ns.DialContextTCP or we'll return
 		// *gonet.TCPConn(nil) instead of a nil interface which trips up
 		// callers.
-		tcpConn, err := ns.DialContextTCP(ctx, dst)
+		v4, v6 := s.TailscaleIPs()
+		src := bools.IfElse(dst.Addr().Is6(), v6, v4)
+		tcpConn, err := ns.DialContextTCPWithBind(ctx, src, dst)
 		if err != nil {
 			return nil, err
 		}
@@ -611,7 +614,9 @@ func (s *Server) start() (reterr error) {
 		// Note: don't just return ns.DialContextUDP or we'll return
 		// *gonet.UDPConn(nil) instead of a nil interface which trips up
 		// callers.
-		udpConn, err := ns.DialContextUDP(ctx, dst)
+		v4, v6 := s.TailscaleIPs()
+		src := bools.IfElse(dst.Addr().Is6(), v6, v4)
+		udpConn, err := ns.DialContextUDPWithBind(ctx, src, dst)
 		if err != nil {
 			return nil, err
 		}
