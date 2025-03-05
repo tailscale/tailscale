@@ -5,22 +5,23 @@ package controlclient
 
 import "errors"
 
-// ControlClientError is an error type that can be returned by controlclient
-// requests.
+// TxnError is an error type that can be returned by controlclient
+// api requests.
 //
 // It wraps an underlying error and an HTTP response and code.
-type ControlClientError struct {
+type TxnError struct {
 	err      error
 	response string
 	httpCode int
 }
 
-func (e *ControlClientError) Error() string {
+// Error implements [error].
+func (e *TxnError) Error() string {
 	return e.err.Error()
 }
 
 // Retryable returns whether the error is retryable.
-func (e *ControlClientError) Retryable() bool {
+func (e *TxnError) Retryable() bool {
 	switch {
 	case errors.Is(e, ErrNoNodeKey),
 		errors.Is(e, ErrHTTPPostFailure),
@@ -36,15 +37,17 @@ func (e *ControlClientError) Retryable() bool {
 	}
 }
 
-var ErrHTTPFailure = ErrControlClientError(errors.New("HTTP Error"))
-var ErrNoNodeKey error = ErrControlClientError(errors.New("No Node Key"))
-var ErrNoNoiseClient error = ErrControlClientError(errors.New("No Noise Client"))
-var ErrHTTPPostFailure error = ErrControlClientError(errors.New("HTTP Post Failure"))
+var ErrHTTPFailure = ErrTxnError(errors.New("HTTP Error"))
+var ErrNoNodeKey error = ErrTxnError(errors.New("No Node Key"))
+var ErrNoNoiseClient error = ErrTxnError(errors.New("No Noise Client"))
+var ErrHTTPPostFailure error = ErrTxnError(errors.New("HTTP Post Failure"))
 
-func ErrControlClientError(err error) error {
-	return &ControlClientError{err, "", 0}
+// ErrTxnError wraps an error in a TxnError.
+func ErrTxnError(err error) error {
+	return &TxnError{err, "", 0}
 }
 
-func ErrAuditLogHTTPFailure(errCode int, response []byte) error {
-	return &ControlClientError{ErrHTTPFailure, string(response), errCode}
+// ErrTxnHTTPFailure wraps an HTTP error in an TxnError.
+func ErrTxnHTTPFailure(errCode int, response []byte) error {
+	return &TxnError{ErrHTTPFailure, string(response), errCode}
 }

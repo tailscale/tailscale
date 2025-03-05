@@ -1688,7 +1688,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	}
 
 	// Update the audit logger with the current profile ID
-	if b.auditLogger != nil {
+	if b.auditLogger != nil && prefsChanged {
 		pid := b.pm.CurrentProfile().ID()
 		b.auditLogger.SetProfileID(pid)
 	}
@@ -5928,7 +5928,15 @@ func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
 	if b.auditLogger != nil {
-		b.auditLogger.Start(b.ccAuto)
+		err := b.auditLogger.SetProfileID(b.pm.CurrentProfile().ID())
+		if err != nil {
+			b.logf("audit logger set profile ID failure: %v", err)
+		}
+
+		err = b.auditLogger.Start(b.ccAuto)
+		if err != nil {
+			b.logf("audit logger start failure: %v", err)
+		}
 	}
 }
 

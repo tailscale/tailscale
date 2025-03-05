@@ -1702,8 +1702,6 @@ func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) e
 
 // SendAuditLog does a synchronous call to the control plane submit an audit log.
 //
-// Errors should be evaluated for retriability.  See [auditlog.errorEvaluator]
-//
 // Auto implements [auditlog.Transport].
 func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
 	return c.direct.sendAuditLog(ctx, auditLog)
@@ -1737,7 +1735,7 @@ func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequ
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		all, _ := io.ReadAll(res.Body)
-		return ErrAuditLogHTTPFailure(res.StatusCode, all)
+		return ErrTxnHTTPFailure(res.StatusCode, all)
 	}
 	return nil
 }
