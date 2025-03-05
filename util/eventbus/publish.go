@@ -5,6 +5,7 @@ package eventbus
 
 import (
 	"reflect"
+	"time"
 )
 
 // publisher is a uniformly typed wrapper around Publisher[T], so that
@@ -18,6 +19,7 @@ type publisher interface {
 type Publisher[T any] struct {
 	client *Client
 	stop   stopFlag
+	debug  hook[publishedEvent]
 }
 
 func newPublisher[T any](c *Client) *Publisher[T] {
@@ -44,12 +46,22 @@ func (p *Publisher[T]) publishType() reflect.Type {
 
 // Publish publishes event v on the bus.
 func (p *Publisher[T]) Publish(v T) {
+	now := time.Now()
+
 	// Check for just a stopped publisher or bus before trying to
 	// write, so that once closed Publish consistently does nothing.
 	select {
 	case <-p.stop.Done():
 		return
 	default:
+	}
+
+	if p.debug.active() {
+		p.debug.run(publishedEvent{
+			Event:     v,
+			From:      p.client,
+			Published: now,
+		})
 	}
 
 	select {

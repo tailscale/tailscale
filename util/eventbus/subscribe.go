@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 )
 
 // subscriber is a uniformly typed wrapper around Subscriber[T], so
 // that debugging facilities can look at active subscribers.
 type subscriber interface {
+	client() *Client
 	subscribeType() reflect.Type
 	// dispatch is a function that dispatches the head value in vals to
 	// a subscriber, while also handling stop and incoming queue write
@@ -38,6 +40,7 @@ type subscribeState struct {
 	dispatcher *worker
 	write      chan any
 	snapshot   chan chan []any
+	debug      hook[subscribedEvent]
 
 	outputsMu sync.Mutex
 	outputs   map[reflect.Type]subscriber
@@ -64,6 +67,7 @@ func (q *subscribeState) pump(ctx context.Context) {
 	}
 	for {
 		if !vals.Empty() {
+			popped := time.Now()
 			val := vals.Peek()
 			sub := q.subscriberFor(val)
 			if sub == nil {
@@ -71,6 +75,20 @@ func (q *subscribeState) pump(ctx context.Context) {
 				vals.Drop()
 				continue
 			}
+
+			if q.debug.active() {
+				q.debug.run(subscribedEvent{
+					Event:              val,
+					From:               nil, // TODO: plumb more
+					To:                 q.client,
+					Published:          time.Time{}, // TODO: plumb
+					ReachedRouter:      time.Time{},
+					DestinationsPicked: time.Time{},
+					QueuedAtSubscriber: time.Time{},
+					NextToDeliver:      popped,
+				})
+			}
+
 			if !sub.dispatch(ctx, &vals, acceptCh) {
 				return
 			}

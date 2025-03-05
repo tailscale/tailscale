@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"time"
 
 	"tailscale.com/util/set"
 )
@@ -18,12 +19,14 @@ type Bus struct {
 	router   *worker
 	write    chan any
 	snapshot chan chan []any
+	debug    hook[routedEvent]
 
 	topicsMu sync.Mutex // guards everything below.
 	topics   map[reflect.Type][]*subscribeState
 
 	// Used for introspection/debugging only, not in the normal event
 	// publishing path.
+	debugMu sync.Mutex
 	clients set.Set[*Client]
 }
 
@@ -53,8 +56,8 @@ func (b *Bus) Client(name string) *Client {
 		bus:  b,
 		pub:  set.Set[publisher]{},
 	}
-	b.topicsMu.Lock()
-	defer b.topicsMu.Unlock()
+	b.debugMu.Lock()
+	defer b.debugMu.Unlock()
 	b.clients.Add(ret)
 	return ret
 }
@@ -68,9 +71,9 @@ func (b *Bus) Close() {
 	b.router.StopAndWait()
 
 	var clients set.Set[*Client]
-	b.topicsMu.Lock()
+	b.debugMu.Lock()
 	clients, b.clients = b.clients, set.Set[*Client]{}
-	b.topicsMu.Unlock()
+	b.debugMu.Unlock()
 
 	for c := range clients {
 		c.Close()
@@ -91,8 +94,26 @@ func (b *Bus) pump(ctx context.Context) {
 		// opportunistically accept more incoming events, if we have
 		// queue space for it.
 		for !vals.Empty() {
+			popped := time.Now()
 			val := vals.Peek()
 			dests := b.dest(reflect.ValueOf(val).Type())
+			routed := time.Now()
+
+			if !b.debug.active() {
+				subscribers := make([]*Client, len(dests))
+				for i := range len(dests) {
+					subscribers[i] = dests[i].client
+				}
+				b.debug.run(routedEvent{
+					Event:              val,
+					From:               nil, // TODO: publisher queue needs to be of publishedEvent
+					To:                 subscribers,
+					Published:          time.Time{}, // TODO: same
+					ReachedRouter:      popped,
+					DestinationsPicked: routed,
+				})
+			}
+
 			for _, d := range dests {
 			deliverOne:
 				for {
