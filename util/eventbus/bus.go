@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"time"
 
 	"tailscale.com/util/set"
 )
@@ -93,11 +94,18 @@ func (b *Bus) pump(ctx context.Context) {
 		for !vals.Empty() {
 			val := vals.Peek()
 			dests := b.dest(reflect.ValueOf(val.Event).Type())
+			routed := time.Now()
 			for _, d := range dests {
+				evt := queuedEvent{
+					Event:     val.Event,
+					From:      val.From,
+					Published: val.Published,
+					Routed:    routed,
+				}
 			deliverOne:
 				for {
 					select {
-					case d.write <- val.Event:
+					case d.write <- evt:
 						break deliverOne
 					case <-d.closed():
 						// Queue closed, don't block but continue
