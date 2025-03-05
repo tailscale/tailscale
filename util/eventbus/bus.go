@@ -16,8 +16,8 @@ import (
 // subscribers.
 type Bus struct {
 	router   *worker
-	write    chan any
-	snapshot chan chan []any
+	write    chan publishedEvent
+	snapshot chan chan []publishedEvent
 
 	topicsMu sync.Mutex // guards everything below.
 	topics   map[reflect.Type][]*subscribeState
@@ -31,8 +31,8 @@ type Bus struct {
 // and [Bus.Queue] and [Subscribe] to make event subscribers.
 func New() *Bus {
 	ret := &Bus{
-		write:    make(chan any),
-		snapshot: make(chan chan []any),
+		write:    make(chan publishedEvent),
+		snapshot: make(chan chan []publishedEvent),
 		topics:   map[reflect.Type][]*subscribeState{},
 		clients:  set.Set[*Client]{},
 	}
@@ -78,8 +78,8 @@ func (b *Bus) Close() {
 }
 
 func (b *Bus) pump(ctx context.Context) {
-	var vals queue[any]
-	acceptCh := func() chan any {
+	var vals queue[publishedEvent]
+	acceptCh := func() chan publishedEvent {
 		if vals.Full() {
 			return nil
 		}
@@ -92,12 +92,12 @@ func (b *Bus) pump(ctx context.Context) {
 		// queue space for it.
 		for !vals.Empty() {
 			val := vals.Peek()
-			dests := b.dest(reflect.ValueOf(val).Type())
+			dests := b.dest(reflect.ValueOf(val.Event).Type())
 			for _, d := range dests {
 			deliverOne:
 				for {
 					select {
-					case d.write <- val:
+					case d.write <- val.Event:
 						break deliverOne
 					case <-d.closed():
 						// Queue closed, don't block but continue
