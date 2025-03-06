@@ -65,7 +65,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
-	verifyTailscaledConfig(t, fc, []string{"my-svc"})
+	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
 	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
 		ing.Annotations["tailscale.com/tags"] = "tag:custom,tag:test"
@@ -125,7 +125,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
 
-	verifyTailscaledConfig(t, fc, []string{"my-svc", "my-other-svc"})
+	verifyTailscaledConfig(t, fc, []string{"svc:my-svc", "svc:my-other-svc"})
 
 	// Delete second Ingress
 	if err := fc.Delete(context.Background(), ing2); err != nil {
@@ -156,7 +156,7 @@ func TestIngressPGReconciler(t *testing.T) {
 		t.Error("second Ingress service config was not cleaned up")
 	}
 
-	verifyTailscaledConfig(t, fc, []string{"my-svc"})
+	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
 	// Delete the first Ingress and verify cleanup
 	if err := fc.Delete(context.Background(), ing); err != nil {
