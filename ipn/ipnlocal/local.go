@@ -1688,7 +1688,9 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// Update the audit logger with the current profile ID.
 	if b.auditLogger != nil && prefsChanged {
 		pid := b.pm.CurrentProfile().ID()
-		b.auditLogger.SetProfileID(pid)
+		if err := b.auditLogger.SetProfileID(pid); err != nil {
+			b.logf("Failed to set profile ID in audit logger: %v", err)
+		}
 	}
 
 	// initTKALocked is dependent on CurrentProfile.ID, which is initialized
@@ -2408,7 +2410,11 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			Store:      store,
 		})
 		b.auditLogger = al
-		auditLogShutdown = func() { al.FlushAndStop(5 * time.Second) }
+		auditLogShutdown = func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			al.FlushAndStop(ctx)
+		}
 	} else {
 		b.logf("auditlog: no audit log storage configured.  client audit logging disabled.")
 	}
@@ -4293,8 +4299,6 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 
 var errNoAuditLogger = errors.New("no audit logger configured")
 
-// enqueueAuditLogLocked enqueues an audit log entry for the specified action and details
-// b.mu must be held.
 func (b *LocalBackend) getAuditLoggerLocked() ipnauth.AuditLogFunc {
 	logger := b.auditLogger
 	return func(action tailcfg.ClientAuditAction, details string) error {

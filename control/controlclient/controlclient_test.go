@@ -164,12 +164,12 @@ func TestRetryableErrors(t *testing.T) {
 		{fmt.Errorf("%w: %w", errNoNodeKey, errors.New("not node key")), true},
 		{context.Canceled, false},
 		{fmt.Errorf("%w: %w", context.Canceled, errors.New("ctx cancelled")), false},
-		{errBadHTTPResponse(429, []byte("too may requests")), true},
-		{errBadHTTPResponse(500, []byte("internal server eror")), true},
-		{errBadHTTPResponse(502, []byte("bad gateway")), true},
-		{errBadHTTPResponse(503, []byte("service unavailable")), true},
-		{errBadHTTPResponse(504, []byte("gateway timeout")), true},
-		{errBadHTTPResponse(1234, []byte("random error")), false},
+		{errBadHTTPResponse(429, "too may requests"), true},
+		{errBadHTTPResponse(500, "internal server eror"), true},
+		{errBadHTTPResponse(502, "bad gateway"), true},
+		{errBadHTTPResponse(503, "service unavailable"), true},
+		{errBadHTTPResponse(504, "gateway timeout"), true},
+		{errBadHTTPResponse(1234, "random error"), false},
 	}
 
 	for _, e := range errors {

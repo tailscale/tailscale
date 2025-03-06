@@ -6,6 +6,7 @@ package controlclient
 import (
 	"errors"
 	"fmt"
+	"net/http"
 )
 
 // apiResponseError is an error type that can be returned by controlclient
@@ -28,21 +29,23 @@ func (e *apiResponseError) Retryable() bool {
 	return e.retryable
 }
 
+func (e *apiResponseError) Unwrap() error { return e.err }
+
 var (
-	errNoNodeKey       = retryableError(errors.New("no node key"))
-	errNoNoiseClient   = retryableError(errors.New("no noise client"))
-	errHTTPPostFailure = retryableError(errors.New("http failure"))
+	errNoNodeKey       = &apiResponseError{errors.New("no node key"), true}
+	errNoNoiseClient   = &apiResponseError{errors.New("no noise client"), true}
+	errHTTPPostFailure = &apiResponseError{errors.New("http failure"), true}
 )
 
-func retryableError(err error) error {
-	return &apiResponseError{err, true}
-}
-
-func errBadHTTPResponse(code int, msg []byte) error {
+func errBadHTTPResponse(code int, msg string) error {
 	retryable := false
 	switch code {
-	case 429, 500, 502, 503, 504:
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
 		retryable = true
 	}
-	return &apiResponseError{fmt.Errorf("%s: %w", msg, errors.New("http error")), retryable}
+	return &apiResponseError{fmt.Errorf("http error %d: %s", code, msg), retryable}
 }

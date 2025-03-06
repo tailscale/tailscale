@@ -1735,7 +1735,7 @@ func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequ
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		all, _ := io.ReadAll(res.Body)
-		return errBadHTTPResponse(res.StatusCode, all)
+		return errBadHTTPResponse(res.StatusCode, string(all))
 	}
 	return nil
 }
