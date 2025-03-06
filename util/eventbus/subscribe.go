@@ -8,14 +8,17 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
-	"time"
 )
 
+type deliveredEvent struct {
+	Event any
+	From  *Client
+	To    *Client
+}
+
 type queuedEvent struct {
-	Event     any
-	From      *Client
-	Published time.Time
-	Routed    time.Time
+	Event any
+	From  *Client
 }
 
 // subscriber is a uniformly typed wrapper around Subscriber[T], so
@@ -46,6 +49,7 @@ type subscribeState struct {
 	dispatcher *worker
 	write      chan queuedEvent
 	snapshot   chan chan []queuedEvent
+	debug      hook[deliveredEvent]
 
 	outputsMu sync.Mutex
 	outputs   map[reflect.Type]subscriber
@@ -81,6 +85,14 @@ func (q *subscribeState) pump(ctx context.Context) {
 			}
 			if !sub.dispatch(ctx, &vals, acceptCh) {
 				return
+			}
+
+			if q.debug.active() {
+				q.debug.run(deliveredEvent{
+					Event: val.Event,
+					From:  val.From,
+					To:    q.client,
+				})
 			}
 		} else {
 			// Keep the cases in this select in sync with

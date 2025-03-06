@@ -17,8 +17,9 @@ import (
 // Subscribers that share the same client receive events one at a
 // time, in the order they were published.
 type Client struct {
-	name string
-	bus  *Bus
+	name         string
+	bus          *Bus
+	publishDebug hook[publishedEvent]
 
 	mu  sync.Mutex
 	pub set.Set[publisher]
