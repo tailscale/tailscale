@@ -263,6 +263,8 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 // fixed, this is a workaround. It might also be useful for future debugging.
 var forceNoise443 = envknob.RegisterBool("TS_FORCE_NOISE_443")
 
+var disableRecentNoiseDialHeuristic = envknob.RegisterBool("TS_DISABLE_RECENT_NOISE_DIAL_HEURISTIC")
+
 // forceNoise443 reports whether the controlclient noise dialer should always
 // use HTTPS connections as its underlay connection (double crypto). This can
 // be necessary when networks or middle boxes are messing with port 80.
@@ -271,7 +273,7 @@ func (d *Dialer) forceNoise443() bool {
 		return true
 	}
 
-	if d.HealthTracker.LastNoiseDialWasRecent() {
+	if !disableRecentNoiseDialHeuristic() && d.HealthTracker.LastNoiseDialWasRecent() {
 		// If we dialed recently, assume there was a recent failure and fall
 		// back to HTTPS dials for the subsequent retries.
 		//
