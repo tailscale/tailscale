@@ -8,17 +8,28 @@ import (
 	"reflect"
 	"slices"
 	"sync"
-	"time"
 
 	"tailscale.com/util/set"
 )
 
+type publishedEvent struct {
+	Event any
+	From  *Client
+}
+
+type routedEvent struct {
+	Event any
+	From  *Client
+	To    []*Client
+}
+
 // Bus is an event bus that distributes published events to interested
 // subscribers.
 type Bus struct {
-	router   *worker
-	write    chan publishedEvent
-	snapshot chan chan []publishedEvent
+	router     *worker
+	write      chan publishedEvent
+	snapshot   chan chan []publishedEvent
+	routeDebug hook[routedEvent]
 
 	topicsMu sync.Mutex // guards everything below.
 	topics   map[reflect.Type][]*subscribeState
@@ -94,13 +105,23 @@ func (b *Bus) pump(ctx context.Context) {
 		for !vals.Empty() {
 			val := vals.Peek()
 			dests := b.dest(reflect.ValueOf(val.Event).Type())
-			routed := time.Now()
+
+			if b.routeDebug.active() {
+				clients := make([]*Client, len(dests))
+				for i := range len(dests) {
+					clients[i] = dests[i].client
+				}
+				b.routeDebug.run(routedEvent{
+					Event: val.Event,
+					From:  val.From,
+					To:    clients,
+				})
+			}
+
 			for _, d := range dests {
 				evt := queuedEvent{
-					Event:     val.Event,
-					From:      val.From,
-					Published: val.Published,
-					Routed:    routed,
+					Event: val.Event,
+					From:  val.From,
 				}
 			deliverOne:
 				for {
@@ -113,6 +134,7 @@ func (b *Bus) pump(ctx context.Context) {
 						break deliverOne
 					case in := <-acceptCh():
 						vals.Add(in)
+						in.From.publishDebug.run(in)
 					case <-ctx.Done():
 						return
 					case ch := <-b.snapshot:
@@ -129,8 +151,9 @@ func (b *Bus) pump(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case val := <-b.write:
-				vals.Add(val)
+			case in := <-b.write:
+				vals.Add(in)
+				in.From.publishDebug.run(in)
 			case ch := <-b.snapshot:
 				ch <- nil
 			}
