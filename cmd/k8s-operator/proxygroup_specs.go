@@ -73,7 +73,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Name: fmt.Sprintf("tailscaledconfig-%d", i),
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: fmt.Sprintf("%s-%d-config", pg.Name, i),
+						SecretName: pgConfigSecretName(pg.Name, i),
 					},
 				},
 			})
@@ -236,8 +236,8 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 				ResourceNames: func() (secrets []string) {
 					for i := range pgReplicas(pg) {
 						secrets = append(secrets,
-							fmt.Sprintf("%s-%d-config", pg.Name, i), // Config with auth key.
-							fmt.Sprintf("%s-%d", pg.Name, i),        // State.
+							pgConfigSecretName(pg.Name, i),   // Config with auth key.
+							fmt.Sprintf("%s-%d", pg.Name, i), // State.
 						)
 					}
 					return secrets
@@ -347,6 +347,10 @@ func pgReplicas(pg *tsapi.ProxyGroup) int32 {
 	}
 
 	return 2
+}
+
+func pgConfigSecretName(pgName string, i int32) string {
+	return fmt.Sprintf("%s-%d-config", pgName, i)
 }
 
 func pgEgressCMName(pg string) string {

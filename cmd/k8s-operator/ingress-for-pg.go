@@ -99,7 +99,7 @@ func (a *IngressPGReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	hostname := hostnameForIngress(ing)
 	logger = logger.With("hostname", hostname)
 
-	if !ing.DeletionTimestamp.IsZero() || !a.shouldExpose(ing) {
+	if !ing.DeletionTimestamp.IsZero() || !shouldExpose(ing) {
 		return res, a.maybeCleanup(ctx, hostname, ing, logger)
 	}
 
@@ -122,6 +122,8 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		logger.Infof("[unexpected] no ProxyGroup annotation, skipping VIPService provisioning")
 		return nil
 	}
+	logger = logger.With("ProxyGroup", pgName)
+
 	pg := &tsapi.ProxyGroup{}
 	if err := a.Get(ctx, client.ObjectKey{Name: pgName}, pg); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -147,8 +149,6 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 	if !IsHTTPSEnabledOnTailnet(a.tsnetServer) {
 		a.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
 	}
-
-	logger = logger.With("proxy-group", pg)
 
 	if !slices.Contains(ing.Finalizers, FinalizerNamePG) {
 		// This log line is printed exactly once during initial provisioning,
@@ -288,7 +288,13 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 	}
 
-	// 5. Update Ingress status
+	// 5. Update tailscaled's AdvertiseServices config, which should add the VIPService
+	// IPs to the ProxyGroup Pods' AllowedIPs in the next netmap update if approved.
+	if err = a.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, true, logger); err != nil {
+		return fmt.Errorf("failed to update tailscaled config: %w", err)
+	}
+
+	// 6. Update Ingress status
 	oldStatus := ing.Status.DeepCopy()
 	ports := []networkingv1.IngressPortStatus{
 		{
@@ -320,9 +326,9 @@ func (a *IngressPGReconciler) maybeProvision(ctx context.Context, hostname strin
 // maybeCleanupProxyGroup ensures that if an Ingress hostname has changed, any VIPService resources created for the
 // Ingress' ProxyGroup corresponding to the old hostname are cleaned up. A run of this function will ensure that any
 // VIPServices that are associated with the provided ProxyGroup and no longer owned by an Ingress are cleaned up.
-func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyGroupName string, logger *zap.SugaredLogger) error {
+func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, pgName string, logger *zap.SugaredLogger) error {
 	// Get serve config for the ProxyGroup
-	cm, cfg, err := a.proxyGroupServeConfig(ctx, proxyGroupName)
+	cm, cfg, err := a.proxyGroupServeConfig(ctx, pgName)
 	if err != nil {
 		return fmt.Errorf("getting serve config: %w", err)
 	}
@@ -349,17 +355,16 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 
 		if !found {
 			logger.Infof("VIPService %q is not owned by any Ingress, cleaning up", vipServiceName)
-			svc, err := a.getVIPService(ctx, vipServiceName, logger)
+
+			// Delete the VIPService from control if necessary.
+			svc, err := a.tsClient.GetVIPService(ctx, vipServiceName)
 			if err != nil {
 				errResp := &tailscale.ErrResponse{}
-				if errors.As(err, &errResp) && errResp.Status == http.StatusNotFound {
-					delete(cfg.Services, vipServiceName)
-					serveConfigChanged = true
-					continue
+				if ok := errors.As(err, errResp); !ok || errResp.Status != http.StatusNotFound {
+					return err
 				}
-				return err
 			}
-			if isVIPServiceForAnyIngress(svc) {
+			if svc != nil && isVIPServiceForAnyIngress(svc) {
 				logger.Infof("cleaning up orphaned VIPService %q", vipServiceName)
 				if err := a.tsClient.DeleteVIPService(ctx, vipServiceName); err != nil {
 					errResp := &tailscale.ErrResponse{}
@@ -367,6 +372,11 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 						return fmt.Errorf("deleting VIPService %q: %w", vipServiceName, err)
 					}
 				}
+			}
+
+			// Make sure the VIPService is not advertised in tailscaled or serve config.
+			if err = a.maybeUpdateAdvertiseServicesConfig(ctx, pgName, vipServiceName, false, logger); err != nil {
+				return fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
 			delete(cfg.Services, vipServiceName)
 			serveConfigChanged = true
@@ -383,6 +393,7 @@ func (a *IngressPGReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			return fmt.Errorf("updating serve config: %w", err)
 		}
 	}
+
 	return nil
 }
 
@@ -421,7 +432,12 @@ func (a *IngressPGReconciler) maybeCleanup(ctx context.Context, hostname string,
 		return fmt.Errorf("error deleting VIPService: %w", err)
 	}
 
-	// 3. Remove the VIPService from the serve config for the ProxyGroup.
+	// 3. Unadvertise the VIPService in tailscaled config.
+	if err = a.maybeUpdateAdvertiseServicesConfig(ctx, pg, serviceName, false, logger); err != nil {
+		return fmt.Errorf("failed to update tailscaled config services: %w", err)
+	}
+
+	// 4. Remove the VIPService from the serve config for the ProxyGroup.
 	logger.Infof("Removing VIPService %q from serve config for ProxyGroup %q", hostname, pg)
 	delete(cfg.Services, serviceName)
 	cfgBytes, err := json.Marshal(cfg)
@@ -501,24 +517,12 @@ func (a *IngressPGReconciler) tailnetCertDomain(ctx context.Context) (string, er
 }
 
 // shouldExpose returns true if the Ingress should be exposed over Tailscale in HA mode (on a ProxyGroup)
-func (a *IngressPGReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
+func shouldExpose(ing *networkingv1.Ingress) bool {
 	isTSIngress := ing != nil &&
 		ing.Spec.IngressClassName != nil &&
 		*ing.Spec.IngressClassName == tailscaleIngressClassName
 	pgAnnot := ing.Annotations[AnnotationProxyGroup]
 	return isTSIngress && pgAnnot != ""
-}
-
-func (a *IngressPGReconciler) getVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (*tailscale.VIPService, error) {
-	svc, err := a.tsClient.GetVIPService(ctx, name)
-	if err != nil {
-		errResp := &tailscale.ErrResponse{}
-		if ok := errors.As(err, errResp); ok && errResp.Status != http.StatusNotFound {
-			logger.Infof("error getting VIPService %q: %v", name, err)
-			return nil, fmt.Errorf("error getting VIPService %q: %w", name, err)
-		}
-	}
-	return svc, nil
 }
 
 func isVIPServiceForIngress(svc *tailscale.VIPService, ing *networkingv1.Ingress) bool {
@@ -582,12 +586,16 @@ func (a *IngressPGReconciler) validateIngress(ing *networkingv1.Ingress, pg *tsa
 
 // deleteVIPServiceIfExists attempts to delete the VIPService if it exists and is owned by the given Ingress.
 func (a *IngressPGReconciler) deleteVIPServiceIfExists(ctx context.Context, name tailcfg.ServiceName, ing *networkingv1.Ingress, logger *zap.SugaredLogger) error {
-	svc, err := a.getVIPService(ctx, name, logger)
+	svc, err := a.tsClient.GetVIPService(ctx, name)
 	if err != nil {
+		errResp := &tailscale.ErrResponse{}
+		if ok := errors.As(err, errResp); ok && errResp.Status == http.StatusNotFound {
+			return nil
+		}
+
 		return fmt.Errorf("error getting VIPService: %w", err)
 	}
 
-	// isVIPServiceForIngress handles nil svc, so we don't need to check it here
 	if !isVIPServiceForIngress(svc, ing) {
 		return nil
 	}
@@ -605,4 +613,55 @@ func isHTTPEndpointEnabled(ing *networkingv1.Ingress) bool {
 		return false
 	}
 	return ing.Annotations[annotationHTTPEndpoint] == "enabled"
+}
+
+func (a *IngressPGReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, shouldBeAdvertised bool, logger *zap.SugaredLogger) (err error) {
+	logger.Debugf("Updating ProxyGroup tailscaled configs to advertise service %q: %v", serviceName, shouldBeAdvertised)
+
+	// Get all config Secrets for this ProxyGroup.
+	secrets := &corev1.SecretList{}
+	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "config"))); err != nil {
+		return fmt.Errorf("failed to list config Secrets: %w", err)
+	}
+
+	for _, secret := range secrets.Items {
+		var updated bool
+		for fileName, confB := range secret.Data {
+			var conf ipn.ConfigVAlpha
+			if err := json.Unmarshal(confB, &conf); err != nil {
+				return fmt.Errorf("error unmarshalling ProxyGroup config: %w", err)
+			}
+
+			// Update the services to advertise if required.
+			idx := slices.Index(conf.AdvertiseServices, serviceName.String())
+			isAdvertised := idx >= 0
+			switch {
+			case isAdvertised == shouldBeAdvertised:
+				// Already up to date.
+				continue
+			case isAdvertised:
+				// Needs to be removed.
+				conf.AdvertiseServices = slices.Delete(conf.AdvertiseServices, idx, idx+1)
+			case shouldBeAdvertised:
+				// Needs to be added.
+				conf.AdvertiseServices = append(conf.AdvertiseServices, serviceName.String())
+			}
+
+			// Update the Secret.
+			confB, err := json.Marshal(conf)
+			if err != nil {
+				return fmt.Errorf("error marshalling ProxyGroup config: %w", err)
+			}
+			mak.Set(&secret.Data, fileName, confB)
+			updated = true
+		}
+
+		if updated {
+			if err := a.Update(ctx, &secret); err != nil {
+				return fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
+			}
+		}
+	}
+
+	return nil
 }

@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
 	"testing"
@@ -24,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ptr"
@@ -63,6 +65,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
 	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
 		ing.Annotations["tailscale.com/tags"] = "tag:custom,tag:test"
@@ -122,6 +125,8 @@ func TestIngressPGReconciler(t *testing.T) {
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
 
+	verifyTailscaledConfig(t, fc, []string{"svc:my-svc", "svc:my-other-svc"})
+
 	// Delete second Ingress
 	if err := fc.Delete(context.Background(), ing2); err != nil {
 		t.Fatalf("deleting second Ingress: %v", err)
@@ -151,6 +156,8 @@ func TestIngressPGReconciler(t *testing.T) {
 		t.Error("second Ingress service config was not cleaned up")
 	}
 
+	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
+
 	// Delete the first Ingress and verify cleanup
 	if err := fc.Delete(context.Background(), ing); err != nil {
 		t.Fatalf("deleting Ingress: %v", err)
@@ -175,6 +182,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	if len(cfg.Services) > 0 {
 		t.Error("serve config not cleaned up")
 	}
+	verifyTailscaledConfig(t, fc, nil)
 }
 
 func TestValidateIngress(t *testing.T) {
@@ -464,6 +472,27 @@ func verifyServeConfig(t *testing.T, fc client.Client, serviceName string, wantH
 	}
 }
 
+func verifyTailscaledConfig(t *testing.T, fc client.Client, expectedServices []string) {
+	var expected string
+	if expectedServices != nil {
+		expectedServicesJSON, err := json.Marshal(expectedServices)
+		if err != nil {
+			t.Fatalf("marshaling expected services: %v", err)
+		}
+		expected = fmt.Sprintf(`,"AdvertiseServices":%s`, expectedServicesJSON)
+	}
+	expectEqual(t, fc, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgConfigSecretName("test-pg", 0),
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels("test-pg", "config"),
+		},
+		Data: map[string][]byte{
+			tsoperator.TailscaledConfigFileName(106): []byte(fmt.Sprintf(`{"Version":""%s}`, expected)),
+		},
+	})
+}
+
 func setupIngressTest(t *testing.T) (*IngressPGReconciler, client.Client, *fakeTSClient) {
 	t.Helper()
 
@@ -494,9 +523,21 @@ func setupIngressTest(t *testing.T) (*IngressPGReconciler, client.Client, *fakeT
 		},
 	}
 
+	// Pre-create a config Secret for the ProxyGroup
+	pgCfgSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgConfigSecretName("test-pg", 0),
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels("test-pg", "config"),
+		},
+		Data: map[string][]byte{
+			tsoperator.TailscaledConfigFileName(106): []byte("{}"),
+		},
+	}
+
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
-		WithObjects(pg, pgConfigMap, tsIngressClass).
+		WithObjects(pg, pgCfgSecret, pgConfigMap, tsIngressClass).
 		WithStatusSubresource(pg).
 		Build()
 
