@@ -23,6 +23,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
@@ -190,6 +191,15 @@ func TestValidateIngress(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-ingress",
 			Namespace: "default",
+			Annotations: map[string]string{
+				AnnotationProxyGroup: "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"test"}},
+			},
 		},
 	}
 
@@ -213,10 +223,11 @@ func TestValidateIngress(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		ing     *networkingv1.Ingress
-		pg      *tsapi.ProxyGroup
-		wantErr string
+		name         string
+		ing          *networkingv1.Ingress
+		pg           *tsapi.ProxyGroup
+		existingIngs []networkingv1.Ingress
+		wantErr      string
 	}{
 		{
 			name: "valid_ingress_with_hostname",
@@ -306,12 +317,38 @@ func TestValidateIngress(t *testing.T) {
 			},
 			wantErr: "ProxyGroup \"test-pg\" is not ready",
 		},
+		{
+			name: "duplicate_hostname",
+			ing:  baseIngress,
+			pg:   readyProxyGroup,
+			existingIngs: []networkingv1.Ingress{{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "existing-ingress",
+					Namespace: "default",
+					Annotations: map[string]string{
+						AnnotationProxyGroup: "test-pg",
+					},
+				},
+				Spec: networkingv1.IngressSpec{
+					IngressClassName: ptr.To("tailscale"),
+					TLS: []networkingv1.IngressTLS{
+						{Hosts: []string{"test"}},
+					},
+				},
+			}},
+			wantErr: `found duplicate Ingress "existing-ingress" for hostname "test" - multiple Ingresses for the same hostname in the same cluster are not allowed`,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &IngressPGReconciler{}
-			err := r.validateIngress(tt.ing, tt.pg)
+			fc := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				WithObjects(tt.ing).
+				WithLists(&networkingv1.IngressList{Items: tt.existingIngs}).
+				Build()
+			r := &HAIngressReconciler{Client: fc}
+			err := r.validateIngress(context.Background(), tt.ing, tt.pg)
 			if (err == nil && tt.wantErr != "") || (err != nil && err.Error() != tt.wantErr) {
 				t.Errorf("validateIngress() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -493,8 +530,7 @@ func verifyTailscaledConfig(t *testing.T, fc client.Client, expectedServices []s
 	})
 }
 
-func setupIngressTest(t *testing.T) (*IngressPGReconciler, client.Client, *fakeTSClient) {
-	t.Helper()
+func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeTSClient) {
 
 	tsIngressClass := &networkingv1.IngressClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
@@ -552,9 +588,9 @@ func setupIngressTest(t *testing.T) (*IngressPGReconciler, client.Client, *fakeT
 	if err := fc.Status().Update(context.Background(), pg); err != nil {
 		t.Fatal(err)
 	}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 
 	ft := &fakeTSClient{}
-	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 	zl, err := zap.NewDevelopment()
 	if err != nil {
 		t.Fatal(err)
@@ -568,16 +604,100 @@ func setupIngressTest(t *testing.T) (*IngressPGReconciler, client.Client, *fakeT
 		},
 	}
 
-	ingPGR := &IngressPGReconciler{
+	ingPGR := &HAIngressReconciler{
 		Client:      fc,
 		tsClient:    ft,
-		tsnetServer: fakeTsnetServer,
 		defaultTags: []string{"tag:k8s"},
 		tsNamespace: "operator-ns",
+		tsnetServer: fakeTsnetServer,
 		logger:      zl.Sugar(),
 		recorder:    record.NewFakeRecorder(10),
 		lc:          lc,
 	}
 
 	return ingPGR, fc, ft
+}
+
+func TestIngressPGReconciler_MultiCluster(t *testing.T) {
+	ingPGR, fc, ft := setupIngressTest(t)
+	ingPGR.operatorID = "operator-1"
+
+	// Create initial Ingress
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+		},
+	}
+	mustCreate(t, fc, ing)
+
+	// Simulate existing VIPService from another cluster
+	existingVIPSvc := &tailscale.VIPService{
+		Name:    "svc:my-svc",
+		Comment: `{"ownerrefs":[{"operatorID":"operator-2"}]}`,
+	}
+	ft.vipServices = map[tailcfg.ServiceName]*tailscale.VIPService{
+		"svc:my-svc": existingVIPSvc,
+	}
+
+	// Verify reconciliation adds our operator reference
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+
+	vipSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
+	if err != nil {
+		t.Fatalf("getting VIPService: %v", err)
+	}
+	if vipSvc == nil {
+		t.Fatal("VIPService not found")
+	}
+
+	c := &comment{}
+	if err := json.Unmarshal([]byte(vipSvc.Comment), c); err != nil {
+		t.Fatalf("parsing comment: %v", err)
+	}
+
+	wantOwnerRefs := []OwnerRef{
+		{OperatorID: "operator-2"},
+		{OperatorID: "operator-1"},
+	}
+	if !reflect.DeepEqual(c.OwnerRefs, wantOwnerRefs) {
+		t.Errorf("incorrect owner refs\ngot:  %+v\nwant: %+v", c.OwnerRefs, wantOwnerRefs)
+	}
+
+	// Delete the Ingress and verify VIPService still exists with one owner ref
+	if err := fc.Delete(context.Background(), ing); err != nil {
+		t.Fatalf("deleting Ingress: %v", err)
+	}
+	expectRequeue(t, ingPGR, "default", "test-ingress")
+
+	vipSvc, err = ft.GetVIPService(context.Background(), "svc:my-svc")
+	if err != nil {
+		t.Fatalf("getting VIPService after deletion: %v", err)
+	}
+	if vipSvc == nil {
+		t.Fatal("VIPService was incorrectly deleted")
+	}
+
+	c = &comment{}
+	if err := json.Unmarshal([]byte(vipSvc.Comment), c); err != nil {
+		t.Fatalf("parsing comment after deletion: %v", err)
+	}
+
+	wantOwnerRefs = []OwnerRef{
+		{OperatorID: "operator-2"},
+	}
+	if !reflect.DeepEqual(c.OwnerRefs, wantOwnerRefs) {
+		t.Errorf("incorrect owner refs after deletion\ngot:  %+v\nwant: %+v", c.OwnerRefs, wantOwnerRefs)
+	}
 }
