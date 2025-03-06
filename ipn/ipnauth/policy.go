@@ -66,7 +66,9 @@ func CheckDisconnectPolicy(actor Actor, profile ipn.LoginProfileView, reason str
 		} else {
 			details = fmt.Sprintf("%q is being disconnected: %v", profile.Name(), reason)
 		}
-		auditFn(profile.ID(), tailcfg.AuditNodeDisconnect, details)
+		if err := auditFn(tailcfg.AuditNodeDisconnect, details); err != nil {
+			return err
+		}
 	}
 	return nil
 }

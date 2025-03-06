@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -34,7 +33,7 @@ func expectError(t *testing.T, err error) {
 
 // auditLoggerForTest creates an auditLogger for you and cleans it up
 // (and ensures no goroutines are leaked) when the test is done.
-func auditLoggerForTest(t *testing.T, opts Opts) *AuditLogger {
+func auditLoggerForTest(t *testing.T, opts Opts) *Logger {
 	t.Helper()
 	if opts.Logf == nil {
 		t.Fatalf("opts.Logf must be set")
@@ -43,35 +42,13 @@ func auditLoggerForTest(t *testing.T, opts Opts) *AuditLogger {
 		t.Fatalf("opts.Store must be set")
 	}
 
-	a := NewAuditLogger(opts)
+	a := NewLogger(opts)
 
 	t.Cleanup(func() {
 		a.FlushAndStop(5 * time.Second)
 	})
 	tstest.ResourceCheck(t)
 	return a
-}
-
-func TestRetryableErrors(t *testing.T) {
-	errors := []struct {
-		err  error
-		want bool
-	}{
-		{controlclient.ErrHTTPFailure, false},
-		{controlclient.ErrNoNoiseClient, true},
-		{fmt.Errorf("%w: %w", controlclient.ErrNoNoiseClient, errors.New("boom")), true},
-		{fmt.Errorf("%w: %w", controlclient.ErrHTTPPostFailure, errors.New("boom")), true},
-		{controlclient.ErrNoNodeKey, true},
-		{context.Canceled, false},
-		{fmt.Errorf("%w: %w", context.Canceled, errors.New("boom")), false},
-		{controlclient.ErrTxnHTTPFailure(500, []byte("server melted")), false},
-	}
-
-	for _, e := range errors {
-		if !cmp.Equal(isRetryableError(e.err), e.want) {
-			t.Fatalf("error evaluator failed for %v", e.err)
-		}
-	}
 }
 
 // TestEnqueueAndFlush enqueues n logs and flushes them.
@@ -82,7 +59,7 @@ func TestEnqueueAndFlush(t *testing.T) {
 	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 200,
 		Logf:       t.Logf,
-		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
+		Store:      newLogStore(&mem.Store{}),
 	})
 
 	a.SetProfileID("test")
@@ -121,7 +98,7 @@ func TestDeduplicateAndSort(t *testing.T) {
 	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
+		Store:      newLogStore(&mem.Store{}),
 	})
 	a.SetProfileID("test")
 
@@ -158,7 +135,7 @@ func TestChangeProfileId(t *testing.T) {
 	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
+		Store:      newLogStore(&mem.Store{}),
 	})
 	expectNoError(t, a.SetProfileID("test"))
 
@@ -174,7 +151,7 @@ func TestSendOnRestore(t *testing.T) {
 	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
+		Store:      newLogStore(&mem.Store{}),
 	})
 	a.SetProfileID("test")
 
@@ -215,7 +192,7 @@ func TestFailureExhaustion(t *testing.T) {
 	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 1,
 		Logf:       t.Logf,
-		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
+		Store:      newLogStore(&mem.Store{}),
 	})
 
 	a.SetProfileID("test")
@@ -255,7 +232,7 @@ func TestEnqueueAndFailNoRetry(t *testing.T) {
 	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
+		Store:      newLogStore(&mem.Store{}),
 	})
 
 	a.SetProfileID("test")
@@ -297,7 +274,7 @@ func TestEnqueueAndRetry(t *testing.T) {
 	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
+		Store:      newLogStore(&mem.Store{}),
 	})
 
 	// Set our backoff parameters to 0 seconds to avoid the
@@ -350,7 +327,7 @@ func TestStart(t *testing.T) {
 	a := auditLoggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      NewLogStateStore(&mem.Store{}, t.Logf),
+		Store:      newLogStore(&mem.Store{}),
 	})
 
 	err := a.Enqueue(tailcfg.AuditNodeDisconnect, "log")
@@ -403,7 +380,7 @@ func TestStart(t *testing.T) {
 
 // TestLogStoring tests that audit logs are persisted sorted by timestamp, oldest to newest
 func TestLogSorting(t *testing.T) {
-	mockStore := NewLogStateStore(&mem.Store{}, t.Logf)
+	mockStore := newLogStore(&mem.Store{})
 
 	logs := []*transaction{
 		{EventID: "1", Details: "log 3", TimeStamp: time.Now().Add(-time.Minute * 1)},

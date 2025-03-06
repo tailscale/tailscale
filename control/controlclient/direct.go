@@ -160,7 +160,7 @@ type Options struct {
 	// Shutdown is an optional function that will be called before client shutdown is
 	// attempted. It is used to allow the client to clean up any resources or complete any
 	// tasks that are dependent on a live client.
-	Shutdown func() // or nil
+	Shutdown func()
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -1665,11 +1665,11 @@ func (c *Auto) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) err
 func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
 	nc, err := c.getNoiseClient()
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrNoNoiseClient, err)
+		return fmt.Errorf("%w: %w", errNoNoiseClient, err)
 	}
 	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
 	if !ok {
-		return ErrNoNodeKey
+		return errNoNodeKey
 	}
 	if c.panicOnUse {
 		panic("tainted client")
@@ -1700,9 +1700,9 @@ func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) e
 	return nil
 }
 
-// SendAuditLog does a synchronous call to the control plane submit an audit log.
+// SendAuditLog implements [auditlog.Transport] by sending an audit log synchronously to the control plane.
 //
-// Auto implements [auditlog.Transport].
+// See docs on [tailcfg.AuditLogRequest] and [auditlog.Logger] for background.
 func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
 	return c.direct.sendAuditLog(ctx, auditLog)
 }
@@ -1710,12 +1710,12 @@ func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogReques
 func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
 	nc, err := c.getNoiseClient()
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrNoNoiseClient, err)
+		return fmt.Errorf("%w: %w", errNoNoiseClient, err)
 	}
 
 	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
 	if !ok {
-		return ErrNoNodeKey
+		return errNoNodeKey
 	}
 
 	req := &tailcfg.AuditLogRequest{
@@ -1730,12 +1730,12 @@ func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequ
 
 	res, err := nc.post(ctx, "/machine/audit-log", nodeKey, req)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrHTTPPostFailure, err)
+		return fmt.Errorf("%w: %w", errHTTPPostFailure, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		all, _ := io.ReadAll(res.Body)
-		return ErrTxnHTTPFailure(res.StatusCode, all)
+		return errBadHTTPResponse(res.StatusCode, all)
 	}
 	return nil
 }

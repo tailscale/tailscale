@@ -3,51 +3,46 @@
 
 package controlclient
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
-// TxnError is an error type that can be returned by controlclient
+// apiResponseError is an error type that can be returned by controlclient
 // api requests.
 //
-// It wraps an underlying error and an HTTP response and code.
-type TxnError struct {
-	err      error
-	response string
-	httpCode int
+// It wraps an underlying error and a flag for clients to query if the
+// error is retryable via the Retryable() method.
+type apiResponseError struct {
+	err       error
+	retryable bool
 }
 
 // Error implements [error].
-func (e *TxnError) Error() string {
+func (e *apiResponseError) Error() string {
 	return e.err.Error()
 }
 
-// Retryable returns whether the error is retryable.
-func (e *TxnError) Retryable() bool {
-	switch {
-	case errors.Is(e, ErrNoNodeKey),
-		errors.Is(e, ErrHTTPPostFailure),
-		errors.Is(e, ErrNoNoiseClient):
-		return true
-	case errors.Is(e, ErrHTTPFailure):
-		// We're treating all HTTP errors as non-retriable here, but this could be made more sophisticated.
-		// Notably, HTTP 500's are often retriable.
-		// (barnstar) TODO: make this more sophisticated. See: https://github.com/tailscale/corp/issues/26811
-		return false
-	default:
-		return false
+// Retryable reports whether the error is retryable.
+func (e *apiResponseError) Retryable() bool {
+	return e.retryable
+}
+
+var (
+	errNoNodeKey       = retryableError(errors.New("no node key"))
+	errNoNoiseClient   = retryableError(errors.New("no noise client"))
+	errHTTPPostFailure = retryableError(errors.New("http failure"))
+)
+
+func retryableError(err error) error {
+	return &apiResponseError{err, true}
+}
+
+func errBadHTTPResponse(code int, msg []byte) error {
+	retryable := false
+	switch code {
+	case 429, 500, 502, 503, 504:
+		retryable = true
 	}
-}
-
-var ErrHTTPFailure = ErrTxnError(errors.New("HTTP Error"))
-var ErrNoNodeKey error = ErrTxnError(errors.New("No Node Key"))
-var ErrNoNoiseClient error = ErrTxnError(errors.New("No Noise Client"))
-var ErrHTTPPostFailure error = ErrTxnError(errors.New("HTTP Post Failure"))
-
-// ErrTxnError wraps an error in a TxnError.
-func ErrTxnError(err error) error {
-	return &TxnError{err, "", 0}
-}
-
-// ErrTxnHTTPFailure wraps an HTTP error in an TxnError.
-func ErrTxnHTTPFailure(errCode int, response []byte) error {
-	return &TxnError{ErrHTTPFailure, string(response), errCode}
+	return &apiResponseError{fmt.Errorf("%s: %w", msg, errors.New("http error")), retryable}
 }

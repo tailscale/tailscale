@@ -452,9 +452,9 @@ type LocalBackend struct {
 	// Returned errors are logged but otherwise ignored and do not affect the shutdown process.
 	shutdownCbs set.HandleSet[func() error]
 
-	// auditLogger is the audit logger for the backend.  It queues, persists, and sends audit logs
-	// to the control client
-	auditLogger *auditlog.AuditLogger
+	// auditLogger manages audit logging for the backend.  It queues, persists, and sends audit logs
+	// to the control client.  auditLogger has the same lifespan as b.cc.
+	auditLogger *auditlog.Logger
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -1100,7 +1100,6 @@ func (b *LocalBackend) Shutdown() {
 	b.shutdownCbs = nil
 	b.mu.Unlock()
 	b.webClientShutdown()
-	b.auditLoggerShutdown()
 
 	for _, cb := range shutdownCbs {
 		if err := cb(); err != nil {
@@ -1121,7 +1120,6 @@ func (b *LocalBackend) Shutdown() {
 	b.unregisterNetMon()
 	b.unregisterHealthWatch()
 	b.unregisterSysPolicyWatch()
-
 	if cc != nil {
 		cc.Shutdown()
 	}
@@ -1687,7 +1685,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		}
 	}
 
-	// Update the audit logger with the current profile ID
+	// Update the audit logger with the current profile ID.
 	if b.auditLogger != nil && prefsChanged {
 		pid := b.pm.CurrentProfile().ID()
 		b.auditLogger.SetProfileID(pid)
@@ -2403,12 +2401,11 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	var auditLogShutdown func()
 	// Audit logging is only available if the client has set up a proper persistent
 	// store for the logs in sys.
-	logstore, ok := b.sys.AuditLogStore.GetOK()
-	if ok && logstore != nil {
-		al := auditlog.NewAuditLogger(auditlog.Opts{
+	if store, ok := b.sys.AuditLogStore.GetOK(); ok {
+		al := auditlog.NewLogger(auditlog.Opts{
 			Logf:       b.logf,
 			RetryLimit: 32,
-			Store:      logstore,
+			Store:      store,
 		})
 		b.auditLogger = al
 		auditLogShutdown = func() { al.FlushAndStop(5 * time.Second) }
@@ -4294,27 +4291,20 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	return err
 }
 
-func (b *LocalBackend) auditLoggerShutdown() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.auditLogger != nil {
-		b.auditLogger.FlushAndStop(5 * time.Second)
-		b.auditLogger = nil
-	}
-}
+var errNoAuditLogger = errors.New("no audit logger configured")
 
 // enqueueAuditLogLocked enqueues an audit log entry for the specified action and details
 // b.mu must be held.
-func (b *LocalBackend) enqueueAuditLogLocked(id ipn.ProfileID, action tailcfg.ClientAuditAction, details string) {
-	if b.auditLogger != nil {
-		err := b.auditLogger.Enqueue(action, details)
-		// We don't want to return an error here, because it will get propagated to localAPI, and prevent
-		// things like disconnections and user switches - but we do want to log it.
-		if err != nil {
-			b.logf("failed to enqueue audit log %v %v: %w", action, details, err)
+func (b *LocalBackend) getAuditLoggerLocked() ipnauth.AuditLogFunc {
+	logger := b.auditLogger
+	return func(action tailcfg.ClientAuditAction, details string) error {
+		if logger == nil {
+			return errNoAuditLogger
 		}
-	} else {
-		b.logf("failed to enqueue audit log %v %v: no audit logger configred", action, details)
+		if err := logger.Enqueue(action, details); err != nil {
+			return fmt.Errorf("failed to enqueue audit log %v %q: %w", action, details, err)
+		}
+		return nil
 	}
 }
 
@@ -4343,8 +4333,15 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.enqueueAuditLogLocked); err != nil {
-			return ipn.PrefsView{}, err
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.getAuditLoggerLocked()); err != nil {
+			b.logf("check profile access failed: %v", err)
+			switch {
+			case errors.Is(err, errNoAuditLogger):
+				// This is likely programmer error - the client has not set up an audit logger but
+				// the policies applied to the client require one.
+			default:
+				return ipn.PrefsView{}, err
+			}
 		}
 
 		// If a user has enough rights to disconnect, such as when [syspolicy.AlwaysOn]
@@ -5928,13 +5925,11 @@ func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
 	if b.auditLogger != nil {
-		err := b.auditLogger.SetProfileID(b.pm.CurrentProfile().ID())
-		if err != nil {
+		if err := b.auditLogger.SetProfileID(b.pm.CurrentProfile().ID()); err != nil {
 			b.logf("audit logger set profile ID failure: %v", err)
 		}
 
-		err = b.auditLogger.Start(b.ccAuto)
-		if err != nil {
+		if err := b.auditLogger.Start(b.ccAuto); err != nil {
 			b.logf("audit logger start failure: %v", err)
 		}
 	}

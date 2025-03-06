@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package auditlog sends auditlog events to the control plane.
+// Package auditlog provides a mechanism for logging audit events.
 package auditlog
 
 import (
@@ -25,8 +25,10 @@ import (
 // transaction represents an audit log that has not yet been sent to the control plane.
 type transaction struct {
 	// EventID is the unique identifier for the event being logged.
+	// This is used on the client side only and is not sent to control
 	EventID string `json:",omitempty"`
 	// Retries is the number of times the logger has attempted to send this log.
+	// This is used on the client side only and is not sent to control
 	Retries int `json:",omitempty"`
 
 	// Action is the action to be logged. It must correspond to a known action in the control plane.
@@ -40,46 +42,39 @@ type transaction struct {
 
 // Transport provides a means for a client to send audit logs to a consumer (typically the control plane).
 type Transport interface {
-	// SendAuditLog sends an audit log to the control plane.
-	// It returns an error if the send fails, which may be checked
-	// with errors.As for retryability.
+	// SendAuditLog sends an audit log to a consumer of audit logs.
+	// Errors should be checked with [IsRetryableError] for retryability.
 	SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) error
 }
 
 // [controlclient.Auto] must implement the [Transport] interface.
 var _ Transport = (*controlclient.Auto)(nil)
 
-// LogStore provides a means for an [AuditLogger] to persist logs to disk or memory.
+// LogStore provides a means for an [Logger] to persist logs to disk or memory.
 type LogStore interface {
 	// Save saves the given data to a persistent store. Save will overwrite existing data
 	// for the given key.
 	Save(key ipn.ProfileID, logs []*transaction) error
 
-	// Load retrieves the data from a persistent store. This must return
-	// an empty slice if no data exists for the given key.
+	// Load retrieves the data from a persistent store.  Returns a nil slice and
+	// no error if no data exists for the given key.
 	Load(key ipn.ProfileID) ([]*transaction, error)
 }
 
-// Opts contains the configuration options for an [AuditLogger].
+// Opts contains the configuration options for an [Logger].
 type Opts struct {
 	// RetryLimit is the maximum number of attempts the logger will make to send a log before giving up.
 	RetryLimit int
-	// Store is the persistent store used to save logs to disk. non-nil
+	// Store is the persistent store used to save logs to disk. Must be non-nil.
 	Store LogStore
-	// Logf is the logger used to log messages from the audit logger. non-nil
+	// Logf is the logger used to log messages from the audit logger. Must be non-nil.
 	Logf logger.Logf
 }
 
-type maybeRetryable interface {
-	Retryable() bool
-}
-
-func isRetryableError(err error) bool {
-	var ae maybeRetryable
-	if errors.As(err, &ae) {
-		return ae.Retryable()
-	}
-	return false
+func IsRetryableError(err error) bool {
+	// See [controlclient.apiResponseError].  Potentially Retryable errors implement the Retryable() method.
+	var retryable interface{ Retryable() bool }
+	return errors.As(err, &retryable) && retryable.Retryable()
 }
 
 type backoffOpts struct {
@@ -94,32 +89,32 @@ var defaultBackoffOpts = backoffOpts{
 	multiplier: 2,
 }
 
-// AuditLogger provides a queue-based mechanism for submitting audit logs to the control plane - or
+// Logger provides a queue-based mechanism for submitting audit logs to the control plane - or
 // another suitable consumer. Logs are stored to disk and retried until they are successfully sent,
 // or until they permanently fail.
 //
-// Each individual profile/controlclient tuple should construct and manage a unique [AuditLogger] instance.
-type AuditLogger struct {
+// Each individual profile/controlclient tuple should construct and manage a unique [Logger] instance.
+type Logger struct {
 	logf        logger.Logf
 	retryLimit  int                // the maximum number of attempts to send a log before giving up.
-	flusher     chan struct{}      // channel used to signal a flush operation
-	done        chan struct{}      // close to stop the worker goroutine.
-	ctx         context.Context    // canceled when the logger is stopped
-	ctxCancel   context.CancelFunc // cancels ctx
-	backoffOpts                    // backoff settings for retry operations
+	flusher     chan struct{}      // channel used to signal a flush operation.
+	done        chan struct{}      // closed when the flush worker exits.
+	ctx         context.Context    // canceled when the logger is stopped.
+	ctxCancel   context.CancelFunc // cancels ctx.
+	backoffOpts                    // backoff settings for retry operations.
 
 	// mu protects the fields below.
 	mu        sync.Mutex
-	store     LogStore      // persistent storage for unsent logs
-	profileID ipn.ProfileID // the profileID for the logger. Empty if SetProfileID has not been called.
-	transport Transport     // nil until SetTransport is called.
+	store     LogStore      // persistent storage for unsent logs.
+	profileID ipn.ProfileID // empty if [Logger.SetProfileID] has not been called.
+	transport Transport     // nil until [Logger.Start] is called.
 }
 
-// NewAuditLogger creates a new [AuditLogger] with the given options.
-func NewAuditLogger(opts Opts) *AuditLogger {
+// NewLogger creates a new [Logger] with the given options.
+func NewLogger(opts Opts) *Logger {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	q := &AuditLogger{
+	q := &Logger{
 		retryLimit:  opts.RetryLimit,
 		logf:        logger.WithPrefix(opts.Logf, "auditlog: "),
 		store:       opts.Store,
@@ -136,7 +131,7 @@ func NewAuditLogger(opts Opts) *AuditLogger {
 // FlushAndStop synchronously flushes all pending logs and stops the audit logger.
 // This will block until a final flush operation completes or the timeout is reached.
 // If the logger is already stopped, this will return immediately.
-func (a *AuditLogger) FlushAndStop(timeout time.Duration) {
+func (a *Logger) FlushAndStop(timeout time.Duration) {
 	a.stop()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -145,7 +140,7 @@ func (a *AuditLogger) FlushAndStop(timeout time.Duration) {
 
 // SetProfileID sets the profileID for the logger. This must be called before any logs can be enqueued.
 // The profileID of a logger cannot be changed once set.
-func (a *AuditLogger) SetProfileID(profileID ipn.ProfileID) error {
+func (a *Logger) SetProfileID(profileID ipn.ProfileID) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.profileID != "" {
@@ -157,9 +152,8 @@ func (a *AuditLogger) SetProfileID(profileID ipn.ProfileID) error {
 }
 
 // Start starts the audit logger with the given transport.
-// If the logger is already started (it has a transport), this will return an error and no-op.
-// If the logger is stopped, this will start the logger and begin processing logs.
-func (a *AuditLogger) Start(t Transport) error {
+// Returns an error if the logger is already started.
+func (a *Logger) Start(t Transport) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -169,21 +163,24 @@ func (a *AuditLogger) Start(t Transport) error {
 
 	a.transport = t
 	pending, err := a.storedCountLocked()
-
-	go a.flushWorker(a.ctx, a.done)
-
 	if err != nil {
 		a.logf("[unexpected] failed to restore logs: %v", err)
 	}
-
+	go a.flushWorker()
 	if pending > 0 {
 		a.flushAsync()
 	}
 	return nil
 }
 
+var (
+	ErrAuditLogStorageFailure = errors.New("audit log storage failure")
+)
+
 // Enqueue queues an audit log to be sent to the control plane (or another suitable consumer/transport).
-func (a *AuditLogger) Enqueue(action tailcfg.ClientAuditAction, details string) error {
+// This will return an error if the underlying store fails to save the log or we fail to generate a unique
+// eventID for the log.
+func (a *Logger) Enqueue(action tailcfg.ClientAuditAction, details string) error {
 	txn := &transaction{
 		Action:    action,
 		Details:   details,
@@ -194,7 +191,7 @@ func (a *AuditLogger) Enqueue(action tailcfg.ClientAuditAction, details string) 
 	// persisted to the store.
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrAuditLogStorageFailure, err)
 	}
 	txn.EventID = fmt.Sprint(txn.TimeStamp, hex.EncodeToString(bytes))
 	return a.enqueue(txn)
@@ -202,15 +199,15 @@ func (a *AuditLogger) Enqueue(action tailcfg.ClientAuditAction, details string) 
 
 // flushAsync requests an asynchronous flush.
 // It is a no-op if a flush is already pending.
-func (a *AuditLogger) flushAsync() {
+func (a *Logger) flushAsync() {
 	select {
 	case a.flusher <- struct{}{}:
 	default:
 	}
 }
 
-func (a *AuditLogger) flushWorker(ctx context.Context, done chan struct{}) {
-	defer close(done)
+func (a *Logger) flushWorker() {
+	defer close(a.done)
 
 	var retryDelay time.Duration
 	retry := time.NewTimer(0)
@@ -218,10 +215,10 @@ func (a *AuditLogger) flushWorker(ctx context.Context, done chan struct{}) {
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-a.ctx.Done():
 			return
 		case <-a.flusher:
-			err := a.flush(ctx)
+			err := a.flush(a.ctx)
 			switch {
 			case errors.Is(err, context.Canceled):
 				// The logger was stopped, no need to retry.
@@ -242,7 +239,7 @@ func (a *AuditLogger) flushWorker(ctx context.Context, done chan struct{}) {
 
 // flush attempts to send all pending logs to the control plane.
 // a.mu must not be held.
-func (a *AuditLogger) flush(ctx context.Context) error {
+func (a *Logger) flush(ctx context.Context) error {
 	a.mu.Lock()
 	pending, err := a.store.Load(a.profileID)
 	t := a.transport
@@ -261,6 +258,7 @@ func (a *AuditLogger) flush(ctx context.Context) error {
 
 	complete, unsent := a.sendToTransport(ctx, pending, t)
 	a.markTransactionsDone(complete)
+	a.appendToStoreLocked(unsent)
 	if len(unsent) != 0 {
 		return fmt.Errorf("failed to send %d logs", len(unsent))
 	}
@@ -274,8 +272,7 @@ func (a *AuditLogger) flush(ctx context.Context) error {
 // containing the logs that were successfully sent (or failed permanently) and those that were not.
 //
 // This may require multiple round trips to the control plane and can be a long running transaction.
-// a.mu must be not be held.
-func (a *AuditLogger) sendToTransport(ctx context.Context, pending []*transaction, t Transport) (complete []*transaction, unsent []*transaction) {
+func (a *Logger) sendToTransport(ctx context.Context, pending []*transaction, t Transport) (complete []*transaction, unsent []*transaction) {
 	for i, txn := range pending {
 		req := tailcfg.AuditLogRequest{
 			Action:    tailcfg.ClientAuditAction(txn.Action),
@@ -283,45 +280,39 @@ func (a *AuditLogger) sendToTransport(ctx context.Context, pending []*transactio
 			Timestamp: txn.TimeStamp,
 		}
 
-		err := t.SendAuditLog(ctx, req)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if err := t.SendAuditLog(ctx, req); err != nil {
+			switch {
+			case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 				// The contex is done.  All further attempts will fail.
 				unsent = append(unsent, pending[i:]...)
 				return complete, unsent
-			}
-
-			txn.Retries++
-			if isRetryableError(err) {
+			case IsRetryableError(err) && txn.Retries+1 < a.retryLimit:
 				// We permit a maximum number of retries for each log. All retriable
 				// errors should be transient and we should be able to send the log eventually, but
 				// we don't want logs to be persisted indefinitely.
-				if txn.Retries < a.retryLimit {
-					unsent = append(unsent, txn)
-				} else {
-					a.logf("failed permanently after %d retries: %v", txn.Retries, err)
-					complete = append(complete, txn)
-				}
-			} else {
+				txn.Retries++
+				unsent = append(unsent, txn)
+			default:
 				complete = append(complete, txn)
 				a.logf("failed permanently: %v", err)
 			}
-			continue
+		} else {
+			// No error - we're done.
+			complete = append(complete, txn)
 		}
-		// No error - we're done.
-		complete = append(complete, txn)
 	}
 
 	return complete, unsent
 }
 
-func (a *AuditLogger) stop() {
+func (a *Logger) stop() {
 	a.mu.Lock()
 	t := a.transport
 	a.mu.Unlock()
 
 	if t == nil {
-		// No transport means no worker goroutine.
+		// No transport means no worker goroutine and done will not be
+		// closed if we cancel the context.
 		return
 	}
 
@@ -335,7 +326,7 @@ func (a *AuditLogger) stop() {
 // requeue failed transactions for example.
 //
 // a.mu must be held.
-func (a *AuditLogger) appendToStoreLocked(txns []*transaction) error {
+func (a *Logger) appendToStoreLocked(txns []*transaction) error {
 	if len(txns) == 0 {
 		return nil
 	}
@@ -360,14 +351,14 @@ func (a *AuditLogger) appendToStoreLocked(txns []*transaction) error {
 
 // storedCountLocked returns the number of logs persisted to the store.
 // a.mu must be held
-func (a *AuditLogger) storedCountLocked() (int, error) {
+func (a *Logger) storedCountLocked() (int, error) {
 	persisted, err := a.store.Load(a.profileID)
 	return len(persisted), err
 }
 
 // markTransactionsDone removes logs from the store that are complete (sent or failed permanently).
 // a.mu must not be held.
-func (a *AuditLogger) markTransactionsDone(sent []*transaction) {
+func (a *Logger) markTransactionsDone(sent []*transaction) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -378,7 +369,7 @@ func (a *AuditLogger) markTransactionsDone(sent []*transaction) {
 
 	persisted, err := a.store.Load(a.profileID)
 	if err != nil {
-		a.logf("[unexpected] setSent failed to restore logs: %v", err)
+		a.logf("[unexpected] markTransactionsDone failed to restore logs: %v", err)
 	}
 	var unsent []*transaction
 	for _, txn := range persisted {
@@ -408,48 +399,44 @@ func deduplicateAndSort(txns []*transaction) []*transaction {
 	return deduped
 }
 
-func (a *AuditLogger) enqueue(txn *transaction) error {
+func (a *Logger) enqueue(txn *transaction) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	err := a.appendToStoreLocked([]*transaction{txn})
-	if err != nil {
-		return err
+	if err := a.appendToStoreLocked([]*transaction{txn}); err != nil {
+		return fmt.Errorf("%w: %w", ErrAuditLogStorageFailure, err)
 	}
 
 	// If a.transport is nil if the logger is stopped.
-	if a.transport == nil {
-		return errors.New("logger not started")
+	if a.transport != nil {
+		a.flushAsync()
 	}
 
-	a.flushAsync()
 	return nil
 }
 
-var _ LogStore = (*LogStateStore)(nil)
+var _ LogStore = (*logStateStore)(nil)
 
-// LogStateStore is a concrete implementation of [LogStore]
+// logStateStore is a concrete implementation of [LogStore]
 // using [ipn.StateStore] as the underlying storage.
-type LogStateStore struct {
+type logStateStore struct {
 	store ipn.StateStore
-	logf  logger.Logf
 }
 
-// NewLogStateStore creates a new LogStateStore with the given [ipn.StateStore].
-func NewLogStateStore(store ipn.StateStore, logf logger.Logf) LogStore {
-	return &LogStateStore{
+// newLogStore creates a new LogStateStore with the given [ipn.StateStore].
+func newLogStore(store ipn.StateStore) LogStore {
+	return &logStateStore{
 		store: store,
-		logf:  logf,
 	}
 }
 
-func (s *LogStateStore) generateKey(key ipn.ProfileID) string {
+func (s *logStateStore) generateKey(key ipn.ProfileID) string {
 	return "auditlog-" + string(key)
 }
 
 // Save saves the given logs to an [ipn.StateStore]. This overwrites
 // any existing entries for the given key.
-func (s *LogStateStore) Save(key ipn.ProfileID, txns []*transaction) error {
+func (s *logStateStore) Save(key ipn.ProfileID, txns []*transaction) error {
 	if key == "" {
 		return errors.New("empty key")
 	}
@@ -458,16 +445,12 @@ func (s *LogStateStore) Save(key ipn.ProfileID, txns []*transaction) error {
 	if err != nil {
 		return err
 	}
-
 	k := ipn.StateKey(s.generateKey(key))
-
-	s.store.WriteState(k, data)
-
-	return nil
+	return s.store.WriteState(k, data)
 }
 
 // Load retrieves the logs from an [ipn.StateStore].
-func (s *LogStateStore) Load(key ipn.ProfileID) ([]*transaction, error) {
+func (s *logStateStore) Load(key ipn.ProfileID) ([]*transaction, error) {
 	if key == "" {
 		return nil, errors.New("empty key")
 	}
@@ -477,14 +460,12 @@ func (s *LogStateStore) Load(key ipn.ProfileID) ([]*transaction, error) {
 
 	switch {
 	case errors.Is(err, ipn.ErrStateNotExist):
-		return []*transaction{}, nil
+		return nil, nil
 	case err != nil:
 		return nil, err
 	}
 
 	var txns []*transaction
-	if err := json.Unmarshal(data, &txns); err != nil {
-		return nil, err
-	}
-	return txns, nil
+	err = json.Unmarshal(data, &txns)
+	return txns, err
 }

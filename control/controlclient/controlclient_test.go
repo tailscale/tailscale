@@ -4,11 +4,15 @@
 package controlclient
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"slices"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 )
@@ -146,4 +150,43 @@ func TestCanSkipStatus(t *testing.T) {
 	if f := fieldsOf(reflect.TypeFor[Status]()); !slices.Equal(f, want) {
 		t.Errorf("Status fields = %q; this code was only written to handle fields %q", f, want)
 	}
+}
+
+func TestRetryableErrors(t *testing.T) {
+	errors := []struct {
+		err  error
+		want bool
+	}{
+		{errNoNoiseClient, true},
+		{errNoNodeKey, true},
+		{fmt.Errorf("%w: %w", errNoNoiseClient, errors.New("no noise")), true},
+		{fmt.Errorf("%w: %w", errHTTPPostFailure, errors.New("bad post")), true},
+		{fmt.Errorf("%w: %w", errNoNodeKey, errors.New("not node key")), true},
+		{context.Canceled, false},
+		{fmt.Errorf("%w: %w", context.Canceled, errors.New("ctx cancelled")), false},
+		{errBadHTTPResponse(429, []byte("too may requests")), true},
+		{errBadHTTPResponse(500, []byte("internal server eror")), true},
+		{errBadHTTPResponse(502, []byte("bad gateway")), true},
+		{errBadHTTPResponse(503, []byte("service unavailable")), true},
+		{errBadHTTPResponse(504, []byte("gateway timeout")), true},
+		{errBadHTTPResponse(1234, []byte("random error")), false},
+	}
+
+	for _, e := range errors {
+		if !cmp.Equal(isRetryableErrorForTest(e.err), e.want) {
+			t.Fatalf("error evaluator failed for %v", e.err)
+		}
+	}
+}
+
+type retryableForTest interface {
+	Retryable() bool
+}
+
+func isRetryableErrorForTest(err error) bool {
+	var ae retryableForTest
+	if errors.As(err, &ae) {
+		return ae.Retryable()
+	}
+	return false
 }

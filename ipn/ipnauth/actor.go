@@ -14,7 +14,7 @@ import (
 )
 
 // AuditLogFunc is any function that can be used to log audit actions performed by an [Actor].
-type AuditLogFunc func(id ipn.ProfileID, action tailcfg.ClientAuditAction, details string)
+type AuditLogFunc func(action tailcfg.ClientAuditAction, details string) error
 
 // Actor is any actor using the [ipnlocal.LocalBackend].
 //
