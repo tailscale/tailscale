@@ -93,7 +93,7 @@ func (c *Client) publish() chan<- PublishedEvent {
 }
 
 func (c *Client) shouldPublish(t reflect.Type) bool {
-	return c.bus.shouldPublish(t)
+	return c.publishDebug.active() || c.bus.shouldPublish(t)
 }
 
 // Subscribe requests delivery of events of type T through the given
