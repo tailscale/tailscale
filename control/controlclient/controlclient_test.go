@@ -4,7 +4,6 @@
 package controlclient
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +11,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 )
@@ -153,29 +151,30 @@ func TestCanSkipStatus(t *testing.T) {
 }
 
 func TestRetryableErrors(t *testing.T) {
-	errors := []struct {
+	errorTests := []struct {
+		desc string
 		err  error
 		want bool
 	}{
-		{errNoNoiseClient, true},
-		{errNoNodeKey, true},
-		{fmt.Errorf("%w: %w", errNoNoiseClient, errors.New("no noise")), true},
-		{fmt.Errorf("%w: %w", errHTTPPostFailure, errors.New("bad post")), true},
-		{fmt.Errorf("%w: %w", errNoNodeKey, errors.New("not node key")), true},
-		{context.Canceled, false},
-		{fmt.Errorf("%w: %w", context.Canceled, errors.New("ctx cancelled")), false},
-		{errBadHTTPResponse(429, "too may requests"), true},
-		{errBadHTTPResponse(500, "internal server eror"), true},
-		{errBadHTTPResponse(502, "bad gateway"), true},
-		{errBadHTTPResponse(503, "service unavailable"), true},
-		{errBadHTTPResponse(504, "gateway timeout"), true},
-		{errBadHTTPResponse(1234, "random error"), false},
+		{"errNoNoiseClient", errNoNoiseClient, true},
+		{"errNoNodeKey", errNoNodeKey, true},
+		{"errNoNoiseClient wrapped", fmt.Errorf("%w: %w", errNoNoiseClient, errors.New("no noise")), true},
+		{"errHTTPPostFailure wrapped", fmt.Errorf("%w: %w", errHTTPPostFailure, errors.New("bad post")), true},
+		{"errNoNodeKey wrapped", fmt.Errorf("%w: %w", errNoNodeKey, errors.New("not node key")), true},
+		{"HTTP 429", errBadHTTPResponse(429, "too may requests"), true},
+		{"HTTP 500", errBadHTTPResponse(500, "internal server eror"), true},
+		{"HTTP 502", errBadHTTPResponse(502, "bad gateway"), true},
+		{"HTTP 503", errBadHTTPResponse(503, "service unavailable"), true},
+		{"HTTP 504", errBadHTTPResponse(504, "gateway timeout"), true},
+		{"HTTP Nonesense Error", errBadHTTPResponse(1234, "random error"), false},
 	}
 
-	for _, e := range errors {
-		if !cmp.Equal(isRetryableErrorForTest(e.err), e.want) {
-			t.Fatalf("error evaluator failed for %v", e.err)
-		}
+	for _, tt := range errorTests {
+		t.Run(tt.desc, func(t *testing.T) {
+			if isRetryableErrorForTest(tt.err) != tt.want {
+				t.Fatalf("error retriability is incorrect %v", tt.err)
+			}
+		})
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -40,15 +39,13 @@ type transaction struct {
 	TimeStamp time.Time `json:",omitzero"`
 }
 
-// Transport provides a means for a client to send audit logs to a consumer (typically the control plane).
 type Transport interface {
 	// SendAuditLog sends an audit log to a consumer of audit logs.
 	// Errors should be checked with [IsRetryableError] for retryability.
 	SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) error
 }
 
-// [controlclient.Auto] must implement the [Transport] interface.
-var _ Transport = (*controlclient.Auto)(nil)
+// AuditTransport provides a means for a client to send audit logs to a consumer (typically the control plane).
 
 // LogStore provides a means for an [Logger] to persist logs to disk or memory.
 type LogStore interface {
@@ -96,14 +93,13 @@ var defaultBackoffOpts = backoffOpts{
 //
 // Each individual profile/controlclient tuple should construct and manage a unique [Logger] instance.
 type Logger struct {
-	logf           logger.Logf
-	retryLimit     int                // the maximum number of attempts to send a log before giving up.
-	flusher        chan struct{}      // channel used to signal a flush operation.
-	done           chan struct{}      // closed when the flush worker exits.
-	ctx            context.Context    // canceled when the logger is stopped.
-	ctxCancel      context.CancelFunc // cancels ctx.
-	retryAttempted chan struct{}      // signaled on each retry attempt. Used for testing.
-	backoffOpts                       // backoff settings for retry operations.
+	logf        logger.Logf
+	retryLimit  int                // the maximum number of attempts to send a log before giving up.
+	flusher     chan struct{}      // channel used to signal a flush operation.
+	done        chan struct{}      // closed when the flush worker exits.
+	ctx         context.Context    // canceled when the logger is stopped.
+	ctxCancel   context.CancelFunc // cancels ctx.
+	backoffOpts                    // backoff settings for retry operations.
 
 	// mu protects the fields below.
 	mu        sync.Mutex
@@ -117,23 +113,23 @@ func NewLogger(opts Opts) *Logger {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	l := &Logger{
-		retryLimit:     opts.RetryLimit,
-		logf:           logger.WithPrefix(opts.Logf, "auditlog: "),
-		store:          opts.Store,
-		flusher:        make(chan struct{}, 1),
-		done:           make(chan struct{}),
-		retryAttempted: make(chan struct{}),
-		ctx:            ctx,
-		ctxCancel:      cancel,
-		backoffOpts:    defaultBackoffOpts,
+		retryLimit:  opts.RetryLimit,
+		logf:        logger.WithPrefix(opts.Logf, "auditlog: "),
+		store:       opts.Store,
+		flusher:     make(chan struct{}, 1),
+		done:        make(chan struct{}),
+		ctx:         ctx,
+		ctxCancel:   cancel,
+		backoffOpts: defaultBackoffOpts,
 	}
 	l.logf("created")
 	return l
 }
 
 // FlushAndStop synchronously flushes all pending logs and stops the audit logger.
-// This will block until a final flush operation completes or the timeout is reached.
-// If the logger is already stopped, this will return immediately.
+// This will block until a final flush operation completes or context is done.
+// If the logger is already stopped, this will return immediately.  All unsent
+// logs will be persisted to the store.
 func (l *Logger) FlushAndStop(ctx context.Context) {
 	l.stop()
 	l.flush(ctx)
@@ -233,7 +229,6 @@ func (l *Logger) flushWorker() {
 			}
 		case <-retry.C:
 			l.flushAsync()
-			l.retryAttempted <- struct{}{}
 		}
 	}
 }
@@ -263,7 +258,7 @@ func (l *Logger) flush(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if err = l.appendToStoreLocked(unsent); err != nil {
-		return fmt.Errorf("%w: %v", ErrAuditLogStorageFailure, err)
+		l.logf("[unexpected] failed to persist logs: %v", err)
 	}
 
 	if len(unsent) != 0 {

@@ -1700,7 +1700,15 @@ func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) e
 	return nil
 }
 
-// SendAuditLog implements [auditlog.Transport] by sending an audit log synchronously to the control plane.
+type AuditTransport interface {
+	// SendAuditLog sends an audit log to a consumer of audit logs.
+	// Errors should be checked with [IsRetryableError] for retryability.
+	SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) error
+}
+
+var _ AuditTransport = (*Auto)(nil)
+
+// SendAuditLog implements [AuditTransport] by sending an audit log synchronously to the control plane.
 //
 // See docs on [tailcfg.AuditLogRequest] and [auditlog.Logger] for background.
 func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
