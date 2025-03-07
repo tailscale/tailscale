@@ -34,6 +34,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/proxymap"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
@@ -42,6 +43,7 @@ import (
 
 // System contains all the subsystems of a Tailscale node (tailscaled, etc.)
 type System struct {
+	Bus            SubSystem[*eventbus.Bus]
 	Dialer         SubSystem[*tsdial.Dialer]
 	DNSManager     SubSystem[*dns.Manager] // can get its *resolver.Resolver from DNSManager.Resolver
 	Engine         SubSystem[wgengine.Engine]
@@ -86,6 +88,8 @@ type NetstackImpl interface {
 // has already been set.
 func (s *System) Set(v any) {
 	switch v := v.(type) {
+	case *eventbus.Bus:
+		s.Bus.Set(v)
 	case *netmon.Monitor:
 		s.NetMon.Set(v)
 	case *dns.Manager:
