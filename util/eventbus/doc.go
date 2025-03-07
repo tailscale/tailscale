@@ -86,18 +86,7 @@
 //
 // # Debugging facilities
 //
-// (TODO, not implemented yet, sorry, I promise we're working on it next!)
-//
-// The bus comes with introspection facilities to help reason about
-// the state of the client, and diagnose issues such as slow
-// subscribers.
-//
-// The bus provide a tsweb debugging page that shows the current state
-// of the bus, including all publishers, subscribers, and queued
-// events.
-//
-// The bus also has a snooping and tracing facility, which lets you
-// observe all events flowing through the bus, along with their
-// source, destination(s) and timing information such as the time of
-// delivery to each subscriber and end-to-end bus delays.
+// The [Debugger], obtained through [Bus.Debugger], provides
+// introspection facilities to monitor events flowing through the bus,
+// and inspect publisher and subscriber state.
 package eventbus

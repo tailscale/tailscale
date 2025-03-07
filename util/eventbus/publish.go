@@ -52,7 +52,7 @@ func (p *Publisher[T]) Publish(v T) {
 	default:
 	}
 
-	evt := publishedEvent{
+	evt := PublishedEvent{
 		Event: v,
 		From:  p.client,
 	}

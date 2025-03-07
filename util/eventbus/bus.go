@@ -12,12 +12,12 @@ import (
 	"tailscale.com/util/set"
 )
 
-type publishedEvent struct {
+type PublishedEvent struct {
 	Event any
 	From  *Client
 }
 
-type routedEvent struct {
+type RoutedEvent struct {
 	Event any
 	From  *Client
 	To    []*Client
@@ -27,24 +27,25 @@ type routedEvent struct {
 // subscribers.
 type Bus struct {
 	router     *worker
-	write      chan publishedEvent
-	snapshot   chan chan []publishedEvent
-	routeDebug hook[routedEvent]
+	write      chan PublishedEvent
+	snapshot   chan chan []PublishedEvent
+	routeDebug hook[RoutedEvent]
 
-	topicsMu sync.Mutex // guards everything below.
+	topicsMu sync.Mutex
 	topics   map[reflect.Type][]*subscribeState
 
 	// Used for introspection/debugging only, not in the normal event
 	// publishing path.
-	clients set.Set[*Client]
+	clientsMu sync.Mutex
+	clients   set.Set[*Client]
 }
 
 // New returns a new bus. Use [PublisherOf] to make event publishers,
 // and [Bus.Queue] and [Subscribe] to make event subscribers.
 func New() *Bus {
 	ret := &Bus{
-		write:    make(chan publishedEvent),
-		snapshot: make(chan chan []publishedEvent),
+		write:    make(chan PublishedEvent),
+		snapshot: make(chan chan []PublishedEvent),
 		topics:   map[reflect.Type][]*subscribeState{},
 		clients:  set.Set[*Client]{},
 	}
@@ -65,10 +66,15 @@ func (b *Bus) Client(name string) *Client {
 		bus:  b,
 		pub:  set.Set[publisher]{},
 	}
-	b.topicsMu.Lock()
-	defer b.topicsMu.Unlock()
+	b.clientsMu.Lock()
+	defer b.clientsMu.Unlock()
 	b.clients.Add(ret)
 	return ret
+}
+
+// Debugger returns the debugging facility for the bus.
+func (b *Bus) Debugger() Debugger {
+	return Debugger{b}
 }
 
 // Close closes the bus. Implicitly closes all clients, publishers and
@@ -79,19 +85,17 @@ func (b *Bus) Client(name string) *Client {
 func (b *Bus) Close() {
 	b.router.StopAndWait()
 
-	var clients set.Set[*Client]
-	b.topicsMu.Lock()
-	clients, b.clients = b.clients, set.Set[*Client]{}
-	b.topicsMu.Unlock()
-
-	for c := range clients {
+	b.clientsMu.Lock()
+	defer b.clientsMu.Unlock()
+	for c := range b.clients {
 		c.Close()
 	}
+	b.clients = nil
 }
 
 func (b *Bus) pump(ctx context.Context) {
-	var vals queue[publishedEvent]
-	acceptCh := func() chan publishedEvent {
+	var vals queue[PublishedEvent]
+	acceptCh := func() chan PublishedEvent {
 		if vals.Full() {
 			return nil
 		}
@@ -111,7 +115,7 @@ func (b *Bus) pump(ctx context.Context) {
 				for i := range len(dests) {
 					clients[i] = dests[i].client
 				}
-				b.routeDebug.run(routedEvent{
+				b.routeDebug.run(RoutedEvent{
 					Event: val.Event,
 					From:  val.From,
 					To:    clients,
@@ -119,9 +123,10 @@ func (b *Bus) pump(ctx context.Context) {
 			}
 
 			for _, d := range dests {
-				evt := queuedEvent{
+				evt := DeliveredEvent{
 					Event: val.Event,
 					From:  val.From,
+					To:    d.client,
 				}
 			deliverOne:
 				for {
@@ -171,6 +176,22 @@ func (b *Bus) shouldPublish(t reflect.Type) bool {
 	b.topicsMu.Lock()
 	defer b.topicsMu.Unlock()
 	return len(b.topics[t]) > 0
+}
+
+func (b *Bus) listClients() []*Client {
+	b.clientsMu.Lock()
+	defer b.clientsMu.Unlock()
+	return b.clients.Slice()
+}
+
+func (b *Bus) snapshotPublishQueue() []PublishedEvent {
+	resp := make(chan []PublishedEvent)
+	select {
+	case b.snapshot <- resp:
+		return <-resp
+	case <-b.router.Done():
+		return nil
+	}
 }
 
 func (b *Bus) subscribe(t reflect.Type, q *subscribeState) (cancel func()) {
