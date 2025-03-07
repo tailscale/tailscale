@@ -139,7 +139,11 @@ jobs:
           echo "Build/test created untracked files in the repo (file names above)."
           exit 1
         fi
-
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
   windows:
     runs-on: windows-2022
     steps:
@@ -176,6 +180,11 @@ jobs:
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
       run: go test ./... -bench . -benchtime 1x -run "^$"
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   privileged:
     runs-on: ubuntu-22.04
@@ -283,6 +292,11 @@ jobs:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: "0"
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        #make it build a few smoke packages.
@@ -342,6 +356,11 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
         GOARM: ${{ matrix.goarm }}
         CGO_ENABLED: "0"
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   android:
     # similar to cross above, but android fails to build a few pieces of the
@@ -394,6 +413,11 @@ jobs:
       run: |
         ./tool/go run ./cmd/tsconnect --fast-compression build
         ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-22.04
