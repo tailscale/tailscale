@@ -764,7 +764,23 @@ var (
 	openIDSupportedSigningAlgos = views.SliceOf([]string{string(jose.RS256)})
 )
 
+func (s *idpServer) addCORSHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", "*")
+	h.Set("Access-Control-Allow-Method", "GET, OPTIONS")
+	// allow all to prevent errors from client sending their own bespoke headers
+	// and having the server reject the request.
+	h.Set("Access-Control-Allow-Headers", "*")
+}
+
 func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
+	s.addCORSHeaders(w)
+
+	// early return for pre-flight OPTIONS requests.
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.URL.Path != oidcConfigPath {
 		http.Error(w, "tsidp: not found", http.StatusNotFound)
 		return
