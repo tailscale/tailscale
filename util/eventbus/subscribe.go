@@ -120,6 +120,20 @@ func (s *subscribeState) snapshotQueue() []DeliveredEvent {
 	}
 }
 
+func (s *subscribeState) subscribeTypes() []reflect.Type {
+	if s == nil {
+		return nil
+	}
+
+	s.outputsMu.Lock()
+	defer s.outputsMu.Unlock()
+	ret := make([]reflect.Type, 0, len(s.outputs))
+	for t := range s.outputs {
+		ret = append(ret, t)
+	}
+	return ret
+}
+
 func (s *subscribeState) addSubscriber(t reflect.Type, sub subscriber) {
 	s.outputsMu.Lock()
 	defer s.outputsMu.Unlock()

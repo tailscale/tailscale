@@ -59,6 +59,20 @@ func (c *Client) peekSubscribeState() *subscribeState {
 	return c.sub
 }
 
+func (c *Client) publishTypes() []reflect.Type {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ret := make([]reflect.Type, 0, len(c.pub))
+	for pub := range c.pub {
+		ret = append(ret, pub.publishType())
+	}
+	return ret
+}
+
+func (c *Client) subscribeTypes() []reflect.Type {
+	return c.peekSubscribeState().subscribeTypes()
+}
+
 func (c *Client) subscribeState() *subscribeState {
 	c.mu.Lock()
 	defer c.mu.Unlock()

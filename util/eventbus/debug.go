@@ -5,6 +5,7 @@ package eventbus
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -106,6 +107,27 @@ func (d *Debugger) WatchPublish(client *Client) *Subscriber[PublishedEvent] {
 func (d *Debugger) WatchSubscribe(client *Client) *Subscriber[DeliveredEvent] {
 	d.checkClient(client)
 	return newMonitor(client.subscribeState().debug.add)
+}
+
+// PublishTypes returns the list of types being published by client.
+//
+// The returned types are those for which the client has obtained a
+// [Publisher]. The client may not have ever sent the type in
+// question.
+func (d *Debugger) PublishTypes(client *Client) []reflect.Type {
+	d.checkClient(client)
+	return client.publishTypes()
+}
+
+// SubscribeTypes returns the list of types being subscribed to by
+// client.
+//
+// The returned types are those for which the client has obtained a
+// [Subscriber]. The client may not have ever received the type in
+// question, and here may not be any publishers of the type.
+func (d *Debugger) SubscribeTypes(client *Client) []reflect.Type {
+	d.checkClient(client)
+	return client.subscribeTypes()
 }
 
 // A hook collects hook functions that can be run as a group.
