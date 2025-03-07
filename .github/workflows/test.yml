@@ -79,7 +79,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: Restore Cache
-      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+      uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -139,6 +139,29 @@ jobs:
           echo "Build/test created untracked files in the repo (file names above)."
           exit 1
         fi
+    - name: Clean Cache
+      run: |
+        echo "Pruning old files from cache:"
+        find ~/.cache/go-build -type f -mmin +30 -print0 | du -hc --files0-from=- | tail -1
+        find ~/go/pkg/mod/cache -type f -mmin +30 -print0 | du -hc --files0-from=- | tail -1
+        find ~\Appdata\Local\go-build -type f -mmin +30 -print0 | du -hc --files0-from=- | tail -1
+    - name: Save Cache
+      uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+      with:
+        # Note: unlike the other setups, this is only grabbing the mod download
+        # cache, rather than the whole mod directory, as the download cache
+        # contains zips that can be unpacked in parallel faster than they can be
+        # fetched and extracted by tar
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod/cache
+          ~\AppData\Local\go-build
+        # The -2- here should be incremented when the scheme of data to be
+        # cached changes (e.g. path above changes).
+        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
+          ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
 
   windows:
     runs-on: windows-2022
@@ -152,23 +175,23 @@ jobs:
         go-version-file: go.mod
         cache: false
 
-    - name: Restore Cache
-      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
-      with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod/cache
-          ~\AppData\Local\go-build
-        # The -2- here should be incremented when the scheme of data to be
-        # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-go-2-
+    # - name: Restore Cache
+    #   uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+    #   with:
+    #     # Note: unlike the other setups, this is only grabbing the mod download
+    #     # cache, rather than the whole mod directory, as the download cache
+    #     # contains zips that can be unpacked in parallel faster than they can be
+    #     # fetched and extracted by tar
+    #     path: |
+    #       ~/.cache/go-build
+    #       ~/go/pkg/mod/cache
+    #       ~\AppData\Local\go-build
+    #     # The -2- here should be incremented when the scheme of data to be
+    #     # cached changes (e.g. path above changes).
+    #     key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
+    #     restore-keys: |
+    #       ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
+    #       ${{ github.job }}-${{ runner.os }}-go-2-
     - name: test
       run: go run ./cmd/testwrapper ./...
     - name: bench all
@@ -253,23 +276,23 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-    - name: Restore Cache
-      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
-      with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod/cache
-          ~\AppData\Local\go-build
-        # The -2- here should be incremented when the scheme of data to be
-        # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
+    # - name: Restore Cache
+    #   uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+    #   with:
+    #     # Note: unlike the other setups, this is only grabbing the mod download
+    #     # cache, rather than the whole mod directory, as the download cache
+    #     # contains zips that can be unpacked in parallel faster than they can be
+    #     # fetched and extracted by tar
+    #     path: |
+    #       ~/.cache/go-build
+    #       ~/go/pkg/mod/cache
+    #       ~\AppData\Local\go-build
+    #     # The -2- here should be incremented when the scheme of data to be
+    #     # cached changes (e.g. path above changes).
+    #     key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
+    #     restore-keys: |
+    #       ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
+    #       ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
     - name: build all
       run: ./tool/go build ./cmd/...
       env:
@@ -318,23 +341,23 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-    - name: Restore Cache
-      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
-      with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod/cache
-          ~\AppData\Local\go-build
-        # The -2- here should be incremented when the scheme of data to be
-        # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
+    # - name: Restore Cache
+    #   uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+    #   with:
+    #     # Note: unlike the other setups, this is only grabbing the mod download
+    #     # cache, rather than the whole mod directory, as the download cache
+    #     # contains zips that can be unpacked in parallel faster than they can be
+    #     # fetched and extracted by tar
+    #     path: |
+    #       ~/.cache/go-build
+    #       ~/go/pkg/mod/cache
+    #       ~\AppData\Local\go-build
+    #     # The -2- here should be incremented when the scheme of data to be
+    #     # cached changes (e.g. path above changes).
+    #     key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
+    #     restore-keys: |
+    #       ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
+    #       ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
     - name: build core
       run: ./tool/go build ./cmd/tailscale ./cmd/tailscaled
       env:
@@ -366,23 +389,23 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-    - name: Restore Cache
-      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
-      with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod/cache
-          ~\AppData\Local\go-build
-        # The -2- here should be incremented when the scheme of data to be
-        # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
-        restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-go-2-
+    # - name: Restore Cache
+    #   uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+    #   with:
+    #     # Note: unlike the other setups, this is only grabbing the mod download
+    #     # cache, rather than the whole mod directory, as the download cache
+    #     # contains zips that can be unpacked in parallel faster than they can be
+    #     # fetched and extracted by tar
+    #     path: |
+    #       ~/.cache/go-build
+    #       ~/go/pkg/mod/cache
+    #       ~\AppData\Local\go-build
+    #     # The -2- here should be incremented when the scheme of data to be
+    #     # cached changes (e.g. path above changes).
+    #     key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
+    #     restore-keys: |
+    #       ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
+    #       ${{ github.job }}-${{ runner.os }}-go-2-
     - name: build tsconnect client
       run: ./tool/go build ./cmd/tsconnect/wasm ./cmd/tailscale/cli
       env:
