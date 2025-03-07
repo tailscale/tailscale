@@ -62,6 +62,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
 	"tailscale.com/version"
@@ -375,6 +376,10 @@ func run() (err error) {
 	var logf logger.Logf = log.Printf
 
 	sys := new(tsd.System)
+
+	// Install an event bus as early as possible, so that it's
+	// available universally when setting up everything else.
+	sys.Set(eventbus.New())
 
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
