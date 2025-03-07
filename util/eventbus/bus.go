@@ -173,6 +173,10 @@ func (b *Bus) dest(t reflect.Type) []*subscribeState {
 }
 
 func (b *Bus) shouldPublish(t reflect.Type) bool {
+	if b.routeDebug.active() {
+		return true
+	}
+
 	b.topicsMu.Lock()
 	defer b.topicsMu.Unlock()
 	return len(b.topics[t]) > 0
