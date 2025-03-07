@@ -62,6 +62,7 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
+	memstore "tailscale.com/ipn/store/mem"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/captivedetection"
@@ -2403,20 +2404,22 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	var auditLogShutdown func()
 	// Audit logging is only available if the client has set up a proper persistent
 	// store for the logs in sys.
-	if store, ok := b.sys.AuditLogStore.GetOK(); ok {
-		al := auditlog.NewLogger(auditlog.Opts{
-			Logf:       b.logf,
-			RetryLimit: 32,
-			Store:      store,
-		})
-		b.auditLogger = al
-		auditLogShutdown = func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			al.FlushAndStop(ctx)
-		}
-	} else {
-		b.logf("auditlog: no audit log storage configured.  client audit logging disabled.")
+	store, ok := b.sys.AuditLogStore.GetOK()
+	if !ok {
+		b.logf("auditlog: [unexpected] no persistent audit log storage configured.  using memory store.")
+		store = auditlog.NewLogStore(&memstore.Store{})
+	}
+
+	al := auditlog.NewLogger(auditlog.Opts{
+		Logf:       b.logf,
+		RetryLimit: 32,
+		Store:      store,
+	})
+	b.auditLogger = al
+	auditLogShutdown = func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		al.FlushAndStop(ctx)
 	}
 
 	// TODO(apenwarr): The only way to change the ServerURL is to
@@ -4339,13 +4342,7 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
 		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.getAuditLoggerLocked()); err != nil {
 			b.logf("check profile access failed: %v", err)
-			switch {
-			case errors.Is(err, errNoAuditLogger):
-				// This is likely programmer error - the client has not set up an audit logger but
-				// the policies applied to the client require one.
-			default:
-				return ipn.PrefsView{}, err
-			}
+			return ipn.PrefsView{}, err
 		}
 
 		// If a user has enough rights to disconnect, such as when [syspolicy.AlwaysOn]

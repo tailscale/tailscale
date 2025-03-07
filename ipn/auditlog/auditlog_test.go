@@ -60,7 +60,7 @@ func TestEnqueueAndFlush(t *testing.T) {
 	l := loggerForTest(t, Opts{
 		RetryLimit: 200,
 		Logf:       t.Logf,
-		Store:      newLogStore(&mem.Store{}),
+		Store:      NewLogStore(&mem.Store{}),
 	})
 
 	expectNoError(t, l.SetProfileID("test"))
@@ -96,7 +96,7 @@ func TestDeduplicateAndSort(t *testing.T) {
 	l := loggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      newLogStore(&mem.Store{}),
+		Store:      NewLogStore(&mem.Store{}),
 	})
 
 	expectNoError(t, l.SetProfileID("test"))
@@ -132,7 +132,7 @@ func TestChangeProfileId(t *testing.T) {
 	l := loggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      newLogStore(&mem.Store{}),
+		Store:      NewLogStore(&mem.Store{}),
 	})
 	expectNoError(t, l.SetProfileID("test"))
 
@@ -148,7 +148,7 @@ func TestSendOnRestore(t *testing.T) {
 	l := loggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      newLogStore(&mem.Store{}),
+		Store:      NewLogStore(&mem.Store{}),
 	})
 	l.SetProfileID("test")
 
@@ -189,7 +189,7 @@ func TestFailureExhaustion(t *testing.T) {
 	l := loggerForTest(t, Opts{
 		RetryLimit: 1,
 		Logf:       t.Logf,
-		Store:      newLogStore(&mem.Store{}),
+		Store:      NewLogStore(&mem.Store{}),
 	})
 
 	expectNoError(t, l.SetProfileID("test"))
@@ -226,7 +226,7 @@ func TestEnqueueAndFailNoRetry(t *testing.T) {
 	l := loggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      newLogStore(&mem.Store{}),
+		Store:      NewLogStore(&mem.Store{}),
 	})
 
 	expectNoError(t, l.SetProfileID("test"))
@@ -263,7 +263,7 @@ func TestEnqueueAndRetry(t *testing.T) {
 	l := loggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      newLogStore(&mem.Store{}),
+		Store:      NewLogStore(&mem.Store{}),
 	})
 
 	l.backoffOpts = backoffOpts{
@@ -317,7 +317,7 @@ func TestEnqueueBeforeSetProfileID(t *testing.T) {
 	l := loggerForTest(t, Opts{
 		RetryLimit: 100,
 		Logf:       t.Logf,
-		Store:      newLogStore(&mem.Store{}),
+		Store:      NewLogStore(&mem.Store{}),
 	})
 
 	err := l.Enqueue(tailcfg.AuditNodeDisconnect, "log")
@@ -338,7 +338,7 @@ func TestEnqueueBeforeSetProfileID(t *testing.T) {
 
 // TestLogStoring tests that audit logs are persisted sorted by timestamp, oldest to newest
 func TestLogSorting(t *testing.T) {
-	mockStore := newLogStore(&mem.Store{})
+	mockStore := NewLogStore(&mem.Store{})
 
 	logs := []*transaction{
 		{EventID: "1", Details: "log 3", TimeStamp: time.Now().Add(-time.Minute * 1)},

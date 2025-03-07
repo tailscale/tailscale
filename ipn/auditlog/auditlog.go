@@ -431,8 +431,8 @@ type logStateStore struct {
 	store ipn.StateStore
 }
 
-// newLogStore creates a new LogStateStore with the given [ipn.StateStore].
-func newLogStore(store ipn.StateStore) LogStore {
+// NewLogStore creates a new LogStateStore with the given [ipn.StateStore].
+func NewLogStore(store ipn.StateStore) LogStore {
 	return &logStateStore{
 		store: store,
 	}
