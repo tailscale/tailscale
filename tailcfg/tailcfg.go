@@ -159,7 +159,8 @@ type CapabilityVersion int
 //   - 112: 2025-01-14: Client interprets AllowedIPs of nil as meaning same as Addresses
 //   - 113: 2025-01-20: Client communicates to control whether funnel is enabled by sending Hostinfo.IngressEnabled (#14688)
 //   - 114: 2025-01-30: NodeAttrMaxKeyDuration CapMap defined, clients might use it (no tailscaled code change) (#14829)
-const CurrentCapabilityVersion CapabilityVersion = 114
+//   - 115: 2025-03-07: Client understands DERPRegion.NoMeasureNoHome.
+const CurrentCapabilityVersion CapabilityVersion = 115
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
