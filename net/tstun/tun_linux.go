@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/sys/unix"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
 )
@@ -36,6 +37,14 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) 
 	kernel := utsReleaseField(&un)
 	logf("Linux kernel version: %s", kernel)
 
+	const dev = "/dev/net/tun"
+	// Check for read/write access to /dev/net/tun before the modprobe check because modprobe would almost always
+	// fail in containerized environments, see https://github.com/tailscale/tailscale/issues/14277
+	if err := unix.Access(dev, unix.O_RDWR); err != nil {
+		logf("tailscaled likely does not have read or write access to %q, access check failed with: %v", dev, err)
+		return
+	}
+
 	modprobeOut, err := exec.Command("/sbin/modprobe", "tun").CombinedOutput()
 	if err == nil {
 		logf("'modprobe tun' successful")
@@ -45,7 +54,6 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) 
 		//
 		// So if there's a problem at this point, it's
 		// probably because /dev/net/tun doesn't exist.
-		const dev = "/dev/net/tun"
 		if fi, err := os.Stat(dev); err != nil {
 			logf("tun module loaded in kernel, but %s does not exist", dev)
 		} else {
