@@ -1032,14 +1032,6 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 }
 
 func envForUser(u *userMeta) []string {
-	if runtime.GOOS == "plan9" {
-		return []string{
-			fmt.Sprintf("shell=%s", u.LoginShell()),
-			"service=ssh",
-			fmt.Sprintf("USER=%s", u.Username),
-			fmt.Sprintf("home=%s", u.HomeDir),
-		}
-	}
 	return []string{
 		fmt.Sprintf("SHELL=%s", u.LoginShell()),
 		fmt.Sprintf("USER=%s", u.Username),
@@ -1116,7 +1108,7 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 
 func shellArgs(isShell bool, cmd string) []string {
 	if isShell {
-		if runtime.GOOS == freebsd || runtime.GOOS == openbsd || runtime.GOOS == "plan9" {
+		if runtime.GOOS == freebsd || runtime.GOOS == openbsd {
 			// bsd shells don't support the "-l" option, so we can't run as a login shell
 			return []string{}
 		}
