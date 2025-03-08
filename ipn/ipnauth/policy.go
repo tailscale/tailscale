@@ -9,6 +9,7 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/syspolicy"
 )
 
@@ -48,7 +49,7 @@ func (a actorWithPolicyChecks) CheckProfileAccess(profile ipn.LoginProfileView, 
 //
 // TODO(nickkhyl): unexport it when we move [ipn.Actor] implementations from [ipnserver]
 // and corp to this package.
-func CheckDisconnectPolicy(actor Actor, profile ipn.LoginProfileView, reason string, auditLogger AuditLogFunc) error {
+func CheckDisconnectPolicy(actor Actor, profile ipn.LoginProfileView, reason string, auditFn AuditLogFunc) error {
 	if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); !alwaysOn {
 		return nil
 	}
@@ -58,15 +59,16 @@ func CheckDisconnectPolicy(actor Actor, profile ipn.LoginProfileView, reason str
 	if reason == "" {
 		return errors.New("disconnect not allowed: reason required")
 	}
-	if auditLogger != nil {
+	if auditFn != nil {
 		var details string
 		if username, _ := actor.Username(); username != "" { // best-effort; we don't have it on all platforms
 			details = fmt.Sprintf("%q is being disconnected by %q: %v", profile.Name(), username, reason)
 		} else {
 			details = fmt.Sprintf("%q is being disconnected: %v", profile.Name(), reason)
 		}
-		// TODO(nickkhyl,barnstar): use a const for DISCONNECT_NODE.
-		auditLogger("DISCONNECT_NODE", details)
+		if err := auditFn(tailcfg.AuditNodeDisconnect, details); err != nil {
+			return err
+		}
 	}
 	return nil
 }
