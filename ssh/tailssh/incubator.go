@@ -7,7 +7,7 @@
 // and groups to the specified `--uid`, `--gid` and `--groups`, and
 // then launches the requested `--cmd`.
 
-//go:build linux || (darwin && !ios) || freebsd || openbsd || plan9
+//go:build linux || (darwin && !ios) || freebsd || openbsd
 
 package tailssh
 
@@ -17,8 +17,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
+	"log/syslog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
@@ -27,11 +30,15 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/creack/pty"
 	"github.com/pkg/sftp"
+	"github.com/u-root/u-root/pkg/termios"
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/hostinfo"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
 )
@@ -44,6 +51,7 @@ const (
 )
 
 func init() {
+	childproc.Add("ssh", beIncubator)
 	childproc.Add("sftp", beSFTP)
 }
 
@@ -86,7 +94,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		panic(fmt.Sprintf("unexpected subsystem: %v", ss.Subsystem()))
 	}
 
-	if ss.conn.srv.tailscaledPath == "" || runtime.GOOS == "plan9" {
+	if ss.conn.srv.tailscaledPath == "" {
 		if isSFTP {
 			// SFTP relies on the embedded Go-based SFTP server in tailscaled,
 			// so without tailscaled, we can't serve SFTP.
@@ -274,6 +282,70 @@ func (ia incubatorArgs) forwadedEnviron() ([]string, string, error) {
 	return environ, allowListKeys, nil
 }
 
+// beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
+// It is responsible for informing the system of a new login session for the
+// user. This is sometimes necessary for mounting home directories and
+// decrypting file systems.
+//
+// Tailscaled launches the incubator as the same user as it was launched as.
+func beIncubator(args []string) error {
+	// To defend against issues like https://golang.org/issue/1435,
+	// defensively lock our current goroutine's thread to the current
+	// system thread before we start making any UID/GID/group changes.
+	//
+	// This shouldn't matter on Linux because syscall.AllThreadsSyscall is
+	// used to invoke syscalls on all OS threads, but (as of 2023-03-23)
+	// that function is not implemented on all platforms.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ia, err := parseIncubatorArgs(args)
+	if err != nil {
+		return err
+	}
+	if ia.isSFTP && ia.isShell {
+		return fmt.Errorf("--sftp and --shell are mutually exclusive")
+	}
+
+	dlogf := logger.Discard
+	if debugIncubator {
+		// We don't own stdout or stderr, so the only place we can log is syslog.
+		if sl, err := syslog.New(syslog.LOG_INFO|syslog.LOG_DAEMON, "tailscaled-ssh"); err == nil {
+			dlogf = log.New(sl, "", 0).Printf
+		}
+	} else if ia.debugTest {
+		// In testing, we don't always have syslog, so log to a temp file.
+		if logFile, err := os.OpenFile("/tmp/tailscalessh.log", os.O_APPEND|os.O_WRONLY, 0666); err == nil {
+			lf := log.New(logFile, "", 0)
+			dlogf = func(msg string, args ...any) {
+				lf.Printf(msg, args...)
+				logFile.Sync()
+			}
+			defer logFile.Close()
+		}
+	}
+
+	if !shouldAttemptLoginShell(dlogf, ia) {
+		dlogf("not attempting login shell")
+		return handleInProcess(dlogf, ia)
+	}
+
+	// First try the login command
+	if err := tryExecLogin(dlogf, ia); err != nil {
+		return err
+	}
+
+	// If we got here, we weren't able to use login (because tryExecLogin
+	// returned without replacing the running process), maybe we can use
+	// su.
+	if handled, err := trySU(dlogf, ia); handled {
+		return err
+	} else {
+		dlogf("not attempting su")
+		return handleInProcess(dlogf, ia)
+	}
+}
+
 func handleInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	if ia.isSFTP {
 		return handleSFTPInProcess(dlogf, ia)
@@ -288,6 +360,11 @@ func handleSFTPInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	if sessionCloser != nil {
 		defer sessionCloser()
 	}
+
+	if err := dropPrivileges(dlogf, ia); err != nil {
+		return err
+	}
+
 	return serveSFTP()
 }
 
@@ -336,6 +413,161 @@ func runningAsRoot() bool {
 	return euid == 0
 }
 
+// tryExecLogin attempts to handle the ssh session by creating a full login
+// shell using the login command. If it never tried, it returns nil. If it
+// failed to do so, it returns an error.
+//
+// Creating a login shell in this way allows us to register the remote IP of
+// the login session, trigger PAM authentication, and get the "remote" PAM
+// profile.
+//
+// However, login is subject to some limitations.
+//
+// 1. login cannot be used to execute commands except on macOS.
+// 2. On Linux and BSD, login requires a TTY to keep running.
+//
+// In these cases, tryExecLogin returns (false, nil) to indicate that processing
+// should fall through to other methods, such as using the su command.
+//
+// Note that this uses unix.Exec to replace the current process, so in cases
+// where we actually do run login, no subsequent Go code will execute.
+func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
+	// Only the macOS version of the login command supports executing a
+	// command, all other versions only support launching a shell without
+	// taking any arguments.
+	if !ia.isShell && runtime.GOOS != darwin {
+		dlogf("won't use login because we're not in a shell or on macOS")
+		return nil
+	}
+
+	switch runtime.GOOS {
+	case linux, freebsd, openbsd:
+		if !ia.hasTTY {
+			dlogf("can't use login because of missing TTY")
+			// We can only use the login command if a shell was requested with
+			// a TTY. If there is no TTY, login exits immediately, which
+			// breaks things like mosh and VSCode.
+			return nil
+		}
+	}
+
+	loginCmdPath, err := exec.LookPath("login")
+	if err != nil {
+		dlogf("failed to get login args: %s", err)
+		return nil
+	}
+	loginArgs := ia.loginArgs(loginCmdPath)
+	dlogf("logging in with %+v", loginArgs)
+
+	environ, _, err := ia.forwadedEnviron()
+	if err != nil {
+		return err
+	}
+
+	// If Exec works, the Go code will not proceed past this:
+	err = unix.Exec(loginCmdPath, loginArgs, environ)
+
+	// If we made it here, Exec failed.
+	return err
+}
+
+// trySU attempts to start a login shell using su. If su is available and
+// supports the necessary arguments, this returns true, plus the result of
+// executing su. Otherwise, it returns (false, nil).
+//
+// Creating a login shell in this way allows us to trigger PAM authentication
+// and get the "login" PAM profile.
+//
+// Unlike login, su often does not require a TTY, so on Linux hosts that have
+// an su command which accepts the right flags, we'll use su instead of login
+// when no TTY is available.
+func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
+	if ia.forceV1Behavior {
+		// v1 behavior did not use su.
+		dlogf("Forcing v1 behavior, won't use su")
+		return false, nil
+	}
+
+	su := findSU(dlogf, ia)
+	if su == "" {
+		return false, nil
+	}
+
+	sessionCloser := maybeStartLoginSession(dlogf, ia)
+	if sessionCloser != nil {
+		defer sessionCloser()
+	}
+
+	environ, allowListEnvKeys, err := ia.forwadedEnviron()
+	if err != nil {
+		return false, err
+	}
+
+	loginArgs := []string{
+		su,
+		"-w", allowListEnvKeys,
+		"-l",
+		ia.localUser,
+	}
+	if ia.cmd != "" {
+		// Note - unlike the login command, su allows using both -l and -c.
+		loginArgs = append(loginArgs, "-c", ia.cmd)
+	}
+
+	dlogf("logging in with %+v", loginArgs)
+
+	// If Exec works, the Go code will not proceed past this:
+	err = unix.Exec(su, loginArgs, environ)
+
+	// If we made it here, Exec failed.
+	return true, err
+}
+
+// findSU attempts to find an su command which supports the -l and -c flags.
+// This actually calls the su command, which can cause side effects like
+// triggering pam_mkhomedir. If a suitable su is not available, this returns
+// "".
+func findSU(dlogf logger.Logf, ia incubatorArgs) string {
+	// Currently, we only support falling back to su on Linux. This
+	// potentially could work on BSDs as well, but requires testing.
+	if runtime.GOOS != linux {
+		return ""
+	}
+
+	// gokrazy doesn't include su. And, if someone installs a breakglass/
+	// debugging package on gokrazy, we don't want to use its su.
+	if distro.Get() == distro.Gokrazy {
+		return ""
+	}
+
+	su, err := exec.LookPath("su")
+	if err != nil {
+		dlogf("can't find su command: %v", err)
+		return ""
+	}
+
+	_, allowListEnvKeys, err := ia.forwadedEnviron()
+	if err != nil {
+		return ""
+	}
+
+	// First try to execute su -w <allow listed env> -l <user> -c true
+	// to make sure su supports the necessary arguments.
+	err = exec.Command(
+		su,
+		"-w", allowListEnvKeys,
+		"-l",
+		ia.localUser,
+		"-c", "true",
+	).Run()
+	if err != nil {
+		dlogf("su check failed: %s", err)
+		return ""
+	}
+
+	return su
+}
+
 // handleSSHInProcess is a last resort if we couldn't use login or su. It
 // registers a new session with the OS, sets its UID, GID and groups to the
 // specified values, and then launches the requested `--cmd` in the user's
@@ -344,6 +576,10 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	sessionCloser := maybeStartLoginSession(dlogf, ia)
 	if sessionCloser != nil {
 		defer sessionCloser()
+	}
+
+	if err := dropPrivileges(dlogf, ia); err != nil {
+		return err
 	}
 
 	environ, _, err := ia.forwadedEnviron()
@@ -383,7 +619,7 @@ func newCommand(hasTTY bool, cmdPath string, cmdEnviron []string, cmdArgs []stri
 		// we set the child to foreground instead which also passes the ctty.
 		// However, we can not do this if never had a tty to begin with.
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			//Foreground: true,
+			Foreground: true,
 		}
 	}
 
@@ -403,6 +639,118 @@ const (
 	// enabling by default.
 	assertPrivilegesWereDroppedByAttemptingToUnDrop = false
 )
+
+// dropPrivileges calls doDropPrivileges with uid, gid, and gids from the given
+// incubatorArgs.
+func dropPrivileges(dlogf logger.Logf, ia incubatorArgs) error {
+	return doDropPrivileges(dlogf, ia.uid, ia.gid, ia.gids, ia.homeDir)
+}
+
+// doDropPrivileges contains all the logic for dropping privileges to a different
+// UID, GID, and set of supplementary groups. This function is
+// security-sensitive and ordering-dependent; please be very cautious if/when
+// refactoring.
+//
+// WARNING: if you change this function, you *MUST* run the TestDoDropPrivileges
+// test in this package as root on at least Linux, FreeBSD and Darwin. This can
+// be done by running:
+//
+//	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDoDropPrivileges
+func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGroups []int, homeDir string) error {
+	dlogf("dropping privileges")
+	fatalf := func(format string, args ...any) {
+		dlogf("[unexpected] error dropping privileges: "+format, args...)
+		os.Exit(1)
+	}
+
+	euid := os.Geteuid()
+	egid := os.Getegid()
+
+	if runtime.GOOS == darwin || runtime.GOOS == freebsd {
+		// On FreeBSD and Darwin, the first entry returned from the
+		// getgroups(2) syscall is the egid, and changing it with
+		// setgroups(2) changes the egid of the process. This is
+		// technically a violation of the POSIX standard; see the
+		// following article for more detail:
+		//    https://www.usenix.org/system/files/login/articles/325-tsafrir.pdf
+		//
+		// In this case, we add an entry at the beginning of the
+		// groupIDs list containing the expected gid if it's not
+		// already there, which modifies the egid and additional groups
+		// as one unit.
+		if len(supplementaryGroups) == 0 || supplementaryGroups[0] != wantGid {
+			supplementaryGroups = append([]int{wantGid}, supplementaryGroups...)
+		}
+	}
+
+	if err := setGroups(supplementaryGroups); err != nil {
+		return err
+	}
+	if egid != wantGid {
+		// On FreeBSD and Darwin, we may have already called the
+		// equivalent of setegid(wantGid) via the call to setGroups,
+		// above. However, per the manpage, setgid(getegid()) is an
+		// allowed operation regardless of privilege level.
+		//
+		// FreeBSD:
+		//	The setgid() system call is permitted if the specified ID
+		//	is equal to the real group ID or the effective group ID
+		//	of the process, or if the effective user ID is that of
+		//	the super user.
+		//
+		// Darwin:
+		//	The setgid() function is permitted if the effective
+		//	user ID is that of the super user, or if the specified
+		//	group ID is the same as the effective group ID.  If
+		//	not, but the specified group ID is the same as the real
+		//	group ID, setgid() will set the effective group ID to
+		//	the real group ID.
+		if err := syscall.Setgid(wantGid); err != nil {
+			fatalf("Setgid(%d): %v", wantGid, err)
+		}
+	}
+	if euid != wantUid {
+		// Switch users if required before starting the desired process.
+		if err := syscall.Setuid(wantUid); err != nil {
+			fatalf("Setuid(%d): %v", wantUid, err)
+		}
+	}
+
+	// If we changed either the UID or GID, defensively assert that we
+	// cannot reset the it back to our original values, and that the
+	// current egid/euid are the expected values after we change
+	// everything; if not, we exit the process.
+	if assertPrivilegesWereDroppedByAttemptingToUnDrop {
+		if egid != wantGid {
+			if err := syscall.Setegid(egid); err == nil {
+				fatalf("able to set egid back to %d", egid)
+			}
+		}
+		if euid != wantUid {
+			if err := syscall.Seteuid(euid); err == nil {
+				fatalf("able to set euid back to %d", euid)
+			}
+		}
+	}
+	if assertPrivilegesWereDropped {
+		if got := os.Getegid(); got != wantGid {
+			fatalf("got egid=%d, want %d", got, wantGid)
+		}
+		if got := os.Geteuid(); got != wantUid {
+			fatalf("got euid=%d, want %d", got, wantUid)
+		}
+		// TODO(andrew-d): assert that our supplementary groups are correct
+	}
+
+	// Prefer to run in user's homedir if possible. We ignore a failure to Chdir,
+	// which just leaves us at "/" where we launched in the first place.
+	dlogf("attempting to chdir to user's home directory %q", homeDir)
+	if err := os.Chdir(homeDir); err != nil {
+		dlogf("failed to chdir to user's home directory %q, continuing in current directory", homeDir)
+	}
+
+	return nil
+}
 
 // launchProcess launches an incubator process for the provided session.
 // It is responsible for configuring the process execution environment.
@@ -435,9 +783,50 @@ func (ss *sshSession) launchProcess() error {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("SSH_AUTH_SOCK=%s", ss.agentListener.Addr()))
 	}
 
-	return ss.startWithStdPipes()
+	ptyReq, winCh, isPty := ss.Pty()
+	if !isPty {
+		ss.logf("starting non-pty command: %+v", cmd.Args)
+		return ss.startWithStdPipes()
+	}
+
+	if sshDisablePTY() {
+		ss.logf("pty support disabled by envknob")
+		return errors.New("pty support disabled by envknob")
+	}
+
+	ss.ptyReq = &ptyReq
+	pty, tty, err := ss.startWithPTY()
+	if err != nil {
+		return err
+	}
+
+	// We need to be able to close stdin and stdout separately later so make a
+	// dup.
+	ptyDup, err := syscall.Dup(int(pty.Fd()))
+	if err != nil {
+		pty.Close()
+		tty.Close()
+		return err
+	}
+	go resizeWindow(ptyDup /* arbitrary fd */, winCh)
+
+	ss.wrStdin = pty
+	ss.rdStdout = os.NewFile(uintptr(ptyDup), pty.Name())
+	ss.rdStderr = nil // not available for pty
+	ss.childPipes = []io.Closer{tty}
 
 	return nil
+}
+
+func resizeWindow(fd int, winCh <-chan ssh.Window) {
+	for win := range winCh {
+		unix.IoctlSetWinsize(fd, syscall.TIOCSWINSZ, &unix.Winsize{
+			Row:    uint16(win.Height),
+			Col:    uint16(win.Width),
+			Xpixel: uint16(win.WidthPixels),
+			Ypixel: uint16(win.HeightPixels),
+		})
+	}
 }
 
 // opcodeShortName is a mapping of SSH opcode
@@ -502,6 +891,107 @@ var opcodeShortName = map[uint8]string{
 	gossh.TTY_OP_OSPEED: "tty_op_ospeed",
 }
 
+// startWithPTY starts cmd with a pseudo-terminal attached to Stdin, Stdout and Stderr.
+func (ss *sshSession) startWithPTY() (ptyFile, tty *os.File, err error) {
+	ptyReq := ss.ptyReq
+	cmd := ss.cmd
+	if cmd == nil {
+		return nil, nil, errors.New("nil ss.cmd")
+	}
+	if ptyReq == nil {
+		return nil, nil, errors.New("nil ss.ptyReq")
+	}
+
+	ptyFile, tty, err = pty.Open()
+	if err != nil {
+		err = fmt.Errorf("pty.Open: %w", err)
+		return
+	}
+	defer func() {
+		if err != nil {
+			ptyFile.Close()
+			tty.Close()
+		}
+	}()
+	ptyRawConn, err := tty.SyscallConn()
+	if err != nil {
+		return nil, nil, fmt.Errorf("SyscallConn: %w", err)
+	}
+	var ctlErr error
+	if err := ptyRawConn.Control(func(fd uintptr) {
+		// Load existing PTY settings to modify them & save them back.
+		tios, err := termios.GTTY(int(fd))
+		if err != nil {
+			ctlErr = fmt.Errorf("GTTY: %w", err)
+			return
+		}
+
+		// Set the rows & cols to those advertised from the ptyReq frame
+		// received over SSH.
+		tios.Row = int(ptyReq.Window.Height)
+		tios.Col = int(ptyReq.Window.Width)
+
+		for c, v := range ptyReq.Modes {
+			if c == gossh.TTY_OP_ISPEED {
+				tios.Ispeed = int(v)
+				continue
+			}
+			if c == gossh.TTY_OP_OSPEED {
+				tios.Ospeed = int(v)
+				continue
+			}
+			k, ok := opcodeShortName[c]
+			if !ok {
+				ss.vlogf("unknown opcode: %d", c)
+				continue
+			}
+			if _, ok := tios.CC[k]; ok {
+				tios.CC[k] = uint8(v)
+				continue
+			}
+			if _, ok := tios.Opts[k]; ok {
+				tios.Opts[k] = v > 0
+				continue
+			}
+			ss.vlogf("unsupported opcode: %v(%d)=%v", k, c, v)
+		}
+
+		// Save PTY settings.
+		if _, err := tios.STTY(int(fd)); err != nil {
+			ctlErr = fmt.Errorf("STTY: %w", err)
+			return
+		}
+	}); err != nil {
+		return nil, nil, fmt.Errorf("ptyRawConn.Control: %w", err)
+	}
+	if ctlErr != nil {
+		return nil, nil, fmt.Errorf("ptyRawConn.Control func: %w", ctlErr)
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setctty: true,
+		Setsid:  true,
+	}
+	updateStringInSlice(cmd.Args, "--has-tty=false", "--has-tty=true")
+	if ptyName, err := ptyName(ptyFile); err == nil {
+		updateStringInSlice(cmd.Args, "--tty-name=", "--tty-name="+ptyName)
+		fullPath := filepath.Join("/dev", ptyName)
+		cmd.Env = append(cmd.Env, fmt.Sprintf("SSH_TTY=%s", fullPath))
+	}
+
+	if ptyReq.Term != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
+	}
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+
+	ss.logf("starting pty command: %+v", cmd.Args)
+	if err = cmd.Start(); err != nil {
+		return
+	}
+	return ptyFile, tty, nil
+}
+
 // startWithStdPipes starts cmd with os.Pipe for Stdin, Stdout and Stderr.
 func (ss *sshSession) startWithStdPipes() (err error) {
 	var rdStdin, wrStdout, wrStderr io.ReadWriteCloser
@@ -530,14 +1020,6 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 }
 
 func envForUser(u *userMeta) []string {
-	if runtime.GOOS == "plan9" {
-		return []string{
-			fmt.Sprintf("shell=%s", u.LoginShell()),
-			"service=ssh",
-			fmt.Sprintf("USER=%s", u.Username),
-			fmt.Sprintf("home=%s", u.HomeDir),
-		}
-	}
 	return []string{
 		fmt.Sprintf("SHELL=%s", u.LoginShell()),
 		fmt.Sprintf("USER=%s", u.Username),
@@ -614,7 +1096,7 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 
 func shellArgs(isShell bool, cmd string) []string {
 	if isShell {
-		if runtime.GOOS == freebsd || runtime.GOOS == openbsd || runtime.GOOS == "plan9" {
+		if runtime.GOOS == freebsd || runtime.GOOS == openbsd {
 			// bsd shells don't support the "-l" option, so we can't run as a login shell
 			return []string{}
 		}
@@ -622,6 +1104,25 @@ func shellArgs(isShell bool, cmd string) []string {
 	} else {
 		return []string{"-c", cmd}
 	}
+}
+
+func setGroups(groupIDs []int) error {
+	if runtime.GOOS == darwin && len(groupIDs) > 16 {
+		// darwin returns "invalid argument" if more than 16 groups are passed to syscall.Setgroups
+		// some info can be found here:
+		// https://opensource.apple.com/source/samba/samba-187.8/patches/support-darwin-initgroups-syscall.auto.html
+		// this fix isn't great, as anyone reading this has probably just wasted hours figuring out why
+		// some permissions thing isn't working, due to some arbitrary group ordering, but it at least allows
+		// this to work for more things than it previously did.
+		groupIDs = groupIDs[:16]
+	}
+
+	err := syscall.Setgroups(groupIDs)
+	if err != nil && os.Geteuid() != 0 && groupsMatchCurrent(groupIDs) {
+		// If we're not root, ignore a Setgroups failure if all groups are the same.
+		return nil
+	}
+	return err
 }
 
 func groupsMatchCurrent(groupIDs []int) bool {
