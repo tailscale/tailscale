@@ -46,6 +46,7 @@ require (
 	github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806
 	github.com/google/uuid v1.6.0
 	github.com/goreleaser/nfpm/v2 v2.33.1
+	github.com/gorilla/websocket v1.5.0
 	github.com/hdevalence/ed25519consensus v0.2.0
 	github.com/illarion/gonotify/v3 v3.0.2
 	github.com/inetaf/tcpproxy v0.0.0-20250203165043-ded522cbd03f

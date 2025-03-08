@@ -4,11 +4,14 @@
 package eventbus
 
 import (
+	"cmp"
 	"fmt"
 	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
+
+	"tailscale.com/tsweb"
 )
 
 // A Debugger offers access to a bus's privileged introspection and
@@ -29,7 +32,11 @@ type Debugger struct {
 
 // Clients returns a list of all clients attached to the bus.
 func (d *Debugger) Clients() []*Client {
-	return d.bus.listClients()
+	ret := d.bus.listClients()
+	slices.SortFunc(ret, func(a, b *Client) int {
+		return cmp.Compare(a.Name(), b.Name())
+	})
+	return ret
 }
 
 // PublishQueue returns the contents of the publish queue.
@@ -129,6 +136,8 @@ func (d *Debugger) SubscribeTypes(client *Client) []reflect.Type {
 	d.checkClient(client)
 	return client.subscribeTypes()
 }
+
+func (d *Debugger) RegisterHTTP(td *tsweb.DebugHandler) { registerHTTPDebugger(d, td) }
 
 // A hook collects hook functions that can be run as a group.
 type hook[T any] struct {

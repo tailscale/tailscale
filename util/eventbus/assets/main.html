@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <script src="bus/htmx.min.js"></script>
+        <script src="bus/htmx-websocket.min.js"></script>
+        <link rel="stylesheet" href="bus/style.css">
+    </head>
+    <body hx-ext="ws">
+        <h1>Event bus</h1>
+
+        <section>
+            <h2>General</h2>
+            {{with $.PublishQueue}}
+            {{len .}} pending
+            {{end}}
+
+            <button hx-post="bus/monitor" hx-swap="outerHTML">Monitor all events</button>
+        </section>
+
+        <section>
+            <h2>Clients</h2>
+
+            {{range .Clients}}
+            <details>
+                <summary>{{.Name}} ({{len .Publish}} pub, {{len .Subscribe}} sub, {{len ($.SubscribeQueue .Client)}} pending)</summary>
+
+                {{if len .Publish}}
+                <h3>Publishing</h3>
+                <ul>
+                    {{range .Publish}}
+                    <li>{{.}}</li>
+                    {{end}}
+                </ul>
+                {{end}}
+
+                {{if len .Subscribe}}
+                <h3>Subscribing</h3>
+                <ul>
+                    {{range .Subscribe}}
+                    <li>{{.}}</li>
+                    {{end}}
+                </ul>
+                {{end}}
+            </details>
+            {{end}}
+        </section>
+
+        <section>
+            <h2>Types</h2>
+
+            {{range .Types}}
+            <details>
+                <summary>{{.Name}} ({{len .Publish}} pub, {{len .Subscribe}} sub)</summary>
+
+                {{if len .Publish}}
+                <h3>Publishing</h3>
+                <ul>
+                    {{range .Publish}}
+                    <li>{{.Name}}</li>
+                    {{end}}
+                </ul>
+                {{end}}
+
+                {{if len .Subscribe}}
+                <h3>Subscribing</h3>
+                <ul>
+                    {{range .Subscribe}}
+                    <li>{{.Name}}</li>
+                    {{end}}
+                </ul>
+                {{end}}
+            </details>
+            {{end}}
+        </section>
+    </body>
+</html>

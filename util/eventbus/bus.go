@@ -73,8 +73,8 @@ func (b *Bus) Client(name string) *Client {
 }
 
 // Debugger returns the debugging facility for the bus.
-func (b *Bus) Debugger() Debugger {
-	return Debugger{b}
+func (b *Bus) Debugger() *Debugger {
+	return &Debugger{b}
 }
 
 // Close closes the bus. Implicitly closes all clients, publishers and
