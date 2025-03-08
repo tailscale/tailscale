@@ -1177,6 +1177,16 @@ func TestRequireTailscaleIP(t *testing.T) {
 			target:      "http://[fd7a:115c:a1e0::53]/",
 			wantHandled: false,
 		},
+		{
+			name:        "quad-100:80",
+			target:      "http://100.100.100.100:80/",
+			wantHandled: false,
+		},
+		{
+			name:        "ipv6-service-addr:80",
+			target:      "http://[fd7a:115c:a1e0::53]:80/",
+			wantHandled: false,
+		},
 	}
 
 	for _, tt := range tests {
