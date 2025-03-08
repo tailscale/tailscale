@@ -601,7 +601,12 @@ func (s *Server) start() (reterr error) {
 		// Note: don't just return ns.DialContextTCP or we'll return
 		// *gonet.TCPConn(nil) instead of a nil interface which trips up
 		// callers.
-		tcpConn, err := ns.DialContextTCP(ctx, dst)
+		v4, v6 := s.TailscaleIPs()
+		src := v4
+		if dst.Addr().Is6() {
+			src = v6
+		}
+		tcpConn, err := ns.DialContextTCPWithBind(ctx, netip.AddrPortFrom(src, 0), dst)
 		if err != nil {
 			return nil, err
 		}
