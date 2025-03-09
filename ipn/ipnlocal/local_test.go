@@ -44,6 +44,7 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -60,6 +61,7 @@ import (
 	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/filter/filtertype"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -5204,5 +5206,64 @@ func TestUpdateIngressLocked(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSrcCapPacketFilter tests that LocalBackend handles packet filters with
+// SrcCaps instead of Srcs (IPs)
+func TestSrcCapPacketFilter(t *testing.T) {
+	lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		return newClient(tb, opts)
+	})
+	if err := lb.Start(ipn.Options{}); err != nil {
+		t.Fatalf("(*LocalBackend).Start(): %v", err)
+	}
+
+	var k key.NodePublic
+	if err := k.UnmarshalText([]byte("nodekey:5c8f86d5fc70d924e55f02446165a5dae8f822994ad26bcf4b08fd841f9bf261")); err != nil {
+		t.Fatal(err)
+	}
+
+	controlClient := lb.cc.(*mockControl)
+	controlClient.send(nil, "", false, &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{netip.MustParsePrefix("1.1.1.1/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				Addresses: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+				ID:        2,
+				Key:       k,
+				CapMap:    tailcfg.NodeCapMap{"cap-X": nil}, // node 2 has cap
+			}).View(),
+			(&tailcfg.Node{
+				Addresses: []netip.Prefix{netip.MustParsePrefix("3.3.3.3/32")},
+				ID:        3,
+				Key:       k,
+				CapMap:    tailcfg.NodeCapMap{}, // node 3 does not have the cap
+			}).View(),
+		},
+		PacketFilter: []filtertype.Match{{
+			IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP}),
+			SrcCaps: []tailcfg.NodeCapability{"cap-X"}, // cap in packet filter rule
+			Dsts: []filtertype.NetPortRange{{
+				Net: netip.MustParsePrefix("1.1.1.1/32"),
+				Ports: filtertype.PortRange{
+					First: 22,
+					Last:  22,
+				},
+			}},
+		}},
+	})
+
+	filter := lb.GetFilterForTest()
+	res := filter.Check(netip.MustParseAddr("2.2.2.2"), netip.MustParseAddr("1.1.1.1"), 22, ipproto.TCP)
+	if res.IsDrop() != false {
+		t.Error("IsDrop() for node with cap = true, want false")
+	}
+
+	res = filter.Check(netip.MustParseAddr("3.3.3.3"), netip.MustParseAddr("1.1.1.1"), 22, ipproto.TCP)
+	if res.IsDrop() != true {
+		t.Error("IsDrop() for node with cap = false, want true")
 	}
 }
