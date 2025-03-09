@@ -95,6 +95,10 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
+    - name: Update modtime
+      shell: bash
+      run: |
+        find "." -type f,d -print0 | xargs -0 touch -d '1970-01-01T00:00:01'
     - name: build all
       if: matrix.buildflags == '' # skip on race builder
       run: ./tool/go build ${{matrix.buildflags}} ./...
@@ -279,6 +283,10 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
+    - name: Update modtime
+      shell: bash
+      run: |
+        find "." -type f,d -print0 | xargs -0 touch -d '1970-01-01T00:00:01'
     - name: build all
       run: ./tool/go build ./cmd/...
       env:
