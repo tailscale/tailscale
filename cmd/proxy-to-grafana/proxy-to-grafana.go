@@ -19,8 +19,25 @@
 //	header_property = username
 //	auto_sign_up = true
 //	whitelist = 127.0.0.1
-//	headers = Name:X-WEBAUTH-NAME
+//	headers = Email:X-Webauth-User, Name:X-Webauth-Name, Role:X-Webauth-Role
 //	enable_login_token = true
+//
+// You can use grants in Tailscale ACL to give users different roles in Grafana.
+// For example, to give group:eng the Editor role, add the following to your ACLs:
+//
+//	 "grants": [
+//			{
+//				"src": ["group:eng"],
+//				"dst": ["tag:grafana"],
+//				"app": {
+//					"tailscale.com/cap/proxy-to-grafana": [{
+//						"role": "editor",
+//					}],
+//				},
+//			},
+//	 ],
+//
+// If multiple roles are specified, the most permissive role is used.
 package main
 
 import (
@@ -48,6 +65,57 @@ var (
 	useHTTPS     = flag.Bool("use-https", false, "Serve over HTTPS via your *.ts.net subdomain if enabled in Tailscale admin.")
 	loginServer  = flag.String("login-server", "", "URL to alternative control server. If empty, the default Tailscale control is used.")
 )
+
+// aclCap is the Tailscale ACL capability used to configure proxy-to-grafana.
+const aclCap tailcfg.PeerCapability = "tailscale.com/cap/proxy-to-grafana"
+
+// aclGrant is an access control rule that assigns Grafana permissions
+// while provisioning a user.
+type aclGrant struct {
+	// Role is one of: "viewer", "editor", "admin".
+	Role string `json:"role"`
+}
+
+// grafanaRole defines possible Grafana roles.
+type grafanaRole int
+
+const (
+	// Roles are ordered by their permissions, with the least permissive role first.
+	// If a user has multiple roles, the most permissive role is used.
+	ViewerRole grafanaRole = iota
+	EditorRole
+	AdminRole
+)
+
+// String returns the string representation of a grafanaRole.
+// It is used as a header value in the HTTP request to Grafana.
+func (r grafanaRole) String() string {
+	switch r {
+	case ViewerRole:
+		return "Viewer"
+	case EditorRole:
+		return "Editor"
+	case AdminRole:
+		return "Admin"
+	default:
+		// A safe default.
+		return "Viewer"
+	}
+}
+
+// roleFromString converts a string to a grafanaRole.
+// It is used to parse the role from the ACL grant.
+func roleFromString(s string) (grafanaRole, error) {
+	switch strings.ToLower(s) {
+	case "viewer":
+		return ViewerRole, nil
+	case "editor":
+		return EditorRole, nil
+	case "admin":
+		return AdminRole, nil
+	}
+	return ViewerRole, fmt.Errorf("unknown role: %q", s)
+}
 
 func main() {
 	flag.Parse()
@@ -134,7 +202,15 @@ func modifyRequest(req *http.Request, localClient *local.Client) {
 		return
 	}
 
-	user, err := getTailscaleUser(req.Context(), localClient, req.RemoteAddr)
+	// Delete any existing X-Webauth-* headers to prevent possible spoofing
+	// if getting Tailnet identity fails.
+	for h := range req.Header {
+		if strings.HasPrefix(h, "X-Webauth-") {
+			req.Header.Del(h)
+		}
+	}
+
+	user, role, err := getTailscaleIdentity(req.Context(), localClient, req.RemoteAddr)
 	if err != nil {
 		log.Printf("error getting Tailscale user: %v", err)
 		return
@@ -142,19 +218,33 @@ func modifyRequest(req *http.Request, localClient *local.Client) {
 
 	req.Header.Set("X-Webauth-User", user.LoginName)
 	req.Header.Set("X-Webauth-Name", user.DisplayName)
+	req.Header.Set("X-Webauth-Role", role.String())
 }
 
-func getTailscaleUser(ctx context.Context, localClient *local.Client, ipPort string) (*tailcfg.UserProfile, error) {
+func getTailscaleIdentity(ctx context.Context, localClient *local.Client, ipPort string) (*tailcfg.UserProfile, grafanaRole, error) {
 	whois, err := localClient.WhoIs(ctx, ipPort)
 	if err != nil {
-		return nil, fmt.Errorf("failed to identify remote host: %w", err)
+		return nil, ViewerRole, fmt.Errorf("failed to identify remote host: %w", err)
 	}
 	if whois.Node.IsTagged() {
-		return nil, fmt.Errorf("tagged nodes are not users")
+		return nil, ViewerRole, fmt.Errorf("tagged nodes are not users")
 	}
 	if whois.UserProfile == nil || whois.UserProfile.LoginName == "" {
-		return nil, fmt.Errorf("failed to identify remote user")
+		return nil, ViewerRole, fmt.Errorf("failed to identify remote user")
 	}
 
-	return whois.UserProfile, nil
+	role := ViewerRole
+	grants, err := tailcfg.UnmarshalCapJSON[aclGrant](whois.CapMap, aclCap)
+	if err != nil {
+		return nil, ViewerRole, fmt.Errorf("failed to unmarshal ACL grants: %w", err)
+	}
+	for _, g := range grants {
+		r, err := roleFromString(g.Role)
+		if err != nil {
+			return nil, ViewerRole, fmt.Errorf("failed to parse role: %w", err)
+		}
+		role = max(role, r)
+	}
+
+	return whois.UserProfile, role, nil
 }
