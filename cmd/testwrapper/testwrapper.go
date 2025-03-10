@@ -259,6 +259,7 @@ func main() {
 			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\nflakytest failures JSON: %s\n\n", thisRun.attempt, j)
 		}
 
+		fatalFailures := make(map[string]struct{}) // pkg.Test key
 		toRetry := make(map[string][]*testAttempt) // pkg -> tests to retry
 		for _, pt := range thisRun.tests {
 			ch := make(chan *testAttempt)
@@ -301,11 +302,24 @@ func main() {
 				if tr.isMarkedFlaky {
 					toRetry[tr.pkg] = append(toRetry[tr.pkg], tr)
 				} else {
+					fatalFailures[tr.pkg+"."+tr.testName] = struct{}{}
 					failed = true
 				}
 			}
 			if failed {
 				fmt.Println("\n\nNot retrying flaky tests because non-flaky tests failed.")
+
+				// Print the list of non-flakytest failures.
+				// We will later analyze the retried GitHub Action runs to see
+				// if non-flakytest failures succeeded upon retry. This will
+				// highlight tests which are flaky but not yet flagged as such.
+				if len(fatalFailures) > 0 {
+					tests := slicesx.MapKeys(fatalFailures)
+					sort.Strings(tests)
+					j, _ := json.Marshal(tests)
+					fmt.Printf("non-flakytest failures: %s\n", j)
+				}
+				fmt.Println()
 				os.Exit(1)
 			}
 
