@@ -347,7 +347,11 @@ var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 // generateDNSResponse generates a DNS response for the given request. The from
 // argument is the NodeID of the node that sent the request.
 func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.NodeID) ([]byte, error) {
-	pm, _ := c.perPeerMap.LoadOrStore(from, &perPeerState{c: c})
+	pm, ok := c.perPeerMap.LoadOrStore(from, &perPeerState{c: c})
+	if !ok {
+		// TODO(raggi): consider returning NXDOMAIN, but it is likely this result does not want to be cached.
+		return nil, fmt.Errorf("missing peer state for %s, unable to answer query: %v", from, req)
+	}
 	var addrs []netip.Addr
 	if len(req.Questions) > 0 {
 		switch req.Questions[0].Type {
