@@ -3,6 +3,7 @@ module tailscale.com
 go 1.24.0
 
 require (
+	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f
 	filippo.io/mkcert v1.4.4
 	fyne.io/systray v1.11.0
 	github.com/akutz/memconn v0.1.0
