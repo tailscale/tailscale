@@ -4,6 +4,8 @@
 package controlclient
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"slices"
@@ -146,4 +148,44 @@ func TestCanSkipStatus(t *testing.T) {
 	if f := fieldsOf(reflect.TypeFor[Status]()); !slices.Equal(f, want) {
 		t.Errorf("Status fields = %q; this code was only written to handle fields %q", f, want)
 	}
+}
+
+func TestRetryableErrors(t *testing.T) {
+	errorTests := []struct {
+		desc string
+		err  error
+		want bool
+	}{
+		{"errNoNoiseClient", errNoNoiseClient, true},
+		{"errNoNodeKey", errNoNodeKey, true},
+		{"errNoNoiseClient wrapped", fmt.Errorf("%w: %w", errNoNoiseClient, errors.New("no noise")), true},
+		{"errHTTPPostFailure wrapped", fmt.Errorf("%w: %w", errHTTPPostFailure, errors.New("bad post")), true},
+		{"errNoNodeKey wrapped", fmt.Errorf("%w: %w", errNoNodeKey, errors.New("not node key")), true},
+		{"HTTP 429", errBadHTTPResponse(429, "too may requests"), true},
+		{"HTTP 500", errBadHTTPResponse(500, "internal server eror"), true},
+		{"HTTP 502", errBadHTTPResponse(502, "bad gateway"), true},
+		{"HTTP 503", errBadHTTPResponse(503, "service unavailable"), true},
+		{"HTTP 504", errBadHTTPResponse(504, "gateway timeout"), true},
+		{"HTTP Nonesense Error", errBadHTTPResponse(1234, "random error"), false},
+	}
+
+	for _, tt := range errorTests {
+		t.Run(tt.desc, func(t *testing.T) {
+			if isRetryableErrorForTest(tt.err) != tt.want {
+				t.Fatalf("error retriability is incorrect %v", tt.err)
+			}
+		})
+	}
+}
+
+type retryableForTest interface {
+	Retryable() bool
+}
+
+func isRetryableErrorForTest(err error) bool {
+	var ae retryableForTest
+	if errors.As(err, &ae) {
+		return ae.Retryable()
+	}
+	return false
 }
