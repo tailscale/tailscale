@@ -85,6 +85,9 @@ func defaultPathForUser(u *user.User) string {
 	if s := defaultPathTmpl(); s != "" {
 		return expandDefaultPathTmpl(s, u)
 	}
+	if runtime.GOOS == "plan9" {
+		return "/bin"
+	}
 	isRoot := u.Uid == "0"
 	switch distro.Get() {
 	case distro.Debian:

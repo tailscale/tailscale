@@ -7,9 +7,11 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"golang.org/x/net/ipv6"
 	"tailscale.com/net/netaddr"
@@ -150,6 +152,12 @@ func (c *RebindingUDPConn) closeLocked() error {
 		return errNilPConn
 	}
 	c.port = 0
+	if runtime.GOOS == "plan9" {
+		// Work around Go bug https://github.com/golang/go/issues/72770.
+		// This does https://go-review.googlesource.com/c/go/+/656395
+		// manually until the upstream Go bug is fixed + released.
+		c.pconn.SetReadDeadline(time.Now().Add(-time.Hour))
+	}
 	return c.pconn.Close()
 }
 
