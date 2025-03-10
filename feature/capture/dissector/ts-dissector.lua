@@ -1,5 +1,5 @@
-function hasbit(x, p)
-  return x % (p + p) >= p       
+local function is_from_derp(x)
+  return x % 2 == 1
 end
 
 tsdebug_ll = Proto("tsdebug", "Tailscale debug")
@@ -75,7 +75,7 @@ function tsdisco_meta.dissector(buffer, pinfo, tree)
     local subtree = tree:add(tsdisco_meta, buffer(), "DISCO metadata")
 
     -- Parse flags
-    local from_derp = hasbit(buffer(offset, 1):le_uint(), 0)
+    local from_derp = is_from_derp(buffer(offset, 1):le_uint())
     subtree:add(DISCO_IS_DERP, from_derp) -- Flag bit 0
     offset = offset + 1
     -- Parse DERP public key
