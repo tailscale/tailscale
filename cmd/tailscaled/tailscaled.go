@@ -182,6 +182,10 @@ func main() {
 		return
 	}
 
+	if runtime.GOOS == "plan9" && os.Getenv("_NETSHELL_CHILD_") != "" {
+		os.Args = []string{"tailscaled", "be-child", "plan9-netshell"}
+	}
+
 	if len(os.Args) > 1 {
 		sub := os.Args[1]
 		if fp, ok := subCommands[sub]; ok {

@@ -22,28 +22,18 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 
 	"github.com/pkg/sftp"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tempfork/netshell"
 	"tailscale.com/types/logger"
 )
 
 func init() {
 	childproc.Add("ssh", beIncubator)
 	childproc.Add("sftp", beSFTP)
-}
-
-// maybeStartLoginSession informs the system that we are about to log someone
-// in. On success, it may return a non-nil close func which must be closed to
-// release the session.
-// We can only do this if we are running as root.
-// This is best effort to still allow running on machines where
-// we don't support starting sessions, e.g. darwin.
-// See maybeStartLoginSessionLinux.
-var maybeStartLoginSession = func(dlogf logger.Logf, ia incubatorArgs) (close func() error) {
-	return nil
+	childproc.Add("plan9-netshell", beNetshell)
 }
 
 // newIncubatorCommand returns a new exec.Cmd configured with
@@ -85,7 +75,6 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 
 	lu := ss.conn.localUser
 	ci := ss.conn.info
-	groups := strings.Join(ss.conn.userGroupIDs, ",")
 	remoteUser := ci.uprof.LoginName
 	if ci.node.IsTagged() {
 		remoteUser = strings.Join(ci.node.Tags().AsSlice(), ",")
@@ -94,10 +83,9 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 	incubatorArgs := []string{
 		"be-child",
 		"ssh",
-		"--login-shell=" + lu.LoginShell(),
-		"--uid=" + lu.Uid,
-		"--gid=" + lu.Gid,
-		"--groups=" + groups,
+		// "--login-shell=" + lu.LoginShell(),
+		// "--uid=" + lu.Uid,
+		// "--gid=" + lu.Gid,
 		"--local-user=" + lu.Username,
 		"--home-dir=" + lu.HomeDir,
 		"--remote-user=" + remoteUser,
@@ -212,6 +200,9 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.Parse(args)
 
 	for _, g := range strings.Split(groups, ",") {
+		if g == "" {
+			continue
+		}
 		gid, err := strconv.Atoi(g)
 		if err != nil {
 			return ia, fmt.Errorf("unable to parse group id %q: %w", g, err)
@@ -250,6 +241,11 @@ func (ia incubatorArgs) forwadedEnviron() ([]string, string, error) {
 	return environ, allowListKeys, nil
 }
 
+func beNetshell(args []string) error {
+	netshell.Main()
+	return nil
+}
+
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
 // It is responsible for informing the system of a new login session for the
 // user. This is sometimes necessary for mounting home directories and
@@ -273,6 +269,11 @@ func beIncubator(args []string) error {
 	}
 	if ia.isSFTP && ia.isShell {
 		return fmt.Errorf("--sftp and --shell are mutually exclusive")
+	}
+
+	if ia.isShell {
+		netshell.Main()
+		return nil
 	}
 
 	dlogf := logger.Discard
@@ -301,11 +302,6 @@ func handleInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 func handleSFTPInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	dlogf("handling sftp")
 
-	sessionCloser := maybeStartLoginSession(dlogf, ia)
-	if sessionCloser != nil {
-		defer sessionCloser()
-	}
-
 	return serveSFTP()
 }
 
@@ -332,10 +328,6 @@ func serveSFTP() error {
 // specified values, and then launches the requested `--cmd` in the user's
 // login shell.
 func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
-	sessionCloser := maybeStartLoginSession(dlogf, ia)
-	if sessionCloser != nil {
-		defer sessionCloser()
-	}
 
 	environ, _, err := ia.forwadedEnviron()
 	if err != nil {
@@ -344,7 +336,7 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 
 	args := shellArgs(ia.isShell, ia.cmd)
 	dlogf("running %s %q", ia.loginShell, args)
-	cmd := newCommand(ia.hasTTY, ia.loginShell, environ, args)
+	cmd := newCommand(ia.loginShell, environ, args)
 	err = cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
@@ -361,22 +353,12 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	return err
 }
 
-func newCommand(hasTTY bool, cmdPath string, cmdEnviron []string, cmdArgs []string) *exec.Cmd {
+func newCommand(cmdPath string, cmdEnviron []string, cmdArgs []string) *exec.Cmd {
 	cmd := exec.Command(cmdPath, cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = cmdEnviron
-
-	if hasTTY {
-		// If we were launched with a tty then we should mark that as the ctty
-		// of the child. However, as the ctty is being passed from the parent
-		// we set the child to foreground instead which also passes the ctty.
-		// However, we can not do this if never had a tty to begin with.
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			// XXX TODO
-		}
-	}
 
 	return cmd
 }
