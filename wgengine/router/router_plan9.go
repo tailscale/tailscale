@@ -60,8 +60,6 @@ func (r *plan9Router) Set(cfg *Config) error {
 		r.logf("XXX add %s /%d = %v", addr.Addr().String(), maskBits, err)
 	}
 
-	r.logf("XXX TODO: Set Routes %v", cfg.Routes)
-
 	ipr, err := os.OpenFile("/net/iproute", os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("open /net/iproute: %w", err)
@@ -97,8 +95,13 @@ func (r *plan9Router) Set(cfg *Config) error {
 		}
 	}
 
-	r.logf("XXX TODO: Set LocalRoutes %v", cfg.LocalRoutes)
-	// TODO(bradfitz): implement this.
+	if len(cfg.LocalRoutes) > 0 {
+		r.logf("XXX TODO: Set LocalRoutes %v", cfg.LocalRoutes)
+	}
+	if len(cfg.SubnetRoutes) > 0 {
+		r.logf("XXX TODO: Set SubnetRoutes %v", cfg.SubnetRoutes)
+	}
+
 	return nil
 }
 

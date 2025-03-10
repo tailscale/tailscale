@@ -931,7 +931,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		t.logf("XXX Wrapper.vectorInbound done")
 		return 0, io.EOF
 	}
-	t.logf("XXX Wrapper.vec in: err=%v, len(data)=%d, offset=%d", res.err, len(res.data), offset)
+	// t.logf("XXX Wrapper.vec in: err=%v, len(data)=%d, offset=%d", res.err, len(res.data), offset)
 	if res.err != nil && len(res.data) == 0 {
 		return 0, res.err
 	}
@@ -949,7 +949,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	var buffsGRO *gro.GRO
 	for _, data := range res.data {
 		p.Decode(data[res.dataOffset:])
-		t.logf("XXX Wrapper.Read decode (off=%d): %v", res.dataOffset, p.String())
+		// t.logf("XXX Wrapper.Read decode (off=%d): %v", res.dataOffset, p.String())
 
 		if m := t.destIPActivity.Load(); m != nil {
 			if fn := m[p.Dst.Addr()]; fn != nil {

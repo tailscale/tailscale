@@ -83,9 +83,8 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 	incubatorArgs := []string{
 		"be-child",
 		"ssh",
-		// "--login-shell=" + lu.LoginShell(),
-		// "--uid=" + lu.Uid,
-		// "--gid=" + lu.Gid,
+		// TODO: "--uid=" + lu.Uid,
+		// TODO: "--gid=" + lu.Gid,
 		"--local-user=" + lu.Username,
 		"--home-dir=" + lu.HomeDir,
 		"--remote-user=" + remoteUser,
@@ -363,20 +362,6 @@ func newCommand(cmdPath string, cmdEnviron []string, cmdArgs []string) *exec.Cmd
 	return cmd
 }
 
-const (
-	// This controls whether we assert that our privileges were dropped
-	// using geteuid/getegid; it's a const and not an envknob because the
-	// incubator doesn't see the parent's environment.
-	//
-	// TODO(andrew): remove this const and always do this after sufficient
-	// testing, e.g. the 1.40 release
-	assertPrivilegesWereDropped = true
-
-	// TODO(andrew-d): verify that this works in more configurations before
-	// enabling by default.
-	assertPrivilegesWereDroppedByAttemptingToUnDrop = false
-)
-
 // launchProcess launches an incubator process for the provided session.
 // It is responsible for configuring the process execution environment.
 // The caller can wait for the process to exit by calling cmd.Wait().
@@ -391,7 +376,7 @@ func (ss *sshSession) launchProcess() error {
 
 	cmd := ss.cmd
 	cmd.Dir = "/"
-	cmd.Env = envForUser(ss.conn.localUser)
+	cmd.Env = append(os.Environ(), envForUser(ss.conn.localUser)...)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {
 			cmd.Env = append(cmd.Env, kv)
@@ -439,12 +424,10 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 }
 
 func envForUser(u *userMeta) []string {
-	// XXX TODO(bradfitz): fix this for plan9
 	return []string{
-		fmt.Sprintf("SHELL=%s", u.LoginShell()),
-		fmt.Sprintf("USER=%s", u.Username),
-		fmt.Sprintf("HOME=%s", u.HomeDir),
-		fmt.Sprintf("PATH=%s", defaultPathForUser(&u.User)),
+		fmt.Sprintf("user=%s", u.Username),
+		fmt.Sprintf("home=%s", u.HomeDir),
+		fmt.Sprintf("path=%s", defaultPathForUser(&u.User)),
 	}
 }
 
@@ -456,7 +439,8 @@ func acceptEnvPair(kv string) bool {
 	if !ok {
 		return false
 	}
-	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")
+	_ = k
+	return true // permit anything on plan9 during bringup, for debugging at least
 }
 
 func shellArgs(isShell bool, cmd string) []string {
