@@ -52,6 +52,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
@@ -519,6 +520,164 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 
 	d1.MustCleanShutdown(t)
 	d2.MustCleanShutdown(t)
+}
+
+func TestCapMapPacketFilter(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := newTestEnv(t)
+
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+	n1.AwaitListening()
+	n1.MustUp()
+	n1.AwaitRunning()
+
+	all := env.Control.AllNodes()
+	if len(all) != 1 {
+		t.Fatalf("expected 1 node, got %d nodes", len(all))
+	}
+	tnode1 := all[0]
+
+	n2 := newTestNode(t, env)
+	d2 := n2.StartDaemon()
+	n2.AwaitListening()
+	n2.MustUp()
+	n2.AwaitRunning()
+
+	all = env.Control.AllNodes()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 node, got %d nodes", len(all))
+	}
+	var tnode2 *tailcfg.Node
+	for _, n := range all {
+		if n.ID != tnode1.ID {
+			tnode2 = n
+		}
+	}
+	if tnode2 == nil {
+		t.Fatalf("failed to find second node ID (two dups?)")
+	}
+
+	t.Logf("node1=%v, node2=%v", tnode1.ID, tnode2.ID)
+
+	n1.AwaitStatus(func(st *ipnstate.Status) error {
+		if len(st.Peer) != 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st.Peer))
+		}
+		peer := st.Peer[st.Peers()[0]]
+		if peer.ID == st.Self.ID {
+			return errors.New("peer is self")
+		}
+		return nil
+	})
+
+	// Check that n2 is reachable from n1 with the default packet filter.
+	if err := n1.PingICMP(n2); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+
+	t.Logf("setting packet filter with a cap")
+	if !env.Control.AddRawMapResponse(tnode2.Key, &tailcfg.MapResponse{
+		PacketFilter: []tailcfg.FilterRule{
+			{
+				SrcIPs: []string{"cap:foobar"},
+				DstPorts: []tailcfg.NetPortRange{{
+					IP:    "*",
+					Ports: tailcfg.PortRange{First: 0, Last: 65535},
+				}},
+			},
+		},
+	}) {
+		t.Fatalf("failed to add map response")
+	}
+
+	// Wait until n2 is no longer reachable from n1.
+	if err := tstest.WaitFor(5*time.Second, func() error {
+		if err := n1.PingICMP(n2); err == nil {
+			t.Fatal("ping successful, wanted an error")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("setting cap on node1")
+	peer := env.Control.PeerForNode(tnode2.Key, tnode1.Key)
+	mak.Set(&peer.CapMap, tailcfg.NodeCapability("foobar"), []tailcfg.RawMessage{})
+	if !env.Control.AddRawMapResponse(tnode2.Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{peer},
+	}) {
+		t.Fatalf("failed to add map response")
+	}
+	n2.AwaitPeerHasCap(tnode1.Key, tailcfg.NodeCapability("foobar"))
+
+	t.Logf("confirming that n1 can ping n2")
+	if err := n1.PingICMP(n2); err != nil {
+		t.Fatalf("ping error %s", err)
+	}
+
+	t.Logf("removing cap from node1")
+	peer = env.Control.PeerForNode(tnode2.Key, tnode1.Key)
+	if _, ok := peer.CapMap[tailcfg.NodeCapability("foobar")]; ok {
+		t.Fatal("unexpected cap")
+	}
+	if !env.Control.AddRawMapResponse(tnode2.Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{peer},
+	}) {
+		t.Fatalf("failed to add map response")
+	}
+	n2.AwaitPeerHasNoCap(tnode1.Key, tailcfg.NodeCapability("foobar"))
+
+	t.Logf("confirming that n1 cannot ping n2")
+	if err := n1.PingICMP(n2); err == nil {
+		t.Fatal("ping successful, wanted an error")
+	}
+
+	t.Logf("adding third node")
+	n3 := newTestNode(t, env)
+	d3 := n3.StartDaemon()
+	n3.AwaitListening()
+	n3.MustUp()
+	n3.AwaitRunning()
+
+	all = env.Control.AllNodes()
+	if len(all) != 3 {
+		t.Fatalf("expected 3 nodes, got %d nodes", len(all))
+	}
+	var tnode3 *tailcfg.Node
+	for _, n := range all {
+		if n.ID != tnode1.ID && n.ID != tnode2.ID {
+			tnode3 = n
+		}
+	}
+	if tnode3 == nil {
+		t.Fatalf("failed to find second node ID (two dups?)")
+	}
+
+	t.Logf("confirming that n3 cannot ping n2")
+	if err := n3.PingICMP(n2); err == nil {
+		t.Fatal("ping successful, wanted an error")
+	}
+
+	t.Logf("setting cap on the node3")
+	peer = env.Control.PeerForNode(tnode2.Key, tnode3.Key)
+	mak.Set(&peer.CapMap, tailcfg.NodeCapability("foobar"), []tailcfg.RawMessage{})
+	if !env.Control.AddRawMapResponse(tnode2.Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{peer},
+	}) {
+		t.Fatalf("failed to add map response")
+	}
+	n2.AwaitPeerHasCap(tnode3.Key, tailcfg.NodeCapability("foobar"))
+
+	t.Logf("confirming that n3 can ping n2")
+	if err := n3.PingICMP(n2); err != nil {
+		t.Fatalf("ping error %s", err)
+	}
+
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
+	d3.MustCleanShutdown(t)
 }
 
 func TestNodeAddressIPFields(t *testing.T) {
@@ -1876,6 +2035,14 @@ func (n *testNode) Ping(otherNode *testNode) error {
 	return n.Tailscale("ping", ip).Run()
 }
 
+func (n *testNode) PingICMP(otherNode *testNode) error {
+	t := n.env.t
+	t.Helper()
+	ip := otherNode.AwaitIP4().String()
+	t.Logf("Running ping --icmp %v (from %v)...", ip, n.AwaitIP4())
+	return n.Tailscale("ping", "--timeout", "1s", "--icmp", ip).Run()
+}
+
 // AwaitListening waits for the tailscaled to be serving local clients
 // over its localhost IPC mechanism. (Unix socket, etc)
 func (n *testNode) AwaitListening() {
@@ -1945,25 +2112,53 @@ func (n *testNode) AwaitRunning() {
 	n.AwaitBackendState("Running")
 }
 
-func (n *testNode) AwaitBackendState(state string) {
-	t := n.env.t
-	t.Helper()
-	if err := tstest.WaitFor(20*time.Second, func() error {
-		st, err := n.Status()
-		if err != nil {
-			return err
+// AwaitPeerHasCap waits until peer has a cap.
+func (n *testNode) AwaitPeerHasCap(peerKey key.NodePublic, cap tailcfg.NodeCapability) {
+	n.awaitPeerCapPresence(peerKey, cap, true)
+}
+
+// AwaitPeerHasCap waits until peer does not have a cap.
+func (n *testNode) AwaitPeerHasNoCap(peerKey key.NodePublic, cap tailcfg.NodeCapability) {
+	n.awaitPeerCapPresence(peerKey, cap, false)
+}
+
+func (n *testNode) awaitPeerCapPresence(peerKey key.NodePublic, cap tailcfg.NodeCapability, wantCap bool) {
+	n.AwaitStatus(func(st *ipnstate.Status) error {
+		for pk, peer := range st.Peer {
+			if pk != peerKey {
+				continue
+			}
+			if _, ok := peer.CapMap[cap]; ok == wantCap {
+				return nil
+			} else {
+				return fmt.Errorf("peer cap=%v want=%v", ok, wantCap)
+			}
 		}
+		return fmt.Errorf("peer not found")
+	})
+}
+
+func (n *testNode) AwaitBackendState(state string) {
+	n.AwaitStatus(func(st *ipnstate.Status) error {
 		if st.BackendState != state {
 			return fmt.Errorf("in state %q; want %q", st.BackendState, state)
 		}
 		return nil
-	}); err != nil {
-		t.Fatalf("failure/timeout waiting for transition to Running status: %v", err)
-	}
+	})
 }
 
 // AwaitNeedsLogin waits for n to reach the IPN state "NeedsLogin".
 func (n *testNode) AwaitNeedsLogin() {
+	n.AwaitStatus(func(st *ipnstate.Status) error {
+		if st.BackendState != "NeedsLogin" {
+			return fmt.Errorf("in state %q", st.BackendState)
+		}
+		return nil
+	})
+}
+
+// AwaitStatus waits until the ready function returns no error.
+func (n *testNode) AwaitStatus(ready func(*ipnstate.Status) error) {
 	t := n.env.t
 	t.Helper()
 	if err := tstest.WaitFor(20*time.Second, func() error {
@@ -1971,12 +2166,9 @@ func (n *testNode) AwaitNeedsLogin() {
 		if err != nil {
 			return err
 		}
-		if st.BackendState != "NeedsLogin" {
-			return fmt.Errorf("in state %q", st.BackendState)
-		}
-		return nil
+		return ready(st)
 	}); err != nil {
-		t.Fatalf("failure/timeout waiting for transition to NeedsLogin status: %v", err)
+		t.Fatalf("failure/timeout waiting for callback function to return no error: %v", err)
 	}
 }
 
