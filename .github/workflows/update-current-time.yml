@@ -1,0 +1,44 @@
+name: update-current-time
+
+on:
+  # allow manual execution
+  workflow_dispatch:
+
+  # run every 14 days
+  schedule:
+    - cron: "0 0 */14 * *"
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  update-flake:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Get access token
+        uses: tibdex/github-app-token@3beb63f4bd073e61482598c45c71c1019b59b73a # v2.1.0
+        id: generate-token
+        with:
+          app_id: ${{ secrets.LICENSING_APP_ID }}
+          installation_retrieval_mode: "id"
+          installation_retrieval_payload: ${{ secrets.LICENSING_APP_INSTALLATION_ID }}
+          private_key: ${{ secrets.LICENSING_APP_PRIVATE_KEY }}
+
+      - name: Send pull request
+        uses: peter-evans/create-pull-request@dd2324fc52d5d43c699a5636bcf19fceaa70c284 #v7.0.7
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          author: Time Updater <noreply+time-updater@tailscale.com>
+          committer: Time Updater <noreply+time-updater@tailscale.com>
+          branch: time-updates
+          commit-message: "net/currentime: update minimum time"
+          title: "net/currentime: update minimum time"
+          body: Triggered by ${{ github.repository }}@${{ github.sha }}
+          signoff: true
+          delete-branch: true
+          reviewers: andrew-d
