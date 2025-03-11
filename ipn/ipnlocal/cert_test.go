@@ -47,10 +47,10 @@ var certTestFS embed.FS
 func TestCertStoreRoundTrip(t *testing.T) {
 	const testDomain = "example.com"
 
-	// Use a fixed verification timestamp so validity doesn't fall off when the
-	// cert expires. If you update the test data below, this may also need to be
-	// updated.
+	// Use fixed verification timestamps so validity doesn't change over time.
+	// If you update the test data below, these may also need to be updated.
 	testNow := time.Date(2023, time.February, 10, 0, 0, 0, 0, time.UTC)
+	testExpired := time.Date(2026, time.February, 10, 0, 0, 0, 0, time.UTC)
 
 	// To re-generate a root certificate and domain certificate for testing,
 	// use:
@@ -78,14 +78,20 @@ func TestCertStoreRoundTrip(t *testing.T) {
 	}
 
 	tests := []struct {
-		name  string
-		store certStore
+		name         string
+		store        certStore
+		debugACMEURL bool
 	}{
-		{"FileStore", certFileStore{dir: t.TempDir(), testRoots: roots}},
-		{"StateStore", certStateStore{StateStore: new(mem.Store), testRoots: roots}},
+		{"FileStore", certFileStore{dir: t.TempDir(), testRoots: roots}, false},
+		{"FileStore_UnknownCA", certFileStore{dir: t.TempDir()}, true},
+		{"StateStore", certStateStore{StateStore: new(mem.Store), testRoots: roots}, false},
+		{"StateStore_UnknownCA", certStateStore{StateStore: new(mem.Store)}, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.debugACMEURL {
+				t.Setenv("TS_DEBUG_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory")
+			}
 			if err := test.store.WriteTLSCertAndKey(testDomain, testCert, testKey); err != nil {
 				t.Fatalf("WriteTLSCertAndKey: unexpected error: %v", err)
 			}
@@ -98,6 +104,10 @@ func TestCertStoreRoundTrip(t *testing.T) {
 			}
 			if diff := cmp.Diff(kp.KeyPEM, testKey); diff != "" {
 				t.Errorf("Key (-got, +want):\n%s", diff)
+			}
+			unexpected, err := test.store.Read(testDomain, testExpired)
+			if err != errCertExpired {
+				t.Fatalf("Read: expected expiry error: %v", string(unexpected.CertPEM))
 			}
 		})
 	}

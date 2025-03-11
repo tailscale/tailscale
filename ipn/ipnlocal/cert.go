@@ -471,6 +471,10 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 		return nil, err
 	}
 
+	if !isDefaultDirectoryURL(ac.DirectoryURL) {
+		logf("acme: using Directory URL %q", ac.DirectoryURL)
+	}
+
 	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
 	switch {
 	case err == nil:
@@ -737,7 +741,28 @@ func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain s
 		// binary's baked-in roots (LetsEncrypt). See tailscale/tailscale#14690.
 		return validateLeaf(leaf, intermediates, domain, now, bakedroots.Get())
 	}
-	return err == nil
+
+	if err == nil {
+		return true
+	}
+
+	// When pointed at a non-prod ACME server, we don't expect to have the CA
+	// in our system or baked-in roots. Verify only throws UnknownAuthorityError
+	// after first checking the leaf cert's expiry, hostnames etc, so we know
+	// that the only reason for an error is to do with constructing a full chain.
+	// Allow this error so that cert caching still works in testing environments.
+	if errors.As(err, &x509.UnknownAuthorityError{}) {
+		acmeURL := envknob.String("TS_DEBUG_ACME_DIRECTORY_URL")
+		if !isDefaultDirectoryURL(acmeURL) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isDefaultDirectoryURL(u string) bool {
+	return u == "" || u == acme.LetsEncryptURL
 }
 
 // validLookingCertDomain reports whether name looks like a valid domain name that
