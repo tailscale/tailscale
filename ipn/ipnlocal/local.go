@@ -78,6 +78,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
 	"tailscale.com/portlist"
+	"tailscale.com/posture"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
@@ -432,6 +433,12 @@ type LocalBackend struct {
 	// lastNotifiedDriveShares keeps track of the last set of shares that we
 	// notified about.
 	lastNotifiedDriveShares *views.SliceView[*drive.Share, drive.ShareView]
+
+	// lastKnownHardwareAddrs is a list of the previous known hardware addrs.
+	// Previously known hwaddrs are kept to work around an issue on Windows
+	// where all addresses might disappear.
+	// http://go/corp/25168
+	lastKnownHardwareAddrs syncs.AtomicValue[[]string]
 
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
@@ -7617,6 +7624,25 @@ func (b *LocalBackend) notifyProfileChangeLocked(profile ipn.LoginProfileView, p
 	for _, cb := range b.profileChangeCbs {
 		cb(profile, prefs, sameNode)
 	}
+}
+
+// getHardwareAddrs returns the hardware addresses for the machine. If the list
+// of hardware addresses is empty, it will return the previously known hardware
+// addresses. Both the current, and previously known hardware addresses might be
+// empty.
+func (b *LocalBackend) getHardwareAddrs() ([]string, error) {
+	addrs, err := posture.GetHardwareAddrs()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(addrs) == 0 {
+		b.logf("getHardwareAddrs: got empty list of hwaddrs, returning previous list")
+		return b.lastKnownHardwareAddrs.Load(), nil
+	}
+
+	b.lastKnownHardwareAddrs.Store(addrs)
+	return addrs, nil
 }
 
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
