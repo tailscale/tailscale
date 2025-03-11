@@ -82,10 +82,10 @@ func TestCertStoreRoundTrip(t *testing.T) {
 		store        certStore
 		debugACMEURL bool
 	}{
-		{"FileStore", certFileStore{dir: t.TempDir(), testRoots: roots}, false},
-		{"FileStore_UnknownCA", certFileStore{dir: t.TempDir()}, true},
-		{"StateStore", certStateStore{StateStore: new(mem.Store), testRoots: roots}, false},
-		{"StateStore_UnknownCA", certStateStore{StateStore: new(mem.Store)}, true},
+		{"FileStore", certFileStore{dir: t.TempDir(), logf: t.Logf, testRoots: roots}, false},
+		{"FileStore_UnknownCA", certFileStore{dir: t.TempDir(), logf: t.Logf}, true},
+		{"StateStore", certStateStore{StateStore: new(mem.Store), logf: t.Logf, testRoots: roots}, false},
+		{"StateStore_UnknownCA", certStateStore{StateStore: new(mem.Store), logf: t.Logf}, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -215,7 +215,7 @@ func TestDebugACMEDirectoryURL(t *testing.T) {
 		const setting = "TS_DEBUG_ACME_DIRECTORY_URL"
 		t.Run(tc, func(t *testing.T) {
 			t.Setenv(setting, tc)
-			ac, err := acmeClient(certStateStore{StateStore: new(mem.Store)})
+			ac, err := acmeClient(certStateStore{StateStore: new(mem.Store), logf: t.Logf})
 			if err != nil {
 				t.Fatalf("acmeClient creation err: %v", err)
 			}

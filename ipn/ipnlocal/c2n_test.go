@@ -31,7 +31,7 @@ func TestHandleC2NTLSCertStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("certDir error: %v", err)
 	}
-	if _, err := b.getCertStore(); err != nil {
+	if _, err := b.getCertStore(t.Logf); err != nil {
 		t.Fatalf("getCertStore error: %v", err)
 	}
 

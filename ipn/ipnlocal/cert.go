@@ -113,7 +113,7 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		log.Printf("acme %T: %s", v, j)
 	}
 
-	cs, err := b.getCertStore()
+	cs, err := b.getCertStore(logf)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +265,7 @@ var errCertExpired = errors.New("cert expired")
 
 var testX509Roots *x509.CertPool // set non-nil by tests
 
-func (b *LocalBackend) getCertStore() (certStore, error) {
+func (b *LocalBackend) getCertStore(logf logger.Logf) (certStore, error) {
 	switch b.store.(type) {
 	case *store.FileStore:
 	case *mem.Store:
@@ -274,7 +274,10 @@ func (b *LocalBackend) getCertStore() (certStore, error) {
 			// We're running in Kubernetes with a custom StateStore,
 			// use that instead of the cert directory.
 			// TODO(maisem): expand this to other environments?
-			return certStateStore{StateStore: b.store}, nil
+			return certStateStore{
+				StateStore: b.store,
+				logf:       logf,
+			}, nil
 		}
 	}
 	dir, err := b.certDir()
@@ -284,12 +287,17 @@ func (b *LocalBackend) getCertStore() (certStore, error) {
 	if testX509Roots != nil && !testenv.InTest() {
 		panic("use of test hook outside of tests")
 	}
-	return certFileStore{dir: dir, testRoots: testX509Roots}, nil
+	return certFileStore{
+		dir:       dir,
+		logf:      logf,
+		testRoots: testX509Roots,
+	}, nil
 }
 
 // certFileStore implements certStore by storing the cert & key files in the named directory.
 type certFileStore struct {
-	dir string
+	dir  string
+	logf logger.Logf
 
 	// This field allows a test to override the CA root(s) for certificate
 	// verification. If nil the default system pool is used.
@@ -330,7 +338,7 @@ func (f certFileStore) Read(domain string, now time.Time) (*TLSCertKeyPair, erro
 		}
 		return nil, err
 	}
-	if !validCertPEM(domain, keyPEM, certPEM, f.testRoots, now) {
+	if !validCertPEM(f.logf, domain, keyPEM, certPEM, f.testRoots, now) {
 		return nil, errCertExpired
 	}
 	return &TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, nil
@@ -347,6 +355,7 @@ func (f certFileStore) WriteKey(domain string, key []byte) error {
 // certStateStore implements certStore by storing the cert & key files in an ipn.StateStore.
 type certStateStore struct {
 	ipn.StateStore
+	logf logger.Logf
 
 	// This field allows a test to override the CA root(s) for certificate
 	// verification. If nil the default system pool is used.
@@ -362,7 +371,7 @@ func (s certStateStore) Read(domain string, now time.Time) (*TLSCertKeyPair, err
 	if err != nil {
 		return nil, err
 	}
-	if !validCertPEM(domain, keyPEM, certPEM, s.testRoots, now) {
+	if !validCertPEM(s.logf, domain, keyPEM, certPEM, s.testRoots, now) {
 		return nil, errCertExpired
 	}
 	return &TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, nil
@@ -669,7 +678,7 @@ func acmeClient(cs certStore) (*acme.Client, error) {
 //
 // If roots != nil, it is used instead of the system root pool. This is meant
 // to support testing; production code should pass roots == nil.
-func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, now time.Time) bool {
+func validCertPEM(logf logger.Logf, domain string, keyPEM, certPEM []byte, roots *x509.CertPool, now time.Time) bool {
 	if len(keyPEM) == 0 || len(certPEM) == 0 {
 		return false
 	}
@@ -691,14 +700,14 @@ func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, n
 			intermediates.AddCert(cert)
 		}
 	}
-	return validateLeaf(leaf, intermediates, domain, now, roots)
+	return validateLeaf(logf, leaf, intermediates, domain, now, roots)
 }
 
 // validateLeaf is a helper for [validCertPEM].
 //
 // If called with roots == nil, it will use the system root pool as well as the
 // baked-in roots. If non-nil, only those roots are used.
-func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain string, now time.Time, roots *x509.CertPool) bool {
+func validateLeaf(logf logger.Logf, leaf *x509.Certificate, intermediates *x509.CertPool, domain string, now time.Time, roots *x509.CertPool) bool {
 	if leaf == nil {
 		return false
 	}
@@ -712,7 +721,7 @@ func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain s
 		// If validation failed and they specified nil for roots (meaning to use
 		// the system roots), then give it another chance to validate using the
 		// binary's baked-in roots (LetsEncrypt). See tailscale/tailscale#14690.
-		return validateLeaf(leaf, intermediates, domain, now, bakedroots.Get())
+		return validateLeaf(logf, leaf, intermediates, domain, now, bakedroots.Get())
 	}
 
 	if err == nil {
@@ -727,6 +736,7 @@ func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain s
 	if errors.As(err, &x509.UnknownAuthorityError{}) {
 		acmeURL := envknob.String("TS_DEBUG_ACME_DIRECTORY_URL")
 		if acmeURL != "" && acmeURL != acme.LetsEncryptURL {
+			logf("validateLeaf: allowing unknown CA for cached certificate from debug ACME server %q", acmeURL)
 			return true
 		}
 	}
