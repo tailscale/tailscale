@@ -10,12 +10,11 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 )
 
 // AuditLogFunc is any function that can be used to log audit actions performed by an [Actor].
-//
-// TODO(nickkhyl,barnstar): define a named string type for the action (in tailcfg?) and use it here.
-type AuditLogFunc func(action, details string)
+type AuditLogFunc func(action tailcfg.ClientAuditAction, details string) error
 
 // Actor is any actor using the [ipnlocal.LocalBackend].
 //
@@ -45,7 +44,7 @@ type Actor interface {
 	//
 	// If the auditLogger is non-nil, it is used to write details about the action
 	// to the audit log when required by the policy.
-	CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ProfileAccess, auditLogger AuditLogFunc) error
+	CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ProfileAccess, auditLogFn AuditLogFunc) error
 
 	// IsLocalSystem reports whether the actor is the Windows' Local System account.
 	//
