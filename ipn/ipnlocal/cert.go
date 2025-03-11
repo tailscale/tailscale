@@ -146,7 +146,7 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 	}
 
 	if envknob.IsCertShareReadOnlyMode() {
-		return nil, fmt.Errorf("retrieving cached TLS credentials failed with %w, and cert store is configured in read-only mode, not attempting to issue new credentials", err)
+		return nil, fmt.Errorf("retrieving cached TLS certificate failed and cert store is configured in read-only mode, not attempting to issue a new certificate: %w", err)
 	}
 
 	pair, err := getCertPEM(ctx, b, cs, logf, traceACME, domain, now, minValidity)
@@ -365,11 +365,18 @@ type certStateStore struct {
 	testRoots *x509.CertPool
 }
 
+// TLSCertKeyReader is an interface implemented by state stores where it makes
+// sense to read the TLS cert and key in a single operation that can be
+// distinguished from generic state value reads. Currently this is only implemented
+// by the kubestore.Store, which, in some cases, need to read cert and key from a
+// non-cached TLS Secret.
+type TLSCertKeyReader interface {
+	ReadTLSCertAndKey(domain string) ([]byte, []byte, error)
+}
+
 func (s certStateStore) Read(domain string, now time.Time) (*TLSCertKeyPair, error) {
 	// If we're using a store that supports atomic reads, use that
-	if kr, ok := s.StateStore.(interface {
-		ReadTLSCertAndKey(string) ([]byte, []byte, error)
-	}); ok {
+	if kr, ok := s.StateStore.(TLSCertKeyReader); ok {
 		cert, key, err := kr.ReadTLSCertAndKey(domain)
 		if err != nil {
 			return nil, err

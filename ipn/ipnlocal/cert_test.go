@@ -301,7 +301,7 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.readOnlyMode {
-				envknob.SetCertShareReadOnlyMode()
+				envknob.Setenv("TS_CERT_SHARE_MODE", "ro")
 			}
 
 			os.RemoveAll(certDir)

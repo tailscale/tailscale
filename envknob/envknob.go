@@ -432,30 +432,7 @@ func IsCertShareReadOnlyMode() bool {
 	return m == modeRO
 }
 
-// SetCertShareReadOnlyMode ensures that this replica will, when serving HTTPS
-// endpoints, only return TLS credentials from its store, but never attempt to
-// issue or renew them.
-func SetCertShareReadOnlyMode() {
-	Setenv("TS_CERT_SHARE_MODE", modeRO)
-}
-
 const modeRO = "ro"
-
-// IsCertShareReadWriteMode returns true if this instance is the replica
-// responsible for issuing and renewing TLS certs in an HA setup with certs
-// shared between multiple replicas.
-func IsCertShareReadWriteMode() bool {
-	m := String("TS_CERT_SHARE_MODE")
-	return m == modeRW
-}
-
-// SetCertShareReadWriteMode ensures that this instance, in an HA setup with
-// shared TLS certs, be the replica that is responsible for issuing TLS certs.
-func SetCertShareReadWriteMode() {
-	Setenv("TS_CERT_SHARE_MODE", modeRW)
-}
-
-const modeRW = "rw"
 
 // CrashOnUnexpected reports whether the Tailscale client should panic
 // on unexpected conditions. If TS_DEBUG_CRASH_ON_UNEXPECTED is set, that's
