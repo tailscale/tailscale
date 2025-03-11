@@ -34,17 +34,17 @@ type safesocketDarwin struct {
 	mu              sync.Mutex
 	token           string   // safesocket auth token
 	port            int      // safesocket port
-	sameuserproofFD *os.File // file descriptor for macos app store sameuserproof file
-	sharedDir       string   // shared directory for location of sameuserproof file
+	sameuserproofFD *os.File // File descriptor for macos app store sameuserproof file
+	sharedDir       string   // Shared directory for location of sameuserproof file
 
-	checkConn   bool        // Check macsys safesocket port before returning it
-	isMacSysExt func() bool // For testing only to force macsys
-	isMacGUIApp func() bool // For testing only to force macOS sandbox
+	checkConn   bool        // If true, check macsys safesocket port before returning it
+	isMacSysExt func() bool // Reports true if this binary is the macOS System Extension
+	isMacGUIApp func() bool // Reports true if running as a macOS GUI app (Tailscale.app)
 }
 
 var ssd = safesocketDarwin{
 	isMacSysExt: version.IsMacSysExt,
-	isMacGUIApp: func() bool { return version.IsMacAppStore() || version.IsMacSysApp() || version.IsMacSysExt() },
+	isMacGUIApp: func() bool { return version.IsMacAppStoreGUI() || version.IsMacSysGUI() },
 	checkConn:   true,
 	sharedDir:   "/Library/Tailscale",
 }
@@ -63,22 +63,25 @@ var ssd = safesocketDarwin{
 // calls InitListenerDarwin.
 
 // localTCPPortAndTokenDarwin returns the localhost TCP port number and auth token
-// either generated, or sourced from the NEPacketTunnelProvider managed tailscaled process.
+// either from the sameuserproof mechanism, or source and set directly from the
+// NEPacketTunnelProvider managed tailscaled process when the CLI is invoked
+// from the Tailscale.app GUI.
 func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 	ssd.mu.Lock()
 	defer ssd.mu.Unlock()
 
-	if !ssd.isMacGUIApp() {
-		return 0, "", ErrNoTokenOnOS
-	}
-
-	if ssd.port != 0 && ssd.token != "" {
+	switch {
+	case ssd.port != 0 && ssd.token != "":
+		// If something has explicitly set our credentials (typically non-standalone macos binary), use them.
 		return ssd.port, ssd.token, nil
+	case !ssd.isMacGUIApp():
+		// We're not a GUI app (probably cmd/tailscale), so try falling back to sameuserproof.
+		// If portAndTokenFromSameUserProof returns an error here, cmd/tailscale will
+		// attempt to use the default unix socket mechanism supported by tailscaled.
+		return portAndTokenFromSameUserProof()
+	default:
+		return 0, "", ErrTokenNotFound
 	}
-
-	// Credentials were not explicitly, this is likely a standalone CLI binary.
-	// Fallback to reading the sameuserproof file.
-	return portAndTokenFromSameUserProof()
 }
 
 // SetCredentials sets an token and port used to authenticate safesocket generated
@@ -341,6 +344,11 @@ func readMacosSameUserProof() (port int, token string, err error) {
 }
 
 func portAndTokenFromSameUserProof() (port int, token string, err error) {
+	// When we're cmd/tailscale, we have no idea what tailscaled is, so we'll try
+	// macos, then macsys and finally, fallback to tailscaled via a unix socket
+	// if both of those return an error.   You can run macos or macsys and
+	// tailscaled at the same time, but we are forced to choose one and the GUI
+	// clients are first in line here.  You cannot run macos and macsys simultaneously.
 	if port, token, err := readMacosSameUserProof(); err == nil {
 		return port, token, nil
 	}
@@ -349,5 +357,5 @@ func portAndTokenFromSameUserProof() (port int, token string, err error) {
 		return port, token, nil
 	}
 
-	return 0, "", err
+	return 0, "", ErrTokenNotFound
 }
