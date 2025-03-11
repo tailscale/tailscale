@@ -445,6 +445,10 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 		return nil, err
 	}
 
+	if !isDefaultDirectoryURL(ac.DirectoryURL) {
+		logf("acme: using Directory URL %q", ac.DirectoryURL)
+	}
+
 	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
 	switch {
 	case err == nil:
@@ -475,9 +479,6 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 		return nil, err
 	}
 
-	if !isDefaultDirectoryURL(ac.DirectoryURL) {
-		logf("acme: using Directory URL %q", ac.DirectoryURL)
-	}
 	order, err := ac.AuthorizeOrder(ctx, []acme.AuthzID{{Type: "dns", Value: domain}})
 	if err != nil {
 		return nil, err
