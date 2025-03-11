@@ -11,6 +11,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/rsa"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -345,7 +346,9 @@ func (ar *authRequest) allowRelyingParty(r *http.Request, lc *local.Client) erro
 			clientID = r.FormValue("client_id")
 			clientSecret = r.FormValue("client_secret")
 		}
-		if ar.funnelRP.ID != clientID || ar.funnelRP.Secret != clientSecret {
+		clientIDcmp := subtle.ConstantTimeCompare([]byte(clientID), []byte(ar.funnelRP.ID))
+		clientSecretcmp := subtle.ConstantTimeCompare([]byte(clientSecret), []byte(ar.funnelRP.Secret))
+		if clientIDcmp != 1 || clientSecretcmp != 1 {
 			return fmt.Errorf("tsidp: invalid client credentials")
 		}
 		return nil

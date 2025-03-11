@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package bools contains the [Int], [Compare], and [Select] functions.
+// Package bools contains the [Int], [Compare], and [IfElse] functions.
 package bools
 
 // Int returns 1 for true and 0 for false.

@@ -172,23 +172,12 @@ func (r *Report) Clone() *Report {
 		return nil
 	}
 	r2 := *r
-	r2.RegionLatency = cloneDurationMap(r2.RegionLatency)
-	r2.RegionV4Latency = cloneDurationMap(r2.RegionV4Latency)
-	r2.RegionV6Latency = cloneDurationMap(r2.RegionV6Latency)
+	r2.RegionLatency = maps.Clone(r2.RegionLatency)
+	r2.RegionV4Latency = maps.Clone(r2.RegionV4Latency)
+	r2.RegionV6Latency = maps.Clone(r2.RegionV6Latency)
 	r2.GlobalV4Counters = maps.Clone(r2.GlobalV4Counters)
 	r2.GlobalV6Counters = maps.Clone(r2.GlobalV6Counters)
 	return &r2
-}
-
-func cloneDurationMap(m map[int]time.Duration) map[int]time.Duration {
-	if m == nil {
-		return nil
-	}
-	m2 := make(map[int]time.Duration, len(m))
-	for k, v := range m {
-		m2[k] = v
-	}
-	return m2
 }
 
 // Client generates Reports describing the result of both passive and active
@@ -398,6 +387,9 @@ type probePlan map[string][]probe
 func sortRegions(dm *tailcfg.DERPMap, last *Report, preferredDERP int) (prev []*tailcfg.DERPRegion) {
 	prev = make([]*tailcfg.DERPRegion, 0, len(dm.Regions))
 	for _, reg := range dm.Regions {
+		if reg.NoMeasureNoHome {
+			continue
+		}
 		// include an otherwise avoid region if it is the current preferred region
 		if reg.Avoid && reg.RegionID != preferredDERP {
 			continue
@@ -544,7 +536,7 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *netmon.State) (plan prob
 	plan = make(probePlan)
 
 	for _, reg := range dm.Regions {
-		if len(reg.Nodes) == 0 {
+		if reg.NoMeasureNoHome || len(reg.Nodes) == 0 {
 			continue
 		}
 

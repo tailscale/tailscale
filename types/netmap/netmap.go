@@ -79,9 +79,6 @@ type NetworkMap struct {
 	// UserProfiles contains the profile information of UserIDs referenced
 	// in SelfNode and Peers.
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfileView
-
-	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
-	MaxKeyDuration time.Duration
 }
 
 // User returns nm.SelfNode.User if nm.SelfNode is non-nil, otherwise it returns

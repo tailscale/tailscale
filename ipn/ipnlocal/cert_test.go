@@ -92,13 +92,9 @@ func TestCertStoreRoundTrip(t *testing.T) {
 			if test.debugACMEURL {
 				t.Setenv("TS_DEBUG_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory")
 			}
-			if err := test.store.WriteCert(testDomain, testCert); err != nil {
-				t.Fatalf("WriteCert: unexpected error: %v", err)
+			if err := test.store.WriteTLSCertAndKey(testDomain, testCert, testKey); err != nil {
+				t.Fatalf("WriteTLSCertAndKey: unexpected error: %v", err)
 			}
-			if err := test.store.WriteKey(testDomain, testKey); err != nil {
-				t.Fatalf("WriteKey: unexpected error: %v", err)
-			}
-
 			kp, err := test.store.Read(testDomain, testNow)
 			if err != nil {
 				t.Fatalf("Read: unexpected error: %v", err)

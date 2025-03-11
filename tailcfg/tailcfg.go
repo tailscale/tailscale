@@ -158,7 +158,9 @@ type CapabilityVersion int
 //   - 111: 2025-01-14: Client supports a peer having Node.HomeDERP (issue #14636)
 //   - 112: 2025-01-14: Client interprets AllowedIPs of nil as meaning same as Addresses
 //   - 113: 2025-01-20: Client communicates to control whether funnel is enabled by sending Hostinfo.IngressEnabled (#14688)
-const CurrentCapabilityVersion CapabilityVersion = 113
+//   - 114: 2025-01-30: NodeAttrMaxKeyDuration CapMap defined, clients might use it (no tailscaled code change) (#14829)
+//   - 115: 2025-03-07: Client understands DERPRegion.NoMeasureNoHome.
+const CurrentCapabilityVersion CapabilityVersion = 115
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -834,15 +836,22 @@ type Hostinfo struct {
 	// App is used to disambiguate Tailscale clients that run using tsnet.
 	App string `json:",omitempty"` // "k8s-operator", "golinks", ...
 
-	Desktop         opt.Bool       `json:",omitempty"` // if a desktop was detected on Linux
-	Package         string         `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
-	DeviceModel     string         `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
-	PushDeviceToken string         `json:",omitempty"` // macOS/iOS APNs device token for notifications (and Android in the future)
-	Hostname        string         `json:",omitempty"` // name of the host the client runs on
-	ShieldsUp       bool           `json:",omitempty"` // indicates whether the host is blocking incoming connections
-	ShareeNode      bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
-	NoLogsNoSupport bool           `json:",omitempty"` // indicates that the user has opted out of sending logs and support
-	WireIngress     bool           `json:",omitempty"` // indicates that the node wants the option to receive ingress connections
+	Desktop         opt.Bool `json:",omitempty"` // if a desktop was detected on Linux
+	Package         string   `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
+	DeviceModel     string   `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
+	PushDeviceToken string   `json:",omitempty"` // macOS/iOS APNs device token for notifications (and Android in the future)
+	Hostname        string   `json:",omitempty"` // name of the host the client runs on
+	ShieldsUp       bool     `json:",omitempty"` // indicates whether the host is blocking incoming connections
+	ShareeNode      bool     `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
+	NoLogsNoSupport bool     `json:",omitempty"` // indicates that the user has opted out of sending logs and support
+	// WireIngress indicates that the node would like to be wired up server-side
+	// (DNS, etc) to be able to use Tailscale Funnel, even if it's not currently
+	// enabled. For example, the user might only use it for intermittent
+	// foreground CLI serve sessions, for which they'd like it to work right
+	// away, even if it's disabled most of the time. As an optimization, this is
+	// only sent if IngressEnabled is false, as IngressEnabled implies that this
+	// option is true.
+	WireIngress     bool           `json:",omitempty"`
 	IngressEnabled  bool           `json:",omitempty"` // if the node has any funnel endpoint enabled
 	AllowsUpdate    bool           `json:",omitempty"` // indicates that the node has opted-in to admin-console-drive remote updates
 	Machine         string         `json:",omitempty"` // the current host's machine type (uname -m)
@@ -2021,10 +2030,6 @@ type MapResponse struct {
 	// auto-update setting doesn't change if the tailnet admin flips the
 	// default after the node registered.
 	DefaultAutoUpdate opt.Bool `json:",omitempty"`
-
-	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
-	// If zero, the value is unchanged.
-	MaxKeyDuration time.Duration `json:",omitempty"`
 }
 
 // ClientVersion is information about the latest client version that's available
@@ -2430,6 +2435,17 @@ const (
 	// If multiple values of this key exist, they should be merged in sequence
 	// (replace conflicting keys).
 	NodeAttrServiceHost NodeCapability = "service-host"
+
+	// NodeAttrMaxKeyDuration represents the MaxKeyDuration setting on the
+	// tailnet. The value of this key in [NodeCapMap] will be only one entry of
+	// type float64 representing the duration in seconds. This cap will be
+	// omitted if the tailnet's MaxKeyDuration is the default.
+	NodeAttrMaxKeyDuration NodeCapability = "tailnet.maxKeyDuration"
+
+	// NodeAttrNativeIPV4 contains the IPV4 address of the node in its
+	// native tailnet. This is currently only sent to Hello, in its
+	// peer node list.
+	NodeAttrNativeIPV4 NodeCapability = "native-ipv4"
 )
 
 // SetDNSRequest is a request to add a DNS record.

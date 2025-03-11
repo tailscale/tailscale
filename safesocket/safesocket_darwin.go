@@ -39,10 +39,12 @@ type safesocketDarwin struct {
 
 	checkConn   bool        // Check macsys safesocket port before returning it
 	isMacSysExt func() bool // For testing only to force macsys
+	isMacGUIApp func() bool // For testing only to force macOS sandbox
 }
 
 var ssd = safesocketDarwin{
 	isMacSysExt: version.IsMacSysExt,
+	isMacGUIApp: func() bool { return version.IsMacAppStore() || version.IsMacSysApp() || version.IsMacSysExt() },
 	checkConn:   true,
 	sharedDir:   "/Library/Tailscale",
 }
@@ -65,6 +67,10 @@ var ssd = safesocketDarwin{
 func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 	ssd.mu.Lock()
 	defer ssd.mu.Unlock()
+
+	if !ssd.isMacGUIApp() {
+		return 0, "", ErrNoTokenOnOS
+	}
 
 	if ssd.port != 0 && ssd.token != "" {
 		return ssd.port, ssd.token, nil

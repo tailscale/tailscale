@@ -131,7 +131,7 @@ func (c *Client) Devices(ctx context.Context, fields *DeviceFieldsOpts) (deviceL
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/devices", c.baseURL(), c.tailnet)
+	path := c.BuildTailnetURL("devices")
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -149,7 +149,7 @@ func (c *Client) Devices(ctx context.Context, fields *DeviceFieldsOpts) (deviceL
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 
 	var devices GetDevicesResponse
@@ -188,7 +188,7 @@ func (c *Client) Device(ctx context.Context, deviceID string, fields *DeviceFiel
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return nil, handleErrorResponse(b, resp)
+		return nil, HandleErrorResponse(b, resp)
 	}
 
 	err = json.Unmarshal(b, &device)
@@ -221,7 +221,7 @@ func (c *Client) DeleteDevice(ctx context.Context, deviceID string) (err error) 
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return handleErrorResponse(b, resp)
+		return HandleErrorResponse(b, resp)
 	}
 	return nil
 }
@@ -253,7 +253,7 @@ func (c *Client) SetAuthorized(ctx context.Context, deviceID string, authorized 
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return handleErrorResponse(b, resp)
+		return HandleErrorResponse(b, resp)
 	}
 
 	return nil
@@ -281,7 +281,7 @@ func (c *Client) SetTags(ctx context.Context, deviceID string, tags []string) er
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {
-		return handleErrorResponse(b, resp)
+		return HandleErrorResponse(b, resp)
 	}
 
 	return nil

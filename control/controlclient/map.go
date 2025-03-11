@@ -89,7 +89,6 @@ type mapSession struct {
 	lastPopBrowserURL      string
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
-	lastMaxExpiry          time.Duration
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -241,6 +240,9 @@ func upgradeNode(n *tailcfg.Node) {
 		}
 		n.LegacyDERPString = ""
 	}
+	if DevKnob.StripHomeDERP() {
+		n.HomeDERP = 0
+	}
 
 	if n.AllowedIPs == nil {
 		n.AllowedIPs = slices.Clone(n.Addresses)
@@ -383,9 +385,6 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
-	}
-	if resp.MaxKeyDuration > 0 {
-		ms.lastMaxExpiry = resp.MaxKeyDuration
 	}
 }
 
@@ -819,7 +818,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		DERPMap:           ms.lastDERPMap,
 		ControlHealth:     ms.lastHealth,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
-		MaxKeyDuration:    ms.lastMaxExpiry,
 	}
 
 	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {

@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -446,6 +447,79 @@ func TestProxyGroupTypes(t *testing.T) {
 	})
 }
 
+func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		Build()
+	reconciler := &ProxyGroupReconciler{
+		tsNamespace: tsNamespace,
+		proxyImage:  testProxyImage,
+		Client:      fc,
+		l:           zap.Must(zap.NewDevelopment()).Sugar(),
+		tsClient:    &fakeTSClient{},
+		clock:       tstest.NewClock(tstest.ClockOpts{}),
+	}
+
+	existingServices := []string{"svc1", "svc2"}
+	existingConfigBytes, err := json.Marshal(ipn.ConfigVAlpha{
+		AdvertiseServices: existingServices,
+		Version:           "should-get-overwritten",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const pgName = "test-ingress"
+	mustCreate(t, fc, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgConfigSecretName(pgName, 0),
+			Namespace: tsNamespace,
+		},
+		// Write directly to Data because the fake client doesn't copy the write-only
+		// StringData field across to Data for us.
+		Data: map[string][]byte{
+			tsoperator.TailscaledConfigFileName(106): existingConfigBytes,
+		},
+	})
+
+	mustCreate(t, fc, &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: pgName,
+			UID:  "test-ingress-uid",
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type:     tsapi.ProxyGroupTypeIngress,
+			Replicas: ptr.To[int32](1),
+		},
+	})
+	expectReconciled(t, reconciler, "", pgName)
+
+	expectedConfigBytes, err := json.Marshal(ipn.ConfigVAlpha{
+		// Preserved.
+		AdvertiseServices: existingServices,
+
+		// Everything else got updated in the reconcile:
+		Version:      "alpha0",
+		AcceptDNS:    "false",
+		AcceptRoutes: "false",
+		Locked:       "false",
+		Hostname:     ptr.To(fmt.Sprintf("%s-%d", pgName, 0)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectEqual(t, fc, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pgConfigSecretName(pgName, 0),
+			Namespace:       tsNamespace,
+			ResourceVersion: "2",
+		},
+		StringData: map[string]string{
+			tsoperator.TailscaledConfigFileName(106): string(expectedConfigBytes),
+		},
+	}, omitSecretData)
+}
+
 func verifyProxyGroupCounts(t *testing.T, r *ProxyGroupReconciler, wantIngress, wantEgress int) {
 	t.Helper()
 	if r.ingressProxyGroups.Len() != wantIngress {
@@ -501,7 +575,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 		for i := range pgReplicas(pg) {
 			expectedSecrets = append(expectedSecrets,
 				fmt.Sprintf("%s-%d", pg.Name, i),
-				fmt.Sprintf("%s-%d-config", pg.Name, i),
+				pgConfigSecretName(pg.Name, i),
 			)
 		}
 	}
@@ -545,4 +619,12 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 			}
 		})
 	}
+}
+
+// The operator mostly writes to StringData and reads from Data, but the fake
+// client doesn't copy StringData across to Data on write. When comparing actual
+// vs expected Secrets, use this function to only check what the operator writes
+// to StringData.
+func omitSecretData(secret *corev1.Secret) {
+	secret.Data = nil
 }

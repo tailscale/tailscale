@@ -73,6 +73,7 @@ func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get ing: %w", err)
 	}
 	if !ing.DeletionTimestamp.IsZero() || !a.shouldExpose(ing) {
+		// TODO(irbekrm): this message is confusing if the Ingress is an HA Ingress
 		logger.Debugf("ingress is being deleted or should not be exposed, cleaning up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, ing)
 	}

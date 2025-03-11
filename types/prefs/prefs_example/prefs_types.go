@@ -48,10 +48,10 @@ import (
 // the `omitzero` JSON tag option. This option is not supported by the
 // [encoding/json] package as of 2024-08-21; see golang/go#45669.
 // It is recommended that a prefs type implements both
-// [jsonv2.MarshalerV2]/[jsonv2.UnmarshalerV2] and [json.Marshaler]/[json.Unmarshaler]
+// [jsonv2.MarshalerTo]/[jsonv2.UnmarshalerFrom] and [json.Marshaler]/[json.Unmarshaler]
 // to ensure consistent and more performant marshaling, regardless of the JSON package
 // used at the call sites; the standard marshalers can be implemented via [jsonv2].
-// See [Prefs.MarshalJSONV2], [Prefs.UnmarshalJSONV2], [Prefs.MarshalJSON],
+// See [Prefs.MarshalJSONTo], [Prefs.UnmarshalJSONFrom], [Prefs.MarshalJSON],
 // and [Prefs.UnmarshalJSON] for an example implementation.
 type Prefs struct {
 	ControlURL prefs.Item[string]               `json:",omitzero"`
@@ -128,34 +128,39 @@ type AppConnectorPrefs struct {
 	Advertise prefs.Item[bool] `json:",omitzero"`
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
+var (
+	_ jsonv2.MarshalerTo     = (*Prefs)(nil)
+	_ jsonv2.UnmarshalerFrom = (*Prefs)(nil)
+)
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
 // It is implemented as a performance improvement and to enable omission of
 // unconfigured preferences from the JSON output. See the [Prefs] doc for details.
-func (p Prefs) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
+func (p Prefs) MarshalJSONTo(out *jsontext.Encoder) error {
 	// The prefs type shadows the Prefs's method set,
 	// causing [jsonv2] to use the default marshaler and avoiding
 	// infinite recursion.
 	type prefs Prefs
-	return jsonv2.MarshalEncode(out, (*prefs)(&p), opts)
+	return jsonv2.MarshalEncode(out, (*prefs)(&p))
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (p *Prefs) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (p *Prefs) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	// The prefs type shadows the Prefs's method set,
 	// causing [jsonv2] to use the default unmarshaler and avoiding
 	// infinite recursion.
 	type prefs Prefs
-	return jsonv2.UnmarshalDecode(in, (*prefs)(p), opts)
+	return jsonv2.UnmarshalDecode(in, (*prefs)(p))
 }
 
 // MarshalJSON implements [json.Marshaler].
 func (p Prefs) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(p) // uses MarshalJSONV2
+	return jsonv2.Marshal(p) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (p *Prefs) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, p) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, p) // uses UnmarshalJSONFrom
 }
 
 type marshalAsTrueInJSON struct{}

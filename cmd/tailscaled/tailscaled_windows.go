@@ -44,6 +44,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn/desktop"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
@@ -334,6 +335,13 @@ func beWindowsSubprocess() bool {
 	sys.Set(netMon)
 
 	sys.Set(driveimpl.NewFileSystemForRemote(log.Printf))
+
+	if sessionManager, err := desktop.NewSessionManager(log.Printf); err == nil {
+		sys.Set(sessionManager)
+	} else {
+		// Errors creating the session manager are unexpected, but not fatal.
+		log.Printf("[unexpected]: error creating a desktop session manager: %v", err)
+	}
 
 	publicLogID, _ := logid.ParsePublicID(logID)
 	err = startIPNServer(ctx, log.Printf, publicLogID, sys)

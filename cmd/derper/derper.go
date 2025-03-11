@@ -63,6 +63,7 @@ var (
 	hostname    = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443. When --certmode=manual, this can be an IP address to avoid SNI checks")
 	runSTUN     = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
 	runDERP     = flag.Bool("derp", true, "whether to run a DERP server. The only reason to set this false is if you're decommissioning a server but want to keep its bootstrap DNS functionality still running.")
+	flagHome    = flag.String("home", "", "what to serve at the root path. It may be left empty (the default, for a default homepage), \"blank\" for a blank page, or a URL to redirect to")
 
 	meshPSKFile     = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
 	meshWith        = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list. If an entry contains a slash, the second part names a hostname to be used when dialing the target.")
@@ -71,9 +72,12 @@ var (
 	secretsCacheDir = flag.String("secrets-cache-dir", defaultSetecCacheDir(), "directory to cache setec secrets in (required if --secrets-url is set)")
 	bootstrapDNS    = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
 	unpublishedDNS  = flag.String("unpublished-bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns and not publish in the list. If an entry contains a slash, the second part names a DNS record to poll for its TXT record with a `0` to `100` value for rollout percentage.")
+
 	verifyClients   = flag.Bool("verify-clients", false, "verify clients to this DERP server through a local tailscaled instance.")
 	verifyClientURL = flag.String("verify-client-url", "", "if non-empty, an admission controller URL for permitting client connections; see tailcfg.DERPAdmitClientRequest")
 	verifyFailOpen  = flag.Bool("verify-client-url-fail-open", true, "whether we fail open if --verify-client-url is unreachable")
+
+	socket = flag.String("socket", "", "optional alternate path to tailscaled socket (only relevant when using --verify-clients)")
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
@@ -192,6 +196,7 @@ func main() {
 
 	s := derp.NewServer(cfg.PrivateKey, log.Printf)
 	s.SetVerifyClient(*verifyClients)
+	s.SetTailscaledSocketPath(*socket)
 	s.SetVerifyClientURL(*verifyClientURL)
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
 	s.SetTCPWriteTimeout(*tcpWriteTimeout)
@@ -250,6 +255,11 @@ func main() {
 	}
 	expvar.Publish("derp", s.ExpVar())
 
+	handleHome, ok := getHomeHandler(*flagHome)
+	if !ok {
+		log.Fatalf("unknown --home value %q", *flagHome)
+	}
+
 	mux := http.NewServeMux()
 	if *runDERP {
 		derpHandler := derphttp.Handler(s)
@@ -270,19 +280,7 @@ func main() {
 	mux.HandleFunc("/bootstrap-dns", tsweb.BrowserHeaderHandlerFunc(handleBootstrapDNS))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tsweb.AddBrowserHeaders(w)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(200)
-		err := homePageTemplate.Execute(w, templateData{
-			ShowAbuseInfo: validProdHostname.MatchString(*hostname),
-			Disabled:      !*runDERP,
-			AllowDebug:    tsweb.AllowDebugAccess(r),
-		})
-		if err != nil {
-			if r.Context().Err() == nil {
-				log.Printf("homePageTemplate.Execute: %v", err)
-			}
-			return
-		}
+		handleHome.ServeHTTP(w, r)
 	}))
 	mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tsweb.AddBrowserHeaders(w)
@@ -324,6 +322,9 @@ func main() {
 		Control:   ktimeout.UserTimeout(*tcpUserTimeout),
 		KeepAlive: *tcpKeepAlive,
 	}
+	// As of 2025-02-19, MPTCP does not support TCP_USER_TIMEOUT socket option
+	// set in ktimeout.UserTimeout above.
+	lc.SetMultipathTCP(false)
 
 	quietLogger := log.New(logger.HTTPServerLogFilter{Inner: log.Printf}, "", 0)
 	httpsrv := &http.Server{
@@ -572,3 +573,35 @@ var homePageTemplate = template.Must(template.New("home").Parse(`<html><body>
 </body>
 </html>
 `))
+
+// getHomeHandler returns a handler for the home page based on a flag string
+// as documented on the --home flag.
+func getHomeHandler(val string) (_ http.Handler, ok bool) {
+	if val == "" {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(200)
+			err := homePageTemplate.Execute(w, templateData{
+				ShowAbuseInfo: validProdHostname.MatchString(*hostname),
+				Disabled:      !*runDERP,
+				AllowDebug:    tsweb.AllowDebugAccess(r),
+			})
+			if err != nil {
+				if r.Context().Err() == nil {
+					log.Printf("homePageTemplate.Execute: %v", err)
+				}
+				return
+			}
+		}), true
+	}
+	if val == "blank" {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(200)
+		}), true
+	}
+	if strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://") {
+		return http.RedirectHandler(val, http.StatusFound), true
+	}
+	return nil, false
+}

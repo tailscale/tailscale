@@ -32,6 +32,7 @@ import (
 )
 
 var (
+	runVMTests    = flag.Bool("run-vm-tests", false, "run tests that require a VM")
 	logTailscaled = flag.Bool("log-tailscaled", false, "log tailscaled output")
 	pcapFile      = flag.String("pcap", "", "write pcap to file")
 )
@@ -59,8 +60,25 @@ func newNatTest(tb testing.TB) *natTest {
 		base:    filepath.Join(modRoot, "gokrazy/natlabapp.qcow2"),
 	}
 
+	if !*runVMTests {
+		tb.Skip("skipping heavy test; set --run-vm-tests to run")
+	}
+
 	if _, err := os.Stat(nt.base); err != nil {
-		tb.Skipf("skipping test; base image %q not found", nt.base)
+		if !os.IsNotExist(err) {
+			tb.Fatal(err)
+		}
+		tb.Logf("building VM image...")
+		cmd := exec.Command("make", "natlab")
+		cmd.Dir = filepath.Join(modRoot, "gokrazy")
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = os.Stdout
+		if err := cmd.Run(); err != nil {
+			tb.Fatalf("Error running 'make natlab' in gokrazy directory")
+		}
+		if _, err := os.Stat(nt.base); err != nil {
+			tb.Skipf("still can't find VM image: %v", err)
+		}
 	}
 
 	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "gokrazy/natlabapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
@@ -216,6 +234,22 @@ func hard(c *vnet.Config) *vnet.Node {
 	return c.AddNode(c.AddNetwork(
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 		fmt.Sprintf("10.0.%d.1/24", n), vnet.HardNAT))
+}
+
+func hardNoDERPOrEndoints(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("10.0.%d.1/24", n), vnet.HardNAT),
+		vnet.TailscaledEnv{
+			Key:   "TS_DEBUG_STRIP_ENDPOINTS",
+			Value: "1",
+		},
+		vnet.TailscaledEnv{
+			Key:   "TS_DEBUG_STRIP_HOME_DERP",
+			Value: "1",
+		},
+	)
 }
 
 func hardPMP(c *vnet.Config) *vnet.Node {
@@ -490,6 +524,26 @@ func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easy)
 	nt.want(routeDirect)
+}
+
+// Issue tailscale/corp#26438: use learned DERP route as send path of last
+// resort
+//
+// See (*magicsock.Conn).fallbackDERPRegionForPeer and its comment for
+// background.
+//
+// This sets up a test with two nodes that must use DERP to communicate but the
+// target of the ping (the second node) additionally is not getting DERP or
+// Endpoint updates from the control plane. (Or rather, it's getting them but is
+// configured to scrub them right when they come off the network before being
+// processed) This then tests whether node2, upon receiving a packet, will be
+// able to reply to node1 since it knows neither node1's endpoints nor its home
+// DERP. The only reply route it can use is that fact that it just received a
+// packet over a particular DERP from that peer.
+func TestFallbackDERPRegionForPeer(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(hard, hardNoDERPOrEndoints)
+	nt.want(routeDERP)
 }
 
 func TestSingleJustIPv6(t *testing.T) {
