@@ -26,7 +26,6 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/set"
@@ -518,16 +517,15 @@ func regularFileExists(path string) bool {
 // that's already sitting on disk, and only reports metadata about the public
 // cert (stuff that'd be the in CT logs anyway).
 func handleC2NTLSCertStatus(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	domain := r.FormValue("domain")
-	if domain == "" {
-		http.Error(w, "no 'domain'", http.StatusBadRequest)
+	cs, err := b.getCertStore()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	logf := logger.WithPrefix(b.logf, fmt.Sprintf("cert(%q): ", domain))
-	cs, err := b.getCertStore(logf)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	domain := r.FormValue("domain")
+	if domain == "" {
+		http.Error(w, "no 'domain'", http.StatusBadRequest)
 		return
 	}
 
