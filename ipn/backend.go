@@ -257,4 +257,8 @@ type Options struct {
 	// AuthKey is an optional node auth key used to authorize a
 	// new node key without user interaction.
 	AuthKey string
+	// LogStore provides optional persistent storage for audit logs.  If nil, or not an
+	// [auditlog.LogStore], in memory storage will be used if the backend
+	// supports audit logging.
+	LogStore interface{}
 }
