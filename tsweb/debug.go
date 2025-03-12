@@ -34,6 +34,7 @@ type DebugHandler struct {
 	kvs      []func(io.Writer)                // output one <li>...</li> each, see KV()
 	urls     []string                         // one <li>...</li> block with link each
 	sections []func(io.Writer, *http.Request) // invoked in registration order prior to outputting </body>
+	title    string                           // title displayed on index page
 }
 
 // Debugger returns the DebugHandler registered on mux at /debug/,
@@ -44,7 +45,8 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 		return d
 	}
 	ret := &DebugHandler{
-		mux: mux,
+		mux:   mux,
+		title: fmt.Sprintf("%s debug", version.CmdName()),
 	}
 	mux.Handle("/debug/", ret)
 
@@ -85,7 +87,7 @@ func (d *DebugHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	AddBrowserHeaders(w)
 	f := func(format string, args ...any) { fmt.Fprintf(w, format, args...) }
-	f("<html><body><h1>%s debug</h1><ul>", version.CmdName())
+	f("<html><body><h1>%s</h1><ul>", html.EscapeString(d.title))
 	for _, kv := range d.kvs {
 		kv(w)
 	}
@@ -103,19 +105,33 @@ func (d *DebugHandler) handle(slug string, handler http.Handler) string {
 	return href
 }
 
-// Handle registers handler at /debug/<slug> and creates a descriptive
-// entry in /debug/ for it.
+// Handle registers handler at /debug/<slug> and adds a link to it
+// on /debug/ with the provided description.
 func (d *DebugHandler) Handle(slug, desc string, handler http.Handler) {
 	href := d.handle(slug, handler)
 	d.URL(href, desc)
 }
 
-// HandleSilent registers handler at /debug/<slug>. It does not create
+// Handle registers handler at /debug/<slug> and adds a link to it
+// on /debug/ with the provided description.
+func (d *DebugHandler) HandleFunc(slug, desc string, handler http.HandlerFunc) {
+	d.Handle(slug, desc, handler)
+}
+
+// HandleSilent registers handler at /debug/<slug>. It does not add
 // a descriptive entry in /debug/ for it. This should be used
 // sparingly, for things that need to be registered but would pollute
 // the list of debug links.
 func (d *DebugHandler) HandleSilent(slug string, handler http.Handler) {
 	d.handle(slug, handler)
+}
+
+// HandleSilent registers handler at /debug/<slug>. It does not add
+// a descriptive entry in /debug/ for it. This should be used
+// sparingly, for things that need to be registered but would pollute
+// the list of debug links.
+func (d *DebugHandler) HandleSilentFunc(slug string, handler http.HandlerFunc) {
+	d.HandleSilent(slug, handler)
 }
 
 // KV adds a key/value list item to /debug/.
@@ -147,6 +163,11 @@ func (d *DebugHandler) URL(url, desc string) {
 // HTML to the page body.
 func (d *DebugHandler) Section(f func(w io.Writer, r *http.Request)) {
 	d.sections = append(d.sections, f)
+}
+
+// Title sets the title at the top of the debug page.
+func (d *DebugHandler) Title(title string) {
+	d.title = title
 }
 
 func gcHandler(w http.ResponseWriter, r *http.Request) {
