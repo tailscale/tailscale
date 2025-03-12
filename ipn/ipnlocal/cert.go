@@ -137,7 +137,7 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		if minValidity == 0 {
 			logf("starting async renewal")
 			// Start renewal in the background, return current valid cert.
-			b.goTracker.Go(func() { getCertPEM(context.Background(), b, cs, logf, traceACME, domain, now, minValidity) })
+			b.goTracker.Go(func() { b.getCertPEM(context.Background(), cs, logf, traceACME, domain, now, minValidity) })
 			return pair, nil
 		}
 		// If the caller requested a specific validity duration, fall through
@@ -149,7 +149,7 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		return nil, fmt.Errorf("retrieving cached TLS certificate failed with %w, and cert store is configured in read-only mode, not attempting to issue new certificate", err)
 	}
 
-	pair, err := getCertPEM(ctx, b, cs, logf, traceACME, domain, now, minValidity)
+	pair, err := b.getCertPEM(ctx, cs, logf, traceACME, domain, now, minValidity)
 	if err != nil {
 		logf("getCertPEM: %v", err)
 		return nil, err
@@ -476,8 +476,7 @@ func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKey
 }
 
 // getCertPem checks if a cert needs to be renewed and if so, renews it.
-// It can be overridden in tests.
-var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
+func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
 	acmeMu.Lock()
 	defer acmeMu.Unlock()
 
