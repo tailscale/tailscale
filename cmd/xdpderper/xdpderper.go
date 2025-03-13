@@ -18,6 +18,9 @@ import (
 	"tailscale.com/derp/xdp"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tsweb"
+
+	// Support for prometheus varz in tsweb
+	_ "tailscale.com/tsweb/promvarz"
 )
 
 var (
