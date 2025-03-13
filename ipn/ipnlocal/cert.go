@@ -119,6 +119,9 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 	}
 
 	if pair, err := getCertPEMCached(cs, domain, now); err == nil {
+		if envknob.IsCertShareReadOnlyMode() {
+			return pair, nil
+		}
 		// If we got here, we have a valid unexpired cert.
 		// Check whether we should start an async renewal.
 		shouldRenew, err := b.shouldStartDomainRenewal(cs, domain, now, pair, minValidity)
@@ -134,7 +137,7 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		if minValidity == 0 {
 			logf("starting async renewal")
 			// Start renewal in the background, return current valid cert.
-			go b.getCertPEM(context.Background(), cs, logf, traceACME, domain, now, minValidity)
+			b.goTracker.Go(func() { getCertPEM(context.Background(), b, cs, logf, traceACME, domain, now, minValidity) })
 			return pair, nil
 		}
 		// If the caller requested a specific validity duration, fall through
@@ -142,7 +145,11 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 		logf("starting sync renewal")
 	}
 
-	pair, err := b.getCertPEM(ctx, cs, logf, traceACME, domain, now, minValidity)
+	if envknob.IsCertShareReadOnlyMode() {
+		return nil, fmt.Errorf("retrieving cached TLS certificate failed and cert store is configured in read-only mode, not attempting to issue a new certificate: %w", err)
+	}
+
+	pair, err := getCertPEM(ctx, b, cs, logf, traceACME, domain, now, minValidity)
 	if err != nil {
 		logf("getCertPEM: %v", err)
 		return nil, err
@@ -358,7 +365,29 @@ type certStateStore struct {
 	testRoots *x509.CertPool
 }
 
+// TLSCertKeyReader is an interface implemented by state stores where it makes
+// sense to read the TLS cert and key in a single operation that can be
+// distinguished from generic state value reads. Currently this is only implemented
+// by the kubestore.Store, which, in some cases, need to read cert and key from a
+// non-cached TLS Secret.
+type TLSCertKeyReader interface {
+	ReadTLSCertAndKey(domain string) ([]byte, []byte, error)
+}
+
 func (s certStateStore) Read(domain string, now time.Time) (*TLSCertKeyPair, error) {
+	// If we're using a store that supports atomic reads, use that
+	if kr, ok := s.StateStore.(TLSCertKeyReader); ok {
+		cert, key, err := kr.ReadTLSCertAndKey(domain)
+		if err != nil {
+			return nil, err
+		}
+		if !validCertPEM(domain, key, cert, s.testRoots, now) {
+			return nil, errCertExpired
+		}
+		return &TLSCertKeyPair{CertPEM: cert, KeyPEM: key, Cached: true}, nil
+	}
+
+	// Otherwise fall back to separate reads
 	certPEM, err := s.ReadState(ipn.StateKey(domain + ".crt"))
 	if err != nil {
 		return nil, err
@@ -446,7 +475,9 @@ func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKey
 	return cs.Read(domain, now)
 }
 
-func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
+// getCertPem checks if a cert needs to be renewed and if so, renews it.
+// It can be overridden in tests.
+var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
 	acmeMu.Lock()
 	defer acmeMu.Unlock()
 

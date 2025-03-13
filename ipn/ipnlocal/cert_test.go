@@ -6,6 +6,7 @@
 package ipnlocal
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,11 +15,17 @@ import (
 	"embed"
 	"encoding/pem"
 	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 )
 
 func TestValidLookingCertDomain(t *testing.T) {
@@ -217,6 +224,154 @@ func TestDebugACMEDirectoryURL(t *testing.T) {
 			}
 			if ac.DirectoryURL != tc {
 				t.Fatalf("acmeClient.DirectoryURL = %q, want %q", ac.DirectoryURL, tc)
+			}
+		})
+	}
+}
+
+func TestGetCertPEMWithValidity(t *testing.T) {
+	const testDomain = "example.com"
+	b := &LocalBackend{
+		store:   &mem.Store{},
+		varRoot: t.TempDir(),
+		ctx:     context.Background(),
+		logf:    t.Logf,
+	}
+	certDir, err := b.certDir()
+	if err != nil {
+		t.Fatalf("certDir error: %v", err)
+	}
+	if _, err := b.getCertStore(); err != nil {
+		t.Fatalf("getCertStore error: %v", err)
+	}
+	testRoot, err := certTestFS.ReadFile("testdata/rootCA.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(testRoot) {
+		t.Fatal("Unable to add test CA to the cert pool")
+	}
+	testX509Roots = roots
+	defer func() { testX509Roots = nil }()
+	tests := []struct {
+		name string
+		now  time.Time
+		// storeCerts is true if the test cert and key should be written to store.
+		storeCerts       bool
+		readOnlyMode     bool // TS_READ_ONLY_CERTS env var
+		wantAsyncRenewal bool // async issuance should be started
+		wantIssuance     bool // sync issuance should be started
+		wantErr          bool
+	}{
+		{
+			name:             "valid_no_renewal",
+			now:              time.Date(2023, time.February, 20, 0, 0, 0, 0, time.UTC),
+			storeCerts:       true,
+			wantAsyncRenewal: false,
+			wantIssuance:     false,
+			wantErr:          false,
+		},
+		{
+			name:             "issuance_needed",
+			now:              time.Date(2023, time.February, 20, 0, 0, 0, 0, time.UTC),
+			storeCerts:       false,
+			wantAsyncRenewal: false,
+			wantIssuance:     true,
+			wantErr:          false,
+		},
+		{
+			name:             "renewal_needed",
+			now:              time.Date(2025, time.May, 1, 0, 0, 0, 0, time.UTC),
+			storeCerts:       true,
+			wantAsyncRenewal: true,
+			wantIssuance:     false,
+			wantErr:          false,
+		},
+		{
+			name:             "renewal_needed_read_only_mode",
+			now:              time.Date(2025, time.May, 1, 0, 0, 0, 0, time.UTC),
+			storeCerts:       true,
+			readOnlyMode:     true,
+			wantAsyncRenewal: false,
+			wantIssuance:     false,
+			wantErr:          false,
+		},
+		{
+			name:             "no_certs_read_only_mode",
+			now:              time.Date(2025, time.May, 1, 0, 0, 0, 0, time.UTC),
+			storeCerts:       false,
+			readOnlyMode:     true,
+			wantAsyncRenewal: false,
+			wantIssuance:     false,
+			wantErr:          true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			if tt.readOnlyMode {
+				envknob.Setenv("TS_CERT_SHARE_MODE", "ro")
+			}
+
+			os.RemoveAll(certDir)
+			if tt.storeCerts {
+				os.MkdirAll(certDir, 0755)
+				if err := os.WriteFile(filepath.Join(certDir, "example.com.crt"),
+					must.Get(os.ReadFile("testdata/example.com.pem")), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(certDir, "example.com.key"),
+					must.Get(os.ReadFile("testdata/example.com-key.pem")), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			b.clock = tstest.NewClock(tstest.ClockOpts{Start: tt.now})
+
+			allDone := make(chan bool, 1)
+			defer b.goTracker.AddDoneCallback(func() {
+				b.mu.Lock()
+				defer b.mu.Unlock()
+				if b.goTracker.RunningGoroutines() > 0 {
+					return
+				}
+				select {
+				case allDone <- true:
+				default:
+				}
+			})()
+
+			// Set to true if get getCertPEM is called. GetCertPEM can be called in a goroutine for async
+			// renewal or in the main goroutine if issuance is required to obtain valid TLS credentials.
+			getCertPemWasCalled := false
+			getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
+				getCertPemWasCalled = true
+				return nil, nil
+			}
+			prevGoRoutines := b.goTracker.StartedGoroutines()
+			_, err = b.GetCertPEMWithValidity(context.Background(), testDomain, 0)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("b.GetCertPemWithValidity got err %v, wants error: '%v'", err, tt.wantErr)
+			}
+			// GetCertPEMWithValidity calls getCertPEM in a goroutine if async renewal is needed. That's the
+			// only goroutine it starts, so this can be used to test if async renewal was started.
+			gotAsyncRenewal := b.goTracker.StartedGoroutines()-prevGoRoutines != 0
+			if gotAsyncRenewal {
+				select {
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for goroutines to finish")
+				case <-allDone:
+				}
+			}
+			// Verify that async renewal was triggered if expected.
+			if tt.wantAsyncRenewal != gotAsyncRenewal {
+				t.Fatalf("wants getCertPem to be called async: %v, got called %v", tt.wantAsyncRenewal, gotAsyncRenewal)
+			}
+			// Verify that (non-async) issuance was started if expected.
+			gotIssuance := getCertPemWasCalled && !gotAsyncRenewal
+			if tt.wantIssuance != gotIssuance {
+				t.Errorf("wants getCertPem to be called: %v, got called %v", tt.wantIssuance, gotIssuance)
 			}
 		})
 	}
