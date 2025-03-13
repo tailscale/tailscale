@@ -74,6 +74,11 @@ type settings struct {
 	HealthCheckEnabled   bool
 	DebugAddrPort        string
 	EgressProxiesCfgPath string
+	// CertShareMode is set for Kubernetes Pods running cert share mode.
+	// Possible values are 'ro' (for Pods that shold never attempt to
+	// issue/renew certs) and 'rw' for Pods that should manage the TLS certs
+	// shared amongst the replicas.
+	CertShareMode string
 }
 
 func configFromEnv() (*settings, error) {
@@ -128,6 +133,19 @@ func configFromEnv() (*settings, error) {
 			cfg.PodIPv6 = parsed.String()
 		}
 	}
+	// If cert share is enabled, set the replica as read or write. Only 0th
+	// replica should be able to write.
+	// If cert share is enabled, set the replica as read or write. Only 0th
+	// replica should be able to write.
+	isInCertShareMode := defaultBool("TS_EXPERIMENTAL_CERT_SHARE", false)
+	if isInCertShareMode {
+		cfg.CertShareMode = "ro"
+		podName := os.Getenv("POD_NAME")
+		if strings.HasSuffix(podName, "-0") {
+			cfg.CertShareMode = "rw"
+		}
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %v", err)
 	}

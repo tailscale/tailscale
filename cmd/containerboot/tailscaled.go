@@ -33,6 +33,9 @@ func startTailscaled(ctx context.Context, cfg *settings) (*local.Client, *os.Pro
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
+	if cfg.CertShareMode != "" {
+		cmd.Env = append(os.Environ(), "TS_CERT_SHARE_MODE="+cfg.CertShareMode)
+	}
 	log.Printf("Starting tailscaled")
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("starting tailscaled failed: %v", err)
