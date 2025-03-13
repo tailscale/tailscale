@@ -41,9 +41,12 @@ const NonceLen = 24
 type MessageType byte
 
 const (
-	TypePing        = MessageType(0x01)
-	TypePong        = MessageType(0x02)
-	TypeCallMeMaybe = MessageType(0x03)
+	TypePing                          = MessageType(0x01)
+	TypePong                          = MessageType(0x02)
+	TypeCallMeMaybe                   = MessageType(0x03)
+	TypeBindUDPRelayEndpoint          = MessageType(0x04)
+	TypeBindUDPRelayEndpointChallenge = MessageType(0x05)
+	TypeBindUDPRelayEndpointAnswer    = MessageType(0x06)
 )
 
 const v0 = byte(0)
@@ -83,6 +86,12 @@ func Parse(p []byte) (Message, error) {
 		return parsePong(ver, p)
 	case TypeCallMeMaybe:
 		return parseCallMeMaybe(ver, p)
+	case TypeBindUDPRelayEndpoint:
+		return parseBindUDPRelayEndpoint(ver, p)
+	case TypeBindUDPRelayEndpointChallenge:
+		return parseBindUDPRelayEndpointChallenge(ver, p)
+	case TypeBindUDPRelayEndpointAnswer:
+		return parseBindUDPRelayEndpointAnswer(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -266,7 +275,121 @@ func MessageSummary(m Message) string {
 		return fmt.Sprintf("pong tx=%x", m.TxID[:6])
 	case *CallMeMaybe:
 		return "call-me-maybe"
+	case *BindUDPRelayEndpoint:
+		return "bind-udp-relay-endpoint"
+	case *BindUDPRelayEndpointChallenge:
+		return "bind-udp-relay-endpoint-challenge"
+	case *BindUDPRelayEndpointAnswer:
+		return "bind-udp-relay-endpoint-answer"
 	default:
 		return fmt.Sprintf("%#v", m)
 	}
+}
+
+// BindUDPRelayHandshakeState represents the state of the 3-way bind handshake
+// between UDP relay client and UDP relay server. Its potential values include
+// those for both participants, UDP relay client and UDP relay server. A UDP
+// relay server implementation can be found in net/udprelay. This is currently
+// considered experimental.
+type BindUDPRelayHandshakeState int
+
+const (
+	// BindUDPRelayHandshakeStateInit represents the initial state prior to any
+	// message being transmitted.
+	BindUDPRelayHandshakeStateInit BindUDPRelayHandshakeState = iota
+	// BindUDPRelayHandshakeStateBindSent is a potential UDP relay client state
+	// once it has transmitted a BindUDPRelayEndpoint message towards a UDP
+	// relay server.
+	BindUDPRelayHandshakeStateBindSent
+	// BindUDPRelayHandshakeStateChallengeSent is a potential UDP relay server
+	// state once it has transmitted a BindUDPRelayEndpointChallenge message
+	// towards a UDP relay client in response to a BindUDPRelayEndpoint message.
+	BindUDPRelayHandshakeStateChallengeSent
+	// BindUDPRelayHandshakeStateAnswerSent is a potential UDP relay client
+	// state once it has transmitted a BindUDPRelayEndpointAnswer message
+	// towards a UDP relay server in response to a BindUDPRelayEndpointChallenge
+	// message.
+	BindUDPRelayHandshakeStateAnswerSent
+	// BindUDPRelayHandshakeStateAnswerReceived is a potential UDP relay server
+	// state once it has received a valid/correct BindUDPRelayEndpointAnswer
+	// message from a UDP relay client in response to a
+	// BindUDPRelayEndpointChallenge message.
+	BindUDPRelayHandshakeStateAnswerReceived
+)
+
+// bindUDPRelayEndpointLen is the length of a marshalled BindUDPRelayEndpoint
+// message, without the message header.
+const bindUDPRelayEndpointLen = BindUDPRelayEndpointChallengeLen
+
+// BindUDPRelayEndpoint is the first messaged transmitted from UDP relay client
+// towards UDP relay server as part of the 3-way bind handshake. It is padded to
+// match the length of BindUDPRelayEndpointChallenge. This message type is
+// currently considered experimental and is not yet tied to a
+// tailcfg.CapabilityVersion.
+type BindUDPRelayEndpoint struct {
+	padding [bindUDPRelayEndpointLen]byte
+}
+
+func (m *BindUDPRelayEndpoint) AppendMarshal(b []byte) []byte {
+	ret, _ := appendMsgHeader(b, TypeBindUDPRelayEndpoint, v0, 0)
+	return ret
+}
+
+func parseBindUDPRelayEndpoint(ver uint8, p []byte) (m *BindUDPRelayEndpoint, err error) {
+	m = new(BindUDPRelayEndpoint)
+	return m, nil
+}
+
+// BindUDPRelayEndpointChallengeLen is the length of a marshalled
+// BindUDPRelayEndpointChallenge message, without the message header.
+const BindUDPRelayEndpointChallengeLen = 32
+
+// BindUDPRelayEndpointChallenge is transmitted from UDP relay server towards
+// UDP relay client in response to a BindUDPRelayEndpoint message as part of the
+// 3-way bind handshake. This message type is currently considered experimental
+// and is not yet tied to a tailcfg.CapabilityVersion.
+type BindUDPRelayEndpointChallenge struct {
+	Challenge [BindUDPRelayEndpointChallengeLen]byte
+}
+
+func (m *BindUDPRelayEndpointChallenge) AppendMarshal(b []byte) []byte {
+	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpointChallenge, v0, BindUDPRelayEndpointChallengeLen)
+	copy(d, m.Challenge[:])
+	return ret
+}
+
+func parseBindUDPRelayEndpointChallenge(ver uint8, p []byte) (m *BindUDPRelayEndpointChallenge, err error) {
+	if len(p) < BindUDPRelayEndpointChallengeLen {
+		return nil, errShort
+	}
+	m = new(BindUDPRelayEndpointChallenge)
+	copy(m.Challenge[:], p[:])
+	return m, nil
+}
+
+// bindUDPRelayEndpointAnswerLen is the length of a marshalled
+// BindUDPRelayEndpointAnswer message, without the message header.
+const bindUDPRelayEndpointAnswerLen = BindUDPRelayEndpointChallengeLen
+
+// BindUDPRelayEndpointAnswer is transmitted from UDP relay client to UDP relay
+// server in response to a BindUDPRelayEndpointChallenge message. This message
+// type is currently considered experimental and is not yet tied to a
+// tailcfg.CapabilityVersion.
+type BindUDPRelayEndpointAnswer struct {
+	Answer [bindUDPRelayEndpointAnswerLen]byte
+}
+
+func (m *BindUDPRelayEndpointAnswer) AppendMarshal(b []byte) []byte {
+	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpointAnswer, v0, bindUDPRelayEndpointAnswerLen)
+	copy(d, m.Answer[:])
+	return ret
+}
+
+func parseBindUDPRelayEndpointAnswer(ver uint8, p []byte) (m *BindUDPRelayEndpointAnswer, err error) {
+	if len(p) < bindUDPRelayEndpointAnswerLen {
+		return nil, errShort
+	}
+	m = new(BindUDPRelayEndpointAnswer)
+	copy(m.Answer[:], p[:])
+	return m, nil
 }
