@@ -434,6 +434,16 @@ func IsCertShareReadOnlyMode() bool {
 
 const modeRO = "ro"
 
+// IsCertShareReadWriteMode returns true if this instance is the replica
+// responsible for issuing and renewing TLS certs in an HA setup with certs
+// shared between multiple replicas.
+func IsCertShareReadWriteMode() bool {
+	m := String("TS_CERT_SHARE_MODE")
+	return m == modeRW
+}
+
+const modeRW = "rw"
+
 // CrashOnUnexpected reports whether the Tailscale client should panic
 // on unexpected conditions. If TS_DEBUG_CRASH_ON_UNEXPECTED is set, that's
 // used. Otherwise the default value is true for unstable builds.

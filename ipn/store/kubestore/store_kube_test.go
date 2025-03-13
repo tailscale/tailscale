@@ -156,7 +156,7 @@ func TestUpdateStateSecret(t *testing.T) {
 				memory:     mem.Store{},
 			}
 
-			err := s.updateStateSecret(tt.updates)
+			err := s.updateSecret(tt.updates)
 			if err != nil {
 				t.Errorf("updateStateSecret() error = %v", err)
 				return

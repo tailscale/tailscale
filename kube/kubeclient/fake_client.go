@@ -35,6 +35,9 @@ func (fc *FakeClient) StrategicMergePatchSecret(context.Context, string, *kubeap
 func (fc *FakeClient) Event(context.Context, string, string, string) error {
 	return nil
 }
+func (fc *FakeClient) ListSecrets(context.Context, map[string]string) (*kubeapi.SecretList, error) {
+	return nil, nil
+}
 
 func (fc *FakeClient) JSONPatchResource(ctx context.Context, resource, name string, patches []JSONPatch) error {
 	return fc.JSONPatchResourceImpl(ctx, resource, name, patches)
