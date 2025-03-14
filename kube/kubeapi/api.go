@@ -153,6 +153,14 @@ type Secret struct {
 	Data map[string][]byte `json:"data,omitempty"`
 }
 
+// SecretList is a list of Secret objects.
+type SecretList struct {
+	TypeMeta   `json:",inline"`
+	ObjectMeta `json:"metadata"`
+
+	Items []Secret `json:"items,omitempty"`
+}
+
 // Event contains a subset of fields from corev1.Event.
 // https://github.com/kubernetes/api/blob/6cc44b8953ae704d6d9ec2adf32e7ae19199ea9f/core/v1/types.go#L7034
 // It is copied here to avoid having to import kube libraries.
