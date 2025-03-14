@@ -5707,13 +5707,15 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		}
 		b.blockEngineUpdates(true)
 		fallthrough
-	case ipn.Stopped:
+	case ipn.Stopped, ipn.NoState:
+		// Unconfigure the engine if it has stopped (WantRunning is set to false)
+		// or if we've switched to a different profile and the state is unknown.
 		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
 
-		if authURL == "" {
+		if newState == ipn.Stopped && authURL == "" {
 			systemd.Status("Stopped; run 'tailscale up' to log in")
 		}
 	case ipn.Starting, ipn.NeedsMachineAuth:
@@ -5727,8 +5729,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 			addrStrs = append(addrStrs, p.Addr().String())
 		}
 		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
-	case ipn.NoState:
-		// Do nothing.
 	default:
 		b.logf("[unexpected] unknown newState %#v", newState)
 	}
