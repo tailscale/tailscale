@@ -178,7 +178,12 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				corev1.EnvVar{
 					Name:  "TS_SERVE_CONFIG",
 					Value: fmt.Sprintf("/etc/proxies/%s", serveConfigKey),
-				})
+				},
+				corev1.EnvVar{
+					Name:  "TS_EXPERIMENTAL_CERT_SHARE",
+					Value: "true",
+				},
+			)
 		}
 		return append(c.Env, envs...)
 	}()
@@ -225,6 +230,13 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"secrets"},
+				Verbs: []string{
+					"list",
+				},
+			},
 			{
 				APIGroups: []string{""},
 				Resources: []string{"secrets"},
@@ -320,7 +332,7 @@ func pgIngressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 
 func pgSecretLabels(pgName, typ string) map[string]string {
 	return pgLabels(pgName, map[string]string{
-		labelSecretType: typ, // "config" or "state".
+		kubetypes.LabelSecretType: typ, // "config" or "state".
 	})
 }
 
@@ -330,7 +342,7 @@ func pgLabels(pgName string, customLabels map[string]string) map[string]string {
 		l[k] = v
 	}
 
-	l[LabelManaged] = "true"
+	l[kubetypes.LabelManaged] = "true"
 	l[LabelParentType] = "proxygroup"
 	l[LabelParentName] = pgName
 

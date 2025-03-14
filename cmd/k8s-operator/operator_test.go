@@ -1387,10 +1387,10 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 			Name:      "headless-1",
 			Namespace: "tailscale",
 			Labels: map[string]string{
-				LabelManaged:         "true",
-				LabelParentName:      "ing-1",
-				LabelParentNamespace: "ns-1",
-				LabelParentType:      "ingress",
+				kubetypes.LabelManaged: "true",
+				LabelParentName:        "ing-1",
+				LabelParentNamespace:   "ns-1",
+				LabelParentType:        "ingress",
 			},
 		},
 	}

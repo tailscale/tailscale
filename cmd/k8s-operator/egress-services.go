@@ -680,12 +680,12 @@ func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, ts
 // should probably validate and truncate (?) the names is they are too long.
 func egressSvcChildResourceLabels(svc *corev1.Service) map[string]string {
 	return map[string]string{
-		LabelManaged:         "true",
-		LabelParentType:      "svc",
-		LabelParentName:      svc.Name,
-		LabelParentNamespace: svc.Namespace,
-		labelProxyGroup:      svc.Annotations[AnnotationProxyGroup],
-		labelSvcType:         typeEgress,
+		kubetypes.LabelManaged: "true",
+		LabelParentType:        "svc",
+		LabelParentName:        svc.Name,
+		LabelParentNamespace:   svc.Namespace,
+		labelProxyGroup:        svc.Annotations[AnnotationProxyGroup],
+		labelSvcType:           typeEgress,
 	}
 }
 

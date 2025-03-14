@@ -247,7 +247,6 @@ func TestProxyGroup(t *testing.T) {
 		// The fake client does not clean up objects whose owner has been
 		// deleted, so we can't test for the owned resources getting deleted.
 	})
-
 }
 
 func TestProxyGroupTypes(t *testing.T) {
@@ -417,6 +416,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		}
 		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupIngress)
 		verifyEnvVar(t, sts, "TS_SERVE_CONFIG", "/etc/proxies/serve-config.json")
+		verifyEnvVar(t, sts, "TS_EXPERIMENTAL_CERT_SHARE", "true")
 
 		// Verify ConfigMap volume mount
 		cmName := fmt.Sprintf("%s-ingress-config", pg.Name)
