@@ -110,7 +110,7 @@ func runWeb(ctx context.Context, args []string) error {
 		Mode:        web.LoginServerMode,
 		CGIMode:     webArgs.cgi,
 		PathPrefix:  webArgs.prefix,
-		LocalClient: &localClient,
+		LocalClient: localClient,
 	}
 	if webArgs.readonly {
 		opts.Mode = web.ReadOnlyServerMode
