@@ -64,3 +64,14 @@ func TestWrapWithMessage(t *testing.T) {
 		t.Errorf("Unwrap = %q, want %q", errors.Unwrap(err), wrapped)
 	}
 }
+
+func TestWrapf(t *testing.T) {
+	wrapped := errors.New("wrapped")
+	err := Wrapf(wrapped, "safe: %s", "for sure")
+	if err.Error() != "safe: for sure" {
+		t.Errorf(`Wrapf(wrapped, "safe: for sure").Error() = %q, want %q`, err.Error(), "safe: for sure")
+	}
+	if errors.Unwrap(err) != wrapped {
+		t.Errorf("Unwrap = %q, want %q", errors.Unwrap(err), wrapped)
+	}
+}

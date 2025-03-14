@@ -75,6 +75,18 @@ func WrapWithMessage(wrapped error, publicMsg string) error {
 	}
 }
 
+// Wrapf wraps the given error with a Vizerror built using the specified publicMsgFormat and values.
+// It always returns a vizerror.Error.
+//
+// Warning: avoid using an error as one of the format arguments, as this will cause the text
+// of that error to be displayed to the end user (which is probably not what you want).
+func Wrapf(wrapped error, publicMsgFormat string, a ...any) error {
+	return Error{
+		publicErr: fmt.Errorf(publicMsgFormat, a...),
+		wrapped:   wrapped,
+	}
+}
+
 // As returns the first vizerror.Error in err's chain.
 func As(err error) (e Error, ok bool) {
 	ok = errors.As(err, &e)
