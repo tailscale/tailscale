@@ -14,7 +14,7 @@ import (
 	"os"
 	"runtime"
 
-	"tailscale.com/tsweb/promvarz"
+	"tailscale.com/feature"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/version"
 )
@@ -37,6 +37,11 @@ type DebugHandler struct {
 	title    string                           // title displayed on index page
 }
 
+// PrometheusHandler is an optional hook to enable native Prometheus
+// support in the debug handler. It is disabled by default. Import the
+// tailscale.com/tsweb/promvarz package to enable this feature.
+var PrometheusHandler feature.Hook[func(*DebugHandler)]
+
 // Debugger returns the DebugHandler registered on mux at /debug/,
 // creating it if necessary.
 func Debugger(mux *http.ServeMux) *DebugHandler {
@@ -53,7 +58,11 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	ret.KVFunc("Uptime", func() any { return varz.Uptime() })
 	ret.KV("Version", version.Long())
 	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
-	ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(promvarz.Handler))
+	if PrometheusHandler.IsSet() {
+		PrometheusHandler.Get()(ret)
+	} else {
+		ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(varz.Handler))
+	}
 
 	// pprof.Index serves everything that runtime/pprof.Lookup finds:
 	// goroutine, threadcreate, heap, allocs, block, mutex
