@@ -55,8 +55,7 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 	var cm certManager
 	if cfg.CertShareMode == "rw" {
 		cm = certManager{
-			parentCtx: ctx,
-			lc:        lc,
+			lc: lc,
 		}
 	}
 	for {

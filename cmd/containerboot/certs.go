@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -22,10 +23,9 @@ import (
 // Currently cert manager logic is only run on ingress ProxyGroup replicas that are responsible for managing certs for
 // HA Ingress HTTPS endpoints ('write' replicas).
 type certManager struct {
-	parentCtx context.Context
-	lc        localClient
-	tracker   goroutines.Tracker // tracks running goroutines
-	mu        sync.Mutex         // guards the following
+	lc      localClient
+	tracker goroutines.Tracker // tracks running goroutines
+	mu      sync.Mutex         // guards the following
 	// certLoops contains a map of DNS names, for which we currently need to
 	// manage certs to cancel functions that allow stopping a goroutine when
 	// we no longer need to manage certs for the DNS name.
@@ -35,9 +35,10 @@ type certManager struct {
 // ensureCertLoops ensures that, for all currently managed Service HTTPS
 // endpoints, there is a cert loop responsible for issuing and ensuring the
 // renewal of the TLS certs.
+// ServeConfig must not be nil.
 func (cm *certManager) ensureCertLoops(ctx context.Context, sc *ipn.ServeConfig) error {
 	if sc == nil {
-		return nil
+		return fmt.Errorf("[unexpected] ensureCertLoops called with nil ServeConfig")
 	}
 	currentDomains := make(map[string]bool)
 	const httpsPort = "443"
@@ -45,8 +46,7 @@ func (cm *certManager) ensureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 		for hostPort := range service.Web {
 			domain, port, err := net.SplitHostPort(string(hostPort))
 			if err != nil {
-				log.Printf("[unexpected] unable to parse HostPort %s", hostPort)
-				continue
+				return fmt.Errorf("[unexpected] unable to parse HostPort %s", hostPort)
 			}
 			if port != httpsPort { // HA Ingress' HTTP endpoint
 				continue
@@ -58,9 +58,9 @@ func (cm *certManager) ensureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 	defer cm.mu.Unlock()
 	for domain := range currentDomains {
 		if _, exists := cm.certLoops[domain]; !exists {
-			ctx, cancel := context.WithCancel(cm.parentCtx)
+			cancelCtx, cancel := context.WithCancel(ctx)
 			mak.Set(&cm.certLoops, domain, cancel)
-			cm.tracker.Go(func() { cm.runCertLoop(ctx, domain) })
+			cm.tracker.Go(func() { cm.runCertLoop(cancelCtx, domain) })
 		}
 	}
 

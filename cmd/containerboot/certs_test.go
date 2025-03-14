@@ -25,16 +25,18 @@ func TestEnsureCertLoops(t *testing.T) {
 		updatedConfig     *ipn.ServeConfig
 		initialGoroutines int64 // after initial serve config is applied
 		updatedGoroutines int64 // after updated serve config is applied
+		wantErr           bool
 	}{
 		{
-			name:              "no_services",
+			name:              "empty_serve_config",
 			initialConfig:     &ipn.ServeConfig{},
 			initialGoroutines: 0,
 		},
 		{
-			name:              "nil_services",
+			name:              "nil_serve_config",
 			initialConfig:     nil,
 			initialGoroutines: 0,
+			wantErr:           true,
 		},
 		{
 			name:          "empty_to_one_service",
@@ -160,7 +162,6 @@ func TestEnsureCertLoops(t *testing.T) {
 			defer cancel()
 
 			cm := &certManager{
-				parentCtx: ctx,
 				lc:        &fakeLocalClient{},
 				certLoops: make(map[string]context.CancelFunc),
 			}
@@ -178,7 +179,8 @@ func TestEnsureCertLoops(t *testing.T) {
 				}
 			})()
 
-			if err := cm.ensureCertLoops(ctx, tt.initialConfig); err != nil {
+			err := cm.ensureCertLoops(ctx, tt.initialConfig)
+			if (err != nil) != tt.wantErr {
 				t.Fatalf("ensureCertLoops() error = %v", err)
 			}
 
