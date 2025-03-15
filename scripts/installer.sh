@@ -521,7 +521,7 @@ main() {
 		dnf)
 			# DNF 5 has a different argument format; determine which one we have.
 			DNF_VERSION="3"
-			if dnf --version | grep -q '^dnf5 version'; then
+			if LANG=C.UTF-8 dnf --version | grep -q '^dnf5 version'; then
 				DNF_VERSION="5"
 			fi
 
