@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"flag"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -128,4 +129,25 @@ func TestCalcAdvertiseRoutesForSet(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSetDefaultsMatchUpDefaults is meant to ensure that the default values
+// for `tailscale set` and `tailscale up` are the same.
+// Since `tailscale set` only sets preferences that are explicitly mentioned,
+// the default values for its flags are only used for `--help` documentation.
+func TestSetDefaultsMatchUpDefaults(t *testing.T) {
+	upFlagSet.VisitAll(func(up *flag.Flag) {
+		if preflessFlag(up.Name) {
+			return
+		}
+
+		set := setFlagSet.Lookup(up.Name)
+		if set == nil {
+			return
+		}
+
+		if set.DefValue != up.DefValue {
+			t.Errorf("--%s: set defaults to %q, but up defaults to %q", up.Name, set.DefValue, up.DefValue)
+		}
+	})
 }
