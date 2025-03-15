@@ -56,14 +56,18 @@ func SetDisableBindConnToInterface(v bool) {
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
 // doesn't route back into Tailscale.
-func Listener(logf logger.Logf, netMon *netmon.Monitor) *net.ListenConfig {
+func Listener(logf logger.Logf, netMon *netmon.Monitor) ListenerInterface {
 	if netMon == nil {
 		panic("netns.Listener called with nil netMon")
 	}
 	if disabled.Load() {
 		return new(net.ListenConfig)
 	}
-	return &net.ListenConfig{Control: control(logf, netMon)}
+	l := &net.ListenConfig{Control: control(logf, netMon)}
+	if warpListener != nil {
+		return warpListener(l)
+	}
+	return l
 }
 
 // NewDialer returns a new Dialer using a net.Dialer with its Control
@@ -107,15 +111,31 @@ func IsSOCKSDialer(d Dialer) bool {
 	return !ok
 }
 
-// wrapDialer, if non-nil, specifies a function to wrap a dialer in a
-// SOCKS-using dialer. It's set conditionally by socks.go.
+// wrapDialer, if non-nil, specifies a function to wrap a dialer.
+// It's set conditionally by socks.go or SetWrapDialer.
 var wrapDialer func(Dialer) Dialer
+
+// SetWrapDialer specifies a function to wrap a dialer
+func SetWrapDialer(f func(Dialer) Dialer) { wrapDialer = f }
 
 // Dialer is the interface for a dialer that can dial with or without a context.
 // It's the type implemented both by net.Dialer and the Go SOCKS dialer.
 type Dialer interface {
 	Dial(network, address string) (net.Conn, error)
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+// warpListener, if non-nil, specifies a function to wrap a listener
+var warpListener func(ListenerInterface) ListenerInterface
+
+// SetWarpListener specifies a function to wrap a listener
+func SetWarpListener(f func(ListenerInterface) ListenerInterface) { warpListener = f }
+
+// ListenerInterface is the interface for a listener that can listen
+// net.Listener and net.PacketConn
+type ListenerInterface interface {
+	Listen(ctx context.Context, network, address string) (net.Listener, error)
+	ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error)
 }
 
 func isLocalhost(addr string) bool {
