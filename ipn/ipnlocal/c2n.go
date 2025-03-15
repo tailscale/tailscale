@@ -360,7 +360,7 @@ func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http
 		// and looks good in client metrics, remove this parameter and always report MAC
 		// addresses.
 		if r.FormValue("hwaddrs") == "true" {
-			res.IfaceHardwareAddrs, err = posture.GetHardwareAddrs()
+			res.IfaceHardwareAddrs, err = b.getHardwareAddrs()
 			if err != nil {
 				b.logf("c2n: GetHardwareAddrs returned error: %v", err)
 			}
