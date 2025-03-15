@@ -47,6 +47,10 @@ func runAdvertise(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println("Advertising this node as new destination for services:", services)
+	fmt.Println("This node will accept connection for services once the services are configured locally and approved on the admin console.")
+	fmt.Println("To configure services, run tailscale serve --service=\"<svc:dns-label>\" for each service.")
+	fmt.Printf("eg. tailscale serve --service=%q 3000\n", services[0])
 
 	_, err = localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
