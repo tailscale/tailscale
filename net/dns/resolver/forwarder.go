@@ -753,7 +753,7 @@ func (f *forwarder) getDialerType() dnscache.DialContextFunc {
 		// See https://github.com/tailscale/tailscale/issues/12027.
 		return f.dialer.UserDial
 	}
-	return f.dialer.SystemDial
+	return f.dialer.UserDial
 }
 
 func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
