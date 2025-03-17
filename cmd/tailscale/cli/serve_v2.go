@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,32 @@ type commandInfo struct {
 	Name      string
 	ShortHelp string
 	LongHelp  string
+}
+
+type bgBoolFlag struct {
+	Value bool
+	IsSet bool // tracks if the flag was set by the user
+}
+
+// Set sets the boolean flag and wether it's explicitly set by user based on the string value.
+func (b *bgBoolFlag) Set(s string) error {
+	if s == "true" {
+		b.Value = true
+	} else if s == "false" {
+		b.Value = false
+	} else {
+		return fmt.Errorf("invalid boolean value: %s", s)
+	}
+	b.IsSet = true
+	return nil
+}
+
+// This is a hack to make the flag package recognize that this is a boolean flag.
+func (b *bgBoolFlag) IsBoolFlag() bool { return true }
+
+// String returns the string representation of the boolean flag.
+func (b *bgBoolFlag) String() string {
+	return fmt.Sprintf("%t", b.Value)
 }
 
 var serveHelpCommon = strings.TrimSpace(`
@@ -119,7 +146,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
-			fs.BoolVar(&e.bg, "bg", false, "Run the command as a background process (default false)")
+			fs.Var(&e.bg, "bg", "Run the command as a background process (default false)")
 			fs.StringVar(&e.setPath, "set-path", "", "Appends the specified path to the base URL for accessing the underlying service")
 			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
 			if subcmd == serve {
@@ -127,6 +154,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
+			fs.StringVar(&e.service, "service", "", "Name of the service to serve.")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 		}),
 		UsageFunc: usageFuncNoDefaultValues,
@@ -182,6 +210,12 @@ func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
 // runServeCombined is the entry point for the "tailscale {serve,funnel}" commands.
 func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	e.subcmd = subcmd
+	if e.service != "" && !e.bg.IsSet {
+		e.bg.Value = true
+	}
+	if !e.bg.IsSet {
+		e.bg.Value = false
+	}
 
 	return func(ctx context.Context, args []string) error {
 		// Undocumented debug command (not using ffcli subcommands) to set raw
@@ -206,6 +240,10 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		defer cancel()
 
 		funnel := subcmd == funnel
+		if e.service != "" && funnel {
+			fmt.Fprintln(e.stderr(), "Error: --service flag is not supported with funnel")
+		}
+
 		if funnel {
 			// verify node has funnel capabilities
 			if err := e.verifyFunnelEnabled(ctx, 443); err != nil {
@@ -213,12 +251,16 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
+		if e.service != "" && e.bg.IsSet && !e.bg.Value {
+			return errors.New("Error: --service flag is only compatible with background mode")
+		}
+
 		mount, err := cleanURLPath(e.setPath)
 		if err != nil {
 			return fmt.Errorf("failed to clean the mount point: %w", err)
 		}
 
-		srvType, srvPort, err := srvTypeAndPortFromFlags(e)
+		srvType, srvPort, wasDefaultServe, err := srvTypeAndPortFromFlags(e)
 		if err != nil {
 			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
 			return errHelpFunc(subcmd)
@@ -227,6 +269,11 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		sc, err := e.lc.GetServeConfig(ctx)
 		if err != nil {
 			return fmt.Errorf("error getting serve config: %w", err)
+		}
+
+		prefs, err := e.lc.GetPrefs(ctx)
+		if err != nil {
+			return fmt.Errorf("error getting prefs: %w", err)
 		}
 
 		// nil if no config
@@ -261,11 +308,19 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
+		services, err := parseServiceNames(e.service)
+		if err != nil {
+			return fmt.Errorf("error: %v\n\n", err)
+		} else if len(services) > 1 {
+			return fmt.Errorf("error: Only one service can be served at a time\n\n")
+		}
+
 		var watcher *tailscale.IPNBusWatcher
-		wantFg := !e.bg && !turnOff
+		forService := len(services) == 1
+		wantFg := !forService && !e.bg.Value && !turnOff
 		if wantFg {
 			// validate the config before creating a WatchIPNBus session
-			if err := e.validateConfig(parentSC, srvPort, srvType); err != nil {
+			if err := e.validateConfig(parentSC, srvPort, srvType, dnsName); err != nil {
 				return err
 			}
 
@@ -290,14 +345,21 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var msg string
+		if forService {
+			dnsName = services[0]
+		}
 		if turnOff {
-			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount)
+			if wasDefaultServe && forService {
+				delete(sc.Services, tailcfg.ServiceName(dnsName))
+			} else {
+				err = e.unsetServe(sc, st, dnsName, srvType, srvPort, mount)
+			}
 		} else {
-			if err := e.validateConfig(parentSC, srvPort, srvType); err != nil {
+			if err := e.validateConfig(parentSC, srvPort, srvType, dnsName); err != nil {
 				return err
 			}
 			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, args[0], funnel)
-			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
+			msg = e.messageForPort(sc, st, prefs, dnsName, srvType, srvPort)
 		}
 		if err != nil {
 			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
@@ -333,20 +395,33 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 
 const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
 
-func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType) error {
-	sc, isFg := sc.FindConfig(port)
-	if sc == nil {
-		return nil
+// validateConfig checks if the serve config is valid to serve the type wanted on the port.
+// dnsName is a FQDN or a serviceName (with `svc:` prefix).
+func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType, dnsName string) error {
+	forService := ipn.IsServiceName(dnsName)
+	var tcpHandlerForPort *ipn.TCPPortHandler
+	if forService {
+		svc := sc.FindServiceConfig(tailcfg.ServiceName(dnsName))
+		if svc == nil || svc.TCP[port] == nil {
+			return nil
+		}
+		tcpHandlerForPort = svc.TCP[port]
+	} else {
+		sc, isFg := sc.FindConfig(port)
+		if sc == nil {
+			return nil
+		}
+		if isFg {
+			return errors.New("foreground already exists under this port")
+		}
+		if !e.bg.Value {
+			return fmt.Errorf(backgroundExistsMsg, infoMap[e.subcmd].Name, wantServe.String(), port)
+		}
+		tcpHandlerForPort = sc.TCP[port]
 	}
-	if isFg {
-		return errors.New("foreground already exists under this port")
-	}
-	if !e.bg {
-		return fmt.Errorf(backgroundExistsMsg, infoMap[e.subcmd].Name, wantServe.String(), port)
-	}
-	existingServe := serveFromPortHandler(sc.TCP[port])
+	existingServe := serveFromPortHandler(tcpHandlerForPort)
 	if wantServe != existingServe {
-		return fmt.Errorf("want %q but port is already serving %q", wantServe, existingServe)
+		return fmt.Errorf("want to serve %q but port is already serving %q for %q", wantServe, existingServe, dnsName)
 	}
 	return nil
 }
@@ -371,7 +446,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
 		useTLS := srvType == serveTypeHTTPS
-		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target)
+		err := e.applyWebServe(sc, st, dnsName, srvPort, useTLS, mount, target)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
@@ -379,7 +454,6 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 		if e.setPath != "" {
 			return fmt.Errorf("cannot mount a path for TCP serve")
 		}
-
 		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
@@ -389,25 +463,52 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 	}
 
 	// update the serve config based on if funnel is enabled
-	e.applyFunnel(sc, dnsName, srvPort, allowFunnel)
-
+	// Since funnel is not supported for services, we only apply it for node's serve.
+	if !ipn.IsServiceName(dnsName) {
+		e.applyFunnel(sc, dnsName, srvPort, allowFunnel)
+	}
 	return nil
 }
 
 var (
-	msgFunnelAvailable     = "Available on the internet:"
-	msgServeAvailable      = "Available within your tailnet:"
-	msgRunningInBackground = "%s started and running in the background."
-	msgDisableProxy        = "To disable the proxy, run: tailscale %s --%s=%d off"
-	msgToExit              = "Press Ctrl+C to exit."
+	msgFunnelAvailable      = "Available on the internet:"
+	msgServeAvailable       = "Available within your tailnet:"
+	msgRunningInBackground  = "%s started and running in the background."
+	msgDisableProxy         = "To disable the proxy, run: tailscale %s --%s=%d off"
+	msgDisableServiceProxy  = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
+	msgDisableService       = "To disable the service entirely, run: tailscale serve --service=%s off"
+	msgServiceNotAdvertised = "This service is not advertised on this node yet, use `tailscale advertise --services=svc:%s` to advertise it."
+	msgToExit               = "Press Ctrl+C to exit."
 )
 
 // messageForPort returns a message for the given port based on the
 // serve config and status.
-func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
+func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, prefs *ipn.Prefs, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
-
-	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
+	forService := ipn.IsServiceName(dnsName)
+	var hp ipn.HostPort
+	var webConfig *ipn.WebServerConfig
+	var tcpHandler *ipn.TCPPortHandler
+	ips := st.TailscaleIPs
+	host := dnsName
+	if forService {
+		host = tailcfg.ServiceName(dnsName).WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+		serviceIPMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](st.Self.CapMap, tailcfg.NodeAttrServiceHost)
+		if len(serviceIPMaps) != 1 || err != nil {
+			if len(serviceIPMaps) != 0 {
+				fmt.Fprintln(e.stderr(), "error: unable to get service IP mappings")
+			}
+			output.WriteString("This service doesn't have VIPs assigned yet.\n")
+			ips = nil
+		} else {
+			if serviceIPMaps[0][tailcfg.ServiceName(dnsName)] == nil {
+				output.WriteString("This service doesn't have VIPs assigned yet.\n")
+				ips = nil
+			}
+			ips = serviceIPMaps[0][tailcfg.ServiceName(dnsName)]
+		}
+	}
+	hp = ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
 
 	if sc.AllowFunnel[hp] == true {
 		output.WriteString(msgFunnelAvailable)
@@ -417,7 +518,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	output.WriteString("\n\n")
 
 	scheme := "https"
-	if sc.IsServingHTTP(srvPort) {
+	if sc.IsServingHTTP(srvPort, dnsName) {
 		scheme = "http"
 	}
 
@@ -438,37 +539,46 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		}
 		return "", ""
 	}
+	if forService {
+		svc := sc.FindServiceConfig(tailcfg.ServiceName(dnsName))
+		if svc != nil {
+			webConfig = svc.Web[hp]
+			tcpHandler = svc.TCP[srvPort]
+		}
+	} else {
+		webConfig = sc.Web[hp]
+		tcpHandler = sc.TCP[srvPort]
+	}
 
-	if sc.Web[hp] != nil {
-		mounts := slicesx.MapKeys(sc.Web[hp].Handlers)
+	if webConfig != nil {
+		mounts := slicesx.MapKeys(webConfig.Handlers)
 		sort.Slice(mounts, func(i, j int) bool {
 			return len(mounts[i]) < len(mounts[j])
 		})
 
 		for _, m := range mounts {
-			h := sc.Web[hp].Handlers[m]
+			h := webConfig.Handlers[m]
 			t, d := srvTypeAndDesc(h)
-			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, dnsName, portPart, m))
+			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, host, portPart, m))
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
-	} else if sc.TCP[srvPort] != nil {
-		h := sc.TCP[srvPort]
+	} else if tcpHandler != nil {
+		h := tcpHandler
 
 		tlsStatus := "TLS over TCP"
 		if h.TerminateTLS != "" {
 			tlsStatus = "TLS terminated"
 		}
 
-		output.WriteString(fmt.Sprintf("%s://%s%s\n", scheme, dnsName, portPart))
 		output.WriteString(fmt.Sprintf("|-- tcp://%s (%s)\n", hp, tlsStatus))
-		for _, a := range st.TailscaleIPs {
+		for _, a := range ips {
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
 		}
-		output.WriteString(fmt.Sprintf("|--> tcp://%s\n", h.TCPForward))
+		output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", h.TCPForward))
 	}
 
-	if !e.bg {
+	if !forService && !e.bg.Value {
 		output.WriteString(msgToExit)
 		return output.String()
 	}
@@ -478,14 +588,23 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 
 	output.WriteString(fmt.Sprintf(msgRunningInBackground, subCmdUpper))
 	output.WriteString("\n")
-	output.WriteString(fmt.Sprintf(msgDisableProxy, subCmd, srvType.String(), srvPort))
+	if forService {
+		if !slices.Contains(prefs.AdvertiseServices, dnsName) {
+			output.WriteString(fmt.Sprintf(msgServiceNotAdvertised, dnsName))
+			output.WriteString("\n")
+		}
+		output.WriteString(fmt.Sprintf(msgDisableServiceProxy, dnsName, srvType.String(), srvPort))
+		output.WriteString("\n")
+		output.WriteString(fmt.Sprintf(msgDisableService, dnsName))
+	} else {
+		output.WriteString(fmt.Sprintf(msgDisableProxy, subCmd, srvType.String(), srvPort))
+	}
 
 	return output.String()
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target string) error {
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16, useTLS bool, mount, target string) error {
 	h := new(ipn.HTTPHandler)
-
 	switch {
 	case strings.HasPrefix(target, "text:"):
 		text := strings.TrimPrefix(target, "text:")
@@ -521,11 +640,11 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 	}
 
 	// TODO: validation needs to check nested foreground configs
-	if sc.IsTCPForwardingOnPort(srvPort) {
+	if sc.IsTCPForwardingOnPortForDNSName(srvPort, dnsName) {
 		return errors.New("cannot serve web; already serving TCP")
 	}
 
-	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS)
+	sc.SetWebHandler(st, h, dnsName, srvPort, mount, useTLS)
 
 	return nil
 }
@@ -552,7 +671,7 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
-	if sc.IsServingWeb(srcPort) {
+	if sc.IsServingWebForDNSName(srcPort, dnsName) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
@@ -577,15 +696,16 @@ func (e *serveEnv) applyFunnel(sc *ipn.ServeConfig, dnsName string, srvPort uint
 }
 
 // unsetServe removes the serve config for the given serve port.
-func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string) error {
+// dnsName is a FQDN or a serviceName (with `svc:` prefix).
+func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16, mount string) error {
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
-		err := e.removeWebServe(sc, dnsName, srvPort, mount)
+		err := e.removeWebServe(sc, st, dnsName, srvPort, mount)
 		if err != nil {
 			return fmt.Errorf("failed to remove web serve: %w", err)
 		}
 	case serveTypeTCP, serveTypeTLSTerminatedTCP:
-		err := e.removeTCPServe(sc, srvPort)
+		err := e.removeTCPServe(sc, dnsName, srvPort)
 		if err != nil {
 			return fmt.Errorf("failed to remove TCP serve: %w", err)
 		}
@@ -598,7 +718,7 @@ func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, dnsName string, srvType serve
 	return nil
 }
 
-func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, err error) {
+func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, wasDefault bool, err error) {
 	sourceMap := map[serveType]uint{
 		serveTypeHTTP:             e.http,
 		serveTypeHTTPS:            e.https,
@@ -611,22 +731,24 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, er
 	for k, v := range sourceMap {
 		if v != 0 {
 			if v > math.MaxUint16 {
-				return 0, 0, fmt.Errorf("port number %d is too high for %s flag", v, srvType)
+				return 0, 0, false, fmt.Errorf("port number %d is too high for %s flag", v, srvType)
 			}
 			srcTypeCount++
 			srvType = k
 			srvPort = uint16(v)
+			wasDefault = false
 		}
 	}
 
 	if srcTypeCount > 1 {
-		return 0, 0, fmt.Errorf("cannot serve multiple types for a single mount point")
+		return 0, 0, false, fmt.Errorf("cannot serve multiple types for a single mount point")
 	} else if srcTypeCount == 0 {
 		srvType = serveTypeHTTPS
 		srvPort = 443
+		wasDefault = true
 	}
 
-	return srvType, srvPort, nil
+	return srvType, srvPort, wasDefault, nil
 }
 
 // isLegacyInvocation helps transition customers who have been using the beta
@@ -727,27 +849,45 @@ func isLegacyInvocation(subcmd serveMode, args []string) (string, bool) {
 // and removes funnel if no remaining mounts exist for the serve port.
 // The srvPort argument is the serving port and the mount argument is
 // the mount point or registered path to remove.
-func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, mount string) error {
-	if sc.IsTCPForwardingOnPort(srvPort) {
-		return errors.New("cannot remove web handler; currently serving TCP")
+func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16, mount string) error {
+	if sc == nil {
+		return nil
+	}
+	forService := ipn.IsServiceName(dnsName)
+	portStr := strconv.Itoa(int(srvPort))
+	var hp ipn.HostPort
+	var webServeMap map[ipn.HostPort]*ipn.WebServerConfig
+	if forService {
+		svcName := tailcfg.ServiceName(dnsName)
+		dnsNameForService := svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+		hp = ipn.HostPort(net.JoinHostPort(dnsNameForService, portStr))
+		if svc, ok := sc.Services[svcName]; !ok || svc == nil {
+			return errors.New("error: service does not exist")
+		} else {
+			webServeMap = svc.Web
+		}
+	} else {
+		hp = ipn.HostPort(net.JoinHostPort(dnsName, portStr))
+		webServeMap = sc.Web
 	}
 
-	portStr := strconv.Itoa(int(srvPort))
-	hp := ipn.HostPort(net.JoinHostPort(dnsName, portStr))
+	if sc.IsTCPForwardingOnPortForDNSName(srvPort, dnsName) {
+		return errors.New("cannot remove web handler; currently serving TCP")
+	}
 
 	var targetExists bool
 	var mounts []string
 	// mount is deduced from e.setPath but it is ambiguous as
 	// to whether the user explicitly passed "/" or it was defaulted to.
 	if e.setPath == "" {
-		targetExists = sc.Web[hp] != nil && len(sc.Web[hp].Handlers) > 0
+		targetExists = webServeMap[hp] != nil && len(webServeMap[hp].Handlers) > 0
 		if targetExists {
-			for mount := range sc.Web[hp].Handlers {
+			for mount := range webServeMap[hp].Handlers {
 				mounts = append(mounts, mount)
 			}
 		}
 	} else {
-		targetExists = sc.WebHandlerExists(hp, mount)
+		targetExists = sc.WebHandlerExists(dnsName, hp, mount)
 		mounts = []string{mount}
 	}
 
@@ -756,29 +896,33 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 	}
 
 	if len(mounts) > 1 {
-		msg := fmt.Sprintf("Are you sure you want to delete %d handlers under port %s?", len(mounts), portStr)
+		msg := fmt.Sprintf("Are you sure you want to delete %d handlers under port %s for %q?", len(mounts), portStr, dnsName)
 		if !e.yes && !promptYesNo(msg) {
 			return nil
 		}
 	}
 
-	sc.RemoveWebHandler(dnsName, srvPort, mounts, true)
+	if forService {
+		sc.RemoveServiceWebHandler(st, tailcfg.ServiceName(dnsName), srvPort, mounts)
+	} else {
+		sc.RemoveWebHandler(dnsName, srvPort, mounts, true)
+	}
 	return nil
 }
 
 // removeTCPServe removes the TCP forwarding configuration for the
-// given srvPort, or serving port.
-func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
+// given srvPort, or serving port for the given dnsName.
+func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, dnsName string, src uint16) error {
 	if sc == nil {
 		return nil
 	}
-	if sc.GetTCPPortHandler(src) == nil {
+	if sc.GetTCPPortHandler(src, dnsName) == nil {
 		return errors.New("error: serve config does not exist")
 	}
-	if sc.IsServingWeb(src) {
+	if sc.IsServingWebForDNSName(src, dnsName) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
-	sc.RemoveTCPForwarding(src)
+	sc.RemoveTCPForwarding(dnsName, src)
 	return nil
 }
 
