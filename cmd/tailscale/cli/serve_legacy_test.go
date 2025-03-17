@@ -877,6 +877,10 @@ var fakeStatus = &ipnstate.Status{
 	},
 }
 
+var fakePref = &ipn.Prefs{
+	AdvertiseServices: []string{"svc:test"},
+}
+
 func (lc *fakeLocalServeClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
 	return fakeStatus, nil
 }
@@ -889,6 +893,10 @@ func (lc *fakeLocalServeClient) SetServeConfig(ctx context.Context, config *ipn.
 	lc.setCount += 1
 	lc.config = config.Clone()
 	return nil
+}
+
+func (lc *fakeLocalServeClient) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
+	return fakePref, nil
 }
 
 type mockQueryFeatureResponse struct {

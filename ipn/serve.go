@@ -166,15 +166,26 @@ type HTTPHandler struct {
 
 // WebHandlerExists reports whether if the ServeConfig Web handler exists for
 // the given host:port and mount point.
-func (sc *ServeConfig) WebHandlerExists(hp HostPort, mount string) bool {
-	h := sc.GetWebHandler(hp, mount)
+func (sc *ServeConfig) WebHandlerExists(dnsName string, hp HostPort, mount string) bool {
+	h := sc.GetWebHandler(dnsName, hp, mount)
 	return h != nil
 }
 
 // GetWebHandler returns the HTTPHandler for the given host:port and mount point.
 // Returns nil if the handler does not exist.
-func (sc *ServeConfig) GetWebHandler(hp HostPort, mount string) *HTTPHandler {
-	if sc == nil || sc.Web[hp] == nil {
+func (sc *ServeConfig) GetWebHandler(dnsName string, hp HostPort, mount string) *HTTPHandler {
+	if sc == nil {
+		return nil
+	}
+	if IsServiceName(dnsName) {
+		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc.Web != nil {
+			if webCfg, ok := svc.Web[hp]; ok {
+				return webCfg.Handlers[mount]
+			}
+		}
+		return nil
+	}
+	if sc.Web[hp] == nil {
 		return nil
 	}
 	return sc.Web[hp].Handlers[mount]
@@ -182,8 +193,14 @@ func (sc *ServeConfig) GetWebHandler(hp HostPort, mount string) *HTTPHandler {
 
 // GetTCPPortHandler returns the TCPPortHandler for the given port.
 // If the port is not configured, nil is returned.
-func (sc *ServeConfig) GetTCPPortHandler(port uint16) *TCPPortHandler {
+func (sc *ServeConfig) GetTCPPortHandler(port uint16, dnsName string) *TCPPortHandler {
 	if sc == nil {
+		return nil
+	}
+	if IsServiceName(dnsName) {
+		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc != nil {
+			return svc.TCP[port]
+		}
 		return nil
 	}
 	return sc.TCP[port]
@@ -227,34 +244,78 @@ func (sc *ServeConfig) IsTCPForwardingAny() bool {
 	return false
 }
 
-// IsTCPForwardingOnPort reports whether if ServeConfig is currently forwarding
-// in TCPForward mode on the given port. This is exclusive of Web/HTTPS serving.
-func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16) bool {
-	if sc == nil || sc.TCP[port] == nil {
+// IsServiceName reports whether if the given string is a valid service name.
+func IsServiceName(s string) bool {
+	return tailcfg.ServiceName(s).Validate() == nil
+}
+
+// IsTCPForwardingOnPort reports whether ServeConfig is currently forwarding
+// in TCPForward mode on the given port for a DNSName. DNSName will be either node's DNSName, or a
+// serviceName for service hosted on node. This is exclusive of Web/HTTPS serving.
+func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, dnsName string) bool {
+	if sc == nil {
 		return false
 	}
-	return !sc.IsServingWeb(port)
+	forService := IsServiceName(dnsName)
+	if forService {
+		svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]
+		if !ok || svc == nil {
+			return false
+		}
+		if svc.TCP[port] == nil {
+			return false
+		}
+	} else if sc.TCP[port] == nil {
+		return false
+	}
+	return !sc.IsServingWeb(port, dnsName)
 }
 
-// IsServingWeb reports whether if ServeConfig is currently serving Web
-// (HTTP/HTTPS) on the given port. This is exclusive of TCPForwarding.
-func (sc *ServeConfig) IsServingWeb(port uint16) bool {
-	return sc.IsServingHTTP(port) || sc.IsServingHTTPS(port)
+// IsServingWeb reports whether ServeConfig is currently serving Web
+// (HTTP/HTTPS) on the given port for a DNSName. DNSName will be either node's DNSName, or a
+// serviceName for service hosted on node. This is exclusive of TCPForwarding.
+func (sc *ServeConfig) IsServingWeb(port uint16, dnsName string) bool {
+	return sc.IsServingHTTP(port, dnsName) || sc.IsServingHTTPS(port, dnsName)
 }
 
-// IsServingHTTPS reports whether if ServeConfig is currently serving HTTPS on
-// the given port. This is exclusive of HTTP and TCPForwarding.
-func (sc *ServeConfig) IsServingHTTPS(port uint16) bool {
-	if sc == nil || sc.TCP[port] == nil {
+// IsServingHTTPS reports whether ServeConfig is currently serving HTTPS on
+// the given port for a DNSName. DNSName will be either node's DNSName, or a
+// serviceName for service hosted on node. This is exclusive of HTTP and TCPForwarding.
+func (sc *ServeConfig) IsServingHTTPS(port uint16, dnsName string) bool {
+	if sc == nil {
+		return false
+	}
+	if IsServiceName(dnsName) {
+		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc != nil {
+			if svc.TCP[port] != nil {
+				return svc.TCP[port].HTTPS
+			}
+		}
+		return false
+	}
+	if sc.TCP[port] == nil {
 		return false
 	}
 	return sc.TCP[port].HTTPS
 }
 
-// IsServingHTTP reports whether if ServeConfig is currently serving HTTP on the
-// given port. This is exclusive of HTTPS and TCPForwarding.
-func (sc *ServeConfig) IsServingHTTP(port uint16) bool {
-	if sc == nil || sc.TCP[port] == nil {
+// IsServingHTTP reports whether ServeConfig is currently serving HTTP on the
+// given port for a DNSName. DNSName will be either node's DNSName, or a
+// serviceName for service hosted on node. This is exclusive of HTTPS and TCPForwarding.
+func (sc *ServeConfig) IsServingHTTP(port uint16, dnsName string) bool {
+	if sc == nil {
+		return false
+	}
+	if IsServiceName(dnsName) {
+		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc != nil {
+			if svc.TCP[port] != nil {
+				return svc.TCP[port].HTTP
+			}
+		}
+		return false
+	}
+
+	if sc.TCP[port] == nil {
 		return false
 	}
 	return sc.TCP[port].HTTP
@@ -278,23 +339,51 @@ func (sc *ServeConfig) FindConfig(port uint16) (*ServeConfig, bool) {
 	return nil, false
 }
 
+// FindServiceConfig finds the ServiceConfig for the given service name when it
+// is hosting the given port.
+func (sc *ServeConfig) FindServiceConfig(svcName tailcfg.ServiceName) *ServiceConfig {
+	if sc == nil {
+		return nil
+	}
+	if svc, ok := sc.Services[svcName]; ok && svc != nil {
+		return svc
+	}
+	return nil
+}
+
 // SetWebHandler sets the given HTTPHandler at the specified host, port,
 // and mount in the serve config. sc.TCP is also updated to reflect web
 // serving usage of the given port.
-func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uint16, mount string, useTLS bool) {
+func (sc *ServeConfig) SetWebHandler(st *ipnstate.Status, handler *HTTPHandler, host string, port uint16, mount string, useTLS bool) {
 	if sc == nil {
 		sc = new(ServeConfig)
 	}
-	mak.Set(&sc.TCP, port, &TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
-
-	hp := HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
-	if _, ok := sc.Web[hp]; !ok {
-		mak.Set(&sc.Web, hp, new(WebServerConfig))
+	var hp HostPort
+	var webCfg *WebServerConfig
+	if IsServiceName(host) {
+		svcName := tailcfg.ServiceName(host)
+		dnsNameForService := svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+		if _, ok := sc.Services[svcName]; !ok {
+			mak.Set(&sc.Services, svcName, new(ServiceConfig))
+		}
+		mak.Set(&sc.Services[svcName].TCP, port, &TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
+		hp = HostPort(net.JoinHostPort(dnsNameForService, strconv.Itoa(int(port))))
+		if _, ok := sc.Services[svcName].Web[hp]; !ok {
+			mak.Set(&sc.Services[svcName].Web, hp, new(WebServerConfig))
+		}
+		mak.Set(&sc.Services[svcName].Web[hp].Handlers, mount, handler)
+		webCfg = sc.Services[svcName].Web[hp]
+	} else {
+		mak.Set(&sc.TCP, port, &TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
+		hp = HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
+		if _, ok := sc.Web[hp]; !ok {
+			mak.Set(&sc.Web, hp, new(WebServerConfig))
+		}
+		mak.Set(&sc.Web[hp].Handlers, mount, handler)
+		webCfg = sc.Web[hp]
 	}
-	mak.Set(&sc.Web[hp].Handlers, mount, handler)
-
 	// TODO(tylersmalley): handle multiple web handlers from foreground mode
-	for k, v := range sc.Web[hp].Handlers {
+	for k, v := range webCfg.Handlers {
 		if v == handler {
 			continue
 		}
@@ -305,9 +394,10 @@ func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uin
 		m1 := strings.TrimSuffix(mount, "/")
 		m2 := strings.TrimSuffix(k, "/")
 		if m1 == m2 {
-			delete(sc.Web[hp].Handlers, k)
+			delete(webCfg.Handlers, k)
 		}
 	}
+
 }
 
 // SetTCPForwarding sets the fwdAddr (IP:port form) to which to forward
@@ -318,9 +408,20 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 	if sc == nil {
 		sc = new(ServeConfig)
 	}
-	mak.Set(&sc.TCP, port, &TCPPortHandler{TCPForward: fwdAddr})
+	var tcpPortHandler *TCPPortHandler
+	if IsServiceName(host) {
+		svcName := tailcfg.ServiceName(host)
+		if _, ok := sc.Services[svcName]; !ok {
+			mak.Set(&sc.Services, svcName, new(ServiceConfig))
+		}
+		mak.Set(&sc.Services[svcName].TCP, port, &TCPPortHandler{TCPForward: fwdAddr})
+		tcpPortHandler = sc.Services[svcName].TCP[port]
+	} else {
+		mak.Set(&sc.TCP, port, &TCPPortHandler{TCPForward: fwdAddr})
+		tcpPortHandler = sc.TCP[port]
+	}
 	if terminateTLS {
-		sc.TCP[port].TerminateTLS = host
+		tcpPortHandler.TerminateTLS = host
 	}
 }
 
@@ -345,7 +446,7 @@ func (sc *ServeConfig) SetFunnel(host string, port uint16, setOn bool) {
 }
 
 // RemoveWebHandler deletes the web handlers at all of the given mount points
-// for the provided host and port in the serve config. If cleanupFunnel is
+// for the provided host and port in the serve config for node. If cleanupFunnel is
 // true, this also removes the funnel value for this port if no handlers remain.
 func (sc *ServeConfig) RemoveWebHandler(host string, port uint16, mounts []string, cleanupFunnel bool) {
 	hp := HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
@@ -374,9 +475,39 @@ func (sc *ServeConfig) RemoveWebHandler(host string, port uint16, mounts []strin
 	}
 }
 
+// RemoveServiceWebHandler deletes the web handlers at all of the given mount points
+// for the provided host and port in the serve config for the given service.
+func (sc *ServeConfig) RemoveServiceWebHandler(st *ipnstate.Status, svcName tailcfg.ServiceName, port uint16, mounts []string) {
+	dnsNameForService := svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+	hp := HostPort(net.JoinHostPort(dnsNameForService, strconv.Itoa(int(port))))
+
+	svc, ok := sc.Services[svcName]
+	if !ok || svc == nil {
+		return
+	}
+
+	// Delete existing handler, then cascade delete if empty.
+	for _, m := range mounts {
+		delete(svc.Web[hp].Handlers, m)
+	}
+	if len(svc.Web[hp].Handlers) == 0 {
+		delete(svc.Web, hp)
+		delete(svc.TCP, port)
+	}
+}
+
 // RemoveTCPForwarding deletes the TCP forwarding configuration for the given
 // port from the serve config.
-func (sc *ServeConfig) RemoveTCPForwarding(port uint16) {
+func (sc *ServeConfig) RemoveTCPForwarding(dnsName string, port uint16) {
+	if IsServiceName(dnsName) {
+		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc != nil {
+			delete(svc.TCP, port)
+			if len(svc.TCP) == 0 {
+				svc.TCP = nil
+			}
+		}
+		return
+	}
 	delete(sc.TCP, port)
 	if len(sc.TCP) == 0 {
 		sc.TCP = nil
