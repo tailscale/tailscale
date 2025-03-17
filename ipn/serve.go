@@ -230,14 +230,37 @@ func (sc *ServeConfig) HasPathHandler() bool {
 	return false
 }
 
-// IsTCPForwardingAny reports whether ServeConfig is currently forwarding in
+// IsNodeTCPForwardingAny reports whether ServeConfig is currently forwarding in
 // TCPForward mode on any port. This is exclusive of Web/HTTPS serving.
-func (sc *ServeConfig) IsTCPForwardingAny() bool {
+func (sc *ServeConfig) IsNodeTCPForwardingAny() bool {
 	if sc == nil || len(sc.TCP) == 0 {
 		return false
 	}
 	for _, h := range sc.TCP {
 		if h.TCPForward != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (sc *ServeConfig) IsNodeServingWeb() bool {
+	if sc == nil || len(sc.Web) == 0 {
+		return false
+	}
+	for _, webServerConfig := range sc.Web {
+		if len(webServerConfig.Handlers) > 0 {
+			return true
+		}
+	}
+	return false
+}
+func (sc *ServeConfig) HostingServices() bool {
+	if sc == nil || len(sc.Services) == 0 {
+		return false
+	}
+	for _, svc := range sc.Services {
+		if len(svc.TCP) > 0 || len(svc.Web) > 0 || svc.Tun {
 			return true
 		}
 	}
