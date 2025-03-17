@@ -201,8 +201,6 @@ func newLocalBackend(t testing.TB, logID logid.PublicID) *ipnlocal.LocalBackend 
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(lb.Shutdown)
-
 	return lb
 }
 
@@ -215,11 +213,15 @@ func newLocalClient(t testing.TB) *local.Client {
 	logID := logid.PublicID{}
 
 	lb := newLocalBackend(t, logID)
-	srv := ipnserver.New(logf, logID, lb.NetMon())
-	srv.SetLocalBackend(lb)
+	t.Cleanup(lb.Shutdown)
 
 	// Connect over Unix domain socket for admin access.
 	l := newLocalListener(t)
+	t.Cleanup(func() { l.Close() })
+
+	srv := ipnserver.New(logf, logID, lb.NetMon())
+	srv.SetLocalBackend(lb)
+
 	go srv.Run(t.Context(), l)
 
 	return &local.Client{
