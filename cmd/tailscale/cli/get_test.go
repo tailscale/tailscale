@@ -180,7 +180,7 @@ func newLocalListener(t testing.TB) net.Listener {
 func newLocalBackend(t testing.TB, logID logid.PublicID) *ipnlocal.LocalBackend {
 	var logf logger.Logf = func(_ string, _ ...any) {}
 	if testing.Verbose() {
-		logf = t.Logf
+		logf = tstest.WhileTestRunningLogger(t)
 	}
 
 	sys := new(tsd.System)
@@ -192,10 +192,7 @@ func newLocalBackend(t testing.TB, logID logid.PublicID) *ipnlocal.LocalBackend 
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() {
-			eng.Close()
-			<-eng.Done()
-		})
+		t.Cleanup(eng.Close)
 
 		sys.Set(eng)
 	}
@@ -212,7 +209,7 @@ func newLocalBackend(t testing.TB, logID logid.PublicID) *ipnlocal.LocalBackend 
 func newLocalClient(t testing.TB) *local.Client {
 	var logf logger.Logf = func(_ string, _ ...any) {}
 	if testing.Verbose() {
-		logf = t.Logf
+		logf = tstest.WhileTestRunningLogger(t)
 	}
 
 	logID := logid.PublicID{}
