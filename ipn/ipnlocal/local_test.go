@@ -1510,6 +1510,15 @@ func TestReconfigureAppConnector(t *testing.T) {
 func TestBackfillAppConnectorRoutes(t *testing.T) {
 	// Create backend with an empty app connector.
 	b := newTestBackend(t)
+	// newTestBackend creates a backend with a non-nil netmap,
+	// but this test requires a nil netmap.
+	// Otherwise, instead of backfilling, [LocalBackend.reconfigAppConnectorLocked]
+	// uses the domains and routes from netmap's [appctype.AppConnectorAttr].
+	// Additionally, a non-nil netmap makes reconfigAppConnectorLocked
+	// asynchronous, resulting in a flaky test.
+	// Therefore, we set the netmap to nil to simulate a fresh backend start
+	// or a profile switch where the netmap is not yet available.
+	b.setNetMapLocked(nil)
 	if err := b.Start(ipn.Options{}); err != nil {
 		t.Fatal(err)
 	}
