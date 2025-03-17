@@ -10,13 +10,10 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"tailscale.com/client/local"
-	"tailscale.com/clientupdate"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store/mem"
@@ -135,19 +132,27 @@ func TestGetDefaultSettings(t *testing.T) {
 				var stdout bytes.Buffer
 				tstest.Replace[io.Writer](t, &Stdout, &stdout)
 
+				// Use a fake localClient that processes settings updates
+				lc := newLocalClient(t)
+				tstest.Replace(t, &localClient, lc)
+
 				if err := runGet(t.Context(), []string{f.Name}); err != nil {
 					t.Fatal(err)
 				}
 
-				var want string
+				want := f.DefValue
 				switch f.Name {
+				case "accept-routes":
+					// ipn.NewPrefs sets this to true
+					// but tailscale up sets it on start.
+					want = "true"
 				case "auto-update":
-					want = strconv.FormatBool(clientupdate.CanAutoUpdate())
-				case "operator":
-					// applyImplicitPrefs will set the default operator to the current user
-					want = os.Getenv("USER")
-				default:
-					want = f.DefValue
+					// Unset by tailscale up.
+					want = "unset"
+				case "login-server":
+					// The default settings is empty,
+					// but tailscale up sets it on start.
+					want = ""
 				}
 				want += "\n"
 
