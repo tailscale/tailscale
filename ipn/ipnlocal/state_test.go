@@ -735,12 +735,10 @@ func TestStateMachine(t *testing.T) {
 		// b.Shutdown() explicitly ourselves.
 		previousCC.assertShutdown(false)
 
-		// Note: unpause happens because ipn needs to get at least one netmap
-		//  on startup, otherwise UIs can't show the node list, login
-		//  name, etc when in state ipn.Stopped.
-		//  Arguably they shouldn't try. But they currently do.
 		nn := notifies.drain(2)
-		cc.assertCalls("New", "Login")
+		// We already have a netmap for this node,
+		// and WantRunning is false, so cc should be paused.
+		cc.assertCalls("New", "Login", "pause")
 		c.Assert(nn[0].Prefs, qt.IsNotNil)
 		c.Assert(nn[1].State, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsFalse)
@@ -751,7 +749,11 @@ func TestStateMachine(t *testing.T) {
 	// When logged in but !WantRunning, ipn leaves us unpaused to retrieve
 	// the first netmap. Simulate that netmap being received, after which
 	// it should pause us, to avoid wasting CPU retrieving unnecessarily
-	// additional netmap updates.
+	// additional netmap updates. Since our LocalBackend instance already
+	// has a netmap, we will reset it to nil to simulate the first netmap
+	// retrieval.
+	b.setNetMapLocked(nil)
+	cc.assertCalls("unpause")
 	//
 	// TODO: really the various GUIs and prefs should be refactored to
 	//  not require the netmap structure at all when starting while
@@ -853,7 +855,7 @@ func TestStateMachine(t *testing.T) {
 	// The last test case is the most common one: restarting when both
 	// logged in and WantRunning.
 	t.Logf("\n\nStart5")
-	notifies.expect(1)
+	notifies.expect(2)
 	c.Assert(b.Start(ipn.Options{}), qt.IsNil)
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
@@ -861,30 +863,32 @@ func TestStateMachine(t *testing.T) {
 		previousCC.assertShutdown(false)
 		cc.assertCalls("New", "Login")
 
-		nn := notifies.drain(1)
+		nn := notifies.drain(2)
 		cc.assertCalls()
 		c.Assert(nn[0].Prefs, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsTrue)
-		c.Assert(b.State(), qt.Equals, ipn.NoState)
+		// We're logged in and have a valid netmap, so we should
+		// be in the Starting state.
+		c.Assert(nn[1].State, qt.IsNotNil)
+		c.Assert(*nn[1].State, qt.Equals, ipn.Starting)
+		c.Assert(b.State(), qt.Equals, ipn.Starting)
 	}
 
 	// Control server accepts our valid key from before.
 	t.Logf("\n\nLoginFinished5")
-	notifies.expect(1)
+	notifies.expect(0)
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
-		nn := notifies.drain(1)
+		notifies.drain(0)
 		cc.assertCalls()
 		// NOTE: No LoginFinished message since no interactive
 		// login was needed.
-		c.Assert(nn[0].State, qt.IsNotNil)
-		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 		// NOTE: No prefs change this time. WantRunning stays true.
 		// We were in Starting in the first place, so that doesn't
-		// change either.
+		// change either, so we don't expect any notifications.
 		c.Assert(ipn.Starting, qt.Equals, b.State())
 	}
 	t.Logf("\n\nExpireKey")

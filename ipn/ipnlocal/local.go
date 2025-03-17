@@ -2380,12 +2380,10 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
 
-	b.setNetMapLocked(nil)
 	persistv := prefs.Persist().AsStruct()
 	if persistv == nil {
 		persistv = new(persist.Persist)
 	}
-	b.updateFilterLocked(nil, ipn.PrefsView{})
 
 	if b.portpoll != nil {
 		b.portpollOnce.Do(func() {
@@ -7531,6 +7529,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		return nil
 	}
 	b.setNetMapLocked(nil) // Reset netmap.
+	b.updateFilterLocked(nil, ipn.PrefsView{})
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
 	if prevCC := b.resetControlClientLocked(); prevCC != nil {
