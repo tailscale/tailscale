@@ -4898,6 +4898,7 @@ rules:
         - update
         - list
         - watch
+        - deletecollection
     - apiGroups:
         - monitoring.coreos.com
       resources:

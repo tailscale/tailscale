@@ -112,9 +112,9 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	}
 	// Get all ClusterIP Services for all egress targets exposed to cluster via this ProxyGroup.
 	lbls := map[string]string{
-		LabelManaged:    "true",
-		labelProxyGroup: proxyGroupName,
-		labelSvcType:    typeEgress,
+		kubetypes.LabelManaged: "true",
+		labelProxyGroup:        proxyGroupName,
+		labelSvcType:           typeEgress,
 	}
 	svcs := &corev1.ServiceList{}
 	if err := er.List(ctx, svcs, client.InNamespace(er.tsNamespace), client.MatchingLabels(lbls)); err != nil {

@@ -450,9 +450,9 @@ func newSvc(name string, port int32) (*corev1.Service, string) {
 			Namespace: "operator-ns",
 			Name:      name,
 			Labels: map[string]string{
-				LabelManaged:    "true",
-				labelProxyGroup: "dev",
-				labelSvcType:    typeEgress,
+				kubetypes.LabelManaged: "true",
+				labelProxyGroup:        "dev",
+				labelSvcType:           typeEgress,
 			},
 		},
 		Spec: corev1.ServiceSpec{},

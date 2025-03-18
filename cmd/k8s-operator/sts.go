@@ -44,11 +44,9 @@ const (
 	// Labels that the operator sets on StatefulSets and Pods. If you add a
 	// new label here, do also add it to tailscaleManagedLabels var to
 	// ensure that it does not get overwritten by ProxyClass configuration.
-	LabelManaged         = "tailscale.com/managed"
 	LabelParentType      = "tailscale.com/parent-resource-type"
 	LabelParentName      = "tailscale.com/parent-resource"
 	LabelParentNamespace = "tailscale.com/parent-resource-ns"
-	labelSecretType      = "tailscale.com/secret-type" // "config" or "state".
 
 	// LabelProxyClass can be set by users on tailscale Ingresses and Services that define cluster ingress or
 	// cluster egress, to specify that configuration in this ProxyClass should be applied to resources created for
@@ -108,7 +106,7 @@ const (
 
 var (
 	// tailscaleManagedLabels are label keys that tailscale operator sets on StatefulSets and Pods.
-	tailscaleManagedLabels = []string{LabelManaged, LabelParentType, LabelParentName, LabelParentNamespace, "app"}
+	tailscaleManagedLabels = []string{kubetypes.LabelManaged, LabelParentType, LabelParentName, LabelParentNamespace, "app"}
 	// tailscaleManagedAnnotations are annotation keys that tailscale operator sets on StatefulSets and Pods.
 	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN, podAnnotationLastSetConfigFileHash}
 )
