@@ -39,7 +39,6 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -79,14 +78,8 @@ func effectiveGOOS() string {
 // acceptRouteDefault returns the CLI's default value of --accept-routes as
 // a function of the platform it's running on.
 func acceptRouteDefault(goos string) bool {
-	switch goos {
-	case "windows":
-		return true
-	case "darwin":
-		return version.IsSandboxedMacOS()
-	default:
-		return false
-	}
+	var p *ipn.Prefs
+	return p.DefaultRouteAll(goos)
 }
 
 var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgsGlobal, "up")

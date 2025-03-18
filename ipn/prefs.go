@@ -29,6 +29,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/version"
 )
 
 // DefaultControlURL is the URL base of the control plane
@@ -664,7 +665,7 @@ func NewPrefs() *Prefs {
 	// Provide default values for options which might be missing
 	// from the json data for any reason. The json can still
 	// override them to false.
-	return &Prefs{
+	p := &Prefs{
 		// ControlURL is explicitly not set to signal that
 		// it's not yet configured, which relaxes the CLI "up"
 		// safety net features. It will get set to DefaultControlURL
@@ -672,7 +673,6 @@ func NewPrefs() *Prefs {
 		// later anyway.
 		ControlURL: "",
 
-		RouteAll:            true,
 		CorpDNS:             true,
 		WantRunning:         false,
 		NetfilterMode:       preftype.NetfilterOn,
@@ -682,6 +682,8 @@ func NewPrefs() *Prefs {
 			Apply: opt.Bool("unset"),
 		},
 	}
+	p.RouteAll = p.DefaultRouteAll(runtime.GOOS)
+	return p
 }
 
 // ControlURLOrDefault returns the coordination server's URL base.
@@ -709,6 +711,19 @@ func (p *Prefs) ControlURLOrDefault() string {
 		return controlURL
 	}
 	return DefaultControlURL
+}
+
+// DefaultRouteAll returns the default value of [Prefs.RouteAll] as a function
+// of the platform it's running on.
+func (p *Prefs) DefaultRouteAll(goos string) bool {
+	switch goos {
+	case "windows":
+		return true
+	case "darwin":
+		return version.IsSandboxedMacOS()
+	default:
+		return false
+	}
 }
 
 // AdminPageURL returns the admin web site URL for the current ControlURL.
