@@ -142,10 +142,6 @@ func TestGetDefaultSettings(t *testing.T) {
 
 				want := f.DefValue
 				switch f.Name {
-				case "accept-routes":
-					// ipn.NewPrefs sets this to true
-					// but tailscale up sets it on start.
-					want = "true"
 				case "auto-update":
 					// Unset by tailscale up.
 					want = "unset"
