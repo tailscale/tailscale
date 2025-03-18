@@ -60,6 +60,7 @@ func readFile(n string) ([]byte, error) {
 // It expects to be run inside a cluster.
 type Client interface {
 	GetSecret(context.Context, string) (*kubeapi.Secret, error)
+	ListSecrets(context.Context, map[string]string) (*kubeapi.SecretList, error)
 	UpdateSecret(context.Context, *kubeapi.Secret) error
 	CreateSecret(context.Context, *kubeapi.Secret) error
 	// Event attempts to ensure an event with the specified options associated with the Pod in which we are
@@ -248,21 +249,35 @@ func (c *client) newRequest(ctx context.Context, method, url string, in any) (*h
 // GetSecret fetches the secret from the Kubernetes API.
 func (c *client) GetSecret(ctx context.Context, name string) (*kubeapi.Secret, error) {
 	s := &kubeapi.Secret{Data: make(map[string][]byte)}
-	if err := c.kubeAPIRequest(ctx, "GET", c.resourceURL(name, TypeSecrets), nil, s); err != nil {
+	if err := c.kubeAPIRequest(ctx, "GET", c.resourceURL(name, TypeSecrets, ""), nil, s); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
+// ListSecrets fetches the secret from the Kubernetes API.
+func (c *client) ListSecrets(ctx context.Context, selector map[string]string) (*kubeapi.SecretList, error) {
+	sl := new(kubeapi.SecretList)
+	s := make([]string, 0, len(selector))
+	for key, val := range selector {
+		s = append(s, key+"="+url.QueryEscape(val))
+	}
+	ss := strings.Join(s, ",")
+	if err := c.kubeAPIRequest(ctx, "GET", c.resourceURL("", TypeSecrets, ss), nil, sl); err != nil {
+		return nil, err
+	}
+	return sl, nil
+}
+
 // CreateSecret creates a secret in the Kubernetes API.
 func (c *client) CreateSecret(ctx context.Context, s *kubeapi.Secret) error {
 	s.Namespace = c.ns
-	return c.kubeAPIRequest(ctx, "POST", c.resourceURL("", TypeSecrets), s, nil)
+	return c.kubeAPIRequest(ctx, "POST", c.resourceURL("", TypeSecrets, ""), s, nil)
 }
 
 // UpdateSecret updates a secret in the Kubernetes API.
 func (c *client) UpdateSecret(ctx context.Context, s *kubeapi.Secret) error {
-	return c.kubeAPIRequest(ctx, "PUT", c.resourceURL(s.Name, TypeSecrets), s, nil)
+	return c.kubeAPIRequest(ctx, "PUT", c.resourceURL(s.Name, TypeSecrets, ""), s, nil)
 }
 
 // JSONPatch is a JSON patch operation.
@@ -283,14 +298,14 @@ func (c *client) JSONPatchResource(ctx context.Context, name, typ string, patche
 			return fmt.Errorf("unsupported JSON patch operation: %q", p.Op)
 		}
 	}
-	return c.kubeAPIRequest(ctx, "PATCH", c.resourceURL(name, typ), patches, nil, setHeader("Content-Type", "application/json-patch+json"))
+	return c.kubeAPIRequest(ctx, "PATCH", c.resourceURL(name, typ, ""), patches, nil, setHeader("Content-Type", "application/json-patch+json"))
 }
 
 // StrategicMergePatchSecret updates a secret in the Kubernetes API using a
 // strategic merge patch.
 // If a fieldManager is provided, it will be used to track the patch.
 func (c *client) StrategicMergePatchSecret(ctx context.Context, name string, s *kubeapi.Secret, fieldManager string) error {
-	surl := c.resourceURL(name, TypeSecrets)
+	surl := c.resourceURL(name, TypeSecrets, "")
 	if fieldManager != "" {
 		uv := url.Values{
 			"fieldManager": {fieldManager},
@@ -342,7 +357,7 @@ func (c *client) Event(ctx context.Context, typ, reason, msg string) error {
 			LastTimestamp:  now,
 			Count:          1,
 		}
-		return c.kubeAPIRequest(ctx, "POST", c.resourceURL("", typeEvents), &ev, nil)
+		return c.kubeAPIRequest(ctx, "POST", c.resourceURL("", typeEvents, ""), &ev, nil)
 	}
 	// If the Event already exists, we patch its count and last timestamp. This ensures that when users run 'kubectl
 	// describe pod...', they see the event just once (but with a message of how many times it has appeared over
@@ -472,9 +487,13 @@ func (c *client) checkPermission(ctx context.Context, verb, typ, name string) (b
 // resourceURL returns a URL that can be used to interact with the given resource type and, if name is not empty string,
 // the named resource of that type.
 // Note that this only works for core/v1 resource types.
-func (c *client) resourceURL(name, typ string) string {
+func (c *client) resourceURL(name, typ, sel string) string {
 	if name == "" {
-		return fmt.Sprintf("%s/api/v1/namespaces/%s/%s", c.url, c.ns, typ)
+		url := fmt.Sprintf("%s/api/v1/namespaces/%s/%s", c.url, c.ns, typ)
+		if sel != "" {
+			url += "?labelSelector=" + sel
+		}
+		return url
 	}
 	return fmt.Sprintf("%s/api/v1/namespaces/%s/%s/%s", c.url, c.ns, typ, name)
 }
@@ -487,7 +506,7 @@ func (c *client) nameForEvent(reason string) string {
 // getEvent fetches the event from the Kubernetes API.
 func (c *client) getEvent(ctx context.Context, name string) (*kubeapi.Event, error) {
 	e := &kubeapi.Event{}
-	if err := c.kubeAPIRequest(ctx, "GET", c.resourceURL(name, typeEvents), nil, e); err != nil {
+	if err := c.kubeAPIRequest(ctx, "GET", c.resourceURL(name, typeEvents, ""), nil, e); err != nil {
 		return nil, err
 	}
 	return e, nil
