@@ -402,16 +402,9 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			logger.Infof("VIPService %q is not owned by any Ingress, cleaning up", vipServiceName)
 
 			// Delete the VIPService from control if necessary.
-			svc, _ := r.tsClient.GetVIPService(ctx, vipServiceName)
-			if svc != nil && isVIPServiceForAnyIngress(svc) {
-				logger.Infof("cleaning up orphaned VIPService %q", vipServiceName)
-				svcsChanged, err = r.cleanupVIPService(ctx, vipServiceName, logger)
-				if err != nil {
-					errResp := &tailscale.ErrResponse{}
-					if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
-						return false, fmt.Errorf("deleting VIPService %q: %w", vipServiceName, err)
-					}
-				}
+			svcsChanged, err = r.cleanupVIPService(ctx, vipServiceName, logger)
+			if err != nil {
+				return false, fmt.Errorf("deleting VIPService %q: %w", vipServiceName, err)
 			}
 
 			// Make sure the VIPService is not advertised in tailscaled or serve config.
@@ -568,13 +561,6 @@ func (r *HAIngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 		*ing.Spec.IngressClassName == tailscaleIngressClassName
 	pgAnnot := ing.Annotations[AnnotationProxyGroup]
 	return isTSIngress && pgAnnot != ""
-}
-
-func isVIPServiceForAnyIngress(svc *tailscale.VIPService) bool {
-	if svc == nil {
-		return false
-	}
-	return strings.HasPrefix(svc.Comment, "tailscale.com/k8s-operator:owned-by:")
 }
 
 // validateIngress validates that the Ingress is properly configured.
