@@ -347,6 +347,7 @@ func runReconcilers(opts reconcilerOpts) {
 		For(&networkingv1.Ingress{}).
 		Named("ingress-pg-reconciler").
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(ingressesFromPGStateSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
 		Complete(&HAIngressReconciler{
 			recorder:    eventRecorder,
@@ -978,8 +979,6 @@ func egressEpsFromPGStateSecrets(cl client.Client, ns string) handler.MapFunc {
 		if v, ok := o.GetLabels()[LabelManaged]; !ok || v != "true" {
 			return nil
 		}
-		// TODO(irbekrm): for now this is good enough as all ProxyGroups are egress. Add a type check once we
-		// have ingress ProxyGroups.
 		if parentType := o.GetLabels()[LabelParentType]; parentType != "proxygroup" {
 			return nil
 		}
@@ -1038,6 +1037,45 @@ func reconcileRequestsForPG(pg string, cl client.Client, ns string) []reconcile.
 		})
 	}
 	return reqs
+}
+
+func ingressesFromPGStateSecret(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		secret, ok := o.(*corev1.Secret)
+		if !ok {
+			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
+			return nil
+		}
+		if secret.ObjectMeta.Labels[LabelManaged] != "true" {
+			return nil
+		}
+		if secret.ObjectMeta.Labels[LabelParentType] != "proxygroup" {
+			return nil
+		}
+		if secret.ObjectMeta.Labels[labelSecretType] != "state" {
+			return nil
+		}
+		pgName, ok := secret.ObjectMeta.Labels[LabelParentName]
+		if !ok {
+			return nil
+		}
+
+		ingList := &networkingv1.IngressList{}
+		if err := cl.List(ctx, ingList, client.MatchingFields{indexIngressProxyGroup: pgName}); err != nil {
+			logger.Infof("error listing Ingresses, skipping a reconcile for event on Secret %s: %v", secret.Name, err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, ing := range ingList.Items {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: ing.Namespace,
+					Name:      ing.Name,
+				},
+			})
+		}
+		return reqs
+	}
 }
 
 // egressSvcsFromEgressProxyGroup is an event handler for egress ProxyGroups. It returns reconcile requests for all

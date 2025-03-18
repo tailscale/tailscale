@@ -645,7 +645,7 @@ func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.Pr
 			return nil, fmt.Errorf("unexpected secret %s was labelled as owned by the ProxyGroup %s: %w", secret.Name, pg.Name, err)
 		}
 
-		id, dnsName, ok, err := getNodeMetadata(ctx, &secret)
+		prefs, ok, err := getDevicePrefs(&secret)
 		if err != nil {
 			return nil, err
 		}
@@ -656,8 +656,8 @@ func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.Pr
 		nm := nodeMetadata{
 			ordinal:     ordinal,
 			stateSecret: &secret,
-			tsID:        id,
-			dnsName:     dnsName,
+			tsID:        prefs.Config.NodeID,
+			dnsName:     prefs.Config.UserProfile.LoginName,
 		}
 		pod := &corev1.Pod{}
 		if err := r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: secret.Name}, pod); err != nil && !apierrors.IsNotFound(err) {

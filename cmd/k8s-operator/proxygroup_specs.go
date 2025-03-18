@@ -318,9 +318,9 @@ func pgIngressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 	}
 }
 
-func pgSecretLabels(pgName, typ string) map[string]string {
+func pgSecretLabels(pgName, secretType string) map[string]string {
 	return pgLabels(pgName, map[string]string{
-		labelSecretType: typ, // "config" or "state".
+		labelSecretType: secretType, // "config" or "state".
 	})
 }
 
