@@ -18,6 +18,7 @@ type FakeClient struct {
 	CreateSecretImpl           func(context.Context, *kubeapi.Secret) error
 	UpdateSecretImpl           func(context.Context, *kubeapi.Secret) error
 	JSONPatchResourceImpl      func(context.Context, string, string, []JSONPatch) error
+	ListSecretsImpl            func(context.Context, map[string]string) (*kubeapi.SecretList, error)
 }
 
 func (fc *FakeClient) CheckSecretPermissions(ctx context.Context, name string) (bool, bool, error) {
@@ -44,4 +45,10 @@ func (fc *FakeClient) UpdateSecret(ctx context.Context, secret *kubeapi.Secret) 
 }
 func (fc *FakeClient) CreateSecret(ctx context.Context, secret *kubeapi.Secret) error {
 	return fc.CreateSecretImpl(ctx, secret)
+}
+func (fc *FakeClient) ListSecrets(ctx context.Context, selector map[string]string) (*kubeapi.SecretList, error) {
+	if fc.ListSecretsImpl != nil {
+		return fc.ListSecretsImpl(ctx, selector)
+	}
+	return nil, nil
 }
