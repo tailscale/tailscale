@@ -8,8 +8,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"reflect"
 	"testing"
 
@@ -184,6 +186,61 @@ func TestIngressPGReconciler(t *testing.T) {
 		t.Error("serve config not cleaned up")
 	}
 	verifyTailscaledConfig(t, fc, nil)
+}
+
+func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
+	ingPGR, fc, ft := setupIngressTest(t)
+
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc.tailnetxyz.ts.net"}},
+			},
+		},
+	}
+	mustCreate(t, fc, ing)
+
+	// Verify initial reconciliation
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	verifyServeConfig(t, fc, "svc:my-svc", false)
+	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
+
+	// Update the Ingress hostname and make sure the original VIPService is deleted.
+	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
+		ing.Spec.TLS[0].Hosts[0] = "updated-svc.tailnetxyz.ts.net"
+	})
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	verifyServeConfig(t, fc, "svc:updated-svc", false)
+	verifyVIPService(t, ft, "svc:updated-svc", []string{"443"})
+	verifyTailscaledConfig(t, fc, []string{"svc:updated-svc"})
+
+	_, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName("svc:my-svc"))
+	if err == nil {
+		t.Fatalf("svc:my-svc not cleaned up")
+	}
+	var errResp *tailscale.ErrResponse
+	if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestValidateIngress(t *testing.T) {
