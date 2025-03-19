@@ -101,6 +101,8 @@ type ManagerOptions struct {
 type Manager struct {
 	opts ManagerOptions
 
+	getSafFd func() int
+
 	// incomingFiles is a map of files actively being received.
 	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
 	// deleter managers asynchronous deletion of files.
@@ -119,14 +121,14 @@ type Manager struct {
 // New initializes a new taildrop manager.
 // It may spawn asynchronous goroutines to delete files,
 // so the Shutdown method must be called for resource cleanup.
-func (opts ManagerOptions) New() *Manager {
+func (opts ManagerOptions) New(getSafFd func() int) *Manager {
 	if opts.Logf == nil {
 		opts.Logf = logger.Discard
 	}
 	if opts.SendFileNotify == nil {
 		opts.SendFileNotify = func() {}
 	}
-	m := &Manager{opts: opts}
+	m := &Manager{opts: opts, getSafFd: getSafFd}
 	m.deleter.Init(m, func(string) {})
 	m.emptySince.Store(-1) // invalidate this cache
 	return m

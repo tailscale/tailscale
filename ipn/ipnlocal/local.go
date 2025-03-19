@@ -406,6 +406,9 @@ type LocalBackend struct {
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
 
+	// getSafFd gets the Storage Access Framework file descriptor for writing Taildrop files to
+	GetSafFd func(filename string) int32
+
 	// lastSuggestedExitNode stores the last suggested exit node suggestion to
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
@@ -5303,7 +5306,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 			Dir:            fileRoot,
 			DirectFileMode: b.directFileRoot != "",
 			SendFileNotify: b.sendFileNotify,
-		}.New(),
+		}.New(b.getSafFd),
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()

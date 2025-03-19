@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,9 +83,17 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	case distro.Get() == distro.Unraid && !m.opts.DirectFileMode:
 		return 0, ErrNotAccessible
 	}
-	dstPath, err := joinDir(m.opts.Dir, baseName)
-	if err != nil {
-		return 0, err
+	var dstPath string
+	var err error
+	if !(m.opts.DirectFileMode && strings.HasPrefix(m.opts.Dir, "content://")) {
+		dstPath, err = joinDir(m.opts.Dir, baseName)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		// For Android which uses SAF mode, we can simply use the baseName as our destination "path"
+		// (since we won't be using traditional file paths).
+		dstPath = baseName
 	}
 
 	redactAndLogError := func(action string, err error) error {
@@ -116,9 +125,21 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	m.deleter.Remove(filepath.Base(partialPath)) // avoid deleting the partial file while receiving
 
 	// Create (if not already) the partial file with read-write permissions.
-	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		return 0, redactAndLogError("Create", err)
+	var f *os.File
+	if m.opts.DirectFileMode && strings.HasPrefix(m.opts.Dir, "content://") {
+		// SAF mode: open the file using Android's SAF.
+		fd := m.GetSafFd(m.opts.Dir, baseName)
+		if err != nil {
+			return 0, redactAndLogError("Create (SAF)", err)
+		}
+		f = os.NewFile(uintptr(fd), baseName)
+		// In SAF mode, we don't have a traditional filesystem path; partialPath remains only for bookkeeping.
+	} else {
+		// Non-SAF (traditional filesystem) mode.
+		f, err = os.OpenFile(partialPath, os.O_CREATE|os.O_RDWR, 0666)
+		if err != nil {
+			return 0, redactAndLogError("Create", err)
+		}
 	}
 	defer func() {
 		f.Close() // best-effort to cleanup dangling file handles
