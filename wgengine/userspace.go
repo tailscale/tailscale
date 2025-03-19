@@ -46,6 +46,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
@@ -89,8 +90,12 @@ const statusPollInterval = 1 * time.Minute
 const networkLoggerUploadTimeout = 5 * time.Second
 
 type userspaceEngine struct {
+	// eventBus will eventually become required, but for now may be nil.
+	// TODO(creachadair): Enforce that this is non-nil at construction.
+	eventBus *eventbus.Bus
+
 	logf             logger.Logf
-	wgLogger         *wglog.Logger //a wireguard-go logging wrapper
+	wgLogger         *wglog.Logger // a wireguard-go logging wrapper
 	reqCh            chan struct{}
 	waitCh           chan struct{} // chan is closed when first Close call completes; contrast with closing bool
 	timeNow          func() mono.Time
@@ -227,6 +232,13 @@ type Config struct {
 	// DriveForLocal, if populated, will cause the engine to expose a Taildrive
 	// listener at 100.100.100.100:8080.
 	DriveForLocal drive.FileSystemForLocal
+
+	// EventBus, if non-nil, is used for event publication and subscription by
+	// the Engine and its subsystems.
+	//
+	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
+	// become required non-nil.
+	EventBus *eventbus.Bus
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -255,6 +267,8 @@ func NewFakeUserspaceEngine(logf logger.Logf, opts ...any) (Engine, error) {
 			conf.HealthTracker = v
 		case *usermetric.Registry:
 			conf.Metrics = v
+		case *eventbus.Bus:
+			conf.EventBus = v
 		default:
 			return nil, fmt.Errorf("unknown option type %T", v)
 		}
@@ -323,6 +337,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	e := &userspaceEngine{
+		eventBus:       conf.EventBus,
 		timeNow:        mono.Now,
 		logf:           logf,
 		reqCh:          make(chan struct{}, 1),
