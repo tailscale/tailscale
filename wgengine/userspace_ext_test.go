@@ -23,6 +23,7 @@ func TestIsNetstack(t *testing.T) {
 			SetSubsystem:  sys.Set,
 			HealthTracker: sys.HealthTracker(),
 			Metrics:       sys.UserMetricsRegistry(),
+			EventBus:      sys.Bus.Get(),
 		},
 	)
 	if err != nil {
@@ -74,6 +75,7 @@ func TestIsNetstackRouter(t *testing.T) {
 			conf.SetSubsystem = sys.Set
 			conf.HealthTracker = sys.HealthTracker()
 			conf.Metrics = sys.UserMetricsRegistry()
+			conf.EventBus = sys.Bus.Get()
 			e, err := wgengine.NewUserspaceEngine(logger.Discard, conf)
 			if err != nil {
 				t.Fatal(err)

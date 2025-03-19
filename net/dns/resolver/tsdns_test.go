@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 )
 
 var (
@@ -1059,7 +1060,10 @@ func TestForwardLinkSelection(t *testing.T) {
 	// routes differently.
 	specialIP := netaddr.IPv4(1, 2, 3, 4)
 
-	netMon, err := netmon.New(logger.WithPrefix(t.Logf, ".... netmon: "))
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, ".... netmon: "))
 	if err != nil {
 		t.Fatal(err)
 	}

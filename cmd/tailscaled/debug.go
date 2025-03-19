@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/util/eventbus"
 )
 
 var debugArgs struct {
@@ -72,11 +73,14 @@ func debugMode(args []string) error {
 }
 
 func runMonitor(ctx context.Context, loop bool) error {
+	b := eventbus.New()
+	defer b.Close()
+
 	dump := func(st *netmon.State) {
 		j, _ := json.MarshalIndent(st, "", "    ")
 		os.Stderr.Write(j)
 	}
-	mon, err := netmon.New(log.Printf)
+	mon, err := netmon.New(b, log.Printf)
 	if err != nil {
 		return err
 	}

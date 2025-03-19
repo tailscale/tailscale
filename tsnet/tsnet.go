@@ -567,7 +567,7 @@ func (s *Server) start() (reterr error) {
 		return err
 	}
 
-	s.netMon, err = netmon.New(tsLogf)
+	s.netMon, err = netmon.New(sys.Bus.Get(), tsLogf)
 	if err != nil {
 		return err
 	}

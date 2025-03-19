@@ -326,7 +326,7 @@ func TestStateMachine(t *testing.T) {
 	sys := tsd.NewSystem()
 	store := new(testStateStorage)
 	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
@@ -964,7 +964,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 	logf := tstest.WhileTestRunningLogger(t)
 	sys := tsd.NewSystem()
 	sys.Set(new(mem.Store))
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
@@ -1045,7 +1045,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	sys := tsd.NewSystem()
 	sys.Set(new(mem.Store))
 
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.Bus.Get())
 	c.Assert(err, qt.IsNil)
 	t.Cleanup(eng.Close)
 	sys.Set(eng)
