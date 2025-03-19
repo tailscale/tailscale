@@ -435,8 +435,11 @@ func (s *Server) Close() error {
 	for _, ln := range s.listeners {
 		ln.closeLocked()
 	}
-
 	wg.Wait()
+
+	if bus := s.sys.Bus.Get(); bus != nil {
+		bus.Close()
+	}
 	s.closed = true
 	return nil
 }
