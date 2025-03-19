@@ -47,7 +47,7 @@ func TestLocalLogLines(t *testing.T) {
 	idA := logid(0xaa)
 
 	// set up a LocalBackend, super bare bones. No functional data.
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithEventBus()
 	store := new(mem.Store)
 	sys.Set(store)
 	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())

@@ -323,7 +323,7 @@ func TestStateMachine(t *testing.T) {
 	c := qt.New(t)
 
 	logf := tstest.WhileTestRunningLogger(t)
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithEventBus()
 	store := new(testStateStorage)
 	sys.Set(store)
 	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
@@ -962,7 +962,7 @@ func TestStateMachine(t *testing.T) {
 
 func TestEditPrefsHasNoKeys(t *testing.T) {
 	logf := tstest.WhileTestRunningLogger(t)
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithEventBus()
 	sys.Set(new(mem.Store))
 	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
 	if err != nil {
@@ -1042,7 +1042,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	t.Skip("test fails")
 	c := qt.New(t)
 	logf := tstest.WhileTestRunningLogger(t)
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithEventBus()
 	sys.Set(new(mem.Store))
 
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)

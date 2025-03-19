@@ -336,7 +336,7 @@ func TestServeWatchIPNBus(t *testing.T) {
 
 func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 	var logf logger.Logf = logger.Discard
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithEventBus()
 	store := new(mem.Store)
 	sys.Set(store)
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
