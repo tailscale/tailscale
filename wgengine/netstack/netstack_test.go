@@ -45,7 +45,7 @@ func TestInjectInboundLeak(t *testing.T) {
 			t.Logf(format, args...)
 		}
 	}
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithEventBus()
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Tun:           tunDev,
 		Dialer:        dialer,
