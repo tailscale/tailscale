@@ -9,7 +9,6 @@ import (
 	"html"
 	"io"
 	"net/http"
-	"net/http/pprof"
 	"net/url"
 	"os"
 	"runtime"
@@ -64,16 +63,7 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 		ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(varz.Handler))
 	}
 
-	// pprof.Index serves everything that runtime/pprof.Lookup finds:
-	// goroutine, threadcreate, heap, allocs, block, mutex
-	ret.Handle("pprof/", "pprof (index)", http.HandlerFunc(pprof.Index))
-	// But register the other ones from net/http/pprof directly:
-	ret.HandleSilent("pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
-	ret.HandleSilent("pprof/profile", http.HandlerFunc(pprof.Profile))
-	ret.HandleSilent("pprof/symbol", http.HandlerFunc(pprof.Symbol))
-	ret.HandleSilent("pprof/trace", http.HandlerFunc(pprof.Trace))
-	ret.URL("/debug/pprof/goroutine?debug=1", "Goroutines (collapsed)")
-	ret.URL("/debug/pprof/goroutine?debug=2", "Goroutines (full)")
+	addProfilingHandlers(ret)
 	ret.Handle("gc", "force GC", http.HandlerFunc(gcHandler))
 	hostname, err := os.Hostname()
 	if err == nil {
