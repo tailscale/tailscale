@@ -15,7 +15,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"net/netip"
 	"net/url"
 	"os"
