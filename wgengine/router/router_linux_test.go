@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/version/distro"
 )
@@ -363,7 +364,9 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 		},
 	}
 
-	mon, err := netmon.New(logger.Discard)
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := netmon.New(bus, logger.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -973,7 +976,10 @@ func newLinuxRootTest(t *testing.T) *linuxTest {
 
 	logf := lt.logOutput.Logf
 
-	mon, err := netmon.New(logger.Discard)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := netmon.New(bus, logger.Discard)
 	if err != nil {
 		lt.Close()
 		t.Fatal(err)
