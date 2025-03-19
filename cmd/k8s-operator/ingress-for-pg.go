@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -240,8 +241,12 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		r.recorder.Event(ing, corev1.EventTypeWarning, "InvalidVIPService", msg)
 		return false, nil
 	}
+	// 3. Ensure that TLS Secret and RBAC exists
+	if err := r.ensureCertResources(ctx, pgName, dnsName); err != nil {
+		return false, fmt.Errorf("error ensuring cert resources: %w", err)
+	}
 
-	// 3. Ensure that the serve config for the ProxyGroup contains the VIPService.
+	// 4. Ensure that the serve config for the ProxyGroup contains the VIPService.
 	cm, cfg, err := r.proxyGroupServeConfig(ctx, pgName)
 	if err != nil {
 		return false, fmt.Errorf("error getting Ingress serve config: %w", err)
@@ -426,8 +431,15 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, proxyGroupName, vipServiceName, false, logger); err != nil {
 				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
-			delete(cfg.Services, vipServiceName)
-			serveConfigChanged = true
+			_, ok := cfg.Services[vipServiceName]
+			if ok {
+				logger.Infof("Removing VIPService %q from serve config", vipServiceName)
+				delete(cfg.Services, vipServiceName)
+				serveConfigChanged = true
+			}
+			if err := r.cleanupCertResources(ctx, proxyGroupName, vipServiceName); err != nil {
+				return false, fmt.Errorf("failed to clean up cert resources: %w", err)
+			}
 		}
 	}
 
@@ -488,16 +500,22 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	if err != nil {
 		return false, fmt.Errorf("error deleting VIPService: %w", err)
 	}
+
+	// 3. Clean up any cluster resources
+	if err := r.cleanupCertResources(ctx, pg, serviceName); err != nil {
+		return false, fmt.Errorf("failed to clean up cert resources: %w", err)
+	}
+
 	if cfg == nil || cfg.Services == nil { // user probably deleted the ProxyGroup
 		return svcChanged, nil
 	}
 
-	// 3. Unadvertise the VIPService in tailscaled config.
+	// 4. Unadvertise the VIPService in tailscaled config.
 	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg, serviceName, false, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 	}
 
-	// 4. Remove the VIPService from the serve config for the ProxyGroup.
+	// 5. Remove the VIPService from the serve config for the ProxyGroup.
 	logger.Infof("Removing VIPService %q from serve config for ProxyGroup %q", hostname, pg)
 	delete(cfg.Services, serviceName)
 	cfgBytes, err := json.Marshal(cfg)
@@ -816,6 +834,49 @@ func (r *HAIngressReconciler) ownerRefsComment(svc *tailscale.VIPService) (strin
 	return string(json), nil
 }
 
+// ensureCertResources ensures that the TLS Secret for an HA Ingress and RBAC
+// resources that allow proxies to manage the Secret are created.
+// Note that Tailscale VIPService name validation matches Kubernetes
+// resource name validation, so we can be certain that the VIPService name
+// (domain) is a valid Kubernetes resource name.
+// https://github.com/tailscale/tailscale/blob/8b1e7f646ee4730ad06c9b70c13e7861b964949b/util/dnsname/dnsname.go#L99
+// https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#dns-subdomain-names
+func (r *HAIngressReconciler) ensureCertResources(ctx context.Context, pgName, domain string) error {
+	secret := certSecret(pgName, r.tsNamespace, domain)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, secret, nil); err != nil {
+		return fmt.Errorf("failed to create or update Secret %s: %w", secret.Name, err)
+	}
+	role := certSecretRole(pgName, r.tsNamespace, domain)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, nil); err != nil {
+		return fmt.Errorf("failed to create or update Role %s: %w", role.Name, err)
+	}
+	rb := certSecretRoleBinding(pgName, r.tsNamespace, domain)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, rb, nil); err != nil {
+		return fmt.Errorf("failed to create or update RoleBinding %s: %w", rb.Name, err)
+	}
+	return nil
+}
+
+// cleanupCertResources ensures that the TLS Secret and associated RBAC
+// resources that allow proxies to read/write to the Secret are deleted.
+func (r *HAIngressReconciler) cleanupCertResources(ctx context.Context, pgName string, name tailcfg.ServiceName) error {
+	domainName, err := r.dnsNameForService(ctx, tailcfg.ServiceName(name))
+	if err != nil {
+		return fmt.Errorf("error getting DNS name for VIPService %s: %w", name, err)
+	}
+	labels := certResourceLabels(pgName, domainName)
+	if err := r.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+		return fmt.Errorf("error deleting RoleBinding for domain name %s: %w", domainName, err)
+	}
+	if err := r.DeleteAllOf(ctx, &rbacv1.Role{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+		return fmt.Errorf("error deleting Role for domain name %s: %w", domainName, err)
+	}
+	if err := r.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+		return fmt.Errorf("error deleting Secret for domain name %s: %w", domainName, err)
+	}
+	return nil
+}
+
 // parseComment returns VIPService comment or nil if none found or not matching the expected format.
 func parseComment(vipSvc *tailscale.VIPService) (*comment, error) {
 	if vipSvc.Comment == "" {
@@ -835,4 +896,94 @@ func parseComment(vipSvc *tailscale.VIPService) (*comment, error) {
 // updates during multi-clutster Ingress create/update operations.
 func requeueInterval() time.Duration {
 	return time.Duration(rand.N(5)+5) * time.Minute
+}
+
+// certSecretRole creates a Role that will allow proxies to manage the TLS
+// Secret for the given domain. Domain must be a valid Kubernetes resource name.
+func certSecretRole(pgName, namespace, domain string) *rbacv1.Role {
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      domain,
+			Namespace: namespace,
+			Labels:    certResourceLabels(pgName, domain),
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups:     []string{""},
+				Resources:     []string{"secrets"},
+				ResourceNames: []string{domain},
+				Verbs: []string{
+					"get",
+					"list",
+					"patch",
+					"update",
+				},
+			},
+		},
+	}
+}
+
+// certSecretRoleBinding creates a RoleBinding for Role that will allow proxies
+// to manage the TLS Secret for the given domain. Domain must be a valid
+// Kubernetes resource name.
+func certSecretRoleBinding(pgName, namespace, domain string) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      domain,
+			Namespace: namespace,
+			Labels:    certResourceLabels(pgName, domain),
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      pgName,
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			Kind: "Role",
+			Name: domain,
+		},
+	}
+}
+
+// certSecret creates a Secret that will store the TLS certificate and private
+// key for the given domain. Domain must be a valid Kubernetes resource name.
+func certSecret(pgName, namespace, domain string) *corev1.Secret {
+	labels := certResourceLabels(pgName, domain)
+	labels[kubetypes.LabelSecretType] = "certs"
+	return &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Secret",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      domain,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Data: map[string][]byte{
+			corev1.TLSCertKey:       nil,
+			corev1.TLSPrivateKeyKey: nil,
+		},
+		Type: corev1.SecretTypeTLS,
+	}
+}
+
+func certResourceLabels(pgName, domain string) map[string]string {
+	return map[string]string{
+		kubetypes.LabelManaged:      "true",
+		"tailscale.com/proxy-group": pgName,
+		"tailscale.com/domain":      domain,
+	}
+}
+
+// dnsNameForService returns the DNS name for the given VIPService name.
+func (r *HAIngressReconciler) dnsNameForService(ctx context.Context, svc tailcfg.ServiceName) (string, error) {
+	s := svc.WithoutPrefix()
+	tcd, err := r.tailnetCertDomain(ctx)
+	if err != nil {
+		return "", fmt.Errorf("error determining DNS name base: %w", err)
+	}
+	return s + "." + tcd, nil
 }

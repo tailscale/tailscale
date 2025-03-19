@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/ptr"
 )
 
@@ -156,8 +157,8 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	// Set a couple additional fields so we can test that we don't
 	// mistakenly override those.
 	labels := map[string]string{
-		LabelManaged:    "true",
-		LabelParentName: "foo",
+		kubetypes.LabelManaged: "true",
+		LabelParentName:        "foo",
 	}
 	annots := map[string]string{
 		podAnnotationLastSetClusterIP: "1.2.3.4",
@@ -303,28 +304,28 @@ func Test_mergeStatefulSetLabelsOrAnnots(t *testing.T) {
 	}{
 		{
 			name:    "no custom labels specified and none present in current labels, return current labels",
-			current: map[string]string{LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
-			want:    map[string]string{LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
+			current: map[string]string{kubetypes.LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
+			want:    map[string]string{kubetypes.LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
 			managed: tailscaleManagedLabels,
 		},
 		{
 			name:    "no custom labels specified, but some present in current labels, return tailscale managed labels only from the current labels",
-			current: map[string]string{"foo": "bar", "something.io/foo": "bar", LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
-			want:    map[string]string{LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
+			current: map[string]string{"foo": "bar", "something.io/foo": "bar", kubetypes.LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
+			want:    map[string]string{kubetypes.LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
 			managed: tailscaleManagedLabels,
 		},
 		{
 			name:    "custom labels specified, current labels only contain tailscale managed labels, return a union of both",
-			current: map[string]string{LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
+			current: map[string]string{kubetypes.LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
 			custom:  map[string]string{"foo": "bar", "something.io/foo": "bar"},
-			want:    map[string]string{"foo": "bar", "something.io/foo": "bar", LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
+			want:    map[string]string{"foo": "bar", "something.io/foo": "bar", kubetypes.LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
 			managed: tailscaleManagedLabels,
 		},
 		{
 			name:    "custom labels specified, current labels contain tailscale managed labels and custom labels, some of which re not present in the new custom labels, return a union of managed labels and the desired custom labels",
-			current: map[string]string{"foo": "bar", "bar": "baz", "app": "1234", LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
+			current: map[string]string{"foo": "bar", "bar": "baz", "app": "1234", kubetypes.LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
 			custom:  map[string]string{"foo": "bar", "something.io/foo": "bar"},
-			want:    map[string]string{"foo": "bar", "something.io/foo": "bar", "app": "1234", LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
+			want:    map[string]string{"foo": "bar", "something.io/foo": "bar", "app": "1234", kubetypes.LabelManaged: "true", LabelParentName: "foo", LabelParentType: "svc", LabelParentNamespace: "foo"},
 			managed: tailscaleManagedLabels,
 		},
 		{

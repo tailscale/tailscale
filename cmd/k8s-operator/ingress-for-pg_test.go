@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -69,6 +70,11 @@ func TestIngressPGReconciler(t *testing.T) {
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
+
+	// Verify cert resources were created for the first Ingress
+	expectEqual(t, fc, certSecret("test-pg", "operator-ns", "my-svc.ts.net"))
+	expectEqual(t, fc, certSecretRole("test-pg", "operator-ns", "my-svc.ts.net"))
+	expectEqual(t, fc, certSecretRoleBinding("test-pg", "operator-ns", "my-svc.ts.net"))
 
 	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
 		ing.Annotations["tailscale.com/tags"] = "tag:custom,tag:test"
@@ -124,6 +130,11 @@ func TestIngressPGReconciler(t *testing.T) {
 	verifyServeConfig(t, fc, "svc:my-other-svc", false)
 	verifyVIPService(t, ft, "svc:my-other-svc", []string{"443"})
 
+	// Verify cert resources were created for the second Ingress
+	expectEqual(t, fc, certSecret("test-pg", "operator-ns", "my-other-svc.ts.net"))
+	expectEqual(t, fc, certSecretRole("test-pg", "operator-ns", "my-other-svc.ts.net"))
+	expectEqual(t, fc, certSecretRoleBinding("test-pg", "operator-ns", "my-other-svc.ts.net"))
+
 	// Verify first Ingress is still working
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
@@ -160,6 +171,9 @@ func TestIngressPGReconciler(t *testing.T) {
 	}
 
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
+	expectMissing[corev1.Secret](t, fc, "operator-ns", "my-other-svc.ts.net")
+	expectMissing[rbacv1.Role](t, fc, "operator-ns", "my-other-svc.ts.net")
+	expectMissing[rbacv1.RoleBinding](t, fc, "operator-ns", "my-other-svc.ts.net")
 
 	// Delete the first Ingress and verify cleanup
 	if err := fc.Delete(context.Background(), ing); err != nil {
@@ -186,6 +200,11 @@ func TestIngressPGReconciler(t *testing.T) {
 		t.Error("serve config not cleaned up")
 	}
 	verifyTailscaledConfig(t, fc, nil)
+
+	// Add verification that cert resources were cleaned up
+	expectMissing[corev1.Secret](t, fc, "operator-ns", "my-svc.ts.net")
+	expectMissing[rbacv1.Role](t, fc, "operator-ns", "my-svc.ts.net")
+	expectMissing[rbacv1.RoleBinding](t, fc, "operator-ns", "my-svc.ts.net")
 }
 
 func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {

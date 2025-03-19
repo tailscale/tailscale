@@ -637,8 +637,8 @@ func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *z
 
 		// Get all headless Services for proxies configured using Service.
 		svcProxyLabels := map[string]string{
-			LabelManaged:    "true",
-			LabelParentType: "svc",
+			kubetypes.LabelManaged: "true",
+			LabelParentType:        "svc",
 		}
 		svcHeadlessSvcList := &corev1.ServiceList{}
 		if err := cl.List(ctx, svcHeadlessSvcList, client.InNamespace(ns), client.MatchingLabels(svcProxyLabels)); err != nil {
@@ -651,8 +651,8 @@ func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *z
 
 		// Get all headless Services for proxies configured using Ingress.
 		ingProxyLabels := map[string]string{
-			LabelManaged:    "true",
-			LabelParentType: "ingress",
+			kubetypes.LabelManaged: "true",
+			LabelParentType:        "ingress",
 		}
 		ingHeadlessSvcList := &corev1.ServiceList{}
 		if err := cl.List(ctx, ingHeadlessSvcList, client.InNamespace(ns), client.MatchingLabels(ingProxyLabels)); err != nil {
@@ -719,7 +719,7 @@ func dnsRecordsReconcilerIngressHandler(ns string, isDefaultLoadBalancer bool, c
 
 func isManagedResource(o client.Object) bool {
 	ls := o.GetLabels()
-	return ls[LabelManaged] == "true"
+	return ls[kubetypes.LabelManaged] == "true"
 }
 
 func isManagedByType(o client.Object, typ string) bool {
@@ -956,7 +956,7 @@ func egressPodsHandler(_ context.Context, o client.Object) []reconcile.Request {
 // returns reconciler requests for all egress EndpointSlices for that ProxyGroup.
 func egressEpsFromPGPods(cl client.Client, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
-		if v, ok := o.GetLabels()[LabelManaged]; !ok || v != "true" {
+		if v, ok := o.GetLabels()[kubetypes.LabelManaged]; !ok || v != "true" {
 			return nil
 		}
 		// TODO(irbekrm): for now this is good enough as all ProxyGroups are egress. Add a type check once we
@@ -976,13 +976,13 @@ func egressEpsFromPGPods(cl client.Client, ns string) handler.MapFunc {
 // returns reconciler requests for all egress EndpointSlices for that ProxyGroup.
 func egressEpsFromPGStateSecrets(cl client.Client, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
-		if v, ok := o.GetLabels()[LabelManaged]; !ok || v != "true" {
+		if v, ok := o.GetLabels()[kubetypes.LabelManaged]; !ok || v != "true" {
 			return nil
 		}
 		if parentType := o.GetLabels()[LabelParentType]; parentType != "proxygroup" {
 			return nil
 		}
-		if secretType := o.GetLabels()[labelSecretType]; secretType != "state" {
+		if secretType := o.GetLabels()[kubetypes.LabelSecretType]; secretType != "state" {
 			return nil
 		}
 		pg, ok := o.GetLabels()[LabelParentName]
@@ -999,7 +999,7 @@ func egressSvcFromEps(_ context.Context, o client.Object) []reconcile.Request {
 	if typ := o.GetLabels()[labelSvcType]; typ != typeEgress {
 		return nil
 	}
-	if v, ok := o.GetLabels()[LabelManaged]; !ok || v != "true" {
+	if v, ok := o.GetLabels()[kubetypes.LabelManaged]; !ok || v != "true" {
 		return nil
 	}
 	svcName, ok := o.GetLabels()[LabelParentName]
@@ -1046,13 +1046,13 @@ func ingressesFromPGStateSecret(cl client.Client, logger *zap.SugaredLogger) han
 			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
 			return nil
 		}
-		if secret.ObjectMeta.Labels[LabelManaged] != "true" {
+		if secret.ObjectMeta.Labels[kubetypes.LabelManaged] != "true" {
 			return nil
 		}
 		if secret.ObjectMeta.Labels[LabelParentType] != "proxygroup" {
 			return nil
 		}
-		if secret.ObjectMeta.Labels[labelSecretType] != "state" {
+		if secret.ObjectMeta.Labels[kubetypes.LabelSecretType] != "state" {
 			return nil
 		}
 		pgName, ok := secret.ObjectMeta.Labels[LabelParentName]
@@ -1183,9 +1183,9 @@ func podsFromEgressEps(cl client.Client, logger *zap.SugaredLogger, ns string) h
 			return nil
 		}
 		podLabels := map[string]string{
-			LabelManaged:    "true",
-			LabelParentType: "proxygroup",
-			LabelParentName: eps.Labels[labelProxyGroup],
+			kubetypes.LabelManaged: "true",
+			LabelParentType:        "proxygroup",
+			LabelParentName:        eps.Labels[labelProxyGroup],
 		}
 		podList := &corev1.PodList{}
 		if err := cl.List(ctx, podList, client.InNamespace(ns),
