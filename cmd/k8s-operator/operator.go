@@ -1046,13 +1046,13 @@ func ingressesFromPGStateSecret(cl client.Client, logger *zap.SugaredLogger) han
 			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
 			return nil
 		}
-		if secret.ObjectMeta.Labels[LabelManaged] != "true" {
+		if secret.ObjectMeta.Labels[kubetypes.LabelManaged] != "true" {
 			return nil
 		}
 		if secret.ObjectMeta.Labels[LabelParentType] != "proxygroup" {
 			return nil
 		}
-		if secret.ObjectMeta.Labels[labelSecretType] != "state" {
+		if secret.ObjectMeta.Labels[kubetypes.LabelSecretType] != "state" {
 			return nil
 		}
 		pgName, ok := secret.ObjectMeta.Labels[LabelParentName]

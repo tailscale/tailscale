@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"reflect"
 	"slices"
@@ -432,13 +431,13 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, proxyGroupName, vipServiceName, false, logger); err != nil {
 				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
-			svcCfg, ok := cfg.Services[vipServiceName]
+			_, ok := cfg.Services[vipServiceName]
 			if ok {
 				logger.Infof("Removing VIPService %q from serve config", vipServiceName)
 				delete(cfg.Services, vipServiceName)
 				serveConfigChanged = true
 			}
-			if err := r.cleanupCertResources(ctx, proxyGroupName, svcCfg); err != nil {
+			if err := r.cleanupCertResources(ctx, proxyGroupName, vipServiceName); err != nil {
 				return false, fmt.Errorf("failed to clean up cert resources: %w", err)
 			}
 		}
@@ -503,7 +502,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 3. Clean up any cluster resources
-	if err := r.cleanupCertResources(ctx, pg, cfg.Services[serviceName]); err != nil {
+	if err := r.cleanupCertResources(ctx, pg, serviceName); err != nil {
 		return false, fmt.Errorf("failed to clean up cert resources: %w", err)
 	}
 
@@ -860,28 +859,20 @@ func (r *HAIngressReconciler) ensureCertResources(ctx context.Context, pgName, d
 
 // cleanupCertResources ensures that the TLS Secret and associated RBAC
 // resources that allow proxies to read/write to the Secret are deleted.
-func (r *HAIngressReconciler) cleanupCertResources(ctx context.Context, pgName string, cfg *ipn.ServiceConfig) error {
-	if cfg == nil {
-		return nil
+func (r *HAIngressReconciler) cleanupCertResources(ctx context.Context, pgName string, name tailcfg.ServiceName) error {
+	domainName, err := r.dnsNameForService(ctx, tailcfg.ServiceName(name))
+	if err != nil {
+		return fmt.Errorf("error getting DNS name for VIPService %s: %w", name, err)
 	}
-	for hp := range cfg.Web {
-		host, port, err := net.SplitHostPort(string(hp))
-		if err != nil {
-			return fmt.Errorf("failed to parse HostPort %q: %w", hp, err)
-		}
-		if port != "443" {
-			continue // HTTP endpoint
-		}
-		labels := certResourceLabels(pgName, host)
-		if err := r.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
-			return fmt.Errorf("error deleting RoleBinding for domain name %s: %w", host, err)
-		}
-		if err := r.DeleteAllOf(ctx, &rbacv1.Role{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
-			return fmt.Errorf("error deleting Role for domain name %s: %w", host, err)
-		}
-		if err := r.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
-			return fmt.Errorf("error deleting Secret for domain name %s: %w", host, err)
-		}
+	labels := certResourceLabels(pgName, domainName)
+	if err := r.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+		return fmt.Errorf("error deleting RoleBinding for domain name %s: %w", domainName, err)
+	}
+	if err := r.DeleteAllOf(ctx, &rbacv1.Role{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+		return fmt.Errorf("error deleting Role for domain name %s: %w", domainName, err)
+	}
+	if err := r.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+		return fmt.Errorf("error deleting Secret for domain name %s: %w", domainName, err)
 	}
 	return nil
 }
@@ -918,8 +909,9 @@ func certSecretRole(pgName, namespace, domain string) *rbacv1.Role {
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
-				APIGroups: []string{""},
-				Resources: []string{"secrets"},
+				APIGroups:     []string{""},
+				Resources:     []string{"secrets"},
+				ResourceNames: []string{domain},
 				Verbs: []string{
 					"get",
 					"list",
@@ -984,4 +976,14 @@ func certResourceLabels(pgName, domain string) map[string]string {
 		"tailscale.com/proxy-group": pgName,
 		"tailscale.com/domain":      domain,
 	}
+}
+
+// dnsNameForService returns the DNS name for the given VIPService name.
+func (r *HAIngressReconciler) dnsNameForService(ctx context.Context, svc tailcfg.ServiceName) (string, error) {
+	s := svc.WithoutPrefix()
+	tcd, err := r.tailnetCertDomain(ctx)
+	if err != nil {
+		return "", fmt.Errorf("error determining DNS name base: %w", err)
+	}
+	return s + "." + tcd, nil
 }

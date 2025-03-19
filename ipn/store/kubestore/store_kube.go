@@ -283,7 +283,7 @@ func (s *Store) updateSecret(data map[string][]byte, secretName string) (err err
 			}
 		}
 		if err := s.client.JSONPatchResource(ctx, secretName, kubeclient.TypeSecrets, m); err != nil {
-			return fmt.Errorf("error patching Secret %s: %w", s.secretName, err)
+			return fmt.Errorf("error patching Secret %s: %w", secretName, err)
 		}
 		return nil
 	}

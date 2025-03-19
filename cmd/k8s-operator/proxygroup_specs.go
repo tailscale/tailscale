@@ -180,6 +180,9 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 					Value: fmt.Sprintf("/etc/proxies/%s", serveConfigKey),
 				},
 				corev1.EnvVar{
+					// Run proxies in cert share mode to
+					// ensure that only one TLS cert is
+					// issued for an HA Ingress.
 					Name:  "TS_EXPERIMENTAL_CERT_SHARE",
 					Value: "true",
 				},
