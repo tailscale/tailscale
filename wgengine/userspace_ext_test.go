@@ -16,7 +16,7 @@ import (
 )
 
 func TestIsNetstack(t *testing.T) {
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithEventBus()
 	e, err := wgengine.NewUserspaceEngine(
 		tstest.WhileTestRunningLogger(t),
 		wgengine.Config{
