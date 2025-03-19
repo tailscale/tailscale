@@ -335,7 +335,8 @@ func (s *Server) requireTailscaleIP(w http.ResponseWriter, r *http.Request) (han
 		ipv6ServiceHost = "[" + tsaddr.TailscaleServiceIPv6String + "]"
 	)
 	// allow requests on quad-100 (or ipv6 equivalent)
-	if r.Host == ipv4ServiceHost || r.Host == ipv6ServiceHost {
+	host := strings.TrimSuffix(r.Host, ":80")
+	if host == ipv4ServiceHost || host == ipv6ServiceHost {
 		return false
 	}
 
