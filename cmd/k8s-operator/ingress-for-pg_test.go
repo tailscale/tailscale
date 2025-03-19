@@ -461,6 +461,31 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Status will be empty until the VIPService shows up in prefs.
+	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress, []networkingv1.IngressLoadBalancerIngress(nil)) {
+		t.Errorf("incorrect Ingress status: got %v, want empty",
+			ing.Status.LoadBalancer.Ingress)
+	}
+
+	// Add the VIPService to prefs to have the Ingress recognised as ready.
+	mustCreate(t, fc, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pg-0",
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels("test-pg", "state"),
+		},
+		Data: map[string][]byte{
+			"_current-profile": []byte("profile-foo"),
+			"profile-foo":      []byte(`{"AdvertiseServices":["svc:my-svc"],"Config":{"NodeID":"node-foo"}}`),
+		},
+	})
+
+	// Reconcile and re-fetch Ingress.
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	if err := fc.Get(context.Background(), client.ObjectKeyFromObject(ing), ing); err != nil {
+		t.Fatal(err)
+	}
+
 	wantStatus := []networkingv1.IngressPortStatus{
 		{Port: 443, Protocol: "TCP"},
 		{Port: 80, Protocol: "TCP"},

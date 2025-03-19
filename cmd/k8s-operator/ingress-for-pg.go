@@ -154,13 +154,13 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	pg := &tsapi.ProxyGroup{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pgName}, pg); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Infof("ProxyGroup %q does not exist", pgName)
+			logger.Infof("ProxyGroup does not exist")
 			return false, nil
 		}
 		return false, fmt.Errorf("getting ProxyGroup %q: %w", pgName, err)
 	}
 	if !tsoperator.ProxyGroupIsReady(pg) {
-		logger.Infof("ProxyGroup %q is not (yet) ready", pgName)
+		logger.Infof("ProxyGroup is not (yet) ready")
 		return false, nil
 	}
 
@@ -174,8 +174,6 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	if !IsHTTPSEnabledOnTailnet(r.tsnetServer) {
 		r.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
 	}
-
-	logger = logger.With("proxy-group", pg.Name)
 
 	if !slices.Contains(ing.Finalizers, FinalizerNamePG) {
 		// This log line is printed exactly once during initial provisioning,
@@ -326,7 +324,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		!reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) ||
 		!reflect.DeepEqual(vipSvc.Ports, existingVIPSvc.Ports) ||
 		!strings.EqualFold(vipSvc.Comment, existingVIPSvc.Comment) {
-		logger.Infof("Ensuring VIPService %q exists and is up to date", hostname)
+		logger.Infof("Ensuring VIPService exists and is up to date")
 		if err := r.tsClient.CreateOrUpdateVIPService(ctx, vipSvc); err != nil {
 			return false, fmt.Errorf("error creating VIPService: %w", err)
 		}
@@ -338,31 +336,48 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
 	}
 
-	// TODO(irbekrm): check that the replicas are ready to route traffic for the VIPService before updating Ingress
-	// status.
-	// 6. Update Ingress status
+	// 6. Update Ingress status if ProxyGroup Pods are ready.
+	count, err := r.numberPodsAdvertising(ctx, pg.Name, serviceName)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if any Pods are configured: %w", err)
+	}
+
 	oldStatus := ing.Status.DeepCopy()
-	ports := []networkingv1.IngressPortStatus{
-		{
-			Protocol: "TCP",
-			Port:     443,
-		},
+
+	switch count {
+	case 0:
+		ing.Status.LoadBalancer.Ingress = nil
+	default:
+		ports := []networkingv1.IngressPortStatus{
+			{
+				Protocol: "TCP",
+				Port:     443,
+			},
+		}
+		if isHTTPEndpointEnabled(ing) {
+			ports = append(ports, networkingv1.IngressPortStatus{
+				Protocol: "TCP",
+				Port:     80,
+			})
+		}
+		ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
+			{
+				Hostname: dnsName,
+				Ports:    ports,
+			},
+		}
 	}
-	if isHTTPEndpointEnabled(ing) {
-		ports = append(ports, networkingv1.IngressPortStatus{
-			Protocol: "TCP",
-			Port:     80,
-		})
-	}
-	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
-		{
-			Hostname: dnsName,
-			Ports:    ports,
-		},
-	}
-	if apiequality.Semantic.DeepEqual(oldStatus, ing.Status) {
+	if apiequality.Semantic.DeepEqual(oldStatus, &ing.Status) {
 		return svcsChanged, nil
 	}
+
+	const prefix = "Updating Ingress status"
+	if count == 0 {
+		logger.Infof("%s. No Pods are advertising VIPService yet", prefix)
+	} else {
+		logger.Infof("%s. %d Pod(s) advertising VIPService", prefix, count)
+	}
+
 	if err := r.Status().Update(ctx, ing); err != nil {
 		return false, fmt.Errorf("failed to update Ingress status: %w", err)
 	}
@@ -724,6 +739,30 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	}
 
 	return nil
+}
+
+func (a *HAIngressReconciler) numberPodsAdvertising(ctx context.Context, pgName string, serviceName tailcfg.ServiceName) (int, error) {
+	// Get all state Secrets for this ProxyGroup.
+	secrets := &corev1.SecretList{}
+	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "state"))); err != nil {
+		return 0, fmt.Errorf("failed to list ProxyGroup %q state Secrets: %w", pgName, err)
+	}
+
+	var count int
+	for _, secret := range secrets.Items {
+		prefs, ok, err := getDevicePrefs(&secret)
+		if err != nil {
+			return 0, fmt.Errorf("error getting node metadata: %w", err)
+		}
+		if !ok {
+			continue
+		}
+		if slices.Contains(prefs.AdvertiseServices, serviceName.String()) {
+			count++
+		}
+	}
+
+	return count, nil
 }
 
 // OwnerRef is an owner reference that uniquely identifies a Tailscale
