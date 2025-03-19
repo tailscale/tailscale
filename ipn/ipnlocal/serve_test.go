@@ -882,6 +882,7 @@ func newTestBackend(t *testing.T) *LocalBackend {
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),
 		Metrics:       sys.UserMetricsRegistry(),
+		EventBus:      sys.Bus.Get(),
 	})
 	if err != nil {
 		t.Fatal(err)

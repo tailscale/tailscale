@@ -329,7 +329,7 @@ func beWindowsSubprocess() bool {
 	}
 
 	sys := tsd.NewSystem()
-	netMon, err := netmon.New(log.Printf)
+	netMon, err := netmon.New(sys.Bus.Get(), log.Printf)
 	if err != nil {
 		log.Fatalf("Could not create netMon: %v", err)
 	}

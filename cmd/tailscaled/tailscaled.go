@@ -391,7 +391,7 @@ func run() (err error) {
 	var netMon *netmon.Monitor
 	isWinSvc := isWindowsService()
 	if !isWinSvc {
-		netMon, err = netmon.New(logf)
+		netMon, err = netmon.New(sys.Bus.Get(), logf)
 		if err != nil {
 			return fmt.Errorf("netmon.New: %w", err)
 		}

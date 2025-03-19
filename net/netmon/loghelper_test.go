@@ -7,10 +7,14 @@ import (
 	"bytes"
 	"fmt"
 	"testing"
+
+	"tailscale.com/util/eventbus"
 )
 
 func TestLinkChangeLogLimiter(t *testing.T) {
-	mon, err := New(t.Logf)
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
