@@ -18,7 +18,7 @@ func TestCreateOrGetMapping(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), nil)
+	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
 	defer c.Close()
 	c.SetLocalPort(1234)
 	for i := range 2 {
@@ -34,7 +34,7 @@ func TestClientProbe(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), nil)
+	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
 	defer c.Close()
 	for i := range 3 {
 		if i > 0 {
@@ -49,7 +49,7 @@ func TestClientProbeThenMap(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), nil)
+	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
 	defer c.Close()
 	c.debug.VerboseLogs = true
 	c.SetLocalPort(1234)
