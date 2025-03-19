@@ -24,6 +24,7 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
 var netcheckCmd = &ffcli.Command{
@@ -48,7 +49,9 @@ var netcheckArgs struct {
 
 func runNetcheck(ctx context.Context, args []string) error {
 	logf := logger.WithPrefix(log.Printf, "portmap: ")
-	netMon, err := netmon.New(logf)
+	bus := eventbus.New()
+	defer bus.Close()
+	netMon, err := netmon.New(bus, logf)
 	if err != nil {
 		return err
 	}

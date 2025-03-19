@@ -7,9 +7,10 @@ package netmon
 
 import (
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
-func newOSMon(logf logger.Logf, m *Monitor) (osMon, error) {
+func newOSMon(_ *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
 	return newPollingMon(logf, m)
 }
 
