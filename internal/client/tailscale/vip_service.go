@@ -27,6 +27,8 @@ type VIPService struct {
 	Addrs []string `json:"addrs,omitempty"`
 	// Comment is an optional text string for display in the admin panel.
 	Comment string `json:"comment,omitempty"`
+	// Annotations are optional key-value pairs that can be used to store arbitrary metadata.
+	Annotations map[string]string `json:"annotations,omitempty"`
 	// Ports are the ports of a VIPService that will be configured via Tailscale serve config.
 	// If set, any node wishing to advertise this VIPService must have this port configured via Tailscale serve.
 	Ports []string `json:"ports,omitempty"`
