@@ -544,7 +544,13 @@ func NewConn(opts Options) (*Conn, error) {
 	portMapOpts := &portmapper.DebugKnobs{
 		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
 	}
-	c.portMapper = portmapper.NewClient(portmapperLogf, opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
+	c.portMapper = portmapper.NewClient(portmapper.Config{
+		Logf:         portmapperLogf,
+		NetMon:       opts.NetMon,
+		DebugKnobs:   portMapOpts,
+		ControlKnobs: opts.ControlKnobs,
+		OnChange:     c.onPortMapChanged,
+	})
 	c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker

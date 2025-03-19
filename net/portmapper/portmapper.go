@@ -201,32 +201,45 @@ func (m *pmpMapping) Release(ctx context.Context) {
 	uc.WriteToUDPAddrPort(pkt, m.gw)
 }
 
-// NewClient returns a new portmapping client.
-//
-// The netMon parameter is required.
-//
-// The debug argument allows configuring the behaviour of the portmapper for
-// debugging; if nil, a sensible set of defaults will be used.
-//
-// The controlKnobs, if non-nil, specifies the control knobs from the control
-// plane that might disable portmapping.
-//
-// The optional onChange argument specifies a func to run in a new goroutine
-// whenever the port mapping status has changed. If nil, it doesn't make a
-// callback.
-func NewClient(logf logger.Logf, netMon *netmon.Monitor, debug *DebugKnobs, controlKnobs *controlknobs.Knobs, onChange func()) *Client {
-	if netMon == nil {
+// Config carries the settings for a [Client].
+type Config struct {
+	// Logf is called to generate text logs for the client. If nil, logger.Discard is used.
+	Logf logger.Logf
+
+	// NetMon is the network monitor used by the client. It must be non-nil.
+	NetMon *netmon.Monitor
+
+	// DebugKnobs, if non-nil, configure the behaviour of the portmapper for
+	// debugging.  If nil, a sensible set of defaults will be used.
+	DebugKnobs *DebugKnobs
+
+	// ControlKnobs, if non-nil, specifies knobs from the control plane that
+	// might disable port mapping.
+	ControlKnobs *controlknobs.Knobs
+
+	// OnChange is called to run in a new goroutine whenever the port mapping
+	// status has changed. If nil, no callback is issued.
+	OnChange func()
+}
+
+// NewClient constructs a new portmapping [Client] from c. It will panic if any
+// required parameters are omitted.
+func NewClient(c Config) *Client {
+	if c.NetMon == nil {
 		panic("nil netMon")
 	}
 	ret := &Client{
-		logf:         logf,
-		netMon:       netMon,
+		logf:         c.Logf,
+		netMon:       c.NetMon,
 		ipAndGateway: netmon.LikelyHomeRouterIP, // TODO(bradfitz): move this to method on netMon
-		onChange:     onChange,
-		controlKnobs: controlKnobs,
+		onChange:     c.OnChange,
+		controlKnobs: c.ControlKnobs,
 	}
-	if debug != nil {
-		ret.debug = *debug
+	if ret.logf == nil {
+		ret.logf = logger.Discard
+	}
+	if c.DebugKnobs != nil {
+		ret.debug = *c.DebugKnobs
 	}
 	return ret
 }
