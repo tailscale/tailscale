@@ -240,6 +240,9 @@ func upgradeNode(n *tailcfg.Node) {
 		}
 		n.LegacyDERPString = ""
 	}
+	if DevKnob.StripHomeDERP() {
+		n.HomeDERP = 0
+	}
 
 	if n.AllowedIPs == nil {
 		n.AllowedIPs = slices.Clone(n.Addresses)

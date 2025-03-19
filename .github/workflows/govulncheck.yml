@@ -30,7 +30,7 @@ jobs:
           token: ${{ secrets.GOVULNCHECK_BOT_TOKEN }}
           payload: |
             {
-              "channel": "C05PXRM304B",
+              "channel": "C08FGKZCQTW",
               "blocks": [
                 {
                   "type": "section",

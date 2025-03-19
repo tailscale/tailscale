@@ -75,7 +75,7 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "deletecollection"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["roles", "rolebindings"]
-  verbs: ["get", "create", "patch", "update", "list", "watch"]
+  verbs: ["get", "create", "patch", "update", "list", "watch", "deletecollection"]
 - apiGroups: ["monitoring.coreos.com"]
   resources: ["servicemonitors"]
   verbs: ["get", "list", "update", "create", "delete"]

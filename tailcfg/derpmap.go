@@ -96,11 +96,31 @@ type DERPRegion struct {
 	Latitude  float64 `json:",omitempty"`
 	Longitude float64 `json:",omitempty"`
 
-	// Avoid is whether the client should avoid picking this as its home
-	// region. The region should only be used if a peer is there.
-	// Clients already using this region as their home should migrate
-	// away to a new region without Avoid set.
+	// Avoid is whether the client should avoid picking this as its home region.
+	// The region should only be used if a peer is there. Clients already using
+	// this region as their home should migrate away to a new region without
+	// Avoid set.
+	//
+	// Deprecated: because of bugs in past implementations combined with unclear
+	// docs that caused people to think the bugs were intentional, this field is
+	// deprecated. It was never supposed to cause STUN/DERP measurement probes,
+	// but due to bugs, it sometimes did. And then some parts of the code began
+	// to rely on that property. But then we were unable to use this field for
+	// its original purpose, nor its later imagined purpose, because various
+	// parts of the codebase thought it meant one thing and others thought it
+	// meant another. But it did something in the middle instead. So we're retiring
+	// it. Use NoMeasureNoHome instead.
 	Avoid bool `json:",omitempty"`
+
+	// NoMeasureNoHome says that this regions should not be measured for its
+	// latency distance (STUN, HTTPS, etc) or availability (e.g. captive portal
+	// checks) and should never be selected as the node's home region. However,
+	// if a peer declares this region as its home, then this client is allowed
+	// to connect to it for the purpose of communicating with that peer.
+	//
+	// This is what the now deprecated Avoid bool was supposed to mean
+	// originally but had implementation bugs and documentation omissions.
+	NoMeasureNoHome bool `json:",omitempty"`
 
 	// Nodes are the DERP nodes running in this region, in
 	// priority order for the current client. Client TLS
@@ -139,6 +159,12 @@ type DERPNode struct {
 	// name. If empty, HostName is used. If CertName is non-empty,
 	// HostName is only used for the TCP dial (if IPv4/IPv6 are
 	// not present) + TLS ClientHello.
+	//
+	// As a special case, if CertName starts with "sha256-raw:",
+	// then the rest of the string is a hex-encoded SHA256 of the
+	// cert to expect. This is used for self-signed certs.
+	// In this case, the HostName field will typically be an IP
+	// address literal.
 	CertName string `json:",omitempty"`
 
 	// IPv4 optionally forces an IPv4 address to use, instead of using DNS.

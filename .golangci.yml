@@ -26,15 +26,10 @@ issues:
 
 # Per-linter settings are contained in this top-level key
 linters-settings:
-  # Enable all rules by default; we don't use invisible unicode runes.
-  bidichk:
-
   gofmt:
     rewrite-rules:
       - pattern: 'interface{}'
         replacement: 'any'
-
-  goimports:
 
   govet:
     # Matches what we use in corp as of 2023-12-07
@@ -77,8 +72,6 @@ linters-settings:
           # NOTE(andrew-d): this doesn't currently work because the printf
           # analyzer doesn't support type declarations
           #- github.com/tailscale/tailscale/types/logger.Logf
-
-  misspell:
 
   revive:
     enable-all-rules: false

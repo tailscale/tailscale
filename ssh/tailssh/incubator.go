@@ -254,32 +254,44 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	return ia, nil
 }
 
-func (ia incubatorArgs) forwadedEnviron() ([]string, string, error) {
+// forwardedEnviron returns the concatenation of the current environment with
+// any environment variables specified in ia.encodedEnv.
+//
+// It also returns allowedExtraKeys, containing the env keys that were passed in
+// to ia.encodedEnv.
+func (ia incubatorArgs) forwardedEnviron() (env, allowedExtraKeys []string, err error) {
 	environ := os.Environ()
+
 	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
-	allowListKeys := "SSH_AUTH_SOCK"
+	// TODO(bradfitz,percy): why is this listed specially? If the parent wanted to included
+	// it, couldn't it have just passed it to the incubator in encodedEnv?
+	// If it didn't, no reason for us to pass it to "su -w ..." if it's not in our env
+	// anyway? (Surely we don't want to inherit the tailscaled parent SSH_AUTH_SOCK, if any)
+	allowedExtraKeys = []string{"SSH_AUTH_SOCK"}
 
 	if ia.encodedEnv != "" {
 		unquoted, err := strconv.Unquote(ia.encodedEnv)
 		if err != nil {
-			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+			return nil, nil, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 
 		var extraEnviron []string
 
 		err = json.Unmarshal([]byte(unquoted), &extraEnviron)
 		if err != nil {
-			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+			return nil, nil, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 
 		environ = append(environ, extraEnviron...)
 
-		for _, v := range extraEnviron {
-			allowListKeys = fmt.Sprintf("%s,%s", allowListKeys, strings.Split(v, "=")[0])
+		for _, kv := range extraEnviron {
+			if k, _, ok := strings.Cut(kv, "="); ok {
+				allowedExtraKeys = append(allowedExtraKeys, k)
+			}
 		}
 	}
 
-	return environ, allowListKeys, nil
+	return environ, allowedExtraKeys, nil
 }
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
@@ -459,7 +471,7 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	loginArgs := ia.loginArgs(loginCmdPath)
 	dlogf("logging in with %+v", loginArgs)
 
-	environ, _, err := ia.forwadedEnviron()
+	environ, _, err := ia.forwardedEnviron()
 	if err != nil {
 		return err
 	}
@@ -498,14 +510,14 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		defer sessionCloser()
 	}
 
-	environ, allowListEnvKeys, err := ia.forwadedEnviron()
+	environ, allowListEnvKeys, err := ia.forwardedEnviron()
 	if err != nil {
 		return false, err
 	}
 
 	loginArgs := []string{
 		su,
-		"-w", allowListEnvKeys,
+		"-w", strings.Join(allowListEnvKeys, ","),
 		"-l",
 		ia.localUser,
 	}
@@ -546,7 +558,7 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 		return ""
 	}
 
-	_, allowListEnvKeys, err := ia.forwadedEnviron()
+	_, allowListEnvKeys, err := ia.forwardedEnviron()
 	if err != nil {
 		return ""
 	}
@@ -555,7 +567,7 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 	// to make sure su supports the necessary arguments.
 	err = exec.Command(
 		su,
-		"-w", allowListEnvKeys,
+		"-w", strings.Join(allowListEnvKeys, ","),
 		"-l",
 		ia.localUser,
 		"-c", "true",
@@ -582,7 +594,7 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 		return err
 	}
 
-	environ, _, err := ia.forwadedEnviron()
+	environ, _, err := ia.forwardedEnviron()
 	if err != nil {
 		return err
 	}

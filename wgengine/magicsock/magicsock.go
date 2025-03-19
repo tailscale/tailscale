@@ -177,6 +177,10 @@ type Conn struct {
 	// port mappings from NAT devices.
 	portMapper *portmapper.Client
 
+	// portMapperLogfUnregister is the function to call to unregister
+	// the portmapper log limiter.
+	portMapperLogfUnregister func()
+
 	// derpRecvCh is used by receiveDERP to read DERP messages.
 	// It must have buffer size > 0; see issue 3736.
 	derpRecvCh chan derpReadResult
@@ -532,10 +536,15 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
+
+	// Don't log the same log messages possibly every few seconds in our
+	// portmapper.
+	portmapperLogf := logger.WithPrefix(c.logf, "portmapper: ")
+	portmapperLogf, c.portMapperLogfUnregister = netmon.LinkChangeLogLimiter(portmapperLogf, opts.NetMon)
 	portMapOpts := &portmapper.DebugKnobs{
 		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
 	}
-	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
+	c.portMapper = portmapper.NewClient(portmapperLogf, opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
 	c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
@@ -2481,6 +2490,7 @@ func (c *Conn) Close() error {
 	}
 	c.stopPeriodicReSTUNTimerLocked()
 	c.portMapper.Close()
+	c.portMapperLogfUnregister()
 
 	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ep.stopAndReset()

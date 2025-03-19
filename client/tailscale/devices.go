@@ -79,6 +79,13 @@ type Device struct {
 	// Tailscale have attempted to collect this from the device but it has not
 	// opted in, PostureIdentity will have Disabled=true.
 	PostureIdentity *DevicePostureIdentity `json:"postureIdentity"`
+
+	// TailnetLockKey is the tailnet lock public key of the node as a hex string.
+	TailnetLockKey string `json:"tailnetLockKey,omitempty"`
+
+	// TailnetLockErr indicates an issue with the tailnet lock node-key signature
+	// on this device. This field is only populated when tailnet lock is enabled.
+	TailnetLockErr string `json:"tailnetLockError,omitempty"`
 }
 
 type DevicePostureIdentity struct {

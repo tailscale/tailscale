@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 )
 
 const (
@@ -222,7 +223,7 @@ func metricsResourceName(stsName string) string {
 // proxy.
 func metricsResourceLabels(opts *metricsOpts) map[string]string {
 	lbls := map[string]string{
-		LabelManaged:             "true",
+		kubetypes.LabelManaged:   "true",
 		labelMetricsTarget:       opts.proxyStsName,
 		labelPromProxyType:       opts.proxyType,
 		labelPromProxyParentName: opts.proxyLabels[LabelParentName],

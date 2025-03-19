@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -39,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -335,14 +337,19 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not get local client: %v", err)
 	}
+	id, err := id(context.Background(), lc)
+	if err != nil {
+		startlog.Fatalf("error determining stable ID of the operator's Tailscale device: %v", err)
+	}
 	ingressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(ingressesFromIngressProxyGroup(mgr.GetClient(), opts.log))
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
 		Named("ingress-pg-reconciler").
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(ingressesFromPGStateSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
-		Complete(&IngressPGReconciler{
+		Complete(&HAIngressReconciler{
 			recorder:    eventRecorder,
 			tsClient:    opts.tsClient,
 			tsnetServer: opts.tsServer,
@@ -350,6 +357,7 @@ func runReconcilers(opts reconcilerOpts) {
 			Client:      mgr.GetClient(),
 			logger:      opts.log.Named("ingress-pg-reconciler"),
 			lc:          lc,
+			operatorID:  id,
 			tsNamespace: opts.tailscaleNamespace,
 		})
 	if err != nil {
@@ -629,8 +637,8 @@ func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *z
 
 		// Get all headless Services for proxies configured using Service.
 		svcProxyLabels := map[string]string{
-			LabelManaged:    "true",
-			LabelParentType: "svc",
+			kubetypes.LabelManaged: "true",
+			LabelParentType:        "svc",
 		}
 		svcHeadlessSvcList := &corev1.ServiceList{}
 		if err := cl.List(ctx, svcHeadlessSvcList, client.InNamespace(ns), client.MatchingLabels(svcProxyLabels)); err != nil {
@@ -643,8 +651,8 @@ func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *z
 
 		// Get all headless Services for proxies configured using Ingress.
 		ingProxyLabels := map[string]string{
-			LabelManaged:    "true",
-			LabelParentType: "ingress",
+			kubetypes.LabelManaged: "true",
+			LabelParentType:        "ingress",
 		}
 		ingHeadlessSvcList := &corev1.ServiceList{}
 		if err := cl.List(ctx, ingHeadlessSvcList, client.InNamespace(ns), client.MatchingLabels(ingProxyLabels)); err != nil {
@@ -711,7 +719,7 @@ func dnsRecordsReconcilerIngressHandler(ns string, isDefaultLoadBalancer bool, c
 
 func isManagedResource(o client.Object) bool {
 	ls := o.GetLabels()
-	return ls[LabelManaged] == "true"
+	return ls[kubetypes.LabelManaged] == "true"
 }
 
 func isManagedByType(o client.Object, typ string) bool {
@@ -948,7 +956,7 @@ func egressPodsHandler(_ context.Context, o client.Object) []reconcile.Request {
 // returns reconciler requests for all egress EndpointSlices for that ProxyGroup.
 func egressEpsFromPGPods(cl client.Client, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
-		if v, ok := o.GetLabels()[LabelManaged]; !ok || v != "true" {
+		if v, ok := o.GetLabels()[kubetypes.LabelManaged]; !ok || v != "true" {
 			return nil
 		}
 		// TODO(irbekrm): for now this is good enough as all ProxyGroups are egress. Add a type check once we
@@ -968,15 +976,13 @@ func egressEpsFromPGPods(cl client.Client, ns string) handler.MapFunc {
 // returns reconciler requests for all egress EndpointSlices for that ProxyGroup.
 func egressEpsFromPGStateSecrets(cl client.Client, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
-		if v, ok := o.GetLabels()[LabelManaged]; !ok || v != "true" {
+		if v, ok := o.GetLabels()[kubetypes.LabelManaged]; !ok || v != "true" {
 			return nil
 		}
-		// TODO(irbekrm): for now this is good enough as all ProxyGroups are egress. Add a type check once we
-		// have ingress ProxyGroups.
 		if parentType := o.GetLabels()[LabelParentType]; parentType != "proxygroup" {
 			return nil
 		}
-		if secretType := o.GetLabels()[labelSecretType]; secretType != "state" {
+		if secretType := o.GetLabels()[kubetypes.LabelSecretType]; secretType != "state" {
 			return nil
 		}
 		pg, ok := o.GetLabels()[LabelParentName]
@@ -993,7 +999,7 @@ func egressSvcFromEps(_ context.Context, o client.Object) []reconcile.Request {
 	if typ := o.GetLabels()[labelSvcType]; typ != typeEgress {
 		return nil
 	}
-	if v, ok := o.GetLabels()[LabelManaged]; !ok || v != "true" {
+	if v, ok := o.GetLabels()[kubetypes.LabelManaged]; !ok || v != "true" {
 		return nil
 	}
 	svcName, ok := o.GetLabels()[LabelParentName]
@@ -1031,6 +1037,45 @@ func reconcileRequestsForPG(pg string, cl client.Client, ns string) []reconcile.
 		})
 	}
 	return reqs
+}
+
+func ingressesFromPGStateSecret(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		secret, ok := o.(*corev1.Secret)
+		if !ok {
+			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
+			return nil
+		}
+		if secret.ObjectMeta.Labels[kubetypes.LabelManaged] != "true" {
+			return nil
+		}
+		if secret.ObjectMeta.Labels[LabelParentType] != "proxygroup" {
+			return nil
+		}
+		if secret.ObjectMeta.Labels[kubetypes.LabelSecretType] != "state" {
+			return nil
+		}
+		pgName, ok := secret.ObjectMeta.Labels[LabelParentName]
+		if !ok {
+			return nil
+		}
+
+		ingList := &networkingv1.IngressList{}
+		if err := cl.List(ctx, ingList, client.MatchingFields{indexIngressProxyGroup: pgName}); err != nil {
+			logger.Infof("error listing Ingresses, skipping a reconcile for event on Secret %s: %v", secret.Name, err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, ing := range ingList.Items {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: ing.Namespace,
+					Name:      ing.Name,
+				},
+			})
+		}
+		return reqs
+	}
 }
 
 // egressSvcsFromEgressProxyGroup is an event handler for egress ProxyGroups. It returns reconcile requests for all
@@ -1138,9 +1183,9 @@ func podsFromEgressEps(cl client.Client, logger *zap.SugaredLogger, ns string) h
 			return nil
 		}
 		podLabels := map[string]string{
-			LabelManaged:    "true",
-			LabelParentType: "proxygroup",
-			LabelParentName: eps.Labels[labelProxyGroup],
+			kubetypes.LabelManaged: "true",
+			LabelParentType:        "proxygroup",
+			LabelParentName:        eps.Labels[labelProxyGroup],
 		}
 		podList := &corev1.PodList{}
 		if err := cl.List(ctx, podList, client.InNamespace(ns),
@@ -1261,4 +1306,15 @@ func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) han
 func hasProxyGroupAnnotation(obj client.Object) bool {
 	ing := obj.(*networkingv1.Ingress)
 	return ing.Annotations[AnnotationProxyGroup] != ""
+}
+
+func id(ctx context.Context, lc *local.Client) (string, error) {
+	st, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("error getting tailscale status: %w", err)
+	}
+	if st.Self == nil {
+		return "", fmt.Errorf("unexpected: device's status does not contain node's metadata")
+	}
+	return string(st.Self.ID), nil
 }

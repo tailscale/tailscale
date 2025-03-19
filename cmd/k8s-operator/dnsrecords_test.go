@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ptr"
 )
@@ -163,10 +164,10 @@ func headlessSvcForParent(o client.Object, typ string) *corev1.Service {
 			Name:      o.GetName(),
 			Namespace: "tailscale",
 			Labels: map[string]string{
-				LabelManaged:         "true",
-				LabelParentName:      o.GetName(),
-				LabelParentNamespace: o.GetNamespace(),
-				LabelParentType:      typ,
+				kubetypes.LabelManaged: "true",
+				LabelParentName:        o.GetName(),
+				LabelParentNamespace:   o.GetNamespace(),
+				LabelParentType:        typ,
 			},
 		},
 		Spec: corev1.ServiceSpec{

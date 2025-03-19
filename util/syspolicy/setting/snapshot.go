@@ -147,23 +147,28 @@ type snapshotJSON struct {
 	Settings map[Key]RawItem `json:",omitempty"`
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (s *Snapshot) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
+var (
+	_ jsonv2.MarshalerTo     = (*Snapshot)(nil)
+	_ jsonv2.UnmarshalerFrom = (*Snapshot)(nil)
+)
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (s *Snapshot) MarshalJSONTo(out *jsontext.Encoder) error {
 	data := &snapshotJSON{}
 	if s != nil {
 		data.Summary = s.summary
 		data.Settings = s.m
 	}
-	return jsonv2.MarshalEncode(out, data, opts)
+	return jsonv2.MarshalEncode(out, data)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (s *Snapshot) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (s *Snapshot) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	if s == nil {
 		return errors.New("s must not be nil")
 	}
 	data := &snapshotJSON{}
-	if err := jsonv2.UnmarshalDecode(in, data, opts); err != nil {
+	if err := jsonv2.UnmarshalDecode(in, data); err != nil {
 		return err
 	}
 	*s = Snapshot{m: data.Settings, sig: deephash.Hash(&data.Settings), summary: data.Summary}
@@ -172,12 +177,12 @@ func (s *Snapshot) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) er
 
 // MarshalJSON implements [json.Marshaler].
 func (s *Snapshot) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(s) // uses MarshalJSONV2
+	return jsonv2.Marshal(s) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (s *Snapshot) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, s) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, s) // uses UnmarshalJSONFrom
 }
 
 // MergeSnapshots returns a [Snapshot] that contains all [RawItem]s

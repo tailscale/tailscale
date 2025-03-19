@@ -157,15 +157,20 @@ func (lv ListView[T]) Equal(lv2 ListView[T]) bool {
 	return lv.ж.Equal(*lv2.ж)
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (lv ListView[T]) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return lv.ж.MarshalJSONV2(out, opts)
+var (
+	_ jsonv2.MarshalerTo     = (*ListView[bool])(nil)
+	_ jsonv2.UnmarshalerFrom = (*ListView[bool])(nil)
+)
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (lv ListView[T]) MarshalJSONTo(out *jsontext.Encoder) error {
+	return lv.ж.MarshalJSONTo(out)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (lv *ListView[T]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (lv *ListView[T]) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	var x List[T]
-	if err := x.UnmarshalJSONV2(in, opts); err != nil {
+	if err := x.UnmarshalJSONFrom(in); err != nil {
 		return err
 	}
 	lv.ж = &x
@@ -174,10 +179,10 @@ func (lv *ListView[T]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options
 
 // MarshalJSON implements [json.Marshaler].
 func (lv ListView[T]) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(lv) // uses MarshalJSONV2
+	return jsonv2.Marshal(lv) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (lv *ListView[T]) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, lv) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, lv) // uses UnmarshalJSONFrom
 }

@@ -387,6 +387,9 @@ type probePlan map[string][]probe
 func sortRegions(dm *tailcfg.DERPMap, last *Report, preferredDERP int) (prev []*tailcfg.DERPRegion) {
 	prev = make([]*tailcfg.DERPRegion, 0, len(dm.Regions))
 	for _, reg := range dm.Regions {
+		if reg.NoMeasureNoHome {
+			continue
+		}
 		// include an otherwise avoid region if it is the current preferred region
 		if reg.Avoid && reg.RegionID != preferredDERP {
 			continue
@@ -533,7 +536,7 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *netmon.State) (plan prob
 	plan = make(probePlan)
 
 	for _, reg := range dm.Regions {
-		if len(reg.Nodes) == 0 {
+		if reg.NoMeasureNoHome || len(reg.Nodes) == 0 {
 			continue
 		}
 

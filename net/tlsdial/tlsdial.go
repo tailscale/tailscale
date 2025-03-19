@@ -12,6 +12,7 @@ package tlsdial
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -243,6 +244,46 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 			return nil
 		}
 		return errSys
+	}
+}
+
+// SetConfigExpectedCertHash configures c's VerifyPeerCertificate function
+// to require that exactly 1 cert is presented, and that the hex of its SHA256 hash
+// is equal to wantFullCertSHA256Hex and that it's a valid cert for c.ServerName.
+func SetConfigExpectedCertHash(c *tls.Config, wantFullCertSHA256Hex string) {
+	if c.VerifyPeerCertificate != nil {
+		panic("refusing to override tls.Config.VerifyPeerCertificate")
+	}
+	// Set InsecureSkipVerify to prevent crypto/tls from doing its
+	// own cert verification, but do the same work that it'd do
+	// (but using certDNSName) in the VerifyPeerCertificate hook.
+	c.InsecureSkipVerify = true
+	c.VerifyConnection = nil
+	c.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return errors.New("no certs presented")
+		}
+		if len(rawCerts) > 1 {
+			return errors.New("unexpected multiple certs presented")
+		}
+		if fmt.Sprintf("%02x", sha256.Sum256(rawCerts[0])) != wantFullCertSHA256Hex {
+			return fmt.Errorf("cert hash does not match expected cert hash")
+		}
+		cert, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return fmt.Errorf("ParseCertificate: %w", err)
+		}
+		if err := cert.VerifyHostname(c.ServerName); err != nil {
+			return fmt.Errorf("cert does not match server name %q: %w", c.ServerName, err)
+		}
+		now := time.Now()
+		if now.After(cert.NotAfter) {
+			return fmt.Errorf("cert expired %v", cert.NotAfter)
+		}
+		if now.Before(cert.NotBefore) {
+			return fmt.Errorf("cert not yet valid until %v; is your clock correct?", cert.NotBefore)
+		}
+		return nil
 	}
 }
 

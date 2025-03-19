@@ -89,7 +89,7 @@ func availableEndpoints(derpMap *tailcfg.DERPMap, preferredDERPRegionID int, log
 	// Use the DERP IPs as captive portal detection endpoints. Using IPs is better than hostnames
 	// because they do not depend on DNS resolution.
 	for _, region := range derpMap.Regions {
-		if region.Avoid {
+		if region.Avoid || region.NoMeasureNoHome {
 			continue
 		}
 		for _, node := range region.Nodes {

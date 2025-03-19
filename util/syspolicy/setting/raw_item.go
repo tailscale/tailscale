@@ -75,31 +75,36 @@ func (i RawItem) String() string {
 	return fmt.Sprintf("%v%s", i.data.Value.Value, suffix)
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (i RawItem) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return jsonv2.MarshalEncode(out, &i.data, opts)
+var (
+	_ jsonv2.MarshalerTo     = (*RawItem)(nil)
+	_ jsonv2.UnmarshalerFrom = (*RawItem)(nil)
+)
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (i RawItem) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(out, &i.data)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (i *RawItem) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
-	return jsonv2.UnmarshalDecode(in, &i.data, opts)
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (i *RawItem) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	return jsonv2.UnmarshalDecode(in, &i.data)
 }
 
 // MarshalJSON implements [json.Marshaler].
 func (i RawItem) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(i) // uses MarshalJSONV2
+	return jsonv2.Marshal(i) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (i *RawItem) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, i) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, i) // uses UnmarshalJSONFrom
 }
 
 // RawValue represents a raw policy setting value read from a policy store.
 // It is JSON-marshallable and facilitates unmarshalling of JSON values
 // into corresponding policy setting types, with special handling for JSON numbers
 // (unmarshalled as float64) and JSON string arrays (unmarshalled as []string).
-// See also [RawValue.UnmarshalJSONV2].
+// See also [RawValue.UnmarshalJSONFrom].
 type RawValue struct {
 	opt.Value[any]
 }
@@ -114,16 +119,21 @@ func RawValueOf[T RawValueType](v T) RawValue {
 	return RawValue{opt.ValueOf[any](v)}
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (v RawValue) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return jsonv2.MarshalEncode(out, v.Value, opts)
+var (
+	_ jsonv2.MarshalerTo     = (*RawValue)(nil)
+	_ jsonv2.UnmarshalerFrom = (*RawValue)(nil)
+)
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v RawValue) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(out, v.Value)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2] by attempting to unmarshal
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom] by attempting to unmarshal
 // a JSON value as one of the supported policy setting value types (bool, string, uint64, or []string),
 // based on the JSON value type. It fails if the JSON value is an object, if it's a JSON number that
 // cannot be represented as a uint64, or if a JSON array contains anything other than strings.
-func (v *RawValue) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+func (v *RawValue) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	var valPtr any
 	switch k := in.PeekKind(); k {
 	case 't', 'f':
@@ -139,7 +149,7 @@ func (v *RawValue) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) er
 	default:
 		panic("unreachable")
 	}
-	if err := jsonv2.UnmarshalDecode(in, valPtr, opts); err != nil {
+	if err := jsonv2.UnmarshalDecode(in, valPtr); err != nil {
 		v.Value.Clear()
 		return err
 	}
@@ -150,12 +160,12 @@ func (v *RawValue) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) er
 
 // MarshalJSON implements [json.Marshaler].
 func (v RawValue) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(v) // uses MarshalJSONV2
+	return jsonv2.Marshal(v) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (v *RawValue) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, v) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, v) // uses UnmarshalJSONFrom
 }
 
 // RawValues is a map of keyed setting values that can be read from a JSON.

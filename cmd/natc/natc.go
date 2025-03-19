@@ -41,6 +41,8 @@ import (
 	"tailscale.com/wgengine/netstack"
 )
 
+var ErrNoIPsAvailable = errors.New("no IPs available")
+
 func main() {
 	hostinfo.SetApp("natc")
 	if !envknob.UseWIPCode() {
@@ -277,14 +279,14 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 	defer cancel()
 	who, err := c.lc.WhoIs(ctx, remoteAddr.String())
 	if err != nil {
-		log.Printf("HandleDNS: WhoIs failed: %v\n", err)
+		log.Printf("HandleDNS(remote=%s): WhoIs failed: %v\n", remoteAddr.String(), err)
 		return
 	}
 
 	var msg dnsmessage.Message
 	err = msg.Unpack(buf)
 	if err != nil {
-		log.Printf("HandleDNS: dnsmessage unpack failed: %v\n ", err)
+		log.Printf("HandleDNS(remote=%s): dnsmessage unpack failed: %v\n", remoteAddr.String(), err)
 		return
 	}
 
@@ -297,19 +299,19 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 			case dnsmessage.TypeAAAA, dnsmessage.TypeA:
 				dstAddrs, err := lookupDestinationIP(q.Name.String())
 				if err != nil {
-					log.Printf("HandleDNS: lookup destination failed: %v\n ", err)
+					log.Printf("HandleDNS(remote=%s): lookup destination failed: %v\n", remoteAddr.String(), err)
 					return
 				}
 				if c.ignoreDestination(dstAddrs) {
 					bs, err := dnsResponse(&msg, dstAddrs)
 					// TODO (fran): treat as SERVFAIL
 					if err != nil {
-						log.Printf("HandleDNS: generate ignore response failed: %v\n", err)
+						log.Printf("HandleDNS(remote=%s): generate ignore response failed: %v\n", remoteAddr.String(), err)
 						return
 					}
 					_, err = pc.WriteTo(bs, remoteAddr)
 					if err != nil {
-						log.Printf("HandleDNS: write failed: %v\n", err)
+						log.Printf("HandleDNS(remote=%s): write failed: %v\n", remoteAddr.String(), err)
 					}
 					return
 				}
@@ -322,7 +324,7 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 	resp, err := c.generateDNSResponse(&msg, who.Node.ID)
 	// TODO (fran): treat as SERVFAIL
 	if err != nil {
-		log.Printf("HandleDNS: connector handling failed: %v\n", err)
+		log.Printf("HandleDNS(remote=%s): connector handling failed: %v\n", remoteAddr.String(), err)
 		return
 	}
 	// TODO (fran): treat as NXDOMAIN
@@ -332,7 +334,7 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 	// This connector handled the DNS request
 	_, err = pc.WriteTo(resp, remoteAddr)
 	if err != nil {
-		log.Printf("HandleDNS: write failed: %v\n", err)
+		log.Printf("HandleDNS(remote=%s): write failed: %v\n", remoteAddr.String(), err)
 	}
 }
 
@@ -529,6 +531,9 @@ func (ps *perPeerState) ipForDomain(domain string) ([]netip.Addr, error) {
 		return addrs, nil
 	}
 	addrs := ps.assignAddrsLocked(domain)
+	if addrs == nil {
+		return nil, ErrNoIPsAvailable
+	}
 	return addrs, nil
 }
 
@@ -575,6 +580,9 @@ func (ps *perPeerState) assignAddrsLocked(domain string) []netip.Addr {
 		ps.addrToDomain = &bart.Table[string]{}
 	}
 	v4 := ps.unusedIPv4Locked()
+	if !v4.IsValid() {
+		return nil
+	}
 	as16 := ps.c.v6ULA.Addr().As16()
 	as4 := v4.As4()
 	copy(as16[12:], as4[:])

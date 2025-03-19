@@ -20,6 +20,7 @@ require (
 	github.com/coder/websocket v1.8.12
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
+	github.com/creachadair/taskgroup v0.13.2
 	github.com/creack/pty v1.1.23
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
@@ -32,7 +33,7 @@ require (
 	github.com/frankban/quicktest v1.14.6
 	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/gaissmai/bart v0.18.0
-	github.com/go-json-experiment/json v0.0.0-20250103232110-6a9a0fde9288
+	github.com/go-json-experiment/json v0.0.0-20250223041408-d3c622f1b874
 	github.com/go-logr/zapr v1.3.0
 	github.com/go-ole/go-ole v1.3.0
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
@@ -77,7 +78,7 @@ require (
 	github.com/tailscale/golang-x-crypto v0.0.0-20250218230618-9a281fd8faca
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
-	github.com/tailscale/mkctr v0.0.0-20250110151924-54977352e4a6
+	github.com/tailscale/mkctr v0.0.0-20250228050937-c75ea1476830
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	github.com/tailscale/setec v0.0.0-20250205144240-8898a29c3fbb
@@ -93,10 +94,10 @@ require (
 	go.uber.org/zap v1.27.0
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
-	golang.org/x/crypto v0.33.0
+	golang.org/x/crypto v0.35.0
 	golang.org/x/exp v0.0.0-20250210185358-939b2ce775ac
 	golang.org/x/mod v0.23.0
-	golang.org/x/net v0.35.0
+	golang.org/x/net v0.36.0
 	golang.org/x/oauth2 v0.26.0
 	golang.org/x/sync v0.11.0
 	golang.org/x/sys v0.30.0

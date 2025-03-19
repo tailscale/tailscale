@@ -19,6 +19,20 @@ import (
 
 //go:generate go run tailscale.com/cmd/viewer --tags=test --type=TestPrefs,TestBundle,TestValueStruct,TestGenericStruct,TestPrefsGroup
 
+var (
+	_ jsonv2.MarshalerTo     = (*ItemView[*TestBundle, TestBundleView])(nil)
+	_ jsonv2.UnmarshalerFrom = (*ItemView[*TestBundle, TestBundleView])(nil)
+
+	_ jsonv2.MarshalerTo     = (*MapView[string, string])(nil)
+	_ jsonv2.UnmarshalerFrom = (*MapView[string, string])(nil)
+
+	_ jsonv2.MarshalerTo     = (*StructListView[*TestBundle, TestBundleView])(nil)
+	_ jsonv2.UnmarshalerFrom = (*StructListView[*TestBundle, TestBundleView])(nil)
+
+	_ jsonv2.MarshalerTo     = (*StructMapView[string, *TestBundle, TestBundleView])(nil)
+	_ jsonv2.UnmarshalerFrom = (*StructMapView[string, *TestBundle, TestBundleView])(nil)
+)
+
 type TestPrefs struct {
 	Int32Item   Item[int32]  `json:",omitzero"`
 	UInt64Item  Item[uint64] `json:",omitzero"`
@@ -53,32 +67,37 @@ type TestPrefs struct {
 	Group TestPrefsGroup `json:",omitzero"`
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (p TestPrefs) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
+var (
+	_ jsonv2.MarshalerTo     = (*TestPrefs)(nil)
+	_ jsonv2.UnmarshalerFrom = (*TestPrefs)(nil)
+)
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (p TestPrefs) MarshalJSONTo(out *jsontext.Encoder) error {
 	// The testPrefs type shadows the TestPrefs's method set,
 	// causing jsonv2 to use the default marshaler and avoiding
 	// infinite recursion.
 	type testPrefs TestPrefs
-	return jsonv2.MarshalEncode(out, (*testPrefs)(&p), opts)
+	return jsonv2.MarshalEncode(out, (*testPrefs)(&p))
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (p *TestPrefs) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (p *TestPrefs) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	// The testPrefs type shadows the TestPrefs's method set,
 	// causing jsonv2 to use the default unmarshaler and avoiding
 	// infinite recursion.
 	type testPrefs TestPrefs
-	return jsonv2.UnmarshalDecode(in, (*testPrefs)(p), opts)
+	return jsonv2.UnmarshalDecode(in, (*testPrefs)(p))
 }
 
 // MarshalJSON implements [json.Marshaler].
 func (p TestPrefs) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(p) // uses MarshalJSONV2
+	return jsonv2.Marshal(p) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (p *TestPrefs) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, p) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, p) // uses UnmarshalJSONFrom
 }
 
 // TestBundle is an example structure type that,

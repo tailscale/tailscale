@@ -652,7 +652,11 @@ func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
 			tlsConf.VerifyConnection = nil
 		}
 		if node.CertName != "" {
-			tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
+			if suf, ok := strings.CutPrefix(node.CertName, "sha256-raw:"); ok {
+				tlsdial.SetConfigExpectedCertHash(tlsConf, suf)
+			} else {
+				tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
+			}
 		}
 	}
 	return tls.Client(nc, tlsConf)
@@ -666,7 +670,7 @@ func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
 func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tlsConn *tls.Conn, connClose io.Closer, node *tailcfg.DERPNode, err error) {
 	tcpConn, node, err := c.dialRegion(ctx, reg)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("dialRegion(%d): %w", reg.RegionID, err)
 	}
 	done := make(chan bool) // unbuffered
 	defer close(done)
@@ -741,6 +745,17 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 
 	nwait := 0
 	startDial := func(dstPrimary, proto string) {
+		dst := cmp.Or(dstPrimary, n.HostName)
+
+		// If dialing an IP address directly, check its address family
+		// and bail out before incrementing nwait.
+		if ip, err := netip.ParseAddr(dst); err == nil {
+			if proto == "tcp4" && ip.Is6() ||
+				proto == "tcp6" && ip.Is4() {
+				return
+			}
+		}
+
 		nwait++
 		go func() {
 			if proto == "tcp4" && c.preferIPv6() {
@@ -755,7 +770,6 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 					// Start v4 dial
 				}
 			}
-			dst := cmp.Or(dstPrimary, n.HostName)
 			port := "443"
 			if !c.useHTTPS() {
 				port = "3340"

@@ -32,6 +32,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
@@ -563,10 +564,10 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 func findGenName(t *testing.T, client client.Client, ns, name, typ string) (full, noSuffix string) {
 	t.Helper()
 	labels := map[string]string{
-		LabelManaged:         "true",
-		LabelParentName:      name,
-		LabelParentNamespace: ns,
-		LabelParentType:      typ,
+		kubetypes.LabelManaged: "true",
+		LabelParentName:        name,
+		LabelParentNamespace:   ns,
+		LabelParentType:        typ,
 	}
 	s, err := getSingleObject[corev1.Secret](context.Background(), client, "operator-ns", labels)
 	if err != nil {
