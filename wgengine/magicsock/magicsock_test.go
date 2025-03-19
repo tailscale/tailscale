@@ -62,6 +62,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cibuild"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/set"
@@ -173,7 +174,10 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate) *magicStack {
 	t.Helper()
 
-	netMon, err := netmon.New(logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon, err := netmon.New(bus, logf)
 	if err != nil {
 		t.Fatalf("netmon.New: %v", err)
 	}
@@ -390,7 +394,10 @@ func TestNewConn(t *testing.T) {
 		}
 	}
 
-	netMon, err := netmon.New(logger.WithPrefix(t.Logf, "... netmon: "))
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
 	if err != nil {
 		t.Fatalf("netmon.New: %v", err)
 	}
@@ -523,7 +530,10 @@ func TestDeviceStartStop(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
-	netMon, err := netmon.New(logger.WithPrefix(t.Logf, "... netmon: "))
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
 	if err != nil {
 		t.Fatalf("netmon.New: %v", err)
 	}
@@ -1362,7 +1372,10 @@ func newTestConn(t testing.TB) *Conn {
 	t.Helper()
 	port := pickPort(t)
 
-	netMon, err := netmon.New(logger.WithPrefix(t.Logf, "... netmon: "))
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
 	if err != nil {
 		t.Fatalf("netmon.New: %v", err)
 	}
@@ -3117,7 +3130,10 @@ func TestMaybeRebindOnError(t *testing.T) {
 }
 
 func TestNetworkDownSendErrors(t *testing.T) {
-	netMon := must.Get(netmon.New(t.Logf))
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon := must.Get(netmon.New(bus, t.Logf))
 	defer netMon.Close()
 
 	reg := new(usermetric.Registry)
