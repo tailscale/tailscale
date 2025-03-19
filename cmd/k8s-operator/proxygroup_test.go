@@ -475,8 +475,6 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			Name:      pgConfigSecretName(pgName, 0),
 			Namespace: tsNamespace,
 		},
-		// Write directly to Data because the fake client doesn't copy the write-only
-		// StringData field across to Data for us.
 		Data: map[string][]byte{
 			tsoperator.TailscaledConfigFileName(106): existingConfigBytes,
 		},
@@ -514,10 +512,10 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			Namespace:       tsNamespace,
 			ResourceVersion: "2",
 		},
-		StringData: map[string]string{
-			tsoperator.TailscaledConfigFileName(106): string(expectedConfigBytes),
+		Data: map[string][]byte{
+			tsoperator.TailscaledConfigFileName(106): expectedConfigBytes,
 		},
-	}, omitSecretData)
+	})
 }
 
 func verifyProxyGroupCounts(t *testing.T, r *ProxyGroupReconciler, wantIngress, wantEgress int) {
@@ -619,12 +617,4 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 			}
 		})
 	}
-}
-
-// The operator mostly writes to StringData and reads from Data, but the fake
-// client doesn't copy StringData across to Data on write. When comparing actual
-// vs expected Secrets, use this function to only check what the operator writes
-// to StringData.
-func omitSecretData(secret *corev1.Secret) {
-	secret.Data = nil
 }
