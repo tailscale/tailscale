@@ -520,9 +520,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 		}
 
 		if existingCfgSecret != nil {
-			if apiequality.Semantic.DeepEqual(existingCfgSecret, cfgSecret) {
-				logger.Debugf("Secret unchanged, skipping update for existing ProxyGroup config Secret %s", cfgSecret.Name)
-			} else {
+			if !apiequality.Semantic.DeepEqual(existingCfgSecret, cfgSecret) {
 				logger.Debugf("Updating the existing ProxyGroup config Secret %s", cfgSecret.Name)
 				if err := r.Update(ctx, cfgSecret); err != nil {
 					return "", err
