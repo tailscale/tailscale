@@ -16,6 +16,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
 var debugNetlinkMessages = envknob.RegisterBool("TS_DEBUG_NETLINK")
@@ -27,15 +28,26 @@ type unspecifiedMessage struct{}
 
 func (unspecifiedMessage) ignore() bool { return false }
 
+// RuleDeleted reports that one of Tailscale's policy routing rules
+// was deleted.
+type RuleDeleted struct {
+	// Table is the table number that the deleted rule referenced.
+	Table uint8
+	// Priority is the lookup priority of the deleted rule.
+	Priority uint32
+}
+
 // nlConn wraps a *netlink.Conn and returns a monitor.Message
 // instead of a netlink.Message. Currently, messages are discarded,
 // but down the line, when messages trigger different logic depending
 // on the type of event, this provides the capability of handling
 // each architecture-specific message in a generic fashion.
 type nlConn struct {
-	logf     logger.Logf
-	conn     *netlink.Conn
-	buffered []netlink.Message
+	busClient    *eventbus.Client
+	rulesDeleted *eventbus.Publisher[RuleDeleted]
+	logf         logger.Logf
+	conn         *netlink.Conn
+	buffered     []netlink.Message
 
 	// addrCache maps interface indices to a set of addresses, and is
 	// used to suppress duplicate RTM_NEWADDR messages. It is populated
@@ -44,7 +56,7 @@ type nlConn struct {
 	addrCache map[uint32]map[netip.Addr]bool
 }
 
-func newOSMon(logf logger.Logf, m *Monitor) (osMon, error) {
+func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
 		// Routes get us most of the events of interest, but we need
 		// address as well to cover things like DHCP deciding to give
@@ -59,12 +71,22 @@ func newOSMon(logf logger.Logf, m *Monitor) (osMon, error) {
 		logf("monitor_linux: AF_NETLINK RTMGRP failed, falling back to polling")
 		return newPollingMon(logf, m)
 	}
-	return &nlConn{logf: logf, conn: conn, addrCache: make(map[uint32]map[netip.Addr]bool)}, nil
+	client := bus.Client("netmon-iprules")
+	return &nlConn{
+		busClient:    client,
+		rulesDeleted: eventbus.Publish[RuleDeleted](client),
+		logf:         logf,
+		conn:         conn,
+		addrCache:    make(map[uint32]map[netip.Addr]bool),
+	}, nil
 }
 
 func (c *nlConn) IsInterestingInterface(iface string) bool { return true }
 
-func (c *nlConn) Close() error { return c.conn.Close() }
+func (c *nlConn) Close() error {
+	c.busClient.Close()
+	return c.conn.Close()
+}
 
 func (c *nlConn) Receive() (message, error) {
 	if len(c.buffered) == 0 {
@@ -219,6 +241,10 @@ func (c *nlConn) Receive() (message, error) {
 			// On `ip -4 rule del pref 5210 table main`, logs:
 			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
 		}
+		c.rulesDeleted.Publish(RuleDeleted{
+			Table:    rmsg.Table,
+			Priority: rmsg.Attributes.Priority,
+		})
 		rdm := ipRuleDeletedMessage{
 			table:    rmsg.Table,
 			priority: rmsg.Attributes.Priority,
