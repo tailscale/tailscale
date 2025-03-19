@@ -15,6 +15,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
 func TestGetDERPMap(t *testing.T) {
@@ -185,7 +186,10 @@ func TestLookup(t *testing.T) {
 	logf, closeLogf := logger.LogfCloser(t.Logf)
 	defer closeLogf()
 
-	netMon, err := netmon.New(logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon, err := netmon.New(bus, logf)
 	if err != nil {
 		t.Fatal(err)
 	}

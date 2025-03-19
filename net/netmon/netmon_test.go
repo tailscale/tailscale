@@ -11,11 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 )
 
 func TestMonitorStartClose(t *testing.T) {
-	mon, err := New(t.Logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +30,10 @@ func TestMonitorStartClose(t *testing.T) {
 }
 
 func TestMonitorJustClose(t *testing.T) {
-	mon, err := New(t.Logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +43,10 @@ func TestMonitorJustClose(t *testing.T) {
 }
 
 func TestMonitorInjectEvent(t *testing.T) {
-	mon, err := New(t.Logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +81,11 @@ func TestMonitorMode(t *testing.T) {
 	default:
 		t.Skipf(`invalid --monitor value: must be "raw" or "callback"`)
 	}
-	mon, err := New(t.Logf)
+
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}

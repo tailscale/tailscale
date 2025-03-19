@@ -43,6 +43,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/must"
 )
 
@@ -956,7 +957,10 @@ func runTS2021(ctx context.Context, args []string) error {
 		logf = log.Printf
 	}
 
-	netMon, err := netmon.New(logger.WithPrefix(logf, "netmon: "))
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon, err := netmon.New(bus, logger.WithPrefix(logf, "netmon: "))
 	if err != nil {
 		return fmt.Errorf("creating netmon: %w", err)
 	}
