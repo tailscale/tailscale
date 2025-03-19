@@ -628,6 +628,96 @@ func TestGetUPnPPortMapping(t *testing.T) {
 	}
 }
 
+func TestGetUPnPPortMapping_LeaseDuration(t *testing.T) {
+	testCases := []struct {
+		name string
+		resp string
+	}{
+		{"only_permanent_leases", testAddPortMappingPermanentLease},
+		{"invalid_args", testAddPortMappingPermanentLease_InvalidArgs},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			// This is a very basic fake UPnP server handler.
+			var sawRequestWithLease atomic.Bool
+			handlers := map[string]any{
+				"AddPortMapping": func(body []byte) (int, string) {
+					// Decode a minimal body to determine whether we skip the request or not.
+					var req struct {
+						Protocol       string `xml:"NewProtocol"`
+						InternalPort   string `xml:"NewInternalPort"`
+						ExternalPort   string `xml:"NewExternalPort"`
+						InternalClient string `xml:"NewInternalClient"`
+						LeaseDuration  string `xml:"NewLeaseDuration"`
+					}
+					if err := xml.Unmarshal(body, &req); err != nil {
+						t.Errorf("bad request: %v", err)
+						return http.StatusBadRequest, "bad request"
+					}
+
+					if req.Protocol != "UDP" {
+						t.Errorf(`got Protocol=%q, want "UDP"`, req.Protocol)
+					}
+					if req.LeaseDuration != "0" {
+						// Return a fake error to ensure that we fall back to a permanent lease.
+						sawRequestWithLease.Store(true)
+						return http.StatusOK, tc.resp
+					}
+
+					return http.StatusOK, testAddPortMappingResponse
+				},
+				"GetExternalIPAddress": testGetExternalIPAddressResponse,
+				"GetStatusInfo":        testGetStatusInfoResponse,
+				"DeletePortMapping":    "", // Do nothing for test
+			}
+
+			igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer igd.Close()
+
+			igd.SetUPnPHandler(&upnpServer{
+				t:    t,
+				Desc: testRootDesc,
+				Control: map[string]map[string]any{
+					"/ctl/IPConn":                          handlers,
+					"/upnp/control/yomkmsnooi/wanipconn-1": handlers,
+				},
+			})
+
+			ctx := context.Background()
+			c := newTestClient(t, igd)
+			c.debug.VerboseLogs = true
+			t.Logf("Listening on upnp=%v", c.testUPnPPort)
+			defer c.Close()
+
+			// Actually test the UPnP port mapping.
+			mustProbeUPnP(t, ctx, c)
+
+			gw, myIP, ok := c.gatewayAndSelfIP()
+			if !ok {
+				t.Fatalf("could not get gateway and self IP")
+			}
+			t.Logf("gw=%v myIP=%v", gw, myIP)
+
+			ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
+			if !ok {
+				t.Fatal("could not get UPnP port mapping")
+			}
+			if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
+				t.Errorf("bad external address; got %v want %v", got, want)
+			}
+			if !sawRequestWithLease.Load() {
+				t.Errorf("wanted request with lease, but didn't see one")
+			}
+			t.Logf("external IP: %v", ext)
+		})
+	}
+}
+
 // TestGetUPnPPortMapping_NoValidServices tests that getUPnPPortMapping doesn't
 // crash when a valid UPnP response with no supported services is discovered
 // and parsed.
@@ -1043,6 +1133,23 @@ const testAddPortMappingPermanentLease = `<?xml version="1.0"?>
     </s:Fault>
   </s:Body>
 </s:Envelope>
+`
+
+const testAddPortMappingPermanentLease_InvalidArgs = `<?xml version="1.0"?>
+<SOAP:Envelope xmlns:SOAP="http://schemas.xmlsoap.org/soap/envelope/" SOAP:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+ <SOAP:Body>
+   <SOAP:Fault>
+    <faultcode>SOAP:Client</faultcode>
+    <faultstring>UPnPError</faultstring>
+    <detail>
+     <UPnPError xmlns="urn:schemas-upnp-org:control-1-0">
+      <errorCode>402</errorCode>
+      <errorDescription>Invalid Args</errorDescription>
+     </UPnPError>
+    </detail>
+   </SOAP:Fault>
+ </SOAP:Body>
+</SOAP:Envelope>
 `
 
 const testAddPortMappingResponse = `<?xml version="1.0"?>

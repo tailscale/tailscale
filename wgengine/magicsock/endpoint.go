@@ -948,7 +948,15 @@ func (de *endpoint) send(buffs [][]byte) error {
 	de.mu.Unlock()
 
 	if !udpAddr.IsValid() && !derpAddr.IsValid() {
-		return errNoUDPOrDERP
+		// Make a last ditch effort to see if we have a DERP route for them. If
+		// they contacted us over DERP and we don't know their UDP endpoints or
+		// their DERP home, we can at least assume they're reachable over the
+		// DERP they used to contact us.
+		if rid := de.c.fallbackDERPRegionForPeer(de.publicKey); rid != 0 {
+			derpAddr = netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(rid))
+		} else {
+			return errNoUDPOrDERP
+		}
 	}
 	var err error
 	if udpAddr.IsValid() {

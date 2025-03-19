@@ -79,7 +79,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: Restore Cache
-      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -139,7 +139,11 @@ jobs:
           echo "Build/test created untracked files in the repo (file names above)."
           exit 1
         fi
-
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
   windows:
     runs-on: windows-2022
     steps:
@@ -153,7 +157,7 @@ jobs:
         cache: false
 
     - name: Restore Cache
-      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -176,6 +180,11 @@ jobs:
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
       run: go test ./... -bench . -benchtime 1x -run "^$"
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   privileged:
     runs-on: ubuntu-22.04
@@ -254,7 +263,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: Restore Cache
-      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -283,6 +292,11 @@ jobs:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: "0"
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        #make it build a few smoke packages.
@@ -319,7 +333,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: Restore Cache
-      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -342,6 +356,11 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
         GOARM: ${{ matrix.goarm }}
         CGO_ENABLED: "0"
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   android:
     # similar to cross above, but android fails to build a few pieces of the
@@ -367,7 +386,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: Restore Cache
-      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -394,6 +413,11 @@ jobs:
       run: |
         ./tool/go run ./cmd/tsconnect --fast-compression build
         ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
+    - name: Tidy cache
+      shell: bash
+      run: |
+        find $(go env GOCACHE) -type f -mmin +90 -delete
+        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-22.04
@@ -461,7 +485,7 @@ jobs:
       run: |
         echo "artifacts_path=$(realpath .)" >> $GITHUB_ENV
     - name: upload crash
-      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
       if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
       with:
         name: artifacts

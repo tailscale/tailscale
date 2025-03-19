@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux
+//go:build linux && !ts_omit_aws
 
 package awsstore
 
@@ -65,7 +65,11 @@ func TestNewAWSStore(t *testing.T) {
 		Resource:  "parameter/foo",
 	}
 
-	s, err := newStore(storeParameterARN.String(), mc)
+	opts := storeOptions{
+		kmsKey: "arn:aws:kms:eu-west-1:123456789:key/MyCustomKey",
+	}
+
+	s, err := newStore(storeParameterARN.String(), opts, mc)
 	if err != nil {
 		t.Fatalf("creating aws store failed: %v", err)
 	}
@@ -73,7 +77,7 @@ func TestNewAWSStore(t *testing.T) {
 
 	// Build a brand new file store and check that both IDs written
 	// above are still there.
-	s2, err := newStore(storeParameterARN.String(), mc)
+	s2, err := newStore(storeParameterARN.String(), opts, mc)
 	if err != nil {
 		t.Fatalf("creating second aws store failed: %v", err)
 	}
@@ -160,5 +164,56 @@ func testStoreSemantics(t *testing.T, store ipn.StateStore) {
 				t.Errorf("reading %q: got %q, want %q", test.id, string(bs), test.data)
 			}
 		}
+	}
+}
+
+func TestParseARNAndOpts(t *testing.T) {
+	tests := []struct {
+		name    string
+		arg     string
+		wantARN string
+		wantKey string
+	}{
+		{
+			name:    "no-key",
+			arg:     "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam",
+			wantARN: "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam",
+		},
+		{
+			name:    "custom-key",
+			arg:     "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=alias/MyCustomKey",
+			wantARN: "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam",
+			wantKey: "alias/MyCustomKey",
+		},
+		{
+			name:    "bare-name",
+			arg:     "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=Bare",
+			wantARN: "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam",
+			wantKey: "alias/Bare",
+		},
+		{
+			name:    "arn-arg",
+			arg:     "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=arn:foo",
+			wantARN: "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam",
+			wantKey: "arn:foo",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arn, opts, err := ParseARNAndOpts(tt.arg)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if arn != tt.wantARN {
+				t.Errorf("ARN = %q; want %q", arn, tt.wantARN)
+			}
+			var got storeOptions
+			for _, opt := range opts {
+				opt(&got)
+			}
+			if got.kmsKey != tt.wantKey {
+				t.Errorf("kmsKey = %q; want %q", got.kmsKey, tt.wantKey)
+			}
+		})
 	}
 }

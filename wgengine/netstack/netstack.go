@@ -843,6 +843,27 @@ func (ns *Impl) DialContextTCP(ctx context.Context, ipp netip.AddrPort) (*gonet.
 	return gonet.DialContextTCP(ctx, ns.ipstack, remoteAddress, ipType)
 }
 
+// DialContextTCPWithBind creates a new gonet.TCPConn connected to the specified
+// remoteAddress with its local address bound to localAddr on an available port.
+func (ns *Impl) DialContextTCPWithBind(ctx context.Context, localAddr netip.Addr, remoteAddr netip.AddrPort) (*gonet.TCPConn, error) {
+	remoteAddress := tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(remoteAddr.Addr().AsSlice()),
+		Port: remoteAddr.Port(),
+	}
+	localAddress := tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(localAddr.AsSlice()),
+	}
+	var ipType tcpip.NetworkProtocolNumber
+	if remoteAddr.Addr().Is4() {
+		ipType = ipv4.ProtocolNumber
+	} else {
+		ipType = ipv6.ProtocolNumber
+	}
+	return gonet.DialTCPWithBind(ctx, ns.ipstack, localAddress, remoteAddress, ipType)
+}
+
 func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.UDPConn, error) {
 	remoteAddress := &tcpip.FullAddress{
 		NIC:  nicID,
@@ -857,6 +878,28 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.
 	}
 
 	return gonet.DialUDP(ns.ipstack, nil, remoteAddress, ipType)
+}
+
+// DialContextUDPWithBind creates a new gonet.UDPConn. Connected to remoteAddr.
+// With its local address bound to localAddr on an available port.
+func (ns *Impl) DialContextUDPWithBind(ctx context.Context, localAddr netip.Addr, remoteAddr netip.AddrPort) (*gonet.UDPConn, error) {
+	remoteAddress := &tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(remoteAddr.Addr().AsSlice()),
+		Port: remoteAddr.Port(),
+	}
+	localAddress := &tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(localAddr.AsSlice()),
+	}
+	var ipType tcpip.NetworkProtocolNumber
+	if remoteAddr.Addr().Is4() {
+		ipType = ipv4.ProtocolNumber
+	} else {
+		ipType = ipv6.ProtocolNumber
+	}
+
+	return gonet.DialUDP(ns.ipstack, localAddress, remoteAddress, ipType)
 }
 
 // getInjectInboundBuffsSizes returns packet memory and a sizes slice for usage

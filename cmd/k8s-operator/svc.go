@@ -84,10 +84,10 @@ func childResourceLabels(name, ns, typ string) map[string]string {
 	// proxying. Instead, we have to do our own filtering and tracking with
 	// labels.
 	return map[string]string{
-		LabelManaged:         "true",
-		LabelParentName:      name,
-		LabelParentNamespace: ns,
-		LabelParentType:      typ,
+		kubetypes.LabelManaged: "true",
+		LabelParentName:        name,
+		LabelParentNamespace:   ns,
+		LabelParentType:        typ,
 	}
 }
 

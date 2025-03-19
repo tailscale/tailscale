@@ -216,6 +216,11 @@ type PeerStatusLite struct {
 }
 
 // PeerStatus describes a peer node and its current state.
+// WARNING: The fields in PeerStatus are merged by the AddPeer method in the StatusBuilder.
+// When adding a new field to PeerStatus, you must update AddPeer to handle merging
+// the new field. The AddPeer function is responsible for combining multiple updates
+// to the same peer, and any new field that is not merged properly may lead to
+// inconsistencies or lost data in the peer status.
 type PeerStatus struct {
 	ID        tailcfg.StableNodeID
 	PublicKey key.NodePublic
@@ -532,6 +537,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.Capabilities; v != nil {
 		e.Capabilities = v
+	}
+	if v := st.TaildropTarget; v != TaildropTargetUnknown {
+		e.TaildropTarget = v
 	}
 	e.Location = st.Location
 }

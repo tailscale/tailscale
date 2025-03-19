@@ -156,6 +156,11 @@ type Options struct {
 	// If we receive a new DialPlan from the server, this value will be
 	// updated.
 	DialPlan ControlDialPlanner
+
+	// Shutdown is an optional function that will be called before client shutdown is
+	// attempted. It is used to allow the client to clean up any resources or complete any
+	// tasks that are dependent on a live client.
+	Shutdown func()
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -1255,6 +1260,7 @@ type devKnobs struct {
 	DumpNetMapsVerbose func() bool
 	ForceProxyDNS      func() bool
 	StripEndpoints     func() bool // strip endpoints from control (only use disco messages)
+	StripHomeDERP      func() bool // strip Home DERP from control
 	StripCaps          func() bool // strip all local node's control-provided capabilities
 }
 
@@ -1266,6 +1272,7 @@ func initDevKnob() devKnobs {
 		DumpRegister:       envknob.RegisterBool("TS_DEBUG_REGISTER"),
 		ForceProxyDNS:      envknob.RegisterBool("TS_DEBUG_PROXY_DNS"),
 		StripEndpoints:     envknob.RegisterBool("TS_DEBUG_STRIP_ENDPOINTS"),
+		StripHomeDERP:      envknob.RegisterBool("TS_DEBUG_STRIP_HOME_DERP"),
 		StripCaps:          envknob.RegisterBool("TS_DEBUG_STRIP_CAPS"),
 	}
 }
@@ -1660,11 +1667,11 @@ func (c *Auto) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) err
 func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
 	nc, err := c.getNoiseClient()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errNoNoiseClient, err)
 	}
 	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
 	if !ok {
-		return errors.New("no node key")
+		return errNoNodeKey
 	}
 	if c.panicOnUse {
 		panic("tainted client")
@@ -1691,6 +1698,47 @@ func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) e
 	all, _ := io.ReadAll(res.Body)
 	if res.StatusCode != 200 {
 		return fmt.Errorf("HTTP error from control plane: %v: %s", res.Status, all)
+	}
+	return nil
+}
+
+// SendAuditLog implements [auditlog.Transport] by sending an audit log synchronously to the control plane.
+//
+// See docs on [tailcfg.AuditLogRequest] and [auditlog.Logger] for background.
+func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	return c.direct.sendAuditLog(ctx, auditLog)
+}
+
+func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errNoNoiseClient, err)
+	}
+
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return errNoNodeKey
+	}
+
+	req := &tailcfg.AuditLogRequest{
+		Version: tailcfg.CurrentCapabilityVersion,
+		NodeKey: nodeKey,
+		Action:  auditLog.Action,
+		Details: auditLog.Details,
+	}
+
+	if c.panicOnUse {
+		panic("tainted client")
+	}
+
+	res, err := nc.post(ctx, "/machine/audit-log", nodeKey, req)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errHTTPPostFailure, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		all, _ := io.ReadAll(res.Body)
+		return errBadHTTPResponse(res.StatusCode, string(all))
 	}
 	return nil
 }

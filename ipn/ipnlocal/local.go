@@ -57,10 +57,12 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/auditlog"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
+	memstore "tailscale.com/ipn/store/mem"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/captivedetection"
@@ -406,8 +408,8 @@ type LocalBackend struct {
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
 
-	// getSafFd gets the Storage Access Framework file descriptor for writing Taildrop files to
-	GetSafFd func(filename string) int32
+	// FileOps abstracts platform-specific file operations needed for file transfers.
+	FileOps taildrop.FileOps
 
 	// lastSuggestedExitNode stores the last suggested exit node suggestion to
 	// avoid unnecessary churn between multiple equally-good options.
@@ -453,6 +455,12 @@ type LocalBackend struct {
 	// Each callback is called exactly once in unspecified order and without b.mu held.
 	// Returned errors are logged but otherwise ignored and do not affect the shutdown process.
 	shutdownCbs set.HandleSet[func() error]
+
+	// auditLogger, if non-nil, manages audit logging for the backend.
+	//
+	// It queues, persists, and sends audit logs
+	// to the control client.  auditLogger has the same lifespan as b.cc.
+	auditLogger *auditlog.Logger
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -618,19 +626,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 				// conditional to avoid log spam at start when off
 				b.SetComponentDebugLogging(component, until)
 			}
-		}
-	}
-
-	// initialize Taildrive shares from saved state
-	fs, ok := b.sys.DriveForRemote.GetOK()
-	if ok {
-		currentShares := b.pm.prefs.DriveShares()
-		if currentShares.Len() > 0 {
-			var shares []*drive.Share
-			for _, share := range currentShares.All() {
-				shares = append(shares, share.AsStruct())
-			}
-			fs.SetShares(shares)
 		}
 	}
 
@@ -811,6 +806,13 @@ func (b *LocalBackend) SetDirectFileRoot(dir string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.directFileRoot = dir
+}
+
+// SetFileOps sets the
+func (b *LocalBackend) SetFileOps(fileOps taildrop.FileOps) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.FileOps = fileOps
 }
 
 // ReloadConfig reloads the backend's config from disk.
@@ -1695,6 +1697,15 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
 	}
+
+	// Update the audit logger with the current profile ID.
+	if b.auditLogger != nil && prefsChanged {
+		pid := b.pm.CurrentProfile().ID()
+		if err := b.auditLogger.SetProfileID(pid); err != nil {
+			b.logf("Failed to set profile ID in audit logger: %v", err)
+		}
+	}
+
 	// initTKALocked is dependent on CurrentProfile.ID, which is initialized
 	// (for new profiles) on the first call to b.pm.SetPrefs.
 	if err := b.initTKALocked(); err != nil {
@@ -2402,6 +2413,27 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		debugFlags = append([]string{"netstack"}, debugFlags...)
 	}
 
+	var auditLogShutdown func()
+	// Audit logging is only available if the client has set up a proper persistent
+	// store for the logs in sys.
+	store, ok := b.sys.AuditLogStore.GetOK()
+	if !ok {
+		b.logf("auditlog: [unexpected] no persistent audit log storage configured.  using memory store.")
+		store = auditlog.NewLogStore(&memstore.Store{})
+	}
+
+	al := auditlog.NewLogger(auditlog.Opts{
+		Logf:       b.logf,
+		RetryLimit: 32,
+		Store:      store,
+	})
+	b.auditLogger = al
+	auditLogShutdown = func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		al.FlushAndStop(ctx)
+	}
+
 	// TODO(apenwarr): The only way to change the ServerURL is to
 	// re-run b.Start, because this is the only place we create a
 	// new controlclient. EditPrefs allows you to overwrite ServerURL,
@@ -2427,6 +2459,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		C2NHandler:                 http.HandlerFunc(b.handleC2N),
 		DialPlan:                   &b.dialPlan, // pointer because it can't be copied
 		ControlKnobs:               b.sys.ControlKnobs(),
+		Shutdown:                   auditLogShutdown,
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -2460,6 +2493,16 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
 	b.sendToLocked(ipn.Notify{Prefs: &prefs}, allClients)
+
+	// initialize Taildrive shares from saved state
+	if fs, ok := b.sys.DriveForRemote.GetOK(); ok {
+		currentShares := b.pm.CurrentPrefs().DriveShares()
+		var shares []*drive.Share
+		for _, share := range currentShares.All() {
+			shares = append(shares, share.AsStruct())
+		}
+		fs.SetShares(shares)
+	}
 
 	if !loggedOut && (b.hasNodeKeyLocked() || confWantRunning) {
 		// If we know that we're either logged in or meant to be
@@ -4269,6 +4312,21 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	return err
 }
 
+var errNoAuditLogger = errors.New("no audit logger configured")
+
+func (b *LocalBackend) getAuditLoggerLocked() ipnauth.AuditLogFunc {
+	logger := b.auditLogger
+	return func(action tailcfg.ClientAuditAction, details string) error {
+		if logger == nil {
+			return errNoAuditLogger
+		}
+		if err := logger.Enqueue(action, details); err != nil {
+			return fmt.Errorf("failed to enqueue audit log %v %q: %w", action, details, err)
+		}
+		return nil
+	}
+}
+
 // EditPrefs applies the changes in mp to the current prefs,
 // acting as the tailscaled itself rather than a specific user.
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
@@ -4294,9 +4352,8 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		// TODO(barnstar,nickkhyl): replace loggerFn with the actual audit logger.
-		loggerFn := func(action, details string) { b.logf("[audit]: %s: %s", action, details) }
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, loggerFn); err != nil {
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.getAuditLoggerLocked()); err != nil {
+			b.logf("check profile access failed: %v", err)
 			return ipn.PrefsView{}, err
 		}
 
@@ -5296,7 +5353,6 @@ func (b *LocalBackend) initPeerAPIListener() {
 	if fileRoot == "" {
 		b.logf("peerapi starting without Taildrop directory configured")
 	}
-
 	ps := &peerAPIServer{
 		b: b,
 		taildrop: taildrop.ManagerOptions{
@@ -5306,7 +5362,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 			Dir:            fileRoot,
 			DirectFileMode: b.directFileRoot != "",
 			SendFileNotify: b.sendFileNotify,
-		}.New(b.getSafFd),
+		}.New(b.FileOps),
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()
@@ -5880,6 +5936,15 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
+	if b.auditLogger != nil {
+		if err := b.auditLogger.SetProfileID(b.pm.CurrentProfile().ID()); err != nil {
+			b.logf("audit logger set profile ID failure: %v", err)
+		}
+
+		if err := b.auditLogger.Start(b.ccAuto); err != nil {
+			b.logf("audit logger start failure: %v", err)
+		}
+	}
 }
 
 // resetControlClientLocked sets b.cc to nil and returns the old value. If the
@@ -6712,7 +6777,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 }
 
 func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.TaildropTargetStatus {
-	if b.netMap == nil || b.state != ipn.Running {
+	if b.state != ipn.Running {
 		return ipnstate.TaildropTargetIpnStateNotRunning
 	}
 	if b.netMap == nil {
@@ -8225,15 +8290,13 @@ func (b *LocalBackend) vipServiceHash(services []*tailcfg.VIPService) string {
 func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	// keyed by service name
 	var services map[tailcfg.ServiceName]*tailcfg.VIPService
-	if !b.serveConfig.Valid() {
-		return nil
-	}
-
-	for svc, config := range b.serveConfig.Services().All() {
-		mak.Set(&services, svc, &tailcfg.VIPService{
-			Name:  svc,
-			Ports: config.ServicePortRange(),
-		})
+	if b.serveConfig.Valid() {
+		for svc, config := range b.serveConfig.Services().All() {
+			mak.Set(&services, svc, &tailcfg.VIPService{
+				Name:  svc,
+				Ports: config.ServicePortRange(),
+			})
+		}
 	}
 
 	for _, s := range prefs.AdvertiseServices().All() {
@@ -8246,7 +8309,14 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 		services[sn].Active = true
 	}
 
-	return slicesx.MapValues(services)
+	servicesList := slicesx.MapValues(services)
+	// [slicesx.MapValues] provides the values in an indeterminate order, but since we'll
+	// be hashing a representation of this list later we want it to be in a consistent
+	// order.
+	slices.SortFunc(servicesList, func(a, b *tailcfg.VIPService) int {
+		return strings.Compare(a.Name.String(), b.Name.String())
+	})
+	return servicesList
 }
 
 var (

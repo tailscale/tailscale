@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <script src="bus/htmx.min.js"></script>
+        <script src="bus/htmx-websocket.min.js"></script>
+        <link rel="stylesheet" href="bus/style.css">
+    </head>
+    <body hx-ext="ws">
+        <h1>Event bus</h1>
+
+        <section>
+            <h2>General</h2>
+            {{with $.PublishQueue}}
+            {{len .}} pending
+            {{end}}
+
+            <button hx-post="bus/monitor" hx-swap="outerHTML">Monitor all events</button>
+        </section>
+
+        <section>
+            <h2>Clients</h2>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Publishing</th>
+                        <th>Subscribing</th>
+                        <th>Pending</th>
+                    </tr>
+                </thead>
+                {{range .Clients}}
+                <tr id="{{.Name}}">
+                    <td>{{.Name}}</td>
+                    <td class="list">
+                        <ul>
+                            {{range .Publish}}
+                            <li><a href="#{{.}}">{{.}}</a></li>
+                            {{end}}
+                        </ul>
+                    </td>
+                    <td class="list">
+                        <ul>
+                            {{range .Subscribe}}
+                            <li><a href="#{{.}}">{{.}}</a></li>
+                            {{end}}
+                        </ul>
+                    </td>
+                    <td>
+                        {{len ($.SubscribeQueue .Client)}}
+                    </td>
+                </tr>
+                {{end}}
+            </table>
+        </section>
+
+        <section>
+            <h2>Types</h2>
+
+            {{range .Types}}
+
+            <section id="{{.}}">
+            <h3>{{.Name}}</h3>
+            <h4>Definition</h4>
+            <code>{{prettyPrintStruct .}}</code>
+
+            <h4>Published by:</h4>
+            {{if len (.Publish)}}
+            <ul>
+                {{range .Publish}}
+                <li><a href="#{{.Name}}">{{.Name}}</a></li>
+                {{end}}
+            </ul>
+            {{else}}
+            <ul>
+                <li>No publishers.</li>
+            </ul>
+            {{end}}
+
+            <h4>Received by:</h4>
+            {{if len (.Subscribe)}}
+            <ul>
+                {{range .Subscribe}}
+                <li><a href="#{{.Name}}">{{.Name}}</a></li>
+                {{end}}
+            </ul>
+            {{else}}
+            <ul>
+                <li>No subscribers.</li>
+            </ul>
+            {{end}}
+            </section>
+            {{end}}
+
+        </section>
+    </body>
+</html>

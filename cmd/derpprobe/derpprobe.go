@@ -15,6 +15,9 @@ import (
 	"tailscale.com/prober"
 	"tailscale.com/tsweb"
 	"tailscale.com/version"
+
+	// Support for prometheus varz in tsweb
+	_ "tailscale.com/tsweb/promvarz"
 )
 
 var (

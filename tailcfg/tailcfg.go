@@ -159,7 +159,8 @@ type CapabilityVersion int
 //   - 112: 2025-01-14: Client interprets AllowedIPs of nil as meaning same as Addresses
 //   - 113: 2025-01-20: Client communicates to control whether funnel is enabled by sending Hostinfo.IngressEnabled (#14688)
 //   - 114: 2025-01-30: NodeAttrMaxKeyDuration CapMap defined, clients might use it (no tailscaled code change) (#14829)
-const CurrentCapabilityVersion CapabilityVersion = 114
+//   - 115: 2025-03-07: Client understands DERPRegion.NoMeasureNoHome.
+const CurrentCapabilityVersion CapabilityVersion = 115
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2440,6 +2441,11 @@ const (
 	// type float64 representing the duration in seconds. This cap will be
 	// omitted if the tailnet's MaxKeyDuration is the default.
 	NodeAttrMaxKeyDuration NodeCapability = "tailnet.maxKeyDuration"
+
+	// NodeAttrNativeIPV4 contains the IPV4 address of the node in its
+	// native tailnet. This is currently only sent to Hello, in its
+	// peer node list.
+	NodeAttrNativeIPV4 NodeCapability = "native-ipv4"
 )
 
 // SetDNSRequest is a request to add a DNS record.
@@ -2976,3 +2982,33 @@ const LBHeader = "Ts-Lb"
 // correspond to those IPs. Any services that don't correspond to a service
 // this client is hosting can be ignored.
 type ServiceIPMappings map[ServiceName][]netip.Addr
+
+// ClientAuditAction represents an auditable action that a client can report to the
+// control plane.  These actions must correspond to the supported actions
+// in the control plane.
+type ClientAuditAction string
+
+const (
+	// AuditNodeDisconnect action is sent when a node has disconnected
+	// from the control plane.  The details must include a reason in the Details
+	// field, either generated, or entered by the user.
+	AuditNodeDisconnect = ClientAuditAction("DISCONNECT_NODE")
+)
+
+// AuditLogRequest represents an audit log request to be sent to the control plane.
+//
+// This is JSON-encoded and sent over the control plane connection to:
+// POST https://<control-plane>/machine/audit-log
+type AuditLogRequest struct {
+	// Version is the client's current CapabilityVersion.
+	Version CapabilityVersion `json:",omitempty"`
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic `json:",omitzero"`
+	// Action is the action to be logged. It must correspond to a known action in the control plane.
+	Action ClientAuditAction `json:",omitempty"`
+	// Details is an opaque string, specific to the action being logged.  Empty strings may not
+	// be valid depending on the action being logged.
+	Details string `json:",omitempty"`
+	// Timestamp is the time at which the audit log was generated on the node.
+	Timestamp time.Time `json:",omitzero"`
+}

@@ -206,6 +206,10 @@ func (m *fakeLocalClient) SetServeConfig(ctx context.Context, cfg *ipn.ServeConf
 	return nil
 }
 
+func (m *fakeLocalClient) CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
+	return nil, nil, nil
+}
+
 func TestHasHTTPSEndpoint(t *testing.T) {
 	tests := []struct {
 		name string

@@ -25,6 +25,7 @@ import (
 	"tailscale.com/drive"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/auditlog"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/desktop"
 	"tailscale.com/net/dns"
@@ -50,6 +51,7 @@ type System struct {
 	Router         SubSystem[router.Router]
 	Tun            SubSystem[*tstun.Wrapper]
 	StateStore     SubSystem[ipn.StateStore]
+	AuditLogStore  SubSystem[auditlog.LogStore]
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
 	DriveForLocal  SubSystem[drive.FileSystemForLocal]
 	DriveForRemote SubSystem[drive.FileSystemForRemote]
@@ -106,6 +108,8 @@ func (s *System) Set(v any) {
 		s.MagicSock.Set(v)
 	case ipn.StateStore:
 		s.StateStore.Set(v)
+	case auditlog.LogStore:
+		s.AuditLogStore.Set(v)
 	case NetstackImpl:
 		s.Netstack.Set(v)
 	case drive.FileSystemForLocal:
