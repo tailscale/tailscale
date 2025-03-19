@@ -436,7 +436,7 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func newTestLocalBackend(t testing.TB) *LocalBackend {
-	return newTestLocalBackendWithSys(t, new(tsd.System))
+	return newTestLocalBackendWithSys(t, tsd.NewSystemWithEventBus())
 }
 
 // newTestLocalBackendWithSys creates a new LocalBackend with the given tsd.System.
@@ -4867,9 +4867,8 @@ func TestConfigFileReload(t *testing.T) {
 			// Create backend with initial config
 			tc.initial.Path = path
 			tc.initial.Raw = initialJSON
-			sys := &tsd.System{
-				InitialConfig: tc.initial,
-			}
+			sys := tsd.NewSystemWithEventBus()
+			sys.InitialConfig = tc.initial
 			b := newTestLocalBackendWithSys(t, sys)
 
 			// Update config file

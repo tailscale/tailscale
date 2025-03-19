@@ -101,7 +101,7 @@ func getMemStats() (ms runtime.MemStats) {
 
 func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	tunDev := tstun.NewFake()
-	sys := &tsd.System{}
+	sys := tsd.NewSystemWithEventBus()
 	sys.Set(new(mem.Store))
 	dialer := new(tsdial.Dialer)
 	logf := tstest.WhileTestRunningLogger(tb)

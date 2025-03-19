@@ -72,6 +72,14 @@ type System struct {
 	userMetricsRegistry usermetric.Registry
 }
 
+// NewSystemWithEventBus constructs a new otherwise-empty system with a
+// freshly-constructed event bus populated.
+func NewSystemWithEventBus() *System {
+	sys := new(System)
+	sys.Set(eventbus.New())
+	return sys
+}
+
 // NetstackImpl is the interface that *netstack.Impl implements.
 // It's an interface for circular dependency reasons: netstack.Impl
 // references LocalBackend, and LocalBackend has a tsd.System.

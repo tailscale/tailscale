@@ -558,7 +558,7 @@ func (s *Server) start() (reterr error) {
 		s.Logf(format, a...)
 	}
 
-	sys := new(tsd.System)
+	sys := tsd.NewSystemWithEventBus()
 	s.sys = sys
 	if err := s.startLogger(&closePool, sys.HealthTracker(), tsLogf); err != nil {
 		return err
@@ -572,6 +572,7 @@ func (s *Server) start() (reterr error) {
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
+		EventBus:      sys.Bus.Get(),
 		ListenPort:    s.Port,
 		NetMon:        s.netMon,
 		Dialer:        s.dialer,
