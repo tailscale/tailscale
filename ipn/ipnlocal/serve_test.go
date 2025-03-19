@@ -877,7 +877,7 @@ func newTestBackend(t *testing.T) *LocalBackend {
 		logf = logger.WithPrefix(tstest.WhileTestRunningLogger(t), "... ")
 	}
 
-	sys := &tsd.System{}
+	sys := tsd.NewSystemWithEventBus()
 	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),
