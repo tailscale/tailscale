@@ -328,7 +328,7 @@ func beWindowsSubprocess() bool {
 		log.Printf("Error pre-loading \"%s\": %v", fqWintunPath, err)
 	}
 
-	sys := tsd.NewSystemWithEventBus()
+	sys := tsd.NewSystem()
 	netMon, err := netmon.New(log.Printf)
 	if err != nil {
 		log.Fatalf("Could not create netMon: %v", err)
