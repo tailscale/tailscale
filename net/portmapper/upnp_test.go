@@ -586,9 +586,8 @@ func TestGetUPnPPortMapping(t *testing.T) {
 			},
 		})
 
-		c := newTestClient(t, igd)
+		c := newTestClient(t, igd, nil)
 		t.Logf("Listening on upnp=%v", c.testUPnPPort)
-		defer c.Close()
 
 		c.debug.VerboseLogs = true
 
@@ -689,10 +688,9 @@ func TestGetUPnPPortMapping_LeaseDuration(t *testing.T) {
 			})
 
 			ctx := context.Background()
-			c := newTestClient(t, igd)
+			c := newTestClient(t, igd, nil)
 			c.debug.VerboseLogs = true
 			t.Logf("Listening on upnp=%v", c.testUPnPPort)
-			defer c.Close()
 
 			// Actually test the UPnP port mapping.
 			mustProbeUPnP(t, ctx, c)
@@ -735,8 +733,7 @@ func TestGetUPnPPortMapping_NoValidServices(t *testing.T) {
 		Desc: noSupportedServicesRootDesc,
 	})
 
-	c := newTestClient(t, igd)
-	defer c.Close()
+	c := newTestClient(t, igd, nil)
 	c.debug.VerboseLogs = true
 
 	ctx := context.Background()
@@ -778,8 +775,7 @@ func TestGetUPnPPortMapping_Legacy(t *testing.T) {
 		},
 	})
 
-	c := newTestClient(t, igd)
-	defer c.Close()
+	c := newTestClient(t, igd, nil)
 	c.debug.VerboseLogs = true
 
 	ctx := context.Background()
@@ -806,9 +802,8 @@ func TestGetUPnPPortMappingNoResponses(t *testing.T) {
 	}
 	defer igd.Close()
 
-	c := newTestClient(t, igd)
+	c := newTestClient(t, igd, nil)
 	t.Logf("Listening on upnp=%v", c.testUPnPPort)
-	defer c.Close()
 
 	c.debug.VerboseLogs = true
 
@@ -939,8 +934,7 @@ func TestGetUPnPPortMapping_Invalid(t *testing.T) {
 				},
 			})
 
-			c := newTestClient(t, igd)
-			defer c.Close()
+			c := newTestClient(t, igd, nil)
 			c.debug.VerboseLogs = true
 
 			ctx := context.Background()
