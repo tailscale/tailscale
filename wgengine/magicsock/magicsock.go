@@ -56,6 +56,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
 	"tailscale.com/util/set"
@@ -136,6 +137,7 @@ type Conn struct {
 	// This block mirrors the contents and field order of the Options
 	// struct. Initialized once at construction, then constant.
 
+	eventBus               *eventbus.Bus
 	logf                   logger.Logf
 	epFunc                 func([]tailcfg.Endpoint)
 	derpActiveFunc         func()
@@ -401,8 +403,15 @@ func (c *Conn) dlogf(format string, a ...any) {
 
 // Options contains options for Listen.
 type Options struct {
-	// Logf optionally provides a log function to use.
-	// Must not be nil.
+	// EventBus, if non-nil, is used for event publication and subscription by
+	// each Conn created from these Options.
+	//
+	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
+	// become required non-nil.
+	EventBus *eventbus.Bus
+
+	// Logf provides a log function to use. It must not be nil.
+	// Use [logger.Discard] to disrcard logs.
 	Logf logger.Logf
 
 	// Port is the port to listen on.
@@ -529,6 +538,7 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	c := newConn(opts.logf())
+	c.eventBus = opts.EventBus
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
 	c.epFunc = opts.endpointsFunc()
@@ -545,6 +555,7 @@ func NewConn(opts Options) (*Conn, error) {
 		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
 	}
 	c.portMapper = portmapper.NewClient(portmapper.Config{
+		EventBus:     c.eventBus,
 		Logf:         portmapperLogf,
 		NetMon:       opts.NetMon,
 		DebugKnobs:   portMapOpts,
