@@ -85,7 +85,11 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 
 // Client is a port mapping client.
 type Client struct {
-	updates      *eventbus.Publisher[Mapping]
+	// The following two fields must either both be nil, or both non-nil.
+	// Both are immutable after construction.
+	pubClient *eventbus.Client
+	updates   *eventbus.Publisher[Mapping]
+
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
 	controlKnobs *controlknobs.Knobs
@@ -245,7 +249,8 @@ func NewClient(c Config) *Client {
 		controlKnobs: c.ControlKnobs,
 	}
 	if c.EventBus != nil {
-		ret.updates = eventbus.Publish[Mapping](c.EventBus.Client("portmapper"))
+		ret.pubClient = c.EventBus.Client("portmapper")
+		ret.updates = eventbus.Publish[Mapping](ret.pubClient)
 	}
 	if ret.logf == nil {
 		ret.logf = logger.Discard
@@ -283,6 +288,7 @@ func (c *Client) Close() error {
 	c.invalidateMappingsLocked(true)
 	if c.updates != nil {
 		c.updates.Close()
+		c.pubClient.Close()
 	}
 	// TODO: close some future ever-listening UDP socket(s),
 	// waiting for multicast announcements from router.
