@@ -517,6 +517,187 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 		},
 	})
 }
+func TestProxyGroupLetsEncryptStaging(t *testing.T) {
+	cl := tstest.NewClock(tstest.ClockOpts{})
+	zl := zap.Must(zap.NewDevelopment())
+
+	pcLEStaging := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "le-staging",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyClassSpec{
+			UseLetsEncryptStagingEndpoint: true,
+		},
+	}
+	pcLEStagingFalse := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "le-staging-false",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyClassSpec{
+			UseLetsEncryptStagingEndpoint: false,
+		},
+	}
+
+	pcOther := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "other",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyClassSpec{},
+	}
+
+	tests := []struct {
+		name                 string
+		pgType               tsapi.ProxyGroupType // ProxyGroup.spec.type value
+		proxyClassName       string               // ProxyGroup.spec.proxyClass value
+		proxyClasses         []*tsapi.ProxyClass  // ProxyClasses to create
+		defaultProxyClass    string
+		useLEStagingEndpoint bool
+	}{
+		{
+			name:                 "ingress_pg_with_staging_proxyclass",
+			pgType:               tsapi.ProxyGroupTypeIngress,
+			proxyClassName:       "le-staging",
+			proxyClasses:         []*tsapi.ProxyClass{pcLEStaging},
+			useLEStagingEndpoint: true,
+		},
+		{
+			name:                 "ingress_pg_with_other_proxyclass",
+			pgType:               tsapi.ProxyGroupTypeIngress,
+			proxyClassName:       "other",
+			proxyClasses:         []*tsapi.ProxyClass{pcOther},
+			useLEStagingEndpoint: false,
+		},
+		{
+			name:                 "ingress_pg_no_proxyclass",
+			pgType:               tsapi.ProxyGroupTypeIngress,
+			proxyClassName:       "",
+			proxyClasses:         nil,
+			useLEStagingEndpoint: false,
+		},
+		{
+			name:                 "ingress_pg_with_staging_proxyclass_false",
+			pgType:               tsapi.ProxyGroupTypeIngress,
+			proxyClassName:       "le-staging-false",
+			proxyClasses:         []*tsapi.ProxyClass{pcLEStagingFalse},
+			useLEStagingEndpoint: false,
+		},
+		{
+			name:                 "egress_pg_with_staging_proxyclass",
+			pgType:               tsapi.ProxyGroupTypeEgress,
+			proxyClassName:       "le-staging",
+			proxyClasses:         []*tsapi.ProxyClass{pcLEStaging},
+			useLEStagingEndpoint: false,
+		},
+		{
+			name:                 "ingress_pg_with_default_staging_proxyclass",
+			pgType:               tsapi.ProxyGroupTypeIngress,
+			proxyClassName:       "",
+			proxyClasses:         []*tsapi.ProxyClass{pcLEStaging},
+			defaultProxyClass:    "le-staging",
+			useLEStagingEndpoint: true,
+		},
+		{
+			name:                 "ingress_pg_with_default_other_proxyclass",
+			pgType:               tsapi.ProxyGroupTypeIngress,
+			proxyClassName:       "",
+			proxyClasses:         []*tsapi.ProxyClass{pcOther},
+			defaultProxyClass:    "other",
+			useLEStagingEndpoint: false,
+		},
+		{
+			name:                 "ingress_pg_with_default_staging_proxyclass_false",
+			pgType:               tsapi.ProxyGroupTypeIngress,
+			proxyClassName:       "",
+			defaultProxyClass:    "le-staging-false",
+			proxyClasses:         []*tsapi.ProxyClass{pcLEStagingFalse},
+			useLEStagingEndpoint: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Build fake client with scheme and ProxyClasses
+			builder := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme)
+
+			// Add ProxyClass if specified and set its status
+			var pc *tsapi.ProxyClass
+			if tt.proxyClasses != nil {
+				pc = tt.proxyClasses[0]
+				builder = builder.WithObjects(pc).
+					WithStatusSubresource(pc)
+			}
+
+			fc := builder.Build()
+
+			// Set ProxyClass status if one is being used
+			if tt.proxyClassName != "" || tt.defaultProxyClass != "" {
+				pc := &tsapi.ProxyClass{}
+				name := tt.proxyClassName
+				if name == "" {
+					name = tt.defaultProxyClass
+				}
+				if err := fc.Get(context.Background(), client.ObjectKey{Name: name}, pc); err != nil {
+					t.Fatal(err)
+				}
+				pc.Status = tsapi.ProxyClassStatus{
+					Conditions: []metav1.Condition{{
+						Type:               string(tsapi.ProxyClassReady),
+						Status:             metav1.ConditionTrue,
+						Reason:             reasonProxyClassValid,
+						Message:            reasonProxyClassValid,
+						LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
+						ObservedGeneration: pc.Generation,
+					}},
+				}
+				if err := fc.Status().Update(context.Background(), pc); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Create ProxyGroup
+			pg := &tsapi.ProxyGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test",
+				},
+				Spec: tsapi.ProxyGroupSpec{
+					Type:       tt.pgType,
+					Replicas:   ptr.To[int32](1),
+					ProxyClass: tt.proxyClassName,
+				},
+			}
+			mustCreate(t, fc, pg)
+
+			reconciler := &ProxyGroupReconciler{
+				tsNamespace:       tsNamespace,
+				proxyImage:        testProxyImage,
+				defaultTags:       []string{"tag:test"},
+				defaultProxyClass: tt.defaultProxyClass,
+				Client:            fc,
+				tsClient:          &fakeTSClient{},
+				l:                 zl.Sugar(),
+				clock:             cl,
+			}
+
+			expectReconciled(t, reconciler, "", pg.Name)
+
+			// Get the StatefulSet and verify the environment variable
+			sts := &appsv1.StatefulSet{}
+			if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+				t.Fatalf("failed to get StatefulSet: %v", err)
+			}
+
+			if tt.useLEStagingEndpoint {
+				verifyEnvVar(t, sts, "TS_DEBUG_ACME_DIRECTORY_URL", letsEncryptStagingEndpoint)
+			} else {
+				verifyEnvVarNotPresent(t, sts, "TS_DEBUG_ACME_DIRECTORY_URL")
+			}
+		})
+	}
+}
 
 func verifyProxyGroupCounts(t *testing.T, r *ProxyGroupReconciler, wantIngress, wantEgress int) {
 	t.Helper()
@@ -539,6 +720,16 @@ func verifyEnvVar(t *testing.T, sts *appsv1.StatefulSet, name, expectedValue str
 		}
 	}
 	t.Errorf("%s environment variable not found", name)
+}
+
+func verifyEnvVarNotPresent(t *testing.T, sts *appsv1.StatefulSet, name string) {
+	t.Helper()
+	for _, env := range sts.Spec.Template.Spec.Containers[0].Env {
+		if env.Name == name {
+			t.Errorf("environment variable %s should not be present", name)
+			return
+		}
+	}
 }
 
 func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup, shouldExist bool, cfgHash string, proxyClass *tsapi.ProxyClass) {
