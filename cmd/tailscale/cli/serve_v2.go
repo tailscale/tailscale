@@ -99,6 +99,7 @@ const (
 	serveTypeHTTP
 	serveTypeTCP
 	serveTypeTLSTerminatedTCP
+	serveTypeTun
 )
 
 var infoMap = map[serveMode]commandInfo{
@@ -156,6 +157,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.StringVar(&e.service, "service", "", "Name of the service to serve.")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
+			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services")
 		}),
 		UsageFunc: usageFuncNoDefaultValues,
 		Subcommands: []*ffcli.Command{
@@ -189,8 +191,15 @@ func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
 		fmt.Fprint(e.stderr(), "\nPlease see https://tailscale.com/kb/1242/tailscale-serve for more information.\n")
 		return errHelpFunc(subcmd)
 	}
+	if len(args) == 0 && e.tun {
+		return nil
+	}
 	if len(args) == 0 {
 		return flag.ErrHelp
+	}
+	if e.tun && len(args) > 1 {
+		fmt.Fprintln(e.stderr(), "Error: invalid argument format")
+		return errHelpFunc(subcmd)
 	}
 	if len(args) > 2 {
 		fmt.Fprintf(e.stderr(), "Error: invalid number of arguments (%d)\n", len(args))
@@ -231,11 +240,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 			return e.lc.SetServeConfig(ctx, sc)
 		}
-
 		if err := e.validateArgs(subcmd, args); err != nil {
 			return err
 		}
-
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 		defer cancel()
 
@@ -292,7 +299,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		// foreground or background.
 		parentSC := sc
 
-		turnOff := "off" == args[len(args)-1]
+		turnOff := len(args) > 0 && "off" == args[len(args)-1]
 		if !turnOff && srvType == serveTypeHTTPS {
 			// Running serve with https requires that the tailnet has enabled
 			// https cert provisioning. Send users through an interactive flow
@@ -317,6 +324,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 
 		var watcher *tailscale.IPNBusWatcher
 		forService := len(services) == 1
+		if !forService && srvType == serveTypeTun {
+			return errors.New("tun mode is only supported for services")
+		}
 		wantFg := !forService && !e.bg.Value && !turnOff
 		if wantFg {
 			// validate the config before creating a WatchIPNBus session
@@ -358,7 +368,11 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if err := e.validateConfig(parentSC, srvPort, srvType, dnsName); err != nil {
 				return err
 			}
-			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, args[0], funnel)
+			target := ""
+			if len(args) > 0 {
+				target = args[0]
+			}
+			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, target, funnel)
 			msg = e.messageForPort(sc, st, prefs, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -402,7 +416,16 @@ func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe se
 	var tcpHandlerForPort *ipn.TCPPortHandler
 	if forService {
 		svc := sc.FindServiceConfig(tailcfg.ServiceName(dnsName))
-		if svc == nil || svc.TCP[port] == nil {
+		if svc == nil {
+			return nil
+		}
+		if wantServe == serveTypeTun && (svc.TCP != nil || svc.Web != nil) {
+			return errors.New("service already has a TCP or Web handler, cannot serve in TUN mode")
+		}
+		if svc.Tun && wantServe != serveTypeTun {
+			return errors.New("service is already being served in TUN mode")
+		}
+		if svc.TCP[port] == nil {
 			return nil
 		}
 		tcpHandlerForPort = svc.TCP[port]
@@ -458,6 +481,12 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
 		}
+	case serveTypeTun:
+		svcName := tailcfg.ServiceName(dnsName)
+		if _, ok := sc.Services[svcName]; !ok {
+			mak.Set(&sc.Services, svcName, new(ipn.ServiceConfig))
+		}
+		sc.Services[svcName].Tun = true
 	default:
 		return fmt.Errorf("invalid type %q", srvType)
 	}
@@ -473,9 +502,12 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 var (
 	msgFunnelAvailable      = "Available on the internet:"
 	msgServeAvailable       = "Available within your tailnet:"
+	msgServiceIPNotAssigned = "This service doesn't have VIPs assigned yet, once VIP is assigned, it will be available in your Tailnet as:"
 	msgRunningInBackground  = "%s started and running in the background."
+	msgRunningTunServie     = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
 	msgDisableProxy         = "To disable the proxy, run: tailscale %s --%s=%d off"
 	msgDisableServiceProxy  = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
+	msgDisableServiceTun    = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
 	msgDisableService       = "To disable the service entirely, run: tailscale serve --service=%s off"
 	msgServiceNotAdvertised = "This service is not advertised on this node yet, use `tailscale advertise --services=svc:%s` to advertise it."
 	msgToExit               = "Press Ctrl+C to exit."
@@ -493,29 +525,8 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, pref
 	host := dnsName
 	if forService {
 		host = tailcfg.ServiceName(dnsName).WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
-		serviceIPMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](st.Self.CapMap, tailcfg.NodeAttrServiceHost)
-		if len(serviceIPMaps) != 1 || err != nil {
-			if len(serviceIPMaps) != 0 {
-				fmt.Fprintln(e.stderr(), "error: unable to get service IP mappings")
-			}
-			output.WriteString("This service doesn't have VIPs assigned yet.\n")
-			ips = nil
-		} else {
-			if serviceIPMaps[0][tailcfg.ServiceName(dnsName)] == nil {
-				output.WriteString("This service doesn't have VIPs assigned yet.\n")
-				ips = nil
-			}
-			ips = serviceIPMaps[0][tailcfg.ServiceName(dnsName)]
-		}
 	}
 	hp = ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
-
-	if sc.AllowFunnel[hp] == true {
-		output.WriteString(msgFunnelAvailable)
-	} else {
-		output.WriteString(msgServeAvailable)
-	}
-	output.WriteString("\n\n")
 
 	scheme := "https"
 	if sc.IsServingHTTP(srvPort, dnsName) {
@@ -540,12 +551,37 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, pref
 		return "", ""
 	}
 	if forService {
-		svc := sc.FindServiceConfig(tailcfg.ServiceName(dnsName))
+		svcName := tailcfg.ServiceName(dnsName)
+		serviceIPMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](st.Self.CapMap, tailcfg.NodeAttrServiceHost)
+		if err != nil || len(serviceIPMaps) > 1 {
+		} else if len(serviceIPMaps) == 0 || serviceIPMaps[0][svcName] == nil {
+			output.WriteString(msgServiceIPNotAssigned)
+			ips = nil
+		} else {
+			output.WriteString(msgServeAvailable)
+			ips = serviceIPMaps[0][svcName]
+		}
+		output.WriteString("\n\n")
+		svc := sc.FindServiceConfig(svcName)
+		if srvType == serveTypeTun && svc.Tun {
+			output.WriteString(fmt.Sprintf(msgRunningTunServie, host))
+			output.WriteString("\n")
+			output.WriteString(fmt.Sprintf(msgDisableServiceTun, dnsName))
+			output.WriteString("\n")
+			output.WriteString(fmt.Sprintf(msgDisableService, dnsName))
+			return output.String()
+		}
 		if svc != nil {
 			webConfig = svc.Web[hp]
 			tcpHandler = svc.TCP[srvPort]
 		}
 	} else {
+		if sc.AllowFunnel[hp] == true {
+			output.WriteString(msgFunnelAvailable)
+		} else {
+			output.WriteString(msgServeAvailable)
+		}
+		output.WriteString("\n\n")
 		webConfig = sc.Web[hp]
 		tcpHandler = sc.TCP[srvPort]
 	}
@@ -709,6 +745,11 @@ func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName 
 		if err != nil {
 			return fmt.Errorf("failed to remove TCP serve: %w", err)
 		}
+	case serveTypeTun:
+		err := e.removeTunServe(sc, dnsName)
+		if err != nil {
+			return fmt.Errorf("failed to remove TUN serve: %w", err)
+		}
 	default:
 		return fmt.Errorf("invalid type %q", srvType)
 	}
@@ -738,6 +779,12 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, wa
 			srvPort = uint16(v)
 			wasDefault = false
 		}
+	}
+
+	if e.tun {
+		srcTypeCount++
+		srvType = serveTypeTun
+		wasDefault = false
 	}
 
 	if srcTypeCount > 1 {
@@ -923,6 +970,22 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, dnsName string, src uint1
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
 	sc.RemoveTCPForwarding(dnsName, src)
+	return nil
+}
+
+func (e *serveEnv) removeTunServe(sc *ipn.ServeConfig, dnsName string) error {
+	if sc == nil {
+		return nil
+	}
+	svcName := tailcfg.ServiceName(dnsName)
+	svc, ok := sc.Services[svcName]
+	if !ok || svc == nil {
+		return errors.New("error: service does not exist")
+	}
+	if !svc.Tun {
+		return errors.New("error: service is not being served in TUN mode")
+	}
+	delete(sc.Services, svcName)
 	return nil
 }
 

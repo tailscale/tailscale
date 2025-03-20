@@ -1013,6 +1013,37 @@ func TestValidateConfig(t *testing.T) {
 			serveType: serveTypeHTTP,
 			wantErr:   true,
 		},
+		{
+			name: "override_service_tcp",
+			desc: "error when setting previous tcp service to tun mode",
+			cfg: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {TCPForward: "http://localhost:4545"},
+						},
+					},
+				},
+			},
+			dns:       "svc:foo",
+			serveType: serveTypeTun,
+			wantErr:   true,
+		},
+		{
+			name: "override_service_tun",
+			desc: "error when setting previous tun service to tcp forwarder",
+			cfg: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						Tun: true,
+					},
+				},
+			},
+			dns:       "svc:foo",
+			serveType: serveTypeTCP,
+			servePort: 443,
+			wantErr:   true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1301,8 +1332,7 @@ func TestMessageForPort(t *testing.T) {
 			srvType: serveTypeHTTP,
 			srvPort: 80,
 			expected: strings.Join([]string{
-				"This service doesn't have VIPs assigned yet.",
-				msgServeAvailable,
+				msgServiceIPNotAssigned,
 				"",
 				"http://bar.test.ts.net/",
 				"|-- proxy http://localhost:3000",
@@ -1431,6 +1461,35 @@ func TestMessageForPort(t *testing.T) {
 				"",
 				fmt.Sprintf(msgRunningInBackground, "Serve"),
 				fmt.Sprintf(msgDisableServiceProxy, "svc:foo", "tcp", 2200),
+				fmt.Sprintf(msgDisableService, "svc:foo"),
+			}, "\n"),
+		},
+		{
+			name:   "serve service Tun",
+			subcmd: serve,
+			serveConfig: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:foo": {
+						Tun: true,
+					},
+				},
+			},
+			status: &ipnstate.Status{
+				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
+				Self: &ipnstate.PeerStatus{
+					CapMap: tailcfg.NodeCapMap{
+						tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{svcIPMapJSONRawMSG},
+					},
+				},
+			},
+			prefs:   &ipn.Prefs{AdvertiseServices: []string{"svc:foo"}},
+			dnsName: "svc:foo",
+			srvType: serveTypeTun,
+			expected: strings.Join([]string{
+				msgServeAvailable,
+				"",
+				fmt.Sprintf(msgRunningTunServie, "foo.test.ts.net"),
+				fmt.Sprintf(msgDisableServiceTun, "svc:foo"),
 				fmt.Sprintf(msgDisableService, "svc:foo"),
 			}, "\n"),
 		},
@@ -1738,6 +1797,23 @@ func TestSetServe(t *testing.T) {
 								},
 							},
 						},
+					},
+				},
+			},
+		},
+		{
+			name: "add new service handler",
+			desc: "add a new service handler in tun mode to empty config",
+			cfg:  &ipn.ServeConfig{},
+			st: &ipnstate.Status{
+				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
+			},
+			dnsName: "svc:bar",
+			srvType: serveTypeTun,
+			expected: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:bar": {
+						Tun: true,
 					},
 				},
 			},

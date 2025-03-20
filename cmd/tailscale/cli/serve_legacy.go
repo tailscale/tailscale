@@ -164,6 +164,7 @@ type serveEnv struct {
 	subcmd           serveMode  // subcommand
 	yes              bool       // update without prompt
 	service          string     // service name
+	tun              bool       // redirect traffic to OS for service
 
 	lc localServeClient // localClient interface, specific to serve
 
