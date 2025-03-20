@@ -518,7 +518,7 @@ func (c *Client) createMapping() {
 	}
 }
 
-// MappingEvent is an event recording the allocation of a port mapping.
+// Mapping is an event recording the allocation of a port mapping.
 type Mapping struct {
 	External  netip.AddrPort
 	Type      string
