@@ -555,6 +555,7 @@ func NewConn(opts Options) (*Conn, error) {
 		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
 	}
 	c.portMapper = portmapper.NewClient(portmapper.Config{
+		EventBus:     c.eventBus,
 		Logf:         portmapperLogf,
 		NetMon:       opts.NetMon,
 		DebugKnobs:   portMapOpts,
