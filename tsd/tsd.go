@@ -40,6 +40,10 @@ import (
 )
 
 // System contains all the subsystems of a Tailscale node (tailscaled, etc.)
+//
+// A valid System value must always have a non-nil Bus populated.  Callers must
+// ensure this before using the value further. Call [NewSystem] to obtain a
+// value ready to use.
 type System struct {
 	Bus            SubSystem[*eventbus.Bus]
 	Dialer         SubSystem[*tsdial.Dialer]
@@ -72,9 +76,9 @@ type System struct {
 	userMetricsRegistry usermetric.Registry
 }
 
-// NewSystemWithEventBus constructs a new otherwise-empty system with a
+// NewSystem constructs a new otherwise-empty [System] with a
 // freshly-constructed event bus populated.
-func NewSystemWithEventBus() *System {
+func NewSystem() *System {
 	sys := new(System)
 	sys.Set(eventbus.New())
 	return sys
