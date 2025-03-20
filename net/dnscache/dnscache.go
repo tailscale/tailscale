@@ -202,6 +202,20 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 netip.Addr
 		r.dlogf("returning %d static results", len(allIPs))
 		return
 	}
+
+	// Hard-code this to avoid extra work, DNS fallbacks, etc.
+	if host == "localhost" {
+		r.dlogf("host is localhost")
+
+		// TODO: @raggi mentioned that some distributions don't use
+		// 127.0.0.1 as the localhost IP; should we check the interface
+		// address to determine this?
+		ip = netip.AddrFrom4([4]byte{127, 0, 0, 1})
+		v6 = netip.IPv6Loopback()
+		allIPs = []netip.Addr{ip, v6}
+		err = nil
+		return
+	}
 	if ip, err := netip.ParseAddr(host); err == nil {
 		ip = ip.Unmap()
 		r.dlogf("%q is an IP", host)
