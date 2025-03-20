@@ -404,6 +404,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 	}
 	magicsockOpts := magicsock.Options{
+		EventBus:         e.eventBus,
 		Logf:             logf,
 		Port:             conf.ListenPort,
 		EndpointsFunc:    endpointsFn,
