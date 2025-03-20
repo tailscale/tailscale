@@ -2215,20 +2215,21 @@ spec:
                         https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices
                         Defaults to false.
                       type: boolean
-                useLetsEncryptStagingEndpoint:
+                useLetsEncryptStagingEnvironment:
                   description: |-
-                    UseLetsEncryptStagingEndpoint can be set to true to use the
-                    LetsEncrypt staging endpoint for the TLS certs issued for any HTTPS
-                    endpoints exposed to tailnet by a proxy instance.
-                    In practice, this only applies to Tailscale Ingress tailnet endpoint.
+                    Set UseLetsEncryptStagingEnvironment to true to issue TLS
+                    certificates for any HTTPS endpoints exposed to the tailnet from
+                    LetsEncrypt's staging environment.
                     https://letsencrypt.org/docs/staging-environment/
-                    By default these certs are issued by the LetsEncrypt production
-                    endpoint.
-                    Note, that changing this setting true -> false, will result in any
-                    existing certs being re-issued from the production endpoint, however
-                    if you have already provisioned certs from the production endpoint
-                    and set this to true, the existing production certs might be used till the time
-                    comes to renew them.
+                    This setting only affects Tailscale Ingress resources.
+                    By default Ingress TLS certificates are issued from LetsEncrypt's
+                    production environment.
+                    Changing this setting true -> false, will result in any
+                    existing certs being re-issued from the production environment.
+                    Changing this setting false (default) -> true, when certs have already
+                    been provisioned from production environment will NOT result in certs
+                    being re-issued from the staging environment before they need to be
+                    renewed.
                   type: boolean
             status:
               description: |-

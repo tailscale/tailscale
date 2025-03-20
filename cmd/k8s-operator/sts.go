@@ -785,8 +785,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 			enableEndpoints(ss, metricsEnabled, debugEnabled)
 		}
 	}
-	if pc.Spec.UseLetsEncryptStagingEndpoint && (stsCfg.proxyType == proxyTypeIngressResource || stsCfg.proxyType == string(tsapi.ProxyGroupTypeIngress)) {
-		logger.Debugf("setting TS_DEBUG_ACME_DIRECTORY_URL to %s", letsEncryptStagingEndpoint)
+	if pc.Spec.UseLetsEncryptStagingEnvironment && (stsCfg.proxyType == proxyTypeIngressResource || stsCfg.proxyType == string(tsapi.ProxyGroupTypeIngress)) {
 		for i, c := range ss.Spec.Template.Spec.Containers {
 			if c.Name == "tailscale" {
 				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env, corev1.EnvVar{

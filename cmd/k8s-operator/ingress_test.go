@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
@@ -28,8 +27,7 @@ import (
 )
 
 func TestTailscaleIngress(t *testing.T) {
-	tsIngressClass := &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "tailscale"}, Spec: networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"}}
-	fc := fake.NewFakeClient(tsIngressClass)
+	fc := fake.NewFakeClient(ingressClass())
 	ft := &fakeTSClient{}
 	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 	zl, err := zap.NewDevelopment()
@@ -50,45 +48,8 @@ func TestTailscaleIngress(t *testing.T) {
 	}
 
 	// 1. Resources get created for regular Ingress
-	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: types.UID("1234-UID"),
-		},
-		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
-			DefaultBackend: &networkingv1.IngressBackend{
-				Service: &networkingv1.IngressServiceBackend{
-					Name: "test",
-					Port: networkingv1.ServiceBackendPort{
-						Number: 8080,
-					},
-				},
-			},
-			TLS: []networkingv1.IngressTLS{
-				{Hosts: []string{"default-test"}},
-			},
-		},
-	}
-	mustCreate(t, fc, ing)
-	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP: "1.2.3.4",
-			Ports: []corev1.ServicePort{{
-				Port: 8080,
-				Name: "http"},
-			},
-		},
-	})
+	mustCreate(t, fc, ingress())
+	mustCreate(t, fc, service())
 
 	expectReconciled(t, ingR, "default", "test")
 
@@ -118,6 +79,9 @@ func TestTailscaleIngress(t *testing.T) {
 		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
 	})
 	expectReconciled(t, ingR, "default", "test")
+
+	// Get the ingress and update it with expected changes
+	ing := ingress()
 	ing.Finalizers = append(ing.Finalizers, "tailscale.com/finalizer")
 	ing.Status.LoadBalancer = networkingv1.IngressLoadBalancerStatus{
 		Ingress: []networkingv1.IngressLoadBalancerIngress{
@@ -147,8 +111,7 @@ func TestTailscaleIngress(t *testing.T) {
 }
 
 func TestTailscaleIngressHostname(t *testing.T) {
-	tsIngressClass := &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "tailscale"}, Spec: networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"}}
-	fc := fake.NewFakeClient(tsIngressClass)
+	fc := fake.NewFakeClient(ingressClass())
 	ft := &fakeTSClient{}
 	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 	zl, err := zap.NewDevelopment()
@@ -169,45 +132,8 @@ func TestTailscaleIngressHostname(t *testing.T) {
 	}
 
 	// 1. Resources get created for regular Ingress
-	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: types.UID("1234-UID"),
-		},
-		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
-			DefaultBackend: &networkingv1.IngressBackend{
-				Service: &networkingv1.IngressServiceBackend{
-					Name: "test",
-					Port: networkingv1.ServiceBackendPort{
-						Number: 8080,
-					},
-				},
-			},
-			TLS: []networkingv1.IngressTLS{
-				{Hosts: []string{"default-test"}},
-			},
-		},
-	}
-	mustCreate(t, fc, ing)
-	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP: "1.2.3.4",
-			Ports: []corev1.ServicePort{{
-				Port: 8080,
-				Name: "http"},
-			},
-		},
-	})
+	mustCreate(t, fc, ingress())
+	mustCreate(t, fc, service())
 
 	expectReconciled(t, ingR, "default", "test")
 
@@ -245,8 +171,10 @@ func TestTailscaleIngressHostname(t *testing.T) {
 		mak.Set(&secret.Data, "device_fqdn", []byte("foo.tailnetxyz.ts.net"))
 	})
 	expectReconciled(t, ingR, "default", "test")
-	ing.Finalizers = append(ing.Finalizers, "tailscale.com/finalizer")
 
+	// Get the ingress and update it with expected changes
+	ing := ingress()
+	ing.Finalizers = append(ing.Finalizers, "tailscale.com/finalizer")
 	expectEqual(t, fc, ing)
 
 	// 3. Ingress proxy with capability version >= 110 advertises HTTPS endpoint
@@ -303,10 +231,9 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 			Annotations: map[string]string{"bar.io/foo": "some-val"},
 			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
 	}
-	tsIngressClass := &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "tailscale"}, Spec: networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"}}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
-		WithObjects(pc, tsIngressClass).
+		WithObjects(pc, ingressClass()).
 		WithStatusSubresource(pc).
 		Build()
 	ft := &fakeTSClient{}
@@ -330,45 +257,8 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 
 	// 1. Ingress is created with no ProxyClass specified, default proxy
 	// resources get configured.
-	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: types.UID("1234-UID"),
-		},
-		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
-			DefaultBackend: &networkingv1.IngressBackend{
-				Service: &networkingv1.IngressServiceBackend{
-					Name: "test",
-					Port: networkingv1.ServiceBackendPort{
-						Number: 8080,
-					},
-				},
-			},
-			TLS: []networkingv1.IngressTLS{
-				{Hosts: []string{"default-test"}},
-			},
-		},
-	}
-	mustCreate(t, fc, ing)
-	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP: "1.2.3.4",
-			Ports: []corev1.ServicePort{{
-				Port: 8080,
-				Name: "http"},
-			},
-		},
-	})
+	mustCreate(t, fc, ingress())
+	mustCreate(t, fc, service())
 
 	expectReconciled(t, ingR, "default", "test")
 
@@ -436,54 +326,19 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 				ObservedGeneration: 1,
 			}}},
 	}
-	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: types.UID("1234-UID"),
-			Labels: map[string]string{
-				"tailscale.com/proxy-class": "metrics",
-			},
-		},
-		Spec: networkingv1.IngressSpec{
-			IngressClassName: ptr.To("tailscale"),
-			DefaultBackend: &networkingv1.IngressBackend{
-				Service: &networkingv1.IngressServiceBackend{
-					Name: "test",
-					Port: networkingv1.ServiceBackendPort{
-						Number: 8080,
-					},
-				},
-			},
-			TLS: []networkingv1.IngressTLS{
-				{Hosts: []string{"default-test"}},
-			},
-		},
-	}
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP: "1.2.3.4",
-			Ports: []corev1.ServicePort{{
-				Port: 8080,
-				Name: "http"},
-			},
-		},
-	}
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
-	tsIngressClass := &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "tailscale"}, Spec: networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"}}
+
+	// Create fake client with ProxyClass, IngressClass, Ingress with metrics ProxyClass, and Service
+	ing := ingress()
+	ing.Labels = map[string]string{
+		LabelProxyClass: "metrics",
+	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
-		WithObjects(pc, tsIngressClass, ing, svc).
+		WithObjects(pc, ingressClass(), ing, service()).
 		WithStatusSubresource(pc).
 		Build()
+
 	ft := &fakeTSClient{}
 	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 	zl, err := zap.NewDevelopment()
@@ -569,180 +424,34 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	zl := zap.Must(zap.NewDevelopment())
 
-	pcLEStaging := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "le-staging",
-			Generation: 1,
-		},
-		Spec: tsapi.ProxyClassSpec{
-			UseLetsEncryptStagingEndpoint: true,
-		},
-	}
+	pcLEStaging, pcLEStagingFalse, pcOther := proxyClassesForLEStagingTest()
 
-	pcLEStagingFalse := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "le-staging-false",
-			Generation: 1,
-		},
-		Spec: tsapi.ProxyClassSpec{
-			UseLetsEncryptStagingEndpoint: false,
-		},
-	}
+	testCases := testCasesForLEStagingTests(pcLEStaging, pcLEStagingFalse, pcOther)
 
-	pcOther := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "other",
-			Generation: 1,
-		},
-		Spec: tsapi.ProxyClassSpec{},
-	}
-
-	tsIngressClass := &networkingv1.IngressClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "tailscale",
-		},
-		Spec: networkingv1.IngressClassSpec{
-			Controller: "tailscale.com/ts-ingress",
-		},
-	}
-
-	tests := []struct {
-		name                 string
-		proxyClassName       string // empty means no ProxyClass
-		proxyClasses         []*tsapi.ProxyClass
-		defaultProxyClass    string
-		useLEStagingEndpoint bool
-	}{
-		{
-			name:                 "ingress_with_staging_proxyclass",
-			proxyClassName:       "le-staging",
-			proxyClasses:         []*tsapi.ProxyClass{pcLEStaging},
-			useLEStagingEndpoint: true,
-		},
-		{
-			name:                 "ingress_with_staging_proxyclass_false",
-			proxyClassName:       "le-staging-false",
-			proxyClasses:         []*tsapi.ProxyClass{pcLEStagingFalse},
-			useLEStagingEndpoint: false,
-		},
-		{
-			name:                 "ingress_with_other_proxyclass",
-			proxyClassName:       "other",
-			proxyClasses:         []*tsapi.ProxyClass{pcOther},
-			useLEStagingEndpoint: false,
-		},
-		{
-			name:                 "ingress_no_proxyclass",
-			proxyClassName:       "",
-			proxyClasses:         nil,
-			useLEStagingEndpoint: false,
-		},
-		{
-			name:                 "ingress_with_default_staging_proxyclass",
-			proxyClassName:       "",
-			proxyClasses:         []*tsapi.ProxyClass{pcLEStaging},
-			defaultProxyClass:    "le-staging",
-			useLEStagingEndpoint: true,
-		},
-		{
-			name:                 "ingress_with_default_other_proxyclass",
-			proxyClassName:       "",
-			proxyClasses:         []*tsapi.ProxyClass{pcOther},
-			defaultProxyClass:    "other",
-			useLEStagingEndpoint: false,
-		},
-		{
-			name:                 "ingress_with_default_staging_proxyclass_false",
-			proxyClassName:       "",
-			defaultProxyClass:    "le-staging-false",
-			proxyClasses:         []*tsapi.ProxyClass{pcLEStagingFalse},
-			useLEStagingEndpoint: false,
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			// Build fake client with scheme and ProxyClasses
 			builder := fake.NewClientBuilder().
-				WithScheme(tsapi.GlobalScheme).
-				WithObjects(tsIngressClass)
+				WithScheme(tsapi.GlobalScheme)
 
-			// Add ProxyClass if specified and set its status
-			var pc *tsapi.ProxyClass
-			if tt.proxyClasses != nil {
-				pc = tt.proxyClasses[0]
-				builder = builder.WithObjects(pc).
-					WithStatusSubresource(pc)
-			}
+			builder = builder.WithObjects(pcLEStaging, pcLEStagingFalse, pcOther).
+				WithStatusSubresource(pcLEStaging, pcLEStagingFalse, pcOther)
 
 			fc := builder.Build()
 
-			// Set ProxyClass status if one is being used
-			if tt.proxyClassName != "" || tt.defaultProxyClass != "" {
-				pc := &tsapi.ProxyClass{}
-				name := tt.proxyClassName
+			if tt.proxyClassPerResource != "" || tt.defaultProxyClass != "" {
+				name := tt.proxyClassPerResource
 				if name == "" {
 					name = tt.defaultProxyClass
 				}
-				if err := fc.Get(context.Background(), client.ObjectKey{Name: name}, pc); err != nil {
-					t.Fatal(err)
-				}
-				pc.Status = tsapi.ProxyClassStatus{
-					Conditions: []metav1.Condition{{
-						Type:               string(tsapi.ProxyClassReady),
-						Status:             metav1.ConditionTrue,
-						Reason:             reasonProxyClassValid,
-						Message:            reasonProxyClassValid,
-						LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
-						ObservedGeneration: pc.Generation,
-					}},
-				}
-				if err := fc.Status().Update(context.Background(), pc); err != nil {
-					t.Fatal(err)
-				}
+				setProxyClassReady(t, fc, cl, name)
 			}
 
-			// Create test service
-			svc := &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-svc",
-					Namespace: "default",
-				},
-				Spec: corev1.ServiceSpec{
-					ClusterIP: "1.2.3.4",
-					Ports: []corev1.ServicePort{{
-						Port: 8080,
-						Name: "http",
-					}},
-				},
-			}
-			mustCreate(t, fc, svc)
-
-			// Create Ingress
-			ing := &networkingv1.Ingress{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "default",
-					UID:       "test-uid",
-				},
-				Spec: networkingv1.IngressSpec{
-					IngressClassName: ptr.To("tailscale"),
-					DefaultBackend: &networkingv1.IngressBackend{
-						Service: &networkingv1.IngressServiceBackend{
-							Name: svc.Name,
-							Port: networkingv1.ServiceBackendPort{
-								Number: 8080,
-							},
-						},
-					},
-					TLS: []networkingv1.IngressTLS{
-						{Hosts: []string{"test-host"}},
-					},
-				},
-			}
-			if tt.proxyClassName != "" {
+			mustCreate(t, fc, ingressClass())
+			mustCreate(t, fc, service())
+			ing := ingress()
+			if tt.proxyClassPerResource != "" {
 				ing.Labels = map[string]string{
-					LabelProxyClass: tt.proxyClassName,
+					LabelProxyClass: tt.proxyClassPerResource,
 				}
 			}
 			mustCreate(t, fc, ing)
@@ -763,7 +472,6 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 
 			expectReconciled(t, ingR, "default", "test")
 
-			// Get the StatefulSet and verify the environment variable
 			_, shortName := findGenName(t, fc, "default", "test", "ingress")
 			sts := &appsv1.StatefulSet{}
 			if err := fc.Get(context.Background(), client.ObjectKey{Namespace: "operator-ns", Name: shortName}, sts); err != nil {
@@ -776,5 +484,53 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 				verifyEnvVarNotPresent(t, sts, "TS_DEBUG_ACME_DIRECTORY_URL")
 			}
 		})
+	}
+}
+
+func ingressClass() *networkingv1.IngressClass {
+	return &networkingv1.IngressClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
+		Spec:       networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},
+	}
+}
+
+func service() *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "1.2.3.4",
+			Ports: []corev1.ServicePort{{
+				Port: 8080,
+				Name: "http"},
+			},
+		},
+	}
+}
+
+func ingress() *networkingv1.Ingress {
+	return &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"default-test"}},
+			},
+		},
 	}
 }
