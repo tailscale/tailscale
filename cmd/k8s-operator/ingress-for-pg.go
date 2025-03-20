@@ -312,15 +312,16 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		vipPorts = append(vipPorts, "80")
 	}
 
+	const managedVIPServiceComment = "This VIPService is managed by the Tailscale Kubernetes Operator, do not modify"
 	vipSvc := &tailscale.VIPService{
 		Name:        serviceName,
 		Tags:        tags,
 		Ports:       vipPorts,
+		Comment:     managedVIPServiceComment,
 		Annotations: updatedAnnotations,
 	}
 	if existingVIPSvc != nil {
 		vipSvc.Addrs = existingVIPSvc.Addrs
-		vipSvc.Comment = existingVIPSvc.Comment
 	}
 	// TODO(irbekrm): right now if two Ingress resources attempt to apply different VIPService configs (different
 	// tags, or HTTP endpoint settings) we can end up reconciling those in a loop. We should detect when an Ingress
@@ -783,7 +784,7 @@ func (a *HAIngressReconciler) numberPodsAdvertising(ctx context.Context, pgName 
 	return count, nil
 }
 
-const ownerAnnotation = "tailscale.com/owner"
+const ownerAnnotation = "tailscale.com/owner-references"
 
 // ownerAnnotationValue is the content of the VIPService.Annotation[ownerAnnotation] field.
 type ownerAnnotationValue struct {
