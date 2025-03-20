@@ -561,7 +561,7 @@ func (s *Server) start() (reterr error) {
 		s.Logf(format, a...)
 	}
 
-	sys := tsd.NewSystemWithEventBus()
+	sys := tsd.NewSystem()
 	s.sys = sys
 	if err := s.startLogger(&closePool, sys.HealthTracker(), tsLogf); err != nil {
 		return err

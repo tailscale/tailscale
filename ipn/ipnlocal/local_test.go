@@ -436,7 +436,7 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func newTestLocalBackend(t testing.TB) *LocalBackend {
-	return newTestLocalBackendWithSys(t, tsd.NewSystemWithEventBus())
+	return newTestLocalBackendWithSys(t, tsd.NewSystem())
 }
 
 // newTestLocalBackendWithSys creates a new LocalBackend with the given tsd.System.
@@ -4407,7 +4407,7 @@ func TestNotificationTargetMatch(t *testing.T) {
 type newTestControlFn func(tb testing.TB, opts controlclient.Options) controlclient.Client
 
 func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl newTestControlFn) *LocalBackend {
-	return newLocalBackendWithSysAndTestControl(t, enableLogging, new(tsd.System), newControl)
+	return newLocalBackendWithSysAndTestControl(t, enableLogging, tsd.NewSystem(), newControl)
 }
 
 func newLocalBackendWithSysAndTestControl(t *testing.T, enableLogging bool, sys *tsd.System, newControl newTestControlFn) *LocalBackend {
@@ -4867,7 +4867,7 @@ func TestConfigFileReload(t *testing.T) {
 			// Create backend with initial config
 			tc.initial.Path = path
 			tc.initial.Raw = initialJSON
-			sys := tsd.NewSystemWithEventBus()
+			sys := tsd.NewSystem()
 			sys.InitialConfig = tc.initial
 			b := newTestLocalBackendWithSys(t, sys)
 
