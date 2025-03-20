@@ -137,6 +137,17 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Print how to access Tailscale LocalAPI",
 			},
 			{
+				Name:       "localapi",
+				ShortUsage: "tailscale debug localapi [<method>] <path> [<body| \"-\">]",
+				Exec:       runLocalAPI,
+				ShortHelp:  "Call a LocalAPI method directly",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("localapi")
+					fs.BoolVar(&localAPIFlags.verbose, "v", false, "verbose; dump HTTP headers")
+					return fs
+				})(),
+			},
+			{
 				Name:       "restun",
 				ShortUsage: "tailscale debug restun",
 				Exec:       localAPIAction("restun"),
@@ -449,6 +460,81 @@ func runLocalCreds(ctx context.Context, args []string) error {
 	}
 	printf("curl --unix-socket %s http://local-tailscaled.sock/localapi/v0/status\n", paths.DefaultTailscaledSocket())
 	return nil
+}
+
+func looksLikeHTTPMethod(s string) bool {
+	if len(s) > len("OPTIONS") {
+		return false
+	}
+	for _, r := range s {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+var localAPIFlags struct {
+	verbose bool
+}
+
+func runLocalAPI(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("expected at least one argument")
+	}
+	method := "GET"
+	if looksLikeHTTPMethod(args[0]) {
+		method = args[0]
+		args = args[1:]
+		if len(args) == 0 {
+			return errors.New("expected at least one argument after method")
+		}
+	}
+	path := args[0]
+	if !strings.HasPrefix(path, "/localapi/") {
+		if !strings.Contains(path, "/") {
+			path = "/localapi/v0/" + path
+		} else {
+			path = "/localapi/" + path
+		}
+	}
+
+	var body io.Reader
+	if len(args) > 1 {
+		if args[1] == "-" {
+			fmt.Fprintf(Stderr, "# reading request body from stdin...\n")
+			all, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return fmt.Errorf("reading Stdin: %q", err)
+			}
+			body = bytes.NewReader(all)
+		} else {
+			body = strings.NewReader(args[1])
+		}
+	}
+	req, err := http.NewRequest(method, "http://local-tailscaled.sock"+path, body)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(Stderr, "# doing request %s %s\n", method, path)
+
+	res, err := localClient.DoLocalRequest(req)
+	if err != nil {
+		return err
+	}
+	is2xx := res.StatusCode >= 200 && res.StatusCode <= 299
+	if localAPIFlags.verbose {
+		res.Write(Stdout)
+	} else {
+		if !is2xx {
+			fmt.Fprintf(Stderr, "# Response status %s\n", res.Status)
+		}
+		io.Copy(Stdout, res.Body)
+	}
+	if is2xx {
+		return nil
+	}
+	return errors.New(res.Status)
 }
 
 type localClientRoundTripper struct{}
