@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 )
 
 var disablePortMapperEnv = envknob.RegisterBool("TS_DISABLE_PORTMAPPER")
@@ -84,6 +85,7 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 
 // Client is a port mapping client.
 type Client struct {
+	eventBus     *eventbus.Bus
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
 	controlKnobs *controlknobs.Knobs
@@ -203,6 +205,13 @@ func (m *pmpMapping) Release(ctx context.Context) {
 
 // Config carries the settings for a [Client].
 type Config struct {
+	// EventBus, if non-nil, is used for event publication and subscription by
+	// portmapper clients created from this config.
+	//
+	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
+	// become required non-nil.
+	EventBus *eventbus.Bus
+
 	// Logf is called to generate text logs for the client. If nil, logger.Discard is used.
 	Logf logger.Logf
 
@@ -229,6 +238,7 @@ func NewClient(c Config) *Client {
 		panic("nil netMon")
 	}
 	ret := &Client{
+		eventBus:     c.EventBus,
 		logf:         c.Logf,
 		netMon:       c.NetMon,
 		ipAndGateway: netmon.LikelyHomeRouterIP, // TODO(bradfitz): move this to method on netMon
