@@ -448,7 +448,7 @@ func newTestLocalBackendWithSys(t testing.TB, sys *tsd.System) *LocalBackend {
 		sys.Set(new(mem.Store))
 	}
 	if _, ok := sys.Engine.GetOK(); !ok {
-		eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+		eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
 		if err != nil {
 			t.Fatalf("NewFakeUserspaceEngine: %v", err)
 		}
@@ -4405,7 +4405,7 @@ func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl
 	sys := tsd.NewSystemWithEventBus()
 	store := new(mem.Store)
 	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}

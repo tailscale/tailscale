@@ -522,7 +522,7 @@ func newLocalBackendWithTestControl(tb testing.TB, newControl newControlClientFn
 	sys.Set(store)
 
 	logf := testLogger(tb, enableLogging)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		tb.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
