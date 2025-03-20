@@ -127,7 +127,7 @@ func TestHasPathHandler(t *testing.T) {
 	}
 }
 
-func TestIsTCPForwardingOnPortForDNSName(t *testing.T) {
+func TestIsTCPForwardingOnPort(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  ServeConfig
@@ -234,9 +234,9 @@ func TestIsTCPForwardingOnPortForDNSName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.cfg.IsTCPForwardingOnPortForDNSName(tt.port, tt.dns)
+			got := tt.cfg.IsTCPForwardingOnPort(tt.port, tt.dns)
 			if tt.want != got {
-				t.Errorf("IsTCPForwardingOnPortForDNSName() = %v, want %v", got, tt.want)
+				t.Errorf("IsTCPForwardingOnPort() = %v, want %v", got, tt.want)
 			}
 		})
 	}

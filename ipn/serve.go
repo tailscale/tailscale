@@ -249,10 +249,10 @@ func IsServiceName(s string) bool {
 	return tailcfg.ServiceName(s).Validate() == nil
 }
 
-// IsTCPForwardingOnPortForDNSName reports whether ServeConfig is currently forwarding
+// IsTCPForwardingOnPort reports whether ServeConfig is currently forwarding
 // in TCPForward mode on the given port for a DNSName. DNSName will be either node's DNSName, or a
 // serviceName for service hosted on node. This is exclusive of Web/HTTPS serving.
-func (sc *ServeConfig) IsTCPForwardingOnPortForDNSName(port uint16, dnsName string) bool {
+func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, dnsName string) bool {
 	if sc == nil {
 		return false
 	}
@@ -268,13 +268,13 @@ func (sc *ServeConfig) IsTCPForwardingOnPortForDNSName(port uint16, dnsName stri
 	} else if sc.TCP[port] == nil {
 		return false
 	}
-	return !sc.IsServingWebForDNSName(port, dnsName)
+	return !sc.IsServingWeb(port, dnsName)
 }
 
-// IsServingWebForDNSName reports whether ServeConfig is currently serving Web
+// IsServingWeb reports whether ServeConfig is currently serving Web
 // (HTTP/HTTPS) on the given port for a DNSName. DNSName will be either node's DNSName, or a
 // serviceName for service hosted on node. This is exclusive of TCPForwarding.
-func (sc *ServeConfig) IsServingWebForDNSName(port uint16, dnsName string) bool {
+func (sc *ServeConfig) IsServingWeb(port uint16, dnsName string) bool {
 	return sc.IsServingHTTP(port, dnsName) || sc.IsServingHTTPS(port, dnsName)
 }
 

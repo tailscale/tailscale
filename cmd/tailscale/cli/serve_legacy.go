@@ -357,7 +357,7 @@ func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, useTLS bo
 	if err != nil {
 		return err
 	}
-	if sc.IsTCPForwardingOnPortForDNSName(srvPort, dnsName) {
+	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
 		fmt.Fprintf(Stderr, "error: cannot serve web; already serving TCP\n")
 		return errHelp
 	}
@@ -418,7 +418,7 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, srvPort uint16, mou
 	if err != nil {
 		return err
 	}
-	if sc.IsTCPForwardingOnPortForDNSName(srvPort, dnsName) {
+	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
@@ -557,7 +557,7 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 
 	fwdAddr := "127.0.0.1:" + dstPortStr
 
-	if sc.IsServingWebForDNSName(srcPort, "") {
+	if sc.IsServingWeb(srcPort, "") {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
@@ -592,7 +592,7 @@ func (e *serveEnv) handleTCPServeRemove(ctx context.Context, src uint16) error {
 	if err != nil {
 		return err
 	}
-	if sc.IsServingWebForDNSName(src, dnsName) {
+	if sc.IsServingWeb(src, dnsName) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
 	if ph := sc.GetTCPPortHandler(src, dnsName); ph != nil {

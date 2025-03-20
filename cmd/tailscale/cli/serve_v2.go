@@ -676,7 +676,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsNa
 	}
 
 	// TODO: validation needs to check nested foreground configs
-	if sc.IsTCPForwardingOnPortForDNSName(srvPort, dnsName) {
+	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
 		return errors.New("cannot serve web; already serving TCP")
 	}
 
@@ -707,7 +707,7 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
-	if sc.IsServingWebForDNSName(srcPort, dnsName) {
+	if sc.IsServingWeb(srcPort, dnsName) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
@@ -918,7 +918,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		webServeMap = sc.Web
 	}
 
-	if sc.IsTCPForwardingOnPortForDNSName(srvPort, dnsName) {
+	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 
@@ -966,7 +966,7 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, dnsName string, src uint1
 	if sc.GetTCPPortHandler(src, dnsName) == nil {
 		return errors.New("error: serve config does not exist")
 	}
-	if sc.IsServingWebForDNSName(src, dnsName) {
+	if sc.IsServingWeb(src, dnsName) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
 	sc.RemoveTCPForwarding(dnsName, src)
