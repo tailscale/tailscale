@@ -5918,6 +5918,9 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.logf("requestEngineStatusAndWait: got status update.")
 }
 
+// [controlclient.Auto] implements [auditlog.Transport].
+var _ auditlog.Transport = (*controlclient.Auto)(nil)
+
 // setControlClientLocked sets the control client to cc,
 // which may be nil.
 //
@@ -5925,12 +5928,12 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
-	if b.auditLogger != nil {
+	if t, ok := b.cc.(auditlog.Transport); ok && b.auditLogger != nil {
 		if err := b.auditLogger.SetProfileID(b.pm.CurrentProfile().ID()); err != nil {
 			b.logf("audit logger set profile ID failure: %v", err)
 		}
 
-		if err := b.auditLogger.Start(b.ccAuto); err != nil {
+		if err := b.auditLogger.Start(t); err != nil {
 			b.logf("audit logger start failure: %v", err)
 		}
 	}
