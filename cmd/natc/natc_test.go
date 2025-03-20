@@ -4,6 +4,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"testing"
@@ -225,9 +227,10 @@ func TestDNSResponse(t *testing.T) {
 
 func TestPerPeerState(t *testing.T) {
 	c := &connector{
-		v4Ranges: []netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")},
-		v6ULA:    netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-		dnsAddr:  netip.MustParseAddr("100.64.1.1"),
+		v4Ranges:      []netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")},
+		v6ULA:         netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
+		dnsAddr:       netip.MustParseAddr("100.64.1.0"),
+		numV4DNSAddrs: (1<<(32-24) - 1),
 	}
 
 	ps := &perPeerState{c: c}
@@ -328,9 +331,10 @@ func TestIgnoreDestination(t *testing.T) {
 
 func TestConnectorGenerateDNSResponse(t *testing.T) {
 	c := &connector{
-		v4Ranges: []netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")},
-		v6ULA:    netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-		dnsAddr:  netip.MustParseAddr("100.64.1.1"),
+		v4Ranges:      []netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")},
+		v6ULA:         netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
+		dnsAddr:       netip.MustParseAddr("100.64.1.0"),
+		numV4DNSAddrs: (1<<(32-24) - 1),
 	}
 
 	req := &dnsmessage.Message{
@@ -361,5 +365,65 @@ func TestConnectorGenerateDNSResponse(t *testing.T) {
 
 	if !cmp.Equal(resp1, resp2) {
 		t.Errorf("generateDNSResponse() responses differ between calls")
+	}
+}
+
+func TestIPPoolExhaustion(t *testing.T) {
+	smallPrefix := netip.MustParsePrefix("100.64.1.0/30") // Only 4 IPs: .0, .1, .2, .3
+	c := &connector{
+		v6ULA:         netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
+		v4Ranges:      []netip.Prefix{smallPrefix},
+		dnsAddr:       netip.MustParseAddr("100.64.1.0"),
+		numV4DNSAddrs: 3,
+	}
+
+	ps := &perPeerState{c: c}
+
+	assignedIPs := make(map[netip.Addr]string)
+
+	domains := []string{"a.example.com", "b.example.com", "c.example.com", "d.example.com"}
+
+	var errs []error
+
+	for i := 0; i < 5; i++ {
+		for _, domain := range domains {
+			addrs, err := ps.ipForDomain(domain)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("failed to get IP for domain %q: %w", domain, err))
+				continue
+			}
+
+			for _, addr := range addrs {
+				if d, ok := assignedIPs[addr]; ok {
+					if d != domain {
+						t.Errorf("IP %s reused for domain %q, previously assigned to %q", addr, domain, d)
+					}
+				} else {
+					assignedIPs[addr] = domain
+				}
+			}
+		}
+	}
+
+	for addr, domain := range assignedIPs {
+		if addr.Is4() && !smallPrefix.Contains(addr) {
+			t.Errorf("IP %s for domain %q not in expected range %s", addr, domain, smallPrefix)
+		}
+		if addr.Is6() && !c.v6ULA.Contains(addr) {
+			t.Errorf("IP %s for domain %q not in expected range %s", addr, domain, c.v6ULA)
+		}
+		if addr == c.dnsAddr {
+			t.Errorf("IP %s for domain %q is the reserved DNS address", addr, domain)
+		}
+	}
+
+	// expect one error for each iteration with the 4th domain
+	if len(errs) != 5 {
+		t.Errorf("Expected 5 errors, got %d: %v", len(errs), errs)
+	}
+	for _, err := range errs {
+		if !errors.Is(err, ErrNoIPsAvailable) {
+			t.Errorf("generateDNSResponse() error = %v, want ErrNoIPsAvailable", err)
+		}
 	}
 }
