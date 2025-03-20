@@ -42,8 +42,8 @@ type commandInfo struct {
 }
 
 type bgBoolFlag struct {
-	Value bool
-	IsSet bool // tracks if the flag was set by the user
+	Value     bool
+	SetByUser bool // tracks if the flag was set by the user
 }
 
 // Set sets the boolean flag and wether it's explicitly set by user based on the string value.
@@ -55,7 +55,7 @@ func (b *bgBoolFlag) Set(s string) error {
 	} else {
 		return fmt.Errorf("invalid boolean value: %s", s)
 	}
-	b.IsSet = true
+	b.SetByUser = true
 	return nil
 }
 
@@ -219,11 +219,8 @@ func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
 // runServeCombined is the entry point for the "tailscale {serve,funnel}" commands.
 func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	e.subcmd = subcmd
-	if e.service != "" && !e.bg.IsSet {
-		e.bg.Value = true
-	}
-	if !e.bg.IsSet {
-		e.bg.Value = false
+	if !e.bg.SetByUser {
+		e.bg.Value = e.service != ""
 	}
 
 	return func(ctx context.Context, args []string) error {
@@ -248,7 +245,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 
 		funnel := subcmd == funnel
 		if e.service != "" && funnel {
-			fmt.Fprintln(e.stderr(), "Error: --service flag is not supported with funnel")
+			return errors.New("Error: --service flag is not supported with funnel")
 		}
 
 		if funnel {
@@ -258,7 +255,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
-		if e.service != "" && e.bg.IsSet && !e.bg.Value {
+		if e.service != "" && e.bg.SetByUser && !e.bg.Value {
 			return errors.New("Error: --service flag is only compatible with background mode")
 		}
 
@@ -315,15 +312,15 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
-		services, err := parseServiceNames(e.service)
-		if err != nil {
-			return fmt.Errorf("error: %v\n\n", err)
-		} else if len(services) > 1 {
-			return fmt.Errorf("error: Only one service can be served at a time\n\n")
-		}
-
 		var watcher *tailscale.IPNBusWatcher
-		forService := len(services) == 1
+		forService := e.service != ""
+		if forService {
+			err = tailcfg.ServiceName(e.service).Validate()
+			if err != nil {
+				return fmt.Errorf("failed to parse service name: %w", err)
+			}
+			dnsName = e.service
+		}
 		if !forService && srvType == serveTypeTun {
 			return errors.New("tun mode is only supported for services")
 		}
@@ -355,9 +352,6 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var msg string
-		if forService {
-			dnsName = services[0]
-		}
 		if turnOff {
 			if wasDefaultServe && forService {
 				delete(sc.Services, tailcfg.ServiceName(dnsName))
@@ -553,8 +547,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, pref
 	if forService {
 		svcName := tailcfg.ServiceName(dnsName)
 		serviceIPMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](st.Self.CapMap, tailcfg.NodeAttrServiceHost)
-		if err != nil || len(serviceIPMaps) > 1 {
-		} else if len(serviceIPMaps) == 0 || serviceIPMaps[0][svcName] == nil {
+		if err != nil || len(serviceIPMaps) == 0 || serviceIPMaps[0][svcName] == nil {
 			output.WriteString(msgServiceIPNotAssigned)
 			ips = nil
 		} else {
