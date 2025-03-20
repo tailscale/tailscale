@@ -19,6 +19,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
 // TestIGD is an IGD (Internet Gateway Device) for testing. It supports fake
@@ -258,12 +259,16 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netip.AddrPort) {
 	}
 }
 
-func newTestClient(t *testing.T, igd *TestIGD) *Client {
+// newTestClient configures a new test client connected to igd for mapping updates.
+// If bus != nil, update events are published to it.
+// A cleanup for the resulting client is added to t.
+func newTestClient(t *testing.T, igd *TestIGD, bus *eventbus.Bus) *Client {
 	var c *Client
 	c = NewClient(Config{
 		Logf:         t.Logf,
 		NetMon:       netmon.NewStatic(),
 		ControlKnobs: new(controlknobs.Knobs),
+		EventBus:     bus,
 		OnChange: func() {
 			t.Logf("port map changed")
 			t.Logf("have mapping: %v", c.HaveMapping())
@@ -273,5 +278,6 @@ func newTestClient(t *testing.T, igd *TestIGD) *Client {
 	c.testUPnPPort = igd.TestUPnPPort()
 	c.netMon = netmon.NewStatic()
 	c.SetGatewayLookupFunc(testIPAndGateway)
+	t.Cleanup(func() { c.Close() })
 	return c
 }
