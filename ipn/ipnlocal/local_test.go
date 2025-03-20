@@ -436,7 +436,7 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func newTestLocalBackend(t testing.TB) *LocalBackend {
-	return newTestLocalBackendWithSys(t, tsd.NewSystemWithEventBus())
+	return newTestLocalBackendWithSys(t, tsd.NewSystem())
 }
 
 // newTestLocalBackendWithSys creates a new LocalBackend with the given tsd.System.
@@ -4402,7 +4402,7 @@ func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl
 	if enableLogging {
 		logf = tstest.WhileTestRunningLogger(t)
 	}
-	sys := tsd.NewSystemWithEventBus()
+	sys := tsd.NewSystem()
 	store := new(mem.Store)
 	sys.Set(store)
 	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
@@ -4748,7 +4748,7 @@ func TestConfigFileReload(t *testing.T) {
 	cfg1 := `{"Hostname": "foo", "Version": "alpha0"}`
 	f := filepath.Join(t.TempDir(), "cfg")
 	must.Do(os.WriteFile(f, []byte(cfg1), 0600))
-	sys := tsd.NewSystemWithEventBus()
+	sys := tsd.NewSystem()
 	sys.InitialConfig = must.Get(conffile.Load(f))
 	lb := newTestLocalBackendWithSys(t, sys)
 	must.Do(lb.Start(ipn.Options{}))
