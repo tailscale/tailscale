@@ -302,7 +302,10 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	if err != nil {
 		return fmt.Errorf("error generating StatefulSet spec: %w", err)
 	}
-	ss = applyProxyClassToStatefulSet(proxyClass, ss, nil, logger)
+	cfg := &tailscaleSTSConfig{
+		proxyType: string(pg.Spec.Type),
+	}
+	ss = applyProxyClassToStatefulSet(proxyClass, ss, cfg, logger)
 	capver, err := r.capVerForPG(ctx, pg, logger)
 	if err != nil {
 		return fmt.Errorf("error getting device info: %w", err)

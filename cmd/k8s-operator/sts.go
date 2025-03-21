@@ -102,6 +102,8 @@ const (
 
 	envVarTSLocalAddrPort = "TS_LOCAL_ADDR_PORT"
 	defaultLocalAddrPort  = 9002 // metrics and health check port
+
+	letsEncryptStagingEndpoint = "https://acme-staging-v02.api.letsencrypt.org/directory"
 )
 
 var (
@@ -781,6 +783,17 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 			logger.Info("ProxyClass specifies that metrics should be enabled, but this is currently not supported for Ingress proxies that accept cluster traffic.")
 		} else {
 			enableEndpoints(ss, metricsEnabled, debugEnabled)
+		}
+	}
+	if pc.Spec.UseLetsEncryptStagingEnvironment && (stsCfg.proxyType == proxyTypeIngressResource || stsCfg.proxyType == string(tsapi.ProxyGroupTypeIngress)) {
+		for i, c := range ss.Spec.Template.Spec.Containers {
+			if c.Name == "tailscale" {
+				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env, corev1.EnvVar{
+					Name:  "TS_DEBUG_ACME_DIRECTORY_URL",
+					Value: letsEncryptStagingEndpoint,
+				})
+				break
+			}
 		}
 	}
 
