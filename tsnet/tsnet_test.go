@@ -120,6 +120,7 @@ func startControl(t *testing.T) (controlURL string, control *testcontrol.Server)
 			Proxied: true,
 		},
 		MagicDNSDomain: "tail-scale.ts.net",
+		Logf:           t.Logf,
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
 	control.HTTPTestServer.Start()
@@ -221,7 +222,7 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 		getCertForTesting: testCertRoot.getCert,
 	}
 	if *verboseNodes {
-		s.Logf = log.Printf
+		s.Logf = t.Logf
 	}
 	t.Cleanup(func() { s.Close() })
 
