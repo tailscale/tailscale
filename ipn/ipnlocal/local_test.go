@@ -4407,19 +4407,27 @@ func TestNotificationTargetMatch(t *testing.T) {
 type newTestControlFn func(tb testing.TB, opts controlclient.Options) controlclient.Client
 
 func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl newTestControlFn) *LocalBackend {
+	return newLocalBackendWithSysAndTestControl(t, enableLogging, new(tsd.System), newControl)
+}
+
+func newLocalBackendWithSysAndTestControl(t *testing.T, enableLogging bool, sys *tsd.System, newControl newTestControlFn) *LocalBackend {
 	logf := logger.Discard
 	if enableLogging {
 		logf = tstest.WhileTestRunningLogger(t)
 	}
-	sys := new(tsd.System)
-	store := new(mem.Store)
-	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
-	if err != nil {
-		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+
+	if _, hasStore := sys.StateStore.GetOK(); !hasStore {
+		store := new(mem.Store)
+		sys.Set(store)
 	}
-	t.Cleanup(e.Close)
-	sys.Set(e)
+	if _, hasEngine := sys.Engine.GetOK(); !hasEngine {
+		e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+		if err != nil {
+			t.Fatalf("NewFakeUserspaceEngine: %v", err)
+		}
+		t.Cleanup(e.Close)
+		sys.Set(e)
+	}
 
 	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
