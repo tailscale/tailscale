@@ -1942,6 +1942,8 @@ func (n *testNode) AwaitIP6() netip.Addr {
 
 // AwaitRunning waits for n to reach the IPN state "Running".
 func (n *testNode) AwaitRunning() {
+	t := n.env.t
+	t.Helper()
 	n.AwaitBackendState("Running")
 }
 
@@ -2015,7 +2017,7 @@ func (n *testNode) Status() (*ipnstate.Status, error) {
 	}
 	st := new(ipnstate.Status)
 	if err := json.Unmarshal(out, st); err != nil {
-		return nil, fmt.Errorf("decoding tailscale status JSON: %w", err)
+		return nil, fmt.Errorf("decoding tailscale status JSON: %w\njson:\n%s", err, out)
 	}
 	return st, nil
 }
