@@ -5328,7 +5328,7 @@ func TestSrcCapPacketFilter(t *testing.T) {
 		}},
 	})
 
-	f := lb.currentNode().GetFilterForTest()
+	f := lb.GetFilterForTest()
 	res := f.Check(netip.MustParseAddr("2.2.2.2"), netip.MustParseAddr("1.1.1.1"), 22, ipproto.TCP)
 	if res != filter.Accept {
 		t.Errorf("Check(2.2.2.2, ...) = %s, want %s", res, filter.Accept)
