@@ -931,6 +931,47 @@ func packetFilterWithIngressCaps() []tailcfg.FilterRule {
 	return out
 }
 
+// PeerForNode returns a Node object for a specific peer of a given node.
+func (s *Server) PeerForNode(nodeKey, peerKey key.NodePublic) *tailcfg.Node {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	node := s.nodes[nodeKey].Clone()
+	peer := s.nodes[peerKey].Clone()
+	s.fillPeerDetailsLocked(node, peer)
+	return peer
+}
+
+func (s *Server) fillPeerDetailsLocked(node, p *tailcfg.Node) {
+	nodeMasqs := s.masquerades[node.Key]
+	if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
+		if masqIP.Is6() {
+			p.SelfNodeV6MasqAddrForThisPeer = ptr.To(masqIP)
+		} else {
+			p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+		}
+	}
+
+	jailed := maps.Clone(s.peerIsJailed[node.Key])
+	p.IsJailed = jailed[p.Key]
+
+	peerAddress := s.masquerades[p.Key][node.Key]
+	if peerAddress.IsValid() {
+		if peerAddress.Is6() {
+			p.Addresses[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			p.AllowedIPs[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+		} else {
+			p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+		}
+	}
+
+	routes := s.nodeSubnetRoutes[p.Key]
+	if len(routes) > 0 {
+		p.PrimaryRoutes = routes
+		p.AllowedIPs = append(p.AllowedIPs, routes...)
+	}
+}
+
 // MapResponse generates a MapResponse for a MapRequest.
 //
 // No updates to s are done here.
@@ -969,40 +1010,13 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		ControlTime:     &t,
 	}
 
-	s.mu.Lock()
-	nodeMasqs := s.masquerades[node.Key]
-	jailed := maps.Clone(s.peerIsJailed[node.Key])
-	s.mu.Unlock()
 	for _, p := range s.AllNodes() {
 		if p.StableID == node.StableID {
 			continue
 		}
-		if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
-			if masqIP.Is6() {
-				p.SelfNodeV6MasqAddrForThisPeer = ptr.To(masqIP)
-			} else {
-				p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
-			}
-		}
-		p.IsJailed = jailed[p.Key]
-
 		s.mu.Lock()
-		peerAddress := s.masquerades[p.Key][node.Key]
-		routes := s.nodeSubnetRoutes[p.Key]
+		s.fillPeerDetailsLocked(node, p)
 		s.mu.Unlock()
-		if peerAddress.IsValid() {
-			if peerAddress.Is6() {
-				p.Addresses[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
-				p.AllowedIPs[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
-			} else {
-				p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
-				p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
-			}
-		}
-		if len(routes) > 0 {
-			p.PrimaryRoutes = routes
-			p.AllowedIPs = append(p.AllowedIPs, routes...)
-		}
 		res.Peers = append(res.Peers, p)
 	}
 
