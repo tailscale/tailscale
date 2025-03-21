@@ -1510,7 +1510,11 @@ func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 	return nil
 }
 
-func (nb *nodeBackend) GetFilterForTest() *filter.Filter {
+func (b *LocalBackend) GetFilterForTest() *filter.Filter {
+	if !testenv.InTest() {
+		panic("GetFilterForTest called outside of test")
+	}
+	nb := b.currentNode()
 	return nb.filterAtomic.Load()
 }
 
