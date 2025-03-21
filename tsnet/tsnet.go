@@ -505,6 +505,11 @@ func (s *Server) start() (reterr error) {
 			// directory and hostname when they're not supplied. But we can fall
 			// back to "tsnet" as well.
 			exe = "tsnet"
+		case "ios":
+			// When compiled as a framework (via TailscaleKit in libtailscale),
+			// os.Executable() returns an error, so fall back to "tsnet" there
+			// too.
+			exe = "tsnet"
 		default:
 			return err
 		}
