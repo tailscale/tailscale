@@ -758,7 +758,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 	tsClaimsWithExtra, err := withExtraClaims(tsClaims, rules)
 	if err != nil {
 		log.Printf("tsidp: failed to merge extra claims: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
