@@ -839,15 +839,17 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 
 	w.WriteHeader(200)
 	for {
-		if resBytes, ok := s.takeRawMapMessage(req.NodeKey); ok {
-			if err := s.sendMapMsg(w, compress, resBytes); err != nil {
-				s.logf("sendMapMsg of raw message: %v", err)
-				return
-			}
-			if streaming {
+		// Only send raw map responses to the streaming poll, to avoid a
+		// non-streaming map request beating the streaming poll in a race and
+		// potentially dropping the map response.
+		if streaming {
+			if resBytes, ok := s.takeRawMapMessage(req.NodeKey); ok {
+				if err := s.sendMapMsg(w, compress, resBytes); err != nil {
+					s.logf("sendMapMsg of raw message: %v", err)
+					return
+				}
 				continue
 			}
-			return
 		}
 
 		if s.canGenerateAutomaticMapResponseFor(req.NodeKey) {
