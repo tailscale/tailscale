@@ -1942,12 +1942,8 @@ type MapResponse struct {
 	// the same HTTP response. A non-nil but empty list always means
 	// no PacketFilter (that is, to block everything).
 	//
-	// Note that this package's type, due its use of a slice and omitempty, is
-	// unable to marshal a zero-length non-nil slice. The control server needs
-	// to marshal this type using a separate type. See MapResponse docs.
-	//
 	// See PacketFilters for the newer way to send PacketFilter updates.
-	PacketFilter []FilterRule `json:",omitempty"`
+	PacketFilter []FilterRule `json:",omitzero"`
 
 	// PacketFilters encodes incremental packet filter updates to the client
 	// without having to send the entire packet filter on any changes as
