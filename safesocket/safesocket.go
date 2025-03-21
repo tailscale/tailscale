@@ -61,7 +61,11 @@ func ConnectContext(ctx context.Context, path string) (net.Conn, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			time.Sleep(250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
 			continue
 		}
 		return c, err
