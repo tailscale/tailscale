@@ -228,12 +228,11 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 			return false, fmt.Errorf("error getting VIPService %q: %w", hostname, err)
 		}
 	}
-	// Generate the VIPService comment for new or existing VIPService. This
-	// checks and ensures that VIPService's owner references are updated for
-	// this Ingress and errors if that is not possible (i.e. because it
-	// appears that the VIPService has been created by a non-operator
-	// actor).
-	svcComment, err := r.ownerRefsComment(existingVIPSvc)
+	// Generate the VIPService owner annotation for new or existing VIPService.
+	// This checks and ensures that VIPService's owner references are updated
+	// for this Ingress and errors if that is not possible (i.e. because it
+	// appears that the VIPService has been created by a non-operator actor).
+	updatedAnnotations, err := r.ownerAnnotations(existingVIPSvc)
 	if err != nil {
 		const instr = "To proceed, you can either manually delete the existing VIPService or choose a different MagicDNS name at `.spec.tls.hosts[0] in the Ingress definition"
 		msg := fmt.Sprintf("error ensuring ownership of VIPService %s: %v. %s", hostname, err, instr)
@@ -313,11 +312,13 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		vipPorts = append(vipPorts, "80")
 	}
 
+	const managedVIPServiceComment = "This VIPService is managed by the Tailscale Kubernetes Operator, do not modify"
 	vipSvc := &tailscale.VIPService{
-		Name:    serviceName,
-		Tags:    tags,
-		Ports:   vipPorts,
-		Comment: svcComment,
+		Name:        serviceName,
+		Tags:        tags,
+		Ports:       vipPorts,
+		Comment:     managedVIPServiceComment,
+		Annotations: updatedAnnotations,
 	}
 	if existingVIPSvc != nil {
 		vipSvc.Addrs = existingVIPSvc.Addrs
@@ -328,7 +329,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	if existingVIPSvc == nil ||
 		!reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) ||
 		!reflect.DeepEqual(vipSvc.Ports, existingVIPSvc.Ports) ||
-		!strings.EqualFold(vipSvc.Comment, existingVIPSvc.Comment) {
+		!ownersAreSetAndEqual(vipSvc, existingVIPSvc) {
 		logger.Infof("Ensuring VIPService exists and is up to date")
 		if err := r.tsClient.CreateOrUpdateVIPService(ctx, vipSvc); err != nil {
 			return false, fmt.Errorf("error creating VIPService: %w", err)
@@ -669,34 +670,34 @@ func (r *HAIngressReconciler) cleanupVIPService(ctx context.Context, name tailcf
 	if svc == nil {
 		return false, nil
 	}
-	c, err := parseComment(svc)
+	o, err := parseOwnerAnnotation(svc)
 	if err != nil {
-		return false, fmt.Errorf("error parsing VIPService comment")
+		return false, fmt.Errorf("error parsing VIPService owner annotation")
 	}
-	if c == nil || len(c.OwnerRefs) == 0 {
+	if o == nil || len(o.OwnerRefs) == 0 {
 		return false, nil
 	}
 	// Comparing with the operatorID only means that we will not be able to
 	// clean up VIPServices in cases where the operator was deleted from the
 	// cluster before deleting the Ingress. Perhaps the comparison could be
 	// 'if or.OperatorID === r.operatorID || or.ingressUID == r.ingressUID'.
-	ix := slices.IndexFunc(c.OwnerRefs, func(or OwnerRef) bool {
+	ix := slices.IndexFunc(o.OwnerRefs, func(or OwnerRef) bool {
 		return or.OperatorID == r.operatorID
 	})
 	if ix == -1 {
 		return false, nil
 	}
-	if len(c.OwnerRefs) == 1 {
+	if len(o.OwnerRefs) == 1 {
 		logger.Infof("Deleting VIPService %q", name)
 		return false, r.tsClient.DeleteVIPService(ctx, name)
 	}
-	c.OwnerRefs = slices.Delete(c.OwnerRefs, ix, ix+1)
+	o.OwnerRefs = slices.Delete(o.OwnerRefs, ix, ix+1)
 	logger.Infof("Deleting VIPService %q", name)
-	json, err := json.Marshal(c)
+	json, err := json.Marshal(o)
 	if err != nil {
 		return false, fmt.Errorf("error marshalling updated VIPService owner reference: %w", err)
 	}
-	svc.Comment = string(json)
+	svc.Annotations[ownerAnnotation] = string(json)
 	return true, r.tsClient.CreateOrUpdateVIPService(ctx, svc)
 }
 
@@ -783,6 +784,15 @@ func (a *HAIngressReconciler) numberPodsAdvertising(ctx context.Context, pgName 
 	return count, nil
 }
 
+const ownerAnnotation = "tailscale.com/owner-references"
+
+// ownerAnnotationValue is the content of the VIPService.Annotation[ownerAnnotation] field.
+type ownerAnnotationValue struct {
+	// OwnerRefs is a list of owner references that identify all operator
+	// instances that manage this VIPService.
+	OwnerRefs []OwnerRef `json:"ownerRefs,omitempty"`
+}
+
 // OwnerRef is an owner reference that uniquely identifies a Tailscale
 // Kubernetes operator instance.
 type OwnerRef struct {
@@ -790,48 +800,67 @@ type OwnerRef struct {
 	OperatorID string `json:"operatorID,omitempty"`
 }
 
-// comment is the content of the VIPService.Comment field.
-type comment struct {
-	// OwnerRefs is a list of owner references that identify all operator
-	// instances that manage this VIPService.
-	OwnerRefs []OwnerRef `json:"ownerRefs,omitempty"`
-}
-
-// ownerRefsComment return VIPService Comment that includes owner reference for this
-// operator instance for the provided VIPService. If the VIPService is nil, a
-// new comment with owner ref is returned. If the VIPService is not nil, the
-// existing comment is returned with the owner reference added, if not already
-// present. If the VIPService is not nil, but does not contain a comment we
-// return an error as this likely means that the VIPService was created by
-// somthing other than a Tailscale Kubernetes operator.
-func (r *HAIngressReconciler) ownerRefsComment(svc *tailscale.VIPService) (string, error) {
+// ownerAnnotations returns the updated annotations required to ensure this
+// instance of the operator is included as an owner. If the VIPService is not
+// nil, but does not contain an owner we return an error as this likely means
+// that the VIPService was created by somthing other than a Tailscale
+// Kubernetes operator.
+func (r *HAIngressReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[string]string, error) {
 	ref := OwnerRef{
 		OperatorID: r.operatorID,
 	}
 	if svc == nil {
-		c := &comment{OwnerRefs: []OwnerRef{ref}}
+		c := ownerAnnotationValue{OwnerRefs: []OwnerRef{ref}}
 		json, err := json.Marshal(c)
 		if err != nil {
-			return "", fmt.Errorf("[unexpected] unable to marshal VIPService comment contents: %w, please report this", err)
+			return nil, fmt.Errorf("[unexpected] unable to marshal VIPService owner annotation contents: %w, please report this", err)
 		}
-		return string(json), nil
+		return map[string]string{
+			ownerAnnotation: string(json),
+		}, nil
 	}
-	c, err := parseComment(svc)
+	o, err := parseOwnerAnnotation(svc)
 	if err != nil {
-		return "", fmt.Errorf("error parsing existing VIPService comment: %w", err)
+		return nil, err
 	}
-	if c == nil || len(c.OwnerRefs) == 0 {
-		return "", fmt.Errorf("VIPService %s exists, but does not contain Comment field with owner references- not proceeding as this is likely a resource created by something other than a Tailscale Kubernetes Operator", svc.Name)
+	if o == nil || len(o.OwnerRefs) == 0 {
+		return nil, fmt.Errorf("VIPService %s exists, but does not contain owner annotation with owner references; not proceeding as this is likely a resource created by something other than the Tailscale Kubernetes operator", svc.Name)
 	}
-	if slices.Contains(c.OwnerRefs, ref) { // up to date
-		return svc.Comment, nil
+	if slices.Contains(o.OwnerRefs, ref) { // up to date
+		return svc.Annotations, nil
 	}
-	c.OwnerRefs = append(c.OwnerRefs, ref)
-	json, err := json.Marshal(c)
+	o.OwnerRefs = append(o.OwnerRefs, ref)
+	json, err := json.Marshal(o)
 	if err != nil {
-		return "", fmt.Errorf("error marshalling updated owner references: %w", err)
+		return nil, fmt.Errorf("error marshalling updated owner references: %w", err)
 	}
-	return string(json), nil
+
+	newAnnots := make(map[string]string, len(svc.Annotations)+1)
+	for k, v := range svc.Annotations {
+		newAnnots[k] = v
+	}
+	newAnnots[ownerAnnotation] = string(json)
+	return newAnnots, nil
+}
+
+// parseOwnerAnnotation returns nil if no valid owner found.
+func parseOwnerAnnotation(vipSvc *tailscale.VIPService) (*ownerAnnotationValue, error) {
+	if vipSvc.Annotations == nil || vipSvc.Annotations[ownerAnnotation] == "" {
+		return nil, nil
+	}
+	o := &ownerAnnotationValue{}
+	if err := json.Unmarshal([]byte(vipSvc.Annotations[ownerAnnotation]), o); err != nil {
+		return nil, fmt.Errorf("error parsing VIPService %s annotation %q: %w", ownerAnnotation, vipSvc.Annotations[ownerAnnotation], err)
+	}
+	return o, nil
+}
+
+func ownersAreSetAndEqual(a, b *tailscale.VIPService) bool {
+	return a != nil && b != nil &&
+		a.Annotations != nil && b.Annotations != nil &&
+		a.Annotations[ownerAnnotation] != "" &&
+		b.Annotations[ownerAnnotation] != "" &&
+		strings.EqualFold(a.Annotations[ownerAnnotation], b.Annotations[ownerAnnotation])
 }
 
 // ensureCertResources ensures that the TLS Secret for an HA Ingress and RBAC
@@ -875,18 +904,6 @@ func (r *HAIngressReconciler) cleanupCertResources(ctx context.Context, pgName s
 		return fmt.Errorf("error deleting Secret for domain name %s: %w", domainName, err)
 	}
 	return nil
-}
-
-// parseComment returns VIPService comment or nil if none found or not matching the expected format.
-func parseComment(vipSvc *tailscale.VIPService) (*comment, error) {
-	if vipSvc.Comment == "" {
-		return nil, nil
-	}
-	c := &comment{}
-	if err := json.Unmarshal([]byte(vipSvc.Comment), c); err != nil {
-		return nil, fmt.Errorf("error parsing VIPService Comment field %q: %w", vipSvc.Comment, err)
-	}
-	return c, nil
 }
 
 // requeueInterval returns a time duration between 5 and 10 minutes, which is

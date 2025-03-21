@@ -745,8 +745,10 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 
 	// Simulate existing VIPService from another cluster
 	existingVIPSvc := &tailscale.VIPService{
-		Name:    "svc:my-svc",
-		Comment: `{"ownerrefs":[{"operatorID":"operator-2"}]}`,
+		Name: "svc:my-svc",
+		Annotations: map[string]string{
+			ownerAnnotation: `{"ownerrefs":[{"operatorID":"operator-2"}]}`,
+		},
 	}
 	ft.vipServices = map[tailcfg.ServiceName]*tailscale.VIPService{
 		"svc:my-svc": existingVIPSvc,
@@ -763,17 +765,17 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 		t.Fatal("VIPService not found")
 	}
 
-	c := &comment{}
-	if err := json.Unmarshal([]byte(vipSvc.Comment), c); err != nil {
-		t.Fatalf("parsing comment: %v", err)
+	o, err := parseOwnerAnnotation(vipSvc)
+	if err != nil {
+		t.Fatalf("parsing owner annotation: %v", err)
 	}
 
 	wantOwnerRefs := []OwnerRef{
 		{OperatorID: "operator-2"},
 		{OperatorID: "operator-1"},
 	}
-	if !reflect.DeepEqual(c.OwnerRefs, wantOwnerRefs) {
-		t.Errorf("incorrect owner refs\ngot:  %+v\nwant: %+v", c.OwnerRefs, wantOwnerRefs)
+	if !reflect.DeepEqual(o.OwnerRefs, wantOwnerRefs) {
+		t.Errorf("incorrect owner refs\ngot:  %+v\nwant: %+v", o.OwnerRefs, wantOwnerRefs)
 	}
 
 	// Delete the Ingress and verify VIPService still exists with one owner ref
@@ -790,15 +792,15 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 		t.Fatal("VIPService was incorrectly deleted")
 	}
 
-	c = &comment{}
-	if err := json.Unmarshal([]byte(vipSvc.Comment), c); err != nil {
-		t.Fatalf("parsing comment after deletion: %v", err)
+	o, err = parseOwnerAnnotation(vipSvc)
+	if err != nil {
+		t.Fatalf("parsing owner annotation: %v", err)
 	}
 
 	wantOwnerRefs = []OwnerRef{
 		{OperatorID: "operator-2"},
 	}
-	if !reflect.DeepEqual(c.OwnerRefs, wantOwnerRefs) {
-		t.Errorf("incorrect owner refs after deletion\ngot:  %+v\nwant: %+v", c.OwnerRefs, wantOwnerRefs)
+	if !reflect.DeepEqual(o.OwnerRefs, wantOwnerRefs) {
+		t.Errorf("incorrect owner refs after deletion\ngot:  %+v\nwant: %+v", o.OwnerRefs, wantOwnerRefs)
 	}
 }
