@@ -499,43 +499,178 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ui.Sub = ar.remoteUser.Node.User.String()
+	ui.Name = ar.remoteUser.UserProfile.DisplayName
+	ui.Email = ar.remoteUser.UserProfile.LoginName
+	ui.Picture = ar.remoteUser.UserProfile.ProfilePicURL
+
+	// TODO(maisem): not sure if this is the right thing to do
+	ui.UserName, _, _ = strings.Cut(ar.remoteUser.UserProfile.LoginName, "@")
+
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](ar.remoteUser.CapMap, tailcfg.PeerCapabilityTsIDP)
 	if err != nil {
 		http.Error(w, "tsidp: failed to unmarshal capability: %v", http.StatusBadRequest)
 		return
 	}
 
-	groups := make([]string, 0)
-	for _, rule := range rules {
-		groups = append(groups, rule.Groups...)
+	// Only keep rules where IncludeInUserInfo is true
+	var filtered []capRule
+	for _, r := range rules {
+		if r.IncludeInUserInfo {
+			filtered = append(filtered, r)
+		}
 	}
 
-	ui.Sub = ar.remoteUser.Node.User.String()
-	ui.Name = ar.remoteUser.UserProfile.DisplayName
-	ui.Email = ar.remoteUser.UserProfile.LoginName
-	ui.Picture = ar.remoteUser.UserProfile.ProfilePicURL
-	ui.Groups = groups
+	userInfo, err := withExtraClaims(ui, filtered)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
-	// TODO(maisem): not sure if this is the right thing to do
-	ui.UserName, _, _ = strings.Cut(ar.remoteUser.UserProfile.LoginName, "@")
-
+	// Write the final result
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(ui); err != nil {
+	if err := json.NewEncoder(w).Encode(userInfo); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
 type userInfo struct {
-	Sub      string   `json:"sub"`
-	Name     string   `json:"name"`
-	Email    string   `json:"email"`
-	Picture  string   `json:"picture"`
-	UserName string   `json:"username"`
-	Groups   []string `json:"groups,omitempty"`
+	Sub      string `json:"sub"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Picture  string `json:"picture"`
+	UserName string `json:"username"`
 }
 
 type capRule struct {
-	Groups []string `json:"groups,omitempty"` // list of features peer is allowed to edit
+	IncludeInUserInfo bool                   `json:"includeInUserInfo"`
+	ExtraClaims       map[string]interface{} `json:"extraClaims,omitempty"` // list of features peer is allowed to edit
+}
+
+// flattenExtraClaims merges all ExtraClaims from a slice of capRule into a single map.
+// It deduplicates values for each claim and preserves the original input type:
+// scalar values remain scalars, and slices are returned as deduplicated []interface{} slices.
+func flattenExtraClaims(rules []capRule) map[string]interface{} {
+	// sets stores deduplicated stringified values for each claim key.
+	sets := make(map[string]map[string]struct{})
+
+	// isSlice tracks whether each claim was originally provided as a slice.
+	isSlice := make(map[string]bool)
+
+	for _, rule := range rules {
+		for claim, raw := range rule.ExtraClaims {
+			// Track whether the claim was provided as a slice
+			switch raw.(type) {
+			case []string, []interface{}:
+				isSlice[claim] = true
+			default:
+				// Only mark as scalar if this is the first time we've seen this claim
+				if _, seen := isSlice[claim]; !seen {
+					isSlice[claim] = false
+				}
+			}
+
+			// Add the claim value(s) into the deduplication set
+			addClaimValue(sets, claim, raw)
+		}
+	}
+
+	// Build final result: either scalar or slice depending on original type
+	result := make(map[string]interface{})
+	for claim, valSet := range sets {
+		if isSlice[claim] {
+			// Claim was provided as a slice: output as []interface{}
+			var vals []interface{}
+			for val := range valSet {
+				vals = append(vals, val)
+			}
+			result[claim] = vals
+		} else {
+			// Claim was a scalar: return a single value
+			for val := range valSet {
+				result[claim] = val
+				break // only one value is expected
+			}
+		}
+	}
+
+	return result
+}
+
+// addClaimValue adds a claim value to the deduplication set for a given claim key.
+// It accepts scalars (string, int, float64), slices of strings or interfaces,
+// and recursively handles nested slices. Unsupported types are ignored with a log message.
+func addClaimValue(sets map[string]map[string]struct{}, claim string, val interface{}) {
+	switch v := val.(type) {
+	case string, float64, int, int64:
+		// Ensure the claim set is initialized
+		if sets[claim] == nil {
+			sets[claim] = make(map[string]struct{})
+		}
+		// Add the stringified scalar to the set
+		sets[claim][fmt.Sprintf("%v", v)] = struct{}{}
+
+	case []string:
+		// Ensure the claim set is initialized
+		if sets[claim] == nil {
+			sets[claim] = make(map[string]struct{})
+		}
+		// Add each string value to the set
+		for _, s := range v {
+			sets[claim][s] = struct{}{}
+		}
+
+	case []interface{}:
+		// Recursively handle each item in the slice
+		for _, item := range v {
+			addClaimValue(sets, claim, item)
+		}
+
+	default:
+		// Log unsupported types for visibility and debugging
+		log.Printf("Unsupported claim type for %q: %#v (type %T)", claim, val, val)
+	}
+}
+
+// withExtraClaims merges flattened extra claims from a list of capRule into the provided struct v,
+// returning a map[string]interface{} that combines both sources.
+//
+// The input struct v is first marshaled to JSON, then unmarshalled into a generic map.
+// Claims defined in openIDSupportedClaims are considered protected and cannot be overwritten.
+// If an extra claim attempts to overwrite a protected claim, an error is returned.
+//
+// Returns the merged claims map or an error if any protected claim is violated or JSON (un)marshaling fails.
+func withExtraClaims(v any, rules []capRule) (map[string]interface{}, error) {
+	// Marshal the static struct
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+
+	// Unmarshal into a generic map
+	var claimMap map[string]interface{}
+	if err := json.Unmarshal(data, &claimMap); err != nil {
+		return nil, err
+	}
+
+	// Convert views.Slice to a map[string]struct{} for efficient lookup
+	protected := make(map[string]struct{}, len(openIDSupportedClaims.AsSlice()))
+	for _, claim := range openIDSupportedClaims.AsSlice() {
+		protected[claim] = struct{}{}
+	}
+
+	// Merge extra claims
+	extra := flattenExtraClaims(rules)
+	for k, v := range extra {
+		if _, isProtected := protected[k]; isProtected {
+			log.Printf("Skip overwriting of existing claim %q", k)
+			return nil, fmt.Errorf("extra claim %q overwriting existing claim", k)
+		}
+
+		claimMap[k] = v
+	}
+
+	return claimMap, nil
 }
 
 func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
@@ -588,17 +723,6 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, tailcfg.PeerCapabilityTsIDP)
-	if err != nil {
-		http.Error(w, "tsidp: failed to unmarshal capability: %v", http.StatusBadRequest)
-		return
-	}
-
-	groups := make([]string, 0)
-	for _, rule := range rules {
-		groups = append(groups, rule.Groups...)
-	}
-
 	now := time.Now()
 	_, tcd, _ := strings.Cut(n.Name(), ".")
 	tsClaims := tailscaleClaims{
@@ -620,14 +744,26 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		UserID:    n.User(),
 		Email:     who.UserProfile.LoginName,
 		UserName:  userName,
-		Groups:    groups,
 	}
 	if ar.localRP {
 		tsClaims.Issuer = s.loopbackURL
 	}
 
+	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, tailcfg.PeerCapabilityTsIDP)
+	if err != nil {
+		http.Error(w, "tsidp: failed to unmarshal capability: %v", http.StatusBadRequest)
+		return
+	}
+
+	tsClaimsWithExtra, err := withExtraClaims(tsClaims, rules)
+	if err != nil {
+		log.Printf("tsidp: failed to merge extra claims: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// Create an OIDC token using this issuer's signer.
-	token, err := jwt.Signed(signer).Claims(tsClaims).CompactSerialize()
+	token, err := jwt.Signed(signer).Claims(tsClaimsWithExtra).CompactSerialize()
 	if err != nil {
 		log.Printf("Error getting token: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -769,9 +905,6 @@ type tailscaleClaims struct {
 	// It is a temporary (2023-11-15) hack during development.
 	// We should probably let this be configured via grants.
 	UserName string `json:"username,omitempty"`
-
-	// Groups are group memberships controlled via grants
-	Groups []string `json:"groups,omitempty"`
 }
 
 var (
@@ -780,7 +913,7 @@ var (
 		"sub", "aud", "exp", "iat", "iss", "jti", "nbf", "username", "email",
 
 		// Tailscale claims, these correspond to fields in tailscaleClaims.
-		"key", "addresses", "nid", "node", "tailnet", "tags", "user", "uid", "groups",
+		"key", "addresses", "nid", "node", "tailnet", "tags", "user", "uid",
 	})
 
 	// As defined in the OpenID spec this should be "openid".
