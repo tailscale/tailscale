@@ -569,7 +569,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 	}
 	ctx = httptrace.WithClientTrace(ctx, &trace)
 	req := &http.Request{
-		Method: "POST",
+		Method: "GET",
 		URL:    u,
 		Header: http.Header{
 			"Upgrade":                             []string{controlhttpcommon.UpgradeHeaderValue},
