@@ -47,6 +47,25 @@ func runAdvertise(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(services) > 0 {
+		fmt.Println("Advertising this node as new destination for services:", services)
+		fmt.Println("This node will accept connection for services once the services are configured locally and approved on the admin console.")
+		sc, err := localClient.GetServeConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get serve config: %w", err)
+		}
+		notServedServices := make([]string, 0)
+		for _, svc := range services {
+			if _, ok := sc.Services[tailcfg.ServiceName(svc)]; !ok {
+				notServedServices = append(notServedServices, svc)
+			}
+		}
+		if len(notServedServices) > 0 {
+			fmt.Println("The following services are not configured to be served yet: ", strings.Join(notServedServices, ", "))
+			fmt.Println("To configure services, run tailscale serve --service=\"<svc:dns-label>\" for each service.")
+			fmt.Printf("eg. tailscale serve --service=%q 3000\n", notServedServices[0])
+		}
+	}
 
 	_, err = localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
