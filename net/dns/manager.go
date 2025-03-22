@@ -284,7 +284,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 
 	// Deal with trivial configs first.
 	switch {
-	case !cfg.needsOSResolver():
+	case !cfg.needsOSResolver() || runtime.GOOS == "plan9":
 		// Set search domains, but nothing else. This also covers the
 		// case where cfg is entirely zero, in which case these
 		// configs clear all Tailscale DNS settings.
