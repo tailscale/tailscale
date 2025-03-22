@@ -491,7 +491,7 @@ func (m *Monitor) IsMajorChangeFrom(s1, s2 *State) bool {
 		return true
 	}
 	for iname, i := range s1.Interface {
-		if iname == m.tsIfName {
+		if iname == m.tsIfName || iname == "/net/ipifc/2" {
 			// Ignore changes in the Tailscale interface itself.
 			continue
 		}
@@ -596,7 +596,7 @@ func (m *Monitor) pollWallTime() {
 //
 // We don't do this on mobile platforms for battery reasons, and because these
 // platforms don't really sleep in the same way.
-const shouldMonitorTimeJump = runtime.GOOS != "android" && runtime.GOOS != "ios"
+const shouldMonitorTimeJump = runtime.GOOS != "android" && runtime.GOOS != "ios" && runtime.GOOS != "plan9"
 
 // checkWallTimeAdvanceLocked reports whether wall time jumped more than 150% of
 // pollWallTimeInterval, indicating we probably just came out of sleep. Once a
