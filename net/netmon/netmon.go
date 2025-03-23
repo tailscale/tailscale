@@ -491,7 +491,7 @@ func (m *Monitor) IsMajorChangeFrom(s1, s2 *State) bool {
 		return true
 	}
 	for iname, i := range s1.Interface {
-		if iname == m.tsIfName || iname == "/net/ipifc/2" {
+		if iname == m.tsIfName {
 			// Ignore changes in the Tailscale interface itself.
 			continue
 		}

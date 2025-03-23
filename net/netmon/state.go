@@ -454,9 +454,6 @@ func isTailscaleInterface(name string, ips []netip.Prefix) bool {
 		// macOS NetworkExtensions and utun devices.
 		return true
 	}
-	if runtime.GOOS == "plan9" && (hasTailscaleIP(ips) || name == "/net/ipifc/2") { // XXX fix; use tun name
-		return true
-	}
 	return name == "Tailscale" || // as it is on Windows
 		strings.HasPrefix(name, "tailscale") // TODO: use --tun flag value, etc; see TODO in method doc
 }
@@ -475,11 +472,11 @@ func getState(optTSInterfaceName string) (*State, error) {
 		Interface:    make(map[string]Interface),
 	}
 	if err := ForeachInterface(func(ni Interface, pfxs []netip.Prefix) {
-		isTS := optTSInterfaceName != "" && ni.Name == optTSInterfaceName
+		isTSInterfaceName := optTSInterfaceName != "" && ni.Name == optTSInterfaceName
 		ifUp := ni.IsUp()
 		s.Interface[ni.Name] = ni
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], pfxs...)
-		if !ifUp || isTS || isTailscaleInterface(ni.Name, pfxs) {
+		if !ifUp || isTSInterfaceName || isTailscaleInterface(ni.Name, pfxs) {
 			return
 		}
 		for _, pfx := range pfxs {

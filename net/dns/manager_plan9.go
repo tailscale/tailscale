@@ -9,14 +9,18 @@ package dns
 import (
 	"bufio"
 	"bytes"
+	"fmt"
+	"io"
 	"log"
 	"net/netip"
 	"os"
 	"regexp"
+	"strings"
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/set"
 )
 
 func NewOSConfigurator(logf logger.Logf, ht *health.Tracker, knobs *controlknobs.Knobs, interfaceName string) (OSConfigurator, error) {
@@ -33,13 +37,113 @@ type plan9DNSManager struct {
 	knobs *controlknobs.Knobs
 }
 
-func (m *plan9DNSManager) SetDNS(c OSConfig) error {
-	var buf bytes.Buffer
-	bw := bufio.NewWriter(&buf)
-	c.WriteToBufioWriter(bw)
-	bw.Flush()
+// netNDBWithoutTailscale returns /net/ndb with any Tailscale
+// bits removed.
+func netNDBWithoutTailscale() ([]byte, error) {
+	raw, err := os.ReadFile("/net/ndb")
+	if err != nil {
+		return nil, err
+	}
+	return netNDBBytesWithoutTailscale(raw)
+}
 
-	log.Printf("XXX: TODO: plan9 SetDNS: %s", buf.Bytes())
+// netNDBBytesWithoutTailscale returns raw (the contents of /net/ndb) with any
+// Tailscale bits removed.
+func netNDBBytesWithoutTailscale(raw []byte) ([]byte, error) {
+	var ret bytes.Buffer
+	bs := bufio.NewScanner(bytes.NewReader(raw))
+	removeLine := set.Set[string]{}
+	for bs.Scan() {
+		t := bs.Text()
+		if rest, ok := strings.CutPrefix(t, "#tailscaled-added-line:"); ok {
+			removeLine.Add(strings.TrimSpace(rest))
+			continue
+		}
+		trimmed := strings.TrimSpace(t)
+		if removeLine.Contains(trimmed) {
+			removeLine.Delete(trimmed)
+			continue
+		}
+
+		// Also remove any DNS line referencing *.ts.net. This is
+		// Tailscale-specific (and won't work with, say, Headscale), but
+		// the Headscale case will be covered by the #tailscaled-added-line
+		// logic above, assuming the user didn't delete those comments.
+		if (strings.HasPrefix(trimmed, "dns=") || strings.Contains(trimmed, "dnsdomain=")) &&
+			strings.HasSuffix(trimmed, ".ts.net") {
+			continue
+		}
+
+		ret.WriteString(t)
+		ret.WriteByte('\n')
+	}
+	return ret.Bytes(), bs.Err()
+}
+
+// setNDBSuffix adds lines to tsFree (the contents of /net/ndb already cleaned
+// of Tailscale-added lines) to add the optional DNS search domain (e.g.
+// "foo.ts.net") and DNS server to it.
+func setNDBSuffix(tsFree []byte, suffix string) []byte {
+	suffix = strings.TrimSuffix(suffix, ".")
+	if suffix == "" {
+		return tsFree
+	}
+	var buf bytes.Buffer
+	bs := bufio.NewScanner(bytes.NewReader(tsFree))
+	var added []string
+	addLine := func(s string) {
+		added = append(added, strings.TrimSpace(s))
+		buf.WriteString(s)
+	}
+	for bs.Scan() {
+		buf.Write(bs.Bytes())
+		buf.WriteByte('\n')
+
+		t := bs.Text()
+		if suffix != "" && len(added) == 0 && strings.HasPrefix(t, "\tdns=") {
+			addLine(fmt.Sprintf("\tdns=100.100.100.100 suffix=%s\n", suffix))
+			addLine(fmt.Sprintf("\tdnsdomain=%s\n", suffix))
+		}
+	}
+	if len(added) == 0 || true {
+		return buf.Bytes()
+	}
+	var ret bytes.Buffer
+	for _, s := range added {
+		ret.WriteString("#tailscaled-added-line: ")
+		ret.WriteString(s)
+		ret.WriteString("\n")
+	}
+	ret.WriteString("\n")
+	ret.Write(buf.Bytes())
+	return ret.Bytes()
+}
+
+func (m *plan9DNSManager) SetDNS(c OSConfig) error {
+	tsFree, err := netNDBWithoutTailscale()
+	if err != nil {
+		return err
+	}
+
+	var suffix string
+	if len(c.SearchDomains) > 0 {
+		suffix = string(c.SearchDomains[0])
+	}
+
+	newBuf := setNDBSuffix(tsFree, suffix)
+	if !bytes.Equal(newBuf, tsFree) {
+		log.Printf("XXX need to write /net/ndb of %q", newBuf)
+		if err := os.WriteFile("/net/ndb", newBuf, 0644); err != nil {
+			return fmt.Errorf("writing /net/ndb: %w", err)
+		}
+		if f, err := os.OpenFile("/net/dns", os.O_WRONLY, 0); err == nil {
+			defer f.Close()
+			if _, err := io.WriteString(f, "refresh\n"); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
