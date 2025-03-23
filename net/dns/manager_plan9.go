@@ -132,14 +132,17 @@ func (m *plan9DNSManager) SetDNS(c OSConfig) error {
 
 	newBuf := setNDBSuffix(tsFree, suffix)
 	if !bytes.Equal(newBuf, tsFree) {
-		log.Printf("XXX need to write /net/ndb of %q", newBuf)
+		log.Printf("XXX plan9: going to write /net/ndb of %q", newBuf)
 		if err := os.WriteFile("/net/ndb", newBuf, 0644); err != nil {
 			return fmt.Errorf("writing /net/ndb: %w", err)
 		}
-		if f, err := os.OpenFile("/net/dns", os.O_WRONLY, 0); err == nil {
-			defer f.Close()
+		if f, err := os.OpenFile("/net/dns", os.O_RDWR, 0); err == nil {
 			if _, err := io.WriteString(f, "refresh\n"); err != nil {
-				return err
+				f.Close()
+				return fmt.Errorf("/net/dns refresh write: %w", err)
+			}
+			if err := f.Close(); err != nil {
+				return fmt.Errorf("/net/dns refresh close: %w", err)
 			}
 		}
 	}
