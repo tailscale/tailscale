@@ -3479,18 +3479,20 @@ func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
 		// can still manually enable auto-updates on this node.
 		return
 	}
-	b.logf("using tailnet default auto-update setting: %v", au)
-	prefsClone := prefs.AsStruct()
-	prefsClone.AutoUpdate.Apply = opt.NewBool(au)
-	_, err := b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
-		Prefs: *prefsClone,
-		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
-			ApplySet: true,
-		},
-	}, unlock)
-	if err != nil {
-		b.logf("failed to apply tailnet-wide default for auto-updates (%v): %v", au, err)
-		return
+	if clientupdate.CanAutoUpdate() {
+		b.logf("using tailnet default auto-update setting: %v", au)
+		prefsClone := prefs.AsStruct()
+		prefsClone.AutoUpdate.Apply = opt.NewBool(au)
+		_, err := b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
+			Prefs: *prefsClone,
+			AutoUpdateSet: ipn.AutoUpdatePrefsMask{
+				ApplySet: true,
+			},
+		}, unlock)
+		if err != nil {
+			b.logf("failed to apply tailnet-wide default for auto-updates (%v): %v", au, err)
+			return
+		}
 	}
 }
 
