@@ -958,7 +958,9 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 
 	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
 		want := b.netMap.GetAddresses().Len()
-		if len(b.peerAPIListeners) < want {
+		have := len(b.peerAPIListeners)
+		b.logf("[v1] linkChange: have %d peerAPIListeners, want %d", have, want)
+		if have < want {
 			b.logf("linkChange: peerAPIListeners too low; trying again")
 			b.goTracker.Go(b.initPeerAPIListener)
 		}
@@ -5369,6 +5371,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 			ln, err = ps.listen(a.Addr(), b.prevIfState)
 			if err != nil {
 				if peerAPIListenAsync {
+					b.logf("possibly transient peerapi listen(%q) error, will try again on linkChange: %v", a.Addr(), err)
 					// Expected. But we fix it later in linkChange
 					// ("peerAPIListeners too low").
 					continue
