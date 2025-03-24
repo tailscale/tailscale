@@ -144,9 +144,15 @@ func (s *Store) WriteTLSCertAndKey(domain string, cert, key []byte) (err error) 
 		return fmt.Errorf("invalid domain name %q: %w", domain, err)
 	}
 	defer func() {
-		// TODO(irbekrm): a read between these two separate writes would
-		// get a mismatched cert and key.  Allow writing both cert and
-		// key to the memory store in a single, lock-protected operation.
+		// TODO(irbekrm): certs for write replicas are currently not
+		// written to memory to avoid out of sync memory state after
+		// Ingress resources have been recreated.  This means that TLS
+		// certs for write replicas are retrieved from the Secret on
+		// each HTTPS request.  This is a temporary solution till we
+		// implement a Secret watch.
+		if s.certShareMode == "rw" {
+			return
+		}
 		if err == nil {
 			s.memory.WriteState(ipn.StateKey(domain+".crt"), cert)
 			s.memory.WriteState(ipn.StateKey(domain+".key"), key)
@@ -172,13 +178,13 @@ func (s *Store) WriteTLSCertAndKey(domain string, cert, key []byte) (err error) 
 // ReadTLSCertAndKey reads a TLS cert and key from memory or from a
 // domain-specific Secret. It first checks the in-memory store, if not found in
 // memory and running cert store in read-only mode, looks up a Secret.
+// Note that write replicas of HA Ingress always retrieve TLS certs from Secrets.
 func (s *Store) ReadTLSCertAndKey(domain string) (cert, key []byte, err error) {
 	if err := dnsname.ValidHostname(domain); err != nil {
 		return nil, nil, fmt.Errorf("invalid domain name %q: %w", domain, err)
 	}
 	certKey := domain + ".crt"
 	keyKey := domain + ".key"
-
 	cert, err = s.memory.ReadState(ipn.StateKey(certKey))
 	if err == nil {
 		key, err = s.memory.ReadState(ipn.StateKey(keyKey))
@@ -186,16 +192,12 @@ func (s *Store) ReadTLSCertAndKey(domain string) (cert, key []byte, err error) {
 			return cert, key, nil
 		}
 	}
-	if s.certShareMode != "ro" {
+	if s.certShareMode != "ro" && s.certShareMode != "rw" {
 		return nil, nil, ipn.ErrStateNotExist
 	}
-	// If we are in cert share read only mode, it is possible that a write
-	// replica just issued the TLS cert for this DNS name and it has not
-	// been loaded to store yet, so check the Secret.
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-
 	secret, err := s.client.GetSecret(ctx, domain)
 	if err != nil {
 		if kubeclient.IsNotFoundErr(err) {
@@ -210,11 +212,16 @@ func (s *Store) ReadTLSCertAndKey(domain string) (cert, key []byte, err error) {
 	if len(cert) == 0 || len(key) == 0 {
 		return nil, nil, ipn.ErrStateNotExist
 	}
-	// TODO(irbekrm): a read between these two separate writes would
-	// get a mismatched cert and key.  Allow writing both cert and
-	// key to the memory store in a single lock-protected operation.
-	s.memory.WriteState(ipn.StateKey(certKey), cert)
-	s.memory.WriteState(ipn.StateKey(keyKey), key)
+	// TODO(irbekrm): currently certs for write replicas of HA Ingress get
+	// retrieved from the cluster Secret on each HTTPS request to avoid a
+	// situation when after Ingress recreation stale certs are read from
+	// memory.
+	// Fix this by watching Secrets to ensure that memory store gets updated
+	// when Secrets are deleted.
+	if s.certShareMode == "ro" {
+		s.memory.WriteState(ipn.StateKey(certKey), cert)
+		s.memory.WriteState(ipn.StateKey(keyKey), key)
+	}
 	return cert, key, nil
 }
 
