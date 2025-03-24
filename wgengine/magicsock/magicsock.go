@@ -3019,7 +3019,7 @@ func (c *Conn) DebugForcePreferDERP(n int) {
 // logging an error if it occurs.
 func portableTrySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 	if runtime.GOOS == "plan9" {
-		// Not supportd. Don't try. Avoid logspam.
+		// Not supported. Don't try. Avoid logspam.
 		return
 	}
 	if c, ok := pconn.(*net.UDPConn); ok {
