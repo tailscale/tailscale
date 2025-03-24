@@ -161,7 +161,7 @@ func (m *Monitor) InterfaceState() *State {
 }
 
 func (m *Monitor) interfaceStateUncached() (*State, error) {
-	return getState()
+	return getState(m.tsIfName)
 }
 
 // SetTailscaleInterfaceName sets the name of the Tailscale interface. For
