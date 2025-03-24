@@ -28,8 +28,8 @@ func init() {
 	RegisterExtension("desktop-sessions", newDesktopSessionsExt)
 }
 
-// desktopSessionsExt implements [localBackendExtension].
-var _ localBackendExtension = (*desktopSessionsExt)(nil)
+// desktopSessionsExt implements [Extension].
+var _ Extension = (*desktopSessionsExt)(nil)
 
 // desktopSessionsExt extends [LocalBackend] with desktop session management.
 // It keeps Tailscale running in the background if Always-On mode is enabled,
@@ -51,7 +51,7 @@ type desktopSessionsExt struct {
 
 // newDesktopSessionsExt returns a new [desktopSessionsExt],
 // or an error if [desktop.SessionManager] is not available.
-func newDesktopSessionsExt(logf logger.Logf, sys *tsd.System) (localBackendExtension, error) {
+func newDesktopSessionsExt(logf logger.Logf, sys *tsd.System) (Extension, error) {
 	sm, ok := sys.SessionManager.GetOK()
 	if !ok {
 		return nil, errors.New("session manager is not available")
