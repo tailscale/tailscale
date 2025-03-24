@@ -307,7 +307,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// through quad-100.
 		rcfg.Routes = routes
 		rcfg.Routes["."] = cfg.DefaultResolvers
-		ocfg.Nameservers = []netip.Addr{cfg.serviceIP()}
+		ocfg.Nameservers = cfg.serviceIPs(m.knobs)
 		return rcfg, ocfg, nil
 	}
 
@@ -345,7 +345,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// or routes + MagicDNS, or just MagicDNS, or on an OS that cannot
 	// split-DNS. Install a split config pointing at quad-100.
 	rcfg.Routes = routes
-	ocfg.Nameservers = []netip.Addr{cfg.serviceIP()}
+	ocfg.Nameservers = cfg.serviceIPs(m.knobs)
 
 	var baseCfg *OSConfig // base config; non-nil if/when known
 
