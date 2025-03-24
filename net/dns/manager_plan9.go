@@ -11,11 +11,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
 	"net/netip"
 	"os"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
@@ -35,16 +35,6 @@ type plan9DNSManager struct {
 	logf  logger.Logf
 	ht    *health.Tracker
 	knobs *controlknobs.Knobs
-}
-
-// netNDBWithoutTailscale returns /net/ndb with any Tailscale
-// bits removed.
-func netNDBWithoutTailscale() ([]byte, error) {
-	raw, err := os.ReadFile("/net/ndb")
-	if err != nil {
-		return nil, err
-	}
-	return netNDBBytesWithoutTailscale(raw)
 }
 
 // netNDBBytesWithoutTailscale returns raw (the contents of /net/ndb) with any
@@ -105,8 +95,9 @@ func setNDBSuffix(tsFree []byte, suffix string) []byte {
 			addLine(fmt.Sprintf("\tdnsdomain=%s\n", suffix))
 		}
 	}
-	if len(added) == 0 || true {
-		return buf.Bytes()
+	bufTrim := bytes.TrimLeftFunc(buf.Bytes(), unicode.IsSpace)
+	if len(added) == 0 {
+		return bufTrim
 	}
 	var ret bytes.Buffer
 	for _, s := range added {
@@ -115,12 +106,17 @@ func setNDBSuffix(tsFree []byte, suffix string) []byte {
 		ret.WriteString("\n")
 	}
 	ret.WriteString("\n")
-	ret.Write(buf.Bytes())
+	ret.Write(bufTrim)
 	return ret.Bytes()
 }
 
 func (m *plan9DNSManager) SetDNS(c OSConfig) error {
-	tsFree, err := netNDBWithoutTailscale()
+	ndbOnDisk, err := os.ReadFile("/net/ndb")
+	if err != nil {
+		return err
+	}
+
+	tsFree, err := netNDBBytesWithoutTailscale(ndbOnDisk)
 	if err != nil {
 		return err
 	}
@@ -131,8 +127,7 @@ func (m *plan9DNSManager) SetDNS(c OSConfig) error {
 	}
 
 	newBuf := setNDBSuffix(tsFree, suffix)
-	if !bytes.Equal(newBuf, tsFree) {
-		log.Printf("XXX plan9: going to write /net/ndb of %q", newBuf)
+	if !bytes.Equal(newBuf, ndbOnDisk) {
 		if err := os.WriteFile("/net/ndb", newBuf, 0644); err != nil {
 			return fmt.Errorf("writing /net/ndb: %w", err)
 		}

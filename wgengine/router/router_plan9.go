@@ -57,7 +57,7 @@ func (r *plan9Router) Set(cfg *Config) error {
 			self6 = addr.Addr()
 		}
 		_, err := fmt.Fprintf(ctl, "add %s /%d\n", addr.Addr().String(), maskBits)
-		r.logf("XXX add %s /%d = %v", addr.Addr().String(), maskBits, err)
+		r.logf("route/plan9: add %s /%d = %v", addr.Addr().String(), maskBits, err)
 	}
 
 	ipr, err := os.OpenFile("/net/iproute", os.O_RDWR, 0)
@@ -86,20 +86,20 @@ func (r *plan9Router) Set(cfg *Config) error {
 			nextHop = self6
 		}
 		if !nextHop.IsValid() {
-			r.logf("XXX skipping route %s: no next hop (no self addr)", route.String())
+			r.logf("route/plan9: skipping route %s: no next hop (no self addr)", route.String())
 			continue
 		}
-		r.logf("XXX plan9.router: add %s /%d %s", route.Addr(), maskBits, nextHop)
+		r.logf("route/plan9: plan9.router: add %s /%d %s", route.Addr(), maskBits, nextHop)
 		if _, err := fmt.Fprintf(ipr, "add %s /%d %s\n", route.Addr(), maskBits, nextHop); err != nil {
 			return fmt.Errorf("add %s: %w", route.String(), err)
 		}
 	}
 
 	if len(cfg.LocalRoutes) > 0 {
-		r.logf("XXX TODO: Set LocalRoutes %v", cfg.LocalRoutes)
+		r.logf("route/plan9: TODO: Set LocalRoutes %v", cfg.LocalRoutes)
 	}
 	if len(cfg.SubnetRoutes) > 0 {
-		r.logf("XXX TODO: Set SubnetRoutes %v", cfg.SubnetRoutes)
+		r.logf("route/plan9: TODO: Set SubnetRoutes %v", cfg.SubnetRoutes)
 	}
 
 	return nil
