@@ -4968,7 +4968,7 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
-	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.ControlKnobs(), version.OS())
+	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), version.OS())
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg)
@@ -4992,7 +4992,7 @@ func (b *LocalBackend) authReconfig() {
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, versionOS string) bool {
+func shouldUseOneCGNATRoute(logf logger.Logf, mon *netmon.Monitor, controlKnobs *controlknobs.Knobs, versionOS string) bool {
 	if controlKnobs != nil {
 		// Explicit enabling or disabling always take precedence.
 		if v, ok := controlKnobs.OneCGNAT.Load().Get(); ok {
@@ -5007,7 +5007,7 @@ func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, 
 	// use fine-grained routes if another interfaces is also using the CGNAT
 	// IP range.
 	if versionOS == "macOS" {
-		hasCGNATInterface, err := netmon.HasCGNATInterface()
+		hasCGNATInterface, err := mon.HasCGNATInterface()
 		if err != nil {
 			logf("shouldUseOneCGNATRoute: Could not determine if any interfaces use CGNAT: %v", err)
 			return false
