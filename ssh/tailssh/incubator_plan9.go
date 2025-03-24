@@ -23,10 +23,10 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/go4org/plan9netshell"
 	"github.com/pkg/sftp"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tempfork/netshell"
 	"tailscale.com/types/logger"
 )
 
@@ -219,7 +219,7 @@ func (ia incubatorArgs) forwardedEnviron() ([]string, string, error) {
 }
 
 func beNetshell(args []string) error {
-	netshell.Main()
+	plan9netshell.Main()
 	return nil
 }
 
@@ -249,7 +249,7 @@ func beIncubator(args []string) error {
 	}
 
 	if ia.isShell {
-		netshell.Main()
+		plan9netshell.Main()
 		return nil
 	}
 
