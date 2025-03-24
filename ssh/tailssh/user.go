@@ -48,6 +48,9 @@ func userLookup(username string) (*userMeta, error) {
 }
 
 func (u *userMeta) LoginShell() string {
+	if runtime.GOOS == "plan9" {
+		return "/bin/rc"
+	}
 	if u.loginShellCached != "" {
 		// This field should be populated on Linux, at least, because
 		// func userLookup on Linux uses "getent" to look up the user

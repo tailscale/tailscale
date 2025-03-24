@@ -68,9 +68,8 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		}
 
 		loginShell := ss.conn.localUser.LoginShell()
-		args := shellArgs(isShell, ss.RawCommand())
-		logf("directly running %s %q", loginShell, args)
-		return exec.CommandContext(ss.ctx, loginShell, args...), nil
+		logf("directly running /bin/rc -c %q", ss.RawCommand())
+		return exec.CommandContext(ss.ctx, loginShell, "-c", ss.RawCommand()), nil
 	}
 
 	lu := ss.conn.localUser
@@ -155,10 +154,6 @@ func (stdRWC) Close() error {
 }
 
 type incubatorArgs struct {
-	loginShell         string
-	uid                int
-	gid                int
-	gids               []int
 	localUser          string
 	homeDir            string
 	remoteUser         string
@@ -176,13 +171,8 @@ type incubatorArgs struct {
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	var ia incubatorArgs
-	var groups string
 
 	flags := flag.NewFlagSet("", flag.ExitOnError)
-	flags.StringVar(&ia.loginShell, "login-shell", "", "path to the user's preferred login shell")
-	flags.IntVar(&ia.uid, "uid", 0, "the uid of local-user")
-	flags.IntVar(&ia.gid, "gid", 0, "the gid of local-user")
-	flags.StringVar(&groups, "groups", "", "comma-separated list of gids of local-user")
 	flags.StringVar(&ia.localUser, "local-user", "", "the user to run as")
 	flags.StringVar(&ia.homeDir, "home-dir", "/", "the user's home directory")
 	flags.StringVar(&ia.remoteUser, "remote-user", "", "the remote user/tags")
@@ -197,22 +187,10 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.BoolVar(&ia.isSELinuxEnforcing, "is-selinux-enforcing", false, "whether SELinux is in enforcing mode")
 	flags.StringVar(&ia.encodedEnv, "encoded-env", "", "JSON encoded array of environment variables in '['key=value']' format")
 	flags.Parse(args)
-
-	for _, g := range strings.Split(groups, ",") {
-		if g == "" {
-			continue
-		}
-		gid, err := strconv.Atoi(g)
-		if err != nil {
-			return ia, fmt.Errorf("unable to parse group id %q: %w", g, err)
-		}
-		ia.gids = append(ia.gids, gid)
-	}
-
 	return ia, nil
 }
 
-func (ia incubatorArgs) forwadedEnviron() ([]string, string, error) {
+func (ia incubatorArgs) forwardedEnviron() ([]string, string, error) {
 	environ := os.Environ()
 	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
 	allowListKeys := "SSH_AUTH_SOCK"
@@ -328,14 +306,13 @@ func serveSFTP() error {
 // login shell.
 func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 
-	environ, _, err := ia.forwadedEnviron()
+	environ, _, err := ia.forwardedEnviron()
 	if err != nil {
 		return err
 	}
 
-	args := shellArgs(ia.isShell, ia.cmd)
-	dlogf("running %s %q", ia.loginShell, args)
-	cmd := newCommand(ia.loginShell, environ, args)
+	dlogf("running /bin/rc -c %q", ia.cmd)
+	cmd := newCommand("/bin/rc", environ, []string{"-c", ia.cmd})
 	err = cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
@@ -441,12 +418,4 @@ func acceptEnvPair(kv string) bool {
 	}
 	_ = k
 	return true // permit anything on plan9 during bringup, for debugging at least
-}
-
-func shellArgs(isShell bool, cmd string) []string {
-	if isShell {
-		return []string{"-l"}
-	} else {
-		return []string{"-c", cmd}
-	}
 }
