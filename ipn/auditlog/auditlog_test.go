@@ -184,8 +184,11 @@ func TestChangeProfileId(t *testing.T) {
 	})
 	c.Assert(al.SetProfileID("test"), qt.IsNil)
 
-	// Changing a profile ID must fail
-	c.Assert(al.SetProfileID("test"), qt.IsNotNil)
+	// Calling SetProfileID with the same profile ID must not fail.
+	c.Assert(al.SetProfileID("test"), qt.IsNil)
+
+	// Changing a profile ID must fail.
+	c.Assert(al.SetProfileID("test2"), qt.IsNotNil)
 }
 
 // TestSendOnRestore pushes a n logs to the persistent store, and ensures they
