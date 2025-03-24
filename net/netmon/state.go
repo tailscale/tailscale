@@ -466,7 +466,7 @@ var getPAC func() string
 // It does not set the returned State.IsExpensive. The caller can populate that.
 //
 // Deprecated: use netmon.Monitor.InterfaceState instead.
-func GetState() (*State, error) {
+func getState() (*State, error) {
 	s := &State{
 		InterfaceIPs: make(map[string][]netip.Prefix),
 		Interface:    make(map[string]Interface),
