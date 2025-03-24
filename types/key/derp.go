@@ -6,6 +6,7 @@ package key
 import (
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,6 +22,27 @@ var ErrInvalidMeshKey = errors.New("invalid mesh key")
 type DERPMesh struct {
 	_ structs.Incomparable // == isn't constant-time
 	k [32]byte             // 64-digit hexadecimal numbers fit in 32 bytes
+}
+
+// MarshalJSON implements the [encoding/json.Marshaler] interface.
+func (k DERPMesh) MarshalJSON() ([]byte, error) {
+	return json.Marshal(k.String())
+}
+
+// UnmarshalJSON implements the [encoding/json.Unmarshaler] interface.
+func (k *DERPMesh) UnmarshalJSON(data []byte) error {
+	var s string
+	json.Unmarshal(data, &s)
+
+	if hex.DecodedLen(len(s)) != len(k.k) {
+		return fmt.Errorf("types/key/derp: cannot unmarshal, incorrect size mesh key len: %d, must be %d, %w", hex.DecodedLen(len(s)), len(k.k), ErrInvalidMeshKey)
+	}
+	_, err := hex.Decode(k.k[:], []byte(s))
+	if err != nil {
+		return fmt.Errorf("types/key/derp: cannot unmarshal, invalid mesh key: %w", err)
+	}
+
+	return nil
 }
 
 // DERPMeshFromRaw32 parses a 32-byte raw value as a DERP mesh key.

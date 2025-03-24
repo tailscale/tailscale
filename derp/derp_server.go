@@ -1364,14 +1364,11 @@ func (s *Server) isMeshPeer(info *clientInfo) bool {
 	// Since mesh keys are a fixed length, we don’t need to be concerned
 	// about timing attacks on client mesh keys that are the wrong length.
 	// See https://github.com/tailscale/corp/issues/28720
-	if info == nil || info.MeshKey == "" {
+	if info == nil || info.MeshKey.IsZero() {
 		return false
 	}
-	k, err := key.ParseDERPMesh(info.MeshKey)
-	if err != nil {
-		return false
-	}
-	return s.meshKey.Equal(k)
+
+	return s.meshKey.Equal(info.MeshKey)
 }
 
 // verifyClient checks whether the client is allowed to connect to the derper,
