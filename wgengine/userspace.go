@@ -1580,6 +1580,11 @@ type fwdDNSLinkSelector struct {
 }
 
 func (ls fwdDNSLinkSelector) PickLink(ip netip.Addr) (linkName string) {
+	// sandboxed macOS needs some extra hand-holding for loopback addresses.
+	if ip.IsLoopback() && version.IsSandboxedMacOS() {
+		return "lo0"
+	}
+
 	if ls.ue.isDNSIPOverTailscale.Load()(ip) {
 		return ls.tunName
 	}
