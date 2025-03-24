@@ -29,6 +29,16 @@ oauthSecretVolume: {}
 # https://helm.sh/docs/chart_best_practices/custom_resource_definitions/
 installCRDs: true
 
+# Grafana dashboard configuration
+grafanaDashboard:
+  enabled: false
+  # Labels to be added to the ConfigMap
+  labels:
+    grafana_dashboard: "1"
+  # Annotations to be added to the ConfigMap
+  annotations:
+    grafana_folder: "Tailscale"
+
 operatorConfig:
   # ACL tag that operator will be tagged with. Operator must be made owner of
   # these tags
