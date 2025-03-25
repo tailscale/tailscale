@@ -404,10 +404,14 @@ func (p *Probe) recordEndLocked(err error) {
 		p.mSeconds.WithLabelValues("ok").Add(latency.Seconds())
 		p.latencyHist.Value = latency
 		p.latencyHist = p.latencyHist.Next()
+		p.mAttempts.WithLabelValues("fail").Add(0)
+		p.mSeconds.WithLabelValues("fail").Add(0)
 	} else {
 		p.latency = 0
 		p.mAttempts.WithLabelValues("fail").Inc()
 		p.mSeconds.WithLabelValues("fail").Add(latency.Seconds())
+		p.mAttempts.WithLabelValues("ok").Add(0)
+		p.mSeconds.WithLabelValues("ok").Add(0)
 	}
 	p.successHist.Value = p.succeeded
 	p.successHist = p.successHist.Next()

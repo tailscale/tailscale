@@ -596,11 +596,23 @@ func (d *derpProber) updateMap(ctx context.Context) error {
 }
 
 func (d *derpProber) ProbeUDP(ipaddr string, port int) ProbeClass {
+	initLabels := make(Labels)
+	ip := net.ParseIP(ipaddr)
+
+	if ip.To4() != nil {
+		initLabels["address_family"] = "ipv4"
+	} else if ip.To16() != nil { // Will return an IPv4 as 16 byte, so ensure the check for IPv4 precedes this
+		initLabels["address_family"] = "ipv6"
+	} else {
+		initLabels["address_family"] = "unknown"
+	}
+
 	return ProbeClass{
 		Probe: func(ctx context.Context) error {
 			return derpProbeUDP(ctx, ipaddr, port)
 		},
-		Class: "derp_udp",
+		Class:  "derp_udp",
+		Labels: initLabels,
 	}
 }
 
