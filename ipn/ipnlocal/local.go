@@ -2404,11 +2404,9 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	var auditLogShutdown func()
-	// Audit logging is only available if the client has set up a proper persistent
-	// store for the logs in sys.
 	store, ok := b.sys.AuditLogStore.GetOK()
 	if !ok {
-		b.logf("auditlog: [unexpected] no persistent audit log storage configured.  using memory store.")
+		// Use memory store by default if no explicit store is provided.
 		store = auditlog.NewLogStore(&memstore.Store{})
 	}
 
