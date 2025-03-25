@@ -347,7 +347,7 @@ func runReconcilers(opts reconcilerOpts) {
 		For(&networkingv1.Ingress{}).
 		Named("ingress-pg-reconciler").
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(ingressesFromPGStateSecret(mgr.GetClient(), startlog))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAIngressesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
 		Complete(&HAIngressReconciler{
 			recorder:    eventRecorder,
@@ -1039,20 +1039,40 @@ func reconcileRequestsForPG(pg string, cl client.Client, ns string) []reconcile.
 	return reqs
 }
 
-func ingressesFromPGStateSecret(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+func isTLSSecret(secret *corev1.Secret) bool {
+	return secret.Type == corev1.SecretTypeTLS &&
+		secret.ObjectMeta.Labels[kubetypes.LabelManaged] == "true" &&
+		secret.ObjectMeta.Labels[kubetypes.LabelSecretType] == "certs" &&
+		secret.ObjectMeta.Labels[labelDomain] != "" &&
+		secret.ObjectMeta.Labels[labelProxyGroup] != ""
+}
+
+func isPGStateSecret(secret *corev1.Secret) bool {
+	return secret.ObjectMeta.Labels[kubetypes.LabelManaged] == "true" &&
+		secret.ObjectMeta.Labels[LabelParentType] == "proxygroup" &&
+		secret.ObjectMeta.Labels[kubetypes.LabelSecretType] == "state"
+}
+
+// HAIngressesFromSecret returns a handler that returns reconcile requests for
+// all HA Ingresses that should be reconciled in response to a Secret event.
+func HAIngressesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		secret, ok := o.(*corev1.Secret)
 		if !ok {
 			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
 			return nil
 		}
-		if secret.ObjectMeta.Labels[kubetypes.LabelManaged] != "true" {
-			return nil
+		if isTLSSecret(secret) {
+			return []reconcile.Request{
+				{
+					NamespacedName: types.NamespacedName{
+						Namespace: secret.ObjectMeta.Labels[LabelParentNamespace],
+						Name:      secret.ObjectMeta.Labels[LabelParentName],
+					},
+				},
+			}
 		}
-		if secret.ObjectMeta.Labels[LabelParentType] != "proxygroup" {
-			return nil
-		}
-		if secret.ObjectMeta.Labels[kubetypes.LabelSecretType] != "state" {
+		if !isPGStateSecret(secret) {
 			return nil
 		}
 		pgName, ok := secret.ObjectMeta.Labels[LabelParentName]

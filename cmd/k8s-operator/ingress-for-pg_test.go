@@ -31,6 +31,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ptr"
 )
@@ -59,7 +60,7 @@ func TestIngressPGReconciler(t *testing.T) {
 				},
 			},
 			TLS: []networkingv1.IngressTLS{
-				{Hosts: []string{"my-svc.tailnetxyz.ts.net"}},
+				{Hosts: []string{"my-svc"}},
 			},
 		},
 	}
@@ -67,12 +68,14 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Verify initial reconciliation
 	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
-	// Verify cert resources were created for the first Ingress
-	expectEqual(t, fc, certSecret("test-pg", "operator-ns", "my-svc.ts.net"))
+	// Verify that Role and RoleBinding have been created for the first Ingress.
+	// Do not verify the cert Secret as that was already verified implicitly above.
 	expectEqual(t, fc, certSecretRole("test-pg", "operator-ns", "my-svc.ts.net"))
 	expectEqual(t, fc, certSecretRoleBinding("test-pg", "operator-ns", "my-svc.ts.net"))
 
@@ -127,11 +130,13 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Verify second Ingress reconciliation
 	expectReconciled(t, ingPGR, "default", "my-other-ingress")
+	populateTLSSecret(context.Background(), fc, "test-pg", "my-other-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "my-other-ingress")
 	verifyServeConfig(t, fc, "svc:my-other-svc", false)
 	verifyVIPService(t, ft, "svc:my-other-svc", []string{"443"})
 
-	// Verify cert resources were created for the second Ingress
-	expectEqual(t, fc, certSecret("test-pg", "operator-ns", "my-other-svc.ts.net"))
+	// Verify that Role and RoleBinding have been created for the first Ingress.
+	// Do not verify the cert Secret as that was already verified implicitly above.
 	expectEqual(t, fc, certSecretRole("test-pg", "operator-ns", "my-other-svc.ts.net"))
 	expectEqual(t, fc, certSecretRoleBinding("test-pg", "operator-ns", "my-other-svc.ts.net"))
 
@@ -231,7 +236,7 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 				},
 			},
 			TLS: []networkingv1.IngressTLS{
-				{Hosts: []string{"my-svc.tailnetxyz.ts.net"}},
+				{Hosts: []string{"my-svc"}},
 			},
 		},
 	}
@@ -239,14 +244,18 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 
 	// Verify initial reconciliation
 	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
 	// Update the Ingress hostname and make sure the original VIPService is deleted.
 	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
-		ing.Spec.TLS[0].Hosts[0] = "updated-svc.tailnetxyz.ts.net"
+		ing.Spec.TLS[0].Hosts[0] = "updated-svc"
 	})
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(context.Background(), fc, "test-pg", "updated-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:updated-svc", false)
 	verifyVIPService(t, ft, "svc:updated-svc", []string{"443"})
@@ -468,6 +477,8 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 
 	// Verify initial reconciliation with HTTP enabled
 	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyVIPService(t, ft, "svc:my-svc", []string{"80", "443"})
 	verifyServeConfig(t, fc, "svc:my-svc", true)
 
@@ -611,6 +622,7 @@ func verifyServeConfig(t *testing.T, fc client.Client, serviceName string, wantH
 }
 
 func verifyTailscaledConfig(t *testing.T, fc client.Client, expectedServices []string) {
+	t.Helper()
 	var expected string
 	if expectedServices != nil {
 		expectedServicesJSON, err := json.Marshal(expectedServices)
@@ -803,4 +815,29 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	if !reflect.DeepEqual(o.OwnerRefs, wantOwnerRefs) {
 		t.Errorf("incorrect owner refs after deletion\ngot:  %+v\nwant: %+v", o.OwnerRefs, wantOwnerRefs)
 	}
+}
+
+func populateTLSSecret(ctx context.Context, c client.Client, pgName, domain string) error {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      domain,
+			Namespace: "operator-ns",
+			Labels: map[string]string{
+				kubetypes.LabelManaged:    "true",
+				labelProxyGroup:           pgName,
+				labelDomain:               domain,
+				kubetypes.LabelSecretType: "certs",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			corev1.TLSCertKey:       []byte("fake-cert"),
+			corev1.TLSPrivateKeyKey: []byte("fake-key"),
+		},
+	}
+
+	_, err := createOrUpdate(ctx, c, "operator-ns", secret, func(s *corev1.Secret) {
+		s.Data = secret.Data
+	})
+	return err
 }
