@@ -201,10 +201,6 @@ func TestWriteTLSCertAndKey(t *testing.T) {
 				"tls.crt": []byte(testCert),
 				"tls.key": []byte(testKey),
 			},
-			wantMemoryStore: map[ipn.StateKey][]byte{
-				"my-app.tailnetxyz.ts.net.crt": []byte(testCert),
-				"my-app.tailnetxyz.ts.net.key": []byte(testKey),
-			},
 		},
 		{
 			name: "cert_share_mode_write_update_existing",
@@ -218,10 +214,6 @@ func TestWriteTLSCertAndKey(t *testing.T) {
 			wantSecretData: map[string][]byte{
 				"tls.crt": []byte(testCert),
 				"tls.key": []byte(testKey),
-			},
-			wantMemoryStore: map[ipn.StateKey][]byte{
-				"my-app.tailnetxyz.ts.net.crt": []byte(testCert),
-				"my-app.tailnetxyz.ts.net.key": []byte(testKey),
 			},
 		},
 		{
@@ -367,7 +359,7 @@ func TestReadTLSCertAndKey(t *testing.T) {
 		wantMemoryStore map[ipn.StateKey][]byte
 	}{
 		{
-			name: "found",
+			name: "found_in_memory",
 			memoryStore: map[ipn.StateKey][]byte{
 				"my-app.tailnetxyz.ts.net.crt": []byte(testCert),
 				"my-app.tailnetxyz.ts.net.key": []byte(testKey),
@@ -381,7 +373,7 @@ func TestReadTLSCertAndKey(t *testing.T) {
 			},
 		},
 		{
-			name:    "not_found",
+			name:    "not_found_in_memory",
 			domain:  testDomain,
 			wantErr: ipn.ErrStateNotExist,
 		},
@@ -399,6 +391,17 @@ func TestReadTLSCertAndKey(t *testing.T) {
 				"my-app.tailnetxyz.ts.net.crt": []byte(testCert),
 				"my-app.tailnetxyz.ts.net.key": []byte(testKey),
 			},
+		},
+		{
+			name:          "cert_share_rw_mode_found_in_secret",
+			certShareMode: "rw",
+			domain:        testDomain,
+			secretData: map[string][]byte{
+				"tls.crt": []byte(testCert),
+				"tls.key": []byte(testKey),
+			},
+			wantCert: []byte(testCert),
+			wantKey:  []byte(testKey),
 		},
 		{
 			name:          "cert_share_ro_mode_found_in_memory",
