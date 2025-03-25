@@ -96,6 +96,9 @@ func (a *Dialer) httpsFallbackDelay() time.Duration {
 var _ = envknob.RegisterBool("TS_USE_CONTROL_DIAL_PLAN") // to record at init time whether it's in use
 
 func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
+
+	a.logPort80Failure.Store(true)
+
 	// If we don't have a dial plan, just fall back to dialing the single
 	// host we know about.
 	useDialPlan := envknob.BoolDefaultTrue("TS_USE_CONTROL_DIAL_PLAN")
@@ -278,7 +281,9 @@ func (d *Dialer) forceNoise443() bool {
 		// This heuristic works around networks where port 80 is MITMed and
 		// appears to work for a bit post-Upgrade but then gets closed,
 		// such as seen in https://github.com/tailscale/tailscale/issues/13597.
-		d.logf("controlhttp: forcing port 443 dial due to recent noise dial")
+		if d.logPort80Failure.CompareAndSwap(true, false) {
+			d.logf("controlhttp: forcing port 443 dial due to recent noise dial")
+		}
 		return true
 	}
 
