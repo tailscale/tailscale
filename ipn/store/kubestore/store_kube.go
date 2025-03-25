@@ -143,21 +143,6 @@ func (s *Store) WriteTLSCertAndKey(domain string, cert, key []byte) (err error) 
 	if err := dnsname.ValidHostname(domain); err != nil {
 		return fmt.Errorf("invalid domain name %q: %w", domain, err)
 	}
-	defer func() {
-		// TODO(irbekrm): certs for write replicas are currently not
-		// written to memory to avoid out of sync memory state after
-		// Ingress resources have been recreated.  This means that TLS
-		// certs for write replicas are retrieved from the Secret on
-		// each HTTPS request.  This is a temporary solution till we
-		// implement a Secret watch.
-		if s.certShareMode == "rw" {
-			return
-		}
-		if err == nil {
-			s.memory.WriteState(ipn.StateKey(domain+".crt"), cert)
-			s.memory.WriteState(ipn.StateKey(domain+".key"), key)
-		}
-	}()
 	secretName := s.secretName
 	data := map[string][]byte{
 		domain + ".crt": cert,
@@ -172,7 +157,20 @@ func (s *Store) WriteTLSCertAndKey(domain string, cert, key []byte) (err error) 
 			keyTLSKey:  key,
 		}
 	}
-	return s.updateSecret(data, secretName)
+	if err := s.updateSecret(data, secretName); err != nil {
+		return fmt.Errorf("error writing TLS cert and key to Secret: %w", err)
+	}
+	// TODO(irbekrm): certs for write replicas are currently not
+	// written to memory to avoid out of sync memory state after
+	// Ingress resources have been recreated.  This means that TLS
+	// certs for write replicas are retrieved from the Secret on
+	// each HTTPS request.  This is a temporary solution till we
+	// implement a Secret watch.
+	if s.certShareMode != "rw" {
+		s.memory.WriteState(ipn.StateKey(domain+".crt"), cert)
+		s.memory.WriteState(ipn.StateKey(domain+".key"), key)
+	}
+	return nil
 }
 
 // ReadTLSCertAndKey reads a TLS cert and key from memory or from a
@@ -192,7 +190,7 @@ func (s *Store) ReadTLSCertAndKey(domain string) (cert, key []byte, err error) {
 			return cert, key, nil
 		}
 	}
-	if s.certShareMode != "ro" && s.certShareMode != "rw" {
+	if s.certShareMode == "" {
 		return nil, nil, ipn.ErrStateNotExist
 	}
 
@@ -212,6 +210,10 @@ func (s *Store) ReadTLSCertAndKey(domain string) (cert, key []byte, err error) {
 	if len(cert) == 0 || len(key) == 0 {
 		return nil, nil, ipn.ErrStateNotExist
 	}
+	// TODO(irbekrm): a read between these two separate writes would
+	// get a mismatched cert and key.  Allow writing both cert and
+	// key to the memory store in a single, lock-protected operation.
+	//
 	// TODO(irbekrm): currently certs for write replicas of HA Ingress get
 	// retrieved from the cluster Secret on each HTTPS request to avoid a
 	// situation when after Ingress recreation stale certs are read from
