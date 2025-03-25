@@ -43,17 +43,6 @@ func TestULA(t *testing.T) {
 	}
 }
 
-func TestRandV4(t *testing.T) {
-	pfx := netip.MustParsePrefix("100.64.1.0/24")
-
-	for i := 0; i < 512; i++ {
-		ip := randV4(pfx)
-		if !pfx.Contains(ip) {
-			t.Errorf("randV4(%s) = %s; not contained in prefix", pfx, ip)
-		}
-	}
-}
-
 func TestDNSResponse(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -227,11 +216,9 @@ func TestDNSResponse(t *testing.T) {
 
 func TestPerPeerState(t *testing.T) {
 	c := &connector{
-		v4Ranges:      []netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")},
-		v6ULA:         netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-		dnsAddr:       netip.MustParseAddr("100.64.1.0"),
-		numV4DNSAddrs: (1<<(32-24) - 1),
+		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
 	}
+	c.setPrefixes([]netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")})
 
 	ps := &perPeerState{c: c}
 
@@ -255,8 +242,8 @@ func TestPerPeerState(t *testing.T) {
 		t.Errorf("Second address is not IPv6: %s", v6)
 	}
 
-	if !c.v4Ranges[0].Contains(v4) {
-		t.Errorf("IPv4 address %s not in range %s", v4, c.v4Ranges[0])
+	if !c.ipset.Contains(v4) {
+		t.Errorf("IPv4 address %s not in range %s", v4, c.ipset)
 	}
 
 	domain, ok := ps.domainForIP(v4)
@@ -331,11 +318,9 @@ func TestIgnoreDestination(t *testing.T) {
 
 func TestConnectorGenerateDNSResponse(t *testing.T) {
 	c := &connector{
-		v4Ranges:      []netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")},
-		v6ULA:         netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-		dnsAddr:       netip.MustParseAddr("100.64.1.0"),
-		numV4DNSAddrs: (1<<(32-24) - 1),
+		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
 	}
+	c.setPrefixes([]netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")})
 
 	req := &dnsmessage.Message{
 		Header: dnsmessage.Header{ID: 1234},
@@ -371,11 +356,9 @@ func TestConnectorGenerateDNSResponse(t *testing.T) {
 func TestIPPoolExhaustion(t *testing.T) {
 	smallPrefix := netip.MustParsePrefix("100.64.1.0/30") // Only 4 IPs: .0, .1, .2, .3
 	c := &connector{
-		v6ULA:         netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-		v4Ranges:      []netip.Prefix{smallPrefix},
-		dnsAddr:       netip.MustParseAddr("100.64.1.0"),
-		numV4DNSAddrs: 3,
+		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
 	}
+	c.setPrefixes([]netip.Prefix{smallPrefix})
 
 	ps := &perPeerState{c: c}
 

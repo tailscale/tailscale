@@ -8,13 +8,12 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"expvar"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand/v2"
+	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
@@ -26,6 +25,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/inetaf/tcpproxy"
 	"github.com/peterbourgon/ff/v3"
+	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/client/local"
 	"tailscale.com/envknob"
@@ -38,6 +38,7 @@ import (
 	"tailscale.com/tsweb"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/must"
 	"tailscale.com/wgengine/netstack"
 )
 
@@ -94,24 +95,6 @@ func main() {
 		}
 		ignoreDstTable.Insert(pfx, true)
 	}
-	var (
-		v4Prefixes    []netip.Prefix
-		numV4DNSAddrs int
-	)
-	for _, s := range strings.Split(*v4PfxStr, ",") {
-		p := netip.MustParsePrefix(strings.TrimSpace(s))
-		if p.Masked() != p {
-			log.Fatalf("v4 prefix %v is not a masked prefix", p)
-		}
-		v4Prefixes = append(v4Prefixes, p)
-		numIPs := 1 << (32 - p.Bits())
-		numV4DNSAddrs += numIPs
-	}
-	if len(v4Prefixes) == 0 {
-		log.Fatalf("no v4 prefixes specified")
-	}
-	dnsAddr := v4Prefixes[0].Addr()
-	numV4DNSAddrs -= 1 // Subtract the dnsAddr allocated above.
 	ts := &tsnet.Server{
 		Hostname: *hostname,
 	}
@@ -159,15 +142,32 @@ func main() {
 	}
 
 	c := &connector{
-		ts:            ts,
-		lc:            lc,
-		dnsAddr:       dnsAddr,
-		v4Ranges:      v4Prefixes,
-		numV4DNSAddrs: numV4DNSAddrs,
-		v6ULA:         ula(uint16(*siteID)),
-		ignoreDsts:    ignoreDstTable,
+		ts:         ts,
+		lc:         lc,
+		v6ULA:      ula(uint16(*siteID)),
+		ignoreDsts: ignoreDstTable,
 	}
+	var prefixes []netip.Prefix
+	for _, s := range strings.Split(*v4PfxStr, ",") {
+		p := netip.MustParsePrefix(strings.TrimSpace(s))
+		if p.Masked() != p {
+			log.Fatalf("v4 prefix %v is not a masked prefix", p)
+		}
+		prefixes = append(prefixes, p)
+	}
+	c.setPrefixes(prefixes)
 	c.run(ctx)
+}
+
+func (c *connector) setPrefixes(prefixes []netip.Prefix) {
+	var ipsb netipx.IPSetBuilder
+	for _, p := range prefixes {
+		ipsb.AddPrefix(p)
+	}
+	c.routes = must.Get(ipsb.IPSet())
+	c.dnsAddr = c.routes.Ranges()[0].From()
+	ipsb.Remove(c.dnsAddr)
+	c.ipset = must.Get(ipsb.IPSet())
 }
 
 type connector struct {
@@ -181,13 +181,13 @@ type connector struct {
 	// prevent the app connector from assigning it to a domain.
 	dnsAddr netip.Addr
 
-	// v4Ranges is the list of IPv4 ranges to advertise and assign addresses from.
+	// ipset is the set of IPv4 ranges to advertise and assign addresses from.
 	// These are masked prefixes.
-	v4Ranges []netip.Prefix
+	ipset *netipx.IPSet
 
-	// numV4DNSAddrs is the total size of the IPv4 ranges in addresses, minus the
-	// dnsAddr allocation.
-	numV4DNSAddrs int
+	// routes is the set of IPv4 ranges advertised to the tailnet, or ipset with
+	// the dnsAddr removed.
+	routes *netipx.IPSet
 
 	// v6ULA is the ULA prefix used by the app connector to assign IPv6 addresses.
 	v6ULA netip.Prefix
@@ -225,7 +225,7 @@ func (c *connector) run(ctx context.Context) {
 	if _, err := c.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseRoutesSet: true,
 		Prefs: ipn.Prefs{
-			AdvertiseRoutes: append(c.v4Ranges, c.v6ULA),
+			AdvertiseRoutes: append(c.routes.Prefixes(), c.v6ULA),
 		},
 	}); err != nil {
 		log.Fatalf("failed to advertise routes: %v", err)
@@ -512,9 +512,9 @@ type perPeerState struct {
 	c *connector
 
 	mu           sync.Mutex
+	addrInUse    *big.Int
 	domainToAddr map[string][]netip.Addr
 	addrToDomain *bart.Table[string]
-	numV4Allocs  int
 }
 
 // domainForIP returns the domain name assigned to the given IP address and
@@ -550,46 +550,12 @@ func (ps *perPeerState) ipForDomain(domain string) ([]netip.Addr, error) {
 	return addrs, nil
 }
 
-// isIPUsedLocked reports whether the given IP address is already assigned to a
-// domain.
-// ps.mu must be held.
-func (ps *perPeerState) isIPUsedLocked(ip netip.Addr) bool {
-	_, ok := ps.addrToDomain.Lookup(ip)
-	return ok
-}
-
 // unusedIPv4Locked returns an unused IPv4 address from the available ranges.
 func (ps *perPeerState) unusedIPv4Locked() netip.Addr {
-	// All addresses have been allocated.
-	if ps.numV4Allocs >= ps.c.numV4DNSAddrs {
-		return netip.Addr{}
+	if ps.addrInUse == nil {
+		ps.addrInUse = big.NewInt(0)
 	}
-
-	// TODO: skip ranges that have been exhausted
-	// TODO: implement a much more efficient algorithm for finding unused IPs,
-	// this is fairly crazy.
-	for {
-		for _, r := range ps.c.v4Ranges {
-			ip := randV4(r)
-			if !r.Contains(ip) {
-				panic("error: randV4 returned invalid address")
-			}
-			if !ps.isIPUsedLocked(ip) && ip != ps.c.dnsAddr {
-				return ip
-			}
-		}
-	}
-}
-
-// randV4 returns a random IPv4 address within the given prefix.
-func randV4(maskedPfx netip.Prefix) netip.Addr {
-	bits := 32 - maskedPfx.Bits()
-	randBits := rand.Uint32N(1 << uint(bits))
-
-	ip4 := maskedPfx.Addr().As4()
-	pn := binary.BigEndian.Uint32(ip4[:])
-	binary.BigEndian.PutUint32(ip4[:], randBits|pn)
-	return netip.AddrFrom4(ip4)
+	return allocAddr(ps.c.ipset, ps.addrInUse)
 }
 
 // assignAddrsLocked assigns a pair of unique IP addresses for the given domain
@@ -604,7 +570,6 @@ func (ps *perPeerState) assignAddrsLocked(domain string) []netip.Addr {
 	if !v4.IsValid() {
 		return nil
 	}
-	ps.numV4Allocs++
 	as16 := ps.c.v6ULA.Addr().As16()
 	as4 := v4.As4()
 	copy(as16[12:], as4[:])
