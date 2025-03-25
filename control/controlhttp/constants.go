@@ -6,6 +6,7 @@ package controlhttp
 import (
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/health"
@@ -89,6 +90,11 @@ type Dialer struct {
 	DialPlan *tailcfg.ControlDialPlan
 
 	proxyFunc func(*http.Request) (*url.URL, error) // or nil
+
+	// logPort80Failure is whether we should log about port 80 interceptions
+	// and forcing a port 443 dial. We do this only once per "dial" method
+	// which can result in many concurrent racing dialHost calls.
+	logPort80Failure atomic.Bool
 
 	// For tests only
 	drainFinished        chan struct{}
