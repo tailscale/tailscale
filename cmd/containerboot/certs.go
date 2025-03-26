@@ -60,6 +60,9 @@ func (cm *certManager) ensureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 		if _, exists := cm.certLoops[domain]; !exists {
 			cancelCtx, cancel := context.WithCancel(ctx)
 			mak.Set(&cm.certLoops, domain, cancel)
+			// Note that most of the issuance anyway happens
+			// serially because the cert client has a shared lock
+			// that's held during any issuance.
 			cm.tracker.Go(func() { cm.runCertLoop(cancelCtx, domain) })
 		}
 	}
@@ -116,7 +119,13 @@ func (cm *certManager) runCertLoop(ctx context.Context, domain string) {
 			// issuance endpoint that explicitly only triggers
 			// issuance and stores certs in the relevant store, but
 			// does not return certs to the caller?
-			_, _, err := cm.lc.CertPair(ctx, domain)
+
+			// An issuance holds a shared lock, so we need to avoid
+			// a situation where other services cannot issue certs
+			// because a single one is holding the lock.
+			ctxT, cancel := context.WithTimeout(ctx, time.Second*300)
+			defer cancel()
+			_, _, err := cm.lc.CertPair(ctxT, domain)
 			if err != nil {
 				log.Printf("error refreshing certificate for %s: %v", domain, err)
 			}
