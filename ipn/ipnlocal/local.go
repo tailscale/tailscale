@@ -5370,9 +5370,11 @@ func (b *LocalBackend) closePeerAPIListenersLocked() {
 const peerAPIListenAsync = runtime.GOOS == "windows" || runtime.GOOS == "android"
 
 func (b *LocalBackend) initPeerAPIListener() {
+	b.logf("[v1] initPeerAPIListener: entered")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.shutdownCalled {
+		b.logf("[v1] initPeerAPIListener: shutting down")
 		return
 	}
 
@@ -5382,6 +5384,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		// ResetForClientDisconnect, or Start happens when its
 		// mutex was released, the netMap could be
 		// nil'ed out (Issue 1996). Bail out early here if so.
+		b.logf("[v1] initPeerAPIListener: no netmap")
 		return
 	}
 
@@ -5396,6 +5399,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		}
 		if allSame {
 			// Nothing to do.
+			b.logf("[v1] initPeerAPIListener: %d netmap addresses match existing listeners", addrs.Len())
 			return
 		}
 	}
@@ -5404,6 +5408,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 
 	selfNode := b.netMap.SelfNode
 	if !selfNode.Valid() || b.netMap.GetAddresses().Len() == 0 {
+		b.logf("[v1] initPeerAPIListener: no addresses in netmap")
 		return
 	}
 
@@ -5437,7 +5442,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 			ln, err = ps.listen(a.Addr(), b.prevIfState)
 			if err != nil {
 				if peerAPIListenAsync {
-					b.logf("possibly transient peerapi listen(%q) error, will try again on linkChange: %v", a.Addr(), err)
+					b.logf("[v1] possibly transient peerapi listen(%q) error, will try again on linkChange: %v", a.Addr(), err)
 					// Expected. But we fix it later in linkChange
 					// ("peerAPIListeners too low").
 					continue
