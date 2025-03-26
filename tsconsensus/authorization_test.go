@@ -5,6 +5,7 @@ package tsconsensus
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -36,7 +37,7 @@ func authForStatus(s *ipnstate.Status) *authorization {
 func addrsForIndex(i int) []netip.Addr {
 	return []netip.Addr{
 		netip.AddrFrom4([4]byte{100, 0, 0, byte(i)}),
-		netip.AddrFrom4([4]byte{100, 0, 1, byte(i)}),
+		netip.MustParseAddr(fmt.Sprintf("fd7a:115c:a1e0:0::%d", i)),
 	}
 }
 
