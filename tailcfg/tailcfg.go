@@ -1987,7 +1987,8 @@ type MapResponse struct {
 	// Note that this package's type, due its use of a slice and omitempty, is
 	// unable to marshal a zero-length non-nil slice. The control server needs
 	// to marshal this type using a separate type. See MapResponse docs.
-	Health []string `json:",omitempty"`
+	Health   []string `json:",omitempty"`
+	HealthV2 []Health `json:",omitempty"`
 
 	// SSHPolicy, if non-nil, updates the SSH policy for how incoming
 	// SSH connections should be handled.
@@ -2030,6 +2031,14 @@ type MapResponse struct {
 	// auto-update setting doesn't change if the tailnet admin flips the
 	// default after the node registered.
 	DefaultAutoUpdate opt.Bool `json:",omitempty"`
+}
+
+type Health struct {
+	ID                  string
+	Title               string
+	Text                string
+	Link                string
+	ImpactsConnectivity bool
 }
 
 // ClientVersion is information about the latest client version that's available

@@ -59,7 +59,7 @@ type NetworkMap struct {
 	// If empty, there are no known problems from the control plane's
 	// point of view, but the node might know about its own health
 	// check problems.
-	ControlHealth []string
+	ControlHealth []tailcfg.Health
 
 	// TKAEnabled indicates whether the tailnet key authority should be
 	// enabled, from the perspective of the control plane.

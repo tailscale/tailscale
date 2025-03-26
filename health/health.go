@@ -111,7 +111,7 @@ type Tracker struct {
 	ipnWantRunning          bool
 	ipnWantRunningLastTrue  time.Time // when ipnWantRunning last changed false -> true
 	anyInterfaceUp          opt.Bool  // empty means unknown (assume true)
-	controlHealth           []string
+	controlHealth           []tailcfg.Health
 	lastLoginErr            error
 	localLogConfigErr       error
 	tlsConnectionErrors     map[string]error // map[ServerName]error
@@ -637,7 +637,7 @@ func (t *Tracker) updateLegacyErrorWarnableLocked(key Subsystem, err error) {
 	}
 }
 
-func (t *Tracker) SetControlHealth(problems []string) {
+func (t *Tracker) SetControlHealth(problems []tailcfg.Health) {
 	if t.nil() {
 		return
 	}
@@ -1151,9 +1151,15 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 
 	if len(t.controlHealth) > 0 {
 		for _, s := range t.controlHealth {
-			t.setUnhealthyLocked(controlHealthWarnable, Args{
-				ArgError: s,
-			})
+			t.setUnhealthyLocked(&Warnable{
+				Code:  WarnableCode(s.ID),
+				Title: s.Title,
+				Text: func(args Args) string {
+					return s.Text
+				},
+				Severity:            SeverityHigh,
+				ImpactsConnectivity: s.ImpactsConnectivity,
+			}, nil)
 		}
 	} else {
 		t.setHealthyLocked(controlHealthWarnable)

@@ -86,6 +86,7 @@ type mapSession struct {
 	lastDomain             string
 	lastDomainAuditLogID   string
 	lastHealth             []string
+	lastHealthV2           []tailcfg.Health
 	lastPopBrowserURL      string
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
@@ -382,6 +383,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
+	}
+	if resp.HealthV2 != nil {
+		ms.lastHealthV2 = resp.HealthV2
 	}
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
@@ -802,6 +806,14 @@ func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
 func (ms *mapSession) netmap() *netmap.NetworkMap {
 	peerViews := ms.sortedPeers()
 
+	var healths []tailcfg.Health
+	for _, h := range ms.lastHealth {
+		healths = append(healths, tailcfg.Health{ID: "legacy", Title: "(debugging) legacy warning", Text: h})
+	}
+	for _, h := range ms.lastHealthV2 {
+		healths = append(healths, h)
+	}
+
 	nm := &netmap.NetworkMap{
 		NodeKey:           ms.publicNodeKey,
 		PrivateKey:        ms.privateNodeKey,
@@ -816,7 +828,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		SSHPolicy:         ms.lastSSHPolicy,
 		CollectServices:   ms.collectServices,
 		DERPMap:           ms.lastDERPMap,
-		ControlHealth:     ms.lastHealth,
+		ControlHealth:     healths,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
 
