@@ -92,7 +92,7 @@ func (a *authorization) AllowsHost(addr netip.Addr) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.peers.allowedRemoteAddrs.Contains(addr)
+	return a.peers.addrs.Contains(addr)
 }
 
 func (a *authorization) SelfAllowed() bool {
@@ -114,20 +114,20 @@ func (a *authorization) AllowedPeers() views.Slice[*ipnstate.PeerStatus] {
 }
 
 type peers struct {
-	status             *ipnstate.Status
-	allowedRemoteAddrs set.Set[netip.Addr]
-	allowedPeers       []*ipnstate.PeerStatus
+	status       *ipnstate.Status
+	addrs        set.Set[netip.Addr]
+	allowedPeers []*ipnstate.PeerStatus
 }
 
 func newPeers(status *ipnstate.Status, tag string) *peers {
 	ps := &peers{
-		status:             status,
-		allowedRemoteAddrs: set.Set[netip.Addr]{},
+		status: status,
+		addrs:  set.Set[netip.Addr]{},
 	}
 	for _, p := range status.Peer {
 		if p.Tags != nil && views.SliceContains(*p.Tags, tag) {
 			ps.allowedPeers = append(ps.allowedPeers, p)
-			ps.allowedRemoteAddrs.AddSlice(p.TailscaleIPs)
+			ps.addrs.AddSlice(p.TailscaleIPs)
 		}
 	}
 	return ps
