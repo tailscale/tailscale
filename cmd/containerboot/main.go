@@ -226,27 +226,36 @@ func run() error {
 		mux := http.NewServeMux()
 
 		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
-		healthCheck = healthHandlers(mux, cfg.PodIPv4)
+		healthCheck = registerHealthHandlers(mux, cfg.PodIPv4)
 
 		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
 		defer close()
 	}
 
-	if cfg.localMetricsEnabled() || cfg.localHealthEnabled() || cfg.egressSvcsTerminateEPEnabled() {
+	if cfg.localMetricsEnabled() ||
+		cfg.localHealthEnabled() ||
+		cfg.egressSvcsTerminateEPEnabled() ||
+		cfg.ServeConfigPath != "" {
 		mux := http.NewServeMux()
 
 		if cfg.localMetricsEnabled() {
 			log.Printf("Running metrics endpoint at %s/metrics", cfg.LocalAddrPort)
-			metricsHandlers(mux, client, cfg.DebugAddrPort)
+			registerMetricsHandlers(mux, client, cfg.DebugAddrPort)
 		}
 
 		if cfg.localHealthEnabled() {
 			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
-			healthCheck = healthHandlers(mux, cfg.PodIPv4)
+			healthCheck = registerHealthHandlers(mux, cfg.PodIPv4)
 		}
-		if cfg.EgressProxiesCfgPath != "" {
-			log.Printf("Running preshutdown hook at %s%s", cfg.LocalAddrPort, kubetypes.EgessServicesPreshutdownEP)
+
+		if cfg.egressSvcsTerminateEPEnabled() {
+			log.Printf("Running egress preshutdown hook at %s%s", cfg.LocalAddrPort, kubetypes.EgessServicesPreshutdownEP)
 			ep.registerHandlers(mux)
+		}
+
+		if cfg.ServeConfigPath != "" {
+			log.Printf("Running serve preshutdown hook at %s%s", cfg.LocalAddrPort, kubetypes.ServePreshutdownEP)
+			registerServeShutdownHandlers(mux, client)
 		}
 
 		close := runHTTPServer(mux, cfg.LocalAddrPort)

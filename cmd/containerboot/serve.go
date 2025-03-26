@@ -9,7 +9,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -168,4 +170,33 @@ func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
 		return nil, err
 	}
 	return &sc, nil
+}
+
+func registerServeShutdownHandlers(mux *http.ServeMux, lc *local.Client) {
+	// Register the ingress shutdown handler.
+	mux.Handle(fmt.Sprintf("GET %s", kubetypes.ServePreshutdownEP), serveShutdownHandler(lc))
+}
+
+func serveShutdownHandler(lc *local.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		prefs, err := lc.GetPrefs(r.Context())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("error getting prefs: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if len(prefs.AdvertiseServices) == 0 {
+			return
+		}
+
+		log.Printf("serve proxy: unadvertising services: %v", prefs.AdvertiseServices)
+		if _, err := lc.EditPrefs(r.Context(), &ipn.MaskedPrefs{
+			AdvertiseServicesSet: true,
+			Prefs: ipn.Prefs{
+				AdvertiseServices: nil,
+			},
+		}); err != nil {
+			http.Error(w, fmt.Sprintf("error setting prefs AdvertiseServices: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
 }

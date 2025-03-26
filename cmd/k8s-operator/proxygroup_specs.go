@@ -209,6 +209,15 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		// Set the deletion grace period to 6 minutes to ensure that the pre-stop hook has enough time to terminate
 		// gracefully.
 		ss.Spec.Template.DeletionGracePeriodSeconds = ptr.To(deletionGracePeriodSeconds)
+	} else if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+		c.Lifecycle = &corev1.Lifecycle{
+			PreStop: &corev1.LifecycleHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: kubetypes.ServePreshutdownEP,
+					Port: intstr.FromInt(defaultLocalAddrPort),
+				},
+			},
+		}
 	}
 	return ss, nil
 }
