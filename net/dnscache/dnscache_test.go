@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -238,5 +239,53 @@ func TestShouldTryBootstrap(t *testing.T) {
 				t.Errorf("got %v; want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLocalhost(t *testing.T) {
+	tstest.Replace(t, &debug, func() bool { return true })
+
+	r := &Resolver{
+		Logf: t.Logf,
+		Forward: &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				// always return an error to force fallback
+				return nil, errors.New("some error")
+			},
+		},
+		LookupIPFallback: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			t.Errorf("unexpected call to LookupIPFallback(%q)", host)
+			return nil, errors.New("unimplemented")
+		},
+	}
+
+	// Just overriding the 'Dial' function in the *net.Resolver isn't
+	// enough, because the Go resolver will read /etc/hosts and return
+	// localhost from that.
+	//
+	// Abuse the IP cache to insert a fake localhost entry pointing to some
+	// invalid IP; if we get this back, we know that we didn't hit our
+	// hard-coded "localhost" logic.
+	invalid4 := netip.MustParseAddr("169.254.169.254")
+	invalid6 := netip.MustParseAddr("fe80::1")
+	r.addIPCache("localhost", invalid4, invalid6, []netip.Addr{invalid4, invalid6}, 24*time.Hour)
+
+	ip4, ip6, allIPs, err := r.LookupIP(context.Background(), "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	localhost4 := netip.MustParseAddr("127.0.0.1")
+	localhost6 := netip.MustParseAddr("::1")
+
+	if ip4 != localhost4 {
+		t.Errorf("ip4 got %q; want %q", ip4, localhost4)
+	}
+	if ip6 != localhost6 {
+		t.Errorf("ip6 got %q; want %q", ip6, localhost6)
+	}
+	if !slices.Equal(allIPs, []netip.Addr{localhost4, localhost6}) {
+		t.Errorf("allIPs got %q; want %q", allIPs, []netip.Addr{localhost4, localhost6})
 	}
 }
