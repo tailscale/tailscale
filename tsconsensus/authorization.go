@@ -110,13 +110,13 @@ func (a *authorization) AllowedPeers() views.Slice[*ipnstate.PeerStatus] {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return views.SliceOf(a.peers.allowedPeers)
+	return views.SliceOf(a.peers.statuses)
 }
 
 type peers struct {
-	status       *ipnstate.Status
-	addrs        set.Set[netip.Addr]
-	allowedPeers []*ipnstate.PeerStatus
+	status   *ipnstate.Status
+	addrs    set.Set[netip.Addr]
+	statuses []*ipnstate.PeerStatus
 }
 
 func newPeers(status *ipnstate.Status, tag string) *peers {
@@ -126,7 +126,7 @@ func newPeers(status *ipnstate.Status, tag string) *peers {
 	}
 	for _, p := range status.Peer {
 		if p.Tags != nil && views.SliceContains(*p.Tags, tag) {
-			ps.allowedPeers = append(ps.allowedPeers, p)
+			ps.statuses = append(ps.statuses, p)
 			ps.addrs.AddSlice(p.TailscaleIPs)
 		}
 	}
