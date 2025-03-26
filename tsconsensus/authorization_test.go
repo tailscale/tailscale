@@ -67,26 +67,33 @@ func authForTags(self []string, peers [][]string) *authorization {
 func TestAuthRefreshErrorsNotRunning(t *testing.T) {
 	ctx := context.Background()
 
-	a := authForStatus(nil)
-	err := a.Refresh(ctx)
-	if err == nil {
-		t.Fatalf("expected err to be non-nil")
-	}
-	expected := "no status"
-	if err.Error() != expected {
-		t.Fatalf("expected: %s, got: %s", expected, err.Error())
+	tests := []struct {
+		in       *ipnstate.Status
+		expected string
+	}{
+		{
+			in:       nil,
+			expected: "no status",
+		},
+		{
+			in: &ipnstate.Status{
+				BackendState: "NeedsMachineAuth",
+			},
+			expected: "ts Server is not running",
+		},
 	}
 
-	a = authForStatus(&ipnstate.Status{
-		BackendState: "NeedsMachineAuth",
-	})
-	err = a.Refresh(ctx)
-	if err == nil {
-		t.Fatalf("expected err to be non-nil")
-	}
-	expected = "ts Server is not running"
-	if err.Error() != expected {
-		t.Fatalf("expected: %s, got: %s", expected, err.Error())
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			a := authForStatus(tt.in)
+			err := a.Refresh(ctx)
+			if err == nil {
+				t.Fatalf("expected err to be non-nil")
+			}
+			if err.Error() != tt.expected {
+				t.Fatalf("expected: %s, got: %s", tt.expected, err.Error())
+			}
+		})
 	}
 }
 
