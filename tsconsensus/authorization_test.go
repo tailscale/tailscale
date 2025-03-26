@@ -56,7 +56,6 @@ func statusForTags(self []string, peers [][]string) *ipnstate.Status {
 			Tags:         &tags,
 			TailscaleIPs: addrsForIndex(i),
 		}
-
 	}
 	return s
 }
