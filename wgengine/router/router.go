@@ -45,9 +45,9 @@ type Router interface {
 //
 // If netMon is nil, it's not used. It's currently (2021-07-20) only
 // used on Linux in some situations.
-func New(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (Router, error) {
+func New(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, ipPolicyPrefBase int, health *health.Tracker) (Router, error) {
 	logf = logger.WithPrefix(logf, "router: ")
-	return newUserspaceRouter(logf, tundev, netMon, health)
+	return newUserspaceRouter(logf, tundev, netMon, ipPolicyPrefBase, health)
 }
 
 // CleanUp restores the system network configuration to its original state
