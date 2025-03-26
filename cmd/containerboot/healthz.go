@@ -47,10 +47,10 @@ func (h *healthz) update(healthy bool) {
 	h.hasAddrs = healthy
 }
 
-// healthHandlers registers a simple health handler at /healthz.
+// registerHealthHandlers registers a simple health handler at /healthz.
 // A containerized tailscale instance is considered healthy if
 // it has at least one tailnet IP address.
-func healthHandlers(mux *http.ServeMux, podIPv4 string) *healthz {
+func registerHealthHandlers(mux *http.ServeMux, podIPv4 string) *healthz {
 	h := &healthz{podIPv4: podIPv4}
 	mux.Handle("GET /healthz", h)
 	return h
