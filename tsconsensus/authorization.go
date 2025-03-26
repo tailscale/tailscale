@@ -92,7 +92,7 @@ func (a *authorization) AllowsHost(addr netip.Addr) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.peers.peerExists(addr, a.tag)
+	return a.peers.allowedRemoteAddrs.Contains(addr)
 }
 
 func (a *authorization) SelfAllowed() bool {
@@ -117,10 +117,6 @@ type peers struct {
 	status             *ipnstate.Status
 	allowedRemoteAddrs set.Set[netip.Addr]
 	allowedPeers       []*ipnstate.PeerStatus
-}
-
-func (ps *peers) peerExists(a netip.Addr, tag string) bool {
-	return ps.allowedRemoteAddrs.Contains(a)
 }
 
 func newPeers(status *ipnstate.Status, tag string) *peers {
