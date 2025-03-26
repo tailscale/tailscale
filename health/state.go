@@ -31,6 +31,7 @@ type UnhealthyState struct {
 	Args                Args           `json:",omitempty"`
 	DependsOn           []WarnableCode `json:",omitempty"`
 	ImpactsConnectivity bool           `json:",omitempty"`
+	URL                 string         `json:",omitempty"`
 }
 
 // unhealthyState returns a unhealthyState of the Warnable given its current warningState.
@@ -63,6 +64,7 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 		Args:                ws.Args,
 		DependsOn:           dependsOnWarnableCodes,
 		ImpactsConnectivity: w.ImpactsConnectivity,
+		URL:                 w.URL,
 	}
 }
 

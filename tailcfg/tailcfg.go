@@ -2037,7 +2037,7 @@ type Health struct {
 	ID                  string
 	Title               string
 	Text                string
-	Link                string
+	URL                 string
 	ImpactsConnectivity bool
 }
 

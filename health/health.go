@@ -253,6 +253,8 @@ type Warnable struct {
 	// should be surfaced as unhealthy to the user. This is used to prevent transient errors from being
 	// displayed to the user.
 	TimeToVisible time.Duration
+
+	URL string
 }
 
 // StaticMessage returns a function that always returns the input string, to be used in
