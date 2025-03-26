@@ -380,7 +380,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 		// Set Ingress status hostname only if either port 443 or 80 is advertised.
 		var hostname string
-		if hasCerts || isHTTPEndpointEnabled(ing) {
+		if len(ports) != 0 {
 			hostname = dnsName
 		}
 		ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
@@ -755,10 +755,8 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	if err != nil {
 		return fmt.Errorf("error checking TLS credentials provisioned for service %q: %w", serviceName, err)
 	}
-	shouldBeAdvertised := mode != serviceAdvertisementOff
-	if mode == serviceAdvertisementHTTPS && !hasCert {
-		shouldBeAdvertised = false // if we only expose port 443 and don't have certs (yet), do not advertise
-	}
+	shouldBeAdvertised := (mode == serviceAdvertisementHTTPAndHTTPS) ||
+		(mode == serviceAdvertisementHTTPS && hasCert) // if we only expose port 443 and don't have certs (yet), do not advertise
 
 	for _, secret := range secrets.Items {
 		var updated bool
