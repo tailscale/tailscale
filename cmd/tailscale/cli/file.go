@@ -15,10 +15,14 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/user"
 	"path"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -452,6 +456,7 @@ var fileGetCmd = &ffcli.Command{
 	overwrite:  overwrite existing file
 	rename:     write to a new number-suffixed filename`)
 		ffcomplete.Flag(fs, "conflict", ffcomplete.Fixed("skip", "overwrite", "rename"))
+		fs.StringVar(&getArgs.chown, "chown", "", "sets owner:group for received files")
 		return fs
 	})(),
 }
@@ -461,6 +466,7 @@ var getArgs = struct {
 	loop     bool
 	verbose  bool
 	conflict onConflict
+	chown    string
 }{conflict: skipOnExist}
 
 func numberedFileName(dir, name string, i int) string {
@@ -512,7 +518,7 @@ func openFileOrSubstitute(dir, base string, action onConflict) (*os.File, error)
 	}
 }
 
-func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targetFile string, size int64, err error) {
+func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string, chown string) (targetFile string, size int64, err error) {
 	rc, size, err := localClient.GetWaitingFile(ctx, wf.Name)
 	if err != nil {
 		return "", 0, fmt.Errorf("opening inbox file %q: %w", wf.Name, err)
@@ -531,10 +537,54 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targe
 		f.Close()
 		return "", 0, fmt.Errorf("failed to write %v: %v", f.Name(), err)
 	}
+	if chown != "" {
+		if runtime.GOOS == "windows" {
+			f.Close()
+			return "", 0, errors.New("chown is not supported on Windows")
+		}
+		usr, grp, _ := strings.Cut(chown, ":")
+
+		var stat syscall.Stat_t
+		if err = syscall.Stat(f.Name(), &stat); err != nil {
+			f.Close()
+			return "", 0, fmt.Errorf("failed to stat file: %v", err)
+		}
+		uid := int(stat.Uid)
+		gid := int(stat.Gid)
+
+		if usr != "" {
+			if uid, err = strconv.Atoi(usr); err != nil {
+				user, err := user.Lookup(usr)
+				if err != nil {
+					f.Close()
+					return "", 0, fmt.Errorf("failed to lookup user: %v", err)
+				}
+				if uid, err = strconv.Atoi(user.Uid); err != nil {
+					f.Close()
+					return "", 0, fmt.Errorf("failed to convert uid to int: %v", err)
+				}
+			}
+		}
+		if grp != "" {
+			group, err := user.LookupGroup(grp)
+			if err != nil {
+				f.Close()
+				return "", 0, fmt.Errorf("failed to lookup group: %v", err)
+			}
+			if gid, err = strconv.Atoi(group.Gid); err != nil {
+				f.Close()
+				return "", 0, fmt.Errorf("failed to convert gid to int: %v", err)
+			}
+		}
+		if err := f.Chown(uid, gid); err != nil {
+			f.Close()
+			return "", 0, fmt.Errorf("failed to chown file: %v", err)
+		}
+	}
 	return f.Name(), size, f.Close()
 }
 
-func runFileGetOneBatch(ctx context.Context, dir string) []error {
+func runFileGetOneBatch(ctx context.Context, dir, chown string) []error {
 	var wfs []apitype.WaitingFile
 	var err error
 	var errs []error
@@ -563,7 +613,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 			errs = append(errs, fmt.Errorf("too many errors in runFileGetOneBatch(). %d files unexamined", len(wfs)-i))
 			break
 		}
-		writtenFile, size, err := receiveFile(ctx, wf, dir)
+		writtenFile, size, err := receiveFile(ctx, wf, dir, chown)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -600,9 +650,12 @@ func runFileGet(ctx context.Context, args []string) error {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return fmt.Errorf("%q is not a directory", dir)
 	}
+	if getArgs.chown != "" && runtime.GOOS == "windows" {
+		return errors.New("--chown is not supported on Windows")
+	}
 	if getArgs.loop {
 		for {
-			errs := runFileGetOneBatch(ctx, dir)
+			errs := runFileGetOneBatch(ctx, dir, getArgs.chown)
 			for _, err := range errs {
 				outln(err)
 			}
@@ -621,7 +674,7 @@ func runFileGet(ctx context.Context, args []string) error {
 			}
 		}
 	}
-	errs := runFileGetOneBatch(ctx, dir)
+	errs := runFileGetOneBatch(ctx, dir, getArgs.chown)
 	if len(errs) == 0 {
 		return nil
 	}
@@ -634,6 +687,9 @@ func runFileGet(ctx context.Context, args []string) error {
 func wipeInbox(ctx context.Context) error {
 	if getArgs.wait {
 		return errors.New("can't use --wait with /dev/null target")
+	}
+	if getArgs.chown != "" {
+		return errors.New("can't use --chown with /dev/null target")
 	}
 	wfs, err := localClient.WaitingFiles(ctx)
 	if err != nil {
