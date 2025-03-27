@@ -12,6 +12,7 @@ import (
 
 	"tailscale.com/drive"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -45,6 +46,10 @@ func TestIsNotableNotify(t *testing.T) {
 			continue
 		case "DriveShares":
 			n.DriveShares = views.SliceOfViews[*drive.Share, drive.ShareView](make([]*drive.Share, 1))
+		case "NodeUpdate":
+			n.NodeUpdate = map[tailcfg.StableNodeID]*ipn.NodeUpdate{}
+		case "UserUpdate":
+			n.UserUpdate = map[tailcfg.UserID]*ipn.UserUpdate{}
 		default:
 			rf := reflect.ValueOf(n).Elem().Field(i)
 			switch rf.Kind() {
@@ -54,6 +59,8 @@ func TestIsNotableNotify(t *testing.T) {
 				rf.SetString("foo")
 			case reflect.Slice:
 				rf.Set(reflect.MakeSlice(rf.Type(), 1, 1))
+			case reflect.Bool:
+				rf.SetBool(true)
 			default:
 				t.Errorf("unhandled field kind %v for %q", rf.Kind(), sf.Name)
 			}
