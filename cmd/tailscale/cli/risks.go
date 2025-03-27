@@ -87,5 +87,5 @@ func presentRiskToUser(riskType, riskMessage, acceptedRisks string) error {
 		}
 	}
 	printf("\r%s\r", strings.Repeat(" ", msgLen))
-	return errAborted
+	return nil
 }
