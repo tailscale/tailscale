@@ -549,6 +549,8 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string, chown 
 			f.Close()
 			return "", 0, fmt.Errorf("failed to stat file: %v", err)
 		}
+
+		// Set default values to allow for partial changes (e.g. `user` or `:staff`)
 		uid := int(stat.Uid)
 		gid := int(stat.Gid)
 
@@ -566,14 +568,16 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string, chown 
 			}
 		}
 		if grp != "" {
-			group, err := user.LookupGroup(grp)
-			if err != nil {
-				f.Close()
-				return "", 0, fmt.Errorf("failed to lookup group: %v", err)
-			}
-			if gid, err = strconv.Atoi(group.Gid); err != nil {
-				f.Close()
-				return "", 0, fmt.Errorf("failed to convert gid to int: %v", err)
+			if gid, err = strconv.Atoi(grp); err != nil {
+				group, err := user.LookupGroup(grp)
+				if err != nil {
+					f.Close()
+					return "", 0, fmt.Errorf("failed to lookup group: %v", err)
+				}
+				if gid, err = strconv.Atoi(group.Gid); err != nil {
+					f.Close()
+					return "", 0, fmt.Errorf("failed to convert gid to int: %v", err)
+				}
 			}
 		}
 		if err := f.Chown(uid, gid); err != nil {
