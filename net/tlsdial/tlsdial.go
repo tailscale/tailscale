@@ -263,7 +263,7 @@ func SetConfigExpectedCertHash(c *tls.Config, wantFullCertSHA256Hex string) {
 		if len(rawCerts) == 0 {
 			return errors.New("no certs presented")
 		}
-		if len(rawCerts) > 1 {
+		if len(rawCerts) > 2 {
 			return errors.New("unexpected multiple certs presented")
 		}
 		if fmt.Sprintf("%02x", sha256.Sum256(rawCerts[0])) != wantFullCertSHA256Hex {
