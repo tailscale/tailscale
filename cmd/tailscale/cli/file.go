@@ -18,11 +18,9 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -538,21 +536,14 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string, chown 
 		return "", 0, fmt.Errorf("failed to write %v: %v", f.Name(), err)
 	}
 	if chown != "" {
-		if runtime.GOOS == "windows" {
-			f.Close()
-			return "", 0, errors.New("chown is not supported on Windows")
-		}
 		usr, grp, _ := strings.Cut(chown, ":")
 
-		var stat syscall.Stat_t
-		if err = syscall.Stat(f.Name(), &stat); err != nil {
+		// Set default values to allow for partial changes (e.g. `user` or `:staff`)
+		uid, gid, err := fileStat(f)
+		if err != nil {
 			f.Close()
 			return "", 0, fmt.Errorf("failed to stat file: %v", err)
 		}
-
-		// Set default values to allow for partial changes (e.g. `user` or `:staff`)
-		uid := int(stat.Uid)
-		gid := int(stat.Gid)
 
 		if usr != "" {
 			if uid, err = strconv.Atoi(usr); err != nil {
@@ -653,9 +644,6 @@ func runFileGet(ctx context.Context, args []string) error {
 
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return fmt.Errorf("%q is not a directory", dir)
-	}
-	if getArgs.chown != "" && runtime.GOOS == "windows" {
-		return errors.New("--chown is not supported on Windows")
 	}
 	if getArgs.loop {
 		for {
