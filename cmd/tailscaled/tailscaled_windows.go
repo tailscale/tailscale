@@ -44,6 +44,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+	_ "tailscale.com/ipn/auditlog"
 	"tailscale.com/ipn/desktop"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail/backoff"

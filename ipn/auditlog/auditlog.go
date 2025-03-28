@@ -112,7 +112,7 @@ func NewLogger(opts Opts) *Logger {
 
 	al := &Logger{
 		retryLimit:  opts.RetryLimit,
-		logf:        logger.WithPrefix(opts.Logf, "auditlog: "),
+		logf:        opts.Logf,
 		store:       opts.Store,
 		flusher:     make(chan struct{}, 1),
 		done:        make(chan struct{}),
@@ -138,8 +138,10 @@ func (al *Logger) FlushAndStop(ctx context.Context) {
 func (al *Logger) SetProfileID(profileID ipn.ProfileID) error {
 	al.mu.Lock()
 	defer al.mu.Unlock()
-	if al.profileID != "" {
-		return errors.New("profileID already set")
+	// It's not an error to call SetProfileID more than once
+	// with the same [ipn.ProfileID].
+	if al.profileID != "" && al.profileID != profileID {
+		return errors.New("profileID cannot be changed once set")
 	}
 
 	al.profileID = profileID

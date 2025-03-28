@@ -28,6 +28,7 @@ import (
 	_ "tailscale.com/health"
 	_ "tailscale.com/hostinfo"
 	_ "tailscale.com/ipn"
+	_ "tailscale.com/ipn/auditlog"
 	_ "tailscale.com/ipn/conffile"
 	_ "tailscale.com/ipn/desktop"
 	_ "tailscale.com/ipn/ipnlocal"

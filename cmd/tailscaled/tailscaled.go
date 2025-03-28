@@ -151,10 +151,33 @@ var subCommands = map[string]*func([]string) error{
 	"serve-taildrive":         &serveDriveFunc,
 }
 
-var beCLI func() // non-nil if CLI is linked in
+var beCLI func() // non-nil if CLI is linked in with the "ts_include_cli" build tag
+
+// shouldRunCLI reports whether we should run the Tailscale CLI (cmd/tailscale)
+// instead of the daemon (cmd/tailscaled) in the case when the two are linked
+// together into one binary for space savings reasons.
+func shouldRunCLI() bool {
+	if beCLI == nil {
+		// Not linked in with the "ts_include_cli" build tag.
+		return false
+	}
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" {
+		// The binary was named (or hardlinked) as "tailscale".
+		return true
+	}
+	if envknob.Bool("TS_BE_CLI") {
+		// The environment variable was set to force it.
+		return true
+	}
+	return false
+}
 
 func main() {
 	envknob.PanicIfAnyEnvCheckedInInit()
+	if shouldRunCLI() {
+		beCLI()
+		return
+	}
 	envknob.ApplyDiskConfig()
 	applyIntegrationTestEnvKnob()
 
@@ -174,11 +197,6 @@ func main() {
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
-
-	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
-		beCLI()
-		return
-	}
 
 	if len(os.Args) > 1 {
 		sub := os.Args[1]
