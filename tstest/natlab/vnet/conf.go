@@ -121,6 +121,8 @@ func (c *Config) AddNode(opts ...any) *Node {
 					n.err = fmt.Errorf("unknown NodeOption %q", o)
 				}
 			}
+		case MAC:
+			n.mac = o
 		default:
 			if n.err == nil {
 				n.err = fmt.Errorf("unknown AddNode option type %T", o)

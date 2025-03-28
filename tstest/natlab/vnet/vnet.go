@@ -88,6 +88,9 @@ func (s *Server) PopulateDERPMapIPs() error {
 			if n.IPv4 != "" {
 				s.derpIPs.Add(netip.MustParseAddr(n.IPv4))
 			}
+			if n.IPv6 != "" {
+				s.derpIPs.Add(netip.MustParseAddr(n.IPv6))
+			}
 		}
 	}
 	return nil
