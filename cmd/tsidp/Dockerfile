@@ -31,7 +31,7 @@ WORKDIR /app
 
 # Environment variables
 ENV TAILSCALE_USE_WIP_CODE=1 \
-    TS_HOSTNAME=tsidp \
+    TS_HOSTNAME=idp \
     TS_STATE_DIR=/var/lib/tsidp
 
 # Expose the default port
