@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -168,4 +169,26 @@ func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
 		return nil, err
 	}
 	return &sc, nil
+}
+
+func ensureServicesNotAdvertised(ctx context.Context, lc *local.Client) error {
+	prefs, err := lc.GetPrefs(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting prefs: %w", err)
+	}
+	if len(prefs.AdvertiseServices) == 0 {
+		return nil
+	}
+
+	log.Printf("serve proxy: unadvertising services: %v", prefs.AdvertiseServices)
+	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		AdvertiseServicesSet: true,
+		Prefs: ipn.Prefs{
+			AdvertiseServices: nil,
+		},
+	}); err != nil {
+		return fmt.Errorf("error setting prefs AdvertiseServices: %w", err)
+	}
+
+	return nil
 }
