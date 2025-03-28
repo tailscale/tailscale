@@ -49,6 +49,7 @@ const (
 	// FinalizerNamePG is the finalizer used by the IngressPGReconciler
 	FinalizerNamePG = "tailscale.com/ingress-pg-finalizer"
 
+	indexIngressProxyGroup = ".metadata.annotations.ingress-proxy-group"
 	// annotationHTTPEndpoint can be used to configure the Ingress to expose an HTTP endpoint to tailnet (as
 	// well as the default HTTPS endpoint).
 	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
