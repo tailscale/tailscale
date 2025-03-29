@@ -5,6 +5,27 @@ package synology
 
 import "tailscale.com/release/dist"
 
+var amd64Platforms = []string{
+	"x86_64",
+
+	"cedarview", // Tested by @dolmen on DS412+ issue #15462
+
+	// Not tested
+	/*
+		"bromolow",
+		"avoton",
+		"braswell",
+		"grantley",
+		"denverton",
+		"apollolake",
+		"broadwell",
+		"broadwellnk"
+		"geminilake",
+		"v1000",
+		"purley",
+	*/
+}
+
 var v5Models = []string{
 	"armv5",
 	"88f6281",
@@ -39,9 +60,9 @@ func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 		// DSM7.2
 		{major: 7, minor: 2},
 	} {
-		ret = append(ret,
-			&target{
-				filenameArch:    "x86_64",
+		for _, platform := range amd64Platforms {
+			ret = append(ret, &target{
+				filenameArch:    platform,
 				dsmMajorVersion: dsmVersion.major,
 				dsmMinorVersion: dsmVersion.minor,
 				goenv: map[string]string{
@@ -50,7 +71,10 @@ func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 				},
 				packageCenter: forPackageCenter,
 				signer:        signer,
-			},
+			})
+		}
+
+		ret = append(ret,
 			&target{
 				filenameArch:    "i686",
 				dsmMajorVersion: dsmVersion.major,
