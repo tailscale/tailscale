@@ -4,6 +4,7 @@
 package multierr_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -105,6 +106,60 @@ func TestRange(t *testing.T) {
 	C.Assert(got, qt.CmpEquals(cmp.Comparer(func(x, y error) bool {
 		return x.Error() == y.Error()
 	})), want)
+}
+
+func TestDeduplicateContextErrors(t *testing.T) {
+	testError := errors.New("test error")
+
+	tests := []struct {
+		name  string
+		input []error
+		want  []error
+	}{
+		{name: "nil", input: nil, want: nil},
+		{name: "empty", input: []error{}, want: []error{}},
+		{name: "single", input: []error{testError}, want: []error{testError}},
+		{
+			name:  "duplicate_non_context",
+			input: []error{testError, testError},
+			want:  []error{testError, testError},
+		},
+		{
+			name:  "single_context",
+			input: []error{context.Canceled},
+			want:  []error{context.Canceled},
+		},
+		{
+			name:  "duplicate_context",
+			input: []error{testError, context.Canceled, context.Canceled},
+			want:  []error{testError, context.Canceled},
+		},
+		{
+			name: "duplicate_context_mixed",
+			input: []error{
+				testError,
+				context.Canceled,
+				context.Canceled,
+				testError,
+				context.DeadlineExceeded,
+				context.DeadlineExceeded,
+			},
+			want: []error{
+				testError,
+				context.Canceled,
+				testError,
+				context.DeadlineExceeded,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := multierr.DeduplicateContextErrors(tt.input)
+			if diff := cmp.Diff(tt.want, got, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("DeduplicateContextErrors() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 var sink error
