@@ -441,7 +441,6 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 	delta.Major = m.IsMajorChangeFrom(oldState, newState)
 	if delta.Major {
 		m.gwValid = false
-		m.ifState = newState
 
 		if s1, s2 := oldState.String(), delta.New.String(); s1 == s2 {
 			m.logf("[unexpected] network state changed, but stringification didn't: %v", s1)
@@ -449,6 +448,7 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 			m.logf("[unexpected] new: %s", jsonSummary(newState))
 		}
 	}
+	m.ifState = newState
 	// See if we have a queued or new time jump signal.
 	if timeJumped {
 		m.resetTimeJumpedLocked()
