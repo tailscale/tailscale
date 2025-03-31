@@ -1504,7 +1504,7 @@ func (lc *Client) SwitchProfile(ctx context.Context, profile ipn.ProfileID) erro
 // If the profile is the current profile, an empty profile
 // will be selected as if SwitchToEmptyProfile was called.
 func (lc *Client) DeleteProfile(ctx context.Context, profile ipn.ProfileID) error {
-	_, err := lc.send(ctx, "DELETE", "/localapi/v0/profiles"+url.PathEscape(string(profile)), http.StatusNoContent, nil)
+	_, err := lc.send(ctx, "DELETE", "/localapi/v0/profiles/"+url.PathEscape(string(profile)), http.StatusNoContent, nil)
 	return err
 }
 
