@@ -249,6 +249,11 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 		results[i].conn = nil // so we don't close it in the defer
 		return conn, nil
 	}
+	if ctx.Err() != nil {
+		a.logf("controlhttp: context aborted dialing")
+		return nil, ctx.Err()
+	}
+
 	merr := multierr.New(errs...)
 
 	// If we get here, then we didn't get anywhere with our dial plan; fall back to just using DNS.
