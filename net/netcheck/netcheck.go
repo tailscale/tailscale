@@ -1045,7 +1045,7 @@ func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Rep
 }
 
 // runHTTPOnlyChecks is the netcheck done by environments that can
-// only do HTTP requests, such as ws/wasm.
+// only do HTTP requests, such as js/wasm.
 func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *reportState, dm *tailcfg.DERPMap) error {
 	var regions []*tailcfg.DERPRegion
 	if rs.incremental && last != nil {
@@ -1057,6 +1057,9 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 	}
 	if len(regions) == 0 {
 		for _, dr := range dm.Regions {
+			if dr.NoMeasureNoHome {
+				continue
+			}
 			regions = append(regions, dr)
 		}
 	}
