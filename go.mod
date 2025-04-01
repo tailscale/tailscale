@@ -4,7 +4,8 @@ go 1.24.0
 
 require (
 	filippo.io/mkcert v1.4.4
-	fyne.io/systray v1.11.0
+	fyne.io/systray v1.11.1-0.20250317195939-bcf6eed85e7a
+	github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
 	github.com/andybalholm/brotli v1.1.0
@@ -100,7 +101,7 @@ require (
 	golang.org/x/net v0.36.0
 	golang.org/x/oauth2 v0.26.0
 	golang.org/x/sync v0.11.0
-	golang.org/x/sys v0.30.0
+	golang.org/x/sys v0.31.0
 	golang.org/x/term v0.29.0
 	golang.org/x/time v0.10.0
 	golang.org/x/tools v0.30.0
