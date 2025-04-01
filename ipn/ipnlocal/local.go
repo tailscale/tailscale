@@ -5069,6 +5069,11 @@ func shouldUseOneCGNATRoute(logf logger.Logf, mon *netmon.Monitor, controlKnobs 
 		}
 	}
 
+	if versionOS == "plan9" {
+		// Just temporarily during plan9 bringup to have fewer routes to debug.
+		return true
+	}
+
 	// Also prefer to do this on the Mac, so that we don't need to constantly
 	// update the network extension configuration (which is disruptive to
 	// Chrome, see https://github.com/tailscale/tailscale/issues/3102). Only
