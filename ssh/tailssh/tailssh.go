@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux || (darwin && !ios) || freebsd || openbsd
+//go:build linux || (darwin && !ios) || freebsd || openbsd || plan9
 
 // Package tailssh is an SSH server integrated into Tailscale.
 package tailssh
@@ -903,7 +903,7 @@ func (ss *sshSession) run() {
 		defer t.Stop()
 	}
 
-	if euid := os.Geteuid(); euid != 0 {
+	if euid := os.Geteuid(); euid != 0 && runtime.GOOS != "plan9" {
 		if lu.Uid != fmt.Sprint(euid) {
 			ss.logf("can't switch to user %q from process euid %v", lu.Username, euid)
 			fmt.Fprintf(ss, "can't switch user\r\n")
