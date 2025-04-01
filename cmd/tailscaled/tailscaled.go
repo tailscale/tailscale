@@ -250,7 +250,18 @@ func main() {
 	// Only apply a default statepath when neither have been provided, so that a
 	// user may specify only --statedir if they wish.
 	if args.statepath == "" && args.statedir == "" {
-		args.statepath = paths.DefaultTailscaledStateFile()
+		if runtime.GOOS == "plan9" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				log.Fatalf("failed to get home directory: %v", err)
+			}
+			args.statedir = filepath.Join(home, "tailscale-state")
+			if err := os.MkdirAll(args.statedir, 0700); err != nil {
+				log.Fatalf("failed to create state directory: %v", err)
+			}
+		} else {
+			args.statepath = paths.DefaultTailscaledStateFile()
+		}
 	}
 
 	if args.disableLogs {
