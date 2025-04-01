@@ -270,6 +270,15 @@ var forceNoise443 = envknob.RegisterBool("TS_FORCE_NOISE_443")
 // use HTTPS connections as its underlay connection (double crypto). This can
 // be necessary when networks or middle boxes are messing with port 80.
 func (d *Dialer) forceNoise443() bool {
+	if runtime.GOOS == "plan9" {
+		// For running demos of Plan 9 in a browser with network relays,
+		// we want to minimize the number of connections we're making.
+		// The main reason to use port 80 is to avoid double crypto
+		// costs server-side but the costs are tiny and number of Plan 9
+		// users doesn't make it worth it. Just disable this and always use
+		// HTTPS for Plan 9. That also reduces some log spam.
+		return true
+	}
 	if forceNoise443() {
 		return true
 	}
