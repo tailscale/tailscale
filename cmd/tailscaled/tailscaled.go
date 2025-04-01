@@ -751,6 +751,12 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, err
 		}
 
+		if runtime.GOOS == "plan9" {
+			// TODO(bradfitz): why don't we do this on all platforms?
+			// We should. Doing it just on plan9 for now conservatively.
+			sys.NetMon.Get().SetTailscaleInterfaceName(devName)
+		}
+
 		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker())
 		if err != nil {
 			dev.Close()
