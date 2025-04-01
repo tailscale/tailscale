@@ -626,9 +626,28 @@ var _UserProfileCloneNeedsRegeneration = UserProfile(struct {
 	ProfilePicURL string
 }{})
 
+// Clone makes a deep copy of VIPService.
+// The result aliases no memory with the original.
+func (src *VIPService) Clone() *VIPService {
+	if src == nil {
+		return nil
+	}
+	dst := new(VIPService)
+	*dst = *src
+	dst.Ports = append(src.Ports[:0:0], src.Ports...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _VIPServiceCloneNeedsRegeneration = VIPService(struct {
+	Name   ServiceName
+	Ports  []ProtoPortRange
+	Active bool
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -799,6 +818,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **UserProfile:
+			*dst = src.Clone()
+			return true
+		}
+	case *VIPService:
+		switch dst := dst.(type) {
+		case *VIPService:
+			*dst = *src.Clone()
+			return true
+		case **VIPService:
 			*dst = src.Clone()
 			return true
 		}
