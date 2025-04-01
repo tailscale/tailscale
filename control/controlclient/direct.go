@@ -1086,7 +1086,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		} else {
 			vlogf("netmap: got new map")
 		}
-		if resp.ControlDialPlan != nil {
+		if resp.ControlDialPlan != nil && !ignoreDialPlan() {
 			if c.dialPlan != nil {
 				c.logf("netmap: got new dial plan from control")
 				c.dialPlan.Store(resp.ControlDialPlan)
@@ -1772,6 +1772,13 @@ func makeScreenTimeDetectingDialFunc(dial dialFunc) (dialFunc, *atomic.Bool) {
 		ab.Store(isTCPLoopback(c.LocalAddr()) && isTCPLoopback(c.RemoteAddr()))
 		return c, nil
 	}, ab
+}
+
+func ignoreDialPlan() bool {
+	// If we're running in v86 (a JavaScript-based emulation of a 32-bit x86)
+	// our networking is very limited. Let's ignore the dial plan since it's too
+	// complicated to race that many IPs anyway.
+	return hostinfo.IsInVM86()
 }
 
 func isTCPLoopback(a net.Addr) bool {

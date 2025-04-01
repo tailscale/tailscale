@@ -21,6 +21,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cloudenv"
@@ -497,5 +498,14 @@ func IsNATLabGuestVM() bool {
 	return false
 }
 
-// NAT Lab VMs have a unique MAC address prefix.
-// See
+const copyV86DeviceModel = "copy-v86"
+
+var isV86Cache lazy.SyncValue[bool]
+
+// IsInVM86 reports whether we're running in the copy/v86 wasm emulator,
+// https://github.com/copy/v86/.
+func IsInVM86() bool {
+	return isV86Cache.Get(func() bool {
+		return New().DeviceModel == copyV86DeviceModel
+	})
+}

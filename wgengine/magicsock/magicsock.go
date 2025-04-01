@@ -719,7 +719,7 @@ func (c *Conn) updateEndpoints(why string) {
 		c.muCond.Broadcast()
 	}()
 	c.dlogf("[v1] magicsock: starting endpoint update (%s)", why)
-	if c.noV4Send.Load() && runtime.GOOS != "js" && !c.onlyTCP443.Load() {
+	if c.noV4Send.Load() && runtime.GOOS != "js" && !c.onlyTCP443.Load() && !hostinfo.IsInVM86() {
 		c.mu.Lock()
 		closed := c.closed
 		c.mu.Unlock()
@@ -2767,7 +2767,9 @@ func (c *Conn) Rebind() {
 		c.logf("Rebind; defIf=%q, ips=%v", defIf, ifIPs)
 	}
 
-	c.maybeCloseDERPsOnRebind(ifIPs)
+	if len(ifIPs) > 0 {
+		c.maybeCloseDERPsOnRebind(ifIPs)
+	}
 	c.resetEndpointStates()
 }
 
