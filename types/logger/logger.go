@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -160,6 +161,10 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 // rate limits.
 func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int, timeNow func() time.Time) Logf {
 	if envknob.String("TS_DEBUG_LOG_RATE") == "all" {
+		return logf
+	}
+	if runtime.GOOS == "plan9" {
+		// To ease bring-up.
 		return logf
 	}
 	var (
