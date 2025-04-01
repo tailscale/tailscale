@@ -11,10 +11,12 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"runtime"
 	"sync"
 	"time"
 
 	"fyne.io/systray"
+	ico "github.com/Kodeworks/golang-image-ico"
 	"github.com/fogleman/gg"
 )
 
@@ -251,7 +253,13 @@ func (logo tsLogo) renderWithBorder(borderUnits int) *bytes.Buffer {
 	}
 
 	b := bytes.NewBuffer(nil)
-	png.Encode(b, dc.Image())
+
+	// Encode as ICO format on Windows, PNG on all other platforms.
+	if runtime.GOOS == "windows" {
+		_ = ico.Encode(b, dc.Image())
+	} else {
+		_ = png.Encode(b, dc.Image())
+	}
 	return b
 }
 

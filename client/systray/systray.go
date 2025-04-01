@@ -7,9 +7,11 @@
 package systray
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"log"
 	"net/http"
@@ -23,6 +25,7 @@ import (
 	"time"
 
 	"fyne.io/systray"
+	ico "github.com/Kodeworks/golang-image-ico"
 	"github.com/atotto/clipboard"
 	dbus "github.com/godbus/dbus/v5"
 	"github.com/toqueteos/webbrowser"
@@ -330,6 +333,20 @@ func setRemoteIcon(menu *systray.MenuItem, urlStr string) {
 		resp, err := http.Get(urlStr)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			b, _ = io.ReadAll(resp.Body)
+
+			// Convert image to ICO format on Windows
+			if runtime.GOOS == "windows" {
+				im, _, err := image.Decode(bytes.NewReader(b))
+				if err != nil {
+					return
+				}
+				buf := bytes.NewBuffer(nil)
+				if err := ico.Encode(buf, im); err != nil {
+					return
+				}
+				b = buf.Bytes()
+			}
+
 			httpCache[urlStr] = b
 			resp.Body.Close()
 		}
