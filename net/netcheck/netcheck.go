@@ -1191,6 +1191,10 @@ func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, nee
 	if len(need) == 0 {
 		return nil
 	}
+	if runtime.GOOS == "plan9" {
+		// ICMP isn't implemented.
+		return nil
+	}
 	ctx, done := context.WithTimeout(ctx, icmpProbeTimeout)
 	defer done()
 
