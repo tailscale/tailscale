@@ -8,7 +8,7 @@
 // This package is only intended for internal and transitional use.
 //
 // Deprecated: the official control plane client is available at
-// tailscale.com/client/tailscale/v2.
+// [tailscale.com/client/tailscale/v2].
 package tailscale
 
 import (
@@ -22,7 +22,7 @@ import (
 )
 
 // I_Acknowledge_This_API_Is_Unstable must be set true to use this package
-// for now. This package is being replaced by tailscale.com/client/tailscale/v2.
+// for now. This package is being replaced by [tailscale.com/client/tailscale/v2].
 var I_Acknowledge_This_API_Is_Unstable = false
 
 // TODO: use url.PathEscape() for deviceID and tailnets when constructing requests.
@@ -34,10 +34,10 @@ const maxReadSize = 10 << 20
 
 // Client makes API calls to the Tailscale control plane API server.
 //
-// Use NewClient to instantiate one. Exported fields should be set before
+// Use [NewClient] to instantiate one. Exported fields should be set before
 // the client is used and not changed thereafter.
 //
-// Deprecated: use tailscale.com/client/tailscale/v2 instead.
+// Deprecated: use [tailscale.com/client/tailscale/v2] instead.
 type Client struct {
 	// tailnet is the globally unique identifier for a Tailscale network, such
 	// as "example.com" or "user@gmail.com".
@@ -51,7 +51,7 @@ type Client struct {
 	BaseURL string
 
 	// HTTPClient optionally specifies an alternate HTTP client to use.
-	// If nil, http.DefaultClient is used.
+	// If nil, [http.DefaultClient] is used.
 	HTTPClient *http.Client
 
 	// UserAgent optionally specifies an alternate User-Agent header
@@ -119,7 +119,7 @@ type AuthMethod interface {
 	modifyRequest(req *http.Request)
 }
 
-// APIKey is an AuthMethod for NewClient that authenticates requests
+// APIKey is an [AuthMethod] for [NewClient] that authenticates requests
 // using an authkey.
 type APIKey string
 
@@ -133,15 +133,15 @@ func (c *Client) setAuth(r *http.Request) {
 	}
 }
 
-// NewClient is a convenience method for instantiating a new Client.
+// NewClient is a convenience method for instantiating a new [Client].
 //
 // tailnet is the globally unique identifier for a Tailscale network, such
 // as "example.com" or "user@gmail.com".
-// If httpClient is nil, then http.DefaultClient is used.
+// If httpClient is nil, then [http.DefaultClient] is used.
 // "api.tailscale.com" is set as the BaseURL for the returned client
 // and can be changed manually by the user.
 //
-// Deprecated: use tailscale.com/client/tailscale/v2 instead.
+// Deprecated: use [tailscale.com/client/tailscale/v2] instead.
 func NewClient(tailnet string, auth AuthMethod) *Client {
 	return &Client{
 		tailnet:   tailnet,
@@ -193,9 +193,9 @@ func (e ErrResponse) Error() string {
 }
 
 // HandleErrorResponse decodes the error message from the server and returns
-// an ErrResponse from it.
+// an [ErrResponse] from it.
 //
-// Deprecated: use tailscale.com/client/tailscale/v2 instead.
+// Deprecated: use [tailscale.com/client/tailscale/v2] instead.
 func HandleErrorResponse(b []byte, resp *http.Response) error {
 	var errResp ErrResponse
 	if err := json.Unmarshal(b, &errResp); err != nil {
