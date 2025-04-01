@@ -242,7 +242,7 @@ func changeAffectsConn(delta *netmon.ChangeDelta, conn net.Conn) bool {
 	// In a few cases, we don't have a new DefaultRouteInterface (e.g. on
 	// Android; see tailscale/corp#19124); if so, pessimistically assume
 	// that all connections are affected.
-	if delta.New.DefaultRouteInterface == "" {
+	if delta.New.DefaultRouteInterface == "" && runtime.GOOS != "plan9" {
 		return true
 	}
 
