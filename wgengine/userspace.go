@@ -1580,6 +1580,12 @@ type fwdDNSLinkSelector struct {
 }
 
 func (ls fwdDNSLinkSelector) PickLink(ip netip.Addr) (linkName string) {
+	// sandboxed macOS does not automatically bind to the loopback interface so
+	// we must be explicit about it.
+	if runtime.GOOS == "darwin" && ip.IsLoopback() {
+		return "lo0"
+	}
+
 	if ls.ue.isDNSIPOverTailscale.Load()(ip) {
 		return ls.tunName
 	}
