@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -305,6 +306,31 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 		for rid, r := range dm.Regions {
 			if r == nil {
 				delete(dm.Regions, rid)
+			}
+		}
+
+		// In the copy/v86 wasm environment with limited networking, if the
+		// control plane didn't pick our DERP home for us, do it ourselves and
+		// mark all but the lowest region as NoMeasureNoHome. For prod, this
+		// will be Region 1, NYC, a compromise between the US and Europe. But
+		// really the control plane should pick this. This is only a fallback.
+		if hostinfo.IsInVM86() {
+			numCanMeasure := 0
+			lowest := 0
+			for rid, r := range dm.Regions {
+				if !r.NoMeasureNoHome {
+					numCanMeasure++
+					if lowest == 0 || rid < lowest {
+						lowest = rid
+					}
+				}
+			}
+			if numCanMeasure > 1 {
+				for rid, r := range dm.Regions {
+					if rid != lowest {
+						r.NoMeasureNoHome = true
+					}
+				}
 			}
 		}
 
