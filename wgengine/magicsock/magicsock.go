@@ -3018,6 +3018,10 @@ func (c *Conn) DebugForcePreferDERP(n int) {
 // portableTrySetSocketBuffer sets SO_SNDBUF and SO_RECVBUF on pconn to socketBufferSize,
 // logging an error if it occurs.
 func portableTrySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
+	if runtime.GOOS == "plan9" {
+		// Not supported. Don't try. Avoid logspam.
+		return
+	}
 	if c, ok := pconn.(*net.UDPConn); ok {
 		// Attempt to increase the buffer size, and allow failures.
 		if err := c.SetReadBuffer(socketBufferSize); err != nil {
