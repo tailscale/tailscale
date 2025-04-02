@@ -76,7 +76,7 @@ operatorConfig:
   # Ephemeral devices are automatically deleted from your tailnet when they
   # disconnect, helping keep your tailnet clean.
   # This can be overridden per proxy by setting spec.ephemeral in the ProxyClass.
-  ephemeralKeys: false
+  ephemeral: false
 
 # In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
 ingressClass:

@@ -1,2 +1,0 @@
-- name: PROXY_EPHEMERAL_KEYS
-  value: {{ .Values.operatorConfig.ephemeralKeys | quote }} 

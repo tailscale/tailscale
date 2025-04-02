@@ -85,6 +85,8 @@ spec:
             - name: PROXY_DEFAULT_CLASS
               value: {{ .Values.proxyConfig.defaultProxyClass }}
             {{- end }}
+            - name: PROXY_EPHEMERAL
+              value: {{ .Values.operatorConfig.ephemeral | quote }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:

@@ -76,7 +76,7 @@ func main() {
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
 		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
-		useEphemeralKeys      = defaultBool("PROXY_EPHEMERAL_KEYS", false)
+		useEphemeralKeys      = defaultBool("PROXY_EPHEMERAL", false)
 	)
 
 	var opts []kzap.Opts
