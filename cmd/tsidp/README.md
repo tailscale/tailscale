@@ -48,7 +48,7 @@
    docker logs tsidp
    ```
 
-   Visit `https://tsidp.tailnet.ts.net` to confirm the service is running.
+   Visit `https://idp.tailnet.ts.net` to confirm the service is running.
 
 ## Usage Example: Proxmox Integration
 
@@ -88,8 +88,8 @@ The `tsidp` server supports several command-line flags:
 ## Environment Variables
 
 - `TS_AUTHKEY`: Your Tailscale authentication key (required)
-- `TS_HOSTNAME`: Hostname for the `tsidp` server (default: "idp")
-- `TS_STATE_DIR`: State directory (default: "/var/lib/tsidp")
+- `TS_HOSTNAME`: Hostname for the `tsidp` server (default: "idp", Docker only)
+- `TS_STATE_DIR`: State directory (default: "/var/lib/tsidp", Docker only)
 - `TAILSCALE_USE_WIP_CODE`: Enable work-in-progress code (default: "1")
 
 ## Support
