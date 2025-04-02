@@ -2446,6 +2446,14 @@ const (
 	// native tailnet. This is currently only sent to Hello, in its
 	// peer node list.
 	NodeAttrNativeIPV4 NodeCapability = "native-ipv4"
+
+	// NodeAttrRelayServer permits the node to act as an underlay UDP relay
+	// server. There are no expected values for this key in NodeCapMap.
+	NodeAttrRelayServer NodeCapability = "relay:server"
+
+	// NodeAttrRelayClient permits the node to act as an underlay UDP relay
+	// client. There are no expected values for this key in NodeCapMap.
+	NodeAttrRelayClient NodeCapability = "relay:client"
 )
 
 // SetDNSRequest is a request to add a DNS record.
