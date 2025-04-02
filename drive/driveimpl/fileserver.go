@@ -142,6 +142,10 @@ func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(parts) < 2 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	r.URL.Path = shared.Join(parts[2:]...)
 	share := parts[1]
 	s.sharesMu.RLock()
