@@ -418,6 +418,18 @@ func TestProxyGroupTypes(t *testing.T) {
 		verifyEnvVar(t, sts, "TS_SERVE_CONFIG", "/etc/proxies/serve-config.json")
 		verifyEnvVar(t, sts, "TS_EXPERIMENTAL_CERT_SHARE", "true")
 
+		expectedLifecycle := corev1.Lifecycle{
+			PreStop: &corev1.LifecycleHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: kubetypes.ServePreshutdownEP,
+					Port: intstr.FromInt(defaultLocalAddrPort),
+				},
+			},
+		}
+		if diff := cmp.Diff(expectedLifecycle, *sts.Spec.Template.Spec.Containers[0].Lifecycle); diff != "" {
+			t.Errorf("unexpected lifecycle (-want +got):\n%s", diff)
+		}
+
 		// Verify ConfigMap volume mount
 		cmName := fmt.Sprintf("%s-ingress-config", pg.Name)
 		expectedVolume := corev1.Volume{

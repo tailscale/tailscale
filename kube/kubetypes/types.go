@@ -48,6 +48,7 @@ const (
 	PodIPv4Header string = "Pod-IPv4"
 
 	EgessServicesPreshutdownEP = "/internal-egress-services-preshutdown"
+	ServePreshutdownEP         = "/internal-serve-preshutdown"
 
 	LabelManaged    = "tailscale.com/managed"
 	LabelSecretType = "tailscale.com/secret-type" // "config", "state" "certs"
