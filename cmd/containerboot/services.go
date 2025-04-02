@@ -35,6 +35,9 @@ import (
 
 const tailscaleTunInterface = "tailscale0"
 
+// Modified using a build flag to speed up tests.
+var testSleepDuration string
+
 // This file contains functionality to run containerboot as a proxy that can
 // route cluster traffic to one or more tailnet targets, based on portmapping
 // rules read from a configfile. Currently (9/2024) this is only used for the
@@ -149,8 +152,13 @@ func (ep *egressProxy) configure(opts egressProxyRunOpts) {
 	ep.podIPv4 = opts.podIPv4
 	ep.tailnetAddrs = opts.tailnetAddrs
 	ep.client = &http.Client{} // default HTTP client
-	ep.shortSleep = time.Second
-	ep.longSleep = time.Second * 10
+	sleepDuration := time.Second
+	if d, err := time.ParseDuration(testSleepDuration); err == nil && d > 0 {
+		log.Printf("using test sleep duration %v", d)
+		sleepDuration = d
+	}
+	ep.shortSleep = sleepDuration
+	ep.longSleep = sleepDuration * 10
 }
 
 // sync triggers an egress proxy config resync. The resync calculates the diff between config and status to determine if
