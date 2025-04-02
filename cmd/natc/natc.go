@@ -359,7 +359,7 @@ var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 // generateDNSResponse generates a DNS response for the given request. The from
 // argument is the NodeID of the node that sent the request.
 func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.NodeID) ([]byte, error) {
-	pm, _ := c.perPeerMap.LoadOrStore(from, &perPeerState{c: c})
+	pm, _ := c.perPeerMap.LoadOrStore(from, newPerPeerState(c))
 	var addrs []netip.Addr
 	if len(req.Questions) > 0 {
 		switch req.Questions[0].Type {
@@ -509,12 +509,20 @@ func proxyTCPConn(c net.Conn, dest string) {
 
 // perPeerState holds the state for a single peer.
 type perPeerState struct {
-	c *connector
+	v6ULA netip.Prefix
+	ipset *netipx.IPSet
 
 	mu           sync.Mutex
 	addrInUse    *big.Int
 	domainToAddr map[string][]netip.Addr
 	addrToDomain *bart.Table[string]
+}
+
+func newPerPeerState(c *connector) *perPeerState {
+	return &perPeerState{
+		ipset: c.ipset,
+		v6ULA: c.v6ULA,
+	}
 }
 
 // domainForIP returns the domain name assigned to the given IP address and
@@ -555,7 +563,7 @@ func (ps *perPeerState) unusedIPv4Locked() netip.Addr {
 	if ps.addrInUse == nil {
 		ps.addrInUse = big.NewInt(0)
 	}
-	return allocAddr(ps.c.ipset, ps.addrInUse)
+	return allocAddr(ps.ipset, ps.addrInUse)
 }
 
 // assignAddrsLocked assigns a pair of unique IP addresses for the given domain
@@ -570,7 +578,7 @@ func (ps *perPeerState) assignAddrsLocked(domain string) []netip.Addr {
 	if !v4.IsValid() {
 		return nil
 	}
-	as16 := ps.c.v6ULA.Addr().As16()
+	as16 := ps.v6ULA.Addr().As16()
 	as4 := v4.As4()
 	copy(as16[12:], as4[:])
 	v6 := netip.AddrFrom16(as16)
