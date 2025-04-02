@@ -81,6 +81,12 @@ type ProxyClassSpec struct {
 	// renewed.
 	// +optional
 	UseLetsEncryptStagingEnvironment bool `json:"useLetsEncryptStagingEnvironment,omitempty"`
+	// Set Ephemeral to true to make the proxy authenticate as an ephemeral device.
+	// Ephemeral devices are automatically deleted from your tailnet when they
+	// disconnect, helping keep your tailnet clean.
+	// Defaults to false.
+	// +optional
+	Ephemeral bool `json:"ephemeral,omitempty"`
 }
 
 type TailscaleConfig struct {

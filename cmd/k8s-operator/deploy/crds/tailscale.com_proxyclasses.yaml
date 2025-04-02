@@ -58,6 +58,13 @@ spec:
                 https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
               type: object
               properties:
+                ephemeral:
+                  description: |-
+                    Set Ephemeral to true to make the proxy authenticate as an ephemeral device.
+                    Ephemeral devices are automatically deleted from your tailnet when they
+                    disconnect, helping keep your tailnet clean.
+                    Defaults to false.
+                  type: boolean
                 metrics:
                   description: |-
                     Configuration for proxy metrics. Metrics are currently not supported

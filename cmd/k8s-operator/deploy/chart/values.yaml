@@ -71,6 +71,12 @@ operatorConfig:
   #   value: "value1"
   # - name: EXTRA_VAR2
   #   value: "value2"
+  
+  # If true, use ephemeral device authentication keys for all proxies by default.
+  # Ephemeral devices are automatically deleted from your tailnet when they
+  # disconnect, helping keep your tailnet clean.
+  # This can be overridden per proxy by setting spec.ephemeral in the ProxyClass.
+  ephemeralKeys: false
 
 # In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
 ingressClass:
@@ -111,12 +117,3 @@ apiServerProxyConfig:
   mode: "false" # "true", "false", "noauth"
 
 imagePullSecrets: []
-
-# If true, the operator will consider LoadBalancer Services with no 
-# loadBalancerClass field set as Tailscale Services.
-defaultLoadBalancer: false
-
-# If true, use ephemeral device authentication keys for all proxies.
-# Ephemeral devices are automatically deleted from your tailnet when they
-# disconnect, helping keep your tailnet clean.
-ephemeralKeys: false

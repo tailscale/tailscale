@@ -377,7 +377,12 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		if len(tags) == 0 {
 			tags = a.defaultTags
 		}
-		authKey, err = newAuthKey(ctx, a.tsClient, tags, a.proxyUseEphemeralKeys)
+		// Determine if we should use ephemeral keys based on ProxyClass first, falling back to operator config
+		ephemeral := a.proxyUseEphemeralKeys
+		if stsC.ProxyClass != nil {
+			ephemeral = stsC.ProxyClass.Spec.Ephemeral
+		}
+		authKey, err = newAuthKey(ctx, a.tsClient, tags, ephemeral)
 		if err != nil {
 			return "", "", nil, err
 		}
@@ -962,8 +967,17 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 			conf.AppConnector.Advertise = true
 		}
 	}
-	if shouldAcceptRoutes(stsC.ProxyClass) {
-		conf.AcceptRoutes = "true"
+	
+	// Apply ProxyClass settings if available
+	if stsC.ProxyClass != nil {
+		// Set AcceptRoutes if specified in ProxyClass
+		if shouldAcceptRoutes(stsC.ProxyClass) {
+			conf.AcceptRoutes = "true"
+		}
+		
+		// For ephemeral devices, we set this in the auth key when created
+		// The ephemeral setting is handled at auth key creation time in the newAuthKey function
+		// We don't need to set it directly in the config
 	}
 
 	if newAuthkey != "" {
