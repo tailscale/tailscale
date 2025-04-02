@@ -376,7 +376,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		if len(tags) == 0 {
 			tags = a.defaultTags
 		}
-		authKey, err = newAuthKey(ctx, a.tsClient, tags)
+		authKey, err = newAuthKey(ctx, a.tsClient, tags, shouldUseEphemeral(stsC.ProxyClass))
 		if err != nil {
 			return "", "", nil, err
 		}
@@ -511,12 +511,13 @@ func deviceInfo(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) (dev 
 	return dev, nil
 }
 
-func newAuthKey(ctx context.Context, tsClient tsClient, tags []string) (string, error) {
+func newAuthKey(ctx context.Context, tsClient tsClient, tags []string, ephemeral bool) (string, error) {
 	caps := tailscale.KeyCapabilities{
 		Devices: tailscale.KeyDeviceCapabilities{
 			Create: tailscale.KeyDeviceCreateCapabilities{
 				Reusable:      false,
 				Preauthorized: true,
+				Ephemeral:     ephemeral,
 				Tags:          tags,
 			},
 		},
@@ -1020,6 +1021,10 @@ func shouldRetainAuthKey(s *corev1.Secret) bool {
 
 func shouldAcceptRoutes(pc *tsapi.ProxyClass) bool {
 	return pc != nil && pc.Spec.TailscaleConfig != nil && pc.Spec.TailscaleConfig.AcceptRoutes
+}
+
+func shouldUseEphemeral(pc *tsapi.ProxyClass) bool {
+	return pc != nil && pc.Spec.TailscaleConfig != nil && pc.Spec.TailscaleConfig.Ephemeral
 }
 
 // ptrObject is a type constraint for pointer types that implement

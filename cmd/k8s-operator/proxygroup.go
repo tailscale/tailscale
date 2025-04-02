@@ -477,7 +477,11 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			if len(tags) == 0 {
 				tags = r.defaultTags
 			}
-			authKey, err = newAuthKey(ctx, r.tsClient, tags)
+			ephemeral := false
+			if proxyClass != nil && proxyClass.Spec.TailscaleConfig != nil {
+				ephemeral = proxyClass.Spec.TailscaleConfig.Ephemeral
+			}
+			authKey, err = newAuthKey(ctx, r.tsClient, tags, ephemeral)
 			if err != nil {
 				return "", err
 			}

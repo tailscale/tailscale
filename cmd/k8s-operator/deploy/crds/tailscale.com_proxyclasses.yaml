@@ -2215,6 +2215,14 @@ spec:
                         https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices
                         Defaults to false.
                       type: boolean
+                    ephemeral:
+                      description: |-
+                        Ephemeral can be set to true to make the proxy instance register
+                        as an ephemeral node. Ephemeral nodes are automatically deleted
+                        from the tailnet when they are offline for a while.
+                        https://tailscale.com/kb/1111/ephemeral-nodes/
+                        Defaults to false.
+                      type: boolean
                 useLetsEncryptStagingEnvironment:
                   description: |-
                     Set UseLetsEncryptStagingEnvironment to true to issue TLS

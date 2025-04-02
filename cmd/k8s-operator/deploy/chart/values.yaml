@@ -36,6 +36,10 @@ operatorConfig:
   # Multiple tags are defined as array items and passed to the operator as a comma-separated string
   defaultTags:
     - "tag:k8s-operator"
+  
+  # When true, the operator will use an ephemeral auth key
+  # https://tailscale.com/kb/1111/ephemeral-nodes/
+  ephemeral: false
 
   image:
     # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/k8s-operator.
