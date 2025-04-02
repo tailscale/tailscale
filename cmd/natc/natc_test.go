@@ -220,7 +220,7 @@ func TestPerPeerState(t *testing.T) {
 	}
 	c.setPrefixes([]netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")})
 
-	ps := &perPeerState{c: c}
+	ps := newPerPeerState(c)
 
 	addrs, err := ps.ipForDomain("example.com")
 	if err != nil {
@@ -360,7 +360,7 @@ func TestIPPoolExhaustion(t *testing.T) {
 	}
 	c.setPrefixes([]netip.Prefix{smallPrefix})
 
-	ps := &perPeerState{c: c}
+	ps := newPerPeerState(c)
 
 	assignedIPs := make(map[netip.Addr]string)
 
