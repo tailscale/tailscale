@@ -1,0 +1,4 @@
+  - name: OPERATOR_DEFAULT_LOAD_BALANCER
+    value: {{ .Values.defaultLoadBalancer | quote }}
+  - name: PROXY_EPHEMERAL_KEYS
+    value: {{ .Values.ephemeralKeys | quote }} 

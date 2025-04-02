@@ -66,11 +66,12 @@ type ProxyGroupReconciler struct {
 	tsClient tsClient
 
 	// User-specified defaults from the helm installation.
-	tsNamespace       string
-	proxyImage        string
-	defaultTags       []string
-	tsFirewallMode    string
-	defaultProxyClass string
+	tsNamespace           string
+	proxyImage            string
+	defaultTags           []string
+	tsFirewallMode        string
+	defaultProxyClass     string
+	proxyUseEphemeralKeys bool
 
 	mu                 sync.Mutex           // protects following
 	egressProxyGroups  set.Slice[types.UID] // for egress proxygroups gauge
@@ -477,7 +478,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			if len(tags) == 0 {
 				tags = r.defaultTags
 			}
-			authKey, err = newAuthKey(ctx, r.tsClient, tags)
+			authKey, err = newAuthKey(ctx, r.tsClient, tags, r.proxyUseEphemeralKeys)
 			if err != nil {
 				return "", err
 			}

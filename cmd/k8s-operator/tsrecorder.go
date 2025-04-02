@@ -57,6 +57,7 @@ type RecorderReconciler struct {
 	clock       tstime.Clock
 	tsNamespace string
 	tsClient    tsClient
+	proxyUseEphemeralKeys bool
 
 	mu        sync.Mutex           // protects following
 	recorders set.Slice[types.UID] // for recorders gauge
@@ -289,7 +290,7 @@ func (r *RecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr *t
 	if len(tags) == 0 {
 		tags = tsapi.Tags{"tag:k8s"}
 	}
-	authKey, err := newAuthKey(ctx, r.tsClient, tags.Stringify())
+	authKey, err := newAuthKey(ctx, r.tsClient, tags.Stringify(), r.proxyUseEphemeralKeys)
 	if err != nil {
 		return err
 	}

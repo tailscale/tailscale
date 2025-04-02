@@ -111,3 +111,12 @@ apiServerProxyConfig:
   mode: "false" # "true", "false", "noauth"
 
 imagePullSecrets: []
+
+# If true, the operator will consider LoadBalancer Services with no 
+# loadBalancerClass field set as Tailscale Services.
+defaultLoadBalancer: false
+
+# If true, use ephemeral device authentication keys for all proxies.
+# Ephemeral devices are automatically deleted from your tailnet when they
+# disconnect, helping keep your tailnet clean.
+ephemeralKeys: false

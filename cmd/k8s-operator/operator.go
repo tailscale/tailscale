@@ -76,6 +76,7 @@ func main() {
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
 		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
+		useEphemeralKeys      = defaultBool("PROXY_EPHEMERAL_KEYS", false)
 	)
 
 	var opts []kzap.Opts
@@ -109,7 +110,7 @@ func main() {
 		hostinfo.SetApp(kubetypes.AppAPIServerProxy)
 	}
 
-	s, tsc := initTSNet(zlog)
+	s, tsc := initTSNet(zlog, useEphemeralKeys)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
@@ -125,6 +126,7 @@ func main() {
 		proxyTags:                     tags,
 		proxyFirewallMode:             tsFirewallMode,
 		defaultProxyClass:             defaultProxyClass,
+		proxyUseEphemeralKeys:         useEphemeralKeys,
 	}
 	runReconcilers(rOpts)
 }
@@ -132,7 +134,7 @@ func main() {
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
-func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
+func initTSNet(zlog *zap.SugaredLogger, useEphemeralKeys bool) (*tsnet.Server, tsClient) {
 	var (
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
 		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
@@ -196,6 +198,7 @@ waitOnline:
 					Create: tailscale.KeyDeviceCreateCapabilities{
 						Reusable:      false,
 						Preauthorized: true,
+						Ephemeral:     useEphemeralKeys,
 						Tags:          strings.Split(operatorTags, ","),
 					},
 				},
@@ -288,6 +291,7 @@ func runReconcilers(opts reconcilerOpts) {
 		proxyImage:             opts.proxyImage,
 		proxyPriorityClassName: opts.proxyPriorityClassName,
 		tsFirewallMode:         opts.proxyFirewallMode,
+		proxyUseEphemeralKeys:  opts.proxyUseEphemeralKeys,
 	}
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -542,12 +546,13 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&rbacv1.Role{}, recorderFilter).
 		Watches(&rbacv1.RoleBinding{}, recorderFilter).
 		Complete(&RecorderReconciler{
-			recorder:    eventRecorder,
-			tsNamespace: opts.tailscaleNamespace,
-			Client:      mgr.GetClient(),
-			l:           opts.log.Named("recorder-reconciler"),
-			clock:       tstime.DefaultClock{},
-			tsClient:    opts.tsClient,
+			recorder:             eventRecorder,
+			tsNamespace:          opts.tailscaleNamespace,
+			Client:               mgr.GetClient(),
+			l:                    opts.log.Named("recorder-reconciler"),
+			clock:                tstime.DefaultClock{},
+			tsClient:             opts.tsClient,
+			proxyUseEphemeralKeys: opts.proxyUseEphemeralKeys,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
@@ -573,11 +578,12 @@ func runReconcilers(opts reconcilerOpts) {
 			clock:    tstime.DefaultClock{},
 			tsClient: opts.tsClient,
 
-			tsNamespace:       opts.tailscaleNamespace,
-			proxyImage:        opts.proxyImage,
-			defaultTags:       strings.Split(opts.proxyTags, ","),
-			tsFirewallMode:    opts.proxyFirewallMode,
-			defaultProxyClass: opts.defaultProxyClass,
+			tsNamespace:           opts.tailscaleNamespace,
+			proxyImage:            opts.proxyImage,
+			defaultTags:           strings.Split(opts.proxyTags, ","),
+			tsFirewallMode:        opts.proxyFirewallMode,
+			defaultProxyClass:     opts.defaultProxyClass,
+			proxyUseEphemeralKeys: opts.proxyUseEphemeralKeys,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)
@@ -627,9 +633,10 @@ type reconcilerOpts struct {
 	// class for proxies that do not have a ProxyClass set.
 	// this is defined by an operator env variable.
 	defaultProxyClass string
+	proxyUseEphemeralKeys         bool
 }
 
-// enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each
+// enqueueAllIngressEgressProxySvcsInNS returns a reconcile request for each
 // ingress/egress proxy headless Service found in the provided namespace.
 func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
 	return func(ctx context.Context, _ client.Object) []reconcile.Request {

@@ -165,6 +165,7 @@ type tailscaleSTSReconciler struct {
 	proxyImage             string
 	proxyPriorityClassName string
 	tsFirewallMode         string
+	proxyUseEphemeralKeys  bool
 }
 
 func (sts tailscaleSTSReconciler) validate() error {
@@ -376,7 +377,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		if len(tags) == 0 {
 			tags = a.defaultTags
 		}
-		authKey, err = newAuthKey(ctx, a.tsClient, tags)
+		authKey, err = newAuthKey(ctx, a.tsClient, tags, a.proxyUseEphemeralKeys)
 		if err != nil {
 			return "", "", nil, err
 		}
@@ -511,12 +512,13 @@ func deviceInfo(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) (dev 
 	return dev, nil
 }
 
-func newAuthKey(ctx context.Context, tsClient tsClient, tags []string) (string, error) {
+func newAuthKey(ctx context.Context, tsClient tsClient, tags []string, ephemeral bool) (string, error) {
 	caps := tailscale.KeyCapabilities{
 		Devices: tailscale.KeyDeviceCapabilities{
 			Create: tailscale.KeyDeviceCreateCapabilities{
 				Reusable:      false,
 				Preauthorized: true,
+				Ephemeral:     ephemeral,
 				Tags:          tags,
 			},
 		},
