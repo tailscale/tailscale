@@ -82,13 +82,14 @@ The `tsidp` server supports several command-line flags:
 - `--port`: Port to listen on (default: 443)
 - `--local-port`: Allow requests from localhost
 - `--use-local-tailscaled`: Use local tailscaled instead of tsnet
+- `--hostname`: tsnet hostname
 - `--dir`: tsnet state directory
 
 ## Environment Variables
 
 - `TS_AUTHKEY`: Your Tailscale authentication key (required)
 - `TS_HOSTNAME`: Hostname for the `tsidp` server (default: "idp")
-- `TS_STATE_DIR`: State directory (default: "/var/lib/tsidp" in Docker, otherwise tsnet default)
+- `TS_STATE_DIR`: State directory (default: "/var/lib/tsidp")
 - `TAILSCALE_USE_WIP_CODE`: Enable work-in-progress code (default: "1")
 
 ## Support

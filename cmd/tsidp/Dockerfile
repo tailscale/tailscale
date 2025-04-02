@@ -38,4 +38,4 @@ ENV TAILSCALE_USE_WIP_CODE=1 \
 EXPOSE 443
 
 # Run the application
-ENTRYPOINT ["/app/tsidp"]
+ENTRYPOINT ["/bin/sh", "-c", "/app/tsidp --hostname=${TS_HOSTNAME} --dir=${TS_STATE_DIR}"]
