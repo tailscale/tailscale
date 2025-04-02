@@ -147,6 +147,20 @@ func IsAppleTV() bool {
 	})
 }
 
+var isMacOSTailscaled lazy.SyncValue[bool]
+
+// IsMacOSTailscaled reports whether this binary is the tailscaled daemon running on macos
+func IsMacOSTailscaled() bool {
+	// This rules out iOS and tvOS
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	return isMacOSTailscaled.Get(func() bool {
+		// A darwin client that is not sandboxed macOS is tailscaled
+		return !IsSandboxedMacOS()
+	})
+}
+
 var isWindowsGUI lazy.SyncValue[bool]
 
 // IsWindowsGUI reports whether the current process is the Windows GUI.
