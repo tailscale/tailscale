@@ -4,15 +4,13 @@
 package main
 
 import (
-	"errors"
-	"fmt"
 	"net/netip"
-	"slices"
 	"testing"
 
 	"github.com/gaissmai/bart"
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/cmd/natc/ippool"
 	"tailscale.com/tailcfg"
 )
 
@@ -214,62 +212,6 @@ func TestDNSResponse(t *testing.T) {
 	}
 }
 
-func TestPerPeerState(t *testing.T) {
-	c := &connector{
-		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-	}
-	c.setPrefixes([]netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")})
-
-	ps := newPerPeerState(c)
-
-	addrs, err := ps.ipForDomain("example.com")
-	if err != nil {
-		t.Fatalf("ipForDomain() error = %v", err)
-	}
-
-	if len(addrs) != 2 {
-		t.Fatalf("ipForDomain() returned %d addresses, want 2", len(addrs))
-	}
-
-	v4 := addrs[0]
-	v6 := addrs[1]
-
-	if !v4.Is4() {
-		t.Errorf("First address is not IPv4: %s", v4)
-	}
-
-	if !v6.Is6() {
-		t.Errorf("Second address is not IPv6: %s", v6)
-	}
-
-	if !c.ipset.Contains(v4) {
-		t.Errorf("IPv4 address %s not in range %s", v4, c.ipset)
-	}
-
-	domain, ok := ps.domainForIP(v4)
-	if !ok {
-		t.Errorf("domainForIP(%s) not found", v4)
-	} else if domain != "example.com" {
-		t.Errorf("domainForIP(%s) = %s, want %s", v4, domain, "example.com")
-	}
-
-	domain, ok = ps.domainForIP(v6)
-	if !ok {
-		t.Errorf("domainForIP(%s) not found", v6)
-	} else if domain != "example.com" {
-		t.Errorf("domainForIP(%s) = %s, want %s", v6, domain, "example.com")
-	}
-
-	addrs2, err := ps.ipForDomain("example.com")
-	if err != nil {
-		t.Fatalf("ipForDomain() second call error = %v", err)
-	}
-
-	if !slices.Equal(addrs, addrs2) {
-		t.Errorf("ipForDomain() second call = %v, want %v", addrs2, addrs)
-	}
-}
-
 func TestIgnoreDestination(t *testing.T) {
 	ignoreDstTable := &bart.Table[bool]{}
 	ignoreDstTable.Insert(netip.MustParsePrefix("192.168.1.0/24"), true)
@@ -317,10 +259,14 @@ func TestIgnoreDestination(t *testing.T) {
 }
 
 func TestConnectorGenerateDNSResponse(t *testing.T) {
+	v6ULA := netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80")
+	routes, dnsAddr, addrPool := calculateAddresses([]netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")})
 	c := &connector{
-		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
+		v6ULA:   v6ULA,
+		ipPool:  &ippool.IPPool{V6ULA: v6ULA, IPSet: addrPool},
+		routes:  routes,
+		dnsAddr: dnsAddr,
 	}
-	c.setPrefixes([]netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")})
 
 	req := &dnsmessage.Message{
 		Header: dnsmessage.Header{ID: 1234},
@@ -351,62 +297,13 @@ func TestConnectorGenerateDNSResponse(t *testing.T) {
 	if !cmp.Equal(resp1, resp2) {
 		t.Errorf("generateDNSResponse() responses differ between calls")
 	}
-}
 
-func TestIPPoolExhaustion(t *testing.T) {
-	smallPrefix := netip.MustParsePrefix("100.64.1.0/30") // Only 4 IPs: .0, .1, .2, .3
-	c := &connector{
-		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
+	var msg dnsmessage.Message
+	err = msg.Unpack(resp1)
+	if err != nil {
+		t.Fatalf("dnsmessage Unpack error = %v", err)
 	}
-	c.setPrefixes([]netip.Prefix{smallPrefix})
-
-	ps := newPerPeerState(c)
-
-	assignedIPs := make(map[netip.Addr]string)
-
-	domains := []string{"a.example.com", "b.example.com", "c.example.com", "d.example.com"}
-
-	var errs []error
-
-	for i := 0; i < 5; i++ {
-		for _, domain := range domains {
-			addrs, err := ps.ipForDomain(domain)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("failed to get IP for domain %q: %w", domain, err))
-				continue
-			}
-
-			for _, addr := range addrs {
-				if d, ok := assignedIPs[addr]; ok {
-					if d != domain {
-						t.Errorf("IP %s reused for domain %q, previously assigned to %q", addr, domain, d)
-					}
-				} else {
-					assignedIPs[addr] = domain
-				}
-			}
-		}
-	}
-
-	for addr, domain := range assignedIPs {
-		if addr.Is4() && !smallPrefix.Contains(addr) {
-			t.Errorf("IP %s for domain %q not in expected range %s", addr, domain, smallPrefix)
-		}
-		if addr.Is6() && !c.v6ULA.Contains(addr) {
-			t.Errorf("IP %s for domain %q not in expected range %s", addr, domain, c.v6ULA)
-		}
-		if addr == c.dnsAddr {
-			t.Errorf("IP %s for domain %q is the reserved DNS address", addr, domain)
-		}
-	}
-
-	// expect one error for each iteration with the 4th domain
-	if len(errs) != 5 {
-		t.Errorf("Expected 5 errors, got %d: %v", len(errs), errs)
-	}
-	for _, err := range errs {
-		if !errors.Is(err, ErrNoIPsAvailable) {
-			t.Errorf("generateDNSResponse() error = %v, want ErrNoIPsAvailable", err)
-		}
+	if len(msg.Answers) != 1 {
+		t.Fatalf("expected 1 answer, got: %d", len(msg.Answers))
 	}
 }
