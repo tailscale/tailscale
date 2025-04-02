@@ -1135,7 +1135,7 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 
 	p, err := drive.ParsePermissions(rawPerms)
 	if err != nil {
-		h.logf("taildrive: error parsing permissions: %w", err.Error())
+		h.logf("taildrive: error parsing permissions: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
