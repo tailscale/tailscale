@@ -61,7 +61,7 @@ func NewFileServer() (*FileServer, error) {
 	}, nil
 }
 
-// generateSecretToken generates a hex-encoded 256 bit secet.
+// generateSecretToken generates a hex-encoded 256 bit secret.
 func generateSecretToken() (string, error) {
 	tokenBytes := make([]byte, 32)
 	_, err := rand.Read(tokenBytes)
