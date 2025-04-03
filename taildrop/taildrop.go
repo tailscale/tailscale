@@ -51,6 +51,10 @@ const (
 	// permitted to be uploaded directly on any platform, like
 	// partial files.
 	deletedSuffix = ".deleted"
+
+	// CompressedDirSuffix is used to mark a directory that is
+	// compressed and being transferred as an archive.
+	CompressedDirSuffix = ".tscompresseddir"
 )
 
 // ClientID is an opaque identifier for file resumption.
