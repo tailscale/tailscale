@@ -64,6 +64,8 @@ spec:
               value: operator
             - name: OPERATOR_LOGGING
               value: {{ .Values.operatorConfig.logging }}
+            - name: OPERATOR_EPHEMERAL
+              value: "{{ .Values.operatorConfig.ephemeral }}"
             - name: OPERATOR_NAMESPACE
               valueFrom:
                 fieldRef:
