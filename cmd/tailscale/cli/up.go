@@ -104,9 +104,9 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.BoolVar(&upArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.BoolVar(&upArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
-	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
+	upf.Var(&upArgs.advertiseTags, "advertise-tags", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\"); flag may be repeated")
+	upf.Var(&upArgs.advertiseRoutes, "advertise-routes", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes; flag may be repeated")
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
-	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 	upf.BoolVar(&upArgs.postureChecking, "posture-checking", false, hidden+"allow management plane to gather device posture information")
@@ -174,9 +174,9 @@ type upArgsT struct {
 	runWebClient           bool
 	forceReauth            bool
 	forceDaemon            bool
-	advertiseRoutes        string
+	advertiseRoutes        stringSliceMultiFlag
 	advertiseDefaultRoute  bool
-	advertiseTags          string
+	advertiseTags          stringSliceMultiFlag
 	advertiseConnector     bool
 	snat                   bool
 	statefulFiltering      bool
@@ -244,7 +244,7 @@ func warnf(format string, args ...any) {
 // function exists for testing and should have no side effects or
 // outside interactions (e.g. no making Tailscale LocalAPI calls).
 func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
-	routes, err := netutil.CalcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
+	routes, err := netutil.CalcAdvertiseRoutes(upArgs.advertiseRoutes.String(), upArgs.advertiseDefaultRoute)
 	if err != nil {
 		return nil, err
 	}
@@ -253,10 +253,8 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		return nil, fmt.Errorf("--exit-node-allow-lan-access can only be used with --exit-node")
 	}
 
-	var tags []string
-	if upArgs.advertiseTags != "" {
-		tags = strings.Split(upArgs.advertiseTags, ",")
-		for _, tag := range tags {
+	if len(upArgs.advertiseTags) > 0 {
+		for _, tag := range upArgs.advertiseTags {
 			err := tailcfg.CheckTag(tag)
 			if err != nil {
 				return nil, fmt.Errorf("tag: %q: %s", tag, err)
@@ -293,7 +291,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.RunSSH = upArgs.runSSH
 	prefs.RunWebClient = upArgs.runWebClient
 	prefs.AdvertiseRoutes = routes
-	prefs.AdvertiseTags = tags
+	prefs.AdvertiseTags = upArgs.advertiseTags
 	prefs.Hostname = upArgs.hostname
 	prefs.ForceDaemon = upArgs.forceDaemon
 	prefs.OperatorUser = upArgs.opUser
@@ -555,7 +553,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		if err != nil {
 			return err
 		}
-		authKey, err = resolveAuthKey(ctx, authKey, upArgs.advertiseTags)
+		authKey, err = resolveAuthKey(ctx, authKey, upArgs.advertiseTags.String())
 		if err != nil {
 			return err
 		}

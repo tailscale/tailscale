@@ -721,14 +721,14 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "error_advertise_route_invalid_ip",
 			args: upArgsT{
-				advertiseRoutes: "foo",
+				advertiseRoutes: []string{"foo"},
 			},
 			wantErr: `"foo" is not a valid IP address or CIDR prefix`,
 		},
 		{
 			name: "error_advertise_route_unmasked_bits",
 			args: upArgsT{
-				advertiseRoutes: "1.2.3.4/16",
+				advertiseRoutes: []string{"1.2.3.4/16"},
 			},
 			wantErr: `1.2.3.4/16 has non-address bits set; expected 1.2.0.0/16`,
 		},
@@ -749,7 +749,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "error_tag_prefix",
 			args: upArgsT{
-				advertiseTags: "foo",
+				advertiseTags: []string{"foo"},
 			},
 			wantErr: `tag: "foo": tags must start with 'tag:'`,
 		},
@@ -829,7 +829,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "via_route_good",
 			goos: "linux",
 			args: upArgsT{
-				advertiseRoutes: "fd7a:115c:a1e0:b1a::bb:10.0.0.0/112",
+				advertiseRoutes: []string{"fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"},
 				netfilterMode:   "off",
 			},
 			want: &ipn.Prefs{
@@ -848,7 +848,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "via_route_good_16_bit",
 			goos: "linux",
 			args: upArgsT{
-				advertiseRoutes: "fd7a:115c:a1e0:b1a::aabb:10.0.0.0/112",
+				advertiseRoutes: []string{"fd7a:115c:a1e0:b1a::aabb:10.0.0.0/112"},
 				netfilterMode:   "off",
 			},
 			want: &ipn.Prefs{
@@ -867,7 +867,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "via_route_short_prefix",
 			goos: "linux",
 			args: upArgsT{
-				advertiseRoutes: "fd7a:115c:a1e0:b1a::/64",
+				advertiseRoutes: []string{"fd7a:115c:a1e0:b1a::/64"},
 				netfilterMode:   "off",
 			},
 			wantErr: "fd7a:115c:a1e0:b1a::/64 4-in-6 prefix must be at least a /96",
@@ -876,7 +876,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "via_route_short_reserved_siteid",
 			goos: "linux",
 			args: upArgsT{
-				advertiseRoutes: "fd7a:115c:a1e0:b1a:1234:5678::/112",
+				advertiseRoutes: []string{"fd7a:115c:a1e0:b1a:1234:5678::/112"},
 				netfilterMode:   "off",
 			},
 			wantErr: "route fd7a:115c:a1e0:b1a:1234:5678::/112 contains invalid site ID 12345678; must be 0xffff or less",
@@ -1103,6 +1103,23 @@ func TestUpdatePrefs(t *testing.T) {
 				CorpDNS:             true,
 				NetfilterMode:       preftype.NetfilterOn,
 				NoStatefulFiltering: opt.NewBool(true),
+			},
+			env: upCheckEnv{backendState: "Running"},
+		},
+		{
+			name:  "change_tags_multi_flag",
+			flags: []string{"--advertise-tags=tag:foo", "--advertise-tags=tag:bar,tag:baz"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:          "https://login.tailscale.com",
+				Persist:             &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
+				CorpDNS:             true,
+				NetfilterMode:       preftype.NetfilterOn,
+				NoStatefulFiltering: opt.NewBool(true),
+			},
+			checkUpdatePrefsMutations: func(t *testing.T, prefs *ipn.Prefs) {
+				if !reflect.DeepEqual(prefs.AdvertiseTags, []string{"tag:foo", "tag:bar", "tag:baz"}) {
+					t.Errorf("advertise-tags should be a superset of multiple flags, it was not; got %q", prefs.AdvertiseTags)
+				}
 			},
 			env: upCheckEnv{backendState: "Running"},
 		},

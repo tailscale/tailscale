@@ -40,6 +40,39 @@ Only settings explicitly mentioned will be set. There are no default values.`,
 	UsageFunc: usageFuncNoDefaultValues,
 }
 
+// stringSliceMultiFlag is a flag.Value implementation that collects multiple
+// string values into a slice. It supports specifying the flag multiple times
+// as well as comma-separated values in each instance of the flag.
+//
+// For example, given a flag definition:
+//
+//	var inputs stringSliceMultiFlag
+//	flag.Var(&inputs, "input", "Comma-separated list of inputs; may be repeated")
+//
+// The following command-line arguments:
+//
+//	-input=foo -input=bar,baz
+//
+// Will result in:
+//
+//	inputs == []string{"foo", "bar", "baz"}
+type stringSliceMultiFlag []string
+
+func (s stringSliceMultiFlag) String() string {
+	return strings.Join(s, ",")
+}
+
+func (s *stringSliceMultiFlag) Set(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+
+	for part := range strings.SplitSeq(v, ",") {
+		*s = append(*s, strings.TrimSpace(part))
+	}
+	return nil
+}
+
 type setArgsT struct {
 	acceptRoutes           bool
 	acceptDNS              bool
@@ -49,7 +82,8 @@ type setArgsT struct {
 	runSSH                 bool
 	runWebClient           bool
 	hostname               string
-	advertiseRoutes        string
+	advertiseRoutes        stringSliceMultiFlag
+	advertiseTags          stringSliceMultiFlag
 	advertiseDefaultRoute  bool
 	advertiseConnector     bool
 	opUser                 string
@@ -75,7 +109,8 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	setf.BoolVar(&setArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
 	setf.StringVar(&setArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
-	setf.StringVar(&setArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
+	setf.Var(&setArgs.advertiseRoutes, "advertise-routes", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes; flag may be repeated")
+	setf.Var(&setArgs.advertiseTags, "advertise-tags", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\"); flag may be repeated")
 	setf.BoolVar(&setArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 	setf.BoolVar(&setArgs.advertiseConnector, "advertise-connector", false, "offer to be an app connector for domain specific internet traffic for the tailnet")
 	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "notify about available Tailscale updates")
@@ -204,6 +239,10 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 
+	if maskedPrefs.AdvertiseTagsSet {
+		maskedPrefs.AdvertiseTags = setArgs.advertiseTags
+	}
+
 	if runtime.GOOS == "darwin" && maskedPrefs.AppConnector.Advertise {
 		if err := presentRiskToUser(riskMacAppConnector, riskMacAppConnectorMessage, setArgs.acceptedRisks); err != nil {
 			return err
@@ -233,6 +272,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			}
 		}
 	}
+
 	checkPrefs := curPrefs.Clone()
 	checkPrefs.ApplyEdits(maskedPrefs)
 	if err := localClient.CheckPrefs(ctx, checkPrefs); err != nil {
@@ -259,11 +299,11 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 // setArgs is the parsed command-line arguments.
 func calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet bool, curPrefs *ipn.Prefs, setArgs setArgsT) (routes []netip.Prefix, err error) {
 	if advertiseExitNodeSet && advertiseRoutesSet {
-		return netutil.CalcAdvertiseRoutes(setArgs.advertiseRoutes, setArgs.advertiseDefaultRoute)
+		return netutil.CalcAdvertiseRoutes(setArgs.advertiseRoutes.String(), setArgs.advertiseDefaultRoute)
 
 	}
 	if advertiseRoutesSet {
-		return netutil.CalcAdvertiseRoutes(setArgs.advertiseRoutes, curPrefs.AdvertisesExitNode())
+		return netutil.CalcAdvertiseRoutes(setArgs.advertiseRoutes.String(), curPrefs.AdvertisesExitNode())
 	}
 	if advertiseExitNodeSet {
 		alreadyAdvertisesExitNode := curPrefs.AdvertisesExitNode()

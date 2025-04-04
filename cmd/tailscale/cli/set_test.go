@@ -116,7 +116,7 @@ func TestCalcAdvertiseRoutesForSet(t *testing.T) {
 				sa.advertiseDefaultRoute = *tc.setExit
 			}
 			if tc.setRoutes != nil {
-				sa.advertiseRoutes = *tc.setRoutes
+				sa.advertiseRoutes = []string{*tc.setRoutes}
 			}
 			got, err := calcAdvertiseRoutesForSet(tc.setExit != nil, tc.setRoutes != nil, curPrefs, sa)
 			if err != nil {
@@ -150,4 +150,79 @@ func TestSetDefaultsMatchUpDefaults(t *testing.T) {
 			t.Errorf("--%s: set defaults to %q, but up defaults to %q", up.Name, set.DefValue, up.DefValue)
 		}
 	})
+}
+
+func TestStringListFlagParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		want     []string
+		flagName string
+	}{
+		{
+			name:     "single tag",
+			args:     []string{"--advertise-tags=tag:foo"},
+			want:     []string{"tag:foo"},
+			flagName: "advertise-tags",
+		},
+		{
+			name:     "comma-separated tags",
+			args:     []string{"--advertise-tags=tag:foo,tag:bar"},
+			want:     []string{"tag:foo", "tag:bar"},
+			flagName: "advertise-tags",
+		},
+		{
+			name:     "multi advertise-tags flags",
+			args:     []string{"--advertise-tags=tag:foo", "--advertise-tags=tag:bar"},
+			want:     []string{"tag:foo", "tag:bar"},
+			flagName: "advertise-tags",
+		},
+		{
+			name:     "mixed comma and multi advertise-tags",
+			args:     []string{"--advertise-tags=tag:foo,tag:bar", "--advertise-tags=tag:baz"},
+			want:     []string{"tag:foo", "tag:bar", "tag:baz"},
+			flagName: "advertise-tags",
+		},
+		{
+			name:     "single advertise-routes parsing",
+			args:     []string{"--advertise-routes=10.0.0.0/8,192.168.0.0/24,172.16.0.0/12"},
+			want:     []string{"10.0.0.0/8", "192.168.0.0/24", "172.16.0.0/12"},
+			flagName: "advertise-routes",
+		},
+		{
+			name:     "multi advertise-routes parsing",
+			args:     []string{"--advertise-routes=10.0.0.0/8", "--advertise-routes=192.168.0.0/24,172.16.0.0/12"},
+			want:     []string{"10.0.0.0/8", "192.168.0.0/24", "172.16.0.0/12"},
+			flagName: "advertise-routes",
+		},
+		{
+			name:     "empty string input should be ignored",
+			args:     []string{"--advertise-tags="},
+			want:     nil,
+			flagName: "advertise-tags",
+		},
+		{
+			name:     "whitespace-only input should be ignored",
+			args:     []string{"--advertise-tags=   "},
+			want:     nil,
+			flagName: "advertise-tags",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var tags stringSliceMultiFlag
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			fs.Var(&tags, tt.flagName, "test flag")
+
+			err := fs.Parse(tt.args)
+			if err != nil {
+				t.Fatalf("flag parsing failed: %v", err)
+			}
+			got := []string(tags)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parsed %q = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
 }
