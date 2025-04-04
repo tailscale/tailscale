@@ -100,14 +100,13 @@ func (nw *narWriter) writeDir(dirPath string) error {
 		sub := path.Join(dirPath, ent.Name())
 		var err error
 		switch {
-		case mode.IsRegular():
-			err = nw.writeRegular(sub)
 		case mode.IsDir():
 			err = nw.writeDir(sub)
+		case mode.IsRegular():
+			err = nw.writeRegular(sub)
+		case mode&os.ModeSymlink != 0:
+			err = nw.writeSymlink(sub)
 		default:
-			// TODO(bradfitz): symlink, but requires fighting io/fs a bit
-			// to get at Readlink or the osFS via fs. But for now
-			// we don't need symlinks because they're not in Go's archive.
 			return fmt.Errorf("unsupported file type %v at %q", sub, mode)
 		}
 		if err != nil {
@@ -139,6 +138,23 @@ func (nw *narWriter) writeRegular(path string) error {
 	if err := writeBytes(nw.w, contents); err != nil {
 		return err
 	}
+	nw.str(")")
+	return nil
+}
+
+func (nw *narWriter) writeSymlink(path string) error {
+	nw.str("(")
+	nw.str("type")
+	nw.str("symlink")
+	nw.str("target")
+	// broken symlinks are valid in a nar
+	// given we do os.chdir(dir) and os.dirfs(".") above
+	// readlink now resolves relative links even if they are broken
+	link, err := os.Readlink(path)
+	if err != nil {
+		return err
+	}
+	nw.str(link)
 	nw.str(")")
 	return nil
 }
