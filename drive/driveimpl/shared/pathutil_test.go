@@ -40,6 +40,7 @@ func TestJoin(t *testing.T) {
 		parts []string
 		want  string
 	}{
+		{[]string{}, "/"},
 		{[]string{""}, "/"},
 		{[]string{"a"}, "/a"},
 		{[]string{"/a"}, "/a"},

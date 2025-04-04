@@ -133,6 +133,71 @@ func TestPermissions(t *testing.T) {
 	}
 }
 
+// TestMissingPaths verifies that the fileserver running at localhost
+// correctly handles paths with missing required components.
+//
+// Expected path format:
+// http://localhost:[PORT]/<secretToken>/<share>[/<subSharePath...>]
+func TestMissingPaths(t *testing.T) {
+	s := newSystem(t)
+
+	fileserverAddr := s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+	addr := strings.Split(fileserverAddr, "|")[1]
+	secretToken := strings.Split(fileserverAddr, "|")[0]
+
+	testCases := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{
+			name:       "empty path",
+			path:       "",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "single slash",
+			path:       "/",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "only token",
+			path:       "/" + secretToken,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "token with trailing slash",
+			path:       "/" + secretToken + "/",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "token and invalid share",
+			path:       "/" + secretToken + "/nonexistentshare",
+			wantStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			u := fmt.Sprintf("http://%s%s", addr, tc.path)
+			resp, err := client.Get(u)
+			if err != nil {
+				t.Fatalf("unexpected error making request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("got status code %d, want %d", resp.StatusCode, tc.wantStatus)
+			}
+		})
+	}
+}
+
 // TestSecretTokenAuth verifies that the fileserver running at localhost cannot
 // be accessed directly without the correct secret token. This matters because
 // if a victim can be induced to visit the localhost URL and access a malicious
@@ -704,8 +769,8 @@ func (a *noopAuthenticator) Close() error {
 	return nil
 }
 
-const lockBody = `<?xml version="1.0" encoding="utf-8" ?> 
-<D:lockinfo xmlns:D='DAV:'> 
-  <D:lockscope><D:exclusive/></D:lockscope> 
-  <D:locktype><D:write/></D:locktype> 
+const lockBody = `<?xml version="1.0" encoding="utf-8" ?>
+<D:lockinfo xmlns:D='DAV:'>
+  <D:lockscope><D:exclusive/></D:lockscope>
+  <D:locktype><D:write/></D:locktype>
 </D:lockinfo>`

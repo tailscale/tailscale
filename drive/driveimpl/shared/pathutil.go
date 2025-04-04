@@ -22,6 +22,9 @@ const (
 // CleanAndSplit cleans the provided path p and splits it into its constituent
 // parts. This is different from path.Split which just splits a path into prefix
 // and suffix.
+//
+// If p is empty or contains only path separators, CleanAndSplit returns a slice
+// of length 1 whose only element is "".
 func CleanAndSplit(p string) []string {
 	return strings.Split(strings.Trim(path.Clean(p), sepStringAndDot), sepString)
 }
@@ -38,6 +41,8 @@ func Parent(p string) string {
 }
 
 // Join behaves like path.Join() but also includes a leading slash.
+//
+// When parts are missing, the result is "/".
 func Join(parts ...string) string {
 	fullParts := make([]string, 0, len(parts))
 	fullParts = append(fullParts, sepString)
