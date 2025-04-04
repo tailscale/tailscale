@@ -28,6 +28,7 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -143,9 +144,10 @@ func main() {
 
 	c := &connector{
 		ts:         ts,
-		lc:         lc,
+		whois:      lc,
 		v6ULA:      ula(uint16(*siteID)),
 		ignoreDsts: ignoreDstTable,
+		resolver:   net.DefaultResolver,
 	}
 	var prefixes []netip.Prefix
 	for _, s := range strings.Split(*v4PfxStr, ",") {
@@ -156,7 +158,7 @@ func main() {
 		prefixes = append(prefixes, p)
 	}
 	c.setPrefixes(prefixes)
-	c.run(ctx)
+	c.run(ctx, lc)
 }
 
 func (c *connector) setPrefixes(prefixes []netip.Prefix) {
@@ -170,12 +172,20 @@ func (c *connector) setPrefixes(prefixes []netip.Prefix) {
 	c.ipset = must.Get(ipsb.IPSet())
 }
 
+type lookupNetIPer interface {
+	LookupNetIP(ctx context.Context, net, host string) ([]netip.Addr, error)
+}
+
+type whoiser interface {
+	WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
+}
+
 type connector struct {
 	// ts is the tsnet.Server used to host the connector.
 	ts *tsnet.Server
-	// lc is the local.Client used to interact with the tsnet.Server hosting this
+	// whoiser is the local.Client used to interact with the tsnet.Server hosting this
 	// connector.
-	lc *local.Client
+	whois whoiser
 
 	// dnsAddr is the IPv4 address to listen on for DNS requests. It is used to
 	// prevent the app connector from assigning it to a domain.
@@ -202,6 +212,9 @@ type connector struct {
 	// return a dns response that contains the ip addresses we discovered with the lookup (ie not the
 	// natc behavior, which would return a dummy ip address pointing at natc).
 	ignoreDsts *bart.Table[bool]
+
+	// resolver is used to lookup IP addresses for DNS queries.
+	resolver lookupNetIPer
 }
 
 // v6ULA is the ULA prefix used by the app connector to assign IPv6 addresses.
@@ -221,8 +234,8 @@ func ula(siteID uint16) netip.Prefix {
 //
 // The passed in context is only used for the initial setup. The connector runs
 // forever.
-func (c *connector) run(ctx context.Context) {
-	if _, err := c.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+func (c *connector) run(ctx context.Context, lc *local.Client) {
+	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseRoutesSet: true,
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: append(c.routes.Prefixes(), c.v6ULA),
@@ -255,26 +268,6 @@ func (c *connector) serveDNS() {
 	}
 }
 
-func lookupDestinationIP(domain string) ([]netip.Addr, error) {
-	netIPs, err := net.LookupIP(domain)
-	if err != nil {
-		var dnsError *net.DNSError
-		if errors.As(err, &dnsError) && dnsError.IsNotFound {
-			return nil, nil
-		} else {
-			return nil, err
-		}
-	}
-	var addrs []netip.Addr
-	for _, ip := range netIPs {
-		a, ok := netip.AddrFromSlice(ip)
-		if ok {
-			addrs = append(addrs, a)
-		}
-	}
-	return addrs, nil
-}
-
 // handleDNS handles a DNS request to the app connector.
 // It generates a response based on the request and the node that sent it.
 //
@@ -289,7 +282,7 @@ func lookupDestinationIP(domain string) ([]netip.Addr, error) {
 func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDPAddr) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	who, err := c.lc.WhoIs(ctx, remoteAddr.String())
+	who, err := c.whois.WhoIs(ctx, remoteAddr.String())
 	if err != nil {
 		log.Printf("HandleDNS(remote=%s): WhoIs failed: %v\n", remoteAddr.String(), err)
 		return
@@ -302,49 +295,123 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 		return
 	}
 
-	// If there are destination ips that we don't want to route, we
-	// have to do a dns lookup here to find the destination ip.
-	if c.ignoreDsts != nil {
-		if len(msg.Questions) > 0 {
-			q := msg.Questions[0]
-			switch q.Type {
-			case dnsmessage.TypeAAAA, dnsmessage.TypeA:
-				dstAddrs, err := lookupDestinationIP(q.Name.String())
+	var resolves map[string][]netip.Addr
+	var addrQCount int
+	pm, _ := c.perPeerMap.LoadOrStore(who.Node.ID, &perPeerState{c: c})
+	for _, q := range msg.Questions {
+		if q.Type != dnsmessage.TypeA && q.Type != dnsmessage.TypeAAAA {
+			continue
+		}
+		addrQCount++
+		if addrs, ok := resolves[q.Name.String()]; !ok {
+			addrs, err = c.resolver.LookupNetIP(ctx, "ip", q.Name.String())
+			var dnsErr *net.DNSError
+			if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+				continue
+			}
+			if err != nil {
+				log.Printf("HandleDNS(remote=%s): lookup destination failed: %v\n", remoteAddr.String(), err)
+				return
+			}
+			// Note: If _any_ destination is ignored, pass through all of the resolved
+			// addresses as-is.
+			//
+			// This could result in some odd split-routing if there was a mix of
+			// ignored and non-ignored addresses, but it's currently the user
+			// preferred behavior.
+			if !c.ignoreDestination(addrs) {
+				addrs, err = pm.ipForDomain(q.Name.String())
 				if err != nil {
 					log.Printf("HandleDNS(remote=%s): lookup destination failed: %v\n", remoteAddr.String(), err)
 					return
 				}
-				if c.ignoreDestination(dstAddrs) {
-					bs, err := dnsResponse(&msg, dstAddrs)
-					// TODO (fran): treat as SERVFAIL
-					if err != nil {
-						log.Printf("HandleDNS(remote=%s): generate ignore response failed: %v\n", remoteAddr.String(), err)
-						return
-					}
-					_, err = pc.WriteTo(bs, remoteAddr)
-					if err != nil {
-						log.Printf("HandleDNS(remote=%s): write failed: %v\n", remoteAddr.String(), err)
-					}
+			}
+			mak.Set(&resolves, q.Name.String(), addrs)
+		}
+	}
+
+	rcode := dnsmessage.RCodeSuccess
+	if addrQCount > 0 && len(resolves) == 0 {
+		rcode = dnsmessage.RCodeNameError
+	}
+
+	b := dnsmessage.NewBuilder(nil,
+		dnsmessage.Header{
+			ID:            msg.Header.ID,
+			Response:      true,
+			Authoritative: true,
+			RCode:         rcode,
+		})
+	b.EnableCompression()
+
+	if err := b.StartQuestions(); err != nil {
+		log.Printf("HandleDNS(remote=%s): dnsmessage start questions failed: %v\n", remoteAddr.String(), err)
+		return
+	}
+
+	for _, q := range msg.Questions {
+		b.Question(q)
+	}
+
+	if err := b.StartAnswers(); err != nil {
+		log.Printf("HandleDNS(remote=%s): dnsmessage start answers failed: %v\n", remoteAddr.String(), err)
+		return
+	}
+
+	for _, q := range msg.Questions {
+		switch q.Type {
+		case dnsmessage.TypeSOA:
+			if err := b.SOAResource(
+				dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+				dnsmessage.SOAResource{NS: q.Name, MBox: tsMBox, Serial: 2023030600,
+					Refresh: 120, Retry: 120, Expire: 120, MinTTL: 60},
+			); err != nil {
+				log.Printf("HandleDNS(remote=%s): dnsmessage SOA resource failed: %v\n", remoteAddr.String(), err)
+				return
+			}
+		case dnsmessage.TypeNS:
+			if err := b.NSResource(
+				dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+				dnsmessage.NSResource{NS: tsMBox},
+			); err != nil {
+				log.Printf("HandleDNS(remote=%s): dnsmessage NS resource failed: %v\n", remoteAddr.String(), err)
+				return
+			}
+		case dnsmessage.TypeAAAA:
+			for _, addr := range resolves[q.Name.String()] {
+				if !addr.Is6() {
+					continue
+				}
+				if err := b.AAAAResource(
+					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+					dnsmessage.AAAAResource{AAAA: addr.As16()},
+				); err != nil {
+					log.Printf("HandleDNS(remote=%s): dnsmessage AAAA resource failed: %v\n", remoteAddr.String(), err)
+					return
+				}
+			}
+		case dnsmessage.TypeA:
+			for _, addr := range resolves[q.Name.String()] {
+				if !addr.Is4() {
+					continue
+				}
+				if err := b.AResource(
+					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+					dnsmessage.AResource{A: addr.As4()},
+				); err != nil {
+					log.Printf("HandleDNS(remote=%s): dnsmessage A resource failed: %v\n", remoteAddr.String(), err)
 					return
 				}
 			}
 		}
 	}
-	// None of the destination IP addresses match an ignore destination prefix, do
-	// the natc thing.
 
-	resp, err := c.generateDNSResponse(&msg, who.Node.ID)
-	// TODO (fran): treat as SERVFAIL
+	out, err := b.Finish()
 	if err != nil {
-		log.Printf("HandleDNS(remote=%s): connector handling failed: %v\n", remoteAddr.String(), err)
+		log.Printf("HandleDNS(remote=%s): dnsmessage finish failed: %v\n", remoteAddr.String(), err)
 		return
 	}
-	// TODO (fran): treat as NXDOMAIN
-	if len(resp) == 0 {
-		return
-	}
-	// This connector handled the DNS request
-	_, err = pc.WriteTo(resp, remoteAddr)
+	_, err = pc.WriteTo(out, remoteAddr)
 	if err != nil {
 		log.Printf("HandleDNS(remote=%s): write failed: %v\n", remoteAddr.String(), err)
 	}
@@ -356,90 +423,6 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 // to indicate that it is a fully qualified domain name.
 var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 
-// generateDNSResponse generates a DNS response for the given request. The from
-// argument is the NodeID of the node that sent the request.
-func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.NodeID) ([]byte, error) {
-	pm, _ := c.perPeerMap.LoadOrStore(from, &perPeerState{c: c})
-	var addrs []netip.Addr
-	if len(req.Questions) > 0 {
-		switch req.Questions[0].Type {
-		case dnsmessage.TypeAAAA, dnsmessage.TypeA:
-			var err error
-			addrs, err = pm.ipForDomain(req.Questions[0].Name.String())
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	return dnsResponse(req, addrs)
-}
-
-// dnsResponse makes a DNS response for the natc. If the dnsmessage is requesting TypeAAAA
-// or TypeA the provided addrs of the requested type will be used.
-func dnsResponse(req *dnsmessage.Message, addrs []netip.Addr) ([]byte, error) {
-	b := dnsmessage.NewBuilder(nil,
-		dnsmessage.Header{
-			ID:            req.Header.ID,
-			Response:      true,
-			Authoritative: true,
-		})
-	b.EnableCompression()
-
-	if len(req.Questions) == 0 {
-		return b.Finish()
-	}
-	q := req.Questions[0]
-	if err := b.StartQuestions(); err != nil {
-		return nil, err
-	}
-	if err := b.Question(q); err != nil {
-		return nil, err
-	}
-	if err := b.StartAnswers(); err != nil {
-		return nil, err
-	}
-	switch q.Type {
-	case dnsmessage.TypeAAAA, dnsmessage.TypeA:
-		want6 := q.Type == dnsmessage.TypeAAAA
-		for _, ip := range addrs {
-			if want6 != ip.Is6() {
-				continue
-			}
-			if want6 {
-				if err := b.AAAAResource(
-					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 5},
-					dnsmessage.AAAAResource{AAAA: ip.As16()},
-				); err != nil {
-					return nil, err
-				}
-			} else {
-				if err := b.AResource(
-					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 5},
-					dnsmessage.AResource{A: ip.As4()},
-				); err != nil {
-					return nil, err
-				}
-			}
-		}
-	case dnsmessage.TypeSOA:
-		if err := b.SOAResource(
-			dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
-			dnsmessage.SOAResource{NS: q.Name, MBox: tsMBox, Serial: 2023030600,
-				Refresh: 120, Retry: 120, Expire: 120, MinTTL: 60},
-		); err != nil {
-			return nil, err
-		}
-	case dnsmessage.TypeNS:
-		if err := b.NSResource(
-			dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
-			dnsmessage.NSResource{NS: tsMBox},
-		); err != nil {
-			return nil, err
-		}
-	}
-	return b.Finish()
-}
-
 // handleTCPFlow handles a TCP flow from the given source to the given
 // destination. It uses the source address to determine the node that sent the
 // request and the destination address to determine the domain that the request
@@ -448,7 +431,7 @@ func dnsResponse(req *dnsmessage.Message, addrs []netip.Addr) ([]byte, error) {
 func (c *connector) handleTCPFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	who, err := c.lc.WhoIs(ctx, src.Addr().String())
+	who, err := c.whois.WhoIs(ctx, src.Addr().String())
 	cancel()
 	if err != nil {
 		log.Printf("HandleTCPFlow: WhoIs failed: %v\n", err)
@@ -501,6 +484,8 @@ func proxyTCPConn(c net.Conn, dest string) {
 			return netutil.NewOneConnListener(c, nil), nil
 		},
 	}
+	// XXX(raggi): if the connection here resolves to an ignored destination,
+	// the connection should be closed/failed.
 	p.AddRoute(addrPortStr, &tcpproxy.DialProxy{
 		Addr: fmt.Sprintf("%s:%s", dest, port),
 	})
