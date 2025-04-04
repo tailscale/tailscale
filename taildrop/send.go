@@ -6,9 +6,11 @@ package taildrop
 import (
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,9 +84,21 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	case distro.Get() == distro.Unraid && !m.opts.DirectFileMode:
 		return 0, ErrNotAccessible
 	}
-	dstPath, err := joinDir(m.opts.Dir, baseName)
-	if err != nil {
-		return 0, err
+	// Determine if we are in SAF mode.
+	safMode := m.opts.DirectFileMode && strings.HasPrefix(m.opts.Dir, "content://")
+
+	var dstPath string
+	var err error
+	if !safMode {
+		// Non-SAF mode: build destination path normally.
+		dstPath, err = joinDir(m.opts.Dir, baseName)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		// In SAF mode, we simply use the baseName as the destination "path"
+		// (the actual directory is managed by SAF).
+		dstPath = baseName
 	}
 
 	redactAndLogError := func(action string, err error) error {
@@ -94,17 +108,19 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	}
 
 	// Check whether there is an in-progress transfer for the file.
-	partialPath := dstPath + id.partialSuffix()
-	inFileKey := incomingFileKey{id, baseName}
-	inFile, loaded := m.incomingFiles.LoadOrInit(inFileKey, func() *incomingFile {
+	partialKey := incomingFileKey{id, baseName}
+	inFile, loaded := m.incomingFiles.LoadOrInit(partialKey, func() *incomingFile {
+
 		inFile := &incomingFile{
 			clock:          m.opts.Clock,
 			started:        m.opts.Clock.Now(),
 			size:           length,
 			sendFileNotify: m.opts.SendFileNotify,
 		}
-		if m.opts.DirectFileMode {
-			inFile.partialPath = partialPath
+		if safMode {
+			// In SAF mode, we'll later assign a valid SAF URI to inFile.partialPath.
+		} else {
+			inFile.partialPath = dstPath + id.partialSuffix()
 			inFile.finalPath = dstPath
 		}
 		return inFile
@@ -112,18 +128,38 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	if loaded {
 		return 0, ErrFileExists
 	}
-	defer m.incomingFiles.Delete(inFileKey)
-	m.deleter.Remove(filepath.Base(partialPath)) // avoid deleting the partial file while receiving
+	defer m.incomingFiles.Delete(partialKey)
+	m.deleter.Remove(filepath.Base(dstPath)) // avoid deletion during transfer
 
-	// Create (if not already) the partial file with read-write permissions.
-	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		return 0, redactAndLogError("Create", err)
+	var f *os.File
+	var partialPath string
+	if safMode {
+		if m.fileOps == nil {
+			return 0, redactAndLogError("Create (SAF)", fmt.Errorf("missing FileOps"))
+		}
+		// SAF mode: call fileOps.OpenFileForWriting to get a SafFile.
+		fd := m.fileOps.OpenFileDescriptor(baseName)
+		uri := m.fileOps.OpenFileURI(baseName)
+		if fd < 0 || uri == "" {
+			return 0, redactAndLogError("Create (SAF)", fmt.Errorf("failed to open file for writing via SAF"))
+		}
+		f = os.NewFile(uintptr(fd), baseName)
+		// Use the SAF URI from OpenFileURI as the partialPath.
+		partialPath = uri
+		inFile.partialPath = partialPath
+		inFile.finalPath = baseName
+	} else {
+		// Traditional filesystem mode.
+		partialPath = dstPath + id.partialSuffix()
+		f, err = os.OpenFile(partialPath, os.O_CREATE|os.O_RDWR, 0666)
+		if err != nil {
+			return 0, redactAndLogError("Create", err)
+		}
 	}
 	defer func() {
 		f.Close() // best-effort to cleanup dangling file handles
 		if err != nil {
-			m.deleter.Insert(filepath.Base(partialPath)) // mark partial file for eventual deletion
+			m.deleter.Insert(filepath.Base(partialPath))
 		}
 	}()
 	inFile.w = f
@@ -177,61 +213,71 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	// File has been successfully received, rename the partial file
 	// to the final destination filename. If a file of that name already exists,
 	// then try multiple times with variations of the filename.
-	computePartialSum := sync.OnceValues(func() ([sha256.Size]byte, error) {
-		return sha256File(partialPath)
-	})
-	maxRetries := 10
-	for ; maxRetries > 0; maxRetries-- {
-		// Atomically rename the partial file as the destination file if it doesn't exist.
-		// Otherwise, it returns the length of the current destination file.
-		// The operation is atomic.
-		dstLength, err := func() (int64, error) {
-			m.renameMu.Lock()
-			defer m.renameMu.Unlock()
-			switch fi, err := os.Stat(dstPath); {
-			case os.IsNotExist(err):
-				return -1, os.Rename(partialPath, dstPath)
-			case err != nil:
-				return -1, err
-			default:
-				return fi.Size(), nil
-			}
-		}()
+	if safMode {
+		// In SAF mode, simply call RenamePartialFile once.
+		_, err := m.fileOps.RenamePartialFile(partialPath, m.opts.Dir, baseName)
+
 		if err != nil {
 			return 0, redactAndLogError("Rename", err)
 		}
-		if dstLength < 0 {
-			break // we successfully renamed; so stop
-		}
-
-		// Avoid the final rename if a destination file has the same contents.
-		//
-		// Note: this is best effort and copying files from iOS from the Media Library
-		// results in processing on the iOS side which means the size and shas of the
-		// same file can be different.
-		if dstLength == fileLength {
-			partialSum, err := computePartialSum()
-			if err != nil {
-				return 0, redactAndLogError("Rename", err)
-			}
-			dstSum, err := sha256File(dstPath)
-			if err != nil {
-				return 0, redactAndLogError("Rename", err)
-			}
-			if dstSum == partialSum {
-				if err := os.Remove(partialPath); err != nil {
-					return 0, redactAndLogError("Remove", err)
+	} else {
+		// Traditional mode: use retry logic.
+		computePartialSum := sync.OnceValues(func() ([sha256.Size]byte, error) {
+			return sha256File(partialPath)
+		})
+		maxRetries := 10
+		for ; maxRetries > 0; maxRetries-- {
+			// Atomically rename the partial file as the destination file if it doesn't exist.
+			// Otherwise, it returns the length of the current destination file.
+			dstLength, err := func() (int64, error) {
+				m.renameMu.Lock()
+				defer m.renameMu.Unlock()
+				switch fi, err := os.Stat(dstPath); {
+				case os.IsNotExist(err):
+					dstPath, err = joinDir(m.opts.Dir, baseName)
+					if err != nil {
+						return 0, err
+					}
+					return -1, os.Rename(partialPath, dstPath)
+				case err != nil:
+					return -1, err
+				default:
+					return fi.Size(), nil
 				}
-				break // we successfully found a content match; so stop
+			}()
+			if err != nil {
+				return 0, redactAndLogError("Rename", err)
 			}
-		}
+			if dstLength < 0 {
+				break // we successfully renamed; so stop
 
-		// Choose a new destination filename and try again.
-		dstPath = NextFilename(dstPath)
-		inFile.finalPath = dstPath
-	}
-	if maxRetries <= 0 {
-		return 0, errors.New("too many retries trying to rename partial file")
+			}
+
+			// Avoid the final rename if a destination file has the same contents.
+			if dstLength == fileLength {
+				partialSum, err := computePartialSum()
+				if err != nil {
+					return 0, redactAndLogError("Rename", err)
+				}
+				dstSum, err := sha256File(dstPath)
+				if err != nil {
+					return 0, redactAndLogError("Rename", err)
+				}
+				if dstSum == partialSum {
+					if err := os.Remove(partialPath); err != nil {
+						return 0, redactAndLogError("Remove", err)
+					}
+					break // we successfully found a content match; so stop
+				}
+
+			}
+			// Choose a new destination filename and try again.
+			dstPath = NextFilename(dstPath)
+			inFile.finalPath = dstPath
+		}
+		if maxRetries <= 0 {
+			return 0, fmt.Errorf("too many retries trying to rename partial file")
+		}
 	}
 	m.totalReceived.Add(1)
 	m.opts.SendFileNotify()
