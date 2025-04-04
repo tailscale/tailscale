@@ -19,7 +19,7 @@ func TestResume(t *testing.T) {
 	defer func() { blockSize = oldBlockSize }()
 	blockSize = 256
 
-	m := ManagerOptions{Logf: t.Logf, Dir: t.TempDir()}.New()
+	m := ManagerOptions{Logf: t.Logf, Dir: t.TempDir()}.New(nil)
 	defer m.Shutdown()
 
 	rn := rand.New(rand.NewSource(0))

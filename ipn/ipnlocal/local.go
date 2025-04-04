@@ -443,6 +443,9 @@ type LocalBackend struct {
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
 
+	// FileOps abstracts platform-specific file operations needed for file transfers.
+	FileOps taildrop.FileOps
+
 	// lastSuggestedExitNode stores the last suggested exit node suggestion to
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
@@ -846,6 +849,13 @@ func (b *LocalBackend) SetDirectFileRoot(dir string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.directFileRoot = dir
+}
+
+// SetFileOps sets the
+func (b *LocalBackend) SetFileOps(fileOps taildrop.FileOps) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.FileOps = fileOps
 }
 
 // ReloadConfig reloads the backend's config from disk.
@@ -5431,7 +5441,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 			Dir:            fileRoot,
 			DirectFileMode: b.directFileRoot != "",
 			SendFileNotify: b.sendFileNotify,
-		}.New(),
+		}.New(b.FileOps),
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()
