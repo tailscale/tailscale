@@ -766,10 +766,17 @@ func TestRFC_AuthorizeOrder(t *testing.T) {
 	s.start()
 	defer s.close()
 
+	prevCertDER, _ := pem.Decode([]byte(leafPEM))
+	prevCert, err := x509.ParseCertificate(prevCertDER.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cl := &Client{Key: testKeyEC, DirectoryURL: s.url("/")}
 	o, err := cl.AuthorizeOrder(context.Background(), DomainIDs("example.org"),
 		WithOrderNotBefore(time.Date(2019, 8, 31, 0, 0, 0, 0, time.UTC)),
 		WithOrderNotAfter(time.Date(2019, 9, 2, 0, 0, 0, 0, time.UTC)),
+		WithOrderReplacesCert(prevCert),
 	)
 	if err != nil {
 		t.Fatal(err)
