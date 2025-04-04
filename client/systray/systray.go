@@ -84,12 +84,13 @@ type Menu struct {
 	bgCancel context.CancelFunc
 
 	// Top-level menu items
-	connect    *systray.MenuItem
-	disconnect *systray.MenuItem
-	self       *systray.MenuItem
-	exitNodes  *systray.MenuItem
-	more       *systray.MenuItem
-	quit       *systray.MenuItem
+	connect     *systray.MenuItem
+	disconnect  *systray.MenuItem
+	self        *systray.MenuItem
+	exitNodes   *systray.MenuItem
+	more        *systray.MenuItem
+	rebuildMenu *systray.MenuItem
+	quit        *systray.MenuItem
 
 	rebuildCh  chan struct{} // triggers a menu rebuild
 	accountsCh chan ipn.ProfileID
@@ -294,6 +295,17 @@ func (menu *Menu) rebuild() {
 			webbrowser.Open("http://100.100.100.100/")
 		})
 	}
+
+	// TODO(#15528): this menu item shouldn't be necessary at all,
+	// but is at least more discoverable than having users switch profiles or exit nodes.
+	menu.rebuildMenu = systray.AddMenuItem("Rebuild menu", "Fix missing menu items")
+	onClick(ctx, menu.rebuildMenu, func(ctx context.Context) {
+		select {
+		case <-ctx.Done():
+		case menu.rebuildCh <- struct{}{}:
+		}
+	})
+	menu.rebuildMenu.Enable()
 
 	menu.quit = systray.AddMenuItem("Quit", "Quit the app")
 	menu.quit.Enable()
