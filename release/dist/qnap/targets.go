@@ -7,13 +7,13 @@ import "tailscale.com/release/dist"
 
 // Targets defines the dist.Targets for QNAP devices.
 //
-// If privateKeyPath and certificatePath are both provided non-empty,
-// these targets will be signed for QNAP app store release with built.
-func Targets(privateKeyPath, certificatePath string) []dist.Target {
-	var signerInfo *signer
-	if privateKeyPath != "" && certificatePath != "" {
-		signerInfo = &signer{privateKeyPath, certificatePath}
-	}
+// If signingServerURL is non-empty, these targets will be signed for QNAP app store
+// release using the signing server. The server protocol is simple. The builder uploads
+// the QNAP package's SHA in an HTTP POST, and the signing server responds with the
+// signature. This is analogous to the signature generated locally in [qbuild].
+//
+// [qbuild]: https://github.com/qnap-dev/QDK/blob/18208315614677fc9a6493e90b60f6eb0c90e6e9/shared/bin/qbuild#L1016
+func Targets(signingServerURL string) []dist.Target {
 	return []dist.Target{
 		&target{
 			arch: "x86",
@@ -21,7 +21,7 @@ func Targets(privateKeyPath, certificatePath string) []dist.Target {
 				"GOOS":   "linux",
 				"GOARCH": "386",
 			},
-			signer: signerInfo,
+			signingServerURL: signingServerURL,
 		},
 		&target{
 			arch: "x86_ce53xx",
@@ -29,7 +29,7 @@ func Targets(privateKeyPath, certificatePath string) []dist.Target {
 				"GOOS":   "linux",
 				"GOARCH": "386",
 			},
-			signer: signerInfo,
+			signingServerURL: signingServerURL,
 		},
 		&target{
 			arch: "x86_64",
@@ -37,7 +37,7 @@ func Targets(privateKeyPath, certificatePath string) []dist.Target {
 				"GOOS":   "linux",
 				"GOARCH": "amd64",
 			},
-			signer: signerInfo,
+			signingServerURL: signingServerURL,
 		},
 		&target{
 			arch: "arm-x31",
@@ -45,7 +45,7 @@ func Targets(privateKeyPath, certificatePath string) []dist.Target {
 				"GOOS":   "linux",
 				"GOARCH": "arm",
 			},
-			signer: signerInfo,
+			signingServerURL: signingServerURL,
 		},
 		&target{
 			arch: "arm-x41",
@@ -53,7 +53,7 @@ func Targets(privateKeyPath, certificatePath string) []dist.Target {
 				"GOOS":   "linux",
 				"GOARCH": "arm",
 			},
-			signer: signerInfo,
+			signingServerURL: signingServerURL,
 		},
 		&target{
 			arch: "arm-x19",
@@ -61,7 +61,7 @@ func Targets(privateKeyPath, certificatePath string) []dist.Target {
 				"GOOS":   "linux",
 				"GOARCH": "arm",
 			},
-			signer: signerInfo,
+			signingServerURL: signingServerURL,
 		},
 		&target{
 			arch: "arm_64",
@@ -69,7 +69,7 @@ func Targets(privateKeyPath, certificatePath string) []dist.Target {
 				"GOOS":   "linux",
 				"GOARCH": "arm64",
 			},
-			signer: signerInfo,
+			signingServerURL: signingServerURL,
 		},
 	}
 }

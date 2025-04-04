@@ -5,5 +5,7 @@ RUN apt-get update -y && \
     git-core \
     ca-certificates
 RUN git clone https://github.com/qnap-dev/QDK.git
+# Pin a specific revision of the QDK since we patch it.
+RUN cd /QDK && git reset --hard 18208315614677fc9a6493e90b60f6eb0c90e6e9
 RUN cd /QDK && ./InstallToUbuntu.sh install
 ENV PATH="/usr/share/QDK/bin:${PATH}"

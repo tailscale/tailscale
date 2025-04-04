@@ -1,0 +1,26 @@
+--- qbuild	2025-04-02 12:16:07
++++ qbuild_new	2025-04-03 12:28:35
+@@ -955,7 +955,22 @@
+ 
+ # Add signature to QPKG.
+ add_qpkg_signature(){
+-	if [ "x${QNAP_CODE_SIGNING}" = "x1" ]; then
++	if [ -n "${QNAP_SIGNING_SERVER_URL}" ]; then
++		verbose_msg "Using Tailscale signing server at ${QNAP_SIGNING_SERVER_URL}"
++		openssl dgst -sha1 -binary "${QDK_QPKG_FILE}" > "${QDK_QPKG_FILE}.sha"
++		curl -X POST --data-binary @"${QDK_QPKG_FILE}.sha" "${QNAP_SIGNING_SERVER_URL}" > "${QDK_QPKG_FILE}.msg" || err_msg "failed to sign pkg"
++		/bin/rm ${QDK_QPKG_FILE}.sha
++		if [ -f "${QDK_QPKG_FILE}.msg" ]; then
++			add_qdk_area_begin
++			add_qdk_area_code_signing ${QDK_QPKG_FILE}.msg
++			add_qdk_area_end
++			SIG=`openssl cms -cmsout -in ${QDK_QPKG_FILE}.msg 2>/dev/null | tr -d '\n' | tail -c 32`
++			echo "${SIG}" > ${QDK_BUILD_DIR}/${QDK_QPKG_FILE}.codesigning
++			/bin/rm ${QDK_QPKG_FILE}.msg
++		else
++			err_msg "$QDK_QPKG_FILE: Code signing digital signature was not added"
++		fi
++	elif [ "x${QNAP_CODE_SIGNING}" = "x1" ]; then
+ 		verbose_msg "Connecting to code signing server to create digital signature..."
+ 		[ -z "$QNAP_CODE_SIGNING_SERVER_IP" ] && QNAP_CODE_SIGNING_SERVER_IP=$DEFAULT_QNAP_CODE_SIGNING_SERVER_IP
+ 		[ -z "$QNAP_CODE_SIGNING_SERVER_PORT" ] && QNAP_CODE_SIGNING_SERVER_PORT=$DEFAULT_QNAP_CODE_SIGNING_SERVER_PORT

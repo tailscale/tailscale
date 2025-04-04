@@ -20,8 +20,7 @@ import (
 
 var (
 	synologyPackageCenter bool
-	qnapPrivateKeyPath    string
-	qnapCertificatePath   string
+	signingServerURL      string
 )
 
 func getTargets() ([]dist.Target, error) {
@@ -42,10 +41,7 @@ func getTargets() ([]dist.Target, error) {
 	// To build for package center, run
 	// ./tool/go run ./cmd/dist build --synology-package-center synology
 	ret = append(ret, synology.Targets(synologyPackageCenter, nil)...)
-	if (qnapPrivateKeyPath == "") != (qnapCertificatePath == "") {
-		return nil, errors.New("both --qnap-private-key-path and --qnap-certificate-path must be set")
-	}
-	ret = append(ret, qnap.Targets(qnapPrivateKeyPath, qnapCertificatePath)...)
+	ret = append(ret, qnap.Targets(signingServerURL)...)
 	return ret, nil
 }
 
@@ -54,8 +50,7 @@ func main() {
 	for _, subcmd := range cmd.Subcommands {
 		if subcmd.Name == "build" {
 			subcmd.FlagSet.BoolVar(&synologyPackageCenter, "synology-package-center", false, "build synology packages with extra metadata for the official package center")
-			subcmd.FlagSet.StringVar(&qnapPrivateKeyPath, "qnap-private-key-path", "", "sign qnap packages with given key (must also provide --qnap-certificate-path)")
-			subcmd.FlagSet.StringVar(&qnapCertificatePath, "qnap-certificate-path", "", "sign qnap packages with given certificate (must also provide --qnap-private-key-path)")
+			subcmd.FlagSet.StringVar(&signingServerURL, "qnap-signing-server", "", "sign qnap packages using a Tailscale signing server at this URL")
 		}
 	}
 
