@@ -13,13 +13,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gaissmai/bart"
@@ -28,21 +26,17 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/client/local"
+	"tailscale.com/cmd/natc/ippool"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tsweb"
-	"tailscale.com/util/dnsname"
-	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine/netstack"
 )
-
-var ErrNoIPsAvailable = errors.New("no IPs available")
 
 func main() {
 	hostinfo.SetApp("natc")
@@ -141,12 +135,6 @@ func main() {
 		log.Fatalf("ts.Up: %v", err)
 	}
 
-	c := &connector{
-		ts:         ts,
-		lc:         lc,
-		v6ULA:      ula(uint16(*siteID)),
-		ignoreDsts: ignoreDstTable,
-	}
 	var prefixes []netip.Prefix
 	for _, s := range strings.Split(*v4PfxStr, ",") {
 		p := netip.MustParsePrefix(strings.TrimSpace(s))
@@ -155,19 +143,31 @@ func main() {
 		}
 		prefixes = append(prefixes, p)
 	}
-	c.setPrefixes(prefixes)
+	routes, dnsAddr, addrPool := calculateAddresses(prefixes)
+
+	v6ULA := ula(uint16(*siteID))
+	c := &connector{
+		ts:         ts,
+		lc:         lc,
+		v6ULA:      v6ULA,
+		ignoreDsts: ignoreDstTable,
+		ipPool:     &ippool.IPPool{V6ULA: v6ULA, IPSet: addrPool},
+		routes:     routes,
+		dnsAddr:    dnsAddr,
+	}
 	c.run(ctx)
 }
 
-func (c *connector) setPrefixes(prefixes []netip.Prefix) {
+func calculateAddresses(prefixes []netip.Prefix) (*netipx.IPSet, netip.Addr, *netipx.IPSet) {
 	var ipsb netipx.IPSetBuilder
 	for _, p := range prefixes {
 		ipsb.AddPrefix(p)
 	}
-	c.routes = must.Get(ipsb.IPSet())
-	c.dnsAddr = c.routes.Ranges()[0].From()
-	ipsb.Remove(c.dnsAddr)
-	c.ipset = must.Get(ipsb.IPSet())
+	routesToAdvertise := must.Get(ipsb.IPSet())
+	dnsAddr := routesToAdvertise.Ranges()[0].From()
+	ipsb.Remove(dnsAddr)
+	addrPool := must.Get(ipsb.IPSet())
+	return routesToAdvertise, dnsAddr, addrPool
 }
 
 type connector struct {
@@ -181,18 +181,12 @@ type connector struct {
 	// prevent the app connector from assigning it to a domain.
 	dnsAddr netip.Addr
 
-	// ipset is the set of IPv4 ranges to advertise and assign addresses from.
-	// These are masked prefixes.
-	ipset *netipx.IPSet
-
 	// routes is the set of IPv4 ranges advertised to the tailnet, or ipset with
 	// the dnsAddr removed.
 	routes *netipx.IPSet
 
 	// v6ULA is the ULA prefix used by the app connector to assign IPv6 addresses.
 	v6ULA netip.Prefix
-
-	perPeerMap syncs.Map[tailcfg.NodeID, *perPeerState]
 
 	// ignoreDsts is initialized at start up with the contents of --ignore-destinations (if none it is nil)
 	// It is never mutated, only used for lookups.
@@ -202,6 +196,8 @@ type connector struct {
 	// return a dns response that contains the ip addresses we discovered with the lookup (ie not the
 	// natc behavior, which would return a dummy ip address pointing at natc).
 	ignoreDsts *bart.Table[bool]
+
+	ipPool *ippool.IPPool
 }
 
 // v6ULA is the ULA prefix used by the app connector to assign IPv6 addresses.
@@ -359,13 +355,12 @@ var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 // generateDNSResponse generates a DNS response for the given request. The from
 // argument is the NodeID of the node that sent the request.
 func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.NodeID) ([]byte, error) {
-	pm, _ := c.perPeerMap.LoadOrStore(from, newPerPeerState(c))
 	var addrs []netip.Addr
 	if len(req.Questions) > 0 {
 		switch req.Questions[0].Type {
 		case dnsmessage.TypeAAAA, dnsmessage.TypeA:
 			var err error
-			addrs, err = pm.ipForDomain(req.Questions[0].Name.String())
+			addrs, err = c.ipPool.IPForDomain(from, req.Questions[0].Name.String())
 			if err != nil {
 				return nil, err
 			}
@@ -454,16 +449,8 @@ func (c *connector) handleTCPFlow(src, dst netip.AddrPort) (handler func(net.Con
 		log.Printf("HandleTCPFlow: WhoIs failed: %v\n", err)
 		return nil, false
 	}
-
-	from := who.Node.ID
-	ps, ok := c.perPeerMap.Load(from)
+	domain, ok := c.ipPool.DomainForIP(who.Node.ID, dst.Addr())
 	if !ok {
-		log.Printf("handleTCPFlow: no perPeerState for %v", from)
-		return nil, false
-	}
-	domain, ok := ps.domainForIP(dst.Addr())
-	if !ok {
-		log.Printf("handleTCPFlow: no domain for IP %v\n", dst.Addr())
 		return nil, false
 	}
 	return func(conn net.Conn) {
@@ -505,87 +492,4 @@ func proxyTCPConn(c net.Conn, dest string) {
 		Addr: fmt.Sprintf("%s:%s", dest, port),
 	})
 	p.Start()
-}
-
-// perPeerState holds the state for a single peer.
-type perPeerState struct {
-	v6ULA netip.Prefix
-	ipset *netipx.IPSet
-
-	mu           sync.Mutex
-	addrInUse    *big.Int
-	domainToAddr map[string][]netip.Addr
-	addrToDomain *bart.Table[string]
-}
-
-func newPerPeerState(c *connector) *perPeerState {
-	return &perPeerState{
-		ipset: c.ipset,
-		v6ULA: c.v6ULA,
-	}
-}
-
-// domainForIP returns the domain name assigned to the given IP address and
-// whether it was found.
-func (ps *perPeerState) domainForIP(ip netip.Addr) (_ string, ok bool) {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if ps.addrToDomain == nil {
-		return "", false
-	}
-	return ps.addrToDomain.Lookup(ip)
-}
-
-// ipForDomain assigns a pair of unique IP addresses for the given domain and
-// returns them. The first address is an IPv4 address and the second is an IPv6
-// address. If the domain already has assigned addresses, it returns them.
-func (ps *perPeerState) ipForDomain(domain string) ([]netip.Addr, error) {
-	fqdn, err := dnsname.ToFQDN(domain)
-	if err != nil {
-		return nil, err
-	}
-	domain = fqdn.WithoutTrailingDot()
-
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if addrs, ok := ps.domainToAddr[domain]; ok {
-		return addrs, nil
-	}
-	addrs := ps.assignAddrsLocked(domain)
-	if addrs == nil {
-		return nil, ErrNoIPsAvailable
-	}
-	return addrs, nil
-}
-
-// unusedIPv4Locked returns an unused IPv4 address from the available ranges.
-func (ps *perPeerState) unusedIPv4Locked() netip.Addr {
-	if ps.addrInUse == nil {
-		ps.addrInUse = big.NewInt(0)
-	}
-	return allocAddr(ps.ipset, ps.addrInUse)
-}
-
-// assignAddrsLocked assigns a pair of unique IP addresses for the given domain
-// and returns them. The first address is an IPv4 address and the second is an
-// IPv6 address. It does not check if the domain already has assigned addresses.
-// ps.mu must be held.
-func (ps *perPeerState) assignAddrsLocked(domain string) []netip.Addr {
-	if ps.addrToDomain == nil {
-		ps.addrToDomain = &bart.Table[string]{}
-	}
-	v4 := ps.unusedIPv4Locked()
-	if !v4.IsValid() {
-		return nil
-	}
-	as16 := ps.v6ULA.Addr().As16()
-	as4 := v4.As4()
-	copy(as16[12:], as4[:])
-	v6 := netip.AddrFrom16(as16)
-	addrs := []netip.Addr{v4, v6}
-	mak.Set(&ps.domainToAddr, domain, addrs)
-	for _, a := range addrs {
-		ps.addrToDomain.Insert(netip.PrefixFrom(a, a.BitLen()), domain)
-	}
-	return addrs
 }
