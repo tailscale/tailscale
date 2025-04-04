@@ -4834,6 +4834,9 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 	hi := *b.hostinfo // shallow copy
 	unlock.UnlockEarly()
 
+	// Save the existing services before modifying hostinfo.
+	oldServices := hi.Services
+
 	// Make a shallow copy of hostinfo so we can mutate
 	// at the Service field.
 	if !b.shouldUploadServices() {
@@ -4844,7 +4847,39 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 	c := len(hi.Services)
 	hi.Services = append(hi.Services[:c:c], peerAPIServices...)
 	hi.PushDeviceToken = b.pushDeviceToken.Load()
+
+	oldPorts := extractPeerAPIPorts(oldServices)
+	newPorts := extractPeerAPIPorts(hi.Services)
+	if oldPorts != newPorts {
+		b.logf("Hostinfo peerAPI ports changed: was %v, now %v", oldPorts, newPorts)
+	}
+
 	cc.SetHostinfo(&hi)
+}
+
+type pair struct {
+	v4, v6 uint16
+}
+
+func extractPeerAPIPorts(services []tailcfg.Service) pair {
+	var p pair
+	for _, s := range services {
+		switch s.Proto {
+		case "peerapi4":
+			p.v4 = s.Port
+		case "peerapi6":
+			p.v6 = s.Port
+		}
+	}
+	return p
+}
+
+// hostinfoPeerAPIPortsChanged compares the peerAPI ports between two slices of services.
+// It returns true if the ports for either "peerapi4" or "peerapi6" have changed.
+func hostinfoPeerAPIPortsChanged(oldServices, newServices []tailcfg.Service) bool {
+	portsOld := extractPeerAPIPorts(oldServices)
+	portsNew := extractPeerAPIPorts(newServices)
+	return portsOld != portsNew
 }
 
 // NetMap returns the latest cached network map received from
