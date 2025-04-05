@@ -421,9 +421,7 @@ func TestExtraClaims(t *testing.T) {
 			claims, err := withExtraClaims(tt.claim, tt.extraClaims)
 			if err != nil {
 				if tt.expectError {
-					if err == nil {
-						t.Fatalf("expected error, got nil")
-					}
+					t.Fatalf("expected error, got nil")
 					return
 				} else {
 					t.Errorf("claim.withExtraClaims() unexpected error = %v", err)
