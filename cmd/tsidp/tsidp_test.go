@@ -419,13 +419,12 @@ func TestExtraClaims(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			claims, err := withExtraClaims(tt.claim, tt.extraClaims)
-			if err != nil {
-				if tt.expectError {
-					t.Fatalf("expected error, got nil")
-					return
-				} else {
-					t.Errorf("claim.withExtraClaims() unexpected error = %v", err)
-				}
+			if err != nil && !tt.expectError {
+				t.Fatalf("claim.withExtraClaims() unexpected error = %v", err)
+			} else if err == nil && tt.expectError {
+				t.Fatalf("expected error, got nil")
+			} else if err != nil && tt.expectError {
+				return // just as expected
 			}
 
 			// Marshal to JSON then unmarshal back to map[string]interface{}
