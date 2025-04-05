@@ -151,8 +151,10 @@ require (
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/jjti/go-spancheck v0.5.3 // indirect
 	github.com/karamaru-alpha/copyloopvar v1.0.8 // indirect
+	github.com/linkdata/deadlock v0.5.2 // indirect
 	github.com/macabu/inamedparam v0.1.3 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
+	github.com/petermattis/goid v0.0.0-20240813172612-4fcff4a6cae7 // indirect
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1 // indirect
 	github.com/xen0n/gosmopolitan v1.2.2 // indirect
 	github.com/ykadowak/zerologlint v0.1.5 // indirect
