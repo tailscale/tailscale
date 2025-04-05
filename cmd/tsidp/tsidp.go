@@ -635,7 +635,10 @@ func addClaimValue(sets map[string]map[string]struct{}, claim string, val interf
 // withExtraClaims merges flattened extra claims from a list of capRule into the provided struct v,
 // returning a map[string]interface{} that combines both sources.
 //
-// The input struct v is first marshaled to JSON, then unmarshalled into a generic map.
+// v is any struct whose fields represent static claims; it is first marshaled to JSON, then unmarshalled into a generic map.
+// rules is a slice of capRule objects that may define additional (extra) claims to merge.
+//
+// These extra claims are flattened and merged into the base map unless they conflict with protected claims.
 // Claims defined in openIDSupportedClaims are considered protected and cannot be overwritten.
 // If an extra claim attempts to overwrite a protected claim, an error is returned.
 //
