@@ -751,7 +751,8 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, tailcfg.PeerCapabilityTsIDP)
 	if err != nil {
-		http.Error(w, "tsidp: failed to unmarshal capability: %v", http.StatusBadRequest)
+		log.Printf("tsidp: failed to unmarshal capability: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
