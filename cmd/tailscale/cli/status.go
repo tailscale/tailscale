@@ -231,6 +231,12 @@ func runStatus(ctx context.Context, args []string) error {
 		outln()
 		printf("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
 	}
+
+	outln()
+	printf("# Tailnet:\n")
+	printf("#     - Name: %s\n", st.CurrentTailnet.Name)
+	printf("#     - MagicDNS Suffix: %s\n", st.CurrentTailnet.MagicDNSSuffix)
+
 	if len(st.Health) > 0 {
 		outln()
 		printHealth()
