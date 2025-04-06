@@ -109,37 +109,39 @@ func (e *desktopSessionsExt) updateDesktopSessionState(session *desktop.Session)
 
 // getBackgroundProfile is a [profileResolver] that works as follows:
 //
-// If Always-On mode is disabled, it returns no profile ("","",false).
+// If Always-On mode is disabled, it returns no profile.
 //
 // If AlwaysOn mode is enabled, it returns the current profile unless:
-// - The current user has signed out.
+// - The current profile's owner has signed out.
 // - Another user has a foreground (i.e. active/unlocked) session.
 //
-// If the current user's session runs in the background and no other user
+// If the current profile owner's session runs in the background and no other user
 // has a foreground session, it returns the current profile. This applies
 // when a locally signed-in user locks their screen or when a remote user
 // disconnects without signing out.
 //
-// In all other cases, it returns no profile ("","",false).
+// In all other cases, it returns no profile.
 //
 // It is called with [LocalBackend.mu] locked.
-func (e *desktopSessionsExt) getBackgroundProfile() (_ ipn.WindowsUserID, _ ipn.ProfileID, ok bool) {
+func (e *desktopSessionsExt) getBackgroundProfile() ipn.LoginProfileView {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); !alwaysOn {
-		return "", "", false
+		// If the Always-On mode is disabled, there's no background profile
+		// as far as the desktop session extension is concerned.
+		return ipn.LoginProfileView{}
 	}
 
-	isCurrentUserSingedIn := false
+	isCurrentProfileOwnerSignedIn := false
 	var foregroundUIDs []ipn.WindowsUserID
 	for _, s := range e.id2sess {
 		switch uid := s.User.UserID(); uid {
-		case e.pm.CurrentUserID():
-			isCurrentUserSingedIn = true
+		case e.pm.CurrentProfile().LocalUserID():
+			isCurrentProfileOwnerSignedIn = true
 			if s.Status == desktop.ForegroundSession {
 				// Keep the current profile if the user has a foreground session.
-				return e.pm.CurrentUserID(), e.pm.CurrentProfile().ID(), true
+				return e.pm.CurrentProfile()
 			}
 		default:
 			if s.Status == desktop.ForegroundSession {
@@ -148,23 +150,24 @@ func (e *desktopSessionsExt) getBackgroundProfile() (_ ipn.WindowsUserID, _ ipn.
 		}
 	}
 
-	// If there's no current user (e.g., tailscaled just started), or if the current
-	// user has no foreground session, switch to the default profile of the first user
-	// with a foreground session, if any.
+	// If the current profile is empty and not owned by anyone (e.g., tailscaled just started),
+	// or if the current profile's owner has no foreground session, switch to the default profile
+	// of the first user with a foreground session, if any.
 	for _, uid := range foregroundUIDs {
-		if profileID := e.pm.DefaultUserProfileID(uid); profileID != "" {
-			return uid, profileID, true
+		if profile := e.pm.DefaultUserProfile(uid); profile.ID() != "" {
+			return profile
 		}
 	}
 
-	// If no user has a foreground session but the current user is still signed in,
+	// If no user has a foreground session but the current profile's owner is still signed in,
 	// keep the current profile even if the session is not in the foreground,
 	// such as when the screen is locked or a remote session is disconnected.
-	if len(foregroundUIDs) == 0 && isCurrentUserSingedIn {
-		return e.pm.CurrentUserID(), e.pm.CurrentProfile().ID(), true
+	if len(foregroundUIDs) == 0 && isCurrentProfileOwnerSignedIn {
+		return e.pm.CurrentProfile()
 	}
 
-	return "", "", false
+	// Otherwise, there's no background profile.
+	return ipn.LoginProfileView{}
 }
 
 // Shutdown implements [localBackendExtension].

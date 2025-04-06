@@ -4124,7 +4124,7 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	}
 
 	// write the other routeInfo as the other profile
-	if err := b.pm.SwitchProfile("id2"); err != nil {
+	if _, _, err := b.pm.SwitchToProfileByID("id2"); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.storeRouteInfo(ri2); err != nil {
@@ -4132,7 +4132,7 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	}
 
 	// read the routeInfo of the first profile
-	if err := b.pm.SwitchProfile("id1"); err != nil {
+	if _, _, err := b.pm.SwitchToProfileByID("id1"); err != nil {
 		t.Fatal(err)
 	}
 	readRi, err = b.readRouteInfoLocked()
@@ -4144,7 +4144,7 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	}
 
 	// read the routeInfo of the second profile
-	if err := b.pm.SwitchProfile("id2"); err != nil {
+	if _, _, err := b.pm.SwitchToProfileByID("id2"); err != nil {
 		t.Fatal(err)
 	}
 	readRi, err = b.readRouteInfoLocked()

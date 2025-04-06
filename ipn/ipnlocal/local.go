@@ -204,13 +204,12 @@ func RegisterExtension(name string, newExt NewExtensionFn) {
 	mak.Set(&registeredExtensions, name, newExt)
 }
 
-// profileResolver is any function that returns user and profile IDs
-// along with a flag indicating whether it succeeded. Since an empty
-// profile ID ("") represents an empty profile, the ok return parameter
-// distinguishes between an empty profile and no profile.
+// profileResolver is any function that returns a read-only view of a login profile.
+// An invalid view indicates no profile. A valid profile view with an empty [ipn.ProfileID]
+// indicates that the profile is new and has not been persisted yet.
 //
 // It is called with [LocalBackend.mu] held.
-type profileResolver func() (_ ipn.WindowsUserID, _ ipn.ProfileID, ok bool)
+type profileResolver func() ipn.LoginProfileView
 
 // NewControlClientCallback is a function to be called when a new [controlclient.Client]
 // is created and before it is first used. The login profile and prefs represent
@@ -4006,13 +4005,21 @@ func (b *LocalBackend) SwitchToBestProfile(reason string) {
 func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock unlockOnce) {
 	defer unlock()
 	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
-	uid, profileID, background := b.resolveBestProfileLocked()
-	cp, switched := b.pm.SetCurrentUserAndProfile(uid, profileID)
+	profile, background := b.resolveBestProfileLocked()
+	cp, switched, err := b.pm.SwitchToProfile(profile)
 	switch {
 	case !switched && cp.ID() == "":
-		b.logf("%s: staying on empty profile", reason)
+		if err != nil {
+			b.logf("%s: an error occurred; staying on empty profile: %v", reason, err)
+		} else {
+			b.logf("%s: staying on empty profile", reason)
+		}
 	case !switched:
-		b.logf("%s: staying on profile %q (%s)", reason, cp.UserProfile().LoginName, cp.ID())
+		if err != nil {
+			b.logf("%s: an error occurred; staying on profile %q (%s): %v", reason, cp.UserProfile().LoginName, cp.ID(), err)
+		} else {
+			b.logf("%s: staying on profile %q (%s)", reason, cp.UserProfile().LoginName, cp.ID())
+		}
 	case cp.ID() == "":
 		b.logf("%s: disconnecting Tailscale", reason)
 	case background:
@@ -4032,7 +4039,7 @@ func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock un
 		// the TKA initialization or [LocalBackend.Start] can fail.
 		// These errors are not critical as far as we're concerned.
 		// But maybe we should post a notification to the API watchers?
-		b.logf("failed switching profile to %q: %v", profileID, err)
+		b.logf("failed switching profile to %q: %v", profile.ID(), err)
 	}
 }
 
@@ -4041,30 +4048,29 @@ func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock un
 // the unattended mode is enabled, the current state of the desktop sessions,
 // and other factors.
 //
-// It returns the user ID, profile ID, and whether the returned profile is
-// considered a background profile. A background profile is used when no OS user
-// is actively using Tailscale, such as when no GUI/CLI client is connected
-// and Unattended Mode is enabled (see also [LocalBackend.getBackgroundProfileLocked]).
-// An empty profile ID indicates that Tailscale should switch to an empty profile.
+// It returns a read-only view of the profile and whether it is considered
+// a background profile. A background profile is used when no OS user is actively
+// using Tailscale, such as when no GUI/CLI client is connected and Unattended Mode
+// is enabled (see also [LocalBackend.getBackgroundProfileLocked]).
+//
+// An invalid view indicates no profile, meaning Tailscale should disconnect
+// and remain idle until a GUI or CLI client connects.
+// A valid profile view with an empty [ipn.ProfileID] indicates a new profile that
+// has not been persisted yet.
 //
 // b.mu must be held.
-func (b *LocalBackend) resolveBestProfileLocked() (userID ipn.WindowsUserID, profileID ipn.ProfileID, isBackground bool) {
+func (b *LocalBackend) resolveBestProfileLocked() (_ ipn.LoginProfileView, isBackground bool) {
 	// If a GUI/CLI client is connected, use the connected user's profile, which means
 	// either the current profile if owned by the user, or their default profile.
 	if b.currentUser != nil {
-		cp := b.pm.CurrentProfile()
-		uid := b.currentUser.UserID()
-
-		var profileID ipn.ProfileID
+		profile := b.pm.CurrentProfile()
 		// TODO(nickkhyl): check if the current profile is allowed on the device,
 		// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
 		// See tailscale/corp#26249.
-		if cp.LocalUserID() == uid {
-			profileID = cp.ID()
-		} else {
-			profileID = b.pm.DefaultUserProfileID(uid)
+		if uid := b.currentUser.UserID(); profile.LocalUserID() != uid {
+			profile = b.pm.DefaultUserProfile(uid)
 		}
-		return uid, profileID, false
+		return profile, false
 	}
 
 	// Otherwise, if on Windows, use the background profile if one is set.
@@ -4073,8 +4079,8 @@ func (b *LocalBackend) resolveBestProfileLocked() (userID ipn.WindowsUserID, pro
 	// If the returned background profileID is "", Tailscale will disconnect
 	// and remain idle until a GUI or CLI client connects.
 	if goos := envknob.GOOS(); goos == "windows" {
-		uid, profileID := b.getBackgroundProfileLocked()
-		return uid, profileID, true
+		profile := b.getBackgroundProfileLocked()
+		return profile, true
 	}
 
 	// On other platforms, however, Tailscale continues to run in the background
@@ -4083,7 +4089,7 @@ func (b *LocalBackend) resolveBestProfileLocked() (userID ipn.WindowsUserID, pro
 	// TODO(nickkhyl): check if the current profile is allowed on the device,
 	// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
 	// See tailscale/corp#26249.
-	return b.pm.CurrentUserID(), b.pm.CurrentProfile().ID(), false
+	return b.pm.CurrentProfile(), false
 }
 
 // RegisterBackgroundProfileResolver registers a function to be used when
@@ -4100,30 +4106,31 @@ func (b *LocalBackend) RegisterBackgroundProfileResolver(resolver profileResolve
 	}
 }
 
-// getBackgroundProfileLocked returns the user and profile ID to use when no GUI/CLI
-// client is connected, or "","" if Tailscale should not run in the background.
+// getBackgroundProfileLocked returns a read-only view of the profile to use
+// when no GUI/CLI client is connected. If Tailscale should not run in the background
+// and should disconnect until a GUI/CLI client connects, the returned view is not valid.
 // As of 2025-02-07, it is only used on Windows.
-func (b *LocalBackend) getBackgroundProfileLocked() (ipn.WindowsUserID, ipn.ProfileID) {
+func (b *LocalBackend) getBackgroundProfileLocked() ipn.LoginProfileView {
 	// TODO(nickkhyl): check if the returned profile is allowed on the device,
 	// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
 	// See tailscale/corp#26249.
 
 	// If Unattended Mode is enabled for the current profile, keep using it.
 	if b.pm.CurrentPrefs().ForceDaemon() {
-		return b.pm.CurrentProfile().LocalUserID(), b.pm.CurrentProfile().ID()
+		return b.pm.CurrentProfile()
 	}
 
 	// Otherwise, attempt to resolve the background profile using the background
 	// profile resolvers available on the current platform.
 	for _, resolver := range b.backgroundProfileResolvers {
-		if uid, profileID, ok := resolver(); ok {
-			return uid, profileID
+		if profile := resolver(); profile.Valid() {
+			return profile
 		}
 	}
 
 	// Otherwise, switch to an empty profile and disconnect Tailscale
 	// until a GUI or CLI client connects.
-	return "", ""
+	return ipn.LoginProfileView{}
 }
 
 // CurrentUserForTest returns the current user and the associated WindowsUserID.
@@ -7555,13 +7562,9 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
-	if b.pm.CurrentProfile().ID() == profile {
-		return nil
-	}
-
 	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
-	if err := b.pm.SwitchProfile(profile); err != nil {
-		return err
+	if _, changed, err := b.pm.SwitchToProfileByID(profile); !changed || err != nil {
+		return err // nil if we're already on the target profile
 	}
 
 	// As an optimization, only reset the dialPlan if the control URL changed.
@@ -7750,7 +7753,7 @@ func (b *LocalBackend) NewProfile() error {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
-	b.pm.NewProfile()
+	b.pm.SwitchToNewProfile()
 
 	// The new profile doesn't yet have a ControlURL because it hasn't been
 	// set. Conservatively reset the dialPlan.

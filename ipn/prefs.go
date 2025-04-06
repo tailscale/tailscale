@@ -593,7 +593,7 @@ func (p PrefsView) Equals(p2 PrefsView) bool {
 }
 
 func (p *Prefs) Equals(p2 *Prefs) bool {
-	if p == nil && p2 == nil {
+	if p == p2 {
 		return true
 	}
 	if p == nil || p2 == nil {
@@ -1013,4 +1013,27 @@ type LoginProfile struct {
 	// ControlURL is the URL of the control server that this profile is logged
 	// into.
 	ControlURL string
+}
+
+// Equals reports whether p and p2 are equal.
+func (p LoginProfileView) Equals(p2 LoginProfileView) bool {
+	return p.ж.Equals(p2.ж)
+}
+
+// Equals reports whether p and p2 are equal.
+func (p *LoginProfile) Equals(p2 *LoginProfile) bool {
+	if p == p2 {
+		return true
+	}
+	if p == nil || p2 == nil {
+		return false
+	}
+	return p.ID == p2.ID &&
+		p.Name == p2.Name &&
+		p.NetworkProfile == p2.NetworkProfile &&
+		p.Key == p2.Key &&
+		p.UserProfile.Equal(&p2.UserProfile) &&
+		p.NodeID == p2.NodeID &&
+		p.LocalUserID == p2.LocalUserID &&
+		p.ControlURL == p2.ControlURL
 }

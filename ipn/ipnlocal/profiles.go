@@ -64,8 +64,7 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) {
 	if pm.currentUserID == uid {
 		return
 	}
-	pm.currentUserID = uid
-	if err := pm.SwitchToDefaultProfile(); err != nil {
+	if _, _, err := pm.SwitchToDefaultProfileForUser(uid); err != nil {
 		// SetCurrentUserID should never fail and must always switch to the
 		// user's default profile or create a new profile for the current user.
 		// Until we implement multi-user support and the new permission model,
@@ -73,79 +72,109 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) {
 		// that when SetCurrentUserID exits, the profile in pm.currentProfile
 		// is either an existing profile owned by the user, or a new, empty profile.
 		pm.logf("%q's default profile cannot be used; creating a new one: %v", uid, err)
-		pm.NewProfileForUser(uid)
+		pm.SwitchToNewProfileForUser(uid)
 	}
 }
 
-// SetCurrentUserAndProfile sets the current user ID and switches the specified
-// profile, if it is accessible to the user. If the profile does not exist,
-// or is not accessible, it switches to the user's default profile,
-// creating a new one if necessary.
+// SwitchToProfile switches to the specified profile and (temporarily,
+// while the "current user" is still a thing on Windows; see tailscale/corp#18342)
+// sets its owner as the current user. The profile must be a valid profile
+// returned by the [profileManager], such as by [profileManager.Profiles],
+// [profileManager.ProfileByID], or [profileManager.NewProfileForUser].
 //
 // It is a shorthand for [profileManager.SetCurrentUserID] followed by
-// [profileManager.SwitchProfile], but it is more efficient as it switches
+// [profileManager.SwitchProfileByID], but it is more efficient as it switches
 // directly to the specified profile rather than switching to the user's
-// default profile first.
+// default profile first. It is a no-op if the specified profile is already
+// the current profile.
 //
-// As a special case, if the specified profile ID "", it creates a new
-// profile for the user and switches to it, unless the current profile
-// is already a new, empty profile owned by the user.
+// As a special case, if the specified profile view is not valid, it resets
+// both the current user and the profile to a new, empty profile not owned
+// by any user.
 //
-// It returns the current profile and whether the call resulted
-// in a profile switch.
-func (pm *profileManager) SetCurrentUserAndProfile(uid ipn.WindowsUserID, profileID ipn.ProfileID) (cp ipn.LoginProfileView, changed bool) {
-	pm.currentUserID = uid
-
-	if profileID == "" {
-		if pm.currentProfile.ID() == "" && pm.currentProfile.LocalUserID() == uid {
-			return pm.currentProfile, false
+// It returns the current profile and whether the call resulted in a profile change,
+// or an error if the specified profile does not exist or its prefs could not be loaded.
+func (pm *profileManager) SwitchToProfile(profile ipn.LoginProfileView) (cp ipn.LoginProfileView, changed bool, err error) {
+	prefs := defaultPrefs
+	switch {
+	case !profile.Valid():
+		// Create a new profile that is not associated with any user.
+		profile = pm.NewProfileForUser("")
+	case profile == pm.currentProfile,
+		profile.ID() != "" && profile.ID() == pm.currentProfile.ID(),
+		profile.ID() == "" && profile.Equals(pm.currentProfile) && prefs.Equals(pm.prefs):
+		// The profile is already the current profile; no need to switch.
+		//
+		// It includes three cases:
+		// 1. The target profile and the current profile are aliases referencing the [ipn.LoginProfile].
+		//    The profile may be either a new (non-persisted) profile or an existing well-known profile.
+		// 2. The target profile is a well-known, persisted profile with the same ID as the current profile.
+		// 3. The target and the current profiles are both new (non-persisted) profiles and they are equal.
+		//    At minimum, equality means that the profiles are owned by the same user on platforms that support it
+		//    and the prefs are the same as well.
+		return pm.currentProfile, false, nil
+	case profile.ID() == "":
+		// Copy the specified profile to prevent accidental mutation.
+		profile = profile.AsStruct().View()
+	default:
+		// Find an existing profile by ID and load its prefs.
+		kp, ok := pm.knownProfiles[profile.ID()]
+		if !ok {
+			// The profile ID is not valid; it may have been deleted or never existed.
+			// As the target profile should have been returned by the [profileManager],
+			// this is unexpected and might indicate a bug in the code.
+			return pm.currentProfile, false, fmt.Errorf("[unexpected] %w: %s (%s)", errProfileNotFound, profile.Name(), profile.ID())
 		}
-		pm.NewProfileForUser(uid)
-		return pm.currentProfile, true
+		profile = kp
+		if prefs, err = pm.loadSavedPrefs(profile.Key()); err != nil {
+			return pm.currentProfile, false, fmt.Errorf("failed to load profile prefs for %s (%s): %w", profile.Name(), profile.ID(), err)
+		}
 	}
 
-	if profile, err := pm.ProfileByID(profileID); err == nil {
-		if pm.CurrentProfile().ID() == profileID {
-			return pm.currentProfile, false
-		}
-		if err := pm.SwitchProfile(profile.ID()); err == nil {
-			return pm.currentProfile, true
-		}
+	if profile.ID() == "" { // new profile that has never been persisted
+		metricNewProfile.Add(1)
+	} else {
+		metricSwitchProfile.Add(1)
 	}
 
-	if err := pm.SwitchToDefaultProfile(); err != nil {
-		pm.logf("%q's default profile cannot be used; creating a new one: %v", uid, err)
-		pm.NewProfile()
+	pm.prefs = prefs
+	pm.updateHealth()
+	pm.currentProfile = profile
+	pm.currentUserID = profile.LocalUserID()
+	if err := pm.setProfileAsUserDefault(profile); err != nil {
+		// This is not a fatal error; we've already switched to the profile.
+		// But if updating the default profile fails, we should log it.
+		pm.logf("failed to set %s (%s) as the default profile: %v", profile.Name(), profile.ID(), err)
 	}
-	return pm.currentProfile, true
+	return profile, true, nil
 }
 
-// DefaultUserProfileID returns [ipn.ProfileID] of the default (last used) profile for the specified user,
-// or an empty string if the specified user does not have a default profile.
-func (pm *profileManager) DefaultUserProfileID(uid ipn.WindowsUserID) ipn.ProfileID {
+// DefaultUserProfile returns a read-only view of the default (last used) profile for the specified user.
+// It returns a read-only view of a new, non-persisted profile if the specified user does not have a default profile.
+func (pm *profileManager) DefaultUserProfile(uid ipn.WindowsUserID) ipn.LoginProfileView {
 	// Read the CurrentProfileKey from the store which stores
 	// the selected profile for the specified user.
 	b, err := pm.store.ReadState(ipn.CurrentProfileKey(string(uid)))
-	pm.dlogf("DefaultUserProfileID: ReadState(%q) = %v, %v", string(uid), len(b), err)
+	pm.dlogf("DefaultUserProfile: ReadState(%q) = %v, %v", string(uid), len(b), err)
 	if err == ipn.ErrStateNotExist || len(b) == 0 {
 		if runtime.GOOS == "windows" {
-			pm.dlogf("DefaultUserProfileID: windows: migrating from legacy preferences")
+			pm.dlogf("DefaultUserProfile: windows: migrating from legacy preferences")
 			profile, err := pm.migrateFromLegacyPrefs(uid, false)
 			if err == nil {
-				return profile.ID()
+				return profile
 			}
 			pm.logf("failed to migrate from legacy preferences: %v", err)
 		}
-		return ""
+		return pm.NewProfileForUser(uid)
 	}
 
 	pk := ipn.StateKey(string(b))
 	prof := pm.findProfileByKey(uid, pk)
 	if !prof.Valid() {
-		pm.dlogf("DefaultUserProfileID: no profile found for key: %q", pk)
-		return ""
+		pm.dlogf("DefaultUserProfile: no profile found for key: %q", pk)
+		return pm.NewProfileForUser(uid)
 	}
-	return prof.ID()
+	return prof
 }
 
 // checkProfileAccess returns an [errProfileAccessDenied] if the current user
@@ -249,12 +278,6 @@ func (pm *profileManager) setUnattendedModeAsConfigured() error {
 	} else {
 		return pm.WriteState(ipn.ServerModeStartKey, nil)
 	}
-}
-
-// Reset unloads the current profile, if any.
-func (pm *profileManager) Reset() {
-	pm.currentUserID = ""
-	pm.NewProfile()
 }
 
 // SetPrefs sets the current profile's prefs to the provided value.
@@ -477,42 +500,32 @@ func (pm *profileManager) profilePrefs(p ipn.LoginProfileView) (ipn.PrefsView, e
 	return pm.loadSavedPrefs(p.Key())
 }
 
-// SwitchProfile switches to the profile with the given id.
+// SwitchToProfileByID switches to the profile with the given id.
+// It returns the current profile and whether the call resulted in a profile change.
 // If the profile exists but is not accessible to the current user, it returns an [errProfileAccessDenied].
 // If the profile does not exist, it returns an [errProfileNotFound].
-func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
-	metricSwitchProfile.Add(1)
-
-	kp, ok := pm.knownProfiles[id]
-	if !ok {
-		return errProfileNotFound
+func (pm *profileManager) SwitchToProfileByID(id ipn.ProfileID) (_ ipn.LoginProfileView, changed bool, err error) {
+	if id == pm.currentProfile.ID() {
+		return pm.currentProfile, false, nil
 	}
-	if pm.currentProfile.Valid() && kp.ID() == pm.currentProfile.ID() && pm.prefs.Valid() {
-		return nil
-	}
-
-	if err := pm.checkProfileAccess(kp); err != nil {
-		return fmt.Errorf("%w: profile %q is not accessible to the current user", err, id)
-	}
-	prefs, err := pm.loadSavedPrefs(kp.Key())
+	profile, err := pm.ProfileByID(id)
 	if err != nil {
-		return err
+		return pm.currentProfile, false, err
 	}
-	pm.prefs = prefs
-	pm.updateHealth()
-	pm.currentProfile = kp
-	return pm.setProfileAsUserDefault(kp)
+	return pm.SwitchToProfile(profile)
 }
 
-// SwitchToDefaultProfile switches to the default (last used) profile for the current user.
-// It creates a new one and switches to it if the current user does not have a default profile,
+// SwitchToDefaultProfileForUser switches to the default (last used) profile for the specified user.
+// It creates a new one and switches to it if the specified user does not have a default profile,
 // or returns an error if the default profile is inaccessible or could not be loaded.
-func (pm *profileManager) SwitchToDefaultProfile() error {
-	if id := pm.DefaultUserProfileID(pm.currentUserID); id != "" {
-		return pm.SwitchProfile(id)
-	}
-	pm.NewProfileForUser(pm.currentUserID)
-	return nil
+func (pm *profileManager) SwitchToDefaultProfileForUser(uid ipn.WindowsUserID) (_ ipn.LoginProfileView, changed bool, err error) {
+	return pm.SwitchToProfile(pm.DefaultUserProfile(uid))
+}
+
+// SwitchToDefaultProfile is like [profileManager.SwitchToDefaultProfileForUser], but switches
+// to the default profile for the current user.
+func (pm *profileManager) SwitchToDefaultProfile() (_ ipn.LoginProfileView, changed bool, err error) {
+	return pm.SwitchToDefaultProfileForUser(pm.currentUserID)
 }
 
 // setProfileAsUserDefault sets the specified profile as the default for the current user.
@@ -610,7 +623,7 @@ func (pm *profileManager) deleteCurrentProfile() error {
 	}
 	if pm.currentProfile.ID() == "" {
 		// Deleting the in-memory only new profile, just create a new one.
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		return nil
 	}
 	return pm.deleteProfileNoPermCheck(pm.currentProfile)
@@ -620,7 +633,7 @@ func (pm *profileManager) deleteCurrentProfile() error {
 // but it doesn't check user's access rights to the profile.
 func (pm *profileManager) deleteProfileNoPermCheck(profile ipn.LoginProfileView) error {
 	if profile.ID() == pm.currentProfile.ID() {
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 	}
 	if err := pm.WriteState(profile.Key(), nil); err != nil {
 		return err
@@ -637,7 +650,7 @@ func (pm *profileManager) DeleteAllProfilesForUser() error {
 	currentProfileDeleted := false
 	writeKnownProfiles := func() error {
 		if currentProfileDeleted || pm.currentProfile.ID() == "" {
-			pm.NewProfile()
+			pm.SwitchToNewProfile()
 		}
 		return pm.writeKnownProfiles()
 	}
@@ -676,23 +689,22 @@ func (pm *profileManager) updateHealth() {
 	pm.health.SetAutoUpdatePrefs(pm.prefs.AutoUpdate().Check, pm.prefs.AutoUpdate().Apply)
 }
 
-// NewProfile creates and switches to a new unnamed profile. The new profile is
+// SwitchToNewProfile creates and switches to a new unnamed profile. The new profile is
 // not persisted until [profileManager.SetPrefs] is called with a logged-in user.
-func (pm *profileManager) NewProfile() {
-	pm.NewProfileForUser(pm.currentUserID)
+func (pm *profileManager) SwitchToNewProfile() {
+	pm.SwitchToNewProfileForUser(pm.currentUserID)
 }
 
-// NewProfileForUser is like [profileManager.NewProfile], but it switches to the
+// SwitchToNewProfileForUser is like [profileManager.SwitchToNewProfile], but it switches to the
 // specified user and sets that user as the profile owner for the new profile.
-func (pm *profileManager) NewProfileForUser(uid ipn.WindowsUserID) {
-	pm.currentUserID = uid
+func (pm *profileManager) SwitchToNewProfileForUser(uid ipn.WindowsUserID) {
+	pm.SwitchToProfile(pm.NewProfileForUser(uid))
+}
 
-	metricNewProfile.Add(1)
-
-	pm.prefs = defaultPrefs
-	pm.updateHealth()
-	newProfile := &ipn.LoginProfile{LocalUserID: uid}
-	pm.currentProfile = newProfile.View()
+// NewProfileForUser creates a new profile for the specified user and returns a read-only view of it.
+// It neither switches to the new profile nor persists it to the store.
+func (pm *profileManager) NewProfileForUser(uid ipn.WindowsUserID) ipn.LoginProfileView {
+	return (&ipn.LoginProfile{LocalUserID: uid}).View()
 }
 
 // newProfileWithPrefs creates a new profile with the specified prefs and assigns
@@ -816,7 +828,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 			if suf, ok := strings.CutPrefix(string(stateKey), "user-"); ok {
 				pm.currentUserID = ipn.WindowsUserID(suf)
 			}
-			pm.NewProfile()
+			pm.SwitchToNewProfile()
 		} else {
 			pm.currentUserID = pm.currentProfile.LocalUserID()
 		}
@@ -841,7 +853,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 			return nil, err
 		}
 	} else {
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 	}
 
 	return pm, nil
