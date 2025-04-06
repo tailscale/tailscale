@@ -71,6 +71,7 @@ type Dialer struct {
 
 	netnsDialerOnce sync.Once
 	netnsDialer     netns.Dialer
+	sysDialForTest  func(_ context.Context, network, addr string) (net.Conn, error) // or nil
 
 	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
 
@@ -361,6 +362,13 @@ func (d *Dialer) logf(format string, args ...any) {
 	}
 }
 
+// SetSystemDialerForTest sets an alternate function to use for SystemDial
+// instead of netns.Dialer. This is intended for use with nettest.MemoryNetwork.
+func (d *Dialer) SetSystemDialerForTest(fn func(ctx context.Context, network, addr string) (net.Conn, error)) {
+	testenv.AssertInTest()
+	d.sysDialForTest = fn
+}
+
 // SystemDial connects to the provided network address without going over
 // Tailscale. It prefers going over the default interface and closes existing
 // connections if the default interface changes. It is used to connect to
@@ -380,10 +388,16 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 		return nil, net.ErrClosed
 	}
 
-	d.netnsDialerOnce.Do(func() {
-		d.netnsDialer = netns.NewDialer(d.logf, d.netMon)
-	})
-	c, err := d.netnsDialer.DialContext(ctx, network, addr)
+	var c net.Conn
+	var err error
+	if d.sysDialForTest != nil {
+		c, err = d.sysDialForTest(ctx, network, addr)
+	} else {
+		d.netnsDialerOnce.Do(func() {
+			d.netnsDialer = netns.NewDialer(d.logf, d.netMon)
+		})
+		c, err = d.netnsDialer.DialContext(ctx, network, addr)
+	}
 	if err != nil {
 		return nil, err
 	}
