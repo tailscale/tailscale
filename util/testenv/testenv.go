@@ -58,3 +58,10 @@ func InParallelTest(t TB) (isParallel bool) {
 	t.Chdir(".") // panics in a t.Parallel test
 	return false
 }
+
+// AssertInTest panics if called outside of a test binary.
+func AssertInTest() {
+	if !InTest() {
+		panic("func called outside of test binary")
+	}
+}
