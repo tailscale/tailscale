@@ -82,6 +82,25 @@ func acceptRouteDefault(goos string) bool {
 	return p.DefaultRouteAll(goos)
 }
 
+// singleUseStringFlag will throw an error if the flag is specified more than once.
+type singleUseStringFlag struct {
+	set   bool
+	value string
+}
+
+func (s singleUseStringFlag) String() string {
+	return s.value
+}
+
+func (s *singleUseStringFlag) Set(v string) error {
+	if s.set {
+		return errors.New("flag can only be specified once")
+	}
+	s.set = true
+	s.value = v
+	return nil
+}
+
 var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgsGlobal, "up")
 
 // newUpFlagSet returns a new flag set for the "up" and "login" commands.
@@ -104,9 +123,9 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.BoolVar(&upArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.BoolVar(&upArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
-	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
+	upf.Var(&upArgs.advertiseTags, "advertise-tags", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
-	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
+	upf.Var(&upArgs.advertiseRoutes, "advertise-routes", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 	upf.BoolVar(&upArgs.postureChecking, "posture-checking", false, hidden+"allow management plane to gather device posture information")
@@ -174,9 +193,9 @@ type upArgsT struct {
 	runWebClient           bool
 	forceReauth            bool
 	forceDaemon            bool
-	advertiseRoutes        string
+	advertiseRoutes        singleUseStringFlag
 	advertiseDefaultRoute  bool
-	advertiseTags          string
+	advertiseTags          singleUseStringFlag
 	advertiseConnector     bool
 	snat                   bool
 	statefulFiltering      bool
@@ -244,7 +263,7 @@ func warnf(format string, args ...any) {
 // function exists for testing and should have no side effects or
 // outside interactions (e.g. no making Tailscale LocalAPI calls).
 func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
-	routes, err := netutil.CalcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
+	routes, err := netutil.CalcAdvertiseRoutes(upArgs.advertiseRoutes.String(), upArgs.advertiseDefaultRoute)
 	if err != nil {
 		return nil, err
 	}
@@ -254,8 +273,8 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	}
 
 	var tags []string
-	if upArgs.advertiseTags != "" {
-		tags = strings.Split(upArgs.advertiseTags, ",")
+	if upArgs.advertiseTags.String() != "" {
+		tags = strings.Split(upArgs.advertiseTags.String(), ",")
 		for _, tag := range tags {
 			err := tailcfg.CheckTag(tag)
 			if err != nil {
@@ -555,7 +574,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		if err != nil {
 			return err
 		}
-		authKey, err = resolveAuthKey(ctx, authKey, upArgs.advertiseTags)
+		authKey, err = resolveAuthKey(ctx, authKey, upArgs.advertiseTags.String())
 		if err != nil {
 			return err
 		}
