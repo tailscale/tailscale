@@ -243,7 +243,7 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
-		"authkey-old-flag": func(env *testEnv) testCase {
+		"authkey_old_flag": func(env *testEnv) testCase {
 			return testCase{
 				// Userspace mode, ephemeral storage, authkey provided on every run.
 				Env: map[string]string{
@@ -304,7 +304,7 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
-		"empty routes": func(env *testEnv) testCase {
+		"empty_routes": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
 					"TS_AUTHKEY": "tskey-key",
@@ -399,7 +399,7 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
-		"ingress proxy": func(env *testEnv) testCase {
+		"ingress_proxy": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
 					"TS_AUTHKEY":   "tskey-key",
@@ -419,7 +419,7 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
-		"egress proxy": func(env *testEnv) testCase {
+		"egress_proxy": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
 					"TS_AUTHKEY":           "tskey-key",
@@ -783,7 +783,7 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
-		"experimental tailscaled config path": func(env *testEnv) testCase {
+		"experimental_tailscaled_config_path": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
 					"TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR": filepath.Join(env.d, "etc/tailscaled/"),
