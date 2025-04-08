@@ -68,14 +68,14 @@
     # you're an end user you should be prepared for this flake to not
     # build periodically.
     tailscale = pkgs:
-      pkgs.buildGo123Module rec {
+      pkgs.buildGo124Module rec {
         name = "tailscale";
 
         src = ./.;
         vendorHash = pkgs.lib.fileContents ./go.mod.sri;
         nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [pkgs.makeWrapper];
         ldflags = ["-X tailscale.com/version.gitCommitStamp=${tailscaleRev}"];
-        CGO_ENABLED = 0;
+        env.CGO_ENABLED = 0;
         subPackages = ["cmd/tailscale" "cmd/tailscaled"];
         doCheck = false;
 
@@ -118,7 +118,7 @@
           gotools
           graphviz
           perl
-          go_1_23
+          go_1_24
           yarn
 
           # qemu and e2fsprogs are needed for natlab
@@ -130,4 +130,4 @@
   in
     flake-utils.lib.eachDefaultSystem (system: flakeForSystem nixpkgs system);
 }
-# nix-direnv cache busting line: sha256-xO1DuLWi6/lpA9ubA2ZYVJM+CkVNA5IaVGZxX9my0j0=
+# nix-direnv cache busting line: sha256-av4kr09rjNRmag94ziNjJuI/cg8b8lAD3Tk24t/ezH4=
