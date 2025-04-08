@@ -61,6 +61,9 @@ func (src *Prefs) Clone() *Prefs {
 			}
 		}
 	}
+	if dst.RelayServerPort != nil {
+		dst.RelayServerPort = ptr.To(*src.RelayServerPort)
+	}
 	dst.Persist = src.Persist.Clone()
 	return dst
 }
@@ -96,6 +99,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share
+	RelayServerPort        *int
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})
