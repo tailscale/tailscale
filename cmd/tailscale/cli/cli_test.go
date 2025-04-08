@@ -1659,3 +1659,51 @@ func TestSingleUseStringFlag(t *testing.T) {
 		})
 	}
 }
+
+func TestSingleUseStringFlagsSetTwice(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagName string
+		vals     []string
+		setup    func(*upArgsT) flag.Value
+	}{
+		{
+			name:     "advertise-tags",
+			flagName: "advertise-tags",
+			vals:     []string{"tag:foo", "tag:bar"},
+			setup: func(u *upArgsT) flag.Value {
+				return &u.advertiseTags
+			},
+		},
+		{
+			name:     "advertise-routes",
+			flagName: "advertise-routes",
+			vals:     []string{"10.0.0.0/8", "192.168.0.0/16"},
+			setup: func(u *upArgsT) flag.Value {
+				return &u.advertiseRoutes
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var upArgs upArgsT
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+
+			fs.Var(tt.setup(&upArgs), tt.flagName, "")
+			args := []string{
+				fmt.Sprintf("--%s=%s", tt.flagName, tt.vals[0]),
+				fmt.Sprintf("--%s=%s", tt.flagName, tt.vals[1]),
+			}
+
+			err := fs.Parse(args)
+			if err == nil {
+				t.Fatal("expected error when setting flag twice, got nil")
+			}
+			if !strings.Contains(err.Error(), "flag can only be specified once") {
+				t.Errorf("unexpected error message: %v", err)
+			}
+		})
+	}
+}
