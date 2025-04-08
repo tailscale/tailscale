@@ -607,9 +607,9 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&
 		p.ForceDaemon == p2.ForceDaemon &&
-		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
-		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
-		compareStrings(p.AdvertiseServices, p2.AdvertiseServices) &&
+		slices.Equal(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
+		slices.Equal(p.AdvertiseTags, p2.AdvertiseTags) &&
+		slices.Equal(p.AdvertiseServices, p2.AdvertiseServices) &&
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&
@@ -634,30 +634,6 @@ func (ap AppConnectorPrefs) Pretty() string {
 		return "appconnector=advertise "
 	}
 	return ""
-}
-
-func compareIPNets(a, b []netip.Prefix) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func compareStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // NewPrefs returns the default preferences to use.
