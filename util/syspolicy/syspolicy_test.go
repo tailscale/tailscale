@@ -14,6 +14,7 @@ import (
 	"tailscale.com/util/syspolicy/internal/metrics"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
+	"tailscale.com/util/testenv"
 )
 
 var someOtherError = errors.New("error other than not found")
@@ -596,7 +597,7 @@ func TestGetStringArray(t *testing.T) {
 	}
 }
 
-func registerSingleSettingStoreForTest[T source.TestValueType](tb TB, s source.TestSetting[T]) {
+func registerSingleSettingStoreForTest[T source.TestValueType](tb testenv.TB, s source.TestSetting[T]) {
 	policyStore := source.NewTestStoreOf(tb, s)
 	MustRegisterStoreForTest(tb, "TestStore", setting.DeviceScope, policyStore)
 }
