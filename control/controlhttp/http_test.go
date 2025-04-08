@@ -26,8 +26,8 @@ import (
 	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/control/controlhttp/controlhttpserver"
 	"tailscale.com/health"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
@@ -760,7 +760,7 @@ func TestDialPlan(t *testing.T) {
 
 type closeTrackDialer struct {
 	t     testing.TB
-	inner dnscache.DialContextFunc
+	inner netx.DialFunc
 	mu    sync.Mutex
 	conns map[*closeTrackConn]bool
 }

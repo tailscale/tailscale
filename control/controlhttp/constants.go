@@ -12,6 +12,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -66,7 +67,7 @@ type Dialer struct {
 	// Dialer is the dialer used to make outbound connections.
 	//
 	// If not specified, this defaults to net.Dialer.DialContext.
-	Dialer dnscache.DialContextFunc
+	Dialer netx.DialFunc
 
 	// DNSCache is the caching Resolver used by this Dialer.
 	//

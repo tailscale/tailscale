@@ -25,6 +25,7 @@ import (
 	"tailscale.com/k8s-operator/sessionrecording/spdy"
 	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
 	"tailscale.com/k8s-operator/sessionrecording/ws"
+	"tailscale.com/net/netx"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -102,7 +103,7 @@ type Hijacker struct {
 // connection succeeds. In case of success, returns a list with a single
 // successful recording attempt and an error channel. If the connection errors
 // after having been established, an error is sent down the channel.
-type RecorderDialFn func(context.Context, []netip.AddrPort, sessionrecording.DialFunc) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error)
+type RecorderDialFn func(context.Context, []netip.AddrPort, netx.DialFunc) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error)
 
 // Hijack hijacks a 'kubectl exec' session and configures for the session
 // contents to be sent to a recorder.

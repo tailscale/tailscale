@@ -23,6 +23,7 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -71,7 +72,7 @@ type Dialer struct {
 
 	netnsDialerOnce sync.Once
 	netnsDialer     netns.Dialer
-	sysDialForTest  func(_ context.Context, network, addr string) (net.Conn, error) // or nil
+	sysDialForTest  netx.DialFunc // or nil
 
 	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
 
@@ -364,7 +365,7 @@ func (d *Dialer) logf(format string, args ...any) {
 
 // SetSystemDialerForTest sets an alternate function to use for SystemDial
 // instead of netns.Dialer. This is intended for use with nettest.MemoryNetwork.
-func (d *Dialer) SetSystemDialerForTest(fn func(ctx context.Context, network, addr string) (net.Conn, error)) {
+func (d *Dialer) SetSystemDialerForTest(fn netx.DialFunc) {
 	testenv.AssertInTest()
 	d.sysDialForTest = fn
 }

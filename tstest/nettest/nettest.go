@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netx"
 	"tailscale.com/util/testenv"
@@ -42,7 +43,7 @@ func PreferMemNetwork() bool {
 func GetNetwork(tb testing.TB) netx.Network {
 	var n netx.Network
 	if PreferMemNetwork() {
-		n = netx.MemNetwork()
+		n = &memnet.Network{}
 	} else {
 		n = netx.RealNetwork()
 	}

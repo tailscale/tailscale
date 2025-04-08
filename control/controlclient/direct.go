@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -272,7 +273,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), opts.HealthTracker, tr.TLSClientConfig)
-		var dialFunc dialFunc
+		var dialFunc netx.DialFunc
 		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
 		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
 		tr.DialTLSContext = dnscache.TLSDialer(dialFunc, dnsCache, tr.TLSClientConfig)
@@ -1749,14 +1750,12 @@ func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
 	}
 }
 
-type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
-
 // makeScreenTimeDetectingDialFunc returns dialFunc, optionally wrapped (on
 // Apple systems) with a func that sets the returned atomic.Bool for whether
 // Screen Time seemed to intercept the connection.
 //
 // The returned *atomic.Bool is nil on non-Apple systems.
-func makeScreenTimeDetectingDialFunc(dial dialFunc) (dialFunc, *atomic.Bool) {
+func makeScreenTimeDetectingDialFunc(dial netx.DialFunc) (netx.DialFunc, *atomic.Bool) {
 	switch runtime.GOOS {
 	case "darwin", "ios":
 		// Continue below.
