@@ -484,14 +484,15 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 	// In case this method was triggered multiple times in parallel (when
 	// serving incoming requests), check whether one of the other goroutines
 	// already renewed the cert before us.
-	if p, err := getCertPEMCached(cs, domain, now); err == nil {
+	previous, err := getCertPEMCached(cs, domain, now)
+	if err == nil {
 		// shouldStartDomainRenewal caches its result so it's OK to call this
 		// frequently.
-		shouldRenew, err := b.shouldStartDomainRenewal(cs, domain, now, p, minValidity)
+		shouldRenew, err := b.shouldStartDomainRenewal(cs, domain, now, previous, minValidity)
 		if err != nil {
 			logf("error checking for certificate renewal: %v", err)
 		} else if !shouldRenew {
-			return p, nil
+			return previous, nil
 		}
 	} else if !errors.Is(err, ipn.ErrStateNotExist) && !errors.Is(err, errCertExpired) {
 		return nil, err
@@ -536,7 +537,17 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		return nil, err
 	}
 
-	order, err := ac.AuthorizeOrder(ctx, []acme.AuthzID{{Type: "dns", Value: domain}})
+	// If we have a previous cert, include it in the order. Assuming we're
+	// within the ARI renewal window this should exclude us from LE rate
+	// limits.
+	var opts []acme.OrderOption
+	if previous != nil {
+		prevCrt, err := previous.parseCertificate()
+		if err == nil {
+			opts = append(opts, acme.WithOrderReplacesCert(prevCrt))
+		}
+	}
+	order, err := ac.AuthorizeOrder(ctx, []acme.AuthzID{{Type: "dns", Value: domain}}, opts...)
 	if err != nil {
 		return nil, err
 	}
