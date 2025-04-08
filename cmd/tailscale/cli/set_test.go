@@ -116,7 +116,7 @@ func TestCalcAdvertiseRoutesForSet(t *testing.T) {
 				sa.advertiseDefaultRoute = *tc.setExit
 			}
 			if tc.setRoutes != nil {
-				sa.advertiseRoutes = *tc.setRoutes
+				sa.advertiseRoutes = newSingleUseStringForTest(*tc.setRoutes)
 			}
 			got, err := calcAdvertiseRoutesForSet(tc.setExit != nil, tc.setRoutes != nil, curPrefs, sa)
 			if err != nil {
