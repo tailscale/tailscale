@@ -248,7 +248,7 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 }
 
 // SetConfigExpectedCertHash configures c's VerifyPeerCertificate function
-// to require that exactly 1 cert is presented, and that the hex of its SHA256 hash
+// to require that no more than 2 certs are presented, and that the hex of the first cert(the server's cert)'s SHA256 hash
 // is equal to wantFullCertSHA256Hex and that it's a valid cert for c.ServerName.
 func SetConfigExpectedCertHash(c *tls.Config, wantFullCertSHA256Hex string) {
 	if c.VerifyPeerCertificate != nil {
@@ -263,7 +263,10 @@ func SetConfigExpectedCertHash(c *tls.Config, wantFullCertSHA256Hex string) {
 		if len(rawCerts) == 0 {
 			return errors.New("no certs presented")
 		}
-		if len(rawCerts) > 1 {
+		// There may be up to 2 certs: the server's cert (mandatory) and the Metacert (used in TLS1.3 and later, to save a rtt).
+		// Unfortunately the TLS connection is not established yet, so we can't check the TLS version here.
+		// Learn more about metacerts at `derp/derp_server.go/initMetacert`.
+		if len(rawCerts) > 2 {
 			return errors.New("unexpected multiple certs presented")
 		}
 		if fmt.Sprintf("%02x", sha256.Sum256(rawCerts[0])) != wantFullCertSHA256Hex {
