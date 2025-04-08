@@ -71,8 +71,7 @@ We require [Developer Certificate of
 Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
 `Signed-off-by` lines in commits.
 
-See `git log` for our commit message style. It's basically the same as
-[Go's style](https://go.dev/wiki/CommitMessage).
+See [commit-messages.md](docs/commit-messages.md) (or skim `git log`) for our commit message style.
 
 ## About Us
 
