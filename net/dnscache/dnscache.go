@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/net/netx"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
@@ -355,10 +356,8 @@ func (r *Resolver) addIPCache(host string, ip, ip6 netip.Addr, allIPs []netip.Ad
 	}
 }
 
-type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
-
 // Dialer returns a wrapped DialContext func that uses the provided dnsCache.
-func Dialer(fwd DialContextFunc, dnsCache *Resolver) DialContextFunc {
+func Dialer(fwd netx.DialFunc, dnsCache *Resolver) netx.DialFunc {
 	d := &dialer{
 		fwd:         fwd,
 		dnsCache:    dnsCache,
@@ -369,7 +368,7 @@ func Dialer(fwd DialContextFunc, dnsCache *Resolver) DialContextFunc {
 
 // dialer is the config and accumulated state for a dial func returned by Dialer.
 type dialer struct {
-	fwd      DialContextFunc
+	fwd      netx.DialFunc
 	dnsCache *Resolver
 
 	mu          sync.Mutex
@@ -653,7 +652,7 @@ func v6addrs(aa []netip.Addr) (ret []netip.Addr) {
 // TLSDialer is like Dialer but returns a func suitable for using with net/http.Transport.DialTLSContext.
 // It returns a *tls.Conn type on success.
 // On TLS cert validation failure, it can invoke a backup DNS resolution strategy.
-func TLSDialer(fwd DialContextFunc, dnsCache *Resolver, tlsConfigBase *tls.Config) DialContextFunc {
+func TLSDialer(fwd netx.DialFunc, dnsCache *Resolver, tlsConfigBase *tls.Config) netx.DialFunc {
 	tcpDialer := Dialer(fwd, dnsCache)
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(address)

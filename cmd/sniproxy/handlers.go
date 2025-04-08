@@ -14,6 +14,7 @@ import (
 
 	"github.com/inetaf/tcpproxy"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/netx"
 )
 
 type tcpRoundRobinHandler struct {
@@ -22,7 +23,7 @@ type tcpRoundRobinHandler struct {
 	To []string
 
 	// DialContext is used to make the outgoing TCP connection.
-	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	DialContext netx.DialFunc
 
 	// ReachableIPs enumerates the IP addresses this handler is reachable on.
 	ReachableIPs []netip.Addr

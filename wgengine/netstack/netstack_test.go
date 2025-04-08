@@ -22,6 +22,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/metrics"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -512,7 +513,7 @@ func tcp4syn(tb testing.TB, src, dst netip.Addr, sport, dport uint16) []byte {
 
 // makeHangDialer returns a dialer that notifies the returned channel when a
 // connection is dialed and then hangs until the test finishes.
-func makeHangDialer(tb testing.TB) (func(context.Context, string, string) (net.Conn, error), chan struct{}) {
+func makeHangDialer(tb testing.TB) (netx.DialFunc, chan struct{}) {
 	done := make(chan struct{})
 	tb.Cleanup(func() {
 		close(done)

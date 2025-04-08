@@ -42,6 +42,7 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
@@ -769,7 +770,7 @@ func (p *Policy) Shutdown(ctx context.Context) error {
 //
 // The netMon parameter is optional. It should be specified in environments where
 // Tailscaled is manipulating the routing table.
-func MakeDialFunc(netMon *netmon.Monitor, logf logger.Logf) func(ctx context.Context, netw, addr string) (net.Conn, error) {
+func MakeDialFunc(netMon *netmon.Monitor, logf logger.Logf) netx.DialFunc {
 	if netMon == nil {
 		netMon = netmon.NewStatic()
 	}
