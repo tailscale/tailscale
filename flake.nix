@@ -75,7 +75,7 @@
         vendorHash = pkgs.lib.fileContents ./go.mod.sri;
         nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [pkgs.makeWrapper];
         ldflags = ["-X tailscale.com/version.gitCommitStamp=${tailscaleRev}"];
-        CGO_ENABLED = 0;
+        env.CGO_ENABLED = 0;
         subPackages = ["cmd/tailscale" "cmd/tailscaled"];
         doCheck = false;
 
