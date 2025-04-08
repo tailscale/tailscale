@@ -165,6 +165,41 @@ func Run(args []string) (err error) {
 	return err
 }
 
+type onceFlagValue struct {
+	flag.Value
+	set bool
+}
+
+func (v *onceFlagValue) Set(s string) error {
+	if v.set {
+		return fmt.Errorf("flag provided multiple times")
+	}
+	v.set = true
+	return v.Value.Set(s)
+}
+
+func (v *onceFlagValue) IsBoolFlag() bool {
+	type boolFlag interface {
+		IsBoolFlag() bool
+	}
+	bf, ok := v.Value.(boolFlag)
+	return ok && bf.IsBoolFlag()
+}
+
+// noDupFlagify modifies c recursively to make all the
+// flag values be wrappers that permit setting the value
+// at most once.
+func noDupFlagify(c *ffcli.Command) {
+	if c.FlagSet != nil {
+		c.FlagSet.VisitAll(func(f *flag.Flag) {
+			f.Value = &onceFlagValue{Value: f.Value}
+		})
+	}
+	for _, sub := range c.Subcommands {
+		noDupFlagify(sub)
+	}
+}
+
 func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
 	rootfs.Func("socket", "path to tailscaled socket", func(s string) error {
@@ -236,6 +271,7 @@ change in the future.
 	})
 
 	ffcomplete.Inject(rootCmd, func(c *ffcli.Command) { c.LongHelp = hidden + c.LongHelp }, usageFunc)
+	noDupFlagify(rootCmd)
 	return rootCmd
 }
 

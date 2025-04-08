@@ -657,13 +657,6 @@ func upArgsFromOSArgs(goos string, flagArgs ...string) (args upArgsT) {
 	return
 }
 
-func newSingleUseStringForTest(v string) singleUseStringFlag {
-	return singleUseStringFlag{
-		set:   true,
-		value: v,
-	}
-}
-
 func TestPrefsFromUpArgs(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -728,14 +721,14 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "error_advertise_route_invalid_ip",
 			args: upArgsT{
-				advertiseRoutes: newSingleUseStringForTest("foo"),
+				advertiseRoutes: "foo",
 			},
 			wantErr: `"foo" is not a valid IP address or CIDR prefix`,
 		},
 		{
 			name: "error_advertise_route_unmasked_bits",
 			args: upArgsT{
-				advertiseRoutes: newSingleUseStringForTest("1.2.3.4/16"),
+				advertiseRoutes: "1.2.3.4/16",
 			},
 			wantErr: `1.2.3.4/16 has non-address bits set; expected 1.2.0.0/16`,
 		},
@@ -756,7 +749,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "error_tag_prefix",
 			args: upArgsT{
-				advertiseTags: newSingleUseStringForTest("foo"),
+				advertiseTags: "foo",
 			},
 			wantErr: `tag: "foo": tags must start with 'tag:'`,
 		},
@@ -836,7 +829,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "via_route_good",
 			goos: "linux",
 			args: upArgsT{
-				advertiseRoutes: newSingleUseStringForTest("fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"),
+				advertiseRoutes: "fd7a:115c:a1e0:b1a::bb:10.0.0.0/112",
 				netfilterMode:   "off",
 			},
 			want: &ipn.Prefs{
@@ -855,7 +848,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "via_route_good_16_bit",
 			goos: "linux",
 			args: upArgsT{
-				advertiseRoutes: newSingleUseStringForTest("fd7a:115c:a1e0:b1a::aabb:10.0.0.0/112"),
+				advertiseRoutes: "fd7a:115c:a1e0:b1a::aabb:10.0.0.0/112",
 				netfilterMode:   "off",
 			},
 			want: &ipn.Prefs{
@@ -874,7 +867,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "via_route_short_prefix",
 			goos: "linux",
 			args: upArgsT{
-				advertiseRoutes: newSingleUseStringForTest("fd7a:115c:a1e0:b1a::/64"),
+				advertiseRoutes: "fd7a:115c:a1e0:b1a::/64",
 				netfilterMode:   "off",
 			},
 			wantErr: "fd7a:115c:a1e0:b1a::/64 4-in-6 prefix must be at least a /96",
@@ -883,7 +876,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "via_route_short_reserved_siteid",
 			goos: "linux",
 			args: upArgsT{
-				advertiseRoutes: newSingleUseStringForTest("fd7a:115c:a1e0:b1a:1234:5678::/112"),
+				advertiseRoutes: "fd7a:115c:a1e0:b1a:1234:5678::/112",
 				netfilterMode:   "off",
 			},
 			wantErr: "route fd7a:115c:a1e0:b1a:1234:5678::/112 contains invalid site ID 12345678; must be 0xffff or less",
@@ -1113,7 +1106,6 @@ func TestUpdatePrefs(t *testing.T) {
 			},
 			env: upCheckEnv{backendState: "Running"},
 		},
-
 		{
 			// Issue 3808: explicitly empty --operator= should clear value.
 			name:  "explicit_empty_operator",
@@ -1507,6 +1499,51 @@ func TestParseNLArgs(t *testing.T) {
 	}
 }
 
+// makeQuietContinueOnError modifies c recursively to make all the
+// flagsets have error mode flag.ContinueOnError and not
+// spew all over stderr.
+func makeQuietContinueOnError(c *ffcli.Command) {
+	if c.FlagSet != nil {
+		c.FlagSet.Init(c.Name, flag.ContinueOnError)
+		c.FlagSet.Usage = func() {}
+		c.FlagSet.SetOutput(io.Discard)
+	}
+	c.UsageFunc = func(*ffcli.Command) string { return "" }
+	for _, sub := range c.Subcommands {
+		makeQuietContinueOnError(sub)
+	}
+}
+
+// see tailscale/tailscale#6813
+func TestNoDups(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "dup-boolean",
+			args: []string{"up", "--json", "--json"},
+			want: "error parsing commandline arguments: invalid boolean flag json: flag provided multiple times",
+		},
+		{
+			name: "dup-string",
+			args: []string{"up", "--hostname=foo", "--hostname=bar"},
+			want: "error parsing commandline arguments: invalid value \"bar\" for flag -hostname: flag provided multiple times",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			makeQuietContinueOnError(cmd)
+			err := cmd.Parse(tt.args)
+			if got := fmt.Sprint(err); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHelpAlias(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	tstest.Replace[io.Writer](t, &Stdout, &stdout)
@@ -1605,57 +1642,4 @@ func TestDepsNoCapture(t *testing.T) {
 		},
 	}.Check(t)
 
-}
-
-func TestSingleUseStringFlag(t *testing.T) {
-	tests := []struct {
-		name      string
-		setValues []string
-		wantValue string
-		wantErr   bool
-	}{
-		{
-			name:      "set once",
-			setValues: []string{"foo"},
-			wantValue: "foo",
-			wantErr:   false,
-		},
-		{
-			name:      "set twice",
-			setValues: []string{"foo", "bar"},
-			wantValue: "foo",
-			wantErr:   true,
-		},
-		{
-			name:      "set nothing",
-			setValues: []string{},
-			wantValue: "",
-			wantErr:   false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var flag singleUseStringFlag
-			var lastErr error
-
-			for _, val := range tt.setValues {
-				lastErr = flag.Set(val)
-			}
-
-			if tt.wantErr {
-				if lastErr == nil {
-					t.Errorf("expected error on final Set, got nil")
-				}
-			} else {
-				if lastErr != nil {
-					t.Errorf("unexpected error on final Set: %v", lastErr)
-				}
-			}
-
-			if got := flag.String(); got != tt.wantValue {
-				t.Errorf("String() = %q, want %q", got, tt.wantValue)
-			}
-		})
-	}
 }
