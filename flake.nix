@@ -68,7 +68,7 @@
     # you're an end user you should be prepared for this flake to not
     # build periodically.
     tailscale = pkgs:
-      pkgs.buildGo123Module rec {
+      pkgs.buildGo124Module rec {
         name = "tailscale";
 
         src = ./.;
@@ -118,7 +118,7 @@
           gotools
           graphviz
           perl
-          go_1_23
+          go_1_24
           yarn
 
           # qemu and e2fsprogs are needed for natlab
