@@ -239,7 +239,7 @@ func WellKnownSettingDefinition(k Key) (*setting.Definition, error) {
 
 // RegisterWellKnownSettingsForTest registers all implicit setting definitions
 // for the duration of the test.
-func RegisterWellKnownSettingsForTest(tb TB) {
+func RegisterWellKnownSettingsForTest(tb testenv.TB) {
 	tb.Helper()
 	err := setting.SetDefinitionsForTest(tb, implicitDefinitions...)
 	if err != nil {

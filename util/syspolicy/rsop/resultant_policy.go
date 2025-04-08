@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/testenv"
 
 	"tailscale.com/util/syspolicy/source"
 )
@@ -449,7 +449,7 @@ func (p *Policy) Close() {
 	}
 }
 
-func setForTest[T any](tb internal.TB, target *T, newValue T) {
+func setForTest[T any](tb testenv.TB, target *T, newValue T) {
 	oldValue := *target
 	tb.Cleanup(func() { *target = oldValue })
 	*target = newValue

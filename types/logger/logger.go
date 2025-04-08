@@ -24,6 +24,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/util/ctxkey"
+	"tailscale.com/util/testenv"
 )
 
 // Logf is the basic Tailscale logger type: a printf-like func.
@@ -384,16 +385,10 @@ func (a asJSONResult) Format(s fmt.State, verb rune) {
 	s.Write(v)
 }
 
-// TBLogger is the testing.TB subset needed by TestLogger.
-type TBLogger interface {
-	Helper()
-	Logf(format string, args ...any)
-}
-
 // TestLogger returns a logger that logs to tb.Logf
 // with a prefix to make it easier to distinguish spam
 // from explicit test failures.
-func TestLogger(tb TBLogger) Logf {
+func TestLogger(tb testenv.TB) Logf {
 	return func(format string, args ...any) {
 		tb.Helper()
 		tb.Logf("    ... "+format, args...)

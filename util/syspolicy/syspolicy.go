@@ -20,6 +20,7 @@ import (
 	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
+	"tailscale.com/util/testenv"
 )
 
 var (
@@ -46,7 +47,7 @@ func RegisterStore(name string, scope setting.PolicyScope, store source.Store) (
 }
 
 // MustRegisterStoreForTest is like [rsop.RegisterStoreForTest], but it fails the test if the store could not be registered.
-func MustRegisterStoreForTest(tb TB, name string, scope setting.PolicyScope, store source.Store) *rsop.StoreRegistration {
+func MustRegisterStoreForTest(tb testenv.TB, name string, scope setting.PolicyScope, store source.Store) *rsop.StoreRegistration {
 	tb.Helper()
 	reg, err := rsop.RegisterStoreForTest(tb, name, scope, store)
 	if err != nil {
