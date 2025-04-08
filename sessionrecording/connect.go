@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
+	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/multierr"
@@ -40,9 +41,6 @@ const (
 // in tests.
 var uploadAckWindow = 30 * time.Second
 
-// DialFunc is a function for dialing the recorder.
-type DialFunc func(ctx context.Context, network, host string) (net.Conn, error)
-
 // ConnectToRecorder connects to the recorder at any of the provided addresses.
 // It returns the first successful response, or a multierr if all attempts fail.
 //
@@ -55,7 +53,7 @@ type DialFunc func(ctx context.Context, network, host string) (net.Conn, error)
 // attempts are in order the recorder(s) was attempted. If successful a
 // successful connection is made, the last attempt in the slice is the
 // attempt for connected recorder.
-func ConnectToRecorder(ctx context.Context, recs []netip.AddrPort, dial DialFunc) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error) {
+func ConnectToRecorder(ctx context.Context, recs []netip.AddrPort, dial netx.DialFunc) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error) {
 	if len(recs) == 0 {
 		return nil, nil, nil, errors.New("no recorders configured")
 	}
@@ -293,7 +291,7 @@ func (u *readCounter) Read(buf []byte) (int, error) {
 
 // clientHTTP1 returns a claassic http.Client with a per-dial context. It uses
 // dialCtx and adds a 5s timeout to it.
-func clientHTTP1(dialCtx context.Context, dial DialFunc) *http.Client {
+func clientHTTP1(dialCtx context.Context, dial netx.DialFunc) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		perAttemptCtx, cancel := context.WithTimeout(ctx, perDialAttemptTimeout)
@@ -313,7 +311,7 @@ func clientHTTP1(dialCtx context.Context, dial DialFunc) *http.Client {
 // clientHTTP2 is like clientHTTP1 but returns an http.Client suitable for h2c
 // requests (HTTP/2 over plaintext). Unfortunately the same client does not
 // work for HTTP/1 so we need to split these up.
-func clientHTTP2(dialCtx context.Context, dial DialFunc) *http.Client {
+func clientHTTP2(dialCtx context.Context, dial netx.DialFunc) *http.Client {
 	return &http.Client{
 		Transport: &http2.Transport{
 			// Allow "http://" scheme in URLs.

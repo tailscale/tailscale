@@ -42,6 +42,7 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
@@ -503,6 +504,18 @@ type Options struct {
 	// If nil, [TransportOptions.New] is used to construct a new client
 	// with that particular transport sending logs to the default logs server.
 	HTTPC *http.Client
+
+	// MaxBufferSize is the maximum size of the log buffer.
+	// This controls the amount of logs that can be temporarily stored
+	// before the logs can be successfully upload.
+	// If zero, a default buffer size is chosen.
+	MaxBufferSize int
+
+	// MaxUploadSize is the maximum size per upload.
+	// This should only be set by clients that have been authenticated
+	// with the logging service as having a higher upload limit.
+	// If zero, a default upload size is chosen.
+	MaxUploadSize int
 }
 
 // New returns a new log policy (a logger and its instance ID).
@@ -603,10 +616,11 @@ func (opts Options) New() *Policy {
 	}
 
 	conf := logtail.Config{
-		Collection:   newc.Collection,
-		PrivateID:    newc.PrivateID,
-		Stderr:       logWriter{console},
-		CompressLogs: true,
+		Collection:    newc.Collection,
+		PrivateID:     newc.PrivateID,
+		Stderr:        logWriter{console},
+		CompressLogs:  true,
+		MaxUploadSize: opts.MaxUploadSize,
 	}
 	if opts.Collection == logtail.CollectionNode {
 		conf.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
@@ -614,13 +628,13 @@ func (opts Options) New() *Policy {
 		conf.IncludeProcSequence = true
 	}
 
-	if envknob.NoLogsNoSupport() || testenv.InTest() {
+	if envknob.NoLogsNoSupport() || testenv.InTest() || runtime.GOOS == "plan9" {
 		opts.Logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
 	} else {
 		// Only attach an on-disk filch buffer if we are going to be sending logs.
 		// No reason to persist them locally just to drop them later.
-		attachFilchBuffer(&conf, opts.Dir, opts.CmdName, opts.Logf)
+		attachFilchBuffer(&conf, opts.Dir, opts.CmdName, opts.MaxBufferSize, opts.Logf)
 		conf.HTTPC = opts.HTTPC
 
 		if conf.HTTPC == nil {
@@ -676,9 +690,10 @@ func (opts Options) New() *Policy {
 // attachFilchBuffer creates an on-disk ring buffer using filch and attaches
 // it to the logtail config. Note that this is optional; if no buffer is set,
 // logtail will use an in-memory buffer.
-func attachFilchBuffer(conf *logtail.Config, dir, cmdName string, logf logger.Logf) {
+func attachFilchBuffer(conf *logtail.Config, dir, cmdName string, maxFileSize int, logf logger.Logf) {
 	filchOptions := filch.Options{
 		ReplaceStderr: redirectStderrToLogPanics(),
+		MaxFileSize:   maxFileSize,
 	}
 	filchPrefix := filepath.Join(dir, cmdName)
 
@@ -755,7 +770,7 @@ func (p *Policy) Shutdown(ctx context.Context) error {
 //
 // The netMon parameter is optional. It should be specified in environments where
 // Tailscaled is manipulating the routing table.
-func MakeDialFunc(netMon *netmon.Monitor, logf logger.Logf) func(ctx context.Context, netw, addr string) (net.Conn, error) {
+func MakeDialFunc(netMon *netmon.Monitor, logf logger.Logf) netx.DialFunc {
 	if netMon == nil {
 		netMon = netmon.NewStatic()
 	}

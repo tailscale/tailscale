@@ -569,6 +569,17 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 			return filter.Drop
 		}
 	}
+	if runtime.GOOS == "plan9" {
+		isLocalAddr, ok := e.isLocalAddr.LoadOk()
+		if ok {
+			if isLocalAddr(p.Dst.Addr()) {
+				// On Plan9's "tun" equivalent, everything goes back in and out
+				// the tun, even when the kernel's replying to itself.
+				t.InjectInboundCopy(p.Buffer())
+				return filter.Drop
+			}
+		}
+	}
 
 	return filter.Accept
 }
@@ -1580,6 +1591,12 @@ type fwdDNSLinkSelector struct {
 }
 
 func (ls fwdDNSLinkSelector) PickLink(ip netip.Addr) (linkName string) {
+	// sandboxed macOS does not automatically bind to the loopback interface so
+	// we must be explicit about it.
+	if runtime.GOOS == "darwin" && ip.IsLoopback() {
+		return "lo0"
+	}
+
 	if ls.ue.isDNSIPOverTailscale.Load()(ip) {
 		return ls.tunName
 	}

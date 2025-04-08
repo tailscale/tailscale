@@ -36,6 +36,7 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
@@ -136,6 +137,7 @@ type Server struct {
 	metaCert    []byte // the encoded x509 cert to send after LetsEncrypt cert+intermediate
 	dupPolicy   dupPolicy
 	debug       bool
+	localClient local.Client
 
 	// Counters:
 	packetsSent, bytesSent     expvar.Int
@@ -482,6 +484,16 @@ func (s *Server) SetVerifyClientURL(v string) {
 // admission controller URL is unreachable.
 func (s *Server) SetVerifyClientURLFailOpen(v bool) {
 	s.verifyClientsURLFailOpen = v
+}
+
+// SetTailscaledSocketPath sets the unix socket path to use to talk to
+// tailscaled if client verification is enabled.
+//
+// If unset or set to the empty string, the default path for the operating
+// system is used.
+func (s *Server) SetTailscaledSocketPath(path string) {
+	s.localClient.Socket = path
+	s.localClient.UseSocketOnly = path != ""
 }
 
 // SetTCPWriteTimeout sets the timeout for writing to connected clients.
@@ -1319,8 +1331,6 @@ func (c *sclient) requestMeshUpdate() {
 	}
 }
 
-var localClient tailscale.LocalClient
-
 // isMeshPeer reports whether the client is a trusted mesh peer
 // node in the DERP region.
 func (s *Server) isMeshPeer(info *clientInfo) bool {
@@ -1339,7 +1349,7 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 
 	// tailscaled-based verification:
 	if s.verifyClientsLocalTailscaled {
-		_, err := localClient.WhoIsNodeKey(ctx, clientKey)
+		_, err := s.localClient.WhoIsNodeKey(ctx, clientKey)
 		if err == tailscale.ErrPeerNotFound {
 			return fmt.Errorf("peer %v not authorized (not found in local tailscaled)", clientKey)
 		}
@@ -1827,6 +1837,14 @@ func (c *sclient) setWriteDeadline() {
 		// of connected peers.
 		d = privilegedWriteTimeout
 	}
+	if d == 0 {
+		// A zero value should disable the write deadline per
+		// --tcp-write-timeout docs. The flag should only be applicable for
+		// non-mesh connections, again per its docs. If mesh happened to use a
+		// zero value constant above it would be a bug, so we don't bother
+		// with a condition on c.canMesh.
+		return
+	}
 	// Ignore the error from setting the write deadline. In practice,
 	// setting the deadline will only fail if the connection is closed
 	// or closing, so the subsequent Write() will fail anyway.
@@ -2231,7 +2249,7 @@ func (s *Server) ConsistencyCheck() error {
 func (s *Server) checkVerifyClientsLocalTailscaled() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	status, err := localClient.StatusWithoutPeers(ctx)
+	status, err := s.localClient.StatusWithoutPeers(ctx)
 	if err != nil {
 		return fmt.Errorf("localClient.Status: %w", err)
 	}

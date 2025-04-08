@@ -43,7 +43,7 @@ func init() {
 
 // configureSyspolicy configures syspolicy for use on Windows,
 // either in test or regular builds depending on whether tb has a non-nil value.
-func configureSyspolicy(tb internal.TB) error {
+func configureSyspolicy(tb testenv.TB) error {
 	const localSystemSID = "S-1-5-18"
 	// Always create and register a machine policy store that reads
 	// policy settings from the HKEY_LOCAL_MACHINE registry hive.

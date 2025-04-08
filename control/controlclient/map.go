@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -77,7 +78,7 @@ type mapSession struct {
 	peers                  map[tailcfg.NodeID]tailcfg.NodeView
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
-	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
+	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfileView
 	lastPacketFilterRules  views.Slice[tailcfg.FilterRule] // concatenation of all namedPacketFilters
 	namedPacketFilters     map[string]views.Slice[tailcfg.FilterRule]
 	lastParsedPacketFilter []filter.Match
@@ -89,7 +90,6 @@ type mapSession struct {
 	lastPopBrowserURL      string
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
-	lastMaxExpiry          time.Duration
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -104,7 +104,7 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnob
 		privateNodeKey:  privateNodeKey,
 		publicNodeKey:   privateNodeKey.Public(),
 		lastDNSConfig:   new(tailcfg.DNSConfig),
-		lastUserProfile: map[tailcfg.UserID]tailcfg.UserProfile{},
+		lastUserProfile: map[tailcfg.UserID]tailcfg.UserProfileView{},
 
 		// Non-nil no-op defaults, to be optionally overridden by the caller.
 		logf:              logger.Discard,
@@ -195,10 +195,6 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 
 	ms.updateStateFromResponse(resp)
 
-	// Occasionally clean up old userprofile if it grows too much
-	// from e.g. ephemeral tagged nodes.
-	ms.cleanLastUserProfile()
-
 	if ms.tryHandleIncrementally(resp) {
 		ms.occasionallyPrintSummary(ms.lastNetmapSummary)
 		return nil
@@ -244,6 +240,9 @@ func upgradeNode(n *tailcfg.Node) {
 			}
 		}
 		n.LegacyDERPString = ""
+	}
+	if DevKnob.StripHomeDERP() {
+		n.HomeDERP = 0
 	}
 
 	if n.AllowedIPs == nil {
@@ -294,8 +293,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 
 	for _, up := range resp.UserProfiles {
-		ms.lastUserProfile[up.ID] = up
+		ms.lastUserProfile[up.ID] = up.View()
 	}
+	// TODO(bradfitz): clean up old user profiles? maybe not worth it.
 
 	if dm := resp.DERPMap; dm != nil {
 		ms.vlogf("netmap: new map contains DERP map")
@@ -306,6 +306,31 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 		for rid, r := range dm.Regions {
 			if r == nil {
 				delete(dm.Regions, rid)
+			}
+		}
+
+		// In the copy/v86 wasm environment with limited networking, if the
+		// control plane didn't pick our DERP home for us, do it ourselves and
+		// mark all but the lowest region as NoMeasureNoHome. For prod, this
+		// will be Region 1, NYC, a compromise between the US and Europe. But
+		// really the control plane should pick this. This is only a fallback.
+		if hostinfo.IsInVM86() {
+			numCanMeasure := 0
+			lowest := 0
+			for rid, r := range dm.Regions {
+				if !r.NoMeasureNoHome {
+					numCanMeasure++
+					if lowest == 0 || rid < lowest {
+						lowest = rid
+					}
+				}
+			}
+			if numCanMeasure > 1 {
+				for rid, r := range dm.Regions {
+					if rid != lowest {
+						r.NoMeasureNoHome = true
+					}
+				}
 			}
 		}
 
@@ -386,9 +411,6 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
-	}
-	if resp.MaxKeyDuration > 0 {
-		ms.lastMaxExpiry = resp.MaxKeyDuration
 	}
 }
 
@@ -541,32 +563,6 @@ func (ms *mapSession) addUserProfile(nm *netmap.NetworkMap, userID tailcfg.UserI
 	}
 	if up, ok := ms.lastUserProfile[userID]; ok {
 		nm.UserProfiles[userID] = up
-	}
-}
-
-// cleanLastUserProfile deletes any entries from lastUserProfile
-// that are not referenced by any peer or the self node.
-//
-// This is expensive enough that we don't do this on every message
-// from the server, but only when it's grown enough to matter.
-func (ms *mapSession) cleanLastUserProfile() {
-	if len(ms.lastUserProfile) < len(ms.peers)*2 {
-		// Hasn't grown enough to be worth cleaning.
-		return
-	}
-
-	keep := set.Set[tailcfg.UserID]{}
-	if node := ms.lastNode; node.Valid() {
-		keep.Add(node.User())
-	}
-	for _, n := range ms.peers {
-		keep.Add(n.User())
-		keep.Add(n.Sharer())
-	}
-	for userID := range ms.lastUserProfile {
-		if !keep.Contains(userID) {
-			delete(ms.lastUserProfile, userID)
-		}
 	}
 }
 
@@ -837,7 +833,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		PrivateKey:        ms.privateNodeKey,
 		MachineKey:        ms.machinePubKey,
 		Peers:             peerViews,
-		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfile),
+		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfileView),
 		Domain:            ms.lastDomain,
 		DomainAuditLogID:  ms.lastDomainAuditLogID,
 		DNS:               *ms.lastDNSConfig,
@@ -848,7 +844,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		DERPMap:           ms.lastDERPMap,
 		ControlHealth:     ms.lastHealth,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
-		MaxKeyDuration:    ms.lastMaxExpiry,
 	}
 
 	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {

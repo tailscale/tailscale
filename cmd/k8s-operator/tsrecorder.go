@@ -230,7 +230,7 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Recorder) (bool, error) {
 	logger := r.logger(tsr.Name)
 
-	id, _, ok, err := r.getNodeMetadata(ctx, tsr.Name)
+	prefs, ok, err := r.getDevicePrefs(ctx, tsr.Name)
 	if err != nil {
 		return false, err
 	}
@@ -243,6 +243,7 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 		return true, nil
 	}
 
+	id := string(prefs.Config.NodeID)
 	logger.Debugf("deleting device %s from control", string(id))
 	if err := r.tsClient.DeleteDevice(ctx, string(id)); err != nil {
 		errResp := &tailscale.ErrResponse{}
@@ -327,34 +328,33 @@ func (r *RecorderReconciler) getStateSecret(ctx context.Context, tsrName string)
 	return secret, nil
 }
 
-func (r *RecorderReconciler) getNodeMetadata(ctx context.Context, tsrName string) (id tailcfg.StableNodeID, dnsName string, ok bool, err error) {
+func (r *RecorderReconciler) getDevicePrefs(ctx context.Context, tsrName string) (prefs prefs, ok bool, err error) {
 	secret, err := r.getStateSecret(ctx, tsrName)
 	if err != nil || secret == nil {
-		return "", "", false, err
+		return prefs, false, err
 	}
 
-	return getNodeMetadata(ctx, secret)
+	return getDevicePrefs(secret)
 }
 
-// getNodeMetadata returns 'ok == true' iff the node ID is found. The dnsName
+// getDevicePrefs returns 'ok == true' iff the node ID is found. The dnsName
 // is expected to always be non-empty if the node ID is, but not required.
-func getNodeMetadata(ctx context.Context, secret *corev1.Secret) (id tailcfg.StableNodeID, dnsName string, ok bool, err error) {
+func getDevicePrefs(secret *corev1.Secret) (prefs prefs, ok bool, err error) {
 	// TODO(tomhjp): Should maybe use ipn to parse the following info instead.
 	currentProfile, ok := secret.Data[currentProfileKey]
 	if !ok {
-		return "", "", false, nil
+		return prefs, false, nil
 	}
 	profileBytes, ok := secret.Data[string(currentProfile)]
 	if !ok {
-		return "", "", false, nil
+		return prefs, false, nil
 	}
-	var profile profile
-	if err := json.Unmarshal(profileBytes, &profile); err != nil {
-		return "", "", false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
+	if err := json.Unmarshal(profileBytes, &prefs); err != nil {
+		return prefs, false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
 	}
 
-	ok = profile.Config.NodeID != ""
-	return tailcfg.StableNodeID(profile.Config.NodeID), profile.Config.UserProfile.LoginName, ok, nil
+	ok = prefs.Config.NodeID != ""
+	return prefs, ok, nil
 }
 
 func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
@@ -367,14 +367,14 @@ func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) 
 }
 
 func getDeviceInfo(ctx context.Context, tsClient tsClient, secret *corev1.Secret) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
-	nodeID, dnsName, ok, err := getNodeMetadata(ctx, secret)
+	prefs, ok, err := getDevicePrefs(secret)
 	if !ok || err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, err
 	}
 
 	// TODO(tomhjp): The profile info doesn't include addresses, which is why we
 	// need the API. Should we instead update the profile to include addresses?
-	device, err := tsClient.Device(ctx, string(nodeID), nil)
+	device, err := tsClient.Device(ctx, string(prefs.Config.NodeID), nil)
 	if err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
 	}
@@ -383,20 +383,25 @@ func getDeviceInfo(ctx context.Context, tsClient tsClient, secret *corev1.Secret
 		Hostname:   device.Hostname,
 		TailnetIPs: device.Addresses,
 	}
-	if dnsName != "" {
+	if dnsName := prefs.Config.UserProfile.LoginName; dnsName != "" {
 		d.URL = fmt.Sprintf("https://%s", dnsName)
 	}
 
 	return d, true, nil
 }
 
-type profile struct {
+// [prefs] is a subset of the ipn.Prefs struct used for extracting information
+// from the state Secret of Tailscale devices.
+type prefs struct {
 	Config struct {
-		NodeID      string `json:"NodeID"`
+		NodeID      tailcfg.StableNodeID `json:"NodeID"`
 		UserProfile struct {
+			// LoginName is the MagicDNS name of the device, e.g. foo.tail-scale.ts.net.
 			LoginName string `json:"LoginName"`
 		} `json:"UserProfile"`
 	} `json:"Config"`
+
+	AdvertiseServices []string `json:"AdvertiseServices"`
 }
 
 func markedForDeletion(obj metav1.Object) bool {

@@ -7,6 +7,7 @@ package ipnserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
@@ -40,12 +42,6 @@ type Server struct {
 	logf         logger.Logf
 	netMon       *netmon.Monitor // must be non-nil
 	backendLogID logid.PublicID
-	// resetOnZero is whether to call bs.Reset on transition from
-	// 1->0 active HTTP requests. That is, this is whether the backend is
-	// being run in "client mode" that requires an active GUI
-	// connection (such as on Windows by default). Even if this
-	// is true, the ForceDaemon pref can override this.
-	resetOnZero bool
 
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
@@ -194,14 +190,22 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer onDone()
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
-		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
+		if actor, ok := ci.(*actor); ok {
+			reason, err := base64.StdEncoding.DecodeString(r.Header.Get(apitype.RequestReasonHeader))
+			if err != nil {
+				http.Error(w, "invalid reason header", http.StatusBadRequest)
+				return
+			}
+			ci = actorWithAccessOverride(actor, string(reason))
+		}
+
+		lah := localapi.NewHandler(ci, lb, s.logf, s.backendLogID)
 		if actor, ok := ci.(*actor); ok {
 			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
 			lah.PermitCert = actor.CanFetchCerts()
 		} else if testenv.InTest() {
 			lah.PermitRead, lah.PermitWrite = true, true
 		}
-		lah.Actor = ci
 		lah.ServeHTTP(w, r)
 		return
 	}
@@ -308,6 +312,13 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor ipnauth.Acto
 // Unix-like platforms and specifies the ID of a local user
 // (in the os/user.User.Uid string form) who is allowed
 // to operate tailscaled without being root or using sudo.
+//
+// Sandboxed macos clients must directly supply, or be able to read,
+// an explicit token. Permission is inferred by validating that
+// token. Sandboxed macos clients also don't use ipnserver.actor at all
+// (and prior to that, they didn't use ipnauth.ConnIdentity)
+//
+// See safesocket and safesocket_darwin.
 func (a *actor) Permissions(operatorUID string) (read, write bool) {
 	switch envknob.GOOS() {
 	case "windows":
@@ -320,7 +331,7 @@ func (a *actor) Permissions(operatorUID string) (read, write bool) {
 		// checks here. Note that this permission model is being changed in
 		// tailscale/corp#18342.
 		return true, true
-	case "js":
+	case "js", "plan9":
 		return true, true
 	}
 	if a.ci.IsUnixSock() {
@@ -412,13 +423,8 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 			return
 		}
 
-		if s.resetOnZero {
-			if lb.InServerMode() {
-				s.logf("client disconnected; staying alive in server mode")
-			} else {
-				s.logf("client disconnected; stopping server")
-				lb.ResetForClientDisconnect()
-			}
+		if envknob.GOOS() == "windows" && !actor.IsLocalSystem() {
+			lb.SetCurrentUser(nil)
 		}
 
 		// Wake up callers waiting for the server to be idle:
@@ -442,7 +448,6 @@ func New(logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) *Server
 		backendLogID: logID,
 		logf:         logf,
 		netMon:       netMon,
-		resetOnZero:  envknob.GOOS() == "windows",
 	}
 }
 

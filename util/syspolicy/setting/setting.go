@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/types/lazy"
 	"tailscale.com/util/syspolicy/internal"
+	"tailscale.com/util/testenv"
 )
 
 // Scope indicates the broadest scope at which a policy setting may apply,
@@ -277,7 +278,7 @@ func DefinitionMapOf(settings []*Definition) (DefinitionMap, error) {
 // for the test duration. It is not concurrency-safe, but unlike [Register],
 // it does not panic and can be called anytime.
 // It returns an error if ds contains two different settings with the same [Key].
-func SetDefinitionsForTest(tb lazy.TB, ds ...*Definition) error {
+func SetDefinitionsForTest(tb testenv.TB, ds ...*Definition) error {
 	m, err := DefinitionMapOf(ds)
 	if err != nil {
 		return err

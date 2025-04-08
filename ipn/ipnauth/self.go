@@ -4,6 +4,8 @@
 package ipnauth
 
 import (
+	"context"
+
 	"tailscale.com/ipn"
 )
 
@@ -17,18 +19,21 @@ var Self Actor = unrestricted{}
 type unrestricted struct{}
 
 // UserID implements [Actor].
-func (u unrestricted) UserID() ipn.WindowsUserID { return "" }
+func (unrestricted) UserID() ipn.WindowsUserID { return "" }
 
 // Username implements [Actor].
-func (u unrestricted) Username() (string, error) { return "", nil }
+func (unrestricted) Username() (string, error) { return "", nil }
+
+// Context implements [Actor].
+func (unrestricted) Context() context.Context { return context.Background() }
 
 // ClientID implements [Actor].
 // It always returns (NoClientID, false) because the tailscaled itself
 // is not a connected LocalAPI client.
-func (u unrestricted) ClientID() (_ ClientID, ok bool) { return NoClientID, false }
+func (unrestricted) ClientID() (_ ClientID, ok bool) { return NoClientID, false }
 
 // CheckProfileAccess implements [Actor].
-func (u unrestricted) CheckProfileAccess(_ ipn.LoginProfileView, _ ProfileAccess) error {
+func (unrestricted) CheckProfileAccess(_ ipn.LoginProfileView, _ ProfileAccess, _ AuditLogFunc) error {
 	// Unrestricted access to all profiles.
 	return nil
 }
@@ -37,10 +42,10 @@ func (u unrestricted) CheckProfileAccess(_ ipn.LoginProfileView, _ ProfileAccess
 //
 // Deprecated: this method exists for compatibility with the current (as of 2025-01-28)
 // permission model and will be removed as we progress on tailscale/corp#18342.
-func (u unrestricted) IsLocalSystem() bool { return false }
+func (unrestricted) IsLocalSystem() bool { return false }
 
 // IsLocalAdmin implements [Actor].
 //
 // Deprecated: this method exists for compatibility with the current (as of 2025-01-28)
 // permission model and will be removed as we progress on tailscale/corp#18342.
-func (u unrestricted) IsLocalAdmin(operatorUID string) bool { return false }
+func (unrestricted) IsLocalAdmin(operatorUID string) bool { return false }

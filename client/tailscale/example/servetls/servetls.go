@@ -11,13 +11,14 @@ import (
 	"log"
 	"net/http"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 )
 
 func main() {
+	var lc local.Client
 	s := &http.Server{
 		TLSConfig: &tls.Config{
-			GetCertificate: tailscale.GetCertificate,
+			GetCertificate: lc.GetCertificate,
 		},
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, "<h1>Hello from Tailscale!</h1> It works.")

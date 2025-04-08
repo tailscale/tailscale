@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/gorilla/csrf"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
@@ -50,7 +50,7 @@ type Server struct {
 	mode ServerMode
 
 	logf    logger.Logf
-	lc      *tailscale.LocalClient
+	lc      *local.Client
 	timeNow func() time.Time
 
 	// devMode indicates that the server run with frontend assets
@@ -125,9 +125,9 @@ type ServerOpts struct {
 	// PathPrefix is the URL prefix added to requests by CGI or reverse proxy.
 	PathPrefix string
 
-	// LocalClient is the tailscale.LocalClient to use for this web server.
+	// LocalClient is the local.Client to use for this web server.
 	// If nil, a new one will be created.
-	LocalClient *tailscale.LocalClient
+	LocalClient *local.Client
 
 	// TimeNow optionally provides a time function.
 	// time.Now is used as default.
@@ -166,7 +166,7 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 		return nil, fmt.Errorf("invalid Mode provided")
 	}
 	if opts.LocalClient == nil {
-		opts.LocalClient = &tailscale.LocalClient{}
+		opts.LocalClient = &local.Client{}
 	}
 	s = &Server{
 		mode:        opts.Mode,
@@ -203,35 +203,9 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	}
 	s.assetsHandler, s.assetsCleanup = assetsHandler(s.devMode)
 
-	var metric string // clientmetric to report on startup
-
-	// Create handler for "/api" requests with CSRF protection.
-	// We don't require secure cookies, since the web client is regularly used
-	// on network appliances that are served on local non-https URLs.
-	// The client is secured by limiting the interface it listens on,
-	// or by authenticating requests before they reach the web client.
-	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
-
-	// signal to the CSRF middleware that the request is being served over
-	// plaintext HTTP to skip TLS-only header checks.
-	withSetPlaintext := func(h http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r = csrf.PlaintextHTTPRequest(r)
-			h.ServeHTTP(w, r)
-		})
-	}
-
-	switch s.mode {
-	case LoginServerMode:
-		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveLoginAPI)))
-		metric = "web_login_client_initialization"
-	case ReadOnlyServerMode:
-		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveLoginAPI)))
-		metric = "web_readonly_client_initialization"
-	case ManageServerMode:
-		s.apiHandler = csrfProtect(withSetPlaintext(http.HandlerFunc(s.serveAPI)))
-		metric = "web_client_initialization"
-	}
+	var metric string
+	s.apiHandler, metric = s.modeAPIHandler(s.mode)
+	s.apiHandler = s.withCSRF(s.apiHandler)
 
 	// Don't block startup on reporting metric.
 	// Report in separate go routine with 5 second timeout.
@@ -242,6 +216,39 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	}()
 
 	return s, nil
+}
+
+func (s *Server) withCSRF(h http.Handler) http.Handler {
+	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
+
+	// ref https://github.com/tailscale/tailscale/pull/14822
+	// signal to the CSRF middleware that the request is being served over
+	// plaintext HTTP to skip TLS-only header checks.
+	withSetPlaintext := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r = csrf.PlaintextHTTPRequest(r)
+			h.ServeHTTP(w, r)
+		})
+	}
+
+	// NB: the order of the withSetPlaintext and csrfProtect calls is important
+	// to ensure that we signal to the CSRF middleware that the request is being
+	// served over plaintext HTTP and not over TLS as it presumes by default.
+	return withSetPlaintext(csrfProtect(h))
+}
+
+func (s *Server) modeAPIHandler(mode ServerMode) (http.Handler, string) {
+	switch mode {
+	case LoginServerMode:
+		return http.HandlerFunc(s.serveLoginAPI), "web_login_client_initialization"
+	case ReadOnlyServerMode:
+		return http.HandlerFunc(s.serveLoginAPI), "web_readonly_client_initialization"
+	case ManageServerMode:
+		return http.HandlerFunc(s.serveAPI), "web_client_initialization"
+	default: // invalid mode
+		log.Fatalf("invalid mode: %v", mode)
+	}
+	return nil, ""
 }
 
 func (s *Server) Shutdown() {
@@ -328,7 +335,8 @@ func (s *Server) requireTailscaleIP(w http.ResponseWriter, r *http.Request) (han
 		ipv6ServiceHost = "[" + tsaddr.TailscaleServiceIPv6String + "]"
 	)
 	// allow requests on quad-100 (or ipv6 equivalent)
-	if r.Host == ipv4ServiceHost || r.Host == ipv6ServiceHost {
+	host := strings.TrimSuffix(r.Host, ":80")
+	if host == ipv4ServiceHost || host == ipv6ServiceHost {
 		return false
 	}
 

@@ -4,11 +4,17 @@
 package ipnauth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 )
+
+// AuditLogFunc is any function that can be used to log audit actions performed by an [Actor].
+type AuditLogFunc func(action tailcfg.ClientAuditAction, details string) error
 
 // Actor is any actor using the [ipnlocal.LocalBackend].
 //
@@ -27,9 +33,18 @@ type Actor interface {
 	// a connected LocalAPI client. Otherwise, it returns a zero value and false.
 	ClientID() (_ ClientID, ok bool)
 
-	// CheckProfileAccess checks whether the actor has the requested access rights
-	// to the specified Tailscale profile. It returns an error if the access is denied.
-	CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ProfileAccess) error
+	// Context returns the context associated with the actor.
+	// It carries additional information about the actor
+	// and is canceled when the actor is done.
+	Context() context.Context
+
+	// CheckProfileAccess checks whether the actor has the necessary access rights
+	// to perform a given action on the specified Tailscale profile.
+	// It returns an error if access is denied.
+	//
+	// If the auditLogger is non-nil, it is used to write details about the action
+	// to the audit log when required by the policy.
+	CheckProfileAccess(profile ipn.LoginProfileView, requestedAccess ProfileAccess, auditLogFn AuditLogFunc) error
 
 	// IsLocalSystem reports whether the actor is the Windows' Local System account.
 	//
@@ -92,4 +107,28 @@ func (id ClientID) MarshalJSON() ([]byte, error) {
 // It is primarily used for testing.
 func (id *ClientID) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, &id.v)
+}
+
+type actorWithRequestReason struct {
+	Actor
+	ctx context.Context
+}
+
+// WithRequestReason returns an [Actor] that wraps the given actor and
+// carries the specified request reason in its context.
+func WithRequestReason(actor Actor, requestReason string) Actor {
+	ctx := apitype.RequestReasonKey.WithValue(actor.Context(), requestReason)
+	return &actorWithRequestReason{Actor: actor, ctx: ctx}
+}
+
+// Context implements [Actor].
+func (a *actorWithRequestReason) Context() context.Context { return a.ctx }
+
+type withoutCloseActor struct{ Actor }
+
+// WithoutClose returns an [Actor] that does not expose the [ActorCloser] interface.
+// In other words, _, ok := WithoutClose(actor).(ActorCloser) will always be false,
+// even if the original actor implements [ActorCloser].
+func WithoutClose(actor Actor) Actor {
+	return withoutCloseActor{actor}
 }

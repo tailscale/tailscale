@@ -4,6 +4,8 @@
 package ipnauth
 
 import (
+	"cmp"
+	"context"
 	"errors"
 
 	"tailscale.com/ipn"
@@ -17,6 +19,7 @@ type TestActor struct {
 	Name        string            // username associated with the actor, or ""
 	NameErr     error             // error to be returned by [TestActor.Username]
 	CID         ClientID          // non-zero if the actor represents a connected LocalAPI client
+	Ctx         context.Context   // context associated with the actor
 	LocalSystem bool              // whether the actor represents the special Local System account on Windows
 	LocalAdmin  bool              // whether the actor has local admin access
 }
@@ -30,8 +33,11 @@ func (a *TestActor) Username() (string, error) { return a.Name, a.NameErr }
 // ClientID implements [Actor].
 func (a *TestActor) ClientID() (_ ClientID, ok bool) { return a.CID, a.CID != NoClientID }
 
+// Context implements [Actor].
+func (a *TestActor) Context() context.Context { return cmp.Or(a.Ctx, context.Background()) }
+
 // CheckProfileAccess implements [Actor].
-func (a *TestActor) CheckProfileAccess(profile ipn.LoginProfileView, _ ProfileAccess) error {
+func (a *TestActor) CheckProfileAccess(profile ipn.LoginProfileView, _ ProfileAccess, _ AuditLogFunc) error {
 	return errors.New("profile access denied")
 }
 

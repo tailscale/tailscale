@@ -417,6 +417,29 @@ func App() string {
 	return ""
 }
 
+// IsCertShareReadOnlyMode returns true if this replica should never attempt to
+// issue or renew TLS credentials for any of the HTTPS endpoints that it is
+// serving. It should only return certs found in its cert store.  Currently,
+// this is used by the Kubernetes Operator's HA Ingress via VIPServices, where
+// multiple Ingress proxy instances serve the same HTTPS endpoint with a shared
+// TLS credentials. The TLS credentials should only be issued by one of the
+// replicas.
+// For HTTPS Ingress the operator and containerboot ensure
+// that read-only replicas will not be serving the HTTPS endpoints before there
+// is a shared cert available.
+func IsCertShareReadOnlyMode() bool {
+	m := String("TS_CERT_SHARE_MODE")
+	return m == "ro"
+}
+
+// IsCertShareReadWriteMode returns true if this instance is the replica
+// responsible for issuing and renewing TLS certs in an HA setup with certs
+// shared between multiple replicas.
+func IsCertShareReadWriteMode() bool {
+	m := String("TS_CERT_SHARE_MODE")
+	return m == "rw"
+}
+
 // CrashOnUnexpected reports whether the Tailscale client should panic
 // on unexpected conditions. If TS_DEBUG_CRASH_ON_UNEXPECTED is set, that's
 // used. Otherwise the default value is true for unstable builds.

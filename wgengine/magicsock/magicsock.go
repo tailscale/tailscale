@@ -177,6 +177,10 @@ type Conn struct {
 	// port mappings from NAT devices.
 	portMapper *portmapper.Client
 
+	// portMapperLogfUnregister is the function to call to unregister
+	// the portmapper log limiter.
+	portMapperLogfUnregister func()
+
 	// derpRecvCh is used by receiveDERP to read DERP messages.
 	// It must have buffer size > 0; see issue 3736.
 	derpRecvCh chan derpReadResult
@@ -532,10 +536,15 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
+
+	// Don't log the same log messages possibly every few seconds in our
+	// portmapper.
+	portmapperLogf := logger.WithPrefix(c.logf, "portmapper: ")
+	portmapperLogf, c.portMapperLogfUnregister = netmon.LinkChangeLogLimiter(portmapperLogf, opts.NetMon)
 	portMapOpts := &portmapper.DebugKnobs{
 		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
 	}
-	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
+	c.portMapper = portmapper.NewClient(portmapperLogf, opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
 	c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
@@ -710,7 +719,7 @@ func (c *Conn) updateEndpoints(why string) {
 		c.muCond.Broadcast()
 	}()
 	c.dlogf("[v1] magicsock: starting endpoint update (%s)", why)
-	if c.noV4Send.Load() && runtime.GOOS != "js" && !c.onlyTCP443.Load() {
+	if c.noV4Send.Load() && runtime.GOOS != "js" && !c.onlyTCP443.Load() && !hostinfo.IsInVM86() {
 		c.mu.Lock()
 		closed := c.closed
 		c.mu.Unlock()
@@ -2481,6 +2490,7 @@ func (c *Conn) Close() error {
 	}
 	c.stopPeriodicReSTUNTimerLocked()
 	c.portMapper.Close()
+	c.portMapperLogfUnregister()
 
 	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ep.stopAndReset()
@@ -2757,7 +2767,9 @@ func (c *Conn) Rebind() {
 		c.logf("Rebind; defIf=%q, ips=%v", defIf, ifIPs)
 	}
 
-	c.maybeCloseDERPsOnRebind(ifIPs)
+	if len(ifIPs) > 0 {
+		c.maybeCloseDERPsOnRebind(ifIPs)
+	}
 	c.resetEndpointStates()
 }
 
@@ -3008,6 +3020,10 @@ func (c *Conn) DebugForcePreferDERP(n int) {
 // portableTrySetSocketBuffer sets SO_SNDBUF and SO_RECVBUF on pconn to socketBufferSize,
 // logging an error if it occurs.
 func portableTrySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
+	if runtime.GOOS == "plan9" {
+		// Not supported. Don't try. Avoid logspam.
+		return
+	}
 	if c, ok := pconn.(*net.UDPConn); ok {
 		// Attempt to increase the buffer size, and allow failures.
 		if err := c.SetReadBuffer(socketBufferSize); err != nil {

@@ -6,11 +6,13 @@ package controlhttp
 import (
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -65,7 +67,7 @@ type Dialer struct {
 	// Dialer is the dialer used to make outbound connections.
 	//
 	// If not specified, this defaults to net.Dialer.DialContext.
-	Dialer dnscache.DialContextFunc
+	Dialer netx.DialFunc
 
 	// DNSCache is the caching Resolver used by this Dialer.
 	//
@@ -89,6 +91,11 @@ type Dialer struct {
 	DialPlan *tailcfg.ControlDialPlan
 
 	proxyFunc func(*http.Request) (*url.URL, error) // or nil
+
+	// logPort80Failure is whether we should log about port 80 interceptions
+	// and forcing a port 443 dial. We do this only once per "dial" method
+	// which can result in many concurrent racing dialHost calls.
+	logPort80Failure atomic.Bool
 
 	// For tests only
 	drainFinished        chan struct{}

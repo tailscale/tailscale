@@ -2685,6 +2685,22 @@ spec:
                                             Defaults to false.
                                         type: boolean
                                 type: object
+                            useLetsEncryptStagingEnvironment:
+                                description: |-
+                                    Set UseLetsEncryptStagingEnvironment to true to issue TLS
+                                    certificates for any HTTPS endpoints exposed to the tailnet from
+                                    LetsEncrypt's staging environment.
+                                    https://letsencrypt.org/docs/staging-environment/
+                                    This setting only affects Tailscale Ingress resources.
+                                    By default Ingress TLS certificates are issued from LetsEncrypt's
+                                    production environment.
+                                    Changing this setting true -> false, will result in any
+                                    existing certs being re-issued from the production environment.
+                                    Changing this setting false (default) -> true, when certs have already
+                                    been provisioned from production environment will NOT result in certs
+                                    being re-issued from the staging environment before they need to be
+                                    renewed.
+                                type: boolean
                         type: object
                     status:
                         description: |-
@@ -2860,7 +2876,7 @@ spec:
                                 type: array
                             type:
                                 description: |-
-                                    Type of the ProxyGroup proxies. Currently the only supported type is egress.
+                                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
                                     Type is immutable once a ProxyGroup is created.
                                 enum:
                                     - egress
@@ -4898,6 +4914,7 @@ rules:
         - update
         - list
         - watch
+        - deletecollection
     - apiGroups:
         - monitoring.coreos.com
       resources:

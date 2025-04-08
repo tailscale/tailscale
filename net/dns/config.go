@@ -10,6 +10,8 @@ import (
 	"net/netip"
 	"sort"
 
+	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
@@ -47,11 +49,28 @@ type Config struct {
 	OnlyIPv6 bool
 }
 
-func (c *Config) serviceIP() netip.Addr {
+var magicDNSDualStack = envknob.RegisterBool("TS_DEBUG_MAGIC_DNS_DUAL_STACK")
+
+// serviceIPs returns the list of service IPs where MagicDNS is reachable.
+//
+// The provided knobs may be nil.
+func (c *Config) serviceIPs(knobs *controlknobs.Knobs) []netip.Addr {
 	if c.OnlyIPv6 {
-		return tsaddr.TailscaleServiceIPv6()
+		return []netip.Addr{tsaddr.TailscaleServiceIPv6()}
 	}
-	return tsaddr.TailscaleServiceIP()
+
+	// TODO(bradfitz,mikeodr,raggi): include IPv6 here too; tailscale/tailscale#15404
+	// And add a controlknobs knob to disable dual stack.
+	//
+	// For now, opt-in for testing.
+	if magicDNSDualStack() {
+		return []netip.Addr{
+			tsaddr.TailscaleServiceIP(),
+			tsaddr.TailscaleServiceIPv6(),
+		}
+	}
+
+	return []netip.Addr{tsaddr.TailscaleServiceIP()}
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting

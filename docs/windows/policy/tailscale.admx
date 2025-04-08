@@ -54,6 +54,10 @@
                   displayName="$(string.SINCE_V1_78)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_82"
+                  displayName="$(string.SINCE_V1_82)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -98,7 +102,7 @@
       <parentCategory ref="Settings_Category" />
       <supportedOn ref="SINCE_V1_56" />
       <elements>
-        <text id="ExitNodeIDPrompt" valueName="ExitNodeID" required="true" />>
+        <text id="ExitNodeIDPrompt" valueName="ExitNodeID" required="true" />
       </elements>
     </policy>
     <policy name="AllowedSuggestedExitNodes" class="Machine" displayName="$(string.AllowedSuggestedExitNodes)" explainText="$(string.AllowedSuggestedExitNodes_Help)" presentation="$(presentation.AllowedSuggestedExitNodes)" key="Software\Policies\Tailscale\AllowedSuggestedExitNodes">
@@ -127,6 +131,37 @@
       <disabledValue>
         <string>never</string>
       </disabledValue>
+    </policy>
+    <policy name="AlwaysOn" class="Machine" displayName="$(string.AlwaysOn)" explainText="$(string.AlwaysOn_Help)" presentation="$(presentation.AlwaysOn)" key="Software\Policies\Tailscale" valueName="AlwaysOn.Enabled">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="SINCE_V1_82" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+      <elements>
+        <enum id="AlwaysOn_OverrideWithReason" valueName="AlwaysOn.OverrideWithReason">
+          <item displayName="$(string.NotAllowed)">
+            <value>
+              <decimal value="0" />
+            </value>
+          </item>
+          <item displayName="$(string.AllowedWithAudit)">
+            <value>
+              <decimal value="1" />
+            </value>
+          </item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="ReconnectAfter" class="Machine" displayName="$(string.ReconnectAfter)" explainText="$(string.ReconnectAfter_Help)" presentation="$(presentation.ReconnectAfter)" key="Software\Policies\Tailscale">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="SINCE_V1_82" />
+      <elements>
+        <text id="ReconnectAfterDelay" valueName="ReconnectAfter" required="true" />
+      </elements>
     </policy>
     <policy name="ExitNodeAllowLANAccess" class="Machine" displayName="$(string.ExitNodeAllowLANAccess)" explainText="$(string.ExitNodeAllowLANAccess_Help)" key="Software\Policies\Tailscale" valueName="ExitNodeAllowLANAccess">
       <parentCategory ref="Settings_Category" />

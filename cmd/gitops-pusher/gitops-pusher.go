@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -405,7 +406,8 @@ func getACLETag(ctx context.Context, client *http.Client, tailnet, apiKey string
 	got := resp.StatusCode
 	want := http.StatusOK
 	if got != want {
-		return "", fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
+		errorDetails, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("wanted HTTP status code %d but got %d: %#q", want, got, string(errorDetails))
 	}
 
 	return Shuck(resp.Header.Get("ETag")), nil

@@ -10,7 +10,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -178,7 +178,8 @@ func (tt noiseClientTest) run(t *testing.T) {
 
 	const msg = "Hello, client"
 	h2 := &http2.Server{}
-	hs := httptest.NewServer(&Upgrader{
+	nw := nettest.GetNetwork(t)
+	hs := nettest.NewHTTPServer(nw, &Upgrader{
 		h2srv:            h2,
 		noiseKeyPriv:     serverPrivate,
 		sendEarlyPayload: tt.sendEarlyPayload,
@@ -193,6 +194,10 @@ func (tt noiseClientTest) run(t *testing.T) {
 	defer hs.Close()
 
 	dialer := tsdial.NewDialer(netmon.NewStatic())
+	if nettest.PreferMemNetwork() {
+		dialer.SetSystemDialerForTest(nw.Dial)
+	}
+
 	nc, err := NewNoiseClient(NoiseOpts{
 		PrivKey:      clientPrivate,
 		ServerPubKey: serverPrivate.Public(),

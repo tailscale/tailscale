@@ -158,22 +158,27 @@ func (p *preference[T]) SetReadOnly(readonly bool) {
 	p.s.Metadata.ReadOnly = readonly
 }
 
-// MarshalJSONV2 implements [jsonv2.MarshalerV2].
-func (p preference[T]) MarshalJSONV2(out *jsontext.Encoder, opts jsonv2.Options) error {
-	return jsonv2.MarshalEncode(out, &p.s, opts)
+var (
+	_ jsonv2.MarshalerTo     = (*preference[struct{}])(nil)
+	_ jsonv2.UnmarshalerFrom = (*preference[struct{}])(nil)
+)
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (p preference[T]) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(out, &p.s)
 }
 
-// UnmarshalJSONV2 implements [jsonv2.UnmarshalerV2].
-func (p *preference[T]) UnmarshalJSONV2(in *jsontext.Decoder, opts jsonv2.Options) error {
-	return jsonv2.UnmarshalDecode(in, &p.s, opts)
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (p *preference[T]) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	return jsonv2.UnmarshalDecode(in, &p.s)
 }
 
 // MarshalJSON implements [json.Marshaler].
 func (p preference[T]) MarshalJSON() ([]byte, error) {
-	return jsonv2.Marshal(p) // uses MarshalJSONV2
+	return jsonv2.Marshal(p) // uses MarshalJSONTo
 }
 
 // UnmarshalJSON implements [json.Unmarshaler].
 func (p *preference[T]) UnmarshalJSON(b []byte) error {
-	return jsonv2.Unmarshal(b, p) // uses UnmarshalJSONV2
+	return jsonv2.Unmarshal(b, p) // uses UnmarshalJSONFrom
 }

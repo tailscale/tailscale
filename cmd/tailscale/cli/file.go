@@ -28,6 +28,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -268,46 +269,77 @@ func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNode
 	if err != nil {
 		return "", false, err
 	}
-	fts, err := localClient.FileTargets(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	for _, ft := range fts {
-		n := ft.Node
-		for _, a := range n.Addresses {
-			if a.Addr() != ip {
-				continue
-			}
-			isOffline = n.Online != nil && !*n.Online
-			return n.StableID, isOffline, nil
-		}
-	}
-	return "", false, fileTargetErrorDetail(ctx, ip)
-}
 
-// fileTargetErrorDetail returns a non-nil error saying why ip is an
-// invalid file sharing target.
-func fileTargetErrorDetail(ctx context.Context, ip netip.Addr) error {
-	found := false
-	if st, err := localClient.Status(ctx); err == nil && st.Self != nil {
-		for _, peer := range st.Peer {
-			for _, pip := range peer.TailscaleIPs {
-				if pip == ip {
-					found = true
-					if peer.UserID != st.Self.UserID {
-						return errors.New("owned by different user; can only send files to your own devices")
-					}
-				}
+	st, err := localClient.Status(ctx)
+	if err != nil {
+		// This likely means tailscaled is unreachable or returned an error on /localapi/v0/status.
+		return "", false, fmt.Errorf("failed to get local status: %w", err)
+	}
+	if st == nil {
+		// Handle the case if the daemon returns nil with no error.
+		return "", false, errors.New("no status available")
+	}
+	if st.Self == nil {
+		// We have a status structure, but it doesn’t include Self info. Probably not connected.
+		return "", false, errors.New("local node is not configured or missing Self information")
+	}
+
+	// Find the PeerStatus that corresponds to ip.
+	var foundPeer *ipnstate.PeerStatus
+peerLoop:
+	for _, ps := range st.Peer {
+		for _, pip := range ps.TailscaleIPs {
+			if pip == ip {
+				foundPeer = ps
+				break peerLoop
 			}
 		}
 	}
-	if found {
-		return errors.New("target seems to be running an old Tailscale version")
+
+	// If we didn’t find a matching peer at all:
+	if foundPeer == nil {
+		if !tsaddr.IsTailscaleIP(ip) {
+			return "", false, fmt.Errorf("unknown target; %v is not a Tailscale IP address", ip)
+		}
+		return "", false, errors.New("unknown target; not in your Tailnet")
 	}
-	if !tsaddr.IsTailscaleIP(ip) {
-		return fmt.Errorf("unknown target; %v is not a Tailscale IP address", ip)
+
+	// We found a peer. Decide whether we can send files to it:
+	isOffline = !foundPeer.Online
+
+	switch foundPeer.TaildropTarget {
+	case ipnstate.TaildropTargetAvailable:
+		return foundPeer.ID, isOffline, nil
+
+	case ipnstate.TaildropTargetNoNetmapAvailable:
+		return "", isOffline, errors.New("cannot send files: no netmap available on this node")
+
+	case ipnstate.TaildropTargetIpnStateNotRunning:
+		return "", isOffline, errors.New("cannot send files: local Tailscale is not connected to the tailnet")
+
+	case ipnstate.TaildropTargetMissingCap:
+		return "", isOffline, errors.New("cannot send files: missing required Taildrop capability")
+
+	case ipnstate.TaildropTargetOffline:
+		return "", isOffline, errors.New("cannot send files: peer is offline")
+
+	case ipnstate.TaildropTargetNoPeerInfo:
+		return "", isOffline, errors.New("cannot send files: invalid or unrecognized peer")
+
+	case ipnstate.TaildropTargetUnsupportedOS:
+		return "", isOffline, errors.New("cannot send files: target's OS does not support Taildrop")
+
+	case ipnstate.TaildropTargetNoPeerAPI:
+		return "", isOffline, errors.New("cannot send files: target is not advertising a file sharing API")
+
+	case ipnstate.TaildropTargetOwnedByOtherUser:
+		return "", isOffline, errors.New("cannot send files: peer is owned by a different user")
+
+	case ipnstate.TaildropTargetUnknown:
+		fallthrough
+	default:
+		return "", isOffline, fmt.Errorf("cannot send files: unknown or indeterminate reason")
 	}
-	return errors.New("unknown target; not in your Tailnet")
 }
 
 const maxSniff = 4 << 20

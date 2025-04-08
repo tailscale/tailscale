@@ -7,6 +7,7 @@ package acme
 import (
 	"context"
 	"crypto"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -205,6 +206,7 @@ func (c *Client) AuthorizeOrder(ctx context.Context, id []AuthzID, opt ...OrderO
 		Identifiers []wireAuthzID `json:"identifiers"`
 		NotBefore   string        `json:"notBefore,omitempty"`
 		NotAfter    string        `json:"notAfter,omitempty"`
+		Replaces    string        `json:"replaces,omitempty"`
 	}{}
 	for _, v := range id {
 		req.Identifiers = append(req.Identifiers, wireAuthzID{
@@ -218,6 +220,14 @@ func (c *Client) AuthorizeOrder(ctx context.Context, id []AuthzID, opt ...OrderO
 			req.NotBefore = time.Time(o).Format(time.RFC3339)
 		case orderNotAfterOpt:
 			req.NotAfter = time.Time(o).Format(time.RFC3339)
+		case orderReplacesCert:
+			req.Replaces = certRenewalIdentifier(o.cert)
+		case orderReplacesCertDER:
+			cert, err := x509.ParseCertificate(o)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse certificate being replaced: %w", err)
+			}
+			req.Replaces = certRenewalIdentifier(cert)
 		default:
 			// Package's fault if we let this happen.
 			panic(fmt.Sprintf("unsupported order option type %T", o))

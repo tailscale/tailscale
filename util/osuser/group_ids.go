@@ -19,6 +19,10 @@ import (
 // an error. It will first try to use the 'id' command to get the group IDs,
 // and if that fails, it will fall back to the user.GroupIds method.
 func GetGroupIds(user *user.User) ([]string, error) {
+	if runtime.GOOS == "plan9" {
+		return nil, nil
+	}
+
 	if runtime.GOOS != "linux" {
 		return user.GroupIds()
 	}

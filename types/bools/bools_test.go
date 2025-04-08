@@ -5,6 +5,15 @@ package bools
 
 import "testing"
 
+func TestInt(t *testing.T) {
+	if got := Int(true); got != 1 {
+		t.Errorf("Int(true) = %v, want 1", got)
+	}
+	if got := Int(false); got != 0 {
+		t.Errorf("Int(false) = %v, want 0", got)
+	}
+}
+
 func TestCompare(t *testing.T) {
 	if got := Compare(false, false); got != 0 {
 		t.Errorf("Compare(false, false) = %v, want 0", got)

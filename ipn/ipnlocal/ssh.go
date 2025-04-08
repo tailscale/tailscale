@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux || (darwin && !ios) || freebsd || openbsd
+//go:build linux || (darwin && !ios) || freebsd || openbsd || plan9
 
 package ipnlocal
 
@@ -24,8 +24,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tailscale/golang-x-crypto/ssh"
 	"go4.org/mem"
+	"golang.org/x/crypto/ssh"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/util/mak"

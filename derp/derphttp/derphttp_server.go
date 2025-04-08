@@ -98,6 +98,7 @@ func ServeNoContent(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(NoContentResponseHeader, "response "+challenge)
 		}
 	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, no-transform, max-age=0")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -105,7 +106,7 @@ func isChallengeChar(c rune) bool {
 	// Semi-randomly chosen as a limited set of valid characters
 	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
 		('0' <= c && c <= '9') ||
-		c == '.' || c == '-' || c == '_'
+		c == '.' || c == '-' || c == '_' || c == ':'
 }
 
 const (

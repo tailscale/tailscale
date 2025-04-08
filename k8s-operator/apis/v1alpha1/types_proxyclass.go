@@ -66,6 +66,21 @@ type ProxyClassSpec struct {
 	// parameters of proxies.
 	// +optional
 	TailscaleConfig *TailscaleConfig `json:"tailscale,omitempty"`
+	// Set UseLetsEncryptStagingEnvironment to true to issue TLS
+	// certificates for any HTTPS endpoints exposed to the tailnet from
+	// LetsEncrypt's staging environment.
+	// https://letsencrypt.org/docs/staging-environment/
+	// This setting only affects Tailscale Ingress resources.
+	// By default Ingress TLS certificates are issued from LetsEncrypt's
+	// production environment.
+	// Changing this setting true -> false, will result in any
+	// existing certs being re-issued from the production environment.
+	// Changing this setting false (default) -> true, when certs have already
+	// been provisioned from production environment will NOT result in certs
+	// being re-issued from the staging environment before they need to be
+	// renewed.
+	// +optional
+	UseLetsEncryptStagingEnvironment bool `json:"useLetsEncryptStagingEnvironment,omitempty"`
 }
 
 type TailscaleConfig struct {

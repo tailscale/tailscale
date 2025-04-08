@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/web"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
@@ -36,16 +36,16 @@ type webClient struct {
 
 	server *web.Server // or nil, initialized lazily
 
-	// lc optionally specifies a LocalClient to use to connect
+	// lc optionally specifies a local.Client to use to connect
 	// to the localapi for this tailscaled instance.
 	// If nil, a default is used.
-	lc *tailscale.LocalClient
+	lc *local.Client
 }
 
 // ConfigureWebClient configures b.web prior to use.
-// Specifially, it sets b.web.lc to the provided LocalClient.
+// Specifially, it sets b.web.lc to the provided local.Client.
 // If provided as nil, b.web.lc is cleared out.
-func (b *LocalBackend) ConfigureWebClient(lc *tailscale.LocalClient) {
+func (b *LocalBackend) ConfigureWebClient(lc *local.Client) {
 	b.webClient.mu.Lock()
 	defer b.webClient.mu.Unlock()
 	b.webClient.lc = lc

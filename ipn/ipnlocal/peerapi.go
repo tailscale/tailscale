@@ -481,7 +481,7 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		fmt.Fprintf(w, "<h3>Could not get the default route: %s</h3>\n", html.EscapeString(err.Error()))
 	}
 
-	if hasCGNATInterface, err := netmon.HasCGNATInterface(); hasCGNATInterface {
+	if hasCGNATInterface, err := h.ps.b.sys.NetMon.Get().HasCGNATInterface(); hasCGNATInterface {
 		fmt.Fprintln(w, "<p>There is another interface using the CGNAT range.</p>")
 	} else if err != nil {
 		fmt.Fprintf(w, "<p>Could not check for CGNAT interfaces: %s</p>\n", html.EscapeString(err.Error()))
@@ -1135,7 +1135,7 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 
 	p, err := drive.ParsePermissions(rawPerms)
 	if err != nil {
-		h.logf("taildrive: error parsing permissions: %w", err.Error())
+		h.logf("taildrive: error parsing permissions: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

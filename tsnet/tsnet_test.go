@@ -36,7 +36,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"golang.org/x/net/proxy"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -120,6 +120,7 @@ func startControl(t *testing.T) (controlURL string, control *testcontrol.Server)
 			Proxied: true,
 		},
 		MagicDNSDomain: "tail-scale.ts.net",
+		Logf:           t.Logf,
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
 	control.HTTPTestServer.Start()
@@ -221,7 +222,7 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 		getCertForTesting: testCertRoot.getCert,
 	}
 	if *verboseNodes {
-		s.Logf = log.Printf
+		s.Logf = t.Logf
 	}
 	t.Cleanup(func() { s.Close() })
 
@@ -1273,7 +1274,7 @@ func waitForCondition(t *testing.T, msg string, waitTime time.Duration, f func()
 }
 
 // mustDirect ensures there is a direct connection between LocalClient 1 and 2
-func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *tailscale.LocalClient) {
+func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *local.Client) {
 	t.Helper()
 	lastLog := time.Now().Add(-time.Minute)
 	// See https://github.com/tailscale/tailscale/issues/654

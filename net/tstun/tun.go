@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !wasm && !plan9 && !tamago && !aix && !solaris && !illumos
+//go:build !wasm && !tamago && !aix && !solaris && !illumos
 
 // Package tun creates a tuntap device, working around OS-specific
 // quirks if necessary.
@@ -9,6 +9,9 @@ package tstun
 
 import (
 	"errors"
+	"fmt"
+	"log"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -45,6 +48,9 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		}
 		dev, err = CreateTAP.Get()(logf, tapName, bridgeName)
 	} else {
+		if runtime.GOOS == "plan9" {
+			cleanUpPlan9Interfaces()
+		}
 		dev, err = tun.CreateTUN(tunName, int(DefaultTUNMTU()))
 	}
 	if err != nil {
@@ -63,6 +69,36 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		return nil, "", err
 	}
 	return dev, name, nil
+}
+
+func cleanUpPlan9Interfaces() {
+	maybeUnbind := func(n int) {
+		b, err := os.ReadFile(fmt.Sprintf("/net/ipifc/%d/status", n))
+		if err != nil {
+			return
+		}
+		status := string(b)
+		if !(strings.HasPrefix(status, "device  maxtu ") ||
+			strings.Contains(status, "fd7a:115c:a1e0:")) {
+			return
+		}
+		f, err := os.OpenFile(fmt.Sprintf("/net/ipifc/%d/ctl", n), os.O_RDWR, 0)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		if _, err := fmt.Fprintf(f, "unbind\n"); err != nil {
+			log.Printf("unbind interface %v: %v", n, err)
+			return
+		}
+		log.Printf("tun: unbound stale interface %v", n)
+	}
+
+	// A common case: after unclean shutdown we might leave interfaces
+	// behind. Look for our straggler(s) and clean them up.
+	for n := 2; n < 5; n++ {
+		maybeUnbind(n)
+	}
 }
 
 // tunDiagnoseFailure, if non-nil, does OS-specific diagnostics of why

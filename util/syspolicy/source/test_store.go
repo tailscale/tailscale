@@ -12,8 +12,8 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
-	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/testenv"
 )
 
 var (
@@ -79,7 +79,7 @@ func (r TestExpectedReads) operation() testReadOperation {
 
 // TestStore is a [Store] that can be used in tests.
 type TestStore struct {
-	tb internal.TB
+	tb testenv.TB
 
 	done chan struct{}
 
@@ -98,7 +98,7 @@ type TestStore struct {
 
 // NewTestStore returns a new [TestStore].
 // The tb will be used to report coding errors detected by the [TestStore].
-func NewTestStore(tb internal.TB) *TestStore {
+func NewTestStore(tb testenv.TB) *TestStore {
 	m := make(map[setting.Key]any)
 	store := &TestStore{
 		tb:   tb,
@@ -112,7 +112,7 @@ func NewTestStore(tb internal.TB) *TestStore {
 
 // NewTestStoreOf is a shorthand for [NewTestStore] followed by [TestStore.SetBooleans],
 // [TestStore.SetUInt64s], [TestStore.SetStrings] or [TestStore.SetStringLists].
-func NewTestStoreOf[T TestValueType](tb internal.TB, settings ...TestSetting[T]) *TestStore {
+func NewTestStoreOf[T TestValueType](tb testenv.TB, settings ...TestSetting[T]) *TestStore {
 	store := NewTestStore(tb)
 	switch settings := any(settings).(type) {
 	case []TestSetting[bool]:

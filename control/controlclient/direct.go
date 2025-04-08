@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -156,6 +157,11 @@ type Options struct {
 	// If we receive a new DialPlan from the server, this value will be
 	// updated.
 	DialPlan ControlDialPlanner
+
+	// Shutdown is an optional function that will be called before client shutdown is
+	// attempted. It is used to allow the client to clean up any resources or complete any
+	// tasks that are dependent on a live client.
+	Shutdown func()
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -267,7 +273,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), opts.HealthTracker, tr.TLSClientConfig)
-		var dialFunc dialFunc
+		var dialFunc netx.DialFunc
 		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
 		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
 		tr.DialTLSContext = dnscache.TLSDialer(dialFunc, dnsCache, tr.TLSClientConfig)
@@ -1003,7 +1009,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		if persist == c.persist {
 			newPersist := persist.AsStruct()
 			newPersist.NodeID = nm.SelfNode.StableID()
-			newPersist.UserProfile = nm.UserProfiles[nm.User()]
+			if up, ok := nm.UserProfiles[nm.User()]; ok {
+				newPersist.UserProfile = *up.AsStruct()
+			}
 
 			c.persist = newPersist.View()
 			persist = c.persist
@@ -1079,7 +1087,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		} else {
 			vlogf("netmap: got new map")
 		}
-		if resp.ControlDialPlan != nil {
+		if resp.ControlDialPlan != nil && !ignoreDialPlan() {
 			if c.dialPlan != nil {
 				c.logf("netmap: got new dial plan from control")
 				c.dialPlan.Store(resp.ControlDialPlan)
@@ -1253,6 +1261,7 @@ type devKnobs struct {
 	DumpNetMapsVerbose func() bool
 	ForceProxyDNS      func() bool
 	StripEndpoints     func() bool // strip endpoints from control (only use disco messages)
+	StripHomeDERP      func() bool // strip Home DERP from control
 	StripCaps          func() bool // strip all local node's control-provided capabilities
 }
 
@@ -1264,6 +1273,7 @@ func initDevKnob() devKnobs {
 		DumpRegister:       envknob.RegisterBool("TS_DEBUG_REGISTER"),
 		ForceProxyDNS:      envknob.RegisterBool("TS_DEBUG_PROXY_DNS"),
 		StripEndpoints:     envknob.RegisterBool("TS_DEBUG_STRIP_ENDPOINTS"),
+		StripHomeDERP:      envknob.RegisterBool("TS_DEBUG_STRIP_HOME_DERP"),
 		StripCaps:          envknob.RegisterBool("TS_DEBUG_STRIP_CAPS"),
 	}
 }
@@ -1658,11 +1668,11 @@ func (c *Auto) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) err
 func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) error {
 	nc, err := c.getNoiseClient()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errNoNoiseClient, err)
 	}
 	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
 	if !ok {
-		return errors.New("no node key")
+		return errNoNodeKey
 	}
 	if c.panicOnUse {
 		panic("tainted client")
@@ -1693,20 +1703,59 @@ func (c *Direct) SetDeviceAttrs(ctx context.Context, attrs tailcfg.AttrUpdate) e
 	return nil
 }
 
+// SendAuditLog implements [auditlog.Transport] by sending an audit log synchronously to the control plane.
+//
+// See docs on [tailcfg.AuditLogRequest] and [auditlog.Logger] for background.
+func (c *Auto) SendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	return c.direct.sendAuditLog(ctx, auditLog)
+}
+
+func (c *Direct) sendAuditLog(ctx context.Context, auditLog tailcfg.AuditLogRequest) (err error) {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errNoNoiseClient, err)
+	}
+
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return errNoNodeKey
+	}
+
+	req := &tailcfg.AuditLogRequest{
+		Version: tailcfg.CurrentCapabilityVersion,
+		NodeKey: nodeKey,
+		Action:  auditLog.Action,
+		Details: auditLog.Details,
+	}
+
+	if c.panicOnUse {
+		panic("tainted client")
+	}
+
+	res, err := nc.post(ctx, "/machine/audit-log", nodeKey, req)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errHTTPPostFailure, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		all, _ := io.ReadAll(res.Body)
+		return errBadHTTPResponse(res.StatusCode, string(all))
+	}
+	return nil
+}
+
 func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
 	if !nodeKey.IsZero() {
 		req.Header.Add(tailcfg.LBHeader, nodeKey.String())
 	}
 }
 
-type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
-
 // makeScreenTimeDetectingDialFunc returns dialFunc, optionally wrapped (on
 // Apple systems) with a func that sets the returned atomic.Bool for whether
 // Screen Time seemed to intercept the connection.
 //
 // The returned *atomic.Bool is nil on non-Apple systems.
-func makeScreenTimeDetectingDialFunc(dial dialFunc) (dialFunc, *atomic.Bool) {
+func makeScreenTimeDetectingDialFunc(dial netx.DialFunc) (netx.DialFunc, *atomic.Bool) {
 	switch runtime.GOOS {
 	case "darwin", "ios":
 		// Continue below.
@@ -1722,6 +1771,13 @@ func makeScreenTimeDetectingDialFunc(dial dialFunc) (dialFunc, *atomic.Bool) {
 		ab.Store(isTCPLoopback(c.LocalAddr()) && isTCPLoopback(c.RemoteAddr()))
 		return c, nil
 	}, ab
+}
+
+func ignoreDialPlan() bool {
+	// If we're running in v86 (a JavaScript-based emulation of a 32-bit x86)
+	// our networking is very limited. Let's ignore the dial plan since it's too
+	// complicated to race that many IPs anyway.
+	return hostinfo.IsInVM86()
 }
 
 func isTCPLoopback(a net.Addr) bool {

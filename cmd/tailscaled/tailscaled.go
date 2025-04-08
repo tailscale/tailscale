@@ -30,7 +30,7 @@ import (
 	"syscall"
 	"time"
 
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive/driveimpl"
@@ -82,7 +82,9 @@ func defaultTunName() string {
 		// "utun" is recognized by wireguard-go/tun/tun_darwin.go
 		// as a magic value that uses/creates any free number.
 		return "utun"
-	case "plan9", "aix", "solaris", "illumos":
+	case "plan9":
+		return "auto"
+	case "aix", "solaris", "illumos":
 		return "userspace-networking"
 	case "linux":
 		switch distro.Get() {
@@ -151,10 +153,33 @@ var subCommands = map[string]*func([]string) error{
 	"serve-taildrive":         &serveDriveFunc,
 }
 
-var beCLI func() // non-nil if CLI is linked in
+var beCLI func() // non-nil if CLI is linked in with the "ts_include_cli" build tag
+
+// shouldRunCLI reports whether we should run the Tailscale CLI (cmd/tailscale)
+// instead of the daemon (cmd/tailscaled) in the case when the two are linked
+// together into one binary for space savings reasons.
+func shouldRunCLI() bool {
+	if beCLI == nil {
+		// Not linked in with the "ts_include_cli" build tag.
+		return false
+	}
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" {
+		// The binary was named (or hardlinked) as "tailscale".
+		return true
+	}
+	if envknob.Bool("TS_BE_CLI") {
+		// The environment variable was set to force it.
+		return true
+	}
+	return false
+}
 
 func main() {
 	envknob.PanicIfAnyEnvCheckedInInit()
+	if shouldRunCLI() {
+		beCLI()
+		return
+	}
 	envknob.ApplyDiskConfig()
 	applyIntegrationTestEnvKnob()
 
@@ -175,9 +200,8 @@ func main() {
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
 
-	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
-		beCLI()
-		return
+	if runtime.GOOS == "plan9" && os.Getenv("_NETSHELL_CHILD_") != "" {
+		os.Args = []string{"tailscaled", "be-child", "plan9-netshell"}
 	}
 
 	if len(os.Args) > 1 {
@@ -230,7 +254,18 @@ func main() {
 	// Only apply a default statepath when neither have been provided, so that a
 	// user may specify only --statedir if they wish.
 	if args.statepath == "" && args.statedir == "" {
-		args.statepath = paths.DefaultTailscaledStateFile()
+		if runtime.GOOS == "plan9" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				log.Fatalf("failed to get home directory: %v", err)
+			}
+			args.statedir = filepath.Join(home, "tailscale-state")
+			if err := os.MkdirAll(args.statedir, 0700); err != nil {
+				log.Fatalf("failed to create state directory: %v", err)
+			}
+		} else {
+			args.statepath = paths.DefaultTailscaledStateFile()
+		}
 	}
 
 	if args.disableLogs {
@@ -621,7 +656,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
-	lb.ConfigureWebClient(&tailscale.LocalClient{
+	lb.ConfigureWebClient(&local.Client{
 		Socket:        args.socketpath,
 		UseSocketOnly: args.socketpath != paths.DefaultTailscaledSocket(),
 	})
@@ -729,6 +764,12 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			}
 			sys.Set(e)
 			return false, err
+		}
+
+		if runtime.GOOS == "plan9" {
+			// TODO(bradfitz): why don't we do this on all platforms?
+			// We should. Doing it just on plan9 for now conservatively.
+			sys.NetMon.Get().SetTailscaleInterfaceName(devName)
 		}
 
 		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker())

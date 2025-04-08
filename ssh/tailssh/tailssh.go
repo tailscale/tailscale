@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux || (darwin && !ios) || freebsd || openbsd
+//go:build linux || (darwin && !ios) || freebsd || openbsd || plan9
 
 // Package tailssh is an SSH server integrated into Tailscale.
 package tailssh
@@ -29,7 +29,7 @@ import (
 	"syscall"
 	"time"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/logtail/backoff"
@@ -51,6 +51,11 @@ var (
 	sshDisableSFTP       = envknob.RegisterBool("TS_SSH_DISABLE_SFTP")
 	sshDisableForwarding = envknob.RegisterBool("TS_SSH_DISABLE_FORWARDING")
 	sshDisablePTY        = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
+
+	// errTerminal is an empty gossh.PartialSuccessError (with no 'Next'
+	// authentication methods that may proceed), which results in the SSH
+	// server immediately disconnecting the client.
+	errTerminal = &gossh.PartialSuccessError{}
 )
 
 const (
@@ -198,8 +203,11 @@ func (srv *server) OnPolicyChange() {
 // Setup and discover server info
 //   - ServerConfigCallback
 //
-// Do the user auth
-//   - NoClientAuthHandler
+// Get access to a ServerPreAuthConn (useful for sending banners)
+//
+// Do the user auth with a NoClientAuthCallback. If user specified
+// a username ending in "+password", follow this with password auth
+// (to work around buggy SSH clients that don't work with noauth).
 //
 // Once auth is done, the conn can be multiplexed with multiple sessions and
 // channels concurrently. At which point any of the following can be called
@@ -219,19 +227,16 @@ type conn struct {
 	idH    string
 	connID string // ID that's shared with control
 
-	// anyPasswordIsOkay is whether the client is authorized but has requested
-	// password-based auth to work around their buggy SSH client. When set, we
-	// accept any password in the PasswordHandler.
-	anyPasswordIsOkay bool // set by NoClientAuthCallback
+	// spac is a [gossh.ServerPreAuthConn] used for sending auth banners.
+	// Banners cannot be sent after auth completes.
+	spac gossh.ServerPreAuthConn
 
-	action0        *tailcfg.SSHAction // set by doPolicyAuth; first matching action
-	currentAction  *tailcfg.SSHAction // set by doPolicyAuth, updated by resolveNextAction
-	finalAction    *tailcfg.SSHAction // set by doPolicyAuth or resolveNextAction
-	finalActionErr error              // set by doPolicyAuth or resolveNextAction
+	action0     *tailcfg.SSHAction // set by clientAuth
+	finalAction *tailcfg.SSHAction // set by clientAuth
 
 	info         *sshConnInfo // set by setInfo
-	localUser    *userMeta    // set by doPolicyAuth
-	userGroupIDs []string     // set by doPolicyAuth
+	localUser    *userMeta    // set by clientAuth
+	userGroupIDs []string     // set by clientAuth
 	acceptEnv    []string
 
 	// mu protects the following fields.
@@ -254,141 +259,183 @@ func (c *conn) vlogf(format string, args ...any) {
 	}
 }
 
-// isAuthorized walks through the action chain and returns nil if the connection
-// is authorized. If the connection is not authorized, it returns
-// errDenied. If the action chain resolution fails, it returns the
-// resolution error.
-func (c *conn) isAuthorized(ctx ssh.Context) error {
-	action := c.currentAction
-	for {
-		if action.Accept {
-			return nil
-		}
-		if action.Reject || action.HoldAndDelegate == "" {
-			return errDenied
-		}
-		var err error
-		action, err = c.resolveNextAction(ctx)
-		if err != nil {
-			return err
-		}
-		if action.Message != "" {
-			if err := ctx.SendAuthBanner(action.Message); err != nil {
-				return err
-			}
-		}
-	}
-}
-
 // errDenied is returned by auth callbacks when a connection is denied by the
-// policy.
-var errDenied = errors.New("ssh: access denied")
-
-// NoClientAuthCallback implements gossh.NoClientAuthCallback and is called by
-// the ssh.Server when the client first connects with the "none"
-// authentication method.
-//
-// It is responsible for continuing policy evaluation from BannerCallback (or
-// starting it afresh). It returns an error if the policy evaluation fails, or
-// if the decision is "reject"
-//
-// It either returns nil (accept) or errDenied (reject). The errors may be wrapped.
-func (c *conn) NoClientAuthCallback(ctx ssh.Context) error {
-	if c.insecureSkipTailscaleAuth {
-		return nil
+// policy. It writes the message to an auth banner and then returns an empty
+// gossh.PartialSuccessError in order to stop processing authentication
+// attempts and immediately disconnect the client.
+func (c *conn) errDenied(message string) error {
+	if message == "" {
+		message = "tailscale: access denied"
 	}
-	if err := c.doPolicyAuth(ctx); err != nil {
-		return err
+	if err := c.spac.SendAuthBanner(message); err != nil {
+		c.logf("failed to send auth banner: %s", err)
 	}
-	if err := c.isAuthorized(ctx); err != nil {
-		return err
-	}
-
-	// Let users specify a username ending in +password to force password auth.
-	// This exists for buggy SSH clients that get confused by success from
-	// "none" auth.
-	if strings.HasSuffix(ctx.User(), forcePasswordSuffix) {
-		c.anyPasswordIsOkay = true
-		return errors.New("any password please") // not shown to users
-	}
-	return nil
+	return errTerminal
 }
 
-func (c *conn) nextAuthMethodCallback(cm gossh.ConnMetadata, prevErrors []error) (nextMethod []string) {
-	switch {
-	case c.anyPasswordIsOkay:
-		nextMethod = append(nextMethod, "password")
-	}
-
-	// The fake "tailscale" method is always appended to next so OpenSSH renders
-	// that in parens as the final failure. (It also shows up in "ssh -v", etc)
-	nextMethod = append(nextMethod, "tailscale")
-	return
-}
-
-// fakePasswordHandler is our implementation of the PasswordHandler hook that
-// checks whether the user's password is correct. But we don't actually use
-// passwords. This exists only for when the user's username ends in "+password"
-// to signal that their SSH client is buggy and gets confused by auth type
-// "none" succeeding and they want our SSH server to require a dummy password
-// prompt instead. We then accept any password since we've already authenticated
-// & authorized them.
-func (c *conn) fakePasswordHandler(ctx ssh.Context, password string) bool {
-	return c.anyPasswordIsOkay
-}
-
-// doPolicyAuth verifies that conn can proceed.
-// It returns nil if the matching policy action is Accept or
-// HoldAndDelegate. Otherwise, it returns errDenied.
-func (c *conn) doPolicyAuth(ctx ssh.Context) error {
-	if err := c.setInfo(ctx); err != nil {
-		c.logf("failed to get conninfo: %v", err)
-		return errDenied
-	}
-	a, localUser, acceptEnv, err := c.evaluatePolicy()
+// errBanner writes the given message to an auth banner and then returns an
+// empty gossh.PartialSuccessError in order to stop processing authentication
+// attempts and immediately disconnect the client. The contents of err is not
+// leaked in the auth banner, but it is logged to the server's log.
+func (c *conn) errBanner(message string, err error) error {
 	if err != nil {
-		return fmt.Errorf("%w: %v", errDenied, err)
+		c.logf("%s: %s", message, err)
 	}
-	c.action0 = a
-	c.currentAction = a
-	c.acceptEnv = acceptEnv
-	if a.Message != "" {
-		if err := ctx.SendAuthBanner(a.Message); err != nil {
-			return fmt.Errorf("SendBanner: %w", err)
-		}
+	if err := c.spac.SendAuthBanner("tailscale: " + message); err != nil {
+		c.logf("failed to send auth banner: %s", err)
 	}
-	if a.Accept || a.HoldAndDelegate != "" {
-		if a.Accept {
-			c.finalAction = a
+	return errTerminal
+}
+
+// errUnexpected is returned by auth callbacks that encounter an unexpected
+// error, such as being unable to send an auth banner. It sends an empty
+// gossh.PartialSuccessError to tell gossh.Server to stop processing
+// authentication attempts and instead disconnect immediately.
+func (c *conn) errUnexpected(err error) error {
+	c.logf("terminal error: %s", err)
+	return errTerminal
+}
+
+// clientAuth is responsible for performing client authentication.
+//
+// If policy evaluation fails, it returns an error.
+// If access is denied, it returns an error. This must always be an empty
+// gossh.PartialSuccessError to prevent further authentication methods from
+// being tried.
+func (c *conn) clientAuth(cm gossh.ConnMetadata) (perms *gossh.Permissions, retErr error) {
+	defer func() {
+		if pse, ok := retErr.(*gossh.PartialSuccessError); ok {
+			if pse.Next.GSSAPIWithMICConfig != nil ||
+				pse.Next.KeyboardInteractiveCallback != nil ||
+				pse.Next.PasswordCallback != nil ||
+				pse.Next.PublicKeyCallback != nil {
+				panic("clientAuth attempted to return a non-empty PartialSuccessError")
+			}
+		} else if retErr != nil {
+			panic(fmt.Sprintf("clientAuth attempted to return a non-PartialSuccessError error of type: %t", retErr))
 		}
+	}()
+
+	if c.insecureSkipTailscaleAuth {
+		return &gossh.Permissions{}, nil
+	}
+
+	if err := c.setInfo(cm); err != nil {
+		return nil, c.errBanner("failed to get connection info", err)
+	}
+
+	action, localUser, acceptEnv, err := c.evaluatePolicy()
+	if err != nil {
+		return nil, c.errBanner("failed to evaluate SSH policy", err)
+	}
+
+	c.action0 = action
+
+	if action.Accept || action.HoldAndDelegate != "" {
+		// Immediately look up user information for purposes of generating
+		// hold and delegate URL (if necessary).
 		lu, err := userLookup(localUser)
 		if err != nil {
-			c.logf("failed to look up %v: %v", localUser, err)
-			ctx.SendAuthBanner(fmt.Sprintf("failed to look up %v\r\n", localUser))
-			return err
+			return nil, c.errBanner(fmt.Sprintf("failed to look up local user %q ", localUser), err)
 		}
 		gids, err := lu.GroupIds()
 		if err != nil {
-			c.logf("failed to look up local user's group IDs: %v", err)
-			return err
+			return nil, c.errBanner("failed to look up local user's group IDs", err)
 		}
 		c.userGroupIDs = gids
 		c.localUser = lu
-		return nil
+		c.acceptEnv = acceptEnv
 	}
-	if a.Reject {
-		c.finalAction = a
-		return errDenied
+
+	for {
+		switch {
+		case action.Accept:
+			metricTerminalAccept.Add(1)
+			if action.Message != "" {
+				if err := c.spac.SendAuthBanner(action.Message); err != nil {
+					return nil, c.errUnexpected(fmt.Errorf("error sending auth welcome message: %w", err))
+				}
+			}
+			c.finalAction = action
+			return &gossh.Permissions{}, nil
+		case action.Reject:
+			metricTerminalReject.Add(1)
+			c.finalAction = action
+			return nil, c.errDenied(action.Message)
+		case action.HoldAndDelegate != "":
+			if action.Message != "" {
+				if err := c.spac.SendAuthBanner(action.Message); err != nil {
+					return nil, c.errUnexpected(fmt.Errorf("error sending hold and delegate message: %w", err))
+				}
+			}
+
+			url := action.HoldAndDelegate
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+
+			metricHolds.Add(1)
+			url = c.expandDelegateURLLocked(url)
+
+			var err error
+			action, err = c.fetchSSHAction(ctx, url)
+			if err != nil {
+				metricTerminalFetchError.Add(1)
+				return nil, c.errBanner("failed to fetch next SSH action", fmt.Errorf("fetch failed from %s: %w", url, err))
+			}
+		default:
+			metricTerminalMalformed.Add(1)
+			return nil, c.errBanner("reached Action that had neither Accept, Reject, nor HoldAndDelegate", nil)
+		}
 	}
-	// Shouldn't get here, but:
-	return errDenied
 }
 
 // ServerConfig implements ssh.ServerConfigCallback.
 func (c *conn) ServerConfig(ctx ssh.Context) *gossh.ServerConfig {
 	return &gossh.ServerConfig{
-		NoClientAuth:           true, // required for the NoClientAuthCallback to run
-		NextAuthMethodCallback: c.nextAuthMethodCallback,
+		PreAuthConnCallback: func(spac gossh.ServerPreAuthConn) {
+			c.spac = spac
+		},
+		NoClientAuth: true, // required for the NoClientAuthCallback to run
+		NoClientAuthCallback: func(cm gossh.ConnMetadata) (*gossh.Permissions, error) {
+			// First perform client authentication, which can potentially
+			// involve multiple steps (for example prompting user to log in to
+			// Tailscale admin panel to confirm identity).
+			perms, err := c.clientAuth(cm)
+			if err != nil {
+				return nil, err
+			}
+
+			// Authentication succeeded. Buggy SSH clients get confused by
+			// success from the "none" auth method. As a workaround, let users
+			// specify a username ending in "+password" to force password auth.
+			// The actual value of the password doesn't matter.
+			if strings.HasSuffix(cm.User(), forcePasswordSuffix) {
+				return nil, &gossh.PartialSuccessError{
+					Next: gossh.ServerAuthCallbacks{
+						PasswordCallback: func(_ gossh.ConnMetadata, password []byte) (*gossh.Permissions, error) {
+							return &gossh.Permissions{}, nil
+						},
+					},
+				}
+			}
+
+			return perms, nil
+		},
+		PasswordCallback: func(cm gossh.ConnMetadata, pword []byte) (*gossh.Permissions, error) {
+			// Some clients don't request 'none' authentication. Instead, they
+			// immediately supply a password. We humor them by accepting the
+			// password, but authenticate as usual, ignoring the actual value of
+			// the password.
+			return c.clientAuth(cm)
+		},
+		PublicKeyCallback: func(cm gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
+			// Some clients don't request 'none' authentication. Instead, they
+			// immediately supply a public key. We humor them by accepting the
+			// key, but authenticate as usual, ignoring the actual content of
+			// the key.
+			return c.clientAuth(cm)
+		},
 	}
 }
 
@@ -399,7 +446,7 @@ func (srv *server) newConn() (*conn, error) {
 		// Stop accepting new connections.
 		// Connections in the auth phase are handled in handleConnPostSSHAuth.
 		// Existing sessions are terminated by Shutdown.
-		return nil, errDenied
+		return nil, errors.New("server is shutting down")
 	}
 	srv.mu.Unlock()
 	c := &conn{srv: srv}
@@ -409,9 +456,6 @@ func (srv *server) newConn() (*conn, error) {
 	c.Server = &ssh.Server{
 		Version:              "Tailscale",
 		ServerConfigCallback: c.ServerConfig,
-
-		NoClientAuthHandler: c.NoClientAuthCallback,
-		PasswordHandler:     c.fakePasswordHandler,
 
 		Handler:                       c.handleSessionPostSSHAuth,
 		LocalPortForwardingCallback:   c.mayForwardLocalPortTo,
@@ -523,16 +567,16 @@ func toIPPort(a net.Addr) (ipp netip.AddrPort) {
 	return netip.AddrPortFrom(tanetaddr.Unmap(), uint16(ta.Port))
 }
 
-// connInfo returns a populated sshConnInfo from the provided arguments,
+// connInfo populates the sshConnInfo from the provided arguments,
 // validating only that they represent a known Tailscale identity.
-func (c *conn) setInfo(ctx ssh.Context) error {
+func (c *conn) setInfo(cm gossh.ConnMetadata) error {
 	if c.info != nil {
 		return nil
 	}
 	ci := &sshConnInfo{
-		sshUser: strings.TrimSuffix(ctx.User(), forcePasswordSuffix),
-		src:     toIPPort(ctx.RemoteAddr()),
-		dst:     toIPPort(ctx.LocalAddr()),
+		sshUser: strings.TrimSuffix(cm.User(), forcePasswordSuffix),
+		src:     toIPPort(cm.RemoteAddr()),
+		dst:     toIPPort(cm.LocalAddr()),
 	}
 	if !tsaddr.IsTailscaleIP(ci.dst.Addr()) {
 		return fmt.Errorf("tailssh: rejecting non-Tailscale local address %v", ci.dst)
@@ -547,7 +591,7 @@ func (c *conn) setInfo(ctx ssh.Context) error {
 	ci.node = node
 	ci.uprof = uprof
 
-	c.idH = ctx.SessionID()
+	c.idH = string(cm.SessionID())
 	c.info = ci
 	c.logf("handling conn: %v", ci.String())
 	return nil
@@ -592,62 +636,6 @@ func (c *conn) handleSessionPostSSHAuth(s ssh.Session) {
 	ss.logf("handling new SSH connection from %v (%v) to ssh-user %q", c.info.uprof.LoginName, c.info.src.Addr(), c.localUser.Username)
 	ss.logf("access granted to %v as ssh-user %q", c.info.uprof.LoginName, c.localUser.Username)
 	ss.run()
-}
-
-// resolveNextAction starts at c.currentAction and makes it way through the
-// action chain one step at a time. An action without a HoldAndDelegate is
-// considered the final action. Once a final action is reached, this function
-// will keep returning that action. It updates c.currentAction to the next
-// action in the chain. When the final action is reached, it also sets
-// c.finalAction to the final action.
-func (c *conn) resolveNextAction(sctx ssh.Context) (action *tailcfg.SSHAction, err error) {
-	if c.finalAction != nil || c.finalActionErr != nil {
-		return c.finalAction, c.finalActionErr
-	}
-
-	defer func() {
-		if action != nil {
-			c.currentAction = action
-			if action.Accept || action.Reject {
-				c.finalAction = action
-			}
-		}
-		if err != nil {
-			c.finalActionErr = err
-		}
-	}()
-
-	ctx, cancel := context.WithCancel(sctx)
-	defer cancel()
-
-	// Loop processing/fetching Actions until one reaches a
-	// terminal state (Accept, Reject, or invalid Action), or
-	// until fetchSSHAction times out due to the context being
-	// done (client disconnect) or its 30 minute timeout passes.
-	// (Which is a long time for somebody to see login
-	// instructions and go to a URL to do something.)
-	action = c.currentAction
-	if action.Accept || action.Reject {
-		if action.Reject {
-			metricTerminalReject.Add(1)
-		} else {
-			metricTerminalAccept.Add(1)
-		}
-		return action, nil
-	}
-	url := action.HoldAndDelegate
-	if url == "" {
-		metricTerminalMalformed.Add(1)
-		return nil, errors.New("reached Action that lacked Accept, Reject, and HoldAndDelegate")
-	}
-	metricHolds.Add(1)
-	url = c.expandDelegateURLLocked(url)
-	nextAction, err := c.fetchSSHAction(ctx, url)
-	if err != nil {
-		metricTerminalFetchError.Add(1)
-		return nil, fmt.Errorf("fetching SSHAction from %s: %w", url, err)
-	}
-	return nextAction, nil
 }
 
 func (c *conn) expandDelegateURLLocked(actionURL string) string {
@@ -915,7 +903,7 @@ func (ss *sshSession) run() {
 		defer t.Stop()
 	}
 
-	if euid := os.Geteuid(); euid != 0 {
+	if euid := os.Geteuid(); euid != 0 && runtime.GOOS != "plan9" {
 		if lu.Uid != fmt.Sprint(euid) {
 			ss.logf("can't switch to user %q from process euid %v", lu.Username, euid)
 			fmt.Fprintf(ss, "can't switch user\r\n")

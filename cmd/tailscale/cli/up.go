@@ -27,8 +27,8 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/oauth2/clientcredentials"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/health/healthmsg"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
@@ -39,7 +39,6 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -79,14 +78,8 @@ func effectiveGOOS() string {
 // acceptRouteDefault returns the CLI's default value of --accept-routes as
 // a function of the platform it's running on.
 func acceptRouteDefault(goos string) bool {
-	switch goos {
-	case "windows":
-		return true
-	case "darwin":
-		return version.IsSandboxedMacOS()
-	default:
-		return false
-	}
+	var p *ipn.Prefs
+	return p.DefaultRouteAll(goos)
 }
 
 var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgsGlobal, "up")
@@ -1095,12 +1088,6 @@ func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 		}
 	}
 	return
-}
-
-func init() {
-	// Required to use our client API. We're fine with the instability since the
-	// client lives in the same repo as this code.
-	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 }
 
 // resolveAuthKey either returns v unchanged (in the common case) or, if it

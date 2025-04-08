@@ -161,7 +161,7 @@ func (m *Monitor) InterfaceState() *State {
 }
 
 func (m *Monitor) interfaceStateUncached() (*State, error) {
-	return GetState()
+	return getState(m.tsIfName)
 }
 
 // SetTailscaleInterfaceName sets the name of the Tailscale interface. For
@@ -441,7 +441,6 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 	delta.Major = m.IsMajorChangeFrom(oldState, newState)
 	if delta.Major {
 		m.gwValid = false
-		m.ifState = newState
 
 		if s1, s2 := oldState.String(), delta.New.String(); s1 == s2 {
 			m.logf("[unexpected] network state changed, but stringification didn't: %v", s1)
@@ -449,6 +448,7 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 			m.logf("[unexpected] new: %s", jsonSummary(newState))
 		}
 	}
+	m.ifState = newState
 	// See if we have a queued or new time jump signal.
 	if timeJumped {
 		m.resetTimeJumpedLocked()
@@ -596,7 +596,7 @@ func (m *Monitor) pollWallTime() {
 //
 // We don't do this on mobile platforms for battery reasons, and because these
 // platforms don't really sleep in the same way.
-const shouldMonitorTimeJump = runtime.GOOS != "android" && runtime.GOOS != "ios"
+const shouldMonitorTimeJump = runtime.GOOS != "android" && runtime.GOOS != "ios" && runtime.GOOS != "plan9"
 
 // checkWallTimeAdvanceLocked reports whether wall time jumped more than 150% of
 // pollWallTimeInterval, indicating we probably just came out of sleep. Once a

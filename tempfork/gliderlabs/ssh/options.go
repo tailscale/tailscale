@@ -3,7 +3,7 @@ package ssh
 import (
 	"os"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // PasswordAuth returns a functional option that sets PasswordHandler on the server.

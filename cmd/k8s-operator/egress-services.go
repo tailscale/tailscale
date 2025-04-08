@@ -630,7 +630,11 @@ func tailnetTargetFromSvc(svc *corev1.Service) egressservices.TailnetTarget {
 
 func portMap(p corev1.ServicePort) egressservices.PortMap {
 	// TODO (irbekrm): out of bounds check?
-	return egressservices.PortMap{Protocol: string(p.Protocol), MatchPort: uint16(p.TargetPort.IntVal), TargetPort: uint16(p.Port)}
+	return egressservices.PortMap{
+		Protocol:   string(p.Protocol),
+		MatchPort:  uint16(p.TargetPort.IntVal),
+		TargetPort: uint16(p.Port),
+	}
 }
 
 func isEgressSvcForProxyGroup(obj client.Object) bool {
@@ -676,12 +680,12 @@ func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, ts
 // should probably validate and truncate (?) the names is they are too long.
 func egressSvcChildResourceLabels(svc *corev1.Service) map[string]string {
 	return map[string]string{
-		LabelManaged:         "true",
-		LabelParentType:      "svc",
-		LabelParentName:      svc.Name,
-		LabelParentNamespace: svc.Namespace,
-		labelProxyGroup:      svc.Annotations[AnnotationProxyGroup],
-		labelSvcType:         typeEgress,
+		kubetypes.LabelManaged: "true",
+		LabelParentType:        "svc",
+		LabelParentName:        svc.Name,
+		LabelParentNamespace:   svc.Namespace,
+		labelProxyGroup:        svc.Annotations[AnnotationProxyGroup],
+		labelSvcType:           typeEgress,
 	}
 }
 

@@ -76,10 +76,9 @@ type NetworkMap struct {
 	// If this is empty, then data-plane audit logging is disabled.
 	DomainAuditLogID string
 
-	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
-
-	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
-	MaxKeyDuration time.Duration
+	// UserProfiles contains the profile information of UserIDs referenced
+	// in SelfNode and Peers.
+	UserProfiles map[tailcfg.UserID]tailcfg.UserProfileView
 }
 
 // User returns nm.SelfNode.User if nm.SelfNode is non-nil, otherwise it returns
@@ -115,7 +114,7 @@ func (nm *NetworkMap) GetVIPServiceIPMap() tailcfg.ServiceIPMappings {
 		return nil
 	}
 
-	ipMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](nm.SelfNode.CapMap().AsMap(), tailcfg.NodeAttrServiceHost)
+	ipMaps, err := tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceIPMappings](nm.SelfNode.CapMap(), tailcfg.NodeAttrServiceHost)
 	if len(ipMaps) != 1 || err != nil {
 		return nil
 	}
@@ -289,7 +288,12 @@ func (nm *NetworkMap) PeerWithStableID(pid tailcfg.StableNodeID) (_ tailcfg.Node
 func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 	fmt.Fprintf(buf, "netmap: self: %v auth=%v",
 		nm.NodeKey.ShortString(), nm.GetMachineStatus())
-	login := nm.UserProfiles[nm.User()].LoginName
+
+	var login string
+	up, ok := nm.UserProfiles[nm.User()]
+	if ok {
+		login = up.LoginName()
+	}
 	if login == "" {
 		if nm.User().IsZero() {
 			login = "?"

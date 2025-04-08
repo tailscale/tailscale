@@ -23,6 +23,7 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -71,6 +72,7 @@ type Dialer struct {
 
 	netnsDialerOnce sync.Once
 	netnsDialer     netns.Dialer
+	sysDialForTest  netx.DialFunc // or nil
 
 	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
 
@@ -242,7 +244,7 @@ func changeAffectsConn(delta *netmon.ChangeDelta, conn net.Conn) bool {
 	// In a few cases, we don't have a new DefaultRouteInterface (e.g. on
 	// Android; see tailscale/corp#19124); if so, pessimistically assume
 	// that all connections are affected.
-	if delta.New.DefaultRouteInterface == "" {
+	if delta.New.DefaultRouteInterface == "" && runtime.GOOS != "plan9" {
 		return true
 	}
 
@@ -361,6 +363,13 @@ func (d *Dialer) logf(format string, args ...any) {
 	}
 }
 
+// SetSystemDialerForTest sets an alternate function to use for SystemDial
+// instead of netns.Dialer. This is intended for use with nettest.MemoryNetwork.
+func (d *Dialer) SetSystemDialerForTest(fn netx.DialFunc) {
+	testenv.AssertInTest()
+	d.sysDialForTest = fn
+}
+
 // SystemDial connects to the provided network address without going over
 // Tailscale. It prefers going over the default interface and closes existing
 // connections if the default interface changes. It is used to connect to
@@ -380,10 +389,16 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 		return nil, net.ErrClosed
 	}
 
-	d.netnsDialerOnce.Do(func() {
-		d.netnsDialer = netns.NewDialer(d.logf, d.netMon)
-	})
-	c, err := d.netnsDialer.DialContext(ctx, network, addr)
+	var c net.Conn
+	var err error
+	if d.sysDialForTest != nil {
+		c, err = d.sysDialForTest(ctx, network, addr)
+	} else {
+		d.netnsDialerOnce.Do(func() {
+			d.netnsDialer = netns.NewDialer(d.logf, d.netMon)
+		})
+		c, err = d.netnsDialer.DialContext(ctx, network, addr)
+	}
 	if err != nil {
 		return nil, err
 	}

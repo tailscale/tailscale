@@ -169,10 +169,9 @@ var (
 	metrics   = map[string]*clientmetric.Metric{}
 )
 
-// NewHandler creates a new LocalAPI HTTP handler. All parameters except netMon
-// are required (if non-nil it's used to do faster interface lookups).
-func NewHandler(b *ipnlocal.LocalBackend, logf logger.Logf, logID logid.PublicID) *Handler {
-	return &Handler{b: b, logf: logf, backendLogID: logID, clock: tstime.StdClock{}}
+// NewHandler creates a new LocalAPI HTTP handler. All parameters are required.
+func NewHandler(actor ipnauth.Actor, b *ipnlocal.LocalBackend, logf logger.Logf, logID logid.PublicID) *Handler {
+	return &Handler{Actor: actor, b: b, logf: logf, backendLogID: logID, clock: tstime.StdClock{}}
 }
 
 type Handler struct {

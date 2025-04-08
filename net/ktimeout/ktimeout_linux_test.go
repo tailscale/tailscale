@@ -4,17 +4,22 @@
 package ktimeout
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
 
-	"golang.org/x/net/nettest"
 	"golang.org/x/sys/unix"
 	"tailscale.com/util/must"
 )
 
 func TestSetUserTimeout(t *testing.T) {
-	l := must.Get(nettest.NewLocalListener("tcp"))
+	lc := net.ListenConfig{}
+	// As of 2025-02-19, MPTCP does not support TCP_USER_TIMEOUT socket option
+	// set in ktimeout.UserTimeout above.
+	lc.SetMultipathTCP(false)
+
+	l := must.Get(lc.Listen(context.Background(), "tcp", "localhost:0"))
 	defer l.Close()
 
 	var err error

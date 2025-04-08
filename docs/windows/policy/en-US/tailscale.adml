@@ -16,9 +16,12 @@
             <string id="SINCE_V1_62">Tailscale version 1.62.0 and later</string>
             <string id="SINCE_V1_74">Tailscale version 1.74.0 and later</string>
             <string id="SINCE_V1_78">Tailscale version 1.78.0 and later</string>
+            <string id="SINCE_V1_82">Tailscale version 1.82.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
+            <string id="AllowedWithAudit">Allowed (with audit)</string>
+            <string id="NotAllowed">Not Allowed</string>
             <string id="LoginURL">Require using a specific Tailscale coordination server</string>
             <string id="LoginURL_Help"><![CDATA[This policy can be used to require the use of a particular Tailscale coordination server.
 
@@ -98,6 +101,22 @@ If you disable this policy, then Run Unattended is always disabled and the menu 
 If you do not configure this policy, then Run Unattended depends on what is selected in the Preferences submenu.
 
 See https://tailscale.com/kb/1315/mdm-keys#set-unattended-mode and https://tailscale.com/kb/1088/run-unattended for more details.]]></string>
+            <string id="AlwaysOn">Restrict users from disconnecting Tailscale (always-on mode)</string>
+            <string id="AlwaysOn_Help"><![CDATA[This policy setting controls whether a user can disconnect Tailscale.
+
+If you enable this policy setting, users will not be allowed to disconnect Tailscale, and it will remain in a connected state as long as they are logged in, even if they close or terminate the GUI. Optionally, you can allow users to temporarily disconnect Tailscale by requiring them to provide a reason, which will be logged for auditing purposes.
+
+If necessary, it can be used along with Unattended Mode to keep Tailscale connected regardless of whether a user is logged in. This can be used to facilitate remote access to a device or ensure connectivity to a Domain Controller before a user logs in.
+
+If you disable or don't configure this policy setting, users will be allowed to disconnect Tailscale at their will.]]></string>
+            <string id="ReconnectAfter">Configure automatic reconnect delay</string>
+            <string id="ReconnectAfter_Help"><![CDATA[This policy setting controls when Tailscale will attempt to reconnect automatically after a user disconnects it. It helps users remain connected most of the time and retain access to corporate resources without preventing them from temporarily disconnecting Tailscale. To configure whether and when Tailscale can be disconnected, see the "Restrict users from disconnecting Tailscale (always-on mode)" policy setting.
+
+If you enable this policy setting, you can specify how long Tailscale will wait before attempting to reconnect after a user disconnects. The value should be specified as a Go duration: for example, 30s, 5m, or 1h30m. If the value is left blank, or if the specified duration is zero, Tailscale will not attempt to reconnect automatically.
+
+If you disable or don't configure this policy setting, Tailscale will only reconnect if a user chooses to or if required by a different policy setting.
+
+Refer to https://pkg.go.dev/time#ParseDuration for information about the supported duration strings.]]></string>
             <string id="ExitNodeAllowLANAccess">Allow Local Network Access when an Exit Node is in use</string>
             <string id="ExitNodeAllowLANAccess_Help"><![CDATA[This policy can be used to require that the Allow Local Network Access setting is configured a certain way.
 
@@ -263,6 +282,16 @@ See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more d
             <presentation id="AuthKey">
                 <textBox refId="AuthKeyPrompt">
                     <label>Auth Key:</label>
+                </textBox>
+            </presentation>
+            <presentation id="AlwaysOn">
+                <text>The options below allow configuring exceptions where disconnecting Tailscale is permitted.</text>
+                <dropdownList refId="AlwaysOn_OverrideWithReason" noSort="true" defaultItem="0">Disconnects with reason:</dropdownList>
+            </presentation>
+            <presentation id="ReconnectAfter">
+                <text>The delay must be a valid Go duration string, such as 30s, 5m, or 1h30m, all without spaces or any other symbols.</text>
+                <textBox refId="ReconnectAfterDelay">
+                    <label>Reconnect after:</label>
                 </textBox>
             </presentation>
             <presentation id="ExitNodeID">

@@ -19,7 +19,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService
 
 // View returns a read-only view of User.
 func (p *User) View() UserView {
@@ -880,25 +880,27 @@ func (v *DERPRegionView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v DERPRegionView) RegionID() int      { return v.ж.RegionID }
-func (v DERPRegionView) RegionCode() string { return v.ж.RegionCode }
-func (v DERPRegionView) RegionName() string { return v.ж.RegionName }
-func (v DERPRegionView) Latitude() float64  { return v.ж.Latitude }
-func (v DERPRegionView) Longitude() float64 { return v.ж.Longitude }
-func (v DERPRegionView) Avoid() bool        { return v.ж.Avoid }
+func (v DERPRegionView) RegionID() int         { return v.ж.RegionID }
+func (v DERPRegionView) RegionCode() string    { return v.ж.RegionCode }
+func (v DERPRegionView) RegionName() string    { return v.ж.RegionName }
+func (v DERPRegionView) Latitude() float64     { return v.ж.Latitude }
+func (v DERPRegionView) Longitude() float64    { return v.ж.Longitude }
+func (v DERPRegionView) Avoid() bool           { return v.ж.Avoid }
+func (v DERPRegionView) NoMeasureNoHome() bool { return v.ж.NoMeasureNoHome }
 func (v DERPRegionView) Nodes() views.SliceView[*DERPNode, DERPNodeView] {
 	return views.SliceOfViews[*DERPNode, DERPNodeView](v.ж.Nodes)
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPRegionViewNeedsRegeneration = DERPRegion(struct {
-	RegionID   int
-	RegionCode string
-	RegionName string
-	Latitude   float64
-	Longitude  float64
-	Avoid      bool
-	Nodes      []*DERPNode
+	RegionID        int
+	RegionCode      string
+	RegionName      string
+	Latitude        float64
+	Longitude       float64
+	Avoid           bool
+	NoMeasureNoHome bool
+	Nodes           []*DERPNode
 }{})
 
 // View returns a read-only view of DERPMap.
@@ -1403,7 +1405,6 @@ func (v UserProfileView) ID() UserID                    { return v.ж.ID }
 func (v UserProfileView) LoginName() string             { return v.ж.LoginName }
 func (v UserProfileView) DisplayName() string           { return v.ж.DisplayName }
 func (v UserProfileView) ProfilePicURL() string         { return v.ж.ProfilePicURL }
-func (v UserProfileView) Roles() emptyStructJSONSlice   { return v.ж.Roles }
 func (v UserProfileView) Equal(v2 UserProfileView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -1412,5 +1413,60 @@ var _UserProfileViewNeedsRegeneration = UserProfile(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Roles         emptyStructJSONSlice
+}{})
+
+// View returns a read-only view of VIPService.
+func (p *VIPService) View() VIPServiceView {
+	return VIPServiceView{ж: p}
+}
+
+// VIPServiceView provides a read-only view over VIPService.
+//
+// Its methods should only be called if `Valid()` returns true.
+type VIPServiceView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *VIPService
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v VIPServiceView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v VIPServiceView) AsStruct() *VIPService {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v VIPServiceView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *VIPServiceView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x VIPService
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v VIPServiceView) Name() ServiceName                  { return v.ж.Name }
+func (v VIPServiceView) Ports() views.Slice[ProtoPortRange] { return views.SliceOf(v.ж.Ports) }
+func (v VIPServiceView) Active() bool                       { return v.ж.Active }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _VIPServiceViewNeedsRegeneration = VIPService(struct {
+	Name   ServiceName
+	Ports  []ProtoPortRange
+	Active bool
 }{})

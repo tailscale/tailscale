@@ -50,10 +50,11 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -87,6 +88,9 @@ func (s *Server) PopulateDERPMapIPs() error {
 		for _, n := range r.Nodes {
 			if n.IPv4 != "" {
 				s.derpIPs.Add(netip.MustParseAddr(n.IPv4))
+			}
+			if n.IPv6 != "" {
+				s.derpIPs.Add(netip.MustParseAddr(n.IPv6))
 			}
 		}
 	}
@@ -646,7 +650,7 @@ type Server struct {
 	mu              sync.Mutex
 	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
 	agentConns      set.Set[*agentConn]       //  not keyed by node; should be small/cheap enough to scan all
-	agentDialer     map[*node]DialFunc
+	agentDialer     map[*node]netx.DialFunc
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -660,8 +664,6 @@ func (s *Server) logf(format string, args ...any) {
 func (s *Server) SetLoggerForTest(logf func(format string, args ...any)) {
 	s.optLogf = logf
 }
-
-type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 var derpMap = &tailcfg.DERPMap{
 	Regions: map[int]*tailcfg.DERPRegion{
@@ -2123,11 +2125,11 @@ func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 }
 
 type NodeAgentClient struct {
-	*tailscale.LocalClient
+	*local.Client
 	HTTPClient *http.Client
 }
 
-func (s *Server) NodeAgentDialer(n *Node) DialFunc {
+func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2148,7 +2150,7 @@ func (s *Server) NodeAgentDialer(n *Node) DialFunc {
 func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {
 	d := s.NodeAgentDialer(n)
 	return &NodeAgentClient{
-		LocalClient: &tailscale.LocalClient{
+		Client: &local.Client{
 			UseSocketOnly: true,
 			OmitAuth:      true,
 			Dial:          d,

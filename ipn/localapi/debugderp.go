@@ -231,8 +231,14 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 		connSuccess := checkConn(derpNode)
 
 		// Verify that the /generate_204 endpoint works
-		captivePortalURL := "http://" + derpNode.HostName + "/generate_204"
-		resp, err := client.Get(captivePortalURL)
+		captivePortalURL := fmt.Sprintf("http://%s/generate_204?t=%d", derpNode.HostName, time.Now().Unix())
+		req, err := http.NewRequest("GET", captivePortalURL, nil)
+		if err != nil {
+			st.Warnings = append(st.Warnings, fmt.Sprintf("Internal error creating request for captive portal check: %v", err))
+			continue
+		}
+		req.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate, no-transform, max-age=0")
+		resp, err := client.Do(req)
 		if err != nil {
 			st.Warnings = append(st.Warnings, fmt.Sprintf("Error making request to the captive portal check %q; is port 80 blocked?", captivePortalURL))
 		} else {

@@ -1,0 +1,6 @@
+<li id="monitor" hx-swap-oob="afterbegin">
+    <details>
+        <summary>{{.Count}}: {{.Type}} from {{.Event.From.Name}}, {{len .Event.To}} recipients</summary>
+        {{.Event.Event}}
+    </details>
+</li>
