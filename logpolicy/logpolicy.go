@@ -518,8 +518,9 @@ type Options struct {
 	MaxUploadSize int
 }
 
-// New returns a new log policy (a logger and its instance ID).
-func (opts Options) New() *Policy {
+// init initializes the log policy and returns a logtail.Config and the
+// Policy.
+func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 	if hostinfo.IsNATLabGuestVM() {
 		// In NATLab Gokrazy instances, tailscaled comes up concurently with
 		// DHCP and the doesn't have DNS for a while. Wait for DHCP first.
@@ -628,7 +629,7 @@ func (opts Options) New() *Policy {
 		conf.IncludeProcSequence = true
 	}
 
-	if envknob.NoLogsNoSupport() || testenv.InTest() || runtime.GOOS == "plan9" {
+	if disableLogging {
 		opts.Logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
 	} else {
@@ -637,14 +638,15 @@ func (opts Options) New() *Policy {
 		attachFilchBuffer(&conf, opts.Dir, opts.CmdName, opts.MaxBufferSize, opts.Logf)
 		conf.HTTPC = opts.HTTPC
 
+		logHost := logtail.DefaultHost
+		if val := getLogTarget(); val != "" {
+			opts.Logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
+			conf.BaseURL = val
+			u, _ := url.Parse(val)
+			logHost = u.Host
+		}
+
 		if conf.HTTPC == nil {
-			logHost := logtail.DefaultHost
-			if val := getLogTarget(); val != "" {
-				opts.Logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
-				conf.BaseURL = val
-				u, _ := url.Parse(val)
-				logHost = u.Host
-			}
 			conf.HTTPC = &http.Client{Transport: TransportOptions{
 				Host:   logHost,
 				NetMon: opts.NetMon,
@@ -680,11 +682,18 @@ func (opts Options) New() *Policy {
 		opts.Logf("%s", earlyErrBuf.Bytes())
 	}
 
-	return &Policy{
+	return &conf, &Policy{
 		Logtail:  lw,
 		PublicID: newc.PublicID,
 		Logf:     opts.Logf,
 	}
+}
+
+// New returns a new log policy (a logger and its instance ID).
+func (opts Options) New() *Policy {
+	disableLogging := envknob.NoLogsNoSupport() || testenv.InTest() || runtime.GOOS == "plan9"
+	_, policy := opts.init(disableLogging)
+	return policy
 }
 
 // attachFilchBuffer creates an on-disk ring buffer using filch and attaches
