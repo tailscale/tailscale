@@ -76,6 +76,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/net/udprelay"
 	"tailscale.com/paths"
 	"tailscale.com/portlist"
 	"tailscale.com/posture"
@@ -378,6 +379,7 @@ type LocalBackend struct {
 	// c2nUpdateStatus is the status of c2n-triggered client update.
 	c2nUpdateStatus updateStatus
 	currentUser     ipnauth.Actor
+	relayServer     relayServer // or nil, initialized lazily
 
 	// backgroundProfileResolvers are optional background profile resolvers.
 	backgroundProfileResolvers set.HandleSet[profileResolver]
@@ -1134,6 +1136,10 @@ func (b *LocalBackend) Shutdown() {
 	if b.sshServer != nil {
 		b.sshServer.Shutdown()
 		b.sshServer = nil
+	}
+	if b.relayServer != nil {
+		b.relayServer.Close()
+		b.relayServer = nil
 	}
 	b.closePeerAPIListenersLocked()
 	if b.debugSink != nil {
@@ -4609,6 +4615,17 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 			b.sshServer = nil
 		}
 	}
+
+	if oldp.RelayServerPort().Valid() && (newp.RelayServerPort == nil ||
+		oldp.RelayServerPort().Get() != *newp.RelayServerPort) {
+		if b.relayServer != nil {
+			b.goTracker.Go(func() {
+				b.relayServer.Close()
+			})
+			b.relayServer = nil
+		}
+	}
+
 	if netMap != nil {
 		newProfile := profileFromView(netMap.UserProfiles[netMap.User()])
 		if newLoginName := newProfile.LoginName; newLoginName != "" {
@@ -6058,6 +6075,40 @@ func (b *LocalBackend) resetAuthURLLocked() {
 	b.authURL = ""
 	b.authURLTime = time.Time{}
 	b.authActor = nil
+}
+
+// relayServer is the interface of the conditionally linked net/udprelay.Server.
+type relayServer interface {
+	// AllocateEndpoint allocates a udprelay.ServerEndpoint for the provided
+	// pair of key.DiscoPublic's. It returns an error (udprelay.ErrServerClosed)
+	// if the server has been closed.
+	AllocateEndpoint(discoA, discoB key.DiscoPublic) (udprelay.ServerEndpoint, error)
+
+	Close() error
+}
+
+type newRelayServerFunc func(port int, addrs []netip.Addr) (relayServer, int, error)
+
+var newRelayServer newRelayServerFunc // or nil
+
+func registerNewRelayServer(fn newRelayServerFunc) {
+	newRelayServer = fn
+}
+
+func (b *LocalBackend) relayServerOrInit() (_ relayServer, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.relayServer != nil {
+		return b.relayServer, nil
+	}
+	if newRelayServer == nil {
+		return nil, errors.New("no relay server support")
+	}
+	b.relayServer, _, err = newRelayServer(b.Prefs().RelayServerPort().Get(), []netip.Addr{netip.MustParseAddr("127.0.0.1")})
+	if err != nil {
+		return nil, fmt.Errorf("newRelayServer: %w", err)
+	}
+	return b.relayServer, nil
 }
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
