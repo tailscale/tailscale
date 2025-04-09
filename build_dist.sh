@@ -28,18 +28,26 @@ EOF
 	exit 0
 fi
 
-tags=""
+tags="${TAGS:-}"
 ldflags="-X tailscale.com/version.longStamp=${VERSION_LONG} -X tailscale.com/version.shortStamp=${VERSION_SHORT}"
 
 # build_dist.sh arguments must precede go build arguments.
 while [ "$#" -gt 1 ]; do
 	case "$1" in
 	--extra-small)
+		if [ ! -z "${TAGS:-}" ]; then
+			echo "set either --extra-small or \$TAGS, but not both"
+			exit 1
+		fi
 		shift
 		ldflags="$ldflags -w -s"
 		tags="${tags:+$tags,}ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion,ts_omit_ssh,ts_omit_wakeonlan,ts_omit_capture"
 		;;
 	--box)
+		if [ ! -z "${TAGS:-}" ]; then
+			echo "set either --box or \$TAGS, but not both"
+			exit 1
+		fi
 		shift
 		tags="${tags:+$tags,}ts_include_cli"
 		;;
