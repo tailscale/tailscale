@@ -340,49 +340,58 @@ func TestDNSResponse(t *testing.T) {
 								t.Errorf("answer[%d] not an A record", i)
 								continue
 							}
-							resource := ans.Body.(*dnsmessage.AResource)
-							gotIP := netip.AddrFrom4([4]byte(resource.A))
-
-							var ips []netip.Addr
-							if tc.wantIgnored {
-								ips = must.Get(c.resolver.LookupNetIP(t.Context(), "ip4", want.name))
-							} else {
-								ips = must.Get(c.ipPool.IPForDomain(tailcfg.NodeID(123), want.name))
-							}
-							var wantIP netip.Addr
-							for _, ip := range ips {
-								if ip.Is4() {
-									wantIP = ip
-									break
-								}
-							}
-							if gotIP != wantIP {
-								t.Errorf("answer[%d] IP = %s, want %s", i, gotIP, wantIP)
-							}
 						case dnsmessage.TypeAAAA:
 							if ans.Body.(*dnsmessage.AAAAResource) == nil {
 								t.Errorf("answer[%d] not an AAAA record", i)
 								continue
 							}
-							resource := ans.Body.(*dnsmessage.AAAAResource)
-							gotIP := netip.AddrFrom16([16]byte(resource.AAAA))
+						}
 
-							var ips []netip.Addr
-							if tc.wantIgnored {
-								ips = must.Get(c.resolver.LookupNetIP(t.Context(), "ip6", want.name))
-							} else {
-								ips = must.Get(c.ipPool.IPForDomain(tailcfg.NodeID(123), want.name))
+						var gotIP netip.Addr
+						switch want.qType {
+						case dnsmessage.TypeA:
+							resource := ans.Body.(*dnsmessage.AResource)
+							gotIP = netip.AddrFrom4([4]byte(resource.A))
+						case dnsmessage.TypeAAAA:
+							resource := ans.Body.(*dnsmessage.AAAAResource)
+							gotIP = netip.AddrFrom16([16]byte(resource.AAAA))
+						}
+
+						var wantIP netip.Addr
+						if tc.wantIgnored {
+							var net string
+							var fxSelectIP func(netip.Addr) bool
+							switch want.qType {
+							case dnsmessage.TypeA:
+								net = "ip4"
+								fxSelectIP = func(a netip.Addr) bool {
+									return a.Is4()
+								}
+							case dnsmessage.TypeAAAA:
+								//TODO(fran) is this branch exercised?
+								net = "ip6"
+								fxSelectIP = func(a netip.Addr) bool {
+									return a.Is6()
+								}
 							}
-							var wantIP netip.Addr
+							ips := must.Get(c.resolver.LookupNetIP(t.Context(), net, want.name))
 							for _, ip := range ips {
-								if ip.Is6() {
+								if fxSelectIP(ip) {
 									wantIP = ip
 									break
 								}
 							}
-							if gotIP != wantIP {
-								t.Errorf("answer[%d] IP = %s, want %s", i, gotIP, wantIP)
+						} else {
+							addr := must.Get(c.ipPool.IPForDomain(tailcfg.NodeID(123), want.name))
+							switch want.qType {
+							case dnsmessage.TypeA:
+								wantIP = addr
+							case dnsmessage.TypeAAAA:
+								wantIP = v6ForV4(v6ULA.Addr(), addr)
 							}
+						}
+						if gotIP != wantIP {
+							t.Errorf("answer[%d] IP = %s, want %s", i, gotIP, wantIP)
 						}
 					}
 				}
@@ -443,5 +452,31 @@ func TestIgnoreDestination(t *testing.T) {
 				t.Errorf("ignoreDestination(%v) = %v, want %v", tc.addrs, got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestV6V4(t *testing.T) {
+	v6ULA := ula(1)
+
+	tests := [][]string{
+		{"100.64.0.0", "fd7a:115c:a1e0:a99c:1:0:6440:0"},
+		{"0.0.0.0", "fd7a:115c:a1e0:a99c:1::"},
+		{"255.255.255.255", "fd7a:115c:a1e0:a99c:1:0:ffff:ffff"},
+	}
+
+	for i, test := range tests {
+		// to v6
+		v6 := v6ForV4(v6ULA.Addr(), netip.MustParseAddr(test[0]))
+		want := netip.MustParseAddr(test[1])
+		if v6 != want {
+			t.Fatalf("test %d: want: %v, got: %v", i, want, v6)
+		}
+
+		// to v4
+		v4 := v4ForV6(netip.MustParseAddr(test[1]))
+		want = netip.MustParseAddr(test[0])
+		if v4 != want {
+			t.Fatalf("test %d: want: %v, got: %v", i, want, v4)
+		}
 	}
 }

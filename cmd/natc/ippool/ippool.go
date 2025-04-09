@@ -41,7 +41,7 @@ func (ipp *IPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr) (string, bo
 	return domain, ok
 }
 
-func (ipp *IPPool) IPForDomain(from tailcfg.NodeID, domain string) ([]netip.Addr, error) {
+func (ipp *IPPool) IPForDomain(from tailcfg.NodeID, domain string) (netip.Addr, error) {
 	npps := &perPeerState{
 		ipset: ipp.IPSet,
 		v6ULA: ipp.V6ULA,
@@ -57,7 +57,7 @@ type perPeerState struct {
 
 	mu           sync.Mutex
 	addrInUse    *big.Int
-	domainToAddr map[string][]netip.Addr
+	domainToAddr map[string]netip.Addr
 	addrToDomain *bart.Table[string]
 }
 
@@ -75,23 +75,23 @@ func (ps *perPeerState) domainForIP(ip netip.Addr) (_ string, ok bool) {
 // ipForDomain assigns a pair of unique IP addresses for the given domain and
 // returns them. The first address is an IPv4 address and the second is an IPv6
 // address. If the domain already has assigned addresses, it returns them.
-func (ps *perPeerState) ipForDomain(domain string) ([]netip.Addr, error) {
+func (ps *perPeerState) ipForDomain(domain string) (netip.Addr, error) {
 	fqdn, err := dnsname.ToFQDN(domain)
 	if err != nil {
-		return nil, err
+		return netip.Addr{}, err
 	}
 	domain = fqdn.WithoutTrailingDot()
 
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	if addrs, ok := ps.domainToAddr[domain]; ok {
-		return addrs, nil
+	if addr, ok := ps.domainToAddr[domain]; ok {
+		return addr, nil
 	}
-	addrs := ps.assignAddrsLocked(domain)
-	if addrs == nil {
-		return nil, ErrNoIPsAvailable
+	addr := ps.assignAddrsLocked(domain)
+	if !addr.IsValid() {
+		return netip.Addr{}, ErrNoIPsAvailable
 	}
-	return addrs, nil
+	return addr, nil
 }
 
 // unusedIPv4Locked returns an unused IPv4 address from the available ranges.
@@ -106,22 +106,16 @@ func (ps *perPeerState) unusedIPv4Locked() netip.Addr {
 // and returns them. The first address is an IPv4 address and the second is an
 // IPv6 address. It does not check if the domain already has assigned addresses.
 // ps.mu must be held.
-func (ps *perPeerState) assignAddrsLocked(domain string) []netip.Addr {
+func (ps *perPeerState) assignAddrsLocked(domain string) netip.Addr {
 	if ps.addrToDomain == nil {
 		ps.addrToDomain = &bart.Table[string]{}
 	}
 	v4 := ps.unusedIPv4Locked()
 	if !v4.IsValid() {
-		return nil
+		return netip.Addr{}
 	}
-	as16 := ps.v6ULA.Addr().As16()
-	as4 := v4.As4()
-	copy(as16[12:], as4[:])
-	v6 := netip.AddrFrom16(as16)
-	addrs := []netip.Addr{v4, v6}
-	mak.Set(&ps.domainToAddr, domain, addrs)
-	for _, a := range addrs {
-		ps.addrToDomain.Insert(netip.PrefixFrom(a, a.BitLen()), domain)
-	}
-	return addrs
+	addr := v4
+	mak.Set(&ps.domainToAddr, domain, addr)
+	ps.addrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), domain)
+	return addr
 }
