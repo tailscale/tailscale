@@ -4844,7 +4844,32 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 	c := len(hi.Services)
 	hi.Services = append(hi.Services[:c:c], peerAPIServices...)
 	hi.PushDeviceToken = b.pushDeviceToken.Load()
+
+	// Compare the expected ports from peerAPIServices to the actual ports in hi.Services.
+	expectedPorts := extractPeerAPIPorts(peerAPIServices)
+	actualPorts := extractPeerAPIPorts(hi.Services)
+	if expectedPorts != actualPorts {
+		b.logf("Hostinfo peerAPI ports changed: expected %v, got %v", expectedPorts, actualPorts)
+	}
+
 	cc.SetHostinfo(&hi)
+}
+
+type portPair struct {
+	v4, v6 uint16
+}
+
+func extractPeerAPIPorts(services []tailcfg.Service) portPair {
+	var p portPair
+	for _, s := range services {
+		switch s.Proto {
+		case "peerapi4":
+			p.v4 = s.Port
+		case "peerapi6":
+			p.v6 = s.Port
+		}
+	}
+	return p
 }
 
 // NetMap returns the latest cached network map received from
