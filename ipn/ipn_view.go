@@ -166,6 +166,10 @@ func (v PrefsView) NetfilterKind() string                 { return v.ж.Netfilte
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
 	return views.SliceOfViews[*drive.Share, drive.ShareView](v.ж.DriveShares)
 }
+func (v PrefsView) RelayServerPort() views.ValuePointer[int] {
+	return views.ValuePointerOf(v.ж.RelayServerPort)
+}
+
 func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
 func (v PrefsView) Persist() persist.PersistView          { return v.ж.Persist.View() }
 
@@ -200,6 +204,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share
+	RelayServerPort        *int
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})

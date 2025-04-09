@@ -246,6 +246,14 @@ type Prefs struct {
 	// by name.
 	DriveShares []*drive.Share
 
+	// RelayServerPort is the UDP port number for the relay server to bind to,
+	// on all interfaces. A non-nil zero value signifies a random unused port
+	// should be used. A nil value signifies relay server functionality
+	// should be disabled. This field is currently experimental, and therefore
+	// no guarantees are made about its current naming and functionality when
+	// non-nil/enabled.
+	RelayServerPort *int `json:",omitempty"`
+
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
 	// peers got /32 or /127 routes for each other.
@@ -337,6 +345,7 @@ type MaskedPrefs struct {
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
 	DriveSharesSet            bool                `json:",omitempty"`
+	RelayServerPortSet        bool                `json:",omitempty"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -555,6 +564,9 @@ func (p *Prefs) pretty(goos string) string {
 	}
 	sb.WriteString(p.AutoUpdate.Pretty())
 	sb.WriteString(p.AppConnector.Pretty())
+	if p.RelayServerPort != nil {
+		fmt.Fprintf(&sb, "relayServerPort=%d ", *p.RelayServerPort)
+	}
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -616,7 +628,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
-		p.NetfilterKind == p2.NetfilterKind
+		p.NetfilterKind == p2.NetfilterKind &&
+		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort)
 }
 
 func (au AutoUpdatePrefs) Pretty() string {
@@ -634,6 +647,16 @@ func (ap AppConnectorPrefs) Pretty() string {
 		return "appconnector=advertise "
 	}
 	return ""
+}
+
+func compareIntPtrs(a, b *int) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return *a == *b
 }
 
 // NewPrefs returns the default preferences to use.
