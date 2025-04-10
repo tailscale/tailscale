@@ -26,6 +26,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
 	"tailscale.com/tailcfg"
@@ -574,6 +575,7 @@ func TestRejoin(t *testing.T) {
 }
 
 func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15627")
 	testConfig(t)
 	ctx := context.Background()
 	clusterTag := "tag:whatever"
@@ -631,6 +633,7 @@ func TestOnlyTaggedPeersCanDialRaftPort(t *testing.T) {
 }
 
 func TestOnlyTaggedPeersCanBeDialed(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15627")
 	testConfig(t)
 	ctx := context.Background()
 	clusterTag := "tag:whatever"
