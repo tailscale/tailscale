@@ -2892,15 +2892,11 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		})
 	}
 
-	sb.MutateStatus(func(s *ipnstate.Status) {
-		s.DERPHomeRegionID = c.myDerp
-		c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
-			// TODO(bradfitz): add a method to ipnstate.StatusBuilder
-			// to include all the DERP connections we have open
-			// and add it here. See the other caller of foreachActiveDerpSortedLocked.
-		})
+	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
+		// TODO(bradfitz): add a method to ipnstate.StatusBuilder
+		// to include all the DERP connections we have open
+		// and add it here. See the other caller of foreachActiveDerpSortedLocked.
 	})
-
 }
 
 // SetStatistics specifies a per-connection statistics aggregator.
