@@ -294,7 +294,7 @@ func (lc *Client) get200(ctx context.Context, path string) ([]byte, error) {
 
 // WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
 //
-// Deprecated: use Client.WhoIs.
+// Deprecated: use [Client.WhoIs].
 func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	return defaultClient.WhoIs(ctx, remoteAddr)
 }
@@ -309,7 +309,7 @@ func decodeJSON[T any](b []byte) (ret T, err error) {
 
 // WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
 //
-// If not found, the error is ErrPeerNotFound.
+// If not found, the error is [ErrPeerNotFound].
 //
 // For connections proxied by tailscaled, this looks up the owner of the given
 // address as TCP first, falling back to UDP; if you want to only check a
@@ -325,7 +325,8 @@ func (lc *Client) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsR
 	return decodeJSON[*apitype.WhoIsResponse](body)
 }
 
-// ErrPeerNotFound is returned by WhoIs and WhoIsNodeKey when a peer is not found.
+// ErrPeerNotFound is returned by [Client.WhoIs], [Client.WhoIsNodeKey] and
+// [Client.WhoIsProto] when a peer is not found.
 var ErrPeerNotFound = errors.New("peer not found")
 
 // WhoIsNodeKey returns the owner of the given wireguard public key.
@@ -345,7 +346,7 @@ func (lc *Client) WhoIsNodeKey(ctx context.Context, key key.NodePublic) (*apityp
 // WhoIsProto returns the owner of the remoteAddr, which must be an IP or
 // IP:port, for the given protocol (tcp or udp).
 //
-// If not found, the error is ErrPeerNotFound.
+// If not found, the error is [ErrPeerNotFound].
 func (lc *Client) WhoIsProto(ctx context.Context, proto, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/whois?proto="+url.QueryEscape(proto)+"&addr="+url.QueryEscape(remoteAddr))
 	if err != nil {
@@ -490,7 +491,7 @@ func (lc *Client) BugReportWithOpts(ctx context.Context, opts BugReportOpts) (st
 
 // BugReport logs and returns a log marker that can be shared by the user with support.
 //
-// This is the same as calling BugReportWithOpts and only specifying the Note
+// This is the same as calling [Client.BugReportWithOpts] and only specifying the Note
 // field.
 func (lc *Client) BugReport(ctx context.Context, note string) (string, error) {
 	return lc.BugReportWithOpts(ctx, BugReportOpts{Note: note})
@@ -531,7 +532,7 @@ func (lc *Client) DebugResultJSON(ctx context.Context, action string) (any, erro
 	return x, nil
 }
 
-// DebugPortmapOpts contains options for the DebugPortmap command.
+// DebugPortmapOpts contains options for the [Client.DebugPortmap] command.
 type DebugPortmapOpts struct {
 	// Duration is how long the mapping should be created for. It defaults
 	// to 5 seconds if not set.
@@ -677,7 +678,7 @@ func (lc *Client) WaitingFiles(ctx context.Context) ([]apitype.WaitingFile, erro
 	return lc.AwaitWaitingFiles(ctx, 0)
 }
 
-// AwaitWaitingFiles is like WaitingFiles but takes a duration to await for an answer.
+// AwaitWaitingFiles is like [Client.WaitingFiles] but takes a duration to await for an answer.
 // If the duration is 0, it will return immediately. The duration is respected at second
 // granularity only. If no files are available, it returns (nil, nil).
 func (lc *Client) AwaitWaitingFiles(ctx context.Context, d time.Duration) ([]apitype.WaitingFile, error) {
@@ -946,7 +947,7 @@ func (lc *Client) SetDNS(ctx context.Context, name, value string) error {
 // The host may be a base DNS name (resolved from the netmap inside
 // tailscaled), a FQDN, or an IP address.
 //
-// The ctx is only used for the duration of the call, not the lifetime of the net.Conn.
+// The ctx is only used for the duration of the call, not the lifetime of the [net.Conn].
 func (lc *Client) DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
 	return lc.UserDial(ctx, "tcp", host, port)
 }
@@ -957,7 +958,7 @@ func (lc *Client) DialTCP(ctx context.Context, host string, port uint16) (net.Co
 // a FQDN, or an IP address.
 //
 // The ctx is only used for the duration of the call, not the lifetime of the
-// net.Conn.
+// [net.Conn].
 func (lc *Client) UserDial(ctx context.Context, network, host string, port uint16) (net.Conn, error) {
 	connCh := make(chan net.Conn, 1)
 	trace := httptrace.ClientTrace{
@@ -1025,7 +1026,7 @@ func (lc *Client) CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) 
 //
 // It returns a cached certificate from disk if it's still valid.
 //
-// Deprecated: use Client.CertPair.
+// Deprecated: use [Client.CertPair].
 func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
 	return defaultClient.CertPair(ctx, domain)
 }
@@ -1072,9 +1073,9 @@ func (lc *Client) CertPairWithValidity(ctx context.Context, domain string, minVa
 // It returns a cached certificate from disk if it's still valid.
 //
 // It's the right signature to use as the value of
-// tls.Config.GetCertificate.
+// [tls.Config.GetCertificate].
 //
-// Deprecated: use Client.GetCertificate.
+// Deprecated: use [Client.GetCertificate].
 func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return defaultClient.GetCertificate(hi)
 }
@@ -1084,7 +1085,7 @@ func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 // It returns a cached certificate from disk if it's still valid.
 //
 // It's the right signature to use as the value of
-// tls.Config.GetCertificate.
+// [tls.Config.GetCertificate].
 //
 // API maturity: this is considered a stable API.
 func (lc *Client) GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -1113,7 +1114,7 @@ func (lc *Client) GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, err
 
 // ExpandSNIName expands bare label name into the most likely actual TLS cert name.
 //
-// Deprecated: use Client.ExpandSNIName.
+// Deprecated: use [Client.ExpandSNIName].
 func ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
 	return defaultClient.ExpandSNIName(ctx, name)
 }
@@ -1502,7 +1503,7 @@ func (lc *Client) SwitchProfile(ctx context.Context, profile ipn.ProfileID) erro
 
 // DeleteProfile removes the profile with the given ID.
 // If the profile is the current profile, an empty profile
-// will be selected as if SwitchToEmptyProfile was called.
+// will be selected as if [Client.SwitchToEmptyProfile] was called.
 func (lc *Client) DeleteProfile(ctx context.Context, profile ipn.ProfileID) error {
 	_, err := lc.send(ctx, "DELETE", "/localapi/v0/profiles/"+url.PathEscape(string(profile)), http.StatusNoContent, nil)
 	return err
@@ -1559,7 +1560,7 @@ func (lc *Client) DebugSetExpireIn(ctx context.Context, d time.Duration) error {
 // StreamDebugCapture streams a pcap-formatted packet capture.
 //
 // The provided context does not determine the lifetime of the
-// returned io.ReadCloser.
+// returned [io.ReadCloser].
 func (lc *Client) StreamDebugCapture(ctx context.Context) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+apitype.LocalAPIHost+"/localapi/v0/debug-capture", nil)
 	if err != nil {
@@ -1582,7 +1583,7 @@ func (lc *Client) StreamDebugCapture(ctx context.Context) (io.ReadCloser, error)
 // The context is used for the life of the watch, not just the call to
 // WatchIPNBus.
 //
-// The returned IPNBusWatcher's Close method must be called when done to release
+// The returned [IPNBusWatcher]'s Close method must be called when done to release
 // resources.
 //
 // A default set of ipn.Notify messages are returned but the set can be modified by mask.
@@ -1609,7 +1610,7 @@ func (lc *Client) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*IP
 	}, nil
 }
 
-// CheckUpdate returns a tailcfg.ClientVersion indicating whether or not an update is available
+// CheckUpdate returns a [*tailcfg.ClientVersion] indicating whether or not an update is available
 // to be installed via the LocalAPI. In case the LocalAPI can't install updates, it returns a
 // ClientVersion that says that we are up to date.
 func (lc *Client) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion, error) {
@@ -1685,7 +1686,7 @@ func (lc *Client) DriveShareList(ctx context.Context) ([]*drive.Share, error) {
 }
 
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.
-// It's returned by Client.WatchIPNBus.
+// It's returned by [Client.WatchIPNBus].
 //
 // It must be closed when done.
 type IPNBusWatcher struct {
