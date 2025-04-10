@@ -397,15 +397,8 @@ flowchart LR
             operator((operator)):::tsnode
             ingress-sts["StatefulSet"]
             serve-cm[serve config ConfigMap]
-
-            config-secret-0["pg-0-config Secret"]
             ingress-0(("pg-0 (dst)")):::tsnode
-            state-secret-0["pg-0 Secret"]
-
-            config-secret-1["pg-1-config Secret"]
             ingress-1(("pg-1 (dst)")):::tsnode
-            state-secret-1["pg-1 Secret"]
-
             tls-secret[myapp.tails.ts.net Secret]
         end
 
@@ -440,14 +433,8 @@ flowchart LR
     operator -.->|watches| ingress
     operator -.->|watches| pg
     operator -.->|creates| serve-cm
-    operator -.->|creates| config-secret-0
-    operator -.->|creates| config-secret-1
-    config-secret-0 -.->|mounted| ingress-0
-    config-secret-1 -.->|mounted| ingress-1
     serve-cm -.->|mounted| ingress-0
     serve-cm -.->|mounted| ingress-1
-    ingress-0 -.->|stores state| state-secret-0
-    ingress-1 -.->|stores state| state-secret-1
     ingress -.->|/api prefix| svc
 
     linkStyle 0 stroke:red;
