@@ -226,6 +226,7 @@ change in the future.
 			loginCmd,
 			logoutCmd,
 			switchCmd,
+			removeCmd,
 			configureCmd(),
 			syspolicyCmd,
 			netcheckCmd,
