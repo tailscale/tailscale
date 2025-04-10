@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   race-root-integration:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
@@ -54,7 +54,7 @@ jobs:
     - name: build test wrapper
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: integration tests as root
-      run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/
+      run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/ -verbose-tailscaled -verbose-tailscale
       env:
         TS_TEST_SHARD: ${{ matrix.shard }}
 
@@ -561,7 +561,7 @@ jobs:
   notify_slack:
     if: always()
     # Any of these jobs failing causes a slack notification.
-    needs: 
+    needs:
       - android
       - test
       - windows
@@ -578,7 +578,7 @@ jobs:
       - staticcheck
     runs-on: ubuntu-22.04
     steps:
-    - name: notify  
+    - name: notify
       # Only notify slack for merged commits, not PR failures.
       #
       # It may be tempting to move this condition into the job's 'if' block, but
@@ -595,7 +595,7 @@ jobs:
           {
             "attachments": [{
               "title": "Failure: ${{ github.workflow }}",
-              "title_link": "https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks",         
+              "title_link": "https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks",
               "text": "${{ github.repository }}@${{ github.ref_name }}: <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>",
               "fields": [{ "value": ${{ toJson(github.event.head_commit.message) }}, "short": false }],
               "footer": "${{ github.event.head_commit.committer.name }} at ${{ github.event.head_commit.timestamp }}",

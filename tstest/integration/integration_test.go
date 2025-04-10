@@ -1153,6 +1153,11 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 		t.Fatalf("error converting self dns name to fqdn: %v", err)
 	}
 
+	out, err := n1.Tailscale("status").Output()
+	t.Logf("XXX: %s\n%s", err, string(out))
+	out, err = n1.Tailscale("dns", "status").Output()
+	t.Logf("XXX: %s\n%s", err, string(out))
+
 	cases := []struct {
 		network     string
 		serviceAddr netip.Addr
@@ -1170,6 +1175,7 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 		err = tstest.WaitFor(time.Second*5, func() error {
 			m := new(dns.Msg)
 			m.SetQuestion(selfDNSName.WithTrailingDot(), dns.TypeA)
+			t.Logf("XXX: dig %s @%s", selfDNSName.WithTrailingDot(), c.serviceAddr.String())
 			conn, err := net.DialTimeout(c.network, net.JoinHostPort(c.serviceAddr.String(), "53"), time.Second*1)
 			if err != nil {
 				return err
