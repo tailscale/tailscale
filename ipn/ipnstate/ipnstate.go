@@ -53,9 +53,6 @@ type Status struct {
 	// If nil, an exit node is not in use.
 	ExitNodeStatus *ExitNodeStatus `json:"ExitNodeStatus,omitempty"`
 
-	// DERPHomeRegionID is the current home DERP region ID.
-	DERPHomeRegionID int
-
 	// Health contains health check problems.
 	// Empty means everything is good. (or at least that no known
 	// problems are detected)
