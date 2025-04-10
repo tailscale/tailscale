@@ -160,7 +160,7 @@ flowchart TD
         end
 
         subgraph cluster-scope[Cluster scoped resources]
-            ingress-class[tailscale IngressClass]
+            ingress-class[Tailscale IngressClass]
         end
 
         subgraph defaultns[namespace=default]
@@ -417,20 +417,20 @@ flowchart LR
         end
 
         subgraph cluster[Cluster scoped resources]
-            ingress-class[tailscale IngressClass]
+            ingress-class[Tailscale IngressClass]
             pg[ProxyGroup 'pg']
         end
     end
 
     control["Tailscale control plane"]
-    vipsvc["myapp VIP Service"]
+    ts-svc["myapp Tailscale Service"]
 
     client["client (src)"]:::tsnode -->|dials https\://myapp.tails.ts.net/api| ingress-1
     ingress-0 -->|forwards traffic| svc
     ingress-1 -->|forwards traffic| svc
-    control -.->|creates| vipsvc
-    operator -.->|creates myapp VIP Service| control
-    control -.->|netmap points myapp VIP Service to pg-1| client
+    control -.->|creates| ts-svc
+    operator -.->|creates myapp Tailscale Service| control
+    control -.->|netmap points myapp Tailscale Service to pg-1| client
     operator -.->|creates| ingress-sts
     ingress-sts -.->|manages| ingress-0
     ingress-sts -.->|manages| ingress-1
