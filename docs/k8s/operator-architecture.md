@@ -406,12 +406,12 @@ flowchart LR
             ingress-1(("pg-1 (dst)")):::tsnode
             state-secret-1["pg-1 Secret"]
 
-            tls-secret[nginx.tails.ts.net Secret]
+            tls-secret[myapp.tails.ts.net Secret]
         end
 
         subgraph defaultns[namespace=default]
-            ingress[nginx.tails.ts.net Ingress]
-            svc["nginx Service"]
+            ingress[myapp.tails.ts.net Ingress]
+            svc["myapp Service"]
             svc --> pod1((pod1))
             svc --> pod2((pod2))
         end
@@ -422,15 +422,19 @@ flowchart LR
         end
     end
 
-    client["client (src)"]:::tsnode -->|dials https\://nginx.tails.ts.net/api| ingress-1
+    control["Tailscale control plane"]
+    vipsvc["myapp VIP Service"]
+
+    client["client (src)"]:::tsnode -->|dials https\://myapp.tails.ts.net/api| ingress-1
     ingress-0 -->|forwards traffic| svc
     ingress-1 -->|forwards traffic| svc
-    operator -.->|creates nginx VIP Service| control
-    control -.->|netmap points nginx VIP Service to pg-1| client
+    control -.->|creates| vipsvc
+    operator -.->|creates myapp VIP Service| control
+    control -.->|netmap points myapp VIP Service to pg-1| client
     operator -.->|creates| ingress-sts
     ingress-sts -.->|manages| ingress-0
     ingress-sts -.->|manages| ingress-1
-    ingress-0 -.->|issues nginx.tails.ts.net cert| le[Let's Encrypt]
+    ingress-0 -.->|issues myapp.tails.ts.net cert| le[Let's Encrypt]
     ingress-0 -.->|stores cert| tls-secret
     ingress-1 -.->|reads cert| tls-secret
     operator -.->|watches| ingress
@@ -449,7 +453,6 @@ flowchart LR
     linkStyle 0 stroke:red;
     linkStyle 4 stroke:red;
 
-    linkStyle 0 stroke:blue;
     linkStyle 1 stroke:blue;
     linkStyle 2 stroke:blue;
     linkStyle 3 stroke:blue;
