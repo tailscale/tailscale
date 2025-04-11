@@ -1245,7 +1245,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			}
 
 		} else {
-			ss.HostName, _ = os.Hostname()
+			ss.HostName, _ = hostinfo.Hostname()
 		}
 		for _, pln := range b.peerAPIListeners {
 			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
