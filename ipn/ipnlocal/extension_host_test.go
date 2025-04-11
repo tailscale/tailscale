@@ -299,6 +299,100 @@ func TestNewExtensionHost(t *testing.T) {
 	}
 }
 
+// TestFindMatchingExtension tests that [ExtensionHost.FindMatchingExtension] correctly
+// finds extensions by their type or interface.
+func TestFindMatchingExtension(t *testing.T) {
+	t.Parallel()
+
+	// Define test extension types and a couple of interfaces
+	type (
+		extensionA struct {
+			testExtension
+		}
+		extensionB struct {
+			testExtension
+		}
+		extensionC struct {
+			testExtension
+		}
+		supportedIface interface {
+			Name() string
+		}
+		unsupportedIface interface {
+			Unsupported()
+		}
+	)
+
+	// Register extensions A and B, but not C.
+	extA := &extensionA{testExtension: testExtension{name: "A"}}
+	extB := &extensionB{testExtension: testExtension{name: "B"}}
+	h := newExtensionHostForTest[ipnext.Extension](t, &testBackend{}, true, extA, extB)
+
+	var gotA *extensionA
+	if !h.FindMatchingExtension(&gotA) {
+		t.Errorf("LookupExtension(%T): not found", gotA)
+	} else if gotA != extA {
+		t.Errorf("LookupExtension(%T): got %v; want %v", gotA, gotA, extA)
+	}
+
+	var gotB *extensionB
+	if !h.FindMatchingExtension(&gotB) {
+		t.Errorf("LookupExtension(%T): extension B not found", gotB)
+	} else if gotB != extB {
+		t.Errorf("LookupExtension(%T): got %v; want %v", gotB, gotB, extB)
+	}
+
+	var gotC *extensionC
+	if h.FindMatchingExtension(&gotC) {
+		t.Errorf("LookupExtension(%T): found, but it should not exist", gotC)
+	}
+
+	// All extensions implement the supportedIface interface,
+	// but LookupExtension should only return the first one found,
+	// which is extA.
+	var gotSupportedIface supportedIface
+	if !h.FindMatchingExtension(&gotSupportedIface) {
+		t.Errorf("LookupExtension(%T): not found", gotSupportedIface)
+	} else if gotName, wantName := gotSupportedIface.Name(), extA.Name(); gotName != wantName {
+		t.Errorf("LookupExtension(%T): name: got %v; want %v", gotSupportedIface, gotName, wantName)
+	} else if gotSupportedIface != extA {
+		t.Errorf("LookupExtension(%T): got %v; want %v", gotSupportedIface, gotSupportedIface, extA)
+	}
+
+	var gotUnsupportedIface unsupportedIface
+	if h.FindMatchingExtension(&gotUnsupportedIface) {
+		t.Errorf("LookupExtension(%T): found, but it should not exist", gotUnsupportedIface)
+	}
+}
+
+// TestFindExtensionByName tests that [ExtensionHost.FindExtensionByName] correctly
+// finds extensions by their name.
+func TestFindExtensionByName(t *testing.T) {
+	// Register extensions A and B, but not C.
+	extA := &testExtension{name: "A"}
+	extB := &testExtension{name: "B"}
+	h := newExtensionHostForTest(t, &testBackend{}, true, extA, extB)
+
+	gotA, ok := h.FindExtensionByName(extA.Name()).(*testExtension)
+	if !ok {
+		t.Errorf("FindExtensionByName(%q): not found", extA.Name())
+	} else if gotA != extA {
+		t.Errorf(`FindExtensionByName(%q): got %v; want %v`, extA.Name(), gotA, extA)
+	}
+
+	gotB, ok := h.FindExtensionByName(extB.Name()).(*testExtension)
+	if !ok {
+		t.Errorf("FindExtensionByName(%q): not found", extB.Name())
+	} else if gotB != extB {
+		t.Errorf(`FindExtensionByName(%q): got %v; want %v`, extB.Name(), gotB, extB)
+	}
+
+	gotC, ok := h.FindExtensionByName("C").(*testExtension)
+	if ok {
+		t.Errorf(`FindExtensionByName("C"): found, but it should not exist: %v`, gotC)
+	}
+}
+
 // TestExtensionHostEnqueueBackendOperation verifies that [ExtensionHost] enqueues
 // backend operations and executes them asynchronously in the order they were received.
 // It also checks that operations requested before the host and all extensions are initialized
