@@ -17,12 +17,16 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 )
 
 var debug = envknob.RegisterBool("TS_DEBUG_PROFILES")
+
+// [profileManager] implements [ipnext.ProfileStore].
+var _ ipnext.ProfileStore = (*profileManager)(nil)
 
 // profileManager is a wrapper around an [ipn.StateStore] that manages
 // multiple profiles and the current profile.
