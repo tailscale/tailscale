@@ -589,6 +589,22 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	return b, nil
 }
 
+// FindExtensionByName returns an active extension with the given name,
+// or nil if no such extension exists.
+func (b *LocalBackend) FindExtensionByName(name string) any {
+	return b.extHost.Extensions().FindExtensionByName(name)
+}
+
+// FindMatchingExtension finds the first active extension that matches target,
+// and if one is found, sets target to that extension and returns true.
+// Otherwise, it returns false.
+//
+// It panics if target is not a non-nil pointer to either a type
+// that implements [ipnext.Extension], or to any interface type.
+func (b *LocalBackend) FindMatchingExtension(target any) bool {
+	return b.extHost.Extensions().FindMatchingExtension(target)
+}
+
 type componentLogState struct {
 	until time.Time
 	timer tstime.TimerController // if non-nil, the AfterFunc to disable it

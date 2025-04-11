@@ -174,6 +174,9 @@ func DefinitionWithErrForTest(name string, err error) *Definition {
 //
 // A host must be safe for concurrent use.
 type Host interface {
+	// Extensions returns the host's [ExtensionServices].
+	Extensions() ExtensionServices
+
 	// Profiles returns the host's [ProfileServices].
 	Profiles() ProfileServices
 
@@ -195,6 +198,22 @@ type Host interface {
 	// control client is created. The returned function unregisters the callback.
 	// It is a runtime error to register a nil callback.
 	RegisterControlClientCallback(NewControlClientCallback) (unregister func())
+}
+
+// ExtensionServices provides access to the [Host]'s extension management services,
+// such as fetching active extensions.
+type ExtensionServices interface {
+	// FindExtensionByName returns an active extension with the given name,
+	// or nil if no such extension exists.
+	FindExtensionByName(name string) any
+
+	// FindMatchingExtension finds the first active extension that matches target,
+	// and if one is found, sets target to that extension and returns true.
+	// Otherwise, it returns false.
+	//
+	// It panics if target is not a non-nil pointer to either a type
+	// that implements [ipnext.Extension], or to any interface type.
+	FindMatchingExtension(target any) bool
 }
 
 // ProfileServices provides access to the [Host]'s profile management services,
