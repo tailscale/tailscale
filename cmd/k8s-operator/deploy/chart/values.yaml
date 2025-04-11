@@ -72,6 +72,15 @@ operatorConfig:
   # - name: EXTRA_VAR2
   #   value: "value2"
 
+  # Create a PodMonitor to scrape Tailscale Operator metrics
+  podMonitor:
+    enabled: false
+    interval: ""
+    scrapeTimeout: ""
+    additionalLabels: {}
+    relabelings: []
+    metricRelabelings: []
+
 # In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
 ingressClass:
   enabled: true
