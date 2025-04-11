@@ -22,6 +22,10 @@ mkdir -p /Tailscale/$ARCH
 cp /tailscaled /Tailscale/$ARCH/tailscaled
 cp /tailscale /Tailscale/$ARCH/tailscale
 
+# Patch qbuild to allow using our own code signing
+QBPATH=`which qbuild`
+patch -b "$QBPATH" < qbuild.patch
+
 sed "s/\$QPKG_VER/$TSTAG-$QNAPTAG/g" /Tailscale/qpkg.cfg.in > /Tailscale/qpkg.cfg
 
 qbuild --root /Tailscale --build-arch $ARCH --build-dir /out
