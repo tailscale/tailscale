@@ -26,7 +26,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
-	"tailscale.com/ipn/desktop"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -53,7 +52,6 @@ type System struct {
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
 	DriveForLocal  SubSystem[drive.FileSystemForLocal]
 	DriveForRemote SubSystem[drive.FileSystemForRemote]
-	SessionManager SubSystem[desktop.SessionManager]
 
 	// InitialConfig is initial server config, if any.
 	// It is nil if the node is not in declarative mode.
@@ -112,8 +110,6 @@ func (s *System) Set(v any) {
 		s.DriveForLocal.Set(v)
 	case drive.FileSystemForRemote:
 		s.DriveForRemote.Set(v)
-	case desktop.SessionManager:
-		s.SessionManager.Set(v)
 	default:
 		panic(fmt.Sprintf("unknown type %T", v))
 	}
