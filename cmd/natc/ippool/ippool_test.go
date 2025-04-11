@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"slices"
 	"testing"
 
 	"go4.org/netipx"
@@ -33,20 +32,18 @@ func TestIPPoolExhaustion(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		for _, domain := range domains {
-			addrs, err := pool.IPForDomain(from, domain)
+			addr, err := pool.IPForDomain(from, domain)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("failed to get IP for domain %q: %w", domain, err))
 				continue
 			}
 
-			for _, addr := range addrs {
-				if d, ok := assignedIPs[addr]; ok {
-					if d != domain {
-						t.Errorf("IP %s reused for domain %q, previously assigned to %q", addr, domain, d)
-					}
-				} else {
-					assignedIPs[addr] = domain
+			if d, ok := assignedIPs[addr]; ok {
+				if d != domain {
+					t.Errorf("IP %s reused for domain %q, previously assigned to %q", addr, domain, d)
 				}
+			} else {
+				assignedIPs[addr] = domain
 			}
 		}
 	}
@@ -80,50 +77,36 @@ func TestIPPool(t *testing.T) {
 		IPSet: addrPool,
 	}
 	from := tailcfg.NodeID(12345)
-	addrs, err := pool.IPForDomain(from, "example.com")
+	addr, err := pool.IPForDomain(from, "example.com")
 	if err != nil {
 		t.Fatalf("ipForDomain() error = %v", err)
 	}
 
-	if len(addrs) != 2 {
-		t.Fatalf("ipForDomain() returned %d addresses, want 2", len(addrs))
+	if !addr.IsValid() {
+		t.Fatal("ipForDomain() returned an invalid address")
 	}
 
-	v4 := addrs[0]
-	v6 := addrs[1]
-
-	if !v4.Is4() {
-		t.Errorf("First address is not IPv4: %s", v4)
+	if !addr.Is4() {
+		t.Errorf("Address is not IPv4: %s", addr)
 	}
 
-	if !v6.Is6() {
-		t.Errorf("Second address is not IPv6: %s", v6)
+	if !addrPool.Contains(addr) {
+		t.Errorf("IPv4 address %s not in range %s", addr, addrPool)
 	}
 
-	if !addrPool.Contains(v4) {
-		t.Errorf("IPv4 address %s not in range %s", v4, addrPool)
-	}
-
-	domain, ok := pool.DomainForIP(from, v4)
+	domain, ok := pool.DomainForIP(from, addr)
 	if !ok {
-		t.Errorf("domainForIP(%s) not found", v4)
+		t.Errorf("domainForIP(%s) not found", addr)
 	} else if domain != "example.com" {
-		t.Errorf("domainForIP(%s) = %s, want %s", v4, domain, "example.com")
+		t.Errorf("domainForIP(%s) = %s, want %s", addr, domain, "example.com")
 	}
 
-	domain, ok = pool.DomainForIP(from, v6)
-	if !ok {
-		t.Errorf("domainForIP(%s) not found", v6)
-	} else if domain != "example.com" {
-		t.Errorf("domainForIP(%s) = %s, want %s", v6, domain, "example.com")
-	}
-
-	addrs2, err := pool.IPForDomain(from, "example.com")
+	addr2, err := pool.IPForDomain(from, "example.com")
 	if err != nil {
 		t.Fatalf("ipForDomain() second call error = %v", err)
 	}
 
-	if !slices.Equal(addrs, addrs2) {
-		t.Errorf("ipForDomain() second call = %v, want %v", addrs2, addrs)
+	if addr.Compare(addr2) != 0 {
+		t.Errorf("ipForDomain() second call = %v, want %v", addr2, addr)
 	}
 }

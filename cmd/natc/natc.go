@@ -317,11 +317,12 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 			// ignored and non-ignored addresses, but it's currently the user
 			// preferred behavior.
 			if !c.ignoreDestination(addrs) {
-				addrs, err = c.ipPool.IPForDomain(who.Node.ID, q.Name.String())
+				addr, err := c.ipPool.IPForDomain(who.Node.ID, q.Name.String())
 				if err != nil {
 					log.Printf("HandleDNS(remote=%s): lookup destination failed: %v\n", remoteAddr.String(), err)
 					return
 				}
+				addrs = []netip.Addr{addr, v6ForV4(c.v6ULA.Addr(), addr)}
 			}
 			mak.Set(&resolves, q.Name.String(), addrs)
 		}
@@ -414,6 +415,20 @@ func (c *connector) handleDNS(pc net.PacketConn, buf []byte, remoteAddr *net.UDP
 	}
 }
 
+func v6ForV4(ula netip.Addr, v4 netip.Addr) netip.Addr {
+	as16 := ula.As16()
+	as4 := v4.As4()
+	copy(as16[12:], as4[:])
+	return netip.AddrFrom16(as16)
+}
+
+func v4ForV6(v6 netip.Addr) netip.Addr {
+	as16 := v6.As16()
+	var as4 [4]byte
+	copy(as4[:], as16[12:])
+	return netip.AddrFrom4(as4)
+}
+
 // tsMBox is the mailbox used in SOA records.
 // The convention is to replace the @ symbol with a dot.
 // So in this case, the mailbox is support.tailscale.com. with the trailing dot
@@ -434,7 +449,11 @@ func (c *connector) handleTCPFlow(src, dst netip.AddrPort) (handler func(net.Con
 		log.Printf("HandleTCPFlow: WhoIs failed: %v\n", err)
 		return nil, false
 	}
-	domain, ok := c.ipPool.DomainForIP(who.Node.ID, dst.Addr())
+	dstAddr := dst.Addr()
+	if dstAddr.Is6() {
+		dstAddr = v4ForV6(dstAddr)
+	}
+	domain, ok := c.ipPool.DomainForIP(who.Node.ID, dstAddr)
 	if !ok {
 		return nil, false
 	}
