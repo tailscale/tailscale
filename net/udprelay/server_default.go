@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ios
+
 // Package udprelay contains constructs for relaying Disco and WireGuard packets
 // between Tailscale clients over UDP. This package is currently considered
 // experimental.

@@ -38,6 +38,7 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/types/key"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
@@ -387,6 +388,9 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/ingress":
 		metricIngressCalls.Add(1)
 		h.handleServeIngress(w, r)
+		return
+	case "/v0/relay/endpoint":
+		h.handleServeRelayAllocateEndpoint(w, r)
 		return
 	}
 	if ph, ok := peerAPIHandlers[r.URL.Path]; ok {
@@ -1192,6 +1196,55 @@ func parseDriveFileExtensionForLog(path string) string {
 	}
 
 	return fileExt
+}
+
+func (h *peerAPIHandler) handleServeRelayAllocateEndpoint(w http.ResponseWriter, r *http.Request) {
+	logAndError := func(code int, publicMsg string) {
+		h.logf("relay: error (status=%d) handling request from %v: %s", code, h.remoteAddr, publicMsg)
+		http.Error(w, publicMsg, code)
+	}
+	if !h.ps.b.ShouldRunRelayServer() {
+		logAndError(http.StatusNotFound, "relay not enabled")
+		return
+	}
+
+	if !h.PeerCaps().HasCapability(tailcfg.PeerCapabilityRelay) {
+		logAndError(http.StatusForbidden, "relay not permitted")
+		return
+	}
+
+	if r.Method != httpm.POST {
+		logAndError(http.StatusMethodNotAllowed, "only POST method is allowed")
+		return
+	}
+
+	var allocateEndpointReq struct {
+		DiscoKeys []key.DiscoPublic
+	}
+	err := json.NewDecoder(io.LimitReader(r.Body, 512)).Decode(&allocateEndpointReq)
+	if err != nil {
+		logAndError(http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(allocateEndpointReq.DiscoKeys) != 2 {
+		logAndError(http.StatusBadRequest, "2 disco public keys must be supplied")
+		return
+	}
+
+	rs, err := h.ps.b.relayServerOrInit()
+	if err != nil {
+		logAndError(http.StatusInternalServerError, "error")
+		return
+	}
+	ep, err := rs.AllocateEndpoint(allocateEndpointReq.DiscoKeys[0], allocateEndpointReq.DiscoKeys[1])
+	if err != nil {
+		logAndError(http.StatusInternalServerError, err.Error())
+		return
+	}
+	err = json.NewEncoder(w).Encode(&ep)
+	if err != nil {
+		logAndError(http.StatusInternalServerError, err.Error())
+	}
 }
 
 // newFakePeerAPIListener creates a new net.Listener that acts like
