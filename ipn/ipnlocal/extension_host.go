@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -231,6 +232,60 @@ func (h *ExtensionHost) init() {
 		}
 	})
 
+}
+
+// Extensions implements [ipnext.Host].
+func (h *ExtensionHost) Extensions() ipnext.ExtensionServices {
+	// Currently, [ExtensionHost] implements [ExtensionServices] directly.
+	// We might want to extract it to a separate type in the future.
+	return h
+}
+
+// FindExtensionByName implements [ipnext.ExtensionServices]
+// and is also used by the [LocalBackend].
+// It returns nil if the extension is not found.
+func (h *ExtensionHost) FindExtensionByName(name string) any {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.extensionsByName[name]
+}
+
+// extensionIfaceType is the runtime type of the [ipnext.Extension] interface.
+var extensionIfaceType = reflect.TypeFor[ipnext.Extension]()
+
+// FindMatchingExtension implements [ipnext.ExtensionServices]
+// and is also used by the [LocalBackend].
+func (h *ExtensionHost) FindMatchingExtension(target any) bool {
+	if h == nil {
+		return false
+	}
+
+	if target == nil {
+		panic("ipnext: target cannot be nil")
+	}
+
+	val := reflect.ValueOf(target)
+	typ := val.Type()
+	if typ.Kind() != reflect.Ptr || val.IsNil() {
+		panic("ipnext: target must be a non-nil pointer")
+	}
+	targetType := typ.Elem()
+	if targetType.Kind() != reflect.Interface && !targetType.Implements(extensionIfaceType) {
+		panic("ipnext: *target must be interface or implement ipnext.Extension")
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, ext := range h.activeExtensions {
+		if reflect.TypeOf(ext).AssignableTo(targetType) {
+			val.Elem().Set(reflect.ValueOf(ext))
+			return true
+		}
+	}
+	return false
 }
 
 // Profiles implements [ipnext.Host].
