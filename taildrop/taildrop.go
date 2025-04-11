@@ -97,9 +97,28 @@ type ManagerOptions struct {
 	SendFileNotify func()
 }
 
+// SafFile represents the result of opening a file via SAF.
+type SafFile struct {
+	FD  int32  // File descriptor
+	URI string // The SAF URI as a string
+}
+
+// FileOps defines platform-specific file operations.
+type FileOps interface {
+	OpenFileURI(filename string) string
+
+	OpenFileDescriptor(filename string) int32
+
+	// RenamePartialFile finalizes a partial file.
+	// It returns the new SAF URI as a string and an error.
+	RenamePartialFile(partialUri, targetDirUri, targetName string) (string, error)
+}
+
 // Manager manages the state for receiving and managing taildropped files.
 type Manager struct {
 	opts ManagerOptions
+
+	fileOps FileOps
 
 	// incomingFiles is a map of files actively being received.
 	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
@@ -119,14 +138,14 @@ type Manager struct {
 // New initializes a new taildrop manager.
 // It may spawn asynchronous goroutines to delete files,
 // so the Shutdown method must be called for resource cleanup.
-func (opts ManagerOptions) New() *Manager {
+func (opts ManagerOptions) New(fileOps FileOps) *Manager {
 	if opts.Logf == nil {
 		opts.Logf = logger.Discard
 	}
 	if opts.SendFileNotify == nil {
 		opts.SendFileNotify = func() {}
 	}
-	m := &Manager{opts: opts}
+	m := &Manager{opts: opts, fileOps: fileOps}
 	m.deleter.Init(m, func(string) {})
 	m.emptySince.Store(-1) // invalidate this cache
 	return m
