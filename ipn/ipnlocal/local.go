@@ -169,78 +169,6 @@ type watchSession struct {
 	cancel    context.CancelFunc // to shut down the session
 }
 
-// Extension extends [LocalBackend] with additional functionality.
-type Extension interface {
-	// Init is called to initialize the extension when the [LocalBackend] is created
-	// and before it starts running. If the extension cannot be initialized,
-	// it must return an error, and the Shutdown method will not be called.
-	// Any returned errors are not fatal; they are used for logging.
-	// TODO(nickkhyl): should we allow returning a fatal error?
-	Init(*LocalBackend) error
-
-	// Shutdown is called when the [LocalBackend] is shutting down,
-	// if the extension was initialized. Any returned errors are not fatal;
-	// they are used for logging.
-	Shutdown() error
-}
-
-// NewExtensionFn is a function that instantiates an [Extension].
-type NewExtensionFn func(logger.Logf, *tsd.System) (Extension, error)
-
-// registeredExtensions is a map of registered local backend extensions,
-// where the key is the name of the extension and the value is the function
-// that instantiates the extension.
-var registeredExtensions map[string]NewExtensionFn
-
-// RegisterExtension registers a function that creates a [localBackendExtension].
-// It panics if newExt is nil or if an extension with the same name has already been registered.
-func RegisterExtension(name string, newExt NewExtensionFn) {
-	if newExt == nil {
-		panic(fmt.Sprintf("lb: newExt is nil: %q", name))
-	}
-	if _, ok := registeredExtensions[name]; ok {
-		panic(fmt.Sprintf("lb: duplicate extensions: %q", name))
-	}
-	mak.Set(&registeredExtensions, name, newExt)
-}
-
-// profileResolver is any function that returns a read-only view of a login profile.
-// An invalid view indicates no profile. A valid profile view with an empty [ipn.ProfileID]
-// indicates that the profile is new and has not been persisted yet.
-//
-// It is called with [LocalBackend.mu] held.
-type profileResolver func() ipn.LoginProfileView
-
-// NewControlClientCallback is a function to be called when a new [controlclient.Client]
-// is created and before it is first used. The login profile and prefs represent
-// the profile for which the cc is created and are always valid; however, the
-// profile's [ipn.LoginProfileView.ID] returns a zero [ipn.ProfileID] if the profile
-// is new and has not been persisted yet.
-//
-// The callback is called with [LocalBackend.mu] held and must not call
-// any [LocalBackend] methods.
-//
-// It returns a function to be called when the cc is being shut down,
-// or nil if no cleanup is needed.
-type NewControlClientCallback func(controlclient.Client, ipn.LoginProfileView, ipn.PrefsView) (cleanup func())
-
-// ProfileChangeCallback is a function to be called when the current login profile changes.
-// The sameNode parameter indicates whether the profile represents the same node as before,
-// such as when only the profile metadata is updated but the node ID remains the same,
-// or when a new profile is persisted and assigned an [ipn.ProfileID] for the first time.
-// The subscribers can use this information to decide whether to reset their state.
-//
-// The profile and prefs are always valid, but the profile's [ipn.LoginProfileView.ID]
-// returns a zero [ipn.ProfileID] if the profile is new and has not been persisted yet.
-//
-// The callback is called with [LocalBackend.mu] held and must not call
-// any [LocalBackend] methods.
-type ProfileChangeCallback func(_ ipn.LoginProfileView, _ ipn.PrefsView, sameNode bool)
-
-// AuditLogProvider is a function that returns an [ipnauth.AuditLogFunc] for
-// logging auditable actions.
-type AuditLogProvider func() ipnauth.AuditLogFunc
-
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -311,6 +239,13 @@ type LocalBackend struct {
 	// for testing and graceful shutdown purposes.
 	goTracker goroutines.Tracker
 
+	// extHost is the bridge between [LocalBackend] and the registered [ipnext.Extension]s.
+	// It may be nil in tests that use direct composite literal initialization of [LocalBackend]
+	// instead of calling [NewLocalBackend]. A nil pointer is a valid, no-op host.
+	// It can be used with or without b.mu held, but is typically used with it held
+	// to prevent state changes while invoking callbacks.
+	extHost *ExtensionHost
+
 	// The mutex protects the following elements.
 	mu             sync.Mutex
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
@@ -377,9 +312,6 @@ type LocalBackend struct {
 	// c2nUpdateStatus is the status of c2n-triggered client update.
 	c2nUpdateStatus updateStatus
 	currentUser     ipnauth.Actor
-
-	// backgroundProfileResolvers are optional background profile resolvers.
-	backgroundProfileResolvers set.HandleSet[profileResolver]
 
 	selfUpdateProgress  []ipnstate.UpdateProgress
 	lastSelfUpdateState ipnstate.SelfUpdateStatus
@@ -481,25 +413,6 @@ type LocalBackend struct {
 	// reconnectTimer is used to schedule a reconnect by setting [ipn.Prefs.WantRunning]
 	// to true after a delay, or nil if no reconnect is scheduled.
 	reconnectTimer tstime.TimerController
-
-	// shutdownCbs are the callbacks to be called when the backend is shutting down.
-	// Each callback is called exactly once in unspecified order and without b.mu held.
-	// Returned errors are logged but otherwise ignored and do not affect the shutdown process.
-	shutdownCbs set.HandleSet[func() error]
-
-	// newControlClientCbs are the functions to be called when a new control client is created.
-	newControlClientCbs set.HandleSet[NewControlClientCallback]
-
-	// profileChangeCbs are the callbacks to be called when the current login profile changes,
-	// either because of a profile switch, or because the profile information was updated
-	// by [LocalBackend.SetControlClientStatus], including when the profile is first populated
-	// and persisted.
-	profileChangeCbs set.HandleSet[ProfileChangeCallback]
-
-	// auditLoggers is a collection of registered audit log providers.
-	// Each [AuditLogProvider] is called to get an [ipnauth.AuditLogFunc] when an auditable action
-	// is about to be performed. If an audit logger returns an error, the action is denied.
-	auditLoggers set.HandleSet[AuditLogProvider]
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -614,6 +527,10 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		}
 	}
 
+	if b.extHost, err = NewExtensionHost(logf, sys, b); err != nil {
+		return nil, fmt.Errorf("failed to create extension host: %w", err)
+	}
+
 	if b.unregisterSysPolicyWatch, err = b.registerSysPolicyWatch(); err != nil {
 		return nil, err
 	}
@@ -668,19 +585,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		}
 	}
 
-	for name, newFn := range registeredExtensions {
-		ext, err := newFn(logf, sys)
-		if err != nil {
-			b.logf("lb: failed to create %q extension: %v", name, err)
-			continue
-		}
-		if err := ext.Init(b); err != nil {
-			b.logf("lb: failed to initialize %q extension: %v", name, err)
-			continue
-		}
-		b.shutdownCbs.Add(ext.Shutdown)
-	}
-
+	b.extHost.Init()
 	return b, nil
 }
 
@@ -1143,16 +1048,10 @@ func (b *LocalBackend) Shutdown() {
 	if b.notifyCancel != nil {
 		b.notifyCancel()
 	}
-	shutdownCbs := slices.Collect(maps.Values(b.shutdownCbs))
-	b.shutdownCbs = nil
+	extHost := b.extHost
+	b.extHost = nil
 	b.mu.Unlock()
 	b.webClientShutdown()
-
-	for _, cb := range shutdownCbs {
-		if err := cb(); err != nil {
-			b.logf("shutdown callback failed: %v", err)
-		}
-	}
 
 	if b.sockstatLogger != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1170,6 +1069,7 @@ func (b *LocalBackend) Shutdown() {
 	if cc != nil {
 		cc.Shutdown()
 	}
+	extHost.Shutdown()
 	b.ctxCancel()
 	b.e.Close()
 	<-b.e.Done()
@@ -1743,7 +1643,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			// If the profile ID was empty before SetPrefs, it's a new profile
 			// and the user has just completed a login for the first time.
 			sameNode := profile.ID() == "" || profile.ID() == cp.ID()
-			b.notifyProfileChangeLocked(profile, prefs.View(), sameNode)
+			b.extHost.NotifyProfileChange(profile, prefs.View(), sameNode)
 		}
 	}
 
@@ -2492,11 +2392,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if err != nil {
 		return err
 	}
-	for _, cb := range b.newControlClientCbs {
-		if cleanup := cb(cc, b.pm.CurrentProfile(), prefs); cleanup != nil {
-			ccShutdownCbs = append(ccShutdownCbs, cleanup)
-		}
-	}
+	ccShutdownCbs = b.extHost.NotifyNewControlClient(cc, b.pm.CurrentProfile(), prefs)
 
 	b.setControlClientLocked(cc)
 	endpoints := b.endpoints
@@ -4060,6 +3956,10 @@ func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock un
 //
 // b.mu must be held.
 func (b *LocalBackend) resolveBestProfileLocked() (_ ipn.LoginProfileView, isBackground bool) {
+	// TODO(nickkhyl): delegate all of this to the extensions and remove the distinction
+	// between "foreground" and "background" profiles as we migrate away from the concept
+	// of a single "current user" on Windows. See tailscale/corp#18342.
+	//
 	// If a GUI/CLI client is connected, use the connected user's profile, which means
 	// either the current profile if owned by the user, or their default profile.
 	if b.currentUser != nil {
@@ -4079,7 +3979,12 @@ func (b *LocalBackend) resolveBestProfileLocked() (_ ipn.LoginProfileView, isBac
 	// If the returned background profileID is "", Tailscale will disconnect
 	// and remain idle until a GUI or CLI client connects.
 	if goos := envknob.GOOS(); goos == "windows" {
-		profile := b.getBackgroundProfileLocked()
+		// If Unattended Mode is enabled for the current profile, keep using it.
+		if b.pm.CurrentPrefs().ForceDaemon() {
+			return b.pm.CurrentProfile(), true
+		}
+		// Otherwise, use the profile returned by the extension.
+		profile := b.extHost.DetermineBackgroundProfile(b.pm)
 		return profile, true
 	}
 
@@ -4090,47 +3995,6 @@ func (b *LocalBackend) resolveBestProfileLocked() (_ ipn.LoginProfileView, isBac
 	// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
 	// See tailscale/corp#26249.
 	return b.pm.CurrentProfile(), false
-}
-
-// RegisterBackgroundProfileResolver registers a function to be used when
-// resolving the background profile, until the returned unregister function is called.
-func (b *LocalBackend) RegisterBackgroundProfileResolver(resolver profileResolver) (unregister func()) {
-	// TODO(nickkhyl): should we allow specifying some kind of priority/altitude for the resolver?
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	handle := b.backgroundProfileResolvers.Add(resolver)
-	return func() {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		delete(b.backgroundProfileResolvers, handle)
-	}
-}
-
-// getBackgroundProfileLocked returns a read-only view of the profile to use
-// when no GUI/CLI client is connected. If Tailscale should not run in the background
-// and should disconnect until a GUI/CLI client connects, the returned view is not valid.
-// As of 2025-02-07, it is only used on Windows.
-func (b *LocalBackend) getBackgroundProfileLocked() ipn.LoginProfileView {
-	// TODO(nickkhyl): check if the returned profile is allowed on the device,
-	// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
-	// See tailscale/corp#26249.
-
-	// If Unattended Mode is enabled for the current profile, keep using it.
-	if b.pm.CurrentPrefs().ForceDaemon() {
-		return b.pm.CurrentProfile()
-	}
-
-	// Otherwise, attempt to resolve the background profile using the background
-	// profile resolvers available on the current platform.
-	for _, resolver := range b.backgroundProfileResolvers {
-		if profile := resolver(); profile.Valid() {
-			return profile
-		}
-	}
-
-	// Otherwise, switch to an empty profile and disconnect Tailscale
-	// until a GUI or CLI client connects.
-	return ipn.LoginProfileView{}
 }
 
 // CurrentUserForTest returns the current user and the associated WindowsUserID.
@@ -4351,47 +4215,6 @@ func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	return err
 }
 
-// RegisterAuditLogProvider registers an audit log provider, which returns a function
-// to be called when an auditable action is about to be performed.
-// The returned function unregisters the provider.
-// It panics if the provider is nil.
-func (b *LocalBackend) RegisterAuditLogProvider(provider AuditLogProvider) (unregister func()) {
-	if provider == nil {
-		panic("nil audit log provider")
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	handle := b.auditLoggers.Add(provider)
-	return func() {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		delete(b.auditLoggers, handle)
-	}
-}
-
-// getAuditLoggerLocked returns a function that calls all currently registered
-// audit loggers, failing as soon as any of them returns an error.
-//
-// b.mu must be held.
-func (b *LocalBackend) getAuditLoggerLocked() ipnauth.AuditLogFunc {
-	var loggers []ipnauth.AuditLogFunc
-	if len(b.auditLoggers) != 0 {
-		loggers = make([]ipnauth.AuditLogFunc, 0, len(b.auditLoggers))
-		for _, getLogger := range b.auditLoggers {
-			loggers = append(loggers, getLogger())
-		}
-	}
-	return func(action tailcfg.ClientAuditAction, details string) error {
-		b.logf("auditlog: %v: %v", action, details)
-		for _, logger := range loggers {
-			if err := logger(action, details); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-}
-
 // EditPrefs applies the changes in mp to the current prefs,
 // acting as the tailscaled itself rather than a specific user.
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
@@ -4417,7 +4240,7 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.getAuditLoggerLocked()); err != nil {
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.extHost.AuditLogger()); err != nil {
 			b.logf("check profile access failed: %v", err)
 			return ipn.PrefsView{}, err
 		}
@@ -6031,23 +5854,6 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.logf("requestEngineStatusAndWait: got status update.")
 }
 
-// RegisterControlClientCallback registers a function to be called every time a new
-// control client is created, until the returned unregister function is called.
-// It panics if the cb is nil.
-func (b *LocalBackend) RegisterControlClientCallback(cb NewControlClientCallback) (unregister func()) {
-	if cb == nil {
-		panic("nil control client callback")
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	handle := b.newControlClientCbs.Add(cb)
-	return func() {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		delete(b.newControlClientCbs, handle)
-	}
-}
-
 // setControlClientLocked sets the control client to cc,
 // which may be nil.
 //
@@ -7633,37 +7439,6 @@ func (b *LocalBackend) resetDialPlan() {
 	}
 }
 
-// RegisterProfileChangeCallback registers a function to be called when the current [ipn.LoginProfile] changes.
-// If includeCurrent is true, the callback is called immediately with the current profile.
-// The returned function unregisters the callback.
-// It panics if the cb is nil.
-func (b *LocalBackend) RegisterProfileChangeCallback(cb ProfileChangeCallback, includeCurrent bool) (unregister func()) {
-	if cb == nil {
-		panic("nil profile change callback")
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	handle := b.profileChangeCbs.Add(cb)
-	if includeCurrent {
-		cb(b.pm.CurrentProfile(), stripKeysFromPrefs(b.pm.CurrentPrefs()), false)
-	}
-	return func() {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		delete(b.profileChangeCbs, handle)
-	}
-}
-
-// notifyProfileChangeLocked invokes all registered profile change callbacks.
-//
-// b.mu must be held.
-func (b *LocalBackend) notifyProfileChangeLocked(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
-	prefs = stripKeysFromPrefs(prefs)
-	for _, cb := range b.profileChangeCbs {
-		cb(profile, prefs, sameNode)
-	}
-}
-
 // getHardwareAddrs returns the hardware addresses for the machine. If the list
 // of hardware addresses is empty, it will return the previously known hardware
 // addresses. Both the current, and previously known hardware addresses might be
@@ -7711,7 +7486,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	b.lastSuggestedExitNode = ""
 	b.keyExpired = false
 	b.resetAlwaysOnOverrideLocked()
-	b.notifyProfileChangeLocked(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
+	b.extHost.NotifyProfileChange(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
 	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
 	b.health.SetLocalLogConfigHealth(nil)
