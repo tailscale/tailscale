@@ -43,7 +43,7 @@ func RegisterHostinfoNewHook(f func(*tailcfg.Hostinfo)) {
 
 // New returns a partially populated Hostinfo for the current host.
 func New() *tailcfg.Hostinfo {
-	hostname, _ := os.Hostname()
+	hostname, _ := Hostname()
 	hostname = dnsname.FirstLabel(hostname)
 	hi := &tailcfg.Hostinfo{
 		IPNVersion:      version.Long(),
@@ -508,4 +508,20 @@ func IsInVM86() bool {
 	return isV86Cache.Get(func() bool {
 		return New().DeviceModel == copyV86DeviceModel
 	})
+}
+
+var hostNameFn atomic.Value // of func() (string, error)
+
+// SetHostNameFn sets a custom function for querying the system hostname.
+func SetHostNameFn(fn func() (string, error)) {
+	hostNameFn.Store(fn)
+}
+
+// Hostname returns the system hostname using the function
+// set by SetHostNameFn or os.Hostname by default.
+func Hostname() (string, error) {
+	if fn, ok := hostNameFn.Load().(func() (string, error)); ok && fn != nil {
+		return fn()
+	}
+	return os.Hostname()
 }
