@@ -14,19 +14,23 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
-	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 )
 
+// featureName is the name of the feature implemented by this package.
+// It is also the the [extension] name and the log prefix.
+const featureName = "auditlog"
+
 func init() {
-	feature.Register("auditlog")
-	ipnlocal.RegisterExtension("auditlog", newExtension)
+	feature.Register(featureName)
+	ipnext.RegisterExtension(featureName, newExtension)
 }
 
-// extension is an [ipnlocal.Extension] managing audit logging
+// extension is an [ipnext.Extension] managing audit logging
 // on platforms that import this package.
 // As of 2025-03-27, that's only Windows and macOS.
 type extension struct {
@@ -48,19 +52,24 @@ type extension struct {
 	logger *Logger
 }
 
-// newExtension is an [ipnlocal.NewExtensionFn] that creates a new audit log extension.
-// It is registered with [ipnlocal.RegisterExtension] if the package is imported.
-func newExtension(logf logger.Logf, _ *tsd.System) (ipnlocal.Extension, error) {
-	return &extension{logf: logger.WithPrefix(logf, "auditlog: ")}, nil
+// newExtension is an [ipnext.NewExtensionFn] that creates a new audit log extension.
+// It is registered with [ipnext.RegisterExtension] if the package is imported.
+func newExtension(logf logger.Logf, _ *tsd.System) (ipnext.Extension, error) {
+	return &extension{logf: logger.WithPrefix(logf, featureName+": ")}, nil
 }
 
-// Init implements [ipnlocal.Extension] by registering callbacks and providers
+// Name implements [ipnext.Extension].
+func (e *extension) Name() string {
+	return featureName
+}
+
+// Init implements [ipnext.Extension] by registering callbacks and providers
 // for the duration of the extension's lifetime.
-func (e *extension) Init(lb *ipnlocal.LocalBackend) error {
+func (e *extension) Init(h ipnext.Host) error {
 	e.cleanup = []func(){
-		lb.RegisterControlClientCallback(e.controlClientChanged),
-		lb.RegisterProfileChangeCallback(e.profileChanged, false),
-		lb.RegisterAuditLogProvider(e.getCurrentLogger),
+		h.RegisterControlClientCallback(e.controlClientChanged),
+		h.Profiles().RegisterProfileChangeCallback(e.profileChanged),
+		h.RegisterAuditLogProvider(e.getCurrentLogger),
 	}
 	return nil
 }
@@ -165,8 +174,8 @@ func noCurrentLogger(_ tailcfg.ClientAuditAction, _ string) error {
 	return errNoLogger
 }
 
-// getCurrentLogger is an [ipnlocal.AuditLogProvider] registered with [ipnlocal.LocalBackend].
-// It is called when [ipnlocal.LocalBackend] needs to audit an action.
+// getCurrentLogger is an [ipnext.AuditLogProvider] registered with [ipnext.Host].
+// It is called when [ipnlocal.LocalBackend] or an extension needs to audit an action.
 //
 // It returns a function that enqueues the audit log for the current profile,
 // or [noCurrentLogger] if the logger is unavailable.
