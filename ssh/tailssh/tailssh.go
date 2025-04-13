@@ -124,13 +124,19 @@ func init() {
 // new sessions are not allowed and existing ones are cleaned up.
 // It reports whether ss was attached to the conn.
 func (srv *server) attachSessionToConnIfNotShutdown(ss *sshSession) bool {
+	ss.conn.mu.Lock()
+	defer ss.conn.mu.Unlock()
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	if srv.shutdownCalled {
 		// Do not start any new sessions.
 		return false
 	}
-	ss.conn.attachSession(ss)
+	if ss.sharedID == "" {
+		panic("empty sharedID")
+	}
+	srv.sessionWaitGroup.Add(1)
+	ss.conn.sessions = append(ss.conn.sessions, ss)
 	return true
 }
 
@@ -803,16 +809,18 @@ func (c *conn) attachSession(ss *sshSession) {
 	if ss.sharedID == "" {
 		panic("empty sharedID")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.sessions = append(c.sessions, ss)
 }
 
 // detachSession unregisters s from the list of active sessions.
 func (c *conn) detachSession(ss *sshSession) {
-	defer c.srv.sessionWaitGroup.Done()
+	defer c.srv.sessionWaitGroup.Done() // Ensure Done() is always called
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.srv.mu.Lock()
+	defer c.srv.mu.Unlock()
+
 	for i, s := range c.sessions {
 		if s == ss {
 			c.sessions = append(c.sessions[:i], c.sessions[i+1:]...)
