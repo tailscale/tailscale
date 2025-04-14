@@ -68,7 +68,7 @@ func (e *extension) Name() string {
 func (e *extension) Init(h ipnext.Host) error {
 	e.cleanup = []func(){
 		h.RegisterControlClientCallback(e.controlClientChanged),
-		h.Profiles().RegisterProfileChangeCallback(e.profileChanged),
+		h.Profiles().RegisterProfileStateChangeCallback(e.profileChanged),
 		h.RegisterAuditLogProvider(e.getCurrentLogger),
 	}
 	return nil
@@ -109,7 +109,7 @@ func (e *extension) startNewLogger(cc controlclient.Client, profileID ipn.Profil
 	return logger, nil
 }
 
-func (e *extension) controlClientChanged(cc controlclient.Client, profile ipn.LoginProfileView, _ ipn.PrefsView) (cleanup func()) {
+func (e *extension) controlClientChanged(cc controlclient.Client, profile ipn.LoginProfileView) (cleanup func()) {
 	logger, err := e.startNewLogger(cc, profile.ID())
 	e.mu.Lock()
 	e.logger = logger // nil on error
