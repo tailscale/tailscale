@@ -153,7 +153,7 @@ func main() {
 		whois:      lc,
 		v6ULA:      v6ULA,
 		ignoreDsts: ignoreDstTable,
-		ipPool:     &ippool.IPPool{V6ULA: v6ULA, IPSet: addrPool},
+		ipPool:     &ippool.IPPool{IPSet: addrPool},
 		routes:     routes,
 		dnsAddr:    dnsAddr,
 		resolver:   net.DefaultResolver,
