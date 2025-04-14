@@ -19,8 +19,7 @@ func TestIPPoolExhaustion(t *testing.T) {
 	var ipsb netipx.IPSetBuilder
 	ipsb.AddPrefix(smallPrefix)
 	addrPool := must.Get(ipsb.IPSet())
-	v6ULA := netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80")
-	pool := IPPool{V6ULA: v6ULA, IPSet: addrPool}
+	pool := IPPool{IPSet: addrPool}
 
 	assignedIPs := make(map[netip.Addr]string)
 
@@ -52,9 +51,6 @@ func TestIPPoolExhaustion(t *testing.T) {
 		if addr.Is4() && !smallPrefix.Contains(addr) {
 			t.Errorf("IP %s for domain %q not in expected range %s", addr, domain, smallPrefix)
 		}
-		if addr.Is6() && !v6ULA.Contains(addr) {
-			t.Errorf("IP %s for domain %q not in expected range %s", addr, domain, v6ULA)
-		}
 	}
 
 	// expect one error for each iteration with the 5th domain
@@ -73,7 +69,6 @@ func TestIPPool(t *testing.T) {
 	ipsb.AddPrefix(netip.MustParsePrefix("100.64.1.0/24"))
 	addrPool := must.Get(ipsb.IPSet())
 	pool := IPPool{
-		V6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
 		IPSet: addrPool,
 	}
 	from := tailcfg.NodeID(12345)

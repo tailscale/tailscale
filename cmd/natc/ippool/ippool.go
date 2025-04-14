@@ -24,7 +24,6 @@ var ErrNoIPsAvailable = errors.New("no IPs available")
 type IPPool struct {
 	perPeerMap syncs.Map[tailcfg.NodeID, *perPeerState]
 	IPSet      *netipx.IPSet
-	V6ULA      netip.Prefix
 }
 
 func (ipp *IPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr) (string, bool) {
@@ -44,7 +43,6 @@ func (ipp *IPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr) (string, bo
 func (ipp *IPPool) IPForDomain(from tailcfg.NodeID, domain string) (netip.Addr, error) {
 	npps := &perPeerState{
 		ipset: ipp.IPSet,
-		v6ULA: ipp.V6ULA,
 	}
 	ps, _ := ipp.perPeerMap.LoadOrStore(from, npps)
 	return ps.ipForDomain(domain)
@@ -52,7 +50,6 @@ func (ipp *IPPool) IPForDomain(from tailcfg.NodeID, domain string) (netip.Addr, 
 
 // perPeerState holds the state for a single peer.
 type perPeerState struct {
-	v6ULA netip.Prefix
 	ipset *netipx.IPSet
 
 	mu           sync.Mutex

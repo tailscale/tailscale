@@ -270,7 +270,7 @@ func TestDNSResponse(t *testing.T) {
 		ignoreDsts: &bart.Table[bool]{},
 		routes:     routes,
 		v6ULA:      v6ULA,
-		ipPool:     &ippool.IPPool{V6ULA: v6ULA, IPSet: addrPool},
+		ipPool:     &ippool.IPPool{IPSet: addrPool},
 		dnsAddr:    dnsAddr,
 	}
 	c.ignoreDsts.Insert(netip.MustParsePrefix("8.8.4.4/32"), true)
