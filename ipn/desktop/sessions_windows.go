@@ -670,3 +670,38 @@ func (cs _WTS_CONNECTSTATE_CLASS) ToSessionStatus() SessionStatus {
 		return ClosedSession
 	}
 }
+
+var (
+	procGetWindowLongPtrW *windows.LazyProc
+	procSetWindowLongPtrW *windows.LazyProc
+)
+
+func init() {
+	// GetWindowLongPtrW and SetWindowLongPtrW are only available on 64-bit platforms.
+	// https://web.archive.org/web/20250414195520/https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowlongptrw
+	if runtime.GOARCH == "386" || runtime.GOARCH == "arm" {
+		procGetWindowLongPtrW = moduser32.NewProc("GetWindowLongW")
+		procSetWindowLongPtrW = moduser32.NewProc("SetWindowLongW")
+	} else {
+		procGetWindowLongPtrW = moduser32.NewProc("GetWindowLongPtrW")
+		procSetWindowLongPtrW = moduser32.NewProc("SetWindowLongPtrW")
+	}
+}
+
+func getWindowLongPtr(hwnd windows.HWND, index int32) (res uintptr, err error) {
+	r0, _, e1 := syscall.Syscall(procGetWindowLongPtrW.Addr(), 2, uintptr(hwnd), uintptr(index), 0)
+	res = uintptr(r0)
+	if res == 0 && e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func setWindowLongPtr(hwnd windows.HWND, index int32, newLong uintptr) (res uintptr, err error) {
+	r0, _, e1 := syscall.Syscall(procSetWindowLongPtrW.Addr(), 3, uintptr(hwnd), uintptr(index), uintptr(newLong))
+	res = uintptr(r0)
+	if res == 0 && e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
