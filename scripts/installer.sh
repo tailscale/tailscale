@@ -208,8 +208,11 @@ main() {
 					PACKAGETYPE="yum"
 				fi
 				;;
-			rhel)
+			rhel|miraclelinux)
 				OS="$ID"
+				if [ "$ID" = "miraclelinux" ]; then
+					OS="rhel"
+				fi
 				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
 				PACKAGETYPE="dnf"
 				if [ "$VERSION" = "7" ]; then
