@@ -1,15 +1,11 @@
 # Commit messages
 
+There are different styles of commit messages followed by different projects.
 This is Tailscale's style guide for writing git commit messages.
-
 As with all style guides, many things here are subjective and exist primarily to
 codify existing conventions and promote uniformity and thus ease of reading by
 others. Others have stronger reasons, such as interop with tooling or making
 future git archaeology easier.
-
-# Commit Messages
-
-There are different styles of commit messages followed by different projects.
 
 Our commit message style is largely based on the Go language's style, which
 shares much in common with the Linux kernel's git commit message style (for
