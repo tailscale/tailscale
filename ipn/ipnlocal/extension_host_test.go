@@ -32,6 +32,11 @@ import (
 	"tailscale.com/util/must"
 )
 
+// defaultCmpOpts are the default options used for deepcmp comparisons in tests.
+var defaultCmpOpts = []deepcmp.Option{
+	cmpopts.EquateComparable(key.NodePublic{}, netip.Addr{}, netip.Prefix{}),
+}
+
 // TestExtensionInitShutdown tests that [ExtensionHost] correctly initializes
 // and shuts down extensions.
 func TestExtensionInitShutdown(t *testing.T) {
@@ -508,56 +513,63 @@ func TestExtensionHostEnqueueBackendOperation(t *testing.T) {
 	}
 }
 
-// TestExtensionHostProfileChangeCallback verifies that [ExtensionHost] correctly handles the registration,
-// invocation, and unregistration of profile change callbacks. It also checks that the callbacks are called
-// with the correct arguments and that any private keys are stripped from [ipn.Prefs] before being passed to the callback.
-func TestExtensionHostProfileChangeCallback(t *testing.T) {
+// TestExtensionHostProfileStateChangeCallback verifies that [ExtensionHost] correctly handles the registration,
+// invocation, and unregistration of profile state change callbacks. This includes callbacks triggered by profile changes
+// and by changes to the profile's [ipn.Prefs]. It also checks that the callbacks are called with the correct arguments
+// and that any private keys are stripped from [ipn.Prefs] before being passed to the callback.
+func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 	t.Parallel()
 
-	type profileChange struct {
+	type stateChange struct {
 		Profile  *ipn.LoginProfile
 		Prefs    *ipn.Prefs
 		SameNode bool
 	}
-	// newProfileChange creates a new profile change with deep copies of the profile and prefs.
-	newProfileChange := func(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) profileChange {
-		return profileChange{
+	type prefsChange struct {
+		Profile  *ipn.LoginProfile
+		Old, New *ipn.Prefs
+	}
+
+	// newStateChange creates a new [stateChange] with deep copies of the profile and prefs.
+	newStateChange := func(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) stateChange {
+		return stateChange{
 			Profile:  profile.AsStruct(),
 			Prefs:    prefs.AsStruct(),
 			SameNode: sameNode,
 		}
 	}
-	// makeProfileChangeAppender returns a callback that appends profile changes to the extension's state.
-	makeProfileChangeAppender := func(e *testExtension) ipnext.ProfileChangeCallback {
+	// makeStateChangeAppender returns a callback that appends profile state changes to the extension's state.
+	makeStateChangeAppender := func(e *testExtension) ipnext.ProfileStateChangeCallback {
 		return func(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
-			UpdateExtState(e, "changes", func(changes []profileChange) []profileChange {
-				return append(changes, newProfileChange(profile, prefs, sameNode))
+			UpdateExtState(e, "changes", func(changes []stateChange) []stateChange {
+				return append(changes, newStateChange(profile, prefs, sameNode))
 			})
 		}
 	}
-	// getProfileChanges returns the profile changes stored in the extension's state.
-	getProfileChanges := func(e *testExtension) []profileChange {
-		changes, _ := GetExtStateOk[[]profileChange](e, "changes")
+	// getStateChanges returns the profile state changes stored in the extension's state.
+	getStateChanges := func(e *testExtension) []stateChange {
+		changes, _ := GetExtStateOk[[]stateChange](e, "changes")
 		return changes
 	}
 
 	tests := []struct {
-		name      string
-		ext       *testExtension
-		calls     []profileChange
-		wantCalls []profileChange
+		name        string
+		ext         *testExtension
+		stateCalls  []stateChange
+		prefsCalls  []prefsChange
+		wantChanges []stateChange
 	}{
 		{
 			// Register the callback for the lifetime of the extension.
 			name: "Register/Lifetime",
 			ext:  &testExtension{},
-			calls: []profileChange{
+			stateCalls: []stateChange{
 				{Profile: &ipn.LoginProfile{ID: "profile-1"}},
 				{Profile: &ipn.LoginProfile{ID: "profile-2"}},
 				{Profile: &ipn.LoginProfile{ID: "profile-3"}},
 				{Profile: &ipn.LoginProfile{ID: "profile-3"}, SameNode: true},
 			},
-			wantCalls: []profileChange{ // all calls are received by the callback
+			wantChanges: []stateChange{ // all calls are received by the callback
 				{Profile: &ipn.LoginProfile{ID: "profile-1"}},
 				{Profile: &ipn.LoginProfile{ID: "profile-2"}},
 				{Profile: &ipn.LoginProfile{ID: "profile-3"}},
@@ -572,19 +584,19 @@ func TestExtensionHostProfileChangeCallback(t *testing.T) {
 				InitHook: func(e *testExtension) error {
 					var unregister func()
 					handler := func(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
-						makeProfileChangeAppender(e)(profile, prefs, sameNode)
+						makeStateChangeAppender(e)(profile, prefs, sameNode)
 						unregister()
 					}
-					unregister = e.host.Profiles().RegisterProfileChangeCallback(handler)
+					unregister = e.host.Profiles().RegisterProfileStateChangeCallback(handler)
 					return nil
 				},
 			},
-			calls: []profileChange{
+			stateCalls: []stateChange{
 				{Profile: &ipn.LoginProfile{ID: "profile-1"}},
 				{Profile: &ipn.LoginProfile{ID: "profile-2"}},
 				{Profile: &ipn.LoginProfile{ID: "profile-3"}},
 			},
-			wantCalls: []profileChange{ // only the first call is received by the callback
+			wantChanges: []stateChange{ // only the first call is received by the callback
 				{Profile: &ipn.LoginProfile{ID: "profile-1"}},
 			},
 		},
@@ -592,7 +604,7 @@ func TestExtensionHostProfileChangeCallback(t *testing.T) {
 			// Ensure that ipn.Prefs are passed to the callback.
 			name: "CheckPrefs",
 			ext:  &testExtension{},
-			calls: []profileChange{{
+			stateCalls: []stateChange{{
 				Profile: &ipn.LoginProfile{ID: "profile-1"},
 				Prefs: &ipn.Prefs{
 					WantRunning: true,
@@ -603,7 +615,7 @@ func TestExtensionHostProfileChangeCallback(t *testing.T) {
 					},
 				},
 			}},
-			wantCalls: []profileChange{{
+			wantChanges: []stateChange{{
 				Profile: &ipn.LoginProfile{ID: "profile-1"},
 				Prefs: &ipn.Prefs{
 					WantRunning: true,
@@ -619,7 +631,7 @@ func TestExtensionHostProfileChangeCallback(t *testing.T) {
 			// Ensure that private keys are stripped from persist.Persist shared with extensions.
 			name: "StripPrivateKeys",
 			ext:  &testExtension{},
-			calls: []profileChange{{
+			stateCalls: []stateChange{{
 				Profile: &ipn.LoginProfile{ID: "profile-1"},
 				Prefs: &ipn.Prefs{
 					Persist: &persist.Persist{
@@ -636,7 +648,7 @@ func TestExtensionHostProfileChangeCallback(t *testing.T) {
 					},
 				},
 			}},
-			wantCalls: []profileChange{{
+			wantChanges: []stateChange{{
 				Profile: &ipn.LoginProfile{ID: "profile-1"},
 				Prefs: &ipn.Prefs{
 					Persist: &persist.Persist{
@@ -654,6 +666,100 @@ func TestExtensionHostProfileChangeCallback(t *testing.T) {
 				},
 			}},
 		},
+		{
+			// Ensure that profile state callbacks are also invoked when prefs (rather than profile) change.
+			name: "PrefsChange",
+			ext:  &testExtension{},
+			prefsCalls: []prefsChange{
+				{
+					Profile: &ipn.LoginProfile{ID: "profile-1"},
+					Old:     &ipn.Prefs{WantRunning: false, LoggedOut: true},
+					New:     &ipn.Prefs{WantRunning: true, LoggedOut: false},
+				},
+				{
+					Profile: &ipn.LoginProfile{ID: "profile-1"},
+					Old:     &ipn.Prefs{AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24")}},
+					New:     &ipn.Prefs{AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("10.10.10.0/24")}},
+				},
+			},
+			wantChanges: []stateChange{
+				{
+					Profile:  &ipn.LoginProfile{ID: "profile-1"},
+					Prefs:    &ipn.Prefs{WantRunning: true, LoggedOut: false},
+					SameNode: true, // must be true for prefs changes
+				},
+				{
+					Profile:  &ipn.LoginProfile{ID: "profile-1"},
+					Prefs:    &ipn.Prefs{AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("10.10.10.0/24")}},
+					SameNode: true, // must be true for prefs changes
+				},
+			},
+		},
+		{
+			// Ensure that private keys are stripped from prefs when state change callback
+			// is invoked by prefs change.
+			name: "PrefsChange/StripPrivateKeys",
+			ext:  &testExtension{},
+			prefsCalls: []prefsChange{
+				{
+					Profile: &ipn.LoginProfile{ID: "profile-1"},
+					Old: &ipn.Prefs{
+						WantRunning: false,
+						LoggedOut:   true,
+						Persist: &persist.Persist{
+							NodeID:            "12345",
+							PrivateNodeKey:    key.NewNode(),
+							OldPrivateNodeKey: key.NewNode(),
+							NetworkLockKey:    key.NewNLPrivate(),
+							UserProfile: tailcfg.UserProfile{
+								ID:            12345,
+								LoginName:     "test@example.com",
+								DisplayName:   "Test User",
+								ProfilePicURL: "https://example.com/profile.png",
+							},
+						},
+					},
+					New: &ipn.Prefs{
+						WantRunning: true,
+						LoggedOut:   false,
+						Persist: &persist.Persist{
+							NodeID:            "12345",
+							PrivateNodeKey:    key.NewNode(),
+							OldPrivateNodeKey: key.NewNode(),
+							NetworkLockKey:    key.NewNLPrivate(),
+							UserProfile: tailcfg.UserProfile{
+								ID:            12345,
+								LoginName:     "test@example.com",
+								DisplayName:   "Test User",
+								ProfilePicURL: "https://example.com/profile.png",
+							},
+						},
+					},
+				},
+			},
+			wantChanges: []stateChange{
+				{
+					Profile: &ipn.LoginProfile{ID: "profile-1"},
+					Prefs: &ipn.Prefs{
+						WantRunning: true,
+						LoggedOut:   false,
+						Persist: &persist.Persist{
+							NodeID:            "12345",
+							PrivateNodeKey:    key.NodePrivate{}, // stripped
+							OldPrivateNodeKey: key.NodePrivate{}, // stripped
+							NetworkLockKey:    key.NLPrivate{},   // stripped
+							UserProfile: tailcfg.UserProfile{
+								ID:            12345,
+								LoginName:     "test@example.com",
+								DisplayName:   "Test User",
+								ProfilePicURL: "https://example.com/profile.png",
+							},
+						},
+					},
+					SameNode: true, // must be true for prefs changes
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -663,24 +769,58 @@ func TestExtensionHostProfileChangeCallback(t *testing.T) {
 			if tt.ext.InitHook == nil {
 				tt.ext.InitHook = func(e *testExtension) error {
 					// Create and register the callback on init.
-					handler := makeProfileChangeAppender(e)
-					e.Cleanup(e.host.Profiles().RegisterProfileChangeCallback(handler))
+					handler := makeStateChangeAppender(e)
+					e.Cleanup(e.host.Profiles().RegisterProfileStateChangeCallback(handler))
 					return nil
 				}
 			}
 
 			h := newExtensionHostForTest(t, &testBackend{}, true, tt.ext)
-			for _, call := range tt.calls {
+			for _, call := range tt.stateCalls {
 				h.NotifyProfileChange(call.Profile.View(), call.Prefs.View(), call.SameNode)
 			}
-			opts := []deepcmp.Option{
-				cmpopts.EquateComparable(key.NodePublic{}, netip.Addr{}, netip.Prefix{}),
+			for _, call := range tt.prefsCalls {
+				h.NotifyProfilePrefsChanged(call.Profile.View(), call.Old.View(), call.New.View())
 			}
-			if diff := deepcmp.Diff(tt.wantCalls, getProfileChanges(tt.ext), opts...); diff != "" {
-				t.Errorf("ProfileChange callbacks: (-want +got): %v", diff)
+			if diff := deepcmp.Diff(tt.wantChanges, getStateChanges(tt.ext), defaultCmpOpts...); diff != "" {
+				t.Errorf("StateChange callbacks: (-want +got): %v", diff)
 			}
 		})
 	}
+}
+
+// TestCurrentProfileState tests that the current profile and prefs are correctly
+// initialized and updated when the host is notified of changes.
+func TestCurrentProfileState(t *testing.T) {
+	h := newExtensionHostForTest[ipnext.Extension](t, &testBackend{}, false)
+
+	// The initial profile and prefs should be valid and set to the default values.
+	gotProfile, gotPrefs := h.Profiles().CurrentProfileState()
+	checkViewsEqual(t, "Initial profile (from state)", gotProfile, zeroProfile)
+	checkViewsEqual(t, "Initial prefs (from state)", gotPrefs, defaultPrefs)
+	gotPrefs = h.Profiles().CurrentPrefs() // same when we only ask for prefs
+	checkViewsEqual(t, "Initial prefs (direct)", gotPrefs, defaultPrefs)
+
+	// Create a new profile and prefs, and notify the host of the change.
+	profile := &ipn.LoginProfile{ID: "profile-A"}
+	prefsV1 := &ipn.Prefs{ProfileName: "Prefs V1", WantRunning: true}
+	h.NotifyProfileChange(profile.View(), prefsV1.View(), false)
+	// The current profile and prefs should be updated.
+	gotProfile, gotPrefs = h.Profiles().CurrentProfileState()
+	checkViewsEqual(t, "Changed profile (from state)", gotProfile, profile.View())
+	checkViewsEqual(t, "New prefs (from state)", gotPrefs, prefsV1.View())
+	gotPrefs = h.Profiles().CurrentPrefs()
+	checkViewsEqual(t, "New prefs (direct)", gotPrefs, prefsV1.View())
+
+	// Notify the host of a change to the profile's prefs.
+	prefsV2 := &ipn.Prefs{ProfileName: "Prefs V2", WantRunning: false}
+	h.NotifyProfilePrefsChanged(profile.View(), prefsV1.View(), prefsV2.View())
+	// The current prefs should be updated.
+	gotProfile, gotPrefs = h.Profiles().CurrentProfileState()
+	checkViewsEqual(t, "Unchanged profile (from state)", gotProfile, profile.View())
+	checkViewsEqual(t, "Changed (from state)", gotPrefs, prefsV2.View())
+	gotPrefs = h.Profiles().CurrentPrefs()
+	checkViewsEqual(t, "Changed prefs (direct)", gotPrefs, prefsV2.View())
 }
 
 // TestBackgroundProfileResolver tests that the background profile resolvers
@@ -1229,5 +1369,31 @@ func (b *testBackend) SwitchToBestProfile(reason string) {
 	defer b.mu.Unlock()
 	if b.switchToBestProfileHook != nil {
 		b.switchToBestProfileHook(reason)
+	}
+}
+
+// equatableView is an interface implemented by views
+// that can be compared for equality.
+type equatableView[T any] interface {
+	Valid() bool
+	Equals(other T) bool
+}
+
+// checkViewsEqual checks that the two views are equal
+// and fails the test if they are not. The prefix is used
+// to format the error message.
+func checkViewsEqual[T equatableView[T]](t *testing.T, prefix string, got, want T) {
+	t.Helper()
+	switch {
+	case got.Equals(want):
+		return
+	case got.Valid() && want.Valid():
+		t.Errorf("%s: got %v; want %v", prefix, got, want)
+	case got.Valid() && !want.Valid():
+		t.Errorf("%s: got %v; want invalid", prefix, got)
+	case !got.Valid() && want.Valid():
+		t.Errorf("%s: got invalid; want %v", prefix, want)
+	default:
+		panic("unreachable")
 	}
 }

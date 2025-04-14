@@ -99,6 +99,13 @@ type ExtensionHost struct {
 	// by the workQueue after all extensions have been initialized.
 	postInitWorkQueue []func(Backend)
 
+	// currentProfile is a read-only view of the currently used profile.
+	// The view is always Valid, but might be of an empty, non-persisted profile.
+	currentProfile ipn.LoginProfileView
+	// currentPrefs is a read-only view of the current profile's [ipn.Prefs]
+	// with any private keys stripped. It is always Valid.
+	currentPrefs ipn.PrefsView
+
 	// auditLoggers are registered [AuditLogProvider]s.
 	// Each provider is called to get an [ipnauth.AuditLogFunc] when an auditable action
 	// is about to be performed. If an audit logger returns an error, the action is denied.
@@ -108,11 +115,12 @@ type ExtensionHost struct {
 	backgroundProfileResolvers set.HandleSet[ipnext.ProfileResolver]
 	// newControlClientCbs are the functions to be called when a new control client is created.
 	newControlClientCbs set.HandleSet[ipnext.NewControlClientCallback]
-	// profileChangeCbs are the callbacks to be invoked when the current login profile changes,
-	// either because of a profile switch, or because the profile information was updated
-	// by [LocalBackend.SetControlClientStatus], including when the profile is first populated
-	// and persisted.
-	profileChangeCbs set.HandleSet[ipnext.ProfileChangeCallback]
+	// profileStateChangeCbs are callbacks that are invoked when the current login profile
+	// or its [ipn.Prefs] change, after those changes have been made. The current login profile
+	// may be changed either because of a profile switch, or because the profile information
+	// was updated by [LocalBackend.SetControlClientStatus], including when the profile
+	// is first populated and persisted.
+	profileStateChangeCbs set.HandleSet[ipnext.ProfileStateChangeCallback]
 }
 
 // Backend is a subset of [LocalBackend] methods that are used by [ExtensionHost].
@@ -133,6 +141,10 @@ func NewExtensionHost(logf logger.Logf, sys *tsd.System, b Backend, overrideExts
 	host := &ExtensionHost{
 		logf:      logger.WithPrefix(logf, "ipnext: "),
 		workQueue: &execqueue.ExecQueue{},
+		// The host starts with an empty profile and default prefs.
+		// We'll update them once [profileManager] notifies us of the initial profile.
+		currentProfile: zeroProfile,
+		currentPrefs:   defaultPrefs,
 	}
 
 	// All operations on the backend must be executed asynchronously by the work queue.
@@ -231,7 +243,6 @@ func (h *ExtensionHost) init() {
 			f(b)
 		}
 	})
-
 }
 
 // Extensions implements [ipnext.Host].
@@ -295,6 +306,22 @@ func (h *ExtensionHost) Profiles() ipnext.ProfileServices {
 	return h
 }
 
+// CurrentProfileState implements [ipnext.ProfileServices].
+func (h *ExtensionHost) CurrentProfileState() (ipn.LoginProfileView, ipn.PrefsView) {
+	if h == nil {
+		return zeroProfile, defaultPrefs
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.currentProfile, h.currentPrefs
+}
+
+// CurrentPrefs implements [ipnext.ProfileServices].
+func (h *ExtensionHost) CurrentPrefs() ipn.PrefsView {
+	_, prefs := h.CurrentProfileState()
+	return prefs
+}
+
 // SwitchToBestProfileAsync implements [ipnext.ProfileServices].
 func (h *ExtensionHost) SwitchToBestProfileAsync(reason string) {
 	if h == nil {
@@ -305,8 +332,8 @@ func (h *ExtensionHost) SwitchToBestProfileAsync(reason string) {
 	})
 }
 
-// RegisterProfileChangeCallback implements [ipnext.ProfileServices].
-func (h *ExtensionHost) RegisterProfileChangeCallback(cb ipnext.ProfileChangeCallback) (unregister func()) {
+// RegisterProfileStateChangeCallback implements [ipnext.ProfileServices].
+func (h *ExtensionHost) RegisterProfileStateChangeCallback(cb ipnext.ProfileStateChangeCallback) (unregister func()) {
 	if h == nil {
 		return func() {}
 	}
@@ -315,31 +342,60 @@ func (h *ExtensionHost) RegisterProfileChangeCallback(cb ipnext.ProfileChangeCal
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	handle := h.profileChangeCbs.Add(cb)
+	handle := h.profileStateChangeCbs.Add(cb)
 	return func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		delete(h.profileChangeCbs, handle)
+		delete(h.profileStateChangeCbs, handle)
 	}
 }
 
-// NotifyProfileChange invokes registered profile change callbacks.
-// It strips private keys from the [ipn.Prefs] before passing it to the callbacks.
+// NotifyProfileChange invokes registered profile state change callbacks
+// and updates the current profile and prefs in the host.
+// It strips private keys from the [ipn.Prefs] before preserving
+// or passing them to the callbacks.
 func (h *ExtensionHost) NotifyProfileChange(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
 	if h == nil {
 		return
 	}
 	h.mu.Lock()
-	cbs := collectValues(h.profileChangeCbs)
+	// Strip private keys from the prefs before preserving or passing them to the callbacks.
+	// Extensions should not need them (unless proven otherwise in the future),
+	// and this is a good way to ensure that they won't accidentally leak them.
+	prefs = stripKeysFromPrefs(prefs)
+	// Update the current profile and prefs in the host,
+	// so we can provide them to the extensions later if they ask.
+	h.currentPrefs = prefs
+	h.currentProfile = profile
+	// Get the callbacks to be invoked.
+	cbs := collectValues(h.profileStateChangeCbs)
 	h.mu.Unlock()
-	if cbs != nil {
-		// Strip private keys from the prefs before passing it to the callbacks.
-		// Extensions should not need it (unless proven otherwise in the future),
-		// and this is a good way to ensure that they won't accidentally leak them.
-		prefs = stripKeysFromPrefs(prefs)
-		for _, cb := range cbs {
-			cb(profile, prefs, sameNode)
-		}
+	for _, cb := range cbs {
+		cb(profile, prefs, sameNode)
+	}
+}
+
+// NotifyProfilePrefsChanged invokes registered profile state change callbacks,
+// and updates the current profile and prefs in the host.
+// It strips private keys from the [ipn.Prefs] before preserving or using them.
+func (h *ExtensionHost) NotifyProfilePrefsChanged(profile ipn.LoginProfileView, oldPrefs, newPrefs ipn.PrefsView) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	// Strip private keys from the prefs before preserving or passing them to the callbacks.
+	// Extensions should not need them (unless proven otherwise in the future),
+	// and this is a good way to ensure that they won't accidentally leak them.
+	newPrefs = stripKeysFromPrefs(newPrefs)
+	// Update the current profile and prefs in the host,
+	// so we can provide them to the extensions later if they ask.
+	h.currentPrefs = newPrefs
+	h.currentProfile = profile
+	// Get the callbacks to be invoked.
+	stateCbs := collectValues(h.profileStateChangeCbs)
+	h.mu.Unlock()
+	for _, cb := range stateCbs {
+		cb(profile, newPrefs, true)
 	}
 }
 
@@ -410,7 +466,7 @@ func (h *ExtensionHost) RegisterControlClientCallback(cb ipnext.NewControlClient
 
 // NotifyNewControlClient invokes all registered control client callbacks.
 // It returns callbacks to be executed when the control client shuts down.
-func (h *ExtensionHost) NotifyNewControlClient(cc controlclient.Client, profile ipn.LoginProfileView, prefs ipn.PrefsView) (ccShutdownCbs []func()) {
+func (h *ExtensionHost) NotifyNewControlClient(cc controlclient.Client, profile ipn.LoginProfileView) (ccShutdownCbs []func()) {
 	if h == nil {
 		return nil
 	}
@@ -420,7 +476,7 @@ func (h *ExtensionHost) NotifyNewControlClient(cc controlclient.Client, profile 
 	if len(cbs) > 0 {
 		ccShutdownCbs = make([]func(), 0, len(cbs))
 		for _, cb := range cbs {
-			if shutdown := cb(cc, profile, prefs); shutdown != nil {
+			if shutdown := cb(cc, profile); shutdown != nil {
 				ccShutdownCbs = append(ccShutdownCbs, shutdown)
 			}
 		}

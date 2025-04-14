@@ -219,12 +219,32 @@ type ExtensionServices interface {
 // ProfileServices provides access to the [Host]'s profile management services,
 // such as switching profiles and registering profile change callbacks.
 type ProfileServices interface {
+	// CurrentProfileState returns read-only views of the current profile
+	// and its preferences. The returned views are always valid,
+	// but the profile's [ipn.LoginProfileView.ID] returns ""
+	// if the profile is new and has not been persisted yet.
+	//
+	// The returned views are immutable snapshots of the current profile
+	// and prefs at the time of the call. The actual state is only guaranteed
+	// to remain unchanged and match these views for the duration
+	// of a callback invoked by the host, if used within that callback.
+	//
+	// Extensions that need the current profile or prefs at other times
+	// should typically subscribe to [ProfileStateChangeCallback]
+	// to be notified if the profile or prefs change after retrieval.
+	// CurrentProfileState returns both the profile and prefs
+	// to guarantee that they are consistent with each other.
+	CurrentProfileState() (ipn.LoginProfileView, ipn.PrefsView)
+
+	// CurrentPrefs is like [CurrentProfileState] but only returns prefs.
+	CurrentPrefs() ipn.PrefsView
+
 	// SwitchToBestProfileAsync asynchronously selects the best profile to use
 	// and switches to it, unless it is already the current profile.
 	//
 	// If an extension needs to know when a profile switch occurs,
-	// it must use [ProfileServices.RegisterProfileChangeCallback]
-	// to register a [ProfileChangeCallback].
+	// it must use [ProfileServices.RegisterProfileStateChangeCallback]
+	// to register a [ProfileStateChangeCallback].
 	//
 	// The reason indicates why the profile is being switched, such as due
 	// to a client connecting or disconnecting or a change in the desktop
@@ -241,10 +261,14 @@ type ProfileServices interface {
 	// only exist on Windows, and we're moving away from them anyway.
 	RegisterBackgroundProfileResolver(ProfileResolver) (unregister func())
 
-	// RegisterProfileChangeCallback registers a function to be called when the current
-	// [ipn.LoginProfile] changes. The returned function unregisters the callback.
+	// RegisterProfileStateChangeCallback registers a function to be called when the current
+	// [ipn.LoginProfile] or its [ipn.Prefs] change. The returned function unregisters the callback.
+	//
+	// To get the initial profile or prefs, use [ProfileServices.CurrentProfileState]
+	// or [ProfileServices.CurrentPrefs] from the extension's [Extension.Init].
+	//
 	// It is a runtime error to register a nil callback.
-	RegisterProfileChangeCallback(ProfileChangeCallback) (unregister func())
+	RegisterProfileStateChangeCallback(ProfileStateChangeCallback) (unregister func())
 }
 
 // ProfileStore provides read-only access to available login profiles and their preferences.
@@ -281,23 +305,30 @@ type AuditLogProvider func() ipnauth.AuditLogFunc
 // The provided [ProfileStore] can only be used for the duration of the callback.
 type ProfileResolver func(ProfileStore) ipn.LoginProfileView
 
-// ProfileChangeCallback is a function to be called when the current login profile changes.
+// ProfileStateChangeCallback is a function to be called when the current login profile
+// or its preferences change.
+//
 // The sameNode parameter indicates whether the profile represents the same node as before,
-// such as when only the profile metadata is updated but the node ID remains the same,
-// or when a new profile is persisted and assigned an [ipn.ProfileID] for the first time.
-// The subscribers can use this information to decide whether to reset their state.
+// which is true when:
+//   - Only the profile's [ipn.Prefs] or metadata (e.g., [tailcfg.UserProfile]) have changed,
+//     but the node ID and [ipn.ProfileID] remain the same.
+//   - The profile has been persisted and assigned an [ipn.ProfileID] for the first time,
+//     so while its node ID and [ipn.ProfileID] have changed, it is still the same profile.
+//
+// It can be used to decide whether to reset state bound to the current profile or node identity.
 //
 // The profile and prefs are always valid, but the profile's [ipn.LoginProfileView.ID]
 // returns "" if the profile is new and has not been persisted yet.
-type ProfileChangeCallback func(_ ipn.LoginProfileView, _ ipn.PrefsView, sameNode bool)
+type ProfileStateChangeCallback func(_ ipn.LoginProfileView, _ ipn.PrefsView, sameNode bool)
 
 // NewControlClientCallback is a function to be called when a new [controlclient.Client]
-// is created and before it is first used. The login profile and prefs represent
-// the profile for which the cc is created and are always valid; however, the
-// profile's [ipn.LoginProfileView.ID] returns "" if the profile is new
-// and has not been persisted yet. If the [controlclient.Client] is created
-// due to a profile switch, any registered [ProfileChangeCallback]s are called first.
+// is created and before it is first used. The specified profile represents the node
+// for which the cc is created and is always valid. Its [ipn.LoginProfileView.ID]
+// returns "" if it is a new node whose profile has never been persisted.
+//
+// If the [controlclient.Client] is created due to a profile switch, any registered
+// [ProfileStateChangeCallback]s are called first.
 //
 // It returns a function to be called when the cc is being shut down,
 // or nil if no cleanup is needed.
-type NewControlClientCallback func(controlclient.Client, ipn.LoginProfileView, ipn.PrefsView) (cleanup func())
+type NewControlClientCallback func(controlclient.Client, ipn.LoginProfileView) (cleanup func())

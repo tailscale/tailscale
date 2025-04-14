@@ -530,6 +530,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if b.extHost, err = NewExtensionHost(logf, sys, b); err != nil {
 		return nil, fmt.Errorf("failed to create extension host: %w", err)
 	}
+	b.pm.SetExtensionHost(b.extHost)
 
 	if b.unregisterSysPolicyWatch, err = b.registerSysPolicyWatch(); err != nil {
 		return nil, err
@@ -1653,8 +1654,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		// Theoretically, a completed login could also result in a switch to a different existing
 		// profile representing a different node (see tailscale/tailscale#8816).
 		//
-		// Let's check if the current profile has changed, and invoke all registered [ProfileChangeCallback]
-		// if necessary.
+		// Let's check if the current profile has changed, and invoke all registered
+		// [ipnext.ProfileStateChangeCallback] if necessary.
 		if cp := b.pm.CurrentProfile(); *cp.AsStruct() != *profile.AsStruct() {
 			// If the profile ID was empty before SetPrefs, it's a new profile
 			// and the user has just completed a login for the first time.
@@ -2408,7 +2409,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if err != nil {
 		return err
 	}
-	ccShutdownCbs = b.extHost.NotifyNewControlClient(cc, b.pm.CurrentProfile(), prefs)
+	ccShutdownCbs = b.extHost.NotifyNewControlClient(cc, b.pm.CurrentProfile())
 
 	b.setControlClientLocked(cc)
 	endpoints := b.endpoints

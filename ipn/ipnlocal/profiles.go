@@ -42,6 +42,19 @@ type profileManager struct {
 	knownProfiles  map[ipn.ProfileID]ipn.LoginProfileView // always non-nil
 	currentProfile ipn.LoginProfileView                   // always Valid.
 	prefs          ipn.PrefsView                          // always Valid.
+
+	// extHost is the bridge between [profileManager] and the registered [ipnext.Extension]s.
+	// It may be nil in tests. A nil pointer is a valid, no-op host.
+	extHost *ExtensionHost
+}
+
+// SetExtensionHost sets the [ExtensionHost] for the [profileManager].
+// The specified host will be notified about profile and prefs changes
+// and will immediately be notified about the current profile and prefs.
+// A nil host is a valid, no-op host.
+func (pm *profileManager) SetExtensionHost(host *ExtensionHost) {
+	pm.extHost = host
+	host.NotifyProfileChange(pm.currentProfile, pm.prefs, false)
 }
 
 func (pm *profileManager) dlogf(format string, args ...any) {
@@ -321,7 +334,6 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 		return err
 	}
 	return pm.setProfileAsUserDefault(cp)
-
 }
 
 // setProfilePrefs is like [profileManager.SetPrefs], but sets prefs for the specified [ipn.LoginProfile],
@@ -419,7 +431,27 @@ func newUnusedID(knownProfiles map[ipn.ProfileID]ipn.LoginProfileView) (ipn.Prof
 func (pm *profileManager) setProfilePrefsNoPermCheck(profile ipn.LoginProfileView, clonedPrefs ipn.PrefsView) error {
 	isCurrentProfile := pm.currentProfile == profile
 	if isCurrentProfile {
+		oldPrefs := pm.prefs
 		pm.prefs = clonedPrefs
+
+		// Sadly, profile prefs can be changed in multiple ways.
+		// It's pretty chaotic, and in many cases callers use
+		// unexported methods of the profile manager instead of
+		// going through [LocalBackend.setPrefsLockedOnEntry]
+		// or at least using [profileManager.SetPrefs].
+		//
+		// While we should definitely clean this up to improve
+		// the overall structure of how prefs are set, which would
+		// also address current and future conflicts, such as
+		// competing features changing the same prefs, this method
+		// is currently the central place where we can detect all
+		// changes to the current profile's prefs.
+		//
+		// That said, regardless of the cleanup, we might want
+		// to keep the profileManager responsible for invoking
+		// profile- and prefs-related callbacks.
+		pm.extHost.NotifyProfilePrefsChanged(pm.currentProfile, oldPrefs, clonedPrefs)
+
 		pm.updateHealth()
 	}
 	if profile.Key() != "" {
@@ -704,6 +736,9 @@ func (pm *profileManager) SwitchToNewProfile() {
 func (pm *profileManager) SwitchToNewProfileForUser(uid ipn.WindowsUserID) {
 	pm.SwitchToProfile(pm.NewProfileForUser(uid))
 }
+
+// zeroProfile is a read-only view of a new, empty profile that is not persisted to the store.
+var zeroProfile = (&ipn.LoginProfile{}).View()
 
 // NewProfileForUser creates a new profile for the specified user and returns a read-only view of it.
 // It neither switches to the new profile nor persists it to the store.
