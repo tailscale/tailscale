@@ -5,11 +5,13 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
 	"log"
 	"os"
+	"slices"
 
 	"tailscale.com/release/dist"
 	"tailscale.com/release/dist/cli"
@@ -19,9 +21,12 @@ import (
 )
 
 var (
-	synologyPackageCenter bool
-	qnapPrivateKeyPath    string
-	qnapCertificatePath   string
+	synologyPackageCenter   bool
+	gcloudCredentialsBase64 string
+	gcloudProject           string
+	gcloudKeyring           string
+	qnapKeyName             string
+	qnapCertificateBase64   string
 )
 
 func getTargets() ([]dist.Target, error) {
@@ -42,10 +47,11 @@ func getTargets() ([]dist.Target, error) {
 	// To build for package center, run
 	// ./tool/go run ./cmd/dist build --synology-package-center synology
 	ret = append(ret, synology.Targets(synologyPackageCenter, nil)...)
-	if (qnapPrivateKeyPath == "") != (qnapCertificatePath == "") {
-		return nil, errors.New("both --qnap-private-key-path and --qnap-certificate-path must be set")
+	qnapSigningArgs := []string{gcloudCredentialsBase64, gcloudProject, gcloudKeyring, qnapKeyName, qnapCertificateBase64}
+	if cmp.Or(qnapSigningArgs...) != "" && slices.Contains(qnapSigningArgs, "") {
+		return nil, errors.New("all of --gcloud-credentials, --gcloud-project, --gcloud-keyring, --qnap-key-name and --qnap-certificate must be set")
 	}
-	ret = append(ret, qnap.Targets(qnapPrivateKeyPath, qnapCertificatePath)...)
+	ret = append(ret, qnap.Targets(gcloudCredentialsBase64, gcloudProject, gcloudKeyring, qnapKeyName, qnapCertificateBase64)...)
 	return ret, nil
 }
 
@@ -54,8 +60,11 @@ func main() {
 	for _, subcmd := range cmd.Subcommands {
 		if subcmd.Name == "build" {
 			subcmd.FlagSet.BoolVar(&synologyPackageCenter, "synology-package-center", false, "build synology packages with extra metadata for the official package center")
-			subcmd.FlagSet.StringVar(&qnapPrivateKeyPath, "qnap-private-key-path", "", "sign qnap packages with given key (must also provide --qnap-certificate-path)")
-			subcmd.FlagSet.StringVar(&qnapCertificatePath, "qnap-certificate-path", "", "sign qnap packages with given certificate (must also provide --qnap-private-key-path)")
+			subcmd.FlagSet.StringVar(&gcloudCredentialsBase64, "gcloud-credentials", "", "base64 encoded GCP credentials (used when signing QNAP builds)")
+			subcmd.FlagSet.StringVar(&gcloudProject, "gcloud-project", "", "name of project in GCP KMS (used when signing QNAP builds)")
+			subcmd.FlagSet.StringVar(&gcloudKeyring, "gcloud-keyring", "", "path to keyring in GCP KMS (used when signing QNAP builds)")
+			subcmd.FlagSet.StringVar(&qnapKeyName, "qnap-key-name", "", "name of GCP key to use when signing QNAP builds")
+			subcmd.FlagSet.StringVar(&qnapCertificateBase64, "qnap-certificate", "", "base64 encoded certificate to use when signing QNAP builds")
 		}
 	}
 

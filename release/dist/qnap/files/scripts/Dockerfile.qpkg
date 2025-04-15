@@ -1,9 +1,21 @@
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
     git-core \
-    ca-certificates
-RUN git clone https://github.com/qnap-dev/QDK.git
+    ca-certificates \
+    apt-transport-https \
+    gnupg \
+    curl \
+    patch
+
+# Install QNAP QDK (force a specific version to pick up updates)
+RUN git clone https://github.com/tailscale/QDK.git && cd /QDK && git reset --hard 9a31a67387c583d19a81a378dcf7c25e2abe231d
 RUN cd /QDK && ./InstallToUbuntu.sh install
 ENV PATH="/usr/share/QDK/bin:${PATH}"
+
+# Install Google Cloud PKCS11 module
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+RUN apt-get update -y && apt-get install -y --no-install-recommends google-cloud-cli libengine-pkcs11-openssl
+RUN curl -L https://github.com/GoogleCloudPlatform/kms-integrations/releases/download/pkcs11-v1.6/libkmsp11-1.6-linux-amd64.tar.gz | tar xz
