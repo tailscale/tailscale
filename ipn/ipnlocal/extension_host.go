@@ -67,6 +67,7 @@ import (
 // and to further reduce the risk of accessing unexported methods or fields of [LocalBackend], the host interacts
 // with it via the [Backend] interface.
 type ExtensionHost struct {
+	b    Backend
 	logf logger.Logf // prefixed with "ipnext:"
 
 	// allExtensions holds the extensions in the order they were registered,
@@ -139,6 +140,7 @@ type Backend interface {
 // Overriding extensions is primarily used for testing.
 func NewExtensionHost(logf logger.Logf, sys *tsd.System, b Backend, overrideExts ...*ipnext.Definition) (_ *ExtensionHost, err error) {
 	host := &ExtensionHost{
+		b:         b,
 		logf:      logger.WithPrefix(logf, "ipnext: "),
 		workQueue: &execqueue.ExecQueue{},
 		// The host starts with an empty profile and default prefs.
@@ -330,6 +332,14 @@ func (h *ExtensionHost) SwitchToBestProfileAsync(reason string) {
 	h.enqueueBackendOperation(func(b Backend) {
 		b.SwitchToBestProfile(reason)
 	})
+}
+
+// Backend returns the [Backend] used by the extension host.
+func (h *ExtensionHost) Backend() Backend {
+	if h == nil {
+		return nil
+	}
+	return h.b
 }
 
 // RegisterProfileStateChangeCallback implements [ipnext.ProfileServices].

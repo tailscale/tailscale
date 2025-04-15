@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -37,10 +36,8 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
-	"tailscale.com/taildrop"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/httphdr"
 	"tailscale.com/util/httpm"
 	"tailscale.com/wgengine/filter"
 )
@@ -64,7 +61,7 @@ type peerAPIServer struct {
 	b        *LocalBackend
 	resolver peerDNSQueryHandler
 
-	taildrop *taildrop.Manager
+	taildrop *taildrop_Manager
 }
 
 func (s *peerAPIServer) listen(ip netip.Addr, ifState *netmon.State) (ln net.Listener, err error) {
@@ -232,6 +229,8 @@ type PeerAPIHandler interface {
 	Self() tailcfg.NodeView
 	LocalBackend() *LocalBackend
 	IsSelfUntagged() bool // whether the peer is untagged and the same as this user
+	RemoteAddr() netip.AddrPort
+	Logf(format string, a ...any)
 }
 
 func (h *peerAPIHandler) IsSelfUntagged() bool {
@@ -239,7 +238,11 @@ func (h *peerAPIHandler) IsSelfUntagged() bool {
 }
 func (h *peerAPIHandler) Peer() tailcfg.NodeView      { return h.peerNode }
 func (h *peerAPIHandler) Self() tailcfg.NodeView      { return h.selfNode }
+func (h *peerAPIHandler) RemoteAddr() netip.AddrPort  { return h.remoteAddr }
 func (h *peerAPIHandler) LocalBackend() *LocalBackend { return h.ps.b }
+func (h *peerAPIHandler) Logf(format string, a ...any) {
+	h.logf(format, a...)
+}
 
 func (h *peerAPIHandler) logf(format string, a ...any) {
 	h.ps.b.logf("peerapi: "+format, a...)
@@ -327,9 +330,18 @@ func RegisterPeerAPIHandler(path string, f func(PeerAPIHandler, http.ResponseWri
 		panic(fmt.Sprintf("duplicate PeerAPI handler %q", path))
 	}
 	peerAPIHandlers[path] = f
+	if strings.HasSuffix(path, "/") {
+		peerAPIHandlerPrefixes[path] = f
+	}
 }
 
-var peerAPIHandlers = map[string]func(PeerAPIHandler, http.ResponseWriter, *http.Request){} // by URL.Path
+var (
+	peerAPIHandlers = map[string]func(PeerAPIHandler, http.ResponseWriter, *http.Request){} // by URL.Path
+
+	// peerAPIHandlerPrefixes are the subset of peerAPIHandlers where
+	// the map key ends with a slash, indicating a prefix match.
+	peerAPIHandlerPrefixes = map[string]func(PeerAPIHandler, http.ResponseWriter, *http.Request){}
+)
 
 func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.validatePeerAPIRequest(r); err != nil {
@@ -343,12 +355,11 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
-	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
-		if r.Method == "PUT" {
-			metricPutCalls.Add(1)
+	for pfx, ph := range peerAPIHandlerPrefixes {
+		if strings.HasPrefix(r.URL.Path, pfx) {
+			ph(h, w, r)
+			return
 		}
-		h.handlePeerPut(w, r)
-		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/dns-query") {
 		metricDNSCalls.Add(1)
@@ -391,6 +402,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if ph, ok := peerAPIHandlers[r.URL.Path]; ok {
 		ph(h, w, r)
+		return
+	}
+	if r.URL.Path != "/" {
+		http.Error(w, "unsupported peerapi path", http.StatusNotFound)
 		return
 	}
 	who := h.peerUser.DisplayName
@@ -630,15 +645,6 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	fmt.Fprintln(w, "</pre>")
 }
 
-// canPutFile reports whether h can put a file ("Taildrop") to this node.
-func (h *peerAPIHandler) canPutFile() bool {
-	if h.peerNode.UnsignedPeerAPIOnly() {
-		// Unsigned peers can't send files.
-		return false
-	}
-	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityFileSharingSend)
-}
-
 // canDebug reports whether h can debug this node (goroutines, metrics,
 // magicsock internal state, etc).
 func (h *peerAPIHandler) canDebug() bool {
@@ -666,110 +672,6 @@ func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
 
 func (h *peerAPIHandler) PeerCaps() tailcfg.PeerCapMap {
 	return h.ps.b.PeerCaps(h.remoteAddr.Addr())
-}
-
-func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
-	if !h.canPutFile() {
-		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
-		return
-	}
-	if !h.ps.b.hasCapFileSharing() {
-		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
-		return
-	}
-	rawPath := r.URL.EscapedPath()
-	prefix, ok := strings.CutPrefix(rawPath, "/v0/put/")
-	if !ok {
-		http.Error(w, "misconfigured internals", http.StatusForbidden)
-		return
-	}
-	baseName, err := url.PathUnescape(prefix)
-	if err != nil {
-		http.Error(w, taildrop.ErrInvalidFileName.Error(), http.StatusBadRequest)
-		return
-	}
-	enc := json.NewEncoder(w)
-	switch r.Method {
-	case "GET":
-		id := taildrop.ClientID(h.peerNode.StableID())
-		if prefix == "" {
-			// List all the partial files.
-			files, err := h.ps.taildrop.PartialFiles(id)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			if err := enc.Encode(files); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				h.logf("json.Encoder.Encode error: %v", err)
-				return
-			}
-		} else {
-			// Stream all the block hashes for the specified file.
-			next, close, err := h.ps.taildrop.HashPartialFile(id, baseName)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			defer close()
-			for {
-				switch cs, err := next(); {
-				case err == io.EOF:
-					return
-				case err != nil:
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					h.logf("HashPartialFile.next error: %v", err)
-					return
-				default:
-					if err := enc.Encode(cs); err != nil {
-						http.Error(w, err.Error(), http.StatusInternalServerError)
-						h.logf("json.Encoder.Encode error: %v", err)
-						return
-					}
-				}
-			}
-		}
-	case "PUT":
-		t0 := h.ps.b.clock.Now()
-		id := taildrop.ClientID(h.peerNode.StableID())
-
-		var offset int64
-		if rangeHdr := r.Header.Get("Range"); rangeHdr != "" {
-			ranges, ok := httphdr.ParseRange(rangeHdr)
-			if !ok || len(ranges) != 1 || ranges[0].Length != 0 {
-				http.Error(w, "invalid Range header", http.StatusBadRequest)
-				return
-			}
-			offset = ranges[0].Start
-		}
-		n, err := h.ps.taildrop.PutFile(taildrop.ClientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
-		switch err {
-		case nil:
-			d := h.ps.b.clock.Since(t0).Round(time.Second / 10)
-			h.logf("got put of %s in %v from %v/%v", approxSize(n), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
-			io.WriteString(w, "{}\n")
-		case taildrop.ErrNoTaildrop:
-			http.Error(w, err.Error(), http.StatusForbidden)
-		case taildrop.ErrInvalidFileName:
-			http.Error(w, err.Error(), http.StatusBadRequest)
-		case taildrop.ErrFileExists:
-			http.Error(w, err.Error(), http.StatusConflict)
-		default:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-	default:
-		http.Error(w, "expected method GET or PUT", http.StatusMethodNotAllowed)
-	}
-}
-
-func approxSize(n int64) string {
-	if n <= 1<<10 {
-		return "<=1KB"
-	}
-	if n <= 1<<20 {
-		return "<=1MB"
-	}
-	return fmt.Sprintf("~%dMB", n>>20)
 }
 
 func (h *peerAPIHandler) handleServeGoroutines(w http.ResponseWriter, r *http.Request) {
@@ -1244,7 +1146,6 @@ var (
 	metricInvalidRequests = clientmetric.NewCounter("peerapi_invalid_requests")
 
 	// Non-debug PeerAPI endpoints.
-	metricPutCalls     = clientmetric.NewCounter("peerapi_put")
 	metricDNSCalls     = clientmetric.NewCounter("peerapi_dns")
 	metricIngressCalls = clientmetric.NewCounter("peerapi_ingress")
 )

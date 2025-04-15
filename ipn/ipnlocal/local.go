@@ -30,7 +30,6 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,7 +80,6 @@ import (
 	"tailscale.com/posture"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
-	"tailscale.com/taildrop"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
@@ -590,6 +588,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	return b, nil
 }
 
+func (b *LocalBackend) Clock() tstime.Clock { return b.clock }
+
 // FindExtensionByName returns an active extension with the given name,
 // or nil if no such extension exists.
 func (b *LocalBackend) FindExtensionByName(name string) any {
@@ -1075,9 +1075,6 @@ func (b *LocalBackend) Shutdown() {
 		defer cancel()
 		b.sockstatLogger.Shutdown(ctx)
 	}
-	if b.peerAPIServer != nil {
-		b.peerAPIServer.taildrop.Shutdown()
-	}
 	b.stopOfflineAutoUpdate()
 
 	b.unregisterNetMon()
@@ -1291,7 +1288,9 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			SSH_HostKeys:    p.Hostinfo().SSH_HostKeys().AsSlice(),
 			Location:        p.Hostinfo().Location().AsStruct(),
 			Capabilities:    p.Capabilities().AsSlice(),
-			TaildropTarget:  b.taildropTargetStatus(p),
+		}
+		if f := hookSetPeerStatusTaildropTargetLocked; f != nil {
+			f(b, ps, p)
 		}
 		if cm := p.CapMap(); cm.Len() > 0 {
 			ps.CapMap = make(tailcfg.NodeCapMap, cm.Len())
@@ -3248,6 +3247,17 @@ func (b *LocalBackend) sendTo(n ipn.Notify, recipient notificationTarget) {
 	b.sendToLocked(n, recipient)
 }
 
+var (
+	// hookSetNotifyFilesWaitingLocked, if non-nil, is called in sendToLocked to
+	// populate ipn.Notify.FilesWaiting when taildrop is linked in to the binary
+	// and enabled on a LocalBackend.
+	hookSetNotifyFilesWaitingLocked func(*LocalBackend, *ipn.Notify)
+
+	// hookSetPeerStatusTaildropTargetLocked, if non-nil, is called to populate PeerStatus
+	// if taildrop is linked in to the binary and enabled on the LocalBackend.
+	hookSetPeerStatusTaildropTargetLocked func(*LocalBackend, *ipnstate.PeerStatus, tailcfg.NodeView)
+)
+
 // sendToLocked is like [LocalBackend.sendTo], but assumes b.mu is already held.
 func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) {
 	if n.Prefs != nil {
@@ -3257,9 +3267,8 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 		n.Version = version.Long()
 	}
 
-	apiSrv := b.peerAPIServer
-	if mayDeref(apiSrv).taildrop.HasFilesWaiting() {
-		n.FilesWaiting = &empty.Message{}
+	if f := hookSetNotifyFilesWaitingLocked; f != nil {
+		f(b, &n)
 	}
 
 	for _, sess := range b.notifyWatchers {
@@ -3271,32 +3280,6 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 			}
 		}
 	}
-}
-
-func (b *LocalBackend) sendFileNotify() {
-	var n ipn.Notify
-
-	b.mu.Lock()
-	for _, wakeWaiter := range b.fileWaiters {
-		wakeWaiter()
-	}
-	apiSrv := b.peerAPIServer
-	if apiSrv == nil {
-		b.mu.Unlock()
-		return
-	}
-
-	// Make sure we always set n.IncomingFiles non-nil so it gets encoded
-	// in JSON to clients. They distinguish between empty and non-nil
-	// to know whether a Notify should be able about files.
-	n.IncomingFiles = apiSrv.taildrop.IncomingFiles()
-	b.mu.Unlock()
-
-	sort.Slice(n.IncomingFiles, func(i, j int) bool {
-		return n.IncomingFiles[i].Started.Before(n.IncomingFiles[j].Started)
-	})
-
-	b.send(n)
 }
 
 // setAuthURL sets the authURL and triggers [LocalBackend.popBrowserAuthNow] if the URL has changed.
@@ -5289,21 +5272,9 @@ func (b *LocalBackend) initPeerAPIListener() {
 		return
 	}
 
-	fileRoot := b.fileRootLocked(selfNode.User())
-	if fileRoot == "" {
-		b.logf("peerapi starting without Taildrop directory configured")
-	}
-
 	ps := &peerAPIServer{
-		b: b,
-		taildrop: taildrop.ManagerOptions{
-			Logf:           b.logf,
-			Clock:          tstime.DefaultClock{Clock: b.clock},
-			State:          b.store,
-			Dir:            fileRoot,
-			DirectFileMode: b.directFileRoot != "",
-			SendFileNotify: b.sendFileNotify,
-		}.New(),
+		b:        b,
+		taildrop: b.newTaildropManager(b.fileRootLocked(selfNode.User())),
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()
@@ -6598,172 +6569,6 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 	return mk, nk
 }
 
-func (b *LocalBackend) removeFileWaiter(handle set.Handle) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	delete(b.fileWaiters, handle)
-}
-
-func (b *LocalBackend) addFileWaiter(wakeWaiter context.CancelFunc) set.Handle {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.fileWaiters.Add(wakeWaiter)
-}
-
-func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
-	b.mu.Lock()
-	apiSrv := b.peerAPIServer
-	b.mu.Unlock()
-	return mayDeref(apiSrv).taildrop.WaitingFiles()
-}
-
-// AwaitWaitingFiles is like WaitingFiles but blocks while ctx is not done,
-// waiting for any files to be available.
-//
-// On return, exactly one of the results will be non-empty or non-nil,
-// respectively.
-func (b *LocalBackend) AwaitWaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
-	if ff, err := b.WaitingFiles(); err != nil || len(ff) > 0 {
-		return ff, err
-	}
-
-	for {
-		gotFile, gotFileCancel := context.WithCancel(context.Background())
-		defer gotFileCancel()
-
-		handle := b.addFileWaiter(gotFileCancel)
-		defer b.removeFileWaiter(handle)
-
-		// Now that we've registered ourselves, check again, in case
-		// of race. Otherwise there's a small window where we could
-		// miss a file arrival and wait forever.
-		if ff, err := b.WaitingFiles(); err != nil || len(ff) > 0 {
-			return ff, err
-		}
-
-		select {
-		case <-gotFile.Done():
-			if ff, err := b.WaitingFiles(); err != nil || len(ff) > 0 {
-				return ff, err
-			}
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-}
-
-func (b *LocalBackend) DeleteFile(name string) error {
-	b.mu.Lock()
-	apiSrv := b.peerAPIServer
-	b.mu.Unlock()
-	return mayDeref(apiSrv).taildrop.DeleteFile(name)
-}
-
-func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err error) {
-	b.mu.Lock()
-	apiSrv := b.peerAPIServer
-	b.mu.Unlock()
-	return mayDeref(apiSrv).taildrop.OpenFile(name)
-}
-
-// hasCapFileSharing reports whether the current node has the file
-// sharing capability enabled.
-func (b *LocalBackend) hasCapFileSharing() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.capFileSharing
-}
-
-// FileTargets lists nodes that the current node can send files to.
-func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
-	var ret []*apitype.FileTarget
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	nm := b.netMap
-	if b.state != ipn.Running || nm == nil {
-		return nil, errors.New("not connected to the tailnet")
-	}
-	if !b.capFileSharing {
-		return nil, errors.New("file sharing not enabled by Tailscale admin")
-	}
-	for _, p := range b.peers {
-		if !b.peerIsTaildropTargetLocked(p) {
-			continue
-		}
-		if p.Hostinfo().OS() == "tvOS" {
-			continue
-		}
-		peerAPI := peerAPIBase(b.netMap, p)
-		if peerAPI == "" {
-			continue
-		}
-		ret = append(ret, &apitype.FileTarget{
-			Node:       p.AsStruct(),
-			PeerAPIURL: peerAPI,
-		})
-	}
-	slices.SortFunc(ret, func(a, b *apitype.FileTarget) int {
-		return cmp.Compare(a.Node.Name, b.Node.Name)
-	})
-	return ret, nil
-}
-
-func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.TaildropTargetStatus {
-	if b.state != ipn.Running {
-		return ipnstate.TaildropTargetIpnStateNotRunning
-	}
-	if b.netMap == nil {
-		return ipnstate.TaildropTargetNoNetmapAvailable
-	}
-	if !b.capFileSharing {
-		return ipnstate.TaildropTargetMissingCap
-	}
-
-	if !p.Online().Get() {
-		return ipnstate.TaildropTargetOffline
-	}
-
-	if !p.Valid() {
-		return ipnstate.TaildropTargetNoPeerInfo
-	}
-	if b.netMap.User() != p.User() {
-		// Different user must have the explicit file sharing target capability
-		if p.Addresses().Len() == 0 ||
-			!b.peerHasCapLocked(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
-			return ipnstate.TaildropTargetOwnedByOtherUser
-		}
-	}
-
-	if p.Hostinfo().OS() == "tvOS" {
-		return ipnstate.TaildropTargetUnsupportedOS
-	}
-	if peerAPIBase(b.netMap, p) == "" {
-		return ipnstate.TaildropTargetNoPeerAPI
-	}
-	return ipnstate.TaildropTargetAvailable
-}
-
-// peerIsTaildropTargetLocked reports whether p is a valid Taildrop file
-// recipient from this node according to its ownership and the capabilities in
-// the netmap.
-//
-// b.mu must be locked.
-func (b *LocalBackend) peerIsTaildropTargetLocked(p tailcfg.NodeView) bool {
-	if b.netMap == nil || !p.Valid() {
-		return false
-	}
-	if b.netMap.User() == p.User() {
-		return true
-	}
-	if p.Addresses().Len() > 0 &&
-		b.peerHasCapLocked(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
-		// Explicitly noted in the netmap ACL caps as a target.
-		return true
-	}
-	return false
-}
-
 func (b *LocalBackend) peerHasCapLocked(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
 	return b.peerCapsLocked(addr).HasCapability(wantCap)
 }
@@ -7832,14 +7637,6 @@ func allowedAutoRoute(ipp netip.Prefix) bool {
 	}
 	// TODO(raggi): exclude tailscale service IPs and so on as well.
 	return true
-}
-
-// mayDeref dereferences p if non-nil, otherwise it returns the zero value.
-func mayDeref[T any](p *T) (v T) {
-	if p == nil {
-		return v
-	}
-	return *p
 }
 
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")

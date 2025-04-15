@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -239,6 +240,11 @@ func (m *Manager) IncomingFiles() []ipn.PartialFile {
 		})
 		f.mu.Unlock()
 	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Started.Before(files[j].Started)
+	})
+
 	return files
 }
 
