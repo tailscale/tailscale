@@ -100,6 +100,17 @@ func (t *Tracker) CurrentState() *State {
 		wm[w.Code] = *w.unhealthyState(ws)
 	}
 
+	for _, h := range t.controlHealth {
+		wm[WarnableCode(h.ID)] = UnhealthyState{
+			WarnableCode:        WarnableCode(h.ID),
+			Severity:            SeverityHigh,
+			Title:               h.Title,
+			Text:                h.Text,
+			ImpactsConnectivity: h.ImpactsConnectivity,
+			URL:                 h.URL,
+		}
+	}
+
 	return &State{
 		Warnings: wm,
 	}

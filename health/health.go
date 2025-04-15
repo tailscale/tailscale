@@ -1151,20 +1151,15 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		t.setHealthyLocked(derpRegionErrorWarnable)
 	}
 
-	if len(t.controlHealth) > 0 {
-		for _, s := range t.controlHealth {
-			t.setUnhealthyLocked(&Warnable{
-				Code:  WarnableCode(s.ID),
-				Title: s.Title,
-				Text: func(args Args) string {
-					return s.Text
-				},
-				Severity:            SeverityHigh,
-				ImpactsConnectivity: s.ImpactsConnectivity,
-			}, nil)
+	if t.controlHealth != nil {
+		// for _, cb := range t.watchers {
+		// 	go cb(nil, nil)
+		// }
+		if len(t.controlHealth) > 0 {
+			t.setUnhealthyLocked(controlHealthWarnable, nil)
+		} else {
+			t.setHealthyLocked(controlHealthWarnable)
 		}
-	} else {
-		t.setHealthyLocked(controlHealthWarnable)
 	}
 
 	if err := envknob.ApplyDiskConfigError(); err != nil {

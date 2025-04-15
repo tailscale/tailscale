@@ -968,6 +968,9 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 }
 
 func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthyState) {
+	if w == nil {
+		return
+	}
 	if us == nil {
 		b.logf("health(warnable=%s): ok", w.Code)
 	} else {
