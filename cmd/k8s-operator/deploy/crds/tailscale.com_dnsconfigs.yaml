@@ -20,6 +20,9 @@ spec:
           jsonPath: .status.nameserver.ip
           name: NameserverIP
           type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
       name: v1alpha1
       schema:
         openAPIV3Schema:

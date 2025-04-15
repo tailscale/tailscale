@@ -18,6 +18,7 @@ var DNSConfigKind = "DNSConfig"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=dc
 // +kubebuilder:printcolumn:name="NameserverIP",type="string",JSONPath=`.status.nameserver.ip`,description="Service IP address of the nameserver"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // DNSConfig can be deployed to cluster to make a subset of Tailscale MagicDNS
 // names resolvable by cluster workloads. Use this if: A) you need to refer to
