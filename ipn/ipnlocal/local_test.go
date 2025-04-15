@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -2597,9 +2596,6 @@ func TestPreferencePolicyInfo(t *testing.T) {
 }
 
 func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("test known broken on macOS; see https://github.com/tailscale/tailscale/issues/15691")
-	}
 	tests := []struct {
 		before, after  opt.Bool
 		container      opt.Bool
@@ -2669,7 +2665,7 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 			// On platforms that don't support auto-update we can never
 			// transition to auto-updates being enabled. The value should
 			// remain unchanged after onTailnetDefaultAutoUpdate.
-			if !clientupdate.CanAutoUpdate() && want.EqualBool(true) {
+			if !clientupdate.CanAutoUpdate() {
 				want = tt.before
 			}
 			if got := b.pm.CurrentPrefs().AutoUpdate().Apply; got != want {
