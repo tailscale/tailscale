@@ -22,7 +22,7 @@ import (
 )
 
 // featureName is the name of the feature implemented by this package.
-// It is also the the [extension] name and the log prefix.
+// It is also the [extension] name and the log prefix.
 const featureName = "auditlog"
 
 func init() {
