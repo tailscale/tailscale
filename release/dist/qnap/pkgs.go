@@ -27,8 +27,11 @@ type target struct {
 }
 
 type signer struct {
-	privateKeyPath  string
-	certificatePath string
+	gcloudCredentialsBase64 string
+	gcloudProject           string
+	gcloudKeyring           string
+	keyName                 string
+	certificateBase64       string
 }
 
 func (t *target) String() string {
@@ -66,7 +69,8 @@ func (t *target) buildQPKG(b *dist.Build, qnapBuilds *qnapBuilds, inner *innerPk
 	filename := fmt.Sprintf("Tailscale_%s-%s_%s.qpkg", b.Version.Short, qnapTag, t.arch)
 	filePath := filepath.Join(b.Out, filename)
 
-	cmd := b.Command(b.Repo, "docker", "run", "--rm",
+	args := []string{"run", "--rm",
+		"--network=host",
 		"-e", fmt.Sprintf("ARCH=%s", t.arch),
 		"-e", fmt.Sprintf("TSTAG=%s", b.Version.Short),
 		"-e", fmt.Sprintf("QNAPTAG=%s", qnapTag),
@@ -76,9 +80,27 @@ func (t *target) buildQPKG(b *dist.Build, qnapBuilds *qnapBuilds, inner *innerPk
 		"-v", fmt.Sprintf("%s:/Tailscale", filepath.Join(qnapBuilds.tmpDir, "files/Tailscale")),
 		"-v", fmt.Sprintf("%s:/build-qpkg.sh", filepath.Join(qnapBuilds.tmpDir, "files/scripts/build-qpkg.sh")),
 		"-v", fmt.Sprintf("%s:/out", b.Out),
+	}
+
+	if t.signer != nil {
+		log.Println("Will sign with Google Cloud HSM")
+		args = append(args,
+			"-e", fmt.Sprintf("GCLOUD_CREDENTIALS_BASE64=%s", t.signer.gcloudCredentialsBase64),
+			"-e", fmt.Sprintf("GCLOUD_PROJECT=%s", t.signer.gcloudProject),
+			"-e", fmt.Sprintf("GCLOUD_KEYRING=%s", t.signer.gcloudKeyring),
+			"-e", fmt.Sprintf("QNAP_SIGNING_KEY_NAME=%s", t.signer.keyName),
+			"-e", fmt.Sprintf("QNAP_SIGNING_CERT_BASE64=%s", t.signer.certificateBase64),
+			"-e", fmt.Sprintf("QNAP_SIGNING_SCRIPT=%s", "/sign-qpkg.sh"),
+			"-v", fmt.Sprintf("%s:/sign-qpkg.sh", filepath.Join(qnapBuilds.tmpDir, "files/scripts/sign-qpkg.sh")),
+		)
+	}
+
+	args = append(args,
 		"build.tailscale.io/qdk:latest",
 		"/build-qpkg.sh",
 	)
+
+	cmd := b.Command(b.Repo, "docker", args...)
 
 	// dist.Build runs target builds in parallel goroutines by default.
 	// For QNAP, this is an issue because the underlaying qbuild builder will
@@ -176,32 +198,6 @@ func newQNAPBuilds(b *dist.Build, signer *signer) (*qnapBuilds, error) {
 		return nil, err
 	}
 
-	if signer != nil {
-		log.Print("Setting up qnap signing files")
-
-		key, err := os.ReadFile(signer.privateKeyPath)
-		if err != nil {
-			return nil, err
-		}
-		cert, err := os.ReadFile(signer.certificatePath)
-		if err != nil {
-			return nil, err
-		}
-
-		// QNAP's qbuild command expects key and cert files to be in the root
-		// of the project directory (in our case release/dist/qnap/Tailscale).
-		// So here, we copy the key and cert over to the project folder for the
-		// duration of qnap package building and then delete them on close.
-
-		keyPath := filepath.Join(m.tmpDir, "files/Tailscale/private_key")
-		if err := os.WriteFile(keyPath, key, 0400); err != nil {
-			return nil, err
-		}
-		certPath := filepath.Join(m.tmpDir, "files/Tailscale/certificate")
-		if err := os.WriteFile(certPath, cert, 0400); err != nil {
-			return nil, err
-		}
-	}
 	return m, nil
 }
 
