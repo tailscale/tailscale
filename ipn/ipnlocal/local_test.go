@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -2596,6 +2597,9 @@ func TestPreferencePolicyInfo(t *testing.T) {
 }
 
 func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("test known broken on macOS; see https://github.com/tailscale/tailscale/issues/15691")
+	}
 	tests := []struct {
 		before, after  opt.Bool
 		container      opt.Bool
