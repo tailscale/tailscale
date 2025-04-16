@@ -87,9 +87,11 @@ type Tracker struct {
 
 	// sysErr maps subsystems to their current error (or nil if the subsystem is healthy)
 	// Deprecated: using Warnables should be preferred
-	sysErr   map[Subsystem]error
-	watchers set.HandleSet[func(*Warnable, *UnhealthyState)] // opt func to run if error state changes
-	timer    tstime.TimerController
+	sysErr      map[Subsystem]error
+	watchers    set.HandleSet[func(*Warnable, *UnhealthyState)] // opt func to run if error state changes
+	anyWatchers set.HandleSet[func()]                           // opt func to run if any error state changes
+
+	timer tstime.TimerController
 
 	latestVersion   *tailcfg.ClientVersion // or nil
 	checkForUpdates bool
@@ -423,6 +425,25 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 			})
 			mak.Set(&t.pendingVisibleTimers, w, tc)
 		}
+
+		for _, cb := range t.anyWatchers {
+			if w.IsVisible(ws, t.now) {
+				go cb()
+				continue
+			}
+			visibleIn := w.TimeToVisible - t.now().Sub(brokenSince)
+			var tc tstime.TimerController = t.clock().AfterFunc(visibleIn, func() {
+				t.mu.Lock()
+				defer t.mu.Unlock()
+				// Check if the Warnable is still unhealthy, as it could have become healthy between the time
+				// the timer was set for and the time it was executed.
+				if t.warnableVal[w] != nil {
+					go cb()
+					delete(t.pendingVisibleTimers, w)
+				}
+			})
+			mak.Set(&t.pendingVisibleTimers, w, tc)
+		}
 	}
 }
 
@@ -452,6 +473,9 @@ func (t *Tracker) setHealthyLocked(w *Warnable) {
 
 	for _, cb := range t.watchers {
 		go cb(w, nil)
+	}
+	for _, cb := range t.anyWatchers {
+		go cb()
 	}
 }
 
@@ -506,6 +530,28 @@ func (t *Tracker) RegisterWatcher(cb func(w *Warnable, r *UnhealthyState)) (unre
 			t.timer.Stop()
 			t.timer = nil
 		}
+	}
+}
+
+// this function will register an observer for notifications when the set of
+// current UnhealthyStates (Warnables + control Health messages) changes. Unlike
+// RegisterWatcher it will not fire for each Warnable but only once any time any
+// amount of Warnables (or control health messages) change.
+func (t *Tracker) RegisterAnyWatcher(cb func()) (unregister func()) {
+	if t.nil() {
+		return func() {}
+	}
+	t.initOnce.Do(t.doOnceInit)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.anyWatchers == nil {
+		t.anyWatchers = set.HandleSet[func()]{}
+	}
+	handle := t.anyWatchers.Add(cb)
+	return func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		delete(t.anyWatchers, handle)
 	}
 }
 
@@ -1152,13 +1198,8 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	}
 
 	if t.controlHealth != nil {
-		// for _, cb := range t.watchers {
-		// 	go cb(nil, nil)
-		// }
-		if len(t.controlHealth) > 0 {
-			t.setUnhealthyLocked(controlHealthWarnable, nil)
-		} else {
-			t.setHealthyLocked(controlHealthWarnable)
+		for _, cb := range t.anyWatchers {
+			go cb()
 		}
 	}
 

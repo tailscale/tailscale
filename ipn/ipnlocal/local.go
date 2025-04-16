@@ -240,6 +240,7 @@ type LocalBackend struct {
 	backendLogID             logid.PublicID
 	unregisterNetMon         func()
 	unregisterHealthWatch    func()
+	unregisterAnyHealthWatch func()
 	unregisterSysPolicyWatch func()
 	portpoll                 *portlist.Poller // may be nil
 	portpollOnce             sync.Once        // guards starting readPoller
@@ -609,6 +610,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.unregisterNetMon = netMon.RegisterChangeCallback(b.linkChange)
 
 	b.unregisterHealthWatch = b.health.RegisterWatcher(b.onHealthChange)
+	b.unregisterAnyHealthWatch = b.health.RegisterAnyWatcher(b.onAnyHealthChange)
 
 	if tunWrap, ok := b.sys.Tun.GetOK(); ok {
 		tunWrap.PeerAPIPort = b.GetPeerAPIPort
@@ -968,15 +970,16 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 }
 
 func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthyState) {
-	if w == nil {
-		return
-	}
 	if us == nil {
 		b.logf("health(warnable=%s): ok", w.Code)
 	} else {
 		b.logf("health(warnable=%s): error: %s", w.Code, us.Text)
 	}
 
+	b.onAnyHealthChange()
+}
+
+func (b *LocalBackend) onAnyHealthChange() {
 	// Whenever health changes, send the current health state to the frontend.
 	state := b.health.CurrentState()
 	b.send(ipn.Notify{
@@ -1127,6 +1130,7 @@ func (b *LocalBackend) Shutdown() {
 
 	b.unregisterNetMon()
 	b.unregisterHealthWatch()
+	b.unregisterAnyHealthWatch()
 	b.unregisterSysPolicyWatch()
 	if cc != nil {
 		cc.Shutdown()
