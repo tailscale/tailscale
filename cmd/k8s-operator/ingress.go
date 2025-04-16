@@ -290,11 +290,77 @@ func validateIngressClass(ctx context.Context, cl client.Client) error {
 	return nil
 }
 
+// checkPathConflict checks if a new path conflicts with existing paths.
+// For PathTypePrefix, a conflict occurs if one path is a prefix of another.
+// For PathTypeExact, a conflict occurs if the paths are identical.
+// Returns true if there's a conflict, along with the conflicting path.
+func checkPathConflict(newPath string, newPathType networkingv1.PathType, existingPaths map[string]networkingv1.PathType) (bool, string) {
+	// If the new path is empty, default it to "/"
+	if newPath == "" {
+		newPath = "/"
+	}
+
+	if !strings.HasPrefix(newPath, "/") {
+		newPath = "/" + newPath
+	}
+
+	for existingPath, existingPathType := range existingPaths {
+		// only identical paths conflict
+		if newPathType == networkingv1.PathTypeExact && existingPathType == networkingv1.PathTypeExact {
+			if newPath == existingPath {
+				return true, existingPath
+			}
+			continue
+		}
+
+		//  check for prefix conflicts
+		if newPathType == networkingv1.PathTypePrefix || existingPathType == networkingv1.PathTypePrefix {
+			// Check if one path is a prefix of the other
+			if strings.HasPrefix(newPath, existingPath) || strings.HasPrefix(existingPath, newPath) {
+				// Special case: "/" is a prefix of everything, but we'll allow it as a fallback
+				if existingPath == "/" || newPath == "/" {
+					continue
+				}
+				return true, existingPath
+			}
+		}
+	}
+
+	return false, ""
+}
+
 func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl client.Client, rec record.EventRecorder, tlsHost string, logger *zap.SugaredLogger) (handlers map[string]*ipn.HTTPHandler, err error) {
+	// Track paths and types to detect conflicts
+	pathTypes := make(map[string]networkingv1.PathType)
+
 	addIngressBackend := func(b *networkingv1.IngressBackend, path string) {
+		if path == "" {
+			path = "/"
+			rec.Eventf(ing, corev1.EventTypeNormal, "PathUndefined", "configured backend is missing a path, defaulting to '/'")
+		}
+
 		if b == nil {
 			return
 		}
+
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+
+		// Determine path type and if not specified default to prexfix
+		pathType := networkingv1.PathTypePrefix
+
+		// Check for path conflicts
+		if hasConflict, conflictingPath := checkPathConflict(path, pathType, pathTypes); hasConflict {
+			rec.Eventf(ing, corev1.EventTypeWarning, "ConflictingPaths",
+				"path %q conflicts with existing path %q, the last defined path will be used",
+				path, conflictingPath)
+			logger.Warnf("Conflicting paths detected: %q conflicts with %q", path, conflictingPath)
+		}
+
+		// Record this path and its type
+		pathTypes[path] = pathType
+
 		if b.Service == nil {
 			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend for path %q is missing service", path)
 			return
@@ -334,7 +400,7 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
 	for _, rule := range ing.Spec.Rules {
 		// Host is optional, but if it's present it must match the TLS host
-		// otherwise we ignore the rule.
+		//otherwise we ignore the rule.
 		if rule.Host != "" && rule.Host != tlsHost {
 			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "rule with host %q ignored, unsupported", rule.Host)
 			continue

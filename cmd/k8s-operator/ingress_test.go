@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"go.uber.org/zap"
@@ -15,6 +16,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -418,6 +420,293 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 	expectReconciled(t, ingR, "default", "test")
 	expectMissing[corev1.Service](t, fc, "operator-ns", metricsResourceName(shortName))
 	// ServiceMonitor gets garbage collected when the Service is deleted - we cannot test that here.
+}
+
+func TestPathConflictDetection(t *testing.T) {
+	tests := []struct {
+		name           string
+		newPath        string
+		newPathType    networkingv1.PathType
+		existingPaths  map[string]networkingv1.PathType
+		expectConflict bool
+		conflictPath   string
+	}{
+		{
+			name:           "no conflict with different paths",
+			newPath:        "/path1",
+			newPathType:    networkingv1.PathTypePrefix,
+			existingPaths:  map[string]networkingv1.PathType{"/path2": networkingv1.PathTypePrefix},
+			expectConflict: false,
+		},
+		{
+			name:           "conflict with prefix path",
+			newPath:        "/parent/child",
+			newPathType:    networkingv1.PathTypePrefix,
+			existingPaths:  map[string]networkingv1.PathType{"/parent": networkingv1.PathTypePrefix},
+			expectConflict: true,
+			conflictPath:   "/parent",
+		},
+		{
+			name:           "conflict with prefix path (reverse order)",
+			newPath:        "/parent",
+			newPathType:    networkingv1.PathTypePrefix,
+			existingPaths:  map[string]networkingv1.PathType{"/parent/child": networkingv1.PathTypePrefix},
+			expectConflict: true,
+			conflictPath:   "/parent/child",
+		},
+		{
+			name:           "conflict with exact path",
+			newPath:        "/same-path",
+			newPathType:    networkingv1.PathTypeExact,
+			existingPaths:  map[string]networkingv1.PathType{"/same-path": networkingv1.PathTypeExact},
+			expectConflict: true,
+			conflictPath:   "/same-path",
+		},
+		{
+			name:           "no conflict with different exact paths",
+			newPath:        "/exact1",
+			newPathType:    networkingv1.PathTypeExact,
+			existingPaths:  map[string]networkingv1.PathType{"/exact2": networkingv1.PathTypeExact},
+			expectConflict: false,
+		},
+		{
+			name:           "no conflict between exact and prefix with different paths",
+			newPath:        "/exact-path",
+			newPathType:    networkingv1.PathTypeExact,
+			existingPaths:  map[string]networkingv1.PathType{"/prefix-path": networkingv1.PathTypePrefix},
+			expectConflict: false,
+		},
+		{
+			name:           "conflict between exact and prefix with same path",
+			newPath:        "/mixed-type",
+			newPathType:    networkingv1.PathTypeExact,
+			existingPaths:  map[string]networkingv1.PathType{"/mixed-type": networkingv1.PathTypePrefix},
+			expectConflict: true,
+			conflictPath:   "/mixed-type",
+		},
+		{
+			name:           "root path does not conflict with other paths",
+			newPath:        "/",
+			newPathType:    networkingv1.PathTypePrefix,
+			existingPaths:  map[string]networkingv1.PathType{"/some-path": networkingv1.PathTypePrefix},
+			expectConflict: false,
+		},
+		{
+			name:           "path normalization - empty path",
+			newPath:        "",
+			newPathType:    networkingv1.PathTypePrefix,
+			existingPaths:  map[string]networkingv1.PathType{"/": networkingv1.PathTypePrefix},
+			expectConflict: false,
+		},
+		{
+			name:           "path normalization - missing leading slash",
+			newPath:        "no-leading-slash",
+			newPathType:    networkingv1.PathTypePrefix,
+			existingPaths:  map[string]networkingv1.PathType{"/no-leading-slash": networkingv1.PathTypePrefix},
+			expectConflict: true,
+			conflictPath:   "/no-leading-slash",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasConflict, conflictPath := checkPathConflict(tt.newPath, tt.newPathType, tt.existingPaths)
+			if hasConflict != tt.expectConflict {
+				t.Errorf("checkPathConflict() hasConflict = %v, want %v", hasConflict, tt.expectConflict)
+			}
+			if hasConflict && conflictPath != tt.conflictPath {
+				t.Errorf("checkPathConflict() conflictPath = %v, want %v", conflictPath, tt.conflictPath)
+			}
+		})
+	}
+}
+
+func TestHandlersForIngressWithConflictingPaths(t *testing.T) {
+	// Create a test ingress with conflicting paths
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			// Add a default backend for the root path
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "default-service",
+					Port: networkingv1.ServiceBackendPort{Number: 8000},
+				},
+			},
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: "",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/parent",
+									PathType: ptr.To(networkingv1.PathTypePrefix),
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "parent-service",
+											Port: networkingv1.ServiceBackendPort{Number: 8080},
+										},
+									},
+								},
+								{
+									Path:     "/parent/child",
+									PathType: ptr.To(networkingv1.PathTypePrefix),
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "child-service",
+											Port: networkingv1.ServiceBackendPort{Number: 8081},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Create fake client with services
+	defaultService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-service",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.0",
+			Ports:     []corev1.ServicePort{{Port: 8000}},
+		},
+	}
+
+	parentService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "parent-service",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.1",
+			Ports:     []corev1.ServicePort{{Port: 8080}},
+		},
+	}
+
+	childService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child-service",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.2",
+			Ports:     []corev1.ServicePort{{Port: 8081}},
+		},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(ing, defaultService, parentService, childService).
+		Build()
+
+	// Create a recorder to capture events
+	recorder := &fakeRecorder{}
+
+	// Create a logger
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := zl.Sugar()
+
+	// Call handlersForIngress
+	handlers, err := handlersForIngress(context.Background(), ing, fc, recorder, "", logger)
+	if err != nil {
+		t.Fatalf("handlersForIngress() error = %v", err)
+	}
+
+	// Verify that handlers map contains paths
+	// We should have 3 handlers: "/" (default), "/parent", and "/parent/child"
+	// Even though there's a conflict, our implementation currently keeps both paths
+	// and just issues a warning
+	if len(handlers) != 3 {
+		t.Errorf("Expected 3 handlers, got %d", len(handlers))
+	}
+
+	// Verify that the handlers map contains the expected paths
+	if _, ok := handlers["/"]; !ok {
+		t.Errorf("Expected handler for path \"/\" but it was not found")
+	}
+
+	if _, ok := handlers["/parent"]; !ok {
+		t.Errorf("Expected handler for path \"/parent\" but it was not found")
+	}
+
+	if _, ok := handlers["/parent/child"]; !ok {
+		t.Errorf("Expected handler for path \"/parent/child\" but it was not found")
+	}
+
+	// Verify that a warning event was recorded for the conflicting paths
+	hasConflictEvent := false
+	for _, event := range recorder.events {
+		if event.eventType == corev1.EventTypeWarning && event.reason == "ConflictingPaths" {
+			hasConflictEvent = true
+			break
+		}
+	}
+
+	if !hasConflictEvent {
+		t.Errorf("Expected a ConflictingPaths warning event, but none was recorded")
+	}
+}
+
+// fakeRecorder is a simple implementation of the EventRecorder interface for testing
+type fakeRecorder struct {
+	events []struct {
+		object    interface{}
+		eventType string
+		reason    string
+		message   string
+	}
+}
+
+func (f *fakeRecorder) Event(object runtime.Object, eventType, reason, message string) {
+	f.events = append(f.events, struct {
+		object    interface{}
+		eventType string
+		reason    string
+		message   string
+	}{
+		object:    object,
+		eventType: eventType,
+		reason:    reason,
+		message:   message,
+	})
+}
+
+func (f *fakeRecorder) Eventf(object runtime.Object, eventType, reason, messageFmt string, args ...interface{}) {
+	var message string
+	if len(args) > 0 {
+		message = fmt.Sprintf(messageFmt, args...)
+	} else {
+		message = messageFmt
+	}
+	f.events = append(f.events, struct {
+		object    interface{}
+		eventType string
+		reason    string
+		message   string
+	}{
+		object:    object,
+		eventType: eventType,
+		reason:    reason,
+		message:   message,
+	})
+}
+
+func (f *fakeRecorder) AnnotatedEventf(object runtime.Object, annotations map[string]string, eventType, reason, messageFmt string, args ...interface{}) {
+	f.Eventf(object, eventType, reason, messageFmt, args...)
 }
 
 func TestIngressLetsEncryptStaging(t *testing.T) {
