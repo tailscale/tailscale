@@ -551,7 +551,7 @@ func TestHandlePeerAPI(t *testing.T) {
 					e.ph.ps.taildrop = taildrop.ManagerOptions{
 						Logf: e.logBuf.Logf,
 						Dir:  rootDir,
-					}.New()
+					}.New(nil)
 				}
 			}
 			for _, req := range tt.reqs {
@@ -594,7 +594,7 @@ func TestFileDeleteRace(t *testing.T) {
 		taildrop: taildrop.ManagerOptions{
 			Logf: t.Logf,
 			Dir:  dir,
-		}.New(),
+		}.New(nil),
 	}
 	ph := &peerAPIHandler{
 		isSelf: true,
