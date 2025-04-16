@@ -28,6 +28,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/views"
 	"tailscale.com/util/httpm"
 )
@@ -1508,7 +1509,7 @@ func TestCSRFProtect(t *testing.T) {
 		}
 	})
 	h := s.withCSRF(mux)
-	ser := httptest.NewServer(h)
+	ser := nettest.NewHTTPServer(nettest.GetNetwork(t), h)
 	defer ser.Close()
 
 	jar, err := cookiejar.New(nil)

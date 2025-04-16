@@ -12,20 +12,21 @@ import (
 	"time"
 
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/util/eventbus"
 )
 
 func TestCreateOrGetMapping(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), nil)
+	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
 	defer c.Close()
 	c.SetLocalPort(1234)
 	for i := range 2 {
 		if i > 0 {
 			time.Sleep(100 * time.Millisecond)
 		}
-		ext, err := c.createOrGetMapping(context.Background())
+		_, ext, err := c.createOrGetMapping(context.Background())
 		t.Logf("Got: %v, %v", ext, err)
 	}
 }
@@ -34,7 +35,7 @@ func TestClientProbe(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), nil)
+	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
 	defer c.Close()
 	for i := range 3 {
 		if i > 0 {
@@ -49,13 +50,13 @@ func TestClientProbeThenMap(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), nil)
+	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
 	defer c.Close()
 	c.debug.VerboseLogs = true
 	c.SetLocalPort(1234)
 	res, err := c.Probe(context.Background())
 	t.Logf("Probe: %+v, %v", res, err)
-	ext, err := c.createOrGetMapping(context.Background())
+	_, ext, err := c.createOrGetMapping(context.Background())
 	t.Logf("createOrGetMapping: %v, %v", ext, err)
 }
 
@@ -66,9 +67,8 @@ func TestProbeIntegration(t *testing.T) {
 	}
 	defer igd.Close()
 
-	c := newTestClient(t, igd)
+	c := newTestClient(t, igd, nil)
 	t.Logf("Listening on pxp=%v, upnp=%v", c.testPxPPort, c.testUPnPPort)
-	defer c.Close()
 
 	res, err := c.Probe(context.Background())
 	if err != nil {
@@ -101,8 +101,7 @@ func TestPCPIntegration(t *testing.T) {
 	}
 	defer igd.Close()
 
-	c := newTestClient(t, igd)
-	defer c.Close()
+	c := newTestClient(t, igd, nil)
 	res, err := c.Probe(context.Background())
 	if err != nil {
 		t.Fatalf("probe failed: %v", err)
@@ -114,7 +113,7 @@ func TestPCPIntegration(t *testing.T) {
 		t.Fatalf("probe did not see pcp: %+v", res)
 	}
 
-	external, err := c.createOrGetMapping(context.Background())
+	_, external, err := c.createOrGetMapping(context.Background())
 	if err != nil {
 		t.Fatalf("failed to get mapping: %v", err)
 	}
@@ -135,4 +134,30 @@ func TestGetUPnPErrorsMetric(t *testing.T) {
 	getUPnPErrorsMetric(100)
 	getUPnPErrorsMetric(0)
 	getUPnPErrorsMetric(-100)
+}
+
+func TestUpdateEvent(t *testing.T) {
+	igd, err := NewTestIGD(t.Logf, TestIGDOptions{PCP: true})
+	if err != nil {
+		t.Fatalf("Create test gateway: %v", err)
+	}
+
+	bus := eventbus.New()
+	defer bus.Close()
+
+	sub := eventbus.Subscribe[Mapping](bus.Client("TestUpdateEvent"))
+	c := newTestClient(t, igd, bus)
+	if _, err := c.Probe(t.Context()); err != nil {
+		t.Fatalf("Probe failed: %v", err)
+	}
+	c.GetCachedMappingOrStartCreatingOne()
+
+	select {
+	case evt := <-sub.Events():
+		t.Logf("Received portmap update: %+v", evt)
+	case <-sub.Done():
+		t.Error("Subscriber closed prematurely")
+	case <-time.After(5 * time.Second):
+		t.Error("Timed out waiting for an update event")
+	}
 }

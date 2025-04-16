@@ -46,7 +46,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		logf: logger.WithPrefix(logf, "tun1: "),
 		traf: traf,
 	}
-	s1 := new(tsd.System)
+	s1 := tsd.NewSystem()
 	e1, err := wgengine.NewUserspaceEngine(l1, wgengine.Config{
 		Router:        router.NewFake(l1),
 		NetMon:        nil,
@@ -73,7 +73,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		logf: logger.WithPrefix(logf, "tun2: "),
 		traf: traf,
 	}
-	s2 := new(tsd.System)
+	s2 := tsd.NewSystem()
 	e2, err := wgengine.NewUserspaceEngine(l2, wgengine.Config{
 		Router:        router.NewFake(l2),
 		NetMon:        nil,

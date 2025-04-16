@@ -24,6 +24,9 @@ spec:
           jsonPath: .status.devices[?(@.url != "")].url
           name: URL
           type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
       name: v1alpha1
       schema:
         openAPIV3Schema:

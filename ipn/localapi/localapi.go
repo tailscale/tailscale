@@ -56,6 +56,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httphdr"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -818,23 +819,31 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 	done := make(chan bool, 1)
 
 	var c *portmapper.Client
-	c = portmapper.NewClient(logger.WithPrefix(logf, "portmapper: "), h.b.NetMon(), debugKnobs, h.b.ControlKnobs(), func() {
-		logf("portmapping changed.")
-		logf("have mapping: %v", c.HaveMapping())
+	c = portmapper.NewClient(portmapper.Config{
+		Logf:         logger.WithPrefix(logf, "portmapper: "),
+		NetMon:       h.b.NetMon(),
+		DebugKnobs:   debugKnobs,
+		ControlKnobs: h.b.ControlKnobs(),
+		OnChange: func() {
+			logf("portmapping changed.")
+			logf("have mapping: %v", c.HaveMapping())
 
-		if ext, ok := c.GetCachedMappingOrStartCreatingOne(); ok {
-			logf("cb: mapping: %v", ext)
-			select {
-			case done <- true:
-			default:
+			if ext, ok := c.GetCachedMappingOrStartCreatingOne(); ok {
+				logf("cb: mapping: %v", ext)
+				select {
+				case done <- true:
+				default:
+				}
+				return
 			}
-			return
-		}
-		logf("cb: no mapping")
+			logf("cb: no mapping")
+		},
 	})
 	defer c.Close()
 
-	netMon, err := netmon.New(logger.WithPrefix(logf, "monitor: "))
+	bus := eventbus.New()
+	defer bus.Close()
+	netMon, err := netmon.New(bus, logger.WithPrefix(logf, "monitor: "))
 	if err != nil {
 		logf("error creating monitor: %v", err)
 		return

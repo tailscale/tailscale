@@ -61,7 +61,7 @@ func NewFileServer() (*FileServer, error) {
 	}, nil
 }
 
-// generateSecretToken generates a hex-encoded 256 bit secet.
+// generateSecretToken generates a hex-encoded 256 bit secret.
 func generateSecretToken() (string, error) {
 	tokenBytes := make([]byte, 32)
 	_, err := rand.Read(tokenBytes)
@@ -142,6 +142,10 @@ func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(parts) < 2 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	r.URL.Path = shared.Join(parts[2:]...)
 	share := parts[1]
 	s.sharesMu.RLock()

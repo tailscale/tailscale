@@ -34,6 +34,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/must"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
@@ -643,9 +644,12 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.isSelf = false
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
+	bus := eventbus.New()
+	defer bus.Close()
+
 	ht := new(health.Tracker)
 	reg := new(usermetric.Registry)
-	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg)
+	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, bus)
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 	h.ps = &peerAPIServer{
 		b: &LocalBackend{
@@ -695,9 +699,12 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
+		bus := eventbus.New()
+		defer bus.Close()
+
 		ht := new(health.Tracker)
 		reg := new(usermetric.Registry)
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, bus)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 		var a *appc.AppConnector
 		if shouldStore {
@@ -768,10 +775,12 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
+		bus := eventbus.New()
+		defer bus.Close()
 		rc := &appctest.RouteCollector{}
 		ht := new(health.Tracker)
 		reg := new(usermetric.Registry)
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, bus)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 		var a *appc.AppConnector
 		if shouldStore {
@@ -833,10 +842,12 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
+		bus := eventbus.New()
+		defer bus.Close()
 		ht := new(health.Tracker)
 		reg := new(usermetric.Registry)
 		rc := &appctest.RouteCollector{}
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, bus)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 		var a *appc.AppConnector
 		if shouldStore {

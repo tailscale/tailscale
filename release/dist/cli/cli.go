@@ -65,6 +65,7 @@ func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
 					fs.StringVar(&buildArgs.manifest, "manifest", "", "manifest file to write")
 					fs.BoolVar(&buildArgs.verbose, "verbose", false, "verbose logging")
 					fs.StringVar(&buildArgs.webClientRoot, "web-client-root", "", "path to root of web client source to build")
+					fs.StringVar(&buildArgs.outPath, "out", "", "path to write output artifacts (defaults to '$PWD/dist' if not set)")
 					return fs
 				})(),
 				LongHelp: strings.TrimSpace(`
@@ -156,6 +157,7 @@ var buildArgs struct {
 	manifest      string
 	verbose       bool
 	webClientRoot string
+	outPath       string
 }
 
 func runBuild(ctx context.Context, filters []string, targets []dist.Target) error {
@@ -172,7 +174,11 @@ func runBuild(ctx context.Context, filters []string, targets []dist.Target) erro
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
-	b, err := dist.NewBuild(wd, filepath.Join(wd, "dist"))
+	outPath := filepath.Join(wd, "dist")
+	if buildArgs.outPath != "" {
+		outPath = buildArgs.outPath
+	}
+	b, err := dist.NewBuild(wd, outPath)
 	if err != nil {
 		return fmt.Errorf("creating build context: %w", err)
 	}

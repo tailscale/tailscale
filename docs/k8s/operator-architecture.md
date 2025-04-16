@@ -131,11 +131,11 @@ flowchart TD
 
 [Documentation][kb-operator-l7-ingress]
 
-L7 ingress is relatively similar to L3 ingress. It is configured via an
-`Ingress` object instead of a `Service`, and uses `tailscale serve` to accept
-traffic instead of configuring `iptables` or `nftables` rules. Note that we use
-tailscaled's local API (`SetServeConfig`) to set serve config, not the
-`tailscale serve` command.
+The L7 ingress architecture diagram is relatively similar to L3 ingress. It is
+configured via an `Ingress` object instead of a `Service`, and uses
+`tailscale serve` to accept traffic instead of configuring `iptables` or
+`nftables` rules. Note that we use tailscaled's local API (`SetServeConfig`) to
+set serve config, not the `tailscale serve` command.
 
 ```mermaid
 %%{ init: { 'theme':'neutral' } }%%
@@ -157,6 +157,10 @@ flowchart TD
             ingress-pod(("ingress proxy (dst)")):::tsnode
             config-secret["config Secret"]
             state-secret["state Secret"]
+        end
+
+        subgraph cluster-scope[Cluster scoped resources]
+            ingress-class[Tailscale IngressClass]
         end
 
         subgraph defaultns[namespace=default]
@@ -260,6 +264,8 @@ flowchart TD
 
 ## `ProxyGroup`
 
+### Egress
+
 [Documentation][kb-operator-l3-egress-proxygroup]
 
 The `ProxyGroup` custom resource manages a collection of proxy Pods that
@@ -277,8 +283,6 @@ egress target. The operator maps from these ports to randomly chosen ephemeral
 ports via the ClusterIP Service and its EndpointSlice. The operator then
 generates the egress ConfigMap that tells the `ProxyGroup` Pods which incoming
 ports map to which egress targets.
-
-`ProxyGroups` currently only support egress.
 
 ```mermaid
 %%{ init: { 'theme':'neutral' } }%%
@@ -361,6 +365,86 @@ flowchart LR
     linkStyle 9 stroke:blue;
     linkStyle 10 stroke:blue;
     linkStyle 11 stroke:blue;
+
+```
+
+### Ingress
+
+A ProxyGroup can also serve as a highly available set of proxies for an
+Ingress resource. The `-0` Pod is always the replica that will issue a certificate
+from Let's Encrypt.
+
+If the same Ingress config is applied in multiple clusters, ProxyGroup proxies
+from each cluster will be valid targets for the ts.net DNS name, and the proxy
+each client is routed to will depend on the same rules as for [high availability][kb-ha]
+subnet routers, and is encoded in the client's netmap.
+
+```mermaid
+%%{ init: { 'theme':'neutral' } }%%
+flowchart LR
+    classDef tsnode color:#fff,fill:#000;
+    classDef pod fill:#fff;
+
+    subgraph Key
+        ts[Tailscale device]:::tsnode
+        pod((Pod)):::pod
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
+    end
+
+    subgraph k8s[Kubernetes cluster]
+        subgraph tailscale-ns[namespace=tailscale]
+            operator((operator)):::tsnode
+            ingress-sts["StatefulSet"]
+            serve-cm[serve config ConfigMap]
+            ingress-0(("pg-0 (dst)")):::tsnode
+            ingress-1(("pg-1 (dst)")):::tsnode
+            tls-secret[myapp.tails.ts.net Secret]
+        end
+
+        subgraph defaultns[namespace=default]
+            ingress[myapp.tails.ts.net Ingress]
+            svc["myapp Service"]
+            svc --> pod1((pod1))
+            svc --> pod2((pod2))
+        end
+
+        subgraph cluster[Cluster scoped resources]
+            ingress-class[Tailscale IngressClass]
+            pg[ProxyGroup 'pg']
+        end
+    end
+
+    control["Tailscale control plane"]
+    ts-svc["myapp Tailscale Service"]
+
+    client["client (src)"]:::tsnode -->|dials https\://myapp.tails.ts.net/api| ingress-1
+    ingress-0 -->|forwards traffic| svc
+    ingress-1 -->|forwards traffic| svc
+    control -.->|creates| ts-svc
+    operator -.->|creates myapp Tailscale Service| control
+    control -.->|netmap points myapp Tailscale Service to pg-1| client
+    operator -.->|creates| ingress-sts
+    ingress-sts -.->|manages| ingress-0
+    ingress-sts -.->|manages| ingress-1
+    ingress-0 -.->|issues myapp.tails.ts.net cert| le[Let's Encrypt]
+    ingress-0 -.->|stores cert| tls-secret
+    ingress-1 -.->|reads cert| tls-secret
+    operator -.->|watches| ingress
+    operator -.->|watches| pg
+    operator -.->|creates| serve-cm
+    serve-cm -.->|mounted| ingress-0
+    serve-cm -.->|mounted| ingress-1
+    ingress -.->|/api prefix| svc
+
+    linkStyle 0 stroke:red;
+    linkStyle 4 stroke:red;
+
+    linkStyle 1 stroke:blue;
+    linkStyle 2 stroke:blue;
+    linkStyle 3 stroke:blue;
+    linkStyle 5 stroke:blue;
+    linkStyle 6 stroke:blue;
 
 ```
 
@@ -514,4 +598,5 @@ flowchart TD
 [kb-operator-connector]: https://tailscale.com/kb/1441/kubernetes-operator-connector
 [kb-operator-app-connector]: https://tailscale.com/kb/1517/kubernetes-operator-app-connector
 [kb-operator-recorder]: https://tailscale.com/kb/1484/kubernetes-operator-deploying-tsrecorder
+[kb-ha]: https://tailscale.com/kb/1115/high-availability
 [k8s-impersonation]: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#user-impersonation

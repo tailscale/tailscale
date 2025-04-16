@@ -16,13 +16,14 @@ import (
 )
 
 func TestIsNetstack(t *testing.T) {
-	sys := new(tsd.System)
+	sys := tsd.NewSystem()
 	e, err := wgengine.NewUserspaceEngine(
 		tstest.WhileTestRunningLogger(t),
 		wgengine.Config{
 			SetSubsystem:  sys.Set,
 			HealthTracker: sys.HealthTracker(),
 			Metrics:       sys.UserMetricsRegistry(),
+			EventBus:      sys.Bus.Get(),
 		},
 	)
 	if err != nil {
@@ -66,7 +67,7 @@ func TestIsNetstackRouter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sys := &tsd.System{}
+			sys := tsd.NewSystem()
 			if tt.setNetstackRouter {
 				sys.NetstackRouter.Set(true)
 			}
@@ -74,6 +75,7 @@ func TestIsNetstackRouter(t *testing.T) {
 			conf.SetSubsystem = sys.Set
 			conf.HealthTracker = sys.HealthTracker()
 			conf.Metrics = sys.UserMetricsRegistry()
+			conf.EventBus = sys.Bus.Get()
 			e, err := wgengine.NewUserspaceEngine(logger.Discard, conf)
 			if err != nil {
 				t.Fatal(err)

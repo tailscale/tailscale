@@ -270,10 +270,7 @@ func (c *Client) FetchRenewalInfo(ctx context.Context, leaf []byte) (*RenewalInf
 		return nil, fmt.Errorf("parsing leaf certificate: %w", err)
 	}
 
-	renewalURL, err := c.getRenewalURL(parsedLeaf)
-	if err != nil {
-		return nil, fmt.Errorf("generating renewal info URL: %w", err)
-	}
+	renewalURL := c.getRenewalURL(parsedLeaf)
 
 	res, err := c.get(ctx, renewalURL, wantStatus(http.StatusOK))
 	if err != nil {
@@ -288,16 +285,20 @@ func (c *Client) FetchRenewalInfo(ctx context.Context, leaf []byte) (*RenewalInf
 	return &info, nil
 }
 
-func (c *Client) getRenewalURL(cert *x509.Certificate) (string, error) {
+func (c *Client) getRenewalURL(cert *x509.Certificate) string {
 	// See https://www.ietf.org/archive/id/draft-ietf-acme-ari-04.html#name-the-renewalinfo-resource
 	// for how the request URL is built.
 	url := c.dir.RenewalInfoURL
 	if !strings.HasSuffix(url, "/") {
 		url += "/"
 	}
+	return url + certRenewalIdentifier(cert)
+}
+
+func certRenewalIdentifier(cert *x509.Certificate) string {
 	aki := base64.RawURLEncoding.EncodeToString(cert.AuthorityKeyId)
 	serial := base64.RawURLEncoding.EncodeToString(cert.SerialNumber.Bytes())
-	return fmt.Sprintf("%s%s.%s", url, aki, serial), nil
+	return aki + "." + serial
 }
 
 // AcceptTOS always returns true to indicate the acceptance of a CA's Terms of Service

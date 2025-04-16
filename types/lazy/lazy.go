@@ -120,9 +120,9 @@ func (z *SyncValue[T]) PeekErr() (v T, err error, ok bool) {
 	return zero, nil, false
 }
 
-// TB is a subset of testing.TB that we use to set up test helpers.
+// testing_TB is a subset of testing.TB that we use to set up test helpers.
 // It's defined here to avoid pulling in the testing package.
-type TB interface {
+type testing_TB interface {
 	Helper()
 	Cleanup(func())
 }
@@ -132,7 +132,9 @@ type TB interface {
 // subtests complete.
 // It is not safe for concurrent use and must not be called concurrently with
 // any SyncValue methods, including another call to itself.
-func (z *SyncValue[T]) SetForTest(tb TB, val T, err error) {
+//
+// The provided tb should be a [*testing.T] or [*testing.B].
+func (z *SyncValue[T]) SetForTest(tb testing_TB, val T, err error) {
 	tb.Helper()
 
 	oldErr, oldVal := z.err.Load(), z.v

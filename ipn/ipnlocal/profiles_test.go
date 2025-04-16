@@ -33,7 +33,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 	newProfile := func(t *testing.T, loginName string) ipn.PrefsView {
 		id++
 		t.Helper()
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		p := pm.CurrentPrefs().AsStruct()
 		p.Persist = &persist.Persist{
 			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
@@ -88,7 +88,7 @@ func TestProfileList(t *testing.T) {
 	newProfile := func(t *testing.T, loginName string) ipn.PrefsView {
 		id++
 		t.Helper()
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		p := pm.CurrentPrefs().AsStruct()
 		p.Persist = &persist.Persist{
 			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
@@ -162,7 +162,7 @@ func TestProfileDupe(t *testing.T) {
 		must.Do(pm.SetPrefs(prefs.View(), ipn.NetworkProfile{}))
 	}
 	login := func(pm *profileManager, p *persist.Persist) {
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		reauth(pm, p)
 	}
 
@@ -399,7 +399,7 @@ func TestProfileManagement(t *testing.T) {
 	checkProfiles(t)
 
 	t.Logf("Create new profile")
-	pm.NewProfile()
+	pm.SwitchToNewProfile()
 	wantCurProfile = ""
 	wantProfiles[""] = defaultPrefs
 	checkProfiles(t)
@@ -438,7 +438,7 @@ func TestProfileManagement(t *testing.T) {
 	checkProfiles(t)
 
 	t.Logf("Create new profile - 2")
-	pm.NewProfile()
+	pm.SwitchToNewProfile()
 	wantCurProfile = ""
 	wantProfiles[""] = defaultPrefs
 	checkProfiles(t)
@@ -550,7 +550,7 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	{
 		t.Logf("Create new profile")
-		pm.NewProfile()
+		pm.SwitchToNewProfile()
 		wantCurProfile = ""
 		wantProfiles[""] = defaultPrefs
 		checkProfiles(t)

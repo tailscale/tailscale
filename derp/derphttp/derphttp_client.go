@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -587,7 +588,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 //
 // The primary use for this is the derper mesh mode to connect to each
 // other over a VPC network.
-func (c *Client) SetURLDialer(dialer func(ctx context.Context, network, addr string) (net.Conn, error)) {
+func (c *Client) SetURLDialer(dialer netx.DialFunc) {
 	c.dialer = dialer
 }
 

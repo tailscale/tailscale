@@ -51,7 +51,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
@@ -1140,18 +1139,9 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 
 	n1.AwaitResponding()
 	n1.MustUp()
-
-	wantIP4 := n1.AwaitIP4()
 	n1.AwaitRunning()
 
-	status, err := n1.Status()
-	if err != nil {
-		t.Fatalf("failed to get node status: %v", err)
-	}
-	selfDNSName, err := dnsname.ToFQDN(status.Self.DNSName)
-	if err != nil {
-		t.Fatalf("error converting self dns name to fqdn: %v", err)
-	}
+	const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
 
 	cases := []struct {
 		network     string
@@ -1167,9 +1157,9 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		err = tstest.WaitFor(time.Second*5, func() error {
+		err := tstest.WaitFor(time.Second*5, func() error {
 			m := new(dns.Msg)
-			m.SetQuestion(selfDNSName.WithTrailingDot(), dns.TypeA)
+			m.SetQuestion(dnsSymbolicFQDN, dns.TypeA)
 			conn, err := net.DialTimeout(c.network, net.JoinHostPort(c.serviceAddr.String(), "53"), time.Second*1)
 			if err != nil {
 				return err
@@ -1194,8 +1184,8 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 				return fmt.Errorf("unexpected answer type: %s", resp.Answer[0])
 			}
 			gotAddr = answer.A
-			if !bytes.Equal(gotAddr, wantIP4.AsSlice()) {
-				return fmt.Errorf("got (%s) != want (%s)", gotAddr, wantIP4)
+			if !bytes.Equal(gotAddr, tsaddr.TailscaleServiceIP().AsSlice()) {
+				return fmt.Errorf("got (%s) != want (%s)", gotAddr, tsaddr.TailscaleServiceIP())
 			}
 			return nil
 		})

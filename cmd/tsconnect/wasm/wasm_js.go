@@ -100,7 +100,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 	logtail := logtail.NewLogger(c, log.Printf)
 	logf := logtail.Logf
 
-	sys := new(tsd.System)
+	sys := tsd.NewSystem()
 	sys.Set(store)
 	dialer := &tsdial.Dialer{Logf: logf}
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{

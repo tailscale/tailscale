@@ -48,11 +48,9 @@ var (
 	procDestroyWindow                      = moduser32.NewProc("DestroyWindow")
 	procDispatchMessageW                   = moduser32.NewProc("DispatchMessageW")
 	procGetMessageW                        = moduser32.NewProc("GetMessageW")
-	procGetWindowLongPtrW                  = moduser32.NewProc("GetWindowLongPtrW")
 	procPostQuitMessage                    = moduser32.NewProc("PostQuitMessage")
 	procRegisterClassExW                   = moduser32.NewProc("RegisterClassExW")
 	procSendMessageW                       = moduser32.NewProc("SendMessageW")
-	procSetWindowLongPtrW                  = moduser32.NewProc("SetWindowLongPtrW")
 	procTranslateMessage                   = moduser32.NewProc("TranslateMessage")
 	procWTSRegisterSessionNotificationEx   = modwtsapi32.NewProc("WTSRegisterSessionNotificationEx")
 	procWTSUnRegisterSessionNotificationEx = modwtsapi32.NewProc("WTSUnRegisterSessionNotificationEx")
@@ -98,15 +96,6 @@ func getMessage(lpMsg *_MSG, hwnd windows.HWND, msgMin uint32, msgMax uint32) (r
 	return
 }
 
-func getWindowLongPtr(hwnd windows.HWND, index int32) (res uintptr, err error) {
-	r0, _, e1 := syscall.Syscall(procGetWindowLongPtrW.Addr(), 2, uintptr(hwnd), uintptr(index), 0)
-	res = uintptr(r0)
-	if res == 0 && e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
 func postQuitMessage(exitCode int32) {
 	syscall.Syscall(procPostQuitMessage.Addr(), 1, uintptr(exitCode), 0, 0)
 	return
@@ -124,15 +113,6 @@ func registerClassEx(windowClass *_WNDCLASSEX) (atom uint16, err error) {
 func sendMessage(hwnd windows.HWND, msg uint32, wparam uintptr, lparam uintptr) (res uintptr) {
 	r0, _, _ := syscall.Syscall6(procSendMessageW.Addr(), 4, uintptr(hwnd), uintptr(msg), uintptr(wparam), uintptr(lparam), 0, 0)
 	res = uintptr(r0)
-	return
-}
-
-func setWindowLongPtr(hwnd windows.HWND, index int32, newLong uintptr) (res uintptr, err error) {
-	r0, _, e1 := syscall.Syscall(procSetWindowLongPtrW.Addr(), 3, uintptr(hwnd), uintptr(index), uintptr(newLong))
-	res = uintptr(r0)
-	if res == 0 && e1 != 0 {
-		err = errnoErr(e1)
-	}
 	return
 }
 

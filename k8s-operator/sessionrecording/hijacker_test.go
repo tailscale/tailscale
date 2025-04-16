@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/k8s-operator/sessionrecording/fakes"
-	"tailscale.com/sessionrecording"
+	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
@@ -80,7 +80,7 @@ func Test_Hijacker(t *testing.T) {
 			h := &Hijacker{
 				connectToRecorder: func(context.Context,
 					[]netip.AddrPort,
-					sessionrecording.DialFunc,
+					netx.DialFunc,
 				) (wc io.WriteCloser, rec []*tailcfg.SSHRecordingAttempt, _ <-chan error, err error) {
 					if tt.failRecorderConnect {
 						err = errors.New("test")

@@ -9,10 +9,10 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"tailscale.com/tstest/deptest"
+	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/key"
 )
 
@@ -36,15 +36,15 @@ func TestGetServeConfigFromJSON(t *testing.T) {
 }
 
 func TestWhoIsPeerNotFound(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	nw := nettest.GetNetwork(t)
+	ts := nettest.NewHTTPServer(nw, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
 	}))
 	defer ts.Close()
 
 	lc := &Client{
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			var std net.Dialer
-			return std.DialContext(ctx, network, ts.Listener.Addr().(*net.TCPAddr).String())
+			return nw.Dial(ctx, network, ts.Listener.Addr().String())
 		},
 	}
 	var k key.NodePublic

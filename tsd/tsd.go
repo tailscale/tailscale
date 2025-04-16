@@ -26,13 +26,13 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
-	"tailscale.com/ipn/desktop"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/proxymap"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
@@ -40,7 +40,12 @@ import (
 )
 
 // System contains all the subsystems of a Tailscale node (tailscaled, etc.)
+//
+// A valid System value must always have a non-nil Bus populated.  Callers must
+// ensure this before using the value further. Call [NewSystem] to obtain a
+// value ready to use.
 type System struct {
+	Bus            SubSystem[*eventbus.Bus]
 	Dialer         SubSystem[*tsdial.Dialer]
 	DNSManager     SubSystem[*dns.Manager] // can get its *resolver.Resolver from DNSManager.Resolver
 	Engine         SubSystem[wgengine.Engine]
@@ -53,7 +58,6 @@ type System struct {
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
 	DriveForLocal  SubSystem[drive.FileSystemForLocal]
 	DriveForRemote SubSystem[drive.FileSystemForRemote]
-	SessionManager SubSystem[desktop.SessionManager]
 
 	// InitialConfig is initial server config, if any.
 	// It is nil if the node is not in declarative mode.
@@ -72,6 +76,14 @@ type System struct {
 	userMetricsRegistry usermetric.Registry
 }
 
+// NewSystem constructs a new otherwise-empty [System] with a
+// freshly-constructed event bus populated.
+func NewSystem() *System {
+	sys := new(System)
+	sys.Set(eventbus.New())
+	return sys
+}
+
 // NetstackImpl is the interface that *netstack.Impl implements.
 // It's an interface for circular dependency reasons: netstack.Impl
 // references LocalBackend, and LocalBackend has a tsd.System.
@@ -84,6 +96,8 @@ type NetstackImpl interface {
 // has already been set.
 func (s *System) Set(v any) {
 	switch v := v.(type) {
+	case *eventbus.Bus:
+		s.Bus.Set(v)
 	case *netmon.Monitor:
 		s.NetMon.Set(v)
 	case *dns.Manager:
@@ -112,8 +126,6 @@ func (s *System) Set(v any) {
 		s.DriveForLocal.Set(v)
 	case drive.FileSystemForRemote:
 		s.DriveForRemote.Set(v)
-	case desktop.SessionManager:
-		s.SessionManager.Set(v)
 	default:
 		panic(fmt.Sprintf("unknown type %T", v))
 	}

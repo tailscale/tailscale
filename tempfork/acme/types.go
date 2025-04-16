@@ -391,6 +391,30 @@ type orderNotAfterOpt time.Time
 
 func (orderNotAfterOpt) privateOrderOpt() {}
 
+// WithOrderReplacesCert indicates that this Order is for a replacement of an
+// existing certificate.
+// See https://datatracker.ietf.org/doc/html/draft-ietf-acme-ari-03#section-5
+func WithOrderReplacesCert(cert *x509.Certificate) OrderOption {
+	return orderReplacesCert{cert}
+}
+
+type orderReplacesCert struct {
+	cert *x509.Certificate
+}
+
+func (orderReplacesCert) privateOrderOpt() {}
+
+// WithOrderReplacesCertDER indicates that this Order is for a replacement of
+// an existing DER-encoded certificate.
+// See https://datatracker.ietf.org/doc/html/draft-ietf-acme-ari-03#section-5
+func WithOrderReplacesCertDER(der []byte) OrderOption {
+	return orderReplacesCertDER(der)
+}
+
+type orderReplacesCertDER []byte
+
+func (orderReplacesCertDER) privateOrderOpt() {}
+
 // Authorization encodes an authorization response.
 type Authorization struct {
 	// URI uniquely identifies a authorization.

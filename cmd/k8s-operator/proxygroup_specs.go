@@ -197,6 +197,16 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 	// This mechanism currently (2025-01-26) rely on the local health check being accessible on the Pod's
 	// IP, so they are not supported for ProxyGroups where users have configured TS_LOCAL_ADDR_PORT to a custom
 	// value.
+	//
+	// NB: For _Ingress_ ProxyGroups, we run shutdown logic within containerboot
+	// in reaction to a SIGTERM signal instead of using a pre-stop hook. This is
+	// because Ingress pods need to unadvertise services, and it's preferable to
+	// avoid triggering those side-effects from a GET request that would be
+	// accessible to the whole cluster network (in the absence of NetworkPolicy
+	// rules).
+	//
+	// TODO(tomhjp): add a readiness probe or gate to Ingress Pods. There is a
+	// small window where the Pod is marked ready but routing can still fail.
 	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress && !hasLocalAddrPortSet(proxyClass) {
 		c.Lifecycle = &corev1.Lifecycle{
 			PreStop: &corev1.LifecycleHandler{

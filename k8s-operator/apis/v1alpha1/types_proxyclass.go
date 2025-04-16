@@ -16,6 +16,7 @@ var ProxyClassKind = "ProxyClass"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ProxyClassReady")].reason`,description="Status of the ProxyClass."
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // ProxyClass describes a set of configuration parameters that can be applied to
 // proxy resources created by the Tailscale Kubernetes operator.

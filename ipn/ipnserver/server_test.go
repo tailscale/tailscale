@@ -517,12 +517,12 @@ type newControlClientFn func(tb testing.TB, opts controlclient.Options) controlc
 func newLocalBackendWithTestControl(tb testing.TB, newControl newControlClientFn, enableLogging bool) *ipnlocal.LocalBackend {
 	tb.Helper()
 
-	sys := &tsd.System{}
+	sys := tsd.NewSystem()
 	store := &mem.Store{}
 	sys.Set(store)
 
 	logf := testLogger(tb, enableLogging)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		tb.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}

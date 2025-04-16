@@ -1499,6 +1499,51 @@ func TestParseNLArgs(t *testing.T) {
 	}
 }
 
+// makeQuietContinueOnError modifies c recursively to make all the
+// flagsets have error mode flag.ContinueOnError and not
+// spew all over stderr.
+func makeQuietContinueOnError(c *ffcli.Command) {
+	if c.FlagSet != nil {
+		c.FlagSet.Init(c.Name, flag.ContinueOnError)
+		c.FlagSet.Usage = func() {}
+		c.FlagSet.SetOutput(io.Discard)
+	}
+	c.UsageFunc = func(*ffcli.Command) string { return "" }
+	for _, sub := range c.Subcommands {
+		makeQuietContinueOnError(sub)
+	}
+}
+
+// see tailscale/tailscale#6813
+func TestNoDups(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "dup-boolean",
+			args: []string{"up", "--json", "--json"},
+			want: "error parsing commandline arguments: invalid boolean flag json: flag provided multiple times",
+		},
+		{
+			name: "dup-string",
+			args: []string{"up", "--hostname=foo", "--hostname=bar"},
+			want: "error parsing commandline arguments: invalid value \"bar\" for flag -hostname: flag provided multiple times",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			makeQuietContinueOnError(cmd)
+			err := cmd.Parse(tt.args)
+			if got := fmt.Sprint(err); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHelpAlias(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	tstest.Replace[io.Writer](t, &Stdout, &stdout)

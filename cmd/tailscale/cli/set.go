@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -22,6 +23,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/version"
 )
@@ -62,6 +64,7 @@ type setArgsT struct {
 	snat                   bool
 	statefulFiltering      bool
 	netfilterMode          string
+	relayServerPort        string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -82,6 +85,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, hidden+"allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
+	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", hidden+"UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -233,6 +237,15 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			}
 		}
 	}
+
+	if setArgs.relayServerPort != "" {
+		uport, err := strconv.ParseUint(setArgs.relayServerPort, 10, 16)
+		if err != nil {
+			return fmt.Errorf("failed to set relay server port: %v", err)
+		}
+		maskedPrefs.Prefs.RelayServerPort = ptr.To(int(uport))
+	}
+
 	checkPrefs := curPrefs.Clone()
 	checkPrefs.ApplyEdits(maskedPrefs)
 	if err := localClient.CheckPrefs(ctx, checkPrefs); err != nil {

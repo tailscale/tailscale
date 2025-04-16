@@ -549,10 +549,7 @@ func TestGetRenewalURL(t *testing.T) {
 	}
 
 	client := newTestClientWithMockDirectory()
-	urlString, err := client.getRenewalURL(parsedLeaf)
-	if err != nil {
-		t.Fatal(err)
-	}
+	urlString := client.getRenewalURL(parsedLeaf)
 
 	parsedURL, err := url.Parse(urlString)
 	if err != nil {

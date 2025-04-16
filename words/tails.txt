@@ -720,3 +720,5 @@ mining
 coat
 follow
 stalk
+caudal
+chronicle

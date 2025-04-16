@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"tailscale.com/net/netmon"
+	"tailscale.com/util/eventbus"
 )
 
 type conn struct {
@@ -72,7 +73,10 @@ func TestCheckReversePathFiltering(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skipf("skipping on %s", runtime.GOOS)
 	}
-	netMon, err := netmon.New(t.Logf)
+	bus := eventbus.New()
+	defer bus.Close()
+
+	netMon, err := netmon.New(bus, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}

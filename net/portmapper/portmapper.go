@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 )
 
 var disablePortMapperEnv = envknob.RegisterBool("TS_DISABLE_PORTMAPPER")
@@ -84,6 +85,11 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 
 // Client is a port mapping client.
 type Client struct {
+	// The following two fields must either both be nil, or both non-nil.
+	// Both are immutable after construction.
+	pubClient *eventbus.Client
+	updates   *eventbus.Publisher[Mapping]
+
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
 	controlKnobs *controlknobs.Knobs
@@ -201,32 +207,56 @@ func (m *pmpMapping) Release(ctx context.Context) {
 	uc.WriteToUDPAddrPort(pkt, m.gw)
 }
 
-// NewClient returns a new portmapping client.
-//
-// The netMon parameter is required.
-//
-// The debug argument allows configuring the behaviour of the portmapper for
-// debugging; if nil, a sensible set of defaults will be used.
-//
-// The controlKnobs, if non-nil, specifies the control knobs from the control
-// plane that might disable portmapping.
-//
-// The optional onChange argument specifies a func to run in a new goroutine
-// whenever the port mapping status has changed. If nil, it doesn't make a
-// callback.
-func NewClient(logf logger.Logf, netMon *netmon.Monitor, debug *DebugKnobs, controlKnobs *controlknobs.Knobs, onChange func()) *Client {
-	if netMon == nil {
+// Config carries the settings for a [Client].
+type Config struct {
+	// EventBus, if non-nil, is used for event publication and subscription by
+	// portmapper clients created from this config.
+	//
+	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
+	// become required non-nil.
+	EventBus *eventbus.Bus
+
+	// Logf is called to generate text logs for the client. If nil, logger.Discard is used.
+	Logf logger.Logf
+
+	// NetMon is the network monitor used by the client. It must be non-nil.
+	NetMon *netmon.Monitor
+
+	// DebugKnobs, if non-nil, configure the behaviour of the portmapper for
+	// debugging.  If nil, a sensible set of defaults will be used.
+	DebugKnobs *DebugKnobs
+
+	// ControlKnobs, if non-nil, specifies knobs from the control plane that
+	// might disable port mapping.
+	ControlKnobs *controlknobs.Knobs
+
+	// OnChange is called to run in a new goroutine whenever the port mapping
+	// status has changed. If nil, no callback is issued.
+	OnChange func()
+}
+
+// NewClient constructs a new portmapping [Client] from c. It will panic if any
+// required parameters are omitted.
+func NewClient(c Config) *Client {
+	if c.NetMon == nil {
 		panic("nil netMon")
 	}
 	ret := &Client{
-		logf:         logf,
-		netMon:       netMon,
+		logf:         c.Logf,
+		netMon:       c.NetMon,
 		ipAndGateway: netmon.LikelyHomeRouterIP, // TODO(bradfitz): move this to method on netMon
-		onChange:     onChange,
-		controlKnobs: controlKnobs,
+		onChange:     c.OnChange,
+		controlKnobs: c.ControlKnobs,
 	}
-	if debug != nil {
-		ret.debug = *debug
+	if c.EventBus != nil {
+		ret.pubClient = c.EventBus.Client("portmapper")
+		ret.updates = eventbus.Publish[Mapping](ret.pubClient)
+	}
+	if ret.logf == nil {
+		ret.logf = logger.Discard
+	}
+	if c.DebugKnobs != nil {
+		ret.debug = *c.DebugKnobs
 	}
 	return ret
 }
@@ -256,6 +286,10 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	c.invalidateMappingsLocked(true)
+	if c.updates != nil {
+		c.updates.Close()
+		c.pubClient.Close()
+	}
 	// TODO: close some future ever-listening UDP socket(s),
 	// waiting for multicast announcements from router.
 	return nil
@@ -467,11 +501,30 @@ func (c *Client) createMapping() {
 		c.runningCreate = false
 	}()
 
-	if _, err := c.createOrGetMapping(ctx); err == nil && c.onChange != nil {
-		go c.onChange()
-	} else if err != nil && !IsNoMappingError(err) {
-		c.logf("createOrGetMapping: %v", err)
+	mapping, _, err := c.createOrGetMapping(ctx)
+	if err != nil {
+		if !IsNoMappingError(err) {
+			c.logf("createOrGetMapping: %v", err)
+		}
+		return
 	}
+	c.updates.Publish(Mapping{
+		External:  mapping.External(),
+		Type:      mapping.MappingType(),
+		GoodUntil: mapping.GoodUntil(),
+	})
+	if c.onChange != nil {
+		go c.onChange()
+	}
+}
+
+// Mapping is an event recording the allocation of a port mapping.
+type Mapping struct {
+	External  netip.AddrPort
+	Type      string
+	GoodUntil time.Time
+
+	// TODO(creachadair): Record whether we reused an existing mapping?
 }
 
 // wildcardIP is used when the previous external IP is not known for PCP port mapping.
@@ -482,19 +535,19 @@ var wildcardIP = netip.MustParseAddr("0.0.0.0")
 //
 // If no mapping is available, the error will be of type
 // NoMappingError; see IsNoMappingError.
-func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPort, err error) {
+func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, external netip.AddrPort, err error) {
 	if c.debug.disableAll() {
-		return netip.AddrPort{}, NoMappingError{ErrPortMappingDisabled}
+		return nil, netip.AddrPort{}, NoMappingError{ErrPortMappingDisabled}
 	}
 	if c.debug.DisableUPnP && c.debug.DisablePCP && c.debug.DisablePMP {
-		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
+		return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
-		return netip.AddrPort{}, NoMappingError{ErrGatewayRange}
+		return nil, netip.AddrPort{}, NoMappingError{ErrGatewayRange}
 	}
 	if gw.Is6() {
-		return netip.AddrPort{}, NoMappingError{ErrGatewayIPv6}
+		return nil, netip.AddrPort{}, NoMappingError{ErrGatewayIPv6}
 	}
 
 	now := time.Now()
@@ -523,6 +576,17 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 			return
 		}
 
+		// TODO(creachadair): This is more subtle than it should be. Ideally we
+		// would just return the mapping directly, but there are many different
+		// paths through the function with carefully-balanced locks, and not all
+		// the paths have a mapping to return. As a workaround, while we're here
+		// doing cleanup under the lock, grab the final mapping value and return
+		// it, so the caller does not need to grab the lock again and potentially
+		// race with a later update. The mapping itself is concurrency-safe.
+		//
+		// We should restructure this code so the locks are properly scoped.
+		mapping = c.mapping
+
 		// Print the internal details of each mapping if we're being verbose.
 		if c.debug.VerboseLogs {
 			c.logf("successfully obtained mapping: now=%d external=%v type=%s mapping=%s",
@@ -548,7 +612,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		if now.Before(m.RenewAfter()) {
 			defer c.mu.Unlock()
 			reusedExisting = true
-			return m.External(), nil
+			return nil, m.External(), nil
 		}
 		// The mapping might still be valid, so just try to renew it.
 		prevPort = m.External().Port()
@@ -557,10 +621,10 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 	if c.debug.DisablePCP && c.debug.DisablePMP {
 		c.mu.Unlock()
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
-			return external, nil
+			return nil, external, nil
 		}
 		c.vlogf("fallback to UPnP due to PCP and PMP being disabled failed")
-		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
+		return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 
 	// If we just did a Probe (e.g. via netchecker) but didn't
@@ -587,16 +651,16 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		c.mu.Unlock()
 		// fallback to UPnP portmapping
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
-			return external, nil
+			return nil, external, nil
 		}
 		c.vlogf("fallback to UPnP due to no PCP and PMP failed")
-		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
+		return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 	c.mu.Unlock()
 
 	uc, err := c.listenPacket(ctx, "udp4", ":0")
 	if err != nil {
-		return netip.AddrPort{}, err
+		return nil, netip.AddrPort{}, err
 	}
 	defer uc.Close()
 
@@ -616,7 +680,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 			if neterror.TreatAsLostUDP(err) {
 				err = NoMappingError{ErrNoPortMappingServices}
 			}
-			return netip.AddrPort{}, err
+			return nil, netip.AddrPort{}, err
 		}
 	} else {
 		// Ask for our external address if needed.
@@ -625,7 +689,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 				if neterror.TreatAsLostUDP(err) {
 					err = NoMappingError{ErrNoPortMappingServices}
 				}
-				return netip.AddrPort{}, err
+				return nil, netip.AddrPort{}, err
 			}
 		}
 
@@ -634,7 +698,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 			if neterror.TreatAsLostUDP(err) {
 				err = NoMappingError{ErrNoPortMappingServices}
 			}
-			return netip.AddrPort{}, err
+			return nil, netip.AddrPort{}, err
 		}
 	}
 
@@ -643,13 +707,13 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		n, src, err := uc.ReadFromUDPAddrPort(res)
 		if err != nil {
 			if ctx.Err() == context.Canceled {
-				return netip.AddrPort{}, err
+				return nil, netip.AddrPort{}, err
 			}
 			// fallback to UPnP portmapping
 			if mapping, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
-				return mapping, nil
+				return nil, mapping, nil
 			}
-			return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
+			return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 		}
 		src = netaddr.Unmap(src)
 		if !src.IsValid() {
@@ -665,7 +729,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 					continue
 				}
 				if pres.ResultCode != 0 {
-					return netip.AddrPort{}, NoMappingError{fmt.Errorf("PMP response Op=0x%x,Res=0x%x", pres.OpCode, pres.ResultCode)}
+					return nil, netip.AddrPort{}, NoMappingError{fmt.Errorf("PMP response Op=0x%x,Res=0x%x", pres.OpCode, pres.ResultCode)}
 				}
 				if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr {
 					m.external = netip.AddrPortFrom(pres.PublicAddr, m.external.Port())
@@ -683,7 +747,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 				if err != nil {
 					c.logf("failed to get PCP mapping: %v", err)
 					// PCP should only have a single packet response
-					return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
+					return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 				}
 				pcpMapping.c = c
 				pcpMapping.internal = m.internal
@@ -691,10 +755,10 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 				c.mu.Lock()
 				defer c.mu.Unlock()
 				c.mapping = pcpMapping
-				return pcpMapping.external, nil
+				return pcpMapping, pcpMapping.external, nil
 			default:
 				c.logf("unknown PMP/PCP version number: %d %v", version, res[:n])
-				return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
+				return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 			}
 		}
 
@@ -702,7 +766,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			c.mapping = m
-			return m.external, nil
+			return nil, m.external, nil
 		}
 	}
 }

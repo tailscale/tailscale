@@ -417,7 +417,7 @@ func (h *peerAPIHandler) handleServeIngress(w http.ResponseWriter, r *http.Reque
 	}
 	logAndError := func(code int, publicMsg string) {
 		h.logf("ingress: bad request from %v: %s", h.remoteAddr, publicMsg)
-		http.Error(w, publicMsg, http.StatusMethodNotAllowed)
+		http.Error(w, publicMsg, code)
 	}
 	bad := func(publicMsg string) {
 		logAndError(http.StatusBadRequest, publicMsg)

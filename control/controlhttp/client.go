@@ -44,6 +44,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -494,7 +495,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 		dns = a.resolver()
 	}
 
-	var dialer dnscache.DialContextFunc
+	var dialer netx.DialFunc
 	if a.Dialer != nil {
 		dialer = a.Dialer
 	} else {

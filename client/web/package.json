@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "license": "BSD-3-Clause",
   "engines": {
-    "node": "18.20.4",
+    "node": "22.14.0",
     "yarn": "1.22.19"
   },
   "type": "module",
@@ -20,7 +20,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
-    "@types/node": "^18.16.1",
+    "@types/node": "^22.14.0",
     "@types/react": "^18.0.20",
     "@types/react-dom": "^18.0.6",
     "@vitejs/plugin-react-swc": "^3.6.0",

@@ -259,7 +259,7 @@ var addMetricTestHook, setMetricTestHook syncs.AtomicValue[metricFn]
 
 // SetHooksForTest sets the specified addMetric and setMetric functions
 // as the metric functions for the duration of tb and all its subtests.
-func SetHooksForTest(tb internal.TB, addMetric, setMetric metricFn) {
+func SetHooksForTest(tb testenv.TB, addMetric, setMetric metricFn) {
 	oldAddMetric := addMetricTestHook.Swap(addMetric)
 	oldSetMetric := setMetricTestHook.Swap(setMetric)
 	tb.Cleanup(func() {

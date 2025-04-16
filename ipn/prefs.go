@@ -246,6 +246,14 @@ type Prefs struct {
 	// by name.
 	DriveShares []*drive.Share
 
+	// RelayServerPort is the UDP port number for the relay server to bind to,
+	// on all interfaces. A non-nil zero value signifies a random unused port
+	// should be used. A nil value signifies relay server functionality
+	// should be disabled. This field is currently experimental, and therefore
+	// no guarantees are made about its current naming and functionality when
+	// non-nil/enabled.
+	RelayServerPort *int `json:",omitempty"`
+
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
 	// peers got /32 or /127 routes for each other.
@@ -337,6 +345,7 @@ type MaskedPrefs struct {
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
 	DriveSharesSet            bool                `json:",omitempty"`
+	RelayServerPortSet        bool                `json:",omitempty"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -555,6 +564,9 @@ func (p *Prefs) pretty(goos string) string {
 	}
 	sb.WriteString(p.AutoUpdate.Pretty())
 	sb.WriteString(p.AppConnector.Pretty())
+	if p.RelayServerPort != nil {
+		fmt.Fprintf(&sb, "relayServerPort=%d ", *p.RelayServerPort)
+	}
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -581,7 +593,7 @@ func (p PrefsView) Equals(p2 PrefsView) bool {
 }
 
 func (p *Prefs) Equals(p2 *Prefs) bool {
-	if p == nil && p2 == nil {
+	if p == p2 {
 		return true
 	}
 	if p == nil || p2 == nil {
@@ -607,16 +619,17 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&
 		p.ForceDaemon == p2.ForceDaemon &&
-		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
-		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
-		compareStrings(p.AdvertiseServices, p2.AdvertiseServices) &&
+		slices.Equal(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
+		slices.Equal(p.AdvertiseTags, p2.AdvertiseTags) &&
+		slices.Equal(p.AdvertiseServices, p2.AdvertiseServices) &&
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&
 		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
-		p.NetfilterKind == p2.NetfilterKind
+		p.NetfilterKind == p2.NetfilterKind &&
+		compareIntPtrs(p.RelayServerPort, p2.RelayServerPort)
 }
 
 func (au AutoUpdatePrefs) Pretty() string {
@@ -636,28 +649,14 @@ func (ap AppConnectorPrefs) Pretty() string {
 	return ""
 }
 
-func compareIPNets(a, b []netip.Prefix) bool {
-	if len(a) != len(b) {
+func compareIntPtrs(a, b *int) bool {
+	if (a == nil) != (b == nil) {
 		return false
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
+	if a == nil {
+		return true
 	}
-	return true
-}
-
-func compareStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return *a == *b
 }
 
 // NewPrefs returns the default preferences to use.
@@ -1014,4 +1013,27 @@ type LoginProfile struct {
 	// ControlURL is the URL of the control server that this profile is logged
 	// into.
 	ControlURL string
+}
+
+// Equals reports whether p and p2 are equal.
+func (p LoginProfileView) Equals(p2 LoginProfileView) bool {
+	return p.ж.Equals(p2.ж)
+}
+
+// Equals reports whether p and p2 are equal.
+func (p *LoginProfile) Equals(p2 *LoginProfile) bool {
+	if p == p2 {
+		return true
+	}
+	if p == nil || p2 == nil {
+		return false
+	}
+	return p.ID == p2.ID &&
+		p.Name == p2.Name &&
+		p.NetworkProfile == p2.NetworkProfile &&
+		p.Key == p2.Key &&
+		p.UserProfile.Equal(&p2.UserProfile) &&
+		p.NodeID == p2.NodeID &&
+		p.LocalUserID == p2.LocalUserID &&
+		p.ControlURL == p2.ControlURL
 }

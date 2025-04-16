@@ -31,6 +31,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
@@ -739,7 +740,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	return out, nil
 }
 
-func (f *forwarder) getDialerType() dnscache.DialContextFunc {
+func (f *forwarder) getDialerType() netx.DialFunc {
 	if f.controlKnobs != nil && f.controlKnobs.UserDialUseRoutes.Load() {
 		// It is safe to use UserDial as it dials external servers without going through Tailscale
 		// and closes connections on interface change in the same way as SystemDial does,

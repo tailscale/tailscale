@@ -435,8 +435,11 @@ func (s *Server) Close() error {
 	for _, ln := range s.listeners {
 		ln.closeLocked()
 	}
-
 	wg.Wait()
+
+	if bus := s.sys.Bus.Get(); bus != nil {
+		bus.Close()
+	}
 	s.closed = true
 	return nil
 }
@@ -558,13 +561,13 @@ func (s *Server) start() (reterr error) {
 		s.Logf(format, a...)
 	}
 
-	sys := new(tsd.System)
+	sys := tsd.NewSystem()
 	s.sys = sys
 	if err := s.startLogger(&closePool, sys.HealthTracker(), tsLogf); err != nil {
 		return err
 	}
 
-	s.netMon, err = netmon.New(tsLogf)
+	s.netMon, err = netmon.New(sys.Bus.Get(), tsLogf)
 	if err != nil {
 		return err
 	}
@@ -572,6 +575,7 @@ func (s *Server) start() (reterr error) {
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
+		EventBus:      sys.Bus.Get(),
 		ListenPort:    s.Port,
 		NetMon:        s.netMon,
 		Dialer:        s.dialer,

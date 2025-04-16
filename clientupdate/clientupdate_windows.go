@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/sys/windows"
@@ -34,6 +35,12 @@ const (
 	// It is used to re-launch the GUI process (tailscale-ipn.exe) after
 	// install is complete.
 	winExePathEnv = "TS_UPDATE_WIN_EXE_PATH"
+	// winVersionEnv is the environment variable that is set along with
+	// winMSIEnv and carries the version of tailscale that is being installed.
+	// It is used for logging purposes.
+	winVersionEnv = "TS_UPDATE_WIN_VERSION"
+	// updaterPrefix is the prefix for the temporary executable created by [makeSelfCopy].
+	updaterPrefix = "tailscale-updater"
 )
 
 func makeSelfCopy() (origPathExe, tmpPathExe string, err error) {
@@ -46,7 +53,7 @@ func makeSelfCopy() (origPathExe, tmpPathExe string, err error) {
 		return "", "", err
 	}
 	defer f.Close()
-	f2, err := os.CreateTemp("", "tailscale-updater-*.exe")
+	f2, err := os.CreateTemp("", updaterPrefix+"-*.exe")
 	if err != nil {
 		return "", "", err
 	}
@@ -137,7 +144,7 @@ you can run the command prompt as Administrator one of these ways:
 	up.Logf("authenticode verification succeeded")
 
 	up.Logf("making tailscale.exe copy to switch to...")
-	up.cleanupOldDownloads(filepath.Join(os.TempDir(), "tailscale-updater-*.exe"))
+	up.cleanupOldDownloads(filepath.Join(os.TempDir(), updaterPrefix+"-*.exe"))
 	selfOrig, selfCopy, err := makeSelfCopy()
 	if err != nil {
 		return err
@@ -146,7 +153,7 @@ you can run the command prompt as Administrator one of these ways:
 	up.Logf("running tailscale.exe copy for final install...")
 
 	cmd := exec.Command(selfCopy, "update")
-	cmd.Env = append(os.Environ(), winMSIEnv+"="+msiTarget, winExePathEnv+"="+selfOrig)
+	cmd.Env = append(os.Environ(), winMSIEnv+"="+msiTarget, winExePathEnv+"="+selfOrig, winVersionEnv+"="+ver)
 	cmd.Stdout = up.Stderr
 	cmd.Stderr = up.Stderr
 	cmd.Stdin = os.Stdin
@@ -162,23 +169,62 @@ you can run the command prompt as Administrator one of these ways:
 func (up *Updater) installMSI(msi string) error {
 	var err error
 	for tries := 0; tries < 2; tries++ {
-		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/norestart", "/qn")
+		// msiexec.exe requires exclusive access to the log file, so create a dedicated one for each run.
+		installLogPath := up.startNewLogFile("tailscale-installer", os.Getenv(winVersionEnv))
+		up.Logf("Install log: %s", installLogPath)
+		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/norestart", "/qn", "/L*v", installLogPath)
 		cmd.Dir = filepath.Dir(msi)
 		cmd.Stdout = up.Stdout
 		cmd.Stderr = up.Stderr
 		cmd.Stdin = os.Stdin
 		err = cmd.Run()
-		if err == nil {
-			break
+		switch err := err.(type) {
+		case nil:
+			// Success.
+			return nil
+		case *exec.ExitError:
+			// For possible error codes returned by Windows Installer, see
+			// https://web.archive.org/web/20250409144914/https://learn.microsoft.com/en-us/windows/win32/msi/error-codes
+			switch windows.Errno(err.ExitCode()) {
+			case windows.ERROR_SUCCESS_REBOOT_REQUIRED:
+				// In most cases, updating Tailscale should not require a reboot.
+				// If it does, it might be because we failed to close the GUI
+				// and the installer couldn't replace tailscale-ipn.exe.
+				// The old GUI will continue to run until the next reboot.
+				// Not ideal, but also not a retryable error.
+				up.Logf("[unexpected] reboot required")
+				return nil
+			case windows.ERROR_SUCCESS_REBOOT_INITIATED:
+				// Same as above, but perhaps the device is configured to prompt
+				// the user to reboot and the user has chosen to reboot now.
+				up.Logf("[unexpected] reboot initiated")
+				return nil
+			case windows.ERROR_INSTALL_ALREADY_RUNNING:
+				// The Windows Installer service is currently busy.
+				// It could be our own install initiated by user/MDM/GP, another MSI install or perhaps a Windows Update install.
+				// Anyway, we can't do anything about it right now. The user (or tailscaled) can retry later.
+				// Retrying now will likely fail, and is risky since we might uninstall the current version
+				// and then fail to install the new one, leaving the user with no Tailscale at all.
+				//
+				// TODO(nickkhyl,awly): should we check if this is actually a downgrade before uninstalling the current version?
+				// Also, maybe keep retrying the install longer if we uninstalled the current version due to a failed install attempt?
+				up.Logf("another installation is already in progress")
+				return err
+			}
+		default:
+			// Everything else is a retryable error.
 		}
+
 		up.Logf("Install attempt failed: %v", err)
 		uninstallVersion := up.currentVersion
 		if v := os.Getenv("TS_DEBUG_UNINSTALL_VERSION"); v != "" {
 			uninstallVersion = v
 		}
+		uninstallLogPath := up.startNewLogFile("tailscale-uninstaller", uninstallVersion)
 		// Assume it's a downgrade, which msiexec won't permit. Uninstall our current version first.
 		up.Logf("Uninstalling current version %q for downgrade...", uninstallVersion)
-		cmd = exec.Command("msiexec.exe", "/x", msiUUIDForVersion(uninstallVersion), "/norestart", "/qn")
+		up.Logf("Uninstall log: %s", uninstallLogPath)
+		cmd = exec.Command("msiexec.exe", "/x", msiUUIDForVersion(uninstallVersion), "/norestart", "/qn", "/L*v", uninstallLogPath)
 		cmd.Stdout = up.Stdout
 		cmd.Stderr = up.Stderr
 		cmd.Stdin = os.Stdin
@@ -205,12 +251,14 @@ func (up *Updater) switchOutputToFile() (io.Closer, error) {
 	var logFilePath string
 	exePath, err := os.Executable()
 	if err != nil {
-		logFilePath = filepath.Join(os.TempDir(), "tailscale-updater.log")
+		logFilePath = up.startNewLogFile(updaterPrefix, os.Getenv(winVersionEnv))
 	} else {
-		logFilePath = strings.TrimSuffix(exePath, ".exe") + ".log"
+		// Use the same suffix as the self-copy executable.
+		suffix := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(exePath), updaterPrefix), ".exe")
+		logFilePath = up.startNewLogFile(updaterPrefix, os.Getenv(winVersionEnv)+suffix)
 	}
 
-	up.Logf("writing update output to %q", logFilePath)
+	up.Logf("writing update output to: %s", logFilePath)
 	logFile, err := os.Create(logFilePath)
 	if err != nil {
 		return nil, err
@@ -222,4 +270,21 @@ func (up *Updater) switchOutputToFile() (io.Closer, error) {
 	up.Stdout = logFile
 	up.Stderr = logFile
 	return logFile, nil
+}
+
+// startNewLogFile returns a name for a new log file.
+// It cleans up any old log files with the same baseNamePrefix.
+func (up *Updater) startNewLogFile(baseNamePrefix, baseNameSuffix string) string {
+	baseName := fmt.Sprintf("%s-%s-%s.log", baseNamePrefix,
+		time.Now().Format("20060102T150405"), baseNameSuffix)
+
+	dir := filepath.Join(os.Getenv("ProgramData"), "Tailscale", "Logs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		up.Logf("failed to create log directory: %v", err)
+		return filepath.Join(os.TempDir(), baseName)
+	}
+
+	// TODO(nickkhyl): preserve up to N old log files?
+	up.cleanupOldDownloads(filepath.Join(dir, baseNamePrefix+"-*.log"))
+	return filepath.Join(dir, baseName)
 }

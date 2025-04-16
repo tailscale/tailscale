@@ -4,16 +4,20 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"fmt"
+	"io"
+	"net"
 	"net/netip"
-	"slices"
 	"testing"
+	"time"
 
 	"github.com/gaissmai/bart"
-	"github.com/google/go-cmp/cmp"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/cmd/natc/ippool"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/must"
 )
 
 func prefixEqual(a, b netip.Prefix) bool {
@@ -43,22 +47,86 @@ func TestULA(t *testing.T) {
 	}
 }
 
+type recordingPacketConn struct {
+	writes [][]byte
+}
+
+func (w *recordingPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	w.writes = append(w.writes, b)
+	return len(b), nil
+}
+
+func (w *recordingPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	return 0, nil, io.EOF
+}
+
+func (w *recordingPacketConn) Close() error {
+	return nil
+}
+
+func (w *recordingPacketConn) LocalAddr() net.Addr {
+	return nil
+}
+
+func (w *recordingPacketConn) RemoteAddr() net.Addr {
+	return nil
+}
+
+func (w *recordingPacketConn) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (w *recordingPacketConn) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+func (w *recordingPacketConn) SetWriteDeadline(t time.Time) error {
+	return nil
+}
+
+type resolver struct {
+	resolves map[string][]netip.Addr
+	fails    map[string]bool
+}
+
+func (r *resolver) LookupNetIP(ctx context.Context, _net, host string) ([]netip.Addr, error) {
+	if addrs, ok := r.resolves[host]; ok {
+		return addrs, nil
+	}
+	if _, ok := r.fails[host]; ok {
+		return nil, &net.DNSError{IsTimeout: false, IsNotFound: false, Name: host, IsTemporary: true}
+	}
+	return nil, &net.DNSError{IsNotFound: true, Name: host}
+}
+
+type whois struct {
+	peers map[string]*apitype.WhoIsResponse
+}
+
+func (w *whois) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
+	addr := netip.MustParseAddrPort(remoteAddr).Addr().String()
+	if peer, ok := w.peers[addr]; ok {
+		return peer, nil
+	}
+	return nil, fmt.Errorf("peer not found")
+}
+
 func TestDNSResponse(t *testing.T) {
 	tests := []struct {
 		name        string
 		questions   []dnsmessage.Question
-		addrs       []netip.Addr
 		wantEmpty   bool
 		wantAnswers []struct {
 			name  string
 			qType dnsmessage.Type
 			addr  netip.Addr
 		}
+		wantNXDOMAIN bool
+		wantIgnored  bool
 	}{
 		{
 			name:        "empty_request",
 			questions:   []dnsmessage.Question{},
-			addrs:       []netip.Addr{},
 			wantEmpty:   false,
 			wantAnswers: nil,
 		},
@@ -71,7 +139,6 @@ func TestDNSResponse(t *testing.T) {
 					Class: dnsmessage.ClassINET,
 				},
 			},
-			addrs: []netip.Addr{netip.MustParseAddr("100.64.1.5")},
 			wantAnswers: []struct {
 				name  string
 				qType dnsmessage.Type
@@ -80,7 +147,7 @@ func TestDNSResponse(t *testing.T) {
 				{
 					name:  "example.com.",
 					qType: dnsmessage.TypeA,
-					addr:  netip.MustParseAddr("100.64.1.5"),
+					addr:  netip.MustParseAddr("100.64.0.0"),
 				},
 			},
 		},
@@ -93,7 +160,6 @@ func TestDNSResponse(t *testing.T) {
 					Class: dnsmessage.ClassINET,
 				},
 			},
-			addrs: []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0:a99c:0001:0505:0505:0505")},
 			wantAnswers: []struct {
 				name  string
 				qType dnsmessage.Type
@@ -102,7 +168,7 @@ func TestDNSResponse(t *testing.T) {
 				{
 					name:  "example.com.",
 					qType: dnsmessage.TypeAAAA,
-					addr:  netip.MustParseAddr("fd7a:115c:a1e0:a99c:0001:0505:0505:0505"),
+					addr:  netip.MustParseAddr("fd7a:115c:a1e0::"),
 				},
 			},
 		},
@@ -115,7 +181,6 @@ func TestDNSResponse(t *testing.T) {
 					Class: dnsmessage.ClassINET,
 				},
 			},
-			addrs:       []netip.Addr{},
 			wantAnswers: nil,
 		},
 		{
@@ -127,146 +192,220 @@ func TestDNSResponse(t *testing.T) {
 					Class: dnsmessage.ClassINET,
 				},
 			},
-			addrs:       []netip.Addr{},
 			wantAnswers: nil,
+		},
+		{
+			name: "nxdomain",
+			questions: []dnsmessage.Question{
+				{
+					Name:  dnsmessage.MustNewName("noexist.example.com."),
+					Type:  dnsmessage.TypeA,
+					Class: dnsmessage.ClassINET,
+				},
+			},
+			wantNXDOMAIN: true,
+		},
+		{
+			name: "servfail",
+			questions: []dnsmessage.Question{
+				{
+					Name:  dnsmessage.MustNewName("fail.example.com."),
+					Type:  dnsmessage.TypeA,
+					Class: dnsmessage.ClassINET,
+				},
+			},
+			wantEmpty: true, // TODO: pass through instead?
+		},
+		{
+			name: "ignored",
+			questions: []dnsmessage.Question{
+				{
+					Name:  dnsmessage.MustNewName("ignore.example.com."),
+					Type:  dnsmessage.TypeA,
+					Class: dnsmessage.ClassINET,
+				},
+			},
+			wantAnswers: []struct {
+				name  string
+				qType dnsmessage.Type
+				addr  netip.Addr
+			}{
+				{
+					name:  "ignore.example.com.",
+					qType: dnsmessage.TypeA,
+					addr:  netip.MustParseAddr("8.8.4.4"),
+				},
+			},
+			wantIgnored: true,
 		},
 	}
 
+	var rpc recordingPacketConn
+	remoteAddr := must.Get(net.ResolveUDPAddr("udp", "100.64.254.1:12345"))
+
+	routes, dnsAddr, addrPool := calculateAddresses([]netip.Prefix{netip.MustParsePrefix("10.64.0.0/24")})
+	v6ULA := ula(1)
+	c := connector{
+		resolver: &resolver{
+			resolves: map[string][]netip.Addr{
+				"example.com.": {
+					netip.MustParseAddr("8.8.8.8"),
+					netip.MustParseAddr("2001:4860:4860::8888"),
+				},
+				"ignore.example.com.": {
+					netip.MustParseAddr("8.8.4.4"),
+				},
+			},
+			fails: map[string]bool{
+				"fail.example.com.": true,
+			},
+		},
+		whois: &whois{
+			peers: map[string]*apitype.WhoIsResponse{
+				"100.64.254.1": {
+					Node: &tailcfg.Node{ID: 123},
+				},
+			},
+		},
+		ignoreDsts: &bart.Table[bool]{},
+		routes:     routes,
+		v6ULA:      v6ULA,
+		ipPool:     &ippool.IPPool{IPSet: addrPool},
+		dnsAddr:    dnsAddr,
+	}
+	c.ignoreDsts.Insert(netip.MustParsePrefix("8.8.4.4/32"), true)
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &dnsmessage.Message{
-				Header: dnsmessage.Header{
+			rb := dnsmessage.NewBuilder(nil,
+				dnsmessage.Header{
 					ID: 1234,
 				},
-				Questions: tc.questions,
+			)
+			must.Do(rb.StartQuestions())
+			for _, q := range tc.questions {
+				rb.Question(q)
 			}
 
-			resp, err := dnsResponse(req, tc.addrs)
+			c.handleDNS(&rpc, must.Get(rb.Finish()), remoteAddr)
+
+			writes := rpc.writes
+			rpc.writes = rpc.writes[:0]
+
+			if tc.wantEmpty {
+				if len(writes) != 0 {
+					t.Errorf("handleDNS() returned non-empty response when expected empty")
+				}
+				return
+			}
+
+			if !tc.wantEmpty && len(writes) != 1 {
+				t.Fatalf("handleDNS() returned an unexpected number of responses: %d, want 1", len(writes))
+			}
+
+			resp := writes[0]
+			var msg dnsmessage.Message
+			err := msg.Unpack(resp)
 			if err != nil {
-				t.Fatalf("dnsResponse() error = %v", err)
+				t.Fatalf("Failed to unpack response: %v", err)
 			}
 
-			if tc.wantEmpty && len(resp) != 0 {
-				t.Errorf("dnsResponse() returned non-empty response when expected empty")
+			if !msg.Header.Response {
+				t.Errorf("Response header is not set")
 			}
 
-			if !tc.wantEmpty && len(resp) == 0 {
-				t.Errorf("dnsResponse() returned empty response when expected non-empty")
+			if msg.Header.ID != 1234 {
+				t.Errorf("Response ID = %d, want %d", msg.Header.ID, 1234)
 			}
 
-			if len(resp) > 0 {
-				var msg dnsmessage.Message
-				err = msg.Unpack(resp)
-				if err != nil {
-					t.Fatalf("Failed to unpack response: %v", err)
-				}
+			if len(tc.wantAnswers) > 0 {
+				if len(msg.Answers) != len(tc.wantAnswers) {
+					t.Errorf("got %d answers, want %d:\n%s", len(msg.Answers), len(tc.wantAnswers), msg.GoString())
+				} else {
+					for i, want := range tc.wantAnswers {
+						ans := msg.Answers[i]
 
-				if !msg.Header.Response {
-					t.Errorf("Response header is not set")
-				}
+						gotName := ans.Header.Name.String()
+						if gotName != want.name {
+							t.Errorf("answer[%d] name = %s, want %s", i, gotName, want.name)
+						}
 
-				if msg.Header.ID != req.Header.ID {
-					t.Errorf("Response ID = %d, want %d", msg.Header.ID, req.Header.ID)
-				}
+						if ans.Header.Type != want.qType {
+							t.Errorf("answer[%d] type = %v, want %v", i, ans.Header.Type, want.qType)
+						}
 
-				if len(tc.wantAnswers) > 0 {
-					if len(msg.Answers) != len(tc.wantAnswers) {
-						t.Errorf("got %d answers, want %d", len(msg.Answers), len(tc.wantAnswers))
-					} else {
-						for i, want := range tc.wantAnswers {
-							ans := msg.Answers[i]
-
-							gotName := ans.Header.Name.String()
-							if gotName != want.name {
-								t.Errorf("answer[%d] name = %s, want %s", i, gotName, want.name)
+						switch want.qType {
+						case dnsmessage.TypeA:
+							if ans.Body.(*dnsmessage.AResource) == nil {
+								t.Errorf("answer[%d] not an A record", i)
+								continue
 							}
-
-							if ans.Header.Type != want.qType {
-								t.Errorf("answer[%d] type = %v, want %v", i, ans.Header.Type, want.qType)
+						case dnsmessage.TypeAAAA:
+							if ans.Body.(*dnsmessage.AAAAResource) == nil {
+								t.Errorf("answer[%d] not an AAAA record", i)
+								continue
 							}
+						}
 
-							var gotIP netip.Addr
+						var gotIP netip.Addr
+						switch want.qType {
+						case dnsmessage.TypeA:
+							resource := ans.Body.(*dnsmessage.AResource)
+							gotIP = netip.AddrFrom4([4]byte(resource.A))
+						case dnsmessage.TypeAAAA:
+							resource := ans.Body.(*dnsmessage.AAAAResource)
+							gotIP = netip.AddrFrom16([16]byte(resource.AAAA))
+						}
+
+						var wantIP netip.Addr
+						if tc.wantIgnored {
+							var net string
+							var fxSelectIP func(netip.Addr) bool
 							switch want.qType {
 							case dnsmessage.TypeA:
-								if ans.Body.(*dnsmessage.AResource) == nil {
-									t.Errorf("answer[%d] not an A record", i)
-									continue
+								net = "ip4"
+								fxSelectIP = func(a netip.Addr) bool {
+									return a.Is4()
 								}
-								resource := ans.Body.(*dnsmessage.AResource)
-								gotIP = netip.AddrFrom4([4]byte(resource.A))
 							case dnsmessage.TypeAAAA:
-								if ans.Body.(*dnsmessage.AAAAResource) == nil {
-									t.Errorf("answer[%d] not an AAAA record", i)
-									continue
+								//TODO(fran) is this branch exercised?
+								net = "ip6"
+								fxSelectIP = func(a netip.Addr) bool {
+									return a.Is6()
 								}
-								resource := ans.Body.(*dnsmessage.AAAAResource)
-								gotIP = netip.AddrFrom16([16]byte(resource.AAAA))
 							}
-
-							if gotIP != want.addr {
-								t.Errorf("answer[%d] IP = %s, want %s", i, gotIP, want.addr)
+							ips := must.Get(c.resolver.LookupNetIP(t.Context(), net, want.name))
+							for _, ip := range ips {
+								if fxSelectIP(ip) {
+									wantIP = ip
+									break
+								}
 							}
+						} else {
+							addr := must.Get(c.ipPool.IPForDomain(tailcfg.NodeID(123), want.name))
+							switch want.qType {
+							case dnsmessage.TypeA:
+								wantIP = addr
+							case dnsmessage.TypeAAAA:
+								wantIP = v6ForV4(v6ULA.Addr(), addr)
+							}
+						}
+						if gotIP != wantIP {
+							t.Errorf("answer[%d] IP = %s, want %s", i, gotIP, wantIP)
 						}
 					}
 				}
 			}
+
+			if tc.wantNXDOMAIN {
+				if msg.RCode != dnsmessage.RCodeNameError {
+					t.Errorf("expected NXDOMAIN, got %v", msg.RCode)
+				}
+				if len(msg.Answers) != 0 {
+					t.Errorf("expected no answers, got %d", len(msg.Answers))
+				}
+			}
 		})
-	}
-}
-
-func TestPerPeerState(t *testing.T) {
-	c := &connector{
-		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-	}
-	c.setPrefixes([]netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")})
-
-	ps := newPerPeerState(c)
-
-	addrs, err := ps.ipForDomain("example.com")
-	if err != nil {
-		t.Fatalf("ipForDomain() error = %v", err)
-	}
-
-	if len(addrs) != 2 {
-		t.Fatalf("ipForDomain() returned %d addresses, want 2", len(addrs))
-	}
-
-	v4 := addrs[0]
-	v6 := addrs[1]
-
-	if !v4.Is4() {
-		t.Errorf("First address is not IPv4: %s", v4)
-	}
-
-	if !v6.Is6() {
-		t.Errorf("Second address is not IPv6: %s", v6)
-	}
-
-	if !c.ipset.Contains(v4) {
-		t.Errorf("IPv4 address %s not in range %s", v4, c.ipset)
-	}
-
-	domain, ok := ps.domainForIP(v4)
-	if !ok {
-		t.Errorf("domainForIP(%s) not found", v4)
-	} else if domain != "example.com" {
-		t.Errorf("domainForIP(%s) = %s, want %s", v4, domain, "example.com")
-	}
-
-	domain, ok = ps.domainForIP(v6)
-	if !ok {
-		t.Errorf("domainForIP(%s) not found", v6)
-	} else if domain != "example.com" {
-		t.Errorf("domainForIP(%s) = %s, want %s", v6, domain, "example.com")
-	}
-
-	addrs2, err := ps.ipForDomain("example.com")
-	if err != nil {
-		t.Fatalf("ipForDomain() second call error = %v", err)
-	}
-
-	if !slices.Equal(addrs, addrs2) {
-		t.Errorf("ipForDomain() second call = %v, want %v", addrs2, addrs)
 	}
 }
 
@@ -316,97 +455,28 @@ func TestIgnoreDestination(t *testing.T) {
 	}
 }
 
-func TestConnectorGenerateDNSResponse(t *testing.T) {
-	c := &connector{
-		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-	}
-	c.setPrefixes([]netip.Prefix{netip.MustParsePrefix("100.64.1.0/24")})
+func TestV6V4(t *testing.T) {
+	v6ULA := ula(1)
 
-	req := &dnsmessage.Message{
-		Header: dnsmessage.Header{ID: 1234},
-		Questions: []dnsmessage.Question{
-			{
-				Name:  dnsmessage.MustNewName("example.com."),
-				Type:  dnsmessage.TypeA,
-				Class: dnsmessage.ClassINET,
-			},
-		},
+	tests := [][]string{
+		{"100.64.0.0", "fd7a:115c:a1e0:a99c:1:0:6440:0"},
+		{"0.0.0.0", "fd7a:115c:a1e0:a99c:1::"},
+		{"255.255.255.255", "fd7a:115c:a1e0:a99c:1:0:ffff:ffff"},
 	}
 
-	nodeID := tailcfg.NodeID(12345)
-
-	resp1, err := c.generateDNSResponse(req, nodeID)
-	if err != nil {
-		t.Fatalf("generateDNSResponse() error = %v", err)
-	}
-	if len(resp1) == 0 {
-		t.Fatalf("generateDNSResponse() returned empty response")
-	}
-
-	resp2, err := c.generateDNSResponse(req, nodeID)
-	if err != nil {
-		t.Fatalf("generateDNSResponse() second call error = %v", err)
-	}
-
-	if !cmp.Equal(resp1, resp2) {
-		t.Errorf("generateDNSResponse() responses differ between calls")
-	}
-}
-
-func TestIPPoolExhaustion(t *testing.T) {
-	smallPrefix := netip.MustParsePrefix("100.64.1.0/30") // Only 4 IPs: .0, .1, .2, .3
-	c := &connector{
-		v6ULA: netip.MustParsePrefix("fd7a:115c:a1e0:a99c:0001::/80"),
-	}
-	c.setPrefixes([]netip.Prefix{smallPrefix})
-
-	ps := newPerPeerState(c)
-
-	assignedIPs := make(map[netip.Addr]string)
-
-	domains := []string{"a.example.com", "b.example.com", "c.example.com", "d.example.com"}
-
-	var errs []error
-
-	for i := 0; i < 5; i++ {
-		for _, domain := range domains {
-			addrs, err := ps.ipForDomain(domain)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("failed to get IP for domain %q: %w", domain, err))
-				continue
-			}
-
-			for _, addr := range addrs {
-				if d, ok := assignedIPs[addr]; ok {
-					if d != domain {
-						t.Errorf("IP %s reused for domain %q, previously assigned to %q", addr, domain, d)
-					}
-				} else {
-					assignedIPs[addr] = domain
-				}
-			}
+	for i, test := range tests {
+		// to v6
+		v6 := v6ForV4(v6ULA.Addr(), netip.MustParseAddr(test[0]))
+		want := netip.MustParseAddr(test[1])
+		if v6 != want {
+			t.Fatalf("test %d: want: %v, got: %v", i, want, v6)
 		}
-	}
 
-	for addr, domain := range assignedIPs {
-		if addr.Is4() && !smallPrefix.Contains(addr) {
-			t.Errorf("IP %s for domain %q not in expected range %s", addr, domain, smallPrefix)
-		}
-		if addr.Is6() && !c.v6ULA.Contains(addr) {
-			t.Errorf("IP %s for domain %q not in expected range %s", addr, domain, c.v6ULA)
-		}
-		if addr == c.dnsAddr {
-			t.Errorf("IP %s for domain %q is the reserved DNS address", addr, domain)
-		}
-	}
-
-	// expect one error for each iteration with the 4th domain
-	if len(errs) != 5 {
-		t.Errorf("Expected 5 errors, got %d: %v", len(errs), errs)
-	}
-	for _, err := range errs {
-		if !errors.Is(err, ErrNoIPsAvailable) {
-			t.Errorf("generateDNSResponse() error = %v, want ErrNoIPsAvailable", err)
+		// to v4
+		v4 := v4ForV6(netip.MustParseAddr(test[1]))
+		want = netip.MustParseAddr(test[0])
+		if v4 != want {
+			t.Fatalf("test %d: want: %v, got: %v", i, want, v4)
 		}
 	}
 }

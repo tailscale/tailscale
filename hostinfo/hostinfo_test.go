@@ -5,6 +5,7 @@ package hostinfo
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -48,4 +49,32 @@ func TestEtcAptSourceFileIsDisabled(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCustomHostnameFunc(t *testing.T) {
+	want := "custom-hostname"
+	SetHostnameFn(func() (string, error) {
+		return want, nil
+	})
+
+	got, err := Hostname()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
+	SetHostnameFn(os.Hostname)
+	got, err = Hostname()
+	want, _ = os.Hostname()
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
 }

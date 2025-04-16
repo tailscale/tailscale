@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/lazy"
+	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 )
 
@@ -25,22 +26,10 @@ func OS() string {
 	return OSForTesting.Get(version.OS)
 }
 
-// TB is a subset of testing.TB that we use to set up test helpers.
-// It's defined here to avoid pulling in the testing package.
-type TB interface {
-	Helper()
-	Cleanup(func())
-	Logf(format string, args ...any)
-	Error(args ...any)
-	Errorf(format string, args ...any)
-	Fatal(args ...any)
-	Fatalf(format string, args ...any)
-}
-
 // EqualJSONForTest compares the JSON in j1 and j2 for semantic equality.
 // It returns "", "", true if j1 and j2 are equal. Otherwise, it returns
 // indented versions of j1 and j2 and false.
-func EqualJSONForTest(tb TB, j1, j2 jsontext.Value) (s1, s2 string, equal bool) {
+func EqualJSONForTest(tb testenv.TB, j1, j2 jsontext.Value) (s1, s2 string, equal bool) {
 	tb.Helper()
 	j1 = j1.Clone()
 	j2 = j2.Clone()

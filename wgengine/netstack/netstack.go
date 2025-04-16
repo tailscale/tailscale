@@ -38,6 +38,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -208,7 +209,7 @@ type Impl struct {
 	// TCP connection to another host (e.g. in subnet router mode).
 	//
 	// This is currently only used in tests.
-	forwardDialFunc func(context.Context, string, string) (net.Conn, error)
+	forwardDialFunc netx.DialFunc
 
 	// forwardInFlightPerClientDropped is a metric that tracks how many
 	// in-flight TCP forward requests were dropped due to the per-client
@@ -326,10 +327,15 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
 	}
-	cubicOpt := tcpip.CongestionControlOption("cubic")
-	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &cubicOpt)
+	// gVisor defaults to reno at the time of writing. We explicitly set reno
+	// congestion control in order to prevent unexpected changes. Netstack
+	// has an int overflow in sender congestion window arithmetic that is more
+	// prone to trigger with cubic congestion control.
+	// See https://github.com/google/gvisor/issues/11632
+	renoOpt := tcpip.CongestionControlOption("reno")
+	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &renoOpt)
 	if tcpipErr != nil {
-		return nil, fmt.Errorf("could not set cubic congestion control: %v", tcpipErr)
+		return nil, fmt.Errorf("could not set reno congestion control: %v", tcpipErr)
 	}
 	err := setTCPBufSizes(ipstack)
 	if err != nil {
@@ -1457,7 +1463,7 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	}()
 
 	// Attempt to dial the outbound connection before we accept the inbound one.
-	var dialFunc func(context.Context, string, string) (net.Conn, error)
+	var dialFunc netx.DialFunc
 	if ns.forwardDialFunc != nil {
 		dialFunc = ns.forwardDialFunc
 	} else {

@@ -32,6 +32,9 @@ spec:
           jsonPath: .status.conditions[?(@.type == "ConnectorReady")].reason
           name: Status
           type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
       name: v1alpha1
       schema:
         openAPIV3Schema:

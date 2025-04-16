@@ -1,6 +1,8 @@
 name: test installer.sh
 
 on:
+  schedule:
+    - cron: '0 15 * * *' # 10am EST (UTC-4/5)
   push:
     branches:
       - "main"
@@ -72,10 +74,10 @@ jobs:
       # tar and gzip are needed by the actions/checkout below.
       run: yum install -y --allowerasing tar gzip ${{ matrix.deps }}
       if: |
-        contains(matrix.image, 'centos')
-        || contains(matrix.image, 'oraclelinux')
-        || contains(matrix.image, 'fedora')
-        || contains(matrix.image, 'amazonlinux')
+        contains(matrix.image, 'centos') ||
+        contains(matrix.image, 'oraclelinux') ||
+        contains(matrix.image, 'fedora') ||
+        contains(matrix.image, 'amazonlinux')
     - name: install dependencies (zypper)
       # tar and gzip are needed by the actions/checkout below.
       run: zypper --non-interactive install tar gzip ${{ matrix.deps }}
@@ -85,11 +87,11 @@ jobs:
         apt-get update
         apt-get install -y ${{ matrix.deps }}
       if: |
-        contains(matrix.image, 'debian')
-        || contains(matrix.image, 'ubuntu')
-        || contains(matrix.image, 'elementary')
-        || contains(matrix.image, 'parrotsec')
-        || contains(matrix.image, 'kalilinux')
+        contains(matrix.image, 'debian') ||
+        contains(matrix.image, 'ubuntu') ||
+        contains(matrix.image, 'elementary') ||
+        contains(matrix.image, 'parrotsec') ||
+        contains(matrix.image, 'kalilinux')
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: run installer
@@ -100,3 +102,30 @@ jobs:
       continue-on-error: true
     - name: check tailscale version
       run: tailscale --version
+  notify-slack:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack of failure on scheduled runs
+        if: failure() && github.event_name == 'schedule'
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "attachments": [{
+                "title": "Tailscale installer test failed",
+                "title_link": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                "text": "One or more OSes in the test matrix failed. See the run for details.",
+                "fields": [
+                  {
+                    "title": "Ref",
+                    "value": "${{ github.ref_name }}",
+                    "short": true
+                  }
+                ],
+                "footer": "${{ github.workflow }} on schedule",
+                "color": "danger"
+              }]
+            }

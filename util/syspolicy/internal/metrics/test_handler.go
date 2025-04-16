@@ -9,6 +9,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/internal"
+	"tailscale.com/util/testenv"
 )
 
 // TestState represents a metric name and its expected value.
@@ -19,13 +20,13 @@ type TestState struct {
 
 // TestHandler facilitates testing of the code that uses metrics.
 type TestHandler struct {
-	t internal.TB
+	t testenv.TB
 
 	m map[string]int64
 }
 
 // NewTestHandler returns a new TestHandler.
-func NewTestHandler(t internal.TB) *TestHandler {
+func NewTestHandler(t testenv.TB) *TestHandler {
 	return &TestHandler{t, make(map[string]int64)}
 }
 

@@ -26,13 +26,12 @@ import (
 	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/control/controlhttp/controlhttpserver"
 	"tailscale.com/health"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
-	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -760,7 +759,7 @@ func TestDialPlan(t *testing.T) {
 
 type closeTrackDialer struct {
 	t     testing.TB
-	inner dnscache.DialContextFunc
+	inner netx.DialFunc
 	mu    sync.Mutex
 	conns map[*closeTrackConn]bool
 }
@@ -821,15 +820,4 @@ type closeTrackConn struct {
 func (c *closeTrackConn) Close() error {
 	c.d.noteClose(c)
 	return c.Conn.Close()
-}
-
-func TestDeps(t *testing.T) {
-	deptest.DepChecker{
-		GOOS:   "darwin",
-		GOARCH: "arm64",
-		BadDeps: map[string]string{
-			// Only the controlhttpserver needs WebSockets...
-			"github.com/coder/websocket": "controlhttp client shouldn't need websockets",
-		},
-	}.Check(t)
 }

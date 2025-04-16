@@ -773,6 +773,7 @@ func init() {
 	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("posture-checking", "PostureChecking")
+	addPrefFlagMapping("relay-server-port", "RelayServerPort")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {

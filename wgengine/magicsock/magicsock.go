@@ -56,6 +56,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
 	"tailscale.com/util/set"
@@ -136,6 +137,8 @@ type Conn struct {
 	// This block mirrors the contents and field order of the Options
 	// struct. Initialized once at construction, then constant.
 
+	eventBus               *eventbus.Bus
+	eventClient            *eventbus.Client
 	logf                   logger.Logf
 	epFunc                 func([]tailcfg.Endpoint)
 	derpActiveFunc         func()
@@ -401,8 +404,15 @@ func (c *Conn) dlogf(format string, a ...any) {
 
 // Options contains options for Listen.
 type Options struct {
-	// Logf optionally provides a log function to use.
-	// Must not be nil.
+	// EventBus, if non-nil, is used for event publication and subscription by
+	// each Conn created from these Options.
+	//
+	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
+	// become required non-nil.
+	EventBus *eventbus.Bus
+
+	// Logf provides a log function to use. It must not be nil.
+	// Use [logger.Discard] to disrcard logs.
 	Logf logger.Logf
 
 	// Port is the port to listen on.
@@ -529,6 +539,7 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	c := newConn(opts.logf())
+	c.eventBus = opts.EventBus
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
 	c.epFunc = opts.endpointsFunc()
@@ -537,6 +548,31 @@ func NewConn(opts Options) (*Conn, error) {
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
 
+	// If an event bus is enabled, subscribe to portmapping changes; otherwise
+	// use the callback mechanism of portmapper.Client.
+	//
+	// TODO(creachadair): Remove the switch once the event bus is mandatory.
+	onPortMapChanged := c.onPortMapChanged
+	if c.eventBus != nil {
+		c.eventClient = c.eventBus.Client("magicsock.Conn")
+
+		pmSub := eventbus.Subscribe[portmapper.Mapping](c.eventClient)
+		go func() {
+			defer pmSub.Close()
+			for {
+				select {
+				case <-pmSub.Events():
+					c.onPortMapChanged()
+				case <-pmSub.Done():
+					return
+				}
+			}
+		}()
+
+		// Disable the explicit callback from the portmapper, the subscriber handles it.
+		onPortMapChanged = nil
+	}
+
 	// Don't log the same log messages possibly every few seconds in our
 	// portmapper.
 	portmapperLogf := logger.WithPrefix(c.logf, "portmapper: ")
@@ -544,7 +580,14 @@ func NewConn(opts Options) (*Conn, error) {
 	portMapOpts := &portmapper.DebugKnobs{
 		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
 	}
-	c.portMapper = portmapper.NewClient(portmapperLogf, opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
+	c.portMapper = portmapper.NewClient(portmapper.Config{
+		EventBus:     c.eventBus,
+		Logf:         portmapperLogf,
+		NetMon:       opts.NetMon,
+		DebugKnobs:   portMapOpts,
+		ControlKnobs: opts.ControlKnobs,
+		OnChange:     onPortMapChanged,
+	})
 	c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
@@ -2460,6 +2503,9 @@ func (c *connBind) Close() error {
 	}
 	if c.closeDisco6 != nil {
 		c.closeDisco6.Close()
+	}
+	if c.eventClient != nil {
+		c.eventClient.Close()
 	}
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.

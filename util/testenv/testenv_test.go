@@ -16,3 +16,16 @@ func TestDeps(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestInParallelTestTrue(t *testing.T) {
+	t.Parallel()
+	if !InParallelTest(t) {
+		t.Fatal("InParallelTest should return true once t.Parallel has been called")
+	}
+}
+
+func TestInParallelTestFalse(t *testing.T) {
+	if InParallelTest(t) {
+		t.Fatal("InParallelTest should return false before t.Parallel has been called")
+	}
+}
