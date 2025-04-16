@@ -17,6 +17,7 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 )
 
 const (
@@ -113,4 +114,8 @@ func strDef(v1, v2 string) string {
 		return v1
 	}
 	return v2
+}
+
+func getUserAgent() string {
+	return "Tailscale/" + version.Short()
 }
