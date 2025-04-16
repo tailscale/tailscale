@@ -179,6 +179,12 @@ func contextWithActor(ctx context.Context, logf logger.Logf, c net.Conn) context
 	return actorKey.WithValue(ctx, actorOrError{actor: actor, err: err})
 }
 
+// NewContextWithActorForTest returns a new context that carries the identity
+// of the specified actor. It is used in tests only.
+func NewContextWithActorForTest(ctx context.Context, actor ipnauth.Actor) context.Context {
+	return actorKey.WithValue(ctx, actorOrError{actor: actor})
+}
+
 // actorFromContext returns an [ipnauth.Actor] associated with ctx,
 // or an error if the context does not carry an actor's identity.
 func actorFromContext(ctx context.Context) (ipnauth.Actor, error) {
