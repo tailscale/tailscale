@@ -455,6 +455,12 @@ func (t *Tracker) setHealthyLocked(w *Warnable) {
 	}
 }
 
+func (t *Tracker) notifyWatchersLocked() {
+	for _, cb := range t.watchers {
+		go cb(nil, nil)
+	}
+}
+
 // AppendWarnableDebugFlags appends to base any health items that are currently in failed
 // state and were created with MapDebugFlag.
 func (t *Tracker) AppendWarnableDebugFlags(base []string) []string {
@@ -647,6 +653,7 @@ func (t *Tracker) SetControlHealth(problems []tailcfg.Health) {
 	defer t.mu.Unlock()
 	t.controlHealth = problems
 	t.selfCheckLocked()
+	t.notifyWatchersLocked()
 }
 
 // GotStreamedMapResponse notes that we got a tailcfg.MapResponse
@@ -1149,17 +1156,6 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		}
 	} else {
 		t.setHealthyLocked(derpRegionErrorWarnable)
-	}
-
-	if t.controlHealth != nil {
-		// for _, cb := range t.watchers {
-		// 	go cb(nil, nil)
-		// }
-		if len(t.controlHealth) > 0 {
-			t.setUnhealthyLocked(controlHealthWarnable, nil)
-		} else {
-			t.setHealthyLocked(controlHealthWarnable)
-		}
 	}
 
 	if err := envknob.ApplyDiskConfigError(); err != nil {

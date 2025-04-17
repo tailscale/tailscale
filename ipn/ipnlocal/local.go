@@ -967,15 +967,14 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	}
 }
 
-func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthyState) {
-	if w == nil {
-		return
-	}
-	if us == nil {
-		b.logf("health(warnable=%s): ok", w.Code)
-	} else {
-		b.logf("health(warnable=%s): error: %s", w.Code, us.Text)
-	}
+func (b *LocalBackend) onHealthChange(_ *health.Warnable, us *health.UnhealthyState) {
+	// if w != nil {
+	// 	if us == nil {
+	// 		b.logf("health(warnable=%s): ok", w.Code)
+	// 	} else {
+	// 		b.logf("health(warnable=%s): error: %s", w.Code, us.Text)
+	// 	}
+	// }
 
 	// Whenever health changes, send the current health state to the frontend.
 	state := b.health.CurrentState()
