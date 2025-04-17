@@ -477,6 +477,29 @@ func TestPathConflictDetection(t *testing.T) {
 			expectConflict: false,
 		},
 		{
+			name:           "conflict when prefix path is a prefix of exact path",
+			newPath:        "/parent/child",
+			newPathType:    networkingv1.PathTypeExact,
+			existingPaths:  map[string]networkingv1.PathType{"/parent": networkingv1.PathTypePrefix},
+			expectConflict: true,
+			conflictPath:   "/parent",
+		},
+		{
+			name:           "conflict when prefix path is a prefix of exact path (reverse order)",
+			newPath:        "/parent",
+			newPathType:    networkingv1.PathTypePrefix,
+			existingPaths:  map[string]networkingv1.PathType{"/parent/child": networkingv1.PathTypeExact},
+			expectConflict: true,
+			conflictPath:   "/parent/child",
+		},
+		{
+			name:           "no conflict when exact path is a prefix of prefix path",
+			newPath:        "/parent",
+			newPathType:    networkingv1.PathTypeExact,
+			existingPaths:  map[string]networkingv1.PathType{"/parent/child": networkingv1.PathTypePrefix},
+			expectConflict: false,
+		},
+		{
 			name:           "conflict between exact and prefix with same path",
 			newPath:        "/mixed-type",
 			newPathType:    networkingv1.PathTypeExact,
@@ -627,11 +650,10 @@ func TestHandlersForIngressWithConflictingPaths(t *testing.T) {
 	}
 
 	// Verify that handlers map contains paths
-	// We should have 3 handlers: "/" (default), "/parent", and "/parent/child"
-	// Even though there's a conflict, our implementation currently keeps both paths
-	// and just issues a warning
-	if len(handlers) != 3 {
-		t.Errorf("Expected 3 handlers, got %d", len(handlers))
+	// With our deterministic conflict resolution, we should have 2 handlers:
+	// "/" (default) and "/parent/child" (more specific than "/parent")
+	if len(handlers) != 2 {
+		t.Errorf("Expected 2 handlers, got %d", len(handlers))
 	}
 
 	// Verify that the handlers map contains the expected paths
@@ -639,12 +661,14 @@ func TestHandlersForIngressWithConflictingPaths(t *testing.T) {
 		t.Errorf("Expected handler for path \"/\" but it was not found")
 	}
 
-	if _, ok := handlers["/parent"]; !ok {
-		t.Errorf("Expected handler for path \"/parent\" but it was not found")
-	}
-
+	// The more specific path should win in the conflict
 	if _, ok := handlers["/parent/child"]; !ok {
 		t.Errorf("Expected handler for path \"/parent/child\" but it was not found")
+	}
+
+	// The less specific path should be removed
+	if _, ok := handlers["/parent"]; ok {
+		t.Errorf("Path \"/parent\" should have been removed due to conflict resolution")
 	}
 
 	// Verify that a warning event was recorded for the conflicting paths
