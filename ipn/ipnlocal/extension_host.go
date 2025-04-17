@@ -25,6 +25,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/set"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
 )
 
@@ -378,7 +379,7 @@ func (h *ExtensionHost) NotifyProfileChange(profile ipn.LoginProfileView, prefs 
 	h.currentPrefs = prefs
 	h.currentProfile = profile
 	// Get the callbacks to be invoked.
-	cbs := collectValues(h.profileStateChangeCbs)
+	cbs := slicesx.MapValues(h.profileStateChangeCbs)
 	h.mu.Unlock()
 	for _, cb := range cbs {
 		cb(profile, prefs, sameNode)
@@ -402,7 +403,7 @@ func (h *ExtensionHost) NotifyProfilePrefsChanged(profile ipn.LoginProfileView, 
 	h.currentPrefs = newPrefs
 	h.currentProfile = profile
 	// Get the callbacks to be invoked.
-	stateCbs := collectValues(h.profileStateChangeCbs)
+	stateCbs := slicesx.MapValues(h.profileStateChangeCbs)
 	h.mu.Unlock()
 	for _, cb := range stateCbs {
 		cb(profile, newPrefs, true)
@@ -443,7 +444,7 @@ func (h *ExtensionHost) DetermineBackgroundProfile(profiles ipnext.ProfileStore)
 	// Attempt to resolve the background profile using the registered
 	// background profile resolvers (e.g., [ipn/desktop.desktopSessionsExt] on Windows).
 	h.mu.Lock()
-	resolvers := collectValues(h.backgroundProfileResolvers)
+	resolvers := slicesx.MapValues(h.backgroundProfileResolvers)
 	h.mu.Unlock()
 	for _, resolver := range resolvers {
 		if profile := resolver(profiles); profile.Valid() {
@@ -481,7 +482,7 @@ func (h *ExtensionHost) NotifyNewControlClient(cc controlclient.Client, profile 
 		return nil
 	}
 	h.mu.Lock()
-	cbs := collectValues(h.newControlClientCbs)
+	cbs := slicesx.MapValues(h.newControlClientCbs)
 	h.mu.Unlock()
 	if len(cbs) > 0 {
 		ccShutdownCbs = make([]func(), 0, len(cbs))
@@ -527,7 +528,7 @@ func (h *ExtensionHost) AuditLogger() ipnauth.AuditLogFunc {
 	}
 
 	h.mu.Lock()
-	providers := collectValues(h.auditLoggers)
+	providers := slicesx.MapValues(h.auditLoggers)
 	h.mu.Unlock()
 
 	var loggers []ipnauth.AuditLogFunc
@@ -641,18 +642,4 @@ type execQueue interface {
 	Add(func())
 	Shutdown()
 	Wait(context.Context) error
-}
-
-// collectValues is like [slices.Collect] of [maps.Values],
-// but pre-allocates the slice to avoid reallocations.
-// It returns nil if the map is empty.
-func collectValues[K comparable, V any](m map[K]V) []V {
-	if len(m) == 0 {
-		return nil
-	}
-	s := make([]V, 0, len(m))
-	for _, v := range m {
-		s = append(s, v)
-	}
-	return s
 }
