@@ -21,6 +21,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 )
 
@@ -114,12 +115,12 @@ type ServerEndpoint struct {
 	// BindLifetime is amount of time post-allocation the Server will consider
 	// the endpoint active while it has yet to be bound via 3-way bind handshake
 	// from both client parties.
-	BindLifetime time.Duration
+	BindLifetime tstime.GoDuration
 
 	// SteadyStateLifetime is the amount of time post 3-way bind handshake from
 	// both client parties the Server will consider the endpoint active lacking
 	// bidirectional data flow.
-	SteadyStateLifetime time.Duration
+	SteadyStateLifetime tstime.GoDuration
 }
 
 // serverEndpoint contains Server-internal ServerEndpoint state. serverEndpoint
@@ -489,8 +490,8 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (ServerEndpoin
 				AddrPorts:           s.addrPorts,
 				VNI:                 e.vni,
 				LamportID:           e.lamportID,
-				BindLifetime:        s.bindLifetime,
-				SteadyStateLifetime: s.steadyStateLifetime,
+				BindLifetime:        tstime.GoDuration{Duration: s.bindLifetime},
+				SteadyStateLifetime: tstime.GoDuration{Duration: s.steadyStateLifetime},
 			}, nil
 		}
 		// If an endpoint exists for the pair of key.DiscoPublic's, and is
@@ -526,7 +527,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (ServerEndpoin
 		AddrPorts:           s.addrPorts,
 		VNI:                 e.vni,
 		LamportID:           e.lamportID,
-		BindLifetime:        s.bindLifetime,
-		SteadyStateLifetime: s.steadyStateLifetime,
+		BindLifetime:        tstime.GoDuration{Duration: s.bindLifetime},
+		SteadyStateLifetime: tstime.GoDuration{Duration: s.steadyStateLifetime},
 	}, nil
 }
