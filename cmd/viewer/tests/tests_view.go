@@ -220,6 +220,10 @@ func (v MapView) StructWithPtr() views.MapFn[string, StructWithPtrs, StructWithP
 		return t.View()
 	})
 }
+
+func (v MapView) StructWithView() views.Map[string, StructWithPtrsView] {
+	return views.MapOf(v.ж.StructWithView)
+}
 func (v MapView) SliceIntPtr() map[string][]*int           { panic("unsupported") }
 func (v MapView) PointerKey() map[*string]int              { panic("unsupported") }
 func (v MapView) StructWithPtrKey() map[StructWithPtrs]int { panic("unsupported") }
@@ -235,6 +239,7 @@ var _MapViewNeedsRegeneration = Map(struct {
 	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
 	StructWithoutPtrKey map[StructWithoutPtrs]int
 	StructWithPtr       map[string]StructWithPtrs
+	StructWithView      map[string]StructWithPtrsView
 	SliceIntPtr         map[string][]*int
 	PointerKey          map[*string]int
 	StructWithPtrKey    map[StructWithPtrs]int
@@ -299,8 +304,13 @@ func (v StructWithSlicesView) Prefixes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.Prefixes)
 }
 func (v StructWithSlicesView) Data() views.ByteSlice[[]byte] { return views.ByteSliceOf(v.ж.Data) }
-func (v StructWithSlicesView) Structs() StructWithPtrs       { panic("unsupported") }
-func (v StructWithSlicesView) Ints() *int                    { panic("unsupported") }
+func (v StructWithSlicesView) Structs() views.ValueSliceView[StructWithPtrs, *StructWithPtrs, StructWithPtrsView] {
+	return views.SliceOfValueViews[StructWithPtrs, *StructWithPtrs](v.ж.Structs)
+}
+func (v StructWithSlicesView) Views() views.Slice[StructWithPtrsView] {
+	return views.SliceOf(v.ж.Views)
+}
+func (v StructWithSlicesView) Ints() *int { panic("unsupported") }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
@@ -311,6 +321,7 @@ var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
 	Prefixes       []netip.Prefix
 	Data           []byte
 	Structs        []StructWithPtrs
+	Views          []StructWithPtrsView
 	Ints           []*int
 }{})
 
