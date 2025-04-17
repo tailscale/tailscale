@@ -6,7 +6,6 @@ package web
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,14 +13,11 @@ import (
 	"log"
 	"net/http"
 	"net/netip"
-	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gorilla/csrf"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
@@ -205,7 +201,7 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 
 	var metric string
 	s.apiHandler, metric = s.modeAPIHandler(s.mode)
-	s.apiHandler = s.withCSRF(s.apiHandler)
+	s.apiHandler = s.withSecFetchSite(s.apiHandler)
 
 	// Don't block startup on reporting metric.
 	// Report in separate go routine with 5 second timeout.
@@ -218,23 +214,30 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	return s, nil
 }
 
-func (s *Server) withCSRF(h http.Handler) http.Handler {
-	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
+// withSecFetchSite wraps a HTTP handler and ensures requests made to it have
+// the `Sec-Fetch-Site` header set to same-origin to prevent CSRF attacks.
+func (s *Server) withSecFetchSite(h http.Handler) http.Handler {
+	// Ref https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Sec-Fetch-Site
+	// Sent by all modern browsers to indicate the relationship between the
+	// origin from which the request was made and the requested resource.
+	// Require that the Sec-Fetch-Site header is set to "same-origin"
+	// for all requests to the web client, preventing CSRF attacks.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Sec-Fetch-Site") {
+		case "same-origin":
+			// valid request
+		case "cross-site", "same-site":
+			// consider anything other than the same-origin to be invalid.
+			http.Error(w, "forbidden non `same-origin` request", http.StatusForbidden)
+			return
+		case "":
+			http.Error(w, "missing required Sec-Fetch-Site request header. You may need to update your browser", http.StatusForbidden)
+			return
+		}
+		// serve all same-site requests.
+		h.ServeHTTP(w, r)
+	})
 
-	// ref https://github.com/tailscale/tailscale/pull/14822
-	// signal to the CSRF middleware that the request is being served over
-	// plaintext HTTP to skip TLS-only header checks.
-	withSetPlaintext := func(h http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r = csrf.PlaintextHTTPRequest(r)
-			h.ServeHTTP(w, r)
-		})
-	}
-
-	// NB: the order of the withSetPlaintext and csrfProtect calls is important
-	// to ensure that we signal to the CSRF middleware that the request is being
-	// served over plaintext HTTP and not over TLS as it presumes by default.
-	return withSetPlaintext(csrfProtect(h))
 }
 
 func (s *Server) modeAPIHandler(mode ServerMode) (http.Handler, string) {
@@ -450,9 +453,8 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 
 // serveLoginAPI serves requests for the web login client.
 // It should only be called by Server.ServeHTTP, via Server.apiHandler,
-// which protects the handler using gorilla csrf.
+// which protects the handler using s.withSecFetchSite.
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	switch {
 	case r.URL.Path == "/api/data" && r.Method == httpm.GET:
 		s.serveGetNodeData(w, r)
@@ -575,7 +577,6 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	path := strings.TrimPrefix(r.URL.Path, "/api")
 	switch {
 	case path == "/data" && r.Method == httpm.GET:
@@ -834,12 +835,11 @@ type nodeData struct {
 	KeyExpiry  string // time.RFC3339
 	KeyExpired bool
 
-	TUNMode     bool
-	IsSynology  bool
-	DSMVersion  int // 6 or 7, if IsSynology=true
-	IsUnraid    bool
-	UnraidToken string
-	URLPrefix   string // if set, the URL prefix the client is served behind
+	TUNMode    bool
+	IsSynology bool
+	DSMVersion int // 6 or 7, if IsSynology=true
+	IsUnraid   bool
+	URLPrefix  string // if set, the URL prefix the client is served behind
 
 	UsingExitNode               *exitNode
 	AdvertisingExitNode         bool
@@ -899,7 +899,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		IsSynology:       distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
 		DSMVersion:       distro.DSMVersion(),
 		IsUnraid:         distro.Get() == distro.Unraid,
-		UnraidToken:      os.Getenv("UNRAID_CSRF_TOKEN"),
 		RunningSSHServer: prefs.RunSSH,
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
 		ControlAdminURL:  prefs.AdminPageURL(),
@@ -1274,37 +1273,6 @@ func (s *Server) proxyRequestToLocalAPI(w http.ResponseWriter, r *http.Request) 
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-// csrfKey returns a key that can be used for CSRF protection.
-// If an error occurs during key creation, the error is logged and the active process terminated.
-// If the server is running in CGI mode, the key is cached to disk and reused between requests.
-// If an error occurs during key storage, the error is logged and the active process terminated.
-func (s *Server) csrfKey() []byte {
-	csrfFile := filepath.Join(os.TempDir(), "tailscale-web-csrf.key")
-
-	// if running in CGI mode, try to read from disk, but ignore errors
-	if s.cgiMode {
-		key, _ := os.ReadFile(csrfFile)
-		if len(key) == 32 {
-			return key
-		}
-	}
-
-	// create a new key
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		log.Fatalf("error generating CSRF key: %v", err)
-	}
-
-	// if running in CGI mode, try to write the newly created key to disk, and exit if it fails.
-	if s.cgiMode {
-		if err := os.WriteFile(csrfFile, key, 0600); err != nil {
-			log.Fatalf("unable to store CSRF key: %v", err)
-		}
-	}
-
-	return key
 }
 
 // enforcePrefix returns a HandlerFunc that enforces a given path prefix is used in requests,
