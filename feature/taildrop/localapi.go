@@ -81,8 +81,13 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 	}
 
 	lb := h.LocalBackend()
+	var ext *extension
+	if !lb.FindMatchingExtension(&ext) {
+		http.Error(w, "misconfigured taildrop extension", http.StatusInternalServerError)
+		return
+	}
 
-	fts, err := lb.FileTargets()
+	fts, err := ext.FileTargets()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -131,7 +136,7 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer t.Stop()
-		defer lb.UpdateOutgoingFiles(outgoingFiles)
+		defer ext.UpdateOutgoingFiles(outgoingFiles)
 		for {
 			select {
 			case u, ok := <-progressUpdates:
@@ -140,7 +145,7 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 				}
 				outgoingFiles[u.ID] = &u
 			case <-t.C:
-				lb.UpdateOutgoingFiles(outgoingFiles)
+				ext.UpdateOutgoingFiles(outgoingFiles)
 			}
 		}
 	}()
@@ -353,7 +358,14 @@ func serveFiles(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file access denied", http.StatusForbidden)
 		return
 	}
+
 	lb := h.LocalBackend()
+	var ext *extension
+	if !lb.FindMatchingExtension(&ext) {
+		http.Error(w, "misconfigured taildrop extension", http.StatusInternalServerError)
+		return
+	}
+
 	suffix, ok := strings.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/files/")
 	if !ok {
 		http.Error(w, "misconfigured", http.StatusInternalServerError)
@@ -376,7 +388,7 @@ func serveFiles(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 			ctx, cancel = context.WithDeadline(ctx, deadline)
 			defer cancel()
 		}
-		wfs, err := lb.AwaitWaitingFiles(ctx)
+		wfs, err := ext.AwaitWaitingFiles(ctx)
 		if err != nil && ctx.Err() == nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -391,14 +403,14 @@ func serveFiles(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" {
-		if err := lb.DeleteFile(name); err != nil {
+		if err := ext.DeleteFile(name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	rc, size, err := lb.OpenFile(name)
+	rc, size, err := ext.OpenFile(name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -418,7 +430,15 @@ func serveFileTargets(h *localapi.Handler, w http.ResponseWriter, r *http.Reques
 		http.Error(w, "want GET to list targets", http.StatusBadRequest)
 		return
 	}
-	fts, err := h.LocalBackend().FileTargets()
+
+	lb := h.LocalBackend()
+	var ext *extension
+	if !lb.FindMatchingExtension(&ext) {
+		http.Error(w, "misconfigured taildrop extension", http.StatusInternalServerError)
+		return
+	}
+
+	fts, err := ext.FileTargets()
 	if err != nil {
 		localapi.WriteErrorJSON(w, err)
 		return

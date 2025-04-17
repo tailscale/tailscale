@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"tailscale.com/feature/taildrop"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
@@ -26,7 +27,7 @@ func configureTaildrop(logf logger.Logf, lb *ipnlocal.LocalBackend) {
 			logf("%s Taildrop support: %v", dg, err)
 		} else {
 			logf("%s Taildrop: using %v", dg, path)
-			lb.SetDirectFileRoot(path)
+			lb.SetExtensionOption(taildrop.FileRoot(path))
 		}
 	}
 

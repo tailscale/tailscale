@@ -421,7 +421,7 @@ func TestPeerAPIBase(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := peerAPIBase(tt.nm, tt.peer.View())
+			got := PeerAPIBase(tt.nm, tt.peer.View())
 			if got != tt.want {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
@@ -1142,7 +1142,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			Hostinfo: (&tailcfg.Hostinfo{}).View(),
 		}).View(),
 	}
-	exitDOH := peerAPIBase(&netmap.NetworkMap{Peers: peers}, peers[0]) + "/dns-query"
+	exitDOH := PeerAPIBase(&netmap.NetworkMap{Peers: peers}, peers[0]) + "/dns-query"
 	routes := map[dnsname.FQDN][]*dnstype.Resolver{
 		"route.example.com.": {{Addr: "route.example.com"}},
 	}

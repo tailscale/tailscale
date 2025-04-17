@@ -322,7 +322,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 	driveRemotes := make([]*drive.Remote, 0, len(nm.Peers))
 	for _, p := range nm.Peers {
 		peerID := p.ID()
-		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), taildrivePrefix[1:])
+		url := fmt.Sprintf("%s/%s", PeerAPIBase(nm, p), taildrivePrefix[1:])
 		driveRemotes = append(driveRemotes, &drive.Remote{
 			Name: p.DisplayName(false),
 			URL:  url,

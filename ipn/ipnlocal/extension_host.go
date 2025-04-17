@@ -23,7 +23,9 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/execqueue"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
@@ -87,6 +89,8 @@ type ExtensionHost struct {
 	// doEnqueueBackendOperation adds an asynchronous [LocalBackend] operation to the workQueue.
 	doEnqueueBackendOperation func(func(Backend))
 
+	optsSetter map[reflect.Type]func(any) error
+
 	// mu protects the following fields.
 	// It must not be held when calling [LocalBackend] methods
 	// or when invoking callbacks registered by extensions.
@@ -123,6 +127,8 @@ type ExtensionHost struct {
 	// was updated by [LocalBackend.SetControlClientStatus], including when the profile
 	// is first populated and persisted.
 	profileStateChangeCbs set.HandleSet[ipnext.ProfileStateChangeCallback]
+
+	netmapCbs set.HandleSet[ipnext.NetmapChangeCallback]
 }
 
 // Backend is a subset of [LocalBackend] methods that are used by [ExtensionHost].
@@ -410,6 +416,36 @@ func (h *ExtensionHost) NotifyProfilePrefsChanged(profile ipn.LoginProfileView, 
 	}
 }
 
+func (h *ExtensionHost) RegisterNetmapChangeCallback(cb ipnext.NetmapChangeCallback) (unregister func()) {
+	if h == nil {
+		return func() {}
+	}
+	if cb == nil {
+		panic("nil callback")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	handle := h.netmapCbs.Add(cb)
+	return func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		delete(h.netmapCbs, handle)
+	}
+}
+
+func (h *ExtensionHost) NotifyNewNetMap(nm *netmap.NetworkMap) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	cbs := slicesx.MapValues(h.netmapCbs)
+	h.mu.Unlock()
+
+	for _, cb := range cbs {
+		cb(nm)
+	}
+}
+
 // RegisterBackgroundProfileResolver implements [ipnext.ProfileServices].
 func (h *ExtensionHost) RegisterBackgroundProfileResolver(resolver ipnext.ProfileResolver) (unregister func()) {
 	if h == nil {
@@ -633,6 +669,31 @@ func (h *ExtensionHost) enqueueBackendOperation(f func(Backend)) {
 	} else {
 		h.postInitWorkQueue = append(h.postInitWorkQueue, f)
 	}
+}
+
+func (h *ExtensionHost) RegisterOptionSetter(typ reflect.Type, f func(any) error) {
+	if h == nil {
+		// Because it's required by TestNilExtensionHostMethodCall.
+		// TODO(bradfitz): I'd rather panic here.
+		return
+	}
+	if _, ok := h.optsSetter[typ]; ok {
+		panic(fmt.Sprintf("option setter for %T already registered", typ))
+	}
+	mak.Set(&h.optsSetter, typ, f)
+}
+
+func (h *ExtensionHost) SetExtensionOption(v any) (handled bool, err error) {
+	if h == nil {
+		// Because it's required by TestNilExtensionHostMethodCall.
+		// TODO(bradfitz): I'd rather return an error here.
+		return
+	}
+	f := h.optsSetter[reflect.TypeOf(v)]
+	if f == nil {
+		return false, nil
+	}
+	return true, f(v)
 }
 
 // execQueue is an ordered asynchronous queue for executing functions.
