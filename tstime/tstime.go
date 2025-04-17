@@ -6,6 +6,7 @@ package tstime
 
 import (
 	"context"
+	"encoding"
 	"strconv"
 	"strings"
 	"time"
@@ -182,4 +183,41 @@ func (StdClock) AfterFunc(d time.Duration, f func()) TimerController {
 // Since calls time.Since.
 func (StdClock) Since(t time.Time) time.Duration {
 	return time.Since(t)
+}
+
+// GoDuration is a [time.Duration] but JSON serializes with [time.Duration.String].
+//
+// Note that this format is specific to Go and non-standard,
+// but excels in being most humanly readable compared to alternatives.
+// The wider industry still lacks consensus for the representation
+// of a time duration in humanly-readable text.
+// See https://go.dev/issue/71631 for more discussion.
+//
+// Regardless of how the industry evolves into the future,
+// this type explicitly uses the Go format.
+type GoDuration struct{ time.Duration }
+
+var (
+	_ encoding.TextAppender    = (*GoDuration)(nil)
+	_ encoding.TextMarshaler   = (*GoDuration)(nil)
+	_ encoding.TextUnmarshaler = (*GoDuration)(nil)
+)
+
+func (d GoDuration) AppendText(b []byte) ([]byte, error) {
+	// The String method is inlineable (see https://go.dev/cl/520602),
+	// so this may not allocate since the string does not escape.
+	return append(b, d.String()...), nil
+}
+
+func (d GoDuration) MarshalText() ([]byte, error) {
+	return []byte(d.String()), nil
+}
+
+func (d *GoDuration) UnmarshalText(b []byte) error {
+	d2, err := time.ParseDuration(string(b))
+	if err != nil {
+		return err
+	}
+	d.Duration = d2
+	return nil
 }

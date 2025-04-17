@@ -4,8 +4,11 @@
 package tstime
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
+
+	"tailscale.com/util/must"
 )
 
 func TestParseDuration(t *testing.T) {
@@ -32,5 +35,19 @@ func TestParseDuration(t *testing.T) {
 		if got, _ := ParseDuration(tt.in); got != tt.want {
 			t.Errorf("ParseDuration(%q) = %d; want %d", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestGoDuration(t *testing.T) {
+	wantDur := GoDuration{time.Hour + time.Minute + time.Second + time.Millisecond + time.Microsecond + time.Nanosecond}
+	gotJSON := string(must.Get(json.Marshal(wantDur)))
+	wantJSON := `"1h1m1.001001001s"`
+	if gotJSON != wantJSON {
+		t.Errorf("json.Marshal(%v) = %s, want %s", wantDur, gotJSON, wantJSON)
+	}
+	var gotDur GoDuration
+	must.Do(json.Unmarshal([]byte(wantJSON), &gotDur))
+	if gotDur != wantDur {
+		t.Errorf("json.Unmarshal(%s) = %v, want %v", wantJSON, gotDur, wantDur)
 	}
 }
