@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
@@ -21,7 +20,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/gorilla/csrf"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
@@ -1491,82 +1489,46 @@ func mockWaitAuthURL(_ context.Context, id string, src tailcfg.NodeID) (*tailcfg
 	}
 }
 
-func TestCSRFProtect(t *testing.T) {
+func TestSecFetchSiteProtect(t *testing.T) {
 	s := &Server{}
-
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /test/csrf-token", func(w http.ResponseWriter, r *http.Request) {
-		token := csrf.Token(r)
-		_, err := io.WriteString(w, token)
-		if err != nil {
-			t.Fatal(err)
-		}
-	})
-	mux.HandleFunc("POST /test/csrf-protected", func(w http.ResponseWriter, r *http.Request) {
+
+	mux.HandleFunc("POST /protected", func(w http.ResponseWriter, r *http.Request) {
 		_, err := io.WriteString(w, "ok")
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
-	h := s.withCSRF(mux)
-	ser := nettest.NewHTTPServer(nettest.GetNetwork(t), h)
-	defer ser.Close()
 
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("unable to construct cookie jar: %v", err)
-	}
+	h := s.withSecFetchSite(mux)
 
-	client := ser.Client()
-	client.Jar = jar
+	serv := nettest.NewHTTPServer(nettest.GetNetwork(t), h)
+	defer serv.Close()
 
-	// make GET request to populate cookie jar
-	resp, err := client.Get(ser.URL + "/test/csrf-token")
+	client := serv.Client()
+
+	// make bare request without Sec-Fetch-Site header; ensure it fails
+	resp, err := client.Post(serv.URL+"/protected", "application/x-www-form-urlencoded", nil)
 	if err != nil {
 		t.Fatalf("unable to make request: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected status: %v", resp.Status)
-	}
-	tokenBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("unable to read body: %v", err)
-	}
-
-	csrfToken := strings.TrimSpace(string(tokenBytes))
-	if csrfToken == "" {
-		t.Fatal("empty csrf token")
-	}
-
-	// make a POST request without the CSRF header; ensure it fails
-	resp, err = client.Post(ser.URL+"/test/csrf-protected", "text/plain", nil)
-	if err != nil {
-		t.Fatalf("unable to make request: %v", err)
-	}
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("unexpected status: %v", resp.Status)
+		t.Fatalf("expected forbidden got %s", resp.Status)
 	}
 
-	// make a POST request with the CSRF header; ensure it succeeds
-	req, err := http.NewRequest("POST", ser.URL+"/test/csrf-protected", nil)
+	// make a request with Sec-Fetch-Site same-origin; ensure it succeeds
+	req, err := http.NewRequest("POST", serv.URL+"/protected", nil)
 	if err != nil {
 		t.Fatalf("error building request: %v", err)
 	}
-	req.Header.Set("X-CSRF-Token", csrfToken)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("unable to make request: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected status: %v", resp.Status)
-	}
 	defer resp.Body.Close()
-	out, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("unable to read body: %v", err)
-	}
-	if string(out) != "ok" {
-		t.Fatalf("unexpected body: %q", out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected ok got %s", resp.Status)
 	}
 }
