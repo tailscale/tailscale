@@ -15,11 +15,9 @@
 //
 // # Browser Routes
 //
-// All routes in the browser mux enforce CSRF protection using the gorilla/csrf
-// package. The application must template the CSRF token into its forms using
-// the [TemplateField] and [TemplateTag] APIs. Applications that are served in a
-// secure context (over HTTPS) should also set the SecureContext field to true
-// to ensure that the the CSRF cookies are marked as Secure.
+// All routes in the browser mux are protected against CSRF attacks by
+// requiring non-(GET|HEAD|OPTIONS) requests to specify the Sec-Fetch-Site header
+// with the value "same-origin".
 //
 // In addition, browser routes will also have the following applied:
 //   - Content-Security-Policy header that disallows inline scripts, framing, and third party resources.
@@ -64,15 +62,11 @@
 //	if err := s.Serve(ln); err != nil && err != http.ErrServerClosed {
 //		log.Fatalf("failed to serve: %v", err)
 //	}
-//
-// [TemplateField]: https://pkg.go.dev/github.com/gorilla/csrf#TemplateField
-// [TemplateTag]: https://pkg.go.dev/github.com/gorilla/csrf#TemplateTag
 package safeweb
 
 import (
 	"cmp"
 	"context"
-	crand "crypto/rand"
 	"fmt"
 	"log"
 	"maps"
@@ -82,8 +76,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-
-	"github.com/gorilla/csrf"
 )
 
 // CSP is the value of a Content-Security-Policy header. Keys are CSP
@@ -150,10 +142,6 @@ var DefaultStrictTransportSecurityOptions = "max-age=31536000"
 
 // Config contains the configuration for a safeweb server.
 type Config struct {
-	// SecureContext specifies whether the Server is running in a secure (HTTPS) context.
-	// Setting this to true will cause the Server to set the Secure flag on CSRF cookies.
-	SecureContext bool
-
 	// BrowserMux is the HTTP handler for any routes in your application that
 	// should only be served to browsers in a primary origin context. These
 	// requests will be subject to CSRF protection and will have
@@ -174,12 +162,6 @@ type Config struct {
 	// No headers will be sent if no methods are provided.
 	AccessControlAllowMethods []string
 
-	// CSRFSecret is the secret used to sign CSRF tokens. It must be 32 bytes long.
-	// This should be considered a sensitive value and should be kept secret.
-	// If this is not provided, the Server will generate a random CSRF secret on
-	// startup.
-	CSRFSecret []byte
-
 	// CSP is the Content-Security-Policy header to return with BrowserMux
 	// responses.
 	CSP CSP
@@ -187,10 +169,6 @@ type Config struct {
 	// unsafe-inline` in the Content-Security-Policy header to permit the use of
 	// inline CSS.
 	CSPAllowInlineStyles bool
-
-	// CookiesSameSiteLax specifies whether to use SameSite=Lax in cookies. The
-	// default is to set SameSite=Strict.
-	CookiesSameSiteLax bool
 
 	// StrictTransportSecurityOptions specifies optional directives for the
 	// Strict-Transport-Security header sent in response to requests made to the
@@ -203,6 +181,16 @@ type Config struct {
 	// Do not use the Handler field of http.Server, as it will be ignored.
 	// Instead, set your handlers using APIMux and BrowserMux.
 	HTTPServer *http.Server
+
+	// ServeHSTS specifies whether to serve the Strict-Transport-Security header
+	// in response to requests made to the BrowserMux.
+	ServeHSTS bool
+
+	// AllowSecFetchSiteSameSite specifies whether to allow requests with the
+	// Sec-Fetch-Site header set to "same-site " indicating that they are
+	// cross-origin but that their origin shares the same site (gTLD+1) with
+	// that of the request.
+	AllowSecFetchSiteSameSite bool
 }
 
 func (c *Config) setDefaults() error {
@@ -212,13 +200,6 @@ func (c *Config) setDefaults() error {
 
 	if c.APIMux == nil {
 		c.APIMux = &http.ServeMux{}
-	}
-
-	if c.CSRFSecret == nil || len(c.CSRFSecret) == 0 {
-		c.CSRFSecret = make([]byte, 32)
-		if _, err := crand.Read(c.CSRFSecret); err != nil {
-			return fmt.Errorf("failed to generate CSRF secret: %w", err)
-		}
 	}
 
 	if c.CSP == nil {
@@ -231,9 +212,8 @@ func (c *Config) setDefaults() error {
 // Server is a safeweb server.
 type Server struct {
 	Config
-	h           *http.Server
-	csp         string
-	csrfProtect func(http.Handler) http.Handler
+	h   *http.Server
+	csp string
 }
 
 // NewServer creates a safeweb server with the provided configuration. It will
@@ -252,10 +232,6 @@ func NewServer(config Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to set defaults: %w", err)
 	}
 
-	sameSite := csrf.SameSiteStrictMode
-	if config.CookiesSameSiteLax {
-		sameSite = csrf.SameSiteLaxMode
-	}
 	if config.CSPAllowInlineStyles {
 		if _, ok := config.CSP["style-src"]; ok {
 			config.CSP.Add("style-src", "unsafe-inline")
@@ -266,9 +242,6 @@ func NewServer(config Config) (*Server, error) {
 	s := &Server{
 		Config: config,
 		csp:    config.CSP.String(),
-		// only set Secure flag on CSRF cookies if we are in a secure context
-		// as otherwise the browser will reject the cookie
-		csrfProtect: csrf.Protect(config.CSRFSecret, csrf.Secure(config.SecureContext), csrf.SameSite(sameSite)),
 	}
 	s.h = cmp.Or(config.HTTPServer, &http.Server{})
 	if s.h.Handler != nil {
@@ -318,12 +291,6 @@ func checkHandlerType(apiPattern, browserPattern string) handlerType {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// if we are not in a secure context, signal to the CSRF middleware that
-	// TLS-only header checks should be skipped
-	if !s.Config.SecureContext {
-		r = csrf.PlaintextHTTPRequest(r)
-	}
-
 	_, bp := s.BrowserMux.Handler(r)
 	_, ap := s.APIMux.Handler(r)
 	switch {
@@ -376,10 +343,38 @@ func (s *Server) serveBrowser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", s.csp)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referer-Policy", "same-origin")
-	if s.SecureContext {
+	if s.ServeHSTS {
 		w.Header().Set("Strict-Transport-Security", cmp.Or(s.StrictTransportSecurityOptions, DefaultStrictTransportSecurityOptions))
 	}
-	s.csrfProtect(s.BrowserMux).ServeHTTP(w, r)
+
+	// Allow GET, HEAD, and OPTIONS requests to the browser mux without
+	// Sec-Fetch-Site header checks.
+	switch r.Method {
+	case "GET", "HEAD", "OPTIONS":
+		s.BrowserMux.ServeHTTP(w, r)
+		return
+	default:
+	}
+
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		// allow same-origin requests
+	case "same-site":
+		// allow cross-origin, but same-site requests if configured
+		if !s.AllowSecFetchSiteSameSite {
+			http.Error(w, "forbidden cross-origin request", http.StatusForbidden)
+			return
+		}
+	case "cross-site", "none":
+		// deny cross-site requests or direct navigation non-GET requests.
+		http.Error(w, "forbidden cross-origin request", http.StatusForbidden)
+		return
+	default:
+		// deny requests with no Sec-Fetch-Site header
+		http.Error(w, "missing required Sec-Fetch-Site header. You might need to update your browser.", http.StatusForbidden)
+		return
+	}
+	s.BrowserMux.ServeHTTP(w, r)
 }
 
 // ServeRedirectHTTP serves a single HTTP handler on the provided listener that

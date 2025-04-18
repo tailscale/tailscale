@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/gorilla/csrf"
 )
 
 func TestCompleteCORSConfig(t *testing.T) {
@@ -156,28 +155,62 @@ func TestAPIMuxCrossOriginResourceSharingHeaders(t *testing.T) {
 
 func TestCSRFProtection(t *testing.T) {
 	tests := []struct {
-		name          string
-		apiRoute      bool
-		passCSRFToken bool
-		wantStatus    int
+		name                   string
+		httpMethod             string
+		apiRoute               bool
+		secFetchSiteNone       bool
+		secFetchSiteSameOrigin bool
+		secFetchSiteSameSite   bool
+		secFetchSiteCrossSite  bool
+		permitSameSite         bool
+		wantStatus             int
 	}{
 		{
-			name:          "POST requests to non-API routes require CSRF token and fail if not provided",
-			apiRoute:      false,
-			passCSRFToken: false,
-			wantStatus:    http.StatusForbidden,
+			name:       "GET requests to browser routes do not require Sec-Fetch-Site header",
+			httpMethod: http.MethodGet,
+			apiRoute:   false,
+			wantStatus: http.StatusOK,
 		},
 		{
-			name:          "POST requests to non-API routes require CSRF token and pass if provided",
-			apiRoute:      false,
-			passCSRFToken: true,
-			wantStatus:    http.StatusOK,
+			name:       "POST requests to browser routes require Sec-Fetch-Site=same-origin and fail if not provided",
+			httpMethod: http.MethodPost,
+			apiRoute:   false,
+			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:          "POST requests to /api/ routes do not require CSRF token",
-			apiRoute:      true,
-			passCSRFToken: false,
-			wantStatus:    http.StatusOK,
+			name:                   "POST requests to browser routes require Sec-Fetch-Site=same-origin and pass if provided",
+			secFetchSiteSameOrigin: true,
+			httpMethod:             http.MethodPost,
+			apiRoute:               false,
+			wantStatus:             http.StatusOK,
+		},
+		{
+			name:             "POST requests to browser routes with Sec-Fetch-Site=none fail",
+			secFetchSiteNone: true,
+			httpMethod:       http.MethodPost,
+			apiRoute:         false,
+			wantStatus:       http.StatusForbidden,
+		},
+		{
+			name:                 "POST requests to browser routes with Sec-Fetch-Site=same-site fail by default",
+			secFetchSiteSameSite: true,
+			httpMethod:           http.MethodPost,
+			apiRoute:             false,
+			wantStatus:           http.StatusForbidden,
+		},
+		{
+			name:                 "POST requests to browser routes with Sec-Fetch-Site=same-site pass if configured",
+			secFetchSiteSameSite: true,
+			permitSameSite:       true,
+			httpMethod:           http.MethodPost,
+			apiRoute:             false,
+			wantStatus:           http.StatusOK,
+		},
+		{
+			name:       "POST requests to API routes do not require Sec-Fetch-Site header",
+			httpMethod: http.MethodPost,
+			apiRoute:   true,
+			wantStatus: http.StatusOK,
 		},
 	}
 	for _, tt := range tests {
@@ -199,7 +232,7 @@ func TestCSRFProtection(t *testing.T) {
 			defer s.Close()
 
 			// construct the test request
-			req := httptest.NewRequest("POST", "/", nil)
+			req := httptest.NewRequest(tt.httpMethod, "/", nil)
 
 			// send JSON for API routes, form data for browser routes
 			if tt.apiRoute {
@@ -208,25 +241,19 @@ func TestCSRFProtection(t *testing.T) {
 				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			}
 
-			// retrieve CSRF cookie & pass it in the test request
-			// ref: https://github.com/gorilla/csrf/blob/main/csrf_test.go#L344-L347
-			var token string
-			if tt.passCSRFToken {
-				h.Handle("/csrf", http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					token = csrf.Token(r)
-				}))
-				get := httptest.NewRequest("GET", "/csrf", nil)
-				w := httptest.NewRecorder()
-				s.h.Handler.ServeHTTP(w, get)
-				resp := w.Result()
-
-				// pass the token & cookie in our subsequent test request
-				req.Header.Set("X-CSRF-Token", token)
-				for _, c := range resp.Cookies() {
-					req.AddCookie(c)
-				}
+			if tt.permitSameSite {
+				s.Config.AllowSecFetchSiteSameSite = true
 			}
 
+			if tt.secFetchSiteNone {
+				req.Header.Set("Sec-Fetch-Site", "none")
+			} else if tt.secFetchSiteSameOrigin {
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+			} else if tt.secFetchSiteSameSite {
+				req.Header.Set("Sec-Fetch-Site", "same-site")
+			} else if tt.secFetchSiteCrossSite {
+				req.Header.Set("Sec-Fetch-Site", "cross-site")
+			}
 			w := httptest.NewRecorder()
 			s.h.Handler.ServeHTTP(w, req)
 			resp := w.Result()
@@ -289,48 +316,6 @@ func TestContentSecurityPolicyHeader(t *testing.T) {
 
 			if got := resp.Header.Get("Content-Security-Policy"); got != tt.wantCSP {
 				t.Fatalf("content security policy want: %q; got: %q", tt.wantCSP, got)
-			}
-		})
-	}
-}
-
-func TestCSRFCookieSecureMode(t *testing.T) {
-	tests := []struct {
-		name       string
-		secureMode bool
-		wantSecure bool
-	}{
-		{
-			name:       "CSRF cookie should be secure when server is in secure context",
-			secureMode: true,
-			wantSecure: true,
-		},
-		{
-			name:       "CSRF cookie should not be secure when server is not in secure context",
-			secureMode: false,
-			wantSecure: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := &http.ServeMux{}
-			h.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Write([]byte("ok"))
-			}))
-			s, err := NewServer(Config{BrowserMux: h, SecureContext: tt.secureMode})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer s.Close()
-
-			req := httptest.NewRequest("GET", "/", nil)
-			w := httptest.NewRecorder()
-			s.h.Handler.ServeHTTP(w, req)
-			resp := w.Result()
-
-			cookie := resp.Cookies()[0]
-			if (cookie.Secure == tt.wantSecure) == false {
-				t.Fatalf("csrf cookie secure flag want: %v; got: %v", tt.wantSecure, cookie.Secure)
 			}
 		})
 	}
@@ -607,7 +592,7 @@ func TestStrictTransportSecurityOptions(t *testing.T) {
 			h.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Write([]byte("ok"))
 			}))
-			s, err := NewServer(Config{BrowserMux: h, SecureContext: tt.secureContext, StrictTransportSecurityOptions: tt.options})
+			s, err := NewServer(Config{BrowserMux: h, ServeHSTS: tt.secureContext, StrictTransportSecurityOptions: tt.options})
 			if err != nil {
 				t.Fatal(err)
 			}
