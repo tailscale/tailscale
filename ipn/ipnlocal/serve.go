@@ -632,7 +632,7 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 
 	hostname := r.Host
 	if r.TLS == nil {
-		tcd := "." + b.Status().CurrentTailnet.MagicDNSSuffix
+		tcd := "." + b.CurrentProfile().NetworkProfile().MagicDNSName
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
 			hostname = host
 		}
