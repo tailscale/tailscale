@@ -7,8 +7,6 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
-	"gopkg.in/square/go-jose.v2"
-	"gopkg.in/square/go-jose.v2/jwt"
 	"io"
 	"log"
 	"net/http"
@@ -18,29 +16,32 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"testing"
+	"time"
+
+	"gopkg.in/square/go-jose.v2"
+	"gopkg.in/square/go-jose.v2/jwt"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
-	"testing"
-	"time"
 )
 
-// normalizeMap recursively sorts []interface{} values in a map[string]interface{}
-func normalizeMap(t *testing.T, m map[string]interface{}) map[string]interface{} {
+// normalizeMap recursively sorts []any values in a map[string]any
+func normalizeMap(t *testing.T, m map[string]any) map[string]any {
 	t.Helper()
-	normalized := make(map[string]interface{}, len(m))
+	normalized := make(map[string]any, len(m))
 	for k, v := range m {
 		switch val := v.(type) {
-		case []interface{}:
+		case []any:
 			sorted := make([]string, len(val))
 			for i, item := range val {
 				sorted[i] = fmt.Sprintf("%v", item) // convert everything to string for sorting
 			}
 			sort.Strings(sorted)
 
-			// convert back to []interface{}
-			sortedIface := make([]interface{}, len(sorted))
+			// convert back to []any
+			sortedIface := make([]any, len(sorted))
 			for i, s := range sorted {
 				sortedIface[i] = s
 			}
@@ -101,26 +102,26 @@ func TestFlattenExtraClaims(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []capRule
-		expected map[string]interface{}
+		expected map[string]any
 	}{
 		{
 			name: "empty extra claims",
 			input: []capRule{
-				{ExtraClaims: map[string]interface{}{}},
+				{ExtraClaims: map[string]any{}},
 			},
-			expected: map[string]interface{}{},
+			expected: map[string]any{},
 		},
 		{
 			name: "string and number values",
 			input: []capRule{
 				{
-					ExtraClaims: map[string]interface{}{
+					ExtraClaims: map[string]any{
 						"featureA": "read",
 						"featureB": 42,
 					},
 				},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"featureA": "read",
 				"featureB": "42",
 			},
@@ -129,95 +130,95 @@ func TestFlattenExtraClaims(t *testing.T) {
 			name: "slice of strings and ints",
 			input: []capRule{
 				{
-					ExtraClaims: map[string]interface{}{
-						"roles": []interface{}{"admin", "user", 1},
+					ExtraClaims: map[string]any{
+						"roles": []any{"admin", "user", 1},
 					},
 				},
 			},
-			expected: map[string]interface{}{
-				"roles": []interface{}{"admin", "user", "1"},
+			expected: map[string]any{
+				"roles": []any{"admin", "user", "1"},
 			},
 		},
 		{
 			name: "duplicate values deduplicated (slice input)",
 			input: []capRule{
 				{
-					ExtraClaims: map[string]interface{}{
+					ExtraClaims: map[string]any{
 						"foo": []string{"bar", "baz"},
 					},
 				},
 				{
-					ExtraClaims: map[string]interface{}{
-						"foo": []interface{}{"bar", "qux"},
+					ExtraClaims: map[string]any{
+						"foo": []any{"bar", "qux"},
 					},
 				},
 			},
-			expected: map[string]interface{}{
-				"foo": []interface{}{"bar", "baz", "qux"},
+			expected: map[string]any{
+				"foo": []any{"bar", "baz", "qux"},
 			},
 		},
 		{
 			name: "ignore unsupported map type, keep valid scalar",
 			input: []capRule{
 				{
-					ExtraClaims: map[string]interface{}{
-						"invalid": map[string]interface{}{"bad": "yes"},
+					ExtraClaims: map[string]any{
+						"invalid": map[string]any{"bad": "yes"},
 						"valid":   "ok",
 					},
 				},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"valid": "ok",
 			},
 		},
 		{
 			name: "scalar first, slice second",
 			input: []capRule{
-				{ExtraClaims: map[string]interface{}{"foo": "bar"}},
-				{ExtraClaims: map[string]interface{}{"foo": []interface{}{"baz"}}},
+				{ExtraClaims: map[string]any{"foo": "bar"}},
+				{ExtraClaims: map[string]any{"foo": []any{"baz"}}},
 			},
-			expected: map[string]interface{}{
-				"foo": []interface{}{"bar", "baz"}, // since first was scalar, second being a slice forces slice output
+			expected: map[string]any{
+				"foo": []any{"bar", "baz"}, // since first was scalar, second being a slice forces slice output
 			},
 		},
 		{
 			name: "conflicting scalar and unsupported map",
 			input: []capRule{
-				{ExtraClaims: map[string]interface{}{"foo": "bar"}},
-				{ExtraClaims: map[string]interface{}{"foo": map[string]interface{}{"bad": "entry"}}},
+				{ExtraClaims: map[string]any{"foo": "bar"}},
+				{ExtraClaims: map[string]any{"foo": map[string]any{"bad": "entry"}}},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"foo": "bar", // map should be ignored
 			},
 		},
 		{
 			name: "multiple slices with overlap",
 			input: []capRule{
-				{ExtraClaims: map[string]interface{}{"roles": []interface{}{"admin", "user"}}},
-				{ExtraClaims: map[string]interface{}{"roles": []interface{}{"admin", "guest"}}},
+				{ExtraClaims: map[string]any{"roles": []any{"admin", "user"}}},
+				{ExtraClaims: map[string]any{"roles": []any{"admin", "guest"}}},
 			},
-			expected: map[string]interface{}{
-				"roles": []interface{}{"admin", "user", "guest"},
+			expected: map[string]any{
+				"roles": []any{"admin", "user", "guest"},
 			},
 		},
 		{
 			name: "slice with unsupported values",
 			input: []capRule{
-				{ExtraClaims: map[string]interface{}{
-					"mixed": []interface{}{"ok", 42, map[string]string{"oops": "fail"}},
+				{ExtraClaims: map[string]any{
+					"mixed": []any{"ok", 42, map[string]string{"oops": "fail"}},
 				}},
 			},
-			expected: map[string]interface{}{
-				"mixed": []interface{}{"ok", "42"}, // map is ignored
+			expected: map[string]any{
+				"mixed": []any{"ok", "42"}, // map is ignored
 			},
 		},
 		{
 			name: "duplicate scalar value",
 			input: []capRule{
-				{ExtraClaims: map[string]interface{}{"env": "prod"}},
-				{ExtraClaims: map[string]interface{}{"env": "prod"}},
+				{ExtraClaims: map[string]any{"env": "prod"}},
+				{ExtraClaims: map[string]any{"env": "prod"}},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"env": "prod", // not converted to slice
 			},
 		},
@@ -242,7 +243,7 @@ func TestExtraClaims(t *testing.T) {
 		name        string
 		claim       tailscaleClaims
 		extraClaims []capRule
-		expected    map[string]interface{}
+		expected    map[string]any
 		expectError bool
 	}{
 		{
@@ -261,12 +262,12 @@ func TestExtraClaims(t *testing.T) {
 			},
 			extraClaims: []capRule{
 				{
-					ExtraClaims: map[string]interface{}{
+					ExtraClaims: map[string]any{
 						"foo": []string{"bar"},
 					},
 				},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"nonce":     "foobar",
 				"key":       "nodekey:0000000000000000000000000000000000000000000000000000000000000000",
 				"addresses": nil,
@@ -275,7 +276,7 @@ func TestExtraClaims(t *testing.T) {
 				"tailnet":   "test.ts.net",
 				"email":     "test@example.com",
 				"username":  "test",
-				"foo":       []interface{}{"bar"},
+				"foo":       []any{"bar"},
 			},
 		},
 		{
@@ -294,17 +295,17 @@ func TestExtraClaims(t *testing.T) {
 			},
 			extraClaims: []capRule{
 				{
-					ExtraClaims: map[string]interface{}{
+					ExtraClaims: map[string]any{
 						"foo": []string{"bar"},
 					},
 				},
 				{
-					ExtraClaims: map[string]interface{}{
+					ExtraClaims: map[string]any{
 						"foo": []string{"foobar"},
 					},
 				},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"nonce":     "foobar",
 				"key":       "nodekey:0000000000000000000000000000000000000000000000000000000000000000",
 				"addresses": nil,
@@ -313,7 +314,7 @@ func TestExtraClaims(t *testing.T) {
 				"tailnet":   "test.ts.net",
 				"email":     "test@example.com",
 				"username":  "test",
-				"foo":       []interface{}{"foobar", "bar"},
+				"foo":       []any{"foobar", "bar"},
 			},
 		},
 		{
@@ -332,17 +333,17 @@ func TestExtraClaims(t *testing.T) {
 			},
 			extraClaims: []capRule{
 				{
-					ExtraClaims: map[string]interface{}{
+					ExtraClaims: map[string]any{
 						"foo": []string{"bar"},
 					},
 				},
 				{
-					ExtraClaims: map[string]interface{}{
+					ExtraClaims: map[string]any{
 						"bar": []string{"foo"},
 					},
 				},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"nonce":     "foobar",
 				"key":       "nodekey:0000000000000000000000000000000000000000000000000000000000000000",
 				"addresses": nil,
@@ -351,8 +352,8 @@ func TestExtraClaims(t *testing.T) {
 				"tailnet":   "test.ts.net",
 				"email":     "test@example.com",
 				"username":  "test",
-				"foo":       []interface{}{"bar"},
-				"bar":       []interface{}{"foo"},
+				"foo":       []any{"bar"},
+				"bar":       []any{"foo"},
 			},
 		},
 		{
@@ -371,12 +372,12 @@ func TestExtraClaims(t *testing.T) {
 			},
 			extraClaims: []capRule{
 				{
-					ExtraClaims: map[string]interface{}{
+					ExtraClaims: map[string]any{
 						"username": "foobar",
 					},
 				},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"nonce":     "foobar",
 				"key":       "nodekey:0000000000000000000000000000000000000000000000000000000000000000",
 				"addresses": nil,
@@ -402,8 +403,8 @@ func TestExtraClaims(t *testing.T) {
 				UserID:    0,
 				UserName:  "test",
 			},
-			extraClaims: []capRule{{ExtraClaims: map[string]interface{}{}}},
-			expected: map[string]interface{}{
+			extraClaims: []capRule{{ExtraClaims: map[string]any{}}},
+			expected: map[string]any{
 				"nonce":     "foobar",
 				"key":       "nodekey:0000000000000000000000000000000000000000000000000000000000000000",
 				"addresses": nil,
@@ -427,13 +428,13 @@ func TestExtraClaims(t *testing.T) {
 				return // just as expected
 			}
 
-			// Marshal to JSON then unmarshal back to map[string]interface{}
+			// Marshal to JSON then unmarshal back to map[string]any
 			gotClaims, err := json.Marshal(claims)
 			if err != nil {
 				t.Errorf("json.Marshal(claims) error = %v", err)
 			}
 
-			var gotClaimsMap map[string]interface{}
+			var gotClaimsMap map[string]any
 			if err := json.Unmarshal(gotClaims, &gotClaimsMap); err != nil {
 				t.Fatalf("json.Unmarshal(gotClaims) error = %v", err)
 			}
@@ -459,7 +460,7 @@ func TestServeToken(t *testing.T) {
 		redirectURI string
 		remoteAddr  string
 		expectError bool
-		expected    map[string]interface{}
+		expected    map[string]any
 	}{
 		{
 			name:        "GET not allowed",
@@ -516,13 +517,13 @@ func TestServeToken(t *testing.T) {
 				tailcfg.PeerCapabilityTsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
-						ExtraClaims: map[string]interface{}{
+						ExtraClaims: map[string]any{
 							"foo": "bar",
 						},
 					}),
 				},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"foo": "bar",
 			},
 		},
@@ -536,7 +537,7 @@ func TestServeToken(t *testing.T) {
 				tailcfg.PeerCapabilityTsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
-						ExtraClaims: map[string]interface{}{
+						ExtraClaims: map[string]any{
 							"sub": "should-not-overwrite",
 						},
 					}),
@@ -623,7 +624,7 @@ func TestServeToken(t *testing.T) {
 				t.Fatalf("failed to parse ID token: %v", err)
 			}
 
-			out := make(map[string]interface{})
+			out := make(map[string]any)
 			if err := tok.Claims(oidcTestingPublicKey(t), &out); err != nil {
 				t.Fatalf("failed to extract claims: %v", err)
 			}
@@ -647,7 +648,7 @@ func TestExtraUserInfo(t *testing.T) {
 		name           string
 		caps           tailcfg.PeerCapMap
 		tokenValidTill time.Time
-		expected       map[string]interface{}
+		expected       map[string]any
 		expectError    bool
 	}{
 		{
@@ -657,14 +658,14 @@ func TestExtraUserInfo(t *testing.T) {
 				tailcfg.PeerCapabilityTsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
-						ExtraClaims: map[string]interface{}{
+						ExtraClaims: map[string]any{
 							"foo": []string{"bar"},
 						},
 					}),
 				},
 			},
-			expected: map[string]interface{}{
-				"foo": []interface{}{"bar"},
+			expected: map[string]any{
+				"foo": []any{"bar"},
 			},
 		},
 		{
@@ -674,14 +675,14 @@ func TestExtraUserInfo(t *testing.T) {
 				tailcfg.PeerCapabilityTsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
-						ExtraClaims: map[string]interface{}{
+						ExtraClaims: map[string]any{
 							"foo": []string{"bar", "foobar"},
 						},
 					}),
 				},
 			},
-			expected: map[string]interface{}{
-				"foo": []interface{}{"bar", "foobar"},
+			expected: map[string]any{
+				"foo": []any{"bar", "foobar"},
 			},
 		},
 		{
@@ -691,14 +692,14 @@ func TestExtraUserInfo(t *testing.T) {
 				tailcfg.PeerCapabilityTsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
-						ExtraClaims: map[string]interface{}{
+						ExtraClaims: map[string]any{
 							"foo": "bar",
 							"bar": "foo",
 						},
 					}),
 				},
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"foo": "bar",
 				"bar": "foo",
 			},
@@ -707,7 +708,7 @@ func TestExtraUserInfo(t *testing.T) {
 			name:           "empty extra claims",
 			caps:           tailcfg.PeerCapMap{},
 			tokenValidTill: time.Now().Add(1 * time.Minute),
-			expected:       map[string]interface{}{},
+			expected:       map[string]any{},
 		},
 		{
 			name:           "attempt to overwrite protected claim",
@@ -716,7 +717,7 @@ func TestExtraUserInfo(t *testing.T) {
 				tailcfg.PeerCapabilityTsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
-						ExtraClaims: map[string]interface{}{
+						ExtraClaims: map[string]any{
 							"sub": "should-not-overwrite",
 							"foo": "ok",
 						},
@@ -732,19 +733,19 @@ func TestExtraUserInfo(t *testing.T) {
 				tailcfg.PeerCapabilityTsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: false,
-						ExtraClaims: map[string]interface{}{
+						ExtraClaims: map[string]any{
 							"foo": "ok",
 						},
 					}),
 				},
 			},
-			expected: map[string]interface{}{},
+			expected: map[string]any{},
 		},
 		{
 			name:           "expired token",
 			caps:           tailcfg.PeerCapMap{},
 			tokenValidTill: time.Now().Add(-1 * time.Minute),
-			expected:       map[string]interface{}{},
+			expected:       map[string]any{},
 			expectError:    true,
 		},
 	}
@@ -802,7 +803,7 @@ func TestExtraUserInfo(t *testing.T) {
 				t.Fatalf("expected 200 OK, got %d: %s", rr.Code, rr.Body.String())
 			}
 
-			var resp map[string]interface{}
+			var resp map[string]any
 			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("failed to parse JSON response: %v", err)
 			}

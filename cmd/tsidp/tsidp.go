@@ -543,14 +543,14 @@ type userInfo struct {
 }
 
 type capRule struct {
-	IncludeInUserInfo bool                   `json:"includeInUserInfo"`
-	ExtraClaims       map[string]interface{} `json:"extraClaims,omitempty"` // list of features peer is allowed to edit
+	IncludeInUserInfo bool           `json:"includeInUserInfo"`
+	ExtraClaims       map[string]any `json:"extraClaims,omitempty"` // list of features peer is allowed to edit
 }
 
 // flattenExtraClaims merges all ExtraClaims from a slice of capRule into a single map.
 // It deduplicates values for each claim and preserves the original input type:
-// scalar values remain scalars, and slices are returned as deduplicated []interface{} slices.
-func flattenExtraClaims(rules []capRule) map[string]interface{} {
+// scalar values remain scalars, and slices are returned as deduplicated []any slices.
+func flattenExtraClaims(rules []capRule) map[string]any {
 	// sets stores deduplicated stringified values for each claim key.
 	sets := make(map[string]map[string]struct{})
 
@@ -561,7 +561,7 @@ func flattenExtraClaims(rules []capRule) map[string]interface{} {
 		for claim, raw := range rule.ExtraClaims {
 			// Track whether the claim was provided as a slice
 			switch raw.(type) {
-			case []string, []interface{}:
+			case []string, []any:
 				isSlice[claim] = true
 			default:
 				// Only mark as scalar if this is the first time we've seen this claim
@@ -576,11 +576,11 @@ func flattenExtraClaims(rules []capRule) map[string]interface{} {
 	}
 
 	// Build final result: either scalar or slice depending on original type
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 	for claim, valSet := range sets {
 		if isSlice[claim] {
-			// Claim was provided as a slice: output as []interface{}
-			var vals []interface{}
+			// Claim was provided as a slice: output as []any
+			var vals []any
 			for val := range valSet {
 				vals = append(vals, val)
 			}
@@ -600,7 +600,7 @@ func flattenExtraClaims(rules []capRule) map[string]interface{} {
 // addClaimValue adds a claim value to the deduplication set for a given claim key.
 // It accepts scalars (string, int, float64), slices of strings or interfaces,
 // and recursively handles nested slices. Unsupported types are ignored with a log message.
-func addClaimValue(sets map[string]map[string]struct{}, claim string, val interface{}) {
+func addClaimValue(sets map[string]map[string]struct{}, claim string, val any) {
 	switch v := val.(type) {
 	case string, float64, int, int64:
 		// Ensure the claim set is initialized
@@ -620,7 +620,7 @@ func addClaimValue(sets map[string]map[string]struct{}, claim string, val interf
 			sets[claim][s] = struct{}{}
 		}
 
-	case []interface{}:
+	case []any:
 		// Recursively handle each item in the slice
 		for _, item := range v {
 			addClaimValue(sets, claim, item)
@@ -633,7 +633,7 @@ func addClaimValue(sets map[string]map[string]struct{}, claim string, val interf
 }
 
 // withExtraClaims merges flattened extra claims from a list of capRule into the provided struct v,
-// returning a map[string]interface{} that combines both sources.
+// returning a map[string]any that combines both sources.
 //
 // v is any struct whose fields represent static claims; it is first marshaled to JSON, then unmarshalled into a generic map.
 // rules is a slice of capRule objects that may define additional (extra) claims to merge.
@@ -643,7 +643,7 @@ func addClaimValue(sets map[string]map[string]struct{}, claim string, val interf
 // If an extra claim attempts to overwrite a protected claim, an error is returned.
 //
 // Returns the merged claims map or an error if any protected claim is violated or JSON (un)marshaling fails.
-func withExtraClaims(v any, rules []capRule) (map[string]interface{}, error) {
+func withExtraClaims(v any, rules []capRule) (map[string]any, error) {
 	// Marshal the static struct
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -651,7 +651,7 @@ func withExtraClaims(v any, rules []capRule) (map[string]interface{}, error) {
 	}
 
 	// Unmarshal into a generic map
-	var claimMap map[string]interface{}
+	var claimMap map[string]any
 	if err := json.Unmarshal(data, &claimMap); err != nil {
 		return nil, err
 	}
