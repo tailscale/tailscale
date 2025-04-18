@@ -8,12 +8,14 @@ package ipnext
 import (
 	"errors"
 	"fmt"
+	"reflect"
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 )
@@ -197,7 +199,22 @@ type Host interface {
 	// RegisterControlClientCallback registers a function to be called every time a new
 	// control client is created. The returned function unregisters the callback.
 	// It is a runtime error to register a nil callback.
+	//
+	// The callback is called with the LocalBackend's mutex locked so it's not
+	// possible to call back into it.
 	RegisterControlClientCallback(NewControlClientCallback) (unregister func())
+
+	// RegisterNetmapChangeCallback registers a function to be called when the
+	// network map changes, including changing to nil. The returned function
+	// unregisters the callback.
+	//
+	// The callback is called with the LocalBackend's mutex locked so it's not
+	// possible to call back into it.
+	RegisterNetmapChangeCallback(NetmapChangeCallback) (unregister func())
+
+	// RegisterOptionSetter registers a function to handle SetExtensionOption
+	// calls of a given type.
+	RegisterOptionSetter(reflect.Type, func(any) error)
 }
 
 // ExtensionServices provides access to the [Host]'s extension management services,
@@ -332,3 +349,7 @@ type ProfileStateChangeCallback func(_ ipn.LoginProfileView, _ ipn.PrefsView, sa
 // It returns a function to be called when the cc is being shut down,
 // or nil if no cleanup is needed.
 type NewControlClientCallback func(controlclient.Client, ipn.LoginProfileView) (cleanup func())
+
+// NetmapChangeCallback is called when the network map changes,
+// including changing to nil.
+type NetmapChangeCallback func(*netmap.NetworkMap)

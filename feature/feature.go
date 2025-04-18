@@ -52,3 +52,9 @@ func (h *Hook[Func]) Get() Func {
 	}
 	return h.f
 }
+
+// Get returns the hook function, or panics if it hasn't been set.
+// Use IsSet to check if it's been set.
+func (h *Hook[Func]) GetOk() (f Func, ok bool) {
+	return h.f, h.ok
+}
