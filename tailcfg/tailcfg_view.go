@@ -19,7 +19,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPolicy,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService
 
 // View returns a read-only view of User.
 func (p *User) View() UserView {
@@ -1174,6 +1174,60 @@ var _SSHActionViewNeedsRegeneration = SSHAction(struct {
 	AllowRemotePortForwarding bool
 	Recorders                 []netip.AddrPort
 	OnRecordingFailure        *SSHRecorderFailureAction
+}{})
+
+// View returns a read-only view of SSHPolicy.
+func (p *SSHPolicy) View() SSHPolicyView {
+	return SSHPolicyView{ж: p}
+}
+
+// SSHPolicyView provides a read-only view over SSHPolicy.
+//
+// Its methods should only be called if `Valid()` returns true.
+type SSHPolicyView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *SSHPolicy
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v SSHPolicyView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v SSHPolicyView) AsStruct() *SSHPolicy {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v SSHPolicyView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *SSHPolicyView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x SSHPolicy
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v SSHPolicyView) Rules() views.SliceView[*SSHRule, SSHRuleView] {
+	return views.SliceOfViews[*SSHRule, SSHRuleView](v.ж.Rules)
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHPolicyViewNeedsRegeneration = SSHPolicy(struct {
+	Rules []*SSHRule
 }{})
 
 // View returns a read-only view of SSHPrincipal.
