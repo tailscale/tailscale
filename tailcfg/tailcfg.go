@@ -1469,6 +1469,11 @@ const (
 	// PeerCapabilityRelayTarget grants the current node the ability to allocate
 	// relay endpoints to the peer which has this capability.
 	PeerCapabilityRelayTarget PeerCapability = "tailscale.com/cap/relay-target"
+
+	// PeerCapabilityTsIDP grants a peer tsidp-specific
+	// capabilities, such as the ability to add user groups to the OIDC
+	// claim
+	PeerCapabilityTsIDP PeerCapability = "tailscale.com/cap/tsidp"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
