@@ -139,6 +139,7 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
 		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
 		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		ephemeral        = defaultBool("OPERATOR_EPHEMERAL", false)
 	)
 	startlog := zlog.Named("startup")
 	if clientIDPath == "" || clientSecretPath == "" {
@@ -196,6 +197,7 @@ waitOnline:
 					Create: tailscale.KeyDeviceCreateCapabilities{
 						Reusable:      false,
 						Preauthorized: true,
+						Ephemeral:     ephemeral,
 						Tags:          strings.Split(operatorTags, ","),
 					},
 				},

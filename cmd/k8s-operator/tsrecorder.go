@@ -289,7 +289,7 @@ func (r *RecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr *t
 	if len(tags) == 0 {
 		tags = tsapi.Tags{"tag:k8s"}
 	}
-	authKey, err := newAuthKey(ctx, r.tsClient, tags.Stringify())
+	authKey, err := newAuthKey(ctx, r.tsClient, tags.Stringify(), false)
 	if err != nil {
 		return err
 	}
