@@ -291,11 +291,25 @@ func validateIngressClass(ctx context.Context, cl client.Client) error {
 }
 
 func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl client.Client, rec record.EventRecorder, tlsHost string, logger *zap.SugaredLogger) (handlers map[string]*ipn.HTTPHandler, err error) {
+	paths := make(map[string]struct{}) // track exact paths
+
 	addIngressBackend := func(b *networkingv1.IngressBackend, path string) {
 		if path == "" {
 			path = "/"
 			rec.Eventf(ing, corev1.EventTypeNormal, "PathUndefined", "configured backend is missing a path, defaulting to '/'")
 		}
+
+		// Only check for exact path conflicts
+		// Note: We don't check for prefix conflicts (e.g., /foo vs /foo/bar) because:
+		// 1. We treat all paths as PathTypePrefix or PathTypeImplementationSpecific
+		// 2. PathTypeExact is not fully supported yet
+		// 3. For prefix paths, the most specific path should match first
+		if _, exists := paths[path]; exists {
+			rec.Eventf(ing, corev1.EventTypeWarning, "ConflictingPaths",
+				"exact duplicate path %q found, this may cause unexpected routing behavior", path)
+			logger.Warnf("exact path conflict detected: %q", path)
+		}
+		paths[path] = struct{}{}
 
 		if b == nil {
 			return
@@ -346,11 +360,8 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 			continue
 		}
 		for _, p := range rule.HTTP.Paths {
-			// Send a warning if folks use Exact path type - to make
-			// it easier for us to support Exact path type matching
-			// in the future if needed.
-			// https://kubernetes.io/docs/concepts/services-networking/ingress/#path-types
-			if *p.PathType == networkingv1.PathTypeExact {
+			// Warn about Exact path type, but treat it as Prefix for now
+			if p.PathType != nil && *p.PathType == networkingv1.PathTypeExact {
 				msg := "Exact path type strict matching is currently not supported and requests will be routed as for Prefix path type. This behaviour might change in the future."
 				logger.Warnf(fmt.Sprintf("Unsupported Path type exact for path %s. %s", p.Path, msg))
 				rec.Eventf(ing, corev1.EventTypeWarning, "UnsupportedPathTypeExact", msg)
