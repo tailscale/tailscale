@@ -40,6 +40,179 @@ import (
 	"tailscale.com/util/mak"
 )
 
+// Annotation identifies an annotation utilized by the tailscale kubernetes operator.
+type Annotation uint
+
+// AnnotationScope identifies which resources it should be expected on
+type AnnotationScope uint
+
+var annotationByValue = map[string]Annotation{}
+
+func init() {
+	for a := Annotation(0); a <= PodAnnotationLastSetConfigFileHash; a++ {
+		if _, ok := annotationScopes[a]; !ok {
+			panic("missing scope for Annotation: " + strconv.Itoa(int(a)))
+		}
+
+		val := a.String()
+		if val != "" && val != "unknown annotation value "+strconv.Itoa(int(a)) {
+			annotationByValue[val] = a
+		}
+	}
+}
+
+const (
+	ScopeUnknown AnnotationScope = iota
+	ScopeService
+	ScopeIngress
+	ScopeGeneral
+)
+
+const (
+	AnnotationProxyClass Annotation = iota
+	AnnotationFinalizer
+	AnnotationExpose
+	AnnotationTags
+	AnnotationHostname
+	AnnotationTailnetTargetIPOld
+	AnnotationTailnetTargetIP
+	AnnotationTailnetTargetFQDN
+	AnnotationProxyGroup
+	AnnotationHTTPEndpoint
+	AnnotationOwnerReferences
+	AnnotationFunnel
+	AnnotationMagicDNSName
+	AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy
+	PodAnnotationLastSetClusterIP
+	PodAnnotationLastSetClusterDNSName
+	PodAnnotationLastSetTailnetTargetIP
+	PodAnnotationLastSetTailnetTargetFQDN
+	PodAnnotationLastSetConfigFileHash
+)
+
+var annotationScopes = map[Annotation][]AnnotationScope{
+	AnnotationProxyClass:         {ScopeGeneral},
+	AnnotationFinalizer:          {ScopeGeneral},
+	AnnotationExpose:             {ScopeService},
+	AnnotationTags:               {ScopeService},
+	AnnotationHostname:           {ScopeService},
+	AnnotationTailnetTargetIPOld: {ScopeService},
+	AnnotationTailnetTargetIP:    {ScopeService},
+	AnnotationTailnetTargetFQDN:  {ScopeService},
+	AnnotationProxyGroup:         {ScopeService},
+	AnnotationHTTPEndpoint:       {ScopeIngress},
+	AnnotationOwnerReferences:    {ScopeIngress},
+	AnnotationFunnel:             {ScopeIngress},
+	AnnotationMagicDNSName:       {ScopeService},
+	AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy: {ScopeIngress},
+	PodAnnotationLastSetClusterIP:                               {ScopeService, ScopeIngress},
+	PodAnnotationLastSetClusterDNSName:                          {ScopeService, ScopeIngress},
+	PodAnnotationLastSetTailnetTargetIP:                         {ScopeService, ScopeIngress},
+	PodAnnotationLastSetTailnetTargetFQDN:                       {ScopeService, ScopeIngress},
+	PodAnnotationLastSetConfigFileHash:                          {ScopeService, ScopeIngress},
+}
+
+func (a Annotation) String() string {
+	switch a {
+	case AnnotationProxyClass:
+		return "tailscale.com/proxy-class"
+	case AnnotationFinalizer:
+		return "tailscale.com/finalizer"
+	case AnnotationExpose:
+		return "tailscale.com/expose"
+	case AnnotationTags:
+		return "tailscale.com/tags"
+	case AnnotationHostname:
+		return "tailscale.com/hostname"
+	case AnnotationTailnetTargetIPOld:
+		return "tailscale.com/ts-tailnet-target-ip"
+	case AnnotationTailnetTargetIP:
+		return "tailscale.com/tailnet-ip"
+	case AnnotationTailnetTargetFQDN:
+		return "tailscale.com/tailnet-fqdn"
+	case AnnotationProxyGroup:
+		return "tailscale.com/proxy-group"
+	case AnnotationHTTPEndpoint:
+		return "tailscale.com/http-endpoint"
+	case AnnotationOwnerReferences:
+		return "tailscale.com/owner-references"
+	case AnnotationFunnel:
+		return "tailscale.com/funnel"
+	case AnnotationMagicDNSName:
+		return "tailscale.com/magic-dnsname"
+	case AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy:
+		return "tailscale.com/experimental-forward-cluster-traffic-via-ingress"
+	case PodAnnotationLastSetClusterIP:
+		return "tailscale.com/operator-last-set-cluster-ip"
+	case PodAnnotationLastSetClusterDNSName:
+		return "tailscale.com/operator-last-set-cluster-dns-name"
+	case PodAnnotationLastSetTailnetTargetIP:
+		return "tailscale.com/operator-last-set-ts-tailnet-target-ip"
+	case PodAnnotationLastSetTailnetTargetFQDN:
+		return "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
+	case PodAnnotationLastSetConfigFileHash:
+		return "tailscale.com/operator-last-set-config-file-hash"
+	default:
+		return "unknown annotation value " + strconv.Itoa(int(a))
+	}
+}
+
+func ParseAnnotation(s string) (Annotation, bool) {
+	a, ok := annotationByValue[s]
+	return a, ok
+}
+
+func ValidateAnnotations(o client.Object) error {
+	annotations := o.GetAnnotations()
+	var scope AnnotationScope
+	switch k := o.GetObjectKind().GroupVersionKind().Kind; k {
+	case "Ingress":
+		scope = ScopeIngress
+	case "Service":
+		scope = ScopeService
+	}
+
+annotations:
+	for a := range annotations {
+		if !strings.HasPrefix(a, "tailscale.com/") {
+			continue
+		}
+
+		ann, ok := ParseAnnotation(a)
+		if !ok {
+			return fmt.Errorf("failed to parse annotation '%s'", a)
+		}
+
+		scopes, ok := annotationScopes[ann]
+		if !ok {
+			return fmt.Errorf("failed to get annotation scopes '%s'", a)
+		}
+		for _, s := range scopes {
+			if s == ScopeGeneral || s == scope {
+				break annotations
+			}
+		}
+
+		return fmt.Errorf("unexpected annotation '%s'", a)
+	}
+
+	return nil
+}
+
+func (a Annotation) GetValue(o client.Object) string {
+	annots := o.GetAnnotations()
+	if annots == nil {
+		return ""
+	}
+
+	val, ok := annots[a.String()]
+	if !ok {
+		return ""
+	}
+
+	return val
+}
+
 const (
 	// Labels that the operator sets on StatefulSets and Pods. If you add a
 	// new label here, do also add it to tailscaleManagedLabels var to
@@ -48,51 +221,20 @@ const (
 	LabelParentName      = "tailscale.com/parent-resource"
 	LabelParentNamespace = "tailscale.com/parent-resource-ns"
 
-	// LabelProxyClass can be set by users on tailscale Ingresses and Services that define cluster ingress or
-	// cluster egress, to specify that configuration in this ProxyClass should be applied to resources created for
-	// the Ingress or Service.
-	LabelProxyClass = "tailscale.com/proxy-class"
+	// LabelAnnotationProxyClass can be set (on annotation or label) by users on tailscale Ingresses and Services
+	// that define cluster ingress or cluster egress, to specify that configuration in this ProxyClass should be
+	// applied to resources created for the Ingress or Service. If this is set as both an annotation and a
+	// label, the value set on the label will be used.
+	LabelAnnotationProxyClass = "tailscale.com/proxy-class"
 
 	FinalizerName = "tailscale.com/finalizer"
 
-	// Annotations settable by users on services.
-	AnnotationExpose             = "tailscale.com/expose"
-	AnnotationTags               = "tailscale.com/tags"
-	AnnotationHostname           = "tailscale.com/hostname"
-	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
-	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
-	//MagicDNS name of tailnet node.
-	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
-
-	AnnotationProxyGroup = "tailscale.com/proxy-group"
-
-	// Annotations settable by users on ingresses.
-	AnnotationFunnel = "tailscale.com/funnel"
-
-	// If set to true, set up iptables/nftables rules in the proxy forward
-	// cluster traffic to the tailnet IP of that proxy. This can only be set
-	// on an Ingress. This is useful in cases where a cluster target needs
-	// to be able to reach a cluster workload exposed to tailnet via Ingress
-	// using the same hostname as a tailnet workload (in this case, the
-	// MagicDNS name of the ingress proxy). This annotation is experimental.
-	// If it is set to true, the proxy set up for Ingress, will run
-	// tailscale in non-userspace, with NET_ADMIN cap for tailscale
-	// container and will also run a privileged init container that enables
-	// forwarding.
-	// Eventually this behaviour might become the default.
-	AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy = "tailscale.com/experimental-forward-cluster-traffic-via-ingress"
-
-	// Annotations set by the operator on pods to trigger restarts when the
-	// hostname, IP, FQDN or tailscaled config changes. If you add a new
-	// annotation here, also add it to tailscaleManagedAnnotations var to
-	// ensure that it does not get removed when a ProxyClass configuration
-	// is applied.
-	podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
-	podAnnotationLastSetClusterDNSName    = "tailscale.com/operator-last-set-cluster-dns-name"
-	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
-	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
-	// podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
-	podAnnotationLastSetConfigFileHash = "tailscale.com/operator-last-set-config-file-hash"
+	// podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
+	// podAnnotationLastSetClusterDNSName    = "tailscale.com/operator-last-set-cluster-dns-name"
+	// podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
+	// podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
+	// // podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
+	// podAnnotationLastSetConfigFileHash = "tailscale.com/operator-last-set-config-file-hash"
 
 	proxyTypeEgress          = "egress_service"
 	proxyTypeIngressService  = "ingress_service"
@@ -109,8 +251,47 @@ const (
 var (
 	// tailscaleManagedLabels are label keys that tailscale operator sets on StatefulSets and Pods.
 	tailscaleManagedLabels = []string{kubetypes.LabelManaged, LabelParentType, LabelParentName, LabelParentNamespace, "app"}
+
+	// taiscaleLabels are all the tailscale labels (managed and unmanaged)
+	tailscaleLabels = append(
+		[]string{},
+		append(tailscaleManagedLabels, LabelAnnotationProxyClass)...,
+	)
+
 	// tailscaleManagedAnnotations are annotation keys that tailscale operator sets on StatefulSets and Pods.
-	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN, podAnnotationLastSetConfigFileHash}
+	tailscaleManagedAnnotations = []string{PodAnnotationLastSetClusterIP.String(), PodAnnotationLastSetTailnetTargetIP.String(), PodAnnotationLastSetTailnetTargetFQDN.String(), PodAnnotationLastSetConfigFileHash.String()}
+
+	// // taiscaleAnnotations are all the tailscale labels (managed and unmanaged)
+	// tailscaleAnnotations = append(
+	// 	[]string{},
+	// 	append(
+	// 		tailscaleManagedAnnotations,
+	// 		AnnotationExpose,
+	// 		AnnotationTags,
+	// 		AnnotationHostname,
+	// 		annotationTailnetTargetIPOld,
+	// 		AnnotationTailnetTargetIP,
+	// 		AnnotationTailnetTargetFQDN,
+	// 		AnnotationProxyGroup,
+	// 		AnnotationFunnel,
+	// 		AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy,
+	// 		podAnnotationLastSetClusterDNSName, // this one wasn't in managed list
+	// 	)...,
+	// )
+	//
+	// taiscaleAnnotations are all the tailscale labels (managed and unmanaged) that are expected on a service resource
+	// tailscaleSvcAnnotations = append(
+	// 	[]string{
+	// 		AnnotationProxyGroup,
+	// 		AnnotationExpose,
+	// 		AnnotationTags,
+	// 		AnnotationHostname,
+	// 		annotationTailnetTargetIPOld,
+	// 		AnnotationTailnetTargetIP,
+	// 		AnnotationTailnetTargetFQDN,
+	// 		LabelAnnotationProxyClass,
+	// 	},
+	// )
 )
 
 type tailscaleSTSConfig struct {
@@ -622,25 +803,25 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_DEST_IP",
 			Value: sts.ClusterTargetIP,
 		})
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterIP, sts.ClusterTargetIP)
+		mak.Set(&ss.Spec.Template.Annotations, PodAnnotationLastSetClusterIP.String(), sts.ClusterTargetIP)
 	} else if sts.ClusterTargetDNSName != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_EXPERIMENTAL_DEST_DNS_NAME",
 			Value: sts.ClusterTargetDNSName,
 		})
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterDNSName, sts.ClusterTargetDNSName)
+		mak.Set(&ss.Spec.Template.Annotations, PodAnnotationLastSetClusterDNSName.String(), sts.ClusterTargetDNSName)
 	} else if sts.TailnetTargetIP != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_TAILNET_TARGET_IP",
 			Value: sts.TailnetTargetIP,
 		})
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetTailnetTargetIP, sts.TailnetTargetIP)
+		mak.Set(&ss.Spec.Template.Annotations, PodAnnotationLastSetTailnetTargetIP.String(), sts.TailnetTargetIP)
 	} else if sts.TailnetTargetFQDN != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_TAILNET_TARGET_FQDN",
 			Value: sts.TailnetTargetFQDN,
 		})
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetTailnetTargetFQDN, sts.TailnetTargetFQDN)
+		mak.Set(&ss.Spec.Template.Annotations, PodAnnotationLastSetTailnetTargetFQDN.String(), sts.TailnetTargetFQDN)
 	} else if sts.ServeConfig != nil {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_SERVE_CONFIG",
@@ -698,11 +879,11 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		// TODO(irbekrm): remove this in 1.84.
 		hash := tsConfigHash
 		if dev == nil || dev.capver >= 110 {
-			hash = s.Spec.Template.GetAnnotations()[podAnnotationLastSetConfigFileHash]
+			hash = PodAnnotationLastSetConfigFileHash.GetValue(s)
 		}
 		s.Spec = ss.Spec
 		if hash != "" {
-			mak.Set(&s.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, hash)
+			mak.Set(&s.Spec.Template.Annotations, PodAnnotationLastSetConfigFileHash.String(), hash)
 		}
 		s.ObjectMeta.Labels = ss.Labels
 		s.ObjectMeta.Annotations = ss.Annotations
@@ -1143,9 +1324,10 @@ func defaultEnv(envName, defVal string) string {
 }
 
 func nameForService(svc *corev1.Service) string {
-	if h, ok := svc.Annotations[AnnotationHostname]; ok {
+	if h := AnnotationHostname.GetValue(svc); h != "" {
 		return h
 	}
+
 	return svc.Namespace + "-" + svc.Name
 }
 
