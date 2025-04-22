@@ -1725,6 +1725,7 @@ func (n *nftablesRunner) DelSNATRule() error {
 			DestRegister:   1,
 			Len:            4,
 			Mask:           hexTSFwmarkMask,
+			Xor:            []byte{0x00, 0x00, 0x00, 0x00},
 		},
 		&expr.Cmp{
 			Op:       expr.CmpOpEq,
