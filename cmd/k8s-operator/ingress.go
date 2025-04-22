@@ -179,7 +179,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			},
 		},
 	}
-	if opt.Bool(ing.Annotations[AnnotationFunnel]).EqualBool(true) {
+	if opt.Bool(ing.Annotations[AnnotationFunnel.String()]).EqualBool(true) {
 		sc.AllowFunnel = map[ipn.HostPort]bool{
 			magic443: true,
 		}
@@ -204,7 +204,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
 	var tags []string
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+	if tstr, ok := ing.Annotations[AnnotationTags.String()]; ok {
 		tags = strings.Split(tstr, ",")
 	}
 	hostname := hostnameForIngress(ing)
@@ -220,7 +220,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		proxyType:           proxyTypeIngressResource,
 	}
 
-	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
+	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy.String()]; val == "true" {
 		sts.ForwardClusterTrafficViaL7IngressProxy = true
 	}
 
@@ -264,7 +264,7 @@ func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 	return ing != nil &&
 		ing.Spec.IngressClassName != nil &&
 		*ing.Spec.IngressClassName == tailscaleIngressClassName &&
-		ing.Annotations[AnnotationProxyGroup] == ""
+		ing.Annotations[AnnotationProxyGroup.String()] == ""
 }
 
 // validateIngressClass attempts to validate that 'tailscale' IngressClass

@@ -327,11 +327,11 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		// TODO(irbekrm): remove this in 1.84.
 		hash := cfgHash
 		if capver >= 110 {
-			hash = s.Spec.Template.GetAnnotations()[podAnnotationLastSetConfigFileHash]
+			hash = PodAnnotationLastSetConfigFileHash.GetValue(s)
 		}
 		s.Spec = ss.Spec
 		if hash != "" && pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-			mak.Set(&s.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, hash)
+			mak.Set(&s.Spec.Template.Annotations, PodAnnotationLastSetConfigFileHash.String(), hash)
 		}
 
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels

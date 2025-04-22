@@ -30,7 +30,6 @@ import (
 
 const (
 	dnsRecordsRecocilerFinalizer = "tailscale.com/dns-records-reconciler"
-	annotationTSMagicDNSName     = "tailscale.com/magic-dnsname"
 )
 
 // dnsRecordsReconciler knows how to update dnsrecords ConfigMap with DNS
@@ -159,7 +158,7 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 	// Ensure that headless Service is annotated with the current MagicDNS
 	// name to help with records cleanup when proxy resources are deleted or
 	// MagicDNS name changes.
-	oldFqdn := headlessSvc.Annotations[annotationTSMagicDNSName]
+	oldFqdn := AnnotationMagicDNSName.GetValue(headlessSvc)
 	if oldFqdn != "" && oldFqdn != fqdn { // i.e user has changed the value of tailscale.com/tailnet-fqdn annotation
 		logger.Debugf("MagicDNS name has changed, remvoving record for %s", oldFqdn)
 		updateFunc := func(rec *operatorutils.Records) {
@@ -169,7 +168,7 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 			return fmt.Errorf("error removing record for %s: %w", oldFqdn, err)
 		}
 	}
-	mak.Set(&headlessSvc.Annotations, annotationTSMagicDNSName, fqdn)
+	mak.Set(&headlessSvc.Annotations, AnnotationMagicDNSName.String(), fqdn)
 	if !apiequality.Semantic.DeepEqual(oldHeadlessSvc, headlessSvc) {
 		logger.Infof("provisioning DNS record for MagicDNS name: %s", fqdn) // this will be printed exactly once
 		if err := dnsRR.Update(ctx, headlessSvc); err != nil {
@@ -267,7 +266,7 @@ func (h *dnsRecordsReconciler) maybeCleanup(ctx context.Context, headlessSvc *co
 		logger.Debug("'dnsrecords' ConfigMap contains no records")
 		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
 	}
-	fqdn, _ := headlessSvc.GetAnnotations()[annotationTSMagicDNSName]
+	fqdn := AnnotationMagicDNSName.GetValue(headlessSvc)
 	if fqdn == "" {
 		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
 	}
@@ -316,7 +315,7 @@ func (dnsRR *dnsRecordsReconciler) fqdnForDNSRecord(ctx context.Context, headles
 		} else if err != nil {
 			return "", err
 		}
-		return svc.Annotations[AnnotationTailnetTargetFQDN], nil
+		return AnnotationTailnetTargetFQDN.GetValue(svc), nil
 	}
 	return "", nil
 }
@@ -363,6 +362,5 @@ func (dnsRR *dnsRecordsReconciler) isSvcForFQDNEgressProxy(ctx context.Context, 
 	} else if err != nil {
 		return false, err
 	}
-	annots := parentSvc.Annotations
-	return annots != nil && annots[AnnotationTailnetTargetFQDN] != "", nil
+	return AnnotationTailnetTargetFQDN.GetValue(parentSvc) != "", nil
 }

@@ -277,7 +277,7 @@ func TestValidateIngress(t *testing.T) {
 			Name:      "test-ingress",
 			Namespace: "default",
 			Annotations: map[string]string{
-				AnnotationProxyGroup: "test-pg",
+				AnnotationProxyGroup.String(): "test-pg",
 			},
 		},
 		Spec: networkingv1.IngressSpec{
@@ -338,7 +338,7 @@ func TestValidateIngress(t *testing.T) {
 					Name:      baseIngress.Name,
 					Namespace: baseIngress.Namespace,
 					Annotations: map[string]string{
-						AnnotationTags: "tag:invalid!",
+						AnnotationTags.String(): "tag:invalid!",
 					},
 				},
 			},
@@ -411,7 +411,7 @@ func TestValidateIngress(t *testing.T) {
 					Name:      "existing-ingress",
 					Namespace: "default",
 					Annotations: map[string]string{
-						AnnotationProxyGroup: "test-pg",
+						AnnotationProxyGroup.String(): "test-pg",
 					},
 				},
 				Spec: networkingv1.IngressSpec{
@@ -759,7 +759,7 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	existingVIPSvc := &tailscale.VIPService{
 		Name: "svc:my-svc",
 		Annotations: map[string]string{
-			ownerAnnotation: `{"ownerrefs":[{"operatorID":"operator-2"}]}`,
+			AnnotationOwnerReferences.String(): `{"ownerrefs":[{"operatorID":"operator-2"}]}`,
 		},
 	}
 	ft.vipServices = map[tailcfg.ServiceName]*tailscale.VIPService{

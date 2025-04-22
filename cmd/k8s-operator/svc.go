@@ -93,7 +93,7 @@ func childResourceLabels(name, ns, typ string) map[string]string {
 
 func (a *ServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
 	targetIP := tailnetTargetAnnotation(svc)
-	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
+	targetFQDN := AnnotationTailnetTargetFQDN.GetValue(svc)
 	return a.shouldExpose(svc) || targetIP != "" || targetFQDN != ""
 }
 
@@ -112,7 +112,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
 
-	if _, ok := svc.Annotations[AnnotationProxyGroup]; ok {
+	if AnnotationProxyGroup.GetValue(svc) != "" {
 		return reconcile.Result{}, nil // this reconciler should not look at Services for ProxyGroup
 	}
 
@@ -257,7 +257,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 	crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
 	var tags []string
-	if tstr, ok := svc.Annotations[AnnotationTags]; ok {
+	if tstr := AnnotationTags.GetValue(svc); tstr != "" {
 		tags = strings.Split(tstr, ",")
 	}
 
@@ -287,8 +287,9 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		sts.TailnetTargetIP = ip
 		a.managedEgressProxies.Add(svc.UID)
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
-	} else if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
-		fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]
+	} else if fqdn := AnnotationTailnetTargetFQDN.GetValue(svc); fqdn != "" {
+		// NOTE (TOM): Do we need this? fqdn should already be set...
+		fqdn := AnnotationTailnetTargetFQDN.GetValue(svc)
 		if !strings.HasSuffix(fqdn, ".") {
 			fqdn = fqdn + "."
 		}
@@ -367,15 +368,15 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 func validateService(svc *corev1.Service) []string {
 	violations := make([]string, 0)
-	if svc.Annotations[AnnotationTailnetTargetFQDN] != "" && svc.Annotations[AnnotationTailnetTargetIP] != "" {
+	if AnnotationTailnetTargetFQDN.GetValue(svc) != "" && AnnotationTailnetTargetIP.GetValue(svc) != "" {
 		violations = append(violations, fmt.Sprintf("only one of annotations %s and %s can be set", AnnotationTailnetTargetIP, AnnotationTailnetTargetFQDN))
 	}
-	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+	if fqdn := AnnotationTailnetTargetFQDN.GetValue(svc); fqdn != "" {
 		if !isMagicDNSName(fqdn) {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
 		}
 	}
-	if ipStr := svc.Annotations[AnnotationTailnetTargetIP]; ipStr != "" {
+	if ipStr := AnnotationTailnetTargetIP.GetValue(svc); ipStr != "" {
 		ip, err := netip.ParseAddr(ipStr)
 		if err != nil {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q could not be parsed as a valid IP Address, error: %s", AnnotationTailnetTargetIP, ipStr, err))
@@ -386,7 +387,7 @@ func validateService(svc *corev1.Service) []string {
 
 	svcName := nameForService(svc)
 	if err := dnsname.ValidLabel(svcName); err != nil {
-		if _, ok := svc.Annotations[AnnotationHostname]; ok {
+		if AnnotationHostname.GetValue(svc) != "" {
 			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname specified %q: %s", svcName, err))
 		} else {
 			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname %q, use %q annotation to override: %s", svcName, AnnotationHostname, err))
@@ -420,7 +421,7 @@ func isTailscaleLoadBalancerService(svc *corev1.Service, isDefaultLoadBalancer b
 // hasExposeAnnotation reports whether Service has the tailscale.com/expose
 // annotation set
 func hasExposeAnnotation(svc *corev1.Service) bool {
-	return svc != nil && svc.Annotations[AnnotationExpose] == "true"
+	return svc != nil && AnnotationExpose.GetValue(svc) == "true"
 }
 
 // tailnetTargetAnnotation returns the value of tailscale.com/tailnet-ip
@@ -431,19 +432,24 @@ func tailnetTargetAnnotation(svc *corev1.Service) string {
 	if svc == nil {
 		return ""
 	}
-	if ip := svc.Annotations[AnnotationTailnetTargetIP]; ip != "" {
+	if ip := AnnotationTailnetTargetIP.GetValue(svc); ip != "" {
 		return ip
 	}
-	return svc.Annotations[annotationTailnetTargetIPOld]
+
+	return AnnotationTailnetTargetIPOld.GetValue(svc)
 }
 
 // proxyClassForObject returns the proxy class for the given object. If the
 // object does not have a proxy class label, it returns the default proxy class
 func proxyClassForObject(o client.Object, proxyDefaultClass string) string {
-	proxyClass, exists := o.GetLabels()[LabelProxyClass]
+	proxyClass, exists := o.GetLabels()[LabelAnnotationProxyClass]
 	if !exists {
-		proxyClass = proxyDefaultClass
+		proxyClass, exists = o.GetAnnotations()[LabelAnnotationProxyClass]
+		if !exists {
+			proxyClass = proxyDefaultClass
+		}
 	}
+
 	return proxyClass
 }
 

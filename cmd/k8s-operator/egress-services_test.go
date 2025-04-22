@@ -69,8 +69,8 @@ func TestTailscaleEgressServices(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
-				AnnotationProxyGroup:        "foo",
+				AnnotationTailnetTargetFQDN.String(): tailnetTargetFQDN,
+				AnnotationProxyGroup.String():        "foo",
 			},
 		},
 		Spec: corev1.ServiceSpec{

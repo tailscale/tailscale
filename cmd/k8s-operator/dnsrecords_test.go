@@ -81,7 +81,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "egress-fqdn",
 			Namespace:   "test",
-			Annotations: map[string]string{"tailscale.com/tailnet-fqdn": "foo.bar.ts.net"},
+			Annotations: map[string]string{AnnotationTailnetTargetFQDN.String(): "foo.bar.ts.net"},
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: "unused",
@@ -104,7 +104,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	// 2. DNS record is updated if tailscale.com/tailnet-fqdn annotation's
 	// value changes
 	mustUpdate(t, fc, "test", "egress-fqdn", func(svc *corev1.Service) {
-		svc.Annotations["tailscale.com/tailnet-fqdn"] = "baz.bar.ts.net"
+		svc.Annotations[AnnotationTailnetTargetFQDN.String()] = "baz.bar.ts.net"
 	})
 	expectReconciled(t, dnsRR, "tailscale", "egress-fqdn") // dns-records-reconciler reconcile the headless Service
 	wantHosts = map[string][]string{"baz.bar.ts.net": {"10.9.8.7"}}

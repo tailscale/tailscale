@@ -43,8 +43,8 @@ func TestEgressServiceReadiness(t *testing.T) {
 			Name:      "my-app",
 			Namespace: "dev",
 			Annotations: map[string]string{
-				AnnotationProxyGroup:        "dev",
-				AnnotationTailnetTargetFQDN: tailnetFQDN,
+				AnnotationProxyGroup.String():        "dev",
+				AnnotationTailnetTargetFQDN.String(): tailnetFQDN,
 			},
 		},
 	}

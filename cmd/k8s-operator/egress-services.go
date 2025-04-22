@@ -192,7 +192,7 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	upToDate := svcConfigurationUpToDate(svc, l)
 	provisioned := true
 	if !upToDate {
-		if clusterIPSvc, provisioned, err = esr.provision(ctx, svc.Annotations[AnnotationProxyGroup], svc, clusterIPSvc, l); err != nil {
+		if clusterIPSvc, provisioned, err = esr.provision(ctx, AnnotationProxyGroup.GetValue(svc), svc, clusterIPSvc, l); err != nil {
 			return err
 		}
 	}
@@ -403,7 +403,7 @@ func (esr *egressSvcsReconciler) maybeCleanup(ctx context.Context, svc *corev1.S
 }
 
 func (esr *egressSvcsReconciler) maybeCleanupProxyGroupConfig(ctx context.Context, svc *corev1.Service, l *zap.SugaredLogger) error {
-	wantsProxyGroup := svc.Annotations[AnnotationProxyGroup]
+	wantsProxyGroup := AnnotationProxyGroup.GetValue(svc)
 	cond := tsoperator.GetServiceCondition(svc, tsapi.EgressSvcConfigured)
 	if cond == nil {
 		return nil
@@ -506,7 +506,7 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 }
 
 func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, svc *corev1.Service, l *zap.SugaredLogger) (bool, error) {
-	proxyGroupName := svc.Annotations[AnnotationProxyGroup]
+	proxyGroupName := AnnotationProxyGroup.GetValue(svc)
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: proxyGroupName,
@@ -563,7 +563,7 @@ func validateEgressService(svc *corev1.Service, pg *tsapi.ProxyGroup) []string {
 	violations := validateService(svc)
 
 	// We check that only one of these two is set in the earlier validateService function.
-	if svc.Annotations[AnnotationTailnetTargetFQDN] == "" && svc.Annotations[AnnotationTailnetTargetIP] == "" {
+	if AnnotationTailnetTargetFQDN.GetValue(svc) == "" && AnnotationTailnetTargetIP.GetValue(svc) == "" {
 		violations = append(violations, fmt.Sprintf("egress Service for ProxyGroup must have one of %s, %s annotations set", AnnotationTailnetTargetFQDN, AnnotationTailnetTargetIP))
 	}
 	if len(svc.Spec.Ports) == 0 {
@@ -618,13 +618,13 @@ func unusedPort(usedPorts sets.Set[int32]) int32 {
 // Service must contain exactly one of tailscale.com/tailnet-ip,
 // tailscale.com/tailnet-fqdn annotations.
 func tailnetTargetFromSvc(svc *corev1.Service) egressservices.TailnetTarget {
-	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+	if fqdn := AnnotationTailnetTargetFQDN.GetValue(svc); fqdn != "" {
 		return egressservices.TailnetTarget{
 			FQDN: fqdn,
 		}
 	}
 	return egressservices.TailnetTarget{
-		IP: svc.Annotations[AnnotationTailnetTargetIP],
+		IP: AnnotationTailnetTargetIP.GetValue(svc),
 	}
 }
 
@@ -642,8 +642,7 @@ func isEgressSvcForProxyGroup(obj client.Object) bool {
 	if !ok {
 		return false
 	}
-	annots := s.ObjectMeta.Annotations
-	return annots[AnnotationProxyGroup] != "" && (annots[AnnotationTailnetTargetFQDN] != "" || annots[AnnotationTailnetTargetIP] != "")
+	return AnnotationProxyGroup.GetValue(s) != "" && (AnnotationTailnetTargetFQDN.GetValue(s) != "" || AnnotationTailnetTargetIP.GetValue(s) != "")
 }
 
 // egressSvcConfig returns a ConfigMap that contains egress services configuration for the provided ProxyGroup as well
@@ -684,7 +683,7 @@ func egressSvcChildResourceLabels(svc *corev1.Service) map[string]string {
 		LabelParentType:        "svc",
 		LabelParentName:        svc.Name,
 		LabelParentNamespace:   svc.Namespace,
-		labelProxyGroup:        svc.Annotations[AnnotationProxyGroup],
+		labelProxyGroup:        AnnotationProxyGroup.GetValue(svc),
 		labelSvcType:           typeEgress,
 	}
 }
@@ -743,12 +742,12 @@ func svcConfiguredReason(svc *corev1.Service, configured bool, l *zap.SugaredLog
 	} else {
 		r = fmt.Sprintf("ConfigurationFailed:%s", r)
 	}
-	r += fmt.Sprintf("ProxyGroup:%s", svc.Annotations[AnnotationProxyGroup])
+	r += fmt.Sprintf("ProxyGroup:%s", AnnotationProxyGroup.GetValue(svc))
 	tt := tailnetTargetFromSvc(svc)
 	s := cfg{
 		Ports:         svc.Spec.Ports,
 		TailnetTarget: tt,
-		ProxyGroup:    svc.Annotations[AnnotationProxyGroup],
+		ProxyGroup:    AnnotationProxyGroup.GetValue(svc),
 	}
 	r += fmt.Sprintf(":Config:%s", cfgHash(s, l))
 	return r

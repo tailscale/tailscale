@@ -94,7 +94,7 @@ func TestTailscaleIngress(t *testing.T) {
 	// 3. Resources get created for Ingress that should allow forwarding
 	// cluster traffic
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
-		mak.Set(&ing.ObjectMeta.Annotations, AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy, "true")
+		mak.Set(&ing.ObjectMeta.Annotations, AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy.String(), "true")
 	})
 	opts.shouldEnableForwardingClusterTrafficViaIngress = true
 	expectReconciled(t, ingR, "default", "test")
@@ -230,7 +230,8 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
 			Labels:      tsapi.Labels{"foo": "bar"},
 			Annotations: map[string]string{"bar.io/foo": "some-val"},
-			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
+			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}},
+		}},
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -285,7 +286,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	// 2. Ingress is updated to specify a ProxyClass, ProxyClass is not yet
 	// ready, so proxy resource configuration does not change.
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
-		mak.Set(&ing.ObjectMeta.Labels, LabelProxyClass, "custom-metadata")
+		mak.Set(&ing.ObjectMeta.Labels, LabelAnnotationProxyClass, "custom-metadata")
 	})
 	expectReconciled(t, ingR, "default", "test")
 	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation, removeResourceReqs)
@@ -309,7 +310,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	// Ingress gets reconciled and the custom ProxyClass configuration is
 	// removed from the proxy resources.
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
-		delete(ing.ObjectMeta.Labels, LabelProxyClass)
+		delete(ing.ObjectMeta.Labels, LabelAnnotationProxyClass)
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = ""
@@ -325,14 +326,15 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 				Status:             metav1.ConditionTrue,
 				Type:               string(tsapi.ProxyClassReady),
 				ObservedGeneration: 1,
-			}}},
+			}},
+		},
 	}
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
 
 	// Create fake client with ProxyClass, IngressClass, Ingress with metrics ProxyClass, and Service
 	ing := ingress()
 	ing.Labels = map[string]string{
-		LabelProxyClass: "metrics",
+		LabelAnnotationProxyClass: "metrics",
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -452,7 +454,7 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 			ing := ingress()
 			if tt.proxyClassPerResource != "" {
 				ing.Labels = map[string]string{
-					LabelProxyClass: tt.proxyClassPerResource,
+					LabelAnnotationProxyClass: tt.proxyClassPerResource,
 				}
 			}
 			mustCreate(t, fc, ing)

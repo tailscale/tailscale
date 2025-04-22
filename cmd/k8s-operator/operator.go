@@ -753,7 +753,7 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handle
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		svcList := new(corev1.ServiceList)
 		labels := map[string]string{
-			LabelProxyClass: o.GetName(),
+			LabelAnnotationProxyClass: o.GetName(),
 		}
 		if err := cl.List(ctx, svcList, client.MatchingLabels(labels)); err != nil {
 			logger.Debugf("error listing Services for ProxyClass: %v", err)
@@ -774,7 +774,7 @@ func proxyClassHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) ha
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		ingList := new(networkingv1.IngressList)
 		labels := map[string]string{
-			LabelProxyClass: o.GetName(),
+			LabelAnnotationProxyClass: o.GetName(),
 		}
 		if err := cl.List(ctx, ingList, client.MatchingLabels(labels)); err != nil {
 			logger.Debugf("error listing Ingresses for ProxyClass: %v", err)
@@ -875,7 +875,7 @@ func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handl
 }
 
 func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
-	if _, ok := o.GetAnnotations()[AnnotationProxyGroup]; ok {
+	if _, ok := o.GetAnnotations()[AnnotationProxyGroup.String()]; ok {
 		// Do not reconcile Services for ProxyGroup.
 		return nil
 	}
@@ -1275,7 +1275,7 @@ func indexEgressServices(o client.Object) []string {
 	if !isEgressSvcForProxyGroup(o) {
 		return nil
 	}
-	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
+	return []string{o.GetAnnotations()[AnnotationProxyGroup.String()]}
 }
 
 // indexPGIngresses adds a local index to a cached Tailscale Ingresses meant to be exposed on a ProxyGroup. The index is
@@ -1284,7 +1284,7 @@ func indexPGIngresses(o client.Object) []string {
 	if !hasProxyGroupAnnotation(o) {
 		return nil
 	}
-	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
+	return []string{o.GetAnnotations()[AnnotationProxyGroup.String()]}
 }
 
 // serviceHandlerForIngressPG returns a handler for Service events that ensures that if the Service
@@ -1325,7 +1325,7 @@ func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) han
 
 func hasProxyGroupAnnotation(obj client.Object) bool {
 	ing := obj.(*networkingv1.Ingress)
-	return ing.Annotations[AnnotationProxyGroup] != ""
+	return ing.Annotations[AnnotationProxyGroup.String()] != ""
 }
 
 func id(ctx context.Context, lc *local.Client) (string, error) {

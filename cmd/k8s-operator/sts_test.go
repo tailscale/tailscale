@@ -161,7 +161,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 		LabelParentName:        "foo",
 	}
 	annots := map[string]string{
-		podAnnotationLastSetClusterIP: "1.2.3.4",
+		PodAnnotationLastSetClusterIP.String(): "1.2.3.4",
 	}
 	env := []corev1.EnvVar{{Name: "TS_HOSTNAME", Value: "nginx"}}
 	userspaceProxySS.Labels = labels
@@ -341,28 +341,28 @@ func Test_mergeStatefulSetLabelsOrAnnots(t *testing.T) {
 		},
 		{
 			name:    "no custom annots specified and none present in current annots, return current annots",
-			current: map[string]string{podAnnotationLastSetClusterIP: "1.2.3.4"},
-			want:    map[string]string{podAnnotationLastSetClusterIP: "1.2.3.4"},
+			current: map[string]string{PodAnnotationLastSetClusterIP.String(): "1.2.3.4"},
+			want:    map[string]string{PodAnnotationLastSetClusterIP.String(): "1.2.3.4"},
 			managed: tailscaleManagedAnnotations,
 		},
 		{
 			name:    "no custom annots specified, but some present in current annots, return tailscale managed annots only from the current annots",
-			current: map[string]string{"foo": "bar", "something.io/foo": "bar", podAnnotationLastSetClusterIP: "1.2.3.4"},
-			want:    map[string]string{podAnnotationLastSetClusterIP: "1.2.3.4"},
+			current: map[string]string{"foo": "bar", "something.io/foo": "bar", PodAnnotationLastSetClusterIP.String(): "1.2.3.4"},
+			want:    map[string]string{PodAnnotationLastSetClusterIP.String(): "1.2.3.4"},
 			managed: tailscaleManagedAnnotations,
 		},
 		{
 			name:    "custom annots specified, current annots only contain tailscale managed annots, return a union of both",
-			current: map[string]string{podAnnotationLastSetClusterIP: "1.2.3.4"},
+			current: map[string]string{PodAnnotationLastSetClusterIP.String(): "1.2.3.4"},
 			custom:  map[string]string{"foo": "bar", "something.io/foo": "bar"},
-			want:    map[string]string{"foo": "bar", "something.io/foo": "bar", podAnnotationLastSetClusterIP: "1.2.3.4"},
+			want:    map[string]string{"foo": "bar", "something.io/foo": "bar", PodAnnotationLastSetClusterIP.String(): "1.2.3.4"},
 			managed: tailscaleManagedAnnotations,
 		},
 		{
 			name:    "custom annots specified, current annots contain tailscale managed annots and custom annots, some of which are not present in the new custom annots, return a union of managed annots and the desired custom annots",
-			current: map[string]string{"foo": "bar", "something.io/foo": "bar", podAnnotationLastSetClusterIP: "1.2.3.4"},
+			current: map[string]string{"foo": "bar", "something.io/foo": "bar", PodAnnotationLastSetClusterIP.String(): "1.2.3.4"},
 			custom:  map[string]string{"something.io/foo": "bar"},
-			want:    map[string]string{"something.io/foo": "bar", podAnnotationLastSetClusterIP: "1.2.3.4"},
+			want:    map[string]string{"something.io/foo": "bar", PodAnnotationLastSetClusterIP.String(): "1.2.3.4"},
 			managed: tailscaleManagedAnnotations,
 		},
 		{

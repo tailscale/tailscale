@@ -65,7 +65,7 @@ func TestLoadBalancerClass(t *testing.T) {
 			// on it being set.
 			UID: types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "invalid.example.com",
+				AnnotationTailnetTargetFQDN.String(): "invalid.example.com",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -88,7 +88,7 @@ func TestLoadBalancerClass(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "invalid.example.com",
+				AnnotationTailnetTargetFQDN.String(): "invalid.example.com",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -242,7 +242,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 			// on it being set.
 			UID: types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+				AnnotationTailnetTargetFQDN.String(): tailnetTargetFQDN,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -276,7 +276,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 			Finalizers: []string{"tailscale.com/finalizer"},
 			UID:        types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+				AnnotationTailnetTargetFQDN.String(): tailnetTargetFQDN,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -298,7 +298,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	tailnetTargetFQDN = "bar.baz.ts.net"
 	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 		s.ObjectMeta.Annotations = map[string]string{
-			AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+			AnnotationTailnetTargetFQDN.String(): tailnetTargetFQDN,
 		}
 	})
 
@@ -354,7 +354,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 			// on it being set.
 			UID: types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				AnnotationTailnetTargetIP.String(): tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -388,7 +388,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 			Finalizers: []string{"tailscale.com/finalizer"},
 			UID:        types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				AnnotationTailnetTargetIP.String(): tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -410,7 +410,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	tailnetTargetIP = "100.77.77.77"
 	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 		s.ObjectMeta.Annotations = map[string]string{
-			AnnotationTailnetTargetIP: tailnetTargetIP,
+			AnnotationTailnetTargetIP.String(): tailnetTargetIP,
 		}
 	})
 
@@ -462,7 +462,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 
 			UID: types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				AnnotationTailnetTargetIP.String(): tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -482,7 +482,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				AnnotationTailnetTargetIP.String(): tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -533,7 +533,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 
 			UID: types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				AnnotationTailnetTargetIP.String(): tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -553,7 +553,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				AnnotationTailnetTargetIP.String(): tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -1132,7 +1132,9 @@ func TestProxyClassForService(t *testing.T) {
 			StatefulSet: &tsapi.StatefulSet{
 				Labels:      tsapi.Labels{"foo": "bar"},
 				Annotations: map[string]string{"bar.io/foo": "some-val"},
-				Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
+				Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}},
+			},
+		},
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -1194,7 +1196,7 @@ func TestProxyClassForService(t *testing.T) {
 	// pointing at the 'custom-metadata' ProxyClass. The ProxyClass is not
 	// yet ready, so no changes are actually applied to the proxy resources.
 	mustUpdate(t, fc, "default", "test", func(svc *corev1.Service) {
-		mak.Set(&svc.Labels, LabelProxyClass, "custom-metadata")
+		mak.Set(&svc.Labels, LabelAnnotationProxyClass, "custom-metadata")
 	})
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
@@ -1220,7 +1222,7 @@ func TestProxyClassForService(t *testing.T) {
 	// configuration from the ProxyClass is removed from the cluster
 	// resources.
 	mustUpdate(t, fc, "default", "test", func(svc *corev1.Service) {
-		delete(svc.Labels, LabelProxyClass)
+		delete(svc.Labels, LabelAnnotationProxyClass)
 	})
 	opts.proxyClass = ""
 	expectReconciled(t, sr, "default", "test")
@@ -1667,7 +1669,7 @@ func Test_externalNameService(t *testing.T) {
 			// on it being set.
 			UID: types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationExpose: "true",
+				AnnotationExpose.String(): "true",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -1711,14 +1713,15 @@ func Test_metricsResourceCreation(t *testing.T) {
 				Status:             metav1.ConditionTrue,
 				Type:               string(tsapi.ProxyClassReady),
 				ObservedGeneration: 1,
-			}}},
+			}},
+		},
 	}
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
-			Labels:    map[string]string{LabelProxyClass: "metrics"},
+			Labels:    map[string]string{LabelAnnotationProxyClass: "metrics"},
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",

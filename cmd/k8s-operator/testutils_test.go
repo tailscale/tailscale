@@ -826,7 +826,7 @@ func (c *fakeTSClient) Deleted() []string {
 // that we don't have to change the annotation in each test case after any
 // change to the configfile contents).
 func removeHashAnnotation(sts *appsv1.StatefulSet) {
-	delete(sts.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash)
+	delete(sts.Spec.Template.Annotations, PodAnnotationLastSetConfigFileHash.String())
 	if len(sts.Spec.Template.Annotations) == 0 {
 		sts.Spec.Template.Annotations = nil
 	}

@@ -50,9 +50,6 @@ const (
 	FinalizerNamePG = "tailscale.com/ingress-pg-finalizer"
 
 	indexIngressProxyGroup = ".metadata.annotations.ingress-proxy-group"
-	// annotationHTTPEndpoint can be used to configure the Ingress to expose an HTTP endpoint to tailnet (as
-	// well as the default HTTPS endpoint).
-	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
 
 	labelDomain = "tailscale.com/domain"
 )
@@ -147,7 +144,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 	// Get and validate ProxyGroup readiness
-	pgName := ing.Annotations[AnnotationProxyGroup]
+	pgName := ing.Annotations[AnnotationProxyGroup.String()]
 	if pgName == "" {
 		logger.Infof("[unexpected] no ProxyGroup annotation, skipping VIPService provisioning")
 		return false, nil
@@ -305,7 +302,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 
 	// 4. Ensure that the VIPService exists and is up to date.
 	tags := r.defaultTags
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+	if tstr, ok := ing.Annotations[AnnotationTags.String()]; ok {
 		tags = strings.Split(tstr, ",")
 	}
 
@@ -498,7 +495,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}()
 
 	// 1. Check if there is a VIPService associated with this Ingress.
-	pg := ing.Annotations[AnnotationProxyGroup]
+	pg := ing.Annotations[AnnotationProxyGroup.String()]
 	cm, cfg, err := r.proxyGroupServeConfig(ctx, pg)
 	if err != nil {
 		return false, fmt.Errorf("error getting ProxyGroup serve config: %w", err)
@@ -610,7 +607,7 @@ func (r *HAIngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 	isTSIngress := ing != nil &&
 		ing.Spec.IngressClassName != nil &&
 		*ing.Spec.IngressClassName == tailscaleIngressClassName
-	pgAnnot := ing.Annotations[AnnotationProxyGroup]
+	pgAnnot := ing.Annotations[AnnotationProxyGroup.String()]
 	return isTSIngress && pgAnnot != ""
 }
 
@@ -624,7 +621,7 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	var errs []error
 
 	// Validate tags if present
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+	if tstr, ok := ing.Annotations[AnnotationTags.String()]; ok {
 		tags := strings.Split(tstr, ",")
 		for _, tag := range tags {
 			tag = strings.TrimSpace(tag)
@@ -714,7 +711,7 @@ func (r *HAIngressReconciler) cleanupVIPService(ctx context.Context, name tailcf
 	if err != nil {
 		return false, fmt.Errorf("error marshalling updated VIPService owner reference: %w", err)
 	}
-	svc.Annotations[ownerAnnotation] = string(json)
+	svc.Annotations[AnnotationOwnerReferences.String()] = string(json)
 	return true, r.tsClient.CreateOrUpdateVIPService(ctx, svc)
 }
 
@@ -723,7 +720,7 @@ func isHTTPEndpointEnabled(ing *networkingv1.Ingress) bool {
 	if ing == nil {
 		return false
 	}
-	return ing.Annotations[annotationHTTPEndpoint] == "enabled"
+	return AnnotationHTTPEndpoint.GetValue(ing) == "enabled"
 }
 
 // serviceAdvertisementMode describes the desired state of a VIPService.
@@ -824,8 +821,6 @@ func (a *HAIngressReconciler) numberPodsAdvertising(ctx context.Context, pgName 
 	return count, nil
 }
 
-const ownerAnnotation = "tailscale.com/owner-references"
-
 // ownerAnnotationValue is the content of the VIPService.Annotation[ownerAnnotation] field.
 type ownerAnnotationValue struct {
 	// OwnerRefs is a list of owner references that identify all operator
@@ -856,7 +851,7 @@ func (r *HAIngressReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[s
 			return nil, fmt.Errorf("[unexpected] unable to marshal VIPService owner annotation contents: %w, please report this", err)
 		}
 		return map[string]string{
-			ownerAnnotation: string(json),
+			AnnotationOwnerReferences.String(): string(json),
 		}, nil
 	}
 	o, err := parseOwnerAnnotation(svc)
@@ -879,18 +874,18 @@ func (r *HAIngressReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[s
 	for k, v := range svc.Annotations {
 		newAnnots[k] = v
 	}
-	newAnnots[ownerAnnotation] = string(json)
+	newAnnots[AnnotationOwnerReferences.String()] = string(json)
 	return newAnnots, nil
 }
 
 // parseOwnerAnnotation returns nil if no valid owner found.
 func parseOwnerAnnotation(vipSvc *tailscale.VIPService) (*ownerAnnotationValue, error) {
-	if vipSvc.Annotations == nil || vipSvc.Annotations[ownerAnnotation] == "" {
+	if vipSvc.Annotations == nil || vipSvc.Annotations[AnnotationOwnerReferences.String()] == "" {
 		return nil, nil
 	}
 	o := &ownerAnnotationValue{}
-	if err := json.Unmarshal([]byte(vipSvc.Annotations[ownerAnnotation]), o); err != nil {
-		return nil, fmt.Errorf("error parsing VIPService %s annotation %q: %w", ownerAnnotation, vipSvc.Annotations[ownerAnnotation], err)
+	if err := json.Unmarshal([]byte(vipSvc.Annotations[AnnotationOwnerReferences.String()]), o); err != nil {
+		return nil, fmt.Errorf("error parsing VIPService %s annotation %q: %w", AnnotationOwnerReferences.String(), vipSvc.Annotations[AnnotationOwnerReferences.String()], err)
 	}
 	return o, nil
 }
@@ -898,9 +893,9 @@ func parseOwnerAnnotation(vipSvc *tailscale.VIPService) (*ownerAnnotationValue, 
 func ownersAreSetAndEqual(a, b *tailscale.VIPService) bool {
 	return a != nil && b != nil &&
 		a.Annotations != nil && b.Annotations != nil &&
-		a.Annotations[ownerAnnotation] != "" &&
-		b.Annotations[ownerAnnotation] != "" &&
-		strings.EqualFold(a.Annotations[ownerAnnotation], b.Annotations[ownerAnnotation])
+		a.Annotations[AnnotationOwnerReferences.String()] != "" &&
+		b.Annotations[AnnotationOwnerReferences.String()] != "" &&
+		strings.EqualFold(a.Annotations[AnnotationOwnerReferences.String()], b.Annotations[AnnotationOwnerReferences.String()])
 }
 
 // ensureCertResources ensures that the TLS Secret for an HA Ingress and RBAC

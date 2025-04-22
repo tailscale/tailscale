@@ -32,8 +32,8 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
-				AnnotationProxyGroup:        "foo",
+				AnnotationTailnetTargetFQDN.String(): "foo.bar.ts.net",
+				AnnotationProxyGroup.String():        "foo",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -135,10 +135,10 @@ func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.Config
 	cfg := egressservices.Config{
 		Ports: ports,
 	}
-	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+	if fqdn := AnnotationTailnetTargetFQDN.GetValue(svc); fqdn != "" {
 		cfg.TailnetTarget = egressservices.TailnetTarget{FQDN: fqdn}
 	}
-	if ip := svc.Annotations[AnnotationTailnetTargetIP]; ip != "" {
+	if ip := AnnotationTailnetTargetIP.GetValue(svc); ip != "" {
 		cfg.TailnetTarget = egressservices.TailnetTarget{IP: ip}
 	}
 	name := tailnetSvcName(svc)
@@ -149,7 +149,7 @@ func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.Config
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgEgressCMName(svc.Annotations[AnnotationProxyGroup]),
+			Name:      pgEgressCMName(AnnotationProxyGroup.GetValue(svc)),
 			Namespace: "operator-ns",
 		},
 		BinaryData: map[string][]byte{egressservices.KeyEgressServices: bs},
@@ -164,10 +164,10 @@ func serviceStatusForPodIP(t *testing.T, svc *corev1.Service, ip string, p uint1
 		ports[egressservices.PortMap{Protocol: string(port.Protocol), MatchPort: p, TargetPort: uint16(port.Port)}] = struct{}{}
 	}
 	svcSt := egressservices.ServiceStatus{Ports: ports}
-	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+	if fqdn := AnnotationTailnetTargetFQDN.GetValue(svc); fqdn != "" {
 		svcSt.TailnetTarget = egressservices.TailnetTarget{FQDN: fqdn}
 	}
-	if ip := svc.Annotations[AnnotationTailnetTargetIP]; ip != "" {
+	if ip := AnnotationTailnetTargetIP.GetValue(svc); ip != "" {
 		svcSt.TailnetTarget = egressservices.TailnetTarget{IP: ip}
 	}
 	svcName := tailnetSvcName(svc)

@@ -617,7 +617,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	}
 	statefulSet.Annotations = defaultProxyClassAnnotations
 	if cfgHash != "" {
-		mak.Set(&statefulSet.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, cfgHash)
+		mak.Set(&statefulSet.Spec.Template.Annotations, PodAnnotationLastSetConfigFileHash.String(), cfgHash)
 	}
 
 	if shouldExist {
