@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,21 +25,21 @@ import (
 	"tailscale.com/types/logger"
 )
 
+func toAnySlice[T any](s []T) []any {
+	out := make([]any, len(s))
+	for i, v := range s {
+		out[i] = v
+	}
+	return out
+}
+
 // nfdump returns a hexdump of 4 bytes per line (like nft --debug=all), allowing
 // users to make sense of large byte literals more easily.
 func nfdump(b []byte) string {
 	var buf bytes.Buffer
-	i := 0
-	for ; i+3 < len(b); i += 4 {
-		// TODO: show printable characters as ASCII
-		fmt.Fprintf(&buf, "%02x %02x %02x %02x\n",
-			b[i],
-			b[i+1],
-			b[i+2],
-			b[i+3])
-	}
-	for ; i < len(b); i++ {
-		fmt.Fprintf(&buf, "%02x ", b[i])
+	for c := range slices.Chunk(b, 4) {
+		format := strings.Repeat("%02x ", len(c))
+		fmt.Fprintf(&buf, format+"\n", toAnySlice(c)...)
 	}
 	return buf.String()
 }
