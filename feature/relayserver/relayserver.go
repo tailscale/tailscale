@@ -142,7 +142,7 @@ func handlePeerAPIRelayAllocateEndpoint(h ipnlocal.PeerAPIHandler, w http.Respon
 
 	httpErrAndLog := func(message string, code int) {
 		http.Error(w, message, code)
-		e.logf("peerapi: request from %v returned code %d: %s", h.RemoteAddr(), code, message)
+		h.Logf("relayserver: request from %v returned code %d: %s", h.RemoteAddr(), code, message)
 	}
 
 	if !h.PeerCaps().HasCapability(tailcfg.PeerCapabilityRelay) {
