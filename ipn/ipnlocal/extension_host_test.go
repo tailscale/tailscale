@@ -284,7 +284,7 @@ func TestNewExtensionHost(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			logf := tstest.WhileTestRunningLogger(t)
-			h, err := NewExtensionHost(logf, &tsd.System{}, &testBackend{}, tt.defs...)
+			h, err := NewExtensionHost(logf, tsd.NewSystem(), &testBackend{}, tt.defs...)
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Errorf("NewExtensionHost: gotErr %v(%v); wantErr %v", gotErr, err, tt.wantErr)
 			}
@@ -1118,7 +1118,7 @@ func newExtensionHostForTest[T ipnext.Extension](t *testing.T, b Backend, initia
 		}
 		defs[i] = ipnext.DefinitionForTest(ext)
 	}
-	h, err := NewExtensionHost(logf, &tsd.System{}, b, defs...)
+	h, err := NewExtensionHost(logf, tsd.NewSystem(), b, defs...)
 	if err != nil {
 		t.Fatalf("NewExtensionHost: %v", err)
 	}
