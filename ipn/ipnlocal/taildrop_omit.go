@@ -5,8 +5,10 @@
 
 package ipnlocal
 
+import "tailscale.com/ipn"
+
 type taildrop_Manager = struct{}
 
-func (b *LocalBackend) newTaildropManager(fileRoot string) *taildrop_Manager {
+func (b *LocalBackend) newTaildropManager(fileRoot string, putMode ipn.PutMode) *taildrop_Manager {
 	return nil
 }
