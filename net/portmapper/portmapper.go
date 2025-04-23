@@ -508,11 +508,13 @@ func (c *Client) createMapping() {
 		}
 		return
 	}
-	c.updates.Publish(Mapping{
-		External:  mapping.External(),
-		Type:      mapping.MappingType(),
-		GoodUntil: mapping.GoodUntil(),
-	})
+	if c.updates != nil {
+		c.updates.Publish(Mapping{
+			External:  mapping.External(),
+			Type:      mapping.MappingType(),
+			GoodUntil: mapping.GoodUntil(),
+		})
+	}
 	if c.onChange != nil {
 		go c.onChange()
 	}
