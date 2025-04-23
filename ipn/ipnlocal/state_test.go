@@ -1397,7 +1397,7 @@ func newLocalBackendWithMockEngineAndControl(t *testing.T, enableLogging bool) (
 	dialer := &tsdial.Dialer{Logf: logf}
 	dialer.SetNetMon(netmon.NewStatic())
 
-	sys := &tsd.System{}
+	sys := tsd.NewSystem()
 	sys.Set(dialer)
 	sys.Set(dialer.NetMon())
 
