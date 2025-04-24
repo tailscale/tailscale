@@ -367,6 +367,31 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("failed setting up indexer for HA Ingresses: %v", err)
 	}
 
+	// svcProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(ingressesFromIngressProxyGroup(mgr.GetClient(), opts.log))
+	err = builder.
+		ControllerManagedBy(mgr).
+		For(&corev1.Service{}).
+		Named("service-pg-reconciler").
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
+		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
+		Complete(&HAServiceReconciler{
+			recorder:    eventRecorder,
+			tsClient:    opts.tsClient,
+			tsnetServer: opts.tsServer,
+			defaultTags: strings.Split(opts.proxyTags, ","),
+			Client:      mgr.GetClient(),
+			logger:      opts.log.Named("service-pg-reconciler"),
+			lc:          lc,
+			operatorID:  id,
+			tsNamespace: opts.tailscaleNamespace,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create service-pg-reconciler: %v", err)
+	}
+	// if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(networkingv1.Ingress), indexIngressProxyGroup, indexPGIngresses); err != nil {
+	// 	startlog.Fatalf("failed setting up indexer for HA Ingresses: %v", err)
+	// }
+
 	connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("connector"))
 	// If a ProxyClassChanges, enqueue all Connectors that have
 	// .spec.proxyClass set to the name of this ProxyClass.
@@ -1095,6 +1120,42 @@ func HAIngressesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.
 			})
 		}
 		return reqs
+	}
+}
+
+// HAServiceFromSecret returns a handler that returns reconcile requests for
+// all HA Services that should be reconciled in response to a Secret event.
+func HAServicesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		secret, ok := o.(*corev1.Secret)
+		if !ok {
+			logger.Infof("[unexpected] Secret handler triggered for an object that is not a Secret")
+			return nil
+		}
+		if !isPGStateSecret(secret) {
+			return nil
+		}
+		_, ok = secret.ObjectMeta.Labels[LabelParentName]
+		if !ok {
+			return nil
+		}
+
+		// svcList := &corev1.ServiceList{}
+		// if err := cl.List(ctx, ingList, client.MatchingFields{indexIngressProxyGroup: pgName}); err != nil {
+		// 	logger.Infof("error listing Ingresses, skipping a reconcile for event on Secret %s: %v", secret.Name, err)
+		// 	return nil
+		// }
+		// reqs := make([]reconcile.Request, 0)
+		// for _, ing := range ingList.Items {
+		// 	reqs = append(reqs, reconcile.Request{
+		// 		NamespacedName: types.NamespacedName{
+		// 			Namespace: ing.Namespace,
+		// 			Name:      ing.Name,
+		// 		},
+		// 	})
+		// }
+		// return reqs
+		return nil
 	}
 }
 
