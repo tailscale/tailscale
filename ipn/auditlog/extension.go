@@ -16,7 +16,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsd"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 )
@@ -52,7 +51,7 @@ type extension struct {
 
 // newExtension is an [ipnext.NewExtensionFn] that creates a new audit log extension.
 // It is registered with [ipnext.RegisterExtension] if the package is imported.
-func newExtension(logf logger.Logf, _ *tsd.System) (ipnext.Extension, error) {
+func newExtension(logf logger.Logf, _ ipnext.SafeBackend) (ipnext.Extension, error) {
 	return &extension{logf: logger.WithPrefix(logf, featureName+": ")}, nil
 }
 

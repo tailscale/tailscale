@@ -20,7 +20,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/udprelay"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsd"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -40,7 +39,7 @@ func init() {
 // newExtension is an [ipnext.NewExtensionFn] that creates a new relay server
 // extension. It is registered with [ipnext.RegisterExtension] if the package is
 // imported.
-func newExtension(logf logger.Logf, _ *tsd.System) (ipnext.Extension, error) {
+func newExtension(logf logger.Logf, _ ipnext.SafeBackend) (ipnext.Extension, error) {
 	return &extension{logf: logger.WithPrefix(logf, featureName+": ")}, nil
 }
 

@@ -525,7 +525,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		}
 	}
 
-	if b.extHost, err = NewExtensionHost(logf, sys, b); err != nil {
+	if b.extHost, err = NewExtensionHost(logf, b); err != nil {
 		return nil, fmt.Errorf("failed to create extension host: %w", err)
 	}
 	b.pm.SetExtensionHost(b.extHost)
@@ -589,6 +589,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 }
 
 func (b *LocalBackend) Clock() tstime.Clock { return b.clock }
+func (b *LocalBackend) Sys() *tsd.System    { return b.sys }
 
 // FindExtensionByName returns an active extension with the given name,
 // or nil if no such extension exists.
@@ -3185,6 +3186,12 @@ func (b *LocalBackend) DebugForcePreferDERP(n int) {
 // b.mu must not be held.
 func (b *LocalBackend) send(n ipn.Notify) {
 	b.sendTo(n, allClients)
+}
+
+// SendNotify sends a notification to the IPN bus,
+// typically to the GUI client.
+func (b *LocalBackend) SendNotify(n ipn.Notify) {
+	b.send(n)
 }
 
 // notificationTarget describes a notification recipient.
