@@ -577,30 +577,6 @@ func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 			},
 		},
 		{
-			// Override the default InitHook used in the test to unregister the callback
-			// after the first call.
-			name: "Register/Once",
-			ext: &testExtension{
-				InitHook: func(e *testExtension) error {
-					var unregister func()
-					handler := func(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
-						makeStateChangeAppender(e)(profile, prefs, sameNode)
-						unregister()
-					}
-					unregister = e.host.Profiles().RegisterProfileStateChangeCallback(handler)
-					return nil
-				},
-			},
-			stateCalls: []stateChange{
-				{Profile: &ipn.LoginProfile{ID: "profile-1"}},
-				{Profile: &ipn.LoginProfile{ID: "profile-2"}},
-				{Profile: &ipn.LoginProfile{ID: "profile-3"}},
-			},
-			wantChanges: []stateChange{ // only the first call is received by the callback
-				{Profile: &ipn.LoginProfile{ID: "profile-1"}},
-			},
-		},
-		{
 			// Ensure that ipn.Prefs are passed to the callback.
 			name: "CheckPrefs",
 			ext:  &testExtension{},
@@ -770,7 +746,7 @@ func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 				tt.ext.InitHook = func(e *testExtension) error {
 					// Create and register the callback on init.
 					handler := makeStateChangeAppender(e)
-					e.Cleanup(e.host.Profiles().RegisterProfileStateChangeCallback(handler))
+					e.host.Profiles().RegisterProfileStateChangeCallback(handler)
 					return nil
 				}
 			}
@@ -891,14 +867,15 @@ func TestBackgroundProfileResolver(t *testing.T) {
 				}
 			}
 
-			h := newExtensionHostForTest[ipnext.Extension](t, &testBackend{}, true)
+			h := newExtensionHostForTest[ipnext.Extension](t, &testBackend{}, false)
 
 			// Register the resolvers with the host.
 			// This is typically done by the extensions themselves,
 			// but we do it here for testing purposes.
 			for _, r := range tt.resolvers {
-				t.Cleanup(h.Profiles().RegisterBackgroundProfileResolver(r))
+				h.Profiles().RegisterBackgroundProfileResolver(r)
 			}
+			h.Init()
 
 			// Call the resolver to get the profile.
 			gotProfile := h.DetermineBackgroundProfile(pm)
@@ -989,7 +966,7 @@ func TestAuditLogProviders(t *testing.T) {
 					}
 				}
 				ext.InitHook = func(e *testExtension) error {
-					e.Cleanup(e.host.RegisterAuditLogProvider(provider))
+					e.host.RegisterAuditLogProvider(provider)
 					return nil
 				}
 				exts = append(exts, ext)
@@ -1168,8 +1145,6 @@ type testExtension struct {
 	// It can be accessed by tests using [setTestExtensionState],
 	// [getTestExtensionStateOk] and [getTestExtensionState].
 	state map[string]any
-	// cleanup are functions to be called on shutdown.
-	cleanup []func()
 }
 
 var _ ipnext.Extension = (*testExtension)(nil)
@@ -1212,22 +1187,11 @@ func (e *testExtension) InitCalled() bool {
 	return e.initCnt.Load() != 0
 }
 
-func (e *testExtension) Cleanup(f func()) {
-	e.mu.Lock()
-	e.cleanup = append(e.cleanup, f)
-	e.mu.Unlock()
-}
-
 // Shutdown implements [ipnext.Extension].
 func (e *testExtension) Shutdown() (err error) {
 	e.t.Helper()
 	e.mu.Lock()
-	cleanup := e.cleanup
-	e.cleanup = nil
 	e.mu.Unlock()
-	for _, f := range cleanup {
-		f()
-	}
 	if e.ShutdownHook != nil {
 		err = e.ShutdownHook(e)
 	}

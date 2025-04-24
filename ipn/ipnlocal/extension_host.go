@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"iter"
 	"maps"
 	"reflect"
 	"slices"
@@ -24,8 +23,6 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/execqueue"
-	"tailscale.com/util/set"
-	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
 )
 
@@ -78,6 +75,7 @@ type ExtensionHost struct {
 	// initOnce is used to ensure that the extensions are initialized only once,
 	// even if [extensionHost.Init] is called multiple times.
 	initOnce sync.Once
+	initDone atomic.Bool
 	// shutdownOnce is like initOnce, but for [ExtensionHost.Shutdown].
 	shutdownOnce sync.Once
 
@@ -86,6 +84,24 @@ type ExtensionHost struct {
 	workQueue execQueue
 	// doEnqueueBackendOperation adds an asynchronous [LocalBackend] operation to the workQueue.
 	doEnqueueBackendOperation func(func(Backend))
+
+	// profileStateChangeCbs are callbacks that are invoked when the current login profile
+	// or its [ipn.Prefs] change, after those changes have been made. The current login profile
+	// may be changed either because of a profile switch, or because the profile information
+	// was updated by [LocalBackend.SetControlClientStatus], including when the profile
+	// is first populated and persisted.
+	profileStateChangeCbs []ipnext.ProfileStateChangeCallback
+	// backgroundProfileResolvers are registered background profile resolvers.
+	// They're used to determine the profile to use when no GUI/CLI client is connected.
+	backgroundProfileResolvers []ipnext.ProfileResolver
+	// auditLoggers are registered [AuditLogProvider]s.
+	// Each provider is called to get an [ipnauth.AuditLogFunc] when an auditable action
+	// is about to be performed. If an audit logger returns an error, the action is denied.
+	auditLoggers []ipnext.AuditLogProvider
+	// newControlClientCbs are the functions to be called when a new control client is created.
+	newControlClientCbs []ipnext.NewControlClientCallback
+
+	shuttingDown atomic.Bool
 
 	// mu protects the following fields.
 	// It must not be held when calling [LocalBackend] methods
@@ -107,22 +123,6 @@ type ExtensionHost struct {
 	// currentPrefs is a read-only view of the current profile's [ipn.Prefs]
 	// with any private keys stripped. It is always Valid.
 	currentPrefs ipn.PrefsView
-
-	// auditLoggers are registered [AuditLogProvider]s.
-	// Each provider is called to get an [ipnauth.AuditLogFunc] when an auditable action
-	// is about to be performed. If an audit logger returns an error, the action is denied.
-	auditLoggers set.HandleSet[ipnext.AuditLogProvider]
-	// backgroundProfileResolvers are registered background profile resolvers.
-	// They're used to determine the profile to use when no GUI/CLI client is connected.
-	backgroundProfileResolvers set.HandleSet[ipnext.ProfileResolver]
-	// newControlClientCbs are the functions to be called when a new control client is created.
-	newControlClientCbs set.HandleSet[ipnext.NewControlClientCallback]
-	// profileStateChangeCbs are callbacks that are invoked when the current login profile
-	// or its [ipn.Prefs] change, after those changes have been made. The current login profile
-	// may be changed either because of a profile switch, or because the profile information
-	// was updated by [LocalBackend.SetControlClientStatus], including when the profile
-	// is first populated and persisted.
-	profileStateChangeCbs set.HandleSet[ipnext.ProfileStateChangeCallback]
 }
 
 // Backend is a subset of [LocalBackend] methods that are used by [ExtensionHost].
@@ -160,13 +160,10 @@ func NewExtensionHost(logf logger.Logf, sys *tsd.System, b Backend, overrideExts
 		host.workQueue.Add(func() { f(b) })
 	}
 
-	var numExts int
-	var exts iter.Seq2[int, *ipnext.Definition]
-	if overrideExts == nil {
-		// Use registered extensions.
-		exts = ipnext.Extensions().All()
-		numExts = ipnext.Extensions().Len()
-	} else {
+	// Use registered extensions.
+	exts := ipnext.Extensions().All()
+	numExts := ipnext.Extensions().Len()
+	if overrideExts != nil {
 		// Use the provided, potentially empty, overrideExts
 		// instead of the registered ones.
 		exts = slices.All(overrideExts)
@@ -196,6 +193,8 @@ func (h *ExtensionHost) Init() {
 }
 
 func (h *ExtensionHost) init() {
+	defer h.initDone.Store(true)
+
 	// Initialize the extensions in the order they were registered.
 	h.mu.Lock()
 	h.activeExtensions = make([]ipnext.Extension, 0, len(h.allExtensions))
@@ -343,21 +342,21 @@ func (h *ExtensionHost) Backend() Backend {
 	return h.b
 }
 
+// addFuncHook appends non-nil fn to hooks.
+func addFuncHook[F any](h *ExtensionHost, hooks *[]F, fn F) {
+	if h.initDone.Load() {
+		panic("invalid callback register after init")
+	}
+	if reflect.ValueOf(fn).IsZero() {
+		panic("nil function hook")
+	}
+	*hooks = append(*hooks, fn)
+}
+
 // RegisterProfileStateChangeCallback implements [ipnext.ProfileServices].
-func (h *ExtensionHost) RegisterProfileStateChangeCallback(cb ipnext.ProfileStateChangeCallback) (unregister func()) {
-	if h == nil {
-		return func() {}
-	}
-	if cb == nil {
-		panic("nil profile change callback")
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	handle := h.profileStateChangeCbs.Add(cb)
-	return func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		delete(h.profileStateChangeCbs, handle)
+func (h *ExtensionHost) RegisterProfileStateChangeCallback(cb ipnext.ProfileStateChangeCallback) {
+	if h != nil {
+		addFuncHook(h, &h.profileStateChangeCbs, cb)
 	}
 }
 
@@ -366,7 +365,7 @@ func (h *ExtensionHost) RegisterProfileStateChangeCallback(cb ipnext.ProfileStat
 // It strips private keys from the [ipn.Prefs] before preserving
 // or passing them to the callbacks.
 func (h *ExtensionHost) NotifyProfileChange(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
-	if h == nil {
+	if !h.active() {
 		return
 	}
 	h.mu.Lock()
@@ -378,10 +377,9 @@ func (h *ExtensionHost) NotifyProfileChange(profile ipn.LoginProfileView, prefs 
 	// so we can provide them to the extensions later if they ask.
 	h.currentPrefs = prefs
 	h.currentProfile = profile
-	// Get the callbacks to be invoked.
-	cbs := slicesx.MapValues(h.profileStateChangeCbs)
 	h.mu.Unlock()
-	for _, cb := range cbs {
+
+	for _, cb := range h.profileStateChangeCbs {
 		cb(profile, prefs, sameNode)
 	}
 }
@@ -390,7 +388,7 @@ func (h *ExtensionHost) NotifyProfileChange(profile ipn.LoginProfileView, prefs 
 // and updates the current profile and prefs in the host.
 // It strips private keys from the [ipn.Prefs] before preserving or using them.
 func (h *ExtensionHost) NotifyProfilePrefsChanged(profile ipn.LoginProfileView, oldPrefs, newPrefs ipn.PrefsView) {
-	if h == nil {
+	if !h.active() {
 		return
 	}
 	h.mu.Lock()
@@ -403,26 +401,22 @@ func (h *ExtensionHost) NotifyProfilePrefsChanged(profile ipn.LoginProfileView, 
 	h.currentPrefs = newPrefs
 	h.currentProfile = profile
 	// Get the callbacks to be invoked.
-	stateCbs := slicesx.MapValues(h.profileStateChangeCbs)
 	h.mu.Unlock()
-	for _, cb := range stateCbs {
+
+	for _, cb := range h.profileStateChangeCbs {
 		cb(profile, newPrefs, true)
 	}
 }
 
 // RegisterBackgroundProfileResolver implements [ipnext.ProfileServices].
-func (h *ExtensionHost) RegisterBackgroundProfileResolver(resolver ipnext.ProfileResolver) (unregister func()) {
-	if h == nil {
-		return func() {}
+func (h *ExtensionHost) RegisterBackgroundProfileResolver(resolver ipnext.ProfileResolver) {
+	if h != nil {
+		addFuncHook(h, &h.backgroundProfileResolvers, resolver)
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	handle := h.backgroundProfileResolvers.Add(resolver)
-	return func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		delete(h.backgroundProfileResolvers, handle)
-	}
+}
+
+func (h *ExtensionHost) active() bool {
+	return h != nil && !h.shuttingDown.Load()
 }
 
 // DetermineBackgroundProfile returns a read-only view of the profile
@@ -434,7 +428,7 @@ func (h *ExtensionHost) RegisterBackgroundProfileResolver(resolver ipnext.Profil
 //
 // As of 2025-02-07, this is only used on Windows.
 func (h *ExtensionHost) DetermineBackgroundProfile(profiles ipnext.ProfileStore) ipn.LoginProfileView {
-	if h == nil {
+	if !h.active() {
 		return ipn.LoginProfileView{}
 	}
 	// TODO(nickkhyl): check if the returned profile is allowed on the device,
@@ -443,10 +437,7 @@ func (h *ExtensionHost) DetermineBackgroundProfile(profiles ipnext.ProfileStore)
 
 	// Attempt to resolve the background profile using the registered
 	// background profile resolvers (e.g., [ipn/desktop.desktopSessionsExt] on Windows).
-	h.mu.Lock()
-	resolvers := slicesx.MapValues(h.backgroundProfileResolvers)
-	h.mu.Unlock()
-	for _, resolver := range resolvers {
+	for _, resolver := range h.backgroundProfileResolvers {
 		if profile := resolver(profiles); profile.Valid() {
 			return profile
 		}
@@ -458,35 +449,21 @@ func (h *ExtensionHost) DetermineBackgroundProfile(profiles ipnext.ProfileStore)
 }
 
 // RegisterControlClientCallback implements [ipnext.Host].
-func (h *ExtensionHost) RegisterControlClientCallback(cb ipnext.NewControlClientCallback) (unregister func()) {
-	if h == nil {
-		return func() {}
-	}
-	if cb == nil {
-		panic("nil control client callback")
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	handle := h.newControlClientCbs.Add(cb)
-	return func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		delete(h.newControlClientCbs, handle)
+func (h *ExtensionHost) RegisterControlClientCallback(cb ipnext.NewControlClientCallback) {
+	if h != nil {
+		addFuncHook(h, &h.newControlClientCbs, cb)
 	}
 }
 
 // NotifyNewControlClient invokes all registered control client callbacks.
 // It returns callbacks to be executed when the control client shuts down.
 func (h *ExtensionHost) NotifyNewControlClient(cc controlclient.Client, profile ipn.LoginProfileView) (ccShutdownCbs []func()) {
-	if h == nil {
+	if !h.active() {
 		return nil
 	}
-	h.mu.Lock()
-	cbs := slicesx.MapValues(h.newControlClientCbs)
-	h.mu.Unlock()
-	if len(cbs) > 0 {
-		ccShutdownCbs = make([]func(), 0, len(cbs))
-		for _, cb := range cbs {
+	if len(h.newControlClientCbs) > 0 {
+		ccShutdownCbs = make([]func(), 0, len(h.newControlClientCbs))
+		for _, cb := range h.newControlClientCbs {
 			if shutdown := cb(cc, profile); shutdown != nil {
 				ccShutdownCbs = append(ccShutdownCbs, shutdown)
 			}
@@ -496,20 +473,9 @@ func (h *ExtensionHost) NotifyNewControlClient(cc controlclient.Client, profile 
 }
 
 // RegisterAuditLogProvider implements [ipnext.Host].
-func (h *ExtensionHost) RegisterAuditLogProvider(provider ipnext.AuditLogProvider) (unregister func()) {
-	if h == nil {
-		return func() {}
-	}
-	if provider == nil {
-		panic("nil audit log provider")
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	handle := h.auditLoggers.Add(provider)
-	return func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		delete(h.auditLoggers, handle)
+func (h *ExtensionHost) RegisterAuditLogProvider(provider ipnext.AuditLogProvider) {
+	if h != nil {
+		addFuncHook(h, &h.auditLoggers, provider)
 	}
 }
 
@@ -523,20 +489,12 @@ func (h *ExtensionHost) RegisterAuditLogProvider(provider ipnext.AuditLogProvide
 // which typically includes the current profile and the audit loggers registered by extensions.
 // It must not be persisted outside of the auditable action context.
 func (h *ExtensionHost) AuditLogger() ipnauth.AuditLogFunc {
-	if h == nil {
+	if !h.active() {
 		return func(tailcfg.ClientAuditAction, string) error { return nil }
 	}
-
-	h.mu.Lock()
-	providers := slicesx.MapValues(h.auditLoggers)
-	h.mu.Unlock()
-
-	var loggers []ipnauth.AuditLogFunc
-	if len(providers) > 0 {
-		loggers = make([]ipnauth.AuditLogFunc, len(providers))
-		for i, provider := range providers {
-			loggers[i] = provider()
-		}
+	loggers := make([]ipnauth.AuditLogFunc, 0, len(h.auditLoggers))
+	for _, provider := range h.auditLoggers {
+		loggers = append(loggers, provider())
 	}
 	return func(action tailcfg.ClientAuditAction, details string) error {
 		// Log auditable actions to the host's log regardless of whether
@@ -567,6 +525,7 @@ func (h *ExtensionHost) Shutdown() {
 }
 
 func (h *ExtensionHost) shutdown() {
+	h.shuttingDown.Store(true)
 	// Prevent any queued but not yet started operations from running,
 	// block new operations from being enqueued, and wait for the
 	// currently executing operation (if any) to finish.
