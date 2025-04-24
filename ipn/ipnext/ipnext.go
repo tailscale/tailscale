@@ -43,6 +43,7 @@ type Extension interface {
 	// provided the extension was initialized. For multiple extensions,
 	// Shutdown is called in the reverse order of Init.
 	// Returned errors are not fatal; they are used for logging.
+	// After a call to Shutdown, the extension will not be called again.
 	Shutdown() error
 }
 
@@ -182,9 +183,11 @@ type Host interface {
 
 	// RegisterAuditLogProvider registers an audit log provider,
 	// which returns a function to be called when an auditable action
-	// is about to be performed. The returned function unregisters the provider.
-	// It is a runtime error to register a nil provider.
-	RegisterAuditLogProvider(AuditLogProvider) (unregister func())
+	// is about to be performed.
+	//
+	// It is a runtime error to register a nil provider or call after the host
+	// has been initialized.
+	RegisterAuditLogProvider(AuditLogProvider)
 
 	// AuditLogger returns a function that calls all currently registered audit loggers.
 	// The function fails if any logger returns an error, indicating that the action
@@ -195,9 +198,11 @@ type Host interface {
 	AuditLogger() ipnauth.AuditLogFunc
 
 	// RegisterControlClientCallback registers a function to be called every time a new
-	// control client is created. The returned function unregisters the callback.
-	// It is a runtime error to register a nil callback.
-	RegisterControlClientCallback(NewControlClientCallback) (unregister func())
+	// control client is created.
+	//
+	// It is a runtime error to register a nil provider or call after the host
+	// has been initialized.
+	RegisterControlClientCallback(NewControlClientCallback)
 }
 
 // ExtensionServices provides access to the [Host]'s extension management services,
@@ -252,23 +257,26 @@ type ProfileServices interface {
 	SwitchToBestProfileAsync(reason string)
 
 	// RegisterBackgroundProfileResolver registers a function to be used when
-	// resolving the background profile. The returned function unregisters the resolver.
-	// It is a runtime error to register a nil resolver.
+	// resolving the background profile.
+	//
+	// It is a runtime error to register a nil provider or call after the host
+	// has been initialized.
 	//
 	// TODO(nickkhyl): allow specifying some kind of priority/altitude for the resolver.
 	// TODO(nickkhyl): make it a "profile resolver" instead of a "background profile resolver".
 	// The concepts of the "current user", "foreground profile" and "background profile"
 	// only exist on Windows, and we're moving away from them anyway.
-	RegisterBackgroundProfileResolver(ProfileResolver) (unregister func())
+	RegisterBackgroundProfileResolver(ProfileResolver)
 
 	// RegisterProfileStateChangeCallback registers a function to be called when the current
-	// [ipn.LoginProfile] or its [ipn.Prefs] change. The returned function unregisters the callback.
+	// [ipn.LoginProfile] or its [ipn.Prefs] change.
 	//
 	// To get the initial profile or prefs, use [ProfileServices.CurrentProfileState]
 	// or [ProfileServices.CurrentPrefs] from the extension's [Extension.Init].
 	//
-	// It is a runtime error to register a nil callback.
-	RegisterProfileStateChangeCallback(ProfileStateChangeCallback) (unregister func())
+	// It is a runtime error to register a nil provider or call after the host
+	// has been initialized.
+	RegisterProfileStateChangeCallback(ProfileStateChangeCallback)
 }
 
 // ProfileStore provides read-only access to available login profiles and their preferences.

@@ -74,13 +74,12 @@ func (e *desktopSessionsExt) Name() string {
 // Init implements [ipnext.Extension].
 func (e *desktopSessionsExt) Init(host ipnext.Host) (err error) {
 	e.host = host
-	unregisterResolver := host.Profiles().RegisterBackgroundProfileResolver(e.getBackgroundProfile)
 	unregisterSessionCb, err := e.sm.RegisterStateCallback(e.updateDesktopSessionState)
 	if err != nil {
-		unregisterResolver()
 		return fmt.Errorf("session callback registration failed: %w", err)
 	}
-	e.cleanup = []func(){unregisterResolver, unregisterSessionCb}
+	host.Profiles().RegisterBackgroundProfileResolver(e.getBackgroundProfile)
+	e.cleanup = []func(){unregisterSessionCb}
 	return nil
 }
 

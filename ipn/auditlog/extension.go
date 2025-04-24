@@ -36,8 +36,6 @@ func init() {
 type extension struct {
 	logf logger.Logf
 
-	// cleanup are functions to call on shutdown.
-	cleanup []func()
 	// store is the log store shared by all loggers.
 	// It is created when the first logger is started.
 	store lazy.SyncValue[LogStore]
@@ -66,11 +64,9 @@ func (e *extension) Name() string {
 // Init implements [ipnext.Extension] by registering callbacks and providers
 // for the duration of the extension's lifetime.
 func (e *extension) Init(h ipnext.Host) error {
-	e.cleanup = []func(){
-		h.RegisterControlClientCallback(e.controlClientChanged),
-		h.Profiles().RegisterProfileStateChangeCallback(e.profileChanged),
-		h.RegisterAuditLogProvider(e.getCurrentLogger),
-	}
+	h.RegisterControlClientCallback(e.controlClientChanged)
+	h.Profiles().RegisterProfileStateChangeCallback(e.profileChanged)
+	h.RegisterAuditLogProvider(e.getCurrentLogger)
 	return nil
 }
 
@@ -190,9 +186,5 @@ func (e *extension) getCurrentLogger() ipnauth.AuditLogFunc {
 
 // Shutdown implements [ipnlocal.Extension].
 func (e *extension) Shutdown() error {
-	for _, f := range e.cleanup {
-		f()
-	}
-	e.cleanup = nil
 	return nil
 }
