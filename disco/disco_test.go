@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go4.org/mem"
 	"tailscale.com/types/key"
@@ -105,6 +106,21 @@ func TestMarshalAndParse(t *testing.T) {
 				},
 			},
 			want: "06 00 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f",
+		},
+		{
+			name: "call_me_maybe_via",
+			m: &CallMeMaybeVia{
+				ServerDisco:         key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 30: 30, 31: 31})),
+				LamportID:           123,
+				VNI:                 456,
+				BindLifetime:        time.Second,
+				SteadyStateLifetime: time.Minute,
+				AddrPorts: []netip.AddrPort{
+					netip.MustParseAddrPort("1.2.3.4:567"),
+					netip.MustParseAddrPort("[2001::3456]:789"),
+				},
+			},
+			want: "07 00 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 00 00 00 00 00 00 7b 00 00 01 c8 00 00 00 00 3b 9a ca 00 00 00 00 0d f8 47 58 00 00 00 00 00 00 00 00 00 00 00 ff ff 01 02 03 04 02 37 20 01 00 00 00 00 00 00 00 00 00 00 00 00 34 56 03 15",
 		},
 	}
 	for _, tt := range tests {

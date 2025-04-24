@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"time"
 
 	"go4.org/mem"
 	"tailscale.com/types/key"
@@ -47,6 +48,7 @@ const (
 	TypeBindUDPRelayEndpoint          = MessageType(0x04)
 	TypeBindUDPRelayEndpointChallenge = MessageType(0x05)
 	TypeBindUDPRelayEndpointAnswer    = MessageType(0x06)
+	TypeCallMeMaybeVia                = MessageType(0x07)
 )
 
 const v0 = byte(0)
@@ -93,6 +95,8 @@ func Parse(p []byte) (Message, error) {
 		return parseBindUDPRelayEndpointChallenge(ver, p)
 	case TypeBindUDPRelayEndpointAnswer:
 		return parseBindUDPRelayEndpointAnswer(ver, p)
+	case TypeCallMeMaybeVia:
+		return parseCallMeMaybeVia(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -390,5 +394,96 @@ func parseBindUDPRelayEndpointAnswer(ver uint8, p []byte) (m *BindUDPRelayEndpoi
 	}
 	m = new(BindUDPRelayEndpointAnswer)
 	copy(m.Answer[:], p[:])
+	return m, nil
+}
+
+// CallMeMaybeVia is a message sent only over DERP to request that the recipient
+// try to open up a magicsock path back to the sender. The 'Via' in
+// CallMeMaybeVia highlights that candidate paths are served through an
+// intermediate relay, likely a [tailscale.com/net/udprelay.Server].
+//
+// Usage of the candidate paths in magicsock requires a 3-way handshake
+// involving [BindUDPRelayEndpoint], [BindUDPRelayEndpointChallenge], and
+// [BindUDPRelayEndpointAnswer].
+//
+// CallMeMaybeVia mirrors [tailscale.com/net/udprelay.ServerEndpoint], which
+// contains field documentation.
+//
+// The recipient may choose to not open a path back if it's already happy with
+// its path. Direct connections, e.g. [CallMeMaybe]-signaled, take priority over
+// CallMeMaybeVia paths.
+//
+// This message type is currently considered experimental and is not yet tied to
+// a [tailscale.com/tailcfg.CapabilityVersion].
+type CallMeMaybeVia struct {
+	// ServerDisco is [tailscale.com/net/udprelay.ServerEndpoint.ServerDisco]
+	ServerDisco key.DiscoPublic
+	// LamportID is [tailscale.com/net/udprelay.ServerEndpoint.LamportID]
+	LamportID uint64
+	// VNI is [tailscale.com/net/udprelay.ServerEndpoint.VNI]
+	VNI uint32
+	// BindLifetime is [tailscale.com/net/udprelay.ServerEndpoint.BindLifetime]
+	BindLifetime time.Duration
+	// SteadyStateLifetime is [tailscale.com/net/udprelay.ServerEndpoint.SteadyStateLifetime]
+	SteadyStateLifetime time.Duration
+	// AddrPorts is [tailscale.com/net/udprelay.ServerEndpoint.AddrPorts]
+	AddrPorts []netip.AddrPort
+}
+
+const cmmvDataLenMinusEndpoints = key.DiscoPublicRawLen + // ServerDisco
+	8 + // LamportID
+	4 + // VNI
+	8 + // BindLifetime
+	8 // SteadyStateLifetime
+
+func (m *CallMeMaybeVia) AppendMarshal(b []byte) []byte {
+	endpointsLen := epLength * len(m.AddrPorts)
+	ret, p := appendMsgHeader(b, TypeCallMeMaybeVia, v0, cmmvDataLenMinusEndpoints+endpointsLen)
+	disco := m.ServerDisco.AppendTo(nil)
+	copy(p, disco)
+	p = p[key.DiscoPublicRawLen:]
+	binary.BigEndian.PutUint64(p[:8], m.LamportID)
+	p = p[8:]
+	binary.BigEndian.PutUint32(p[:4], m.VNI)
+	p = p[4:]
+	binary.BigEndian.PutUint64(p[:8], uint64(m.BindLifetime))
+	p = p[8:]
+	binary.BigEndian.PutUint64(p[:8], uint64(m.SteadyStateLifetime))
+	p = p[8:]
+	for _, ipp := range m.AddrPorts {
+		a := ipp.Addr().As16()
+		copy(p, a[:])
+		binary.BigEndian.PutUint16(p[16:18], ipp.Port())
+		p = p[epLength:]
+	}
+	return ret
+}
+
+func parseCallMeMaybeVia(ver uint8, p []byte) (m *CallMeMaybeVia, err error) {
+	m = new(CallMeMaybeVia)
+	if len(p) < cmmvDataLenMinusEndpoints+epLength ||
+		(len(p)-cmmvDataLenMinusEndpoints)%epLength != 0 ||
+		ver != 0 {
+		return m, nil
+	}
+	m.ServerDisco = key.DiscoPublicFromRaw32(mem.B(p[:key.DiscoPublicRawLen]))
+	p = p[key.DiscoPublicRawLen:]
+	m.LamportID = binary.BigEndian.Uint64(p[:8])
+	p = p[8:]
+	m.VNI = binary.BigEndian.Uint32(p[:4])
+	p = p[4:]
+	m.BindLifetime = time.Duration(binary.BigEndian.Uint64(p[:8]))
+	p = p[8:]
+	m.SteadyStateLifetime = time.Duration(binary.BigEndian.Uint64(p[:8]))
+	p = p[8:]
+	m.AddrPorts = make([]netip.AddrPort, 0, len(p)-cmmvDataLenMinusEndpoints/epLength)
+	for len(p) > 0 {
+		var a [16]byte
+		copy(a[:], p)
+		m.AddrPorts = append(m.AddrPorts, netip.AddrPortFrom(
+			netip.AddrFrom16(a).Unmap(),
+			binary.BigEndian.Uint16(p[16:18])))
+		p = p[epLength:]
+	}
 	return m, nil
 }
