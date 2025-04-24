@@ -59,12 +59,13 @@ type ConsensusIPPool struct {
 }
 
 func (ipp *ConsensusIPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr, updatedAt time.Time) (string, bool) {
-	// TODO (fran) lock?
 	pm, ok := ipp.perPeerMap.Load(from)
 	if !ok {
 		log.Printf("DomainForIP: peer state absent for: %d", from)
 		return "", false
 	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	ww, ok := pm.AddrToDomain.Lookup(addr)
 	if !ok {
 		log.Printf("DomainForIP: peer state doesn't recognize domain")
@@ -99,8 +100,9 @@ func (ipp *ConsensusIPPool) executeMarkLastUsed(bs []byte) tsconsensus.CommandRe
 	return tsconsensus.CommandResult{}
 }
 
+// applyMarkLastUsed is not safe for concurrent access. It's only called from raft which will
+// not call it concurrently.
 func (ipp *ConsensusIPPool) applyMarkLastUsed(from tailcfg.NodeID, addr netip.Addr, domain string, updatedAt time.Time) error {
-	// TODO (fran) lock?
 	ps, ok := ipp.perPeerMap.Load(from)
 	if !ok {
 		// There's nothing to mark. But this is unexpected, because we mark last used after we do things with peer state.
@@ -144,7 +146,7 @@ type whereWhen struct {
 type consensusPerPeerState struct {
 	DomainToAddr map[string]netip.Addr
 	AddrToDomain *bart.Table[whereWhen]
-	mu           sync.Mutex // not jsonified
+	mu           sync.Mutex
 }
 
 func (ipp *ConsensusIPPool) StopConsensus(ctx context.Context) error {
@@ -185,7 +187,7 @@ func (ipp *ConsensusIPPool) IPForDomain(nid tailcfg.NodeID, domain string) (neti
 	args := checkoutAddrArgs{
 		NodeID:        nid,
 		Domain:        domain,
-		ReuseDeadline: now.Add(-48 * time.Hour), // TODO (fran) is this good? should it be configurable?
+		ReuseDeadline: now.Add(-48 * time.Hour), // TODO (fran) is this appropriate? should it be configurable?
 		UpdatedAt:     now,
 	}
 	bs, err := json.Marshal(args)
@@ -267,8 +269,9 @@ func (ipp *ConsensusIPPool) executeCheckoutAddr(bs []byte) tsconsensus.CommandRe
 // reuseDeadline is the time before which addresses are considered to be expired.
 // So if addresses are being reused after they haven't been used for 24 hours say updatedAt would be now
 // and reuseDeadline would be 24 hours ago.
+// It is not safe for concurrent access (it's only called from raft, which will not call concurrently
+// so that's fine).
 func (ipp *ConsensusIPPool) applyCheckoutAddr(nid tailcfg.NodeID, domain string, reuseDeadline, updatedAt time.Time) (netip.Addr, error) {
-	// TODO (fran) lock and unlock (we need to right?)
 	pm, _ := ipp.perPeerMap.LoadOrStore(nid, &consensusPerPeerState{
 		AddrToDomain: &bart.Table[whereWhen]{},
 	})
