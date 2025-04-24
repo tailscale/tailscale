@@ -13,6 +13,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/tsd"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
@@ -52,7 +53,7 @@ type Extension interface {
 // If the extension should be skipped at runtime, it must return either [SkipExtension]
 // or a wrapped [SkipExtension]. Any other error returned is fatal and will prevent
 // the LocalBackend from starting.
-type NewExtensionFn func(logger.Logf, *tsd.System) (Extension, error)
+type NewExtensionFn func(logger.Logf, SafeBackend) (Extension, error)
 
 // SkipExtension is an error returned by [NewExtensionFn] to indicate that the extension
 // should be skipped rather than prevent the LocalBackend from starting.
@@ -78,8 +79,8 @@ func (d *Definition) Name() string {
 }
 
 // MakeExtension instantiates the extension.
-func (d *Definition) MakeExtension(logf logger.Logf, sys *tsd.System) (Extension, error) {
-	ext, err := d.newFn(logf, sys)
+func (d *Definition) MakeExtension(logf logger.Logf, sb SafeBackend) (Extension, error) {
+	ext, err := d.newFn(logf, sb)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,7 @@ func Extensions() views.Slice[*Definition] {
 func DefinitionForTest(ext Extension) *Definition {
 	return &Definition{
 		name:  ext.Name(),
-		newFn: func(logger.Logf, *tsd.System) (Extension, error) { return ext, nil },
+		newFn: func(logger.Logf, SafeBackend) (Extension, error) { return ext, nil },
 	}
 }
 
@@ -140,7 +141,7 @@ func DefinitionForTest(ext Extension) *Definition {
 func DefinitionWithErrForTest(name string, err error) *Definition {
 	return &Definition{
 		name:  name,
-		newFn: func(logger.Logf, *tsd.System) (Extension, error) { return nil, err },
+		newFn: func(logger.Logf, SafeBackend) (Extension, error) { return nil, err },
 	}
 }
 
@@ -203,6 +204,19 @@ type Host interface {
 	// It is a runtime error to register a nil provider or call after the host
 	// has been initialized.
 	RegisterControlClientCallback(NewControlClientCallback)
+
+	// SendNotifyAsync sends a notification to the IPN bus,
+	// typically to the GUI client.
+	SendNotifyAsync(ipn.Notify)
+}
+
+// SafeBackend is a subset of the [ipnlocal.LocalBackend] type's methods that
+// are safe to call from extension hooks at any time (even hooks called while
+// LocalBackend's internal mutex is held).
+type SafeBackend interface {
+	Sys() *tsd.System
+	Clock() tstime.Clock
+	TailscaleVarRoot() string
 }
 
 // ExtensionServices provides access to the [Host]'s extension management services,

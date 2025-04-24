@@ -7,7 +7,6 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/taildrop"
-	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 )
 
@@ -15,7 +14,7 @@ func init() {
 	ipnext.RegisterExtension("taildrop", newExtension)
 }
 
-func newExtension(logf logger.Logf, _ *tsd.System) (ipnext.Extension, error) {
+func newExtension(logf logger.Logf, b ipnext.SafeBackend) (ipnext.Extension, error) {
 	return &extension{
 		logf: logger.WithPrefix(logf, "taildrop: "),
 	}, nil
@@ -23,7 +22,7 @@ func newExtension(logf logger.Logf, _ *tsd.System) (ipnext.Extension, error) {
 
 type extension struct {
 	logf logger.Logf
-	lb   *ipnlocal.LocalBackend
+	sb   ipnext.SafeBackend
 	mgr  *taildrop.Manager
 }
 
@@ -32,11 +31,6 @@ func (e *extension) Name() string {
 }
 
 func (e *extension) Init(h ipnext.Host) error {
-	type I interface {
-		Backend() ipnlocal.Backend
-	}
-	e.lb = h.(I).Backend().(*ipnlocal.LocalBackend)
-
 	// TODO(bradfitz): move init of taildrop.Manager from ipnlocal/peerapi.go to
 	// here
 	e.mgr = nil
@@ -45,7 +39,11 @@ func (e *extension) Init(h ipnext.Host) error {
 }
 
 func (e *extension) Shutdown() error {
-	if mgr, err := e.lb.TaildropManager(); err == nil {
+	lb, ok := e.sb.(*ipnlocal.LocalBackend)
+	if !ok {
+		return nil
+	}
+	if mgr, err := lb.TaildropManager(); err == nil {
 		mgr.Shutdown()
 	} else {
 		e.logf("taildrop: failed to shutdown taildrop manager: %v", err)

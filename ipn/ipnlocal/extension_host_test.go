@@ -27,7 +27,9 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/persist"
 	"tailscale.com/util/must"
 )
@@ -284,7 +286,7 @@ func TestNewExtensionHost(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			logf := tstest.WhileTestRunningLogger(t)
-			h, err := NewExtensionHost(logf, tsd.NewSystem(), &testBackend{}, tt.defs...)
+			h, err := NewExtensionHostForTest(logf, &testBackend{}, tt.defs...)
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Errorf("NewExtensionHost: gotErr %v(%v); wantErr %v", gotErr, err, tt.wantErr)
 			}
@@ -1095,7 +1097,7 @@ func newExtensionHostForTest[T ipnext.Extension](t *testing.T, b Backend, initia
 		}
 		defs[i] = ipnext.DefinitionForTest(ext)
 	}
-	h, err := NewExtensionHost(logf, tsd.NewSystem(), b, defs...)
+	h, err := NewExtensionHostForTest(logf, b, defs...)
 	if err != nil {
 		t.Fatalf("NewExtensionHost: %v", err)
 	}
@@ -1320,6 +1322,7 @@ func (q *testExecQueue) Wait(context.Context) error { return nil }
 // testBackend implements [ipnext.Backend] for testing purposes
 // by calling the provided hooks when its methods are called.
 type testBackend struct {
+	lazySys                 lazy.SyncValue[*tsd.System]
 	switchToBestProfileHook func(reason string)
 
 	// mu protects the backend state.
@@ -1327,6 +1330,13 @@ type testBackend struct {
 	// and released on exit, mimicking the behavior of the [LocalBackend].
 	mu sync.Mutex
 }
+
+func (b *testBackend) Clock() tstime.Clock { return tstime.StdClock{} }
+func (b *testBackend) Sys() *tsd.System {
+	return b.lazySys.Get(tsd.NewSystem)
+}
+func (b *testBackend) SendNotify(ipn.Notify)    { panic("not implemented") }
+func (b *testBackend) TailscaleVarRoot() string { panic("not implemented") }
 
 func (b *testBackend) SwitchToBestProfile(reason string) {
 	b.mu.Lock()

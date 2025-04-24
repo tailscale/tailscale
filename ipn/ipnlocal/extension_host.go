@@ -20,7 +20,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/testenv"
@@ -131,15 +130,32 @@ type Backend interface {
 	// SwitchToBestProfile switches to the best profile for the current state of the system.
 	// The reason indicates why the profile is being switched.
 	SwitchToBestProfile(reason string)
+
+	SendNotify(ipn.Notify)
+	ipnext.SafeBackend
 }
 
 // NewExtensionHost returns a new [ExtensionHost] which manages registered extensions for the given backend.
 // The extensions are instantiated, but are not initialized until [ExtensionHost.Init] is called.
 // It returns an error if instantiating any extension fails.
+func NewExtensionHost(logf logger.Logf, b Backend) (*ExtensionHost, error) {
+	return newExtensionHost(logf, b)
+}
+
+func NewExtensionHostForTest(logf logger.Logf, b Backend, overrideExts ...*ipnext.Definition) (*ExtensionHost, error) {
+	if !testenv.InTest() {
+		panic("use outside of test")
+	}
+	return newExtensionHost(logf, b, overrideExts...)
+}
+
+// newExtensionHost is the shared implementation of [NewExtensionHost] and
+// [NewExtensionHostForTest].
 //
-// If overrideExts is non-nil, the registered extensions are ignored and the provided extensions are used instead.
-// Overriding extensions is primarily used for testing.
-func NewExtensionHost(logf logger.Logf, sys *tsd.System, b Backend, overrideExts ...*ipnext.Definition) (_ *ExtensionHost, err error) {
+// If overrideExts is non-nil, the registered extensions are ignored and the
+// provided extensions are used instead. Overriding extensions is primarily used
+// for testing.
+func newExtensionHost(logf logger.Logf, b Backend, overrideExts ...*ipnext.Definition) (_ *ExtensionHost, err error) {
 	host := &ExtensionHost{
 		b:         b,
 		logf:      logger.WithPrefix(logf, "ipnext: "),
@@ -172,7 +188,7 @@ func NewExtensionHost(logf logger.Logf, sys *tsd.System, b Backend, overrideExts
 
 	host.allExtensions = make([]ipnext.Extension, 0, numExts)
 	for _, d := range exts {
-		ext, err := d.MakeExtension(logf, sys)
+		ext, err := d.MakeExtension(logf, b)
 		if errors.Is(err, ipnext.SkipExtension) {
 			// The extension wants to be skipped.
 			host.logf("%q: %v", d.Name(), err)
@@ -334,12 +350,14 @@ func (h *ExtensionHost) SwitchToBestProfileAsync(reason string) {
 	})
 }
 
-// Backend returns the [Backend] used by the extension host.
-func (h *ExtensionHost) Backend() Backend {
+// SendNotifyAsync implements [ipnext.Host].
+func (h *ExtensionHost) SendNotifyAsync(n ipn.Notify) {
 	if h == nil {
-		return nil
+		return
 	}
-	return h.b
+	h.enqueueBackendOperation(func(b Backend) {
+		b.SendNotify(n)
+	})
 }
 
 // addFuncHook appends non-nil fn to hooks.
