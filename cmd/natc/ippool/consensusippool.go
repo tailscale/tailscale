@@ -21,43 +21,27 @@ import (
 	"tailscale.com/util/mak"
 )
 
-/*
-	TODO(fran)
-
-An ConsensusIPPool is a group of one or more IPV4 ranges from which individual IPV4 addresses can be
-checked out.
-
-natc-consensus provides per domain router functionality for a tailnet.
-  - when a node does a dns lookup for a domain the natc-consensus handles, natc-consensus asks ConsensusIPPool for an IP address
-    for that node and domain. When ConsensusIPPool
-  - when a node sends traffic to the IP address it has for a domain, natc-consensus asks ConsensusIPPool which domain that traffic
-    is for.
-  - when an IP address hasn't been used for a while ConsensusIPPool forgets about that node-ip-domain mapping and may provide
-    that IP address to that node in response to a subsequent DNS request.
-
-The pool is distributed across servers in a cluster, to provide high availability.
-
-Each tailcfg.NodeID has the full range available. The same IPV4 address will be provided to different nodes.
-
-ConsensusIPPool will maintain the node-ip-domain mapping until it expires, and won't hand out the IP address to that node
-again while it maintains the mapping.
-
-Reading from the pool is fast, writing to the pool is slow. Because reads can be done in memory on the server that got
-the traffic, but writes must be sent to the consensus peers.
-
-To handle expiry we write on reads, to update the last-used-date, but we do that after we've returned a response.
-
-# ConsensusIPPool.DomainForIP gets the domain associated with a previous IP checkout for a node
-
-ConsensusIPPool.IPForDomain gets an IP address for the node+domain. It will return an IP address from any existing mapping,
-or it may create a mapping with a new unused IP address.
-*/
+// A ConsensusIPPool is an IPSet from which individual IPV4 addresses can be checked out.
+//
+// The pool is distributed across servers in a cluster, to provide high availability.
+//
+// Each tailcfg.NodeID has the full range available. The same IPV4 address will be provided to different nodes.
+//
+// ConsensusIPPool will maintain the node-ip-domain mapping until it expires, and won't hand out the IP address to that node
+// again while it maintains the mapping.
+//
+// Reading from the pool is fast, writing to the pool is slow. Because reads can be done in memory on the server that got
+// the traffic, but writes must be sent to the consensus peers.
+//
+// To handle expiry we write on reads, to update the last-used-date, but we do that after we've returned a response.
 type ConsensusIPPool struct {
 	IPSet      *netipx.IPSet
 	perPeerMap syncs.Map[tailcfg.NodeID, *consensusPerPeerState]
 	consensus  commandExecutor
 }
 
+// DomainForIP is part of the IPPool interface. It returns a domain for a given IP address, if we have
+// previously assigned the IP address to a domain for the node that is asking. Otherwise it logs and returns the empty string.
 func (ipp *ConsensusIPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr, updatedAt time.Time) (string, bool) {
 	pm, ok := ipp.perPeerMap.Load(from)
 	if !ok {
@@ -87,6 +71,7 @@ type markLastUsedArgs struct {
 	UpdatedAt time.Time
 }
 
+// executeMarkLastUsed parses a markLastUsed log entry and applies it.
 func (ipp *ConsensusIPPool) executeMarkLastUsed(bs []byte) tsconsensus.CommandResult {
 	var args markLastUsedArgs
 	err := json.Unmarshal(bs, &args)
@@ -100,6 +85,8 @@ func (ipp *ConsensusIPPool) executeMarkLastUsed(bs []byte) tsconsensus.CommandRe
 	return tsconsensus.CommandResult{}
 }
 
+// applyMarkLastUsed applies the arguments from the log entry to the state. It updates an entry in the AddrToDomain
+// map with a new LastUsed timestamp.
 // applyMarkLastUsed is not safe for concurrent access. It's only called from raft which will
 // not call it concurrently.
 func (ipp *ConsensusIPPool) applyMarkLastUsed(from tailcfg.NodeID, addr netip.Addr, domain string, updatedAt time.Time) error {
@@ -127,6 +114,7 @@ func (ipp *ConsensusIPPool) applyMarkLastUsed(from tailcfg.NodeID, addr netip.Ad
 	return nil
 }
 
+// StartConsensus is part of the IPPool interface. It starts the raft background routines that handle consensus.
 func (ipp *ConsensusIPPool) StartConsensus(ctx context.Context, ts *tsnet.Server, clusterTag string) error {
 	cfg := tsconsensus.DefaultConfig()
 	cfg.ServeDebugMonitor = true
@@ -149,6 +137,7 @@ type consensusPerPeerState struct {
 	mu           sync.Mutex
 }
 
+// StopConsensus is part of the IPPool interface. It stops the raft background routines that handle consensus.
 func (ipp *ConsensusIPPool) StopConsensus(ctx context.Context) error {
 	return (ipp.consensus).(*tsconsensus.Consensus).Stop(ctx)
 }
@@ -182,6 +171,8 @@ func (ps *consensusPerPeerState) unusedIPV4(ipset *netipx.IPSet, reuseDeadline t
 	return netip.Addr{}, false, "", errors.New("ip pool exhausted")
 }
 
+// IPForDomain is part of the IPPool interface. It returns an IP address for the given domain for the given node
+// allocating an IP address from the pool if we haven't already.
 func (ipp *ConsensusIPPool) IPForDomain(nid tailcfg.NodeID, domain string) (netip.Addr, error) {
 	now := time.Now()
 	args := checkoutAddrArgs{
@@ -212,6 +203,7 @@ func (ipp *ConsensusIPPool) IPForDomain(nid tailcfg.NodeID, domain string) (neti
 	return addr, err
 }
 
+// markLastUsed executes a markLastUsed command on the leader with raft.
 func (ipp *ConsensusIPPool) markLastUsed(nid tailcfg.NodeID, addr netip.Addr, domain string, lastUsed time.Time) error {
 	args := markLastUsedArgs{
 		NodeID:    nid,
@@ -246,6 +238,7 @@ type checkoutAddrArgs struct {
 	UpdatedAt     time.Time
 }
 
+// executeCheckoutAddr parses a checkoutAddr raft log entry and applies it.
 func (ipp *ConsensusIPPool) executeCheckoutAddr(bs []byte) tsconsensus.CommandResult {
 	var args checkoutAddrArgs
 	err := json.Unmarshal(bs, &args)
@@ -294,7 +287,7 @@ func (ipp *ConsensusIPPool) applyCheckoutAddr(nid tailcfg.NodeID, domain string,
 	return addr, nil
 }
 
-// fulfil the raft lib functional state machine interface
+// Apply is part of the raft.FSM interface. It takes an incoming log entry and applies it to the state.
 func (ipp *ConsensusIPPool) Apply(l *raft.Log) interface{} {
 	var c tsconsensus.Command
 	if err := json.Unmarshal(l.Data, &c); err != nil {
@@ -311,10 +304,12 @@ func (ipp *ConsensusIPPool) Apply(l *raft.Log) interface{} {
 }
 
 // TODO(fran) what exactly would we gain by implementing Snapshot and Restore?
+// Snapshot is part of the raft.FSM interface.
 func (ipp *ConsensusIPPool) Snapshot() (raft.FSMSnapshot, error) {
 	return nil, nil
 }
 
+// Restore is part of the raft.FSM interface.
 func (ipp *ConsensusIPPool) Restore(rc io.ReadCloser) error {
 	return nil
 }
