@@ -18,8 +18,10 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/testenv"
 )
 
 // TestIGD is an IGD (Internet Gateway Device) for testing. It supports fake
@@ -64,7 +66,8 @@ type igdCounters struct {
 	invalidPCPMapPkt int32
 }
 
-func NewTestIGD(logf logger.Logf, t TestIGDOptions) (*TestIGD, error) {
+func NewTestIGD(tb testenv.TB, t TestIGDOptions) (*TestIGD, error) {
+	logf := tstest.WhileTestRunningLogger(tb)
 	d := &TestIGD{
 		doPMP:  t.PMP,
 		doPCP:  t.PCP,
@@ -265,7 +268,7 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netip.AddrPort) {
 func newTestClient(t *testing.T, igd *TestIGD, bus *eventbus.Bus) *Client {
 	var c *Client
 	c = NewClient(Config{
-		Logf:         t.Logf,
+		Logf:         tstest.WhileTestRunningLogger(t),
 		NetMon:       netmon.NewStatic(),
 		ControlKnobs: new(controlknobs.Knobs),
 		EventBus:     bus,

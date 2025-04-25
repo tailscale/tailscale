@@ -28,7 +28,7 @@ func TestSelectBestService(t *testing.T) {
 	}
 
 	// Run a fake IGD server to respond to UPnP requests.
-	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
 	if err != nil {
 		t.Fatal(err)
 	}

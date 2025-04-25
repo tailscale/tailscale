@@ -61,7 +61,7 @@ func TestClientProbeThenMap(t *testing.T) {
 }
 
 func TestProbeIntegration(t *testing.T) {
-	igd, err := NewTestIGD(t.Logf, TestIGDOptions{PMP: true, PCP: true, UPnP: true})
+	igd, err := NewTestIGD(t, TestIGDOptions{PMP: true, PCP: true, UPnP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestProbeIntegration(t *testing.T) {
 }
 
 func TestPCPIntegration(t *testing.T) {
-	igd, err := NewTestIGD(t.Logf, TestIGDOptions{PMP: false, PCP: true, UPnP: false})
+	igd, err := NewTestIGD(t, TestIGDOptions{PMP: false, PCP: true, UPnP: false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestGetUPnPErrorsMetric(t *testing.T) {
 }
 
 func TestUpdateEvent(t *testing.T) {
-	igd, err := NewTestIGD(t.Logf, TestIGDOptions{PCP: true})
+	igd, err := NewTestIGD(t, TestIGDOptions{PCP: true})
 	if err != nil {
 		t.Fatalf("Create test gateway: %v", err)
 	}

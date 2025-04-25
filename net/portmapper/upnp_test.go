@@ -533,7 +533,7 @@ func TestGetUPnPClient(t *testing.T) {
 }
 
 func TestGetUPnPPortMapping(t *testing.T) {
-	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -672,7 +672,7 @@ func TestGetUPnPPortMapping_LeaseDuration(t *testing.T) {
 				"DeletePortMapping":    "", // Do nothing for test
 			}
 
-			igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+			igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -722,7 +722,7 @@ func TestGetUPnPPortMapping_LeaseDuration(t *testing.T) {
 //
 // See https://github.com/tailscale/tailscale/issues/10911
 func TestGetUPnPPortMapping_NoValidServices(t *testing.T) {
-	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +753,7 @@ func TestGetUPnPPortMapping_NoValidServices(t *testing.T) {
 
 // Tests the legacy behaviour with the pre-UPnP standard portmapping service.
 func TestGetUPnPPortMapping_Legacy(t *testing.T) {
-	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -796,7 +796,7 @@ func TestGetUPnPPortMapping_Legacy(t *testing.T) {
 }
 
 func TestGetUPnPPortMappingNoResponses(t *testing.T) {
-	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -912,7 +912,7 @@ func TestGetUPnPPortMapping_Invalid(t *testing.T) {
 		"127.0.0.1",
 	} {
 		t.Run(responseAddr, func(t *testing.T) {
-			igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+			igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
 			if err != nil {
 				t.Fatal(err)
 			}
