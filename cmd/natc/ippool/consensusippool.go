@@ -148,9 +148,8 @@ func (ipp *ConsensusIPPool) StopConsensus(ctx context.Context) error {
 // So if addresses are being reused after they haven't been used for 24 hours say, reuseDeadline
 // would be 24 hours ago.
 func (ps *consensusPerPeerState) unusedIPV4(ipset *netipx.IPSet, reuseDeadline time.Time) (netip.Addr, bool, string, error) {
-	// TODO (fran) here we iterate through each ip within the ranges until we find one that's unused or expired
-	// if we want to have a random ip choice behavior we could make that work with the state machine by doing something like
-	// passing the randomly chosen ip into the state machine call (so replaying logs would still be deterministic)
+	// If we want to have a random IP choice behavior we could make that work with the state machine by doing something like
+	// passing the randomly chosen IP into the state machine call (so replaying logs would still be deterministic).
 	for _, r := range ipset.Ranges() {
 		ip := r.From()
 		toIP := r.To()
