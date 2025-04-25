@@ -1675,27 +1675,12 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 	// Perform all mutations of prefs based on the netmap here.
 	if prefsChanged {
-		profile := b.pm.CurrentProfile()
 		// Prefs will be written out if stale; this is not safe unless locked or cloned.
 		if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
 			MagicDNSName: curNetMap.MagicDNSSuffix(),
 			DomainName:   curNetMap.DomainName(),
 		}); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
-		}
-		// Updating profile prefs may have resulted in a change to the current [ipn.LoginProfile],
-		// either because the user completed a login, which populated and persisted their profile
-		// for the first time, or because of an [ipn.NetworkProfile] or [tailcfg.UserProfile] change.
-		// Theoretically, a completed login could also result in a switch to a different existing
-		// profile representing a different node (see tailscale/tailscale#8816).
-		//
-		// Let's check if the current profile has changed, and invoke all registered
-		// [ipnext.ProfileStateChangeCallback] if necessary.
-		if cp := b.pm.CurrentProfile(); *cp.AsStruct() != *profile.AsStruct() {
-			// If the profile ID was empty before SetPrefs, it's a new profile
-			// and the user has just completed a login for the first time.
-			sameNode := profile.ID() == "" || profile.ID() == cp.ID()
-			b.extHost.NotifyProfileChange(profile, prefs.View(), sameNode)
 		}
 	}
 

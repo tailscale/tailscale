@@ -43,6 +43,15 @@ type profileManager struct {
 	currentProfile ipn.LoginProfileView                   // always Valid (once [newProfileManager] returns).
 	prefs          ipn.PrefsView                          // always Valid (once [newProfileManager] returns).
 
+	// StateChangeHook is an optional hook that is called when the current profile or prefs change,
+	// such as due to a profile switch or a change in the profile's preferences.
+	// It is typically set by the [LocalBackend] to invert the dependency between
+	// the [profileManager] and the [LocalBackend], so that instead of [LocalBackend]
+	// asking [profileManager] for the state, we can have [profileManager] call
+	// [LocalBackend] when the state changes. See also:
+	// https://github.com/tailscale/tailscale/pull/15791#discussion_r2060838160
+	StateChangeHook ipnext.ProfileStateChangeCallback
+
 	// extHost is the bridge between [profileManager] and the registered [ipnext.Extension]s.
 	// It may be nil in tests. A nil pointer is a valid, no-op host.
 	extHost *ExtensionHost
@@ -166,6 +175,16 @@ func (pm *profileManager) SwitchToProfile(profile ipn.LoginProfileView) (cp ipn.
 		// But if updating the default profile fails, we should log it.
 		pm.logf("failed to set %s (%s) as the default profile: %v", profile.Name(), profile.ID(), err)
 	}
+
+	if f := pm.StateChangeHook; f != nil {
+		f(pm.currentProfile, pm.prefs, false)
+	}
+	// Do not call pm.extHost.NotifyProfileChange here; it is invoked in
+	// [LocalBackend.resetForProfileChangeLockedOnEntry] after the netmap reset.
+	// TODO(nickkhyl): Consider moving it here (or into the stateChangeCb handler
+	// in [LocalBackend]) once the profile/node state, including the netmap,
+	// is actually tied to the current profile.
+
 	return profile, true, nil
 }
 
@@ -344,11 +363,19 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 	// [LocalBackend.resetForProfileChangeLockedOnEntry] is not called and certain
 	// node/profile-specific state may not be reset as expected.
 	//
-	// However, LocalBackend notifies [ipnext.Extension]s about the profile change,
+	// However, [profileManager] notifies [ipnext.Extension]s about the profile change,
 	// so features migrated from LocalBackend to external packages should not be affected.
 	//
 	// See tailscale/corp#28014.
-	pm.currentProfile = cp
+	if !cp.Equals(pm.currentProfile) {
+		const sameNode = false // implicit profile switch
+		pm.currentProfile = cp
+		pm.prefs = prefsIn.AsStruct().View()
+		if f := pm.StateChangeHook; f != nil {
+			f(cp, prefsIn, sameNode)
+		}
+		pm.extHost.NotifyProfileChange(cp, prefsIn, sameNode)
+	}
 	cp, err := pm.setProfilePrefs(nil, prefsIn, np)
 	if err != nil {
 		return err
@@ -410,7 +437,20 @@ func (pm *profileManager) setProfilePrefs(lp *ipn.LoginProfile, prefsIn ipn.Pref
 	// Update the current profile view to reflect the changes
 	// if the specified profile is the current profile.
 	if isCurrentProfile {
-		pm.currentProfile = lp.View()
+		// Always set pm.currentProfile to the new profile view for pointer equality.
+		// We check it further down the call stack.
+		lp := lp.View()
+		sameProfileInfo := lp.Equals(pm.currentProfile)
+		pm.currentProfile = lp
+		if !sameProfileInfo {
+			// But only invoke the callbacks if the profile info has actually changed.
+			const sameNode = true                // just an info update; still the same node
+			pm.prefs = prefsIn.AsStruct().View() // suppress further callbacks for this change
+			if f := pm.StateChangeHook; f != nil {
+				f(lp, prefsIn, sameNode)
+			}
+			pm.extHost.NotifyProfileChange(lp, prefsIn, sameNode)
+		}
 	}
 
 	// An empty profile.ID indicates that the node info is not available yet,
@@ -470,7 +510,13 @@ func (pm *profileManager) setProfilePrefsNoPermCheck(profile ipn.LoginProfileVie
 		// That said, regardless of the cleanup, we might want
 		// to keep the profileManager responsible for invoking
 		// profile- and prefs-related callbacks.
-		pm.extHost.NotifyProfilePrefsChanged(pm.currentProfile, oldPrefs, clonedPrefs)
+
+		if !clonedPrefs.Equals(oldPrefs) {
+			if f := pm.StateChangeHook; f != nil {
+				f(pm.currentProfile, clonedPrefs, true)
+			}
+			pm.extHost.NotifyProfilePrefsChanged(pm.currentProfile, oldPrefs, clonedPrefs)
+		}
 
 		pm.updateHealth()
 	}

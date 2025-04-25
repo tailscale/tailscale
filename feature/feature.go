@@ -53,6 +53,12 @@ func (h *Hook[Func]) Get() Func {
 	return h.f
 }
 
+// GetOk returns the hook function and true if it has been set,
+// otherwise its zero value and false.
+func (h *Hook[Func]) GetOk() (f Func, ok bool) {
+	return h.f, h.ok
+}
+
 // Hooks is a slice of funcs.
 //
 // As opposed to a single Hook, this is meant to be used when
