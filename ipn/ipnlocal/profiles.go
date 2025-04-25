@@ -40,8 +40,8 @@ type profileManager struct {
 
 	currentUserID  ipn.WindowsUserID
 	knownProfiles  map[ipn.ProfileID]ipn.LoginProfileView // always non-nil
-	currentProfile ipn.LoginProfileView                   // always Valid.
-	prefs          ipn.PrefsView                          // always Valid.
+	currentProfile ipn.LoginProfileView                   // always Valid (once [newProfileManager] returns).
+	prefs          ipn.PrefsView                          // always Valid (once [newProfileManager] returns).
 
 	// extHost is the bridge between [profileManager] and the registered [ipnext.Extension]s.
 	// It may be nil in tests. A nil pointer is a valid, no-op host.
@@ -111,6 +111,9 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) {
 //
 // It returns the current profile and whether the call resulted in a profile change,
 // or an error if the specified profile does not exist or its prefs could not be loaded.
+//
+// It may be called during [profileManager] initialization before [newProfileManager] returns
+// and must check whether pm.currentProfile is Valid before using it.
 func (pm *profileManager) SwitchToProfile(profile ipn.LoginProfileView) (cp ipn.LoginProfileView, changed bool, err error) {
 	prefs := defaultPrefs
 	switch {
@@ -118,7 +121,7 @@ func (pm *profileManager) SwitchToProfile(profile ipn.LoginProfileView) (cp ipn.
 		// Create a new profile that is not associated with any user.
 		profile = pm.NewProfileForUser("")
 	case profile == pm.currentProfile,
-		profile.ID() != "" && profile.ID() == pm.currentProfile.ID(),
+		profile.ID() != "" && pm.currentProfile.Valid() && profile.ID() == pm.currentProfile.ID(),
 		profile.ID() == "" && profile.Equals(pm.currentProfile) && prefs.Equals(pm.prefs):
 		// The profile is already the current profile; no need to switch.
 		//
@@ -176,7 +179,7 @@ func (pm *profileManager) DefaultUserProfile(uid ipn.WindowsUserID) ipn.LoginPro
 	if err == ipn.ErrStateNotExist || len(b) == 0 {
 		if runtime.GOOS == "windows" {
 			pm.dlogf("DefaultUserProfile: windows: migrating from legacy preferences")
-			profile, err := pm.migrateFromLegacyPrefs(uid, false)
+			profile, err := pm.migrateFromLegacyPrefs(uid)
 			if err == nil {
 				return profile
 			}
@@ -328,6 +331,23 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 			delete(pm.knownProfiles, p.ID())
 		}
 	}
+	// TODO(nickkhyl): Revisit how we handle implicit switching to a different profile,
+	// which occurs when prefsIn represents a node/user different from that of the
+	// currentProfile. It happens when a login (either reauth or user-initiated login)
+	// is completed with a different node/user identity than the one currently in use.
+	//
+	// Currently, we overwrite the existing profile prefs with the ones from prefsIn,
+	// where prefsIn is the previous profile's prefs with an updated Persist, LoggedOut,
+	// WantRunning and possibly other fields. This may not be the desired behavior.
+	//
+	// Additionally, LocalBackend doesn't treat it as a proper profile switch, meaning that
+	// [LocalBackend.resetForProfileChangeLockedOnEntry] is not called and certain
+	// node/profile-specific state may not be reset as expected.
+	//
+	// However, LocalBackend notifies [ipnext.Extension]s about the profile change,
+	// so features migrated from LocalBackend to external packages should not be affected.
+	//
+	// See tailscale/corp#28014.
 	pm.currentProfile = cp
 	cp, err := pm.setProfilePrefs(nil, prefsIn, np)
 	if err != nil {
@@ -746,28 +766,6 @@ func (pm *profileManager) NewProfileForUser(uid ipn.WindowsUserID) ipn.LoginProf
 	return (&ipn.LoginProfile{LocalUserID: uid}).View()
 }
 
-// newProfileWithPrefs creates a new profile with the specified prefs and assigns
-// the specified uid as the profile owner. If switchNow is true, it switches to the
-// newly created profile immediately. It returns the newly created profile on success,
-// or an error on failure.
-func (pm *profileManager) newProfileWithPrefs(uid ipn.WindowsUserID, prefs ipn.PrefsView, switchNow bool) (ipn.LoginProfileView, error) {
-	metricNewProfile.Add(1)
-
-	profile, err := pm.setProfilePrefs(&ipn.LoginProfile{LocalUserID: uid}, prefs, ipn.NetworkProfile{})
-	if err != nil {
-		return ipn.LoginProfileView{}, err
-	}
-	if switchNow {
-		pm.currentProfile = profile
-		pm.prefs = prefs.AsStruct().View()
-		pm.updateHealth()
-		if err := pm.setProfileAsUserDefault(profile); err != nil {
-			return ipn.LoginProfileView{}, err
-		}
-	}
-	return profile, nil
-}
-
 // defaultPrefs is the default prefs for a new profile. This initializes before
 // even this package's init() so do not rely on other parts of the system being
 // fully initialized here (for example, syspolicy will not be available on
@@ -857,27 +855,9 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 		health:        ht,
 	}
 
+	var initialProfile ipn.LoginProfileView
 	if stateKey != "" {
-		for _, v := range knownProfiles {
-			if v.Key() == stateKey {
-				pm.currentProfile = v
-			}
-		}
-		if !pm.currentProfile.Valid() {
-			if suf, ok := strings.CutPrefix(string(stateKey), "user-"); ok {
-				pm.currentUserID = ipn.WindowsUserID(suf)
-			}
-			pm.SwitchToNewProfile()
-		} else {
-			pm.currentUserID = pm.currentProfile.LocalUserID()
-		}
-		prefs, err := pm.loadSavedPrefs(stateKey)
-		if err != nil {
-			return nil, err
-		}
-		if err := pm.setProfilePrefsNoPermCheck(pm.currentProfile, prefs); err != nil {
-			return nil, err
-		}
+		initialProfile = pm.findProfileByKey("", stateKey)
 		// Most platform behavior is controlled by the goos parameter, however
 		// some behavior is implied by build tag and fails when run on Windows,
 		// so we explicitly avoid that behavior when running on Windows.
@@ -888,17 +868,24 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 	} else if len(knownProfiles) == 0 && goos != "windows" && runtime.GOOS != "windows" {
 		// No known profiles, try a migration.
 		pm.dlogf("no known profiles; trying to migrate from legacy prefs")
-		if _, err := pm.migrateFromLegacyPrefs(pm.currentUserID, true); err != nil {
-			return nil, err
-		}
-	} else {
-		pm.SwitchToNewProfile()
-	}
+		if initialProfile, err = pm.migrateFromLegacyPrefs(pm.currentUserID); err != nil {
 
+		}
+	}
+	if !initialProfile.Valid() {
+		var initialUserID ipn.WindowsUserID
+		if suf, ok := strings.CutPrefix(string(stateKey), "user-"); ok {
+			initialUserID = ipn.WindowsUserID(suf)
+		}
+		initialProfile = pm.NewProfileForUser(initialUserID)
+	}
+	if _, _, err := pm.SwitchToProfile(initialProfile); err != nil {
+		return nil, err
+	}
 	return pm, nil
 }
 
-func (pm *profileManager) migrateFromLegacyPrefs(uid ipn.WindowsUserID, switchNow bool) (ipn.LoginProfileView, error) {
+func (pm *profileManager) migrateFromLegacyPrefs(uid ipn.WindowsUserID) (ipn.LoginProfileView, error) {
 	metricMigration.Add(1)
 	sentinel, prefs, err := pm.loadLegacyPrefs(uid)
 	if err != nil {
@@ -906,7 +893,7 @@ func (pm *profileManager) migrateFromLegacyPrefs(uid ipn.WindowsUserID, switchNo
 		return ipn.LoginProfileView{}, fmt.Errorf("load legacy prefs: %w", err)
 	}
 	pm.dlogf("loaded legacy preferences; sentinel=%q", sentinel)
-	profile, err := pm.newProfileWithPrefs(uid, prefs, switchNow)
+	profile, err := pm.setProfilePrefs(&ipn.LoginProfile{LocalUserID: uid}, prefs, ipn.NetworkProfile{})
 	if err != nil {
 		metricMigrationError.Add(1)
 		return ipn.LoginProfileView{}, fmt.Errorf("migrating _daemon profile: %w", err)
