@@ -52,7 +52,7 @@ func (ipp *ConsensusIPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr, up
 	defer pm.mu.Unlock()
 	ww, ok := pm.addrToDomain.Lookup(addr)
 	if !ok {
-		log.Printf("DomainForIP: peer state doesn't recognize domain")
+		log.Printf("DomainForIP: peer state doesn't recognize addr: %s", addr)
 		return "", false
 	}
 	go func() {
@@ -268,11 +268,14 @@ func (ipp *ConsensusIPPool) applyCheckoutAddr(nid tailcfg.NodeID, domain string,
 		addrToDomain: &bart.Table[whereWhen]{},
 	})
 	if existing, ok := pm.domainToAddr[domain]; ok {
-		// TODO (fran) handle error case where this doesn't exist
-		ww, _ := pm.addrToDomain.Lookup(existing)
-		ww.LastUsed = updatedAt
-		pm.addrToDomain.Insert(netip.PrefixFrom(existing, existing.BitLen()), ww)
-		return existing, nil
+		ww, ok := pm.addrToDomain.Lookup(existing)
+		if ok {
+			ww.LastUsed = updatedAt
+			pm.addrToDomain.Insert(netip.PrefixFrom(existing, existing.BitLen()), ww)
+			return existing, nil
+		} else {
+			log.Printf("applyCheckoutAddr: data out of sync, allocating new IP")
+		}
 	}
 	addr, wasInUse, previousDomain, err := pm.unusedIPV4(ipp.IPSet, reuseDeadline)
 	if err != nil {
