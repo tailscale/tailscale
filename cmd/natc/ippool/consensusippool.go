@@ -50,7 +50,7 @@ func (ipp *ConsensusIPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr, up
 	}
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-	ww, ok := pm.AddrToDomain.Lookup(addr)
+	ww, ok := pm.addrToDomain.Lookup(addr)
 	if !ok {
 		log.Printf("DomainForIP: peer state doesn't recognize domain")
 		return "", false
@@ -96,7 +96,7 @@ func (ipp *ConsensusIPPool) applyMarkLastUsed(from tailcfg.NodeID, addr netip.Ad
 		log.Printf("applyMarkLastUsed: could not find peer state, nodeID: %s", from)
 		return nil
 	}
-	ww, ok := ps.AddrToDomain.Lookup(addr)
+	ww, ok := ps.addrToDomain.Lookup(addr)
 	if !ok {
 		// The peer state didn't have an entry for the IP address (possibly it expired), so there's nothing to mark.
 		return nil
@@ -110,7 +110,7 @@ func (ipp *ConsensusIPPool) applyMarkLastUsed(from tailcfg.NodeID, addr netip.Ad
 		return nil
 	}
 	ww.LastUsed = updatedAt
-	ps.AddrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), ww)
+	ps.addrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), ww)
 	return nil
 }
 
@@ -132,8 +132,8 @@ type whereWhen struct {
 }
 
 type consensusPerPeerState struct {
-	DomainToAddr map[string]netip.Addr
-	AddrToDomain *bart.Table[whereWhen]
+	domainToAddr map[string]netip.Addr
+	addrToDomain *bart.Table[whereWhen]
 	mu           sync.Mutex
 }
 
@@ -158,7 +158,7 @@ func (ps *consensusPerPeerState) unusedIPV4(ipset *netipx.IPSet, reuseDeadline t
 			continue
 		}
 		for toIP.Compare(ip) != -1 {
-			ww, ok := ps.AddrToDomain.Lookup(ip)
+			ww, ok := ps.addrToDomain.Lookup(ip)
 			if !ok {
 				return ip, false, "", nil
 			}
@@ -266,24 +266,24 @@ func (ipp *ConsensusIPPool) executeCheckoutAddr(bs []byte) tsconsensus.CommandRe
 // so that's fine).
 func (ipp *ConsensusIPPool) applyCheckoutAddr(nid tailcfg.NodeID, domain string, reuseDeadline, updatedAt time.Time) (netip.Addr, error) {
 	pm, _ := ipp.perPeerMap.LoadOrStore(nid, &consensusPerPeerState{
-		AddrToDomain: &bart.Table[whereWhen]{},
+		addrToDomain: &bart.Table[whereWhen]{},
 	})
-	if existing, ok := pm.DomainToAddr[domain]; ok {
+	if existing, ok := pm.domainToAddr[domain]; ok {
 		// TODO (fran) handle error case where this doesn't exist
-		ww, _ := pm.AddrToDomain.Lookup(existing)
+		ww, _ := pm.addrToDomain.Lookup(existing)
 		ww.LastUsed = updatedAt
-		pm.AddrToDomain.Insert(netip.PrefixFrom(existing, existing.BitLen()), ww)
+		pm.addrToDomain.Insert(netip.PrefixFrom(existing, existing.BitLen()), ww)
 		return existing, nil
 	}
 	addr, wasInUse, previousDomain, err := pm.unusedIPV4(ipp.IPSet, reuseDeadline)
 	if err != nil {
 		return netip.Addr{}, err
 	}
-	mak.Set(&pm.DomainToAddr, domain, addr)
+	mak.Set(&pm.domainToAddr, domain, addr)
 	if wasInUse {
-		delete(pm.DomainToAddr, previousDomain)
+		delete(pm.domainToAddr, previousDomain)
 	}
-	pm.AddrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), whereWhen{Domain: domain, LastUsed: updatedAt})
+	pm.addrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), whereWhen{Domain: domain, LastUsed: updatedAt})
 	return addr, nil
 }
 
