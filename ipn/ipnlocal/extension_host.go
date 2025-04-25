@@ -64,8 +64,9 @@ import (
 // and to further reduce the risk of accessing unexported methods or fields of [LocalBackend], the host interacts
 // with it via the [Backend] interface.
 type ExtensionHost struct {
-	b    Backend
-	logf logger.Logf // prefixed with "ipnext:"
+	b     Backend
+	hooks ipnext.Hooks
+	logf  logger.Logf // prefixed with "ipnext:"
 
 	// allExtensions holds the extensions in the order they were registered,
 	// including those that have not yet attempted initialization or have failed to initialize.
@@ -83,22 +84,6 @@ type ExtensionHost struct {
 	workQueue execQueue
 	// doEnqueueBackendOperation adds an asynchronous [LocalBackend] operation to the workQueue.
 	doEnqueueBackendOperation func(func(Backend))
-
-	// profileStateChangeCbs are callbacks that are invoked when the current login profile
-	// or its [ipn.Prefs] change, after those changes have been made. The current login profile
-	// may be changed either because of a profile switch, or because the profile information
-	// was updated by [LocalBackend.SetControlClientStatus], including when the profile
-	// is first populated and persisted.
-	profileStateChangeCbs []ipnext.ProfileStateChangeCallback
-	// backgroundProfileResolvers are registered background profile resolvers.
-	// They're used to determine the profile to use when no GUI/CLI client is connected.
-	backgroundProfileResolvers []ipnext.ProfileResolver
-	// auditLoggers are registered [AuditLogProvider]s.
-	// Each provider is called to get an [ipnauth.AuditLogFunc] when an auditable action
-	// is about to be performed. If an audit logger returns an error, the action is denied.
-	auditLoggers []ipnext.AuditLogProvider
-	// newControlClientCbs are the functions to be called when a new control client is created.
-	newControlClientCbs []ipnext.NewControlClientCallback
 
 	shuttingDown atomic.Bool
 
@@ -206,6 +191,15 @@ func (h *ExtensionHost) Init() {
 	if h != nil {
 		h.initOnce.Do(h.init)
 	}
+}
+
+var zeroHooks ipnext.Hooks
+
+func (h *ExtensionHost) Hooks() *ipnext.Hooks {
+	if h == nil {
+		return &zeroHooks
+	}
+	return &h.hooks
 }
 
 func (h *ExtensionHost) init() {
@@ -360,24 +354,6 @@ func (h *ExtensionHost) SendNotifyAsync(n ipn.Notify) {
 	})
 }
 
-// addFuncHook appends non-nil fn to hooks.
-func addFuncHook[F any](h *ExtensionHost, hooks *[]F, fn F) {
-	if h.initDone.Load() {
-		panic("invalid callback register after init")
-	}
-	if reflect.ValueOf(fn).IsZero() {
-		panic("nil function hook")
-	}
-	*hooks = append(*hooks, fn)
-}
-
-// RegisterProfileStateChangeCallback implements [ipnext.ProfileServices].
-func (h *ExtensionHost) RegisterProfileStateChangeCallback(cb ipnext.ProfileStateChangeCallback) {
-	if h != nil {
-		addFuncHook(h, &h.profileStateChangeCbs, cb)
-	}
-}
-
 // NotifyProfileChange invokes registered profile state change callbacks
 // and updates the current profile and prefs in the host.
 // It strips private keys from the [ipn.Prefs] before preserving
@@ -397,7 +373,7 @@ func (h *ExtensionHost) NotifyProfileChange(profile ipn.LoginProfileView, prefs 
 	h.currentProfile = profile
 	h.mu.Unlock()
 
-	for _, cb := range h.profileStateChangeCbs {
+	for _, cb := range h.hooks.ProfileStateChange {
 		cb(profile, prefs, sameNode)
 	}
 }
@@ -421,15 +397,8 @@ func (h *ExtensionHost) NotifyProfilePrefsChanged(profile ipn.LoginProfileView, 
 	// Get the callbacks to be invoked.
 	h.mu.Unlock()
 
-	for _, cb := range h.profileStateChangeCbs {
+	for _, cb := range h.hooks.ProfileStateChange {
 		cb(profile, newPrefs, true)
-	}
-}
-
-// RegisterBackgroundProfileResolver implements [ipnext.ProfileServices].
-func (h *ExtensionHost) RegisterBackgroundProfileResolver(resolver ipnext.ProfileResolver) {
-	if h != nil {
-		addFuncHook(h, &h.backgroundProfileResolvers, resolver)
 	}
 }
 
@@ -455,7 +424,7 @@ func (h *ExtensionHost) DetermineBackgroundProfile(profiles ipnext.ProfileStore)
 
 	// Attempt to resolve the background profile using the registered
 	// background profile resolvers (e.g., [ipn/desktop.desktopSessionsExt] on Windows).
-	for _, resolver := range h.backgroundProfileResolvers {
+	for _, resolver := range h.hooks.BackgroundProfileResolvers {
 		if profile := resolver(profiles); profile.Valid() {
 			return profile
 		}
@@ -466,35 +435,18 @@ func (h *ExtensionHost) DetermineBackgroundProfile(profiles ipnext.ProfileStore)
 	return ipn.LoginProfileView{}
 }
 
-// RegisterControlClientCallback implements [ipnext.Host].
-func (h *ExtensionHost) RegisterControlClientCallback(cb ipnext.NewControlClientCallback) {
-	if h != nil {
-		addFuncHook(h, &h.newControlClientCbs, cb)
-	}
-}
-
 // NotifyNewControlClient invokes all registered control client callbacks.
 // It returns callbacks to be executed when the control client shuts down.
 func (h *ExtensionHost) NotifyNewControlClient(cc controlclient.Client, profile ipn.LoginProfileView) (ccShutdownCbs []func()) {
 	if !h.active() {
 		return nil
 	}
-	if len(h.newControlClientCbs) > 0 {
-		ccShutdownCbs = make([]func(), 0, len(h.newControlClientCbs))
-		for _, cb := range h.newControlClientCbs {
-			if shutdown := cb(cc, profile); shutdown != nil {
-				ccShutdownCbs = append(ccShutdownCbs, shutdown)
-			}
+	for _, cb := range h.hooks.NewControlClient {
+		if shutdown := cb(cc, profile); shutdown != nil {
+			ccShutdownCbs = append(ccShutdownCbs, shutdown)
 		}
 	}
 	return ccShutdownCbs
-}
-
-// RegisterAuditLogProvider implements [ipnext.Host].
-func (h *ExtensionHost) RegisterAuditLogProvider(provider ipnext.AuditLogProvider) {
-	if h != nil {
-		addFuncHook(h, &h.auditLoggers, provider)
-	}
 }
 
 // AuditLogger returns a function that reports an auditable action
@@ -510,8 +462,8 @@ func (h *ExtensionHost) AuditLogger() ipnauth.AuditLogFunc {
 	if !h.active() {
 		return func(tailcfg.ClientAuditAction, string) error { return nil }
 	}
-	loggers := make([]ipnauth.AuditLogFunc, 0, len(h.auditLoggers))
-	for _, provider := range h.auditLoggers {
+	loggers := make([]ipnauth.AuditLogFunc, 0, len(h.hooks.AuditLoggers))
+	for _, provider := range h.hooks.AuditLoggers {
 		loggers = append(loggers, provider())
 	}
 	return func(action tailcfg.ClientAuditAction, details string) error {

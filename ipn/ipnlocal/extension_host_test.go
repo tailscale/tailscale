@@ -748,7 +748,7 @@ func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 				tt.ext.InitHook = func(e *testExtension) error {
 					// Create and register the callback on init.
 					handler := makeStateChangeAppender(e)
-					e.host.Profiles().RegisterProfileStateChangeCallback(handler)
+					e.host.Hooks().ProfileStateChange.Add(handler)
 					return nil
 				}
 			}
@@ -875,7 +875,7 @@ func TestBackgroundProfileResolver(t *testing.T) {
 			// This is typically done by the extensions themselves,
 			// but we do it here for testing purposes.
 			for _, r := range tt.resolvers {
-				h.Profiles().RegisterBackgroundProfileResolver(r)
+				h.Hooks().BackgroundProfileResolvers.Add(r)
 			}
 			h.Init()
 
@@ -968,7 +968,7 @@ func TestAuditLogProviders(t *testing.T) {
 					}
 				}
 				ext.InitHook = func(e *testExtension) error {
-					e.host.RegisterAuditLogProvider(provider)
+					e.host.Hooks().AuditLoggers.Add(provider)
 					return nil
 				}
 				exts = append(exts, ext)

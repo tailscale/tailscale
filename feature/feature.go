@@ -52,3 +52,21 @@ func (h *Hook[Func]) Get() Func {
 	}
 	return h.f
 }
+
+// Hooks is a slice of funcs.
+//
+// As opposed to a single Hook, this is meant to be used when
+// multiple parties are able to install the same hook.
+type Hooks[Func any] []Func
+
+// Add adds a hook to the list of hooks.
+//
+// Add should only be called during early program
+// startup before Tailscale has started.
+// It is not safe for concurrent use.
+func (h *Hooks[Func]) Add(f Func) {
+	if reflect.ValueOf(f).IsZero() {
+		panic("Add with zero value")
+	}
+	*h = append(*h, f)
+}

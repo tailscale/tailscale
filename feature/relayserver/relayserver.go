@@ -71,7 +71,7 @@ func (e *extension) Name() string {
 func (e *extension) Init(host ipnext.Host) error {
 	profile, prefs := host.Profiles().CurrentProfileState()
 	e.profileStateChanged(profile, prefs, false)
-	host.Profiles().RegisterProfileStateChangeCallback(e.profileStateChanged)
+	host.Hooks().ProfileStateChange.Add(e.profileStateChanged)
 	// TODO(jwhited): callback for netmap/nodeattr changes (e.hasNodeAttrRelayServer)
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"tailscale.com/control/controlclient"
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/tsd"
@@ -182,14 +183,6 @@ type Host interface {
 	// Profiles returns the host's [ProfileServices].
 	Profiles() ProfileServices
 
-	// RegisterAuditLogProvider registers an audit log provider,
-	// which returns a function to be called when an auditable action
-	// is about to be performed.
-	//
-	// It is a runtime error to register a nil provider or call after the host
-	// has been initialized.
-	RegisterAuditLogProvider(AuditLogProvider)
-
 	// AuditLogger returns a function that calls all currently registered audit loggers.
 	// The function fails if any logger returns an error, indicating that the action
 	// cannot be logged and must not be performed.
@@ -198,12 +191,9 @@ type Host interface {
 	// the time of the call and must not be persisted.
 	AuditLogger() ipnauth.AuditLogFunc
 
-	// RegisterControlClientCallback registers a function to be called every time a new
-	// control client is created.
-	//
-	// It is a runtime error to register a nil provider or call after the host
-	// has been initialized.
-	RegisterControlClientCallback(NewControlClientCallback)
+	// Hooks returns a non-nil pointer to a [Hooks] struct.
+	// Hooks must not be modified concurrently or after Tailscale has started.
+	Hooks() *Hooks
 
 	// SendNotifyAsync sends a notification to the IPN bus,
 	// typically to the GUI client.
@@ -269,28 +259,6 @@ type ProfileServices interface {
 	// to a client connecting or disconnecting or a change in the desktop
 	// session state. It is used for logging.
 	SwitchToBestProfileAsync(reason string)
-
-	// RegisterBackgroundProfileResolver registers a function to be used when
-	// resolving the background profile.
-	//
-	// It is a runtime error to register a nil provider or call after the host
-	// has been initialized.
-	//
-	// TODO(nickkhyl): allow specifying some kind of priority/altitude for the resolver.
-	// TODO(nickkhyl): make it a "profile resolver" instead of a "background profile resolver".
-	// The concepts of the "current user", "foreground profile" and "background profile"
-	// only exist on Windows, and we're moving away from them anyway.
-	RegisterBackgroundProfileResolver(ProfileResolver)
-
-	// RegisterProfileStateChangeCallback registers a function to be called when the current
-	// [ipn.LoginProfile] or its [ipn.Prefs] change.
-	//
-	// To get the initial profile or prefs, use [ProfileServices.CurrentProfileState]
-	// or [ProfileServices.CurrentPrefs] from the extension's [Extension.Init].
-	//
-	// It is a runtime error to register a nil provider or call after the host
-	// has been initialized.
-	RegisterProfileStateChangeCallback(ProfileStateChangeCallback)
 }
 
 // ProfileStore provides read-only access to available login profiles and their preferences.
@@ -354,3 +322,36 @@ type ProfileStateChangeCallback func(_ ipn.LoginProfileView, _ ipn.PrefsView, sa
 // It returns a function to be called when the cc is being shut down,
 // or nil if no cleanup is needed.
 type NewControlClientCallback func(controlclient.Client, ipn.LoginProfileView) (cleanup func())
+
+// Hooks is a collection of hooks that extensions can add to (non-concurrently)
+// during program initialization and can be called by LocalBackend and others at
+// runtime.
+//
+// Each hook has its own rules about when it's called and what environment it
+// has access to and what it's allowed to do.
+type Hooks struct {
+	// ProfileStateChange are callbacks that are invoked when the current login profile
+	// or its [ipn.Prefs] change, after those changes have been made. The current login profile
+	// may be changed either because of a profile switch, or because the profile information
+	// was updated by [LocalBackend.SetControlClientStatus], including when the profile
+	// is first populated and persisted.
+	ProfileStateChange feature.Hooks[ProfileStateChangeCallback]
+
+	// BackgroundProfileResolvers are registered background profile resolvers.
+	// They're used to determine the profile to use when no GUI/CLI client is connected.
+	//
+	// TODO(nickkhyl): allow specifying some kind of priority/altitude for the resolver.
+	// TODO(nickkhyl): make it a "profile resolver" instead of a "background profile resolver".
+	// The concepts of the "current user", "foreground profile" and "background profile"
+	// only exist on Windows, and we're moving away from them anyway.
+	BackgroundProfileResolvers feature.Hooks[ProfileResolver]
+
+	// AuditLoggers are registered [AuditLogProvider]s.
+	// Each provider is called to get an [ipnauth.AuditLogFunc] when an auditable action
+	// is about to be performed. If an audit logger returns an error, the action is denied.
+	AuditLoggers feature.Hooks[AuditLogProvider]
+
+	// NewControlClient are the functions to be called when a new control client
+	// is created. It is called with the LocalBackend locked.
+	NewControlClient feature.Hooks[NewControlClientCallback]
+}
