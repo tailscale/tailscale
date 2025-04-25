@@ -8,6 +8,7 @@ package ipnext
 import (
 	"errors"
 	"fmt"
+	"iter"
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/feature"
@@ -16,8 +17,7 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/views"
-	"tailscale.com/util/mak"
+	"tailscale.com/types/mapx"
 )
 
 // Extension augments LocalBackend with additional functionality.
@@ -91,13 +91,9 @@ func (d *Definition) MakeExtension(logf logger.Logf, sb SafeBackend) (Extension,
 	return ext, nil
 }
 
-// extensionsByName is a map of registered extensions,
+// extensions is a map of registered extensions,
 // where the key is the name of the extension.
-var extensionsByName map[string]*Definition
-
-// extensionsByOrder is a slice of registered extensions,
-// in the order they were registered.
-var extensionsByOrder []*Definition
+var extensions mapx.OrderedMap[string, *Definition]
 
 // RegisterExtension registers a function that instantiates an [Extension].
 // The name must be the same as returned by the extension's [Extension.Name].
@@ -111,19 +107,16 @@ func RegisterExtension(name string, newExt NewExtensionFn) {
 	if newExt == nil {
 		panic(fmt.Sprintf("ipnext: newExt is nil: %q", name))
 	}
-	if _, ok := extensionsByName[name]; ok {
+	if extensions.Contains(name) {
 		panic(fmt.Sprintf("ipnext: duplicate extensions: %q", name))
 	}
-	ext := &Definition{name, newExt}
-	mak.Set(&extensionsByName, name, ext)
-	extensionsByOrder = append(extensionsByOrder, ext)
+	extensions.Set(name, &Definition{name, newExt})
 }
 
-// Extensions returns a read-only view of the extensions
-// registered via [RegisterExtension]. It preserves the order
-// in which the extensions were registered.
-func Extensions() views.Slice[*Definition] {
-	return views.SliceOf(extensionsByOrder)
+// Extensions iterates over the extensions in the order they were registered
+// via [RegisterExtension].
+func Extensions() iter.Seq[*Definition] {
+	return extensions.Values()
 }
 
 // DefinitionForTest returns a [Definition] for the specified [Extension].
