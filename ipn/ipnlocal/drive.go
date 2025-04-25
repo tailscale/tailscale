@@ -4,7 +4,6 @@
 package ipnlocal
 
 import (
-	"cmp"
 	"fmt"
 	"os"
 	"slices"
@@ -26,26 +25,14 @@ const (
 // enabled. This is currently based on checking for the drive:share node
 // attribute.
 func (b *LocalBackend) DriveSharingEnabled() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.driveSharingEnabledLocked()
-}
-
-func (b *LocalBackend) driveSharingEnabledLocked() bool {
-	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTaildriveShare)
+	return b.currentNode().SelfHasCap(tailcfg.NodeAttrsTaildriveShare)
 }
 
 // DriveAccessEnabled reports whether accessing Taildrive shares on remote nodes
 // is enabled. This is currently based on checking for the drive:access node
 // attribute.
 func (b *LocalBackend) DriveAccessEnabled() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.driveAccessEnabledLocked()
-}
-
-func (b *LocalBackend) driveAccessEnabledLocked() bool {
-	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTaildriveAccess)
+	return b.currentNode().SelfHasCap(tailcfg.NodeAttrsTaildriveAccess)
 }
 
 // DriveSetServerAddr tells Taildrive to use the given address for connecting
@@ -266,7 +253,7 @@ func (b *LocalBackend) driveNotifyShares(shares views.SliceView[*drive.Share, dr
 // shares has changed since the last notification.
 func (b *LocalBackend) driveNotifyCurrentSharesLocked() {
 	var shares views.SliceView[*drive.Share, drive.ShareView]
-	if b.driveSharingEnabledLocked() {
+	if b.DriveSharingEnabled() {
 		// Only populate shares if sharing is enabled.
 		shares = b.pm.prefs.DriveShares()
 	}
@@ -310,12 +297,12 @@ func (b *LocalBackend) updateDrivePeersLocked(nm *netmap.NetworkMap) {
 	}
 
 	var driveRemotes []*drive.Remote
-	if b.driveAccessEnabledLocked() {
+	if b.DriveAccessEnabled() {
 		// Only populate peers if access is enabled, otherwise leave blank.
 		driveRemotes = b.driveRemotesFromPeers(nm)
 	}
 
-	fs.SetRemotes(b.netMap.Domain, driveRemotes, b.newDriveTransport())
+	fs.SetRemotes(nm.Domain, driveRemotes, b.newDriveTransport())
 }
 
 func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Remote {
@@ -330,23 +317,20 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// Peers are available to Taildrive if:
 				// - They are online
 				// - They are allowed to share at least one folder with us
-				b.mu.Lock()
-				latestNetMap := b.netMap
-				b.mu.Unlock()
-
-				idx, found := slices.BinarySearchFunc(latestNetMap.Peers, peerID, func(candidate tailcfg.NodeView, id tailcfg.NodeID) int {
-					return cmp.Compare(candidate.ID(), id)
-				})
-				if !found {
+				cn := b.currentNode()
+				peer, ok := cn.PeerByID(peerID)
+				if !ok {
 					return false
 				}
-
-				peer := latestNetMap.Peers[idx]
 
 				// Exclude offline peers.
 				// TODO(oxtoacart): for some reason, this correctly
 				// catches when a node goes from offline to online,
 				// but not the other way around...
+				// TODO(oxtoacart,nickkhyl): the reason was probably
+				// that we were using netmap.Peers instead of b.peers.
+				// The netmap.Peers slice is not updated in all cases.
+				// It should be fixed now that we use PeerByIDOk.
 				if !peer.Online().Get() {
 					return false
 				}
@@ -354,8 +338,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// Check that the peer is allowed to share with us.
 				addresses := peer.Addresses()
 				for _, p := range addresses.All() {
-					capsMap := b.PeerCaps(p.Addr())
-					if capsMap.HasCapability(tailcfg.PeerCapabilityTaildriveSharer) {
+					if cn.PeerHasCap(p.Addr(), tailcfg.PeerCapabilityTaildriveSharer) {
 						return true
 					}
 				}

@@ -162,9 +162,9 @@ func TestHandlePeerAPI(t *testing.T) {
 			lb := &LocalBackend{
 				logf:           e.logBuf.Logf,
 				capFileSharing: tt.capSharing,
-				netMap:         &netmap.NetworkMap{SelfNode: selfNode.View()},
 				clock:          &tstest.Clock{},
 			}
+			lb.currentNode().SetNetMap(&netmap.NetworkMap{SelfNode: selfNode.View()})
 			e.ph = &peerAPIHandler{
 				isSelf:   tt.isSelf,
 				selfNode: selfNode.View(),

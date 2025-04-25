@@ -382,14 +382,14 @@ func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {
 		t.Fatal("unexpected true on backend with nil NetMap")
 	}
 
-	b.netMap = &netmap.NetworkMap{
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
 		DNS: tailcfg.DNSConfig{
 			ExitNodeFilteredSet: []string{
 				".ts.net",
 				"some.exact.bad",
 			},
 		},
-	}
+	})
 	tests := []struct {
 		name string
 		want bool
