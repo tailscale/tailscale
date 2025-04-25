@@ -77,7 +77,7 @@ func (e *desktopSessionsExt) Init(host ipnext.Host) (err error) {
 	if err != nil {
 		return fmt.Errorf("session callback registration failed: %w", err)
 	}
-	host.Profiles().RegisterBackgroundProfileResolver(e.getBackgroundProfile)
+	host.Hooks().BackgroundProfileResolvers.Add(e.getBackgroundProfile)
 	e.cleanup = []func(){unregisterSessionCb}
 	return nil
 }

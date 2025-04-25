@@ -63,9 +63,9 @@ func (e *extension) Name() string {
 // Init implements [ipnext.Extension] by registering callbacks and providers
 // for the duration of the extension's lifetime.
 func (e *extension) Init(h ipnext.Host) error {
-	h.RegisterControlClientCallback(e.controlClientChanged)
-	h.Profiles().RegisterProfileStateChangeCallback(e.profileChanged)
-	h.RegisterAuditLogProvider(e.getCurrentLogger)
+	h.Hooks().NewControlClient.Add(e.controlClientChanged)
+	h.Hooks().ProfileStateChange.Add(e.profileChanged)
+	h.Hooks().AuditLoggers.Add(e.getCurrentLogger)
 	return nil
 }
 
