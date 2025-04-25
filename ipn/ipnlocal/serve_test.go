@@ -320,7 +320,7 @@ func TestServeConfigServices(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b.netMap = &netmap.NetworkMap{
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
 			CapMap: tailcfg.NodeCapMap{
@@ -334,7 +334,7 @@ func TestServeConfigServices(t *testing.T) {
 				ProfilePicURL: "https://example.com/photo.jpg",
 			}).View(),
 		},
-	}
+	})
 
 	tests := []struct {
 		name              string
@@ -902,7 +902,7 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	pm.currentProfile = (&ipn.LoginProfile{ID: "id0"}).View()
 	b.pm = pm
 
-	b.netMap = &netmap.NetworkMap{
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
 		}).View(),
@@ -913,24 +913,26 @@ func newTestBackend(t *testing.T) *LocalBackend {
 				ProfilePicURL: "https://example.com/photo.jpg",
 			}).View(),
 		},
-	}
-	b.peers = map[tailcfg.NodeID]tailcfg.NodeView{
-		152: (&tailcfg.Node{
-			ID:           152,
-			ComputedName: "some-peer",
-			User:         tailcfg.UserID(1),
-		}).View(),
-		153: (&tailcfg.Node{
-			ID:           153,
-			ComputedName: "some-tagged-peer",
-			Tags:         []string{"tag:server", "tag:test"},
-			User:         tailcfg.UserID(1),
-		}).View(),
-	}
-	b.nodeByAddr = map[netip.Addr]tailcfg.NodeID{
-		netip.MustParseAddr("100.150.151.152"): 152,
-		netip.MustParseAddr("100.150.151.153"): 153,
-	}
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:           152,
+				ComputedName: "some-peer",
+				User:         tailcfg.UserID(1),
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.150.151.152/32"),
+				},
+			}).View(),
+			(&tailcfg.Node{
+				ID:           153,
+				ComputedName: "some-tagged-peer",
+				Tags:         []string{"tag:server", "tag:test"},
+				User:         tailcfg.UserID(1),
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.150.151.153/32"),
+				},
+			}).View(),
+		},
+	})
 	return b
 }
 

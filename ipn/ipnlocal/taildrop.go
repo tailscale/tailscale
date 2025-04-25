@@ -179,23 +179,32 @@ func (b *LocalBackend) HasCapFileSharing() bool {
 func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	var ret []*apitype.FileTarget
 
-	b.mu.Lock()
+	b.mu.Lock() // for b.{state,capFileSharing}
 	defer b.mu.Unlock()
-	nm := b.netMap
+	cn := b.currentNode()
+	nm := cn.NetMap()
+	self := cn.SelfUserID()
 	if b.state != ipn.Running || nm == nil {
 		return nil, errors.New("not connected to the tailnet")
 	}
 	if !b.capFileSharing {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
-	for _, p := range b.peers {
-		if !b.peerIsTaildropTargetLocked(p) {
-			continue
+	peers := cn.AppendMatchingPeers(nil, func(p tailcfg.NodeView) bool {
+		if !p.Valid() || p.Hostinfo().OS() == "tvOS" {
+			return false
 		}
-		if p.Hostinfo().OS() == "tvOS" {
-			continue
+		if self != p.User() {
+			return false
 		}
-		peerAPI := peerAPIBase(b.netMap, p)
+		if p.Addresses().Len() != 0 && cn.PeerHasCap(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+			// Explicitly noted in the netmap ACL caps as a target.
+			return true
+		}
+		return false
+	})
+	for _, p := range peers {
+		peerAPI := cn.PeerAPIBase(p)
 		if peerAPI == "" {
 			continue
 		}
@@ -214,7 +223,9 @@ func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.Taildro
 	if b.state != ipn.Running {
 		return ipnstate.TaildropTargetIpnStateNotRunning
 	}
-	if b.netMap == nil {
+	cn := b.currentNode()
+	nm := cn.NetMap()
+	if nm == nil {
 		return ipnstate.TaildropTargetNoNetmapAvailable
 	}
 	if !b.capFileSharing {
@@ -228,10 +239,10 @@ func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.Taildro
 	if !p.Valid() {
 		return ipnstate.TaildropTargetNoPeerInfo
 	}
-	if b.netMap.User() != p.User() {
+	if nm.User() != p.User() {
 		// Different user must have the explicit file sharing target capability
-		if p.Addresses().Len() == 0 ||
-			!b.peerHasCapLocked(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+		if p.Addresses().Len() == 0 || !cn.PeerHasCap(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+			// Explicitly noted in the netmap ACL caps as a target.
 			return ipnstate.TaildropTargetOwnedByOtherUser
 		}
 	}
@@ -239,30 +250,10 @@ func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.Taildro
 	if p.Hostinfo().OS() == "tvOS" {
 		return ipnstate.TaildropTargetUnsupportedOS
 	}
-	if peerAPIBase(b.netMap, p) == "" {
+	if !cn.PeerHasPeerAPI(p) {
 		return ipnstate.TaildropTargetNoPeerAPI
 	}
 	return ipnstate.TaildropTargetAvailable
-}
-
-// peerIsTaildropTargetLocked reports whether p is a valid Taildrop file
-// recipient from this node according to its ownership and the capabilities in
-// the netmap.
-//
-// b.mu must be locked.
-func (b *LocalBackend) peerIsTaildropTargetLocked(p tailcfg.NodeView) bool {
-	if b.netMap == nil || !p.Valid() {
-		return false
-	}
-	if b.netMap.User() == p.User() {
-		return true
-	}
-	if p.Addresses().Len() > 0 &&
-		b.peerHasCapLocked(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
-		// Explicitly noted in the netmap ACL caps as a target.
-		return true
-	}
-	return false
 }
 
 // UpdateOutgoingFiles updates b.outgoingFiles to reflect the given updates and

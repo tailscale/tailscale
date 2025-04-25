@@ -13,7 +13,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/types/netmap"
-	"tailscale.com/util/mak"
 )
 
 func TestFileTargets(t *testing.T) {
@@ -23,7 +22,7 @@ func TestFileTargets(t *testing.T) {
 		t.Errorf("before connect: got %q; want %q", got, want)
 	}
 
-	b.netMap = new(netmap.NetworkMap)
+	b.currentNode().SetNetMap(new(netmap.NetworkMap))
 	_, err = b.FileTargets()
 	if got, want := fmt.Sprint(err), "not connected to the tailnet"; got != want {
 		t.Errorf("non-running netmap: got %q; want %q", got, want)
@@ -44,16 +43,15 @@ func TestFileTargets(t *testing.T) {
 		t.Fatalf("unexpected %d peers", len(got))
 	}
 
-	var peerMap map[tailcfg.NodeID]tailcfg.NodeView
-	mak.NonNil(&peerMap)
-	var nodeID tailcfg.NodeID
-	nodeID = 1234
-	peer := &tailcfg.Node{
-		ID:       1234,
-		Hostinfo: (&tailcfg.Hostinfo{OS: "tvOS"}).View(),
+	nm := &netmap.NetworkMap{
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:       1234,
+				Hostinfo: (&tailcfg.Hostinfo{OS: "tvOS"}).View(),
+			}).View(),
+		},
 	}
-	peerMap[nodeID] = peer.View()
-	b.peers = peerMap
+	b.currentNode().SetNetMap(nm)
 	got, err = b.FileTargets()
 	if err != nil {
 		t.Fatal(err)
