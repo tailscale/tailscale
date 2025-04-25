@@ -162,17 +162,14 @@ func newExtensionHost(logf logger.Logf, b Backend, overrideExts ...*ipnext.Defin
 	}
 
 	// Use registered extensions.
-	exts := ipnext.Extensions().All()
-	numExts := ipnext.Extensions().Len()
+	extDef := ipnext.Extensions()
 	if overrideExts != nil {
 		// Use the provided, potentially empty, overrideExts
 		// instead of the registered ones.
-		exts = slices.All(overrideExts)
-		numExts = len(overrideExts)
+		extDef = slices.Values(overrideExts)
 	}
 
-	host.allExtensions = make([]ipnext.Extension, 0, numExts)
-	for _, d := range exts {
+	for d := range extDef {
 		ext, err := d.MakeExtension(logf, b)
 		if errors.Is(err, ipnext.SkipExtension) {
 			// The extension wants to be skipped.
