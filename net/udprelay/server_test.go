@@ -174,8 +174,7 @@ func TestServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// We expect the same endpoint details as the 3-way bind handshake has not
-	// yet been completed for both relay client parties.
+	// We expect the same endpoint details pre-handshake.
 	if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
 		t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
 	}
@@ -190,6 +189,15 @@ func TestServer(t *testing.T) {
 
 	tcA.handshake(t)
 	tcB.handshake(t)
+
+	dupEndpoint, err = server.AllocateEndpoint(discoA.Public(), discoB.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// We expect the same endpoint details post-handshake.
+	if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
+		t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
+	}
 
 	txToB := []byte{1, 2, 3}
 	tcA.writeDataPkt(t, txToB)
