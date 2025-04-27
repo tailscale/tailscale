@@ -4,6 +4,7 @@
 package ipnlocal
 
 import (
+	"context"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -30,7 +31,7 @@ import (
 // Two pointers to different [localNodeContext] instances represent different local nodes.
 // However, there's currently a bug where a new [localNodeContext] might not be created
 // during an implicit node switch (see tailscale/corp#28014).
-
+//
 // In the future, we might want to include at least the following in this struct (in addition to the current fields).
 // However, not everything should be exported or otherwise made available to the outside world (e.g. [ipnext] extensions,
 // peer API handlers, etc.).
@@ -52,12 +53,17 @@ import (
 // Even if they're tied to the local node, instead of moving them here, we should extract the entire feature
 // into a separate package and have it install proper hooks.
 type localNodeContext struct {
+	ctx       context.Context         // canceled by [localNodeContext.shutdown]
+	ctxCancel context.CancelCauseFunc // cancels ctx
+
 	// filterAtomic is a stateful packet filter. Immutable once created, but can be
 	// replaced with a new one.
 	filterAtomic atomic.Pointer[filter.Filter]
 
 	// TODO(nickkhyl): maybe use sync.RWMutex?
 	mu sync.Mutex // protects the following fields
+
+	readyCh chan struct{} // closed by [localNodeContext.ready]; nil after shutdown
 
 	// NetMap is the most recently set full netmap from the controlclient.
 	// It can't be mutated in place once set. Because it can't be mutated in place,
@@ -79,12 +85,24 @@ type localNodeContext struct {
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
 }
 
-func newLocalNodeContext() *localNodeContext {
-	cn := &localNodeContext{}
+func newLocalNodeContext(ctx context.Context) *localNodeContext {
+	ctx, ctxCancel := context.WithCancelCause(ctx)
+	cn := &localNodeContext{
+		ctx:       ctx,
+		ctxCancel: ctxCancel,
+		readyCh:   make(chan struct{}),
+	}
 	// Default filter blocks everything and logs nothing.
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
 	cn.filterAtomic.Store(noneFilter)
 	return cn
+}
+
+// Context returns a context that is canceled when the [localNodeContext] shuts down,
+// either because [LocalBackend] is switching to a different [localNodeContext]
+// or shutting down itself.
+func (c *localNodeContext) Context() context.Context {
+	return c.ctx
 }
 
 func (c *localNodeContext) Self() tailcfg.NodeView {
@@ -204,4 +222,51 @@ func (c *localNodeContext) unlockedNodesPermitted(packetFilter []filter.Match) b
 
 func (c *localNodeContext) filter() *filter.Filter {
 	return c.filterAtomic.Load()
+}
+
+// ready signals that [LocalBackend] has completed the switch to this [localNodeContext]
+// and any pending calls to [localNodeContext.wait] must be unblocked.
+func (c *localNodeContext) ready() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.readyCh != nil {
+		close(c.readyCh)
+	}
+}
+
+// Wait blocks until [LocalBackend] completes the switch to this [localNodeContext]
+// and calls [localNodeContext.ready]. It returns an error if the provided context
+// is canceled or if the [localNodeContext] shuts down or is already shut down.
+//
+// It must not be called with the [LocalBackend]' internal mutex held as [LocalBackend]
+// may need to acquire it to complete the switch.
+//
+// TODO(nickkhyl): Relax this restriction once [LocalBackend]'s state machine
+// runs in its own goroutine, or if we decide that waiting for the state machine
+// restart to finish isn't necessary for [LocalBackend] to consider the switch complete.
+// We mostly need this because of [LocalBackend.Start] acquiring b.mu and the fact that
+// methods like [LocalBackend.SwitchProfile] must report any errors returned by it.
+// Perhaps we could report those errors asynchronously as [health.Warnable]s?
+func (c *localNodeContext) Wait(ctx context.Context) error {
+	c.mu.Lock()
+	readyCh := c.readyCh
+	c.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.ctx.Done():
+		return context.Cause(ctx)
+	case <-readyCh:
+		return nil
+	}
+}
+
+// shutdown cancels the context with the given cause and shuts down the receiver.
+func (c *localNodeContext) shutdown(cause error) {
+	c.ctxCancel(cause)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.readyCh = nil
 }

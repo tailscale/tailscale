@@ -167,6 +167,17 @@ type watchSession struct {
 	cancel    context.CancelFunc // to shut down the session
 }
 
+var (
+	// errShutdown indicates that the [LocalBackend.Shutdown] was called.
+	errShutdown = errors.New("shutting down")
+
+	// errNodeContextChanged indicates that [LocalBackend] has switched
+	// to a different [localNodeContext], usually due to a profile change.
+	// It is used as a context cancellation cause for the old context
+	// and can be returned when an operation is performed on it.
+	errNodeContextChanged = errors.New("profile changed")
+)
+
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -179,11 +190,11 @@ type watchSession struct {
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx                      context.Context    // canceled by [LocalBackend.Shutdown]
-	ctxCancel                context.CancelFunc // cancels ctx
-	logf                     logger.Logf        // general logging
-	keyLogf                  logger.Logf        // for printing list of peers on change
-	statsLogf                logger.Logf        // for printing peers stats on change
+	ctx                      context.Context         // canceled by [LocalBackend.Shutdown]
+	ctxCancel                context.CancelCauseFunc // cancels ctx
+	logf                     logger.Logf             // general logging
+	keyLogf                  logger.Logf             // for printing list of peers on change
+	statsLogf                logger.Logf             // for printing peers stats on change
 	sys                      *tsd.System
 	health                   *health.Tracker // always non-nil
 	metrics                  metrics
@@ -479,7 +490,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	envknob.LogCurrent(logf)
 	osshare.SetFileSharingEnabled(false, logf)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	clock := tstime.StdClock{}
 
 	// Until we transition to a Running state, use a canceled context for
@@ -519,7 +530,10 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
-	b.currentNodeAtomic.Store(newLocalNodeContext())
+	cn := newLocalNodeContext(ctx)
+	b.currentNodeAtomic.Store(cn)
+	cn.ready()
+
 	mConn.SetNetInfoCallback(b.setNetInfo)
 
 	if sys.InitialConfig != nil {
@@ -599,8 +613,10 @@ func (b *LocalBackend) currentNode() *localNodeContext {
 		return v
 	}
 	// Auto-init one in tests for LocalBackend created without the NewLocalBackend constructor...
-	v := newLocalNodeContext()
-	b.currentNodeAtomic.CompareAndSwap(nil, v)
+	v := newLocalNodeContext(cmp.Or(b.ctx, context.Background()))
+	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
+		v.ready()
+	}
 	return b.currentNodeAtomic.Load()
 }
 
@@ -1099,8 +1115,8 @@ func (b *LocalBackend) Shutdown() {
 	if cc != nil {
 		cc.Shutdown()
 	}
+	b.ctxCancel(errShutdown)
 	extHost.Shutdown()
-	b.ctxCancel()
 	b.e.Close()
 	<-b.e.Done()
 	b.awaitNoGoroutinesInTest()
@@ -7396,7 +7412,11 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		// down, so no need to do any work.
 		return nil
 	}
-	b.currentNodeAtomic.Store(newLocalNodeContext())
+	newNodeCtx := newLocalNodeContext(b.ctx)
+	if oldNodeCtx := b.currentNodeAtomic.Swap(newNodeCtx); oldNodeCtx != nil {
+		oldNodeCtx.shutdown(errNodeContextChanged)
+	}
+	defer newNodeCtx.ready()
 	b.setNetMapLocked(nil) // Reset netmap.
 	b.updateFilterLocked(ipn.PrefsView{})
 	// Reset the NetworkMap in the engine
