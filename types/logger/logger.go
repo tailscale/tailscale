@@ -323,6 +323,7 @@ func (fn ArgWriter) Format(f fmt.State, _ rune) {
 	bw.Reset(f)
 	fn(bw)
 	bw.Flush()
+	bw.Reset(io.Discard)
 	argBufioPool.Put(bw)
 }
 
