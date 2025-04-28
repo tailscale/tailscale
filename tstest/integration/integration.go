@@ -386,9 +386,9 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200) // must have no content, but not a 204
 }
 
-// testEnv contains the test environment (set of servers) used by one
+// TestEnv contains the test environment (set of servers) used by one
 // or more nodes.
-type testEnv struct {
+type TestEnv struct {
 	t            testing.TB
 	tunMode      bool
 	cli          string
@@ -405,9 +405,9 @@ type testEnv struct {
 	TrafficTrapServer *httptest.Server
 }
 
-// controlURL returns e.ControlServer.URL, panicking if it's the empty string,
+// ControlURL returns e.ControlServer.URL, panicking if it's the empty string,
 // which it should never be in tests.
-func (e *testEnv) controlURL() string {
+func (e *TestEnv) ControlURL() string {
 	s := e.ControlServer.URL
 	if s == "" {
 		panic("control server not set")
@@ -415,19 +415,21 @@ func (e *testEnv) controlURL() string {
 	return s
 }
 
-type testEnvOpt interface {
-	modifyTestEnv(*testEnv)
+// TestEnvOpt represents an option that can be passed to NewTestEnv.
+type TestEnvOpt interface {
+	ModifyTestEnv(*TestEnv)
 }
 
-type configureControl func(*testcontrol.Server)
+// ConfigureControl is a test option that configures the test control server.
+type ConfigureControl func(*testcontrol.Server)
 
-func (f configureControl) modifyTestEnv(te *testEnv) {
+func (f ConfigureControl) ModifyTestEnv(te *TestEnv) {
 	f(te.Control)
 }
 
-// newTestEnv starts a bunch of services and returns a new test environment.
-// newTestEnv arranges for the environment's resources to be cleaned up on exit.
-func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
+// NewTestEnv starts a bunch of services and returns a new test environment.
+// NewTestEnv arranges for the environment's resources to be cleaned up on exit.
+func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
 	}
@@ -438,7 +440,7 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
 	trafficTrap := new(trafficTrap)
-	e := &testEnv{
+	e := &TestEnv{
 		t:                 t,
 		cli:               TailscaleBinary(t),
 		daemon:            TailscaledBinary(t),
@@ -450,7 +452,7 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 		TrafficTrapServer: httptest.NewServer(trafficTrap),
 	}
 	for _, o := range opts {
-		o.modifyTestEnv(e)
+		o.ModifyTestEnv(e)
 	}
 	control.HTTPTestServer.Start()
 	t.Cleanup(func() {
@@ -463,15 +465,15 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 		e.TrafficTrapServer.Close()
 		e.ControlServer.Close()
 	})
-	t.Logf("control URL: %v", e.controlURL())
+	t.Logf("control URL: %v", e.ControlURL())
 	return e
 }
 
-// testNode is a machine with a tailscale & tailscaled.
+// TestNode is a machine with a tailscale & tailscaled.
 // Currently, the test is simplistic and user==node==machine.
 // That may grow complexity later to test more.
-type testNode struct {
-	env              *testEnv
+type TestNode struct {
+	env              *TestEnv
 	tailscaledParser *nodeOutputParser
 
 	dir        string // temp dir for sock & state
@@ -484,9 +486,9 @@ type testNode struct {
 	onLogLine []func([]byte)
 }
 
-// newTestNode allocates a temp directory for a new test node.
+// NewTestNode allocates a temp directory for a new test node.
 // The node is not started automatically.
-func newTestNode(t *testing.T, env *testEnv) *testNode {
+func NewTestNode(t *testing.T, env *TestEnv) *TestNode {
 	dir := t.TempDir()
 	sockFile := filepath.Join(dir, "tailscale.sock")
 	if len(sockFile) >= 104 {
@@ -494,7 +496,7 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 		sockFile = filepath.Join(os.TempDir(), rands.HexString(8)+".sock")
 		t.Cleanup(func() { os.Remove(sockFile) })
 	}
-	n := &testNode{
+	n := &TestNode{
 		env:       env,
 		dir:       dir,
 		sockFile:  sockFile,
@@ -520,7 +522,7 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 	return n
 }
 
-func (n *testNode) diskPrefs() *ipn.Prefs {
+func (n *TestNode) diskPrefs() *ipn.Prefs {
 	t := n.env.t
 	t.Helper()
 	if _, err := os.ReadFile(n.stateFile); err != nil {
@@ -539,7 +541,7 @@ func (n *testNode) diskPrefs() *ipn.Prefs {
 
 // AwaitResponding waits for n's tailscaled to be up enough to be
 // responding, but doesn't wait for any particular state.
-func (n *testNode) AwaitResponding() {
+func (n *TestNode) AwaitResponding() {
 	t := n.env.t
 	t.Helper()
 	n.AwaitListening()
@@ -560,7 +562,7 @@ func (n *testNode) AwaitResponding() {
 
 // addLogLineHook registers a hook f to be called on each tailscaled
 // log line output.
-func (n *testNode) addLogLineHook(f func([]byte)) {
+func (n *TestNode) addLogLineHook(f func([]byte)) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.onLogLine = append(n.onLogLine, f)
@@ -568,7 +570,7 @@ func (n *testNode) addLogLineHook(f func([]byte)) {
 
 // socks5AddrChan returns a channel that receives the address (e.g. "localhost:23874")
 // of the node's SOCKS5 listener, once started.
-func (n *testNode) socks5AddrChan() <-chan string {
+func (n *TestNode) socks5AddrChan() <-chan string {
 	ch := make(chan string, 1)
 	n.addLogLineHook(func(line []byte) {
 		const sub = "SOCKS5 listening on "
@@ -585,7 +587,7 @@ func (n *testNode) socks5AddrChan() <-chan string {
 	return ch
 }
 
-func (n *testNode) AwaitSocksAddr(ch <-chan string) string {
+func (n *TestNode) AwaitSocksAddr(ch <-chan string) string {
 	t := n.env.t
 	t.Helper()
 	timer := time.NewTimer(10 * time.Second)
@@ -605,7 +607,7 @@ func (n *testNode) AwaitSocksAddr(ch <-chan string) string {
 type nodeOutputParser struct {
 	allBuf      bytes.Buffer
 	pendLineBuf bytes.Buffer
-	n           *testNode
+	n           *TestNode
 }
 
 func (op *nodeOutputParser) Write(p []byte) (n int, err error) {
@@ -658,11 +660,11 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 
 // StartDaemon starts the node's tailscaled, failing if it fails to start.
 // StartDaemon ensures that the process will exit when the test completes.
-func (n *testNode) StartDaemon() *Daemon {
+func (n *TestNode) StartDaemon() *Daemon {
 	return n.StartDaemonAsIPNGOOS(runtime.GOOS)
 }
 
-func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
+func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	t := n.env.t
 	cmd := exec.Command(n.env.daemon)
 	cmd.Args = append(cmd.Args,
@@ -725,12 +727,12 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	}
 }
 
-func (n *testNode) MustUp(extraArgs ...string) {
+func (n *TestNode) MustUp(extraArgs ...string) {
 	t := n.env.t
 	t.Helper()
 	args := []string{
 		"up",
-		"--login-server=" + n.env.controlURL(),
+		"--login-server=" + n.env.ControlURL(),
 		"--reset",
 	}
 	args = append(args, extraArgs...)
@@ -743,7 +745,7 @@ func (n *testNode) MustUp(extraArgs ...string) {
 	}
 }
 
-func (n *testNode) MustDown() {
+func (n *TestNode) MustDown() {
 	t := n.env.t
 	t.Logf("Running down ...")
 	if err := n.Tailscale("down", "--accept-risk=all").Run(); err != nil {
@@ -751,7 +753,7 @@ func (n *testNode) MustDown() {
 	}
 }
 
-func (n *testNode) MustLogOut() {
+func (n *TestNode) MustLogOut() {
 	t := n.env.t
 	t.Logf("Running logout ...")
 	if err := n.Tailscale("logout").Run(); err != nil {
@@ -759,7 +761,7 @@ func (n *testNode) MustLogOut() {
 	}
 }
 
-func (n *testNode) Ping(otherNode *testNode) error {
+func (n *TestNode) Ping(otherNode *TestNode) error {
 	t := n.env.t
 	ip := otherNode.AwaitIP4().String()
 	t.Logf("Running ping %v (from %v)...", ip, n.AwaitIP4())
@@ -768,7 +770,7 @@ func (n *testNode) Ping(otherNode *testNode) error {
 
 // AwaitListening waits for the tailscaled to be serving local clients
 // over its localhost IPC mechanism. (Unix socket, etc)
-func (n *testNode) AwaitListening() {
+func (n *TestNode) AwaitListening() {
 	t := n.env.t
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
 		c, err := safesocket.ConnectContext(context.Background(), n.sockFile)
@@ -781,7 +783,7 @@ func (n *testNode) AwaitListening() {
 	}
 }
 
-func (n *testNode) AwaitIPs() []netip.Addr {
+func (n *TestNode) AwaitIPs() []netip.Addr {
 	t := n.env.t
 	t.Helper()
 	var addrs []netip.Addr
@@ -815,7 +817,7 @@ func (n *testNode) AwaitIPs() []netip.Addr {
 }
 
 // AwaitIP4 returns the IPv4 address of n.
-func (n *testNode) AwaitIP4() netip.Addr {
+func (n *TestNode) AwaitIP4() netip.Addr {
 	t := n.env.t
 	t.Helper()
 	ips := n.AwaitIPs()
@@ -823,7 +825,7 @@ func (n *testNode) AwaitIP4() netip.Addr {
 }
 
 // AwaitIP6 returns the IPv6 address of n.
-func (n *testNode) AwaitIP6() netip.Addr {
+func (n *TestNode) AwaitIP6() netip.Addr {
 	t := n.env.t
 	t.Helper()
 	ips := n.AwaitIPs()
@@ -831,13 +833,13 @@ func (n *testNode) AwaitIP6() netip.Addr {
 }
 
 // AwaitRunning waits for n to reach the IPN state "Running".
-func (n *testNode) AwaitRunning() {
+func (n *TestNode) AwaitRunning() {
 	t := n.env.t
 	t.Helper()
 	n.AwaitBackendState("Running")
 }
 
-func (n *testNode) AwaitBackendState(state string) {
+func (n *TestNode) AwaitBackendState(state string) {
 	t := n.env.t
 	t.Helper()
 	if err := tstest.WaitFor(20*time.Second, func() error {
@@ -855,7 +857,7 @@ func (n *testNode) AwaitBackendState(state string) {
 }
 
 // AwaitNeedsLogin waits for n to reach the IPN state "NeedsLogin".
-func (n *testNode) AwaitNeedsLogin() {
+func (n *TestNode) AwaitNeedsLogin() {
 	t := n.env.t
 	t.Helper()
 	if err := tstest.WaitFor(20*time.Second, func() error {
@@ -872,7 +874,7 @@ func (n *testNode) AwaitNeedsLogin() {
 	}
 }
 
-func (n *testNode) TailscaleForOutput(arg ...string) *exec.Cmd {
+func (n *TestNode) TailscaleForOutput(arg ...string) *exec.Cmd {
 	cmd := n.Tailscale(arg...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -881,7 +883,7 @@ func (n *testNode) TailscaleForOutput(arg ...string) *exec.Cmd {
 
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.
 // It does not start the process.
-func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
+func (n *TestNode) Tailscale(arg ...string) *exec.Cmd {
 	cmd := exec.Command(n.env.cli)
 	cmd.Args = append(cmd.Args, "--socket="+n.sockFile)
 	cmd.Args = append(cmd.Args, arg...)
@@ -897,7 +899,7 @@ func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
 	return cmd
 }
 
-func (n *testNode) Status() (*ipnstate.Status, error) {
+func (n *TestNode) Status() (*ipnstate.Status, error) {
 	cmd := n.Tailscale("status", "--json")
 	cmd.Stdout = nil // in case --verbose-tailscale was set
 	cmd.Stderr = nil // in case --verbose-tailscale was set
@@ -912,7 +914,7 @@ func (n *testNode) Status() (*ipnstate.Status, error) {
 	return st, nil
 }
 
-func (n *testNode) MustStatus() *ipnstate.Status {
+func (n *TestNode) MustStatus() *ipnstate.Status {
 	tb := n.env.t
 	tb.Helper()
 	st, err := n.Status()
