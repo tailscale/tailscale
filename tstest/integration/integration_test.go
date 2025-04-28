@@ -68,9 +68,9 @@ func TestTUNMode(t *testing.T) {
 		t.Skip("skipping when not root")
 	}
 	tstest.Parallel(t)
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 	env.tunMode = true
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	d1 := n1.StartDaemon()
 
 	n1.AwaitResponding()
@@ -85,8 +85,8 @@ func TestTUNMode(t *testing.T) {
 func TestOneNodeUpNoAuth(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
 
 	d1 := n1.StartDaemon()
 	n1.AwaitResponding()
@@ -103,8 +103,8 @@ func TestOneNodeUpNoAuth(t *testing.T) {
 func TestOneNodeExpiredKey(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
 
 	d1 := n1.StartDaemon()
 	n1.AwaitResponding()
@@ -140,8 +140,8 @@ func TestOneNodeExpiredKey(t *testing.T) {
 func TestControlKnobs(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
 
 	d1 := n1.StartDaemon()
 	defer d1.MustCleanShutdown(t)
@@ -171,8 +171,8 @@ func TestControlKnobs(t *testing.T) {
 func TestCollectPanic(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n := NewTestNode(t, env)
 
 	cmd := exec.Command(env.daemon, "--cleanup")
 	cmd.Env = append(os.Environ(),
@@ -202,9 +202,9 @@ func TestCollectPanic(t *testing.T) {
 func TestControlTimeLogLine(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 	env.LogCatcher.StoreRawJSON()
-	n := newTestNode(t, env)
+	n := NewTestNode(t, env)
 
 	n.StartDaemon()
 	n.AwaitResponding()
@@ -226,8 +226,8 @@ func TestControlTimeLogLine(t *testing.T) {
 func TestStateSavedOnStart(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
 
 	d1 := n1.StartDaemon()
 	n1.AwaitResponding()
@@ -245,7 +245,7 @@ func TestStateSavedOnStart(t *testing.T) {
 	n1.MustDown()
 
 	// And change the hostname to something:
-	if err := n1.Tailscale("up", "--login-server="+n1.env.controlURL(), "--hostname=foo").Run(); err != nil {
+	if err := n1.Tailscale("up", "--login-server="+n1.env.ControlURL(), "--hostname=foo").Run(); err != nil {
 		t.Fatalf("up: %v", err)
 	}
 
@@ -263,11 +263,11 @@ func TestStateSavedOnStart(t *testing.T) {
 func TestOneNodeUpAuth(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t, configureControl(func(control *testcontrol.Server) {
+	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
 		control.RequireAuth = true
 	}))
 
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	d1 := n1.StartDaemon()
 
 	n1.AwaitListening()
@@ -275,9 +275,9 @@ func TestOneNodeUpAuth(t *testing.T) {
 	st := n1.MustStatus()
 	t.Logf("Status: %s", st.BackendState)
 
-	t.Logf("Running up --login-server=%s ...", env.controlURL())
+	t.Logf("Running up --login-server=%s ...", env.ControlURL())
 
-	cmd := n1.Tailscale("up", "--login-server="+env.controlURL())
+	cmd := n1.Tailscale("up", "--login-server="+env.ControlURL())
 	var authCountAtomic int32
 	cmd.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
 		if env.Control.CompleteAuth(urlStr) {
@@ -309,11 +309,11 @@ func TestConfigFileAuthKey(t *testing.T) {
 	tstest.Shard(t)
 	t.Parallel()
 	const authKey = "opensesame"
-	env := newTestEnv(t, configureControl(func(control *testcontrol.Server) {
+	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
 		control.RequireAuthKey = authKey
 	}))
 
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	n1.configFile = filepath.Join(n1.dir, "config.json")
 	authKeyFile := filepath.Join(n1.dir, "my-auth-key")
 	must.Do(os.WriteFile(authKeyFile, fmt.Appendf(nil, "%s\n", authKey), 0666))
@@ -334,14 +334,14 @@ func TestConfigFileAuthKey(t *testing.T) {
 func TestTwoNodes(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 
 	// Create two nodes:
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	n1SocksAddrCh := n1.socks5AddrChan()
 	d1 := n1.StartDaemon()
 
-	n2 := newTestNode(t, env)
+	n2 := NewTestNode(t, env)
 	n2SocksAddrCh := n2.socks5AddrChan()
 	d2 := n2.StartDaemon()
 
@@ -360,7 +360,7 @@ func TestTwoNodes(t *testing.T) {
 		defer n2.mu.Unlock()
 
 		rxNoDates := regexp.MustCompile(`(?m)^\d{4}.\d{2}.\d{2}.\d{2}:\d{2}:\d{2}`)
-		cleanLog := func(n *testNode) []byte {
+		cleanLog := func(n *TestNode) []byte {
 			b := n.tailscaledParser.allBuf.Bytes()
 			b = rxNoDates.ReplaceAll(b, nil)
 			return b
@@ -420,10 +420,10 @@ func TestTwoNodes(t *testing.T) {
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 
 	// Create one node:
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	d1 := n1.StartDaemon()
 	n1.AwaitListening()
 	n1.MustUp()
@@ -435,7 +435,7 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 	}
 	tnode1 := all[0]
 
-	n2 := newTestNode(t, env)
+	n2 := NewTestNode(t, env)
 	d2 := n2.StartDaemon()
 	n2.AwaitListening()
 	n2.MustUp()
@@ -505,8 +505,8 @@ func TestNodeAddressIPFields(t *testing.T) {
 	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
 	d1 := n1.StartDaemon()
 
 	n1.AwaitListening()
@@ -532,8 +532,8 @@ func TestNodeAddressIPFields(t *testing.T) {
 func TestAddPingRequest(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
 	n1.StartDaemon()
 
 	n1.AwaitListening()
@@ -586,7 +586,7 @@ func TestC2NPingRequest(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
 
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 
 	gotPing := make(chan bool, 1)
 	env.Control.HandleC2N = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -604,7 +604,7 @@ func TestC2NPingRequest(t *testing.T) {
 		gotPing <- true
 	})
 
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	n1.StartDaemon()
 
 	n1.AwaitListening()
@@ -657,8 +657,8 @@ func TestC2NPingRequest(t *testing.T) {
 func TestNoControlConnWhenDown(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
 
 	d1 := n1.StartDaemon()
 	n1.AwaitResponding()
@@ -696,8 +696,8 @@ func TestNoControlConnWhenDown(t *testing.T) {
 func TestOneNodeUpWindowsStyle(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
 	n1.upFlagGOOS = "windows"
 
 	d1 := n1.StartDaemonAsIPNGOOS("windows")
@@ -716,9 +716,9 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 func TestClientSideJailing(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	registerNode := func() (*testNode, key.NodePublic) {
-		n := newTestNode(t, env)
+	env := NewTestEnv(t)
+	registerNode := func() (*TestNode, key.NodePublic) {
+		n := NewTestNode(t, env)
 		n.StartDaemon()
 		n.AwaitListening()
 		n.MustUp()
@@ -832,9 +832,9 @@ func TestNATPing(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	for _, v6 := range []bool{false, true} {
-		env := newTestEnv(t)
-		registerNode := func() (*testNode, key.NodePublic) {
-			n := newTestNode(t, env)
+		env := NewTestEnv(t)
+		registerNode := func() (*TestNode, key.NodePublic) {
+			n := NewTestNode(t, env)
 			n.StartDaemon()
 			n.AwaitListening()
 			n.MustUp()
@@ -959,11 +959,11 @@ func TestNATPing(t *testing.T) {
 func TestLogoutRemovesAllPeers(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 	// Spin up some nodes.
-	nodes := make([]*testNode, 2)
+	nodes := make([]*TestNode, 2)
 	for i := range nodes {
-		nodes[i] = newTestNode(t, env)
+		nodes[i] = NewTestNode(t, env)
 		nodes[i].StartDaemon()
 		nodes[i].AwaitResponding()
 		nodes[i].MustUp()
@@ -1017,9 +1017,9 @@ func TestAutoUpdateDefaults(t *testing.T) {
 	}
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 
-	checkDefault := func(n *testNode, want bool) error {
+	checkDefault := func(n *TestNode, want bool) error {
 		enabled, ok := n.diskPrefs().AutoUpdate.Apply.Get()
 		if !ok {
 			return fmt.Errorf("auto-update for node is unset, should be set as %v", want)
@@ -1030,7 +1030,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 		return nil
 	}
 
-	sendAndCheckDefault := func(t *testing.T, n *testNode, send, want bool) {
+	sendAndCheckDefault := func(t *testing.T, n *TestNode, send, want bool) {
 		t.Helper()
 		if !env.Control.AddRawMapResponse(n.MustStatus().Self.PublicKey, &tailcfg.MapResponse{
 			DefaultAutoUpdate: opt.NewBool(send),
@@ -1046,11 +1046,11 @@ func TestAutoUpdateDefaults(t *testing.T) {
 
 	tests := []struct {
 		desc string
-		run  func(t *testing.T, n *testNode)
+		run  func(t *testing.T, n *TestNode)
 	}{
 		{
 			desc: "tailnet-default-false",
-			run: func(t *testing.T, n *testNode) {
+			run: func(t *testing.T, n *TestNode) {
 				// First received default "false".
 				sendAndCheckDefault(t, n, false, false)
 				// Should not be changed even if sent "true" later.
@@ -1064,7 +1064,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 		},
 		{
 			desc: "tailnet-default-true",
-			run: func(t *testing.T, n *testNode) {
+			run: func(t *testing.T, n *TestNode) {
 				// First received default "true".
 				sendAndCheckDefault(t, n, true, true)
 				// Should not be changed even if sent "false" later.
@@ -1078,7 +1078,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 		},
 		{
 			desc: "user-sets-first",
-			run: func(t *testing.T, n *testNode) {
+			run: func(t *testing.T, n *TestNode) {
 				// User sets auto-update first, before receiving defaults.
 				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
 					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
@@ -1091,7 +1091,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-			n := newTestNode(t, env)
+			n := NewTestNode(t, env)
 			d := n.StartDaemon()
 			defer d.MustCleanShutdown(t)
 
@@ -1113,9 +1113,9 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("skipping when not root")
 	}
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 	env.tunMode = true
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	d1 := n1.StartDaemon()
 
 	n1.AwaitResponding()
@@ -1186,12 +1186,12 @@ func TestNetstackTCPLoopback(t *testing.T) {
 		t.Skip("skipping when not root")
 	}
 
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 	env.tunMode = true
 	loopbackPort := 5201
 	env.loopbackPort = &loopbackPort
 	loopbackPortStr := strconv.Itoa(loopbackPort)
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	d1 := n1.StartDaemon()
 
 	n1.AwaitResponding()
@@ -1328,11 +1328,11 @@ func TestNetstackUDPLoopback(t *testing.T) {
 		t.Skip("skipping when not root")
 	}
 
-	env := newTestEnv(t)
+	env := NewTestEnv(t)
 	env.tunMode = true
 	loopbackPort := 5201
 	env.loopbackPort = &loopbackPort
-	n1 := newTestNode(t, env)
+	n1 := NewTestNode(t, env)
 	d1 := n1.StartDaemon()
 
 	n1.AwaitResponding()
