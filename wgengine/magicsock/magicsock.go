@@ -1602,12 +1602,21 @@ var debugIPv4DiscoPingPenalty = envknob.RegisterDuration("TS_DISCO_PONG_IPV4_DEL
 //
 // If dst is a DERP IP:port, then dstKey must be non-zero.
 //
+// If geneveVNI is non-nil, then the [disco.Message] will be preceded by a
+// Geneve header with the supplied VNI set.
+//
 // The dstKey should only be non-zero if the dstDisco key
 // unambiguously maps to exactly one peer.
-func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
+func (c *Conn) sendDiscoMessage(dst netip.AddrPort, geneveVNI *uint32, dstKey key.NodePublic, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
 	isDERP := dst.Addr() == tailcfg.DerpMagicIPAddr
 	if _, isPong := m.(*disco.Pong); isPong && !isDERP && dst.Addr().Is4() {
 		time.Sleep(debugIPv4DiscoPingPenalty())
+	}
+
+	isRelayHandshakeMsg := false
+	switch m.(type) {
+	case *disco.BindUDPRelayEndpoint, *disco.BindUDPRelayEndpointAnswer:
+		isRelayHandshakeMsg = true
 	}
 
 	c.mu.Lock()
@@ -1616,9 +1625,37 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 		return false, errConnClosed
 	}
 	pkt := make([]byte, 0, 512) // TODO: size it correctly? pool? if it matters.
+	if geneveVNI != nil {
+		gh := packet.GeneveHeader{
+			Version:  0,
+			Protocol: packet.GeneveProtocolDisco,
+			VNI:      *geneveVNI,
+			Control:  isRelayHandshakeMsg,
+		}
+		pkt = append(pkt, make([]byte, packet.GeneveFixedHeaderLength)...)
+		err := gh.Encode(pkt)
+		if err != nil {
+			return false, err
+		}
+	}
 	pkt = append(pkt, disco.Magic...)
 	pkt = c.discoPublic.AppendTo(pkt)
-	di := c.discoInfoLocked(dstDisco)
+	var di *discoInfo
+	if !isRelayHandshakeMsg {
+		di = c.discoInfoLocked(dstDisco)
+	} else {
+		// c.discoInfoLocked() caches [*discoInfo] for dstDisco. It assumes that
+		// dstDisco is a known Tailscale peer, and will be cleaned around
+		// network map changes. In the case of a relay handshake message,
+		// dstDisco belongs to a relay server with a disco key that is
+		// discovered at endpoint allocation time or [disco.CallMeMaybeVia]
+		// reception time. There is no clear ending to its lifetime, so we
+		// can't cache with the same strategy. Instead, generate the shared
+		// key on the fly for now.
+		di = &discoInfo{
+			sharedKey: c.discoPrivate.Shared(dstDisco),
+		}
+	}
 	c.mu.Unlock()
 
 	if isDERP {
@@ -1943,7 +1980,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 
 	ipDst := src
 	discoDest := di.discoKey
-	go c.sendDiscoMessage(ipDst, dstKey, discoDest, &disco.Pong{
+	go c.sendDiscoMessage(ipDst, nil, dstKey, discoDest, &disco.Pong{
 		TxID: dm.TxID,
 		Src:  src,
 	}, discoVerboseLog)
@@ -1988,12 +2025,12 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 	for _, ep := range c.lastEndpoints {
 		eps = append(eps, ep.Addr)
 	}
-	go de.c.sendDiscoMessage(derpAddr, de.publicKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+	go de.c.sendDiscoMessage(derpAddr, nil, de.publicKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 	if debugSendCallMeUnknownPeer() {
 		// Send a callMeMaybe packet to a non-existent peer
 		unknownKey := key.NewNode().Public()
 		c.logf("magicsock: sending CallMeMaybe to unknown peer per TS_DEBUG_SEND_CALLME_UNKNOWN_PEER")
-		go de.c.sendDiscoMessage(derpAddr, unknownKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+		go de.c.sendDiscoMessage(derpAddr, nil, unknownKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 	}
 }
 
