@@ -705,7 +705,6 @@ var errProfileAccessDenied = errors.New("profile access denied")
 // This is useful for deleting the last profile. In other cases, it is
 // recommended to call [profileManager.SwitchProfile] first.
 func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
-	metricDeleteProfile.Add(1)
 	if id == pm.currentProfile.ID() {
 		return pm.deleteCurrentProfile()
 	}
@@ -741,6 +740,7 @@ func (pm *profileManager) deleteProfileNoPermCheck(profile ipn.LoginProfileView)
 		return err
 	}
 	delete(pm.knownProfiles, profile.ID())
+	metricDeleteProfile.Add(1)
 	return pm.writeKnownProfiles()
 }
 
@@ -781,6 +781,7 @@ func (pm *profileManager) writeKnownProfiles() error {
 	if err != nil {
 		return err
 	}
+	metricProfileCount.Set(int64(len(pm.knownProfiles)))
 	return pm.WriteState(ipn.KnownProfilesStateKey, b)
 }
 
@@ -893,6 +894,8 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *healt
 		return nil, err
 	}
 
+	metricProfileCount.Set(int64(len(knownProfiles)))
+
 	pm := &profileManager{
 		goos:          goos,
 		store:         store,
@@ -961,6 +964,7 @@ var (
 	metricSwitchProfile    = clientmetric.NewCounter("profiles_switch")
 	metricDeleteProfile    = clientmetric.NewCounter("profiles_delete")
 	metricDeleteAllProfile = clientmetric.NewCounter("profiles_delete_all")
+	metricProfileCount     = clientmetric.NewGauge("profiles_count")
 
 	metricMigration        = clientmetric.NewCounter("profiles_migration")
 	metricMigrationError   = clientmetric.NewCounter("profiles_migration_error")

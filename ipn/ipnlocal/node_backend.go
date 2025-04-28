@@ -172,6 +172,17 @@ func (nb *nodeBackend) PeerByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool)
 	return n, ok
 }
 
+func (nb *nodeBackend) PeerByStableID(id tailcfg.StableNodeID) (_ tailcfg.NodeView, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	for _, n := range nb.peers {
+		if n.StableID() == id {
+			return n, true
+		}
+	}
+	return tailcfg.NodeView{}, false
+}
+
 func (nb *nodeBackend) UserByID(id tailcfg.UserID) (_ tailcfg.UserProfileView, ok bool) {
 	nb.mu.Lock()
 	nm := nb.netMap

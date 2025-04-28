@@ -166,6 +166,8 @@ type watchSession struct {
 	cancel    context.CancelFunc // to shut down the session
 }
 
+var metricCaptivePortalDetected = clientmetric.NewCounter("captiveportal_detected")
+
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -2764,6 +2766,9 @@ func (b *LocalBackend) performCaptiveDetection() {
 	b.mu.Unlock()
 	found := d.Detect(ctx, netMon, dm, preferredDERP)
 	if found {
+		if !b.health.IsUnhealthy(captivePortalWarnable) {
+			metricCaptivePortalDetected.Add(1)
+		}
 		b.health.SetUnhealthy(captivePortalWarnable, health.Args{})
 	} else {
 		b.health.SetHealthy(captivePortalWarnable)
@@ -4379,9 +4384,11 @@ func (b *LocalBackend) editPrefsLockedOnEntry(mp *ipn.MaskedPrefs, unlock unlock
 		b.egg = true
 		b.goTracker.Go(b.doSetHostinfoFilterServices)
 	}
+
 	p0 := b.pm.CurrentPrefs()
 	p1 := b.pm.CurrentPrefs().AsStruct()
 	p1.ApplyEdits(mp)
+
 	if err := b.checkPrefsLocked(p1); err != nil {
 		b.logf("EditPrefs check error: %v", err)
 		return ipn.PrefsView{}, err
@@ -4393,8 +4400,22 @@ func (b *LocalBackend) editPrefsLockedOnEntry(mp *ipn.MaskedPrefs, unlock unlock
 	if p1.View().Equals(p0) {
 		return stripKeysFromPrefs(p0), nil
 	}
+
 	b.logf("EditPrefs: %v", mp.Pretty())
 	newPrefs := b.setPrefsLockedOnEntry(p1, unlock)
+
+	// This is recorded here in the EditPrefs path, not the setPrefs path on purpose.
+	// recordForEdit records metrics related to edits and changes, not the final state.
+	// If, in the future, we want to record gauge-metrics related to the state of prefs,
+	// that should be done in the setPrefs path.
+	e := prefsMetricsEditEvent{
+		change:                mp,
+		pNew:                  p1.View(),
+		pOld:                  p0,
+		node:                  b.currentNode(),
+		lastSuggestedExitNode: b.lastSuggestedExitNode,
+	}
+	e.record()
 
 	// Note: don't perform any actions for the new prefs here. Not
 	// every prefs change goes through EditPrefs. Put your actions
@@ -4467,6 +4488,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	applySysPolicy(newp, b.lastSuggestedExitNode, b.overrideAlwaysOn)
 	// setExitNodeID does likewise. No-op if no exit node resolution is needed.
 	setExitNodeID(newp, netMap)
+
 	// We do this to avoid holding the lock while doing everything else.
 
 	oldHi := b.hostinfo
