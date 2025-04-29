@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	"tailscale.com/atomicfile"
-	"tailscale.com/version"
 )
 
 func main() {
@@ -28,8 +28,19 @@ func main() {
 		// any time.
 		switch os.Args[1] {
 		case "gocross-version":
-			fmt.Println(version.GetMeta().GitCommit)
-			os.Exit(0)
+			bi, ok := debug.ReadBuildInfo()
+			if !ok {
+				fmt.Fprintln(os.Stderr, "failed getting build info")
+				os.Exit(1)
+			}
+			for _, s := range bi.Settings {
+				if s.Key == "vcs.revision" {
+					fmt.Println(s.Value)
+					os.Exit(0)
+				}
+			}
+			fmt.Fprintln(os.Stderr, "did not find vcs.revision in build info")
+			os.Exit(1)
 		case "is-gocross":
 			// This subcommand exits with an error code when called on a
 			// regular go binary, so it can be used to detect when `go` is
@@ -85,9 +96,9 @@ func main() {
 		path := filepath.Join(toolchain, "bin") + string(os.PathListSeparator) + os.Getenv("PATH")
 		env.Set("PATH", path)
 
-		debug("Input: %s\n", formatArgv(os.Args))
-		debug("Command: %s\n", formatArgv(newArgv))
-		debug("Set the following flags/envvars:\n%s\n", env.Diff())
+		debugf("Input: %s\n", formatArgv(os.Args))
+		debugf("Command: %s\n", formatArgv(newArgv))
+		debugf("Set the following flags/envvars:\n%s\n", env.Diff())
 
 		args = newArgv
 		if err := env.Apply(); err != nil {
@@ -103,7 +114,7 @@ func main() {
 //go:embed gocross-wrapper.sh
 var wrapperScript []byte
 
-func debug(format string, args ...any) {
+func debugf(format string, args ...any) {
 	debug := os.Getenv("GOCROSS_DEBUG")
 	var (
 		out *os.File
