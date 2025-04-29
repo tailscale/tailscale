@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/netip"
 	"sync"
@@ -303,17 +302,6 @@ func (ipp *ConsensusIPPool) Apply(l *raft.Log) interface{} {
 	default:
 		panic(fmt.Sprintf("unrecognized command: %s", c.Name))
 	}
-}
-
-// TODO(fran) what exactly would we gain by implementing Snapshot and Restore?
-// Snapshot is part of the raft.FSM interface.
-func (ipp *ConsensusIPPool) Snapshot() (raft.FSMSnapshot, error) {
-	return nil, nil
-}
-
-// Restore is part of the raft.FSM interface.
-func (ipp *ConsensusIPPool) Restore(rc io.ReadCloser) error {
-	return nil
 }
 
 // commandExecutor is an interface covering the routing parts of consensus

@@ -1,8 +1,10 @@
 package ippool
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/netip"
 	"testing"
 	"time"
@@ -181,5 +183,110 @@ func TestConsensusDomainForIP(t *testing.T) {
 	}
 	if !ok {
 		t.Fatalf("expected domain to be found for IP that was handed out for it")
+	}
+}
+
+func TestConsensusSnapshot(t *testing.T) {
+	pfx := netip.MustParsePrefix("100.64.0.0/16")
+	ipp := makePool(pfx)
+	domain := "example.com"
+	expectedAddr := netip.MustParseAddr("100.64.0.0")
+	expectedFrom := expectedAddr
+	expectedTo := netip.MustParseAddr("100.64.255.255")
+	from := tailcfg.NodeID(1)
+
+	// pool allocates first addr for from
+	ipp.IPForDomain(from, domain)
+	// take a snapshot
+	fsmSnap, err := ipp.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := fsmSnap.(fsmSnapshot)
+
+	// verify snapshot state matches the state we know ipp will have
+	// ipset matches ipp.IPSet
+	if len(snap.IPSet.Ranges) != 1 {
+		t.Fatalf("expected 1, got %d", len(snap.IPSet.Ranges))
+	}
+	if snap.IPSet.Ranges[0].From != expectedFrom {
+		t.Fatalf("want %s, got %s", expectedFrom, snap.IPSet.Ranges[0].From)
+	}
+	if snap.IPSet.Ranges[0].To != expectedTo {
+		t.Fatalf("want %s, got %s", expectedTo, snap.IPSet.Ranges[0].To)
+	}
+
+	// perPeerMap has one entry, for from
+	if len(snap.PerPeerMap) != 1 {
+		t.Fatalf("expected 1, got %d", len(snap.PerPeerMap))
+	}
+	ps, _ := snap.PerPeerMap[from]
+
+	// the one peer state has allocated one address, the first in the prefix
+	if len(ps.DomainToAddr) != 1 {
+		t.Fatalf("expected 1, got %d", len(ps.DomainToAddr))
+	}
+	addr := ps.DomainToAddr[domain]
+	if addr != expectedAddr {
+		t.Fatalf("want %s, got %s", expectedAddr.String(), addr.String())
+	}
+	if len(ps.AddrToDomain) != 1 {
+		t.Fatalf("expected 1, got %d", len(ps.AddrToDomain))
+	}
+	addrPfx, err := addr.Prefix(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ww, _ := ps.AddrToDomain[addrPfx]
+	if ww.Domain != domain {
+		t.Fatalf("want %s, got %s", domain, ww.Domain)
+	}
+}
+
+func TestConsensusRestore(t *testing.T) {
+	pfx := netip.MustParsePrefix("100.64.0.0/16")
+	ipp := makePool(pfx)
+	domain := "example.com"
+	expectedAddr := netip.MustParseAddr("100.64.0.0")
+	from := tailcfg.NodeID(1)
+
+	ipp.IPForDomain(from, domain)
+	// take the snapshot after only 1 addr allocated
+	fsmSnap, err := ipp.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := fsmSnap.(fsmSnapshot)
+
+	ipp.IPForDomain(from, "b.example.com")
+	ipp.IPForDomain(from, "c.example.com")
+	ipp.IPForDomain(from, "d.example.com")
+	// ipp now has 4 entries in domainToAddr
+	ps, _ := ipp.perPeerMap.Load(from)
+	if len(ps.domainToAddr) != 4 {
+		t.Fatalf("want 4, got %d", len(ps.domainToAddr))
+	}
+
+	// restore the snapshot
+	bs, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipp.Restore(io.NopCloser(bytes.NewBuffer(bs)))
+
+	// everything should be as it was when the snapshot was taken
+	if ipp.perPeerMap.Len() != 1 {
+		t.Fatalf("want 1, got %d", ipp.perPeerMap.Len())
+	}
+	psAfter, _ := ipp.perPeerMap.Load(from)
+	if len(psAfter.domainToAddr) != 1 {
+		t.Fatalf("want 1, got %d", len(psAfter.domainToAddr))
+	}
+	if psAfter.domainToAddr[domain] != expectedAddr {
+		t.Fatalf("want %s, got %s", expectedAddr, psAfter.domainToAddr[domain])
+	}
+	ww, _ := psAfter.addrToDomain.Lookup(expectedAddr)
+	if ww.Domain != domain {
+		t.Fatalf("want %s, got %s", domain, ww.Domain)
 	}
 }
