@@ -278,15 +278,20 @@ func TestOneNodeUpAuth(t *testing.T) {
 	t.Logf("Running up --login-server=%s ...", env.ControlURL())
 
 	cmd := n1.Tailscale("up", "--login-server="+env.ControlURL())
-	var authCountAtomic int32
+	var authCountAtomic atomic.Int32
 	cmd.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
+		t.Logf("saw auth URL %q", urlStr)
 		if env.Control.CompleteAuth(urlStr) {
-			atomic.AddInt32(&authCountAtomic, 1)
+			if authCountAtomic.Add(1) > 1 {
+				err := errors.New("completed multple auth URLs")
+				t.Error(err)
+				return err
+			}
 			t.Logf("completed auth path %s", urlStr)
 			return nil
 		}
 		err := fmt.Errorf("Failed to complete auth path to %q", urlStr)
-		t.Log(err)
+		t.Error(err)
 		return err
 	}}
 	cmd.Stderr = cmd.Stdout
@@ -297,7 +302,7 @@ func TestOneNodeUpAuth(t *testing.T) {
 
 	n1.AwaitRunning()
 
-	if n := atomic.LoadInt32(&authCountAtomic); n != 1 {
+	if n := authCountAtomic.Load(); n != 1 {
 		t.Errorf("Auth URLs completed = %d; want 1", n)
 	}
 
