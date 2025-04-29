@@ -1463,18 +1463,60 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 	return b.currentNode().PeerCaps(src)
 }
 
-func (b *localNodeContext) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
+// PeerContext provides contextual information about a peer.
+type PeerContext interface {
+	Node() tailcfg.NodeView
+	Caps() tailcfg.PeerCapMap
+}
+
+// peerContext is a short-lived struct containing information about a peer.
+// It is not safe for concurrent use and [localNodeContext]'s mutex must be held
+// when using it. Therefore, it must not be retained or used outside the scope
+// of the predicate or callback it was passed to.
+type peerContext struct {
+	self *localNodeContext
+	peer tailcfg.NodeView
+}
+
+func (p peerContext) Node() tailcfg.NodeView {
+	if p.self == nil {
+		panic("peerInfo used outside of its scope")
+	}
+	return p.peer
+}
+
+// HasCap reports whether the peer has the specified capability.
+// It panics if used outside of the PeerInfo's scope.
+func (p peerContext) Caps() tailcfg.PeerCapMap {
+	if p.self == nil {
+		panic("peerInfo used outside of its scope")
+	}
+	if p.peer.Addresses().Len() == 0 {
+		return nil
+	}
+	return p.self.peerCapsLocked(p.peer.Addresses().At(0).Addr())
+}
+
+// AppendMatchingPeers appends to base all peers in the netmap that match the predicate.
+// The predicate is called with the node context's internal mutex locked,
+// so it must not call back into the backend or the node context.
+// The PeerInfo struct is only valid during the predicate call,
+// and must not be retained or used outside of it.
+func (b *localNodeContext) AppendMatchingPeers(base []tailcfg.NodeView, pred func(PeerContext) bool) []tailcfg.NodeView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ret := base
 	if b.netMap == nil {
 		return ret
 	}
+	pi := &peerContext{self: b}
 	for _, peer := range b.netMap.Peers {
-		if pred(peer) {
+		pi.peer = peer
+		if pred(pi) {
 			ret = append(ret, peer)
 		}
 	}
+	pi.self = nil
 	return ret
 }
 

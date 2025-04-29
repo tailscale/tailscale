@@ -190,14 +190,14 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	if !b.capFileSharing {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
-	peers := cn.AppendMatchingPeers(nil, func(p tailcfg.NodeView) bool {
-		if !p.Valid() || p.Hostinfo().OS() == "tvOS" {
+	peers := cn.AppendMatchingPeers(nil, func(p PeerContext) bool {
+		if !p.Node().Valid() || p.Node().Hostinfo().OS() == "tvOS" {
 			return false
 		}
-		if self != p.User() {
+		if self != p.Node().User() {
 			return false
 		}
-		if p.Addresses().Len() != 0 && cn.PeerHasCap(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+		if p.Caps().HasCapability(tailcfg.PeerCapabilityFileSharingTarget) {
 			// Explicitly noted in the netmap ACL caps as a target.
 			return true
 		}
