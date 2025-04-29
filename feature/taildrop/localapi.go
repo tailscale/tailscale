@@ -365,6 +365,7 @@ func serveFiles(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ctx := r.Context()
+		var wfs []apitype.WaitingFile
 		if s := r.FormValue("waitsec"); s != "" && s != "0" {
 			d, err := strconv.Atoi(s)
 			if err != nil {
@@ -375,11 +376,18 @@ func serveFiles(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithDeadline(ctx, deadline)
 			defer cancel()
-		}
-		wfs, err := lb.AwaitWaitingFiles(ctx)
-		if err != nil && ctx.Err() == nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			wfs, err = lb.AwaitWaitingFiles(ctx)
+			if err != nil && ctx.Err() == nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			var err error
+			wfs, err = lb.WaitingFiles()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(wfs)

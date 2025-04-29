@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/client/local"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn"
@@ -436,6 +437,7 @@ func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
 	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 	logc := new(LogCatcher)
 	control := &testcontrol.Server{
+		Logf:    logger.WithPrefix(t.Logf, "testcontrol: "),
 		DERPMap: derpMap,
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
@@ -484,6 +486,7 @@ type TestNode struct {
 
 	mu        sync.Mutex
 	onLogLine []func([]byte)
+	lc        *local.Client
 }
 
 // NewTestNode allocates a temp directory for a new test node.
@@ -500,14 +503,18 @@ func NewTestNode(t *testing.T, env *TestEnv) *TestNode {
 		env:       env,
 		dir:       dir,
 		sockFile:  sockFile,
-		stateFile: filepath.Join(dir, "tailscale.state"),
+		stateFile: filepath.Join(dir, "tailscaled.state"), // matches what cmd/tailscaled uses
 	}
 
-	// Look for a data race. Once we see the start marker, start logging the rest.
+	// Look for a data race or panic.
+	// Once we see the start marker, start logging the rest.
 	var sawRace bool
 	var sawPanic bool
 	n.addLogLineHook(func(line []byte) {
 		lineB := mem.B(line)
+		if mem.Contains(lineB, mem.S("DEBUG-ADDR=")) {
+			t.Log(strings.TrimSpace(string(line)))
+		}
 		if mem.Contains(lineB, mem.S("WARNING: DATA RACE")) {
 			sawRace = true
 		}
@@ -520,6 +527,20 @@ func NewTestNode(t *testing.T, env *TestEnv) *TestNode {
 	})
 
 	return n
+}
+
+func (n *TestNode) LocalClient() *local.Client {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.lc == nil {
+		tr := &http.Transport{}
+		n.lc = &local.Client{
+			Socket:        n.sockFile,
+			UseSocketOnly: true,
+		}
+		n.env.t.Cleanup(tr.CloseIdleConnections)
+	}
+	return n.lc
 }
 
 func (n *TestNode) diskPrefs() *ipn.Prefs {
@@ -668,9 +689,10 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	t := n.env.t
 	cmd := exec.Command(n.env.daemon)
 	cmd.Args = append(cmd.Args,
-		"--state="+n.stateFile,
+		"--statedir="+n.dir,
 		"--socket="+n.sockFile,
 		"--socks5-server=localhost:0",
+		"--debug=localhost:0",
 	)
 	if *verboseTailscaled {
 		cmd.Args = append(cmd.Args, "-verbose=2")
