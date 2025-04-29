@@ -402,7 +402,7 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 			// executed immediately. Otherwise, the callback should be enqueued to run once the Warnable
 			// becomes visible.
 			if w.IsVisible(ws, t.now) {
-				go cb(w, w.unhealthyState(ws))
+				cb(w, w.unhealthyState(ws))
 				continue
 			}
 
@@ -415,7 +415,7 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 				// Check if the Warnable is still unhealthy, as it could have become healthy between the time
 				// the timer was set for and the time it was executed.
 				if t.warnableVal[w] != nil {
-					go cb(w, w.unhealthyState(ws))
+					cb(w, w.unhealthyState(ws))
 					delete(t.pendingVisibleTimers, w)
 				}
 			})
@@ -449,7 +449,7 @@ func (t *Tracker) setHealthyLocked(w *Warnable) {
 	}
 
 	for _, cb := range t.watchers {
-		go cb(w, nil)
+		cb(w, nil)
 	}
 }
 
@@ -483,6 +483,16 @@ func (t *Tracker) AppendWarnableDebugFlags(base []string) []string {
 // The provided callback function will be executed in its own goroutine. The returned function can be used
 // to unregister the callback.
 func (t *Tracker) RegisterWatcher(cb func(w *Warnable, r *UnhealthyState)) (unregister func()) {
+	return t.registerSyncWatcher(func(w *Warnable, r *UnhealthyState) {
+		go cb(w, r)
+	})
+}
+
+// registerSyncWatcher adds a function that will be called whenever the health
+// state of any Warnable changes. The provided callback function will be
+// executed synchronously. Call RegisterWatcher to register any callbacks that
+// won't return from execution immediately.
+func (t *Tracker) registerSyncWatcher(cb func(w *Warnable, r *UnhealthyState)) (unregister func()) {
 	if t.nil() {
 		return func() {}
 	}
