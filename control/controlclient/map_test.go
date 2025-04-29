@@ -17,6 +17,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/health"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
@@ -1134,5 +1135,36 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// TestNetmapHealthIntegration checks that we get the expected health warnings
+// from processing a map response and passing the NetworkMap to a health tracker
+func TestNetmapHealthIntegration(t *testing.T) {
+	ms := newTestMapSession(t, nil)
+	ht := health.Tracker{}
+
+	ht.SetIPNState("NeedsLogin", true)
+	ht.GotStreamedMapResponse()
+
+	nm := ms.netmapForResponse(&tailcfg.MapResponse{
+		Health: []string{"Test message"},
+	})
+	ht.SetControlHealth(nm.ControlHealth)
+
+	state := ht.CurrentState()
+	warning, ok := state.Warnings["control-health"]
+
+	if !ok {
+		t.Fatal("no warning found in current state with code 'control-health'")
+	}
+	if got, want := warning.Title, "Coordination server reports an issue"; got != want {
+		t.Errorf("warning.Title = %q, want %q", got, want)
+	}
+	if got, want := warning.Severity, health.SeverityMedium; got != want {
+		t.Errorf("warning.Severity = %s, want %s", got, want)
+	}
+	if got, want := warning.Text, "The coordination server is reporting an health issue: Test message"; got != want {
+		t.Errorf("warning.Text = %q, want %q", got, want)
 	}
 }

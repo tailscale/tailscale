@@ -451,3 +451,88 @@ func TestNoDERPHomeWarnableManual(t *testing.T) {
 		t.Fatalf("got unexpected noDERPHomeWarnable warnable: %v", ws)
 	}
 }
+
+func TestControlHealth(t *testing.T) {
+	ht := Tracker{}
+	ht.SetIPNState("NeedsLogin", true)
+	ht.GotStreamedMapResponse()
+
+	ht.SetControlHealth([]string{"Test message"})
+	state := ht.CurrentState()
+	warning, ok := state.Warnings["control-health"]
+
+	if !ok {
+		t.Fatal("no warning found in current state with code 'control-health'")
+	}
+	if got, want := warning.Title, "Coordination server reports an issue"; got != want {
+		t.Errorf("warning.Title = %q, want %q", got, want)
+	}
+	if got, want := warning.Severity, SeverityMedium; got != want {
+		t.Errorf("warning.Severity = %s, want %s", got, want)
+	}
+	if got, want := warning.Text, "The coordination server is reporting an health issue: Test message"; got != want {
+		t.Errorf("warning.Text = %q, want %q", got, want)
+	}
+}
+
+func TestControlHealthNotifiesOnChange(t *testing.T) {
+	ht := Tracker{}
+	ht.SetIPNState("NeedsLogin", true)
+	ht.GotStreamedMapResponse()
+
+	gotNotified := false
+	ht.registerSyncWatcher(func(_ *Warnable, _ *UnhealthyState) {
+		gotNotified = true
+	})
+
+	ht.SetControlHealth([]string{"Test message"})
+
+	if !gotNotified {
+		t.Errorf("watcher did not get called, want it to be called")
+	}
+}
+
+func TestControlHealthNoNotifyOnUnchanged(t *testing.T) {
+	ht := Tracker{}
+	ht.SetIPNState("NeedsLogin", true)
+	ht.GotStreamedMapResponse()
+
+	// Set up an existing control health issue
+	ht.SetControlHealth([]string{"Test message"})
+
+	// Now register our watcher
+	gotNotified := false
+	ht.registerSyncWatcher(func(_ *Warnable, _ *UnhealthyState) {
+		gotNotified = true
+	})
+
+	// Send the same control health message again - should not notify
+	ht.SetControlHealth([]string{"Test message"})
+
+	if gotNotified {
+		t.Errorf("watcher got called, want it to not be called")
+	}
+}
+
+func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
+	ht := Tracker{}
+	ht.SetIPNState("NeedsLogin", true)
+
+	gotNotified := false
+	ht.registerSyncWatcher(func(_ *Warnable, _ *UnhealthyState) {
+		gotNotified = true
+	})
+
+	ht.SetControlHealth([]string{"Test message"})
+
+	state := ht.CurrentState()
+	_, ok := state.Warnings["control-health"]
+
+	if ok {
+		t.Error("got a warning with code 'control-health', want none")
+	}
+
+	if gotNotified {
+		t.Error("watcher got called, want it to not be called")
+	}
+}
