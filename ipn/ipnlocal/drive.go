@@ -4,6 +4,7 @@
 package ipnlocal
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"slices"
@@ -338,7 +339,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// Check that the peer is allowed to share with us.
 				addresses := peer.Addresses()
 				for _, p := range addresses.All() {
-					if cn.PeerHasCap(p.Addr(), tailcfg.PeerCapabilityTaildriveSharer) {
+					if cn.PeerHasCap(context.Background(), p.Addr(), tailcfg.PeerCapabilityTaildriveSharer) {
 						return true
 					}
 				}

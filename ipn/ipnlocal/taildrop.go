@@ -190,14 +190,14 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	if !b.capFileSharing {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
-	peers := cn.AppendMatchingPeers(nil, func(p tailcfg.NodeView) bool {
+	peers := cn.AppendMatchingPeers(nil, func(ctx context.Context, p tailcfg.NodeView) bool {
 		if !p.Valid() || p.Hostinfo().OS() == "tvOS" {
 			return false
 		}
 		if self != p.User() {
 			return false
 		}
-		if p.Addresses().Len() != 0 && cn.PeerHasCap(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+		if p.Addresses().Len() != 0 && cn.PeerHasCap(ctx, p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
 			// Explicitly noted in the netmap ACL caps as a target.
 			return true
 		}
@@ -241,7 +241,7 @@ func (b *LocalBackend) taildropTargetStatus(p tailcfg.NodeView) ipnstate.Taildro
 	}
 	if nm.User() != p.User() {
 		// Different user must have the explicit file sharing target capability
-		if p.Addresses().Len() == 0 || !cn.PeerHasCap(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+		if p.Addresses().Len() == 0 || !cn.PeerHasCap(context.Background(), p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
 			// Explicitly noted in the netmap ACL caps as a target.
 			return ipnstate.TaildropTargetOwnedByOtherUser
 		}

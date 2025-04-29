@@ -96,6 +96,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/goroutines"
@@ -1463,7 +1464,11 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 	return b.currentNode().PeerCaps(src)
 }
 
-func (b *localNodeContext) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
+var nodeCtxLockedKey = ctxkey.New("localNodeContext-locked", false)
+
+var ctxNodeContextLocked = nodeCtxLockedKey.WithValue(context.Background(), true)
+
+func (b *localNodeContext) AppendMatchingPeers(base []tailcfg.NodeView, pred func(context.Context, tailcfg.NodeView) bool) []tailcfg.NodeView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ret := base
@@ -1471,7 +1476,7 @@ func (b *localNodeContext) AppendMatchingPeers(base []tailcfg.NodeView, pred fun
 		return ret
 	}
 	for _, peer := range b.netMap.Peers {
-		if pred(peer) {
+		if pred(ctxNodeContextLocked, peer) {
 			ret = append(ret, peer)
 		}
 	}
@@ -6652,9 +6657,11 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 
 // PeerHasCap reports whether the peer with the given Tailscale IP addresses
 // contains the given capability string, with any value(s).
-func (b *localNodeContext) PeerHasCap(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (b *localNodeContext) PeerHasCap(ctx context.Context, addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
+	if !nodeCtxLockedKey.Value(ctx) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+	}
 	return b.peerHasCapLocked(addr, wantCap)
 }
 
