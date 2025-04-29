@@ -141,6 +141,9 @@ func (src *Hostinfo) Clone() *Hostinfo {
 	if dst.Location != nil {
 		dst.Location = ptr.To(*src.Location)
 	}
+	if dst.TPM != nil {
+		dst.TPM = ptr.To(*src.TPM)
+	}
 	return dst
 }
 
@@ -184,6 +187,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	AppConnector    opt.Bool
 	ServicesHash    string
 	Location        *Location
+	TPM             *TPMInfo
 }{})
 
 // Clone makes a deep copy of NetInfo.
