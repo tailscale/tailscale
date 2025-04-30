@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net"
 	"reflect"
@@ -828,6 +829,23 @@ func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
 func (ms *mapSession) netmap() *netmap.NetworkMap {
 	peerViews := ms.sortedPeers()
 
+	var displayMessages map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
+
+	if len(ms.lastHealth) > 0 {
+		// As they all resolve to the same ID, we can only pass on one message
+		// from ControlHealth. In practice we generally send 0 or 1, but
+		// if there are multiple, the last one wins.
+		h := ms.lastHealth[len(ms.lastHealth)-1]
+		displayMessages = map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+			"control-health": {
+				Title:    "Coordination server reports an issue",
+				Severity: tailcfg.SeverityMedium,
+				Text:     fmt.Sprintf("The coordination server is reporting a health issue: %s", h),
+			},
+		}
+
+	}
+
 	nm := &netmap.NetworkMap{
 		NodeKey:           ms.publicNodeKey,
 		PrivateKey:        ms.privateNodeKey,
@@ -842,7 +860,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		SSHPolicy:         ms.lastSSHPolicy,
 		CollectServices:   ms.collectServices,
 		DERPMap:           ms.lastDERPMap,
-		ControlHealth:     ms.lastHealth,
+		DisplayMessages:   displayMessages,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
 
