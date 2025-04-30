@@ -325,17 +325,23 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 
 		if ip.Is4() {
-			mak.Set(&cfg.IPv4Mapping, vipv4, ip)
+			cfg.IPv4Mapping = &ingressservices.Mapping{
+				ClusterIP:    ip,
+				VIPServiceIP: vipv4,
+			}
 		} else if ip.Is6() {
-			mak.Set(&cfg.IPv6Mapping, vipv6, ip)
+			cfg.IPv6Mapping = &ingressservices.Mapping{
+				ClusterIP:    ip,
+				VIPServiceIP: vipv6,
+			}
 		}
 	}
 
 	existingCfg := cfgs[serviceName.String()]
 	if !reflect.DeepEqual(existingCfg, cfg) {
-		logger.Infof("Updating ingress config")
+		logger.Infof("Updating ingress config adding %+#v", cfg)
 		mak.Set(&cfgs, serviceName.String(), cfg)
-		cfgBytes, err := json.Marshal(cfg)
+		cfgBytes, err := json.Marshal(cfgs)
 		if err != nil {
 			return false, fmt.Errorf("error marshaling ingress config: %w", err)
 		}
@@ -347,9 +353,9 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 
 	// 5. Update tailscaled's AdvertiseServices config, which should add the VIPService
 	// IPs to the ProxyGroup Pods' AllowedIPs in the next netmap update if approved.
-	// if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, mode, logger); err != nil {
-	// 	return false, fmt.Errorf("failed to update tailscaled config: %w", err)
-	// }
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, mode, logger); err != nil {
+		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
+	}
 
 	// 6. Update Ingress status if ProxyGroup Pods are ready.
 	// count, err := r.numberPodsAdvertising(ctx, pg.Name, serviceName)
@@ -628,6 +634,7 @@ func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcf
 
 func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, logger *zap.SugaredLogger) (err error) {
 	// Get all config Secrets for this ProxyGroup.
+	// Get all Pods
 	secrets := &corev1.SecretList{}
 	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "config"))); err != nil {
 		return fmt.Errorf("failed to list config Secrets: %w", err)

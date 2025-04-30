@@ -10,10 +10,29 @@ const (
 // service name.
 type Configs map[string]Config
 
-type Mapping map[netip.Addr]netip.Addr
+func (cfgs *Configs) GetConfig(name string) *Config {
+	if cfgs == nil {
+		return nil
+	}
+	if cfg, ok := (*cfgs)[name]; ok {
+		return &cfg
+	}
+	return nil
+}
+
+type Status struct {
+	Configs Configs `json:"configs,omitempty"`
+	// PodIP is sufficiently unique to distinguish status that belongs to this Pod.
+	PodIP string `json:"podIP,omitempty"`
+}
+
+type Mapping struct {
+	VIPServiceIP netip.Addr `json:"VIPServiceIP"`
+	ClusterIP    netip.Addr `json:"ClusterIP"`
+}
 
 // Config is an ingress service configuration.
 type Config struct {
-	IPv4Mapping Mapping `json:"IPv4Mapping"`
-	IPv6Mapping Mapping `json:"IPv6Mapping"`
+	IPv4Mapping *Mapping `json:"IPv4Mapping,omitempty"`
+	IPv6Mapping *Mapping `json:"IPv6Mapping,omitempty"`
 }

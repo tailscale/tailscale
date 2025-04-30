@@ -54,7 +54,8 @@ const (
 	// well as the default HTTPS endpoint).
 	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
 
-	labelDomain = "tailscale.com/domain"
+	labelDomain              = "tailscale.com/domain"
+	managedVIPServiceComment = "This VIPService is managed by the Tailscale Kubernetes Operator, do not modify"
 )
 
 var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
@@ -314,7 +315,6 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		vipPorts = append(vipPorts, "80")
 	}
 
-	const managedVIPServiceComment = "This VIPService is managed by the Tailscale Kubernetes Operator, do not modify"
 	vipSvc := &tailscale.VIPService{
 		Name:        serviceName,
 		Tags:        tags,

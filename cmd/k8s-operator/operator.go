@@ -372,6 +372,8 @@ func runReconcilers(opts reconcilerOpts) {
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}).
 		Named("service-pg-reconciler").
+		// TODO: this watch does not seem to work- does not if ProxyGroup created later
+		// maybe need to watch the ProxyGroup
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
 		Complete(&HAServiceReconciler{

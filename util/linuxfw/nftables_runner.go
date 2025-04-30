@@ -555,6 +555,8 @@ type NetfilterRunner interface {
 	EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error
 
 	DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error
+	EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error
+	DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error
 
 	DeleteSvc(svc, tun string, targetIPs []netip.Addr, pm []PortMap) error
 
@@ -2052,4 +2054,11 @@ func snatRule(t *nftables.Table, ch *nftables.Chain, src, dst netip.Addr, meta [
 		},
 		UserData: meta,
 	}
+}
+
+func (nfr *nftablesRunner) EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	return nil
+}
+func (nfr *nftablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	return nil
 }

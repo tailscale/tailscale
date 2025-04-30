@@ -1,7 +1,20 @@
 apiVersion: tailscale.com/v1alpha1
 kind: ProxyGroup
 metadata:
-  name: egress-proxies
+  name: ingress-proxies
 spec:
-  type: egress
-  replicas: 3
+  type: ingress 
+  replicas: 2
+  proxyClass: prod
+---
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyClass
+metadata:
+  name: prod
+spec:
+  statefulSet:
+    pod:
+      tailscaleContainer:
+         env:
+         - name: TS_DEBUG_FIREWALL_MODE
+           value: "iptables"

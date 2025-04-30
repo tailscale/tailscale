@@ -24,10 +24,10 @@ func (i *iptablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip
 	if err != nil {
 		return fmt.Errorf("error checking if rule exists: %w", err)
 	}
-	if !exists {
-		return table.Append("nat", "PREROUTING", args...)
+	if exists {
+		return nil
 	}
-	return nil
+	return table.Append("nat", "PREROUTING", args...)
 }
 
 // DeleteMapRuleForSvc constructs a prerouting rule as would be created by
@@ -40,10 +40,38 @@ func (i *iptablesRunner) DeletePortMapRuleForSvc(svc, excludeI string, targetIP 
 	if err != nil {
 		return fmt.Errorf("error checking if rule exists: %w", err)
 	}
-	if exists {
-		return table.Delete("nat", "PREROUTING", args...)
+	if !exists {
+		return nil
 	}
-	return nil
+	return table.Delete("nat", "PREROUTING", args...)
+}
+
+// origDst is the VIPService IP address, dst is cluster Service address.
+func (i *iptablesRunner) EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	table := i.getIPTByAddr(dst)
+	args := argsForIngressRule(svcName, origDst, dst)
+	exists, err := table.Exists("nat", "PREROUTING", args...)
+	if err != nil {
+		return fmt.Errorf("error checking if rule exists: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	return table.Append("nat", "PREROUTING", args...)
+}
+
+// origDst is the VIPService IP address, dst is cluster Service address.
+func (i *iptablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	table := i.getIPTByAddr(dst)
+	args := argsForIngressRule(svcName, origDst, dst)
+	exists, err := table.Exists("nat", "PREROUTING", args...)
+	if err != nil {
+		return fmt.Errorf("error checking if rule exists: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	return table.Delete("nat", "PREROUTING", args...)
 }
 
 // DeleteSvc constructs all possible rules that would have been created by
@@ -72,8 +100,24 @@ func argsForPortMapRule(svc, excludeI string, targetIP netip.Addr, pm PortMap) [
 	}
 }
 
+func argsForIngressRule(svcName string, origDst, targetIP netip.Addr) []string {
+	c := commentForIngressSvc(svcName, origDst, targetIP)
+	return []string{
+		"--destination", origDst.String(),
+		"-m", "comment", "--comment", c,
+		"-j", "DNAT",
+		"--to-destination", targetIP.String(),
+	}
+}
+
 // commentForSvc generates a comment to be added to an iptables DNAT rule for a
 // service. This is for iptables debugging/readability purposes only.
 func commentForSvc(svc string, pm PortMap) string {
 	return fmt.Sprintf("%s:%s:%d -> %s:%d", svc, pm.Protocol, pm.MatchPort, pm.Protocol, pm.TargetPort)
+}
+
+// commentForIngressSvc generates a comment to be added to an iptables DNAT rule for a
+// service. This is for iptables debugging/readability purposes only.
+func commentForIngressSvc(svc string, vip, clusterIP netip.Addr) string {
+	return fmt.Sprintf("svc: %s, %s -> %s", svc, vip.String(), clusterIP.String())
 }
