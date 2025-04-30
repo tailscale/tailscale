@@ -247,6 +247,7 @@ func ensureIngressRulesAdded(cfgs map[string]ingressservices.Config, nfr linuxfw
 	}
 	return nil
 }
+
 func ensureIngressRulesDeleted(cfgs map[string]ingressservices.Config, nfr linuxfw.NetfilterRunner) error {
 	for serviceName, cfg := range cfgs {
 		f := func(svcName string, vipIP, clusterIP netip.Addr) error {

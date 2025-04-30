@@ -243,3 +243,61 @@ func protoFromString(s string) (uint8, error) {
 		return 0, fmt.Errorf("unrecognized protocol: %q", s)
 	}
 }
+
+func (n *nftablesRunner) EnsureDNATRuleForSvc(svc string, origDst, dst netip.Addr) error {
+	t, ch, err := n.ensurePreroutingChain(origDst)
+	if err != nil {
+		return fmt.Errorf("error ensuring chain for %s: %w", svc, err)
+	}
+	meta := svcRuleMeta(svc, origDst, dst)
+	rule, err := n.findRuleByMetadata(t, ch, meta)
+	if err != nil {
+		return fmt.Errorf("error looking up rule: %w", err)
+	}
+	if rule != nil {
+		return nil
+	}
+	rule = dnatRuleForChain(t, ch, origDst, dst, meta)
+	n.conn.InsertRule(rule)
+	return n.conn.Flush()
+}
+
+func (n *nftablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	table, err := n.getNFTByAddr(origDst)
+	if err != nil {
+		return fmt.Errorf("error setting up nftables for IP family of %s: %w", origDst, err)
+	}
+	t, err := getTableIfExists(n.conn, table.Proto, "nat")
+	if err != nil {
+		return fmt.Errorf("error checking if nat table exists: %w", err)
+	}
+	if t == nil {
+		return nil
+	}
+	ch, err := getChainFromTable(n.conn, t, "PREROUTING")
+	if errors.Is(err, errorChainNotFound{tableName: "nat", chainName: "PREROUTING"}) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("error checking if chain PREROUTING exists: %w", err)
+	}
+	meta := svcRuleMeta(svcName, origDst, dst)
+	rule, err := n.findRuleByMetadata(t, ch, meta)
+	if err != nil {
+		return fmt.Errorf("error checking if rule exists: %w", err)
+	}
+	if rule == nil {
+		return nil
+	}
+	if err := n.conn.DelRule(rule); err != nil {
+		return fmt.Errorf("error deleting rule: %w", err)
+	}
+	return n.conn.Flush()
+}
+
+// svcRuleMeta generates metadata for a rule.
+// This metadata can then be used to find the rule.
+// https://github.com/google/nftables/issues/48
+func svcRuleMeta(svcName string, origDst, dst netip.Addr) []byte {
+	return []byte(fmt.Sprintf("svc:%s,VIP:%s,ClusterIP:%s", svcName, origDst.String(), dst.String()))
+}
