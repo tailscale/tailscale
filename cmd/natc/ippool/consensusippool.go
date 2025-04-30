@@ -42,16 +42,8 @@ type ConsensusIPPool struct {
 // DomainForIP is part of the IPPool interface. It returns a domain for a given IP address, if we have
 // previously assigned the IP address to a domain for the node that is asking. Otherwise it logs and returns the empty string.
 func (ipp *ConsensusIPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr, updatedAt time.Time) (string, bool) {
-	pm, ok := ipp.perPeerMap.Load(from)
+	ww, ok := ipp.retryDomainLookup(from, addr, 0)
 	if !ok {
-		log.Printf("DomainForIP: peer state absent for: %d", from)
-		return "", false
-	}
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	ww, ok := pm.addrToDomain.Lookup(addr)
-	if !ok {
-		log.Printf("DomainForIP: peer state doesn't recognize addr: %s", addr)
 		return "", false
 	}
 	go func() {
@@ -61,6 +53,37 @@ func (ipp *ConsensusIPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr, up
 		}
 	}()
 	return ww.Domain, true
+}
+
+// retryDomainLookup tries to lookup the domain for this IP+node. If it can't find the node or the IP it
+// tries again up to 5 times, with exponential backoff.
+// The raft lib will tell the leader that a log entry has been applied to a quorum of nodes, sometimes before the
+// log entry has been applied to the local state. This means that in our case the traffic on an IP can arrive before
+// we have the domain for which that IP applies stored.
+func (ipp *ConsensusIPPool) retryDomainLookup(from tailcfg.NodeID, addr netip.Addr, n int) (whereWhen, bool) {
+	ps, foundPeerState := ipp.perPeerMap.Load(from)
+	if foundPeerState {
+		ps.mu.Lock()
+		ww, foundDomain := ps.addrToDomain.Lookup(addr)
+		ps.mu.Unlock()
+		if foundDomain {
+			return ww, true
+		}
+	}
+	if n > 4 {
+		if !foundPeerState {
+			log.Printf("DomainForIP: peer state absent for: %d", from)
+		} else {
+			log.Printf("DomainForIP: peer state doesn't recognize addr: %s", addr)
+		}
+		return whereWhen{}, false
+	}
+	timeToWait := 100
+	for i := 0; i < n; i++ {
+		timeToWait *= 2
+	}
+	time.Sleep(time.Millisecond * time.Duration(timeToWait))
+	return ipp.retryDomainLookup(from, addr, n+1)
 }
 
 type markLastUsedArgs struct {
