@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/internal/client/tailscale"
+	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/ingressservices"
@@ -351,9 +352,12 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 	}
 
+	logger.Infof("updating AdvertiseServices config")
 	// 5. Update tailscaled's AdvertiseServices config, which should add the VIPService
 	// IPs to the ProxyGroup Pods' AllowedIPs in the next netmap update if approved.
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, mode, logger); err != nil {
+	// NOTE (ChaosInTheCRD): afaik, we conclusively know here that we *want* to advertise (we don't have to wait for certs or anything)
+	// We do however need to ensure that the service should be unadvertised during cleanup
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, true, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
 	}
 
@@ -632,7 +636,8 @@ func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcf
 	return true, r.tsClient.CreateOrUpdateVIPService(ctx, svc)
 }
 
-func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, logger *zap.SugaredLogger) (err error) {
+func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, shouldBeAdvertised bool, logger *zap.SugaredLogger) (err error) {
+	logger.Debugf("checking advertisement for service '%s'", serviceName)
 	// Get all config Secrets for this ProxyGroup.
 	// Get all Pods
 	secrets := &corev1.SecretList{}
@@ -640,44 +645,43 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 		return fmt.Errorf("failed to list config Secrets: %w", err)
 	}
 
-	// for _, secret := range secrets.Items {
-	// 	var updated bool
-	// 	for fileName, confB := range secret.Data {
-	// 		var conf ipn.ConfigVAlpha
-	// 		if err := json.Unmarshal(confB, &conf); err != nil {
-	// 			return fmt.Errorf("error unmarshalling ProxyGroup config: %w", err)
-	// 		}
-	//
-	// 		// Update the services to advertise if required.
-	// 		idx := slices.Index(conf.AdvertiseServices, serviceName.String())
-	// 		isAdvertised := idx >= 0
-	// 		switch {
-	// 		case isAdvertised == shouldBeAdvertised:
-	// 			// Already up to date.
-	// 			continue
-	// 		case isAdvertised:
-	// 			// Needs to be removed.
-	// 			conf.AdvertiseServices = slices.Delete(conf.AdvertiseServices, idx, idx+1)
-	// 		case shouldBeAdvertised:
-	// 			// Needs to be added.
-	// 			conf.AdvertiseServices = append(conf.AdvertiseServices, serviceName.String())
-	// 		}
-	//
-	// 		// Update the Secret.
-	// 		confB, err := json.Marshal(conf)
-	// 		if err != nil {
-	// 			return fmt.Errorf("error marshalling ProxyGroup config: %w", err)
-	// 		}
-	// 		mak.Set(&secret.Data, fileName, confB)
-	// 		updated = true
-	// 	}
-	//
-	// 	if updated {
-	// 		if err := a.Update(ctx, &secret); err != nil {
-	// 			return fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
-	// 		}
-	// 	}
-	// }
+	for _, secret := range secrets.Items {
+		var updated bool
+		for fileName, confB := range secret.Data {
+			var conf ipn.ConfigVAlpha
+			if err := json.Unmarshal(confB, &conf); err != nil {
+				return fmt.Errorf("error unmarshalling ProxyGroup config: %w", err)
+			}
+
+			idx := slices.Index(conf.AdvertiseServices, serviceName.String())
+			isAdvertised := idx >= 0
+			switch {
+			case !isAdvertised && !shouldBeAdvertised:
+				logger.Debugf("service '%s' shouldn't be advertised", serviceName)
+				continue
+			case isAdvertised && !shouldBeAdvertised:
+				logger.Debugf("deleting advertisement for service '%s'", serviceName)
+				conf.AdvertiseServices = slices.Delete(conf.AdvertiseServices, idx, idx+1)
+			case shouldBeAdvertised:
+				logger.Debugf("advertising service '%s' in secret with name '%s'", serviceName, secret.DeepCopy().Name)
+				conf.AdvertiseServices = append(conf.AdvertiseServices, serviceName.String())
+			}
+
+			confB, err := json.Marshal(conf)
+			if err != nil {
+				return fmt.Errorf("error marshalling ProxyGroup config: %w", err)
+			}
+			mak.Set(&secret.Data, fileName, confB)
+			updated = true
+		}
+
+		if updated {
+			logger.Debugf("updating secret with name '%s'", &secret.Name)
+			if err := a.Update(ctx, &secret); err != nil {
+				return fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
+			}
+		}
+	}
 
 	return nil
 }
