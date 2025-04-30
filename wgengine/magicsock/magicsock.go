@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"expvar"
 	"fmt"
@@ -1707,6 +1708,45 @@ const (
 	discoRXPathRawSocket discoRXPath = "raw socket"
 )
 
+const discoHeaderLen = len(disco.Magic) + key.DiscoPublicRawLen
+
+// isDiscoMaybeGeneve reports whether msg is a Tailscale Disco protocol
+// message, and if true, whether it is encapsulated by a Geneve header.
+//
+// isGeneveEncap is only relevant when isDiscoMsg is true.
+//
+// Naked Disco, Geneve followed by Disco, and naked WireGuard can be confidently
+// distinguished based on the following:
+//  1. [disco.Magic] is sufficiently non-overlapping with a Geneve protocol
+//     field value of [packet.GeneveProtocolDisco].
+//  2. [disco.Magic] is sufficiently non-overlapping with the first 4 bytes of
+//     a WireGuard packet.
+//  3. [packet.GeneveHeader] with a Geneve protocol field value of
+//     [packet.GeneveProtocolDisco] is sufficiently non-overlapping with the
+//     first 4 bytes of a WireGuard packet.
+func isDiscoMaybeGeneve(msg []byte) (isDiscoMsg bool, isGeneveEncap bool) {
+	if len(msg) < discoHeaderLen {
+		return false, false
+	}
+	if string(msg[:len(disco.Magic)]) == disco.Magic {
+		return true, false
+	}
+	if len(msg) < packet.GeneveFixedHeaderLength+discoHeaderLen {
+		return false, false
+	}
+	if msg[0]&0xC0 != 0 || // version bits that we always transmit as 0s
+		msg[1]&0x3F != 0 || // reserved bits that we always transmit as 0s
+		binary.BigEndian.Uint16(msg[2:4]) != packet.GeneveProtocolDisco ||
+		msg[7] != 0 { // reserved byte that we always transmit as 0
+		return false, false
+	}
+	msg = msg[packet.GeneveFixedHeaderLength:]
+	if string(msg[:len(disco.Magic)]) == disco.Magic {
+		return true, true
+	}
+	return false, false
+}
+
 // handleDiscoMessage handles a discovery message and reports whether
 // msg was a Tailscale inter-node discovery message.
 //
@@ -1722,18 +1762,16 @@ const (
 // it was received from at the DERP layer. derpNodeSrc is zero when received
 // over UDP.
 func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc key.NodePublic, via discoRXPath) (isDiscoMsg bool) {
-	const headerLen = len(disco.Magic) + key.DiscoPublicRawLen
-	if len(msg) < headerLen || string(msg[:len(disco.Magic)]) != disco.Magic {
-		return false
+	isDiscoMsg, isGeneveEncap := isDiscoMaybeGeneve(msg)
+	if !isDiscoMsg {
+		return
+	}
+	if isGeneveEncap {
+		// TODO(jwhited): decode Geneve header
+		msg = msg[packet.GeneveFixedHeaderLength:]
 	}
 
-	// If the first four parts are the prefix of disco.Magic
-	// (0x5453f09f) then it's definitely not a valid WireGuard
-	// packet (which starts with little-endian uint32 1, 2, 3, 4).
-	// Use naked returns for all following paths.
-	isDiscoMsg = true
-
-	sender := key.DiscoPublicFromRaw32(mem.B(msg[len(disco.Magic):headerLen]))
+	sender := key.DiscoPublicFromRaw32(mem.B(msg[len(disco.Magic):discoHeaderLen]))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1751,6 +1789,10 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	}
 
 	if !c.peerMap.knownPeerDiscoKey(sender) {
+		// Geneve encapsulated disco used for udp relay handshakes are not known
+		// "peer" keys as they are dynamically discovered by UDP relay endpoint
+		// allocation or [disco.CallMeMaybeVia] reception.
+		// TODO(jwhited): handle relay handshake messsages instead of early return
 		metricRecvDiscoBadPeer.Add(1)
 		if debugDisco() {
 			c.logf("magicsock: disco: ignoring disco-looking frame, don't know of key %v", sender.ShortString())
@@ -1774,7 +1816,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 
 	di := c.discoInfoLocked(sender)
 
-	sealedBox := msg[headerLen:]
+	sealedBox := msg[discoHeaderLen:]
 	payload, ok := di.sharedKey.Open(sealedBox)
 	if !ok {
 		// This might be have been intended for a previous
