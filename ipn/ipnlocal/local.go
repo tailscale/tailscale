@@ -1463,15 +1463,30 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 	return b.currentNode().PeerCaps(src)
 }
 
+// AppendMatchingPeers returns base with all peers that match pred appended.
+//
+// It acquires b.mu to read the netmap but releases it before calling pred.
 func (b *localNodeContext) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
+	var peers []tailcfg.NodeView
+
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	ret := base
-	if b.netMap == nil {
-		return ret
+	if b.netMap != nil {
+		// All fields on b.netMap are immutable, so this is
+		// safe to copy and use outside the lock.
+		peers = b.netMap.Peers
 	}
-	for _, peer := range b.netMap.Peers {
-		if pred(peer) {
+	b.mu.Unlock()
+
+	ret := base
+	for _, peer := range peers {
+		// The peers in b.netMap don't contain updates made via
+		// UpdateNetmapDelta. So only use PeerView in b.netMap for its NodeID,
+		// and then look up the latest copy in b.peers which is updated in
+		// response to UpdateNetmapDelta edits.
+		b.mu.Lock()
+		peer, ok := b.peers[peer.ID()]
+		b.mu.Unlock()
+		if ok && pred(peer) {
 			ret = append(ret, peer)
 		}
 	}
