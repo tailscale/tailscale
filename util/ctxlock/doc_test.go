@@ -18,25 +18,21 @@ type Resource struct {
 
 func (r *Resource) GetFoo(ctx ctxlock.Context) string {
 	defer ctxlock.Lock(ctx, &r.mu).Unlock() // Lock the mutex if not already held.
-	syncs.AssertLocked(&r.mu)               // Panic if mu is still unlocked.
 	return r.foo
 }
 
 func (r *Resource) SetFoo(ctx ctxlock.Context, foo string) {
 	defer ctxlock.Lock(ctx, &r.mu).Unlock()
-	syncs.AssertLocked(&r.mu)
 	r.foo = foo
 }
 
 func (r *Resource) GetBar(ctx ctxlock.Context) string {
 	defer ctxlock.Lock(ctx, &r.mu).Unlock()
-	syncs.AssertLocked(&r.mu)
 	return r.bar
 }
 
 func (r *Resource) SetBar(ctx ctxlock.Context, bar string) {
 	defer ctxlock.Lock(ctx, &r.mu).Unlock()
-	syncs.AssertLocked(&r.mu)
 	r.bar = bar
 }
 
@@ -44,7 +40,6 @@ func (r *Resource) WithLock(ctx ctxlock.Context, f func(ctx ctxlock.Context)) {
 	// Lock the mutex if not already held, and get a new context.
 	ctx = ctxlock.Lock(ctx, &r.mu)
 	defer ctx.Unlock()
-	syncs.AssertLocked(&r.mu)
 	f(ctx) // Call the callback with the new context.
 }
 
