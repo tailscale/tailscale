@@ -134,11 +134,12 @@ func newHarness(t *testing.T) *Harness {
 	loginServer := fmt.Sprintf("http://%s", ln.Addr())
 	t.Logf("loginServer: %s", loginServer)
 
+	binaries := integration.GetBinaries(t)
 	h := &Harness{
 		pubKey:         string(pubkey),
-		binaryDir:      integration.BinaryDir(t),
-		cli:            integration.TailscaleBinary(t),
-		daemon:         integration.TailscaledBinary(t),
+		binaryDir:      binaries.Dir,
+		cli:            binaries.Tailscale.Path,
+		daemon:         binaries.Tailscaled.Path,
 		signer:         signer,
 		loginServerURL: loginServer,
 		cs:             cs,
