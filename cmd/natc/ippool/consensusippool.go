@@ -162,11 +162,11 @@ func (ipp *ConsensusIPPool) IPForDomain(nid tailcfg.NodeID, domain string) (neti
 	}
 	result, err := ipp.consensus.ExecuteCommand(c)
 	if err != nil {
-		log.Printf("IpForDomain: raft error executing command: %v", err)
+		log.Printf("IPForDomain: raft error executing command: %v", err)
 		return netip.Addr{}, err
 	}
 	if result.Err != nil {
-		log.Printf("IpForDomain: error returned from state machine: %v", err)
+		log.Printf("IPForDomain: error returned from state machine: %v", err)
 		return netip.Addr{}, result.Err
 	}
 	var addr netip.Addr
