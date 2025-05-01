@@ -49,7 +49,6 @@ func TestMain(m *testing.M) {
 	os.Setenv("TS_DISABLE_UPNP", "true")
 	flag.Parse()
 	v := m.Run()
-	CleanupBinaries()
 	if v != 0 {
 		os.Exit(v)
 	}
