@@ -38,10 +38,25 @@ import (
 	"tailscale.com/util/set"
 )
 
+// ensure LoadBalancer Service's status is set
+// ensure the right conditions on Services are set
+// reconcile on proxygroup changes
+// metrics
+// unit tests - operator
+// unit tests - containerboot
+// unit tests - iptables
+// unit tests - nftables
+// multi-cluster
+// set finalizer
+// cleanup
+// hostname change - cleanup
+// failover (testing)
+// can we refactor?
+
 // var gaugePGServiceResources = clientmetric.NewGauge(kubetypes.MetricServicePGResourceCount)
 
-// HAServiceReconciler is a controller that reconciles kubernetes services with tailscale annotations
-// should be exposed on an ingress ProxyGroup (in HA mode).
+// HAServiceReconciler is a controller that reconciles Tailscale Kubernetes
+// Services that should be exposed on an ingress ProxyGroup (in HA mode).
 type HAServiceReconciler struct {
 	client.Client
 
@@ -64,31 +79,11 @@ type HAServiceReconciler struct {
 	managedServices set.Slice[types.UID]
 }
 
-func (r *HAServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
-	proxyGroup := svc.Annotations[AnnotationProxyGroup]
-	return r.shouldExpose(svc) && proxyGroup != ""
-}
-
-func (r *HAServiceReconciler) shouldExpose(svc *corev1.Service) bool {
-	return r.shouldExposeClusterIP(svc)
-}
-
-func (r *HAServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
-	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
-		return false
-	}
-	return isTailscaleLoadBalancerService(svc, r.isDefaultLoadBalancer) || hasExposeAnnotation(svc)
-}
-
 // Reconcile reconciles Services that should be exposed over Tailscale in HA
 // mode (on a ProxyGroup). It looks at all Servicees with
 // tailscale.com/proxy-group annotation. For each such Service, it ensures that
 // a VIPService named after the hostname of the Service exists and is up to
-// date. It also ensures that the serve config for the ingress ProxyGroup is
-// updated to route traffic for the VIPService to the Service's backend
-// Services.  Service hostname change also results in the VIPService for the
-// previous hostname being cleaned up and a new VIPService being created for the
-// new hostname.
+// date.
 // HA Servicees support multi-cluster Service setup.
 // Each VIPService contains a list of owner references that uniquely identify
 // the Service resource and the operator.  When an Service that acts as a
@@ -192,22 +187,23 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 
-	// TODO (ChaosInTheCRD): Write cleanup logic
-	// if !slices.Contains(ing.Finalizers, FinalizerNamePG) {
-	// 	// This log line is printed exactly once during initial provisioning,
-	// 	// because once the finalizer is in place this block gets skipped. So,
-	// 	// this is a nice place to tell the operator that the high level,
-	// 	// multi-reconcile operation is underway.
-	// 	logger.Infof("exposing Ingress over tailscale")
-	// 	ing.Finalizers = append(ing.Finalizers, FinalizerNamePG)
-	// 	if err := r.Update(ctx, ing); err != nil {
-	// 		return false, fmt.Errorf("failed to add finalizer: %w", err)
-	// 	}
-	// 	r.mu.Lock()
-	// 	r.managedIngresses.Add(ing.UID)
-	// 	gaugePGIngressResources.Set(int64(r.managedIngresses.Len()))
-	// 	r.mu.Unlock()
-	// }
+	const finalizerName = "tailscale.com/service-pg-finalizer"
+
+	if !slices.Contains(svc.Finalizers, finalizerName) {
+		// This log line is printed exactly once during initial provisioning,
+		// because once the finalizer is in place this block gets skipped. So,
+		// this is a nice place to tell the operator that the high level,
+		// multi-reconcile operation is underway.
+		logger.Infof("exposing Service over tailscale")
+		svc.Finalizers = append(svc.Finalizers, finalizerName)
+		if err := r.Update(ctx, svc); err != nil {
+			return false, fmt.Errorf("failed to add finalizer: %w", err)
+		}
+		// r.mu.Lock()
+		// r.managedIngresses.Add(ing.UID)
+		// gaugePGIngressResources.Set(int64(r.managedIngresses.Len()))
+		// r.mu.Unlock()
+	}
 	//
 	// 1. Ensure that if Ingress' hostname has changed, any VIPService
 	// resources corresponding to the old hostname are cleaned up.
@@ -420,6 +416,77 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	return svcsChanged, nil
 }
 
+// maybeCleanup ensures that any resources, such as a VIPService created for this Service, are cleaned up when the
+// Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the VIPService is only
+// deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
+// corresponding to this Service.
+func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcChanged bool, err error) {
+	logger.Debugf("Ensuring any resources for Service are cleaned up")
+	ix := slices.Index(svc.Finalizers, FinalizerNamePG)
+	if ix < 0 {
+		logger.Debugf("no finalizer, nothing to do")
+		return false, nil
+	}
+	logger.Infof("Ensuring that VIPService %q configuration is cleaned up", hostname)
+	//
+	// // Ensure that if cleanup succeeded Ingress finalizers are removed.
+	// defer func() {
+	// 	if err != nil {
+	// 		return
+	// 	}
+	// 	if e := r.deleteFinalizer(ctx, ing, logger); err != nil {
+	// 		err = errors.Join(err, e)
+	// 	}
+	// }()
+	//
+	// // 1. Check if there is a VIPService associated with this Ingress.
+	// pg := ing.Annotations[AnnotationProxyGroup]
+	// cm, cfg, err := r.proxyGroupServeConfig(ctx, pg)
+	// if err != nil {
+	// 	return false, fmt.Errorf("error getting ProxyGroup serve config: %w", err)
+	// }
+	// serviceName := tailcfg.ServiceName("svc:" + hostname)
+	//
+	// // VIPService is always first added to serve config and only then created in the Tailscale API, so if it is not
+	// // found in the serve config, we can assume that there is no VIPService. (If the serve config does not exist at
+	// // all, it is possible that the ProxyGroup has been deleted before cleaning up the Ingress, so carry on with
+	// // cleanup).
+	// if cfg != nil && cfg.Services != nil && cfg.Services[serviceName] == nil {
+	// 	return false, nil
+	// }
+	//
+	// // 2. Clean up the VIPService resources.
+	// svcChanged, err = r.cleanupVIPService(ctx, serviceName, logger)
+	// if err != nil {
+	// 	return false, fmt.Errorf("error deleting VIPService: %w", err)
+	// }
+	//
+	// // 3. Clean up any cluster resources
+	// if err := r.cleanupCertResources(ctx, pg, serviceName); err != nil {
+	// 	return false, fmt.Errorf("failed to clean up cert resources: %w", err)
+	// }
+	//
+	// if cfg == nil || cfg.Services == nil { // user probably deleted the ProxyGroup
+	// 	return svcChanged, nil
+	// }
+	//
+	// // 4. Unadvertise the VIPService in tailscaled config.
+	// if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg, serviceName, serviceAdvertisementOff, logger); err != nil {
+	// 	return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
+	// }
+	//
+	// // 5. Remove the VIPService from the serve config for the ProxyGroup.
+	// logger.Infof("Removing VIPService %q from serve config for ProxyGroup %q", hostname, pg)
+	// delete(cfg.Services, serviceName)
+	// cfgBytes, err := json.Marshal(cfg)
+	// if err != nil {
+	// 	return false, fmt.Errorf("error marshaling serve config: %w", err)
+	// }
+	// mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
+	// return svcChanged, r.Update(ctx, cm)
+	return svcChanged, nil
+}
+
 // VIPServices that are associated with the provided ProxyGroup and no longer managed this operator's instance are deleted, if not owned by other operator instances, else the owner reference is cleaned up.
 // Returns true if the operation resulted in existing VIPService updates (owner reference removal).
 func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyGroupName string, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
@@ -487,77 +554,6 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 	return svcsChanged, nil
 }
 
-// maybeCleanup ensures that any resources, such as a VIPService created for this Ingress, are cleaned up when the
-// Ingress is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the VIPService is only
-// deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
-// corresponding to this Ingress.
-func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger) (svcChanged bool, err error) {
-	// logger.Debugf("Ensuring any resources for Ingress are cleaned up")
-	// ix := slices.Index(ing.Finalizers, FinalizerNamePG)
-	// if ix < 0 {
-	// 	logger.Debugf("no finalizer, nothing to do")
-	// 	return false, nil
-	// }
-	// logger.Infof("Ensuring that VIPService %q configuration is cleaned up", hostname)
-	//
-	// // Ensure that if cleanup succeeded Ingress finalizers are removed.
-	// defer func() {
-	// 	if err != nil {
-	// 		return
-	// 	}
-	// 	if e := r.deleteFinalizer(ctx, ing, logger); err != nil {
-	// 		err = errors.Join(err, e)
-	// 	}
-	// }()
-	//
-	// // 1. Check if there is a VIPService associated with this Ingress.
-	// pg := ing.Annotations[AnnotationProxyGroup]
-	// cm, cfg, err := r.proxyGroupServeConfig(ctx, pg)
-	// if err != nil {
-	// 	return false, fmt.Errorf("error getting ProxyGroup serve config: %w", err)
-	// }
-	// serviceName := tailcfg.ServiceName("svc:" + hostname)
-	//
-	// // VIPService is always first added to serve config and only then created in the Tailscale API, so if it is not
-	// // found in the serve config, we can assume that there is no VIPService. (If the serve config does not exist at
-	// // all, it is possible that the ProxyGroup has been deleted before cleaning up the Ingress, so carry on with
-	// // cleanup).
-	// if cfg != nil && cfg.Services != nil && cfg.Services[serviceName] == nil {
-	// 	return false, nil
-	// }
-	//
-	// // 2. Clean up the VIPService resources.
-	// svcChanged, err = r.cleanupVIPService(ctx, serviceName, logger)
-	// if err != nil {
-	// 	return false, fmt.Errorf("error deleting VIPService: %w", err)
-	// }
-	//
-	// // 3. Clean up any cluster resources
-	// if err := r.cleanupCertResources(ctx, pg, serviceName); err != nil {
-	// 	return false, fmt.Errorf("failed to clean up cert resources: %w", err)
-	// }
-	//
-	// if cfg == nil || cfg.Services == nil { // user probably deleted the ProxyGroup
-	// 	return svcChanged, nil
-	// }
-	//
-	// // 4. Unadvertise the VIPService in tailscaled config.
-	// if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg, serviceName, serviceAdvertisementOff, logger); err != nil {
-	// 	return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
-	// }
-	//
-	// // 5. Remove the VIPService from the serve config for the ProxyGroup.
-	// logger.Infof("Removing VIPService %q from serve config for ProxyGroup %q", hostname, pg)
-	// delete(cfg.Services, serviceName)
-	// cfgBytes, err := json.Marshal(cfg)
-	// if err != nil {
-	// 	return false, fmt.Errorf("error marshaling serve config: %w", err)
-	// }
-	// mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
-	// return svcChanged, r.Update(ctx, cm)
-	return svcChanged, nil
-}
-
 func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, ing *networkingv1.Ingress, logger *zap.SugaredLogger) error {
 	// found := false
 	// ing.Finalizers = slices.DeleteFunc(ing.Finalizers, func(f string) bool {
@@ -577,6 +573,22 @@ func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, ing *networki
 	// r.managedIngresses.Remove(ing.UID)
 	// gaugePGIngressResources.Set(int64(r.managedIngresses.Len()))
 	return nil
+}
+
+func (r *HAServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
+	proxyGroup := svc.Annotations[AnnotationProxyGroup]
+	return r.shouldExpose(svc) && proxyGroup != ""
+}
+
+func (r *HAServiceReconciler) shouldExpose(svc *corev1.Service) bool {
+	return r.shouldExposeClusterIP(svc)
+}
+
+func (r *HAServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
+	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
+		return false
+	}
+	return isTailscaleLoadBalancerService(svc, r.isDefaultLoadBalancer) || hasExposeAnnotation(svc)
 }
 
 // tailnetCertDomain returns the base domain (TCD) of the current tailnet.
