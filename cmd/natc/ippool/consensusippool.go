@@ -86,56 +86,6 @@ func (ipp *ConsensusIPPool) retryDomainLookup(from tailcfg.NodeID, addr netip.Ad
 	return ipp.retryDomainLookup(from, addr, n+1)
 }
 
-type markLastUsedArgs struct {
-	NodeID    tailcfg.NodeID
-	Addr      netip.Addr
-	Domain    string
-	UpdatedAt time.Time
-}
-
-// executeMarkLastUsed parses a markLastUsed log entry and applies it.
-func (ipp *ConsensusIPPool) executeMarkLastUsed(bs []byte) tsconsensus.CommandResult {
-	var args markLastUsedArgs
-	err := json.Unmarshal(bs, &args)
-	if err != nil {
-		return tsconsensus.CommandResult{Err: err}
-	}
-	err = ipp.applyMarkLastUsed(args.NodeID, args.Addr, args.Domain, args.UpdatedAt)
-	if err != nil {
-		return tsconsensus.CommandResult{Err: err}
-	}
-	return tsconsensus.CommandResult{}
-}
-
-// applyMarkLastUsed applies the arguments from the log entry to the state. It updates an entry in the AddrToDomain
-// map with a new LastUsed timestamp.
-// applyMarkLastUsed is not safe for concurrent access. It's only called from raft which will
-// not call it concurrently.
-func (ipp *ConsensusIPPool) applyMarkLastUsed(from tailcfg.NodeID, addr netip.Addr, domain string, updatedAt time.Time) error {
-	ps, ok := ipp.perPeerMap.Load(from)
-	if !ok {
-		// There's nothing to mark. But this is unexpected, because we mark last used after we do things with peer state.
-		log.Printf("applyMarkLastUsed: could not find peer state, nodeID: %s", from)
-		return nil
-	}
-	ww, ok := ps.addrToDomain.Lookup(addr)
-	if !ok {
-		// The peer state didn't have an entry for the IP address (possibly it expired), so there's nothing to mark.
-		return nil
-	}
-	if ww.Domain != domain {
-		// The IP address expired and was reused for a new domain. Don't mark.
-		return nil
-	}
-	if ww.LastUsed.After(updatedAt) {
-		// This has been marked more recently. Don't mark.
-		return nil
-	}
-	ww.LastUsed = updatedAt
-	ps.addrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), ww)
-	return nil
-}
-
 // StartConsensus is part of the IPPool interface. It starts the raft background routines that handle consensus.
 func (ipp *ConsensusIPPool) StartConsensus(ctx context.Context, ts *tsnet.Server, clusterTag string) error {
 	cfg := tsconsensus.DefaultConfig()
@@ -222,6 +172,56 @@ func (ipp *ConsensusIPPool) IPForDomain(nid tailcfg.NodeID, domain string) (neti
 	var addr netip.Addr
 	err = json.Unmarshal(result.Result, &addr)
 	return addr, err
+}
+
+type markLastUsedArgs struct {
+	NodeID    tailcfg.NodeID
+	Addr      netip.Addr
+	Domain    string
+	UpdatedAt time.Time
+}
+
+// executeMarkLastUsed parses a markLastUsed log entry and applies it.
+func (ipp *ConsensusIPPool) executeMarkLastUsed(bs []byte) tsconsensus.CommandResult {
+	var args markLastUsedArgs
+	err := json.Unmarshal(bs, &args)
+	if err != nil {
+		return tsconsensus.CommandResult{Err: err}
+	}
+	err = ipp.applyMarkLastUsed(args.NodeID, args.Addr, args.Domain, args.UpdatedAt)
+	if err != nil {
+		return tsconsensus.CommandResult{Err: err}
+	}
+	return tsconsensus.CommandResult{}
+}
+
+// applyMarkLastUsed applies the arguments from the log entry to the state. It updates an entry in the AddrToDomain
+// map with a new LastUsed timestamp.
+// applyMarkLastUsed is not safe for concurrent access. It's only called from raft which will
+// not call it concurrently.
+func (ipp *ConsensusIPPool) applyMarkLastUsed(from tailcfg.NodeID, addr netip.Addr, domain string, updatedAt time.Time) error {
+	ps, ok := ipp.perPeerMap.Load(from)
+	if !ok {
+		// There's nothing to mark. But this is unexpected, because we mark last used after we do things with peer state.
+		log.Printf("applyMarkLastUsed: could not find peer state, nodeID: %s", from)
+		return nil
+	}
+	ww, ok := ps.addrToDomain.Lookup(addr)
+	if !ok {
+		// The peer state didn't have an entry for the IP address (possibly it expired), so there's nothing to mark.
+		return nil
+	}
+	if ww.Domain != domain {
+		// The IP address expired and was reused for a new domain. Don't mark.
+		return nil
+	}
+	if ww.LastUsed.After(updatedAt) {
+		// This has been marked more recently. Don't mark.
+		return nil
+	}
+	ww.LastUsed = updatedAt
+	ps.addrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), ww)
+	return nil
 }
 
 // markLastUsed executes a markLastUsed command on the leader with raft.
