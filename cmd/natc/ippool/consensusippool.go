@@ -286,28 +286,28 @@ func (ipp *ConsensusIPPool) executeCheckoutAddr(bs []byte) tsconsensus.CommandRe
 // It is not safe for concurrent access (it's only called from raft, which will not call concurrently
 // so that's fine).
 func (ipp *ConsensusIPPool) applyCheckoutAddr(nid tailcfg.NodeID, domain string, reuseDeadline, updatedAt time.Time) (netip.Addr, error) {
-	pm, _ := ipp.perPeerMap.LoadOrStore(nid, &consensusPerPeerState{
+	ps, _ := ipp.perPeerMap.LoadOrStore(nid, &consensusPerPeerState{
 		addrToDomain: &bart.Table[whereWhen]{},
 	})
-	if existing, ok := pm.domainToAddr[domain]; ok {
-		ww, ok := pm.addrToDomain.Lookup(existing)
+	if existing, ok := ps.domainToAddr[domain]; ok {
+		ww, ok := ps.addrToDomain.Lookup(existing)
 		if ok {
 			ww.LastUsed = updatedAt
-			pm.addrToDomain.Insert(netip.PrefixFrom(existing, existing.BitLen()), ww)
+			ps.addrToDomain.Insert(netip.PrefixFrom(existing, existing.BitLen()), ww)
 			return existing, nil
 		} else {
 			log.Printf("applyCheckoutAddr: data out of sync, allocating new IP")
 		}
 	}
-	addr, wasInUse, previousDomain, err := pm.unusedIPV4(ipp.IPSet, reuseDeadline)
+	addr, wasInUse, previousDomain, err := ps.unusedIPV4(ipp.IPSet, reuseDeadline)
 	if err != nil {
 		return netip.Addr{}, err
 	}
-	mak.Set(&pm.domainToAddr, domain, addr)
+	mak.Set(&ps.domainToAddr, domain, addr)
 	if wasInUse {
-		delete(pm.domainToAddr, previousDomain)
+		delete(ps.domainToAddr, previousDomain)
 	}
-	pm.addrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), whereWhen{Domain: domain, LastUsed: updatedAt})
+	ps.addrToDomain.Insert(netip.PrefixFrom(addr, addr.BitLen()), whereWhen{Domain: domain, LastUsed: updatedAt})
 	return addr, nil
 }
 
