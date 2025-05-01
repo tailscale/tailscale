@@ -194,8 +194,8 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		if !p.Valid() || p.Hostinfo().OS() == "tvOS" {
 			return false
 		}
-		if self != p.User() {
-			return false
+		if self == p.User() {
+			return true
 		}
 		if p.Addresses().Len() != 0 && cn.PeerHasCap(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
 			// Explicitly noted in the netmap ACL caps as a target.
