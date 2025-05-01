@@ -31,7 +31,7 @@ type ingressProxy struct {
 	kc          kubeclient.Client // never nil
 	stateSecret string            // name of the kube state Secret
 
-	podIP string // never empty string
+	podIP string // never empty
 }
 
 func (ep *ingressProxy) run(ctx context.Context, opts ingressProxyOpts) error {
@@ -39,8 +39,6 @@ func (ep *ingressProxy) run(ctx context.Context, opts ingressProxyOpts) error {
 	ep.configure(opts)
 	var tickChan <-chan time.Time
 	var eventChan <-chan fsnotify.Event
-	// TODO (irbekrm): take a look if this can be pulled into a single func
-	// shared with serve config loader.
 	if w, err := fsnotify.NewWatcher(); err != nil {
 		log.Printf("failed to create fsnotify watcher, timer-only mode: %v", err)
 		ticker := time.NewTicker(5 * time.Second)
@@ -148,7 +146,6 @@ func (ep *ingressProxy) getRulesToAdd(cfgs *ingressservices.Configs, status *ing
 }
 
 func (ep *ingressProxy) syncIngressConfigs(cfgs *ingressservices.Configs, status *ingressservices.Status) error {
-	// Add new services, update rules for any that have changed.
 	rulesToAdd := ep.getRulesToAdd(cfgs, status)
 	rulesToDelete := ep.getRulesToDelete(cfgs, status)
 
@@ -158,11 +155,9 @@ func (ep *ingressProxy) syncIngressConfigs(cfgs *ingressservices.Configs, status
 	if err := ensureIngressRulesAdded(rulesToAdd, ep.nfr); err != nil {
 		return fmt.Errorf("error adding rules: %w", err)
 	}
-	// Maybe SNAT?
 	return nil
 }
 
-// getConfigs gets the mounted egress service configuration.
 func (ep *ingressProxy) getConfigs() (*ingressservices.Configs, error) {
 	j, err := os.ReadFile(ep.cfgPath)
 	if os.IsNotExist(err) {

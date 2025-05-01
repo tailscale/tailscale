@@ -438,7 +438,7 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	if err != nil {
 		return false, fmt.Errorf("error marshaling ingress config: %w", err)
 	}
-	mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
+	mak.Set(&cm.BinaryData, ingressservices.IngressConfigKey, cfgBytes)
 	return true, r.Update(ctx, cm)
 }
 
@@ -631,7 +631,6 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 		logger.Debugf("Pod %q has config %q, but wants %q", pod.Name, gotCfgs.Configs.GetConfig(serviceName), wantsCfg)
 		return false, nil
 	}
-
 	return true, nil
 }
 
@@ -656,24 +655,32 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 			isAdvertised := idx >= 0
 			switch {
 			case !isAdvertised && !shouldBeAdvertised:
-				logger.Debugf("service '%s' shouldn't be advertised", serviceName)
+				logger.Debugf("service %q shouldn't be advertised", serviceName)
+				continue
+			case isAdvertised && shouldBeAdvertised:
+				logger.Debugf("service %q is already advertised", serviceName)
 				continue
 			case isAdvertised && !shouldBeAdvertised:
-				logger.Debugf("deleting advertisement for service '%s'", serviceName)
+				logger.Debugf("deleting advertisement for service %q", serviceName)
 				conf.AdvertiseServices = slices.Delete(conf.AdvertiseServices, idx, idx+1)
+
 			case shouldBeAdvertised:
-				ready, err := a.backendRoutesSetup(ctx, serviceName.String(), secret.Name, pgName, cfg, logger)
+				replicaName, ok := strings.CutSuffix(secret.Name, "-config")
+				if !ok {
+					logger.Infof("[unexpected] unable to determine replica name from config secret name %q, unable to determine if backend routing has been configured", secret.Name)
+					return nil
+				}
+				ready, err := a.backendRoutesSetup(ctx, serviceName.String(), replicaName, pgName, cfg, logger)
 				if err != nil {
 					return fmt.Errorf("error checking backend routes: %w", err)
 				}
 				if !ready {
-					logger.Debugf("service '%s' is not ready to be advertised", serviceName)
+					logger.Debugf("service %q is not ready to be advertised", serviceName)
 					continue
 				}
 				logger.Debugf("advertising service '%s' in secret with name '%s'", serviceName, secret.DeepCopy().Name)
 				conf.AdvertiseServices = append(conf.AdvertiseServices, serviceName.String())
 			}
-
 			confB, err := json.Marshal(conf)
 			if err != nil {
 				return fmt.Errorf("error marshalling ProxyGroup config: %w", err)
@@ -681,15 +688,13 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 			mak.Set(&secret.Data, fileName, confB)
 			updated = true
 		}
-
 		if updated {
-			logger.Debugf("updating secret with name '%s'", &secret.Name)
+			logger.Debugf("updating Secret %q", secret.Name)
 			if err := a.Update(ctx, &secret); err != nil {
 				return fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
 			}
 		}
 	}
-
 	return nil
 }
 

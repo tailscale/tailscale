@@ -372,8 +372,6 @@ func runReconcilers(opts reconcilerOpts) {
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}).
 		Named("service-pg-reconciler").
-		// TODO: this watch does not seem to work- does not if ProxyGroup created later
-		// maybe need to watch the ProxyGroup
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
 		Complete(&HAServiceReconciler{
@@ -390,9 +388,9 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not create service-pg-reconciler: %v", err)
 	}
-	// if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(networkingv1.Ingress), indexIngressProxyGroup, indexPGIngresses); err != nil {
-	// 	startlog.Fatalf("failed setting up indexer for HA Ingresses: %v", err)
-	// }
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(corev1.Service), indexIngressProxyGroup, indexPGIngresses); err != nil {
+		startlog.Fatalf("failed setting up indexer for HA Services: %v", err)
+	}
 
 	connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("connector"))
 	// If a ProxyClassChanges, enqueue all Connectors that have
@@ -1137,27 +1135,25 @@ func HAServicesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.M
 		if !isPGStateSecret(secret) {
 			return nil
 		}
-		_, ok = secret.ObjectMeta.Labels[LabelParentName]
+		pgName, ok := secret.ObjectMeta.Labels[LabelParentName]
 		if !ok {
 			return nil
 		}
-
-		// svcList := &corev1.ServiceList{}
-		// if err := cl.List(ctx, ingList, client.MatchingFields{indexIngressProxyGroup: pgName}); err != nil {
-		// 	logger.Infof("error listing Ingresses, skipping a reconcile for event on Secret %s: %v", secret.Name, err)
-		// 	return nil
-		// }
-		// reqs := make([]reconcile.Request, 0)
-		// for _, ing := range ingList.Items {
-		// 	reqs = append(reqs, reconcile.Request{
-		// 		NamespacedName: types.NamespacedName{
-		// 			Namespace: ing.Namespace,
-		// 			Name:      ing.Name,
-		// 		},
-		// 	})
-		// }
-		// return reqs
-		return nil
+		svcList := &corev1.ServiceList{}
+		if err := cl.List(ctx, svcList, client.MatchingFields{indexIngressProxyGroup: pgName}); err != nil {
+			logger.Infof("error listing Services, skipping a reconcile for event on Secret %s: %v", secret.Name, err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, ing := range svcList.Items {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: ing.Namespace,
+					Name:      ing.Name,
+				},
+			})
+		}
+		return reqs
 	}
 }
 
@@ -1341,8 +1337,9 @@ func indexEgressServices(o client.Object) []string {
 	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
 }
 
-// indexPGIngresses adds a local index to a cached Tailscale Ingresses meant to be exposed on a ProxyGroup. The index is
-// used a list filter.
+// indexPGIngresses adds a local index to a cached Tailscale Ingresses and
+// Services meant to be exposed on a ProxyGroup. The index is used a list
+// filter.
 func indexPGIngresses(o client.Object) []string {
 	if !hasProxyGroupAnnotation(o) {
 		return nil
@@ -1387,8 +1384,7 @@ func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) han
 }
 
 func hasProxyGroupAnnotation(obj client.Object) bool {
-	ing := obj.(*networkingv1.Ingress)
-	return ing.Annotations[AnnotationProxyGroup] != ""
+	return obj.GetAnnotations()[AnnotationProxyGroup] != ""
 }
 
 func id(ctx context.Context, lc *local.Client) (string, error) {
