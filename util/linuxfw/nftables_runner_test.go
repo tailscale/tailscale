@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,21 +25,21 @@ import (
 	"tailscale.com/types/logger"
 )
 
+func toAnySlice[T any](s []T) []any {
+	out := make([]any, len(s))
+	for i, v := range s {
+		out[i] = v
+	}
+	return out
+}
+
 // nfdump returns a hexdump of 4 bytes per line (like nft --debug=all), allowing
 // users to make sense of large byte literals more easily.
 func nfdump(b []byte) string {
 	var buf bytes.Buffer
-	i := 0
-	for ; i < len(b); i += 4 {
-		// TODO: show printable characters as ASCII
-		fmt.Fprintf(&buf, "%02x %02x %02x %02x\n",
-			b[i],
-			b[i+1],
-			b[i+2],
-			b[i+3])
-	}
-	for ; i < len(b); i++ {
-		fmt.Fprintf(&buf, "%02x ", b[i])
+	for c := range slices.Chunk(b, 4) {
+		format := strings.Repeat("%02x ", len(c))
+		fmt.Fprintf(&buf, format+"\n", toAnySlice(c)...)
 	}
 	return buf.String()
 }
@@ -75,7 +76,7 @@ func linediff(a, b string) string {
 	return buf.String()
 }
 
-func newTestConn(t *testing.T, want [][]byte) *nftables.Conn {
+func newTestConn(t *testing.T, want [][]byte, reply [][]netlink.Message) *nftables.Conn {
 	conn, err := nftables.New(nftables.WithTestDial(
 		func(req []netlink.Message) ([]netlink.Message, error) {
 			for idx, msg := range req {
@@ -96,7 +97,13 @@ func newTestConn(t *testing.T, want [][]byte) *nftables.Conn {
 				}
 				want = want[1:]
 			}
-			return req, nil
+			// no reply for batch end message
+			if len(want) == 0 {
+				return nil, nil
+			}
+			rep := reply[0]
+			reply = reply[1:]
+			return rep, nil
 		}))
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +127,7 @@ func TestInsertHookRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -160,7 +167,7 @@ func TestInsertLoopbackRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -196,7 +203,7 @@ func TestInsertLoopbackRuleV6(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	tableV6 := testConn.AddTable(&nftables.Table{
 		Family: protoV6,
 		Name:   "ts-filter-test",
@@ -232,7 +239,7 @@ func TestAddReturnChromeOSVMRangeRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -264,7 +271,7 @@ func TestAddDropCGNATRangeRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -296,7 +303,7 @@ func TestAddSetSubnetRouteMarkRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -328,7 +335,7 @@ func TestAddDropOutgoingPacketFromCGNATRangeRuleWithTunname(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -360,7 +367,7 @@ func TestAddAcceptOutgoingPacketRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -392,7 +399,7 @@ func TestAddAcceptIncomingPacketRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -420,11 +427,11 @@ func TestAddMatchSubnetRouteMarkRuleMasq(t *testing.T) {
 		// nft add chain ip ts-nat-test ts-postrouting-test { type nat hook postrouting priority 100; }
 		[]byte("\x02\x00\x00\x00\x10\x00\x01\x00\x74\x73\x2d\x6e\x61\x74\x2d\x74\x65\x73\x74\x00\x18\x00\x03\x00\x74\x73\x2d\x70\x6f\x73\x74\x72\x6f\x75\x74\x69\x6e\x67\x2d\x74\x65\x73\x74\x00\x14\x00\x04\x80\x08\x00\x01\x00\x00\x00\x00\x04\x08\x00\x02\x00\x00\x00\x00\x64\x08\x00\x07\x00\x6e\x61\x74\x00"),
 		// nft add rule ip ts-nat-test ts-postrouting-test meta mark & 0x00ff0000 == 0x00040000 counter masquerade
-		[]byte("\x02\x00\x00\x00\x10\x00\x01\x00\x74\x73\x2d\x6e\x61\x74\x2d\x74\x65\x73\x74\x00\x18\x00\x02\x00\x74\x73\x2d\x70\x6f\x73\x74\x72\x6f\x75\x74\x69\x6e\x67\x2d\x74\x65\x73\x74\x00\xf4\x00\x04\x80\x24\x00\x01\x80\x09\x00\x01\x00\x6d\x65\x74\x61\x00\x00\x00\x00\x14\x00\x02\x80\x08\x00\x02\x00\x00\x00\x00\x03\x08\x00\x01\x00\x00\x00\x00\x01\x44\x00\x01\x80\x0c\x00\x01\x00\x62\x69\x74\x77\x69\x73\x65\x00\x34\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x01\x08\x00\x02\x00\x00\x00\x00\x01\x08\x00\x03\x00\x00\x00\x00\x04\x0c\x00\x04\x80\x08\x00\x01\x00\x00\xff\x00\x00\x0c\x00\x05\x80\x08\x00\x01\x00\x00\x00\x00\x00\x2c\x00\x01\x80\x08\x00\x01\x00\x63\x6d\x70\x00\x20\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x01\x08\x00\x02\x00\x00\x00\x00\x00\x0c\x00\x03\x80\x08\x00\x01\x00\x00\x04\x00\x00\x2c\x00\x01\x80\x0c\x00\x01\x00\x63\x6f\x75\x6e\x74\x65\x72\x00\x1c\x00\x02\x80\x0c\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0c\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x30\x00\x01\x80\x0e\x00\x01\x00\x69\x6d\x6d\x65\x64\x69\x61\x74\x65\x00\x00\x00\x1c\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x00\x10\x00\x02\x80\x0c\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x01"),
+		[]byte("\x02\x00\x00\x00\x10\x00\x01\x00\x74\x73\x2d\x6e\x61\x74\x2d\x74\x65\x73\x74\x00\x18\x00\x02\x00\x74\x73\x2d\x70\x6f\x73\x74\x72\x6f\x75\x74\x69\x6e\x67\x2d\x74\x65\x73\x74\x00\xd8\x00\x04\x80\x24\x00\x01\x80\x09\x00\x01\x00\x6d\x65\x74\x61\x00\x00\x00\x00\x14\x00\x02\x80\x08\x00\x02\x00\x00\x00\x00\x03\x08\x00\x01\x00\x00\x00\x00\x01\x44\x00\x01\x80\x0c\x00\x01\x00\x62\x69\x74\x77\x69\x73\x65\x00\x34\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x01\x08\x00\x02\x00\x00\x00\x00\x01\x08\x00\x03\x00\x00\x00\x00\x04\x0c\x00\x04\x80\x08\x00\x01\x00\x00\xff\x00\x00\x0c\x00\x05\x80\x08\x00\x01\x00\x00\x00\x00\x00\x2c\x00\x01\x80\x08\x00\x01\x00\x63\x6d\x70\x00\x20\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x01\x08\x00\x02\x00\x00\x00\x00\x00\x0c\x00\x03\x80\x08\x00\x01\x00\x00\x04\x00\x00\x2c\x00\x01\x80\x0c\x00\x01\x00\x63\x6f\x75\x6e\x74\x65\x72\x00\x1c\x00\x02\x80\x0c\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0c\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x14\x00\x01\x80\x09\x00\x01\x00\x6d\x61\x73\x71\x00\x00\x00\x00\x04\x00\x02\x80"),
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-nat-test",
@@ -436,7 +443,46 @@ func TestAddMatchSubnetRouteMarkRuleMasq(t *testing.T) {
 		Hooknum:  nftables.ChainHookPostrouting,
 		Priority: nftables.ChainPriorityNATSource,
 	})
-	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Accept)
+	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Masq)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDelMatchSubnetRouteMarkMasqRule(t *testing.T) {
+	proto := nftables.TableFamilyIPv4
+	reply := [][]netlink.Message{
+		nil,
+		{{Header: netlink.Header{Length: 0x128, Type: 0xa06, Flags: 0x802, Sequence: 0xa213d55d, PID: 0x11e79}, Data: []uint8{0x2, 0x0, 0x0, 0x8c, 0xd, 0x0, 0x1, 0x0, 0x6e, 0x61, 0x74, 0x2d, 0x74, 0x65, 0x73, 0x74, 0x0, 0x0, 0x0, 0x0, 0x18, 0x0, 0x2, 0x0, 0x74, 0x73, 0x2d, 0x70, 0x6f, 0x73, 0x74, 0x72, 0x6f, 0x75, 0x74, 0x69, 0x6e, 0x67, 0x2d, 0x74, 0x65, 0x73, 0x74, 0x0, 0xc, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0xe0, 0x0, 0x4, 0x0, 0x24, 0x0, 0x1, 0x0, 0x9, 0x0, 0x1, 0x0, 0x6d, 0x65, 0x74, 0x61, 0x0, 0x0, 0x0, 0x0, 0x14, 0x0, 0x2, 0x0, 0x8, 0x0, 0x2, 0x0, 0x0, 0x0, 0x0, 0x3, 0x8, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x1, 0x4c, 0x0, 0x1, 0x0, 0xc, 0x0, 0x1, 0x0, 0x62, 0x69, 0x74, 0x77, 0x69, 0x73, 0x65, 0x0, 0x3c, 0x0, 0x2, 0x0, 0x8, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x1, 0x8, 0x0, 0x2, 0x0, 0x0, 0x0, 0x0, 0x1, 0x8, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x4, 0x8, 0x0, 0x6, 0x0, 0x0, 0x0, 0x0, 0x0, 0xc, 0x0, 0x4, 0x0, 0x8, 0x0, 0x1, 0x0, 0x0, 0xff, 0x0, 0x0, 0xc, 0x0, 0x5, 0x0, 0x8, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2c, 0x0, 0x1, 0x0, 0x8, 0x0, 0x1, 0x0, 0x63, 0x6d, 0x70, 0x0, 0x20, 0x0, 0x2, 0x0, 0x8, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x1, 0x8, 0x0, 0x2, 0x0, 0x0, 0x0, 0x0, 0x0, 0xc, 0x0, 0x3, 0x0, 0x8, 0x0, 0x1, 0x0, 0x0, 0x4, 0x0, 0x0, 0x2c, 0x0, 0x1, 0x0, 0xc, 0x0, 0x1, 0x0, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72, 0x0, 0x1c, 0x0, 0x2, 0x0, 0xc, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xc, 0x0, 0x2, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x14, 0x0, 0x1, 0x0, 0x9, 0x0, 0x1, 0x0, 0x6d, 0x61, 0x73, 0x71, 0x0, 0x0, 0x0, 0x0, 0x4, 0x0, 0x2, 0x0}}},
+		{{Header: netlink.Header{Length: 0x14, Type: 0x3, Flags: 0x2, Sequence: 0x311fdccb, PID: 0x11e79}, Data: []uint8{0x0, 0x0, 0x0, 0x0}}},
+		{{Header: netlink.Header{Length: 0x24, Type: 0x2, Flags: 0x100, Sequence: 0x311fdccb, PID: 0x11e79}, Data: []uint8{0x0, 0x0, 0x0, 0x0, 0x48, 0x0, 0x0, 0x0, 0x8, 0xa, 0x5, 0x0, 0xcb, 0xdc, 0x1f, 0x31, 0x79, 0x1e, 0x1, 0x0}}},
+	}
+	want := [][]byte{
+		// get rules in nat-test table ts-postrouting-test chain
+		[]byte("\x02\x00\x00\x00\x0d\x00\x01\x00\x6e\x61\x74\x2d\x74\x65\x73\x74\x00\x00\x00\x00\x18\x00\x02\x00\x74\x73\x2d\x70\x6f\x73\x74\x72\x6f\x75\x74\x69\x6e\x67\x2d\x74\x65\x73\x74\x00"),
+		// batch begin
+		[]byte("\x00\x00\x00\x0a"),
+		// nft delete rule ip nat-test ts-postrouting-test handle 4
+		[]byte("\x02\x00\x00\x00\x0d\x00\x01\x00\x6e\x61\x74\x2d\x74\x65\x73\x74\x00\x00\x00\x00\x18\x00\x02\x00\x74\x73\x2d\x70\x6f\x73\x74\x72\x6f\x75\x74\x69\x6e\x67\x2d\x74\x65\x73\x74\x00\x0c\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\x04"),
+		// batch end
+		[]byte("\x00\x00\x00\x0a"),
+	}
+
+	conn := newTestConn(t, want, reply)
+
+	table := &nftables.Table{
+		Family: proto,
+		Name:   "nat-test",
+	}
+	chain := &nftables.Chain{
+		Name:     "ts-postrouting-test",
+		Table:    table,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	}
+
+	err := delMatchSubnetRouteMarkMasqRule(conn, table, chain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +502,7 @@ func TestAddMatchSubnetRouteMarkRuleAccept(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := newTestConn(t, want, nil)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
