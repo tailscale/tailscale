@@ -14,12 +14,9 @@ package ctxlock
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
-)
-
-var (
-	noneCtx       = context.Background()
-	noneUnchecked = unchecked{noneCtx, nil}
+	"time"
 )
 
 type ctxKey struct{ *sync.Mutex }
@@ -30,36 +27,60 @@ func ctxKeyOf(mu *sync.Mutex) ctxKey {
 
 // checked is an implementation of [Context] that performs runtime checks
 // to ensure that the context is used correctly.
+//
+// Its zero value and a nil pointer carry no lock state and an empty [context.Context].
 type checked struct {
-	context.Context             // nil after [checked.Unlock] is called
-	mu              *sync.Mutex // nil if the context does not track a mutex lock state
+	context.Context             // nil if the context does not carry a [context.Context]
+	mu              *sync.Mutex // nil if the context does not carry a mutex lock state
 	parent          *checked    // nil if the context owns the lock
-}
-
-func noneChecked() *checked {
-	return &checked{noneCtx, nil, nil}
+	unlocked        bool        // whether [checked.Unlock] was called
 }
 
 func wrapChecked(parent context.Context) *checked {
-	return &checked{parent, nil, nil}
+	return &checked{parent, nil, nil, false}
 }
 
 func lockChecked(parent *checked, mu *sync.Mutex) *checked {
-	checkLockArgs(parent, mu)
+	panicIfNil(mu)
 	if parentLockCtx, ok := parent.Value(ctxKeyOf(mu)).(*checked); ok {
 		if appearsUnlocked(mu) {
 			// The parent still owns the lock, but the mutex is unlocked.
 			panic("mu is spuriously unlocked")
 		}
-		return &checked{parent, mu, parentLockCtx}
+		return &checked{parent, mu, parentLockCtx, false}
 	}
 	mu.Lock()
-	return &checked{parent, mu, nil}
+	return &checked{parent, mu, nil, false}
+}
+
+func (c *checked) Deadline() (deadline time.Time, ok bool) {
+	c.panicIfUnlocked()
+	if c == nil || c.Context == nil {
+		return time.Time{}, false
+	}
+	return c.Context.Deadline()
+}
+
+func (c *checked) Done() <-chan struct{} {
+	c.panicIfUnlocked()
+	if c == nil || c.Context == nil {
+		return nil
+	}
+	return c.Context.Done()
+}
+
+func (c *checked) Err() error {
+	c.panicIfUnlocked()
+	if c == nil || c.Context == nil {
+		return nil
+	}
+	return c.Context.Err()
 }
 
 func (c *checked) Value(key any) any {
-	if c.Context == nil {
-		panic("use of context after unlock")
+	c.panicIfUnlocked()
+	if c == nil {
+		return nil
 	}
 	if key == ctxKeyOf(c.mu) {
 		return c
@@ -69,16 +90,19 @@ func (c *checked) Value(key any) any {
 
 func (c *checked) Unlock() {
 	switch {
-	case c.Context == nil:
+	case c == nil:
+		// No-op; zero context.
+		return
+	case c.unlocked:
 		panic("already unlocked")
 	case c.mu == nil:
 		// No-op; the context does not track a mutex lock state,
 		// such as when it was created with [noneChecked] or [wrapChecked].
 	case c.parent == nil:
 		// We own the lock; let's unlock it.
-		// This panics if the mutex is already unlocked.
+		// This triggers a fatal error if the mutex is already unlocked.
 		c.mu.Unlock()
-	case c.parent.Context == nil:
+	case c.parent.unlocked:
 		// The parent context is already unlocked.
 		// The mutex may or may not be locked;
 		// something else may have already locked it.
@@ -92,25 +116,26 @@ func (c *checked) Unlock() {
 	default:
 		// No-op; a parent or ancestor will handle unlocking.
 	}
-	c.Context = nil
+	c.unlocked = true // mark this context as unlocked
 }
 
-func checkLockArgs[T interface {
-	context.Context
-	comparable
-}](parent T, mu *sync.Mutex) {
-	var zero T
-	if parent == zero {
-		panic("nil parent context")
+func (c *checked) panicIfUnlocked() {
+	if c != nil && c.unlocked {
+		panic("use of context after unlock")
 	}
-	if mu == nil {
-		panic(fmt.Sprintf("nil %T", mu))
+}
+
+func panicIfNil[T comparable](v T) {
+	if reflect.ValueOf(v).IsNil() {
+		panic(fmt.Sprintf("nil %T", v))
 	}
 }
 
 // unchecked is an implementation of [Context] that trades runtime checks for performance.
+//
+// Its zero value carries no mutex lock state and an empty [context.Context].
 type unchecked struct {
-	context.Context             // always non-nil
+	context.Context             // nil if the context does not carry a [context.Context]
 	mu              *sync.Mutex // non-nil if locked by this context
 }
 
@@ -119,7 +144,6 @@ func wrapUnchecked(parent context.Context) unchecked {
 }
 
 func lockUnchecked(parent unchecked, mu *sync.Mutex) unchecked {
-	checkLockArgs(parent, mu) // this is cheap, so we do it even in the unchecked case
 	if parent.Value(ctxKeyOf(mu)) == nil {
 		mu.Lock()
 	} else {
@@ -128,9 +152,33 @@ func lockUnchecked(parent unchecked, mu *sync.Mutex) unchecked {
 	return unchecked{parent.Context, mu}
 }
 
+func (c unchecked) Deadline() (deadline time.Time, ok bool) {
+	if c.Context == nil {
+		return time.Time{}, false
+	}
+	return c.Context.Deadline()
+}
+
+func (c unchecked) Done() <-chan struct{} {
+	if c.Context == nil {
+		return nil
+	}
+	return c.Context.Done()
+}
+
+func (c unchecked) Err() error {
+	if c.Context == nil {
+		return nil
+	}
+	return c.Context.Err()
+}
+
 func (c unchecked) Value(key any) any {
 	if key == ctxKeyOf(c.mu) {
 		return key
+	}
+	if c.Context == nil {
+		return nil
 	}
 	return c.Context.Value(key)
 }

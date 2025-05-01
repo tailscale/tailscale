@@ -74,3 +74,16 @@ func ExampleContext_twoResources() {
 	fmt.Println(r1.GetFoo(ctxlock.None()))
 	// Output: foobar
 }
+
+func ExampleContext_zeroValue() {
+	var r1, r2 Resource
+	r1.SetFoo(ctxlock.Context{}, "foo")
+	r2.SetBar(ctxlock.Context{}, "bar")
+	r1.WithLock(ctxlock.Context{}, func(ctx ctxlock.Context) {
+		// Here, r1's lock is held, but r2's lock is not.
+		// So r2 will be locked when we call r2.GetBar(ctx).
+		r1.SetFoo(ctx, r1.GetFoo(ctx)+r2.GetBar(ctx))
+	})
+	fmt.Println(r1.GetFoo(ctxlock.Context{}))
+	// Output: foobar
+}

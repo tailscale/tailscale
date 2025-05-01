@@ -29,12 +29,12 @@ var (
 		Lock: Lock,
 	}
 	checkedImpl = impl[*checked]{
-		None: noneChecked,
+		None: func() *checked { return nil },
 		Wrap: wrapChecked,
 		Lock: lockChecked,
 	}
 	uncheckedImpl = impl[unchecked]{
-		None: func() unchecked { return noneUnchecked },
+		None: func() unchecked { return unchecked{} },
 		Wrap: wrapUnchecked,
 		Lock: lockUnchecked,
 	}
@@ -158,28 +158,9 @@ func testWrappedLockContext[T ctx](t *testing.T, impl impl[T]) {
 	wantUnlocked(t, &mu) // mu is now unlocked
 }
 
-func TestNilContextAndMutex(t *testing.T) {
-	t.Run("Exported", func(t *testing.T) {
-		testNilContextAndMutex(t, exportedImpl)
-	})
-
-	t.Run("Checked", func(t *testing.T) {
-		testNilContextAndMutex(t, checkedImpl)
-	})
-
-	t.Run("Unchecked", func(t *testing.T) {
-		testNilContextAndMutex(t, uncheckedImpl)
-	})
-}
-
-func testNilContextAndMutex[T ctx](t *testing.T, impl impl[T]) {
-	t.Run("NilContext", func(t *testing.T) {
-		var zero T
-		wantPanic(t, "nil parent context", func() { impl.Lock(zero, &sync.Mutex{}) })
-	})
-	t.Run("NilMutex", func(t *testing.T) {
-		wantPanic(t, "nil *sync.Mutex", func() { impl.Lock(impl.None(), nil) })
-	})
+func TestNilMutex(t *testing.T) {
+	impl := checkedImpl
+	wantPanic(t, "nil *sync.Mutex", func() { impl.Lock(impl.None(), nil) })
 }
 
 func TestUseUnlockedParent_Checked(t *testing.T) {
@@ -205,7 +186,7 @@ func TestUnlockParentFirst_Checked(t *testing.T) {
 	impl := checkedImpl
 
 	var mu sync.Mutex
-	parent := impl.Lock(impl.None(), &mu)
+	parent := impl.Lock(impl.Wrap(context.Background()), &mu)
 	child := impl.Lock(parent, &mu)
 
 	parent.Unlock()      // unlocks mu
@@ -221,9 +202,6 @@ func TestUnlockTwice_Checked(t *testing.T) {
 		wantPanic(t, "already unlocked", ctx.Unlock)
 	}
 
-	t.Run("None", func(t *testing.T) {
-		unlockTwice(t, impl.None())
-	})
 	t.Run("Wrapped", func(t *testing.T) {
 		unlockTwice(t, impl.Wrap(context.Background()))
 	})

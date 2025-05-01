@@ -26,7 +26,7 @@ type Context struct {
 // It is typically used by top-level callers that do not have a parent context to pass in,
 // and is a shorthand for [Context]([context.Background]).
 func None() Context {
-	return Context{noneChecked()}
+	return Context{}
 }
 
 // Wrap returns a derived [Context] that wraps the provided [context.Context].

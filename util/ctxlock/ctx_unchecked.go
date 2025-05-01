@@ -18,7 +18,7 @@ type Context struct {
 }
 
 func None() Context {
-	return Context{noneUnchecked}
+	return Context{}
 }
 
 func Wrap(parent context.Context) Context {
