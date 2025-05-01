@@ -1625,6 +1625,25 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, geneveVNI *uint32, dstKey ke
 		c.mu.Unlock()
 		return false, errConnClosed
 	}
+	var di *discoInfo
+	switch {
+	case c.peerMap.knownPeerDiscoKey(dstDisco):
+		di = c.discoInfoForKnownPeerLocked(dstDisco)
+	case isRelayHandshakeMsg:
+		// TODO(jwhited): consider caching relay server disco shared keys
+		di = &discoInfo{
+			sharedKey: c.discoPrivate.Shared(dstDisco),
+		}
+	default:
+		// This is an attempt to send to an unknown peer that is not a relay
+		// server. This can happen when a call to the current function, which is
+		// often via a new goroutine, races with applying a change in the
+		// netmap, e.g. the associated peer(s) for dstDisco goes away.
+		c.mu.Unlock()
+		return false, errors.New("unknown peer")
+	}
+	c.mu.Unlock()
+
 	pkt := make([]byte, 0, 512) // TODO: size it correctly? pool? if it matters.
 	if geneveVNI != nil {
 		gh := packet.GeneveHeader{
@@ -1641,23 +1660,6 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, geneveVNI *uint32, dstKey ke
 	}
 	pkt = append(pkt, disco.Magic...)
 	pkt = c.discoPublic.AppendTo(pkt)
-	var di *discoInfo
-	if !isRelayHandshakeMsg {
-		di = c.discoInfoLocked(dstDisco)
-	} else {
-		// c.discoInfoLocked() caches [*discoInfo] for dstDisco. It assumes that
-		// dstDisco is a known Tailscale peer, and will be cleaned around
-		// network map changes. In the case of a relay handshake message,
-		// dstDisco belongs to a relay server with a disco key that is
-		// discovered at endpoint allocation time or [disco.CallMeMaybeVia]
-		// reception time. There is no clear ending to its lifetime, so we
-		// can't cache with the same strategy. Instead, generate the shared
-		// key on the fly for now.
-		di = &discoInfo{
-			sharedKey: c.discoPrivate.Shared(dstDisco),
-		}
-	}
-	c.mu.Unlock()
 
 	if isDERP {
 		metricSendDiscoDERP.Add(1)
@@ -1814,7 +1816,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	//
 	// From here on, peerNode and de are non-nil.
 
-	di := c.discoInfoLocked(sender)
+	di := c.discoInfoForKnownPeerLocked(sender)
 
 	sealedBox := msg[discoHeaderLen:]
 	payload, ok := di.sharedKey.Open(sealedBox)
@@ -2076,10 +2078,15 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 	}
 }
 
-// discoInfoLocked returns the previous or new discoInfo for k.
+// discoInfoForKnownPeerLocked returns the previous or new discoInfo for k.
+//
+// Callers must only pass key.DiscoPublic's that are present in and
+// lifetime-managed via [Conn].peerMap. UDP relay server disco keys are discovered
+// at relay endpoint allocation time or [disco.CallMeMaybeVia] reception time
+// and therefore must never pass through this method.
 //
 // c.mu must be held.
-func (c *Conn) discoInfoLocked(k key.DiscoPublic) *discoInfo {
+func (c *Conn) discoInfoForKnownPeerLocked(k key.DiscoPublic) *discoInfo {
 	di, ok := c.discoInfo[k]
 	if !ok {
 		di = &discoInfo{
