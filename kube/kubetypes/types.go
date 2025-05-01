@@ -6,6 +6,7 @@ package kubetypes
 const (
 	// Hostinfo App values for the Tailscale Kubernetes Operator components.
 	AppOperator          = "k8s-operator"
+	AppProxy             = "k8s-proxy"
 	AppAPIServerProxy    = "k8s-operator-proxy"
 	AppIngressProxy      = "k8s-operator-ingress-proxy"
 	AppIngressResource   = "k8s-operator-ingress-resource"
