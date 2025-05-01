@@ -58,6 +58,7 @@ func main() {
 		ignoreDstPfxStr = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
 		wgPort          = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
 		clusterTag      = fs.String("cluster-tag", "", "optionally run in a consensus cluster with other nodes with this tag")
+		server          = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -95,7 +96,7 @@ func main() {
 	ts := &tsnet.Server{
 		Hostname: *hostname,
 	}
-	ts.ControlURL = "http://host.docker.internal:31544" // TODO fran
+	ts.ControlURL = *server
 	if *wgPort != 0 {
 		if *wgPort >= 1<<16 {
 			log.Fatalf("wg-port must be in the range [0, 65535]")
