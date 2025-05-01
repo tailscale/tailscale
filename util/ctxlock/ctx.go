@@ -17,60 +17,62 @@ import (
 )
 
 var (
-	noneCtx       = context.Background()
-	noneUnchecked = unchecked{noneCtx, nil}
+	noneCtx = context.Background()
 )
 
-type lockerKey struct{ *sync.Mutex }
+type lockerKey[T any] struct{ key T }
 
-func lockerKeyOf(mu *sync.Mutex) lockerKey {
-	return lockerKey{mu}
+func lockerKeyOf[T sync.Locker](mu T) lockerKey[T] {
+	return lockerKey[T]{key: mu}
 }
 
 // checked is an implementation of [Context] that performs runtime checks
 // to ensure that the context is used correctly.
-type checked struct {
+type checked[T sync.Locker] struct {
 	context.Context             // nil after [checked.Unlock] is called
-	mu              *sync.Mutex // nil if the context does not track a mutex lock state
-	parent          *checked    // nil if the context owns the lock
+	mu              T           // nil if the context does not track a mutex lock state
+	parent          *checked[T] // nil if the context owns the lock
 }
 
-func noneChecked() *checked {
-	return &checked{noneCtx, nil, nil}
+func noneChecked[T sync.Locker]() *checked[T] {
+	var zero T
+	return &checked[T]{noneCtx, zero, nil}
 }
 
-func wrapChecked(parent context.Context) *checked {
-	return &checked{parent, nil, nil}
+func wrapChecked[T sync.Locker](parent context.Context) *checked[T] {
+	var zero T
+	return &checked[T]{parent, zero, nil}
 }
 
-func lockChecked(parent *checked, mu *sync.Mutex) *checked {
+func lockChecked[T, P sync.Locker](parent *checked[P], mu T) *checked[T] {
 	checkLockArgs(parent, mu)
-	if parentLockCtx, ok := parent.Value(lockerKeyOf(mu)).(*checked); ok {
+	if parentLockCtx, ok := parent.Value(lockerKeyOf(mu)).(*checked[T]); ok {
 		if appearsUnlocked(mu) {
 			// The parent still owns the lock, but the mutex is unlocked.
 			panic("mu is already unlocked")
 		}
-		return &checked{parent, mu, parentLockCtx}
+		return &checked[T]{parent, mu, parentLockCtx}
 	}
 	mu.Lock()
-	return &checked{parent, mu, nil}
+	return &checked[T]{parent, mu, nil}
 }
 
-func (c *checked) Value(key any) any {
+func (c *checked[T]) Value(key any) any {
 	if c.Context == nil {
 		panic("use of context after unlock")
 	}
-	if key == lockerKeyOf(c.mu) {
+	if key == any(lockerKeyOf(c.mu)) {
 		return c
 	}
 	return c.Context.Value(key)
 }
 
-func (c *checked) Unlock() {
+func (c *checked[T]) Unlock() {
+	var zero T
 	switch {
 	case c.Context == nil:
 		panic("already unlocked")
-	case c.mu == nil:
+	case any(c.mu) == any(zero):
 		// No-op; the context does not track a mutex lock state,
 		// such as when it was created with [noneChecked] or [wrapChecked].
 	case appearsUnlocked(c.mu):
@@ -88,45 +90,54 @@ func (c *checked) Unlock() {
 func checkLockArgs[T interface {
 	context.Context
 	comparable
-}](parent T, mu *sync.Mutex) {
+}, L sync.Locker](parent T, mu L) {
 	var zero T
+	var nilLocker L
 	if parent == zero {
 		panic("nil parent context")
 	}
-	if mu == nil {
+	if any(mu) == any(nilLocker) {
 		panic("nil locker")
 	}
 }
 
 // unchecked is an implementation of [Context] that trades runtime checks for performance.
-type unchecked struct {
-	context.Context             // always non-nil
-	mu              *sync.Mutex // non-nil if locked by this context
+type unchecked[T sync.Locker] struct {
+	context.Context   // always non-nil
+	mu              T // non-nil if locked by this context
 }
 
-func wrapUnchecked(parent context.Context) unchecked {
-	return unchecked{parent, nil}
+func noneUnchecked[T sync.Locker]() unchecked[T] {
+	var zero T
+	return unchecked[T]{noneCtx, zero}
 }
 
-func lockUnchecked(parent unchecked, mu *sync.Mutex) unchecked {
-	checkLockArgs(parent, mu) // this is cheap, so we do it even in the unchecked case
+func wrapUnchecked[T sync.Locker](parent context.Context) unchecked[T] {
+	var zero T
+	return unchecked[T]{parent, zero}
+}
+
+func lockUnchecked[T, P sync.Locker](parent unchecked[P], mu T) unchecked[T] {
+	checkLockArgs(parent.Context, mu) // this is cheap, so we do it even in the unchecked case
 	if parent.Value(lockerKeyOf(mu)) == nil {
 		mu.Lock()
 	} else {
-		mu = nil // already locked by a parent/ancestor
+		var zero T
+		mu = zero // already locked by a parent/ancestor
 	}
-	return unchecked{parent.Context, mu}
+	return unchecked[T]{parent.Context, mu}
 }
 
-func (c unchecked) Value(key any) any {
-	if key == lockerKeyOf(c.mu) {
+func (c unchecked[T]) Value(key any) any {
+	if any(key) == any(lockerKeyOf(c.mu)) {
 		return key
 	}
 	return c.Context.Value(key)
 }
 
-func (c unchecked) Unlock() {
-	if c.mu != nil {
+func (c unchecked[T]) Unlock() {
+	var zero T
+	if any(c.mu) != any(zero) {
 		c.mu.Unlock()
 	}
 }

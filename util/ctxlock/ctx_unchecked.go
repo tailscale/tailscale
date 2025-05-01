@@ -13,18 +13,18 @@ import (
 	"sync"
 )
 
-type Context struct {
-	unchecked
+type Context[T sync.Locker] struct {
+	unchecked[T]
 }
 
-func None() Context {
-	return Context{noneUnchecked}
+func None[T sync.Locker]() Context[T] {
+	return Context[T]{noneUnchecked[T]()}
 }
 
-func Wrap(parent context.Context) Context {
-	return Context{wrapUnchecked(parent)}
+func Wrap[T sync.Locker](parent context.Context) Context[T] {
+	return Context[T]{wrapUnchecked[T](parent)}
 }
 
-func Lock(parent Context, mu *sync.Mutex) Context {
-	return Context{lockUnchecked(parent.unchecked, mu)}
+func Lock[T, P sync.Locker](parent Context[P], mu T) Context[T] {
+	return Context[T]{lockUnchecked(parent.unchecked, mu)}
 }

@@ -23,20 +23,20 @@ type impl[T ctx] struct {
 }
 
 var (
-	exportedImpl = impl[Context]{
-		None: None,
-		Wrap: Wrap,
-		Lock: Lock,
+	exportedImpl = impl[Context[*sync.Mutex]]{
+		None: None[*sync.Mutex],
+		Wrap: Wrap[*sync.Mutex],
+		Lock: Lock[*sync.Mutex, *sync.Mutex],
 	}
-	checkedImpl = impl[*checked]{
-		None: noneChecked,
-		Wrap: wrapChecked,
-		Lock: lockChecked,
+	checkedImpl = impl[*checked[*sync.Mutex]]{
+		None: noneChecked[*sync.Mutex],
+		Wrap: wrapChecked[*sync.Mutex],
+		Lock: lockChecked[*sync.Mutex, *sync.Mutex],
 	}
-	uncheckedImpl = impl[unchecked]{
-		None: func() unchecked { return noneUnchecked },
-		Wrap: wrapUnchecked,
-		Lock: lockUnchecked,
+	uncheckedImpl = impl[unchecked[*sync.Mutex]]{
+		None: noneUnchecked[*sync.Mutex],
+		Wrap: wrapUnchecked[*sync.Mutex],
+		Lock: lockUnchecked[*sync.Mutex, *sync.Mutex],
 	}
 )
 
@@ -207,7 +207,7 @@ func TestUnlockParentFirst_Checked(t *testing.T) {
 func TestUnlockTwice_Checked(t *testing.T) {
 	impl := checkedImpl
 
-	doTest := func(t *testing.T, ctx *checked) {
+	doTest := func(t *testing.T, ctx *checked[*sync.Mutex]) {
 		ctx.Unlock()             // unlocks mu
 		wantPanic(t, ctx.Unlock) // panics since mu is already unlocked
 	}
