@@ -19,7 +19,6 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +36,8 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
+
+const finalizerName = "tailscale.com/service-pg-finalizer"
 
 // ensure LoadBalancer Service's status is set
 // ensure the right conditions on Services are set
@@ -111,8 +112,8 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	if !svc.DeletionTimestamp.IsZero() || !r.isTailscaleService(svc) {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
-		return reconcile.Result{}, nil
-		// return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
+		_, err = r.maybeCleanup(ctx, hostname, svc, logger)
+		return res, err
 	}
 
 	// needsRequeue is set to true if the underlying VIPService has changed as a result of this reconcile. If that
@@ -186,8 +187,6 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, r.clock, logger)
 		return false, nil
 	}
-
-	const finalizerName = "tailscale.com/service-pg-finalizer"
 
 	if !slices.Contains(svc.Finalizers, finalizerName) {
 		// This log line is printed exactly once during initial provisioning,
@@ -353,52 +352,24 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	// IPs to the ProxyGroup Pods' AllowedIPs in the next netmap update if approved.
 	// NOTE (ChaosInTheCRD): afaik, we conclusively know here that we *want* to advertise (we don't have to wait for certs or anything)
 	// We do however need to ensure that the service should be unadvertised during cleanup
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, true, logger); err != nil {
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg.Name, serviceName, &cfg, true, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
 	}
 
-	// 6. Update Ingress status if ProxyGroup Pods are ready.
-	// count, err := r.numberPodsAdvertising(ctx, pg.Name, serviceName)
-	// if err != nil {
-	// 	return false, fmt.Errorf("failed to check if any Pods are configured: %w", err)
-	// }
+	// TODO: is it ready?
+	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		return false, nil
+	}
+	dnsName, err := r.dnsNameForService(ctx, serviceName)
+	if err != nil {
+		return false, fmt.Errorf("error getting DNS name for Service: %w", err)
+	}
+	ingress := []corev1.LoadBalancerIngress{
+		{Hostname: dnsName,
+			IP: vipv4.String()},
+	}
+	svc.Status.LoadBalancer.Ingress = ingress
 
-	// oldStatus := ing.Status.DeepCopy()
-	//
-	// switch count {
-	// case 0:
-	// 	ing.Status.LoadBalancer.Ingress = nil
-	// default:
-	// 	var ports []networkingv1.IngressPortStatus
-	// 	hasCerts, err := r.hasCerts(ctx, serviceName)
-	// 	if err != nil {
-	// 		return false, fmt.Errorf("error checking TLS credentials provisioned for Ingress: %w", err)
-	// 	}
-	// 	// If TLS certs have not been issued (yet), do not set port 443.
-	// 	if hasCerts {
-	// 		ports = append(ports, networkingv1.IngressPortStatus{
-	// 			Protocol: "TCP",
-	// 			Port:     443,
-	// 		})
-	// 	}
-	// 	if isHTTPEndpointEnabled(ing) {
-	// 		ports = append(ports, networkingv1.IngressPortStatus{
-	// 			Protocol: "TCP",
-	// 			Port:     80,
-	// 		})
-	// 	}
-	// 	// Set Ingress status hostname only if either port 443 or 80 is advertised.
-	// 	var hostname string
-	// 	if len(ports) != 0 {
-	// 		hostname = dnsName
-	// 	}
-	// 	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
-	// 		{
-	// 			Hostname: hostname,
-	// 			Ports:    ports,
-	// 		},
-	// 	}
-	// }
 	// if apiequality.Semantic.DeepEqual(oldStatus, &ing.Status) {
 	// 	return svcsChanged, nil
 	// }
@@ -422,69 +393,53 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 // corresponding to this Service.
 func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcChanged bool, err error) {
 	logger.Debugf("Ensuring any resources for Service are cleaned up")
-	ix := slices.Index(svc.Finalizers, FinalizerNamePG)
+	ix := slices.Index(svc.Finalizers, finalizerName)
 	if ix < 0 {
 		logger.Debugf("no finalizer, nothing to do")
 		return false, nil
 	}
 	logger.Infof("Ensuring that VIPService %q configuration is cleaned up", hostname)
-	//
-	// // Ensure that if cleanup succeeded Ingress finalizers are removed.
-	// defer func() {
-	// 	if err != nil {
-	// 		return
-	// 	}
-	// 	if e := r.deleteFinalizer(ctx, ing, logger); err != nil {
-	// 		err = errors.Join(err, e)
-	// 	}
-	// }()
-	//
-	// // 1. Check if there is a VIPService associated with this Ingress.
-	// pg := ing.Annotations[AnnotationProxyGroup]
-	// cm, cfg, err := r.proxyGroupServeConfig(ctx, pg)
-	// if err != nil {
-	// 	return false, fmt.Errorf("error getting ProxyGroup serve config: %w", err)
-	// }
-	// serviceName := tailcfg.ServiceName("svc:" + hostname)
-	//
-	// // VIPService is always first added to serve config and only then created in the Tailscale API, so if it is not
-	// // found in the serve config, we can assume that there is no VIPService. (If the serve config does not exist at
-	// // all, it is possible that the ProxyGroup has been deleted before cleaning up the Ingress, so carry on with
-	// // cleanup).
-	// if cfg != nil && cfg.Services != nil && cfg.Services[serviceName] == nil {
-	// 	return false, nil
-	// }
-	//
-	// // 2. Clean up the VIPService resources.
-	// svcChanged, err = r.cleanupVIPService(ctx, serviceName, logger)
-	// if err != nil {
-	// 	return false, fmt.Errorf("error deleting VIPService: %w", err)
-	// }
-	//
-	// // 3. Clean up any cluster resources
-	// if err := r.cleanupCertResources(ctx, pg, serviceName); err != nil {
-	// 	return false, fmt.Errorf("failed to clean up cert resources: %w", err)
-	// }
-	//
-	// if cfg == nil || cfg.Services == nil { // user probably deleted the ProxyGroup
-	// 	return svcChanged, nil
-	// }
-	//
-	// // 4. Unadvertise the VIPService in tailscaled config.
-	// if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pg, serviceName, serviceAdvertisementOff, logger); err != nil {
-	// 	return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
-	// }
-	//
-	// // 5. Remove the VIPService from the serve config for the ProxyGroup.
-	// logger.Infof("Removing VIPService %q from serve config for ProxyGroup %q", hostname, pg)
-	// delete(cfg.Services, serviceName)
-	// cfgBytes, err := json.Marshal(cfg)
-	// if err != nil {
-	// 	return false, fmt.Errorf("error marshaling serve config: %w", err)
-	// }
-	// mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
-	// return svcChanged, r.Update(ctx, cm)
-	return svcChanged, nil
+
+	defer func() {
+		if err != nil {
+			return
+		}
+		if e := r.deleteFinalizer(ctx, svc, logger); err != nil {
+			err = errors.Join(err, e)
+		}
+	}()
+
+	serviceName := tailcfg.ServiceName("svc:" + hostname)
+	//  1. Clean up the VIPService.
+	svcChanged, err = r.cleanupVIPService(ctx, serviceName, logger)
+	if err != nil {
+		return false, fmt.Errorf("error deleting VIPService: %w", err)
+	}
+
+	// 2. Unadvertise the VIPService.
+	pgName := svc.Annotations[AnnotationProxyGroup]
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, pgName, serviceName, nil, false, logger); err != nil {
+		return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
+	}
+
+	// TODO: maybe wait for the service to be unadvertised, only then remove the backend routing
+
+	// 3. Clean up ingress config (routing rules).
+	cm, cfgs, err := ingressSvcsConfigs(ctx, r.Client, pgName, r.tsNamespace)
+	if err != nil {
+		return false, fmt.Errorf("error retrieving ingress services configuration: %w", err)
+	}
+	if cm == nil || cfgs == nil {
+		return true, nil
+	}
+	logger.Infof("Removing VIPService %q from ingress config for ProxyGroup %q", hostname, pgName)
+	delete(cfgs, serviceName.String())
+	cfgBytes, err := json.Marshal(cfgs)
+	if err != nil {
+		return false, fmt.Errorf("error marshaling ingress config: %w", err)
+	}
+	mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
+	return true, r.Update(ctx, cm)
 }
 
 // VIPServices that are associated with the provided ProxyGroup and no longer managed this operator's instance are deleted, if not owned by other operator instances, else the owner reference is cleaned up.
@@ -554,20 +509,15 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 	return svcsChanged, nil
 }
 
-func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, ing *networkingv1.Ingress, logger *zap.SugaredLogger) error {
-	// found := false
-	// ing.Finalizers = slices.DeleteFunc(ing.Finalizers, func(f string) bool {
-	// 	found = true
-	// 	return f == FinalizerNamePG
-	// })
-	// if !found {
-	// 	return nil
-	// }
-	// logger.Debug("ensure %q finalizer is removed", FinalizerNamePG)
-	//
-	// if err := r.Update(ctx, ing); err != nil {
-	// 	return fmt.Errorf("failed to remove finalizer %q: %w", FinalizerNamePG, err)
-	// }
+func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
+	svc.Finalizers = slices.DeleteFunc(svc.Finalizers, func(f string) bool {
+		return f == finalizerName
+	})
+	logger.Debug("ensure %q finalizer is removed", finalizerName)
+
+	if err := r.Update(ctx, svc); err != nil {
+		return fmt.Errorf("failed to remove finalizer %q: %w", finalizerName, err)
+	}
 	// r.mu.Lock()
 	// defer r.mu.Unlock()
 	// r.managedIngresses.Remove(ing.UID)
@@ -648,7 +598,44 @@ func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcf
 	return true, r.tsClient.CreateOrUpdateVIPService(ctx, svc)
 }
 
-func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, shouldBeAdvertised bool, logger *zap.SugaredLogger) (err error) {
+func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceName, replicaName, pgName string, wantsCfg *ingressservices.Config, logger *zap.SugaredLogger) (bool, error) {
+	pod := &corev1.Pod{}
+	err := a.Get(ctx, client.ObjectKey{Namespace: a.tsNamespace, Name: replicaName}, pod)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to get Pod: %w", err)
+	}
+	secret := &corev1.Secret{}
+	err = a.Get(ctx, client.ObjectKey{Namespace: a.tsNamespace, Name: replicaName}, secret)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to get Secret: %w", err)
+	}
+	if len(secret.Data) == 0 || secret.Data[ingressservices.IngressConfigKey] == nil {
+		return false, nil
+	}
+	gotCfgB := secret.Data[ingressservices.IngressConfigKey]
+	var gotCfgs ingressservices.Status
+	if err := json.Unmarshal(gotCfgB, &gotCfgs); err != nil {
+		return false, fmt.Errorf("error unmarshalling ingress config: %w", err)
+	}
+	if gotCfgs.PodIP != pod.Status.PodIP { // TODO: consider multiple IPs
+		logger.Debugf("Pod %q has IP %q, but wants %q", pod.Name, gotCfgs.PodIP, pod.Status.PodIP)
+		return false, nil
+	}
+	if !reflect.DeepEqual(gotCfgs.Configs.GetConfig(serviceName), wantsCfg) {
+		logger.Debugf("Pod %q has config %q, but wants %q", pod.Name, gotCfgs.Configs.GetConfig(serviceName), wantsCfg)
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, cfg *ingressservices.Config, shouldBeAdvertised bool, logger *zap.SugaredLogger) (err error) {
 	logger.Debugf("checking advertisement for service '%s'", serviceName)
 	// Get all config Secrets for this ProxyGroup.
 	// Get all Pods
@@ -675,6 +662,14 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 				logger.Debugf("deleting advertisement for service '%s'", serviceName)
 				conf.AdvertiseServices = slices.Delete(conf.AdvertiseServices, idx, idx+1)
 			case shouldBeAdvertised:
+				ready, err := a.backendRoutesSetup(ctx, serviceName.String(), secret.Name, pgName, cfg, logger)
+				if err != nil {
+					return fmt.Errorf("error checking backend routes: %w", err)
+				}
+				if !ready {
+					logger.Debugf("service '%s' is not ready to be advertised", serviceName)
+					continue
+				}
 				logger.Debugf("advertising service '%s' in secret with name '%s'", serviceName, secret.DeepCopy().Name)
 				conf.AdvertiseServices = append(conf.AdvertiseServices, serviceName.String())
 			}
