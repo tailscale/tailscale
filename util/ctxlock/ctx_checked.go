@@ -43,6 +43,9 @@ func Wrap(parent context.Context) Context {
 // It locks the mutex unless it is already held by the parent or an ancestor [Context].
 // It is a runtime error to pass a nil mutex or to unlock the parent context
 // before the returned one.
-func Lock(parent Context, mu *sync.Mutex) Context {
-	return Context{lockChecked(parent.checked, mu)}
+func Lock[T context.Context](parent T, mu *sync.Mutex) Context {
+	if parent, ok := any(parent).(Context); ok {
+		return Context{lockChecked(parent.checked, mu)}
+	}
+	return Context{lockChecked(wrapChecked(parent), mu)}
 }

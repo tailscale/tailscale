@@ -4,10 +4,10 @@
 package ctxlock_test
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
-	"tailscale.com/syncs"
 	"tailscale.com/util/ctxlock"
 )
 
@@ -27,7 +27,8 @@ func (r *Resource) SetFoo(ctx ctxlock.Context, foo string) {
 }
 
 func (r *Resource) GetBar(ctx ctxlock.Context) string {
-	defer ctxlock.Lock(ctx, &r.mu).Unlock()
+	ctx = ctxlock.Lock(ctx, &r.mu)
+	defer ctx.Unlock() // If you prefer it this way.
 	return r.bar
 }
 
@@ -41,6 +42,17 @@ func (r *Resource) WithLock(ctx ctxlock.Context, f func(ctx ctxlock.Context)) {
 	ctx = ctxlock.Lock(ctx, &r.mu)
 	defer ctx.Unlock()
 	f(ctx) // Call the callback with the new context.
+}
+
+func (r *Resource) HandleRequest(ctx context.Context, foo, bar string, f func(ctx ctxlock.Context) string) string {
+	// Same, but with a standard [context.Context] instead of [ctxlock.Context].
+	// [ctxlock.Lock] is generic and works with both without allocating.
+	// The provided context can be used for cancellation, etc.
+	muCtx := ctxlock.Lock(ctx, &r.mu)
+	defer muCtx.Unlock()
+	r.foo = foo
+	r.bar = bar
+	return f(muCtx)
 }
 
 func ExampleContext() {
@@ -80,5 +92,16 @@ func ExampleContext_zeroValue() {
 		r1.SetFoo(ctx, r1.GetFoo(ctx)+r2.GetBar(ctx))
 	})
 	fmt.Println(r1.GetFoo(ctxlock.Context{}))
+	// Output: foobar
+}
+
+func ExampleContext_stdContext() {
+	var r Resource
+	ctx := context.Background()
+	result := r.HandleRequest(ctx, "foo", "bar", func(ctx ctxlock.Context) string {
+		// The r's lock is held, and ctx carries the lock state.
+		return r.GetFoo(ctx) + r.GetBar(ctx)
+	})
+	fmt.Println(result)
 	// Output: foobar
 }

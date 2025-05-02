@@ -25,6 +25,9 @@ func Wrap(parent context.Context) Context {
 	return Context{wrapUnchecked(parent)}
 }
 
-func Lock(parent Context, mu *sync.Mutex) Context {
-	return Context{lockUnchecked(parent.unchecked, mu)}
+func Lock[T context.Context](parent T, mu *sync.Mutex) Context {
+	if parent, ok := any(parent).(Context); ok {
+		return Context{lockUnchecked(parent.unchecked, mu)}
+	}
+	return Context{lockUnchecked(wrapUnchecked(parent), mu)}
 }

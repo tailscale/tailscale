@@ -26,7 +26,7 @@ var (
 	exportedImpl = impl[Context]{
 		None: None,
 		Wrap: Wrap,
-		Lock: Lock,
+		Lock: Lock[Context],
 	}
 	checkedImpl = impl[*checked]{
 		None: func() *checked { return nil },
@@ -75,6 +75,34 @@ func benchmarkReentrance[T ctx](b *testing.B, impl impl[T]) {
 		}(parent)
 		parent.Unlock()
 	}
+}
+
+func BenchmarkGenericLock(b *testing.B) {
+	// Does not allocate with --tags=ts_omit_ctxlock_checks.
+	b.Run("ZeroContext", func(b *testing.B) {
+		var mu sync.Mutex
+		var ctx Context
+		for b.Loop() {
+			parent := Lock(ctx, &mu)
+			func(ctx Context) {
+				child := Lock(ctx, &mu)
+				child.Unlock()
+			}(parent)
+			parent.Unlock()
+		}
+	})
+	b.Run("StdContext", func(b *testing.B) {
+		var mu sync.Mutex
+		ctx := context.Background()
+		for b.Loop() {
+			parent := Lock(ctx, &mu)
+			func(ctx Context) {
+				child := Lock(ctx, &mu)
+				child.Unlock()
+			}(parent)
+			parent.Unlock()
+		}
+	})
 }
 
 func TestHappyPath(t *testing.T) {
