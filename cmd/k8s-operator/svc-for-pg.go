@@ -203,20 +203,20 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		// gaugePGIngressResources.Set(int64(r.managedIngresses.Len()))
 		// r.mu.Unlock()
 	}
-	//
-	// 1. Ensure that if Ingress' hostname has changed, any VIPService
+
+	// 1. Ensure that if Service's hostname/name has changed, any VIPService
 	// resources corresponding to the old hostname are cleaned up.
 	// In practice, this function will ensure that any VIPServices that are
-	// associated with the provided ProxyGroup and no longer owned by an
-	// Ingress are cleaned up. This is fine- it is not expensive and ensures
+	// associated with the provided ProxyGroup and no longer owned by a
+	// Service are cleaned up. This is fine- it is not expensive and ensures
 	// that in edge cases (a single update changed both hostname and removed
 	// ProxyGroup annotation) the VIPService is more likely to be
 	// (eventually) removed.
-	// svcsChanged, err = r.maybeCleanupProxyGroup(ctx, pgName, logger)
-	// if err != nil {
-	// 	return false, fmt.Errorf("failed to cleanup VIPService resources for ProxyGroup: %w", err)
-	// }
-	//
+	svcsChanged, err = r.maybeCleanupProxyGroup(ctx, pgName, logger)
+	if err != nil {
+		return false, fmt.Errorf("failed to cleanup VIPService resources for ProxyGroup: %w", err)
+	}
+
 	// 2. Ensure that there isn't a VIPService with the same hostname
 	// already created and not owned by this Service.
 	// TODO(irbekrm): perhaps in future we could have record names being
@@ -454,70 +454,59 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	return true, r.Update(ctx, cm)
 }
 
+// TODO: Fix, not cleaning up properly
 // VIPServices that are associated with the provided ProxyGroup and no longer managed this operator's instance are deleted, if not owned by other operator instances, else the owner reference is cleaned up.
 // Returns true if the operation resulted in existing VIPService updates (owner reference removal).
 func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyGroupName string, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
-	// Get serve config for the ProxyGroup
-	// cm, cfg, err := r.proxyGroupServeConfig(ctx, proxyGroupName)
-	// if err != nil {
-	// 	return false, fmt.Errorf("getting serve config: %w", err)
-	// }
-	// if cfg == nil {
-	// 	return false, nil // ProxyGroup does not have any VIPServices
-	// }
-	//
-	// ingList := &networkingv1.IngressList{}
-	// if err := r.List(ctx, ingList); err != nil {
-	// 	return false, fmt.Errorf("listing Ingresses: %w", err)
-	// }
-	// serveConfigChanged := false
-	// // For each VIPService in serve config...
-	// for vipServiceName := range cfg.Services {
-	// 	// ...check if there is currently an Ingress with this hostname
-	// 	found := false
-	// 	for _, i := range ingList.Items {
-	// 		ingressHostname := hostnameForIngress(&i)
-	// 		if ingressHostname == vipServiceName.WithoutPrefix() {
-	// 			found = true
-	// 			break
-	// 		}
-	// 	}
-	//
-	// 	if !found {
-	// 		logger.Infof("VIPService %q is not owned by any Ingress, cleaning up", vipServiceName)
-	//
-	// 		// Delete the VIPService from control if necessary.
-	// 		svcsChanged, err = r.cleanupVIPService(ctx, vipServiceName, logger)
-	// 		if err != nil {
-	// 			return false, fmt.Errorf("deleting VIPService %q: %w", vipServiceName, err)
-	// 		}
-	//
-	// 		// Make sure the VIPService is not advertised in tailscaled or serve config.
-	// 		if err = r.maybeUpdateAdvertiseServicesConfig(ctx, proxyGroupName, vipServiceName, serviceAdvertisementOff, logger); err != nil {
-	// 			return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
-	// 		}
-	// 		_, ok := cfg.Services[vipServiceName]
-	// 		if ok {
-	// 			logger.Infof("Removing VIPService %q from serve config", vipServiceName)
-	// 			delete(cfg.Services, vipServiceName)
-	// 			serveConfigChanged = true
-	// 		}
-	// 		if err := r.cleanupCertResources(ctx, proxyGroupName, vipServiceName); err != nil {
-	// 			return false, fmt.Errorf("failed to clean up cert resources: %w", err)
-	// 		}
-	// 	}
-	// }
-	//
-	// if serveConfigChanged {
-	// 	cfgBytes, err := json.Marshal(cfg)
-	// 	if err != nil {
-	// 		return false, fmt.Errorf("marshaling serve config: %w", err)
-	// 	}
-	// 	mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
-	// 	if err := r.Update(ctx, cm); err != nil {
-	// 		return false, fmt.Errorf("updating serve config: %w", err)
-	// 	}
-	// }
+	cm, config, err := ingressSvcsConfigs(ctx, r.Client, proxyGroupName, r.tsNamespace)
+	if err != nil {
+		return false, fmt.Errorf("failed to get ingress service config: %s", err)
+	}
+
+	svcList := &corev1.ServiceList{}
+	if err := r.Client.List(ctx, svcList, client.MatchingFields{indexIngressProxyGroup: proxyGroupName}); err != nil {
+		return false, fmt.Errorf("failed to find services for ProxyGroup %q: %w", proxyGroupName, err)
+	}
+
+	ingressConfigChanged := false
+	for vipSvcName, cfg := range config {
+		found := false
+		for _, svc := range svcList.Items {
+			if strings.EqualFold(fmt.Sprintf("svc:%s", nameForService(&svc)), vipSvcName) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			logger.Infof("VIPService %q is not owned by any Service, cleaning up", vipSvcName)
+
+			// Make sure the VIPService is not advertised in tailscaled or serve config.
+			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, proxyGroupName, tailcfg.ServiceName(vipSvcName), &cfg, false, logger); err != nil {
+				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
+			}
+
+			r.cleanupVIPService(ctx, tailcfg.ServiceName(vipSvcName), logger)
+
+			_, ok := config[vipSvcName]
+			if ok {
+				logger.Infof("Removing VIPService %q from serve config", vipSvcName)
+				delete(config, vipSvcName)
+				ingressConfigChanged = true
+			}
+		}
+	}
+
+	if ingressConfigChanged {
+		configBytes, err := json.Marshal(config)
+		if err != nil {
+			return false, fmt.Errorf("marshaling serve config: %w", err)
+		}
+		mak.Set(&cm.BinaryData, ingressservices.IngressConfigKey, configBytes)
+		if err := r.Update(ctx, cm); err != nil {
+			return false, fmt.Errorf("updating serve config: %w", err)
+		}
+	}
+
 	return svcsChanged, nil
 }
 
