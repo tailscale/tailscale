@@ -356,19 +356,31 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
 	}
 
-	// TODO: is it ready?
 	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
 		return false, nil
 	}
-	dnsName, err := r.dnsNameForService(ctx, serviceName)
+
+	count, err := r.numberPodsAdvertising(ctx, pgName, serviceName)
 	if err != nil {
-		return false, fmt.Errorf("error getting DNS name for Service: %w", err)
+		return false, fmt.Errorf("failed to get number of advertised Pods: %w", err)
 	}
-	ingress := []corev1.LoadBalancerIngress{
-		{Hostname: dnsName,
-			IP: vipv4.String()},
+
+	var lbs []corev1.LoadBalancerIngress
+	if count != 0 {
+		dnsName, err := r.dnsNameForService(ctx, serviceName)
+		if err != nil {
+			return false, fmt.Errorf("error getting DNS name for Service: %w", err)
+		}
+
+		lbs = []corev1.LoadBalancerIngress{
+			{
+				Hostname: dnsName,
+				IP:       vipv4.String(),
+			},
+		}
 	}
-	svc.Status.LoadBalancer.Ingress = ingress
+
+	svc.Status.LoadBalancer.Ingress = lbs
 
 	// if apiequality.Semantic.DeepEqual(oldStatus, &ing.Status) {
 	// 	return svcsChanged, nil
