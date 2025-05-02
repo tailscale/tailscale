@@ -875,8 +875,35 @@ type Hostinfo struct {
 	// explicitly declared by a node.
 	Location *Location `json:",omitempty"`
 
+	TPM *TPMInfo `json:",omitempty"` // TPM device metadata, if available
+
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
+}
+
+// TPMInfo contains information about a TPM 2.0 device present on a node.
+// All fields are read from TPM_CAP_TPM_PROPERTIES, see Part 2, section 6.13 of
+// https://trustedcomputinggroup.org/resource/tpm-library-specification/.
+type TPMInfo struct {
+	// Manufacturer is a 4-letter code from section 4.1 of
+	// https://trustedcomputinggroup.org/resource/vendor-id-registry/,
+	// for example "MSFT" for Microsoft.
+	// Read from TPM_PT_MANUFACTURER.
+	Manufacturer string `json:",omitempty"`
+	// Vendor is a vendor ID string, up to 16 characters.
+	// Read from TPM_PT_VENDOR_STRING_*.
+	Vendor string `json:",omitempty"`
+	// Model is a vendor-defined TPM model.
+	// Read from TPM_PT_VENDOR_TPM_TYPE.
+	Model int `json:",omitempty"`
+	// FirmwareVersion is the version number of the firmware.
+	// Read from TPM_PT_FIRMWARE_VERSION_*.
+	FirmwareVersion uint64 `json:",omitempty"`
+	// SpecRevision is the TPM 2.0 spec revision encoded as a single number. All
+	// revisions can be found at
+	// https://trustedcomputinggroup.org/resource/tpm-library-specification/.
+	// Before revision 184, TCG used the "01.83" format for revision 183.
+	SpecRevision int `json:",omitempty"`
 }
 
 // ServiceName is the name of a service, of the form `svc:dns-label`. Services
