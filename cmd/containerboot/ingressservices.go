@@ -23,15 +23,23 @@ import (
 	"tailscale.com/util/mak"
 )
 
+// ingressProxy corresponds to a Kubernetes Operator's network layer ingress
+// proxy. It configures firewall rules (iptables or nftables) to proxy tailnet
+// traffic to Kubernetes Services.  Currently this is only used for network
+// layer proxies in HA mode.
 type ingressProxy struct {
-	cfgPath string // path to a directory with ingress services config files
+	cfgPath string // path to ingress configfile.
 
-	nfr linuxfw.NetfilterRunner // never nil
+	// nfr is the netfilter runner used to configure firewall rules.
+	// Never nil.
+	nfr linuxfw.NetfilterRunner
 
 	kc          kubeclient.Client // never nil
-	stateSecret string            // name of the kube state Secret
+	stateSecret string            // Secret that holds Tailscale state
 
-	podIP string // never empty
+	// Pod's IP addresses are used as an identifier of this partcular Pod.
+	podIPv4 string // empty if Pod does not have IPv4 address
+	podIPv6 string // empty if Pod does not have IPv6 address
 }
 
 func (ep *ingressProxy) run(ctx context.Context, opts ingressProxyOpts) error {
@@ -73,41 +81,45 @@ func (ep *ingressProxy) run(ctx context.Context, opts ingressProxyOpts) error {
 
 type ingressProxyOpts struct {
 	cfgPath     string
-	nfr         linuxfw.NetfilterRunner
-	kc          kubeclient.Client
+	nfr         linuxfw.NetfilterRunner // never nil
+	kc          kubeclient.Client       // never nil
 	stateSecret string
-	podIP       string // TODO: change to IP hash maybe
+	podIPv4     string
+	podIPv6     string
 }
 
-// applyOpts configures egress proxy using the provided options.
 func (ep *ingressProxy) configure(opts ingressProxyOpts) {
 	ep.cfgPath = opts.cfgPath
 	ep.nfr = opts.nfr
 	ep.kc = opts.kc
 	ep.stateSecret = opts.stateSecret
-	ep.podIP = opts.podIP
+	ep.podIPv4 = opts.podIPv4
+	ep.podIPv6 = opts.podIPv6
 }
 
+// sync reconciles proxy's firewall rules (iptables or nftables) on ingress config changes:
+// - ensures that new firewall rules are added
+// - ensures that old firewall rules are deleted
+// - updates ingress proxy's status in the state Secret
 func (ep *ingressProxy) sync(ctx context.Context) error {
 	cfgs, err := ep.getConfigs()
 	if err != nil {
-		return fmt.Errorf("error retrieving ingress service configs: %w", err)
+		return fmt.Errorf("ingress proxy: error retrieving configs: %w", err)
 	}
 	status, err := ep.getStatus(ctx)
 	if err != nil {
-		return fmt.Errorf("error retrieving current ingress proxy status: %w", err)
+		return fmt.Errorf("ingress proxy: error retrieving current status: %w", err)
 	}
-	// get status
 	if err := ep.syncIngressConfigs(cfgs, status); err != nil {
-		return fmt.Errorf("error syncing ingress service configs: %w", err)
+		return fmt.Errorf("ingress proxy: error syncing configs: %w", err)
 	}
 	var existingConfigs *ingressservices.Configs
 	if status != nil {
 		existingConfigs = &status.Configs
 	}
-	if !ingresServicesStatusIsEqual(cfgs, existingConfigs) {
+	if !(ingresServicesStatusIsEqual(cfgs, existingConfigs) && ep.isCurrentStatus(status)) {
 		if err := ep.setStatus(ctx, cfgs); err != nil {
-			return fmt.Errorf("error setting ingress proxy status: %w", err)
+			return fmt.Errorf("ingress proxy: error setting status: %w", err)
 		}
 	}
 	return nil
@@ -117,12 +129,16 @@ func (ep *ingressProxy) getRulesToDelete(cfgs *ingressservices.Configs, status *
 	if status == nil {
 		return nil
 	}
-	for svcName, cfg := range status.Configs {
-		needed := cfgs.GetConfig(svcName)
-		if reflect.DeepEqual(needed, cfg) {
+	for vipSvc, gotCfg := range status.Configs {
+		if cfgs == nil {
+			mak.Set(&rulesToDelete, vipSvc, gotCfg)
 			continue
 		}
-		mak.Set(&rulesToDelete, svcName, cfg)
+		wantsCfg := cfgs.GetConfig(vipSvc)
+		if wantsCfg != nil && reflect.DeepEqual(*wantsCfg, gotCfg) {
+			continue
+		}
+		mak.Set(&rulesToDelete, vipSvc, gotCfg)
 	}
 	return rulesToDelete
 }
@@ -131,29 +147,41 @@ func (ep *ingressProxy) getRulesToAdd(cfgs *ingressservices.Configs, status *ing
 	if cfgs == nil {
 		return nil
 	}
-	for svcName, cfg := range *cfgs {
-		if status == nil {
-			mak.Set(&rulesToAdd, svcName, cfg)
+	for vipSvc, wantsCfg := range *cfgs {
+		if status == nil || !ep.isCurrentStatus(status) {
+			mak.Set(&rulesToAdd, vipSvc, wantsCfg)
 			continue
 		}
-		existing := status.Configs.GetConfig(svcName)
-		if reflect.DeepEqual(existing, cfg) {
-			continue
+		gotCfg := status.Configs.GetConfig(vipSvc)
+		if gotCfg == nil || !reflect.DeepEqual(wantsCfg, *gotCfg) {
+			mak.Set(&rulesToAdd, vipSvc, wantsCfg)
 		}
-		mak.Set(&rulesToAdd, svcName, cfg)
 	}
 	return rulesToAdd
 }
 
+// isCurrentStatus returns true if the status of an ingress proxy as read from
+// the proxy's state Secret is the status of the current proxy Pod.  We use
+// Pod's IP address to determine that the status is for this Pod.
+func (ep *ingressProxy) isCurrentStatus(status *ingressservices.Status) bool {
+	if status == nil {
+		return true
+	}
+	return status.PodIPv4 == ep.podIPv4 && status.PodIPv6 == ep.podIPv6
+}
+
 func (ep *ingressProxy) syncIngressConfigs(cfgs *ingressservices.Configs, status *ingressservices.Status) error {
+	log.Printf("syncing ingress service configs with status %+#v", status)
 	rulesToAdd := ep.getRulesToAdd(cfgs, status)
 	rulesToDelete := ep.getRulesToDelete(cfgs, status)
+	log.Printf("ingress rules to add: %v", rulesToAdd)
+	log.Printf("ingress rules to delete: %v", rulesToDelete)
 
 	if err := ensureIngressRulesDeleted(rulesToDelete, ep.nfr); err != nil {
 		return fmt.Errorf("error deleting ingress rules: %w", err)
 	}
 	if err := ensureIngressRulesAdded(rulesToAdd, ep.nfr); err != nil {
-		return fmt.Errorf("error adding rules: %w", err)
+		return fmt.Errorf("error adding ingress rules: %w", err)
 	}
 	return nil
 }
@@ -193,16 +221,17 @@ func (ep *ingressProxy) getStatus(ctx context.Context) (*ingressservices.Status,
 	if err := json.Unmarshal([]byte(raw), status); err != nil {
 		return nil, fmt.Errorf("error unmarshalling previous config: %w", err)
 	}
-	if reflect.DeepEqual(status.PodIP, ep.podIP) {
-		return status, nil
-	}
-	return nil, nil
+	return status, nil
 }
 
 func (ep *ingressProxy) setStatus(ctx context.Context, newCfg *ingressservices.Configs) error {
 	// Pod IP is used to determine if a stored status applies to THIS proxy Pod.
-	status := &ingressservices.Status{Configs: *newCfg}
-	status.PodIP = ep.podIP
+	status := &ingressservices.Status{}
+	if newCfg != nil {
+		status.Configs = *newCfg
+	}
+	status.PodIPv4 = ep.podIPv4
+	status.PodIPv6 = ep.podIPv6
 	secret, err := ep.kc.GetSecret(ctx, ep.stateSecret)
 	if err != nil {
 		return fmt.Errorf("error retrieving state Secret: %w", err)

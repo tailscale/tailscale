@@ -599,9 +599,11 @@ func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcf
 }
 
 func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceName, replicaName, pgName string, wantsCfg *ingressservices.Config, logger *zap.SugaredLogger) (bool, error) {
+	logger.Debugf("checking backend routes for service '%s'", serviceName)
 	pod := &corev1.Pod{}
 	err := a.Get(ctx, client.ObjectKey{Namespace: a.tsNamespace, Name: replicaName}, pod)
 	if apierrors.IsNotFound(err) {
+		logger.Debugf("Pod %q not found", replicaName)
 		return false, nil
 	}
 	if err != nil {
@@ -610,6 +612,7 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 	secret := &corev1.Secret{}
 	err = a.Get(ctx, client.ObjectKey{Namespace: a.tsNamespace, Name: replicaName}, secret)
 	if apierrors.IsNotFound(err) {
+		logger.Debugf("Secret %q not found", replicaName)
 		return false, nil
 	}
 	if err != nil {
@@ -623,12 +626,44 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 	if err := json.Unmarshal(gotCfgB, &gotCfgs); err != nil {
 		return false, fmt.Errorf("error unmarshalling ingress config: %w", err)
 	}
-	if gotCfgs.PodIP != pod.Status.PodIP { // TODO: consider multiple IPs
-		logger.Debugf("Pod %q has IP %q, but wants %q", pod.Name, gotCfgs.PodIP, pod.Status.PodIP)
+	statusUpToDate, err := isCurrentStatus(gotCfgs, pod, logger)
+	if err != nil {
+		return false, fmt.Errorf("error checking ingress config status: %w", err)
+	}
+	if !statusUpToDate {
+		logger.Debugf("Pod %q is not ready to advertise VIPService", pod.Name)
 		return false, nil
 	}
 	if !reflect.DeepEqual(gotCfgs.Configs.GetConfig(serviceName), wantsCfg) {
 		logger.Debugf("Pod %q has config %q, but wants %q", pod.Name, gotCfgs.Configs.GetConfig(serviceName), wantsCfg)
+		return false, nil
+	}
+	return true, nil
+}
+
+func isCurrentStatus(gotCfgs ingressservices.Status, pod *corev1.Pod, logger *zap.SugaredLogger) (bool, error) {
+	ips := pod.Status.PodIPs
+	if len(ips) == 0 {
+		logger.Debugf("Pod %q does not yet have IPs, unable to determine if status is up to date", pod.Name)
+		return false, nil
+	}
+
+	if len(ips) > 2 {
+		return false, fmt.Errorf("POD_IPs can contain at most 2 IPs, got %d (%v)", len(ips), ips)
+	}
+	var podIPv4, podIPv6 string
+	for _, ip := range ips {
+		parsed, err := netip.ParseAddr(ip.IP)
+		if err != nil {
+			return false, fmt.Errorf("error parsing IP address %s: %w", ip.IP, err)
+		}
+		if parsed.Is4() {
+			podIPv4 = parsed.String()
+			continue
+		}
+		podIPv6 = parsed.String()
+	}
+	if podIPv4 != gotCfgs.PodIPv4 || podIPv6 != gotCfgs.PodIPv6 {
 		return false, nil
 	}
 	return true, nil

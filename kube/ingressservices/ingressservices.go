@@ -22,8 +22,8 @@ func (cfgs *Configs) GetConfig(name string) *Config {
 
 type Status struct {
 	Configs Configs `json:"configs,omitempty"`
-	// PodIP is sufficiently unique to distinguish status that belongs to this Pod.
-	PodIP string `json:"podIP,omitempty"`
+	PodIPv4 string  `json:"podIPv4,omitempty"`
+	PodIPv6 string  `json:"podIPv6,omitempty"`
 }
 
 type Mapping struct {

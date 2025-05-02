@@ -703,7 +703,8 @@ runLoop:
 							nfr:         nfr,
 							kc:          kc,
 							stateSecret: cfg.KubeSecret,
-							podIP:       cfg.PodIPv4,
+							podIPv4:     cfg.PodIPv4,
+							podIPv6:     cfg.PodIPv6,
 						}
 						go func() {
 							if err := ip.run(ctx, opts); err != nil {
