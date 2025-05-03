@@ -87,17 +87,17 @@ func newNodeBackend() *nodeBackend {
 	return cn
 }
 
-func (c *nodeBackend) Self() tailcfg.NodeView {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.netMap == nil {
+func (nb *nodeBackend) Self() tailcfg.NodeView {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.netMap == nil {
 		return tailcfg.NodeView{}
 	}
-	return c.netMap.SelfNode
+	return nb.netMap.SelfNode
 }
 
-func (c *nodeBackend) SelfUserID() tailcfg.UserID {
-	self := c.Self()
+func (nb *nodeBackend) SelfUserID() tailcfg.UserID {
+	self := nb.Self()
 	if !self.Valid() {
 		return 0
 	}
@@ -105,59 +105,59 @@ func (c *nodeBackend) SelfUserID() tailcfg.UserID {
 }
 
 // SelfHasCap reports whether the specified capability was granted to the self node in the most recent netmap.
-func (c *nodeBackend) SelfHasCap(wantCap tailcfg.NodeCapability) bool {
-	return c.SelfHasCapOr(wantCap, false)
+func (nb *nodeBackend) SelfHasCap(wantCap tailcfg.NodeCapability) bool {
+	return nb.SelfHasCapOr(wantCap, false)
 }
 
 // SelfHasCapOr is like [nodeBackend.SelfHasCap], but returns the specified default value
 // if the netmap is not available yet.
-func (c *nodeBackend) SelfHasCapOr(wantCap tailcfg.NodeCapability, def bool) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.netMap == nil {
+func (nb *nodeBackend) SelfHasCapOr(wantCap tailcfg.NodeCapability, def bool) bool {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.netMap == nil {
 		return def
 	}
-	return c.netMap.AllCaps.Contains(wantCap)
+	return nb.netMap.AllCaps.Contains(wantCap)
 }
 
-func (c *nodeBackend) NetworkProfile() ipn.NetworkProfile {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (nb *nodeBackend) NetworkProfile() ipn.NetworkProfile {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
 	return ipn.NetworkProfile{
 		// These are ok to call with nil netMap.
-		MagicDNSName: c.netMap.MagicDNSSuffix(),
-		DomainName:   c.netMap.DomainName(),
+		MagicDNSName: nb.netMap.MagicDNSSuffix(),
+		DomainName:   nb.netMap.DomainName(),
 	}
 }
 
 // TODO(nickkhyl): update it to return a [tailcfg.DERPMapView]?
-func (c *nodeBackend) DERPMap() *tailcfg.DERPMap {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.netMap == nil {
+func (nb *nodeBackend) DERPMap() *tailcfg.DERPMap {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.netMap == nil {
 		return nil
 	}
-	return c.netMap.DERPMap
+	return nb.netMap.DERPMap
 }
 
-func (c *nodeBackend) NodeByAddr(ip netip.Addr) (_ tailcfg.NodeID, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	nid, ok := c.nodeByAddr[ip]
+func (nb *nodeBackend) NodeByAddr(ip netip.Addr) (_ tailcfg.NodeID, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	nid, ok := nb.nodeByAddr[ip]
 	return nid, ok
 }
 
-func (c *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.netMap == nil {
+func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.netMap == nil {
 		return 0, false
 	}
-	if self := c.netMap.SelfNode; self.Valid() && self.Key() == k {
+	if self := nb.netMap.SelfNode; self.Valid() && self.Key() == k {
 		return self.ID(), true
 	}
 	// TODO(bradfitz,nickkhyl): add nodeByKey like nodeByAddr instead of walking peers.
-	for _, n := range c.peers {
+	for _, n := range nb.peers {
 		if n.Key() == k {
 			return n.ID(), true
 		}
@@ -165,17 +165,17 @@ func (c *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	return 0, false
 }
 
-func (c *nodeBackend) PeerByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	n, ok := c.peers[id]
+func (nb *nodeBackend) PeerByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	n, ok := nb.peers[id]
 	return n, ok
 }
 
-func (c *nodeBackend) UserByID(id tailcfg.UserID) (_ tailcfg.UserProfileView, ok bool) {
-	c.mu.Lock()
-	nm := c.netMap
-	c.mu.Unlock()
+func (nb *nodeBackend) UserByID(id tailcfg.UserID) (_ tailcfg.UserProfileView, ok bool) {
+	nb.mu.Lock()
+	nm := nb.netMap
+	nb.mu.Unlock()
 	if nm == nil {
 		return tailcfg.UserProfileView{}, false
 	}
@@ -184,10 +184,10 @@ func (c *nodeBackend) UserByID(id tailcfg.UserID) (_ tailcfg.UserProfileView, ok
 }
 
 // Peers returns all the current peers in an undefined order.
-func (c *nodeBackend) Peers() []tailcfg.NodeView {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return slicesx.MapValues(c.peers)
+func (nb *nodeBackend) Peers() []tailcfg.NodeView {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return slicesx.MapValues(nb.peers)
 }
 
 // unlockedNodesPermitted reports whether any peer with theUnsignedPeerAPIOnly bool set true has any of its allowed IPs
@@ -196,12 +196,12 @@ func (c *nodeBackend) Peers() []tailcfg.NodeView {
 // TODO(nickkhyl): It is here temporarily until we can move the whole [LocalBackend.updateFilterLocked] here,
 // but change it so it builds and returns a filter for the current netmap/prefs instead of re-configuring the engine filter.
 // Something like (*nodeBackend).RebuildFilters() (filter, jailedFilter *filter.Filter, changed bool) perhaps?
-func (c *nodeBackend) unlockedNodesPermitted(packetFilter []filter.Match) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return packetFilterPermitsUnlockedNodes(c.peers, packetFilter)
+func (nb *nodeBackend) unlockedNodesPermitted(packetFilter []filter.Match) bool {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return packetFilterPermitsUnlockedNodes(nb.peers, packetFilter)
 }
 
-func (c *nodeBackend) filter() *filter.Filter {
-	return c.filterAtomic.Load()
+func (nb *nodeBackend) filter() *filter.Filter {
+	return nb.filterAtomic.Load()
 }
