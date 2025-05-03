@@ -11,6 +11,8 @@
 // It defaults to the checked implementation unless the ts_omit_ctxlock_checks build tag is set.
 package ctxlock
 
+// This file contains both the [checked] and [unchecked] implementations of [State].
+
 import (
 	"context"
 	"fmt"
@@ -25,29 +27,40 @@ func ctxKeyOf(mu *sync.Mutex) ctxKey {
 	return ctxKey{mu}
 }
 
-// checked is an implementation of [Context] that performs runtime checks
-// to ensure that the context is used correctly.
+// checked is an implementation of [State] that performs runtime checks
+// to ensure the correct order of locking and unlocking.
 //
-// Its zero value and a nil pointer carry no lock state and an empty [context.Context].
+// Its zero value and a nil pointer are valid and carry no lock state
+// and an empty [context.Context].
 type checked struct {
-	context.Context             // nil if the context does not carry a [context.Context]
-	mu              *sync.Mutex // nil if the context does not carry a mutex lock state
-	parent          *checked    // nil if the context owns the lock
-	unlocked        bool        // whether [checked.Unlock] was called
+	context.Context // nil means an empty context
+
+	// mu is the mutex tracked by this state,
+	// or nil if it wasn't created with [Lock].
+	mu *sync.Mutex
+
+	// parent is an ancestor State associated with the same mutex.
+	// It may or may not own the lock (the lock could be held by a further ancestor).
+	// The parent is nil if this State is the root of the hierarchy,
+	// meaning it owns the lock.
+	parent *checked
+
+	// unlocked is whether [checked.Unlock] was called on this state.
+	unlocked bool
 }
 
-func wrapChecked(parent context.Context) *checked {
-	return &checked{parent, nil, nil, false}
+func fromContextChecked(ctx context.Context) *checked {
+	return &checked{ctx, nil, nil, false}
 }
 
 func lockChecked(parent *checked, mu *sync.Mutex) *checked {
 	panicIfNil(mu)
-	if parentLockCtx, ok := parent.Value(ctxKeyOf(mu)).(*checked); ok {
+	if parentState, ok := parent.Value(ctxKeyOf(mu)).(*checked); ok {
 		if appearsUnlocked(mu) {
-			// The parent still owns the lock, but the mutex is unlocked.
-			panic("mu is spuriously unlocked")
+			// The parent is already unlocked, but the mutex is not.
+			panic(fmt.Sprintf("%T is spuriously unlocked", mu))
 		}
-		return &checked{parent, mu, parentLockCtx, false}
+		return &checked{parent, mu, parentState, false}
 	}
 	mu.Lock()
 	return &checked{parent, mu, nil, false}
@@ -80,48 +93,55 @@ func (c *checked) Err() error {
 func (c *checked) Value(key any) any {
 	c.panicIfUnlocked()
 	if c == nil {
+		// No-op; zero state.
 		return nil
 	}
-	if key == ctxKeyOf(c.mu) {
+	if key, ok := key.(ctxKey); ok && key.Mutex == c.mu {
+		// This is the mutex tracked by this state.
 		return c
 	}
-	return c.Context.Value(key)
+	if c.Context != nil {
+		// Forward the call to the parent context,
+		// which may or may not be a [checked] state.
+		return c.Context.Value(key)
+	}
+	return nil
 }
 
 func (c *checked) Unlock() {
 	switch {
 	case c == nil:
-		// No-op; zero context.
+		// No-op; zero state.
 		return
 	case c.unlocked:
 		panic("already unlocked")
 	case c.mu == nil:
-		// No-op; the context does not track a mutex lock state,
-		// such as when it was created with [noneChecked] or [wrapChecked].
+		// No-op; the state does not track a mutex lock state,
+		// meaning it was not created with [Lock].
 	case c.parent == nil:
-		// We own the lock; let's unlock it.
+		// The state own the mutex's lock; we must unlock it.
 		// This triggers a fatal error if the mutex is already unlocked.
 		c.mu.Unlock()
 	case c.parent.unlocked:
-		// The parent context is already unlocked.
+		// The parent state is already unlocked.
 		// The mutex may or may not be locked;
 		// something else may have already locked it.
 		panic("parent already unlocked")
 	case appearsUnlocked(c.mu):
 		// The mutex itself is unlocked,
-		// even though the parent context is still locked.
-		// It may be unlocked by an ancestor context
+		// even though the parent state is still locked.
+		// It may be unlocked by an ancestor state
 		// or by something else entirely.
 		panic("mutex is not locked")
 	default:
 		// No-op; a parent or ancestor will handle unlocking.
 	}
-	c.unlocked = true // mark this context as unlocked
+	c.unlocked = true // mark this state as unlocked
 }
 
 func (c *checked) panicIfUnlocked() {
 	if c != nil && c.unlocked {
-		panic("use of context after unlock")
+		panic("use after unlock")
 	}
 }
 
@@ -131,23 +151,26 @@ func panicIfNil[T comparable](v T) {
 	}
 }
 
-// unchecked is an implementation of [Context] that trades runtime checks for performance.
+// unchecked is an implementation of [State] that trades runtime checks for performance.
 //
 // Its zero value carries no mutex lock state and an empty [context.Context].
 type unchecked struct {
-	context.Context             // nil if the context does not carry a [context.Context]
-	mu              *sync.Mutex // non-nil if locked by this context
+	context.Context             // nil means an empty context
+	mu              *sync.Mutex // non-nil if owned by this state
 }
 
-func wrapUnchecked(parent context.Context) unchecked {
-	return unchecked{parent, nil}
+func fromContextUnchecked(ctx context.Context) unchecked {
+	return unchecked{ctx, nil}
 }
 
 func lockUnchecked(parent unchecked, mu *sync.Mutex) unchecked {
 	if parent.Value(ctxKeyOf(mu)) == nil {
+		// There's no ancestor state associated with this mutex,
+		// so we can lock it.
 		mu.Lock()
 	} else {
-		mu = nil // already locked by a parent/ancestor
+		// The mutex is already locked by a parent/ancestor state.
+		mu = nil
 	}
 	return unchecked{parent.Context, mu}
 }
@@ -174,7 +197,7 @@ func (c unchecked) Err() error {
 }
 
 func (c unchecked) Value(key any) any {
-	if key == ctxKeyOf(c.mu) {
+	if key, ok := key.(ctxKey); ok && key.Mutex == c.mu {
 		return key
 	}
 	if c.Context == nil {
