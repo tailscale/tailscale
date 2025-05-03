@@ -770,6 +770,27 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 	}
 }
 
+// awaitTailscaledRunnable tries to run `tailscaled --version` until it
+// works. This is an unsatisfying workaround for ETXTBSY we were seeing
+// on GitHub Actions that aren't understood. It's not clear what's holding
+// a writable fd to tailscaled after `go install` completes.
+// See https://github.com/tailscale/tailscale/issues/15868.
+func (n *TestNode) awaitTailscaledRunnable() error {
+	t := n.env.t
+	t.Helper()
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		out, err := exec.Command(n.env.daemon, "--version").CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		t.Logf("error running tailscaled --version: %v, %s", err, out)
+		return err
+	}); err != nil {
+		return fmt.Errorf("gave up trying to run tailscaled: %v", err)
+	}
+	return nil
+}
+
 // StartDaemon starts the node's tailscaled, failing if it fails to start.
 // StartDaemon ensures that the process will exit when the test completes.
 func (n *TestNode) StartDaemon() *Daemon {
@@ -778,6 +799,11 @@ func (n *TestNode) StartDaemon() *Daemon {
 
 func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	t := n.env.t
+
+	if err := n.awaitTailscaledRunnable(); err != nil {
+		t.Fatalf("awaitTailscaledRunnable: %v", err)
+	}
+
 	cmd := exec.Command(n.env.daemon)
 	cmd.Args = append(cmd.Args,
 		"--statedir="+n.dir,
