@@ -1335,8 +1335,9 @@ func (b *testBackend) Clock() tstime.Clock { return tstime.StdClock{} }
 func (b *testBackend) Sys() *tsd.System {
 	return b.lazySys.Get(tsd.NewSystem)
 }
-func (b *testBackend) SendNotify(ipn.Notify)    { panic("not implemented") }
-func (b *testBackend) TailscaleVarRoot() string { panic("not implemented") }
+func (b *testBackend) SendNotify(ipn.Notify)           { panic("not implemented") }
+func (b *testBackend) NodeBackend() ipnext.NodeBackend { panic("not implemented") }
+func (b *testBackend) TailscaleVarRoot() string        { panic("not implemented") }
 
 func (b *testBackend) SwitchToBestProfile(reason string) {
 	b.mu.Lock()

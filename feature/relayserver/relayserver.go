@@ -133,7 +133,7 @@ func (e *extension) relayServerOrInit() (relayServer, error) {
 }
 
 func handlePeerAPIRelayAllocateEndpoint(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
-	e, ok := h.LocalBackend().FindExtensionByName(featureName).(*extension)
+	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
 	if !ok {
 		http.Error(w, "relay failed to initialize", http.StatusServiceUnavailable)
 		return

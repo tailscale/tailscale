@@ -1,35 +1,38 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !ts_omit_taildrop
-
-package main
+package taildrop
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
 )
 
-func configureTaildrop(logf logger.Logf, lb *ipnlocal.LocalBackend) {
+// SetDirectFileRoot sets the directory where received files are written.
+//
+// This must be called before Tailscale is started.
+func (e *Extension) SetDirectFileRoot(root string) {
+	e.directFileRoot = root
+}
+
+func (e *Extension) setPlatformDefaultDirectFileRoot() {
 	dg := distro.Get()
+
 	switch dg {
 	case distro.Synology, distro.TrueNAS, distro.QNAP, distro.Unraid:
 		// See if they have a "Taildrop" share.
 		// See https://github.com/tailscale/tailscale/issues/2179#issuecomment-982821319
 		path, err := findTaildropDir(dg)
 		if err != nil {
-			logf("%s Taildrop support: %v", dg, err)
+			e.logf("%s Taildrop support: %v", dg, err)
 		} else {
-			logf("%s Taildrop: using %v", dg, path)
-			lb.SetDirectFileRoot(path)
+			e.logf("%s Taildrop: using %v", dg, path)
+			e.directFileRoot = path
 		}
 	}
-
 }
 
 func findTaildropDir(dg distro.Distro) (string, error) {

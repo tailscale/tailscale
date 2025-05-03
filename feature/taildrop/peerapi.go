@@ -38,26 +38,30 @@ func canPutFile(h ipnlocal.PeerAPIHandler) bool {
 }
 
 func handlePeerPut(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
-	lb := h.LocalBackend()
-	handlePeerPutWithBackend(h, lb, w, r)
+	ext, ok := ipnlocal.GetExt[*Extension](h.LocalBackend())
+	if !ok {
+		http.Error(w, "miswired", http.StatusInternalServerError)
+		return
+	}
+	handlePeerPutWithBackend(h, ext, w, r)
 }
 
-// localBackend is the subset of ipnlocal.Backend that taildrop
+// extensionForPut is the subset of taildrop extension that taildrop
 // file put needs. This is pulled out for testability.
-type localBackend interface {
-	TaildropManager() (*taildrop.Manager, error)
-	HasCapFileSharing() bool
+type extensionForPut interface {
+	manager() *taildrop.Manager
+	hasCapFileSharing() bool
 	Clock() tstime.Clock
 }
 
-func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, lb localBackend, w http.ResponseWriter, r *http.Request) {
+func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, ext extensionForPut, w http.ResponseWriter, r *http.Request) {
 	if r.Method == "PUT" {
 		metricPutCalls.Add(1)
 	}
 
-	taildropMgr, err := lb.TaildropManager()
-	if err != nil {
-		h.Logf("taildropManager: %v", err)
+	taildropMgr := ext.manager()
+	if taildropMgr == nil {
+		h.Logf("taildrop: no taildrop manager")
 		http.Error(w, "failed to get taildrop manager", http.StatusInternalServerError)
 		return
 	}
@@ -66,7 +70,7 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, lb localBackend, w http
 		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
 		return
 	}
-	if !lb.HasCapFileSharing() {
+	if !ext.hasCapFileSharing() {
 		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
 		return
 	}
@@ -123,7 +127,7 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, lb localBackend, w http
 			}
 		}
 	case "PUT":
-		t0 := lb.Clock().Now()
+		t0 := ext.Clock().Now()
 		id := taildrop.ClientID(h.Peer().StableID())
 
 		var offset int64
@@ -138,7 +142,7 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, lb localBackend, w http
 		n, err := taildropMgr.PutFile(taildrop.ClientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
 		switch err {
 		case nil:
-			d := lb.Clock().Since(t0).Round(time.Second / 10)
+			d := ext.Clock().Since(t0).Round(time.Second / 10)
 			h.Logf("got put of %s in %v from %v/%v", approxSize(n), d, h.RemoteAddr().Addr(), h.Peer().ComputedName)
 			io.WriteString(w, "{}\n")
 		case taildrop.ErrNoTaildrop:

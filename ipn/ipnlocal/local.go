@@ -26,7 +26,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
@@ -58,6 +57,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
+	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
@@ -277,37 +277,23 @@ type LocalBackend struct {
 	capFileSharing bool      // whether netMap contains the file sharing capability
 	capTailnetLock bool      // whether netMap contains the tailnet lock capability
 	// hostinfo is mutated in-place while mu is held.
-	hostinfo         *tailcfg.Hostinfo      // TODO(nickkhyl): move to nodeContext
-	nmExpiryTimer    tstime.TimerController // for updating netMap on node expiry; can be nil; TODO(nickkhyl): move to nodeContext
-	activeLogin      string                 // last logged LoginName from netMap; TODO(nickkhyl): move to nodeContext (or remove? it's in [ipn.LoginProfile]).
-	engineStatus     ipn.EngineStatus
-	endpoints        []tailcfg.Endpoint
-	blocked          bool
-	keyExpired       bool          // TODO(nickkhyl): move to nodeContext
-	authURL          string        // non-empty if not Running; TODO(nickkhyl): move to nodeContext
-	authURLTime      time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeContext
-	authActor        ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeContext
-	egg              bool
-	prevIfState      *netmon.State
-	peerAPIServer    *peerAPIServer // or nil
-	peerAPIListeners []*peerAPIListener
-	loginFlags       controlclient.LoginFlags
-	fileWaiters      set.HandleSet[context.CancelFunc] // of wake-up funcs
-	notifyWatchers   map[string]*watchSession          // by session ID
-	lastStatusTime   time.Time                         // status.AsOf value of the last processed status update
-	// directFileRoot, if non-empty, means to write received files
-	// directly to this directory, without staging them in an
-	// intermediate buffered directory for "pick-up" later. If
-	// empty, the files are received in a daemon-owned location
-	// and the localapi is used to enumerate, download, and delete
-	// them. This is used on macOS where the GUI lifetime is the
-	// same as the Network Extension lifetime and we can thus avoid
-	// double-copying files by writing them to the right location
-	// immediately.
-	// It's also used on several NAS platforms (Synology, TrueNAS, etc)
-	// but in that case DoFinalRename is also set true, which moves the
-	// *.partial file to its final name on completion.
-	directFileRoot    string
+	hostinfo          *tailcfg.Hostinfo      // TODO(nickkhyl): move to nodeContext
+	nmExpiryTimer     tstime.TimerController // for updating netMap on node expiry; can be nil; TODO(nickkhyl): move to nodeContext
+	activeLogin       string                 // last logged LoginName from netMap; TODO(nickkhyl): move to nodeContext (or remove? it's in [ipn.LoginProfile]).
+	engineStatus      ipn.EngineStatus
+	endpoints         []tailcfg.Endpoint
+	blocked           bool
+	keyExpired        bool          // TODO(nickkhyl): move to nodeContext
+	authURL           string        // non-empty if not Running; TODO(nickkhyl): move to nodeContext
+	authURLTime       time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeContext
+	authActor         ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeContext
+	egg               bool
+	prevIfState       *netmon.State
+	peerAPIServer     *peerAPIServer // or nil
+	peerAPIListeners  []*peerAPIListener
+	loginFlags        controlclient.LoginFlags
+	notifyWatchers    map[string]*watchSession // by session ID
+	lastStatusTime    time.Time                // status.AsOf value of the last processed status update
 	componentLogUntil map[string]componentLogState
 	// c2nUpdateStatus is the status of c2n-triggered client update.
 	c2nUpdateStatus updateStatus
@@ -370,9 +356,6 @@ type LocalBackend struct {
 	// where all addresses might disappear.
 	// http://go/corp/25168
 	lastKnownHardwareAddrs syncs.AtomicValue[[]string]
-
-	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
-	outgoingFiles map[string]*ipn.OutgoingFile
 
 	// lastSuggestedExitNode stores the last suggested exit node suggestion to
 	// avoid unnecessary churn between multiple equally-good options.
@@ -594,6 +577,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 func (b *LocalBackend) Clock() tstime.Clock { return b.clock }
 func (b *LocalBackend) Sys() *tsd.System    { return b.sys }
 
+// NodeBackend returns the current node's NodeBackend interface.
+func (b *LocalBackend) NodeBackend() ipnext.NodeBackend {
+	return b.currentNode()
+}
+
 func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
@@ -772,17 +760,6 @@ func (b *LocalBackend) Dialer() *tsdial.Dialer {
 	return b.dialer
 }
 
-// SetDirectFileRoot sets the directory to download files to directly,
-// without buffering them through an intermediate daemon-owned
-// tailcfg.UserID-specific directory.
-//
-// This must be called before the LocalBackend starts being used.
-func (b *LocalBackend) SetDirectFileRoot(dir string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.directFileRoot = dir
-}
-
 // ReloadConfig reloads the backend's config from disk.
 //
 // It returns (false, nil) if not running in declarative mode, (true, nil) on
@@ -841,6 +818,16 @@ func (b *LocalBackend) setStaticEndpointsFromConfigLocked(conf *conffile.Config)
 		} else {
 			ms.SetStaticEndpoints(views.SliceOf(conf.Parsed.StaticEndpoints))
 		}
+	}
+}
+
+func (b *LocalBackend) setStateLocked(state ipn.State) {
+	if b.state == state {
+		return
+	}
+	b.state = state
+	for _, f := range b.extHost.Hooks().BackendStateChange {
+		f(state)
 	}
 }
 
@@ -1309,8 +1296,8 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			Location:        p.Hostinfo().Location().AsStruct(),
 			Capabilities:    p.Capabilities().AsSlice(),
 		}
-		if f := hookSetPeerStatusTaildropTargetLocked; f != nil {
-			f(b, ps, p)
+		for _, f := range b.extHost.Hooks().SetPeerStatus {
+			f(ps, p, cn)
 		}
 		if cm := p.CapMap(); cm.Len() > 0 {
 			ps.CapMap = make(tailcfg.NodeCapMap, cm.Len())
@@ -2357,7 +2344,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		hostinfo.Services = b.hostinfo.Services // keep any previous services
 	}
 	b.hostinfo = hostinfo
-	b.state = ipn.NoState
+	b.setStateLocked(ipn.NoState)
 
 	cn := b.currentNode()
 	if opts.UpdatePrefs != nil {
@@ -3316,17 +3303,6 @@ func (b *LocalBackend) sendTo(n ipn.Notify, recipient notificationTarget) {
 	b.sendToLocked(n, recipient)
 }
 
-var (
-	// hookSetNotifyFilesWaitingLocked, if non-nil, is called in sendToLocked to
-	// populate ipn.Notify.FilesWaiting when taildrop is linked in to the binary
-	// and enabled on a LocalBackend.
-	hookSetNotifyFilesWaitingLocked func(*LocalBackend, *ipn.Notify)
-
-	// hookSetPeerStatusTaildropTargetLocked, if non-nil, is called to populate PeerStatus
-	// if taildrop is linked in to the binary and enabled on the LocalBackend.
-	hookSetPeerStatusTaildropTargetLocked func(*LocalBackend, *ipnstate.PeerStatus, tailcfg.NodeView)
-)
-
 // sendToLocked is like [LocalBackend.sendTo], but assumes b.mu is already held.
 func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) {
 	if n.Prefs != nil {
@@ -3336,8 +3312,8 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 		n.Version = version.Long()
 	}
 
-	if f := hookSetNotifyFilesWaitingLocked; f != nil {
-		f(b, &n)
+	for _, f := range b.extHost.Hooks().MutateNotifyLocked {
+		f(&n)
 	}
 
 	for _, sess := range b.notifyWatchers {
@@ -5266,26 +5242,6 @@ func (b *LocalBackend) TailscaleVarRoot() string {
 	return ""
 }
 
-func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {
-	if v := b.directFileRoot; v != "" {
-		return v
-	}
-	varRoot := b.TailscaleVarRoot()
-	if varRoot == "" {
-		b.logf("Taildrop disabled; no state directory")
-		return ""
-	}
-	baseDir := fmt.Sprintf("%s-uid-%d",
-		strings.ReplaceAll(b.activeLogin, "@", "-"),
-		uid)
-	dir := filepath.Join(varRoot, "files", baseDir)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		b.logf("Taildrop disabled; error making directory: %v", err)
-		return ""
-	}
-	return dir
-}
-
 // closePeerAPIListenersLocked closes any existing PeerAPI listeners
 // and clears out the PeerAPI server state.
 //
@@ -5353,8 +5309,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 	}
 
 	ps := &peerAPIServer{
-		b:        b,
-		taildrop: b.newTaildropManager(b.fileRootLocked(selfNode.User())),
+		b: b,
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()
@@ -5643,7 +5598,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlockOnce) {
 	cn := b.currentNode()
 	oldState := b.state
-	b.state = newState
+	b.setStateLocked(newState)
 	prefs := b.pm.CurrentPrefs()
 
 	// Some temporary (2024-05-05) debugging code to help us catch
@@ -6158,6 +6113,8 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 // received nm. If nm is nil, it resets all configuration as though
 // Tailscale is turned off.
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
+	oldSelf := b.currentNode().NetMap().SelfNodeOrZero()
+
 	b.dialer.SetNetMap(nm)
 	if ns, ok := b.sys.Netstack.GetOK(); ok {
 		ns.UpdateNetstackIPs(nm)
@@ -6205,6 +6162,13 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	b.ipVIPServiceMap = nm.GetIPVIPServiceMap()
+
+	if !oldSelf.Equal(nm.SelfNodeOrZero()) {
+		for _, f := range b.extHost.Hooks().OnSelfChange {
+			f(nm.SelfNode)
+		}
+	}
+
 	if nm == nil {
 		// If there is no netmap, the client is going into a "turned off"
 		// state so reset the metrics.
@@ -6667,12 +6631,21 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 	return mk, nk
 }
 
-// PeerHasCap reports whether the peer with the given Tailscale IP addresses
-// contains the given capability string, with any value(s).
-func (nb *nodeBackend) PeerHasCap(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
+// PeerHasCap reports whether the peer contains the given capability string,
+// with any value(s).
+func (nb *nodeBackend) PeerHasCap(peer tailcfg.NodeView, wantCap tailcfg.PeerCapability) bool {
+	if !peer.Valid() {
+		return false
+	}
+
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return nb.peerHasCapLocked(addr, wantCap)
+	for _, ap := range peer.Addresses().All() {
+		if nb.peerHasCapLocked(ap.Addr(), wantCap) {
+			return true
+		}
+	}
+	return false
 }
 
 func (nb *nodeBackend) peerHasCapLocked(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
