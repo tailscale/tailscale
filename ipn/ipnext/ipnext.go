@@ -9,11 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net/netip"
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -191,6 +194,10 @@ type Host interface {
 	// SendNotifyAsync sends a notification to the IPN bus,
 	// typically to the GUI client.
 	SendNotifyAsync(ipn.Notify)
+
+	// NodeBackend returns the [NodeBackend] for the currently active node
+	// (which is approximately the same as the current profile).
+	NodeBackend() NodeBackend
 }
 
 // SafeBackend is a subset of the [ipnlocal.LocalBackend] type's methods that
@@ -323,7 +330,9 @@ type NewControlClientCallback func(controlclient.Client, ipn.LoginProfileView) (
 // Each hook has its own rules about when it's called and what environment it
 // has access to and what it's allowed to do.
 type Hooks struct {
-	// ProfileStateChange are callbacks that are invoked when the current login profile
+	// BackendStateChange is called when the backend state changes.
+	BackendStateChange feature.Hooks[func(ipn.State)]
+
 	// or its [ipn.Prefs] change, after those changes have been made. The current login profile
 	// may be changed either because of a profile switch, or because the profile information
 	// was updated by [LocalBackend.SetControlClientStatus], including when the profile
@@ -347,4 +356,42 @@ type Hooks struct {
 	// NewControlClient are the functions to be called when a new control client
 	// is created. It is called with the LocalBackend locked.
 	NewControlClient feature.Hooks[NewControlClientCallback]
+
+	// OnSelfChange is called (with LocalBackend.mu held) when the self node
+	// changes, including changing to nothing (an invalid view).
+	OnSelfChange feature.Hooks[func(tailcfg.NodeView)]
+
+	// MutateNotifyLocked is called to optionally mutate the provided Notify
+	// before sending it to the IPN bus. It is called with LocalBackend.mu held.
+	MutateNotifyLocked feature.Hooks[func(*ipn.Notify)]
+
+	// SetPeerStatus is called to mutate PeerStatus.
+	// Callers must only use NodeBackend to read data.
+	SetPeerStatus feature.Hooks[func(*ipnstate.PeerStatus, tailcfg.NodeView, NodeBackend)]
+}
+
+// NodeBackend is an interface to query the current node and its peers.
+//
+// It is not a snapshot in time but is locked to a particular node.
+type NodeBackend interface {
+	// AppendMatchingPeers appends all peers that match the predicate
+	// to the base slice and returns it.
+	AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView
+
+	// PeerCaps returns the capabilities that src has to this node.
+	PeerCaps(src netip.Addr) tailcfg.PeerCapMap
+
+	// PeerHasCap reports whether the peer has the specified peer capability.
+	PeerHasCap(peer tailcfg.NodeView, cap tailcfg.PeerCapability) bool
+
+	// PeerAPIBase returns the "http://ip:port" URL base to reach peer's
+	// PeerAPI, or the empty string if the peer is invalid or doesn't support
+	// PeerAPI.
+	PeerAPIBase(tailcfg.NodeView) string
+
+	// PeerHasPeerAPI whether the provided peer supports PeerAPI.
+	//
+	// It effectively just reports whether PeerAPIBase(node) is non-empty, but
+	// potentially more efficiently.
+	PeerHasPeerAPI(tailcfg.NodeView) bool
 }

@@ -87,6 +87,8 @@ type ExtensionHost struct {
 
 	shuttingDown atomic.Bool
 
+	extByType sync.Map // reflect.Type -> ipnext.Extension
+
 	// mu protects the following fields.
 	// It must not be held when calling [LocalBackend] methods
 	// or when invoking callbacks registered by extensions.
@@ -117,6 +119,9 @@ type Backend interface {
 	SwitchToBestProfile(reason string)
 
 	SendNotify(ipn.Notify)
+
+	NodeBackend() ipnext.NodeBackend
+
 	ipnext.SafeBackend
 }
 
@@ -183,6 +188,13 @@ func newExtensionHost(logf logger.Logf, b Backend, overrideExts ...*ipnext.Defin
 	return host, nil
 }
 
+func (h *ExtensionHost) NodeBackend() ipnext.NodeBackend {
+	if h == nil {
+		return nil
+	}
+	return h.b.NodeBackend()
+}
+
 // Init initializes the host and the extensions it manages.
 func (h *ExtensionHost) Init() {
 	if h != nil {
@@ -229,6 +241,7 @@ func (h *ExtensionHost) init() {
 		h.mu.Lock()
 		h.activeExtensions = append(h.activeExtensions, ext)
 		h.extensionsByName[ext.Name()] = ext
+		h.extByType.Store(reflect.TypeOf(ext), ext)
 		h.mu.Unlock()
 	}
 
@@ -275,6 +288,29 @@ func (h *ExtensionHost) FindExtensionByName(name string) any {
 
 // extensionIfaceType is the runtime type of the [ipnext.Extension] interface.
 var extensionIfaceType = reflect.TypeFor[ipnext.Extension]()
+
+// GetExt returns the extension of type T registered with lb.
+// If lb is nil or the extension is not found, it returns zero, false.
+func GetExt[T ipnext.Extension](lb *LocalBackend) (_ T, ok bool) {
+	var zero T
+	if lb == nil {
+		return zero, false
+	}
+	if ext, ok := lb.extHost.extensionOfType(reflect.TypeFor[T]()); ok {
+		return ext.(T), true
+	}
+	return zero, false
+}
+
+func (h *ExtensionHost) extensionOfType(t reflect.Type) (_ ipnext.Extension, ok bool) {
+	if h == nil {
+		return nil, false
+	}
+	if v, ok := h.extByType.Load(t); ok {
+		return v.(ipnext.Extension), true
+	}
+	return nil, false
+}
 
 // FindMatchingExtension implements [ipnext.ExtensionServices]
 // and is also used by the [LocalBackend].
