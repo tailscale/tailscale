@@ -185,13 +185,13 @@ func (m *Manager) setLocked(cfg Config) error {
 		cfg.WriteToBufioWriter(w)
 	}))
 
+	if !cfg.hasDefaultResolvers() && len(m.forceFallbackResolvers) > 0 {
+		cfg.DefaultResolvers = m.forceFallbackResolvers
+	}
+
 	rcfg, ocfg, err := m.compileConfig(cfg)
 	if err != nil {
 		return err
-	}
-
-	if _, ok := rcfg.Routes["."]; !ok && len(m.forceFallbackResolvers) > 0 {
-		rcfg.Routes["."] = m.forceFallbackResolvers
 	}
 
 	m.logf("Resolvercfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
