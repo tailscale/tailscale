@@ -52,6 +52,43 @@ func TestRecorder(t *testing.T) {
 		clock:       cl,
 	}
 
+	t.Run("custom service account name is used if specified", func(t *testing.T) {
+		updated := tsr.DeepCopy()
+		updated.Spec.EnableUI = true
+		updated.Spec.StatefulSet.Pod.ServiceAccountName = "my-custom-sa"
+		mustUpdate(t, fc, "", updated.Name, func(r *tsapi.Recorder) {
+			r.Spec = updated.Spec
+		})
+
+		expectReconciled(t, reconciler, "", updated.Name)
+
+		rb := &rbacv1.RoleBinding{}
+		if err := fc.Get(context.Background(), client.ObjectKey{
+			Namespace: tsNamespace,
+			Name:      updated.Name,
+		}, rb); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := rb.Subjects[0].Name, "my-custom-sa"; got != want {
+			t.Errorf("RoleBinding subject name = %q; want %q", got, want)
+		}
+
+		ss := &appsv1.StatefulSet{}
+
+		if err := fc.Get(context.Background(), client.ObjectKey{
+			Namespace: tsNamespace,
+			Name:      updated.Name,
+		}, ss); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := ss.Spec.Template.Spec.ServiceAccountName, "my-custom-sa"; got != want {
+			t.Errorf("StatefulSet Pod spec SA = %q; want %q", got, want)
+		}
+
+		expectMissing[corev1.ServiceAccount](t, fc, tsNamespace, updated.Name)
+
+	})
+
 	t.Run("invalid spec gives an error condition", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", tsr.Name)
 
