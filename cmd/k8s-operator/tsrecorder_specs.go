@@ -39,7 +39,13 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
 					Annotations: tsr.Spec.StatefulSet.Pod.Annotations,
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: tsr.Name,
+					ServiceAccountName: func() string {
+						if tsr.Spec.StatefulSet.Pod.ServiceAccountName != "" {
+							return tsr.Spec.StatefulSet.Pod.ServiceAccountName
+						}
+
+						return tsr.Name
+					}(),
 					Affinity:           tsr.Spec.StatefulSet.Pod.Affinity,
 					SecurityContext:    tsr.Spec.StatefulSet.Pod.SecurityContext,
 					ImagePullSecrets:   tsr.Spec.StatefulSet.Pod.ImagePullSecrets,
@@ -144,25 +150,30 @@ func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
 }
 
 func tsrRoleBinding(tsr *tsapi.Recorder, namespace string) *rbacv1.RoleBinding {
-	return &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            tsr.Name,
-			Namespace:       namespace,
-			Labels:          labels("recorder", tsr.Name, nil),
-			OwnerReferences: tsrOwnerReference(tsr),
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      tsr.Name,
-				Namespace: namespace,
-			},
-		},
-		RoleRef: rbacv1.RoleRef{
-			Kind: "Role",
-			Name: tsr.Name,
-		},
-	}
+    saName := tsr.Spec.StatefulSet.Pod.ServiceAccountName
+    if saName == "" {
+        saName = tsr.Name
+    }
+
+    return &rbacv1.RoleBinding{
+        ObjectMeta: metav1.ObjectMeta{
+            Name:            tsr.Name,
+            Namespace:       namespace,
+            Labels:          labels("recorder", tsr.Name, nil),
+            OwnerReferences: tsrOwnerReference(tsr),
+        },
+        Subjects: []rbacv1.Subject{
+            {
+                Kind:      "ServiceAccount",
+                Name:      saName,
+                Namespace: namespace,
+            },
+        },
+        RoleRef: rbacv1.RoleRef{
+            Kind: "Role",
+            Name: tsr.Name,
+        },
+    }
 }
 
 func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string) *corev1.Secret {

@@ -94,6 +94,7 @@ type RecorderStatefulSet struct {
 	// Configuration for pods created by the Recorder's StatefulSet.
 	// +optional
 	Pod RecorderPod `json:"pod,omitempty"`
+
 }
 
 type RecorderPod struct {
@@ -142,6 +143,13 @@ type RecorderPod struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// The service account to use for the Recorder's StatefulSet. If not set,
+	// the operator will create a service account with the same name as the
+	// Recorder resource.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account
+	// +optional
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 }
 
 type RecorderContainer struct {
