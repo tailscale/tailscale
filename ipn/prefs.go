@@ -235,6 +235,11 @@ type Prefs struct {
 
 	// PostureChecking enables the collection of information used for device
 	// posture checks.
+	//
+	// Note: this should be named ReportPosture, but it was shipped as
+	// PostureChecking in some early releases and this JSON field is written to
+	// disk, so we just keep its old name. (akin to CorpDNS which is an internal
+	// pref name that doesn't match the public interface)
 	PostureChecking bool
 
 	// NetfilterKind specifies what netfilter implementation to use.

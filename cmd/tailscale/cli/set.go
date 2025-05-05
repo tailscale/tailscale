@@ -60,7 +60,7 @@ type setArgsT struct {
 	forceDaemon            bool
 	updateCheck            bool
 	updateApply            bool
-	postureChecking        bool
+	reportPosture          bool
 	snat                   bool
 	statefulFiltering      bool
 	netfilterMode          string
@@ -83,7 +83,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.advertiseConnector, "advertise-connector", false, "offer to be an app connector for domain specific internet traffic for the tailnet")
 	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "notify about available Tailscale updates")
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
-	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, "allow management plane to gather device posture information")
+	setf.BoolVar(&setArgs.reportPosture, "report-posture", false, "allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", hidden+"UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
 
@@ -156,7 +156,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			AppConnector: ipn.AppConnectorPrefs{
 				Advertise: setArgs.advertiseConnector,
 			},
-			PostureChecking:     setArgs.postureChecking,
+			PostureChecking:     setArgs.reportPosture,
 			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
 		},
 	}
