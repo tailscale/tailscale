@@ -95,6 +95,7 @@ type endpoint struct {
 
 	expired         bool // whether the node has expired
 	isWireguardOnly bool // whether the endpoint is WireGuard only
+	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
 }
 
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
@@ -1249,6 +1250,13 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		// sent so our firewall ports are probably open and now
 		// would be a good time for them to connect.
 		go de.c.enqueueCallMeMaybe(derpAddr, de)
+
+		// Schedule allocation of relay endpoints. We make no considerations for
+		// current relay endpoints or best UDP path state for now, keep it
+		// simple.
+		if de.relayCapable {
+			go de.c.relayManager.allocateAndHandshakeAllServers(de)
+		}
 	}
 }
 
@@ -1863,6 +1871,7 @@ func (de *endpoint) resetLocked() {
 		}
 	}
 	de.probeUDPLifetime.resetCycleEndpointLocked()
+	de.c.relayManager.cancelOutstandingWork(de)
 }
 
 func (de *endpoint) numStopAndReset() int64 {
