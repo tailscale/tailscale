@@ -5056,6 +5056,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
 	dcfg.OnlyIPv6 = selfV6Only
 
+	wantAAAA := nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA)
+
 	// Populate MagicDNS records. We do this unconditionally so that
 	// quad-100 can always respond to MagicDNS queries, even if the OS
 	// isn't configured to make MagicDNS resolution truly
@@ -5092,7 +5094,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			// https://github.com/tailscale/tailscale/issues/1152
 			// tracks adding the right capability reporting to
 			// enable AAAA in MagicDNS.
-			if addr.Addr().Is6() && have4 {
+			if addr.Addr().Is6() && have4 && !wantAAAA {
 				continue
 			}
 			ips = append(ips, addr.Addr())
