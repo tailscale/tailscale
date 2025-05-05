@@ -160,7 +160,8 @@ type CapabilityVersion int
 //   - 113: 2025-01-20: Client communicates to control whether funnel is enabled by sending Hostinfo.IngressEnabled (#14688)
 //   - 114: 2025-01-30: NodeAttrMaxKeyDuration CapMap defined, clients might use it (no tailscaled code change) (#14829)
 //   - 115: 2025-03-07: Client understands DERPRegion.NoMeasureNoHome.
-const CurrentCapabilityVersion CapabilityVersion = 115
+//   - 116: 2025-05-05: Client serves MagicDNS "AAAA" if NodeAttrMagicDNSPeerAAAA set on self node
+const CurrentCapabilityVersion CapabilityVersion = 116
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2493,6 +2494,10 @@ const (
 	// NodeAttrRelayClient permits the node to act as an underlay UDP relay
 	// client. There are no expected values for this key in NodeCapMap.
 	NodeAttrRelayClient NodeCapability = "relay:client"
+
+	// NodeAttrMagicDNSPeerAAAA is a capability that tells the node's MagicDNS
+	// server to answer AAAA queries about its peers. See tailscale/tailscale#1152.
+	NodeAttrMagicDNSPeerAAAA NodeCapability = "magicdns-aaaa"
 )
 
 // SetDNSRequest is a request to add a DNS record.
