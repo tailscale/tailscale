@@ -65,15 +65,22 @@ func newFlagSet(name string) *flag.FlagSet {
 func CleanUpArgs(args []string) []string {
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
+		switch {
 		// Rewrite --authkey to --auth-key, and --authkey=x to --auth-key=x,
 		// and the same for the -authkey variant.
-		switch {
 		case arg == "--authkey", arg == "-authkey":
 			arg = "--auth-key"
 		case strings.HasPrefix(arg, "--authkey="), strings.HasPrefix(arg, "-authkey="):
-			arg = strings.TrimLeft(arg, "-")
-			arg = strings.TrimPrefix(arg, "authkey=")
-			arg = "--auth-key=" + arg
+			_, val, _ := strings.Cut(arg, "=")
+			arg = "--auth-key=" + val
+
+		// And the same, for posture-checking => report-posture
+		case arg == "--posture-checking", arg == "-posture-checking":
+			arg = "--report-posture"
+		case strings.HasPrefix(arg, "--posture-checking="), strings.HasPrefix(arg, "-posture-checking="):
+			_, val, _ := strings.Cut(arg, "=")
+			arg = "--report-posture=" + val
+
 		}
 		out = append(out, arg)
 	}

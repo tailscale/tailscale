@@ -33,7 +33,7 @@ var validUpFlags = set.Of(
 	"netfilter-mode",
 	"nickname",
 	"operator",
-	"posture-checking",
+	"report-posture",
 	"qr",
 	"reset",
 	"shields-up",
