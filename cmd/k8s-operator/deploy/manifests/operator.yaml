@@ -4552,6 +4552,13 @@ spec:
                                                                 type: string
                                                         type: object
                                                 type: object
+                                            serviceAccountName:
+                                                description: |-
+                                                    The service account to use for the Recorder's StatefulSet. If not set,
+                                                    the operator will create a service account with the same name as the
+                                                    Recorder resource.
+                                                    https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account
+                                                type: string
                                             tolerations:
                                                 description: |-
                                                     Tolerations for Recorder Pods. By default, the operator does not apply
