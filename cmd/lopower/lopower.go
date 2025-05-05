@@ -67,6 +67,7 @@ var (
 	printConfig    = flag.Bool("print-config", true, "print the client's WireGuard configuration to stdout on startup")
 	includeV4      = flag.Bool("include-v4", true, "include IPv4 (CGNAT) in the WireGuard configuration; incompatible with some carriers. IPv6 is always included.")
 	verbosePackets = flag.Bool("verbose-packets", false, "log packet contents")
+	verboseDNS     = flag.Bool("verbose-dns", false, "log DNS queries")
 )
 
 type config struct {
@@ -680,16 +681,21 @@ func (lp *lpServer) filteredDNSQuery(ctx context.Context, q []byte, family strin
 	if err != nil {
 		return nil, err
 	}
-	if *includeV4 {
-		return origRes, nil
-	}
-
-	// Filter out *.ts.net A records.
 
 	var msg dnsmessage.Message
 	if err := msg.Unpack(origRes); err != nil {
 		return nil, err
 	}
+
+	if *verboseDNS {
+		log.Printf("[v] DNS: %s", msg.GoString())
+	}
+
+	if *includeV4 {
+		return origRes, nil
+	}
+
+	// Filter out *.ts.net A records.
 	newAnswers := msg.Answers[:0]
 	for _, a := range msg.Answers {
 		name := a.Header.Name.String()
