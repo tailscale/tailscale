@@ -87,6 +87,9 @@ func TestRecorder(t *testing.T) {
 
 		expectMissing[corev1.ServiceAccount](t, fc, tsNamespace, updated.Name)
 
+		// reset the service account name
+		updated.Spec.StatefulSet.Pod.ServiceAccountName = ""
+
 	})
 
 	t.Run("invalid spec gives an error condition", func(t *testing.T) {
