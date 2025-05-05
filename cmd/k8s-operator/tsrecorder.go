@@ -171,7 +171,6 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	}
 	// Create the ServiceAccount only if the user hasn't specified a custom name
 	if tsr.Spec.StatefulSet.Pod.ServiceAccountName == "" {
-<<<<<<< HEAD
 		sa := tsrServiceAccount(tsr, r.tsNamespace)
 		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
 			s.ObjectMeta.Labels = sa.ObjectMeta.Labels
@@ -181,26 +180,6 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 			return fmt.Errorf("error creating ServiceAccount: %w", err)
 		}
 	}
-||||||| b03a2a323
-	sa := tsrServiceAccount(tsr, r.tsNamespace)
-	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
-		s.ObjectMeta.Labels = sa.ObjectMeta.Labels
-		s.ObjectMeta.Annotations = sa.ObjectMeta.Annotations
-		s.ObjectMeta.OwnerReferences = sa.ObjectMeta.OwnerReferences
-	}); err != nil {
-		return fmt.Errorf("error creating ServiceAccount: %w", err)
-	}
-=======
-        sa := tsrServiceAccount(tsr, r.tsNamespace)
-        if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
-            s.ObjectMeta.Labels = sa.ObjectMeta.Labels
-            s.ObjectMeta.Annotations = sa.ObjectMeta.Annotations
-            s.ObjectMeta.OwnerReferences = sa.ObjectMeta.OwnerReferences
-        }); err != nil {
-            return fmt.Errorf("error creating ServiceAccount: %w", err)
-        }
-    }
->>>>>>> upstream/proxyclass/sa
 	role := tsrRole(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
 		r.ObjectMeta.Labels = role.ObjectMeta.Labels
