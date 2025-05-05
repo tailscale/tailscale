@@ -5,62 +5,58 @@ package ctxlock
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
 	"tailscale.com/util/ctxkey"
 )
 
-type state interface {
+type stateType interface {
+	*checked | unchecked
 	context.Context
-	Unlock()
+	unlock()
 }
 
-type impl[T state] struct {
+type lockStateType interface{ lockCallers | unchecked }
+
+type impl[T stateType, S lockStateType] struct {
 	None        func() T
 	FromContext func(context.Context) T
-	Lock        func(T, *sync.Mutex) T
-	LockCtx     func(context.Context, *sync.Mutex) T
+	Lock        func(T, *mutex[Reentrant, S]) T
+	LockCtx     func(context.Context, *mutex[Reentrant, S]) T
 }
 
 var (
-	exportedImpl = impl[State]{
-		None:        None,
-		FromContext: FromContext,
-		Lock:        Lock[State],
-		LockCtx:     Lock[context.Context],
-	}
-	checkedImpl = impl[*checked]{
+	checkedImpl = impl[*checked, lockCallers]{
 		None:        func() *checked { return nil },
 		FromContext: fromContextChecked,
-		Lock:        lockChecked,
-		LockCtx: func(ctx context.Context, mu *sync.Mutex) *checked {
+		Lock:        lockChecked[Reentrant],
+		LockCtx: func(ctx context.Context, mu *checkedMutex[Reentrant]) *checked {
 			return lockChecked(fromContextChecked(ctx), mu)
 		},
 	}
-	uncheckedImpl = impl[unchecked]{
+	uncheckedImpl = impl[unchecked, unchecked]{
 		None:        func() unchecked { return unchecked{} },
 		FromContext: fromContextUnchecked,
-		Lock:        lockUnchecked,
-		LockCtx: func(ctx context.Context, mu *sync.Mutex) unchecked {
+		Lock:        lockUnchecked[Reentrant],
+		LockCtx: func(ctx context.Context, mu *mutex[Reentrant, unchecked]) unchecked {
 			return lockUnchecked(fromContextUnchecked(ctx), mu)
 		},
 	}
 )
 
-// BenchmarkLockUnlock benchmarks the performance of locking and unlocking a mutex.
-func BenchmarkLockUnlock(b *testing.B) {
-	var mu sync.Mutex
-	b.Run("Exported", func(b *testing.B) {
-		benchmarkLockUnlock(b, exportedImpl)
-	})
+// BenchmarkStateLockUnlock benchmarks the performance of locking and unlocking a mutex.
+func BenchmarkStateLockUnlock(b *testing.B) {
 	b.Run("Checked", func(b *testing.B) {
-		benchmarkLockUnlock(b, checkedImpl)
+		benchmarkStateLockUnlock(b, checkedImpl)
 	})
 	b.Run("Unchecked", func(b *testing.B) {
-		benchmarkLockUnlock(b, uncheckedImpl)
+		benchmarkStateLockUnlock(b, uncheckedImpl)
 	})
 	b.Run("Reference", func(b *testing.B) {
+		var mu sync.Mutex
 		for b.Loop() {
 			mu.Lock()
 			mu.Unlock()
@@ -68,21 +64,16 @@ func BenchmarkLockUnlock(b *testing.B) {
 	})
 }
 
-func benchmarkLockUnlock[T state](b *testing.B, impl impl[T]) {
-	var mu sync.Mutex
+func benchmarkStateLockUnlock[T stateType, S lockStateType](b *testing.B, impl impl[T, S]) {
+	var mu mutex[Reentrant, S]
 	for b.Loop() {
-		ctx := impl.Lock(impl.None(), &mu)
-		ctx.Unlock()
+		state := impl.Lock(impl.None(), &mu)
+		state.unlock()
 	}
 }
 
 // BenchmarkReentrance benchmarks the performance of reentrant locking and unlocking.
 func BenchmarkReentrance(b *testing.B) {
-	var mu sync.Mutex
-
-	b.Run("Exported", func(b *testing.B) {
-		benchmarkReentrance(b, exportedImpl)
-	})
 	b.Run("Checked", func(b *testing.B) {
 		benchmarkReentrance(b, checkedImpl)
 	})
@@ -90,6 +81,7 @@ func BenchmarkReentrance(b *testing.B) {
 		benchmarkReentrance(b, uncheckedImpl)
 	})
 	b.Run("Reference", func(b *testing.B) {
+		var mu sync.Mutex
 		for b.Loop() {
 			mu.Lock()
 			func(mu *sync.Mutex) {
@@ -102,102 +94,68 @@ func BenchmarkReentrance(b *testing.B) {
 	})
 }
 
-func benchmarkReentrance[T state](b *testing.B, impl impl[T]) {
-	var mu sync.Mutex
+func benchmarkReentrance[T stateType, S lockStateType](b *testing.B, impl impl[T, S]) {
+	var mu mutex[Reentrant, S]
 	for b.Loop() {
 		parent := impl.Lock(impl.None(), &mu)
 		func(ctx T) {
 			child := impl.Lock(ctx, &mu)
-			child.Unlock()
+			child.unlock()
 		}(parent)
-		parent.Unlock()
+		parent.unlock()
 	}
-}
-
-// BenchmarkGenericLock benchmarks the performance of the generic [Lock] function
-// that works with both [State] and [context.Context].
-func BenchmarkGenericLock(b *testing.B) {
-	// Does not allocate with --tags=ts_omit_ctxlock_checks.
-	b.Run("State", func(b *testing.B) {
-		var mu sync.Mutex
-		var ctx State
-		for b.Loop() {
-			parent := Lock(ctx, &mu)
-			func(ctx State) {
-				child := Lock(ctx, &mu)
-				child.Unlock()
-			}(parent)
-			parent.Unlock()
-		}
-	})
-	b.Run("StdContext", func(b *testing.B) {
-		var mu sync.Mutex
-		ctx := context.Background()
-		for b.Loop() {
-			parent := Lock(ctx, &mu)
-			func(ctx State) {
-				child := Lock(ctx, &mu)
-				child.Unlock()
-			}(parent)
-			parent.Unlock()
-		}
-	})
 }
 
 // TestUncheckedAllocFree tests that the exported implementation of [State] does not allocate memory
 // when the ts_omit_ctxlock_checks build tag is set.
 func TestUncheckedAllocFree(t *testing.T) {
-	if Checked {
+	if IsChecked {
 		t.Skip("Exported implementation is not alloc-free (use --tags=ts_omit_ctxlock_checks)")
 	}
 	t.Run("Simple/WithState", func(t *testing.T) {
-		var mu sync.Mutex
+		var mu ReentrantMutex
 		mustNotAllocate(t, func() {
-			ctx := Lock(None(), &mu)
-			ctx.Unlock()
+			mu := Lock(None(), &mu)
+			mu.Unlock()
 		})
 	})
 
 	t.Run("Simple/WithContext", func(t *testing.T) {
-		var mu sync.Mutex
+		var mu ReentrantMutex
 		ctx := context.Background()
 		mustNotAllocate(t, func() {
-			ctx := Lock(ctx, &mu)
-			ctx.Unlock()
+			mu := Lock(ctx, &mu)
+			mu.Unlock()
 		})
 	})
 
 	t.Run("Reentrant/WithState", func(t *testing.T) {
-		var mu sync.Mutex
+		var mu ReentrantMutex
 		mustNotAllocate(t, func() {
 			parent := Lock(None(), &mu)
-			func(ctx State) {
-				child := Lock(parent, &mu)
+			func(state State) {
+				child := Lock(state, &mu)
 				child.Unlock()
-			}(parent)
+			}(parent.State())
 			parent.Unlock()
 		})
 	})
 
 	t.Run("Reentrant/WithContext", func(t *testing.T) {
-		var mu sync.Mutex
+		var mu ReentrantMutex
 		ctx := context.Background()
 		mustNotAllocate(t, func() {
 			parent := Lock(ctx, &mu)
-			func(ctx State) {
-				child := Lock(ctx, &mu)
+			func(state State) {
+				child := Lock(state, &mu)
 				child.Unlock()
-			}(parent)
+			}(parent.State())
 			parent.Unlock()
 		})
 	})
 }
 
 func TestHappyPath(t *testing.T) {
-	t.Run("Exported", func(t *testing.T) {
-		testHappyPath(t, exportedImpl)
-	})
-
 	t.Run("Checked", func(t *testing.T) {
 		testHappyPath(t, checkedImpl)
 	})
@@ -207,32 +165,33 @@ func TestHappyPath(t *testing.T) {
 	})
 }
 
-func testHappyPath[T state](t *testing.T, impl impl[T]) {
-	var mu sync.Mutex
+func testHappyPath[T stateType, S lockStateType](t *testing.T, impl impl[T, S]) {
+	var mu mutex[Reentrant, S]
 	parent := impl.Lock(impl.None(), &mu)
 	wantLocked(t, &mu) // mu is locked by parent
 
 	child := impl.Lock(parent, &mu)
 	wantLocked(t, &mu) // mu is still locked by parent
 
-	var mu2 sync.Mutex
+	var mu2 mutex[Reentrant, S]
 	ls2 := impl.Lock(child, &mu2)
-	wantLocked(t, &mu2)   // mu2 is locked by ls2
-	ls2.Unlock()          // unlocks mu2
+	wantLocked(t, &mu2) // mu2 is locked by ls2
+
+	grandchild := impl.Lock(ls2, &mu)
+	grandchild.unlock() // no-op; mu is owned by parent
+	wantLocked(t, &mu)  // mu is still locked by parent
+
+	ls2.unlock()          // unlocks mu2
 	wantUnlocked(t, &mu2) // mu2 is now unlocked
 
-	child.Unlock()     // noop
+	child.unlock()     // noop
 	wantLocked(t, &mu) // mu is still locked by parent
 
-	parent.Unlock()      // unlocks mu
+	parent.unlock()      // unlocks mu
 	wantUnlocked(t, &mu) // mu is now unlocked
 }
 
 func TestContextWrapping(t *testing.T) {
-	t.Run("Exported", func(t *testing.T) {
-		testContextWrapping(t, exportedImpl)
-	})
-
 	t.Run("Checked", func(t *testing.T) {
 		testContextWrapping(t, checkedImpl)
 	})
@@ -242,13 +201,13 @@ func TestContextWrapping(t *testing.T) {
 	})
 }
 
-func testContextWrapping[T state](t *testing.T, impl impl[T]) {
+func testContextWrapping[T stateType, S lockStateType](t *testing.T, impl impl[T, S]) {
 	// Create a [context.Context] with a value set in it.
 	wantValue := "value"
 	key := ctxkey.New("key", "")
 	ctxWithValue := key.WithValue(context.Background(), wantValue)
 
-	var mu sync.Mutex
+	var mu mutex[Reentrant, S]
 	parent := impl.LockCtx(ctxWithValue, &mu)
 	wantLocked(t, &mu) // mu is locked by parent
 
@@ -268,103 +227,72 @@ func testContextWrapping[T state](t *testing.T, impl impl[T]) {
 	}
 
 	// ... and the lock state.
-	child.Unlock()     // no-op; mu is owned by parent
+	child.unlock()     // no-op; mu is owned by parent
 	wantLocked(t, &mu) // mu is still locked by parent
 
-	parentDup.Unlock() // no-op; mu is owned by parent
+	parentDup.unlock() // no-op; mu is owned by parent
 	wantLocked(t, &mu) // mu is still locked by parent
 
-	parent.Unlock()      // unlocks mu
+	parent.unlock()      // unlocks mu
 	wantUnlocked(t, &mu) // mu is now unlocked
 }
 
 func TestNilMutex(t *testing.T) {
 	impl := checkedImpl
-	wantPanic(t, "nil *sync.Mutex", func() { impl.Lock(impl.None(), nil) })
+	wantPanic(t, "nil mutex", func() { impl.Lock(impl.None(), nil) })
 }
 
 func TestUseUnlockedParent_Checked(t *testing.T) {
 	impl := checkedImpl
 
-	var mu sync.Mutex
+	var mu checkedMutex[Reentrant]
 	parent := impl.Lock(impl.None(), &mu)
-	parent.Unlock()      // unlocks mu
+	parent.unlock()      // unlocks mu
 	wantUnlocked(t, &mu) // mu is now unlocked
 	wantPanic(t, "use after unlock", func() { impl.Lock(parent, &mu) })
-}
-
-func TestUseUnlockedMutex_Checked(t *testing.T) {
-	impl := checkedImpl
-
-	var mu sync.Mutex
-	parent := impl.Lock(impl.None(), &mu)
-	mu.Unlock() // unlock mu directly without unlocking parent
-	wantPanic(t, "*sync.Mutex is spuriously unlocked", func() { impl.Lock(parent, &mu) })
 }
 
 func TestUnlockParentFirst_Checked(t *testing.T) {
 	impl := checkedImpl
 
-	var mu sync.Mutex
+	var mu checkedMutex[Reentrant]
 	parent := impl.Lock(impl.FromContext(context.Background()), &mu)
 	child := impl.Lock(parent, &mu)
 
-	parent.Unlock()      // unlocks mu
+	parent.unlock()      // unlocks mu
 	wantUnlocked(t, &mu) // mu is now unlocked
-	wantPanic(t, "parent already unlocked", child.Unlock)
+	wantPanic(t, "parent already unlocked", child.unlock)
 }
 
 func TestUnlockTwice_Checked(t *testing.T) {
 	impl := checkedImpl
 
 	unlockTwice := func(t *testing.T, ctx *checked) {
-		ctx.Unlock() // unlocks mu
-		wantPanic(t, "already unlocked", ctx.Unlock)
+		ctx.unlock() // unlocks mu
+		wantPanic(t, "already unlocked", ctx.unlock)
 	}
 
 	t.Run("Wrapped", func(t *testing.T) {
 		unlockTwice(t, impl.FromContext(context.Background()))
 	})
 	t.Run("Locked", func(t *testing.T) {
-		var mu sync.Mutex
+		var mu checkedMutex[Reentrant]
 		ctx := impl.Lock(impl.None(), &mu)
 		unlockTwice(t, ctx)
 	})
-	t.Run("Locked/WithReloc", func(t *testing.T) {
-		var mu sync.Mutex
-		ctx := impl.Lock(impl.None(), &mu)
-		ctx.Unlock() // unlocks mu
-		mu.Lock()    // re-locks mu, but not by the state
-		wantPanic(t, "already unlocked", ctx.Unlock)
-	})
 	t.Run("Child", func(t *testing.T) {
-		var mu sync.Mutex
+		var mu checkedMutex[Reentrant]
 		parent := impl.Lock(impl.None(), &mu)
-		defer parent.Unlock()
+		defer parent.unlock()
 		child := impl.Lock(parent, &mu)
 		unlockTwice(t, child)
 	})
-	t.Run("Child/WithReloc", func(t *testing.T) {
-		var mu sync.Mutex
-		parent := impl.Lock(impl.None(), &mu)
-		child := impl.Lock(parent, &mu)
-		parent.Unlock()
-		mu.Lock() // re-locks mu, but not the parent state
-		wantPanic(t, "parent already unlocked", child.Unlock)
-	})
-	t.Run("Child/WithManualUnlock", func(t *testing.T) {
-		var mu sync.Mutex
-		parent := impl.Lock(impl.None(), &mu)
-		child := impl.Lock(parent, &mu)
-		mu.Unlock() // unlocks mu, but not the parent state
-		wantPanic(t, "mutex is not locked", child.Unlock)
-	})
 	t.Run("Grandchild", func(t *testing.T) {
-		var mu sync.Mutex
+		var mu checkedMutex[Reentrant]
 		parent := impl.Lock(impl.None(), &mu)
-		defer parent.Unlock()
+		defer parent.unlock()
 		child := impl.Lock(parent, &mu)
-		defer child.Unlock()
+		defer child.unlock()
 		grandchild := impl.Lock(child, &mu)
 		unlockTwice(t, grandchild)
 	})
@@ -373,76 +301,70 @@ func TestUnlockTwice_Checked(t *testing.T) {
 func TestUseUnlocked_Checked(t *testing.T) {
 	impl := checkedImpl
 
-	var mu sync.Mutex
+	var mu checkedMutex[Reentrant]
 	state := lockChecked(impl.None(), &mu)
-	state.Unlock()
+	state.unlock()
 
 	// All of these should panic since the state is already unlocked.
-	wantPanic(t, "", func() { state.Deadline() })
-	wantPanic(t, "", func() { state.Done() })
-	wantPanic(t, "", func() { state.Err() })
-	wantPanic(t, "", func() { state.Unlock() })
-	wantPanic(t, "", func() { state.Value("key") })
+	wantPanic(t, "*", func() { state.Deadline() })
+	wantPanic(t, "*", func() { state.Done() })
+	wantPanic(t, "*", func() { state.Err() })
+	wantPanic(t, "*", func() { state.unlock() })
+	wantPanic(t, "*", func() { state.Value("key") })
 }
 
 func TestUseZeroState(t *testing.T) {
-	t.Run("Exported", func(t *testing.T) {
-		testUseEmptyState(t, exportedImpl.None, exportedImpl)
-	})
 	t.Run("Checked", func(t *testing.T) {
-		testUseEmptyState(t, checkedImpl.None, checkedImpl)
+		testUseEmptyState(t, checkedImpl.None)
 	})
 	t.Run("Unchecked", func(t *testing.T) {
-		testUseEmptyState(t, uncheckedImpl.None, uncheckedImpl)
+		testUseEmptyState(t, uncheckedImpl.None)
 	})
 }
 
 func TestUseWrappedBackground(t *testing.T) {
-	t.Run("Exported", func(t *testing.T) {
-		testUseEmptyState(t, getWrappedBackground(t, exportedImpl), exportedImpl)
-	})
 	t.Run("Checked", func(t *testing.T) {
-		testUseEmptyState(t, getWrappedBackground(t, checkedImpl), checkedImpl)
+		testUseEmptyState(t, getWrappedBackground(t, checkedImpl))
 	})
 	t.Run("Unchecked", func(t *testing.T) {
-		testUseEmptyState(t, getWrappedBackground(t, uncheckedImpl), uncheckedImpl)
+		testUseEmptyState(t, getWrappedBackground(t, uncheckedImpl))
 	})
 }
 
-func getWrappedBackground[T state](t *testing.T, impl impl[T]) func() T {
+func getWrappedBackground[T stateType, S lockStateType](t *testing.T, impl impl[T, S]) func() T {
 	t.Helper()
 	return func() T {
 		return impl.FromContext(context.Background())
 	}
 }
 
-func testUseEmptyState[T state](t *testing.T, getCtx func() T, impl impl[T]) {
-	// Using aan empty [State] must not panic or deadlock.
+func testUseEmptyState[T stateType](t *testing.T, getState func() T) {
+	// Using an empty [State] must not panic or deadlock.
 	// It should also behave like [context.Background].
 	for range 2 {
-		ctx := getCtx()
-		if gotDone := ctx.Done(); gotDone != nil {
+		state := getState()
+		if gotDone := state.Done(); gotDone != nil {
 			t.Errorf("ctx.Done() = %v; want nil", gotDone)
 		}
-		if gotDeadline, ok := ctx.Deadline(); ok {
+		if gotDeadline, ok := state.Deadline(); ok {
 			t.Errorf("ctx.Deadline() = %v; want !ok", gotDeadline)
 		}
-		if gotErr := ctx.Err(); gotErr != nil {
+		if gotErr := state.Err(); gotErr != nil {
 			t.Errorf("ctx.Err() = %v; want nil", gotErr)
 		}
-		if gotValue := ctx.Value("test-key"); gotValue != nil {
+		if gotValue := state.Value("test-key"); gotValue != nil {
 			t.Errorf("ctx.Value(test-key) = %v; want nil", gotValue)
 		}
-		ctx.Unlock()
+		state.unlock()
 	}
 }
 
 func wantPanic(t *testing.T, wantMsg string, fn func()) {
 	t.Helper()
 	defer func() {
-		if r := recover(); wantMsg != "" {
-			if gotMsg, ok := r.(string); !ok || gotMsg != wantMsg {
-				t.Errorf("panic: %v; want %q", r, wantMsg)
+		if r := recover(); wantMsg != "*" {
+			if gotMsg := trimPanicMessage(r); gotMsg != wantMsg {
+				t.Errorf("panic: got %q; want %q", r, wantMsg)
 			}
 		}
 	}()
@@ -450,19 +372,26 @@ func wantPanic(t *testing.T, wantMsg string, fn func()) {
 	t.Fatal("failed to panic")
 }
 
-func wantLocked(t *testing.T, m *sync.Mutex) {
-	if m.TryLock() {
-		m.Unlock()
+func (m *mutex[R, S]) isLockedForTest() bool {
+	if m.m.TryLock() {
+		m.m.Unlock()
+		return false
+	}
+	return true
+}
+
+func wantLocked[R Rank, S lockStateType](t *testing.T, m *mutex[R, S]) {
+	t.Helper()
+	if !m.isLockedForTest() {
 		t.Fatal("mutex is not locked")
 	}
 }
 
-func wantUnlocked(t *testing.T, m *sync.Mutex) {
+func wantUnlocked[R Rank, S lockStateType](t *testing.T, m *mutex[R, S]) {
 	t.Helper()
-	if !m.TryLock() {
+	if m.isLockedForTest() {
 		t.Fatal("mutex is locked")
 	}
-	m.Unlock()
 }
 
 func mustNotAllocate(t *testing.T, steps func()) {
@@ -471,4 +400,13 @@ func mustNotAllocate(t *testing.T, steps func()) {
 	if allocs := testing.AllocsPerRun(runs, steps); allocs != 0 {
 		t.Errorf("expected 0 allocs, got %f", allocs)
 	}
+}
+
+func trimPanicMessage(r any) string {
+	msg := fmt.Sprintf("%v", r)
+	msg = strings.TrimSpace(msg)
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		return msg[:i]
+	}
+	return msg
 }
