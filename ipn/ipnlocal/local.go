@@ -258,7 +258,7 @@ type LocalBackend struct {
 	// We intend to relax this in the future and only require holding b.mu when replacing it,
 	// but that requires a better (strictly ordered?) state machine and better management
 	// of [LocalBackend]'s own state that is not tied to the node context.
-	currentNodeAtomic atomic.Pointer[localNodeContext]
+	currentNodeAtomic atomic.Pointer[nodeBackend]
 
 	conf           *conffile.Config   // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager    // mu guards access
@@ -519,7 +519,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
-	b.currentNodeAtomic.Store(newLocalNodeContext())
+	b.currentNodeAtomic.Store(newNodeBackend())
 	mConn.SetNetInfoCallback(b.setNetInfo)
 
 	if sys.InitialConfig != nil {
@@ -594,12 +594,12 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 func (b *LocalBackend) Clock() tstime.Clock { return b.clock }
 func (b *LocalBackend) Sys() *tsd.System    { return b.sys }
 
-func (b *LocalBackend) currentNode() *localNodeContext {
+func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
 	}
 	// Auto-init one in tests for LocalBackend created without the NewLocalBackend constructor...
-	v := newLocalNodeContext()
+	v := newNodeBackend()
 	b.currentNodeAtomic.CompareAndSwap(nil, v)
 	return b.currentNodeAtomic.Load()
 }
@@ -1463,15 +1463,30 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 	return b.currentNode().PeerCaps(src)
 }
 
-func (b *localNodeContext) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	ret := base
-	if b.netMap == nil {
-		return ret
+// AppendMatchingPeers returns base with all peers that match pred appended.
+//
+// It acquires b.mu to read the netmap but releases it before calling pred.
+func (nb *nodeBackend) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
+	var peers []tailcfg.NodeView
+
+	nb.mu.Lock()
+	if nb.netMap != nil {
+		// All fields on b.netMap are immutable, so this is
+		// safe to copy and use outside the lock.
+		peers = nb.netMap.Peers
 	}
-	for _, peer := range b.netMap.Peers {
-		if pred(peer) {
+	nb.mu.Unlock()
+
+	ret := base
+	for _, peer := range peers {
+		// The peers in b.netMap don't contain updates made via
+		// UpdateNetmapDelta. So only use PeerView in b.netMap for its NodeID,
+		// and then look up the latest copy in b.peers which is updated in
+		// response to UpdateNetmapDelta edits.
+		nb.mu.Lock()
+		peer, ok := nb.peers[peer.ID()]
+		nb.mu.Unlock()
+		if ok && pred(peer) {
 			ret = append(ret, peer)
 		}
 	}
@@ -1480,21 +1495,21 @@ func (b *localNodeContext) AppendMatchingPeers(base []tailcfg.NodeView, pred fun
 
 // PeerCaps returns the capabilities that remote src IP has to
 // ths current node.
-func (b *localNodeContext) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.peerCapsLocked(src)
+func (nb *nodeBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return nb.peerCapsLocked(src)
 }
 
-func (b *localNodeContext) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
-	if b.netMap == nil {
+func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
+	if nb.netMap == nil {
 		return nil
 	}
-	filt := b.filterAtomic.Load()
+	filt := nb.filterAtomic.Load()
 	if filt == nil {
 		return nil
 	}
-	addrs := b.netMap.GetAddresses()
+	addrs := nb.netMap.GetAddresses()
 	for i := range addrs.Len() {
 		a := addrs.At(i)
 		if !a.IsSingleIP() {
@@ -1508,8 +1523,8 @@ func (b *localNodeContext) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 	return nil
 }
 
-func (b *localNodeContext) GetFilterForTest() *filter.Filter {
-	return b.filterAtomic.Load()
+func (nb *nodeBackend) GetFilterForTest() *filter.Filter {
+	return nb.filterAtomic.Load()
 }
 
 // SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
@@ -2019,14 +2034,14 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	return true
 }
 
-func (c *localNodeContext) netMapWithPeers() *netmap.NetworkMap {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.netMap == nil {
+func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.netMap == nil {
 		return nil
 	}
-	nm := ptr.To(*c.netMap) // shallow clone
-	nm.Peers = slicesx.MapValues(c.peers)
+	nm := ptr.To(*nb.netMap) // shallow clone
+	nm.Peers = slicesx.MapValues(nb.peers)
 	slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 		return cmp.Compare(a.ID(), b.ID())
 	})
@@ -2063,10 +2078,10 @@ func (b *LocalBackend) pickNewAutoExitNode() {
 	b.send(ipn.Notify{Prefs: &newPrefs})
 }
 
-func (c *localNodeContext) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.netMap == nil || len(c.peers) == 0 {
+func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.netMap == nil || len(nb.peers) == 0 {
 		return false
 	}
 
@@ -2078,7 +2093,7 @@ func (c *localNodeContext) UpdateNetmapDelta(muts []netmap.NodeMutation) (handle
 	for _, m := range muts {
 		n, ok := mutableNodes[m.NodeIDBeingMutated()]
 		if !ok {
-			nv, ok := c.peers[m.NodeIDBeingMutated()]
+			nv, ok := nb.peers[m.NodeIDBeingMutated()]
 			if !ok {
 				// TODO(bradfitz): unexpected metric?
 				return false
@@ -2089,7 +2104,7 @@ func (c *localNodeContext) UpdateNetmapDelta(muts []netmap.NodeMutation) (handle
 		m.Apply(n)
 	}
 	for nid, n := range mutableNodes {
-		c.peers[nid] = n.View()
+		nb.peers[nid] = n.View()
 	}
 	return true
 }
@@ -2250,10 +2265,10 @@ func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
 	return b.currentNode().PeersForTest()
 }
 
-func (b *localNodeContext) PeersForTest() []tailcfg.NodeView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	ret := slicesx.MapValues(b.peers)
+func (nb *nodeBackend) PeersForTest() []tailcfg.NodeView {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	ret := slicesx.MapValues(nb.peers)
 	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
 		return cmp.Compare(a.ID(), b.ID())
 	})
@@ -2532,12 +2547,12 @@ var invalidPacketFilterWarnable = health.Register(&health.Warnable{
 // b.mu must be held.
 func (b *LocalBackend) updateFilterLocked(prefs ipn.PrefsView) {
 	// TODO(nickkhyl) split this into two functions:
-	// - (*localNodeContext).RebuildFilters() (normalFilter, jailedFilter *filter.Filter, changed bool),
+	// - (*nodeBackend).RebuildFilters() (normalFilter, jailedFilter *filter.Filter, changed bool),
 	//   which would return packet filters for the current state and whether they changed since the last call.
 	// - (*LocalBackend).updateFilters(), which would use the above to update the engine with the new filters,
 	//    notify b.sshServer, etc.
 	//
-	// For this, we would need to plumb a few more things into the [localNodeContext]. Most importantly,
+	// For this, we would need to plumb a few more things into the [nodeBackend]. Most importantly,
 	// the current [ipn.PrefsView]), but also maybe also a b.logf and a b.health?
 	//
 	// NOTE(danderson): keep change detection as the first thing in
@@ -2823,8 +2838,8 @@ func (b *LocalBackend) setFilter(f *filter.Filter) {
 	b.e.SetFilter(f)
 }
 
-func (c *localNodeContext) setFilter(f *filter.Filter) {
-	c.filterAtomic.Store(f)
+func (nb *nodeBackend) setFilter(f *filter.Filter) {
+	nb.filterAtomic.Store(f)
 }
 
 var removeFromDefaultRoute = []netip.Prefix{
@@ -3886,7 +3901,7 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineSt
 // in Hostinfo. When the user preferences currently request "shields up"
 // mode, all inbound connections are refused, so services are not reported.
 // Otherwise, shouldUploadServices respects NetMap.CollectServices.
-// TODO(nickkhyl): move this into [localNodeContext]?
+// TODO(nickkhyl): move this into [nodeBackend]?
 func (b *LocalBackend) shouldUploadServices() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -4758,10 +4773,10 @@ func (b *LocalBackend) NetMap() *netmap.NetworkMap {
 	return b.currentNode().NetMap()
 }
 
-func (c *localNodeContext) NetMap() *netmap.NetworkMap {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.netMap
+func (nb *nodeBackend) NetMap() *netmap.NetworkMap {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return nb.netMap
 }
 
 func (b *LocalBackend) isEngineBlocked() bool {
@@ -5003,10 +5018,10 @@ func shouldUseOneCGNATRoute(logf logger.Logf, mon *netmon.Monitor, controlKnobs 
 	return false
 }
 
-func (c *localNodeContext) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return dnsConfigForNetmap(c.netMap, c.peers, prefs, selfExpired, logf, versionOS)
+func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, logf, versionOS)
 }
 
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
@@ -5040,6 +5055,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	selfV6Only := nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
 		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
 	dcfg.OnlyIPv6 = selfV6Only
+
+	wantAAAA := nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA)
 
 	// Populate MagicDNS records. We do this unconditionally so that
 	// quad-100 can always respond to MagicDNS queries, even if the OS
@@ -5077,7 +5094,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			// https://github.com/tailscale/tailscale/issues/1152
 			// tracks adding the right capability reporting to
 			// enable AAAA in MagicDNS.
-			if addr.Addr().Is6() && have4 {
+			if addr.Addr().Is6() && have4 && !wantAAAA {
 				continue
 			}
 			ips = append(ips, addr.Addr())
@@ -6129,12 +6146,12 @@ func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) (newPre
 	return newPrefs
 }
 
-func (c *localNodeContext) SetNetMap(nm *netmap.NetworkMap) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.netMap = nm
-	c.updateNodeByAddrLocked()
-	c.updatePeersLocked()
+func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	nb.netMap = nm
+	nb.updateNodeByAddrLocked()
+	nb.updatePeersLocked()
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
@@ -6209,25 +6226,25 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.driveNotifyCurrentSharesLocked()
 }
 
-func (b *localNodeContext) updateNodeByAddrLocked() {
-	nm := b.netMap
+func (nb *nodeBackend) updateNodeByAddrLocked() {
+	nm := nb.netMap
 	if nm == nil {
-		b.nodeByAddr = nil
+		nb.nodeByAddr = nil
 		return
 	}
 
 	// Update the nodeByAddr index.
-	if b.nodeByAddr == nil {
-		b.nodeByAddr = map[netip.Addr]tailcfg.NodeID{}
+	if nb.nodeByAddr == nil {
+		nb.nodeByAddr = map[netip.Addr]tailcfg.NodeID{}
 	}
 	// First pass, mark everything unwanted.
-	for k := range b.nodeByAddr {
-		b.nodeByAddr[k] = 0
+	for k := range nb.nodeByAddr {
+		nb.nodeByAddr[k] = 0
 	}
 	addNode := func(n tailcfg.NodeView) {
 		for _, ipp := range n.Addresses().All() {
 			if ipp.IsSingleIP() {
-				b.nodeByAddr[ipp.Addr()] = n.ID()
+				nb.nodeByAddr[ipp.Addr()] = n.ID()
 			}
 		}
 	}
@@ -6238,34 +6255,34 @@ func (b *localNodeContext) updateNodeByAddrLocked() {
 		addNode(p)
 	}
 	// Third pass, actually delete the unwanted items.
-	for k, v := range b.nodeByAddr {
+	for k, v := range nb.nodeByAddr {
 		if v == 0 {
-			delete(b.nodeByAddr, k)
+			delete(nb.nodeByAddr, k)
 		}
 	}
 }
 
-func (b *localNodeContext) updatePeersLocked() {
-	nm := b.netMap
+func (nb *nodeBackend) updatePeersLocked() {
+	nm := nb.netMap
 	if nm == nil {
-		b.peers = nil
+		nb.peers = nil
 		return
 	}
 
 	// First pass, mark everything unwanted.
-	for k := range b.peers {
-		b.peers[k] = tailcfg.NodeView{}
+	for k := range nb.peers {
+		nb.peers[k] = tailcfg.NodeView{}
 	}
 
 	// Second pass, add everything wanted.
 	for _, p := range nm.Peers {
-		mak.Set(&b.peers, p.ID(), p)
+		mak.Set(&nb.peers, p.ID(), p)
 	}
 
 	// Third pass, remove deleted things.
-	for k, v := range b.peers {
+	for k, v := range nb.peers {
 		if !v.Valid() {
-			delete(b.peers, k)
+			delete(nb.peers, k)
 		}
 	}
 }
@@ -6652,14 +6669,14 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 
 // PeerHasCap reports whether the peer with the given Tailscale IP addresses
 // contains the given capability string, with any value(s).
-func (b *localNodeContext) PeerHasCap(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.peerHasCapLocked(addr, wantCap)
+func (nb *nodeBackend) PeerHasCap(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return nb.peerHasCapLocked(addr, wantCap)
 }
 
-func (b *localNodeContext) peerHasCapLocked(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
-	return b.peerCapsLocked(addr).HasCapability(wantCap)
+func (nb *nodeBackend) peerHasCapLocked(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
+	return nb.peerCapsLocked(addr).HasCapability(wantCap)
 }
 
 // SetDNS adds a DNS record for the given domain name & TXT record
@@ -6722,16 +6739,16 @@ func peerAPIURL(ip netip.Addr, port uint16) string {
 	return fmt.Sprintf("http://%v", netip.AddrPortFrom(ip, port))
 }
 
-func (c *localNodeContext) PeerHasPeerAPI(p tailcfg.NodeView) bool {
-	return c.PeerAPIBase(p) != ""
+func (nb *nodeBackend) PeerHasPeerAPI(p tailcfg.NodeView) bool {
+	return nb.PeerAPIBase(p) != ""
 }
 
 // PeerAPIBase returns the "http://ip:port" URL base to reach peer's PeerAPI,
 // or the empty string if the peer is invalid or doesn't support PeerAPI.
-func (c *localNodeContext) PeerAPIBase(p tailcfg.NodeView) string {
-	c.mu.Lock()
-	nm := c.netMap
-	c.mu.Unlock()
+func (nb *nodeBackend) PeerAPIBase(p tailcfg.NodeView) string {
+	nb.mu.Lock()
+	nm := nb.netMap
+	nb.mu.Unlock()
 	return peerAPIBase(nm, p)
 }
 
@@ -6972,10 +6989,10 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg
 	return "", false
 }
 
-func (c *localNodeContext) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return exitNodeCanProxyDNS(c.netMap, c.peers, exitNodeID)
+func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return exitNodeCanProxyDNS(nb.netMap, nb.peers, exitNodeID)
 }
 
 // wireguardExitNodeDNSResolvers returns the DNS resolvers to use for a
@@ -7396,7 +7413,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		// down, so no need to do any work.
 		return nil
 	}
-	b.currentNodeAtomic.Store(newLocalNodeContext())
+	b.currentNodeAtomic.Store(newNodeBackend())
 	b.setNetMapLocked(nil) // Reset netmap.
 	b.updateFilterLocked(ipn.PrefsView{})
 	// Reset the NetworkMap in the engine
@@ -8086,7 +8103,7 @@ func (b *LocalBackend) startAutoUpdate(logPrefix string) (retErr error) {
 // rules that require a source IP to have a certain node capability.
 //
 // TODO(bradfitz): optimize this later if/when it matters.
-// TODO(nickkhyl): move this into [localNodeContext] along with [LocalBackend.updateFilterLocked].
+// TODO(nickkhyl): move this into [nodeBackend] along with [LocalBackend.updateFilterLocked].
 func (b *LocalBackend) srcIPHasCapForFilter(srcIP netip.Addr, cap tailcfg.NodeCapability) bool {
 	if cap == "" {
 		// Shouldn't happen, but just in case.

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/client/local"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn"
@@ -64,61 +65,151 @@ var (
 // as a last ditch place to report errors.
 var MainError syncs.AtomicValue[error]
 
-// CleanupBinaries cleans up any resources created by calls to BinaryDir, TailscaleBinary, or TailscaledBinary.
-// It should be called from TestMain after all tests have completed.
-func CleanupBinaries() {
-	buildOnce.Do(func() {})
-	if binDir != "" {
-		os.RemoveAll(binDir)
+// Binaries contains the paths to the tailscale and tailscaled binaries.
+type Binaries struct {
+	Dir        string
+	Tailscale  BinaryInfo
+	Tailscaled BinaryInfo
+}
+
+// BinaryInfo describes a tailscale or tailscaled binary.
+type BinaryInfo struct {
+	Path string // abs path to tailscale or tailscaled binary
+	Size int64
+
+	// FD and FDmu are set on Unix to efficiently copy the binary to a new
+	// test's automatically-cleaned-up temp directory.
+	FD   *os.File // for Unix (macOS, Linux, ...)
+	FDMu sync.Locker
+
+	// Contents is used on Windows instead of FD to copy the binary between
+	// test directories. (On Windows you can't keep an FD open while an earlier
+	// test's temp directories are deleted.)
+	// This burns some memory and costs more in I/O, but oh well.
+	Contents []byte
+}
+
+func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
+	ret := b
+	ret.Path = filepath.Join(dir, path.Base(b.Path))
+
+	switch runtime.GOOS {
+	case "linux":
+		// TODO(bradfitz): be fancy and use linkat with AT_EMPTY_PATH to avoid
+		// copying? I couldn't get it to work, though.
+		// For now, just do the same thing as every other Unix and copy
+		// the binary.
+		fallthrough
+	case "darwin", "freebsd", "openbsd", "netbsd":
+		f, err := os.OpenFile(ret.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o755)
+		if err != nil {
+			return BinaryInfo{}, err
+		}
+		b.FDMu.Lock()
+		b.FD.Seek(0, 0)
+		size, err := io.Copy(f, b.FD)
+		b.FDMu.Unlock()
+		if err != nil {
+			f.Close()
+			return BinaryInfo{}, fmt.Errorf("copying %q: %w", b.Path, err)
+		}
+		if size != b.Size {
+			f.Close()
+			return BinaryInfo{}, fmt.Errorf("copy %q: size mismatch: %d != %d", b.Path, size, b.Size)
+		}
+		if err := f.Close(); err != nil {
+			return BinaryInfo{}, err
+		}
+		return ret, nil
+	case "windows":
+		return ret, os.WriteFile(ret.Path, b.Contents, 0o755)
+	default:
+		return BinaryInfo{}, fmt.Errorf("unsupported OS %q", runtime.GOOS)
 	}
 }
 
-// BinaryDir returns a directory containing test tailscale and tailscaled binaries.
-// If any test calls BinaryDir, there must be a TestMain function that calls
-// CleanupBinaries after all tests are complete.
-func BinaryDir(tb testing.TB) string {
+// GetBinaries create a temp directory using tb and builds (or copies previously
+// built) cmd/tailscale and cmd/tailscaled binaries into that directory.
+//
+// It fails tb if the build or binary copies fail.
+func GetBinaries(tb testing.TB) *Binaries {
+	dir := tb.TempDir()
 	buildOnce.Do(func() {
-		binDir, buildErr = buildTestBinaries()
+		buildErr = buildTestBinaries(dir)
 	})
 	if buildErr != nil {
 		tb.Fatal(buildErr)
 	}
-	return binDir
-}
-
-// TailscaleBinary returns the path to the test tailscale binary.
-// If any test calls TailscaleBinary, there must be a TestMain function that calls
-// CleanupBinaries after all tests are complete.
-func TailscaleBinary(tb testing.TB) string {
-	return filepath.Join(BinaryDir(tb), "tailscale"+exe())
-}
-
-// TailscaledBinary returns the path to the test tailscaled binary.
-// If any test calls TailscaleBinary, there must be a TestMain function that calls
-// CleanupBinaries after all tests are complete.
-func TailscaledBinary(tb testing.TB) string {
-	return filepath.Join(BinaryDir(tb), "tailscaled"+exe())
+	if binariesCache.Dir == dir {
+		return binariesCache
+	}
+	ts, err := binariesCache.Tailscale.CopyTo(dir)
+	if err != nil {
+		tb.Fatalf("copying tailscale binary: %v", err)
+	}
+	tsd, err := binariesCache.Tailscaled.CopyTo(dir)
+	if err != nil {
+		tb.Fatalf("copying tailscaled binary: %v", err)
+	}
+	return &Binaries{
+		Dir:        dir,
+		Tailscale:  ts,
+		Tailscaled: tsd,
+	}
 }
 
 var (
-	buildOnce sync.Once
-	buildErr  error
-	binDir    string
+	buildOnce     sync.Once
+	buildErr      error
+	binariesCache *Binaries
 )
 
 // buildTestBinaries builds tailscale and tailscaled.
-// It returns the dir containing the binaries.
-func buildTestBinaries() (string, error) {
-	bindir, err := os.MkdirTemp("", "")
-	if err != nil {
-		return "", err
+// On success, it initializes [binariesCache].
+func buildTestBinaries(dir string) error {
+	getBinaryInfo := func(name string) (BinaryInfo, error) {
+		bi := BinaryInfo{Path: filepath.Join(dir, name+exe())}
+		fi, err := os.Stat(bi.Path)
+		if err != nil {
+			return BinaryInfo{}, fmt.Errorf("stat %q: %v", bi.Path, err)
+		}
+		bi.Size = fi.Size()
+
+		switch runtime.GOOS {
+		case "windows":
+			bi.Contents, err = os.ReadFile(bi.Path)
+			if err != nil {
+				return BinaryInfo{}, fmt.Errorf("read %q: %v", bi.Path, err)
+			}
+		default:
+			bi.FD, err = os.OpenFile(bi.Path, os.O_RDONLY, 0)
+			if err != nil {
+				return BinaryInfo{}, fmt.Errorf("open %q: %v", bi.Path, err)
+			}
+			bi.FDMu = new(sync.Mutex)
+			// Note: bi.FD is copied around between tests but never closed, by
+			// design. It will be closed when the process exits, and that will
+			// close the inode that we're copying the bytes from for each test.
+		}
+		return bi, nil
 	}
-	err = build(bindir, "tailscale.com/cmd/tailscaled", "tailscale.com/cmd/tailscale")
+	err := build(dir, "tailscale.com/cmd/tailscaled", "tailscale.com/cmd/tailscale")
 	if err != nil {
-		os.RemoveAll(bindir)
-		return "", err
+		return err
 	}
-	return bindir, nil
+	b := &Binaries{
+		Dir: dir,
+	}
+	b.Tailscale, err = getBinaryInfo("tailscale")
+	if err != nil {
+		return err
+	}
+	b.Tailscaled, err = getBinaryInfo("tailscaled")
+	if err != nil {
+		return err
+	}
+	binariesCache = b
+	return nil
 }
 
 func build(outDir string, targets ...string) error {
@@ -436,14 +527,16 @@ func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
 	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 	logc := new(LogCatcher)
 	control := &testcontrol.Server{
+		Logf:    logger.WithPrefix(t.Logf, "testcontrol: "),
 		DERPMap: derpMap,
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
 	trafficTrap := new(trafficTrap)
+	binaries := GetBinaries(t)
 	e := &TestEnv{
 		t:                 t,
-		cli:               TailscaleBinary(t),
-		daemon:            TailscaledBinary(t),
+		cli:               binaries.Tailscale.Path,
+		daemon:            binaries.Tailscaled.Path,
 		LogCatcher:        logc,
 		LogCatcherServer:  httptest.NewServer(logc),
 		Control:           control,
@@ -484,6 +577,7 @@ type TestNode struct {
 
 	mu        sync.Mutex
 	onLogLine []func([]byte)
+	lc        *local.Client
 }
 
 // NewTestNode allocates a temp directory for a new test node.
@@ -500,14 +594,18 @@ func NewTestNode(t *testing.T, env *TestEnv) *TestNode {
 		env:       env,
 		dir:       dir,
 		sockFile:  sockFile,
-		stateFile: filepath.Join(dir, "tailscale.state"),
+		stateFile: filepath.Join(dir, "tailscaled.state"), // matches what cmd/tailscaled uses
 	}
 
-	// Look for a data race. Once we see the start marker, start logging the rest.
+	// Look for a data race or panic.
+	// Once we see the start marker, start logging the rest.
 	var sawRace bool
 	var sawPanic bool
 	n.addLogLineHook(func(line []byte) {
 		lineB := mem.B(line)
+		if mem.Contains(lineB, mem.S("DEBUG-ADDR=")) {
+			t.Log(strings.TrimSpace(string(line)))
+		}
 		if mem.Contains(lineB, mem.S("WARNING: DATA RACE")) {
 			sawRace = true
 		}
@@ -520,6 +618,20 @@ func NewTestNode(t *testing.T, env *TestEnv) *TestNode {
 	})
 
 	return n
+}
+
+func (n *TestNode) LocalClient() *local.Client {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.lc == nil {
+		tr := &http.Transport{}
+		n.lc = &local.Client{
+			Socket:        n.sockFile,
+			UseSocketOnly: true,
+		}
+		n.env.t.Cleanup(tr.CloseIdleConnections)
+	}
+	return n.lc
 }
 
 func (n *TestNode) diskPrefs() *ipn.Prefs {
@@ -658,6 +770,27 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 	}
 }
 
+// awaitTailscaledRunnable tries to run `tailscaled --version` until it
+// works. This is an unsatisfying workaround for ETXTBSY we were seeing
+// on GitHub Actions that aren't understood. It's not clear what's holding
+// a writable fd to tailscaled after `go install` completes.
+// See https://github.com/tailscale/tailscale/issues/15868.
+func (n *TestNode) awaitTailscaledRunnable() error {
+	t := n.env.t
+	t.Helper()
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		out, err := exec.Command(n.env.daemon, "--version").CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		t.Logf("error running tailscaled --version: %v, %s", err, out)
+		return err
+	}); err != nil {
+		return fmt.Errorf("gave up trying to run tailscaled: %v", err)
+	}
+	return nil
+}
+
 // StartDaemon starts the node's tailscaled, failing if it fails to start.
 // StartDaemon ensures that the process will exit when the test completes.
 func (n *TestNode) StartDaemon() *Daemon {
@@ -666,11 +799,17 @@ func (n *TestNode) StartDaemon() *Daemon {
 
 func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	t := n.env.t
+
+	if err := n.awaitTailscaledRunnable(); err != nil {
+		t.Fatalf("awaitTailscaledRunnable: %v", err)
+	}
+
 	cmd := exec.Command(n.env.daemon)
 	cmd.Args = append(cmd.Args,
-		"--state="+n.stateFile,
+		"--statedir="+n.dir,
 		"--socket="+n.sockFile,
 		"--socks5-server=localhost:0",
+		"--debug=localhost:0",
 	)
 	if *verboseTailscaled {
 		cmd.Args = append(cmd.Args, "-verbose=2")
@@ -684,7 +823,6 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Args = append(cmd.Args, "--config="+n.configFile)
 	}
 	cmd.Env = append(os.Environ(),
-		"TS_CONTROL_IS_PLAINTEXT_HTTP=1",
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,

@@ -44,6 +44,7 @@ require (
 	github.com/golangci/golangci-lint v1.57.1
 	github.com/google/go-cmp v0.6.0
 	github.com/google/go-containerregistry v0.20.2
+	github.com/google/go-tpm v0.9.4
 	github.com/google/gopacket v1.1.19
 	github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806
 	github.com/google/uuid v1.6.0

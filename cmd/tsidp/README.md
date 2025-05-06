@@ -35,7 +35,7 @@
 
    ```bash
    docker run -d \
-     --name `tsidp` \
+     --name tsidp \
      -p 443:443 \
      -e TS_AUTHKEY=YOUR_TAILSCALE_AUTHKEY \
      -e TS_HOSTNAME=idp \
