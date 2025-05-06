@@ -382,6 +382,7 @@ func runReconcilers(opts reconcilerOpts) {
 			Client:      mgr.GetClient(),
 			logger:      opts.log.Named("service-pg-reconciler"),
 			lc:          lc,
+			clock:       tstime.DefaultClock{},
 			operatorID:  id,
 			tsNamespace: opts.tailscaleNamespace,
 		})

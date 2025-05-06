@@ -37,21 +37,24 @@ import (
 	"tailscale.com/util/set"
 )
 
-const finalizerName = "tailscale.com/service-pg-finalizer"
+const (
+	finalizerName = "tailscale.com/service-pg-finalizer"
 
-// ensure LoadBalancer Service's status is set
+	reasonIngressSvcInvalid              = "IngressSvcInvalid"
+	reasonIngressSvcValid                = "IngressSvcValid"
+	reasonIngressSvcConfigured           = "IngressSvcConfigured"
+	reasonIngressSvcNoBackendsConfigured = "IngressSvcNoBackendsConfigured"
+	reasonIngressSvcCreationFailed       = "IngressSvcCreationFailed"
+)
+
+// ensure LoadBalancer Service's status is set x
+// set finalizer x
+// cleanup x
+// hostname change - cleanup x
+// failover (testing) x
 // ensure the right conditions on Services are set
-// reconcile on proxygroup changes
 // metrics
-// unit tests - operator
-// unit tests - containerboot
-// unit tests - iptables
-// unit tests - nftables
 // multi-cluster
-// set finalizer
-// cleanup
-// hostname change - cleanup
-// failover (testing)
 // can we refactor?
 
 // var gaugePGServiceResources = clientmetric.NewGauge(kubetypes.MetricServicePGResourceCount)
@@ -164,6 +167,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		logger.Infof("[unexpected] no ProxyGroup annotation, skipping VIPService provisioning")
 		return false, nil
 	}
+
 	logger = logger.With("ProxyGroup", pgName)
 
 	pg := &tsapi.ProxyGroup{}
@@ -184,7 +188,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		msg := fmt.Sprintf("unable to provision proxy resources: invalid Service: %s", strings.Join(violations, ", "))
 		r.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVICE", msg)
 		r.logger.Error(msg)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, r.clock, logger)
+		tsoperator.SetServiceCondition(svc, tsapi.IngressSvcValid, metav1.ConditionFalse, reasonIngressSvcInvalid, msg, r.clock, logger)
 		return false, nil
 	}
 
@@ -247,6 +251,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		msg := fmt.Sprintf("error ensuring ownership of VIPService %s: %v. %s", hostname, err, instr)
 		logger.Warn(msg)
 		r.recorder.Event(svc, corev1.EventTypeWarning, "InvalidVIPService", msg)
+		tsoperator.SetServiceCondition(svc, tsapi.IngressSvcValid, metav1.ConditionFalse, reasonIngressSvcInvalid, msg, r.clock, logger)
 		return false, nil
 	}
 
@@ -365,7 +370,12 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, fmt.Errorf("failed to get number of advertised Pods: %w", err)
 	}
 
+	// NOTE: if there are no pods advertising, we want to set 'svc.Status.LoadBalancer.Ingress' to nil"
 	var lbs []corev1.LoadBalancerIngress
+	conditionStatus := metav1.ConditionFalse
+	conditionType := tsapi.IngressSvcConfigured
+	conditionReason := reasonIngressSvcNoBackendsConfigured
+	conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", count, *pg.Spec.Replicas)
 	if count != 0 {
 		dnsName, err := r.dnsNameForService(ctx, serviceName)
 		if err != nil {
@@ -378,8 +388,12 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 				IP:       vipv4.String(),
 			},
 		}
+
+		conditionStatus = metav1.ConditionTrue
+		conditionReason = reasonIngressSvcConfigured
 	}
 
+	tsoperator.SetServiceCondition(svc, conditionType, conditionStatus, conditionReason, conditionMessage, r.clock, logger)
 	svc.Status.LoadBalancer.Ingress = lbs
 
 	// if apiequality.Semantic.DeepEqual(oldStatus, &ing.Status) {
