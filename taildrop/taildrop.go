@@ -73,9 +73,16 @@ type ManagerOptions struct {
 	State ipn.StateStore      // may be nil
 
 	// Dir is the directory to store received files.
-	// This main either be the final location for the files
+	// This may either be the final location for the files
 	// or just a temporary staging directory (see DirectFileMode).
 	Dir string
+
+	// PutMode controls how Manager.PutFile writes files to storage.
+	//
+	//  PutModeDirect    – write files directly to a filesystem path (default).
+	//  PutModeAndroidSAF – use Android’s Storage Access Framework (SAF), where
+	//                        the OS manages the underlying directory permissions.
+	PutMode ipn.PutMode
 
 	// DirectFileMode reports whether we are writing files
 	// directly to a download directory, rather than writing them to
@@ -102,6 +109,8 @@ type ManagerOptions struct {
 type Manager struct {
 	opts ManagerOptions
 
+	fileOps ipn.FileOps
+
 	// incomingFiles is a map of files actively being received.
 	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
 	// deleter managers asynchronous deletion of files.
@@ -120,14 +129,14 @@ type Manager struct {
 // New initializes a new taildrop manager.
 // It may spawn asynchronous goroutines to delete files,
 // so the Shutdown method must be called for resource cleanup.
-func (opts ManagerOptions) New() *Manager {
+func (opts ManagerOptions) New(fileOps ipn.FileOps) *Manager {
 	if opts.Logf == nil {
 		opts.Logf = logger.Discard
 	}
 	if opts.SendFileNotify == nil {
 		opts.SendFileNotify = func() {}
 	}
-	m := &Manager{opts: opts}
+	m := &Manager{opts: opts, fileOps: fileOps}
 	m.deleter.Init(m, func(string) {})
 	m.emptySince.Store(-1) // invalidate this cache
 	return m

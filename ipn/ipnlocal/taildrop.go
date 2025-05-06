@@ -31,7 +31,7 @@ func init() {
 
 type taildrop_Manager = taildrop.Manager
 
-func (b *LocalBackend) newTaildropManager(fileRoot string) *taildrop.Manager {
+func (b *LocalBackend) newTaildropManager(fileRoot string, putMode ipn.PutMode) *taildrop.Manager {
 	// TODO(bradfitz): move all this to an ipnext so ipnlocal doesn't need to depend
 	// on taildrop at all.
 	if fileRoot == "" {
@@ -42,9 +42,10 @@ func (b *LocalBackend) newTaildropManager(fileRoot string) *taildrop.Manager {
 		Clock:          tstime.DefaultClock{Clock: b.clock},
 		State:          b.store,
 		Dir:            fileRoot,
+		PutMode:        putMode,
 		DirectFileMode: b.directFileRoot != "",
 		SendFileNotify: b.sendFileNotify,
-	}.New()
+	}.New(b.FileOps)
 }
 
 func (b *LocalBackend) sendFileNotify() {

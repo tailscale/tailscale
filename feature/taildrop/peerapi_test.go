@@ -478,7 +478,7 @@ func TestHandlePeerAPI(t *testing.T) {
 				e.taildrop = taildrop.ManagerOptions{
 					Logf: e.logBuf.Logf,
 					Dir:  rootDir,
-				}.New()
+				}.New(nil)
 			}
 
 			lb := &fakeLocalBackend{
@@ -528,7 +528,7 @@ func TestFileDeleteRace(t *testing.T) {
 	taildropMgr := taildrop.ManagerOptions{
 		Logf: t.Logf,
 		Dir:  dir,
-	}.New()
+	}.New(nil)
 
 	ph := &peerAPIHandler{
 		isSelf: true,
