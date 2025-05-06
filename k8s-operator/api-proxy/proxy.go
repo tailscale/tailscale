@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package apiproxy
 
 import (
 	"crypto/tls"
@@ -37,15 +37,15 @@ var (
 	whoIsKey                  = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 )
 
-type apiServerProxyMode int
+type APIServerProxyMode int
 
-func (a apiServerProxyMode) String() string {
+func (a APIServerProxyMode) String() string {
 	switch a {
-	case apiserverProxyModeDisabled:
+	case APIServerProxyModeDisabled:
 		return "disabled"
-	case apiserverProxyModeEnabled:
+	case APIServerProxyModeEnabled:
 		return "auth"
-	case apiserverProxyModeNoAuth:
+	case APIServerProxyModeNoAuth:
 		return "noauth"
 	default:
 		return "unknown"
@@ -53,12 +53,12 @@ func (a apiServerProxyMode) String() string {
 }
 
 const (
-	apiserverProxyModeDisabled apiServerProxyMode = iota
-	apiserverProxyModeEnabled
-	apiserverProxyModeNoAuth
+	APIServerProxyModeDisabled APIServerProxyMode = iota
+	APIServerProxyModeEnabled
+	APIServerProxyModeNoAuth
 )
 
-func parseAPIProxyMode() apiServerProxyMode {
+func ParseAPIProxyMode() APIServerProxyMode {
 	haveAuthProxyEnv := os.Getenv("AUTH_PROXY") != ""
 	haveAPIProxyEnv := os.Getenv("APISERVER_PROXY") != ""
 	switch {
@@ -67,34 +67,34 @@ func parseAPIProxyMode() apiServerProxyMode {
 	case haveAuthProxyEnv:
 		var authProxyEnv = defaultBool("AUTH_PROXY", false) // deprecated
 		if authProxyEnv {
-			return apiserverProxyModeEnabled
+			return APIServerProxyModeEnabled
 		}
-		return apiserverProxyModeDisabled
+		return APIServerProxyModeDisabled
 	case haveAPIProxyEnv:
 		var apiProxyEnv = defaultEnv("APISERVER_PROXY", "") // true, false or "noauth"
 		switch apiProxyEnv {
 		case "true":
-			return apiserverProxyModeEnabled
+			return APIServerProxyModeEnabled
 		case "false", "":
-			return apiserverProxyModeDisabled
+			return APIServerProxyModeDisabled
 		case "noauth":
-			return apiserverProxyModeNoAuth
+			return APIServerProxyModeNoAuth
 		default:
 			panic(fmt.Sprintf("unknown APISERVER_PROXY value %q", apiProxyEnv))
 		}
 	}
-	return apiserverProxyModeDisabled
+	return APIServerProxyModeDisabled
 }
 
 // maybeLaunchAPIServerProxy launches the auth proxy, which is a small HTTP server
 // that authenticates requests using the Tailscale LocalAPI and then proxies
 // them to the kube-apiserver.
-func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.Server, mode apiServerProxyMode) {
-	if mode == apiserverProxyModeDisabled {
+func MaybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.Server, mode APIServerProxyMode) {
+	if mode == APIServerProxyModeDisabled {
 		return
 	}
 	startlog := zlog.Named("launchAPIProxy")
-	if mode == apiserverProxyModeNoAuth {
+	if mode == APIServerProxyModeNoAuth {
 		restConfig = rest.AnonymousClientConfig(restConfig)
 	}
 	cfg, err := restConfig.TransportConfig()
@@ -132,8 +132,8 @@ func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config,
 //     are passed through to the Kubernetes API.
 //
 // It never returns.
-func runAPIServerProxy(ts *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLogger, mode apiServerProxyMode, host string) {
-	if mode == apiserverProxyModeDisabled {
+func runAPIServerProxy(ts *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLogger, mode APIServerProxyMode, host string) {
+	if mode == APIServerProxyModeDisabled {
 		return
 	}
 	ln, err := ts.Listen("tcp", ":443")
@@ -192,7 +192,7 @@ type apiserverProxy struct {
 	lc  *local.Client
 	rp  *httputil.ReverseProxy
 
-	mode        apiServerProxyMode
+	mode        APIServerProxyMode
 	ts          *tsnet.Server
 	upstreamURL *url.URL
 }
@@ -285,7 +285,7 @@ func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 	r.URL.Scheme = h.upstreamURL.Scheme
 	r.URL.Host = h.upstreamURL.Host
-	if h.mode == apiserverProxyModeNoAuth {
+	if h.mode == APIServerProxyModeNoAuth {
 		// If we are not providing authentication, then we are just
 		// proxying to the Kubernetes API, so we don't need to do
 		// anything else.
