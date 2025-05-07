@@ -163,16 +163,17 @@ func TestConsensusPoolExpiry(t *testing.T) {
 	}
 }
 
-func TestConsensusPoolExtendExpiry(t *testing.T) {
+func TestConsensusPoolExtendValid(t *testing.T) {
 	ipp := makePool(netip.MustParsePrefix("100.64.0.0/31"))
 	firstIP := netip.MustParseAddr("100.64.0.0")
 	secondIP := netip.MustParseAddr("100.64.0.1")
 	timeOfUse := time.Now()
-	afterTimeOfUse1 := timeOfUse.Add(-1 * time.Hour)
-	afterTimeOfUse2 := timeOfUse.Add(-2 * time.Hour)
+	beforeTimeOfUse := timeOfUse.Add(-2 * time.Hour)
+	afterTimeOfUse1 := timeOfUse.Add(1 * time.Hour)
+	afterTimeOfUse2 := timeOfUse.Add(2 * time.Hour)
 	from := tailcfg.NodeID(1)
 
-	aAddr, err := ipp.applyCheckoutAddr(from, "a.example.com", timeOfUse, timeOfUse)
+	aAddr, err := ipp.applyCheckoutAddr(from, "a.example.com", beforeTimeOfUse, timeOfUse)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +186,7 @@ func TestConsensusPoolExtendExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bAddr, err := ipp.applyCheckoutAddr(from, "b.example.com", afterTimeOfUse2, afterTimeOfUse2)
+	bAddr, err := ipp.applyCheckoutAddr(from, "b.example.com", timeOfUse, afterTimeOfUse2)
 	if err != nil {
 		t.Fatal(err)
 	}
