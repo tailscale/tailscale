@@ -153,6 +153,135 @@ func Test_iptablesRunner_DeleteSvc(t *testing.T) {
 	svcMustExist(t, "svc2", map[string][]string{v4Addr.String(): s2R1, v6Addr.String(): s2R2}, iptr)
 }
 
+func Test_iptablesRunner_EnsureDNATRuleForSvc(t *testing.T) {
+	v4OrigDst := netip.MustParseAddr("10.0.0.1")
+	v4Target := netip.MustParseAddr("10.0.0.2")
+	v6OrigDst := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	v6Target := netip.MustParseAddr("fd7a:115c:a1e0::2")
+	v4Rule := argsForIngressRule("svc:test", v4OrigDst, v4Target)
+
+	tests := []struct {
+		name              string
+		svcName           string
+		origDst           netip.Addr
+		targetIP          netip.Addr
+		precreateSvcRules [][]string
+	}{
+		{
+			name:     "dnat_for_ipv4",
+			svcName:  "svc:test",
+			origDst:  v4OrigDst,
+			targetIP: v4Target,
+		},
+		{
+			name:     "dnat_for_ipv6",
+			svcName:  "svc:test-2",
+			origDst:  v6OrigDst,
+			targetIP: v6Target,
+		},
+		{
+			name:              "add_existing_rule",
+			svcName:           "svc:test",
+			origDst:           v4OrigDst,
+			targetIP:          v4Target,
+			precreateSvcRules: [][]string{v4Rule},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iptr := NewFakeIPTablesRunner()
+			table := iptr.getIPTByAddr(tt.targetIP)
+			for _, ruleset := range tt.precreateSvcRules {
+				mustPrecreateDNATRule(t, ruleset, table)
+			}
+			if err := iptr.EnsureDNATRuleForSvc(tt.svcName, tt.origDst, tt.targetIP); err != nil {
+				t.Errorf("[unexpected error] iptablesRunner.EnsureDNATRuleForSvc() = %v", err)
+			}
+			args := argsForIngressRule(tt.svcName, tt.origDst, tt.targetIP)
+			exists, err := table.Exists("nat", "PREROUTING", args...)
+			if err != nil {
+				t.Fatalf("error checking if rule exists: %v", err)
+			}
+			if !exists {
+				t.Errorf("expected rule was not created")
+			}
+		})
+	}
+}
+
+func Test_iptablesRunner_DeleteDNATRuleForSvc(t *testing.T) {
+	v4OrigDst := netip.MustParseAddr("10.0.0.1")
+	v4Target := netip.MustParseAddr("10.0.0.2")
+	v6OrigDst := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	v6Target := netip.MustParseAddr("fd7a:115c:a1e0::2")
+	v4Rule := argsForIngressRule("svc:test", v4OrigDst, v4Target)
+	v6Rule := argsForIngressRule("svc:test", v6OrigDst, v6Target)
+
+	tests := []struct {
+		name              string
+		svcName           string
+		origDst           netip.Addr
+		targetIP          netip.Addr
+		precreateSvcRules [][]string
+	}{
+		{
+			name:              "multiple_rules_ipv4_deleted",
+			svcName:           "svc:test",
+			origDst:           v4OrigDst,
+			targetIP:          v4Target,
+			precreateSvcRules: [][]string{v4Rule, v6Rule},
+		},
+		{
+			name:              "multiple_rules_ipv6_deleted",
+			svcName:           "svc:test",
+			origDst:           v6OrigDst,
+			targetIP:          v6Target,
+			precreateSvcRules: [][]string{v4Rule, v6Rule},
+		},
+		{
+			name:              "non-existent_rule_deleted",
+			svcName:           "svc:test",
+			origDst:           v4OrigDst,
+			targetIP:          v4Target,
+			precreateSvcRules: [][]string{v6Rule},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iptr := NewFakeIPTablesRunner()
+			table := iptr.getIPTByAddr(tt.targetIP)
+			for _, ruleset := range tt.precreateSvcRules {
+				mustPrecreateDNATRule(t, ruleset, table)
+			}
+			if err := iptr.DeleteDNATRuleForSvc(tt.svcName, tt.origDst, tt.targetIP); err != nil {
+				t.Errorf("iptablesRunner.DeleteDNATRuleForSvc() errored: %v ", err)
+			}
+			deletedRule := argsForIngressRule(tt.svcName, tt.origDst, tt.targetIP)
+			exists, err := table.Exists("nat", "PREROUTING", deletedRule...)
+			if err != nil {
+				t.Fatalf("error verifying that rule does not exist after deletion: %v", err)
+			}
+			if exists {
+				t.Errorf("DNAT rule exists after deletion")
+			}
+		})
+	}
+}
+
+func mustPrecreateDNATRule(t *testing.T, rules []string, table iptablesInterface) {
+	t.Helper()
+	exists, err := table.Exists("nat", "PREROUTING", rules...)
+	if err != nil {
+		t.Fatalf("error ensuring that nat PREROUTING table exists: %v", err)
+	}
+	if exists {
+		return
+	}
+	if err := table.Append("nat", "PREROUTING", rules...); err != nil {
+		t.Fatalf("error precreating DNAT rule: %v", err)
+	}
+}
+
 func svcMustExist(t *testing.T, svcName string, rules map[string][]string, iptr *iptablesRunner) {
 	t.Helper()
 	for dst, ruleset := range rules {
