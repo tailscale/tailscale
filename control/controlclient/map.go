@@ -88,6 +88,7 @@ type mapSession struct {
 	lastDomain             string
 	lastDomainAuditLogID   string
 	lastHealth             []string
+	lastDisplayMessages    map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
 	lastPopBrowserURL      string
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
@@ -409,6 +410,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
+	}
+	if resp.DisplayMessages != nil {
+		ms.lastDisplayMessages = resp.DisplayMessages
 	}
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
@@ -831,7 +835,9 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 
 	var displayMessages map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
 
-	if len(ms.lastHealth) > 0 {
+	if len(ms.lastDisplayMessages) != 0 {
+		displayMessages = ms.lastDisplayMessages
+	} else if len(ms.lastHealth) > 0 {
 		// As they all resolve to the same ID, we can only pass on one message
 		// from ControlHealth. In practice we generally send 0 or 1, but
 		// if there are multiple, the last one wins.
