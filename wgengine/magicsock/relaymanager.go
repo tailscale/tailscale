@@ -51,6 +51,7 @@ func (r *relayManager) initLocked() {
 	}
 	r.discoInfoByServerDisco = make(map[key.DiscoPublic]*discoInfo)
 	r.serversByAddrPort = make(map[netip.AddrPort]key.DiscoPublic)
+	r.relaySetupWorkByEndpoint = make(map[*endpoint]*relaySetupWork)
 }
 
 // discoInfo returns a [*discoInfo] for 'serverDisco' if there is an
