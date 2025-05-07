@@ -95,15 +95,16 @@ type Direct struct {
 	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
 	noiseClient *NoiseClient
 
-	persist      persist.PersistView
-	authKey      string
-	tryingNewKey key.NodePrivate
-	expiry       time.Time         // or zero value if none/unknown
-	hostinfo     *tailcfg.Hostinfo // always non-nil
-	netinfo      *tailcfg.NetInfo
-	endpoints    []tailcfg.Endpoint
-	tkaHead      string
-	lastPingURL  string // last PingRequest.URL received, for dup suppression
+	persist                 persist.PersistView
+	authKey                 string
+	tryingNewKey            key.NodePrivate
+	expiry                  time.Time         // or zero value if none/unknown
+	hostinfo                *tailcfg.Hostinfo // always non-nil
+	netinfo                 *tailcfg.NetInfo
+	endpoints               []tailcfg.Endpoint
+	tkaHead                 string
+	lastPingURL             string // last PingRequest.URL received, for dup suppression
+	connectionHandleForTest string // sent in MapRequest.ConnectionHandleForTest
 }
 
 // Observer is implemented by users of the control client (such as LocalBackend)
@@ -401,6 +402,14 @@ func (c *Direct) SetTKAHead(tkaHead string) bool {
 	c.tkaHead = tkaHead
 	c.logf("tkaHead: %v", tkaHead)
 	return true
+}
+
+// SetConnectionHandleForTest stores a new MapRequest.ConnectionHandleForTest
+// value for the next update.
+func (c *Direct) SetConnectionHandleForTest(handle string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connectionHandleForTest = handle
 }
 
 func (c *Direct) GetPersist() persist.PersistView {
@@ -851,6 +860,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	serverNoiseKey := c.serverNoiseKey
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
+	connectionHandleForTest := c.connectionHandleForTest
 	var epStrs []string
 	var eps []netip.AddrPort
 	var epTypes []tailcfg.EndpointType
@@ -891,17 +901,18 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 
 	nodeKey := persist.PublicNodeKey()
 	request := &tailcfg.MapRequest{
-		Version:       tailcfg.CurrentCapabilityVersion,
-		KeepAlive:     true,
-		NodeKey:       nodeKey,
-		DiscoKey:      c.discoPubKey,
-		Endpoints:     eps,
-		EndpointTypes: epTypes,
-		Stream:        isStreaming,
-		Hostinfo:      hi,
-		DebugFlags:    c.debugFlags,
-		OmitPeers:     nu == nil,
-		TKAHead:       c.tkaHead,
+		Version:                 tailcfg.CurrentCapabilityVersion,
+		KeepAlive:               true,
+		NodeKey:                 nodeKey,
+		DiscoKey:                c.discoPubKey,
+		Endpoints:               eps,
+		EndpointTypes:           epTypes,
+		Stream:                  isStreaming,
+		Hostinfo:                hi,
+		DebugFlags:              c.debugFlags,
+		OmitPeers:               nu == nil,
+		TKAHead:                 c.tkaHead,
+		ConnectionHandleForTest: connectionHandleForTest,
 	}
 	var extraDebugFlags []string
 	if hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&

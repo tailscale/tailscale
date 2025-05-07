@@ -1413,6 +1413,12 @@ type MapRequest struct {
 	//     * "warn-router-unhealthy": client's Router implementation is
 	//       having problems.
 	DebugFlags []string `json:",omitempty"`
+
+	// ConnectionHandleForTest, if non-empty, is an opaque string sent by the client that
+	// identifies this specific connection to the server. The server may choose to
+	// use this handle to identify the connection for debugging or testing
+	// purposes. It has no semantic meaning.
+	ConnectionHandleForTest string `json:",omitempty"`
 }
 
 // PortRange represents a range of UDP or TCP port numbers.
