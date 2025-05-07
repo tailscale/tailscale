@@ -72,8 +72,18 @@ func (e *extension) Init(host ipnext.Host) error {
 	profile, prefs := host.Profiles().CurrentProfileState()
 	e.profileStateChanged(profile, prefs, false)
 	host.Hooks().ProfileStateChange.Add(e.profileStateChanged)
-	// TODO(jwhited): callback for netmap/nodeattr changes (e.hasNodeAttrRelayServer)
+	host.Hooks().OnSelfChange.Add(e.selfNodeViewChanged)
 	return nil
+}
+
+func (e *extension) selfNodeViewChanged(nodeView tailcfg.NodeView) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.hasNodeAttrRelayServer = nodeView.HasCap(tailcfg.NodeAttrRelayServer)
+	if !e.hasNodeAttrRelayServer && e.server != nil {
+		e.server.Close()
+		e.server = nil
+	}
 }
 
 func (e *extension) profileStateChanged(_ ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
