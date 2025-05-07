@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_taildrop
+
 package cli
 
 import (
@@ -38,14 +40,20 @@ import (
 	"tailscale.com/version"
 )
 
-var fileCmd = &ffcli.Command{
-	Name:       "file",
-	ShortUsage: "tailscale file <cp|get> ...",
-	ShortHelp:  "Send or receive files",
-	Subcommands: []*ffcli.Command{
-		fileCpCmd,
-		fileGetCmd,
-	},
+func init() {
+	fileCmd = getFileCmd
+}
+
+func getFileCmd() *ffcli.Command {
+	return &ffcli.Command{
+		Name:       "file",
+		ShortUsage: "tailscale file <cp|get> ...",
+		ShortHelp:  "Send or receive files",
+		Subcommands: []*ffcli.Command{
+			fileCpCmd,
+			fileGetCmd,
+		},
+	}
 }
 
 type countingReader struct {
