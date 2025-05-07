@@ -14,7 +14,6 @@ import (
 
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tailcfg"
-	"tailscale.com/taildrop"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
@@ -49,7 +48,7 @@ func handlePeerPut(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Req
 // extensionForPut is the subset of taildrop extension that taildrop
 // file put needs. This is pulled out for testability.
 type extensionForPut interface {
-	manager() *taildrop.Manager
+	manager() *manager
 	hasCapFileSharing() bool
 	Clock() tstime.Clock
 }
@@ -67,11 +66,11 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, ext extensionForPut, w 
 	}
 
 	if !canPutFile(h) {
-		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
+		http.Error(w, ErrNoTaildrop.Error(), http.StatusForbidden)
 		return
 	}
 	if !ext.hasCapFileSharing() {
-		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
+		http.Error(w, ErrNoTaildrop.Error(), http.StatusForbidden)
 		return
 	}
 	rawPath := r.URL.EscapedPath()
@@ -82,13 +81,13 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, ext extensionForPut, w 
 	}
 	baseName, err := url.PathUnescape(prefix)
 	if err != nil {
-		http.Error(w, taildrop.ErrInvalidFileName.Error(), http.StatusBadRequest)
+		http.Error(w, ErrInvalidFileName.Error(), http.StatusBadRequest)
 		return
 	}
 	enc := json.NewEncoder(w)
 	switch r.Method {
 	case "GET":
-		id := taildrop.ClientID(h.Peer().StableID())
+		id := clientID(h.Peer().StableID())
 		if prefix == "" {
 			// List all the partial files.
 			files, err := taildropMgr.PartialFiles(id)
@@ -128,7 +127,7 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, ext extensionForPut, w 
 		}
 	case "PUT":
 		t0 := ext.Clock().Now()
-		id := taildrop.ClientID(h.Peer().StableID())
+		id := clientID(h.Peer().StableID())
 
 		var offset int64
 		if rangeHdr := r.Header.Get("Range"); rangeHdr != "" {
@@ -139,17 +138,17 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, ext extensionForPut, w 
 			}
 			offset = ranges[0].Start
 		}
-		n, err := taildropMgr.PutFile(taildrop.ClientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
+		n, err := taildropMgr.PutFile(clientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
 		switch err {
 		case nil:
 			d := ext.Clock().Since(t0).Round(time.Second / 10)
 			h.Logf("got put of %s in %v from %v/%v", approxSize(n), d, h.RemoteAddr().Addr(), h.Peer().ComputedName)
 			io.WriteString(w, "{}\n")
-		case taildrop.ErrNoTaildrop:
+		case ErrNoTaildrop:
 			http.Error(w, err.Error(), http.StatusForbidden)
-		case taildrop.ErrInvalidFileName:
+		case ErrInvalidFileName:
 			http.Error(w, err.Error(), http.StatusBadRequest)
-		case taildrop.ErrFileExists:
+		case ErrFileExists:
 			http.Error(w, err.Error(), http.StatusConflict)
 		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)

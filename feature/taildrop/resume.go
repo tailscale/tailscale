@@ -19,29 +19,29 @@ var (
 	hashAlgorithm = "sha256"
 )
 
-// BlockChecksum represents the checksum for a single block.
-type BlockChecksum struct {
-	Checksum  Checksum `json:"checksum"`
+// blockChecksum represents the checksum for a single block.
+type blockChecksum struct {
+	Checksum  checksum `json:"checksum"`
 	Algorithm string   `json:"algo"` // always "sha256" for now
 	Size      int64    `json:"size"` // always (64<<10) for now
 }
 
-// Checksum is an opaque checksum that is comparable.
-type Checksum struct{ cs [sha256.Size]byte }
+// checksum is an opaque checksum that is comparable.
+type checksum struct{ cs [sha256.Size]byte }
 
-func hash(b []byte) Checksum {
-	return Checksum{sha256.Sum256(b)}
+func hash(b []byte) checksum {
+	return checksum{sha256.Sum256(b)}
 }
-func (cs Checksum) String() string {
+func (cs checksum) String() string {
 	return hex.EncodeToString(cs.cs[:])
 }
-func (cs Checksum) AppendText(b []byte) ([]byte, error) {
+func (cs checksum) AppendText(b []byte) ([]byte, error) {
 	return hex.AppendEncode(b, cs.cs[:]), nil
 }
-func (cs Checksum) MarshalText() ([]byte, error) {
+func (cs checksum) MarshalText() ([]byte, error) {
 	return hex.AppendEncode(nil, cs.cs[:]), nil
 }
-func (cs *Checksum) UnmarshalText(b []byte) error {
+func (cs *checksum) UnmarshalText(b []byte) error {
 	if len(b) != 2*len(cs.cs) {
 		return fmt.Errorf("invalid hex length: %d", len(b))
 	}
@@ -51,7 +51,7 @@ func (cs *Checksum) UnmarshalText(b []byte) error {
 
 // PartialFiles returns a list of partial files in [Handler.Dir]
 // that were sent (or is actively being sent) by the provided id.
-func (m *Manager) PartialFiles(id ClientID) (ret []string, err error) {
+func (m *manager) PartialFiles(id clientID) (ret []string, err error) {
 	if m == nil || m.opts.Dir == "" {
 		return nil, ErrNoTaildrop
 	}
@@ -72,11 +72,11 @@ func (m *Manager) PartialFiles(id ClientID) (ret []string, err error) {
 // starting from the beginning of the file.
 // It returns (BlockChecksum{}, io.EOF) when the stream is complete.
 // It is the caller's responsibility to call close.
-func (m *Manager) HashPartialFile(id ClientID, baseName string) (next func() (BlockChecksum, error), close func() error, err error) {
+func (m *manager) HashPartialFile(id clientID, baseName string) (next func() (blockChecksum, error), close func() error, err error) {
 	if m == nil || m.opts.Dir == "" {
 		return nil, nil, ErrNoTaildrop
 	}
-	noopNext := func() (BlockChecksum, error) { return BlockChecksum{}, io.EOF }
+	noopNext := func() (blockChecksum, error) { return blockChecksum{}, io.EOF }
 	noopClose := func() error { return nil }
 
 	dstFile, err := joinDir(m.opts.Dir, baseName)
@@ -92,25 +92,25 @@ func (m *Manager) HashPartialFile(id ClientID, baseName string) (next func() (Bl
 	}
 
 	b := make([]byte, blockSize) // TODO: Pool this?
-	next = func() (BlockChecksum, error) {
+	next = func() (blockChecksum, error) {
 		switch n, err := io.ReadFull(f, b); {
 		case err != nil && err != io.EOF && err != io.ErrUnexpectedEOF:
-			return BlockChecksum{}, redactError(err)
+			return blockChecksum{}, redactError(err)
 		case n == 0:
-			return BlockChecksum{}, io.EOF
+			return blockChecksum{}, io.EOF
 		default:
-			return BlockChecksum{hash(b[:n]), hashAlgorithm, int64(n)}, nil
+			return blockChecksum{hash(b[:n]), hashAlgorithm, int64(n)}, nil
 		}
 	}
 	close = f.Close
 	return next, close, nil
 }
 
-// ResumeReader reads and discards the leading content of r
+// resumeReader reads and discards the leading content of r
 // that matches the content based on the checksums that exist.
 // It returns the number of bytes consumed,
 // and returns an [io.Reader] representing the remaining content.
-func ResumeReader(r io.Reader, hashNext func() (BlockChecksum, error)) (int64, io.Reader, error) {
+func resumeReader(r io.Reader, hashNext func() (blockChecksum, error)) (int64, io.Reader, error) {
 	if hashNext == nil {
 		return 0, r, nil
 	}

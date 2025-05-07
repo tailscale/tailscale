@@ -19,7 +19,7 @@ import (
 )
 
 type incomingFileKey struct {
-	id   ClientID
+	id   clientID
 	name string // e.g., "foo.jpeg"
 }
 
@@ -61,19 +61,19 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 	return n, err
 }
 
-// PutFile stores a file into [Manager.Dir] from a given client id.
+// PutFile stores a file into [manager.Dir] from a given client id.
 // The baseName must be a base filename without any slashes.
 // The length is the expected length of content to read from r,
 // it may be negative to indicate that it is unknown.
 // It returns the length of the entire file.
 //
 // If there is a failure reading from r, then the partial file is not deleted
-// for some period of time. The [Manager.PartialFiles] and [Manager.HashPartialFile]
+// for some period of time. The [manager.PartialFiles] and [manager.HashPartialFile]
 // methods may be used to list all partial files and to compute the hash for a
 // specific partial file. This allows the client to determine whether to resume
 // a partial file. While resuming, PutFile may be called again with a non-zero
 // offset to specify where to resume receiving data at.
-func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, length int64) (int64, error) {
+func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, length int64) (int64, error) {
 	switch {
 	case m == nil || m.opts.Dir == "":
 		return 0, ErrNoTaildrop
@@ -227,7 +227,7 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 		}
 
 		// Choose a new destination filename and try again.
-		dstPath = NextFilename(dstPath)
+		dstPath = nextFilename(dstPath)
 		inFile.finalPath = dstPath
 	}
 	if maxRetries <= 0 {

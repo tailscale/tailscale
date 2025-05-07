@@ -54,20 +54,20 @@ const (
 	deletedSuffix = ".deleted"
 )
 
-// ClientID is an opaque identifier for file resumption.
+// clientID is an opaque identifier for file resumption.
 // A client can only list and resume partial files for its own ID.
 // It must contain any filesystem specific characters (e.g., slashes).
-type ClientID string // e.g., "n12345CNTRL"
+type clientID string // e.g., "n12345CNTRL"
 
-func (id ClientID) partialSuffix() string {
+func (id clientID) partialSuffix() string {
 	if id == "" {
 		return partialSuffix
 	}
 	return "." + string(id) + partialSuffix // e.g., ".n12345CNTRL.partial"
 }
 
-// ManagerOptions are options to configure the [Manager].
-type ManagerOptions struct {
+// managerOptions are options to configure the [manager].
+type managerOptions struct {
 	Logf  logger.Logf         // may be nil
 	Clock tstime.DefaultClock // may be nil
 	State ipn.StateStore      // may be nil
@@ -98,9 +98,9 @@ type ManagerOptions struct {
 	SendFileNotify func()
 }
 
-// Manager manages the state for receiving and managing taildropped files.
-type Manager struct {
-	opts ManagerOptions
+// manager manages the state for receiving and managing taildropped files.
+type manager struct {
+	opts managerOptions
 
 	// incomingFiles is a map of files actively being received.
 	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
@@ -120,27 +120,27 @@ type Manager struct {
 // New initializes a new taildrop manager.
 // It may spawn asynchronous goroutines to delete files,
 // so the Shutdown method must be called for resource cleanup.
-func (opts ManagerOptions) New() *Manager {
+func (opts managerOptions) New() *manager {
 	if opts.Logf == nil {
 		opts.Logf = logger.Discard
 	}
 	if opts.SendFileNotify == nil {
 		opts.SendFileNotify = func() {}
 	}
-	m := &Manager{opts: opts}
+	m := &manager{opts: opts}
 	m.deleter.Init(m, func(string) {})
 	m.emptySince.Store(-1) // invalidate this cache
 	return m
 }
 
 // Dir returns the directory.
-func (m *Manager) Dir() string {
+func (m *manager) Dir() string {
 	return m.opts.Dir
 }
 
 // Shutdown shuts down the Manager.
 // It blocks until all spawned goroutines have stopped running.
-func (m *Manager) Shutdown() {
+func (m *manager) Shutdown() {
 	if m != nil {
 		m.deleter.shutdown()
 		m.deleter.group.Wait()
@@ -222,7 +222,7 @@ func rangeDir(dir string, fn func(fs.DirEntry) bool) error {
 }
 
 // IncomingFiles returns a list of active incoming files.
-func (m *Manager) IncomingFiles() []ipn.PartialFile {
+func (m *manager) IncomingFiles() []ipn.PartialFile {
 	// Make sure we always set n.IncomingFiles non-nil so it gets encoded
 	// in JSON to clients. They distinguish between empty and non-nil
 	// to know whether a Notify should be able about files.
@@ -318,12 +318,12 @@ var (
 	rxNumberSuffix    = regexp.MustCompile(` \([0-9]+\)`)
 )
 
-// NextFilename returns the next filename in a sequence.
+// nextFilename returns the next filename in a sequence.
 // It is used for construction a new filename if there is a conflict.
 //
 // For example, "Foo.jpg" becomes "Foo (1).jpg" and
 // "Foo (1).jpg" becomes "Foo (2).jpg".
-func NextFilename(name string) string {
+func nextFilename(name string) string {
 	ext := rxExtensionSuffix.FindString(strings.TrimPrefix(name, "."))
 	name = strings.TrimSuffix(name, ext)
 	var n uint64

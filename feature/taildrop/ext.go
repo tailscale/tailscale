@@ -22,7 +22,6 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/taildrop"
 	"tailscale.com/tstime"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/logger"
@@ -72,7 +71,7 @@ type Extension struct {
 	selfUID        tailcfg.UserID
 	capFileSharing bool
 	fileWaiters    set.HandleSet[context.CancelFunc] // of wake-up funcs
-	mgr            atomic.Pointer[taildrop.Manager]  // mutex held to write; safe to read without lock;
+	mgr            atomic.Pointer[manager]           // mutex held to write; safe to read without lock;
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
 }
@@ -113,7 +112,7 @@ func (e *Extension) onSelfChange(self tailcfg.NodeView) {
 	osshare.SetFileSharingEnabled(e.capFileSharing, e.logf)
 }
 
-func (e *Extension) setMgrLocked(mgr *taildrop.Manager) {
+func (e *Extension) setMgrLocked(mgr *manager) {
 	if old := e.mgr.Swap(mgr); old != nil {
 		old.Shutdown()
 	}
@@ -141,7 +140,7 @@ func (e *Extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 	if fileRoot == "" {
 		e.logf("no Taildrop directory configured")
 	}
-	e.setMgrLocked(taildrop.ManagerOptions{
+	e.setMgrLocked(managerOptions{
 		Logf:           e.logf,
 		Clock:          tstime.DefaultClock{Clock: e.sb.Clock()},
 		State:          e.stateStore,
@@ -191,10 +190,10 @@ func (e *Extension) hasCapFileSharing() bool {
 	return e.capFileSharing
 }
 
-// manager returns the active taildrop.Manager, or nil.
+// manager returns the active Manager, or nil.
 //
 // Methods on a nil Manager are safe to call.
-func (e *Extension) manager() *taildrop.Manager {
+func (e *Extension) manager() *manager {
 	return e.mgr.Load()
 }
 

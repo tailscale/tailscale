@@ -69,7 +69,7 @@ func TestDeleter(t *testing.T) {
 	}
 	eventHook := func(event string) { eventsChan <- event }
 
-	var m Manager
+	var m manager
 	var fd fileDeleter
 	m.opts.Logf = t.Logf
 	m.opts.Clock = tstime.DefaultClock{Clock: clock}
@@ -142,7 +142,7 @@ func TestDeleter(t *testing.T) {
 // Test that the asynchronous full scan of the taildrop directory does not occur
 // on a cold start if taildrop has never received any files.
 func TestDeleterInitWithoutTaildrop(t *testing.T) {
-	var m Manager
+	var m manager
 	var fd fileDeleter
 	m.opts.Logf = t.Logf
 	m.opts.Dir = t.TempDir()
