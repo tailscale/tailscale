@@ -24,7 +24,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/tailcfg"
-	"tailscale.com/taildrop"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
 	"tailscale.com/util/mak"
@@ -320,7 +319,7 @@ func singleFilePut(
 	default:
 		resumeStart := time.Now()
 		dec := json.NewDecoder(resp.Body)
-		offset, remainingBody, err = taildrop.ResumeReader(body, func() (out taildrop.BlockChecksum, err error) {
+		offset, remainingBody, err = resumeReader(body, func() (out blockChecksum, err error) {
 			err = dec.Decode(&out)
 			return out, err
 		})

@@ -19,7 +19,7 @@ func TestResume(t *testing.T) {
 	defer func() { blockSize = oldBlockSize }()
 	blockSize = 256
 
-	m := ManagerOptions{Logf: t.Logf, Dir: t.TempDir()}.New()
+	m := managerOptions{Logf: t.Logf, Dir: t.TempDir()}.New()
 	defer m.Shutdown()
 
 	rn := rand.New(rand.NewSource(0))
@@ -32,7 +32,7 @@ func TestResume(t *testing.T) {
 		next, close, err := m.HashPartialFile("", "foo")
 		must.Do(err)
 		defer close()
-		offset, r, err := ResumeReader(r, next)
+		offset, r, err := resumeReader(r, next)
 		must.Do(err)
 		must.Do(close()) // Windows wants the file handle to be closed to rename it.
 
@@ -51,7 +51,7 @@ func TestResume(t *testing.T) {
 			next, close, err := m.HashPartialFile("", "bar")
 			must.Do(err)
 			defer close()
-			offset, r, err := ResumeReader(r, next)
+			offset, r, err := resumeReader(r, next)
 			must.Do(err)
 			must.Do(close()) // Windows wants the file handle to be closed to rename it.
 

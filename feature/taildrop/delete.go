@@ -47,7 +47,7 @@ type deleteFile struct {
 	inserted time.Time
 }
 
-func (d *fileDeleter) Init(m *Manager, eventHook func(string)) {
+func (d *fileDeleter) Init(m *manager, eventHook func(string)) {
 	d.logf = m.opts.Logf
 	d.clock = m.opts.Clock
 	d.dir = m.opts.Dir
@@ -81,7 +81,7 @@ func (d *fileDeleter) Init(m *Manager, eventHook func(string)) {
 				// Only enqueue the file for deletion if there is no active put.
 				nameID := strings.TrimSuffix(de.Name(), partialSuffix)
 				if i := strings.LastIndexByte(nameID, '.'); i > 0 {
-					key := incomingFileKey{ClientID(nameID[i+len("."):]), nameID[:i]}
+					key := incomingFileKey{clientID(nameID[i+len("."):]), nameID[:i]}
 					m.incomingFiles.LoadFunc(key, func(_ *incomingFile, loaded bool) {
 						if !loaded {
 							d.Insert(de.Name())

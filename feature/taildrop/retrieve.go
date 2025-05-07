@@ -20,7 +20,7 @@ import (
 
 // HasFilesWaiting reports whether any files are buffered in [Handler.Dir].
 // This always returns false when [Handler.DirectFileMode] is false.
-func (m *Manager) HasFilesWaiting() (has bool) {
+func (m *manager) HasFilesWaiting() (has bool) {
 	if m == nil || m.opts.Dir == "" || m.opts.DirectFileMode {
 		return false
 	}
@@ -61,7 +61,7 @@ func (m *Manager) HasFilesWaiting() (has bool) {
 // WaitingFiles returns the list of files that have been sent by a
 // peer that are waiting in [Handler.Dir].
 // This always returns nil when [Handler.DirectFileMode] is false.
-func (m *Manager) WaitingFiles() (ret []apitype.WaitingFile, err error) {
+func (m *manager) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 	if m == nil || m.opts.Dir == "" {
 		return nil, ErrNoTaildrop
 	}
@@ -94,7 +94,7 @@ func (m *Manager) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 
 // DeleteFile deletes a file of the given baseName from [Handler.Dir].
 // This method is only allowed when [Handler.DirectFileMode] is false.
-func (m *Manager) DeleteFile(baseName string) error {
+func (m *manager) DeleteFile(baseName string) error {
 	if m == nil || m.opts.Dir == "" {
 		return ErrNoTaildrop
 	}
@@ -151,7 +151,7 @@ func touchFile(path string) error {
 
 // OpenFile opens a file of the given baseName from [Handler.Dir].
 // This method is only allowed when [Handler.DirectFileMode] is false.
-func (m *Manager) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
+func (m *manager) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
 	if m == nil || m.opts.Dir == "" {
 		return nil, 0, ErrNoTaildrop
 	}

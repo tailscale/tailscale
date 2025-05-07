@@ -59,10 +59,10 @@ func TestNextFilename(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := NextFilename(tt.in); got != tt.want {
+		if got := nextFilename(tt.in); got != tt.want {
 			t.Errorf("NextFilename(%q) = %q, want %q", tt.in, got, tt.want)
 		}
-		if got2 := NextFilename(tt.want); got2 != tt.want2 {
+		if got2 := nextFilename(tt.want); got2 != tt.want2 {
 			t.Errorf("NextFilename(%q) = %q, want %q", tt.want, got2, tt.want2)
 		}
 	}

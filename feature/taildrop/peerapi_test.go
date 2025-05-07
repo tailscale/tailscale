@@ -21,7 +21,6 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tailcfg"
-	"tailscale.com/taildrop"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -54,10 +53,10 @@ type fakeExtension struct {
 	logf           logger.Logf
 	capFileSharing bool
 	clock          tstime.Clock
-	taildrop       *taildrop.Manager
+	taildrop       *manager
 }
 
-func (lb *fakeExtension) manager() *taildrop.Manager {
+func (lb *fakeExtension) manager() *manager {
 	return lb.taildrop
 }
 func (lb *fakeExtension) Clock() tstime.Clock { return lb.clock }
@@ -66,7 +65,7 @@ func (lb *fakeExtension) hasCapFileSharing() bool {
 }
 
 type peerAPITestEnv struct {
-	taildrop *taildrop.Manager
+	taildrop *manager
 	ph       *peerAPIHandler
 	rr       *httptest.ResponseRecorder
 	logBuf   tstest.MemLogger
@@ -477,7 +476,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			}
 
 			var e peerAPITestEnv
-			e.taildrop = taildrop.ManagerOptions{
+			e.taildrop = managerOptions{
 				Logf: e.logBuf.Logf,
 				Dir:  rootDir,
 			}.New()
@@ -526,7 +525,7 @@ func TestHandlePeerAPI(t *testing.T) {
 // a bit. So test that we work around that sufficiently.
 func TestFileDeleteRace(t *testing.T) {
 	dir := t.TempDir()
-	taildropMgr := taildrop.ManagerOptions{
+	taildropMgr := managerOptions{
 		Logf: t.Logf,
 		Dir:  dir,
 	}.New()
