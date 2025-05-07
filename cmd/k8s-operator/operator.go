@@ -240,6 +240,7 @@ func runReconcilers(opts reconcilerOpts) {
 	nsFilter := cache.ByObject{
 		Field: client.InNamespace(opts.tailscaleNamespace).AsSelector(),
 	}
+
 	// We watch the ServiceMonitor CRD to ensure that reconcilers are re-triggered if user's workflows result in the
 	// ServiceMonitor CRD applied after some of our resources that define ServiceMonitor creation. This selector
 	// ensures that we only watch the ServiceMonitor CRD and that we don't cache full contents of it.
@@ -247,6 +248,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Field:     fields.SelectorFromSet(fields.Set{"metadata.name": serviceMonitorCRD}),
 		Transform: crdTransformer(startlog),
 	}
+
 	mgrOpts := manager.Options{
 		// TODO (irbekrm): stricter filtering what we watch/cache/call
 		// reconcilers on. c/r by default starts a watch on any
@@ -259,7 +261,6 @@ func runReconcilers(opts reconcilerOpts) {
 				&corev1.ConfigMap{}:                         nsFilter,
 				&appsv1.StatefulSet{}:                       nsFilter,
 				&appsv1.Deployment{}:                        nsFilter,
-				&discoveryv1.EndpointSlice{}:                nsFilter,
 				&rbacv1.Role{}:                              nsFilter,
 				&rbacv1.RoleBinding{}:                       nsFilter,
 				&apiextensionsv1.CustomResourceDefinition{}: serviceMonitorSelector,
@@ -368,12 +369,14 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	// svcProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(ingressesFromIngressProxyGroup(mgr.GetClient(), opts.log))
+	ingressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(ingressSvcFromEps(mgr.GetClient()))
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}).
 		Named("service-pg-reconciler").
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
+		Watches(&discoveryv1.EndpointSlice{}, ingressSvcFromEpsFilter).
 		Complete(&HAServiceReconciler{
 			recorder:    eventRecorder,
 			tsClient:    opts.tsClient,
@@ -1016,6 +1019,35 @@ func egressEpsFromPGStateSecrets(cl client.Client, ns string) handler.MapFunc {
 			return nil
 		}
 		return reconcileRequestsForPG(pg, cl, ns)
+	}
+}
+
+func ingressSvcFromEps(cl client.Client) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		svcName := o.GetLabels()[discoveryv1.LabelServiceName]
+		if svcName == "" {
+			return nil
+		}
+
+		svc := &corev1.Service{}
+		ns := o.GetNamespace()
+		if err := cl.Get(ctx, types.NamespacedName{Name: svcName, Namespace: ns}, svc); err != nil {
+			return nil
+		}
+
+		pgName := svc.Annotations[AnnotationProxyGroup]
+		if pgName == "" {
+			return nil
+		}
+
+		return []reconcile.Request{
+			{
+				NamespacedName: types.NamespacedName{
+					Namespace: ns,
+					Name:      svcName,
+				},
+			},
+		}
 	}
 }
 
