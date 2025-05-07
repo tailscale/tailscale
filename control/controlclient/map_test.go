@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
@@ -1139,8 +1140,190 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 	}
 }
 
+// TestNetmapDisplayMessage checks that the various diff operations
+// (add/update/delete/clear) for [tailcfg.DisplayMessage] in a
+// [tailcfg.MapResponse] work as expected.
+func TestNetmapDisplayMessage(t *testing.T) {
+	type test struct {
+		name         string
+		initialState *tailcfg.MapResponse
+		mapResponse  tailcfg.MapResponse
+		wantMessages map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
+	}
+
+	tests := []test{
+		{
+			name: "basic-set",
+			mapResponse: tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"test-message": {
+						Title:               "Testing",
+						Text:                "This is a test message",
+						Severity:            tailcfg.SeverityHigh,
+						ImpactsConnectivity: true,
+						PrimaryAction: &tailcfg.DisplayMessageAction{
+							URL:   "https://www.example.com",
+							Label: "Learn more",
+						},
+					},
+				},
+			},
+			wantMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test-message": {
+					Title:               "Testing",
+					Text:                "This is a test message",
+					Severity:            tailcfg.SeverityHigh,
+					ImpactsConnectivity: true,
+					PrimaryAction: &tailcfg.DisplayMessageAction{
+						URL:   "https://www.example.com",
+						Label: "Learn more",
+					},
+				},
+			},
+		},
+		{
+			name: "delete-one",
+			initialState: &tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"message-a": {
+						Title: "Message A",
+					},
+					"message-b": {
+						Title: "Message B",
+					},
+				},
+			},
+			mapResponse: tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"message-a": nil,
+				},
+			},
+			wantMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"message-b": {
+					Title: "Message B",
+				},
+			},
+		},
+		{
+			name: "update-one",
+			initialState: &tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"message-a": {
+						Title: "Message A",
+					},
+					"message-b": {
+						Title: "Message B",
+					},
+				},
+			},
+			mapResponse: tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"message-a": {
+						Title: "Message A updated",
+					},
+				},
+			},
+			wantMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"message-a": {
+					Title: "Message A updated",
+				},
+				"message-b": {
+					Title: "Message B",
+				},
+			},
+		},
+		{
+			name: "add-one",
+			initialState: &tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"message-a": {
+						Title: "Message A",
+					},
+				},
+			},
+			mapResponse: tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"message-b": {
+						Title: "Message B",
+					},
+				},
+			},
+			wantMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"message-a": {
+					Title: "Message A",
+				},
+				"message-b": {
+					Title: "Message B",
+				},
+			},
+		},
+		{
+			name: "delete-all",
+			initialState: &tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"message-a": {
+						Title: "Message A",
+					},
+					"message-b": {
+						Title: "Message B",
+					},
+				},
+			},
+			mapResponse: tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"*": nil,
+				},
+			},
+			wantMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{},
+		},
+		{
+			name: "delete-all-and-add",
+			initialState: &tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"message-a": {
+						Title: "Message A",
+					},
+					"message-b": {
+						Title: "Message B",
+					},
+				},
+			},
+			mapResponse: tailcfg.MapResponse{
+				DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+					"*": nil,
+					"message-c": {
+						Title: "Message C",
+					},
+				},
+			},
+			wantMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"message-c": {
+					Title: "Message C",
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ms := newTestMapSession(t, nil)
+
+			if test.initialState != nil {
+				ms.netmapForResponse(test.initialState)
+			}
+
+			nm := ms.netmapForResponse(&test.mapResponse)
+
+			if diff := cmp.Diff(test.wantMessages, nm.DisplayMessages, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("unexpected warnings (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestNetmapHealthIntegration checks that we get the expected health warnings
-// from processing a map response and passing the NetworkMap to a health tracker
+// from processing a [tailcfg.MapResponse] containing health messages and passing the
+// [netmap.NetworkMap] to a [health.Tracker].
 func TestNetmapHealthIntegration(t *testing.T) {
 	ms := newTestMapSession(t, nil)
 	ht := health.Tracker{}
@@ -1180,5 +1363,58 @@ func TestNetmapHealthIntegration(t *testing.T) {
 
 	if d := cmp.Diff(want, got); d != "" {
 		t.Fatalf("CurrentStatus().Warnings[\"control-health*\"] different than expected (-want +got)\n%s", d)
+	}
+}
+
+// TestNetmapDisplayMessageIntegration checks that we get the expected health
+// warnings from processing a [tailcfg.MapResponse] that contains DisplayMessages and
+// passing the [netmap.NetworkMap] to a [health.Tracker].
+func TestNetmapDisplayMessageIntegration(t *testing.T) {
+	ms := newTestMapSession(t, nil)
+	ht := health.Tracker{}
+
+	ht.SetIPNState("NeedsLogin", true)
+	ht.GotStreamedMapResponse()
+	baseWarnings := ht.CurrentState().Warnings
+
+	nm := ms.netmapForResponse(&tailcfg.MapResponse{
+		DisplayMessages: map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+			"test-message": {
+				Title:               "Testing",
+				Text:                "This is a test message",
+				Severity:            tailcfg.SeverityHigh,
+				ImpactsConnectivity: true,
+				PrimaryAction: &tailcfg.DisplayMessageAction{
+					URL:   "https://www.example.com",
+					Label: "Learn more",
+				},
+			},
+		},
+	})
+	ht.SetControlHealth(nm.DisplayMessages)
+
+	state := ht.CurrentState()
+
+	// Ignore warnings that aren't from the netmap
+	for k := range baseWarnings {
+		delete(state.Warnings, k)
+	}
+
+	want := map[health.WarnableCode]health.UnhealthyState{
+		"test-message": {
+			WarnableCode:        "test-message",
+			Title:               "Testing",
+			Text:                "This is a test message",
+			Severity:            health.SeverityHigh,
+			ImpactsConnectivity: true,
+			PrimaryAction: &health.UnhealthyStateAction{
+				URL:   "https://www.example.com",
+				Label: "Learn more",
+			},
+		},
+	}
+
+	if diff := cmp.Diff(want, state.Warnings); diff != "" {
+		t.Errorf("unexpected message contents (-want +got):\n%s", diff)
 	}
 }

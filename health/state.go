@@ -30,10 +30,19 @@ type UnhealthyState struct {
 	Severity            Severity
 	Title               string
 	Text                string
-	BrokenSince         *time.Time     `json:",omitempty"`
-	Args                Args           `json:",omitempty"`
-	DependsOn           []WarnableCode `json:",omitempty"`
-	ImpactsConnectivity bool           `json:",omitempty"`
+	BrokenSince         *time.Time            `json:",omitempty"`
+	Args                Args                  `json:",omitempty"`
+	DependsOn           []WarnableCode        `json:",omitempty"`
+	ImpactsConnectivity bool                  `json:",omitempty"`
+	PrimaryAction       *UnhealthyStateAction `json:",omitempty"`
+}
+
+// UnhealthyStateAction represents an action (URL and link) to be presented to
+// the user associated with an [UnhealthyState]. Analogous to
+// [tailcfg.DisplayMessageAction].
+type UnhealthyStateAction struct {
+	URL   string
+	Label string
 }
 
 // unhealthyState returns a unhealthyState of the Warnable given its current warningState.
@@ -102,15 +111,23 @@ func (t *Tracker) CurrentState() *State {
 	}
 
 	for id, msg := range t.lastNotifiedControlMessages {
-		code := WarnableCode(id)
-		wm[code] = UnhealthyState{
-			WarnableCode:        code,
+		state := UnhealthyState{
+			WarnableCode:        WarnableCode(id),
 			Severity:            severityFromTailcfg(msg.Severity),
 			Title:               msg.Title,
 			Text:                msg.Text,
 			ImpactsConnectivity: msg.ImpactsConnectivity,
 			// TODO(tailscale/corp#27759): DependsOn?
 		}
+
+		if msg.PrimaryAction != nil {
+			state.PrimaryAction = &UnhealthyStateAction{
+				URL:   msg.PrimaryAction.URL,
+				Label: msg.PrimaryAction.Label,
+			}
+		}
+
+		wm[state.WarnableCode] = state
 	}
 
 	return &State{
