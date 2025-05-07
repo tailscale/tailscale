@@ -161,7 +161,8 @@ type CapabilityVersion int
 //   - 114: 2025-01-30: NodeAttrMaxKeyDuration CapMap defined, clients might use it (no tailscaled code change) (#14829)
 //   - 115: 2025-03-07: Client understands DERPRegion.NoMeasureNoHome.
 //   - 116: 2025-05-05: Client serves MagicDNS "AAAA" if NodeAttrMagicDNSPeerAAAA set on self node
-const CurrentCapabilityVersion CapabilityVersion = 116
+//   - 117: 2025-05-28: Client understands DisplayMessages (structured health messages), but not necessarily PrimaryAction.
+const CurrentCapabilityVersion CapabilityVersion = 117
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2030,10 +2031,28 @@ type MapResponse struct {
 	// known problems). A non-zero length slice are the list of problems that
 	// the control plane sees.
 	//
+	// Either this will be set, or DisplayMessages will be set, but not both.
+	//
 	// Note that this package's type, due its use of a slice and omitempty, is
 	// unable to marshal a zero-length non-nil slice. The control server needs
 	// to marshal this type using a separate type. See MapResponse docs.
 	Health []string `json:",omitempty"`
+
+	// DisplayMessages sets the health state of the node from the control
+	// plane's perspective.
+	//
+	// Either this will be set, or Health will be set, but not both.
+	//
+	// The map keys are IDs that uniquely identify the type of health issue. The
+	// map values are the messages. If the server sends down a map with entries,
+	// the client treats it as a patch: new entries are added, keys with a value
+	// of nil are deleted, existing entries with new values are updated. A nil
+	// map and an empty map both mean no change has occurred since the last
+	// update.
+	//
+	// As a special case, the map key "*" with a value of nil means to clear all
+	// prior display messages before processing the other map entries.
+	DisplayMessages map[DisplayMessageID]*DisplayMessage `json:",omitempty"`
 
 	// SSHPolicy, if non-nil, updates the SSH policy for how incoming
 	// SSH connections should be handled.
@@ -2079,24 +2098,53 @@ type MapResponse struct {
 }
 
 // DisplayMessage represents a health state of the node from the control plane's
-// perspective. It is deliberately similar to health.Warnable as both get
-// converted into health.UnhealthyState to be sent to the GUI.
+// perspective. It is deliberately similar to [health.Warnable] as both get
+// converted into [health.UnhealthyState] to be sent to the GUI.
 type DisplayMessage struct {
 	// Title is a string that the GUI uses as title for this message. The title
-	// should be short and fit in a single line.
+	// should be short and fit in a single line. It should not end in a period.
+	//
+	// Example: "Network may be blocking Tailscale".
+	//
+	// See the various instantiations of [health.Warnable] for more examples.
 	Title string
 
-	// Text is an extended string that the GUI will display to the user.
+	// Text is an extended string that the GUI will display to the user. This
+	// could be multiple sentences explaining the issue in more detail.
+	//
+	// Example: "macOS Screen Time seems to be blocking Tailscale. Try disabling
+	// Screen Time in System Settings > Screen Time > Content & Privacy > Access
+	// to Web Content."
+	//
+	// See the various instantiations of [health.Warnable] for more examples.
 	Text string
 
 	// Severity is the severity of the DisplayMessage, which the GUI can use to
-	// determine how to display it. Maps to health.Severity.
+	// determine how to display it. Maps to [health.Severity].
 	Severity DisplayMessageSeverity
 
 	// ImpactsConnectivity is whether the health problem will impact the user's
 	// ability to connect to the Internet or other nodes on the tailnet, which
 	// the GUI can use to determine how to display it.
 	ImpactsConnectivity bool `json:",omitempty"`
+
+	// Primary action, if present, represents the action to allow the user to
+	// take when interacting with this message. For example, if the
+	// DisplayMessage is shown via a notification, the action label might be a
+	// button on that notification and clicking the button would open the URL.
+	PrimaryAction *DisplayMessageAction `json:",omitempty"`
+}
+
+// DisplayMessageAction represents an action (URL and link) to be presented to
+// the user associated with a [DisplayMessage].
+type DisplayMessageAction struct {
+	// URL is the URL to navigate to when the user interacts with this action
+	URL string
+
+	// Label is the call to action for the UI to display on the UI element that
+	// will open the URL (such as a button or link). For example, "Sign in" or
+	// "Learn more".
+	Label string
 }
 
 // DisplayMessageID is a string that uniquely identifies the kind of health
