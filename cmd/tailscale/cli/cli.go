@@ -207,6 +207,8 @@ func noDupFlagify(c *ffcli.Command) {
 	}
 }
 
+var fileCmd func() *ffcli.Command
+
 func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
 	rootfs.Func("socket", "path to tailscaled socket", func(s string) error {
@@ -247,7 +249,7 @@ change in the future.
 			serveCmd(),
 			versionCmd,
 			webCmd,
-			fileCmd,
+			nilOrCall(fileCmd),
 			bugReportCmd,
 			certCmd,
 			netlockCmd,
@@ -284,6 +286,13 @@ change in the future.
 
 func nonNilCmds(cmds ...*ffcli.Command) []*ffcli.Command {
 	return slicesx.AppendNonzero(cmds[:0], cmds)
+}
+
+func nilOrCall(f func() *ffcli.Command) *ffcli.Command {
+	if f == nil {
+		return nil
+	}
+	return f()
 }
 
 func fatalf(format string, a ...any) {
