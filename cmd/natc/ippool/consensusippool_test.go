@@ -110,10 +110,11 @@ func TestConsensusPoolExpiry(t *testing.T) {
 	if aAddr.Compare(firstIP) != 0 {
 		t.Fatalf("expected %s, got %s", firstIP, aAddr)
 	}
-	d, ok := ipp.DomainForIP(from, firstIP, timeOfUse)
+	ww, ok := ipp.retryDomainLookup(from, firstIP, 0)
 	if !ok {
-		t.Fatal("expected addr to be found")
+		t.Fatal("expected wherewhen to be found")
 	}
+	d := ww.Domain
 	if d != "a.example.com" {
 		t.Fatalf("expected aAddr to look up to a.example.com, got: %s", d)
 	}
@@ -135,10 +136,11 @@ func TestConsensusPoolExpiry(t *testing.T) {
 	if cAddr.Compare(firstIP) != 0 {
 		t.Fatalf("expected %s, got %s", firstIP, cAddr)
 	}
-	d, ok = ipp.DomainForIP(from, firstIP, timeOfUse)
+	ww, ok = ipp.retryDomainLookup(from, firstIP, 0)
 	if !ok {
-		t.Fatal("expected addr to be found")
+		t.Fatal("expected wherewhen to be found")
 	}
+	d = ww.Domain
 	if d != "c.example.com" {
 		t.Fatalf("expected firstIP to look up to c.example.com, got: %s", d)
 	}
@@ -151,12 +153,44 @@ func TestConsensusPoolExpiry(t *testing.T) {
 	if cAddrAgain.Compare(cAddr) != 0 {
 		t.Fatalf("expected cAddrAgain to be cAddr, but they are different. cAddrAgain=%s cAddr=%s", cAddrAgain, cAddr)
 	}
-	d, ok = ipp.DomainForIP(from, firstIP, timeOfUse)
+	ww, ok = ipp.retryDomainLookup(from, firstIP, 0)
 	if !ok {
-		t.Fatal("expected addr to be found")
+		t.Fatal("expected wherewhen to be found")
 	}
+	d = ww.Domain
 	if d != "c.example.com" {
 		t.Fatalf("expected firstIP to look up to c.example.com, got: %s", d)
+	}
+}
+
+func TestConsensusPoolExtendExpiry(t *testing.T) {
+	ipp := makePool(netip.MustParsePrefix("100.64.0.0/31"))
+	firstIP := netip.MustParseAddr("100.64.0.0")
+	secondIP := netip.MustParseAddr("100.64.0.1")
+	timeOfUse := time.Now()
+	afterTimeOfUse1 := timeOfUse.Add(-1 * time.Hour)
+	afterTimeOfUse2 := timeOfUse.Add(-2 * time.Hour)
+	from := tailcfg.NodeID(1)
+
+	aAddr, err := ipp.applyCheckoutAddr(from, "a.example.com", timeOfUse, timeOfUse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aAddr.Compare(firstIP) != 0 {
+		t.Fatalf("expected %s, got %s", firstIP, aAddr)
+	}
+
+	err = ipp.applyMarkLastUsed(from, aAddr, "a.example.com", afterTimeOfUse1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bAddr, err := ipp.applyCheckoutAddr(from, "b.example.com", afterTimeOfUse2, afterTimeOfUse2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bAddr.Compare(secondIP) != 0 {
+		t.Fatalf("expected %s, got %s", firstIP, aAddr)
 	}
 }
 
