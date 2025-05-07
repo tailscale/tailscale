@@ -498,8 +498,7 @@ jobs:
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: check depaware
       run: |
-        export PATH=$(./tool/go env GOROOT)/bin:$PATH
-        find . -name 'depaware.txt' | xargs -n1 dirname | xargs ./tool/go run github.com/tailscale/depaware --check --internal
+        make depaware
 
   go_generate:
     runs-on: ubuntu-22.04
