@@ -30,10 +30,16 @@ type UnhealthyState struct {
 	Severity            Severity
 	Title               string
 	Text                string
-	BrokenSince         *time.Time     `json:",omitempty"`
-	Args                Args           `json:",omitempty"`
-	DependsOn           []WarnableCode `json:",omitempty"`
-	ImpactsConnectivity bool           `json:",omitempty"`
+	BrokenSince         *time.Time            `json:",omitempty"`
+	Args                Args                  `json:",omitempty"`
+	DependsOn           []WarnableCode        `json:",omitempty"`
+	ImpactsConnectivity bool                  `json:",omitempty"`
+	PrimaryAction       *UnhealthyStateAction `json:",omitempty"`
+}
+
+type UnhealthyStateAction struct {
+	URL   string
+	Label string
 }
 
 // unhealthyState returns a unhealthyState of the Warnable given its current warningState.
@@ -129,6 +135,13 @@ func UnhealthyStateFromDisplayMessage(id tailcfg.DisplayMessageID, message tailc
 		Title:               message.Title,
 		Text:                message.Text,
 		ImpactsConnectivity: message.ImpactsConnectivity,
+	}
+
+	if message.PrimaryAction != nil {
+		state.PrimaryAction = &UnhealthyStateAction{
+			URL:   message.PrimaryAction.URL,
+			Label: message.PrimaryAction.Label,
+		}
 	}
 
 	return state
