@@ -32,8 +32,10 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/ingressservices"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
@@ -53,12 +55,13 @@ const (
 // cleanup x
 // hostname change - cleanup x
 // failover (testing) x
-// ensure the right conditions on Services are set
-// metrics
-// multi-cluster
+// ensure the right conditions on Services are set x
+// metrics x
+// multi-cluster x
+// unit tests
 // can we refactor?
 
-// var gaugePGServiceResources = clientmetric.NewGauge(kubetypes.MetricServicePGResourceCount)
+var gaugePGServiceResources = clientmetric.NewGauge(kubetypes.MetricServicePGResourceCount)
 
 // HAServiceReconciler is a controller that reconciles Tailscale Kubernetes
 // Services that should be exposed on an ingress ProxyGroup (in HA mode).
@@ -79,7 +82,6 @@ type HAServiceReconciler struct {
 	mu sync.Mutex // protects following
 	// managedServices is a set of all service resources that we're currently
 	// managing. This is only used for metrics.
-	// NOTE (ChaosInTheCRD): Do we need this
 	managedServices set.Slice[types.UID]
 }
 
@@ -122,24 +124,19 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	// needsRequeue is set to true if the underlying VIPService has changed as a result of this reconcile. If that
 	// is the case, we reconcile the Ingress one more time to ensure that concurrent updates to the VIPService in a
 	// multi-cluster Ingress setup have not resulted in another actor overwriting our VIPService update.
-	// needsRequeue := false
-	// if !svc.DeletionTimestamp.IsZero() {
-	// 	needsRequeue, err = r.maybeCleanup(ctx, hostname, ing, logger)
-	// } else {
-	// 	needsRequeue, err = r.maybeProvision(ctx, hostname, ing, logger)
-	// }
-	// if err != nil {
-	// 	return res, err
-	// }
-	// if needsRequeue {
-	// 	res = reconcile.Result{RequeueAfter: requeueInterval()}
-	// }
-	if _, err := r.maybeProvision(ctx, hostname, svc, logger); err != nil {
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-		} else {
-			return reconcile.Result{}, err
-		}
+	needsRequeue := false
+	if !svc.DeletionTimestamp.IsZero() {
+		needsRequeue, err = r.maybeCleanup(ctx, hostname, svc, logger)
+	} else {
+		needsRequeue, err = r.maybeProvision(ctx, hostname, svc, logger)
+	}
+	if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+		logger.Infof("optimistic lock error, retrying: %s", err)
+	} else {
+		return reconcile.Result{}, err
+	}
+	if needsRequeue {
+		res = reconcile.Result{RequeueAfter: requeueInterval()}
 	}
 
 	return reconcile.Result{}, nil
@@ -202,10 +199,10 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		if err := r.Update(ctx, svc); err != nil {
 			return false, fmt.Errorf("failed to add finalizer: %w", err)
 		}
-		// r.mu.Lock()
-		// r.managedIngresses.Add(ing.UID)
-		// gaugePGIngressResources.Set(int64(r.managedIngresses.Len()))
-		// r.mu.Unlock()
+		r.mu.Lock()
+		r.managedServices.Add(svc.UID)
+		gaugePGServiceResources.Set(int64(r.managedServices.Len()))
+		r.mu.Unlock()
 	}
 
 	// 1. Ensure that if Service's hostname/name has changed, any VIPService
@@ -227,7 +224,6 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	// stored on VIPServices. I am not certain if there might not be edge
 	// cases (custom domains, etc?) where attempting to determine the DNS
 	// name of the VIPService in this way won't be incorrect.
-
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	existingVIPSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
 	// TODO(irbekrm): here and when creating the VIPService, verify if the
@@ -499,7 +495,10 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
 
-			r.cleanupVIPService(ctx, tailcfg.ServiceName(vipSvcName), logger)
+			svcsChanged, err = r.cleanupVIPService(ctx, tailcfg.ServiceName(vipSvcName), logger)
+			if err != nil {
+				return false, fmt.Errorf("deleting VIPService %q: %w", vipSvcName, err)
+			}
 
 			_, ok := config[vipSvcName]
 			if ok {
@@ -533,10 +532,10 @@ func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.S
 	if err := r.Update(ctx, svc); err != nil {
 		return fmt.Errorf("failed to remove finalizer %q: %w", finalizerName, err)
 	}
-	// r.mu.Lock()
-	// defer r.mu.Unlock()
-	// r.managedIngresses.Remove(ing.UID)
-	// gaugePGIngressResources.Set(int64(r.managedIngresses.Len()))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.managedServices.Remove(svc.UID)
+	gaugePGIngressResources.Set(int64(r.managedServices.Len()))
 	return nil
 }
 
@@ -569,7 +568,7 @@ func (r *HAServiceReconciler) tailnetCertDomain(ctx context.Context) (string, er
 // If a VIPService is found, but contains other owner references, only removes this operator's owner reference.
 // If a VIPService by the given name is not found or does not contain this operator's owner reference, do nothing.
 // It returns true if an existing VIPService was updated to remove owner reference, as well as any error that occurred.
-func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, _ error) {
+func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, err error) {
 	svc, err := r.tsClient.GetVIPService(ctx, name)
 	if err != nil {
 		errResp := &tailscale.ErrResponse{}
