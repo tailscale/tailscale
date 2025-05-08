@@ -6,7 +6,6 @@ package prober
 import (
 	"bytes"
 	"context"
-	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -20,8 +19,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/crypto/ocsp"
 )
 
 var leafCert = x509.Certificate{
@@ -118,11 +115,6 @@ func TestCertExpiration(t *testing.T) {
 			},
 			"one of the certs expires in",
 		},
-		{
-			"valid duration but no OCSP",
-			func() *x509.Certificate { return &leafCert },
-			"no OCSP server presented in leaf cert for CN=tlsprobe.test",
-		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{tt.cert()}}
@@ -134,93 +126,150 @@ func TestCertExpiration(t *testing.T) {
 	}
 }
 
-type ocspServer struct {
-	issuer        *x509.Certificate
-	responderCert *x509.Certificate
-	template      *ocsp.Response
-	priv          crypto.Signer
+type CRLServer struct {
+	crlBytes []byte
 }
 
-func (s *ocspServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.template == nil {
+func (s *CRLServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.crlBytes == nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	resp, err := ocsp.CreateResponse(s.issuer, s.responderCert, *s.template, s.priv)
-	if err != nil {
-		panic(err)
-	}
-	w.Write(resp)
+	w.Header().Set("Content-Type", "application/pkix-crl")
+	w.WriteHeader(http.StatusOK)
+	w.Write(s.crlBytes)
 }
 
-func TestOCSP(t *testing.T) {
-	issuerKey, err := rsa.GenerateKey(rand.Reader, 4096)
+func TestCRL(t *testing.T) {
+	// Generate CA key and self-signed CA cert
+	caKey, err := rsa.GenerateKey(rand.Reader, 4096)
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuerBytes, err := x509.CreateCertificate(rand.Reader, &issuerCertTpl, &issuerCertTpl, &issuerKey.PublicKey, issuerKey)
+	caTpl := issuerCertTpl
+	caTpl.BasicConstraintsValid = true
+	caTpl.IsCA = true
+	caTpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature
+	caBytes, err := x509.CreateCertificate(rand.Reader, &caTpl, &caTpl, &caKey.PublicKey, caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuerCert, err := x509.ParseCertificate(issuerBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	responderKey, err := rsa.GenerateKey(rand.Reader, 4096)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// issuer cert template re-used here, but with a different key
-	responderBytes, err := x509.CreateCertificate(rand.Reader, &issuerCertTpl, &issuerCertTpl, &responderKey.PublicKey, responderKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	responderCert, err := x509.ParseCertificate(responderBytes)
+	caCert, err := x509.ParseCertificate(caBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	handler := &ocspServer{
-		issuer:        issuerCert,
-		responderCert: responderCert,
-		priv:          issuerKey,
+	// Issue a leaf cert signed by the CA
+	leaf := leafCert
+	leaf.SerialNumber = big.NewInt(20001)
+	leaf.Issuer = caCert.Subject
+	leafKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		t.Fatal(err)
 	}
-	srv := httptest.NewUnstartedServer(handler)
-	srv.Start()
+	leafBytes, err := x509.CreateCertificate(rand.Reader, &leaf, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCertParsed, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Catch no CRL set by Let's Encrypt date.
+	noCRLCert := leafCert
+	noCRLCert.SerialNumber = big.NewInt(20002)
+	noCRLCert.CRLDistributionPoints = []string{}
+	noCRLCert.NotBefore = time.Unix(letsEncryptStartedStaplingCRL, 0).Add(-48 * time.Hour)
+	noCRLCert.Issuer = caCert.Subject
+	noCRLCertKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noCRLStapledBytes, err := x509.CreateCertificate(rand.Reader, &noCRLCert, caCert, &noCRLCertKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noCRLStapledParsed, err := x509.ParseCertificate(noCRLStapledBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crlServer := &CRLServer{crlBytes: nil}
+	srv := httptest.NewServer(crlServer)
 	defer srv.Close()
 
-	cert := leafCert
-	cert.OCSPServer = append(cert.OCSPServer, srv.URL)
-	key, err := rsa.GenerateKey(rand.Reader, 4096)
+	// Create a CRL that revokes the leaf cert using x509.CreateRevocationList
+	now := time.Now()
+	revoked := []x509.RevocationListEntry{{
+		SerialNumber:   leaf.SerialNumber,
+		RevocationTime: now,
+		ReasonCode:     1, // Key compromise
+	}}
+	rl := x509.RevocationList{
+		SignatureAlgorithm:        caCert.SignatureAlgorithm,
+		Issuer:                    caCert.Subject,
+		ThisUpdate:                now,
+		NextUpdate:                now.Add(24 * time.Hour),
+		RevokedCertificateEntries: revoked,
+		Number:                    big.NewInt(1),
+	}
+	rlBytes, err := x509.CreateRevocationList(rand.Reader, &rl, caCert, caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, &cert, issuerCert, &key.PublicKey, issuerKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := x509.ParseCertificate(certBytes)
+
+	emptyRlBytes, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(2)}, caCert, caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, tt := range []struct {
-		name    string
-		resp    *ocsp.Response
-		wantErr string
+		name     string
+		cert     *x509.Certificate
+		crlBytes []byte
+		wantErr  string
 	}{
-		{"good response", &ocsp.Response{Status: ocsp.Good}, ""},
-		{"unknown response", &ocsp.Response{Status: ocsp.Unknown}, "unknown OCSP verification status for CN=tlsprobe.test"},
-		{"revoked response", &ocsp.Response{Status: ocsp.Revoked}, "cert for CN=tlsprobe.test has been revoked"},
-		{"error 500 from ocsp", nil, "non-200 status code from OCSP"},
+		{
+			"ValidCert",
+			leafCertParsed,
+			emptyRlBytes,
+			"",
+		},
+		{
+			"RevokedCert",
+			leafCertParsed,
+			rlBytes,
+			"has been revoked on",
+		},
+		{
+			"EmptyCRL",
+			leafCertParsed,
+			emptyRlBytes,
+			"",
+		},
+		{
+			"NoCRL",
+			leafCertParsed,
+			nil,
+			"",
+		},
+		{
+			"NotBeforeCRLStaplingDate",
+			noCRLStapledParsed,
+			nil,
+			"",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			handler.template = tt.resp
-			if handler.template != nil {
-				handler.template.SerialNumber = big.NewInt(1337)
+			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{tt.cert, caCert}}
+			if tt.crlBytes != nil {
+				crlServer.crlBytes = tt.crlBytes
+				tt.cert.CRLDistributionPoints = []string{srv.URL}
+			} else {
+				crlServer.crlBytes = nil
+				tt.cert.CRLDistributionPoints = []string{}
 			}
-			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{parsed, issuerCert}}
 			err := validateConnState(context.Background(), cs)
 
 			if err == nil && tt.wantErr == "" {
