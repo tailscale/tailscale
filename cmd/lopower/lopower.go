@@ -51,10 +51,12 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tsnet"
+	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -68,6 +70,7 @@ var (
 	includeV4      = flag.Bool("include-v4", true, "include IPv4 (CGNAT) in the WireGuard configuration; incompatible with some carriers. IPv6 is always included.")
 	verbosePackets = flag.Bool("verbose-packets", false, "log packet contents")
 	verboseDNS     = flag.Bool("verbose-dns", false, "log DNS queries")
+	verboseTsnet   = flag.Bool("verbose-tsnet", false, "print tsnet logs")
 )
 
 type config struct {
@@ -541,6 +544,12 @@ func (lp *lpServer) serveQR() {
 	log.Printf("# Serving QR code at http://%s/", ln.Addr())
 	hs := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/metrics" {
+				w.Header().Set("Content-Type", "text/plain")
+				varz.Handler(w, r)
+				clientmetric.WritePrometheusExpositionFormat(w)
+				return
+			}
 			if r.URL.Path != "/" {
 				http.NotFound(w, r)
 				return
@@ -641,6 +650,9 @@ func (lp *lpServer) startTSNet(ctx context.Context) {
 		Hostname:  hostname,
 		UserLogf:  log.Printf,
 		Ephemeral: false,
+	}
+	if *verboseTsnet {
+		ts.Logf = log.Printf
 	}
 	lp.tsnet = ts
 	ts.PreStart = func() error {
