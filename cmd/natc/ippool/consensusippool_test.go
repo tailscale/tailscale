@@ -99,11 +99,14 @@ func TestConsensusPoolExpiry(t *testing.T) {
 	secondIP := netip.MustParseAddr("100.64.0.1")
 	timeOfUse := time.Now()
 	beforeTimeOfUse := timeOfUse.Add(-2 * time.Hour)
+	beforeTimeOfUseHalf := timeOfUse.Add(-1 * time.Hour)
+	afterTimeOfUseHalf := timeOfUse.Add(1 * time.Hour)
 	afterTimeOfUse := timeOfUse.Add(2 * time.Hour)
+	wayLater := timeOfUse.Add(6 * time.Hour)
 	from := tailcfg.NodeID(1)
 
 	// the pool is unused, we get an address, and it's marked as being used at timeOfUse
-	aAddr, err := ipp.applyCheckoutAddr(from, "a.example.com", timeOfUse, timeOfUse)
+	aAddr, err := ipp.applyCheckoutAddr(from, "a.example.com", beforeTimeOfUse, timeOfUse)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +123,7 @@ func TestConsensusPoolExpiry(t *testing.T) {
 	}
 
 	// the time before which we will reuse addresses is prior to timeOfUse, so no reuse
-	bAddr, err := ipp.applyCheckoutAddr(from, "b.example.com", beforeTimeOfUse, timeOfUse)
+	bAddr, err := ipp.applyCheckoutAddr(from, "b.example.com", beforeTimeOfUseHalf, afterTimeOfUseHalf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,7 @@ func TestConsensusPoolExpiry(t *testing.T) {
 	}
 
 	// the time before which we will reuse addresses is after timeOfUse, so reuse addresses that were marked as used at timeOfUse.
-	cAddr, err := ipp.applyCheckoutAddr(from, "c.example.com", afterTimeOfUse, timeOfUse)
+	cAddr, err := ipp.applyCheckoutAddr(from, "c.example.com", afterTimeOfUseHalf, afterTimeOfUse)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,8 +148,9 @@ func TestConsensusPoolExpiry(t *testing.T) {
 		t.Fatalf("expected firstIP to look up to c.example.com, got: %s", d)
 	}
 
+	fmt.Println("Checkout addr c")
 	// the addr remains associated with c.example.com
-	cAddrAgain, err := ipp.applyCheckoutAddr(from, "c.example.com", beforeTimeOfUse, timeOfUse)
+	cAddrAgain, err := ipp.applyCheckoutAddr(from, "c.example.com", afterTimeOfUse, wayLater)
 	if err != nil {
 		t.Fatal(err)
 	}
