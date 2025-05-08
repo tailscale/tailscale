@@ -52,7 +52,7 @@ func TestRecorder(t *testing.T) {
 		clock:       cl,
 	}
 
-	t.Run("invalid spec gives an error condition", func(t *testing.T) {
+	t.Run("invalid_spec_gives_an_error_condition", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", tsr.Name)
 
 		msg := "Recorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
@@ -67,7 +67,7 @@ func TestRecorder(t *testing.T) {
 		expectEvents(t, fr, []string{expectedEvent})
 	})
 
-	t.Run("observe Ready=true status condition for a valid spec", func(t *testing.T) {
+	t.Run("observe_Ready_true_status_condition_for_a_valid_spec", func(t *testing.T) {
 		tsr.Spec.EnableUI = true
 		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
 			t.Spec = tsr.Spec
@@ -83,7 +83,42 @@ func TestRecorder(t *testing.T) {
 		expectRecorderResources(t, fc, tsr, true)
 	})
 
-	t.Run("populate node info in state secret, and see it appear in status", func(t *testing.T) {
+	t.Run("modify_service_account_config", func(t *testing.T) {
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = "test-sa"
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = map[string]string{
+			"test": "test",
+		}
+		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
+			t.Spec = tsr.Spec
+		})
+
+		expectReconciled(t, reconciler, "", tsr.Name)
+
+		expectEqual(t, fc, tsr)
+		if expected := 1; reconciler.recorders.Len() != expected {
+			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
+		}
+		expectRecorderResources(t, fc, tsr, true)
+
+		// Get the service account and check the annotations.
+		sa := &corev1.ServiceAccount{}
+		if err := fc.Get(context.Background(), client.ObjectKey{
+			Name:      tsr.Spec.StatefulSet.Pod.ServiceAccount.Name,
+			Namespace: tsNamespace,
+		}, sa); err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(sa.Annotations, tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations); diff != "" {
+			t.Fatalf("unexpected service account annotations (-got +want):\n%s", diff)
+		}
+		if sa.Name != tsr.Spec.StatefulSet.Pod.ServiceAccount.Name {
+			t.Fatalf("unexpected service account name: got %q, want %q", sa.Name, tsr.Spec.StatefulSet.Pod.ServiceAccount.Name)
+		}
+
+		expectMissing[corev1.ServiceAccount](t, fc, tsNamespace, tsr.Name)
+	})
+
+	t.Run("populate_node_info_in_state_secret_and_see_it_appear_in_status", func(t *testing.T) {
 		bytes, err := json.Marshal(map[string]any{
 			"Config": map[string]any{
 				"NodeID": "nodeid-123",
@@ -115,7 +150,7 @@ func TestRecorder(t *testing.T) {
 		expectEqual(t, fc, tsr)
 	})
 
-	t.Run("delete the Recorder and observe cleanup", func(t *testing.T) {
+	t.Run("delete_the_Recorder_and_observe_cleanup", func(t *testing.T) {
 		if err := fc.Delete(context.Background(), tsr); err != nil {
 			t.Fatal(err)
 		}

@@ -160,7 +160,7 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	if err := r.ensureAuthSecretCreated(ctx, tsr); err != nil {
 		return fmt.Errorf("error creating secrets: %w", err)
 	}
-	// State secret is precreated so we can use the Recorder CR as its owner ref.
+	// State Secret is precreated so we can use the Recorder CR as its owner ref.
 	sec := tsrStateSecret(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sec, func(s *corev1.Secret) {
 		s.ObjectMeta.Labels = sec.ObjectMeta.Labels
@@ -206,6 +206,13 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 		return fmt.Errorf("error creating StatefulSet: %w", err)
 	}
 
+	// ServiceAccount name may have changed, in which case we need to clean up
+	// the previous ServiceAccount. RoleBinding will already be updated to point
+	// to the new ServiceAccount.
+	if err := r.maybeCleanupServiceAccounts(ctx, tsr, sa.Name); err != nil {
+		return fmt.Errorf("error cleaning up ServiceAccounts: %w", err)
+	}
+
 	var devices []tsapi.RecorderTailnetDevice
 
 	device, ok, err := r.getDeviceInfo(ctx, tsr.Name)
@@ -220,6 +227,37 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	devices = append(devices, device)
 
 	tsr.Status.Devices = devices
+
+	return nil
+}
+
+// maybeCleanupServiceAccounts deletes any dangling ServiceAccounts
+// owned by the Recorder if the ServiceAccount name has been changed.
+// They would eventually be cleaned up by owner reference deletion, but
+// this avoids a long-lived Recorder with many ServiceAccount name changes
+// accumulating a large amount of garbage.
+//
+// This is a no-op if the ServiceAccount name has not changed.
+func (r *RecorderReconciler) maybeCleanupServiceAccounts(ctx context.Context, tsr *tsapi.Recorder, currentName string) error {
+	logger := r.logger(tsr.Name)
+
+	// List all ServiceAccounts owned by this Recorder.
+	sas := &corev1.ServiceAccountList{}
+	if err := r.List(ctx, sas, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels("recorder", tsr.Name, nil))); err != nil {
+		return fmt.Errorf("error listing ServiceAccounts for cleanup: %w", err)
+	}
+	for _, sa := range sas.Items {
+		if sa.Name == currentName {
+			continue
+		}
+		if err := r.Delete(ctx, &sa); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Debugf("ServiceAccount %s not found, likely already deleted", sa.Name)
+			} else {
+				return fmt.Errorf("error deleting ServiceAccount %s: %w", sa.Name, err)
+			}
+		}
+	}
 
 	return nil
 }
