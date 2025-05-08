@@ -124,6 +124,13 @@ type Server struct {
 	// field at zero unless you know what you are doing.
 	Port uint16
 
+	// AdvertiseTags specifies groups that this embedded server wants to join, for
+	// purposes of ACL enforcement. These can be referenced from the ACL
+	// security policy. Note that advertising a tag doesn't guarantee that
+	// the control server will allow you to take on the rights for that
+	// tag.
+	AdvertiseTags []string
+
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	initOnce         sync.Once
@@ -662,6 +669,7 @@ func (s *Server) start() (reterr error) {
 	prefs.WantRunning = true
 	prefs.ControlURL = s.ControlURL
 	prefs.RunWebClient = s.RunWebClient
+	prefs.AdvertiseTags = s.AdvertiseTags
 	authKey := s.getAuthKey()
 	err = lb.Start(ipn.Options{
 		UpdatePrefs: prefs,
