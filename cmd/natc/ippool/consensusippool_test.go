@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/hashicorp/raft"
 	"go4.org/netipx"
 	"tailscale.com/tailcfg"
@@ -41,6 +42,58 @@ func makePool(pfx netip.Prefix) *ConsensusIPPool {
 	}
 	ipp.consensus = &FakeConsensus{ipp: ipp}
 	return ipp
+}
+
+func TestApplyCheckoutAddr(t *testing.T) {
+	pfx := netip.MustParsePrefix("100.64.0.0/31")
+	from := tailcfg.NodeID(1)
+	now := time.Now()
+	firstIP := netip.MustParseAddr("100.64.0.0")
+	secondIP := netip.MustParseAddr("100.64.0.1")
+	reuseDeadline := now.Add(-2 * time.Hour)
+	beforeReuseDDL := now.Add(-4 * time.Hour)
+	tests := []struct {
+		name    string
+		addAddr func(t *bart.Table[whereWhen])
+		want    netip.Addr
+	}{
+		{
+			name:    "clean pool",
+			addAddr: func(t *bart.Table[whereWhen]) {},
+			want:    firstIP,
+		},
+		{
+			name: "one addr used",
+			addAddr: func(t *bart.Table[whereWhen]) {
+				t.Insert(netip.PrefixFrom(firstIP, firstIP.BitLen()), whereWhen{Domain: "exist.example.com", LastUsed: now})
+			},
+			want: secondIP,
+		},
+		{
+			name: "one addr used expired",
+			addAddr: func(t *bart.Table[whereWhen]) {
+				t.Insert(netip.PrefixFrom(firstIP, firstIP.BitLen()), whereWhen{Domain: "exist.example.com", LastUsed: beforeReuseDDL})
+			},
+			want: firstIP,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipp := makePool(pfx)
+			ps, _ := ipp.perPeerMap.LoadOrStore(from, &consensusPerPeerState{
+				addrToDomain: &bart.Table[whereWhen]{},
+			})
+			tt.addAddr(ps.addrToDomain)
+			addr, err := ipp.applyCheckoutAddr(from, "req.example.com", reuseDeadline, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.want.Compare(addr) != 0 {
+				t.Fatal("Expected to get ", tt.want, ", instead got ", addr)
+			}
+		})
+	}
 }
 
 func TestConsensusIPForDomain(t *testing.T) {
