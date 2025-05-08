@@ -102,7 +102,6 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
-	"tailscale.com/util/osshare"
 	"tailscale.com/util/osuser"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
@@ -274,7 +273,6 @@ type LocalBackend struct {
 	machinePrivKey key.MachinePrivate
 	tka            *tkaState // TODO(nickkhyl): move to nodeContext
 	state          ipn.State // TODO(nickkhyl): move to nodeContext
-	capFileSharing bool      // whether netMap contains the file sharing capability
 	capTailnetLock bool      // whether netMap contains the tailnet lock capability
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo          *tailcfg.Hostinfo      // TODO(nickkhyl): move to nodeContext
@@ -460,7 +458,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 
 	envknob.LogCurrent(logf)
-	osshare.SetFileSharingEnabled(false, logf)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := tstime.StdClock{}
@@ -6139,13 +6136,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	} else {
 		b.health.SetControlHealth(nil)
 	}
-
-	// Determine if file sharing is enabled
-	fs := nm.HasCap(tailcfg.CapabilityFileSharing)
-	if fs != b.capFileSharing {
-		osshare.SetFileSharingEnabled(fs, b.logf)
-	}
-	b.capFileSharing = fs
 
 	if nm.HasCap(tailcfg.NodeAttrLinuxMustUseIPTables) {
 		b.capForcedNetfilter = "iptables"
