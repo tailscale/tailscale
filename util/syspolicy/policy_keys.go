@@ -63,6 +63,14 @@ const (
 	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"
 	EnableTailscaleDNS        Key = "UseTailscaleDNSSettings"
 	EnableTailscaleSubnets    Key = "UseTailscaleSubnets"
+
+	// EnableDNSRegistration is a string value that can be set to "always", "never"
+	// or "user-decides". It controls whether DNS registration and dynamic DNS
+	// updates are enabled for the Tailscale interface. For historical reasons
+	// and to maintain compatibility with existing setups, the default is "never".
+	// It is only used on Windows.
+	EnableDNSRegistration Key = "EnableDNSRegistration"
+
 	// CheckUpdates is the key to signal if the updater should periodically
 	// check for updates.
 	CheckUpdates Key = "CheckUpdates"
@@ -168,6 +176,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(CheckUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(ControlURL, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(DeviceSerialNumber, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(EnableDNSRegistration, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(EnableIncomingConnections, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(EnableRunExitNode, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(EnableServerMode, setting.DeviceSetting, setting.PreferenceOptionValue),
