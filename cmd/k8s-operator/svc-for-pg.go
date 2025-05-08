@@ -130,10 +130,12 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	} else {
 		needsRequeue, err = r.maybeProvision(ctx, hostname, svc, logger)
 	}
-	if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-		logger.Infof("optimistic lock error, retrying: %s", err)
-	} else {
-		return reconcile.Result{}, err
+	if err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+		} else {
+			return reconcile.Result{}, err
+		}
 	}
 	if needsRequeue {
 		res = reconcile.Result{RequeueAfter: requeueInterval()}
@@ -277,6 +279,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		if err := r.tsClient.CreateOrUpdateVIPService(ctx, vipSvc); err != nil {
 			return false, fmt.Errorf("error creating VIPService: %w", err)
 		}
+		existingVIPSvc = vipSvc
 	}
 
 	cm, cfgs, err := ingressSvcsConfigs(ctx, r.Client, pgName, r.tsNamespace)
@@ -371,7 +374,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	conditionStatus := metav1.ConditionFalse
 	conditionType := tsapi.IngressSvcConfigured
 	conditionReason := reasonIngressSvcNoBackendsConfigured
-	conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", count, *pg.Spec.Replicas)
+	conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", count, pgReplicas(pg))
 	if count != 0 {
 		dnsName, err := r.dnsNameForService(ctx, serviceName)
 		if err != nil {
@@ -475,7 +478,7 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 
 	svcList := &corev1.ServiceList{}
 	if err := r.Client.List(ctx, svcList, client.MatchingFields{indexIngressProxyGroup: proxyGroupName}); err != nil {
-		return false, fmt.Errorf("failed to find services for ProxyGroup %q: %w", proxyGroupName, err)
+		return false, fmt.Errorf("failed to find Services for ProxyGroup %q: %w", proxyGroupName, err)
 	}
 
 	ingressConfigChanged := false
