@@ -20,6 +20,7 @@ import (
 	_ "golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	_ "tailscale.com/client/local"
 	_ "tailscale.com/cmd/tailscaled/childproc"
+	_ "tailscale.com/cmd/tailscaled/tailscaledhooks"
 	_ "tailscale.com/control/controlclient"
 	_ "tailscale.com/derp/derphttp"
 	_ "tailscale.com/drive/driveimpl"

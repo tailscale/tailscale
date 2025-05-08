@@ -15,9 +15,9 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+	"tailscale.com/cmd/tailscaled/tailscaledhooks"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/osshare"
 )
 
 func init() {
@@ -81,8 +81,9 @@ func installSystemDaemonWindows(args []string) (err error) {
 }
 
 func uninstallSystemDaemonWindows(args []string) (ret error) {
-	// Remove file sharing from Windows shell (noop in non-windows)
-	osshare.SetFileSharingEnabled(false, logger.Discard)
+	for _, f := range tailscaledhooks.UninstallSystemDaemonWindows {
+		f()
+	}
 
 	m, err := mgr.Connect()
 	if err != nil {

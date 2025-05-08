@@ -67,18 +67,16 @@ func bodyNotContains(sub string) check {
 
 func TestHandlePeerAPI(t *testing.T) {
 	tests := []struct {
-		name       string
-		isSelf     bool // the peer sending the request is owned by us
-		capSharing bool // self node has file sharing capability
-		debugCap   bool // self node has debug capability
-		reqs       []*http.Request
-		checks     []check
+		name     string
+		isSelf   bool // the peer sending the request is owned by us
+		debugCap bool // self node has debug capability
+		reqs     []*http.Request
+		checks   []check
 	}{
 		{
-			name:       "not_peer_api",
-			isSelf:     true,
-			capSharing: true,
-			reqs:       []*http.Request{httptest.NewRequest("GET", "/", nil)},
+			name:   "not_peer_api",
+			isSelf: true,
+			reqs:   []*http.Request{httptest.NewRequest("GET", "/", nil)},
 			checks: checks(
 				httpStatus(200),
 				bodyContains("This is my Tailscale device."),
@@ -86,10 +84,9 @@ func TestHandlePeerAPI(t *testing.T) {
 			),
 		},
 		{
-			name:       "not_peer_api_not_owner",
-			isSelf:     false,
-			capSharing: true,
-			reqs:       []*http.Request{httptest.NewRequest("GET", "/", nil)},
+			name:   "not_peer_api_not_owner",
+			isSelf: false,
+			reqs:   []*http.Request{httptest.NewRequest("GET", "/", nil)},
 			checks: checks(
 				httpStatus(200),
 				bodyContains("This is my Tailscale device."),
@@ -160,9 +157,8 @@ func TestHandlePeerAPI(t *testing.T) {
 			}
 			var e peerAPITestEnv
 			lb := &LocalBackend{
-				logf:           e.logBuf.Logf,
-				capFileSharing: tt.capSharing,
-				clock:          &tstest.Clock{},
+				logf:  e.logBuf.Logf,
+				clock: &tstest.Clock{},
 			}
 			lb.currentNode().SetNetMap(&netmap.NetworkMap{SelfNode: selfNode.View()})
 			e.ph = &peerAPIHandler{

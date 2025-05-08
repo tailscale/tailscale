@@ -12,12 +12,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/cmd/tailscaled/tailscaledhooks"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnstate"
@@ -31,6 +33,13 @@ import (
 
 func init() {
 	ipnext.RegisterExtension("taildrop", newExtension)
+
+	if runtime.GOOS == "windows" {
+		tailscaledhooks.UninstallSystemDaemonWindows.Add(func() {
+			// Remove file sharing from Windows shell.
+			osshare.SetFileSharingEnabled(false, logger.Discard)
+		})
+	}
 }
 
 func newExtension(logf logger.Logf, b ipnext.SafeBackend) (ipnext.Extension, error) {
