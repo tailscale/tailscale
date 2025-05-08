@@ -58,6 +58,10 @@
                   displayName="$(string.SINCE_V1_82)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_84"
+                  displayName="$(string.SINCE_V1_84)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -192,6 +196,24 @@
       <disabledValue>
         <string>never</string>
       </disabledValue>
+    </policy>
+    <policy name="DNSRegistration" class="Machine" displayName="$(string.DNSRegistration)" explainText="$(string.DNSRegistration_Help)" presentation="$(presentation.DNSRegistration)" key="Software\Policies\Tailscale" valueName="EnableDNSRegistration">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="SINCE_V1_84" />
+      <elements>
+        <enum id="DNSRegistration_Mode" valueName="EnableDNSRegistration">
+          <item displayName="$(string.AlwaysRegister)">
+            <value>
+              <string>always</string>
+            </value>
+          </item>
+          <item displayName="$(string.UseAdapterProperties)">
+            <value>
+              <string>user-decides</string>
+            </value>
+          </item>
+        </enum>
+      </elements>
     </policy>
     <policy name="InstallUpdates" class="Machine" displayName="$(string.InstallUpdates)" explainText="$(string.InstallUpdates_Help)" key="Software\Policies\Tailscale" valueName="InstallUpdates">
       <parentCategory ref="Settings_Category" />

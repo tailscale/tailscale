@@ -17,6 +17,7 @@
             <string id="SINCE_V1_74">Tailscale version 1.74.0 and later</string>
             <string id="SINCE_V1_78">Tailscale version 1.78.0 and later</string>
             <string id="SINCE_V1_82">Tailscale version 1.82.0 and later</string>
+            <string id="SINCE_V1_84">Tailscale version 1.84.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
@@ -147,6 +148,14 @@ If you disable this policy, then Use Tailscale Subnets is always disabled and th
 If you do not configure this policy, then Use Tailscale Subnets depends on what is selected in the Preferences submenu.
 
 See https://tailscale.com/kb/1315/mdm-keys#set-whether-the-device-accepts-tailscale-subnets or https://tailscale.com/kb/1019/subnets for more details.]]></string>
+            <string id="AlwaysRegister">Always register</string>
+            <string id="UseAdapterProperties">Use adapter properties</string>
+            <string id="DNSRegistration">Register Tailscale IP addresses in DNS</string>
+            <string id="DNSRegistration_Help"><![CDATA[This policy setting controls whether Tailscale IP addresses are registered in DNS and whether dynamic DNS updates are enabled for the Tailscale interface.
+
+If you enable this policy, you can specify whether Tailscale IP addresses should always be registered in DNS or allow the settings to be changed in the network adapter's properties (admin rights required). The "Always" option is recommended in Active Directory domain environments where all devices, including Domain Controllers, have Tailscale installed and are reachable via their Tailscale IP addresses.
+
+If you disable or do not configure this policy, Tailscale IP addresses will not be registered in DNS, and dynamic DNS updates will be disabled for the Tailscale interface. It can be used on non-domain-joined devices or in environments that primarily rely on subnet routers.]]></string>
             <string id="InstallUpdates">Automatically install updates</string>
             <string id="InstallUpdates_Help"><![CDATA[This policy can be used to require that Automatically Install Updates is configured a certain way.
 
@@ -298,6 +307,9 @@ See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more d
                 <textBox refId="ExitNodeIDPrompt">
                     <label>Exit Node:</label>
                 </textBox>
+            </presentation>
+            <presentation id="DNSRegistration">
+                <dropdownList refId="DNSRegistration_Mode" noSort="true" defaultItem="0">Registration mode:</dropdownList>
             </presentation>
             <presentation id="AllowedSuggestedExitNodes">
                 <listBox refId="AllowedSuggestedExitNodesList">Target IDs:</listBox>
