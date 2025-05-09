@@ -151,6 +151,7 @@ func (d *Dialer) SetRoutes(routes, localRoutes []netip.Prefix) {
 		for _, r := range localRoutes {
 			rt.Insert(r, false)
 		}
+		d.logf("tsdial: bart table size: %d", rt.Size())
 	}
 
 	d.routes.Store(rt)
