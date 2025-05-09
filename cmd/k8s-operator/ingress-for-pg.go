@@ -54,7 +54,11 @@ const (
 	// well as the default HTTPS endpoint).
 	annotationHTTPEndpoint = "tailscale.com/http-endpoint"
 
-	labelDomain = "tailscale.com/domain"
+	labelDomain              = "tailscale.com/domain"
+	msgFeatureGateNotEnabled = "VIPService feature gate is not enabled for this tailnet, skipping provisioning. " +
+		"Please contact Tailscale support to enable the feature gate, then recreate the operator's Pod."
+
+	warningVIPServiceFeatureGateNotEnabled = "VIPServiceFeatureGateNotEnabled"
 )
 
 var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
@@ -142,6 +146,19 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 // out assuming that this is an owner reference created by an unknown actor.
 // Returns true if the operation resulted in a VIPService update.
 func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
+	// Currently (2025-05) VIPServices are behind an alpha feature flag that
+	// needs to be explicitly enabled for a tailnet to be able to use them.
+	serviceName := tailcfg.ServiceName("svc:" + hostname)
+	existingVIPSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
+	if isErrorVIPServiceFeatureGateNotEnabled(err) {
+		logger.Warn(msgFeatureGateNotEnabled)
+		r.recorder.Event(ing, corev1.EventTypeWarning, warningVIPServiceFeatureGateNotEnabled, msgFeatureGateNotEnabled)
+		return false, nil
+	}
+	if err != nil && !isErrorVIPServiceNotFound(err) {
+		return false, fmt.Errorf("error getting VIPService %q: %w", hostname, err)
+	}
+
 	if err := validateIngressClass(ctx, r.Client); err != nil {
 		logger.Infof("error validating tailscale IngressClass: %v.", err)
 		return false, nil
@@ -213,23 +230,6 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	// stored on VIPServices. I am not certain if there might not be edge
 	// cases (custom domains, etc?) where attempting to determine the DNS
 	// name of the VIPService in this way won't be incorrect.
-	tcd, err := r.tailnetCertDomain(ctx)
-	if err != nil {
-		return false, fmt.Errorf("error determining DNS name base: %w", err)
-	}
-	dnsName := hostname + "." + tcd
-	serviceName := tailcfg.ServiceName("svc:" + hostname)
-	existingVIPSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
-	// TODO(irbekrm): here and when creating the VIPService, verify if the
-	// error is not terminal (and therefore should not be reconciled). For
-	// example, if the hostname is already a hostname of a Tailscale node,
-	// the GET here will fail.
-	if err != nil {
-		errResp := &tailscale.ErrResponse{}
-		if ok := errors.As(err, errResp); ok && errResp.Status != http.StatusNotFound {
-			return false, fmt.Errorf("error getting VIPService %q: %w", hostname, err)
-		}
-	}
 	// Generate the VIPService owner annotation for new or existing VIPService.
 	// This checks and ensures that VIPService's owner references are updated
 	// for this Ingress and errors if that is not possible (i.e. because it
@@ -243,6 +243,11 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 	// 3. Ensure that TLS Secret and RBAC exists
+	tcd, err := r.tailnetCertDomain(ctx)
+	if err != nil {
+		return false, fmt.Errorf("error determining DNS name base: %w", err)
+	}
+	dnsName := hostname + "." + tcd
 	if err := r.ensureCertResources(ctx, pgName, dnsName, ing); err != nil {
 		return false, fmt.Errorf("error ensuring cert resources: %w", err)
 	}
@@ -438,9 +443,21 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 
 		if !found {
 			logger.Infof("VIPService %q is not owned by any Ingress, cleaning up", vipServiceName)
+			vipService, err := r.tsClient.GetVIPService(ctx, vipServiceName)
+			if isErrorVIPServiceFeatureGateNotEnabled(err) {
+				msg := fmt.Sprintf("Unable to proceed with cleanup: %s.", msgFeatureGateNotEnabled)
+				logger.Warn(msg)
+				return false, nil
+			}
+			if isErrorVIPServiceNotFound(err) {
+				return false, nil
+			}
+			if err != nil {
+				return false, fmt.Errorf("getting VIPService %q: %w", vipServiceName, err)
+			}
 
 			// Delete the VIPService from control if necessary.
-			svcsChanged, err = r.cleanupVIPService(ctx, vipServiceName, logger)
+			svcsChanged, err = r.cleanupVIPService(ctx, vipService, logger)
 			if err != nil {
 				return false, fmt.Errorf("deleting VIPService %q: %w", vipServiceName, err)
 			}
@@ -486,6 +503,20 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 		return false, nil
 	}
 	logger.Infof("Ensuring that VIPService %q configuration is cleaned up", hostname)
+	serviceName := tailcfg.ServiceName("svc:" + hostname)
+	svc, err := r.tsClient.GetVIPService(ctx, serviceName)
+	if err != nil {
+		if isErrorVIPServiceFeatureGateNotEnabled(err) {
+			msg := fmt.Sprintf("Unable to proceed with cleanup: %s.", msgFeatureGateNotEnabled)
+			logger.Warn(msg)
+			r.recorder.Event(ing, corev1.EventTypeWarning, warningVIPServiceFeatureGateNotEnabled, msg)
+			return false, nil
+		}
+		if isErrorVIPServiceNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("error getting VIPService: %w", err)
+	}
 
 	// Ensure that if cleanup succeeded Ingress finalizers are removed.
 	defer func() {
@@ -503,7 +534,6 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	if err != nil {
 		return false, fmt.Errorf("error getting ProxyGroup serve config: %w", err)
 	}
-	serviceName := tailcfg.ServiceName("svc:" + hostname)
 
 	// VIPService is always first added to serve config and only then created in the Tailscale API, so if it is not
 	// found in the serve config, we can assume that there is no VIPService. (If the serve config does not exist at
@@ -514,7 +544,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 2. Clean up the VIPService resources.
-	svcChanged, err = r.cleanupVIPService(ctx, serviceName, logger)
+	svcChanged, err = r.cleanupVIPService(ctx, svc, logger)
 	if err != nil {
 		return false, fmt.Errorf("error deleting VIPService: %w", err)
 	}
@@ -674,16 +704,7 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 // If a VIPService is found, but contains other owner references, only removes this operator's owner reference.
 // If a VIPService by the given name is not found or does not contain this operator's owner reference, do nothing.
 // It returns true if an existing VIPService was updated to remove owner reference, as well as any error that occurred.
-func (r *HAIngressReconciler) cleanupVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, _ error) {
-	svc, err := r.tsClient.GetVIPService(ctx, name)
-	if err != nil {
-		errResp := &tailscale.ErrResponse{}
-		if ok := errors.As(err, errResp); ok && errResp.Status == http.StatusNotFound {
-			return false, nil
-		}
-
-		return false, fmt.Errorf("error getting VIPService: %w", err)
-	}
+func (r *HAIngressReconciler) cleanupVIPService(ctx context.Context, svc *tailscale.VIPService, logger *zap.SugaredLogger) (updated bool, _ error) {
 	if svc == nil {
 		return false, nil
 	}
@@ -705,11 +726,11 @@ func (r *HAIngressReconciler) cleanupVIPService(ctx context.Context, name tailcf
 		return false, nil
 	}
 	if len(o.OwnerRefs) == 1 {
-		logger.Infof("Deleting VIPService %q", name)
-		return false, r.tsClient.DeleteVIPService(ctx, name)
+		logger.Infof("Deleting VIPService %q", svc.Name)
+		return false, r.tsClient.DeleteVIPService(ctx, svc.Name)
 	}
 	o.OwnerRefs = slices.Delete(o.OwnerRefs, ix, ix+1)
-	logger.Infof("Deleting VIPService %q", name)
+	logger.Infof("Deleting VIPService %q", svc.Name)
 	json, err := json.Marshal(o)
 	if err != nil {
 		return false, fmt.Errorf("error marshalling updated VIPService owner reference: %w", err)
@@ -1073,4 +1094,16 @@ func (r *HAIngressReconciler) hasCerts(ctx context.Context, svc tailcfg.ServiceN
 	key := secret.Data[corev1.TLSPrivateKeyKey]
 
 	return len(cert) > 0 && len(key) > 0, nil
+}
+
+func isErrorVIPServiceFeatureGateNotEnabled(err error) bool {
+	errResp := tailscale.ErrResponse{}
+	ok := errors.As(err, &errResp)
+	return ok && errResp.Message == tailcfg.MessageVIPServiceFeatureNotEnabled
+}
+
+func isErrorVIPServiceNotFound(err error) bool {
+	var errResp tailscale.ErrResponse
+	ok := errors.As(err, &errResp)
+	return ok && errResp.Status == http.StatusNotFound
 }

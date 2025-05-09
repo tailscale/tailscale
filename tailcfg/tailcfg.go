@@ -962,6 +962,11 @@ type VIPService struct {
 	Active bool
 }
 
+// MessageVIPServiceFeatureNotEnabled is the message returned in the response
+// error if a VIPServices API call is made for a tailnet that does not have
+// vip-services feature flag enabled.
+const MessageVIPServiceFeatureNotEnabled = "feature unavailable for tailnet"
+
 // TailscaleSSHEnabled reports whether or not this node is acting as a
 // Tailscale SSH server.
 func (hi *Hostinfo) TailscaleSSHEnabled() bool {
