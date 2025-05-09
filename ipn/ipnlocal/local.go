@@ -1450,66 +1450,6 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 	return b.currentNode().PeerCaps(src)
 }
 
-// AppendMatchingPeers returns base with all peers that match pred appended.
-//
-// It acquires b.mu to read the netmap but releases it before calling pred.
-func (nb *nodeBackend) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
-	var peers []tailcfg.NodeView
-
-	nb.mu.Lock()
-	if nb.netMap != nil {
-		// All fields on b.netMap are immutable, so this is
-		// safe to copy and use outside the lock.
-		peers = nb.netMap.Peers
-	}
-	nb.mu.Unlock()
-
-	ret := base
-	for _, peer := range peers {
-		// The peers in b.netMap don't contain updates made via
-		// UpdateNetmapDelta. So only use PeerView in b.netMap for its NodeID,
-		// and then look up the latest copy in b.peers which is updated in
-		// response to UpdateNetmapDelta edits.
-		nb.mu.Lock()
-		peer, ok := nb.peers[peer.ID()]
-		nb.mu.Unlock()
-		if ok && pred(peer) {
-			ret = append(ret, peer)
-		}
-	}
-	return ret
-}
-
-// PeerCaps returns the capabilities that remote src IP has to
-// ths current node.
-func (nb *nodeBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	return nb.peerCapsLocked(src)
-}
-
-func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
-	if nb.netMap == nil {
-		return nil
-	}
-	filt := nb.filterAtomic.Load()
-	if filt == nil {
-		return nil
-	}
-	addrs := nb.netMap.GetAddresses()
-	for i := range addrs.Len() {
-		a := addrs.At(i)
-		if !a.IsSingleIP() {
-			continue
-		}
-		dst := a.Addr()
-		if dst.BitLen() == src.BitLen() { // match on family
-			return filt.CapsWithValues(src, dst)
-		}
-	}
-	return nil
-}
-
 func (b *LocalBackend) GetFilterForTest() *filter.Filter {
 	if !testenv.InTest() {
 		panic("GetFilterForTest called outside of test")
@@ -2025,20 +1965,6 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	return true
 }
 
-func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	if nb.netMap == nil {
-		return nil
-	}
-	nm := ptr.To(*nb.netMap) // shallow clone
-	nm.Peers = slicesx.MapValues(nb.peers)
-	slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
-		return cmp.Compare(a.ID(), b.ID())
-	})
-	return nm
-}
-
 // mutationsAreWorthyOfTellingIPNBus reports whether any mutation type in muts is
 // worthy of spamming the IPN bus (the Windows & Mac GUIs, basically) to tell them
 // about the update.
@@ -2067,37 +1993,6 @@ func (b *LocalBackend) pickNewAutoExitNode() {
 	}
 
 	b.send(ipn.Notify{Prefs: &newPrefs})
-}
-
-func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	if nb.netMap == nil || len(nb.peers) == 0 {
-		return false
-	}
-
-	// Locally cloned mutable nodes, to avoid calling AsStruct (clone)
-	// multiple times on a node if it's mutated multiple times in this
-	// call (e.g. its endpoints + online status both change)
-	var mutableNodes map[tailcfg.NodeID]*tailcfg.Node
-
-	for _, m := range muts {
-		n, ok := mutableNodes[m.NodeIDBeingMutated()]
-		if !ok {
-			nv, ok := nb.peers[m.NodeIDBeingMutated()]
-			if !ok {
-				// TODO(bradfitz): unexpected metric?
-				return false
-			}
-			n = nv.AsStruct()
-			mak.Set(&mutableNodes, nv.ID(), n)
-		}
-		m.Apply(n)
-	}
-	for nid, n := range mutableNodes {
-		nb.peers[nid] = n.View()
-	}
-	return true
 }
 
 // setExitNodeID updates prefs to reference an exit node by ID, rather
@@ -2254,16 +2149,6 @@ func (b *LocalBackend) DisablePortMapperForTest() {
 // for integration tests in another repo.
 func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
 	return b.currentNode().PeersForTest()
-}
-
-func (nb *nodeBackend) PeersForTest() []tailcfg.NodeView {
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	ret := slicesx.MapValues(nb.peers)
-	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
-		return cmp.Compare(a.ID(), b.ID())
-	})
-	return ret
 }
 
 func (b *LocalBackend) getNewControlClientFuncLocked() clientGen {
@@ -2830,10 +2715,6 @@ func packetFilterPermitsUnlockedNodes(peers map[tailcfg.NodeID]tailcfg.NodeView,
 func (b *LocalBackend) setFilter(f *filter.Filter) {
 	b.currentNode().setFilter(f)
 	b.e.SetFilter(f)
-}
-
-func (nb *nodeBackend) setFilter(f *filter.Filter) {
-	nb.filterAtomic.Store(f)
 }
 
 var removeFromDefaultRoute = []netip.Prefix{
@@ -4773,12 +4654,6 @@ func (b *LocalBackend) NetMap() *netmap.NetworkMap {
 	return b.currentNode().NetMap()
 }
 
-func (nb *nodeBackend) NetMap() *netmap.NetworkMap {
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	return nb.netMap
-}
-
 func (b *LocalBackend) isEngineBlocked() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -5015,201 +4890,6 @@ func shouldUseOneCGNATRoute(logf logger.Logf, mon *netmon.Monitor, controlKnobs 
 		}
 	}
 	return false
-}
-
-func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, logf, versionOS)
-}
-
-// dnsConfigForNetmap returns a *dns.Config for the given netmap,
-// prefs, client OS version, and cloud hosting environment.
-//
-// The versionOS is a Tailscale-style version ("iOS", "macOS") and not
-// a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
-	if nm == nil {
-		return nil
-	}
-
-	// If the current node's key is expired, then we don't program any DNS
-	// configuration into the operating system. This ensures that if the
-	// DNS configuration specifies a DNS server that is only reachable over
-	// Tailscale, we don't break connectivity for the user.
-	//
-	// TODO(andrew-d): this also stops returning anything from quad-100; we
-	// could do the same thing as having "CorpDNS: false" and keep that but
-	// not program the OS?
-	if selfExpired {
-		return &dns.Config{}
-	}
-
-	dcfg := &dns.Config{
-		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-		Hosts:  map[dnsname.FQDN][]netip.Addr{},
-	}
-
-	// selfV6Only is whether we only have IPv6 addresses ourselves.
-	selfV6Only := nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
-		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
-	dcfg.OnlyIPv6 = selfV6Only
-
-	wantAAAA := nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA)
-
-	// Populate MagicDNS records. We do this unconditionally so that
-	// quad-100 can always respond to MagicDNS queries, even if the OS
-	// isn't configured to make MagicDNS resolution truly
-	// magic. Details in
-	// https://github.com/tailscale/tailscale/issues/1886.
-	set := func(name string, addrs views.Slice[netip.Prefix]) {
-		if addrs.Len() == 0 || name == "" {
-			return
-		}
-		fqdn, err := dnsname.ToFQDN(name)
-		if err != nil {
-			return // TODO: propagate error?
-		}
-		var have4 bool
-		for _, addr := range addrs.All() {
-			if addr.Addr().Is4() {
-				have4 = true
-				break
-			}
-		}
-		var ips []netip.Addr
-		for _, addr := range addrs.All() {
-			if selfV6Only {
-				if addr.Addr().Is6() {
-					ips = append(ips, addr.Addr())
-				}
-				continue
-			}
-			// If this node has an IPv4 address, then
-			// remove peers' IPv6 addresses for now, as we
-			// don't guarantee that the peer node actually
-			// can speak IPv6 correctly.
-			//
-			// https://github.com/tailscale/tailscale/issues/1152
-			// tracks adding the right capability reporting to
-			// enable AAAA in MagicDNS.
-			if addr.Addr().Is6() && have4 && !wantAAAA {
-				continue
-			}
-			ips = append(ips, addr.Addr())
-		}
-		dcfg.Hosts[fqdn] = ips
-	}
-	set(nm.Name, nm.GetAddresses())
-	for _, peer := range peers {
-		set(peer.Name(), peer.Addresses())
-	}
-	for _, rec := range nm.DNS.ExtraRecords {
-		switch rec.Type {
-		case "", "A", "AAAA":
-			// Treat these all the same for now: infer from the value
-		default:
-			// TODO: more
-			continue
-		}
-		ip, err := netip.ParseAddr(rec.Value)
-		if err != nil {
-			// Ignore.
-			continue
-		}
-		fqdn, err := dnsname.ToFQDN(rec.Name)
-		if err != nil {
-			continue
-		}
-		dcfg.Hosts[fqdn] = append(dcfg.Hosts[fqdn], ip)
-	}
-
-	if !prefs.CorpDNS() {
-		return dcfg
-	}
-
-	for _, dom := range nm.DNS.Domains {
-		fqdn, err := dnsname.ToFQDN(dom)
-		if err != nil {
-			logf("[unexpected] non-FQDN search domain %q", dom)
-		}
-		dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
-	}
-	if nm.DNS.Proxied { // actually means "enable MagicDNS"
-		for _, dom := range magicDNSRootDomains(nm) {
-			dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
-		}
-	}
-
-	addDefault := func(resolvers []*dnstype.Resolver) {
-		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
-	}
-
-	// If we're using an exit node and that exit node is new enough (1.19.x+)
-	// to run a DoH DNS proxy, then send all our DNS traffic through it.
-	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
-		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
-		return dcfg
-	}
-
-	// If the user has set default resolvers ("override local DNS"), prefer to
-	// use those resolvers as the default, otherwise if there are WireGuard exit
-	// node resolvers, use those as the default.
-	if len(nm.DNS.Resolvers) > 0 {
-		addDefault(nm.DNS.Resolvers)
-	} else {
-		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
-			addDefault(resolvers)
-		}
-	}
-
-	for suffix, resolvers := range nm.DNS.Routes {
-		fqdn, err := dnsname.ToFQDN(suffix)
-		if err != nil {
-			logf("[unexpected] non-FQDN route suffix %q", suffix)
-		}
-
-		// Create map entry even if len(resolvers) == 0; Issue 2706.
-		// This lets the control plane send ExtraRecords for which we
-		// can authoritatively answer "name not exists" for when the
-		// control plane also sends this explicit but empty route
-		// making it as something we handle.
-		//
-		// While we're already populating it, might as well size the
-		// slice appropriately.
-		// Per #9498 the exact requirements of nil vs empty slice remain
-		// unclear, this is a haunted graveyard to be resolved.
-		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
-		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
-	}
-
-	// Set FallbackResolvers as the default resolvers in the
-	// scenarios that can't handle a purely split-DNS config. See
-	// https://github.com/tailscale/tailscale/issues/1743 for
-	// details.
-	switch {
-	case len(dcfg.DefaultResolvers) != 0:
-		// Default resolvers already set.
-	case !prefs.ExitNodeID().IsZero():
-		// When using an exit node, we send all DNS traffic to the exit node, so
-		// we don't need a fallback resolver.
-		//
-		// However, if the exit node is too old to run a DoH DNS proxy, then we
-		// need to use a fallback resolver as it's very likely the LAN resolvers
-		// will become unreachable.
-		//
-		// This is especially important on Apple OSes, where
-		// adding the default route to the tunnel interface makes
-		// it "primary", and we MUST provide VPN-sourced DNS
-		// settings or we break all DNS resolution.
-		//
-		// https://github.com/tailscale/tailscale/issues/1713
-		addDefault(nm.DNS.FallbackResolvers)
-	case len(dcfg.Routes) == 0:
-		// No settings requiring split DNS, no problem.
-	}
-
-	return dcfg
 }
 
 // SetTCPHandlerForFunnelFlow sets the TCP handler for Funnel flows.
@@ -6124,14 +5804,6 @@ func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) (newPre
 	return newPrefs
 }
 
-func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	nb.netMap = nm
-	nb.updateNodeByAddrLocked()
-	nb.updatePeersLocked()
-}
-
 // setNetMapLocked updates the LocalBackend state to reflect the newly
 // received nm. If nm is nil, it resets all configuration as though
 // Tailscale is turned off.
@@ -6204,67 +5876,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	b.updateDrivePeersLocked(nm)
 	b.driveNotifyCurrentSharesLocked()
-}
-
-func (nb *nodeBackend) updateNodeByAddrLocked() {
-	nm := nb.netMap
-	if nm == nil {
-		nb.nodeByAddr = nil
-		return
-	}
-
-	// Update the nodeByAddr index.
-	if nb.nodeByAddr == nil {
-		nb.nodeByAddr = map[netip.Addr]tailcfg.NodeID{}
-	}
-	// First pass, mark everything unwanted.
-	for k := range nb.nodeByAddr {
-		nb.nodeByAddr[k] = 0
-	}
-	addNode := func(n tailcfg.NodeView) {
-		for _, ipp := range n.Addresses().All() {
-			if ipp.IsSingleIP() {
-				nb.nodeByAddr[ipp.Addr()] = n.ID()
-			}
-		}
-	}
-	if nm.SelfNode.Valid() {
-		addNode(nm.SelfNode)
-	}
-	for _, p := range nm.Peers {
-		addNode(p)
-	}
-	// Third pass, actually delete the unwanted items.
-	for k, v := range nb.nodeByAddr {
-		if v == 0 {
-			delete(nb.nodeByAddr, k)
-		}
-	}
-}
-
-func (nb *nodeBackend) updatePeersLocked() {
-	nm := nb.netMap
-	if nm == nil {
-		nb.peers = nil
-		return
-	}
-
-	// First pass, mark everything unwanted.
-	for k := range nb.peers {
-		nb.peers[k] = tailcfg.NodeView{}
-	}
-
-	// Second pass, add everything wanted.
-	for _, p := range nm.Peers {
-		mak.Set(&nb.peers, p.ID(), p)
-	}
-
-	// Third pass, remove deleted things.
-	for k, v := range nb.peers {
-		if !v.Valid() {
-			delete(nb.peers, k)
-		}
-	}
 }
 
 // responseBodyWrapper wraps an io.ReadCloser and stores
@@ -6647,27 +6258,6 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 	return mk, nk
 }
 
-// PeerHasCap reports whether the peer contains the given capability string,
-// with any value(s).
-func (nb *nodeBackend) PeerHasCap(peer tailcfg.NodeView, wantCap tailcfg.PeerCapability) bool {
-	if !peer.Valid() {
-		return false
-	}
-
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	for _, ap := range peer.Addresses().All() {
-		if nb.peerHasCapLocked(ap.Addr(), wantCap) {
-			return true
-		}
-	}
-	return false
-}
-
-func (nb *nodeBackend) peerHasCapLocked(addr netip.Addr, wantCap tailcfg.PeerCapability) bool {
-	return nb.peerCapsLocked(addr).HasCapability(wantCap)
-}
-
 // SetDNS adds a DNS record for the given domain name & TXT record
 // value.
 //
@@ -6715,70 +6305,6 @@ func peerAPIPorts(peer tailcfg.NodeView) (p4, p6 uint16) {
 		}
 	}
 	return
-}
-
-// peerAPIURL returns an HTTP URL for the peer's peerapi service,
-// without a trailing slash.
-//
-// If ip or port is the zero value then it returns the empty string.
-func peerAPIURL(ip netip.Addr, port uint16) string {
-	if port == 0 || !ip.IsValid() {
-		return ""
-	}
-	return fmt.Sprintf("http://%v", netip.AddrPortFrom(ip, port))
-}
-
-func (nb *nodeBackend) PeerHasPeerAPI(p tailcfg.NodeView) bool {
-	return nb.PeerAPIBase(p) != ""
-}
-
-// PeerAPIBase returns the "http://ip:port" URL base to reach peer's PeerAPI,
-// or the empty string if the peer is invalid or doesn't support PeerAPI.
-func (nb *nodeBackend) PeerAPIBase(p tailcfg.NodeView) string {
-	nb.mu.Lock()
-	nm := nb.netMap
-	nb.mu.Unlock()
-	return peerAPIBase(nm, p)
-}
-
-// peerAPIBase returns the "http://ip:port" URL base to reach peer's peerAPI.
-// It returns the empty string if the peer doesn't support the peerapi
-// or there's no matching address family based on the netmap's own addresses.
-func peerAPIBase(nm *netmap.NetworkMap, peer tailcfg.NodeView) string {
-	if nm == nil || !peer.Valid() || !peer.Hostinfo().Valid() {
-		return ""
-	}
-
-	var have4, have6 bool
-	addrs := nm.GetAddresses()
-	for _, a := range addrs.All() {
-		if !a.IsSingleIP() {
-			continue
-		}
-		switch {
-		case a.Addr().Is4():
-			have4 = true
-		case a.Addr().Is6():
-			have6 = true
-		}
-	}
-	p4, p6 := peerAPIPorts(peer)
-	switch {
-	case have4 && p4 != 0:
-		return peerAPIURL(nodeIP(peer, netip.Addr.Is4), p4)
-	case have6 && p6 != 0:
-		return peerAPIURL(nodeIP(peer, netip.Addr.Is6), p6)
-	}
-	return ""
-}
-
-func nodeIP(n tailcfg.NodeView, pred func(netip.Addr) bool) netip.Addr {
-	for _, pfx := range n.Addresses().All() {
-		if pfx.IsSingleIP() && pred(pfx.Addr()) {
-			return pfx.Addr()
-		}
-	}
-	return netip.Addr{}
 }
 
 func (b *LocalBackend) CheckIPForwarding() error {
@@ -6976,12 +6502,6 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg
 		}
 	}
 	return "", false
-}
-
-func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
-	nb.mu.Lock()
-	defer nb.mu.Unlock()
-	return exitNodeCanProxyDNS(nb.netMap, nb.peers, exitNodeID)
 }
 
 // wireguardExitNodeDNSResolvers returns the DNS resolvers to use for a
