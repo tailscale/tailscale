@@ -406,8 +406,8 @@ func parseBindUDPRelayEndpointAnswer(ver uint8, p []byte) (m *BindUDPRelayEndpoi
 // involving [BindUDPRelayEndpoint], [BindUDPRelayEndpointChallenge], and
 // [BindUDPRelayEndpointAnswer].
 //
-// CallMeMaybeVia mirrors [tailscale.com/net/udprelay.ServerEndpoint], which
-// contains field documentation.
+// CallMeMaybeVia mirrors [tailscale.com/net/udprelay/endpoint.ServerEndpoint],
+// which contains field documentation.
 //
 // The recipient may choose to not open a path back if it's already happy with
 // its path. Direct connections, e.g. [CallMeMaybe]-signaled, take priority over
@@ -416,17 +416,17 @@ func parseBindUDPRelayEndpointAnswer(ver uint8, p []byte) (m *BindUDPRelayEndpoi
 // This message type is currently considered experimental and is not yet tied to
 // a [tailscale.com/tailcfg.CapabilityVersion].
 type CallMeMaybeVia struct {
-	// ServerDisco is [tailscale.com/net/udprelay.ServerEndpoint.ServerDisco]
+	// ServerDisco is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.ServerDisco]
 	ServerDisco key.DiscoPublic
-	// LamportID is [tailscale.com/net/udprelay.ServerEndpoint.LamportID]
+	// LamportID is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.LamportID]
 	LamportID uint64
-	// VNI is [tailscale.com/net/udprelay.ServerEndpoint.VNI]
+	// VNI is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.VNI]
 	VNI uint32
-	// BindLifetime is [tailscale.com/net/udprelay.ServerEndpoint.BindLifetime]
+	// BindLifetime is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.BindLifetime]
 	BindLifetime time.Duration
-	// SteadyStateLifetime is [tailscale.com/net/udprelay.ServerEndpoint.SteadyStateLifetime]
+	// SteadyStateLifetime is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.SteadyStateLifetime]
 	SteadyStateLifetime time.Duration
-	// AddrPorts is [tailscale.com/net/udprelay.ServerEndpoint.AddrPorts]
+	// AddrPorts is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.AddrPorts]
 	AddrPorts []netip.AddrPort
 }
 

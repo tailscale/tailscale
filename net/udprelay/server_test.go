@@ -17,6 +17,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 )
@@ -259,7 +260,7 @@ func TestServerEndpointJSONUnmarshal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var out ServerEndpoint
+			var out endpoint.ServerEndpoint
 			err := json.Unmarshal(tt.json, &out)
 			if tt.wantErr != (err != nil) {
 				t.Fatalf("wantErr: %v (err == nil): %v", tt.wantErr, err == nil)
@@ -274,11 +275,11 @@ func TestServerEndpointJSONUnmarshal(t *testing.T) {
 func TestServerEndpointJSONMarshal(t *testing.T) {
 	tests := []struct {
 		name           string
-		serverEndpoint ServerEndpoint
+		serverEndpoint endpoint.ServerEndpoint
 	}{
 		{
 			name: "valid roundtrip",
-			serverEndpoint: ServerEndpoint{
+			serverEndpoint: endpoint.ServerEndpoint{
 				ServerDisco:         key.NewDisco().Public(),
 				LamportID:           uint64(math.MaxUint64),
 				AddrPorts:           []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:1"), netip.MustParseAddrPort("127.0.0.2:2")},
@@ -295,7 +296,7 @@ func TestServerEndpointJSONMarshal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var got ServerEndpoint
+			var got endpoint.ServerEndpoint
 			err = json.Unmarshal(b, &got)
 			if err != nil {
 				t.Fatal(err)

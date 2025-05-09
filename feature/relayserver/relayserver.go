@@ -19,6 +19,7 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/udprelay"
+	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -57,7 +58,7 @@ type extension struct {
 
 // relayServer is the interface of [udprelay.Server].
 type relayServer interface {
-	AllocateEndpoint(discoA key.DiscoPublic, discoB key.DiscoPublic) (udprelay.ServerEndpoint, error)
+	AllocateEndpoint(discoA key.DiscoPublic, discoB key.DiscoPublic) (endpoint.ServerEndpoint, error)
 	Close() error
 }
 

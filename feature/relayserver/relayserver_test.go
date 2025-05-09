@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"tailscale.com/ipn"
-	"tailscale.com/net/udprelay"
+	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
 )
@@ -17,8 +17,8 @@ type fakeRelayServer struct{}
 
 func (f *fakeRelayServer) Close() error { return nil }
 
-func (f *fakeRelayServer) AllocateEndpoint(_, _ key.DiscoPublic) (udprelay.ServerEndpoint, error) {
-	return udprelay.ServerEndpoint{}, errors.New("fake relay server")
+func (f *fakeRelayServer) AllocateEndpoint(_, _ key.DiscoPublic) (endpoint.ServerEndpoint, error) {
+	return endpoint.ServerEndpoint{}, errors.New("fake relay server")
 }
 
 func Test_extension_profileStateChanged(t *testing.T) {
