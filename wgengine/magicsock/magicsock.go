@@ -1939,6 +1939,13 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			c.logf("magicsock: disco: ignoring %s from %v; %v is unknown", msgType, sender.ShortString(), derpNodeSrc.ShortString())
 			return
 		}
+		ep.mu.Lock()
+		relayCapable := ep.relayCapable
+		ep.mu.Unlock()
+		if isVia && !relayCapable {
+			c.logf("magicsock: disco: ignoring %s from %v; %v is not known to be relay capable", msgType, sender.ShortString(), sender.ShortString())
+			return
+		}
 		epDisco := ep.disco.Load()
 		if epDisco == nil {
 			return
