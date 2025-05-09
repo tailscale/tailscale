@@ -376,6 +376,7 @@ func (s *Server) serveBrowser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", s.csp)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referer-Policy", "same-origin")
+	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	if s.SecureContext {
 		w.Header().Set("Strict-Transport-Security", cmp.Or(s.StrictTransportSecurityOptions, DefaultStrictTransportSecurityOptions))
 	}
