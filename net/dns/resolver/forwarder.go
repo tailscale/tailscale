@@ -741,21 +741,19 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	return out, nil
 }
 
-var optDNSForwardUseRoutes = envknob.RegisterOptBool("TS_DNS_FORWARD_USE_ROUTES")
+var optDNSForwardUseRoutes = envknob.RegisterOptBool("TS_DEBUG_DNS_FORWARD_USE_ROUTES")
 
-// ShouldUseRoutes reports true if the DNS resolver should use the peer or system dialer
-// for forwarding DNS queries to upstream nameservers via TCP, based on the destination
-// address and configured routes. Currently, this requires maintaining a [bart.Table],
-// resulting in a slightly higher memory usage.
+// ShouldUseRoutes reports whether the DNS resolver should consider routes when dialing
+// upstream nameservers via TCP.
 //
-// It reports false if the system dialer should always be used, regardless of the
-// destination address.
+// If true, routes should be considered ([tsdial.Dialer.UserDial]), otherwise defer
+// to the system routes ([tsdial.Dialer.SystemDial]).
 //
 // TODO(nickkhyl): Update [tsdial.Dialer] to reuse the bart.Table we create in net/tstun.Wrapper
 // to avoid having two bart tables in memory, especially on iOS. Once that's done,
 // we can get rid of the nodeAttr/control knob and always use UserDial for DNS.
 //
-// See https://github.com/tailscale/tailscale/issues/12027.
+// See tailscale/tailscale#12027.
 func ShouldUseRoutes(knobs *controlknobs.Knobs) bool {
 	switch runtime.GOOS {
 	case "android", "ios":
@@ -764,7 +762,7 @@ func ShouldUseRoutes(knobs *controlknobs.Knobs) bool {
 		return knobs != nil && knobs.UserDialUseRoutes.Load()
 	default:
 		// On all other platforms, it is the default behavior,
-		// but it can be overridden with the "TS_DNS_FORWARD_USE_ROUTES" env var.
+		// but it can be overridden with the "TS_DEBUG_DNS_FORWARD_USE_ROUTES" env var.
 		doNotUseRoutes := optDNSForwardUseRoutes().EqualBool(false)
 		return !doNotUseRoutes
 	}
