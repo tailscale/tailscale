@@ -14,8 +14,9 @@ import (
 
 // This test creates a temporary network namespace for the nftables rules being
 // set up, so it needs to run in a privileged mode. Locally it needs to be run
-// by root, else it will be silently skipped. In CI it runs in a privileged
-// container.
+// by root, else it will be silently skipped.
+// sudo  go test -v -run Test_nftablesRunner_EnsurePortMapRuleForSvc ./util/linuxfw/...
+// In CI it runs in a privileged container.
 func Test_nftablesRunner_EnsurePortMapRuleForSvc(t *testing.T) {
 	conn := newSysConn(t)
 	runner := newFakeNftablesRunnerWithConn(t, conn, true)
@@ -23,49 +24,213 @@ func Test_nftablesRunner_EnsurePortMapRuleForSvc(t *testing.T) {
 	pmTCP := PortMap{MatchPort: 4003, TargetPort: 80, Protocol: "TCP"}
 	pmTCP1 := PortMap{MatchPort: 4004, TargetPort: 443, Protocol: "TCP"}
 
-	// Create a rule for service 'foo' to forward TCP traffic to IPv4 endpoint
-	runner.EnsurePortMapRuleForSvc("foo", "tailscale0", ipv4, pmTCP)
+	// Create a rule for service 'svc:foo' to forward TCP traffic to IPv4 endpoint
+	runner.EnsurePortMapRuleForSvc("svc:foo", "tailscale0", ipv4, pmTCP)
 	svcChains(t, 1, conn)
-	chainRuleCount(t, "foo", 1, conn, nftables.TableFamilyIPv4)
-	checkPortMapRule(t, "foo", ipv4, pmTCP, runner, nftables.TableFamilyIPv4)
+	chainRuleCount(t, "svc:foo", 1, conn, nftables.TableFamilyIPv4)
+	checkPortMapRule(t, "svc:foo", ipv4, pmTCP, runner, nftables.TableFamilyIPv4)
 
-	// Create another rule for service 'foo' to forward TCP traffic to the
+	// Create another rule for service 'svc:foo' to forward TCP traffic to the
 	// same IPv4 endpoint, but to a different port.
-	runner.EnsurePortMapRuleForSvc("foo", "tailscale0", ipv4, pmTCP1)
+	runner.EnsurePortMapRuleForSvc("svc:foo", "tailscale0", ipv4, pmTCP1)
 	svcChains(t, 1, conn)
-	chainRuleCount(t, "foo", 2, conn, nftables.TableFamilyIPv4)
-	checkPortMapRule(t, "foo", ipv4, pmTCP1, runner, nftables.TableFamilyIPv4)
+	chainRuleCount(t, "svc:foo", 2, conn, nftables.TableFamilyIPv4)
+	checkPortMapRule(t, "svc:foo", ipv4, pmTCP1, runner, nftables.TableFamilyIPv4)
 
-	// Create a rule for service 'foo' to forward TCP traffic to an IPv6 endpoint
-	runner.EnsurePortMapRuleForSvc("foo", "tailscale0", ipv6, pmTCP)
+	// Create a rule for service 'svc:foo' to forward TCP traffic to an IPv6 endpoint
+	runner.EnsurePortMapRuleForSvc("svc:foo", "tailscale0", ipv6, pmTCP)
 	svcChains(t, 2, conn)
-	chainRuleCount(t, "foo", 1, conn, nftables.TableFamilyIPv6)
-	checkPortMapRule(t, "foo", ipv6, pmTCP, runner, nftables.TableFamilyIPv6)
+	chainRuleCount(t, "svc:foo", 1, conn, nftables.TableFamilyIPv6)
+	checkPortMapRule(t, "svc:foo", ipv6, pmTCP, runner, nftables.TableFamilyIPv6)
 
-	// Create a rule for service 'bar' to forward TCP traffic to IPv4 endpoint
-	runner.EnsurePortMapRuleForSvc("bar", "tailscale0", ipv4, pmTCP)
+	// Create a rule for service 'svc:bar' to forward TCP traffic to IPv4 endpoint
+	runner.EnsurePortMapRuleForSvc("svc:bar", "tailscale0", ipv4, pmTCP)
 	svcChains(t, 3, conn)
-	chainRuleCount(t, "bar", 1, conn, nftables.TableFamilyIPv4)
-	checkPortMapRule(t, "bar", ipv4, pmTCP, runner, nftables.TableFamilyIPv4)
+	chainRuleCount(t, "svc:bar", 1, conn, nftables.TableFamilyIPv4)
+	checkPortMapRule(t, "svc:bar", ipv4, pmTCP, runner, nftables.TableFamilyIPv4)
 
-	// Create a rule for service 'bar' to forward TCP traffic to an IPv6 endpoint
-	runner.EnsurePortMapRuleForSvc("bar", "tailscale0", ipv6, pmTCP)
+	// Create a rule for service 'svc:bar' to forward TCP traffic to an IPv6 endpoint
+	runner.EnsurePortMapRuleForSvc("svc:bar", "tailscale0", ipv6, pmTCP)
 	svcChains(t, 4, conn)
-	chainRuleCount(t, "bar", 1, conn, nftables.TableFamilyIPv6)
-	checkPortMapRule(t, "bar", ipv6, pmTCP, runner, nftables.TableFamilyIPv6)
+	chainRuleCount(t, "svc:bar", 1, conn, nftables.TableFamilyIPv6)
+	checkPortMapRule(t, "svc:bar", ipv6, pmTCP, runner, nftables.TableFamilyIPv6)
 
-	// Delete service bar
-	runner.DeleteSvc("bar", "tailscale0", []netip.Addr{ipv4, ipv6}, []PortMap{pmTCP})
+	// Delete service svc:bar
+	runner.DeleteSvc("svc:bar", "tailscale0", []netip.Addr{ipv4, ipv6}, []PortMap{pmTCP})
 	svcChains(t, 2, conn)
 
-	// Delete a rule from service foo
-	runner.DeletePortMapRuleForSvc("foo", "tailscale0", ipv4, pmTCP)
+	// Delete a rule from service svc:foo
+	runner.DeletePortMapRuleForSvc("svc:foo", "tailscale0", ipv4, pmTCP)
 	svcChains(t, 2, conn)
-	chainRuleCount(t, "foo", 1, conn, nftables.TableFamilyIPv4)
+	chainRuleCount(t, "svc:foo", 1, conn, nftables.TableFamilyIPv4)
 
-	// Delete service foo
-	runner.DeleteSvc("foo", "tailscale0", []netip.Addr{ipv4, ipv6}, []PortMap{pmTCP, pmTCP1})
+	// Delete service svc:foo
+	runner.DeleteSvc("svc:foo", "tailscale0", []netip.Addr{ipv4, ipv6}, []PortMap{pmTCP, pmTCP1})
 	svcChains(t, 0, conn)
+}
+
+func Test_nftablesRunner_EnsureDNATRuleForSvc(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunnerWithConn(t, conn, true)
+
+	// Test IPv4 DNAT rule
+	ipv4OrigDst := netip.MustParseAddr("10.0.0.1")
+	ipv4Target := netip.MustParseAddr("10.0.0.2")
+
+	// Create DNAT rule for service 'svc:foo' to forward IPv4 traffic
+	err := runner.EnsureDNATRuleForSvc("svc:foo", ipv4OrigDst, ipv4Target)
+	if err != nil {
+		t.Fatalf("error creating IPv4 DNAT rule: %v", err)
+	}
+	checkDNATRule(t, "svc:foo", ipv4OrigDst, ipv4Target, runner, nftables.TableFamilyIPv4)
+
+	// Test IPv6 DNAT rule
+	ipv6OrigDst := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	ipv6Target := netip.MustParseAddr("fd7a:115c:a1e0::2")
+
+	// Create DNAT rule for service 'svc:foo' to forward IPv6 traffic
+	err = runner.EnsureDNATRuleForSvc("svc:foo", ipv6OrigDst, ipv6Target)
+	if err != nil {
+		t.Fatalf("error creating IPv6 DNAT rule: %v", err)
+	}
+	checkDNATRule(t, "svc:foo", ipv6OrigDst, ipv6Target, runner, nftables.TableFamilyIPv6)
+
+	// Test creating rule for another service
+	err = runner.EnsureDNATRuleForSvc("svc:bar", ipv4OrigDst, ipv4Target)
+	if err != nil {
+		t.Fatalf("error creating DNAT rule for service 'svc:bar': %v", err)
+	}
+	checkDNATRule(t, "svc:bar", ipv4OrigDst, ipv4Target, runner, nftables.TableFamilyIPv4)
+}
+
+func Test_nftablesRunner_DeleteDNATRuleForSvc(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunnerWithConn(t, conn, true)
+
+	// Test IPv4 DNAT rule deletion
+	ipv4OrigDst := netip.MustParseAddr("10.0.0.1")
+	ipv4Target := netip.MustParseAddr("10.0.0.2")
+
+	// Create and then delete IPv4 DNAT rule
+	err := runner.EnsureDNATRuleForSvc("svc:foo", ipv4OrigDst, ipv4Target)
+	if err != nil {
+		t.Fatalf("error creating IPv4 DNAT rule: %v", err)
+	}
+
+	// Verify rule exists before deletion
+	table, err := runner.getNFTByAddr(ipv4OrigDst)
+	if err != nil {
+		t.Fatalf("error getting table: %v", err)
+	}
+	nftTable, err := getTableIfExists(runner.conn, table.Proto, "nat")
+	if err != nil {
+		t.Fatalf("error getting nat table: %v", err)
+	}
+	ch, err := getChainFromTable(runner.conn, nftTable, "PREROUTING")
+	if err != nil {
+		t.Fatalf("error getting PREROUTING chain: %v", err)
+	}
+	meta := svcRuleMeta("svc:foo", ipv4OrigDst, ipv4Target)
+	rule, err := runner.findRuleByMetadata(nftTable, ch, meta)
+	if err != nil {
+		t.Fatalf("error checking if rule exists: %v", err)
+	}
+	if rule == nil {
+		t.Fatal("rule does not exist before deletion")
+	}
+
+	err = runner.DeleteDNATRuleForSvc("svc:foo", ipv4OrigDst, ipv4Target)
+	if err != nil {
+		t.Fatalf("error deleting IPv4 DNAT rule: %v", err)
+	}
+
+	// Verify rule is deleted
+	rule, err = runner.findRuleByMetadata(nftTable, ch, meta)
+	if err != nil {
+		t.Fatalf("error checking if rule exists: %v", err)
+	}
+	if rule != nil {
+		t.Fatal("rule still exists after deletion")
+	}
+
+	// Test IPv6 DNAT rule deletion
+	ipv6OrigDst := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	ipv6Target := netip.MustParseAddr("fd7a:115c:a1e0::2")
+
+	// Create and then delete IPv6 DNAT rule
+	err = runner.EnsureDNATRuleForSvc("svc:foo", ipv6OrigDst, ipv6Target)
+	if err != nil {
+		t.Fatalf("error creating IPv6 DNAT rule: %v", err)
+	}
+
+	// Verify rule exists before deletion
+	table, err = runner.getNFTByAddr(ipv6OrigDst)
+	if err != nil {
+		t.Fatalf("error getting table: %v", err)
+	}
+	nftTable, err = getTableIfExists(runner.conn, table.Proto, "nat")
+	if err != nil {
+		t.Fatalf("error getting nat table: %v", err)
+	}
+	ch, err = getChainFromTable(runner.conn, nftTable, "PREROUTING")
+	if err != nil {
+		t.Fatalf("error getting PREROUTING chain: %v", err)
+	}
+	meta = svcRuleMeta("svc:foo", ipv6OrigDst, ipv6Target)
+	rule, err = runner.findRuleByMetadata(nftTable, ch, meta)
+	if err != nil {
+		t.Fatalf("error checking if rule exists: %v", err)
+	}
+	if rule == nil {
+		t.Fatal("rule does not exist before deletion")
+	}
+
+	err = runner.DeleteDNATRuleForSvc("svc:foo", ipv6OrigDst, ipv6Target)
+	if err != nil {
+		t.Fatalf("error deleting IPv6 DNAT rule: %v", err)
+	}
+
+	// Verify rule is deleted
+	rule, err = runner.findRuleByMetadata(nftTable, ch, meta)
+	if err != nil {
+		t.Fatalf("error checking if rule exists: %v", err)
+	}
+	if rule != nil {
+		t.Fatal("rule still exists after deletion")
+	}
+}
+
+// checkDNATRule verifies that a DNAT rule exists for the given service, original destination, and target IP.
+func checkDNATRule(t *testing.T, svc string, origDst, targetIP netip.Addr, runner *nftablesRunner, fam nftables.TableFamily) {
+	t.Helper()
+	table, err := runner.getNFTByAddr(origDst)
+	if err != nil {
+		t.Fatalf("error getting table: %v", err)
+	}
+	nftTable, err := getTableIfExists(runner.conn, table.Proto, "nat")
+	if err != nil {
+		t.Fatalf("error getting nat table: %v", err)
+	}
+	if nftTable == nil {
+		t.Fatal("nat table not found")
+	}
+
+	ch, err := getChainFromTable(runner.conn, nftTable, "PREROUTING")
+	if err != nil {
+		t.Fatalf("error getting PREROUTING chain: %v", err)
+	}
+	if ch == nil {
+		t.Fatal("PREROUTING chain not found")
+	}
+
+	meta := svcRuleMeta(svc, origDst, targetIP)
+	rule, err := runner.findRuleByMetadata(nftTable, ch, meta)
+	if err != nil {
+		t.Fatalf("error checking if rule exists: %v", err)
+	}
+	if rule == nil {
+		t.Fatal("DNAT rule not found")
+	}
 }
 
 // svcChains verifies that the expected number of chains exist (for either IP
