@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -740,18 +741,37 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	return out, nil
 }
 
+var optDNSForwardUseRoutes = envknob.RegisterOptBool("TS_DNS_FORWARD_USE_ROUTES")
+
+// ShouldUseRoutes reports true if the DNS resolver should use the peer or system dialer
+// for forwarding DNS queries to upstream nameservers via TCP, based on the destination
+// address and configured routes. Currently, this requires maintaining a [bart.Table],
+// resulting in a slightly higher memory usage.
+//
+// It reports false if the system dialer should always be used, regardless of the
+// destination address.
+//
+// TODO(nickkhyl): Update [tsdial.Dialer] to reuse the bart.Table we create in net/tstun.Wrapper
+// to avoid having two bart tables in memory, especially on iOS. Once that's done,
+// we can get rid of the nodeAttr/control knob and always use UserDial for DNS.
+//
+// See https://github.com/tailscale/tailscale/issues/12027.
+func ShouldUseRoutes(knobs *controlknobs.Knobs) bool {
+	switch runtime.GOOS {
+	case "android", "ios":
+		// On mobile platforms with lower memory limits (e.g., 50MB on iOS),
+		// this behavior is still gated by the "user-dial-routes" nodeAttr.
+		return knobs != nil && knobs.UserDialUseRoutes.Load()
+	default:
+		// On all other platforms, it is the default behavior,
+		// but it can be overridden with the "TS_DNS_FORWARD_USE_ROUTES" env var.
+		doNotUseRoutes := optDNSForwardUseRoutes().EqualBool(false)
+		return !doNotUseRoutes
+	}
+}
+
 func (f *forwarder) getDialerType() netx.DialFunc {
-	if f.controlKnobs != nil && f.controlKnobs.UserDialUseRoutes.Load() {
-		// It is safe to use UserDial as it dials external servers without going through Tailscale
-		// and closes connections on interface change in the same way as SystemDial does,
-		// thus preventing DNS resolution issues when switching between WiFi and cellular,
-		// but can also dial an internal DNS server on the Tailnet or via a subnet router.
-		//
-		// TODO(nickkhyl): Update tsdial.Dialer to reuse the bart.Table we create in net/tstun.Wrapper
-		// to avoid having two bart tables in memory, especially on iOS. Once that's done,
-		// we can get rid of the nodeAttr/control knob and always use UserDial for DNS.
-		//
-		// See https://github.com/tailscale/tailscale/issues/12027.
+	if ShouldUseRoutes(f.controlKnobs) {
 		return f.dialer.UserDial
 	}
 	return f.dialer.SystemDial
