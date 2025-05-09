@@ -34,6 +34,22 @@ This command is currently in alpha and may change in the future.`,
 		return fs
 	}(),
 	Exec: switchProfile,
+
+	// Add remove subcommand
+	Subcommands: []*ffcli.Command{
+		{
+			Name:       "remove",
+			ShortUsage: "tailscale switch remove <id>",
+			ShortHelp:  "Remove a Tailscale account",
+			LongHelp: `"tailscale switch remove" removes a Tailscale account from the
+local machine. This does not delete the account itself, but
+it will no longer be available for switching to. You can
+add it back by logging in again.
+
+This command is currently in alpha and may change in the future.`,
+			Exec: removeProfile,
+		},
+	},
 }
 
 func init() {
@@ -185,4 +201,50 @@ func switchProfile(ctx context.Context, args []string) error {
 			os.Exit(1)
 		}
 	}
+}
+
+func removeProfile(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		outln("usage: tailscale switch remove NAME")
+		os.Exit(1)
+	}
+	cp, all, err := localClient.ProfileStatus(ctx)
+	if err != nil {
+		errf("Failed to remove account: %v\n", err)
+		os.Exit(1)
+	}
+
+	profID, ok := matchProfile(args[0], all)
+	if !ok {
+		errf("No profile named %q\n", args[0])
+		os.Exit(1)
+	}
+
+	if profID == cp.ID {
+		printf("Already on account %q\n", args[0])
+		os.Exit(0)
+	}
+
+	return localClient.DeleteProfile(ctx, profID)
+}
+
+func matchProfile(arg string, all []ipn.LoginProfile) (ipn.ProfileID, bool) {
+	// Allow matching by ID, Tailnet, or Account
+	// in that order.
+	for _, p := range all {
+		if p.ID == ipn.ProfileID(arg) {
+			return p.ID, true
+		}
+	}
+	for _, p := range all {
+		if p.NetworkProfile.DomainName == arg {
+			return p.ID, true
+		}
+	}
+	for _, p := range all {
+		if p.Name == arg {
+			return p.ID, true
+		}
+	}
+	return "", false
 }
