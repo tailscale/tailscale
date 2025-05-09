@@ -30,8 +30,8 @@ oauthSecretVolume: {}
 installCRDs: true
 
 operatorConfig:
-  # ACL tag that operator will be tagged with. Operator must be made owner of
-  # these tags
+  # ACL tags that operator's Tailscale device will be tagged with.
+  # These tags must be the exact same tags that the operator's OAuth client creds were tagged with.
   # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
   # Multiple tags are defined as array items and passed to the operator as a comma-separated string
   defaultTags:
@@ -92,8 +92,8 @@ proxyConfig:
     # used.
     tag: ""
     digest: ""
-  # ACL tag that operator will tag proxies with. Operator must be made owner of
-  # these tags
+  # ACL tags that operator will tag proxies with.
+  # These tags must be either the tags that the operator's OAuth client creds were tagged with or tags owned by those tags.
   # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
   # Multiple tags can be passed as a comma-separated string i.e 'tag:k8s-proxies,tag:prod'.
   # Note that if you pass multiple tags to this field via `--set` flag to helm upgrade/install commands you must escape the comma (for example, "tag:k8s-proxies\,tag:prod"). See https://github.com/helm/helm/issues/1556
