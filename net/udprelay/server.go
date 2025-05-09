@@ -21,20 +21,21 @@ import (
 	"go4.org/mem"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 )
 
 const (
 	// defaultBindLifetime is somewhat arbitrary. We attempt to account for
-	// high latency between client and Server, and high latency between
-	// clients over side channels, e.g. DERP, used to exchange ServerEndpoint
-	// details. So, a total of 3 paths with potentially high latency. Using a
-	// conservative 10s "high latency" bounds for each path we end up at a 30s
-	// total. It is worse to set an aggressive bind lifetime as this may lead
-	// to path discovery failure, vs dealing with a slight increase of Server
-	// resource utilization (VNIs, RAM, etc) while tracking endpoints that won't
-	// bind.
+	// high latency between client and [Server], and high latency between
+	// clients over side channels, e.g. DERP, used to exchange
+	// [endpoint.ServerEndpoint] details. So, a total of 3 paths with
+	// potentially high latency. Using a conservative 10s "high latency" bounds
+	// for each path we end up at a 30s total. It is worse to set an aggressive
+	// bind lifetime as this may lead to path discovery failure, vs dealing with
+	// a slight increase of [Server] resource utilization (VNIs, RAM, etc) while
+	// tracking endpoints that won't bind.
 	defaultBindLifetime        = time.Second * 30
 	defaultSteadyStateLifetime = time.Minute * 5
 )
@@ -82,49 +83,8 @@ func newPairOfDiscoPubKeys(discoA, discoB key.DiscoPublic) pairOfDiscoPubKeys {
 	return pair
 }
 
-// ServerEndpoint contains the Server's endpoint details.
-type ServerEndpoint struct {
-	// ServerDisco is the Server's Disco public key used as part of the 3-way
-	// bind handshake. Server will use the same ServerDisco for its lifetime.
-	// ServerDisco value in combination with LamportID value represents a
-	// unique ServerEndpoint allocation.
-	ServerDisco key.DiscoPublic
-
-	// LamportID is unique and monotonically non-decreasing across
-	// ServerEndpoint allocations for the lifetime of Server. It enables clients
-	// to dedup and resolve allocation event order. Clients may race to allocate
-	// on the same Server, and signal ServerEndpoint details via alternative
-	// channels, e.g. DERP. Additionally, Server.AllocateEndpoint() requests may
-	// not result in a new allocation depending on existing server-side endpoint
-	// state. Therefore, where clients have local, existing state that contains
-	// ServerDisco and LamportID values matching a newly learned endpoint, these
-	// can be considered one and the same. If ServerDisco is equal, but
-	// LamportID is unequal, LamportID comparison determines which
-	// ServerEndpoint was allocated most recently.
-	LamportID uint64
-
-	// AddrPorts are the IP:Port candidate pairs the Server may be reachable
-	// over.
-	AddrPorts []netip.AddrPort
-
-	// VNI (Virtual Network Identifier) is the Geneve header VNI the Server
-	// will use for transmitted packets, and expects for received packets
-	// associated with this endpoint.
-	VNI uint32
-
-	// BindLifetime is amount of time post-allocation the Server will consider
-	// the endpoint active while it has yet to be bound via 3-way bind handshake
-	// from both client parties.
-	BindLifetime tstime.GoDuration
-
-	// SteadyStateLifetime is the amount of time post 3-way bind handshake from
-	// both client parties the Server will consider the endpoint active lacking
-	// bidirectional data flow.
-	SteadyStateLifetime tstime.GoDuration
-}
-
-// serverEndpoint contains Server-internal ServerEndpoint state. serverEndpoint
-// methods are not thread-safe.
+// serverEndpoint contains Server-internal [endpoint.ServerEndpoint] state.
+// serverEndpoint methods are not thread-safe.
 type serverEndpoint struct {
 	// discoPubKeys contains the key.DiscoPublic of the served clients. The
 	// indexing of this array aligns with the following fields, e.g.
@@ -308,10 +268,11 @@ func (e *serverEndpoint) isBound() bool {
 		e.handshakeState[1] == disco.BindUDPRelayHandshakeStateAnswerReceived
 }
 
-// NewServer constructs a Server listening on 0.0.0.0:'port'. IPv6 is not yet
+// NewServer constructs a [Server] listening on 0.0.0.0:'port'. IPv6 is not yet
 // supported. Port may be 0, and what ultimately gets bound is returned as
 // 'boundPort'. Supplied 'addrs' are joined with 'boundPort' and returned as
-// ServerEndpoint.AddrPorts in response to Server.AllocateEndpoint() requests.
+// [endpoint.ServerEndpoint.AddrPorts] in response to Server.AllocateEndpoint()
+// requests.
 //
 // TODO: IPv6 support
 // TODO: dynamic addrs:port discovery
@@ -454,30 +415,30 @@ func (s *Server) packetReadLoop() {
 
 var ErrServerClosed = errors.New("server closed")
 
-// AllocateEndpoint allocates a [ServerEndpoint] for the provided pair of
-// [key.DiscoPublic]'s. If an allocation already exists for discoA and discoB it
-// is returned without modification/reallocation. AllocateEndpoint returns
+// AllocateEndpoint allocates an [endpoint.ServerEndpoint] for the provided pair
+// of [key.DiscoPublic]'s. If an allocation already exists for discoA and discoB
+// it is returned without modification/reallocation. AllocateEndpoint returns
 // [ErrServerClosed] if the server has been closed.
-func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (ServerEndpoint, error) {
+func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.ServerEndpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return ServerEndpoint{}, ErrServerClosed
+		return endpoint.ServerEndpoint{}, ErrServerClosed
 	}
 
 	if discoA.Compare(s.discoPublic) == 0 || discoB.Compare(s.discoPublic) == 0 {
-		return ServerEndpoint{}, fmt.Errorf("client disco equals server disco: %s", s.discoPublic.ShortString())
+		return endpoint.ServerEndpoint{}, fmt.Errorf("client disco equals server disco: %s", s.discoPublic.ShortString())
 	}
 
 	pair := newPairOfDiscoPubKeys(discoA, discoB)
 	e, ok := s.byDisco[pair]
 	if ok {
 		// Return the existing allocation. Clients can resolve duplicate
-		// [ServerEndpoint]'s via [ServerEndpoint.LamportID].
+		// [endpoint.ServerEndpoint]'s via [endpoint.ServerEndpoint.LamportID].
 		//
 		// TODO: consider ServerEndpoint.BindLifetime -= time.Now()-e.allocatedAt
 		// to give the client a more accurate picture of the bind window.
-		return ServerEndpoint{
+		return endpoint.ServerEndpoint{
 			ServerDisco:         s.discoPublic,
 			AddrPorts:           s.addrPorts,
 			VNI:                 e.vni,
@@ -488,7 +449,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (ServerEndpoin
 	}
 
 	if len(s.vniPool) == 0 {
-		return ServerEndpoint{}, errors.New("VNI pool exhausted")
+		return endpoint.ServerEndpoint{}, errors.New("VNI pool exhausted")
 	}
 
 	s.lamportID++
@@ -506,7 +467,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (ServerEndpoin
 	s.byDisco[pair] = e
 	s.byVNI[e.vni] = e
 
-	return ServerEndpoint{
+	return endpoint.ServerEndpoint{
 		ServerDisco:         s.discoPublic,
 		AddrPorts:           s.addrPorts,
 		VNI:                 e.vni,
