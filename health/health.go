@@ -362,6 +362,18 @@ func (t *Tracker) SetMetricsRegistry(reg *usermetric.Registry) {
 	}))
 }
 
+// IsUnhealthy reports whether the current state is unhealthy because the given
+// warnable is set.
+func (t *Tracker) IsUnhealthy(w *Warnable) bool {
+	if t.nil() {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, exists := t.warnableVal[w]
+	return exists
+}
+
 // SetUnhealthy sets a warningState for the given Warnable with the provided Args, and should be
 // called when a Warnable becomes unhealthy, or its unhealthy status needs to be updated.
 // SetUnhealthy takes ownership of args. The args can be nil if no additional information is

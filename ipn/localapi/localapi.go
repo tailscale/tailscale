@@ -62,6 +62,13 @@ import (
 	"tailscale.com/wgengine/magicsock"
 )
 
+var (
+	metricInvalidRequests   = clientmetric.NewCounter("localapi_invalid_requests")
+	metricDebugMetricsCalls = clientmetric.NewCounter("localapi_debugmetric_requests")
+	metricUserMetricsCalls  = clientmetric.NewCounter("localapi_usermetric_requests")
+	metricBugReportRequests = clientmetric.NewCounter("localapi_bugreport_requests")
+)
+
 type LocalAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
 
 // handler is the set of LocalAPI handlers, keyed by the part of the
@@ -423,6 +430,8 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 
 	// NOTE(andrew): if we have anything else we want to do while recording
 	// a bugreport, we can add it here.
+
+	metricBugReportRequests.Add(1)
 
 	// Read from the client; this will also return when the client closes
 	// the connection.
@@ -2622,14 +2631,6 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
 	}
 }
-
-var (
-	metricInvalidRequests = clientmetric.NewCounter("localapi_invalid_requests")
-
-	// User-visible LocalAPI endpoints.
-	metricDebugMetricsCalls = clientmetric.NewCounter("localapi_debugmetric_requests")
-	metricUserMetricsCalls  = clientmetric.NewCounter("localapi_usermetric_requests")
-)
 
 // serveSuggestExitNode serves a POST endpoint for returning a suggested exit node.
 func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
