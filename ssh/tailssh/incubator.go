@@ -12,11 +12,13 @@
 package tailssh
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"log/syslog"
 	"os"
@@ -29,6 +31,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/pkg/sftp"
@@ -70,11 +73,36 @@ var maybeStartLoginSession = func(dlogf logger.Logf, ia incubatorArgs) (close fu
 	return nil
 }
 
+// tryExecInDir tries to run a command in dir and returns nil if it succeeds.
+// Otherwise, it returns a filesystem error or a timeout error if the command
+// took too long.
+func tryExecInDir(ctx context.Context, dir string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Assume that the following executables exist, are executable, and
+	// immediately return.
+	var name string
+	switch runtime.GOOS {
+	case "windows":
+		windir := os.Getenv("windir")
+		name = filepath.Join(windir, "system32", "doskey.exe")
+	default:
+		name = "/bin/true"
+	}
+
+	cmd := exec.CommandContext(ctx, name)
+	cmd.Dir = dir
+	return cmd.Run()
+}
+
 // newIncubatorCommand returns a new exec.Cmd configured with
 // `tailscaled be-child ssh` as the entrypoint.
 //
-// If ss.srv.tailscaledPath is empty, this method is equivalent to
-// exec.CommandContext.
+// If ss.srv.tailscaledPath is empty, this method is almost equivalent to
+// exec.CommandContext. It will refuse to run in SFTP-mode. It will simulate the
+// behavior of SSHD when by falling back to the root directory if it cannot run
+// a command in the user’s home directory.
 //
 // The returned Cmd.Env is guaranteed to be nil; the caller populates it.
 func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err error) {
@@ -104,7 +132,35 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		loginShell := ss.conn.localUser.LoginShell()
 		args := shellArgs(isShell, ss.RawCommand())
 		logf("directly running %s %q", loginShell, args)
-		return exec.CommandContext(ss.ctx, loginShell, args...), nil
+		cmd = exec.CommandContext(ss.ctx, loginShell, args...)
+
+		// While running directly instead of using `tailscaled be-child`,
+		// do what sshd does by running inside the home directory,
+		// falling back to the root directory it doesn't have permissions.
+		// This can happen if the system has networked home directories,
+		// i.e. NFS or SMB, which enable root-squashing by default.
+		cmd.Dir = ss.conn.localUser.HomeDir
+		err := tryExecInDir(ss.ctx, cmd.Dir)
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			// /bin/true might not be installed on a barebones system,
+			// so we assume that the home directory does not exist.
+			cmd.Dir = "/"
+		case errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist):
+			// Ensure that cmd.Dir is the source of the error.
+			var pathErr *fs.PathError
+			if errors.As(err, &pathErr) && pathErr.Path == cmd.Dir {
+				// If we cannot run loginShell in localUser.HomeDir,
+				// we will try to run this command in the root directory.
+				cmd.Dir = "/"
+			} else {
+				return nil, err
+			}
+		case err != nil:
+			return nil, err
+		}
+
+		return cmd, nil
 	}
 
 	lu := ss.conn.localUser
@@ -178,7 +234,10 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		}
 	}
 
-	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...), nil
+	cmd = exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
+	// The incubator will chdir into the home directory after it drops privileges.
+	cmd.Dir = "/"
+	return cmd, nil
 }
 
 var debugIncubator bool
@@ -777,7 +836,6 @@ func (ss *sshSession) launchProcess() error {
 	}
 
 	cmd := ss.cmd
-	cmd.Dir = "/"
 	cmd.Env = envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {
