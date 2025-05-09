@@ -67,8 +67,35 @@ func TestRecorder(t *testing.T) {
 		expectEvents(t, fr, []string{expectedEvent})
 	})
 
-	t.Run("observe_Ready_true_status_condition_for_a_valid_spec", func(t *testing.T) {
+	t.Run("conflicting_service_account_config_marked_as_invalid", func(t *testing.T) {
+		mustCreate(t, fc, &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pre-existing-sa",
+				Namespace: tsNamespace,
+			},
+		})
+
 		tsr.Spec.EnableUI = true
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = "pre-existing-sa"
+		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
+			t.Spec = tsr.Spec
+		})
+
+		expectReconciled(t, reconciler, "", tsr.Name)
+
+		msg := `Recorder is invalid: custom ServiceAccount name "pre-existing-sa" specified but conflicts with a pre-existing ServiceAccount in the tailscale namespace`
+		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, metav1.ConditionFalse, reasonRecorderInvalid, msg, 0, cl, zl.Sugar())
+		expectEqual(t, fc, tsr)
+		if expected := 0; reconciler.recorders.Len() != expected {
+			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
+		}
+
+		expectedEvent := "Warning RecorderInvalid " + msg
+		expectEvents(t, fr, []string{expectedEvent})
+	})
+
+	t.Run("observe_Ready_true_status_condition_for_a_valid_spec", func(t *testing.T) {
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = ""
 		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
 			t.Spec = tsr.Spec
 		})
@@ -83,7 +110,7 @@ func TestRecorder(t *testing.T) {
 		expectRecorderResources(t, fc, tsr, true)
 	})
 
-	t.Run("modify_service_account_config", func(t *testing.T) {
+	t.Run("valid_service_account_config", func(t *testing.T) {
 		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = "test-sa"
 		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = map[string]string{
 			"test": "test",
