@@ -394,7 +394,18 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})
 		}
 		rcfg.Routes["."] = defaultRoutes
-		ocfg.SearchDomains = append(ocfg.SearchDomains, baseCfg.SearchDomains...)
+
+		seen := map[dnsname.FQDN]bool{}
+		SearchDomains := append(ocfg.SearchDomains, baseCfg.SearchDomains...)
+		// deduplicate our list of SearchDomains
+		ocfg.SearchDomains = []dnsname.FQDN{}
+		for _, sd := range SearchDomains {
+			if seen[sd] {
+				continue
+			}
+			ocfg.SearchDomains = append(ocfg.SearchDomains, sd)
+			seen[sd] = true
+		}
 	}
 
 	return rcfg, ocfg, nil
