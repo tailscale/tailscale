@@ -64,6 +64,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/ipset"
@@ -4908,7 +4909,6 @@ func (b *LocalBackend) authReconfig() {
 	nm := cn.NetMap()
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := cn.SelfHasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
-	userDialUseRoutes := cn.SelfHasCap(tailcfg.NodeAttrUserDialUseRoutes)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
 	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
@@ -4969,7 +4969,7 @@ func (b *LocalBackend) authReconfig() {
 	}
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
 
-	if userDialUseRoutes {
+	if resolver.ShouldUseRoutes(b.ControlKnobs()) {
 		b.dialer.SetRoutes(rcfg.Routes, rcfg.LocalRoutes)
 	} else {
 		b.dialer.SetRoutes(nil, nil)
