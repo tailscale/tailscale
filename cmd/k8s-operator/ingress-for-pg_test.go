@@ -265,8 +265,9 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	if err == nil {
 		t.Fatalf("svc:my-svc not cleaned up")
 	}
-	var errResp *tailscale.ErrResponse
-	if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
+	// var errResp *tailscale.ErrResponse
+	errResp := &tailscale.ErrResponse{}
+	if !errors.As(err, errResp) || errResp.Status != http.StatusNotFound {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
