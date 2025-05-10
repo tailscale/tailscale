@@ -5,28 +5,44 @@
 package ippool
 
 import (
+	"context"
 	"errors"
 	"log"
 	"math/big"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/gaissmai/bart"
 	"go4.org/netipx"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsnet"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 )
 
 var ErrNoIPsAvailable = errors.New("no IPs available")
 
-type IPPool struct {
+type IPPool interface {
+	StartConsensus(context.Context, *tsnet.Server, string) error
+	StopConsensus(context.Context) error
+	DomainForIP(tailcfg.NodeID, netip.Addr, time.Time) (string, bool)
+	IPForDomain(tailcfg.NodeID, string) (netip.Addr, error)
+}
+
+type SingleMachineIPPool struct {
 	perPeerMap syncs.Map[tailcfg.NodeID, *perPeerState]
 	IPSet      *netipx.IPSet
 }
 
-func (ipp *IPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr) (string, bool) {
+func (*SingleMachineIPPool) StartConsensus(context.Context, *tsnet.Server, string) error {
+	return nil
+}
+func (*SingleMachineIPPool) StopConsensus(context.Context) error {
+	return nil
+}
+func (ipp *SingleMachineIPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr, _ time.Time) (string, bool) {
 	ps, ok := ipp.perPeerMap.Load(from)
 	if !ok {
 		log.Printf("handleTCPFlow: no perPeerState for %v", from)
@@ -40,7 +56,7 @@ func (ipp *IPPool) DomainForIP(from tailcfg.NodeID, addr netip.Addr) (string, bo
 	return domain, ok
 }
 
-func (ipp *IPPool) IPForDomain(from tailcfg.NodeID, domain string) (netip.Addr, error) {
+func (ipp *SingleMachineIPPool) IPForDomain(from tailcfg.NodeID, domain string) (netip.Addr, error) {
 	npps := &perPeerState{
 		ipset: ipp.IPSet,
 	}
