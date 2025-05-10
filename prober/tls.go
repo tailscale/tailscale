@@ -4,7 +4,6 @@
 package prober
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"golang.org/x/crypto/ocsp"
 	"tailscale.com/util/multierr"
 )
 
@@ -106,50 +104,49 @@ func validateConnState(ctx context.Context, cs *tls.ConnectionState) (returnerr 
 		}
 	}
 
-	if len(leafCert.OCSPServer) == 0 {
-		errs = append(errs, fmt.Errorf("no OCSP server presented in leaf cert for %v", leafCert.Subject))
-		return
-	}
-
-	ocspResp, err := getOCSPResponse(ctx, leafCert.OCSPServer[0], leafCert, issuerCert)
-	if err != nil {
-		errs = append(errs, errors.Wrapf(err, "OCSP verification failed for %v", leafCert.Subject))
-		return
-	}
-
-	if ocspResp.Status == ocsp.Unknown {
-		errs = append(errs, fmt.Errorf("unknown OCSP verification status for %v", leafCert.Subject))
-	}
-
-	if ocspResp.Status == ocsp.Revoked {
-		errs = append(errs, fmt.Errorf("cert for %v has been revoked on %v, reason: %v", leafCert.Subject, ocspResp.RevokedAt, ocspResp.RevocationReason))
+	// Only check CRL if a distribution point is present in the leaf cert.
+	if len(leafCert.CRLDistributionPoints) > 0 {
+		revoked, err := checkCertCRL(ctx, leafCert.CRLDistributionPoints[0], leafCert, issuerCert)
+		if revoked && err != nil {
+			errs = append(errs, errors.Wrapf(err, "CRL verification failed for %v", leafCert.Subject))
+		}
 	}
 	return
 }
 
-func getOCSPResponse(ctx context.Context, ocspServer string, leafCert, issuerCert *x509.Certificate) (*ocsp.Response, error) {
-	reqb, err := ocsp.CreateRequest(leafCert, issuerCert, nil)
+func checkCertCRL(ctx context.Context, crlURL string, leafCert, issuerCert *x509.Certificate) (bool, error) {
+	hreq, err := http.NewRequestWithContext(ctx, "GET", crlURL, nil)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not create OCSP request")
+		return false, errors.Wrap(err, "could not create CRL GET request")
 	}
-	hreq, err := http.NewRequestWithContext(ctx, "POST", ocspServer, bytes.NewReader(reqb))
-	if err != nil {
-		return nil, errors.Wrap(err, "could not create OCSP POST request")
-	}
-	hreq.Header.Add("Content-Type", "application/ocsp-request")
-	hreq.Header.Add("Accept", "application/ocsp-response")
 	hresp, err := http.DefaultClient.Do(hreq)
 	if err != nil {
-		return nil, errors.Wrap(err, "OCSP request failed")
+		return false, errors.Wrap(err, "CRL request failed")
 	}
 	defer hresp.Body.Close()
 	if hresp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ocsp: non-200 status code from OCSP server: %s", hresp.Status)
+		return false, fmt.Errorf("crl: non-200 status code from CRL server: %s", hresp.Status)
 	}
 	lr := io.LimitReader(hresp.Body, 10<<20) // 10MB
-	ocspB, err := io.ReadAll(lr)
+	crlB, err := io.ReadAll(lr)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	return ocsp.ParseResponse(ocspB, issuerCert)
+
+	crl, err := x509.ParseRevocationList(crlB)
+	if err != nil {
+		return false, errors.Wrap(err, "could not parse CRL")
+	}
+
+	if err := crl.CheckSignatureFrom(issuerCert); err != nil {
+		return false, errors.Wrap(err, "could not verify CRL signature")
+	}
+
+	for _, revoked := range crl.RevokedCertificateEntries {
+		if revoked.SerialNumber.Cmp(leafCert.SerialNumber) == 0 {
+			return true, fmt.Errorf("cert for %v has been revoked on %v, reason: %v", leafCert.Subject, revoked.RevocationTime, revoked.ReasonCode)
+		}
+	}
+
+	return false, nil
 }
