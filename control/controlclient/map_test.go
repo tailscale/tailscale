@@ -1150,7 +1150,7 @@ func TestNetmapHealthIntegration(t *testing.T) {
 	nm := ms.netmapForResponse(&tailcfg.MapResponse{
 		Health: []string{"Test message"},
 	})
-	ht.SetControlHealth(nm.ControlHealth)
+	ht.SetControlHealth(nm.DisplayMessages)
 
 	state := ht.CurrentState()
 	warning, ok := state.Warnings["control-health"]
@@ -1164,7 +1164,7 @@ func TestNetmapHealthIntegration(t *testing.T) {
 	if got, want := warning.Severity, health.SeverityMedium; got != want {
 		t.Errorf("warning.Severity = %s, want %s", got, want)
 	}
-	if got, want := warning.Text, "The coordination server is reporting an health issue: Test message"; got != want {
+	if got, want := warning.Text, "The coordination server is reporting a health issue: Test message"; got != want {
 		t.Errorf("warning.Text = %q, want %q", got, want)
 	}
 }

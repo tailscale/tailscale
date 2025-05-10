@@ -238,16 +238,6 @@ var applyDiskConfigWarnable = Register(&Warnable{
 	},
 })
 
-// controlHealthWarnable is a Warnable that warns the user that the coordination server is reporting an health issue.
-var controlHealthWarnable = Register(&Warnable{
-	Code:     "control-health",
-	Title:    "Coordination server reports an issue",
-	Severity: SeverityMedium,
-	Text: func(args Args) string {
-		return fmt.Sprintf("The coordination server is reporting an health issue: %v", args[ArgError])
-	},
-})
-
 // warmingUpWarnableDuration is the duration for which the warmingUpWarnable is reported by the backend after the user
 // has changed ipnWantRunning to true from false.
 const warmingUpWarnableDuration = 5 * time.Second
