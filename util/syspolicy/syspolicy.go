@@ -90,6 +90,13 @@ func GetPreferenceOption(name Key) (setting.PreferenceOption, error) {
 	return getCurrentPolicySettingValue(name, setting.ShowChoiceByPolicy)
 }
 
+// GetPreferenceOptionOrDefault is like [GetPreferenceOption], but allows
+// specifying a default value to return if the policy setting is not configured.
+// It can be used in situations where "user-decides" is not the default.
+func GetPreferenceOptionOrDefault(name Key, defaultValue setting.PreferenceOption) (setting.PreferenceOption, error) {
+	return getCurrentPolicySettingValue(name, defaultValue)
+}
+
 // GetVisibility loads a policy from the registry that can be managed
 // by an enterprise policy management system and describes show/hide decisions
 // for UI elements. The registry value should be a string set to "show" (return
