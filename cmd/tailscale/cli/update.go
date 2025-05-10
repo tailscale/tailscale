@@ -95,7 +95,13 @@ func confirmUpdate(ver string) bool {
 func promptYesNo(msg string) bool {
 	fmt.Print(msg + " [y/n] ")
 	var resp string
-	fmt.Scanln(&resp)
+	_, err := fmt.Scanln(&resp)
+	if err != nil {
+		if err.Error() == "unexpected newline" {
+			return true // newline is "yes"
+		}
+		return false
+	}
 	resp = strings.ToLower(resp)
 	switch resp {
 	case "y", "yes", "sure":
