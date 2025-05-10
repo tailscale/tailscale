@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"time"
 
@@ -74,6 +75,9 @@ func main() {
 		}
 		for _, s := range st.bad {
 			log.Printf("bad: %s", s)
+		}
+		if len(st.bad) > 0 {
+			os.Exit(1)
 		}
 		return
 	}
