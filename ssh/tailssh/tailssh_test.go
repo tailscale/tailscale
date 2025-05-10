@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -48,7 +47,6 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
-	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
@@ -230,7 +228,7 @@ func TestMatchRule(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &conn{
 				info: tt.ci,
-				srv:  &server{logf: t.Logf},
+				srv:  &server{logf: tstest.WhileTestRunningLogger(t)},
 			}
 			got, gotUser, gotAcceptEnv, err := c.matchRule(tt.rule)
 			if err != tt.wantErr {
@@ -349,7 +347,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &conn{
 				info: tt.ci,
-				srv:  &server{logf: t.Logf},
+				srv:  &server{logf: tstest.WhileTestRunningLogger(t)},
 			}
 			got, gotUser, gotAcceptEnv, match := c.evalSSHPolicy(tt.policy)
 			if match != tt.wantMatch {
@@ -491,7 +489,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 	})
 
 	s := &server{
-		logf: t.Logf,
+		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
 			matchingRule: newSSHRule(
@@ -553,7 +551,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s.logf = t.Logf
+			s.logf = tstest.WhileTestRunningLogger(t)
 			tstest.Replace(t, &handler, tt.handler)
 			sc, dc := memnet.NewTCPConn(src, dst, 1024)
 			var wg sync.WaitGroup
@@ -621,7 +619,7 @@ func TestMultipleRecorders(t *testing.T) {
 	})
 
 	s := &server{
-		logf: t.Logf,
+		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
 			matchingRule: newSSHRule(
@@ -714,7 +712,7 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	})
 
 	s := &server{
-		logf: t.Logf,
+		logf: tstest.WhileTestRunningLogger(t),
 		lb: &localState{
 			sshEnabled: true,
 			matchingRule: newSSHRule(
@@ -887,13 +885,15 @@ func TestSSHAuthFlow(t *testing.T) {
 		},
 	}
 	s := &server{
-		logf: log.Printf,
+		logf: tstest.WhileTestRunningLogger(t),
 	}
 	defer s.Shutdown()
 	src, dst := must.Get(netip.ParseAddrPort("100.100.100.101:2231")), must.Get(netip.ParseAddrPort("100.100.100.102:22"))
 	for _, tc := range tests {
 		for _, authMethods := range [][]string{nil, {"publickey", "password"}, {"password", "publickey"}} {
 			t.Run(fmt.Sprintf("%s-skip-none-auth-%v", tc.name, strings.Join(authMethods, "-then-")), func(t *testing.T) {
+				s.logf = tstest.WhileTestRunningLogger(t)
+
 				sc, dc := memnet.NewTCPConn(src, dst, 1024)
 				s.lb = tc.state
 				sshUser := "alice"
@@ -1036,7 +1036,7 @@ func TestSSHAuthFlow(t *testing.T) {
 }
 
 func TestSSH(t *testing.T) {
-	var logf logger.Logf = t.Logf
+	logf := tstest.WhileTestRunningLogger(t)
 	sys := tsd.NewSystem()
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
