@@ -557,6 +557,14 @@ func (n *fakeIPTablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	return errors.New("not implemented")
 }
 
+func (n *fakeIPTablesRunner) EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	return errors.New("not implemented")
+}
+
+func (n *fakeIPTablesRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
+	return errors.New("not implemented")
+}
+
 func (n *fakeIPTablesRunner) addBase4(tunname string) error {
 	curIPT := n.ipt4
 	newRules := []struct{ chain, rule string }{

@@ -441,6 +441,7 @@ authLoop:
 	// egressSvcsErrorChan will get an error sent to it if this containerboot instance is configured to expose 1+
 	// egress services in HA mode and errored.
 	var egressSvcsErrorChan = make(chan error)
+	var ingressSvcsErrorChan = make(chan error)
 	defer t.Stop()
 	// resetTimer resets timer for when to next attempt to resolve the DNS
 	// name for the proxy configured with TS_EXPERIMENTAL_DEST_DNS_NAME. The
@@ -694,6 +695,23 @@ runLoop:
 							}
 						}()
 					}
+					ip := ingressProxy{}
+					if cfg.IngressProxiesCfgPath != "" {
+						log.Printf("configuring ingress proxy using configuration file at %s", cfg.IngressProxiesCfgPath)
+						opts := ingressProxyOpts{
+							cfgPath:     cfg.IngressProxiesCfgPath,
+							nfr:         nfr,
+							kc:          kc,
+							stateSecret: cfg.KubeSecret,
+							podIPv4:     cfg.PodIPv4,
+							podIPv6:     cfg.PodIPv6,
+						}
+						go func() {
+							if err := ip.run(ctx, opts); err != nil {
+								ingressSvcsErrorChan <- err
+							}
+						}()
+					}
 
 					// Wait on tailscaled process. It won't be cleaned up by default when the
 					// container exits as it is not PID1. TODO (irbekrm): perhaps we can replace the
@@ -738,6 +756,8 @@ runLoop:
 			resetTimer(false)
 		case e := <-egressSvcsErrorChan:
 			return fmt.Errorf("egress proxy failed: %v", e)
+		case e := <-ingressSvcsErrorChan:
+			return fmt.Errorf("ingress proxy failed: %v", e)
 		}
 	}
 	wg.Wait()

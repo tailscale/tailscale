@@ -107,6 +107,12 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 	if err != nil {
 		return err
 	}
+	rule := dnatRuleForChain(nat, preroutingCh, origDst, dst, nil)
+	n.conn.InsertRule(rule)
+	return n.conn.Flush()
+}
+
+func dnatRuleForChain(t *nftables.Table, ch *nftables.Chain, origDst, dst netip.Addr, meta []byte) *nftables.Rule {
 	var daddrOffset, fam, dadderLen uint32
 	if origDst.Is4() {
 		daddrOffset = 16
@@ -117,9 +123,9 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 		dadderLen = 16
 		fam = unix.NFPROTO_IPV6
 	}
-	dnatRule := &nftables.Rule{
-		Table: nat,
-		Chain: preroutingCh,
+	rule := &nftables.Rule{
+		Table: t,
+		Chain: ch,
 		Exprs: []expr.Any{
 			&expr.Payload{
 				DestRegister: 1,
@@ -143,8 +149,10 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 			},
 		},
 	}
-	n.conn.InsertRule(dnatRule)
-	return n.conn.Flush()
+	if len(meta) > 0 {
+		rule.UserData = meta
+	}
+	return rule
 }
 
 // DNATWithLoadBalancer currently just forwards all traffic destined for origDst
@@ -555,6 +563,8 @@ type NetfilterRunner interface {
 	EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error
 
 	DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error
+	EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error
+	DeleteDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error
 
 	DeleteSvc(svc, tun string, targetIPs []netip.Addr, pm []PortMap) error
 

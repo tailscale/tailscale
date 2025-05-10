@@ -64,16 +64,17 @@ type settings struct {
 	// when setting up rules to proxy cluster traffic to cluster ingress
 	// target.
 	// Deprecated: use PodIPv4, PodIPv6 instead to support dual stack clusters
-	PodIP                string
-	PodIPv4              string
-	PodIPv6              string
-	PodUID               string
-	HealthCheckAddrPort  string
-	LocalAddrPort        string
-	MetricsEnabled       bool
-	HealthCheckEnabled   bool
-	DebugAddrPort        string
-	EgressProxiesCfgPath string
+	PodIP                 string
+	PodIPv4               string
+	PodIPv6               string
+	PodUID                string
+	HealthCheckAddrPort   string
+	LocalAddrPort         string
+	MetricsEnabled        bool
+	HealthCheckEnabled    bool
+	DebugAddrPort         string
+	EgressProxiesCfgPath  string
+	IngressProxiesCfgPath string
 	// CertShareMode is set for Kubernetes Pods running cert share mode.
 	// Possible values are empty (containerboot doesn't run any certs
 	// logic),  'ro' (for Pods that shold never attempt to issue/renew
@@ -114,6 +115,7 @@ func configFromEnv() (*settings, error) {
 		HealthCheckEnabled:                    defaultBool("TS_ENABLE_HEALTH_CHECK", false),
 		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
 		EgressProxiesCfgPath:                  defaultEnv("TS_EGRESS_PROXIES_CONFIG_PATH", ""),
+		IngressProxiesCfgPath:                 defaultEnv("TS_INGRESS_PROXIES_CONFIG_PATH", ""),
 		PodUID:                                defaultEnv("POD_UID", ""),
 	}
 	podIPs, ok := os.LookupEnv("POD_IPS")
@@ -219,6 +221,9 @@ func (s *settings) validate() error {
 	if s.EgressProxiesCfgPath != "" && !(s.InKubernetes && s.KubeSecret != "") {
 		return errors.New("TS_EGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes")
 	}
+	if s.IngressProxiesCfgPath != "" && !(s.InKubernetes && s.KubeSecret != "") {
+		return errors.New("TS_INGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes")
+	}
 	return nil
 }
 
@@ -308,7 +313,7 @@ func isOneStepConfig(cfg *settings) bool {
 // as an L3 proxy, proxying to an endpoint provided via one of the config env
 // vars.
 func isL3Proxy(cfg *settings) bool {
-	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressProxiesCfgPath != ""
+	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressProxiesCfgPath != "" || cfg.IngressProxiesCfgPath != ""
 }
 
 // hasKubeStateStore returns true if the state must be stored in a Kubernetes
