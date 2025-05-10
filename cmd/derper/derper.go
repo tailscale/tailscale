@@ -58,6 +58,7 @@ var (
 	dev         = flag.Bool("dev", false, "run in localhost development mode (overrides -a)")
 	versionFlag = flag.Bool("version", false, "print version and exit")
 	addr        = flag.String("a", ":443", "server HTTP/HTTPS listen address, in form \":port\", \"ip:port\", or for IPv6 \"[ip]:port\". If the IP is omitted, it defaults to all interfaces. Serves HTTPS if the port is 443 and/or -certmode is manual, otherwise HTTP.")
+	meshAddr    = flag.String("mesh-addr", "", "optional, Specify a separate http/https listen address for mesh connections, if unset, mesh will use address specified in 'a'")
 	httpPort    = flag.Int("http-port", 80, "The port on which to serve HTTP. Set to -1 to disable. The listener is bound to the same IP (if any) as specified in the -a flag.")
 	stunPort    = flag.Int("stun-port", 3478, "The UDP port on which to serve STUN. The listener is bound to the same IP (if any) as specified in the -a flag.")
 	configPath  = flag.String("c", "", "config file path")
@@ -203,6 +204,13 @@ func main() {
 	s.SetVerifyClientURL(*verifyClientURL)
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
 	s.SetTCPWriteTimeout(*tcpWriteTimeout)
+	if *meshAddr != "" {
+		_, port, err := net.SplitHostPort(*meshAddr)
+		if err != nil {
+			log.Fatalf("failed to parse mesh port addr %s: %v", *meshAddr, err)
+		}
+		s.SetMeshPort(port)
+	}
 
 	var meshKey string
 	if *dev {
@@ -345,9 +353,23 @@ func main() {
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
+	var meshSrv *http.Server
+	if *meshAddr != "" {
+		// Same as httpsrv above, different port.
+		meshSrv = &http.Server{
+			Addr:         *meshAddr,
+			Handler:      mux,
+			ErrorLog:     quietLogger,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+		}
+	}
 	go func() {
 		<-ctx.Done()
 		httpsrv.Shutdown(ctx)
+		if meshSrv != nil {
+			meshSrv.Shutdown(ctx)
+		}
 	}()
 
 	if serveTLS {
@@ -359,7 +381,7 @@ func main() {
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
 		getCert := httpsrv.TLSConfig.GetCertificate
-		httpsrv.TLSConfig.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		certFunc := func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			cert, err := getCert(hi)
 			if err != nil {
 				return nil, err
@@ -367,9 +389,10 @@ func main() {
 			cert.Certificate = append(cert.Certificate, s.MetaCert())
 			return cert, nil
 		}
+		httpsrv.TLSConfig.GetCertificate = certFunc
 		// Disable TLS 1.0 and 1.1, which are obsolete and have security issues.
 		httpsrv.TLSConfig.MinVersion = tls.VersionTLS12
-		httpsrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.TLS != nil {
 				label := "unknown"
 				switch r.TLS.Version {
@@ -389,6 +412,17 @@ func main() {
 
 			mux.ServeHTTP(w, r)
 		})
+		httpsrv.Handler = handlerFunc
+
+		if meshSrv != nil {
+			go func() {
+				meshSrv.TLSConfig = certManager.TLSConfig()
+				meshSrv.TLSConfig.GetCertificate = certFunc
+				meshSrv.TLSConfig.MinVersion = tls.VersionTLS12
+				meshSrv.Handler = handlerFunc
+				err = rateLimitedListenAndServeTLS(meshSrv, &lc)
+			}()
+		}
 		if *httpPort > -1 {
 			go func() {
 				port80mux := http.NewServeMux()
@@ -420,6 +454,17 @@ func main() {
 		}
 		err = rateLimitedListenAndServeTLS(httpsrv, &lc)
 	} else {
+		if meshSrv != nil {
+			go func() {
+				log.Printf("derper: starting mesh on %s", *meshAddr)
+				var lnm net.Listener
+				lnm, err = lc.Listen(context.Background(), "tcp", *meshAddr)
+				if err != nil {
+					log.Fatal(err)
+				}
+				err = meshSrv.Serve(lnm)
+			}()
+		}
 		log.Printf("derper: serving on %s", *addr)
 		var ln net.Listener
 		ln, err = lc.Listen(context.Background(), "tcp", httpsrv.Addr)
@@ -465,7 +510,9 @@ func rateLimitedListenAndServeTLS(srv *http.Server, lc *net.ListenConfig) error 
 		return err
 	}
 	rln := newRateLimitedListener(ln, rate.Limit(*acceptConnLimit), *acceptConnBurst)
-	expvar.Publish("tls_listener", rln.ExpVar())
+	if expvar.Get("tls_listener") == nil {
+		expvar.Publish("tls_listener", rln.ExpVar())
+	}
 	defer rln.Close()
 	return srv.ServeTLS(rln, "", "")
 }
