@@ -1550,12 +1550,22 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			// Auth completed, unblock the engine
 			b.blockEngineUpdates(false)
 		}
-		b.authReconfig()
 		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
 	}
 
 	// Lock b again and do only the things that require locking.
 	b.mu.Lock()
+
+	// [LocalBackend.authReconfig] should be called once per control client status update,
+	// and only after the new netmap has been set.
+	//
+	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
+	// This is where netmap information gets propagated to router and magicsock.
+	//
+	// TODO(nickkhyl): Revisit this after the state machine refactor.
+	// We shouldn't be calling it from five different places, and the authReconfig logic
+	// may need its own refactor.
+	defer b.authReconfig()
 
 	prefsChanged := false
 	cn := b.currentNode()
@@ -1718,9 +1728,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.setAuthURL(st.URL)
 	}
 	b.stateMachine()
-	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
-	// This is where netmap information gets propagated to router and magicsock.
-	b.authReconfig()
 }
 
 type preferencePolicyInfo struct {
