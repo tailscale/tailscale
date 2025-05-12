@@ -624,7 +624,7 @@ func verifyServeConfig(t *testing.T, fc client.Client, serviceName string, wantH
 func verifyTailscaledConfig(t *testing.T, fc client.Client, expectedServices []string) {
 	t.Helper()
 	var expected string
-	if expectedServices != nil {
+	if len(expectedServices) > 0 {
 		expectedServicesJSON, err := json.Marshal(expectedServices)
 		if err != nil {
 			t.Fatalf("marshaling expected services: %v", err)

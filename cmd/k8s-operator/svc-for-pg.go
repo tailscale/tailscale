@@ -530,7 +530,7 @@ func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.S
 	svc.Finalizers = slices.DeleteFunc(svc.Finalizers, func(f string) bool {
 		return f == finalizerName
 	})
-	logger.Debug("ensure %q finalizer is removed", finalizerName)
+	logger.Debugf("ensure %q finalizer is removed", finalizerName)
 
 	if err := r.Update(ctx, svc); err != nil {
 		return fmt.Errorf("failed to remove finalizer %q: %w", finalizerName, err)
@@ -652,7 +652,12 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 		return false, nil
 	}
 	if !reflect.DeepEqual(gotCfgs.Configs.GetConfig(serviceName), wantsCfg) {
-		logger.Debugf("Pod %q has config %q, but wants %q", pod.Name, gotCfgs.Configs.GetConfig(serviceName), wantsCfg)
+		wantj, err := json.Marshal(wantsCfg)
+		if err != nil {
+			return false, fmt.Errorf("error marshalling ingress config: %w", err)
+		}
+
+		logger.Debugf("Pod %q has config %q, but wants %q", pod.Name, string(gotCfgB), wantj)
 		return false, nil
 	}
 	return true, nil

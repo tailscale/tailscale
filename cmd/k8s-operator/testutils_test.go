@@ -38,6 +38,10 @@ import (
 	"tailscale.com/util/mak"
 )
 
+const (
+	vipTestIP = "5.6.7.8"
+)
+
 // confgOpts contains configuration options for creating cluster resources for
 // Tailscale proxies.
 type configOpts struct {
@@ -895,6 +899,11 @@ func (c *fakeTSClient) CreateOrUpdateVIPService(ctx context.Context, svc *tailsc
 	if c.vipServices == nil {
 		c.vipServices = make(map[tailcfg.ServiceName]*tailscale.VIPService)
 	}
+
+	if svc.Addrs == nil {
+		svc.Addrs = []string{vipTestIP}
+	}
+
 	c.vipServices[svc.Name] = svc
 	return nil
 }
