@@ -64,7 +64,6 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/ipset"
@@ -4843,12 +4842,6 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
-
-	if resolver.ShouldUseRoutes(b.ControlKnobs()) {
-		b.dialer.SetRoutes(rcfg.Routes, rcfg.LocalRoutes)
-	} else {
-		b.dialer.SetRoutes(nil, nil)
-	}
 
 	b.initPeerAPIListener()
 	b.readvertiseAppConnectorRoutes()

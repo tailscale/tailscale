@@ -26,6 +26,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netmon"
@@ -102,6 +103,7 @@ type userspaceEngine struct {
 	tundev           *tstun.Wrapper
 	wgdev            *device.Device
 	router           router.Router
+	dialer           *tsdial.Dialer
 	confListenPort   uint16 // original conf.ListenPort
 	dns              *dns.Manager
 	magicConn        *magicsock.Conn
@@ -344,6 +346,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		waitCh:         make(chan struct{}),
 		tundev:         tsTUNDev,
 		router:         rtr,
+		dialer:         conf.Dialer,
 		confListenPort: conf.ListenPort,
 		birdClient:     conf.BIRDClient,
 		controlKnobs:   conf.ControlKnobs,
@@ -1028,6 +1031,14 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		if err != nil {
 			return err
 		}
+
+		if resolver.ShouldUseRoutes(e.controlKnobs) {
+			e.logf("wgengine: Reconfig: user dialer")
+			e.dialer.SetRoutes(routerCfg.Routes, routerCfg.LocalRoutes)
+		} else {
+			e.dialer.SetRoutes(nil, nil)
+		}
+
 		// Keep DNS configuration after router configuration, as some
 		// DNS managers refuse to apply settings if the device has no
 		// assigned address.
