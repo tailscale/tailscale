@@ -397,6 +397,15 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	// OS-specific details
 	h.logf.JSON(1, "UserBugReportOS", osdiag.SupportInfo(osdiag.LogSupportInfoReasonBugReport))
 
+	// Tailnet lock details
+	st := h.b.NetworkLockStatus()
+	if st.Enabled {
+		h.logf.JSON(1, "UserBugReportTailnetLockStatus", st)
+		if st.NodeKeySignature != nil {
+			h.logf("user bugreport tailnet lock signature: %s", st.NodeKeySignature.String())
+		}
+	}
+
 	if defBool(r.URL.Query().Get("diagnose"), false) {
 		h.b.Doctor(r.Context(), logger.WithPrefix(h.logf, "diag: "))
 	}
