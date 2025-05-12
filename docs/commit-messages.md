@@ -72,7 +72,7 @@ For the body (the rest of the description):
 
 - blank line after the subject (first) line
 - the text should be wrapped to ~76 characters (to appease git viewing tools, mainly), unless you really need longer lines (e.g. for ASCII art, tables, or long links)
-- there must be a `Fixes` or `Updates` line for all non-trivial commits linking to a tracking bug. This goes after the body with a blank newline separating the two. Trivial code clean-up commits can use `Updates #cleanup` instead of an issue.
+- there must be a `Fixes` or `Updates` line for all non-cleanup commits linking to a tracking bug. This goes after the body with a blank newline separating the two. [Cleanup commits](#is-it-a-cleanup) can use `Updates #cleanup` instead of an issue.
 - `Change-Id` lines should ideally be included in commits in the `corp` repo and are more optional in `tailscale/tailscale`. You can configure Git to do this for you by running `./tool/go run misc/install-git-hooks.go` from the root of the corp repo. This was originally a Gerrit thing and we don't use Gerrit, but it lets us tooling track commits as they're cherry-picked between branches. Also, tools like [git-cleanup](https://github.com/bradfitz/gitutil) use it to clean up your old local branches once they're merged upstream.
 - we don't use Markdown in commit messages. (Accidental Markdown like bulleted lists or even headings is fine, but not links)
 - we require `Signed-off-by` lines in public repos (such as `tailscale/tailscale`). Add them using `git commit --signoff` or `git commit -s` for short. You can use them in private repos but do not have to.
@@ -107,6 +107,54 @@ Please say `Updates` and not other common Github-recognized conventions (that is
 For changes in `tailscale/tailscale` that fix a significant bug or add a new feature that should be included in the release notes for the next release,
 add `RELNOTE: <summary of change>` toward the end of the commit message.
 This will aid the release engineer in writing the release notes for the next release.
+
+## Is it a #cleanup?
+
+Our issuebot permits writing `Updates #cleanup` instead of an actual GitHub issue number.
+
+But only do that if it’s actually a cleanup. Don’t use that as an excuse to avoid filing an issue.
+
+Shortcuts[^1] to file issues:
+- [go/bugc](http://go/bugc) (corp, safe choice)
+- [go/bugo](http://go/bugo) (open source, if you want it public to the world).
+
+[^1]: These shortcuts point to our Tailscale’s internal URL shortener service, which you too [can run in your own Tailnet](https://tailscale.com/blog/golink).
+
+The following guide can help you decide whether a tracking issue is warranted.
+
+|     |     |
+| --- | --- |
+| Was there a crash/panic? | Not a cleanup. Put the panic in a bug. Talk about when it was introduced, why, why a test didn’t catch it, note what followup work might need to be done. |
+| Did a customer report it? | Not a cleanup. Make a corp bug with links to the customer ticket. |
+| Is it from an incident, get paged? | Not a cleanup. Let’s track why we got paged. |
+| Does it change behavior? | Not a cleanup. File a bug to track why. |
+| Adding a test for a recently fixed bug? | Not a cleanup. Use the recently fixed bug’s bug number. |
+| Does it tweak a constant/parameter? | Not a cleanup. File a bug to track the debugging/tuning effort and record past results and goals for the future state. |
+| Fixing a regression from an earlier change? | Not a cleanup. At minimum, reference the PR that caused the regression, but if users noticed, it might warrant its own bug. |
+| Is it part of an overall effort that’ll take a hundred small steps? | Not a cleanup. The overall effort should have a tracking bug to collect all the minor efforts. |
+| Is it a security fix? Is it a security hardening? | Not a cleanup. There should be a bug about security incidents or security hardening efforts and backporting to previous releases, etc. |
+| Is it a feature flag being removed? | Not a cleanup. File a task to coordinate with other teams and to track the work. |
+
+### Actual cleanup examples
+
+- Fixing typos in internal comments that users would’ve never seen
+- Simple, mechanical replacement of a deprecated API to its equivalently behaving replacement
+  - [`errors.Wrapf`](https://pkg.go.dev/github.com/pkg/errors#Wrapf) → [`fmt.Errorf("%w")`](https://pkg.go.dev/fmt#Errorf)
+  - [math/rand](https://pkg.go.dev/math/rand) → [math/rand/v2](https://pkg.go.dev/math/rand/v2)
+- Code movement
+- Removing dead code that doesn’t change behavior (API changes, feature flags, etc)
+- Refactoring in prep for another change (but maybe mention the upcoming change’s bug as motivation)
+- Adding a test that you just noticed was missing, not as a result of any bug or report or new feature coming
+- Formatting (gofmt / prettifier) that was missed earlier
+
+### What’s the point of an issue?
+
+- Let us capture information that is inappropriate for a commit message
+- Let us have conversations on a change after the fact
+- Let us track metadata on issues and decide what to backport
+- Let us associate related changes to each other, including after the fact
+- Lets you write the backstory once on an overall bug/effort and re-use that issue number for N future commits, without having to repeat yourself on each commit message
+- Provides archaeological breadcrumbs to future debuggers, providing context on why things were changed
 
 # Reverts
 
