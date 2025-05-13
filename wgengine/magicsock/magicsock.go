@@ -1960,7 +1960,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 				c.discoShort, epDisco.short, via.ServerDisco.ShortString(),
 				ep.publicKey.ShortString(), derpStr(src.String()),
 				len(via.AddrPorts))
-			c.relayManager.handleCallMeMaybeVia(via)
+			c.relayManager.handleCallMeMaybeVia(ep, via)
 		} else {
 			c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
 				c.discoShort, epDisco.short,
