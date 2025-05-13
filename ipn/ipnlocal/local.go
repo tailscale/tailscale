@@ -7691,3 +7691,72 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 var (
 	metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
 )
+
+// tkaFilterNetmapLocked checks the signatures on each node key, dropping
+// nodes from the netmap whose signature does not verify.
+//
+// b.mu must be held.
+func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
+	if b.tka == nil {
+		b.health.SetTKAHealth(nil)
+		return // TKA not enabled.
+	}
+
+	tracker := rotationTracker{logf: b.logf}
+	var toDelete map[int]bool // peer index => true
+	for i, p := range nm.Peers {
+		if p.UnsignedPeerAPIOnly() {
+			// Not subject to tailnet lock.
+			continue
+		}
+		if p.KeySignature().Len() == 0 {
+			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID(), p.StableID())
+			mak.Set(&toDelete, i, true)
+		} else {
+			details, err := b.tka.authority.NodeKeyAuthorizedWithDetails(p.Key(), p.KeySignature().AsSlice())
+			if err != nil {
+				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID(), p.StableID(), err)
+				mak.Set(&toDelete, i, true)
+				continue
+			}
+			if details != nil {
+				// Rotation details are returned when the node key is signed by a valid SigRotation signature.
+				tracker.addRotationDetails(p.Key(), details)
+			}
+		}
+		if exp := p.KeyExpiry(); !exp.IsZero() && exp.After(time.Now()) {
+			b.logf("Network lock is dropping peer %v(%v) due to expired key", p.ID(), p.StableID())
+			mak.Set(&toDelete, i, true)
+		}
+	}
+
+	obsoleteByRotation := tracker.obsoleteKeys()
+
+	// nm.Peers is ordered, so deletion must be order-preserving.
+	if len(toDelete) > 0 || len(obsoleteByRotation) > 0 {
+		peers := make([]tailcfg.NodeView, 0, len(nm.Peers))
+		filtered := make([]ipnstate.TKAPeer, 0, len(toDelete)+len(obsoleteByRotation))
+		for i, p := range nm.Peers {
+			if !toDelete[i] && !obsoleteByRotation.Contains(p.Key()) {
+				peers = append(peers, p)
+			} else {
+				if obsoleteByRotation.Contains(p.Key()) {
+					b.logf("Network lock is dropping peer %v(%v) due to key rotation", p.ID(), p.StableID())
+				}
+				// Record information about the node we filtered out.
+				filtered = append(filtered, tkaStateFromPeer(p))
+			}
+		}
+		nm.Peers = peers
+		b.tka.filtered = filtered
+	} else {
+		b.tka.filtered = nil
+	}
+
+	// Check that we ourselves are not locked out, report a health issue if so.
+	if nm.SelfNode.Valid() && b.tka.authority.NodeKeyAuthorized(nm.SelfNode.Key(), nm.SelfNode.KeySignature().AsSlice()) != nil {
+		b.health.SetTKAHealth(errors.New(healthmsg.LockedOut))
+	} else {
+		b.health.SetTKAHealth(nil)
+	}
+}
