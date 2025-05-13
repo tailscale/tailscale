@@ -11,9 +11,8 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
-	"testing"
-
 	"slices"
+	"testing"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -621,7 +620,7 @@ func verifyServeConfig(t *testing.T, fc client.Client, serviceName string, wantH
 func verifyTailscaledConfig(t *testing.T, fc client.Client, expectedServices []string) {
 	t.Helper()
 	var expected string
-	if expectedServices != nil {
+	if expectedServices != nil && len(expectedServices) > 0 {
 		expectedServicesJSON, err := json.Marshal(expectedServices)
 		if err != nil {
 			t.Fatalf("marshaling expected services: %v", err)
@@ -641,7 +640,6 @@ func verifyTailscaledConfig(t *testing.T, fc client.Client, expectedServices []s
 }
 
 func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeTSClient) {
-
 	tsIngressClass := &networkingv1.IngressClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
 		Spec:       networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},

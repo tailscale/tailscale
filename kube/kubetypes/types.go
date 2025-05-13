@@ -18,6 +18,7 @@ const (
 	MetricIngressProxyCount              = "k8s_ingress_proxies"      // L3
 	MetricIngressResourceCount           = "k8s_ingress_resources"    // L7
 	MetricIngressPGResourceCount         = "k8s_ingress_pg_resources" // L7 on ProxyGroup
+	MetricServicePGResourceCount         = "k8s_service_pg_resources" // L3 on ProxyGroup
 	MetricEgressProxyCount               = "k8s_egress_proxies"
 	MetricConnectorResourceCount         = "k8s_connector_resources"
 	MetricConnectorWithSubnetRouterCount = "k8s_connector_subnetrouter_resources"
