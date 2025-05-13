@@ -145,7 +145,7 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 			Labels:    pgSecretLabels("test-pg", "config"),
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): []byte("{}"),
+			tsoperator.TailscaledConfigFileName(106): []byte(`{"Version":""}`),
 		},
 	}
 
@@ -224,6 +224,110 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 	return svcPGR, pgStateSecret, fc, ft
 }
 
+func TestServicePGReconciler_MultiCluster(t *testing.T) {
+	var ft *fakeTSClient
+	var lc localClient
+	for i := 0; i <= 10; i++ {
+		pgr, stateSecret, fc, fti := setupServiceTest(t)
+		if i == 0 {
+			ft = fti
+			lc = pgr.lc
+		} else {
+			pgr.tsClient = ft
+			pgr.lc = lc
+		}
+
+		svc, _ := setupTestService(t, "test-multi-cluster", "", "4.3.2.1", fc, stateSecret)
+		expectReconciled(t, pgr, "default", svc.Name)
+
+		vipSvcs, err := ft.ListVIPServices(context.Background())
+		if err != nil {
+			t.Fatalf("getting VIPService: %v", err)
+		}
+
+		if len(vipSvcs) != 1 {
+			t.Fatalf("unexpected number of VIPServices (%d)", len(vipSvcs))
+		}
+
+		for name := range vipSvcs {
+			t.Logf("found vip service with name %q", name.String())
+		}
+	}
+}
+
+func TestIgnoreRegularService(t *testing.T) {
+	pgr, _, fc, ft := setupServiceTest(t)
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/expose": "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	}
+
+	// hostname := svc.Namespace + svc.Name
+
+	mustCreate(t, fc, svc)
+	expectReconciled(t, pgr, "default", "test")
+
+	verifyTailscaledConfig(t, fc, nil)
+
+	vipSvcs, err := ft.ListVIPServices(context.Background())
+	if err == nil {
+		t.Fatalf("failed to list VIPServices")
+	}
+
+	if len(vipSvcs) > 0 {
+		t.Fatal("unexpected vip services found")
+	}
+}
+
+func removeEl(s []string, value string) []string {
+	result := s[:0]
+	for _, v := range s {
+		if v != value {
+			result = append(result, v)
+		}
+	}
+	return result
+}
+
+func updateIngressConfigSecret(t *testing.T, fc client.Client, stateSecret *corev1.Secret, serviceName string, clusterIP string) {
+	ingressConfig := ingressservices.Configs{
+		fmt.Sprintf("svc:%s", serviceName): ingressservices.Config{
+			IPv4Mapping: &ingressservices.Mapping{
+				VIPServiceIP: netip.MustParseAddr(vipTestIP),
+				ClusterIP:    netip.MustParseAddr(clusterIP),
+			},
+		},
+	}
+
+	ingressStatus := ingressservices.Status{
+		Configs: ingressConfig,
+		PodIPv4: "4.3.2.1",
+	}
+
+	icJson, err := json.Marshal(ingressStatus)
+	if err != nil {
+		t.Fatal("failed to json marshal ingress config")
+	}
+
+	mustUpdate(t, fc, stateSecret.Namespace, stateSecret.Name, func(sec *corev1.Secret) {
+		mak.Set(&sec.Data, ingressservices.IngressConfigKey, icJson)
+	})
+}
+
 func setupTestService(t *testing.T, svcName string, hostname string, clusterIP string, fc client.Client, stateSecret *corev1.Secret) (svc *corev1.Service, eps *discoveryv1.EndpointSlice) {
 	uid := rand.IntN(100)
 	svc = &corev1.Service{
@@ -270,125 +374,4 @@ func setupTestService(t *testing.T, svcName string, hostname string, clusterIP s
 	mustCreate(t, fc, eps)
 
 	return svc, eps
-}
-
-//	func TestServicePGReconciler_MultiCluster(t *testing.T) {
-//		ingPGR, fc, ft := setupIngressTest(t)
-//		ingPGR.operatorID = "operator-1"
-//
-//		// Create initial Ingress
-//		ing := &networkingv1.Ingress{
-//			TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-//			ObjectMeta: metav1.ObjectMeta{
-//				Name:      "test-ingress",
-//				Namespace: "default",
-//				UID:       types.UID("1234-UID"),
-//				Annotations: map[string]string{
-//					"tailscale.com/proxy-group": "test-pg",
-//				},
-//			},
-//			Spec: networkingv1.IngressSpec{
-//				IngressClassName: ptr.To("tailscale"),
-//				TLS: []networkingv1.IngressTLS{
-//					{Hosts: []string{"my-svc"}},
-//				},
-//			},
-//		}
-//		mustCreate(t, fc, ing)
-//
-//		// Simulate existing VIPService from another cluster
-//		existingVIPSvc := &tailscale.VIPService{
-//			Name: "svc:my-svc",
-//			Annotations: map[string]string{
-//				ownerAnnotation: `{"ownerrefs":[{"operatorID":"operator-2"}]}`,
-//			},
-//		}
-//		ft.vipServices = map[tailcfg.ServiceName]*tailscale.VIPService{
-//			"svc:my-svc": existingVIPSvc,
-//		}
-//
-//		// Verify reconciliation adds our operator reference
-//		expectReconciled(t, ingPGR, "default", "test-ingress")
-//
-//		vipSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
-//		if err != nil {
-//			t.Fatalf("getting VIPService: %v", err)
-//		}
-//		if vipSvc == nil {
-//			t.Fatal("VIPService not found")
-//		}
-//
-//		o, err := parseOwnerAnnotation(vipSvc)
-//		if err != nil {
-//			t.Fatalf("parsing owner annotation: %v", err)
-//		}
-//
-//		wantOwnerRefs := []OwnerRef{
-//			{OperatorID: "operator-2"},
-//			{OperatorID: "operator-1"},
-//		}
-//		if !reflect.DeepEqual(o.OwnerRefs, wantOwnerRefs) {
-//			t.Errorf("incorrect owner refs\ngot:  %+v\nwant: %+v", o.OwnerRefs, wantOwnerRefs)
-//		}
-//
-//		// Delete the Ingress and verify VIPService still exists with one owner ref
-//		if err := fc.Delete(context.Background(), ing); err != nil {
-//			t.Fatalf("deleting Ingress: %v", err)
-//		}
-//		expectRequeue(t, ingPGR, "default", "test-ingress")
-//
-//		vipSvc, err = ft.GetVIPService(context.Background(), "svc:my-svc")
-//		if err != nil {
-//			t.Fatalf("getting VIPService after deletion: %v", err)
-//		}
-//		if vipSvc == nil {
-//			t.Fatal("VIPService was incorrectly deleted")
-//		}
-//
-//		o, err = parseOwnerAnnotation(vipSvc)
-//		if err != nil {
-//			t.Fatalf("parsing owner annotation: %v", err)
-//		}
-//
-//		wantOwnerRefs = []OwnerRef{
-//			{OperatorID: "operator-2"},
-//		}
-//		if !reflect.DeepEqual(o.OwnerRefs, wantOwnerRefs) {
-//			t.Errorf("incorrect owner refs after deletion\ngot:  %+v\nwant: %+v", o.OwnerRefs, wantOwnerRefs)
-//		}
-//	}
-
-func removeEl(s []string, value string) []string {
-	result := s[:0]
-	for _, v := range s {
-		if v != value {
-			result = append(result, v)
-		}
-	}
-	return result
-}
-
-func updateIngressConfigSecret(t *testing.T, fc client.Client, stateSecret *corev1.Secret, serviceName string, clusterIP string) {
-	ingressConfig := ingressservices.Configs{
-		fmt.Sprintf("svc:%s", serviceName): ingressservices.Config{
-			IPv4Mapping: &ingressservices.Mapping{
-				VIPServiceIP: netip.MustParseAddr(vipTestIP),
-				ClusterIP:    netip.MustParseAddr(clusterIP),
-			},
-		},
-	}
-
-	ingressStatus := ingressservices.Status{
-		Configs: ingressConfig,
-		PodIPv4: "4.3.2.1",
-	}
-
-	icJson, err := json.Marshal(ingressStatus)
-	if err != nil {
-		t.Fatal("failed to json marshal ingress config")
-	}
-
-	mustUpdate(t, fc, stateSecret.Namespace, stateSecret.Name, func(sec *corev1.Secret) {
-		mak.Set(&sec.Data, ingressservices.IngressConfigKey, icJson)
-	})
 }

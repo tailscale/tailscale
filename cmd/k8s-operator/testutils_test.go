@@ -565,6 +565,23 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 	return s
 }
 
+func findNoGenName(t *testing.T, client client.Client, ns, name, typ string) {
+	t.Helper()
+	labels := map[string]string{
+		kubetypes.LabelManaged: "true",
+		LabelParentName:        name,
+		LabelParentNamespace:   ns,
+		LabelParentType:        typ,
+	}
+	s, err := getSingleObject[corev1.Secret](context.Background(), client, "operator-ns", labels)
+	if err != nil {
+		t.Fatalf("finding secrets for %q: %v", name, err)
+	}
+	if s != nil {
+		t.Fatalf("found unexpected secret with name %q", s.GetName())
+	}
+}
+
 func findGenName(t *testing.T, client client.Client, ns, name, typ string) (full, noSuffix string) {
 	t.Helper()
 	labels := map[string]string{
@@ -891,6 +908,15 @@ func (c *fakeTSClient) GetVIPService(ctx context.Context, name tailcfg.ServiceNa
 		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
 	}
 	return svc, nil
+}
+
+func (c *fakeTSClient) ListVIPServices(ctx context.Context) (map[tailcfg.ServiceName]*tailscale.VIPService, error) {
+	c.Lock()
+	defer c.Unlock()
+	if c.vipServices == nil {
+		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
+	}
+	return c.vipServices, nil
 }
 
 func (c *fakeTSClient) CreateOrUpdateVIPService(ctx context.Context, svc *tailscale.VIPService) error {
