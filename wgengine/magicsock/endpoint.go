@@ -1871,7 +1871,7 @@ func (de *endpoint) resetLocked() {
 		}
 	}
 	de.probeUDPLifetime.resetCycleEndpointLocked()
-	de.c.relayManager.cancelOutstandingWork(de)
+	de.c.relayManager.stopWork(de)
 }
 
 func (de *endpoint) numStopAndReset() int64 {
