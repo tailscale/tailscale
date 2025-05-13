@@ -252,7 +252,7 @@ func TestCRL(t *testing.T) {
 			"NoCRL",
 			leafCertParsed,
 			nil,
-			"",
+			"no CRL server presented in leaf cert for",
 		},
 		{
 			"NotBeforeCRLStaplingDate",
@@ -276,7 +276,7 @@ func TestCRL(t *testing.T) {
 				return
 			}
 
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+			if err == nil || tt.wantErr == "" || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("unexpected error %q; want %q", err, tt.wantErr)
 			}
 		})
