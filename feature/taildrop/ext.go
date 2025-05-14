@@ -73,6 +73,10 @@ type Extension struct {
 	// *.partial file to its final name on completion.
 	directFileRoot string
 
+	// FileOps abstracts platform-specific file operations needed for file transfers.
+	// This is currently being used for Android to use the Storage Access Framework.
+	FileOps FileOps
+
 	nodeBackendForTest ipnext.NodeBackend // if non-nil, pretend we're this node state for tests
 
 	mu             sync.Mutex // Lock order: lb.mu > e.mu
@@ -83,6 +87,30 @@ type Extension struct {
 	mgr            atomic.Pointer[manager]           // mutex held to write; safe to read without lock;
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
+}
+
+// safDirectoryPrefix is used to determine if the directory is managed via SAF.
+const SafDirectoryPrefix = "content://"
+
+// PutMode controls how Manager.PutFile writes files to storage.
+//
+//	PutModeDirect    – write files directly to a filesystem path (default).
+//	PutModeAndroidSAF – use Android’s Storage Access Framework (SAF), where
+//	                      the OS manages the underlying directory permissions.
+type PutMode int
+
+const (
+	PutModeDirect PutMode = iota
+	PutModeAndroidSAF
+)
+
+// FileOps defines platform-specific file operations.
+type FileOps interface {
+	OpenFileWriter(filename string) (io.WriteCloser, string, error)
+
+	// RenamePartialFile finalizes a partial file.
+	// It returns the new SAF URI as a string and an error.
+	RenamePartialFile(partialUri, targetDirUri, targetName string) (string, error)
 }
 
 func (e *Extension) Name() string {
@@ -153,12 +181,18 @@ func (e *Extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 	if fileRoot == "" {
 		e.logf("no Taildrop directory configured")
 	}
+	mode := PutModeDirect
+	if e.directFileRoot != "" && strings.HasPrefix(e.directFileRoot, SafDirectoryPrefix) {
+		mode = PutModeAndroidSAF
+	}
 	e.setMgrLocked(managerOptions{
 		Logf:           e.logf,
 		Clock:          tstime.DefaultClock{Clock: e.sb.Clock()},
 		State:          e.stateStore,
 		Dir:            fileRoot,
 		DirectFileMode: isDirectFileMode,
+		FileOps:        e.FileOps,
+		Mode:           mode,
 		SendFileNotify: e.sendFileNotify,
 	}.New())
 }
