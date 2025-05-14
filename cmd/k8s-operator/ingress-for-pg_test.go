@@ -8,10 +8,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
-	"net/http"
 	"reflect"
 	"testing"
 
@@ -265,8 +263,7 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	if err == nil {
 		t.Fatalf("svc:my-svc not cleaned up")
 	}
-	var errResp *tailscale.ErrResponse
-	if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
+	if !isErrorTailscaleServiceNotFound(err) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
