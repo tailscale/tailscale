@@ -26,6 +26,21 @@ import (
 // TODO(bradfitz): add test between different users with the peercap to permit that?
 
 func TestTaildropIntegration(t *testing.T) {
+	t.Skip("known failing test; see https://github.com/tailscale/tailscale/issues/15970")
+	testTaildropIntegration(t, false)
+}
+
+func TestTaildropIntegration_Fresh(t *testing.T) {
+	testTaildropIntegration(t, true)
+}
+
+// freshProfiles is whether to start the test right away
+// with a fresh profile. If false, tailscaled is started, stopped,
+// and restarted again to simulate a real-world scenario where
+// the first profile already existed.
+//
+// This exercises an ipnext hook ordering issue we hit earlier.
+func testTaildropIntegration(t *testing.T, freshProfiles bool) {
 	tstest.Parallel(t)
 	controlOpt := integration.ConfigureControl(func(s *testcontrol.Server) {
 		s.AllNodesSameUser = true // required for Taildrop
@@ -39,18 +54,30 @@ func TestTaildropIntegration(t *testing.T) {
 	n2 := integration.NewTestNode(t, env)
 	d2 := n2.StartDaemon()
 
-	n1.AwaitListening()
-	t.Logf("n1 is listening")
-	n2.AwaitListening()
-	t.Logf("n2 is listening")
-	n1.MustUp()
-	t.Logf("n1 is up")
-	n2.MustUp()
-	t.Logf("n2 is up")
-	n1.AwaitRunning()
-	t.Logf("n1 is running")
-	n2.AwaitRunning()
-	t.Logf("n2 is running")
+	awaitUp := func() {
+		t.Helper()
+		n1.AwaitListening()
+		t.Logf("n1 is listening")
+		n2.AwaitListening()
+		t.Logf("n2 is listening")
+		n1.MustUp()
+		t.Logf("n1 is up")
+		n2.MustUp()
+		t.Logf("n2 is up")
+		n1.AwaitRunning()
+		t.Logf("n1 is running")
+		n2.AwaitRunning()
+		t.Logf("n2 is running")
+	}
+	awaitUp()
+
+	if !freshProfiles {
+		d1.MustCleanShutdown(t)
+		d2.MustCleanShutdown(t)
+		d1 = n1.StartDaemon()
+		d2 = n2.StartDaemon()
+		awaitUp()
+	}
 
 	var peerStableID tailcfg.StableNodeID
 
