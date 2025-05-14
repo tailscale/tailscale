@@ -26,7 +26,6 @@ import (
 // TODO(bradfitz): add test between different users with the peercap to permit that?
 
 func TestTaildropIntegration(t *testing.T) {
-	t.Skip("known failing test; see https://github.com/tailscale/tailscale/issues/15970")
 	testTaildropIntegration(t, false)
 }
 
