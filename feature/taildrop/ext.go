@@ -100,6 +100,10 @@ func (e *Extension) Init(h ipnext.Host) error {
 	h.Hooks().SetPeerStatus.Add(e.setPeerStatus)
 	h.Hooks().BackendStateChange.Add(e.onBackendStateChange)
 
+	// TODO(nickkhyl): remove this after the profileManager refactoring.
+	// See tailscale/tailscale#15974.
+	profile, prefs := h.Profiles().CurrentProfileState()
+	e.onChangeProfile(profile, prefs, false)
 	return nil
 }
 

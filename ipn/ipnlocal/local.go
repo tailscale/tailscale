@@ -237,6 +237,8 @@ type LocalBackend struct {
 	// for testing and graceful shutdown purposes.
 	goTracker goroutines.Tracker
 
+	startOnce sync.Once // protects the one‑time initialization in [LocalBackend.Start]
+
 	// extHost is the bridge between [LocalBackend] and the registered [ipnext.Extension]s.
 	// It may be nil in tests that use direct composite literal initialization of [LocalBackend]
 	// instead of calling [NewLocalBackend]. A nil pointer is a valid, no-op host.
@@ -568,8 +570,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			}
 		}
 	}
-
-	b.extHost.Init()
 	return b, nil
 }
 
@@ -2162,6 +2162,11 @@ func (b *LocalBackend) getNewControlClientFuncLocked() clientGen {
 	return b.ccGen
 }
 
+// initOnce is called on the first call to [LocalBackend.Start].
+func (b *LocalBackend) initOnce() {
+	b.extHost.Init()
+}
+
 // Start applies the configuration specified in opts, and starts the
 // state machine.
 //
@@ -2174,6 +2179,8 @@ func (b *LocalBackend) getNewControlClientFuncLocked() clientGen {
 // from the following whether or not that is a safe transition).
 func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.logf("Start")
+
+	b.startOnce.Do(b.initOnce)
 
 	var clientToShutdown controlclient.Client
 	defer func() {

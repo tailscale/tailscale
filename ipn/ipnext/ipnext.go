@@ -37,7 +37,10 @@ type Extension interface {
 	// It must be the same as the name used to register the extension.
 	Name() string
 
-	// Init is called to initialize the extension when LocalBackend is initialized.
+	// Init is called to initialize the extension when LocalBackend's
+	// Start method is called. Extensions are created but not initialized
+	// unless LocalBackend is started.
+	//
 	// If the extension cannot be initialized, it must return an error,
 	// and its Shutdown method will not be called on the host's shutdown.
 	// Returned errors are not fatal; they are used for logging.
@@ -333,6 +336,7 @@ type Hooks struct {
 	// BackendStateChange is called when the backend state changes.
 	BackendStateChange feature.Hooks[func(ipn.State)]
 
+	// ProfileStateChange contains callbacks that are invoked when the current login profile
 	// or its [ipn.Prefs] change, after those changes have been made. The current login profile
 	// may be changed either because of a profile switch, or because the profile information
 	// was updated by [LocalBackend.SetControlClientStatus], including when the profile
