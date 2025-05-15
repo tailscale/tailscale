@@ -2679,6 +2679,25 @@ spec:
                                                 type: array
                                         type: object
                                 type: object
+                            tailnetListener:
+                                properties:
+                                    nodePortConfig:
+                                        properties:
+                                            portRanges:
+                                                items:
+                                                    type: string
+                                                type: array
+                                            selector:
+                                                additionalProperties:
+                                                    type: string
+                                                type: object
+                                        type: object
+                                    type:
+                                        description: Cannot change after creation
+                                        type: string
+                                required:
+                                    - type
+                                type: object
                             tailscale:
                                 description: |-
                                     TailscaleConfig contains options to configure the tailscale-specific

@@ -2203,6 +2203,25 @@ spec:
                                   won't make it *more* imbalanced.
                                   It's a required field.
                                 type: string
+                tailnetListener:
+                  type: object
+                  required:
+                    - type
+                  properties:
+                    nodePortConfig:
+                      type: object
+                      properties:
+                        portRanges:
+                          type: array
+                          items:
+                            type: string
+                        selector:
+                          type: object
+                          additionalProperties:
+                            type: string
+                    type:
+                      description: Cannot change after creation
+                      type: string
                 tailscale:
                   description: |-
                     TailscaleConfig contains options to configure the tailscale-specific

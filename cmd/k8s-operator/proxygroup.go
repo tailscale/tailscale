@@ -206,6 +206,20 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	return setStatusReady(pg, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady)
 }
 
+func (r *ProxyGroupReconciler) maybeExposeViaNodePort(ctx context.Context, pc *tsapi.ProxyClass, pg *tsapi.ProxyGroup) error {
+	// TODO: make NodePort a const
+	if pc == nil || pc.Spec.TailnetListenerConfig == nil || pc.Spec.TailnetListenerConfig.Type != "NodePort" {
+		return nil
+	}
+	// 1. Create a NodePort Service per each replica
+	// TODO: support setting NodePort range
+	for i := range *(pg.Spec.Replicas) {
+
+	}
+
+	return nil
+}
+
 // validateProxyClassForPG applies custom validation logic for ProxyClass applied to ProxyGroup.
 func validateProxyClassForPG(logger *zap.SugaredLogger, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) {
 	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {

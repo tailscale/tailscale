@@ -81,7 +81,20 @@ type ProxyClassSpec struct {
 	// being re-issued from the staging environment before they need to be
 	// renewed.
 	// +optional
-	UseLetsEncryptStagingEnvironment bool `json:"useLetsEncryptStagingEnvironment,omitempty"`
+	UseLetsEncryptStagingEnvironment bool                   `json:"useLetsEncryptStagingEnvironment,omitempty"`
+	TailnetListenerConfig            *TailnetListenerConfig `json:"tailnetListener,omitempty"`
+}
+
+type TailnetListenerConfig struct {
+	// Cannot change after creation
+	Type           TailnetListenerConfigMode `json:"type"`
+	NodePortConfig *NodePort                 `json:"nodePortConfig,omitempty"`
+}
+
+type TailnetListenerConfigMode string
+type NodePort struct {
+	PortRanges []string          `json:"portRanges,omitempty"`
+	Selector   map[string]string `json:"selector,omitempty"`
 }
 
 type TailscaleConfig struct {
