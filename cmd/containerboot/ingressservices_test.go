@@ -19,8 +19,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 		currentConfigs *ingressservices.Configs
 		currentStatus  *ingressservices.Status
 		wantServices   map[string]struct {
-			VIPServiceIP netip.Addr
-			ClusterIP    netip.Addr
+			TailscaleServiceIP netip.Addr
+			ClusterIP          netip.Addr
 		}
 	}{
 		{
@@ -30,8 +30,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 			},
 			currentStatus: nil,
 			wantServices: map[string]struct {
-				VIPServiceIP netip.Addr
-				ClusterIP    netip.Addr
+				TailscaleServiceIP netip.Addr
+				ClusterIP          netip.Addr
 			}{
 				"svc:foo": makeWantService("100.64.0.1", "10.0.0.1"),
 			},
@@ -45,8 +45,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 			},
 			currentStatus: nil,
 			wantServices: map[string]struct {
-				VIPServiceIP netip.Addr
-				ClusterIP    netip.Addr
+				TailscaleServiceIP netip.Addr
+				ClusterIP          netip.Addr
 			}{
 				"svc:foo": makeWantService("100.64.0.1", "10.0.0.1"),
 				"svc:bar": makeWantService("100.64.0.2", "10.0.0.2"),
@@ -60,8 +60,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 			},
 			currentStatus: nil,
 			wantServices: map[string]struct {
-				VIPServiceIP netip.Addr
-				ClusterIP    netip.Addr
+				TailscaleServiceIP netip.Addr
+				ClusterIP          netip.Addr
 			}{
 				"svc:foo": makeWantService("2001:db8::1", "2001:db8::2"),
 			},
@@ -73,8 +73,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 			},
 			currentStatus: nil,
 			wantServices: map[string]struct {
-				VIPServiceIP netip.Addr
-				ClusterIP    netip.Addr
+				TailscaleServiceIP netip.Addr
+				ClusterIP          netip.Addr
 			}{
 				"svc:ipv6": makeWantService("2001:db8::10", "2001:db8::20"),
 			},
@@ -91,8 +91,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 				PodIPv6: "2001:db8::2", // Current pod IPv6
 			},
 			wantServices: map[string]struct {
-				VIPServiceIP netip.Addr
-				ClusterIP    netip.Addr
+				TailscaleServiceIP netip.Addr
+				ClusterIP          netip.Addr
 			}{},
 		},
 		{
@@ -111,8 +111,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 				PodIPv6: "2001:db8::2", // Current pod IPv6
 			},
 			wantServices: map[string]struct {
-				VIPServiceIP netip.Addr
-				ClusterIP    netip.Addr
+				TailscaleServiceIP netip.Addr
+				ClusterIP          netip.Addr
 			}{
 				"svc:foo": makeWantService("100.64.0.1", "10.0.0.2"),
 				"svc:new": makeWantService("100.64.0.4", "10.0.0.4"),
@@ -124,8 +124,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 				"svc:web": makeServiceConfig("100.64.0.10", "10.0.0.10", "", ""),
 				"svc:web-ipv6": {
 					IPv6Mapping: &ingressservices.Mapping{
-						VIPServiceIP: netip.MustParseAddr("2001:db8::10"),
-						ClusterIP:    netip.MustParseAddr("2001:db8::20"),
+						TailscaleServiceIP: netip.MustParseAddr("2001:db8::10"),
+						ClusterIP:          netip.MustParseAddr("2001:db8::20"),
 					},
 				},
 				"svc:api": makeServiceConfig("100.64.0.20", "10.0.0.20", "", ""),
@@ -135,8 +135,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 					"svc:web": makeServiceConfig("100.64.0.10", "10.0.0.10", "", ""),
 					"svc:web-ipv6": {
 						IPv6Mapping: &ingressservices.Mapping{
-							VIPServiceIP: netip.MustParseAddr("2001:db8::10"),
-							ClusterIP:    netip.MustParseAddr("2001:db8::20"),
+							TailscaleServiceIP: netip.MustParseAddr("2001:db8::10"),
+							ClusterIP:          netip.MustParseAddr("2001:db8::20"),
 						},
 					},
 					"svc:old": makeServiceConfig("100.64.0.30", "10.0.0.30", "", ""),
@@ -145,8 +145,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 				PodIPv6: "2001:db8::1", // Outdated pod IP
 			},
 			wantServices: map[string]struct {
-				VIPServiceIP netip.Addr
-				ClusterIP    netip.Addr
+				TailscaleServiceIP netip.Addr
+				ClusterIP          netip.Addr
 			}{
 				"svc:web":      makeWantService("100.64.0.10", "10.0.0.10"),
 				"svc:web-ipv6": makeWantService("2001:db8::10", "2001:db8::20"),
@@ -181,8 +181,8 @@ func TestSyncIngressConfigs(t *testing.T) {
 					t.Errorf("service %s not found", svc)
 					continue
 				}
-				if got.VIPServiceIP != want.VIPServiceIP {
-					t.Errorf("service %s: got VIPServiceIP %v, want %v", svc, got.VIPServiceIP, want.VIPServiceIP)
+				if got.TailscaleServiceIP != want.TailscaleServiceIP {
+					t.Errorf("service %s: got TailscaleServiceIP %v, want %v", svc, got.TailscaleServiceIP, want.TailscaleServiceIP)
 				}
 				if got.ClusterIP != want.ClusterIP {
 					t.Errorf("service %s: got ClusterIP %v, want %v", svc, got.ClusterIP, want.ClusterIP)
@@ -192,32 +192,32 @@ func TestSyncIngressConfigs(t *testing.T) {
 	}
 }
 
-func makeServiceConfig(vipIP, clusterIP string, vipIP6, clusterIP6 string) ingressservices.Config {
+func makeServiceConfig(tsIP, clusterIP string, tsIP6, clusterIP6 string) ingressservices.Config {
 	cfg := ingressservices.Config{}
-	if vipIP != "" && clusterIP != "" {
+	if tsIP != "" && clusterIP != "" {
 		cfg.IPv4Mapping = &ingressservices.Mapping{
-			VIPServiceIP: netip.MustParseAddr(vipIP),
-			ClusterIP:    netip.MustParseAddr(clusterIP),
+			TailscaleServiceIP: netip.MustParseAddr(tsIP),
+			ClusterIP:          netip.MustParseAddr(clusterIP),
 		}
 	}
-	if vipIP6 != "" && clusterIP6 != "" {
+	if tsIP6 != "" && clusterIP6 != "" {
 		cfg.IPv6Mapping = &ingressservices.Mapping{
-			VIPServiceIP: netip.MustParseAddr(vipIP6),
-			ClusterIP:    netip.MustParseAddr(clusterIP6),
+			TailscaleServiceIP: netip.MustParseAddr(tsIP6),
+			ClusterIP:          netip.MustParseAddr(clusterIP6),
 		}
 	}
 	return cfg
 }
 
-func makeWantService(vipIP, clusterIP string) struct {
-	VIPServiceIP netip.Addr
-	ClusterIP    netip.Addr
+func makeWantService(tsIP, clusterIP string) struct {
+	TailscaleServiceIP netip.Addr
+	ClusterIP          netip.Addr
 } {
 	return struct {
-		VIPServiceIP netip.Addr
-		ClusterIP    netip.Addr
+		TailscaleServiceIP netip.Addr
+		ClusterIP          netip.Addr
 	}{
-		VIPServiceIP: netip.MustParseAddr(vipIP),
-		ClusterIP:    netip.MustParseAddr(clusterIP),
+		TailscaleServiceIP: netip.MustParseAddr(tsIP),
+		ClusterIP:          netip.MustParseAddr(clusterIP),
 	}
 }

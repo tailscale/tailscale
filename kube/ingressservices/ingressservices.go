@@ -16,10 +16,10 @@ import "net/netip"
 const IngressConfigKey = "ingress-config.json"
 
 // Configs contains the desired configuration for ingress proxies firewall.  Map
-// keys are VIPService names.
+// keys are Tailscale Service names.
 type Configs map[string]Config
 
-// GetConfig returns the desired configuration for the given VIPService name.
+// GetConfig returns the desired configuration for the given Tailscale Service name.
 func (cfgs *Configs) GetConfig(name string) *Config {
 	if cfgs == nil {
 		return nil
@@ -45,9 +45,9 @@ type Config struct {
 	IPv6Mapping *Mapping `json:"IPv6Mapping,omitempty"`
 }
 
-// Mapping describes a rule that forwads traffic from VIPService IP to a
+// Mapping describes a rule that forwards traffic from Tailscale Service IP to a
 // Kubernetes Service IP.
 type Mapping struct {
-	VIPServiceIP netip.Addr `json:"VIPServiceIP"`
-	ClusterIP    netip.Addr `json:"ClusterIP"`
+	TailscaleServiceIP netip.Addr `json:"TailscaleServiceIP"`
+	ClusterIP          netip.Addr `json:"ClusterIP"`
 }
