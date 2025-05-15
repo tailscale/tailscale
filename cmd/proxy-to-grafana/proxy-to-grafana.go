@@ -53,7 +53,7 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
@@ -195,19 +195,20 @@ func main() {
 	log.Fatal(http.Serve(ln, proxy))
 }
 
-func modifyRequest(req *http.Request, localClient *local.Client) {
-	// with enable_login_token set to true, we get a cookie that handles
-	// auth for paths that are not /login
-	if req.URL.Path != "/login" {
-		return
-	}
-
+func modifyRequest(req *http.Request, localClient whoisIdentitySource) {
 	// Delete any existing X-Webauth-* headers to prevent possible spoofing
 	// if getting Tailnet identity fails.
 	for h := range req.Header {
 		if strings.HasPrefix(h, "X-Webauth-") {
 			req.Header.Del(h)
 		}
+	}
+
+	// Set the X-Webauth-* headers only for the /login path
+	// With enable_login_token set to true, we get a cookie that handles
+	// auth for paths that are not /login
+	if req.URL.Path != "/login" {
+		return
 	}
 
 	user, role, err := getTailscaleIdentity(req.Context(), localClient, req.RemoteAddr)
@@ -221,7 +222,7 @@ func modifyRequest(req *http.Request, localClient *local.Client) {
 	req.Header.Set("X-Webauth-Role", role.String())
 }
 
-func getTailscaleIdentity(ctx context.Context, localClient *local.Client, ipPort string) (*tailcfg.UserProfile, grafanaRole, error) {
+func getTailscaleIdentity(ctx context.Context, localClient whoisIdentitySource, ipPort string) (*tailcfg.UserProfile, grafanaRole, error) {
 	whois, err := localClient.WhoIs(ctx, ipPort)
 	if err != nil {
 		return nil, ViewerRole, fmt.Errorf("failed to identify remote host: %w", err)
@@ -247,4 +248,8 @@ func getTailscaleIdentity(ctx context.Context, localClient *local.Client, ipPort
 	}
 
 	return whois.UserProfile, role, nil
+}
+
+type whoisIdentitySource interface {
+	WhoIs(ctx context.Context, ipPort string) (*apitype.WhoIsResponse, error)
 }
