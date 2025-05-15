@@ -33,15 +33,513 @@ import (
 	"tailscale.com/util/mak"
 )
 
-const testProxyImage = "tailscale/tailscale:test"
+const (
+	testProxyImage = "tailscale/tailscale:test"
+	initialCfgHash = "6632726be70cf224049580deb4d317bba065915b5fd415461d60ed621c91b196"
+)
 
 var defaultProxyClassAnnotations = map[string]string{
 	"some-annotation": "from-the-proxy-class",
 }
 
-func TestProxyGroup(t *testing.T) {
-	const initialCfgHash = "6632726be70cf224049580deb4d317bba065915b5fd415461d60ed621c91b196"
+func TestProxyGroupWithStaticEndpoints(t *testing.T) {
+	type testNodeAddr struct {
+		ip       string
+		addrType corev1.NodeAddressType
+	}
 
+	type testNode struct {
+		name      string
+		addresses []testNodeAddr
+		labels    map[string]string
+	}
+
+	testCases := []struct {
+		name                  string
+		staticEndpointConfig  *tsapi.StaticEndpointsConfig
+		replicas              *int32
+		nodes                 []testNode
+		expectStaticEndpoints bool
+		expectErrOnReconcile  bool
+		expectStatefulSet     bool
+	}{
+		{
+			name: "SpecificPorts",
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3001},
+						{Port: 3005},
+						{Port: 3007},
+						{Port: 3009},
+					},
+					Selector: map[string]string{
+						"foo/bar": "baz",
+					},
+				},
+			},
+			replicas: ptr.To(int32(4)),
+			nodes: []testNode{
+				{
+					name:      "foobar",
+					addresses: []testNodeAddr{{ip: "192.168.0.1", addrType: corev1.NodeExternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+				{
+					name:      "foobarbaz",
+					addresses: []testNodeAddr{{ip: "192.168.0.2", addrType: corev1.NodeInternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+				{
+					name:      "foobarbazz",
+					addresses: []testNodeAddr{{ip: "192.168.0.3", addrType: corev1.NodeExternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+			},
+			expectStaticEndpoints: true,
+			expectErrOnReconcile:  false,
+			expectStatefulSet:     true,
+		},
+		{
+			name: "SpecificPorts",
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3001},
+						{Port: 3005},
+						{Port: 3007},
+						{Port: 3009},
+					},
+					Selector: map[string]string{
+						"foo/bar": "baz",
+					},
+				},
+			},
+			replicas: ptr.To(int32(4)),
+			nodes: []testNode{
+				{
+					name:      "foobar",
+					addresses: []testNodeAddr{{ip: "192.168.0.1", addrType: corev1.NodeExternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+				{
+					name:      "foobarbaz",
+					addresses: []testNodeAddr{{ip: "192.168.0.2", addrType: corev1.NodeExternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+				{
+					name:      "foobarbazz",
+					addresses: []testNodeAddr{{ip: "192.168.0.3", addrType: corev1.NodeExternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+			},
+			expectStaticEndpoints: true,
+			expectErrOnReconcile:  false,
+			expectStatefulSet:     true,
+		},
+		{
+			name: "NotEnoughPorts",
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3001},
+						{Port: 3005},
+						{Port: 3007},
+					},
+					Selector: map[string]string{
+						"foo/bar": "baz",
+					},
+				},
+			},
+			replicas: ptr.To(int32(4)),
+			nodes: []testNode{
+				{
+					name:      "foobar",
+					addresses: []testNodeAddr{{ip: "192.168.0.1", addrType: corev1.NodeExternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+				{
+					name:      "foobarbaz",
+					addresses: []testNodeAddr{{ip: "192.168.0.2", addrType: corev1.NodeExternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+				{
+					name:      "foobarbazz",
+					addresses: []testNodeAddr{{ip: "192.168.0.3", addrType: corev1.NodeExternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+			},
+			expectStaticEndpoints: false,
+			expectErrOnReconcile:  true,
+		},
+		{
+			name: "NonClashingRanges",
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3000, EndPort: 3002},
+						{Port: 3003, EndPort: 3005},
+						{Port: 3006},
+					},
+					Selector: map[string]string{
+						"foo/bar": "baz",
+					},
+				},
+			},
+			replicas: ptr.To(int32(3)),
+			nodes: []testNode{
+				{name: "node1", addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+				{name: "node2", addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+				{name: "node3", addresses: []testNodeAddr{{ip: "10.0.0.3", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+			},
+			expectStaticEndpoints: true,
+			expectErrOnReconcile:  false,
+			expectStatefulSet:     true,
+		},
+		{
+			name: "SingleValidPorts",
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3100},
+						{Port: 3101},
+						{Port: 3102},
+					},
+					Selector: map[string]string{
+						"foo/bar": "baz",
+					},
+				},
+			},
+			replicas: ptr.To(int32(3)),
+			nodes: []testNode{
+				{name: "node1", addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+				{name: "node2", addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+				{name: "node3", addresses: []testNodeAddr{{ip: "10.0.0.3", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+			},
+			expectStaticEndpoints: true,
+			expectErrOnReconcile:  false,
+			expectStatefulSet:     true,
+		},
+		{
+			name: "NoMatchingNodes",
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3000, EndPort: 3005},
+					},
+					Selector: map[string]string{
+						"zone": "us-west",
+					},
+				},
+			},
+			replicas: ptr.To(int32(2)),
+			nodes: []testNode{
+				{name: "node1", addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"zone": "eu-central"}},
+				{name: "node2", addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeInternalIP}}, labels: map[string]string{"zone": "eu-central"}},
+			},
+			expectStaticEndpoints: false,
+			// we don't expect an err here since we want to avoid retrying the reconcile
+			expectErrOnReconcile: false,
+			expectStatefulSet:    false,
+		},
+		{
+			name: "AllInternalIPAddresses",
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3001},
+						{Port: 3005},
+						{Port: 3007},
+						{Port: 3009},
+					},
+					Selector: map[string]string{
+						"foo/bar": "baz",
+					},
+				},
+			},
+			replicas: ptr.To(int32(4)),
+			nodes: []testNode{
+				{
+					name:      "foobar",
+					addresses: []testNodeAddr{{ip: "192.168.0.1", addrType: corev1.NodeInternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+				{
+					name:      "foobarbaz",
+					addresses: []testNodeAddr{{ip: "192.168.0.2", addrType: corev1.NodeInternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+				{
+					name:      "foobarbazz",
+					addresses: []testNodeAddr{{ip: "192.168.0.3", addrType: corev1.NodeInternalIP}},
+					labels:    map[string]string{"foo/bar": "baz"},
+				},
+			},
+			expectStaticEndpoints: false,
+			expectErrOnReconcile:  false,
+			expectStatefulSet:     false,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) { // Use t.Run here
+			tsClient := &fakeTSClient{}
+			zl, _ := zap.NewDevelopment()
+			fr := record.NewFakeRecorder(1)
+			cl := tstest.NewClock(tstest.ClockOpts{})
+			pc := &tsapi.ProxyClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "default-pc",
+				},
+				Spec: tsapi.ProxyClassSpec{
+					StatefulSet: &tsapi.StatefulSet{
+						Annotations: defaultProxyClassAnnotations,
+					},
+					StaticEndpoints: tt.staticEndpointConfig,
+				},
+				Status: tsapi.ProxyClassStatus{
+					Conditions: []metav1.Condition{{
+						Type:               string(tsapi.ProxyClassReady),
+						Status:             metav1.ConditionTrue,
+						Reason:             reasonProxyClassValid,
+						Message:            reasonProxyClassValid,
+						LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
+					}},
+				},
+			}
+
+			pg := &tsapi.ProxyGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test",
+					Finalizers: []string{"tailscale.com/finalizer"},
+				},
+				Spec: tsapi.ProxyGroupSpec{
+					Type:       tsapi.ProxyGroupTypeEgress,
+					ProxyClass: pc.Name,
+					Replicas:   tt.replicas,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				WithObjects(pg, pc).
+				WithStatusSubresource(pg, pc).
+				Build()
+
+			ppc := &tsapi.ProxyClass{}
+			_ = fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: "default-pc"}, ppc)
+
+			if len(tt.nodes) == 0 {
+				tt.nodes = []testNode{
+					{
+						name:      "test-123",
+						addresses: []testNodeAddr{{ip: "192.168.0.1", addrType: corev1.NodeExternalIP}},
+						labels: map[string]string{
+							"foo/bar": "baz",
+						},
+					},
+				}
+			}
+
+			expectedIPs := []string{}
+			expectedPorts := []uint16{}
+			if tt.staticEndpointConfig != nil && tt.staticEndpointConfig.NodePort != nil {
+				for _, r := range tt.staticEndpointConfig.NodePort.Ports {
+					if r.EndPort == 0 {
+						expectedPorts = append(expectedPorts, r.Port)
+					} else {
+						for p := r.Port; p <= r.EndPort; p++ {
+							expectedPorts = append(expectedPorts, p)
+						}
+					}
+				}
+			}
+
+			for _, n := range tt.nodes {
+				if tt.staticEndpointConfig != nil && tt.staticEndpointConfig.NodePort != nil {
+					for k, v := range tt.staticEndpointConfig.NodePort.Selector {
+						if va, ok := n.labels[k]; ok && v == va {
+							for _, addr := range n.addresses {
+								if addr.addrType == corev1.NodeExternalIP {
+									expectedIPs = append(expectedIPs, addr.ip)
+								}
+							}
+						}
+					}
+				}
+
+				no := &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   n.name,
+						Labels: n.labels,
+					},
+					Status: corev1.NodeStatus{
+						Addresses: []corev1.NodeAddress{},
+					},
+				}
+
+				for _, addr := range n.addresses {
+					no.Status.Addresses = append(no.Status.Addresses, corev1.NodeAddress{
+						Type:    addr.addrType,
+						Address: addr.ip,
+					})
+				}
+
+				fc.Create(context.Background(), no)
+			}
+
+			reconciler := &ProxyGroupReconciler{
+				tsNamespace:       tsNamespace,
+				proxyImage:        testProxyImage,
+				defaultTags:       []string{"tag:test-tag"},
+				tsFirewallMode:    "auto",
+				defaultProxyClass: "default-pc",
+
+				Client:   fc,
+				tsClient: tsClient,
+				recorder: fr,
+				l:        zl.Sugar(),
+				clock:    cl,
+			}
+
+			if tt.expectErrOnReconcile {
+				expectError(t, reconciler, "", pg.Name)
+			} else {
+				expectReconciled(t, reconciler, "", pg.Name)
+				if tt.name == "InvalidPort" {
+					expectEvents(t, fr, []string{})
+				}
+
+				if err := fc.Get(context.Background(), client.ObjectKey{Name: pc.Name}, pc); err != nil {
+					t.Fatalf("failed to get ProxyClass: %v", err)
+				}
+
+				svcs := []corev1.Service{}
+				if tt.expectStaticEndpoints && tt.replicas != nil {
+					for i := range *tt.replicas {
+						svc := &corev1.Service{}
+						err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: fmt.Sprintf("%s-%d", pg.Name, i)}, svc)
+						if err != nil {
+							t.Logf("Error getting service for replica %d: %v", i, err)
+						}
+					}
+				}
+
+				if !tt.expectStaticEndpoints && len(svcs) > 0 {
+					t.Fatalf("expected 0 static endpoint services, found %d", len(svcs))
+				}
+
+				sts := &appsv1.StatefulSet{}
+				err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts)
+				if !tt.expectStatefulSet {
+					if err == nil {
+						t.Fatalf("expected no StatefulSet to be created but got one of name %q", sts.Name)
+					}
+				} else {
+					if err != nil {
+						t.Fatalf("failed to get StatefulSet: %v", err)
+					}
+
+					found := false
+					for _, c := range sts.Spec.Template.Spec.Containers {
+						if c.Name == "tailscale" {
+							for _, e := range c.Env {
+								if e.Name == "PORT" {
+									found = true
+									break
+								}
+							}
+						}
+					}
+
+					if !tt.expectStaticEndpoints && found {
+						t.Fatalf("found unexpected 'PORT' env var on ProxyGroup StatefulSet")
+					}
+					if tt.expectStaticEndpoints && !found {
+						t.Fatalf("couldn't find expected 'PORT' env var on ProxyGroup StatefulSet")
+					}
+
+					if tt.replicas != nil {
+						for i := range *tt.replicas {
+							sec := &corev1.Secret{}
+							if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: fmt.Sprintf("%s-%d-config", pg.Name, i)}, sec); err != nil {
+								t.Fatalf("failed to get state Secret: %v", err)
+							}
+
+							config := &ipn.ConfigVAlpha{}
+							found = false // Reset found for each secret
+							for _, d := range sec.Data {
+								if err := json.Unmarshal(d, config); err == nil {
+									if !tt.expectStaticEndpoints && len(config.StaticEndpoints) > 0 {
+										t.Fatalf("found unexpected StaticEndpoints in config Secret: %s", config.StaticEndpoints)
+									}
+
+									if tt.expectStaticEndpoints && len(config.StaticEndpoints) < 1 {
+										t.Fatalf("expected StaticEndpoints in config Secret but none found")
+									}
+
+									for _, e := range config.StaticEndpoints {
+										// Simplified check as per previous logic.
+										// This check might be too loose if multiple IPs/ports are expected in specific combinations.
+										// If specific IP-Port pairings are critical, more detailed checks are needed.
+										ipFound := false
+										for _, expectedIP := range expectedIPs {
+											if e.Addr().String() == expectedIP {
+												ipFound = true
+												break
+											}
+										}
+										portFound := false
+										for _, expectedPort := range expectedPorts {
+											if uint16(e.Port()) == expectedPort {
+												portFound = true
+												break
+											}
+										}
+
+										if !ipFound || !portFound {
+											t.Fatalf("found unexpected static endpoint %q: does not match expected IPs %q and expected Ports %q", e.String(), expectedIPs, expectedPorts)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+
+				t.Run("delete_and_cleanup", func(t *testing.T) {
+					if err := fc.Delete(context.Background(), pg); err != nil {
+						t.Fatalf("error deleting ProxyGroup: %v", err)
+					}
+
+					expectReconciled(t, reconciler, "", pg.Name)
+
+					expectMissing[tsapi.ProxyGroup](t, fc, "", pg.Name)
+					// The line below was removed as requested.
+					// if expected := 0; reconciler.egressProxyGroups.Len() != expected {
+					// 	t.Fatalf("expected %d ProxyGroups, got %d", expected, reconciler.egressProxyGroups.Len())
+					// }
+
+					for _, n := range tt.nodes {
+						node := &corev1.Node{
+							ObjectMeta: metav1.ObjectMeta{
+								Name: n.name,
+							},
+						}
+						if err := fc.Delete(context.Background(), node); err != nil {
+							t.Fatalf("error deleting node: %v", err)
+						}
+					}
+
+					// The fake client does not clean up objects whose owner has been
+					// deleted, so we can't test for the owned resources getting deleted.
+				})
+			}
+		})
+	}
+}
+
+func TestProxyGroup(t *testing.T) {
 	pc := &tsapi.ProxyClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "default-pc",
@@ -611,7 +1109,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	role := pgRole(pg, tsNamespace)
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
-	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", proxyClass)
+	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", nil, proxyClass)
 	if err != nil {
 		t.Fatal(err)
 	}

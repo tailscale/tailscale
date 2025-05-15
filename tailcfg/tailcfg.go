@@ -1424,8 +1424,8 @@ type MapRequest struct {
 
 // PortRange represents a range of UDP or TCP port numbers.
 type PortRange struct {
-	First uint16
-	Last  uint16
+	First uint16 `json:"first"`
+	Last  uint16 `json:"last"`
 }
 
 // Contains reports whether port is in pr.

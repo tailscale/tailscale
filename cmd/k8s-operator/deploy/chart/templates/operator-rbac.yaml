@@ -17,6 +17,9 @@ metadata:
   name: tailscale-operator
 rules:
 - apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
   resources: ["events", "services", "services/status"]
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["networking.k8s.io"]
