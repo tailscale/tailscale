@@ -525,10 +525,11 @@ func runReconcilers(opts reconcilerOpts) {
 		Named("proxyclass-reconciler").
 		Watches(&apiextensionsv1.CustomResourceDefinition{}, serviceMonitorFilter).
 		Complete(&ProxyClassReconciler{
-			Client:   mgr.GetClient(),
-			recorder: eventRecorder,
-			logger:   opts.log.Named("proxyclass-reconciler"),
-			clock:    tstime.DefaultClock{},
+			Client:      mgr.GetClient(),
+			recorder:    eventRecorder,
+			tsNamespace: opts.tailscaleNamespace,
+			logger:      opts.log.Named("proxyclass-reconciler"),
+			clock:       tstime.DefaultClock{},
 		})
 	if err != nil {
 		startlog.Fatal("could not create proxyclass reconciler: %v", err)
@@ -590,6 +591,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}).
 		Named("proxygroup-reconciler").
+		Watches(&corev1.Service{}, ownedByProxyGroupFilter).
 		Watches(&appsv1.StatefulSet{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ConfigMap{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ServiceAccount{}, ownedByProxyGroupFilter).

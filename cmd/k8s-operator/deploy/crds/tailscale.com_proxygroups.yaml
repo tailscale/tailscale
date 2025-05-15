@@ -189,6 +189,7 @@ spec:
                     type: object
                     required:
                       - hostname
+                      - tailnetListeners
                     properties:
                       hostname:
                         description: |-
@@ -200,6 +201,13 @@ spec:
                         description: |-
                           TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
                           assigned to the device.
+                        type: array
+                        items:
+                          type: string
+                      tailnetListeners:
+                        description: |-
+                          TailnetListener is the configuration set on the device to facilitate direct
+                          connections
                         type: array
                         items:
                           type: string

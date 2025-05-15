@@ -28,7 +28,7 @@ const deletionGracePeriodSeconds int64 = 360
 
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
-func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
+func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, port *int32, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -142,6 +142,13 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
 			},
+		}
+
+		if port != nil {
+			envs = append(envs, corev1.EnvVar{
+				Name:  "PORT",
+				Value: strconv.Itoa(int(*port)),
+			})
 		}
 
 		if tsFirewallMode != "" {

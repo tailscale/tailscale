@@ -104,6 +104,10 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	hostname := nameForService(svc)
 	logger = logger.With("hostname", hostname)
 
+	if isManagedResource(svc) {
+		return reconcile.Result{}, nil
+	}
+
 	if !svc.DeletionTimestamp.IsZero() || !r.isTailscaleService(svc) {
 		logger.Debugf("Service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
 		_, err = r.maybeCleanup(ctx, hostname, svc, logger)
