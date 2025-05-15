@@ -6,6 +6,10 @@
 package v1alpha1
 
 import (
+	"fmt"
+	"iter"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -82,6 +86,124 @@ type ProxyClassSpec struct {
 	// renewed.
 	// +optional
 	UseLetsEncryptStagingEnvironment bool `json:"useLetsEncryptStagingEnvironment,omitempty"`
+	// Configuration for 'static endpoints' on proxies in order to facilitate
+	// direct connections from other devices on the tailnet.
+	// See https://tailscale.com/kb/1445/kubernetes-operator-customization#static-endpoints.
+	// +optional
+	StaticEndpoints *StaticEndpointsConfig `json:"staticEndpoints,omitempty"`
+}
+
+type StaticEndpointsConfig struct {
+	// The configuration for static endpoints using NodePort Services.
+	NodePort *NodePortConfig `json:"nodePort"`
+}
+
+type NodePortConfig struct {
+	// The port ranges from which the operator will select NodePorts for the Services.
+	// You must ensure that firewall rules allow UDP ingress traffic for these ports
+	// to the node's external IPs.
+	// The ports must be in the range of service node ports for the cluster (default `30000-32767`).
+	// See https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport.
+	// +kubebuilder:validation:MinItems=1
+	Ports []PortRange `json:"ports"`
+	// A selector which will be used to select the node's that will have their `ExternalIP`'s advertised
+	// by the ProxyGroup as Static Endpoints.
+	Selector map[string]string `json:"selector,omitempty"`
+}
+
+// PortRanges is a list of PortRange(s)
+type PortRanges []PortRange
+
+func (prs PortRanges) String() string {
+	var prStrings []string
+
+	for _, pr := range prs {
+		prStrings = append(prStrings, pr.String())
+	}
+
+	return strings.Join(prStrings, ", ")
+}
+
+// All allows us to iterate over all the ports in the PortRanges
+func (prs PortRanges) All() iter.Seq[uint16] {
+	return func(yield func(uint16) bool) {
+		for _, pr := range prs {
+			end := pr.EndPort
+			if end == 0 {
+				end = pr.Port
+			}
+
+			for port := pr.Port; port <= end; port++ {
+				if !yield(port) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// Contains reports whether port is in any of the PortRanges.
+func (prs PortRanges) Contains(port uint16) bool {
+	for _, r := range prs {
+		if r.Contains(port) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ClashesWith reports whether the supplied PortRange clashes with any of the PortRanges.
+func (prs PortRanges) ClashesWith(pr PortRange) bool {
+	for p := range prs.All() {
+		if pr.Contains(p) {
+			return true
+		}
+	}
+
+	return false
+}
+
+type PortRange struct {
+	// port represents a port selected to be used. This is a required field.
+	Port uint16 `json:"port"`
+
+	// endPort indicates that the range of ports from port to endPort if set, inclusive,
+	// should be used. This field cannot be defined if the port field is not defined.
+	// The endPort must be either unset, or equal or greater than port.
+	// +optional
+	EndPort uint16 `json:"endPort,omitempty"`
+}
+
+// Contains reports whether port is in pr.
+func (pr PortRange) Contains(port uint16) bool {
+	switch pr.EndPort {
+	case 0:
+		return port == pr.Port
+	default:
+		return port >= pr.Port && port <= pr.EndPort
+	}
+}
+
+// String returns the PortRange in a string form.
+func (pr PortRange) String() string {
+	if pr.EndPort == 0 {
+		return fmt.Sprintf("%d", pr.Port)
+	}
+
+	return fmt.Sprintf("%d-%d", pr.Port, pr.EndPort)
+}
+
+// IsValid reports whether the port range is valid.
+func (pr PortRange) IsValid() bool {
+	if pr.Port == 0 {
+		return false
+	}
+	if pr.EndPort == 0 {
+		return true
+	}
+
+	return pr.Port <= pr.EndPort
 }
 
 type TailscaleConfig struct {

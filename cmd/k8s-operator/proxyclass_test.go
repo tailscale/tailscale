@@ -131,9 +131,11 @@ func TestProxyClass(t *testing.T) {
 		proxyClass.Spec.StatefulSet.Pod.TailscaleInitContainer.Image = pc.Spec.StatefulSet.Pod.TailscaleInitContainer.Image
 		proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Env = []tsapi.Env{{Name: "TS_USERSPACE", Value: "true"}, {Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH"}, {Name: "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS"}}
 	})
-	expectedEvents := []string{"Warning CustomTSEnvVar ProxyClass overrides the default value for TS_USERSPACE env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
+	expectedEvents := []string{
+		"Warning CustomTSEnvVar ProxyClass overrides the default value for TS_USERSPACE env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
 		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_TS_CONFIGFILE_PATH env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
-		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future."}
+		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
+	}
 	expectReconciled(t, pcr, "", "test")
 	expectEvents(t, fr, expectedEvents)
 
@@ -174,6 +176,110 @@ func TestProxyClass(t *testing.T) {
 	expectReconciled(t, pcr, "", "test")
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, 0, cl, zl.Sugar())
 	expectEqual(t, fc, pc)
+}
+
+func TestValidateProxyClassStaticEndpoints(t *testing.T) {
+	for name, tc := range map[string]struct {
+		staticEndpointConfig *tsapi.StaticEndpointsConfig
+		valid                bool
+	}{
+		"no_static_endpoints": {
+			staticEndpointConfig: nil,
+			valid:                true,
+		},
+		"valid_specific_ports": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3001},
+						{Port: 3005},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: true,
+		},
+		"valid_port_ranges": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3000, EndPort: 3002},
+						{Port: 3005, EndPort: 3007},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: true,
+		},
+		"overlapping_port_ranges": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 1000, EndPort: 2000},
+						{Port: 1500, EndPort: 1800},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: false,
+		},
+		"clashing_port_and_range": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3005},
+						{Port: 3001, EndPort: 3010},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: false,
+		},
+		"malformed_port_range": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports: []tsapi.PortRange{
+						{Port: 3001, EndPort: 3000},
+					},
+					Selector: map[string]string{"kubernetes.io/hostname": "foobar"},
+				},
+			},
+			valid: false,
+		},
+		"empty_selector": {
+			staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports:    []tsapi.PortRange{{Port: 3000}},
+					Selector: map[string]string{},
+				},
+			},
+			valid: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fc := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				Build()
+			zl, _ := zap.NewDevelopment()
+			pcr := &ProxyClassReconciler{
+				logger: zl.Sugar(),
+				Client: fc,
+			}
+
+			pc := &tsapi.ProxyClass{
+				Spec: tsapi.ProxyClassSpec{
+					StaticEndpoints: tc.staticEndpointConfig,
+				},
+			}
+
+			logger := pcr.logger.With("ProxyClass", pc)
+			err := pcr.validate(context.Background(), pc, logger)
+			valid := err == nil
+			if valid != tc.valid {
+				t.Errorf("expected valid=%v, got valid=%v, err=%v", tc.valid, valid, err)
+			}
+		})
+	}
 }
 
 func TestValidateProxyClass(t *testing.T) {
@@ -219,8 +325,12 @@ func TestValidateProxyClass(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			pcr := &ProxyClassReconciler{}
-			err := pcr.validate(context.Background(), tc.pc)
+			zl, _ := zap.NewDevelopment()
+			pcr := &ProxyClassReconciler{
+				logger: zl.Sugar(),
+			}
+			logger := pcr.logger.With("ProxyClass", tc.pc)
+			err := pcr.validate(context.Background(), tc.pc, logger)
 			valid := err == nil
 			if valid != tc.valid {
 				t.Errorf("expected valid=%v, got valid=%v, err=%v", tc.valid, valid, err)
