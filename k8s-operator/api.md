@@ -425,6 +425,23 @@ _Appears in:_
 | `ip` _string_ | IP is the ClusterIP of the Service fronting the deployed ts.net nameserver.<br />Currently you must manually update your cluster DNS config to add<br />this address as a stub nameserver for ts.net for cluster workloads to be<br />able to resolve MagicDNS names associated with egress or Ingress<br />proxies.<br />The IP address will change if you delete and recreate the DNSConfig. |  |  |
 
 
+#### NodePortConfig
+
+
+
+
+
+
+
+_Appears in:_
+- [StaticEndpointsConfig](#staticendpointsconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `ports` _[PortRange](#portrange) array_ | The port ranges from which the operator will select NodePorts for the Services.<br />You must ensure that firewall rules allow UDP ingress traffic for these ports<br />to the node's external IPs.<br />The ports must be in the range of service node ports for the cluster (default `30000-32767`).<br />See https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport. |  | MinItems: 1 <br /> |
+| `selector` _object (keys:string, values:string)_ | A selector which will be used to select the node's that will have their `ExternalIP`'s advertised<br />by the ProxyGroup as Static Endpoints. |  |  |
+
+
 #### Pod
 
 
@@ -449,6 +466,26 @@ _Appears in:_
 | `nodeSelector` _object (keys:string, values:string)_ | Proxy Pod's node selector.<br />By default Tailscale Kubernetes operator does not apply any node<br />selector.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
 | `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | Proxy Pod's tolerations.<br />By default Tailscale Kubernetes operator does not apply any<br />tolerations.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
 | `topologySpreadConstraints` _[TopologySpreadConstraint](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#topologyspreadconstraint-v1-core) array_ | Proxy Pod's topology spread constraints.<br />By default Tailscale Kubernetes operator does not apply any topology spread constraints.<br />https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/ |  |  |
+
+
+#### PortRange
+
+
+
+
+
+
+
+_Appears in:_
+- [NodePortConfig](#nodeportconfig)
+- [PortRanges](#portranges)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `port` _integer_ | port represents a port selected to be used. This is a required field. |  |  |
+| `endPort` _integer_ | endPort indicates that the range of ports from port to endPort if set, inclusive,<br />should be used. This field cannot be defined if the port field is not defined.<br />The endPort must be either unset, or equal or greater than port. |  |  |
+
+
 
 
 #### ProxyClass
@@ -518,6 +555,7 @@ _Appears in:_
 | `metrics` _[Metrics](#metrics)_ | Configuration for proxy metrics. Metrics are currently not supported<br />for egress proxies and for Ingress proxies that have been configured<br />with tailscale.com/experimental-forward-cluster-traffic-via-ingress<br />annotation. Note that the metrics are currently considered unstable<br />and will likely change in breaking ways in the future - we only<br />recommend that you use those for debugging purposes. |  |  |
 | `tailscale` _[TailscaleConfig](#tailscaleconfig)_ | TailscaleConfig contains options to configure the tailscale-specific<br />parameters of proxies. |  |  |
 | `useLetsEncryptStagingEnvironment` _boolean_ | Set UseLetsEncryptStagingEnvironment to true to issue TLS<br />certificates for any HTTPS endpoints exposed to the tailnet from<br />LetsEncrypt's staging environment.<br />https://letsencrypt.org/docs/staging-environment/<br />This setting only affects Tailscale Ingress resources.<br />By default Ingress TLS certificates are issued from LetsEncrypt's<br />production environment.<br />Changing this setting true -> false, will result in any<br />existing certs being re-issued from the production environment.<br />Changing this setting false (default) -> true, when certs have already<br />been provisioned from production environment will NOT result in certs<br />being re-issued from the staging environment before they need to be<br />renewed. |  |  |
+| `staticEndpoints` _[StaticEndpointsConfig](#staticendpointsconfig)_ | Configuration for 'static endpoints' on proxies in order to facilitate<br />direct connections from other devices on the tailnet.<br />See https://tailscale.com/kb/1445/kubernetes-operator-customization#static-endpoints. |  |  |
 
 
 #### ProxyClassStatus
@@ -935,6 +973,22 @@ _Appears in:_
 | `pod` _[Pod](#pod)_ | Configuration for the proxy Pod. |  |  |
 
 
+#### StaticEndpointsConfig
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyClassSpec](#proxyclassspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `nodePort` _[NodePortConfig](#nodeportconfig)_ | The configuration for static endpoints using NodePort Services. |  |  |
+
+
 #### Storage
 
 
@@ -1015,6 +1069,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
+| `staticEndpoints` _string array_ | StaticEndpoints are user configured, 'static' endpoints by which tailnet peers can reach this device. |  |  |
 
 
 #### TailscaleConfig
