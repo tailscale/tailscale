@@ -14,10 +14,6 @@ import (
 )
 
 func init() {
-	registerAvailableExternalStores = append(registerAvailableExternalStores, registerKubeStore)
-}
-
-func registerKubeStore() {
 	Register("kube:", func(logf logger.Logf, path string) (ipn.StateStore, error) {
 		secretName := strings.TrimPrefix(path, "kube:")
 		return kubestore.New(logf, secretName)

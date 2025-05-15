@@ -26,16 +26,8 @@ import (
 // The arg is of the form "prefix:rest", where prefix was previously registered with Register.
 type Provider func(logf logger.Logf, arg string) (ipn.StateStore, error)
 
-var regOnce sync.Once
-
-var registerAvailableExternalStores []func()
-
-func registerDefaultStores() {
+func init() {
 	Register("mem:", mem.New)
-
-	for _, f := range registerAvailableExternalStores {
-		f()
-	}
 }
 
 var knownStores map[string]Provider
@@ -55,7 +47,6 @@ var knownStores map[string]Provider
 //     the suffix is a Kubernetes secret name
 //   - In all other cases, the path is treated as a filepath.
 func New(logf logger.Logf, path string) (ipn.StateStore, error) {
-	regOnce.Do(registerDefaultStores)
 	for prefix, sf := range knownStores {
 		if strings.HasPrefix(path, prefix) {
 			// We can't strip the prefix here as some NewStoreFunc (like arn:)
