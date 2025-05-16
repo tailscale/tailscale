@@ -91,6 +91,10 @@ type managerOptions struct {
 	// copy them out, and then delete them.
 	DirectFileMode bool
 
+	FileOps FileOps
+
+	Mode PutMode
+
 	// SendFileNotify is called periodically while a file is actively
 	// receiving the contents for the file. There is a final call
 	// to the function when reception completes.
