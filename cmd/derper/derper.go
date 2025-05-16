@@ -96,9 +96,6 @@ var (
 var (
 	tlsRequestVersion = &metrics.LabelMap{Label: "version"}
 	tlsActiveVersion  = &metrics.LabelMap{Label: "version"}
-
-	// Exactly 64 hexadecimal lowercase digits.
-	validMeshKey = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 const setecMeshKeyName = "meshkey"
@@ -157,14 +154,6 @@ func writeNewConfig() config {
 		log.Fatal(err)
 	}
 	return cfg
-}
-
-func checkMeshKey(key string) (string, error) {
-	key = strings.TrimSpace(key)
-	if !validMeshKey.MatchString(key) {
-		return "", errors.New("key must contain exactly 64 hex digits")
-	}
-	return key, nil
 }
 
 func main() {
@@ -246,10 +235,9 @@ func main() {
 		log.Printf("No mesh key configured for --dev mode")
 	} else if meshKey == "" {
 		log.Printf("No mesh key configured")
-	} else if key, err := checkMeshKey(meshKey); err != nil {
+	} else if err := s.SetMeshKey(meshKey); err != nil {
 		log.Fatalf("invalid mesh key: %v", err)
 	} else {
-		s.SetMeshKey(key)
 		log.Println("DERP mesh key configured")
 	}
 

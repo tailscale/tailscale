@@ -57,7 +57,7 @@ type Client struct {
 	TLSConfig     *tls.Config        // optional; nil means default
 	HealthTracker *health.Tracker    // optional; used if non-nil only
 	DNSCache      *dnscache.Resolver // optional; nil means no caching
-	MeshKey       string             // optional; for trusted clients
+	MeshKey       key.DERPMesh       // optional; for trusted clients
 	IsProber      bool               // optional; for probers to optional declare themselves as such
 
 	// WatchConnectionChanges is whether the client wishes to subscribe to

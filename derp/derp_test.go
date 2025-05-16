@@ -511,11 +511,13 @@ func (ts *testServer) close(t *testing.T) error {
 	return nil
 }
 
+const testMeshKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
 func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	t.Helper()
 	logf := logger.WithPrefix(t.Logf, "derp-server: ")
 	s := NewServer(key.NewNode(), logf)
-	s.SetMeshKey("mesh-key")
+	s.SetMeshKey(testMeshKey)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -591,8 +593,12 @@ func newRegularClient(t *testing.T, ts *testServer, name string) *testClient {
 
 func newTestWatcher(t *testing.T, ts *testServer, name string) *testClient {
 	return newTestClient(t, ts, name, func(nc net.Conn, priv key.NodePrivate, logf logger.Logf) (*Client, error) {
+		mk, err := key.ParseDERPMesh(testMeshKey)
+		if err != nil {
+			return nil, err
+		}
 		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
-		c, err := NewClient(priv, nc, brw, logf, MeshKey("mesh-key"))
+		c, err := NewClient(priv, nc, brw, logf, MeshKey(mk))
 		if err != nil {
 			return nil, err
 		}
@@ -1624,6 +1630,99 @@ func TestGetPerClientSendQueueDepth(t *testing.T) {
 			t.Setenv(envKey, tc.envVal)
 			val := getPerClientSendQueueDepth()
 			c.Assert(val, qt.Equals, tc.want)
+		})
+	}
+}
+
+func TestSetMeshKey(t *testing.T) {
+	for name, tt := range map[string]struct {
+		key     string
+		want    key.DERPMesh
+		wantErr bool
+	}{
+		"clobber": {
+			key:     testMeshKey,
+			wantErr: false,
+		},
+		"invalid": {
+			key:     "badf00d",
+			wantErr: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &Server{}
+
+			err := s.SetMeshKey(tt.key)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected err")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+
+			want, err := key.ParseDERPMesh(tt.key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !s.meshKey.Equal(want) {
+				t.Fatalf("got %v, want %v", s.meshKey, want)
+			}
+		})
+	}
+}
+
+func TestIsMeshPeer(t *testing.T) {
+	s := &Server{}
+	err := s.SetMeshKey(testMeshKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tt := range map[string]struct {
+		info       *clientInfo
+		want       bool
+		wantAllocs float64
+	}{
+		"nil": {
+			info:       nil,
+			want:       false,
+			wantAllocs: 0,
+		},
+		"empty": {
+			info:       &clientInfo{MeshKey: ""},
+			want:       false,
+			wantAllocs: 0,
+		},
+		"invalid": {
+			info:       &clientInfo{MeshKey: "invalid"},
+			want:       false,
+			wantAllocs: 2, // error message
+		},
+		"mismatch": {
+			info:       &clientInfo{MeshKey: "0badf00d00000000000000000000000000000000000000000000000000000000"},
+			want:       false,
+			wantAllocs: 1,
+		},
+		"match": {
+			info:       &clientInfo{MeshKey: testMeshKey},
+			want:       true,
+			wantAllocs: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got bool
+			allocs := testing.AllocsPerRun(1, func() {
+				got = s.isMeshPeer(tt.info)
+			})
+			if got != tt.want {
+				t.Fatalf("got %t, want %t: info = %#v", got, tt.want, tt.info)
+			}
+
+			if allocs != tt.wantAllocs && tt.want {
+				t.Errorf("%f allocations, want %f", allocs, tt.wantAllocs)
+			}
 		})
 	}
 }
