@@ -598,6 +598,9 @@ func TestProberRunHandler(t *testing.T) {
 				}
 
 				if reqJSON {
+					if w.Header().Get("Content-Type") != "application/json" {
+						t.Errorf("unexpected content type: got %q, want application/json", w.Header().Get("Content-Type"))
+					}
 					var gotJSON RunHandlerResponse
 					if err := json.Unmarshal(w.Body.Bytes(), &gotJSON); err != nil {
 						t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, w.Body.String())
