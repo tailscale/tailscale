@@ -1013,5 +1013,6 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `acceptRoutes` _boolean_ | AcceptRoutes can be set to true to make the proxy instance accept<br />routes advertized by other nodes on the tailnet, such as subnet<br />routes.<br />This is equivalent of passing --accept-routes flag to a tailscale Linux client.<br />https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices<br />Defaults to false. |  |  |
+| `ephemeral` _boolean_ | Ephemeral can be set to true to make the proxy instance register<br />as an ephemeral node. Ephemeral nodes are automatically deleted<br />from the tailnet when they are offline for a while.<br />https://tailscale.com/kb/1111/ephemeral-nodes/<br />Defaults to false. |  |  |
 
 
