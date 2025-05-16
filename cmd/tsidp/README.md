@@ -83,14 +83,36 @@ The `tsidp` server supports several command-line flags:
 - `--local-port`: Allow requests from localhost
 - `--use-local-tailscaled`: Use local tailscaled instead of tsnet
 - `--hostname`: tsnet hostname
-- `--dir`: tsnet state directory
+- `--dir`: tsnet state directory; a default one will be created if not provided
+- `--state`: Path to tailscale state file. Can also be set to use a Kubernetes Secret with the format `kube:<secret-name>`. If unset, `dir` is used for file-based state, or tsnet default if `dir` is also unset.
 
 ## Environment Variables
 
 - `TS_AUTHKEY`: Your Tailscale authentication key (required)
 - `TS_HOSTNAME`: Hostname for the `tsidp` server (default: "idp", Docker only)
-- `TS_STATE_DIR`: State directory (default: "/var/lib/tsidp", Docker only)
+- `TS_STATE_DIR`: Default state directory for `tsnet` (default: "/var/lib/tsidp" in Docker). This variable typically sets the default for the `--dir` flag in the Docker environment. `tsnet` uses the directory specified by `--dir` (or its internal default if `--dir` is not set) for its persistent files (e.g., node keys).
+- `TS_STATE`: Path to tailscale state file or `kube:<secret-name>`. Overrides the `--state` flag if set.
 - `TAILSCALE_USE_WIP_CODE`: Enable work-in-progress code (default: "1")
+
+## Storing State in Kubernetes Secrets
+
+When running `tsidp` in a Kubernetes environment, you can configure it to store its state in a Kubernetes Secret. This is achieved by setting the `--state` flag (or `TS_STATE` environment variable) to `kube:<your-secret-name>`.
+
+For example:
+`./tsidp --state kube:my-tsidp-state-secret`
+
+Or using the environment variable:
+`TS_STATE=kube:my-tsidp-state-secret ./tsidp`
+
+### Required RBAC Permissions
+
+If you use Kubernetes Secret storage, the service account under which `tsidp` runs needs the following permissions on the specified Kubernetes Secret:
+- `get`
+- `update` (primary mechanism for writing state)
+- `create` (if the Secret does not already exist)
+- `patch` (beneficial for certain conflict resolution scenarios, but not strictly required for default operation)
+
+Ensure that appropriate Role and RoleBinding are configured in your Kubernetes cluster.
 
 ## Support
 
