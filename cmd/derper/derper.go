@@ -68,7 +68,7 @@ var (
 	runDERP     = flag.Bool("derp", true, "whether to run a DERP server. The only reason to set this false is if you're decommissioning a server but want to keep its bootstrap DNS functionality still running.")
 	flagHome    = flag.String("home", "", "what to serve at the root path. It may be left empty (the default, for a default homepage), \"blank\" for a blank page, or a URL to redirect to")
 
-	meshPSKFile     = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
+	meshPSKFile     = flag.String("mesh-psk-file", defaultMeshPSKFile(), fmt.Sprintf("if non-empty, path to file containing the mesh pre-shared key file. It should match '%s'; whitespace is trimmed.", derp.ValidMeshKey.String()))
 	meshWith        = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list. If an entry contains a slash, the second part names a hostname to be used when dialing the target.")
 	secretsURL      = flag.String("secrets-url", "", "SETEC server URL for secrets retrieval of mesh key")
 	secretPrefix    = flag.String("secrets-path-prefix", "prod/derp", "setec path prefix for \""+setecMeshKeyName+"\" secret for DERP mesh key")
@@ -96,9 +96,6 @@ var (
 var (
 	tlsRequestVersion = &metrics.LabelMap{Label: "version"}
 	tlsActiveVersion  = &metrics.LabelMap{Label: "version"}
-
-	// Exactly 64 hexadecimal lowercase digits.
-	validMeshKey = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 const setecMeshKeyName = "meshkey"
@@ -157,14 +154,6 @@ func writeNewConfig() config {
 		log.Fatal(err)
 	}
 	return cfg
-}
-
-func checkMeshKey(key string) (string, error) {
-	key = strings.TrimSpace(key)
-	if !validMeshKey.MatchString(key) {
-		return "", errors.New("key must contain exactly 64 hex digits")
-	}
-	return key, nil
 }
 
 func main() {
@@ -246,7 +235,7 @@ func main() {
 		log.Printf("No mesh key configured for --dev mode")
 	} else if meshKey == "" {
 		log.Printf("No mesh key configured")
-	} else if key, err := checkMeshKey(meshKey); err != nil {
+	} else if key, err := derp.CheckMeshKey(meshKey); err != nil {
 		log.Fatalf("invalid mesh key: %v", err)
 	} else {
 		s.SetMeshKey(key)
