@@ -12,10 +12,6 @@ import (
 )
 
 func init() {
-	registerAvailableExternalStores = append(registerAvailableExternalStores, registerAWSStore)
-}
-
-func registerAWSStore() {
 	Register("arn:", func(logf logger.Logf, arg string) (ipn.StateStore, error) {
 		ssmARN, opts, err := awsstore.ParseARNAndOpts(arg)
 		if err != nil {
