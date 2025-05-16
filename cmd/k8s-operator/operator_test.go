@@ -1802,6 +1802,54 @@ func Test_metricsResourceCreation(t *testing.T) {
 	// object). We cannot test this using the fake client.
 }
 
+func TestIgnorePGService(t *testing.T) {
+	// NOTE: creating proxygroup stuff just to be sure that it's all ignored
+	_, _, fc, _ := setupServiceTest(t)
+
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+		clock:  clock,
+	}
+
+	// Create a service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxygroup": "test-pg",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	findNoGenName(t, fc, "default", "test", "svc")
+}
+
 func toFQDN(t *testing.T, s string) dnsname.FQDN {
 	t.Helper()
 	fqdn, err := dnsname.ToFQDN(s)
