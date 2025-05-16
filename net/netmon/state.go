@@ -27,6 +27,9 @@ import (
 // same interface and subnet.
 var forceAllIPv6Endpoints = envknob.RegisterBool("TS_DEBUG_FORCE_ALL_IPV6_ENDPOINTS")
 
+// set a debug knob to exclude interfaces from the list of interfaces
+var excludedInterfaces = envknob.RegisterString("TS_DEBUG_EXCLUDED_INTERFACES")
+
 // LoginEndpointForProxyDetermination is the URL used for testing
 // which HTTP proxy the system should use.
 var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
@@ -46,6 +49,22 @@ func isProblematicInterface(nif *net.Interface) bool {
 	return false
 }
 
+func isExcludedInterface(nif *net.Interface) bool {
+	if nif == nil {
+		return false
+	}
+
+	remain := excludedInterfaces()
+	for remain != "" {
+		var candidate string
+		candidate, remain, _ = strings.Cut(remain, ",")
+		if strings.TrimSpace(candidate) == nif.Name {
+			return true
+		}
+	}
+	return false
+}
+
 // LocalAddresses returns the machine's IP addresses, separated by
 // whether they're loopback addresses. If there are no regular addresses
 // it will return any IPv4 linklocal or IPv6 unique local addresses because we
@@ -59,9 +78,9 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 	var regular4, regular6, linklocal4, ula6 []netip.Addr
 	for _, iface := range ifaces {
 		stdIf := iface.Interface
-		if !isUp(stdIf) || isProblematicInterface(stdIf) {
+		if !isUp(stdIf) || isProblematicInterface(stdIf) || isExcludedInterface(stdIf) {
 			// Skip down interfaces and ones that are
-			// problematic that we don't want to try to
+			// problematic or that we don't want to try to
 			// send Tailscale traffic over.
 			continue
 		}
