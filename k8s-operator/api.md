@@ -726,6 +726,7 @@ _Appears in:_
 | `imagePullSecrets` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#localobjectreference-v1-core) array_ | Image pull Secrets for Recorder Pods.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec |  |  |
 | `nodeSelector` _object (keys:string, values:string)_ | Node selector rules for Recorder Pods. By default, the operator does<br />not apply any node selector rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
 | `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | Tolerations for Recorder Pods. By default, the operator does not apply<br />any tolerations.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+| `serviceAccountName` _string_ | The service account to use for the Recorder's StatefulSet. If not set,<br />the operator will create a service account with the same name as the<br />Recorder resource.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account |  |  |
 
 
 #### RecorderSpec
