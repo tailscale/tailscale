@@ -64,6 +64,10 @@ type Dialer struct {
 	// If nil, it's not used.
 	NetstackDialUDP func(context.Context, netip.AddrPort) (net.Conn, error)
 
+	// UserDialCustomResolverDial if non-nil is invoked by UserDial to resolve a destination address.
+	// It is invoked after the in-memory tailnet machine map.
+	UserDialCustomResolverDial func(context.Context, string, string) (net.Conn, error)
+
 	peerClientOnce sync.Once
 	peerClient     *http.Client
 
@@ -297,9 +301,9 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 	d.dns = m
 }
 
-// userDialResolve resolves addr as if a user initiating the dial. (e.g. from a
+// UserDialResolve resolves addr as if a user initiating the dial. (e.g. from a
 // SOCKS or HTTP outbound proxy)
-func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
+func (d *Dialer) UserDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
 	d.mu.Lock()
 	dns := d.dns
 	exitDNSDoH := d.exitDNSDoHBase
@@ -332,6 +336,9 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 				dnsCache: d.dnsCache,
 			}, nil
 		}
+	} else if d.UserDialCustomResolverDial != nil { // Use custom resolver if set.
+		r.PreferGo = true
+		r.Dial = d.UserDialCustomResolverDial
 	}
 
 	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
@@ -419,7 +426,7 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 // UserDial connects to the provided network address as if a user were
 // initiating the dial. (e.g. from a SOCKS or HTTP outbound proxy)
 func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	ipp, err := d.userDialResolve(ctx, network, addr)
+	ipp, err := d.UserDialResolve(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
