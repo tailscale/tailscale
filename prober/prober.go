@@ -559,8 +559,8 @@ func (p *Prober) RunHandler(w http.ResponseWriter, r *http.Request) error {
 			PreviousSuccessRatio:  prevInfo.RecentSuccessRatio(),
 			PreviousMedianLatency: prevInfo.RecentMedianLatency(),
 		}
-		w.WriteHeader(respStatus)
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(respStatus)
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			return tsweb.Error(http.StatusInternalServerError, "error encoding JSON response", err)
 		}
