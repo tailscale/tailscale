@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -41,7 +42,7 @@ func TestRecorder(t *testing.T) {
 		Build()
 	tsClient := &fakeTSClient{}
 	zl, _ := zap.NewDevelopment()
-	fr := record.NewFakeRecorder(1)
+	fr := record.NewFakeRecorder(2)
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &RecorderReconciler{
 		tsNamespace: tsNamespace,
@@ -65,6 +66,35 @@ func TestRecorder(t *testing.T) {
 
 		expectedEvent := "Warning RecorderInvalid Recorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
 		expectEvents(t, fr, []string{expectedEvent})
+
+		tsr.Spec.EnableUI = true
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = map[string]string{
+			"invalid space characters": "test",
+		}
+		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
+			t.Spec = tsr.Spec
+		})
+		expectReconciled(t, reconciler, "", tsr.Name)
+
+		// Only check part of this error message, because it's defined in an
+		// external package and may change.
+		if err := fc.Get(context.Background(), client.ObjectKey{
+			Name: tsr.Name,
+		}, tsr); err != nil {
+			t.Fatal(err)
+		}
+		if len(tsr.Status.Conditions) != 1 {
+			t.Fatalf("expected 1 condition, got %d", len(tsr.Status.Conditions))
+		}
+		cond := tsr.Status.Conditions[0]
+		if cond.Type != string(tsapi.RecorderReady) || cond.Status != metav1.ConditionFalse || cond.Reason != reasonRecorderInvalid {
+			t.Fatalf("expected condition RecorderReady false due to RecorderInvalid, got %v", cond)
+		}
+		for _, msg := range []string{cond.Message, <-fr.Events} {
+			if !strings.Contains(msg, `"invalid space characters"`) {
+				t.Fatalf("expected invalid annotation key in error message, got %q", cond.Message)
+			}
+		}
 	})
 
 	t.Run("conflicting_service_account_config_marked_as_invalid", func(t *testing.T) {
@@ -75,7 +105,7 @@ func TestRecorder(t *testing.T) {
 			},
 		})
 
-		tsr.Spec.EnableUI = true
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = nil
 		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = "pre-existing-sa"
 		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
 			t.Spec = tsr.Spec

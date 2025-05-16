@@ -8,13 +8,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
@@ -22,8 +22,10 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -107,7 +109,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		if !apiequality.Semantic.DeepEqual(oldTSRStatus, &tsr.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, tsr); updateErr != nil {
-				err = errors.Wrap(err, updateErr.Error())
+				err = errors.Join(err, updateErr)
 			}
 		}
 		return reconcile.Result{}, err
@@ -361,10 +363,11 @@ func (r *RecorderReconciler) validate(ctx context.Context, tsr *tsapi.Recorder) 
 	// Check any custom ServiceAccount config doesn't conflict with pre-existing
 	// ServiceAccounts. This check is performed once during validation to ensure
 	// errors are raised early, but also again during any Updates to prevent a race.
-	if tsr.Spec.StatefulSet.Pod.ServiceAccount.Name != tsr.Name {
+	specSA := tsr.Spec.StatefulSet.Pod.ServiceAccount
+	if specSA.Name != tsr.Name {
 		sa := &corev1.ServiceAccount{}
 		key := client.ObjectKey{
-			Name:      tsr.Spec.StatefulSet.Pod.ServiceAccount.Name,
+			Name:      specSA.Name,
 			Namespace: r.tsNamespace,
 		}
 
@@ -379,6 +382,11 @@ func (r *RecorderReconciler) validate(ctx context.Context, tsr *tsapi.Recorder) 
 			if err := saOwnedByRecorder(sa, tsr); err != nil {
 				return err
 			}
+		}
+	}
+	if len(specSA.Annotations) > 0 {
+		if violations := apivalidation.ValidateAnnotations(specSA.Annotations, field.NewPath(".spec.statefulSet.pod.serviceAccount.annotations")); len(violations) > 0 {
+			return violations.ToAggregate()
 		}
 	}
 
