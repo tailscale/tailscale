@@ -878,3 +878,79 @@ func TestCheckTag(t *testing.T) {
 		})
 	}
 }
+
+func TestDisplayMessageEqual(t *testing.T) {
+	base := DisplayMessage{
+		Title:               "title",
+		Text:                "text",
+		Severity:            SeverityHigh,
+		ImpactsConnectivity: false,
+	}
+
+	type test struct {
+		name      string
+		value     DisplayMessage
+		wantEqual bool
+	}
+
+	for _, test := range []test{
+		{
+			name: "same",
+			value: DisplayMessage{
+				Title:               "title",
+				Text:                "text",
+				Severity:            SeverityHigh,
+				ImpactsConnectivity: false,
+			},
+			wantEqual: true,
+		},
+		{
+			name: "different-title",
+			value: DisplayMessage{
+				Title:               "different title",
+				Text:                "text",
+				Severity:            SeverityHigh,
+				ImpactsConnectivity: false,
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-text",
+			value: DisplayMessage{
+				Title:               "title",
+				Text:                "different text",
+				Severity:            SeverityHigh,
+				ImpactsConnectivity: false,
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-severity",
+			value: DisplayMessage{
+				Title:               "title",
+				Text:                "text",
+				Severity:            SeverityMedium,
+				ImpactsConnectivity: false,
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-impactsConnectivity",
+			value: DisplayMessage{
+				Title:               "title",
+				Text:                "text",
+				Severity:            SeverityHigh,
+				ImpactsConnectivity: true,
+			},
+			wantEqual: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := base.Equal(test.value)
+
+			if got != test.wantEqual {
+				t.Errorf("Equal: got %t, want %t", got, test.wantEqual)
+			}
+		})
+	}
+}
