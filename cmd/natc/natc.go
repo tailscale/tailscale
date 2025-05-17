@@ -57,6 +57,8 @@ func main() {
 		printULA        = fs.Bool("print-ula", false, "print the ULA prefix and exit")
 		ignoreDstPfxStr = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
 		wgPort          = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
+		clusterTag      = fs.String("cluster-tag", "", "optionally run in a consensus cluster with other nodes with this tag")
+		server          = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -94,6 +96,7 @@ func main() {
 	ts := &tsnet.Server{
 		Hostname: *hostname,
 	}
+	ts.ControlURL = *server
 	if *wgPort != 0 {
 		if *wgPort >= 1<<16 {
 			log.Fatalf("wg-port must be in the range [0, 65535]")
@@ -148,12 +151,30 @@ func main() {
 	routes, dnsAddr, addrPool := calculateAddresses(prefixes)
 
 	v6ULA := ula(uint16(*siteID))
+
+	var ipp ippool.IPPool
+	if *clusterTag != "" {
+		ipp = ippool.NewConsensusIPPool(addrPool)
+		err = ipp.StartConsensus(ctx, ts, *clusterTag)
+		if err != nil {
+			log.Fatalf("StartConsensus: %v", err)
+		}
+		defer func() {
+			err := ipp.StopConsensus(ctx)
+			if err != nil {
+				log.Printf("Error stopping consensus: %v", err)
+			}
+		}()
+	} else {
+		ipp = &ippool.SingleMachineIPPool{IPSet: addrPool}
+	}
+
 	c := &connector{
 		ts:         ts,
 		whois:      lc,
 		v6ULA:      v6ULA,
 		ignoreDsts: ignoreDstTable,
-		ipPool:     &ippool.IPPool{IPSet: addrPool},
+		ipPool:     ipp,
 		routes:     routes,
 		dnsAddr:    dnsAddr,
 		resolver:   net.DefaultResolver,
@@ -209,7 +230,7 @@ type connector struct {
 	ignoreDsts *bart.Table[bool]
 
 	// ipPool contains the per-peer IPv4 address assignments.
-	ipPool *ippool.IPPool
+	ipPool ippool.IPPool
 
 	// resolver is used to lookup IP addresses for DNS queries.
 	resolver lookupNetIPer
@@ -453,7 +474,7 @@ func (c *connector) handleTCPFlow(src, dst netip.AddrPort) (handler func(net.Con
 	if dstAddr.Is6() {
 		dstAddr = v4ForV6(dstAddr)
 	}
-	domain, ok := c.ipPool.DomainForIP(who.Node.ID, dstAddr)
+	domain, ok := c.ipPool.DomainForIP(who.Node.ID, dstAddr, time.Now())
 	if !ok {
 		return nil, false
 	}
