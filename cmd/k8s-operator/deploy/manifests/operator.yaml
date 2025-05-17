@@ -4552,6 +4552,36 @@ spec:
                                                                 type: string
                                                         type: object
                                                 type: object
+                                            serviceAccount:
+                                                description: |-
+                                                    Config for the ServiceAccount to create for the Recorder's StatefulSet.
+                                                    By default, the operator will create a ServiceAccount with the same
+                                                    name as the Recorder resource.
+                                                    https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account
+                                                properties:
+                                                    annotations:
+                                                        additionalProperties:
+                                                            type: string
+                                                        description: |-
+                                                            Annotations to add to the ServiceAccount.
+                                                            https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
+
+                                                            You can use this to add IAM roles to the ServiceAccount (IRSA) instead of
+                                                            providing static S3 credentials in a Secret.
+                                                            https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
+
+                                                            For example:
+                                                            eks.amazonaws.com/role-arn: arn:aws:iam::<account-id>:role/<role-name>
+                                                        type: object
+                                                    name:
+                                                        description: |-
+                                                            Name of the ServiceAccount to create. Defaults to the name of the
+                                                            Recorder resource.
+                                                            https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account
+                                                        maxLength: 253
+                                                        pattern: ^[a-z0-9]([a-z0-9-.]{0,61}[a-z0-9])?$
+                                                        type: string
+                                                type: object
                                             tolerations:
                                                 description: |-
                                                     Tolerations for Recorder Pods. By default, the operator does not apply

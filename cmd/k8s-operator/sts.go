@@ -1052,13 +1052,13 @@ func tailscaledConfigHash(c tailscaledConfigs) (string, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
-// createOrUpdate adds obj to the k8s cluster, unless the object already exists,
-// in which case update is called to make changes to it. If update is nil, the
-// existing object is returned unmodified.
+// createOrMaybeUpdate adds obj to the k8s cluster, unless the object already exists,
+// in which case update is called to make changes to it. If update is nil or returns
+// an error, the object is returned unmodified.
 //
 // obj is looked up by its Name and Namespace if Name is set, otherwise it's
 // looked up by labels.
-func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client, ns string, obj O, update func(O)) (O, error) {
+func createOrMaybeUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client, ns string, obj O, update func(O) error) (O, error) {
 	var (
 		existing O
 		err      error
@@ -1073,7 +1073,9 @@ func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client,
 	}
 	if err == nil && existing != nil {
 		if update != nil {
-			update(existing)
+			if err := update(existing); err != nil {
+				return nil, err
+			}
 			if err := c.Update(ctx, existing); err != nil {
 				return nil, err
 			}
@@ -1087,6 +1089,21 @@ func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client,
 		return nil, err
 	}
 	return obj, nil
+}
+
+// createOrUpdate adds obj to the k8s cluster, unless the object already exists,
+// in which case update is called to make changes to it. If update is nil, the
+// existing object is returned unmodified.
+//
+// obj is looked up by its Name and Namespace if Name is set, otherwise it's
+// looked up by labels.
+func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client, ns string, obj O, update func(O)) (O, error) {
+	return createOrMaybeUpdate(ctx, c, ns, obj, func(o O) error {
+		if update != nil {
+			update(o)
+		}
+		return nil
+	})
 }
 
 // getSingleObject searches for k8s objects of type T
