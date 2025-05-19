@@ -552,7 +552,7 @@ func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr netip.Ad
 // addrForWireGuardSendLocked returns the address that should be used for
 // sending the next packet. If a packet has never or not recently been sent to
 // the endpoint, then a randomly selected address for the endpoint is returned,
-// as well as a bool indiciating that WireGuard discovery pings should be started.
+// as well as a bool indicating that WireGuard discovery pings should be started.
 // If the addresses have latency information available, then the address with the
 // best latency is used.
 //
@@ -1261,7 +1261,7 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 }
 
 // sendWireGuardOnlyPingsLocked evaluates all available addresses for
-// a WireGuard only endpoint and initates an ICMP ping for useable
+// a WireGuard only endpoint and initiates an ICMP ping for useable
 // addresses.
 func (de *endpoint) sendWireGuardOnlyPingsLocked(now mono.Time) {
 	if runtime.GOOS == "js" {
@@ -1629,7 +1629,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
-				What: "handlePingLocked-bestAddr-update",
+				What: "handlePongConnLocked-bestAddr-update",
 				From: de.bestAddr,
 				To:   thisPong,
 			})
@@ -1638,7 +1638,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 		if de.bestAddr.AddrPort == thisPong.AddrPort {
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
-				What: "handlePingLocked-bestAddr-latency",
+				What: "handlePongConnLocked-bestAddr-latency",
 				From: de.bestAddr,
 				To:   thisPong,
 			})
