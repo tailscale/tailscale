@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
@@ -38,6 +39,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/derp/derpconst"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
@@ -616,7 +618,7 @@ func (s *Server) initMetacert() {
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(ProtocolVersion),
 		Subject: pkix.Name{
-			CommonName: fmt.Sprintf("derpkey%s", s.publicKey.UntypedHexString()),
+			CommonName: derpconst.MetaCertCommonNamePrefix + s.publicKey.UntypedHexString(),
 		},
 		// Windows requires NotAfter and NotBefore set:
 		NotAfter:  s.clock.Now().Add(30 * 24 * time.Hour),
@@ -635,6 +637,25 @@ func (s *Server) initMetacert() {
 // MetaCert returns the server metadata cert that can be sent by the
 // TLS server to let the client skip a round trip during start-up.
 func (s *Server) MetaCert() []byte { return s.metaCert }
+
+// ModifyTLSConfigToAddMetaCert modifies c.GetCertificate to make
+// it append s.MetaCert to the returned certificates.
+//
+// It panics if c or c.GetCertificate is nil.
+func (s *Server) ModifyTLSConfigToAddMetaCert(c *tls.Config) {
+	getCert := c.GetCertificate
+	if getCert == nil {
+		panic("c.GetCertificate is nil")
+	}
+	c.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		cert, err := getCert(hi)
+		if err != nil {
+			return nil, err
+		}
+		cert.Certificate = append(cert.Certificate, s.MetaCert())
+		return cert, nil
+	}
+}
 
 // registerClient notes that client c is now authenticated and ready for packets.
 //

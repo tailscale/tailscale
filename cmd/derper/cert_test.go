@@ -140,6 +140,7 @@ func TestPinnedCertRawIP(t *testing.T) {
 	var hs http.Server
 	hs.Handler = mux
 	hs.TLSConfig = cp.TLSConfig()
+	ds.ModifyTLSConfigToAddMetaCert(hs.TLSConfig)
 	go hs.ServeTLS(ln, "", "")
 
 	lnPort := ln.Addr().(*net.TCPAddr).Port

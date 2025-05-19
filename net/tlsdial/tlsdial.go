@@ -21,10 +21,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/derp/derpconst"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -247,9 +249,10 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 	}
 }
 
-// SetConfigExpectedCertHash configures c's VerifyPeerCertificate function
-// to require that exactly 1 cert is presented, and that the hex of its SHA256 hash
-// is equal to wantFullCertSHA256Hex and that it's a valid cert for c.ServerName.
+// SetConfigExpectedCertHash configures c's VerifyPeerCertificate function to
+// require that exactly 1 cert is presented (not counting any present MetaCert),
+// and that the hex of its SHA256 hash is equal to wantFullCertSHA256Hex and
+// that it's a valid cert for c.ServerName.
 func SetConfigExpectedCertHash(c *tls.Config, wantFullCertSHA256Hex string) {
 	if c.VerifyPeerCertificate != nil {
 		panic("refusing to override tls.Config.VerifyPeerCertificate")
@@ -260,28 +263,35 @@ func SetConfigExpectedCertHash(c *tls.Config, wantFullCertSHA256Hex string) {
 	c.InsecureSkipVerify = true
 	c.VerifyConnection = nil
 	c.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-		if len(rawCerts) == 0 {
-			return errors.New("no certs presented")
+		var sawGoodCert bool
+		for _, rawCert := range rawCerts {
+			cert, err := x509.ParseCertificate(rawCert)
+			if err != nil {
+				return fmt.Errorf("ParseCertificate: %w", err)
+			}
+			if strings.HasPrefix(cert.Subject.CommonName, derpconst.MetaCertCommonNamePrefix) {
+				continue
+			}
+			if sawGoodCert {
+				return errors.New("unexpected multiple certs presented")
+			}
+			if fmt.Sprintf("%02x", sha256.Sum256(rawCert)) != wantFullCertSHA256Hex {
+				return fmt.Errorf("cert hash does not match expected cert hash")
+			}
+			if err := cert.VerifyHostname(c.ServerName); err != nil {
+				return fmt.Errorf("cert does not match server name %q: %w", c.ServerName, err)
+			}
+			now := time.Now()
+			if now.After(cert.NotAfter) {
+				return fmt.Errorf("cert expired %v", cert.NotAfter)
+			}
+			if now.Before(cert.NotBefore) {
+				return fmt.Errorf("cert not yet valid until %v; is your clock correct?", cert.NotBefore)
+			}
+			sawGoodCert = true
 		}
-		if len(rawCerts) > 1 {
-			return errors.New("unexpected multiple certs presented")
-		}
-		if fmt.Sprintf("%02x", sha256.Sum256(rawCerts[0])) != wantFullCertSHA256Hex {
-			return fmt.Errorf("cert hash does not match expected cert hash")
-		}
-		cert, err := x509.ParseCertificate(rawCerts[0])
-		if err != nil {
-			return fmt.Errorf("ParseCertificate: %w", err)
-		}
-		if err := cert.VerifyHostname(c.ServerName); err != nil {
-			return fmt.Errorf("cert does not match server name %q: %w", c.ServerName, err)
-		}
-		now := time.Now()
-		if now.After(cert.NotAfter) {
-			return fmt.Errorf("cert expired %v", cert.NotAfter)
-		}
-		if now.Before(cert.NotBefore) {
-			return fmt.Errorf("cert not yet valid until %v; is your clock correct?", cert.NotBefore)
+		if !sawGoodCert {
+			return errors.New("expected cert not presented")
 		}
 		return nil
 	}
