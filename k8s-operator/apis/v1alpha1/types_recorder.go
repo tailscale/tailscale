@@ -142,6 +142,36 @@ type RecorderPod struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// Config for the ServiceAccount to create for the Recorder's StatefulSet.
+	// By default, the operator will create a ServiceAccount with the same
+	// name as the Recorder resource.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account
+	// +optional
+	ServiceAccount RecorderServiceAccount `json:"serviceAccount,omitempty"`
+}
+
+type RecorderServiceAccount struct {
+	// Name of the ServiceAccount to create. Defaults to the name of the
+	// Recorder resource.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-.]{0,61}[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Annotations to add to the ServiceAccount.
+	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
+	//
+	// You can use this to add IAM roles to the ServiceAccount (IRSA) instead of
+	// providing static S3 credentials in a Secret.
+	// https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
+	//
+	// For example:
+	// eks.amazonaws.com/role-arn: arn:aws:iam::<account-id>:role/<role-name>
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 type RecorderContainer struct {

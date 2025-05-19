@@ -726,6 +726,24 @@ _Appears in:_
 | `imagePullSecrets` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#localobjectreference-v1-core) array_ | Image pull Secrets for Recorder Pods.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec |  |  |
 | `nodeSelector` _object (keys:string, values:string)_ | Node selector rules for Recorder Pods. By default, the operator does<br />not apply any node selector rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
 | `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | Tolerations for Recorder Pods. By default, the operator does not apply<br />any tolerations.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+| `serviceAccount` _[RecorderServiceAccount](#recorderserviceaccount)_ | Config for the ServiceAccount to create for the Recorder's StatefulSet.<br />By default, the operator will create a ServiceAccount with the same<br />name as the Recorder resource.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account |  |  |
+
+
+#### RecorderServiceAccount
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderPod](#recorderpod)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name of the ServiceAccount to create. Defaults to the name of the<br />Recorder resource.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account |  | MaxLength: 253 <br />Pattern: `^[a-z0-9]([a-z0-9-.]{0,61}[a-z0-9])?$` <br />Type: string <br /> |
+| `annotations` _object (keys:string, values:string)_ | Annotations to add to the ServiceAccount.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set<br />You can use this to add IAM roles to the ServiceAccount (IRSA) instead of<br />providing static S3 credentials in a Secret.<br />https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html<br />For example:<br />eks.amazonaws.com/role-arn: arn:aws:iam::<account-id>:role/<role-name> |  |  |
 
 
 #### RecorderSpec
