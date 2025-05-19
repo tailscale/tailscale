@@ -8,10 +8,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand/v2"
-	"net/http"
 	"net/netip"
 	"testing"
 
@@ -23,7 +21,6 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn/ipnstate"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -108,8 +105,7 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	if err == nil {
 		t.Fatalf("svc:default-%s not cleaned up", svc.Name)
 	}
-	var errResp *tailscale.ErrResponse
-	if !errors.As(err, &errResp) || errResp.Status != http.StatusNotFound {
+	if !isErrorTailscaleServiceNotFound(err) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
