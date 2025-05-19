@@ -364,7 +364,7 @@ func (r *RecorderReconciler) validate(ctx context.Context, tsr *tsapi.Recorder) 
 	// ServiceAccounts. This check is performed once during validation to ensure
 	// errors are raised early, but also again during any Updates to prevent a race.
 	specSA := tsr.Spec.StatefulSet.Pod.ServiceAccount
-	if specSA.Name != tsr.Name {
+	if specSA.Name != "" && specSA.Name != tsr.Name {
 		sa := &corev1.ServiceAccount{}
 		key := client.ObjectKey{
 			Name:      specSA.Name,
