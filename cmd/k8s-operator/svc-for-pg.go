@@ -77,12 +77,12 @@ type HAServiceReconciler struct {
 // Reconcile reconciles Services that should be exposed over Tailscale in HA
 // mode (on a ProxyGroup). It looks at all Services with
 // tailscale.com/proxy-group annotation. For each such Service, it ensures that
-// a VIPService named after the hostname of the Service exists and is up to
+// a Tailscale Service named after the hostname of the Service exists and is up to
 // date.
 // HA Servicees support multi-cluster Service setup.
-// Each VIPService contains a list of owner references that uniquely identify
+// Each Tailscale Service contains a list of owner references that uniquely identify
 // the operator.  When an Service that acts as a
-// backend is being deleted, the corresponding VIPService is only deleted if the
+// backend is being deleted, the corresponding Tailscale Service is only deleted if the
 // only owner reference that it contains is for this operator. If other owner
 // references are found, then cleanup operation only removes this operator's owner
 // reference.
@@ -110,9 +110,9 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		return res, err
 	}
 
-	// needsRequeue is set to true if the underlying VIPService has changed as a result of this reconcile. If that
-	// is the case, we reconcile the Ingress one more time to ensure that concurrent updates to the VIPService in a
-	// multi-cluster Ingress setup have not resulted in another actor overwriting our VIPService update.
+	// needsRequeue is set to true if the underlying Tailscale Service has changed as a result of this reconcile. If that
+	// is the case, we reconcile the Ingress one more time to ensure that concurrent updates to the Tailscale Service in a
+	// multi-cluster Ingress setup have not resulted in another actor overwriting our Tailscale Service update.
 	needsRequeue := false
 	needsRequeue, err = r.maybeProvision(ctx, hostname, svc, logger)
 	if err != nil {
@@ -129,14 +129,14 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	return reconcile.Result{}, nil
 }
 
-// maybeProvision ensures that a VIPService for this Ingress exists and is up to date and that the serve config for the
+// maybeProvision ensures that a Tailscale Service for this Ingress exists and is up to date and that the serve config for the
 // corresponding ProxyGroup contains the Ingress backend's definition.
-// If a VIPService does not exist, it will be created.
-// If a VIPService exists, but only with owner references from other operator instances, an owner reference for this
+// If a Tailscale Service does not exist, it will be created.
+// If a Tailscale Service exists, but only with owner references from other operator instances, an owner reference for this
 // operator instance is added.
-// If a VIPService exists, but does not have an owner reference from any operator, we error
+// If a Tailscale Service exists, but does not have an owner reference from any operator, we error
 // out assuming that this is an owner reference created by an unknown actor.
-// Returns true if the operation resulted in a VIPService update.
+// Returns true if the operation resulted in a Tailscale Service update.
 func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
 	oldSvcStatus := svc.Status.DeepCopy()
 	defer func() {
@@ -148,7 +148,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 
 	pgName := svc.Annotations[AnnotationProxyGroup]
 	if pgName == "" {
-		logger.Infof("[unexpected] no ProxyGroup annotation, skipping VIPService provisioning")
+		logger.Infof("[unexpected] no ProxyGroup annotation, skipping Tailscale Service provisioning")
 		return false, nil
 	}
 
@@ -194,23 +194,23 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		r.mu.Unlock()
 	}
 
-	// 1. Ensure that if Service's hostname/name has changed, any VIPService
+	// 1. Ensure that if Service's hostname/name has changed, any Tailscale Service
 	// resources corresponding to the old hostname are cleaned up.
-	// In practice, this function will ensure that any VIPServices that are
+	// In practice, this function will ensure that any Tailscale Services that are
 	// associated with the provided ProxyGroup and no longer owned by a
 	// Service are cleaned up. This is fine- it is not expensive and ensures
 	// that in edge cases (a single update changed both hostname and removed
-	// ProxyGroup annotation) the VIPService is more likely to be
+	// ProxyGroup annotation) the Tailscale Service is more likely to be
 	// (eventually) removed.
 	svcsChanged, err = r.maybeCleanupProxyGroup(ctx, pgName, logger)
 	if err != nil {
-		return false, fmt.Errorf("failed to cleanup VIPService resources for ProxyGroup: %w", err)
+		return false, fmt.Errorf("failed to cleanup Tailscale Service resources for ProxyGroup: %w", err)
 	}
 
-	// 2. Ensure that there isn't a VIPService with the same hostname
+	// 2. Ensure that there isn't a Tailscale Service with the same hostname
 	// already created and not owned by this Service.
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
-	existingVIPSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
+	existingTSSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
 	if isErrorFeatureFlagNotEnabled(err) {
 		logger.Warn(msgFeatureFlagNotEnabled)
 		r.recorder.Event(svc, corev1.EventTypeWarning, warningTailscaleServiceFeatureFlagNotEnabled, msgFeatureFlagNotEnabled)
@@ -220,16 +220,16 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, fmt.Errorf("error getting Tailscale Service %q: %w", hostname, err)
 	}
 
-	// 3. Generate the VIPService owner annotation for new or existing Tailscale Service.
-	// This checks and ensures that VIPService's owner references are updated
+	// 3. Generate the Tailscale Service owner annotation for new or existing Tailscale Service.
+	// This checks and ensures that Tailscale Service's owner references are updated
 	// for this Service and errors if that is not possible (i.e. because it
-	// appears that the VIPService has been created by a non-operator actor).
-	updatedAnnotations, err := r.ownerAnnotations(existingVIPSvc)
+	// appears that the Tailscale Service has been created by a non-operator actor).
+	updatedAnnotations, err := r.ownerAnnotations(existingTSSvc)
 	if err != nil {
 		instr := fmt.Sprintf("To proceed, you can either manually delete the existing Tailscale Service or choose a different hostname with the '%s' annotaion", AnnotationHostname)
-		msg := fmt.Sprintf("error ensuring ownership of VIPService %s: %v. %s", hostname, err, instr)
+		msg := fmt.Sprintf("error ensuring ownership of Tailscale Service %s: %v. %s", hostname, err, instr)
 		logger.Warn(msg)
-		r.recorder.Event(svc, corev1.EventTypeWarning, "InvalidVIPService", msg)
+		r.recorder.Event(svc, corev1.EventTypeWarning, "InvalidTailscaleService", msg)
 		tsoperator.SetServiceCondition(svc, tsapi.IngressSvcValid, metav1.ConditionFalse, reasonIngressSvcInvalid, msg, r.clock, logger)
 		return false, nil
 	}
@@ -239,28 +239,28 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		tags = strings.Split(tstr, ",")
 	}
 
-	vipSvc := &tailscale.VIPService{
+	tsSvc := &tailscale.VIPService{
 		Name:        serviceName,
 		Tags:        tags,
 		Ports:       []string{"do-not-validate"}, // we don't want to validate ports
 		Comment:     managedTSServiceComment,
 		Annotations: updatedAnnotations,
 	}
-	if existingVIPSvc != nil {
-		vipSvc.Addrs = existingVIPSvc.Addrs
+	if existingTSSvc != nil {
+		tsSvc.Addrs = existingTSSvc.Addrs
 	}
 
-	// TODO(irbekrm): right now if two Service resources attempt to apply different VIPService configs (different
+	// TODO(irbekrm): right now if two Service resources attempt to apply different Tailscale Service configs (different
 	// tags) we can end up reconciling those in a loop. We should detect when a Service
 	// with the same generation number has been reconciled ~more than N times and stop attempting to apply updates.
-	if existingVIPSvc == nil ||
-		!reflect.DeepEqual(vipSvc.Tags, existingVIPSvc.Tags) ||
-		!ownersAreSetAndEqual(vipSvc, existingVIPSvc) {
-		logger.Infof("Ensuring VIPService exists and is up to date")
-		if err := r.tsClient.CreateOrUpdateVIPService(ctx, vipSvc); err != nil {
-			return false, fmt.Errorf("error creating VIPService: %w", err)
+	if existingTSSvc == nil ||
+		!reflect.DeepEqual(tsSvc.Tags, existingTSSvc.Tags) ||
+		!ownersAreSetAndEqual(tsSvc, existingTSSvc) {
+		logger.Infof("Ensuring Tailscale Service exists and is up to date")
+		if err := r.tsClient.CreateOrUpdateVIPService(ctx, tsSvc); err != nil {
+			return false, fmt.Errorf("error creating Tailscale Service: %w", err)
 		}
-		existingVIPSvc = vipSvc
+		existingTSSvc = tsSvc
 	}
 
 	cm, cfgs, err := ingressSvcsConfigs(ctx, r.Client, pgName, r.tsNamespace)
@@ -272,29 +272,29 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 
-	if existingVIPSvc.Addrs == nil {
-		existingVIPSvc, err = r.tsClient.GetVIPService(ctx, vipSvc.Name)
+	if existingTSSvc.Addrs == nil {
+		existingTSSvc, err = r.tsClient.GetVIPService(ctx, tsSvc.Name)
 		if err != nil {
-			return false, fmt.Errorf("error getting VIPService: %w", err)
+			return false, fmt.Errorf("error getting Tailscale Service: %w", err)
 		}
-		if existingVIPSvc.Addrs == nil {
+		if existingTSSvc.Addrs == nil {
 			// TODO(irbekrm): this should be a retry
-			return false, fmt.Errorf("unexpected: VIPService addresses not populated")
+			return false, fmt.Errorf("unexpected: Tailscale Service addresses not populated")
 		}
 	}
 
-	var vipv4 netip.Addr
-	var vipv6 netip.Addr
-	for _, vip := range existingVIPSvc.Addrs {
-		ip, err := netip.ParseAddr(vip)
+	var tsSvcIPv4 netip.Addr
+	var tsSvcIPv6 netip.Addr
+	for _, tsip := range existingTSSvc.Addrs {
+		ip, err := netip.ParseAddr(tsip)
 		if err != nil {
 			return false, fmt.Errorf("error parsing Tailscale Service address: %w", err)
 		}
 
 		if ip.Is4() {
-			vipv4 = ip
+			tsSvcIPv4 = ip
 		} else if ip.Is6() {
-			vipv6 = ip
+			tsSvcIPv6 = ip
 		}
 	}
 
@@ -308,12 +308,12 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		if ip.Is4() {
 			cfg.IPv4Mapping = &ingressservices.Mapping{
 				ClusterIP:          ip,
-				TailscaleServiceIP: vipv4,
+				TailscaleServiceIP: tsSvcIPv4,
 			}
 		} else if ip.Is6() {
 			cfg.IPv6Mapping = &ingressservices.Mapping{
 				ClusterIP:          ip,
-				TailscaleServiceIP: vipv6,
+				TailscaleServiceIP: tsSvcIPv6,
 			}
 		}
 	}
@@ -332,7 +332,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	logger.Infof("updating AdvertiseServices config")
-	// 4. Update tailscaled's AdvertiseServices config, which should add the VIPService
+	// 4. Update tailscaled's AdvertiseServices config, which should add the Tailscale Service
 	// IPs to the ProxyGroup Pods' AllowedIPs in the next netmap update if approved.
 	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, svc, pg.Name, serviceName, &cfg, true, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
@@ -343,7 +343,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, fmt.Errorf("failed to get number of advertised Pods: %w", err)
 	}
 
-	// TODO(irbekrm): here and when creating the VIPService, verify if the
+	// TODO(irbekrm): here and when creating the Tailscale Service, verify if the
 	// error is not terminal (and therefore should not be reconciled). For
 	// example, if the hostname is already a hostname of a Tailscale node,
 	// the GET here will fail.
@@ -362,7 +362,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		lbs = []corev1.LoadBalancerIngress{
 			{
 				Hostname: dnsName,
-				IP:       vipv4.String(),
+				IP:       tsSvcIPv4.String(),
 			},
 		}
 
@@ -376,8 +376,8 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	return svcsChanged, nil
 }
 
-// maybeCleanup ensures that any resources, such as a VIPService created for this Service, are cleaned up when the
-// Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the VIPService is only
+// maybeCleanup ensures that any resources, such as a Tailscale Service created for this Service, are cleaned up when the
+// Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
 // deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
 // corresponding to this Service.
 func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcChanged bool, err error) {
@@ -387,7 +387,7 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 		logger.Debugf("no finalizer, nothing to do")
 		return false, nil
 	}
-	logger.Infof("Ensuring that VIPService %q configuration is cleaned up", hostname)
+	logger.Infof("Ensuring that Tailscale Service %q configuration is cleaned up", hostname)
 
 	defer func() {
 		if err != nil {
@@ -397,13 +397,13 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}()
 
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
-	//  1. Clean up the VIPService.
-	svcChanged, err = r.cleanupVIPService(ctx, serviceName, logger)
+	//  1. Clean up the Tailscale Service.
+	svcChanged, err = r.cleanupTailscaleService(ctx, serviceName, logger)
 	if err != nil {
-		return false, fmt.Errorf("error deleting VIPService: %w", err)
+		return false, fmt.Errorf("error deleting Tailscale Service: %w", err)
 	}
 
-	// 2. Unadvertise the VIPService.
+	// 2. Unadvertise the Tailscale Service.
 	pgName := svc.Annotations[AnnotationProxyGroup]
 	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, svc, pgName, serviceName, nil, false, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
@@ -419,7 +419,7 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	if cm == nil || cfgs == nil {
 		return true, nil
 	}
-	logger.Infof("Removing VIPService %q from ingress config for ProxyGroup %q", hostname, pgName)
+	logger.Infof("Removing Tailscale Service %q from ingress config for ProxyGroup %q", hostname, pgName)
 	delete(cfgs, serviceName.String())
 	cfgBytes, err := json.Marshal(cfgs)
 	if err != nil {
@@ -429,8 +429,8 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	return true, r.Update(ctx, cm)
 }
 
-// VIPServices that are associated with the provided ProxyGroup and no longer managed this operator's instance are deleted, if not owned by other operator instances, else the owner reference is cleaned up.
-// Returns true if the operation resulted in existing VIPService updates (owner reference removal).
+// Tailscale Services that are associated with the provided ProxyGroup and no longer managed this operator's instance are deleted, if not owned by other operator instances, else the owner reference is cleaned up.
+// Returns true if the operation resulted in existing Tailscale Service updates (owner reference removal).
 func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyGroupName string, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
 	cm, config, err := ingressSvcsConfigs(ctx, r.Client, proxyGroupName, r.tsNamespace)
 	if err != nil {
@@ -443,31 +443,31 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 	}
 
 	ingressConfigChanged := false
-	for vipSvcName, cfg := range config {
+	for tsSvcName, cfg := range config {
 		found := false
 		for _, svc := range svcList.Items {
-			if strings.EqualFold(fmt.Sprintf("svc:%s", nameForService(&svc)), vipSvcName) {
+			if strings.EqualFold(fmt.Sprintf("svc:%s", nameForService(&svc)), tsSvcName) {
 				found = true
 				break
 			}
 		}
 		if !found {
-			logger.Infof("VIPService %q is not owned by any Service, cleaning up", vipSvcName)
+			logger.Infof("Tailscale Service %q is not owned by any Service, cleaning up", tsSvcName)
 
-			// Make sure the VIPService is not advertised in tailscaled or serve config.
-			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, nil, proxyGroupName, tailcfg.ServiceName(vipSvcName), &cfg, false, logger); err != nil {
+			// Make sure the Tailscale Service is not advertised in tailscaled or serve config.
+			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, nil, proxyGroupName, tailcfg.ServiceName(tsSvcName), &cfg, false, logger); err != nil {
 				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
 
-			svcsChanged, err = r.cleanupVIPService(ctx, tailcfg.ServiceName(vipSvcName), logger)
+			svcsChanged, err = r.cleanupTailscaleService(ctx, tailcfg.ServiceName(tsSvcName), logger)
 			if err != nil {
-				return false, fmt.Errorf("deleting VIPService %q: %w", vipSvcName, err)
+				return false, fmt.Errorf("deleting Tailscale Service %q: %w", tsSvcName, err)
 			}
 
-			_, ok := config[vipSvcName]
+			_, ok := config[tsSvcName]
 			if ok {
-				logger.Infof("Removing VIPService %q from serve config", vipSvcName)
-				delete(config, vipSvcName)
+				logger.Infof("Removing Tailscale Service %q from serve config", tsSvcName)
+				delete(config, tsSvcName)
 				ingressConfigChanged = true
 			}
 		}
@@ -528,11 +528,11 @@ func (r *HAServiceReconciler) tailnetCertDomain(ctx context.Context) (string, er
 	return st.CurrentTailnet.MagicDNSSuffix, nil
 }
 
-// cleanupVIPService deletes any VIPService by the provided name if it is not owned by operator instances other than this one.
-// If a VIPService is found, but contains other owner references, only removes this operator's owner reference.
-// If a VIPService by the given name is not found or does not contain this operator's owner reference, do nothing.
-// It returns true if an existing VIPService was updated to remove owner reference, as well as any error that occurred.
-func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, err error) {
+// cleanupTailscaleService deletes any Tailscale Service by the provided name if it is not owned by operator instances other than this one.
+// If a Tailscale Service is found, but contains other owner references, only removes this operator's owner reference.
+// If a Tailscale Service by the given name is not found or does not contain this operator's owner reference, do nothing.
+// It returns true if an existing Tailscale Service was updated to remove owner reference, as well as any error that occurred.
+func (r *HAServiceReconciler) cleanupTailscaleService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, err error) {
 	svc, err := r.tsClient.GetVIPService(ctx, name)
 	if isErrorFeatureFlagNotEnabled(err) {
 		msg := fmt.Sprintf("Unable to proceed with cleanup: %s.", msgFeatureFlagNotEnabled)
@@ -546,23 +546,23 @@ func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcf
 			return false, nil
 		}
 		if !ok {
-			return false, fmt.Errorf("unexpected error getting VIPService %q: %w", name.String(), err)
+			return false, fmt.Errorf("unexpected error getting Tailscale Service %q: %w", name.String(), err)
 		}
 
-		return false, fmt.Errorf("error getting VIPService: %w", err)
+		return false, fmt.Errorf("error getting Tailscale Service: %w", err)
 	}
 	if svc == nil {
 		return false, nil
 	}
 	o, err := parseOwnerAnnotation(svc)
 	if err != nil {
-		return false, fmt.Errorf("error parsing VIPService owner annotation: %w", err)
+		return false, fmt.Errorf("error parsing Tailscale Service owner annotation: %w", err)
 	}
 	if o == nil || len(o.OwnerRefs) == 0 {
 		return false, nil
 	}
 	// Comparing with the operatorID only means that we will not be able to
-	// clean up VIPServices in cases where the operator was deleted from the
+	// clean up Tailscale Services in cases where the operator was deleted from the
 	// cluster before deleting the Ingress. Perhaps the comparison could be
 	// 'if or.OperatorID == r.operatorID || or.ingressUID == r.ingressUID'.
 	ix := slices.IndexFunc(o.OwnerRefs, func(or OwnerRef) bool {
@@ -572,14 +572,14 @@ func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcf
 		return false, nil
 	}
 	if len(o.OwnerRefs) == 1 {
-		logger.Infof("Deleting VIPService %q", name)
+		logger.Infof("Deleting Tailscale Service %q", name)
 		return false, r.tsClient.DeleteVIPService(ctx, name)
 	}
 	o.OwnerRefs = slices.Delete(o.OwnerRefs, ix, ix+1)
-	logger.Infof("Updating VIPService %q", name)
+	logger.Infof("Updating Tailscale Service %q", name)
 	json, err := json.Marshal(o)
 	if err != nil {
-		return false, fmt.Errorf("error marshalling updated VIPService owner reference: %w", err)
+		return false, fmt.Errorf("error marshalling updated Tailscale Service owner reference: %w", err)
 	}
 	svc.Annotations[ownerAnnotation] = string(json)
 	return true, r.tsClient.CreateOrUpdateVIPService(ctx, svc)
@@ -618,7 +618,7 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 		return false, fmt.Errorf("error checking ingress config status: %w", err)
 	}
 	if !statusUpToDate || !reflect.DeepEqual(gotCfgs.Configs.GetConfig(serviceName), wantsCfg) {
-		logger.Debugf("Pod %q is not ready to advertise VIPService", pod.Name)
+		logger.Debugf("Pod %q is not ready to advertise Tailscale Service", pod.Name)
 		return false, nil
 	}
 	return true, nil
@@ -746,9 +746,9 @@ func (a *HAServiceReconciler) numberPodsAdvertising(ctx context.Context, pgName 
 }
 
 // ownerAnnotations returns the updated annotations required to ensure this
-// instance of the operator is included as an owner. If the VIPService is not
+// instance of the operator is included as an owner. If the Tailscale Service is not
 // nil, but does not contain an owner we return an error as this likely means
-// that the VIPService was created by something other than a Tailscale
+// that the Tailscale Service was created by something other than a Tailscale
 // Kubernetes operator.
 func (r *HAServiceReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[string]string, error) {
 	ref := OwnerRef{
@@ -758,7 +758,7 @@ func (r *HAServiceReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[s
 		c := ownerAnnotationValue{OwnerRefs: []OwnerRef{ref}}
 		json, err := json.Marshal(c)
 		if err != nil {
-			return nil, fmt.Errorf("[unexpected] unable to marshal VIPService owner annotation contents: %w, please report this", err)
+			return nil, fmt.Errorf("[unexpected] unable to marshal Tailscale Service owner annotation contents: %w, please report this", err)
 		}
 		return map[string]string{
 			ownerAnnotation: string(json),
@@ -769,7 +769,7 @@ func (r *HAServiceReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[s
 		return nil, err
 	}
 	if o == nil || len(o.OwnerRefs) == 0 {
-		return nil, fmt.Errorf("VIPService %s exists, but does not contain owner annotation with owner references; not proceeding as this is likely a resource created by something other than the Tailscale Kubernetes operator", svc.Name)
+		return nil, fmt.Errorf("Tailscale Service %s exists, but does not contain owner annotation with owner references; not proceeding as this is likely a resource created by something other than the Tailscale Kubernetes operator", svc.Name)
 	}
 	if slices.Contains(o.OwnerRefs, ref) { // up to date
 		return svc.Annotations, nil
@@ -788,7 +788,7 @@ func (r *HAServiceReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[s
 	return newAnnots, nil
 }
 
-// dnsNameForService returns the DNS name for the given VIPService name.
+// dnsNameForService returns the DNS name for the given Tailscale Service name.
 func (r *HAServiceReconciler) dnsNameForService(ctx context.Context, svc tailcfg.ServiceName) (string, error) {
 	s := svc.WithoutPrefix()
 	tcd, err := r.tailnetCertDomain(ctx)
