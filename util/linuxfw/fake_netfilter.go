@@ -16,8 +16,8 @@ type FakeNetfilterRunner struct {
 	// services is a map that tracks the firewall rules added/deleted via
 	// EnsureDNATRuleForSvc/DeleteDNATRuleForSvc.
 	services map[string]struct {
-		VIPServiceIP netip.Addr
-		ClusterIP    netip.Addr
+		TailscaleServiceIP netip.Addr
+		ClusterIP          netip.Addr
 	}
 }
 
@@ -25,16 +25,16 @@ type FakeNetfilterRunner struct {
 func NewFakeNetfilterRunner() *FakeNetfilterRunner {
 	return &FakeNetfilterRunner{
 		services: make(map[string]struct {
-			VIPServiceIP netip.Addr
-			ClusterIP    netip.Addr
+			TailscaleServiceIP netip.Addr
+			ClusterIP          netip.Addr
 		}),
 	}
 }
 
 func (f *FakeNetfilterRunner) EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
 	f.services[svcName] = struct {
-		VIPServiceIP netip.Addr
-		ClusterIP    netip.Addr
+		TailscaleServiceIP netip.Addr
+		ClusterIP          netip.Addr
 	}{origDst, dst}
 	return nil
 }
@@ -45,8 +45,8 @@ func (f *FakeNetfilterRunner) DeleteDNATRuleForSvc(svcName string, origDst, dst 
 }
 
 func (f *FakeNetfilterRunner) GetServiceState() map[string]struct {
-	VIPServiceIP netip.Addr
-	ClusterIP    netip.Addr
+	TailscaleServiceIP netip.Addr
+	ClusterIP          netip.Addr
 } {
 	return f.services
 }
