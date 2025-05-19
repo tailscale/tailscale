@@ -27,6 +27,7 @@ import (
 	qt "github.com/frankban/quicktest"
 	"go4.org/mem"
 	"golang.org/x/time/rate"
+	"tailscale.com/derp/derpconst"
 	"tailscale.com/disco"
 	"tailscale.com/net/memnet"
 	"tailscale.com/tstest"
@@ -930,7 +931,7 @@ func TestMetaCert(t *testing.T) {
 	if fmt.Sprint(cert.SerialNumber) != fmt.Sprint(ProtocolVersion) {
 		t.Errorf("serial = %v; want %v", cert.SerialNumber, ProtocolVersion)
 	}
-	if g, w := cert.Subject.CommonName, fmt.Sprintf("derpkey%s", pub.UntypedHexString()); g != w {
+	if g, w := cert.Subject.CommonName, derpconst.MetaCertCommonNamePrefix+pub.UntypedHexString(); g != w {
 		t.Errorf("CommonName = %q; want %q", g, w)
 	}
 	if n := len(cert.Extensions); n != 1 {

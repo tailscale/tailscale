@@ -30,6 +30,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/derp"
+	"tailscale.com/derp/derpconst"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
@@ -1152,7 +1153,7 @@ var ErrClientClosed = errors.New("derphttp.Client closed")
 func parseMetaCert(certs []*x509.Certificate) (serverPub key.NodePublic, serverProtoVersion int) {
 	for _, cert := range certs {
 		// Look for derpkey prefix added by initMetacert() on the server side.
-		if pubHex, ok := strings.CutPrefix(cert.Subject.CommonName, "derpkey"); ok {
+		if pubHex, ok := strings.CutPrefix(cert.Subject.CommonName, derpconst.MetaCertCommonNamePrefix); ok {
 			var err error
 			serverPub, err = key.ParseNodePublicUntyped(mem.S(pubHex))
 			if err == nil && cert.SerialNumber.BitLen() <= 8 { // supports up to version 255
