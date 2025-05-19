@@ -22,6 +22,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/execqueue"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/testenv"
 )
 
@@ -97,7 +98,8 @@ type ExtensionHost struct {
 	initialized atomic.Bool
 	// activeExtensions is a subset of allExtensions that have been initialized and are ready to use.
 	activeExtensions []ipnext.Extension
-	// extensionsByName are the activeExtensions indexed by their names.
+	// extensionsByName are the extensions indexed by their names.
+	// They are not necessarily initialized (in activeExtensions) yet.
 	extensionsByName map[string]ipnext.Extension
 	// postInitWorkQueue is a queue of functions to be executed
 	// by the workQueue after all extensions have been initialized.
@@ -184,6 +186,24 @@ func newExtensionHost(logf logger.Logf, b Backend, overrideExts ...*ipnext.Defin
 			return nil, fmt.Errorf("failed to create %q extension: %v", d.Name(), err)
 		}
 		host.allExtensions = append(host.allExtensions, ext)
+
+		if d.Name() != ext.Name() {
+			return nil, fmt.Errorf("extension name %q does not match the registered name %q", ext.Name(), d.Name())
+		}
+
+		if _, ok := host.extensionsByName[ext.Name()]; ok {
+			return nil, fmt.Errorf("duplicate extension name %q", ext.Name())
+		} else {
+			mak.Set(&host.extensionsByName, ext.Name(), ext)
+		}
+
+		typ := reflect.TypeOf(ext)
+		if _, ok := host.extByType.Load(typ); ok {
+			if _, ok := ext.(interface{ PermitDoubleRegister() }); !ok {
+				return nil, fmt.Errorf("duplicate extension type %T", ext)
+			}
+		}
+		host.extByType.Store(typ, ext)
 	}
 	return host, nil
 }
@@ -215,10 +235,6 @@ func (h *ExtensionHost) init() {
 	defer h.initDone.Store(true)
 
 	// Initialize the extensions in the order they were registered.
-	h.mu.Lock()
-	h.activeExtensions = make([]ipnext.Extension, 0, len(h.allExtensions))
-	h.extensionsByName = make(map[string]ipnext.Extension, len(h.allExtensions))
-	h.mu.Unlock()
 	for _, ext := range h.allExtensions {
 		// Do not hold the lock while calling [ipnext.Extension.Init].
 		// Extensions call back into the host to register their callbacks,
@@ -240,8 +256,6 @@ func (h *ExtensionHost) init() {
 		// We'd like to make them visible to other extensions that are initialized later.
 		h.mu.Lock()
 		h.activeExtensions = append(h.activeExtensions, ext)
-		h.extensionsByName[ext.Name()] = ext
-		h.extByType.Store(reflect.TypeOf(ext), ext)
 		h.mu.Unlock()
 	}
 
