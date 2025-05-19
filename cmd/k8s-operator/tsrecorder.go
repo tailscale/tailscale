@@ -8,13 +8,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
@@ -22,8 +22,10 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -107,7 +109,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		if !apiequality.Semantic.DeepEqual(oldTSRStatus, &tsr.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, tsr); updateErr != nil {
-				err = errors.Wrap(err, updateErr.Error())
+				err = errors.Join(err, updateErr)
 			}
 		}
 		return reconcile.Result{}, err
@@ -125,7 +127,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		}
 	}
 
-	if err := r.validate(tsr); err != nil {
+	if err := r.validate(ctx, tsr); err != nil {
 		message := fmt.Sprintf("Recorder is invalid: %s", err)
 		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderInvalid, message)
 		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderInvalid, message)
@@ -160,20 +162,26 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	if err := r.ensureAuthSecretCreated(ctx, tsr); err != nil {
 		return fmt.Errorf("error creating secrets: %w", err)
 	}
-	// State secret is precreated so we can use the Recorder CR as its owner ref.
+	// State Secret is precreated so we can use the Recorder CR as its owner ref.
 	sec := tsrStateSecret(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sec, func(s *corev1.Secret) {
 		s.ObjectMeta.Labels = sec.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = sec.ObjectMeta.Annotations
-		s.ObjectMeta.OwnerReferences = sec.ObjectMeta.OwnerReferences
 	}); err != nil {
 		return fmt.Errorf("error creating state Secret: %w", err)
 	}
 	sa := tsrServiceAccount(tsr, r.tsNamespace)
-	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
+	if _, err := createOrMaybeUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) error {
+		// Perform this check within the update function to make sure we don't
+		// have a race condition between the previous check and the update.
+		if err := saOwnedByRecorder(s, tsr); err != nil {
+			return err
+		}
+
 		s.ObjectMeta.Labels = sa.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = sa.ObjectMeta.Annotations
-		s.ObjectMeta.OwnerReferences = sa.ObjectMeta.OwnerReferences
+
+		return nil
 	}); err != nil {
 		return fmt.Errorf("error creating ServiceAccount: %w", err)
 	}
@@ -181,7 +189,6 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
 		r.ObjectMeta.Labels = role.ObjectMeta.Labels
 		r.ObjectMeta.Annotations = role.ObjectMeta.Annotations
-		r.ObjectMeta.OwnerReferences = role.ObjectMeta.OwnerReferences
 		r.Rules = role.Rules
 	}); err != nil {
 		return fmt.Errorf("error creating Role: %w", err)
@@ -190,7 +197,6 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, roleBinding, func(r *rbacv1.RoleBinding) {
 		r.ObjectMeta.Labels = roleBinding.ObjectMeta.Labels
 		r.ObjectMeta.Annotations = roleBinding.ObjectMeta.Annotations
-		r.ObjectMeta.OwnerReferences = roleBinding.ObjectMeta.OwnerReferences
 		r.RoleRef = roleBinding.RoleRef
 		r.Subjects = roleBinding.Subjects
 	}); err != nil {
@@ -200,10 +206,16 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = ss.ObjectMeta.Annotations
-		s.ObjectMeta.OwnerReferences = ss.ObjectMeta.OwnerReferences
 		s.Spec = ss.Spec
 	}); err != nil {
 		return fmt.Errorf("error creating StatefulSet: %w", err)
+	}
+
+	// ServiceAccount name may have changed, in which case we need to clean up
+	// the previous ServiceAccount. RoleBinding will already be updated to point
+	// to the new ServiceAccount.
+	if err := r.maybeCleanupServiceAccounts(ctx, tsr, sa.Name); err != nil {
+		return fmt.Errorf("error cleaning up ServiceAccounts: %w", err)
 	}
 
 	var devices []tsapi.RecorderTailnetDevice
@@ -220,6 +232,47 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	devices = append(devices, device)
 
 	tsr.Status.Devices = devices
+
+	return nil
+}
+
+func saOwnedByRecorder(sa *corev1.ServiceAccount, tsr *tsapi.Recorder) error {
+	// If ServiceAccount name has been configured, check that we don't clobber
+	// a pre-existing SA not owned by this Recorder.
+	if sa.Name != tsr.Name && !apiequality.Semantic.DeepEqual(sa.OwnerReferences, tsrOwnerReference(tsr)) {
+		return fmt.Errorf("custom ServiceAccount name %q specified but conflicts with a pre-existing ServiceAccount in the %s namespace", sa.Name, sa.Namespace)
+	}
+
+	return nil
+}
+
+// maybeCleanupServiceAccounts deletes any dangling ServiceAccounts
+// owned by the Recorder if the ServiceAccount name has been changed.
+// They would eventually be cleaned up by owner reference deletion, but
+// this avoids a long-lived Recorder with many ServiceAccount name changes
+// accumulating a large amount of garbage.
+//
+// This is a no-op if the ServiceAccount name has not changed.
+func (r *RecorderReconciler) maybeCleanupServiceAccounts(ctx context.Context, tsr *tsapi.Recorder, currentName string) error {
+	logger := r.logger(tsr.Name)
+
+	// List all ServiceAccounts owned by this Recorder.
+	sas := &corev1.ServiceAccountList{}
+	if err := r.List(ctx, sas, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels("recorder", tsr.Name, nil))); err != nil {
+		return fmt.Errorf("error listing ServiceAccounts for cleanup: %w", err)
+	}
+	for _, sa := range sas.Items {
+		if sa.Name == currentName {
+			continue
+		}
+		if err := r.Delete(ctx, &sa); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Debugf("ServiceAccount %s not found, likely already deleted", sa.Name)
+			} else {
+				return fmt.Errorf("error deleting ServiceAccount %s: %w", sa.Name, err)
+			}
+		}
+	}
 
 	return nil
 }
@@ -302,9 +355,39 @@ func (r *RecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr *t
 	return nil
 }
 
-func (r *RecorderReconciler) validate(tsr *tsapi.Recorder) error {
+func (r *RecorderReconciler) validate(ctx context.Context, tsr *tsapi.Recorder) error {
 	if !tsr.Spec.EnableUI && tsr.Spec.Storage.S3 == nil {
 		return errors.New("must either enable UI or use S3 storage to ensure recordings are accessible")
+	}
+
+	// Check any custom ServiceAccount config doesn't conflict with pre-existing
+	// ServiceAccounts. This check is performed once during validation to ensure
+	// errors are raised early, but also again during any Updates to prevent a race.
+	specSA := tsr.Spec.StatefulSet.Pod.ServiceAccount
+	if specSA.Name != "" && specSA.Name != tsr.Name {
+		sa := &corev1.ServiceAccount{}
+		key := client.ObjectKey{
+			Name:      specSA.Name,
+			Namespace: r.tsNamespace,
+		}
+
+		err := r.Get(ctx, key, sa)
+		switch {
+		case apierrors.IsNotFound(err):
+			// ServiceAccount doesn't exist, so no conflict.
+		case err != nil:
+			return fmt.Errorf("error getting ServiceAccount %q for validation: %w", tsr.Spec.StatefulSet.Pod.ServiceAccount.Name, err)
+		default:
+			// ServiceAccount exists, check if it's owned by the Recorder.
+			if err := saOwnedByRecorder(sa, tsr); err != nil {
+				return err
+			}
+		}
+	}
+	if len(specSA.Annotations) > 0 {
+		if violations := apivalidation.ValidateAnnotations(specSA.Annotations, field.NewPath(".spec.statefulSet.pod.serviceAccount.annotations")); len(violations) > 0 {
+			return violations.ToAggregate()
+		}
 	}
 
 	return nil

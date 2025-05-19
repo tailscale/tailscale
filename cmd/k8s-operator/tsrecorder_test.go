@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -41,7 +42,7 @@ func TestRecorder(t *testing.T) {
 		Build()
 	tsClient := &fakeTSClient{}
 	zl, _ := zap.NewDevelopment()
-	fr := record.NewFakeRecorder(1)
+	fr := record.NewFakeRecorder(2)
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &RecorderReconciler{
 		tsNamespace: tsNamespace,
@@ -52,7 +53,7 @@ func TestRecorder(t *testing.T) {
 		clock:       cl,
 	}
 
-	t.Run("invalid spec gives an error condition", func(t *testing.T) {
+	t.Run("invalid_spec_gives_an_error_condition", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", tsr.Name)
 
 		msg := "Recorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
@@ -65,10 +66,66 @@ func TestRecorder(t *testing.T) {
 
 		expectedEvent := "Warning RecorderInvalid Recorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
 		expectEvents(t, fr, []string{expectedEvent})
+
+		tsr.Spec.EnableUI = true
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = map[string]string{
+			"invalid space characters": "test",
+		}
+		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
+			t.Spec = tsr.Spec
+		})
+		expectReconciled(t, reconciler, "", tsr.Name)
+
+		// Only check part of this error message, because it's defined in an
+		// external package and may change.
+		if err := fc.Get(context.Background(), client.ObjectKey{
+			Name: tsr.Name,
+		}, tsr); err != nil {
+			t.Fatal(err)
+		}
+		if len(tsr.Status.Conditions) != 1 {
+			t.Fatalf("expected 1 condition, got %d", len(tsr.Status.Conditions))
+		}
+		cond := tsr.Status.Conditions[0]
+		if cond.Type != string(tsapi.RecorderReady) || cond.Status != metav1.ConditionFalse || cond.Reason != reasonRecorderInvalid {
+			t.Fatalf("expected condition RecorderReady false due to RecorderInvalid, got %v", cond)
+		}
+		for _, msg := range []string{cond.Message, <-fr.Events} {
+			if !strings.Contains(msg, `"invalid space characters"`) {
+				t.Fatalf("expected invalid annotation key in error message, got %q", cond.Message)
+			}
+		}
 	})
 
-	t.Run("observe Ready=true status condition for a valid spec", func(t *testing.T) {
-		tsr.Spec.EnableUI = true
+	t.Run("conflicting_service_account_config_marked_as_invalid", func(t *testing.T) {
+		mustCreate(t, fc, &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "pre-existing-sa",
+				Namespace: tsNamespace,
+			},
+		})
+
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = nil
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = "pre-existing-sa"
+		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
+			t.Spec = tsr.Spec
+		})
+
+		expectReconciled(t, reconciler, "", tsr.Name)
+
+		msg := `Recorder is invalid: custom ServiceAccount name "pre-existing-sa" specified but conflicts with a pre-existing ServiceAccount in the tailscale namespace`
+		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, metav1.ConditionFalse, reasonRecorderInvalid, msg, 0, cl, zl.Sugar())
+		expectEqual(t, fc, tsr)
+		if expected := 0; reconciler.recorders.Len() != expected {
+			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
+		}
+
+		expectedEvent := "Warning RecorderInvalid " + msg
+		expectEvents(t, fr, []string{expectedEvent})
+	})
+
+	t.Run("observe_Ready_true_status_condition_for_a_valid_spec", func(t *testing.T) {
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = ""
 		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
 			t.Spec = tsr.Spec
 		})
@@ -83,7 +140,42 @@ func TestRecorder(t *testing.T) {
 		expectRecorderResources(t, fc, tsr, true)
 	})
 
-	t.Run("populate node info in state secret, and see it appear in status", func(t *testing.T) {
+	t.Run("valid_service_account_config", func(t *testing.T) {
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = "test-sa"
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = map[string]string{
+			"test": "test",
+		}
+		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
+			t.Spec = tsr.Spec
+		})
+
+		expectReconciled(t, reconciler, "", tsr.Name)
+
+		expectEqual(t, fc, tsr)
+		if expected := 1; reconciler.recorders.Len() != expected {
+			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
+		}
+		expectRecorderResources(t, fc, tsr, true)
+
+		// Get the service account and check the annotations.
+		sa := &corev1.ServiceAccount{}
+		if err := fc.Get(context.Background(), client.ObjectKey{
+			Name:      tsr.Spec.StatefulSet.Pod.ServiceAccount.Name,
+			Namespace: tsNamespace,
+		}, sa); err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(sa.Annotations, tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations); diff != "" {
+			t.Fatalf("unexpected service account annotations (-got +want):\n%s", diff)
+		}
+		if sa.Name != tsr.Spec.StatefulSet.Pod.ServiceAccount.Name {
+			t.Fatalf("unexpected service account name: got %q, want %q", sa.Name, tsr.Spec.StatefulSet.Pod.ServiceAccount.Name)
+		}
+
+		expectMissing[corev1.ServiceAccount](t, fc, tsNamespace, tsr.Name)
+	})
+
+	t.Run("populate_node_info_in_state_secret_and_see_it_appear_in_status", func(t *testing.T) {
 		bytes, err := json.Marshal(map[string]any{
 			"Config": map[string]any{
 				"NodeID": "nodeid-123",
@@ -115,7 +207,7 @@ func TestRecorder(t *testing.T) {
 		expectEqual(t, fc, tsr)
 	})
 
-	t.Run("delete the Recorder and observe cleanup", func(t *testing.T) {
+	t.Run("delete_the_Recorder_and_observe_cleanup", func(t *testing.T) {
 		if err := fc.Delete(context.Background(), tsr); err != nil {
 			t.Fatal(err)
 		}
