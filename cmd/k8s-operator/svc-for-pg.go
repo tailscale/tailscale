@@ -211,6 +211,11 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	// already created and not owned by this Service.
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	existingVIPSvc, err := r.tsClient.GetVIPService(ctx, serviceName)
+	if isErrorFeatureFlagNotEnabled(err) {
+		logger.Warn(msgFeatureFlagNotEnabled)
+		r.recorder.Event(svc, corev1.EventTypeWarning, warningTailscaleServiceFeatureFlagNotEnabled, msgFeatureFlagNotEnabled)
+		return false, nil
+	}
 	if err != nil && !isErrorTailscaleServiceNotFound(err) {
 		return false, fmt.Errorf("error getting Tailscale Service %q: %w", hostname, err)
 	}
@@ -529,6 +534,11 @@ func (r *HAServiceReconciler) tailnetCertDomain(ctx context.Context) (string, er
 // It returns true if an existing VIPService was updated to remove owner reference, as well as any error that occurred.
 func (r *HAServiceReconciler) cleanupVIPService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, err error) {
 	svc, err := r.tsClient.GetVIPService(ctx, name)
+	if isErrorFeatureFlagNotEnabled(err) {
+		msg := fmt.Sprintf("Unable to proceed with cleanup: %s.", msgFeatureFlagNotEnabled)
+		logger.Warn(msg)
+		return false, nil
+	}
 	if err != nil {
 		errResp := &tailscale.ErrResponse{}
 		ok := errors.As(err, errResp)
