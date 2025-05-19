@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -3313,6 +3314,55 @@ func Test_isDiscoMaybeGeneve(t *testing.T) {
 			}
 			if gotIsGeneveEncap != tt.wantIsGeneveEncap {
 				t.Errorf("isDiscoMaybeGeneve() gotIsGeneveEncap = %v, want %v", gotIsGeneveEncap, tt.wantIsGeneveEncap)
+			}
+		})
+	}
+}
+
+func Test_virtualNetworkID(t *testing.T) {
+	tests := []struct {
+		name string
+		set  *uint32
+		want uint32
+	}{
+		{
+			"don't set",
+			nil,
+			0,
+		},
+		{
+			"set 0",
+			ptr.To(uint32(0)),
+			0,
+		},
+		{
+			"set 1",
+			ptr.To(uint32(1)),
+			1,
+		},
+		{
+			"set math.MaxUint32",
+			ptr.To(uint32(math.MaxUint32)),
+			1<<24 - 1,
+		},
+		{
+			"set max 3-byte value",
+			ptr.To(uint32(1<<24 - 1)),
+			1<<24 - 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := virtualNetworkID{}
+			if tt.set != nil {
+				v.set(*tt.set)
+			}
+			if v.isSet() != (tt.set != nil) {
+				t.Fatalf("isSet: %v != wantIsSet: %v", v.isSet(), tt.set != nil)
+			}
+			if v.get() != tt.want {
+				t.Fatalf("get(): %v != want: %v", v.get(), tt.want)
 			}
 		})
 	}

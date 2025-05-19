@@ -16,7 +16,6 @@ import (
 	"tailscale.com/disco"
 	udprelay "tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/types/key"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/set"
 )
@@ -500,10 +499,12 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 
 	sentBindAny := false
 	bind := &disco.BindUDPRelayEndpoint{}
+	vni := virtualNetworkID{}
+	vni.set(work.se.VNI)
 	for _, addrPort := range work.se.AddrPorts {
 		if addrPort.IsValid() {
 			sentBindAny = true
-			go work.ep.c.sendDiscoMessage(addrPort, ptr.To(work.se.VNI), key.NodePublic{}, work.se.ServerDisco, bind, discoLog)
+			go work.ep.c.sendDiscoMessage(addrPort, vni, key.NodePublic{}, work.se.ServerDisco, bind, discoLog)
 		}
 	}
 	if !sentBindAny {
@@ -552,7 +553,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		//     [udprelay.ServerEndpoint] from becoming fully operational.
 		//  4. This is a singular tx with no roundtrip latency measurements
 		//     involved.
-		work.ep.c.sendDiscoMessage(challenge.from, ptr.To(work.se.VNI), key.NodePublic{}, work.se.ServerDisco, answer, discoLog)
+		work.ep.c.sendDiscoMessage(challenge.from, vni, key.NodePublic{}, work.se.ServerDisco, answer, discoLog)
 		return
 	case <-timer.C:
 		// The handshake timed out.
