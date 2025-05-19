@@ -10,14 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"math/rand/v2"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -59,6 +58,7 @@ const (
 		"Please contact Tailscale support through https://tailscale.com/contact/support to enable the feature flag, then recreate the operator's Pod."
 
 	warningTailscaleServiceFeatureFlagNotEnabled = "TailscaleServiceFeatureFlagNotEnabled"
+	managedTSServiceComment                      = "This Tailscale Service is managed by the Tailscale Kubernetes Operator, do not modify"
 )
 
 var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
@@ -323,7 +323,6 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		tsSvcPorts = append(tsSvcPorts, "80")
 	}
 
-	const managedTSServiceComment = "This Tailscale Service is managed by the Tailscale Kubernetes Operator, do not modify"
 	tsSvc := &tailscale.VIPService{
 		Name:        serviceName,
 		Tags:        tags,
@@ -532,9 +531,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 		if err != nil {
 			return
 		}
-		if e := r.deleteFinalizer(ctx, ing, logger); err != nil {
-			err = errors.Join(err, e)
-		}
+		err = r.deleteFinalizer(ctx, ing, logger)
 	}()
 
 	// 1. Check if there is a Tailscale Service associated with this Ingress.
@@ -766,7 +763,6 @@ const (
 )
 
 func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, logger *zap.SugaredLogger) (err error) {
-
 	// Get all config Secrets for this ProxyGroup.
 	secrets := &corev1.SecretList{}
 	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "config"))); err != nil {
@@ -1091,7 +1087,6 @@ func (r *HAIngressReconciler) hasCerts(ctx context.Context, svc tailcfg.ServiceN
 		Namespace: r.tsNamespace,
 		Name:      domain,
 	}, secret)
-
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil

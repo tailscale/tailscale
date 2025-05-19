@@ -222,4 +222,7 @@ const (
 	// on a ProxyGroup.
 	// Set to true if the service is ready to route cluster traffic.
 	EgressSvcReady ConditionType = `TailscaleEgressSvcReady`
+
+	IngressSvcValid      ConditionType = `TailscaleIngressSvcValid`
+	IngressSvcConfigured ConditionType = `TailscaleIngressSvcConfigured`
 )
