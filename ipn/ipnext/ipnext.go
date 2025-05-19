@@ -114,7 +114,7 @@ func RegisterExtension(name string, newExt NewExtensionFn) {
 		panic(fmt.Sprintf("ipnext: newExt is nil: %q", name))
 	}
 	if extensions.Contains(name) {
-		panic(fmt.Sprintf("ipnext: duplicate extensions: %q", name))
+		panic(fmt.Sprintf("ipnext: duplicate extension name %q", name))
 	}
 	extensions.Set(name, &Definition{name, newExt})
 }
