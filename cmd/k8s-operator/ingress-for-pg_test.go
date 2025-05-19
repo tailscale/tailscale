@@ -68,7 +68,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
-	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
 	// Verify that Role and RoleBinding have been created for the first Ingress.
@@ -81,20 +81,20 @@ func TestIngressPGReconciler(t *testing.T) {
 	})
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
-	// Verify VIPService uses custom tags
-	vipSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
+	// Verify Tailscale Service uses custom tags
+	tsSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
 	if err != nil {
-		t.Fatalf("getting VIPService: %v", err)
+		t.Fatalf("getting Tailscale Service: %v", err)
 	}
-	if vipSvc == nil {
-		t.Fatal("VIPService not created")
+	if tsSvc == nil {
+		t.Fatal("Tailscale Service not created")
 	}
 	wantTags := []string{"tag:custom", "tag:test"} // custom tags only
-	gotTags := slices.Clone(vipSvc.Tags)
+	gotTags := slices.Clone(tsSvc.Tags)
 	slices.Sort(gotTags)
 	slices.Sort(wantTags)
 	if !slices.Equal(gotTags, wantTags) {
-		t.Errorf("incorrect VIPService tags: got %v, want %v", gotTags, wantTags)
+		t.Errorf("incorrect Tailscale Service tags: got %v, want %v", gotTags, wantTags)
 	}
 
 	// Create second Ingress
@@ -130,7 +130,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	populateTLSSecret(context.Background(), fc, "test-pg", "my-other-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "my-other-ingress")
 	verifyServeConfig(t, fc, "svc:my-other-svc", false)
-	verifyVIPService(t, ft, "svc:my-other-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-other-svc", []string{"443"})
 
 	// Verify that Role and RoleBinding have been created for the first Ingress.
 	// Do not verify the cert Secret as that was already verified implicitly above.
@@ -139,7 +139,7 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Verify first Ingress is still working
 	verifyServeConfig(t, fc, "svc:my-svc", false)
-	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"443"})
 
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc", "svc:my-other-svc"})
 
@@ -244,10 +244,10 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
-	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
-	// Update the Ingress hostname and make sure the original VIPService is deleted.
+	// Update the Ingress hostname and make sure the original Tailscale Service is deleted.
 	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
 		ing.Spec.TLS[0].Hosts[0] = "updated-svc"
 	})
@@ -255,7 +255,7 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	populateTLSSecret(context.Background(), fc, "test-pg", "updated-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:updated-svc", false)
-	verifyVIPService(t, ft, "svc:updated-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:updated-svc", []string{"443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:updated-svc"})
 
 	_, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName("svc:my-svc"))
@@ -475,7 +475,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	verifyVIPService(t, ft, "svc:my-svc", []string{"80", "443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"80", "443"})
 	verifyServeConfig(t, fc, "svc:my-svc", true)
 
 	// Verify Ingress status
@@ -487,13 +487,13 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Status will be empty until the VIPService shows up in prefs.
+	// Status will be empty until the Tailscale Service shows up in prefs.
 	if !reflect.DeepEqual(ing.Status.LoadBalancer.Ingress, []networkingv1.IngressLoadBalancerIngress(nil)) {
 		t.Errorf("incorrect Ingress status: got %v, want empty",
 			ing.Status.LoadBalancer.Ingress)
 	}
 
-	// Add the VIPService to prefs to have the Ingress recognised as ready.
+	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
 	mustCreate(t, fc, &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-pg-0",
@@ -528,7 +528,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 
 	// Verify reconciliation after removing HTTP
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	verifyVIPService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"443"})
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 
 	// Verify Ingress status
@@ -549,20 +549,20 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 	}
 }
 
-func verifyVIPService(t *testing.T, ft *fakeTSClient, serviceName string, wantPorts []string) {
+func verifyTailscaleService(t *testing.T, ft *fakeTSClient, serviceName string, wantPorts []string) {
 	t.Helper()
-	vipSvc, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName(serviceName))
+	tsSvc, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName(serviceName))
 	if err != nil {
-		t.Fatalf("getting VIPService %q: %v", serviceName, err)
+		t.Fatalf("getting Tailscale Service %q: %v", serviceName, err)
 	}
-	if vipSvc == nil {
-		t.Fatalf("VIPService %q not created", serviceName)
+	if tsSvc == nil {
+		t.Fatalf("Tailscale Service %q not created", serviceName)
 	}
-	gotPorts := slices.Clone(vipSvc.Ports)
+	gotPorts := slices.Clone(tsSvc.Ports)
 	slices.Sort(gotPorts)
 	slices.Sort(wantPorts)
 	if !slices.Equal(gotPorts, wantPorts) {
-		t.Errorf("incorrect ports for VIPService %q: got %v, want %v", serviceName, gotPorts, wantPorts)
+		t.Errorf("incorrect ports for Tailscale Service %q: got %v, want %v", serviceName, gotPorts, wantPorts)
 	}
 }
 
@@ -750,7 +750,7 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	}
 	mustCreate(t, fc, ing)
 
-	// Simulate existing VIPService from another cluster
+	// Simulate existing Tailscale Service from another cluster
 	existingVIPSvc := &tailscale.VIPService{
 		Name: "svc:my-svc",
 		Annotations: map[string]string{
@@ -764,15 +764,15 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	// Verify reconciliation adds our operator reference
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
-	vipSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
+	tsSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
 	if err != nil {
-		t.Fatalf("getting VIPService: %v", err)
+		t.Fatalf("getting Tailscale Service: %v", err)
 	}
-	if vipSvc == nil {
-		t.Fatal("VIPService not found")
+	if tsSvc == nil {
+		t.Fatal("Tailscale Service not found")
 	}
 
-	o, err := parseOwnerAnnotation(vipSvc)
+	o, err := parseOwnerAnnotation(tsSvc)
 	if err != nil {
 		t.Fatalf("parsing owner annotation: %v", err)
 	}
@@ -785,21 +785,21 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 		t.Errorf("incorrect owner refs\ngot:  %+v\nwant: %+v", o.OwnerRefs, wantOwnerRefs)
 	}
 
-	// Delete the Ingress and verify VIPService still exists with one owner ref
+	// Delete the Ingress and verify Tailscale Service still exists with one owner ref
 	if err := fc.Delete(context.Background(), ing); err != nil {
 		t.Fatalf("deleting Ingress: %v", err)
 	}
 	expectRequeue(t, ingPGR, "default", "test-ingress")
 
-	vipSvc, err = ft.GetVIPService(context.Background(), "svc:my-svc")
+	tsSvc, err = ft.GetVIPService(context.Background(), "svc:my-svc")
 	if err != nil {
-		t.Fatalf("getting VIPService after deletion: %v", err)
+		t.Fatalf("getting Tailscale Service after deletion: %v", err)
 	}
-	if vipSvc == nil {
-		t.Fatal("VIPService was incorrectly deleted")
+	if tsSvc == nil {
+		t.Fatal("Tailscale Service was incorrectly deleted")
 	}
 
-	o, err = parseOwnerAnnotation(vipSvc)
+	o, err = parseOwnerAnnotation(tsSvc)
 	if err != nil {
 		t.Fatalf("parsing owner annotation: %v", err)
 	}

@@ -47,7 +47,7 @@ func TestServicePGReconciler(t *testing.T) {
 		expectReconciled(t, svcPGR, "default", svc.Name)
 
 		config = append(config, fmt.Sprintf("svc:default-%s", svc.Name))
-		verifyVIPService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
+		verifyTailscaleService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
 		verifyTailscaledConfig(t, fc, config)
 	}
 
@@ -89,7 +89,7 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 
 	expectReconciled(t, svcPGR, "default", svc.Name)
 
-	verifyVIPService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
+	verifyTailscaleService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
 	verifyTailscaledConfig(t, fc, []string{fmt.Sprintf("svc:default-%s", svc.Name)})
 
 	hostname := "foobarbaz"
@@ -101,7 +101,7 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	updateIngressConfigSecret(t, fc, stateSecret, hostname, cip)
 	expectReconciled(t, svcPGR, "default", svc.Name)
 
-	verifyVIPService(t, ft, fmt.Sprintf("svc:%s", hostname), []string{"do-not-validate"})
+	verifyTailscaleService(t, ft, fmt.Sprintf("svc:%s", hostname), []string{"do-not-validate"})
 	verifyTailscaledConfig(t, fc, []string{fmt.Sprintf("svc:%s", hostname)})
 
 	_, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName(fmt.Sprintf("svc:default-%s", svc.Name)))
@@ -238,17 +238,17 @@ func TestServicePGReconciler_MultiCluster(t *testing.T) {
 		svc, _ := setupTestService(t, "test-multi-cluster", "", "4.3.2.1", fc, stateSecret)
 		expectReconciled(t, pgr, "default", svc.Name)
 
-		vipSvcs, err := ft.ListVIPServices(context.Background())
+		tsSvcs, err := ft.ListVIPServices(context.Background())
 		if err != nil {
-			t.Fatalf("getting VIPService: %v", err)
+			t.Fatalf("getting Tailscale Service: %v", err)
 		}
 
-		if len(vipSvcs) != 1 {
-			t.Fatalf("unexpected number of VIPServices (%d)", len(vipSvcs))
+		if len(tsSvcs) != 1 {
+			t.Fatalf("unexpected number of Tailscale Services (%d)", len(tsSvcs))
 		}
 
-		for name := range vipSvcs {
-			t.Logf("found vip service with name %q", name.String())
+		for name := range tsSvcs {
+			t.Logf("found Tailscale Service with name %q", name.String())
 		}
 	}
 }
@@ -279,10 +279,10 @@ func TestIgnoreRegularService(t *testing.T) {
 
 	verifyTailscaledConfig(t, fc, nil)
 
-	vipSvcs, err := ft.ListVIPServices(context.Background())
+	tsSvcs, err := ft.ListVIPServices(context.Background())
 	if err == nil {
-		if len(vipSvcs) > 0 {
-			t.Fatal("unexpected vip services found")
+		if len(tsSvcs) > 0 {
+			t.Fatal("unexpected Tailscale Services found")
 		}
 	}
 }
