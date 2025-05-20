@@ -6,8 +6,10 @@ package controlclient
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"io"
 	"maps"
 	"net"
 	"reflect"
@@ -829,23 +831,6 @@ func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
 func (ms *mapSession) netmap() *netmap.NetworkMap {
 	peerViews := ms.sortedPeers()
 
-	var displayMessages map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
-
-	if len(ms.lastHealth) > 0 {
-		// As they all resolve to the same ID, we can only pass on one message
-		// from ControlHealth. In practice we generally send 0 or 1, but
-		// if there are multiple, the last one wins.
-		h := ms.lastHealth[len(ms.lastHealth)-1]
-		displayMessages = map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-			"control-health": {
-				Title:    "Coordination server reports an issue",
-				Severity: tailcfg.SeverityMedium,
-				Text:     fmt.Sprintf("The coordination server is reporting a health issue: %s", h),
-			},
-		}
-
-	}
-
 	nm := &netmap.NetworkMap{
 		NodeKey:           ms.publicNodeKey,
 		PrivateKey:        ms.privateNodeKey,
@@ -860,7 +845,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		SSHPolicy:         ms.lastSSHPolicy,
 		CollectServices:   ms.collectServices,
 		DERPMap:           ms.lastDERPMap,
-		DisplayMessages:   displayMessages,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
 
@@ -886,5 +870,21 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 	if DevKnob.ForceProxyDNS() {
 		nm.DNS.Proxied = true
 	}
+
+	// Convert all ms.lastHeatlh to the new [netmap.NetworkMap.DisplayMessages].
+	for _, h := range ms.lastHealth {
+		mak.Set(&nm.DisplayMessages, tailcfg.DisplayMessageID("control-health-"+strhash(h)), tailcfg.DisplayMessage{
+			Title:    "Coordination server reports an issue",
+			Severity: tailcfg.SeverityMedium,
+			Text:     "The coordination server is reporting a health issue: " + h,
+		})
+	}
+
 	return nm
+}
+
+func strhash(h string) string {
+	s := sha256.New()
+	io.WriteString(s, h)
+	return hex.EncodeToString(s.Sum(nil))
 }
