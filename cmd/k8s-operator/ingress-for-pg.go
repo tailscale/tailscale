@@ -1105,13 +1105,11 @@ func isErrorFeatureFlagNotEnabled(err error) bool {
 	// Tailscale control plane when a Tailscale Service API call is made for a
 	// tailnet that does not have the Tailscale Services feature flag enabled.
 	const messageFFNotEnabled = "feature unavailable for tailnet"
-	var errResp *tailscale.ErrResponse
-	ok := errors.As(err, &errResp)
-	return ok && strings.Contains(errResp.Message, messageFFNotEnabled)
+	return err != nil && strings.Contains(err.Error(), messageFFNotEnabled)
 }
 
 func isErrorTailscaleServiceNotFound(err error) bool {
-	var errResp *tailscale.ErrResponse
+	var errResp tailscale.ErrResponse
 	ok := errors.As(err, &errResp)
 	return ok && errResp.Status == http.StatusNotFound
 }

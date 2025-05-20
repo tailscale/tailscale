@@ -901,11 +901,11 @@ func (c *fakeTSClient) GetVIPService(ctx context.Context, name tailcfg.ServiceNa
 	c.Lock()
 	defer c.Unlock()
 	if c.vipServices == nil {
-		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
+		return nil, tailscale.ErrResponse{Status: http.StatusNotFound}
 	}
 	svc, ok := c.vipServices[name]
 	if !ok {
-		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
+		return nil, tailscale.ErrResponse{Status: http.StatusNotFound}
 	}
 	return svc, nil
 }
