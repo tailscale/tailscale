@@ -820,7 +820,7 @@ func (de *endpoint) heartbeat() {
 
 	udpAddr, _, _ := de.addrForSendLocked(now)
 	if udpAddr.IsValid() {
-		// We have a preferred path. Ping that every 2 seconds.
+		// We have a preferred path. Ping that every 'heartbeatInterval'.
 		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0, nil)
 	}
 
