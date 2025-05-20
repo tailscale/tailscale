@@ -831,6 +831,16 @@ func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
 func (ms *mapSession) netmap() *netmap.NetworkMap {
 	peerViews := ms.sortedPeers()
 
+	// Convert all ms.lastHealth to the new [netmap.NetworkMap.DisplayMessages].
+	var msgs map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
+	for _, h := range ms.lastHealth {
+		mak.Set(&msgs, tailcfg.DisplayMessageID("control-health-"+strhash(h)), tailcfg.DisplayMessage{
+			Title:    "Coordination server reports an issue",
+			Severity: tailcfg.SeverityMedium,
+			Text:     "The coordination server is reporting a health issue: " + h,
+		})
+	}
+
 	nm := &netmap.NetworkMap{
 		NodeKey:           ms.publicNodeKey,
 		PrivateKey:        ms.privateNodeKey,
@@ -845,6 +855,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		SSHPolicy:         ms.lastSSHPolicy,
 		CollectServices:   ms.collectServices,
 		DERPMap:           ms.lastDERPMap,
+		DisplayMessages:   msgs,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
 
@@ -869,15 +880,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 	}
 	if DevKnob.ForceProxyDNS() {
 		nm.DNS.Proxied = true
-	}
-
-	// Convert all ms.lastHeatlh to the new [netmap.NetworkMap.DisplayMessages].
-	for _, h := range ms.lastHealth {
-		mak.Set(&nm.DisplayMessages, tailcfg.DisplayMessageID("control-health-"+strhash(h)), tailcfg.DisplayMessage{
-			Title:    "Coordination server reports an issue",
-			Severity: tailcfg.SeverityMedium,
-			Text:     "The coordination server is reporting a health issue: " + h,
-		})
 	}
 
 	return nm
