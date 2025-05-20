@@ -102,26 +102,19 @@ func (t *Tracker) CurrentState() *State {
 	}
 
 	for id, msg := range t.lastNotifiedControlMessages {
-		s := UnhealthyStateFromDisplayMessage(id, msg)
-		wm[s.WarnableCode] = s
+		code := WarnableCode(id)
+		wm[code] = UnhealthyState{
+			WarnableCode:        code,
+			Severity:            severityFromTailcfg(msg.Severity),
+			Title:               msg.Title,
+			Text:                msg.Text,
+			ImpactsConnectivity: msg.ImpactsConnectivity,
+		}
 	}
 
 	return &State{
 		Warnings: wm,
 	}
-}
-
-// UnhealthyStateFromDisplayMessage converts [tailcfg.DisplayMessage] to [UnhealthyState].
-func UnhealthyStateFromDisplayMessage(id tailcfg.DisplayMessageID, msg tailcfg.DisplayMessage) UnhealthyState {
-	state := UnhealthyState{
-		WarnableCode:        WarnableCode(id),
-		Severity:            severityFromTailcfg(msg.Severity),
-		Title:               msg.Title,
-		Text:                msg.Text,
-		ImpactsConnectivity: msg.ImpactsConnectivity,
-	}
-
-	return state
 }
 
 func severityFromTailcfg(s tailcfg.DisplayMessageSeverity) Severity {
