@@ -209,7 +209,7 @@ func unregister(w *Warnable) {
 type WarnableCode string
 
 // A Warnable is something that we might want to warn the user about, or not. A
-// Warnable is either in a healthy or unhealth state. A Warnable is unhealthy if
+// Warnable is either in a healthy or unhealthy state. A Warnable is unhealthy if
 // the Tracker knows about a WarningState affecting the Warnable.
 //
 // In most cases, Warnables are components of the backend (for instance, "DNS"
@@ -528,7 +528,7 @@ type Change struct {
 // the callback will be called with WarnableChanged set to true and the Warnable
 // and its UnhealthyState:
 //
-//	go cb(Change{WarnableChanged: true, Warnable: w, UnhealthState: us})
+//	go cb(Change{WarnableChanged: true, Warnable: w, UnhealthyState: us})
 //
 // If a Warnable becomes healthy, the callback will be called with
 // WarnableChanged set to true, the Warnable set, and UnhealthyState set to nil:
