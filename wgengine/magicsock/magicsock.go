@@ -1603,16 +1603,43 @@ const (
 // speeds.
 var debugIPv4DiscoPingPenalty = envknob.RegisterDuration("TS_DISCO_PONG_IPV4_DELAY")
 
+// virtualNetworkID is a Geneve header (RFC8926) 3-byte virtual network
+// identifier. Its field must only ever be accessed via its methods.
+type virtualNetworkID struct {
+	_vni uint32
+}
+
+const (
+	vniSetMask uint32 = 0xFF000000
+	vniGetMask uint32 = ^vniSetMask
+)
+
+// isSet returns true if set() had been called previously, otherwise false.
+func (v *virtualNetworkID) isSet() bool {
+	return v._vni&vniSetMask != 0
+}
+
+// set sets the provided VNI. If VNI exceeds the 3-byte storage it will be
+// clamped.
+func (v *virtualNetworkID) set(vni uint32) {
+	v._vni = vni | vniSetMask
+}
+
+// get returns the VNI value.
+func (v *virtualNetworkID) get() uint32 {
+	return v._vni & vniGetMask
+}
+
 // sendDiscoMessage sends discovery message m to dstDisco at dst.
 //
 // If dst is a DERP IP:port, then dstKey must be non-zero.
 //
-// If geneveVNI is non-nil, then the [disco.Message] will be preceded by a
-// Geneve header with the supplied VNI set.
+// If vni.isSet(), the [disco.Message] will be preceded by a Geneve header with
+// the VNI field set to the value returned by vni.get().
 //
 // The dstKey should only be non-zero if the dstDisco key
 // unambiguously maps to exactly one peer.
-func (c *Conn) sendDiscoMessage(dst netip.AddrPort, geneveVNI *uint32, dstKey key.NodePublic, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
+func (c *Conn) sendDiscoMessage(dst netip.AddrPort, vni virtualNetworkID, dstKey key.NodePublic, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
 	isDERP := dst.Addr() == tailcfg.DerpMagicIPAddr
 	if _, isPong := m.(*disco.Pong); isPong && !isDERP && dst.Addr().Is4() {
 		time.Sleep(debugIPv4DiscoPingPenalty())
@@ -1651,11 +1678,11 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, geneveVNI *uint32, dstKey ke
 	c.mu.Unlock()
 
 	pkt := make([]byte, 0, 512) // TODO: size it correctly? pool? if it matters.
-	if geneveVNI != nil {
+	if vni.isSet() {
 		gh := packet.GeneveHeader{
 			Version:  0,
 			Protocol: packet.GeneveProtocolDisco,
-			VNI:      *geneveVNI,
+			VNI:      vni.get(),
 			Control:  isRelayHandshakeMsg,
 		}
 		pkt = append(pkt, make([]byte, packet.GeneveFixedHeaderLength)...)
@@ -1903,9 +1930,17 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	switch dm := dm.(type) {
 	case *disco.Ping:
 		metricRecvDiscoPing.Add(1)
+		if isGeneveEncap {
+			// TODO(jwhited): handle Geneve-encapsulated disco ping.
+			return
+		}
 		c.handlePingLocked(dm, src, di, derpNodeSrc)
 	case *disco.Pong:
 		metricRecvDiscoPong.Add(1)
+		if isGeneveEncap {
+			// TODO(jwhited): handle Geneve-encapsulated disco pong.
+			return
+		}
 		// There might be multiple nodes for the sender's DiscoKey.
 		// Ask each to handle it, stopping once one reports that
 		// the Pong's TxID was theirs.
@@ -2020,12 +2055,12 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 	isDerp := src.Addr() == tailcfg.DerpMagicIPAddr
 
 	// If we can figure out with certainty which node key this disco
-	// message is for, eagerly update our IP<>node and disco<>node
+	// message is for, eagerly update our IP:port<>node and disco<>node
 	// mappings to make p2p path discovery faster in simple
 	// cases. Without this, disco would still work, but would be
 	// reliant on DERP call-me-maybe to establish the disco<>node
 	// mapping, and on subsequent disco handlePongConnLocked to establish
-	// the IP<>disco mapping.
+	// the IP:port<>disco mapping.
 	if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
 		if !isDerp {
 			c.peerMap.setNodeKeyForIPPort(src, nk)
@@ -2086,7 +2121,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 
 	ipDst := src
 	discoDest := di.discoKey
-	go c.sendDiscoMessage(ipDst, nil, dstKey, discoDest, &disco.Pong{
+	go c.sendDiscoMessage(ipDst, virtualNetworkID{}, dstKey, discoDest, &disco.Pong{
 		TxID: dm.TxID,
 		Src:  src,
 	}, discoVerboseLog)
@@ -2131,12 +2166,12 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 	for _, ep := range c.lastEndpoints {
 		eps = append(eps, ep.Addr)
 	}
-	go de.c.sendDiscoMessage(derpAddr, nil, de.publicKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+	go de.c.sendDiscoMessage(derpAddr, virtualNetworkID{}, de.publicKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 	if debugSendCallMeUnknownPeer() {
 		// Send a callMeMaybe packet to a non-existent peer
 		unknownKey := key.NewNode().Public()
 		c.logf("magicsock: sending CallMeMaybe to unknown peer per TS_DEBUG_SEND_CALLME_UNKNOWN_PEER")
-		go de.c.sendDiscoMessage(derpAddr, nil, unknownKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+		go de.c.sendDiscoMessage(derpAddr, virtualNetworkID{}, unknownKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 	}
 }
 
