@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -586,30 +587,48 @@ func TestProberRunHandler(t *testing.T) {
 				defer probe.Close()
 				<-probe.stopped // wait for the first run.
 
-				w := httptest.NewRecorder()
+				mux := http.NewServeMux()
+				server := httptest.NewServer(mux)
+				defer server.Close()
 
-				req := httptest.NewRequest("GET", "/prober/run/?name="+tt.name, nil)
+				mux.Handle("/prober/run/", tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunHandler), tsweb.HandlerOptions{}))
+
+				req, err := http.NewRequest("GET", server.URL+"/prober/run/?name="+tt.name, nil)
+				if err != nil {
+					t.Fatalf("failed to create request: %v", err)
+				}
+
 				if reqJSON {
 					req.Header.Set("Accept", "application/json")
 				}
-				tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunHandler), tsweb.HandlerOptions{}).ServeHTTP(w, req)
-				if w.Result().StatusCode != tt.wantResponseCode {
-					t.Errorf("unexpected response code: got %d, want %d", w.Code, tt.wantResponseCode)
+
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("failed to make request: %v", err)
+				}
+
+				if resp.StatusCode != tt.wantResponseCode {
+					t.Errorf("unexpected response code: got %d, want %d", resp.StatusCode, tt.wantResponseCode)
 				}
 
 				if reqJSON {
-					if w.Header().Get("Content-Type") != "application/json" {
-						t.Errorf("unexpected content type: got %q, want application/json", w.Header().Get("Content-Type"))
+					if resp.Header.Get("Content-Type") != "application/json" {
+						t.Errorf("unexpected content type: got %q, want application/json", resp.Header.Get("Content-Type"))
 					}
 					var gotJSON RunHandlerResponse
-					if err := json.Unmarshal(w.Body.Bytes(), &gotJSON); err != nil {
-						t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, w.Body.String())
+					body, err := io.ReadAll(resp.Body)
+					if err != nil {
+						t.Fatalf("failed to read response body: %v", err)
+					}
+
+					if err := json.Unmarshal(body, &gotJSON); err != nil {
+						t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, body)
 					}
 					if diff := cmp.Diff(tt.wantJSONResponse, gotJSON, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Labels", "RecentLatencies")); diff != "" {
 						t.Errorf("unexpected JSON response (-want +got):\n%s", diff)
 					}
 				} else {
-					body, _ := io.ReadAll(w.Result().Body)
+					body, _ := io.ReadAll(resp.Body)
 					if !strings.Contains(string(body), tt.wantPlaintextResponse) {
 						t.Errorf("unexpected response body: got %q, want to contain %q", body, tt.wantPlaintextResponse)
 					}
