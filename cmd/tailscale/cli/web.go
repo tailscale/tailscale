@@ -43,6 +43,7 @@ Tailscale, as opposed to a CLI or a native app.
 		webf.BoolVar(&webArgs.cgi, "cgi", false, "run as CGI script")
 		webf.StringVar(&webArgs.prefix, "prefix", "", "URL prefix added to requests (for cgi or reverse proxies)")
 		webf.BoolVar(&webArgs.readonly, "readonly", false, "run web UI in read-only mode")
+		webf.StringVar(&webArgs.origin, "origin", "", "origin at which the web UI is served (if behind a reverse proxy or used with cgi)")
 		return webf
 	})(),
 	Exec: runWeb,
@@ -53,6 +54,7 @@ var webArgs struct {
 	cgi      bool
 	prefix   string
 	readonly bool
+	origin   string
 }
 
 func tlsConfigFromEnvironment() *tls.Config {
@@ -114,6 +116,9 @@ func runWeb(ctx context.Context, args []string) error {
 	}
 	if webArgs.readonly {
 		opts.Mode = web.ReadOnlyServerMode
+	}
+	if webArgs.origin != "" {
+		opts.OriginOverride = webArgs.origin
 	}
 	webServer, err := web.NewServer(opts)
 	if err != nil {
