@@ -25,6 +25,6 @@ func TestRelayManagerInitAndIdle(t *testing.T) {
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}
-	rm.handleBindUDPRelayEndpointChallenge(&disco.BindUDPRelayEndpointChallenge{}, &discoInfo{}, netip.AddrPort{}, 0)
+	rm.handleGeneveEncapDiscoMsgNotBestAddr(&disco.BindUDPRelayEndpointChallenge{}, &discoInfo{}, netip.AddrPort{}, 0)
 	<-rm.runLoopStoppedCh
 }
