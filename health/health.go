@@ -208,13 +208,15 @@ func unregister(w *Warnable) {
 // the program.
 type WarnableCode string
 
-// A Warnable is something that we might want to warn the user about, or not. A Warnable is either
-// in an healthy or unhealth state. A Warnable is unhealthy if the Tracker knows about a WarningState
-// affecting the Warnable.
-// In most cases, Warnables are components of the backend (for instance, "DNS" or "Magicsock").
-// Warnables are similar to the Subsystem type previously used in this package, but they provide
-// a unique identifying code for each Warnable, along with more metadata that makes it easier for
-// a GUI to display the Warnable in a user-friendly way.
+// A Warnable is something that we might want to warn the user about, or not. A
+// Warnable is either in a healthy or unhealth state. A Warnable is unhealthy if
+// the Tracker knows about a WarningState affecting the Warnable.
+//
+// In most cases, Warnables are components of the backend (for instance, "DNS"
+// or "Magicsock"). Warnables are similar to the Subsystem type previously used
+// in this package, but they provide a unique identifying code for each
+// Warnable, along with more metadata that makes it easier for a GUI to display
+// the Warnable in a user-friendly way.
 type Warnable struct {
 	// Code is a string that uniquely identifies this Warnable across the entire Tailscale backend,
 	// and can be mapped to a user-displayable localized string.
@@ -501,38 +503,43 @@ func (t *Tracker) AppendWarnableDebugFlags(base []string) []string {
 // Change is used to communicate a change to health. This could either be due to
 // a Warnable changing from health to unhealthy (or vice-versa), or because the
 // health messages received from the control-plane have changed.
+//
+// Exactly one *Changed field will be true.
 type Change struct {
-	// Health messages from the POV of the control-plane server changed. If set, WarnableChanged, Warnable, and UnhealthyState are not set.
+	// ControlHealthChanged indicates it was health messages from the
+	// control-plane server that changed.
 	ControlHealthChanged bool
 
-	// A client Warnable changed state. Mutually exclusive with ControlHealthChanged. If set, Warnable is set and ControlHealthChanged is not set.
+	// WarnableChanged indicates it was a client Warnable which changed state.
 	WarnableChanged bool
-
-	// Warnable that changed state. If it is now unhealthy, UnhealthyState will
-	// be set.
+	// Warnable is whose health changed, as indicated in UnhealthyState.
 	Warnable *Warnable
-
-	// UnhealthyState is set if the Warnable is unhealthy, and unset if the
-	// Warnable is now healthy.
+	// UnhealthyState is set if the changed Warnable is now unhealthy, or nil
+	// if Warnable is now healthy.
 	UnhealthyState *UnhealthyState
 }
 
-// RegisterWatcher adds a function that will be called whenever the health state
-// of any Warnable changes or the health messages from the control-plane change.
+// RegisterWatcher adds a function that will be called its own goroutine
+// whenever the health state of any client [Warnable] or control-plane health
+// messages changes. The returned function can be used to unregister the
+// callback.
 //
-// If a Warnable becomes unhealthy or its unhealthy state is updated, the
-// callback will be called with WarnableChanged set to true and the Warnable and
-// its UnhealthyState.
+// If a client [Warnable] becomes unhealthy or its unhealthy state is updated,
+// the callback will be called with WarnableChanged set to true and the Warnable
+// and its UnhealthyState:
+//
+//	go cb(Change{WarnableChanged: true, Warnable: w, UnhealthState: us})
 //
 // If a Warnable becomes healthy, the callback will be called with
-// WarnableChanged set to true, the Warnable set, and UnhealthyState set to nil
+// WarnableChanged set to true, the Warnable set, and UnhealthyState set to nil:
+//
+//	go cb(Change{WarnableChanged: true, Warnable: w, UnhealthyState: nil})
 //
 // If the health messages from the control-plane change, the callback will be
-// called with ControlHealthChanged set to true. Clients can fetch the set of
-// control-plane health messages by calling [Tracker.CurrentState].
+// called with ControlHealthChanged set to true. Recipients can fetch the set of
+// control-plane health messages by calling [Tracker.CurrentState]:
 //
-// The provided callback function will be executed in its own goroutine. The
-// returned function can be used to unregister the callback.
+//	go cb(Change{ControlHealthChanged: true})
 func (t *Tracker) RegisterWatcher(cb func(Change)) (unregister func()) {
 	return t.registerSyncWatcher(func(c Change) {
 		go cb(c)

@@ -23,8 +23,8 @@ type State struct {
 }
 
 // UnhealthyState contains information to be shown to the user to inform them
-// that a Warnable is currently unhealthy or DisplayMessage is being sent from
-// the control-plane.
+// that a [Warnable] is currently unhealthy or [tailcfg.DisplayMessage] is being
+// sent from the control-plane.
 type UnhealthyState struct {
 	WarnableCode        WarnableCode
 	Severity            Severity
@@ -101,8 +101,8 @@ func (t *Tracker) CurrentState() *State {
 		wm[w.Code] = *w.unhealthyState(ws)
 	}
 
-	for id, message := range t.lastNotifiedControlMessages {
-		s := UnhealthyStateFromDisplayMessage(id, message)
+	for id, msg := range t.lastNotifiedControlMessages {
+		s := UnhealthyStateFromDisplayMessage(id, msg)
 		wm[s.WarnableCode] = s
 	}
 
@@ -111,6 +111,7 @@ func (t *Tracker) CurrentState() *State {
 	}
 }
 
+// UnhealthyStateFromDisplayMessage converts [tailcfg.DisplayMessage] to [UnhealthyState].
 func UnhealthyStateFromDisplayMessage(id tailcfg.DisplayMessageID, message tailcfg.DisplayMessage) UnhealthyState {
 	severity := SeverityMedium
 
