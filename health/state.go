@@ -112,27 +112,27 @@ func (t *Tracker) CurrentState() *State {
 }
 
 // UnhealthyStateFromDisplayMessage converts [tailcfg.DisplayMessage] to [UnhealthyState].
-func UnhealthyStateFromDisplayMessage(id tailcfg.DisplayMessageID, message tailcfg.DisplayMessage) UnhealthyState {
-	severity := SeverityMedium
-
-	switch message.Severity {
-	case tailcfg.SeverityHigh:
-		severity = SeverityHigh
-	case tailcfg.SeverityMedium:
-		severity = SeverityMedium
-	case tailcfg.SeverityLow:
-		severity = SeverityLow
-	}
-
+func UnhealthyStateFromDisplayMessage(id tailcfg.DisplayMessageID, msg tailcfg.DisplayMessage) UnhealthyState {
 	state := UnhealthyState{
 		WarnableCode:        WarnableCode(id),
-		Severity:            severity,
-		Title:               message.Title,
-		Text:                message.Text,
-		ImpactsConnectivity: message.ImpactsConnectivity,
+		Severity:            severityFromTailcfg(msg.Severity),
+		Title:               msg.Title,
+		Text:                msg.Text,
+		ImpactsConnectivity: msg.ImpactsConnectivity,
 	}
 
 	return state
+}
+
+func severityFromTailcfg(s tailcfg.DisplayMessageSeverity) Severity {
+	switch s {
+	case tailcfg.SeverityHigh:
+		return SeverityHigh
+	case tailcfg.SeverityLow:
+		return SeverityLow
+	default:
+		return SeverityMedium
+	}
 }
 
 // isEffectivelyHealthyLocked reports whether w is effectively healthy.
