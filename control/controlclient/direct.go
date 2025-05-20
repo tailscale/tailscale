@@ -1623,7 +1623,7 @@ func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailc
 	return nil
 }
 
-// ReportHealthChange reports to the control plane a change to this node's
+// ReportWarnableChange reports to the control plane a change to this node's
 // health. w must be non-nil. us can be nil to indicate a healthy state for w.
 func (c *Direct) ReportWarnableChange(w *health.Warnable, us *health.UnhealthyState) {
 	if w == health.NetworkStatusWarnable || w == health.IPNStateWarnable || w == health.LoginStateWarnable {
