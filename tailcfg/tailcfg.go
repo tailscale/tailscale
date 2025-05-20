@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/types/bools"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -2106,19 +2105,10 @@ type DisplayMessageID string
 
 // Equal returns true iff all fields are equal.
 func (m DisplayMessage) Equal(o DisplayMessage) bool {
-	if c := cmp.Compare(m.Title, o.Title); c != 0 {
-		return false
-	}
-	if c := cmp.Compare(m.Text, o.Text); c != 0 {
-		return false
-	}
-	if c := cmp.Compare(m.Severity, o.Severity); c != 0 {
-		return false
-	}
-	if c := bools.Compare(m.ImpactsConnectivity, o.ImpactsConnectivity); c != 0 {
-		return false
-	}
-	return true
+	return m.Title == o.Title &&
+		m.Text == o.Text &&
+		m.Severity == o.Severity &&
+		m.ImpactsConnectivity == o.ImpactsConnectivity
 }
 
 // DisplayMessageSeverity represents how serious a [DisplayMessage] is. Analogous
