@@ -4,6 +4,7 @@
 package store
 
 import (
+	"maps"
 	"path/filepath"
 	"testing"
 
@@ -14,10 +15,9 @@ import (
 )
 
 func TestNewStore(t *testing.T) {
-	regOnce.Do(registerDefaultStores)
+	oldKnownStores := maps.Clone(knownStores)
 	t.Cleanup(func() {
-		knownStores = map[string]Provider{}
-		registerDefaultStores()
+		knownStores = oldKnownStores
 	})
 	knownStores = map[string]Provider{}
 
