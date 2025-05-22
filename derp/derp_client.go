@@ -30,7 +30,7 @@ type Client struct {
 	logf        logger.Logf
 	nc          Conn
 	br          *bufio.Reader
-	meshKey     string
+	meshKey     key.DERPMesh
 	canAckPings bool
 	isProber    bool
 
@@ -56,7 +56,7 @@ func (f clientOptFunc) update(o *clientOpt) { f(o) }
 
 // clientOpt are the options passed to newClient.
 type clientOpt struct {
-	MeshKey     string
+	MeshKey     key.DERPMesh
 	ServerPub   key.NodePublic
 	CanAckPings bool
 	IsProber    bool
@@ -66,7 +66,7 @@ type clientOpt struct {
 // access to join the mesh.
 //
 // An empty key means to not use a mesh key.
-func MeshKey(key string) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.MeshKey = key }) }
+func MeshKey(k key.DERPMesh) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.MeshKey = k }) }
 
 // IsProber returns a ClientOpt to pass to the DERP server during connect to
 // declare that this client is a a prober.
@@ -182,7 +182,7 @@ type clientInfo struct {
 func (c *Client) sendClientKey() error {
 	msg, err := json.Marshal(clientInfo{
 		Version:     ProtocolVersion,
-		MeshKey:     c.meshKey,
+		MeshKey:     c.meshKey.String(),
 		CanAckPings: c.canAckPings,
 		IsProber:    c.isProber,
 	})

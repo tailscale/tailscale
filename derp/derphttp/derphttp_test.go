@@ -212,6 +212,8 @@ func TestPing(t *testing.T) {
 	}
 }
 
+const testMeshKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
 func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.Server) {
 	s = derp.NewServer(k, t.Logf)
 	httpsrv := &http.Server{
@@ -224,7 +226,7 @@ func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.S
 		t.Fatal(err)
 	}
 	serverURL = "http://" + ln.Addr().String()
-	s.SetMeshKey("1234")
+	s.SetMeshKey(testMeshKey)
 
 	go func() {
 		if err := httpsrv.Serve(ln); err != nil {
@@ -243,7 +245,11 @@ func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToW
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.MeshKey = "1234"
+	k, err := key.ParseDERPMesh(testMeshKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.MeshKey = k
 	return
 }
 

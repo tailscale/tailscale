@@ -134,7 +134,7 @@ type Server struct {
 	publicKey   key.NodePublic
 	logf        logger.Logf
 	memSys0     uint64 // runtime.MemStats.Sys at start (or early-ish)
-	meshKey     string
+	meshKey     key.DERPMesh
 	limitedLogf logger.Logf
 	metaCert    []byte // the encoded x509 cert to send after LetsEncrypt cert+intermediate
 	dupPolicy   dupPolicy
@@ -464,8 +464,13 @@ func genDroppedCounters() {
 // amongst themselves.
 //
 // It must be called before serving begins.
-func (s *Server) SetMeshKey(v string) {
-	s.meshKey = v
+func (s *Server) SetMeshKey(v string) error {
+	k, err := key.ParseDERPMesh(v)
+	if err != nil {
+		return err
+	}
+	s.meshKey = k
+	return nil
 }
 
 // SetVerifyClients sets whether this DERP server verifies clients through tailscaled.
@@ -506,10 +511,10 @@ func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 }
 
 // HasMeshKey reports whether the server is configured with a mesh key.
-func (s *Server) HasMeshKey() bool { return s.meshKey != "" }
+func (s *Server) HasMeshKey() bool { return !s.meshKey.IsZero() }
 
 // MeshKey returns the configured mesh key, if any.
-func (s *Server) MeshKey() string { return s.meshKey }
+func (s *Server) MeshKey() key.DERPMesh { return s.meshKey }
 
 // PrivateKey returns the server's private key.
 func (s *Server) PrivateKey() key.NodePrivate { return s.privateKey }
@@ -1355,7 +1360,18 @@ func (c *sclient) requestMeshUpdate() {
 // isMeshPeer reports whether the client is a trusted mesh peer
 // node in the DERP region.
 func (s *Server) isMeshPeer(info *clientInfo) bool {
-	return info != nil && info.MeshKey != "" && info.MeshKey == s.meshKey
+	// Compare mesh keys in constant time to prevent timing attacks.
+	// Since mesh keys are a fixed length, we don’t need to be concerned
+	// about timing attacks on client mesh keys that are the wrong length.
+	// See https://github.com/tailscale/corp/issues/28720
+	if info == nil || info.MeshKey == "" {
+		return false
+	}
+	k, err := key.ParseDERPMesh(info.MeshKey)
+	if err != nil {
+		return false
+	}
+	return s.meshKey.Equal(k)
 }
 
 // verifyClient checks whether the client is allowed to connect to the derper,
