@@ -518,6 +518,22 @@ func TestControlHealth(t *testing.T) {
 			t.Fatalf(`Strings() wrong (-want +got):\n%s`, diff)
 		}
 	})
+
+	t.Run("tailscaled_health_messages", func(t *testing.T) {
+		var r usermetric.Registry
+		ht.SetMetricsRegistry(&r)
+
+		got := ht.metricHealthMessage.Get(metricHealthMessageLabel{
+			Type: MetricLabelWarning,
+		}).String()
+		want := strconv.Itoa(
+			2 + // from SetControlHealth
+				len(baseStrs),
+		)
+		if got != want {
+			t.Errorf("metricsHealthMessage.Get(warning) = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestControlHealthNotifiesOnSet(t *testing.T) {
