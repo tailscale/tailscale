@@ -5,12 +5,14 @@ package health
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/opt"
@@ -462,18 +464,60 @@ func TestControlHealth(t *testing.T) {
 	ht.SetIPNState("NeedsLogin", true)
 	ht.GotStreamedMapResponse()
 
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"control-health-test": {},
-	})
-	state := ht.CurrentState()
-	warning, ok := state.Warnings["control-health-test"]
+	baseWarns := ht.CurrentState().Warnings
+	baseStrs := ht.Strings()
 
-	if !ok {
-		t.Fatal("no warning found in current state with code 'control-health'")
-	}
-	if got, want := warning.WarnableCode, "control-health-test"; string(got) != want {
-		t.Errorf("warning.WarnableCode = %q, want %q", got, want)
-	}
+	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+		"control-health-test": {
+			Title: "Control health message",
+			Text:  "Extra help",
+		},
+		"control-health-title": {
+			Title: "Control health title only",
+		},
+	})
+
+	t.Run("Warnings", func(t *testing.T) {
+		wantWarns := map[WarnableCode]UnhealthyState{
+			"control-health-test": {
+				WarnableCode: "control-health-test",
+				Severity:     SeverityMedium,
+				Title:        "Control health message",
+				Text:         "Extra help",
+			},
+			"control-health-title": {
+				WarnableCode: "control-health-title",
+				Severity:     SeverityMedium,
+				Title:        "Control health title only",
+			},
+		}
+		state := ht.CurrentState()
+		gotWarns := maps.Clone(state.Warnings)
+		for k := range gotWarns {
+			if _, inBase := baseWarns[k]; inBase {
+				delete(gotWarns, k)
+			}
+		}
+		if diff := cmp.Diff(wantWarns, gotWarns); diff != "" {
+			t.Fatalf(`CurrentState().Warnings["control-health-*"] wrong (-want +got):\n%s`, diff)
+		}
+	})
+
+	t.Run("Strings()", func(t *testing.T) {
+		wantStrs := []string{
+			"Control health message: Extra help",
+			"Control health title only",
+		}
+		var gotStrs []string
+		for _, s := range ht.Strings() {
+			if !slices.Contains(baseStrs, s) {
+				gotStrs = append(gotStrs, s)
+			}
+		}
+		if diff := cmp.Diff(wantStrs, gotStrs); diff != "" {
+			t.Fatalf(`Strings() wrong (-want +got):\n%s`, diff)
+		}
+	})
 }
 
 func TestControlHealthNotifiesOnSet(t *testing.T) {

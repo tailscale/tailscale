@@ -1009,11 +1009,11 @@ func (t *Tracker) OverallError() error {
 	return t.multiErrLocked()
 }
 
-// Strings() returns a string array containing the Text of all Warnings
-// currently known to the Tracker. These strings can be presented to the
-// user, although ideally you would use the Code property on each Warning
-// to show a localized version of them instead.
-// This function is here for legacy compatibility purposes and is deprecated.
+// Strings() returns a string array containing the Text of all Warnings and
+// ControlHealth messages currently known to the Tracker. These strings can be
+// presented to the user, although ideally you would use the Code property on
+// each Warning to show a localized version of them instead. This function is
+// here for legacy compatibility purposes and is deprecated.
 func (t *Tracker) Strings() []string {
 	if t.nil() {
 		return nil
@@ -1039,6 +1039,19 @@ func (t *Tracker) stringsLocked() []string {
 			result = append(result, w.Text(ws.Args))
 		}
 	}
+
+	warnLen := len(result)
+	for _, c := range t.controlMessages {
+		if c.Title != "" && c.Text != "" {
+			result = append(result, c.Title+": "+c.Text)
+		} else if c.Title != "" {
+			result = append(result, c.Title)
+		} else if c.Text != "" {
+			result = append(result, c.Text)
+		}
+	}
+	sort.Strings(result[warnLen:])
+
 	return result
 }
 
