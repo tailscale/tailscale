@@ -169,12 +169,9 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 
-	// Validate Service configuration
-	if violations := validateService(svc); len(violations) > 0 {
-		msg := fmt.Sprintf("unable to provision proxy resources: invalid Service: %s", strings.Join(violations, ", "))
-		r.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVICE", msg)
-		r.logger.Error(msg)
-		tsoperator.SetServiceCondition(svc, tsapi.IngressSvcValid, metav1.ConditionFalse, reasonIngressSvcInvalid, msg, r.clock, logger)
+	if err := r.validateService(ctx, svc, pg); err != nil {
+		r.recorder.Event(svc, corev1.EventTypeWarning, reasonIngressSvcInvalid, err.Error())
+		tsoperator.SetServiceCondition(svc, tsapi.IngressSvcValid, metav1.ConditionFalse, reasonIngressSvcInvalid, err.Error(), r.clock, logger)
 		return false, nil
 	}
 
@@ -856,4 +853,27 @@ func (r *HAServiceReconciler) checkEndpointsReady(ctx context.Context, svc *core
 
 	logger.Debugf("could not find any ready Endpoints in EndpointSlice")
 	return false, nil
+}
+
+func (r *HAServiceReconciler) validateService(ctx context.Context, svc *corev1.Service, pg *tsapi.ProxyGroup) error {
+	var errs []error
+	if pg.Spec.Type != tsapi.ProxyGroupTypeIngress {
+		errs = append(errs, fmt.Errorf("ProxyGroup %q is of type %q but must be of type %q",
+			pg.Name, pg.Spec.Type, tsapi.ProxyGroupTypeIngress))
+	}
+	if violations := validateService(svc); len(violations) > 0 {
+		errs = append(errs, fmt.Errorf("invalid Service: %s", strings.Join(violations, ", ")))
+	}
+	svcList := &corev1.ServiceList{}
+	if err := r.List(ctx, svcList); err != nil {
+		errs = append(errs, fmt.Errorf("[unexpected] error listing Services: %w", err))
+		return errors.Join(errs...)
+	}
+	svcName := nameForService(svc)
+	for _, s := range svcList.Items {
+		if r.shouldExpose(&s) && nameForService(&s) == svcName && s.UID != svc.UID {
+			errs = append(errs, fmt.Errorf("found duplicate Service %q for hostname %q - multiple HA Services for the same hostname in the same cluster are not allowed", client.ObjectKeyFromObject(&s), svcName))
+		}
+	}
+	return errors.Join(errs...)
 }

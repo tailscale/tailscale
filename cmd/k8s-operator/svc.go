@@ -392,6 +392,7 @@ func validateService(svc *corev1.Service) []string {
 			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname %q, use %q annotation to override: %s", svcName, AnnotationHostname, err))
 		}
 	}
+	violations = append(violations, tagViolations(svc)...)
 	return violations
 }
 

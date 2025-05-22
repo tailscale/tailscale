@@ -1804,7 +1804,7 @@ func Test_metricsResourceCreation(t *testing.T) {
 
 func TestIgnorePGService(t *testing.T) {
 	// NOTE: creating proxygroup stuff just to be sure that it's all ignored
-	_, _, fc, _ := setupServiceTest(t)
+	_, _, fc, _, _ := setupServiceTest(t)
 
 	ft := &fakeTSClient{}
 	zl, err := zap.NewDevelopment()
