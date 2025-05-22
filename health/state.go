@@ -109,6 +109,7 @@ func (t *Tracker) CurrentState() *State {
 			Title:               msg.Title,
 			Text:                msg.Text,
 			ImpactsConnectivity: msg.ImpactsConnectivity,
+			// TODO(tailscale/corp#27759): DependsOn?
 		}
 	}
 
