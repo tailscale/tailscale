@@ -4,15 +4,18 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/util/testenv"
 )
 
@@ -20,11 +23,12 @@ var (
 	riskTypes           []string
 	riskLoseSSH         = registerRiskType("lose-ssh")
 	riskMacAppConnector = registerRiskType("mac-app-connector")
+	riskStrictRPFilter  = registerRiskType("linux-strict-rp-filter")
 	riskAll             = registerRiskType("all")
 )
 
 const riskMacAppConnectorMessage = `
-You are trying to configure an app connector on macOS, which is not officially supported due to system limitations. This may result in performance and reliability issues. 
+You are trying to configure an app connector on macOS, which is not officially supported due to system limitations. This may result in performance and reliability issues.
 
 Do not use a macOS app connector for any mission-critical purposes. For the best experience, Linux is the only recommended platform for app connectors.
 `
@@ -88,4 +92,19 @@ func presentRiskToUser(riskType, riskMessage, acceptedRisks string) error {
 	}
 	printf("\r%s\r", strings.Repeat(" ", msgLen))
 	return errAborted
+}
+
+// checkExitNodeRisk checks if the user is using an exit node on Linux and
+// whether reverse path filtering is enabled. If so, it presents a risk message.
+func checkExitNodeRisk(ctx context.Context, prefs *ipn.Prefs, acceptedRisks string) error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	if !prefs.ExitNodeIP.IsValid() && prefs.ExitNodeID == "" {
+		return nil
+	}
+	if err := localClient.CheckReversePathFiltering(ctx); err != nil {
+		return presentRiskToUser(riskStrictRPFilter, err.Error(), acceptedRisks)
+	}
+	return nil
 }

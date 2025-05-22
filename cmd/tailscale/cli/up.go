@@ -481,6 +481,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	}
 
 	warnOnAdvertiseRouts(ctx, prefs)
+	if err := checkExitNodeRisk(ctx, prefs, upArgs.acceptedRisks); err != nil {
+		return err
+	}
 
 	curPrefs, err := localClient.GetPrefs(ctx)
 	if err != nil {
