@@ -859,7 +859,7 @@ func dohQuery(r *http.Request) (dnsQuery []byte, publicErr string) {
 	case "GET":
 		q64 := r.FormValue("dns")
 		if q64 == "" {
-			return nil, "missing 'dns' parameter"
+			return nil, "missing ‘dns’ parameter; try '?dns=' (DoH standard) or use '?q=<name>' for JSON debug mode"
 		}
 		if base64.RawURLEncoding.DecodedLen(len(q64)) > maxQueryLen {
 			return nil, "query too large"
