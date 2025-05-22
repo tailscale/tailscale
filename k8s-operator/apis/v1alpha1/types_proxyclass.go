@@ -92,6 +92,7 @@ type TailnetListenerConfig struct {
 }
 
 type TailnetListenerConfigMode string
+
 type NodePort struct {
 	PortRanges []string          `json:"portRanges,omitempty"`
 	Selector   map[string]string `json:"selector,omitempty"`
