@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -1148,23 +1149,36 @@ func TestNetmapHealthIntegration(t *testing.T) {
 	ht.GotStreamedMapResponse()
 
 	nm := ms.netmapForResponse(&tailcfg.MapResponse{
-		Health: []string{"Test message"},
+		Health: []string{
+			"Test message",
+			"Another message",
+		},
 	})
-	ht.SetControlHealth(nm.ControlHealth)
+	ht.SetControlHealth(nm.DisplayMessages)
 
-	state := ht.CurrentState()
-	warning, ok := state.Warnings["control-health"]
+	want := map[health.WarnableCode]health.UnhealthyState{
+		"control-health-c0719e9a8d5d838d861dc6f675c899d2b309a3a65bb9fe6b11e5afcbf9a2c0b1": {
+			WarnableCode: "control-health-c0719e9a8d5d838d861dc6f675c899d2b309a3a65bb9fe6b11e5afcbf9a2c0b1",
+			Title:        "Coordination server reports an issue",
+			Severity:     health.SeverityMedium,
+			Text:         "The coordination server is reporting a health issue: Test message",
+		},
+		"control-health-1dc7017a73a3c55c0d6a8423e3813c7ab6562d9d3064c2ec6ac7822f61b1db9c": {
+			WarnableCode: "control-health-1dc7017a73a3c55c0d6a8423e3813c7ab6562d9d3064c2ec6ac7822f61b1db9c",
+			Title:        "Coordination server reports an issue",
+			Severity:     health.SeverityMedium,
+			Text:         "The coordination server is reporting a health issue: Another message",
+		},
+	}
 
-	if !ok {
-		t.Fatal("no warning found in current state with code 'control-health'")
+	got := maps.Clone(ht.CurrentState().Warnings)
+	for k := range got {
+		if !strings.HasPrefix(string(k), "control-health") {
+			delete(got, k)
+		}
 	}
-	if got, want := warning.Title, "Coordination server reports an issue"; got != want {
-		t.Errorf("warning.Title = %q, want %q", got, want)
-	}
-	if got, want := warning.Severity, health.SeverityMedium; got != want {
-		t.Errorf("warning.Severity = %s, want %s", got, want)
-	}
-	if got, want := warning.Text, "The coordination server is reporting an health issue: Test message"; got != want {
-		t.Errorf("warning.Text = %q, want %q", got, want)
+
+	if d := cmp.Diff(want, got); d != "" {
+		t.Fatalf("CurrentStatus().Warnings[\"control-health*\"] different than expected (-want +got)\n%s", d)
 	}
 }

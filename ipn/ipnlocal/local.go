@@ -933,11 +933,15 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	}
 }
 
-func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthyState) {
-	if us == nil {
-		b.logf("health(warnable=%s): ok", w.Code)
-	} else {
-		b.logf("health(warnable=%s): error: %s", w.Code, us.Text)
+func (b *LocalBackend) onHealthChange(change health.Change) {
+	if change.WarnableChanged {
+		w := change.Warnable
+		us := change.UnhealthyState
+		if us == nil {
+			b.logf("health(warnable=%s): ok", w.Code)
+		} else {
+			b.logf("health(warnable=%s): error: %s", w.Code, us.Text)
+		}
 	}
 
 	// Whenever health changes, send the current health state to the frontend.
@@ -5826,7 +5830,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.pauseOrResumeControlClientLocked()
 
 	if nm != nil {
-		b.health.SetControlHealth(nm.ControlHealth)
+		b.health.SetControlHealth(nm.DisplayMessages)
 	} else {
 		b.health.SetControlHealth(nil)
 	}

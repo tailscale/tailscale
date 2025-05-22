@@ -5,6 +5,8 @@ package health
 
 import (
 	"time"
+
+	"tailscale.com/tailcfg"
 )
 
 // State contains the health status of the backend, and is
@@ -21,7 +23,8 @@ type State struct {
 }
 
 // UnhealthyState contains information to be shown to the user to inform them
-// that a Warnable is currently unhealthy.
+// that a [Warnable] is currently unhealthy or [tailcfg.DisplayMessage] is being
+// sent from the control-plane.
 type UnhealthyState struct {
 	WarnableCode        WarnableCode
 	Severity            Severity
@@ -98,8 +101,31 @@ func (t *Tracker) CurrentState() *State {
 		wm[w.Code] = *w.unhealthyState(ws)
 	}
 
+	for id, msg := range t.lastNotifiedControlMessages {
+		code := WarnableCode(id)
+		wm[code] = UnhealthyState{
+			WarnableCode:        code,
+			Severity:            severityFromTailcfg(msg.Severity),
+			Title:               msg.Title,
+			Text:                msg.Text,
+			ImpactsConnectivity: msg.ImpactsConnectivity,
+			// TODO(tailscale/corp#27759): DependsOn?
+		}
+	}
+
 	return &State{
 		Warnings: wm,
+	}
+}
+
+func severityFromTailcfg(s tailcfg.DisplayMessageSeverity) Severity {
+	switch s {
+	case tailcfg.SeverityHigh:
+		return SeverityHigh
+	case tailcfg.SeverityLow:
+		return SeverityLow
+	default:
+		return SeverityMedium
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
@@ -198,7 +199,11 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
 	c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
-	c.unregisterHealthWatch = opts.HealthTracker.RegisterWatcher(direct.ReportHealthChange)
+	c.unregisterHealthWatch = opts.HealthTracker.RegisterWatcher(func(c health.Change) {
+		if c.WarnableChanged {
+			direct.ReportWarnableChange(c.Warnable, c.UnhealthyState)
+		}
+	})
 	return c, nil
 
 }

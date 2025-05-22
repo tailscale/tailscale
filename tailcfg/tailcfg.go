@@ -2028,7 +2028,7 @@ type MapResponse struct {
 	// plane's perspective. A nil value means no change from the previous
 	// MapResponse. A non-nil 0-length slice restores the health to good (no
 	// known problems). A non-zero length slice are the list of problems that
-	// the control place sees.
+	// the control plane sees.
 	//
 	// Note that this package's type, due its use of a slice and omitempty, is
 	// unable to marshal a zero-length non-nil slice. The control server needs
@@ -2077,6 +2077,56 @@ type MapResponse struct {
 	// default after the node registered.
 	DefaultAutoUpdate opt.Bool `json:",omitempty"`
 }
+
+// DisplayMessage represents a health state of the node from the control plane's
+// perspective. It is deliberately similar to health.Warnable as both get
+// converted into health.UnhealthyState to be sent to the GUI.
+type DisplayMessage struct {
+	// Title is a string that the GUI uses as title for this message. The title
+	// should be short and fit in a single line.
+	Title string
+
+	// Text is an extended string that the GUI will display to the user.
+	Text string
+
+	// Severity is the severity of the DisplayMessage, which the GUI can use to
+	// determine how to display it. Maps to health.Severity.
+	Severity DisplayMessageSeverity
+
+	// ImpactsConnectivity is whether the health problem will impact the user's
+	// ability to connect to the Internet or other nodes on the tailnet, which
+	// the GUI can use to determine how to display it.
+	ImpactsConnectivity bool `json:",omitempty"`
+}
+
+// DisplayMessageID is a string that uniquely identifies the kind of health
+// issue (e.g. "session-expired").
+type DisplayMessageID string
+
+// Equal returns true iff all fields are equal.
+func (m DisplayMessage) Equal(o DisplayMessage) bool {
+	return m.Title == o.Title &&
+		m.Text == o.Text &&
+		m.Severity == o.Severity &&
+		m.ImpactsConnectivity == o.ImpactsConnectivity
+}
+
+// DisplayMessageSeverity represents how serious a [DisplayMessage] is. Analogous
+// to health.Severity.
+type DisplayMessageSeverity string
+
+const (
+	// SeverityHigh is the highest severity level, used for critical errors that need immediate attention.
+	// On platforms where the client GUI can deliver notifications, a SeverityHigh message will trigger
+	// a modal notification.
+	SeverityHigh DisplayMessageSeverity = "high"
+	// SeverityMedium is used for errors that are important but not critical. This won't trigger a modal
+	// notification, however it will be displayed in a more visible way than a SeverityLow message.
+	SeverityMedium DisplayMessageSeverity = "medium"
+	// SeverityLow is used for less important notices that don't need immediate attention. The user will
+	// have to go to a Settings window, or another "hidden" GUI location to see these messages.
+	SeverityLow DisplayMessageSeverity = "low"
+)
 
 // ClientVersion is information about the latest client version that's available
 // for the client (and whether they're already running it).
