@@ -305,7 +305,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - name: build some
-      run: ./tool/go build ./ipn/... ./wgengine/ ./types/... ./control/controlclient
+      run: ./tool/go build ./ipn/... ./ssh/tailssh ./wgengine/ ./types/... ./control/controlclient
       env:
         GOOS: ios
         GOARCH: arm64
@@ -375,7 +375,7 @@ jobs:
       # some Android breakages early.
       # TODO(bradfitz): better; see https://github.com/tailscale/tailscale/issues/4482
     - name: build some
-      run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/netmon ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version
+      run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/netmon ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version ./ssh/tailssh
       env:
         GOOS: android
         GOARCH: arm64
