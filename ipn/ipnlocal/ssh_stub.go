@@ -8,6 +8,7 @@ package ipnlocal
 import (
 	"errors"
 
+	"golang.org/x/crypto/ssh"
 	"tailscale.com/tailcfg"
 )
 
@@ -16,5 +17,9 @@ func (b *LocalBackend) getSSHHostKeyPublicStrings() ([]string, error) {
 }
 
 func (b *LocalBackend) getSSHUsernames(*tailcfg.C2NSSHUsernamesRequest) (*tailcfg.C2NSSHUsernamesResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (b *LocalBackend) GetSSH_HostKeys() (keys []ssh.Signer, err error) {
 	return nil, errors.New("not implemented")
 }
