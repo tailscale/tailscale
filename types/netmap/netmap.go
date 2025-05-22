@@ -54,12 +54,12 @@ type NetworkMap struct {
 	// between updates and should not be modified.
 	DERPMap *tailcfg.DERPMap
 
-	// DisplayMessages are the list of health check problems for this
+	// ControlHealth are the list of health check problems for this
 	// node from the perspective of the control plane.
 	// If empty, there are no known problems from the control plane's
 	// point of view, but the node might know about its own health
 	// check problems.
-	DisplayMessages map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
+	ControlHealth []string
 
 	// TKAEnabled indicates whether the tailnet key authority should be
 	// enabled, from the perspective of the control plane.
