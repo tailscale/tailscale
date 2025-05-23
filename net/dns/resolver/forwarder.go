@@ -245,12 +245,6 @@ type forwarder struct {
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
-
-	// missingUpstreamRecovery, if non-nil, is set called when a SERVFAIL is
-	// returned due to missing upstream resolvers.
-	//
-	// This should attempt to properly (re)set the upstream resolvers.
-	missingUpstreamRecovery func()
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, health *health.Tracker, knobs *controlknobs.Knobs) *forwarder {
@@ -258,13 +252,12 @@ func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkS
 		panic("nil netMon")
 	}
 	f := &forwarder{
-		logf:                    logger.WithPrefix(logf, "forward: "),
-		netMon:                  netMon,
-		linkSel:                 linkSel,
-		dialer:                  dialer,
-		health:                  health,
-		controlKnobs:            knobs,
-		missingUpstreamRecovery: func() {},
+		logf:         logger.WithPrefix(logf, "forward: "),
+		netMon:       netMon,
+		linkSel:      linkSel,
+		dialer:       dialer,
+		health:       health,
+		controlKnobs: knobs,
 	}
 	f.ctx, f.ctxCancel = context.WithCancel(context.Background())
 	return f
@@ -961,13 +954,6 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			metricDNSFwdErrorNoUpstream.Add(1)
 			f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: ""})
 			f.logf("no upstream resolvers set, returning SERVFAIL")
-
-			// Attempt to recompile the DNS configuration
-			// If we are being asked to forward queries and we have no
-			// nameservers, the network is in a bad state.
-			if f.missingUpstreamRecovery != nil {
-				f.missingUpstreamRecovery()
-			}
 
 			res, err := servfailResponse(query)
 			if err != nil {

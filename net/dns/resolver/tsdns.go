@@ -251,15 +251,7 @@ func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, h
 	return r
 }
 
-// SetMissingUpstreamRecovery sets a callback to be called upon encountering
-// a SERVFAIL due to missing upstream resolvers.
-//
-// This call should only happen before the resolver is used. It is not safe
-// for concurrent use.
-func (r *Resolver) SetMissingUpstreamRecovery(f func()) {
-	r.forwarder.missingUpstreamRecovery = f
-}
-
+// SetHook is used in tests to set a hook that saves the resolver config
 func (r *Resolver) TestOnlySetHook(hook func(Config)) { r.saveConfigForTests = hook }
 
 func (r *Resolver) SetConfig(cfg Config) error {
