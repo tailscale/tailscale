@@ -272,6 +272,7 @@ func TestValidateIngress(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-ingress",
 			Namespace: "default",
+			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
 				AnnotationProxyGroup: "test-pg",
 			},
@@ -339,7 +340,7 @@ func TestValidateIngress(t *testing.T) {
 				},
 			},
 			pg:      readyProxyGroup,
-			wantErr: "tailscale.com/tags annotation contains invalid tag \"tag:invalid!\": tag names can only contain numbers, letters, or dashes",
+			wantErr: "Ingress contains invalid tags: invalid tag \"tag:invalid!\": tag names can only contain numbers, letters, or dashes",
 		},
 		{
 			name: "multiple_TLS_entries",
@@ -417,7 +418,7 @@ func TestValidateIngress(t *testing.T) {
 					},
 				},
 			}},
-			wantErr: `found duplicate Ingress "existing-ingress" for hostname "test" - multiple Ingresses for the same hostname in the same cluster are not allowed`,
+			wantErr: `found duplicate Ingress "default/existing-ingress" for hostname "test" - multiple Ingresses for the same hostname in the same cluster are not allowed`,
 		},
 	}
 

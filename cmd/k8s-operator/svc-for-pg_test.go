@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net/netip"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -33,7 +34,7 @@ import (
 )
 
 func TestServicePGReconciler(t *testing.T) {
-	svcPGR, stateSecret, fc, ft := setupServiceTest(t)
+	svcPGR, stateSecret, fc, ft, _ := setupServiceTest(t)
 	svcs := []*corev1.Service{}
 	config := []string{}
 	for i := range 4 {
@@ -79,7 +80,7 @@ func TestServicePGReconciler(t *testing.T) {
 }
 
 func TestServicePGReconciler_UpdateHostname(t *testing.T) {
-	svcPGR, stateSecret, fc, ft := setupServiceTest(t)
+	svcPGR, stateSecret, fc, ft, _ := setupServiceTest(t)
 
 	cip := "4.1.6.7"
 	svc, _ := setupTestService(t, "test-service", "", cip, fc, stateSecret)
@@ -110,7 +111,7 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	}
 }
 
-func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, client.Client, *fakeTSClient) {
+func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, client.Client, *fakeTSClient, *tstest.Clock) {
 	// Pre-create the ProxyGroup
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -215,14 +216,74 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 		lc:          lc,
 	}
 
-	return svcPGR, pgStateSecret, fc, ft
+	return svcPGR, pgStateSecret, fc, ft, cl
+}
+
+func TestValidateService(t *testing.T) {
+	// Test that no more than one Kubernetes Service in a cluster refers to the same Tailscale Service.
+	pgr, _, lc, _, cl := setupServiceTest(t)
+	svc := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app",
+			Namespace: "ns-1",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+				"tailscale.com/hostname":    "my-app",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "1.2.3.4",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: ptr.To("tailscale"),
+		},
+	}
+	svc2 := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app2",
+			Namespace: "ns-2",
+			UID:       types.UID("1235-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+				"tailscale.com/hostname":    "my-app",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "1.2.3.5",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: ptr.To("tailscale"),
+		},
+	}
+	wantSvc := &corev1.Service{
+		ObjectMeta: svc.ObjectMeta,
+		TypeMeta:   svc.TypeMeta,
+		Spec:       svc.Spec,
+		Status: corev1.ServiceStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               string(tsapi.IngressSvcValid),
+					Status:             metav1.ConditionFalse,
+					Reason:             reasonIngressSvcInvalid,
+					LastTransitionTime: metav1.NewTime(cl.Now().Truncate(time.Second)),
+					Message:            `found duplicate Service "ns-2/my-app2" for hostname "my-app" - multiple HA Services for the same hostname in the same cluster are not allowed`,
+				},
+			},
+		},
+	}
+
+	mustCreate(t, lc, svc)
+	mustCreate(t, lc, svc2)
+	expectReconciled(t, pgr, svc.Namespace, svc.Name)
+	expectEqual(t, lc, wantSvc)
 }
 
 func TestServicePGReconciler_MultiCluster(t *testing.T) {
 	var ft *fakeTSClient
 	var lc localClient
 	for i := 0; i <= 10; i++ {
-		pgr, stateSecret, fc, fti := setupServiceTest(t)
+		pgr, stateSecret, fc, fti, _ := setupServiceTest(t)
 		if i == 0 {
 			ft = fti
 			lc = pgr.lc
@@ -250,7 +311,7 @@ func TestServicePGReconciler_MultiCluster(t *testing.T) {
 }
 
 func TestIgnoreRegularService(t *testing.T) {
-	pgr, _, fc, ft := setupServiceTest(t)
+	pgr, _, fc, ft, _ := setupServiceTest(t)
 
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{

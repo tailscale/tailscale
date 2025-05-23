@@ -660,14 +660,9 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	var errs []error
 
 	// Validate tags if present
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
-		tags := strings.Split(tstr, ",")
-		for _, tag := range tags {
-			tag = strings.TrimSpace(tag)
-			if err := tailcfg.CheckTag(tag); err != nil {
-				errs = append(errs, fmt.Errorf("tailscale.com/tags annotation contains invalid tag %q: %w", tag, err))
-			}
-		}
+	violations := tagViolations(ing)
+	if len(violations) > 0 {
+		errs = append(errs, fmt.Errorf("Ingress contains invalid tags: %v", strings.Join(violations, ",")))
 	}
 
 	// Validate TLS configuration
@@ -699,8 +694,8 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 		return errors.Join(errs...)
 	}
 	for _, i := range ingList.Items {
-		if r.shouldExpose(&i) && hostnameForIngress(&i) == hostname && i.Name != ing.Name {
-			errs = append(errs, fmt.Errorf("found duplicate Ingress %q for hostname %q - multiple Ingresses for the same hostname in the same cluster are not allowed", i.Name, hostname))
+		if r.shouldExpose(&i) && hostnameForIngress(&i) == hostname && i.UID != ing.UID {
+			errs = append(errs, fmt.Errorf("found duplicate Ingress %q for hostname %q - multiple Ingresses for the same hostname in the same cluster are not allowed", client.ObjectKeyFromObject(&i), hostname))
 		}
 	}
 	return errors.Join(errs...)
@@ -1112,4 +1107,23 @@ func isErrorTailscaleServiceNotFound(err error) bool {
 	var errResp tailscale.ErrResponse
 	ok := errors.As(err, &errResp)
 	return ok && errResp.Status == http.StatusNotFound
+}
+
+func tagViolations(obj client.Object) []string {
+	var violations []string
+	if obj == nil {
+		return nil
+	}
+	tags, ok := obj.GetAnnotations()[AnnotationTags]
+	if !ok {
+		return nil
+	}
+
+	for _, tag := range strings.Split(tags, ",") {
+		tag = strings.TrimSpace(tag)
+		if err := tailcfg.CheckTag(tag); err != nil {
+			violations = append(violations, fmt.Sprintf("invalid tag %q: %v", tag, err))
+		}
+	}
+	return violations
 }
