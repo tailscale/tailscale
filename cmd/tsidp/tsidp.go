@@ -41,12 +41,16 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/store"
+	_ "tailscale.com/ipn/store/kubestore"
+	"tailscale.com/kube/kubeclient"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/multierr"
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
@@ -67,6 +71,7 @@ var (
 	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available on the public internet")
 	flagHostname           = flag.String("hostname", "idp", "tsnet hostname to use instead of idp")
 	flagDir                = flag.String("dir", "", "tsnet state directory; a default one will be created if not provided")
+	flagState              = flag.String("state", "", "path to tailscale state file or 'kube:<secret-name>' to use Kubernetes secret; if unset, 'dir' is used")
 )
 
 func main() {
@@ -123,11 +128,30 @@ func main() {
 	} else {
 		ts := &tsnet.Server{
 			Hostname: *flagHostname,
-			Dir:      *flagDir,
 		}
 		if *flagVerbose {
 			ts.Logf = log.Printf
 		}
+
+		if *flagDir != "" {
+			ts.Dir = *flagDir
+		}
+
+		if *flagState != "" {
+			if isKubeStatePath(*flagState) {
+				if err := validateKubePermissions(ctx, *flagState); err != nil {
+					log.Fatalf("tsidp: state is set to be stored in a Kubernetes Secret, but kube permissions validation for the Secret failed: %v", err)
+				}
+			}
+			s, err := store.New(ts.Logf, *flagState)
+			if err != nil {
+				log.Fatalf("Failed to create state store: %v", err)
+			}
+			ts.Store = s
+			// If flagDir is not set, tsnet will use its own OS-dependent default directory
+			// for its persistent state (like node keys), which is the desired behavior.
+		}
+
 		st, err = ts.Up(ctx)
 		if err != nil {
 			log.Fatal(err)
@@ -1242,4 +1266,87 @@ func isFunnelRequest(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// isKubeStatePath evaluates whether the provided state path indicates that
+// tailscaled state should be stored in a Kubernetes Secret.
+func isKubeStatePath(statePath string) bool {
+	return strings.HasPrefix(statePath, "kube:")
+}
+
+// validateKubePermissions validates that a tsidp instance has the right
+// permissions to modify its state Secret.
+// It needs to have permissions to Get and Update the Secret.
+// If the Secret does not already exist, it also needs to have permissions to Create it.
+// Patch permission is beneficial but not strictly required by kubestore's default operations.
+func validateKubePermissions(ctx context.Context, state string) error {
+	secretName, ok := strings.CutPrefix(state, "kube:")
+	if !ok || secretName == "" {
+		return fmt.Errorf("unable to retrieve valid Kubernetes Secret name from %q", state)
+	}
+
+	kc, err := kubeclient.New("tailscale-tsidp")
+	if err != nil {
+		return fmt.Errorf("error initializing kube client: %w", err)
+	}
+
+	// Our kube client connects to kube API server via the kubernetes
+	// Service in the default namespace, which is not the default client-go
+	// etc behaviour and causes issues to some users. The client defaults
+	// probably cannot be changed for backwards compatibility reasons, but
+	// we can do the right thing here at the same time as adding support for
+	// tsidp to be deployed to kube.
+	url, err := kubeAPIServerAddress()
+	if err != nil {
+		return fmt.Errorf("error initiating kube client: %w", err)
+	}
+	kc.SetURL(url)
+
+	// CheckSecretPermissions returns an error if the permissions to Get or Update
+	// the Secret are missing. It also returns bools for canPatch and canCreate.
+	// kubestore primarily uses Update.
+	canPatch, canCreate, err := kc.CheckSecretPermissions(ctx, secretName)
+	if err != nil { // This err means Get or Update failed, or other auth issue
+		return fmt.Errorf("error checking required permissions (Get/Update) for Kubernetes Secret %q: %w", secretName, err)
+	}
+
+	// Check if secret exists if we don't have create permissions.
+	// If it doesn't exist and we can't create, it's an error.
+	// If it doesn't exist and we *can* create, that's fine, kubestore will create it.
+	// If it exists, we're good (Get permission was implicitly checked by CheckSecretPermissions).
+	secretExistsErr := func() error { _, err := kc.GetSecret(ctx, secretName); return err }()
+	if kubeclient.IsNotFoundErr(secretExistsErr) {
+		if !canCreate {
+			return fmt.Errorf("kube state Kubernetes Secret %q does not exist and tsidp lacks permissions to create it. Ensure RBAC allows 'create' for Secrets.", secretName)
+		}
+		// It's okay if it doesn't exist and we can create it.
+	} else if secretExistsErr != nil {
+		// Any other error while trying to GetSecret (besides NotFound) is a problem.
+		return fmt.Errorf("error attempting to get kube state Kubernetes Secret %q: %w", secretName, secretExistsErr)
+	}
+
+	// At this point, we know we can Get and Update the secret (or Create if it didn't exist).
+	// Log if patch is not available, as it's preferred by some for conflict handling, but not essential.
+	if !canPatch {
+		log.Printf("Warning: Patch permission for Kubernetes Secret %q is missing; kubestore will rely on Update. This is usually fine.", secretName)
+	}
+	return nil
+}
+
+// kubeAPIServerAddress determines the address of the kube API server. It uses
+// the standard environment variables set by kube that are expected to be found
+// on any Pod- this is the same logic as used by client-go.
+// https://github.com/kubernetes/client-go/blob/v0.29.5/rest/config.go#L516-L536
+func kubeAPIServerAddress() (_ string, err error) {
+	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+	if host == "" {
+		err = errors.New("[unexpected] tsidp seems to be running in a Kubernetes environment with KUBERNETES_SERVICE_HOST unset")
+	}
+	if port == "" {
+		err = multierr.New(err, errors.New("[unexpected] tsidp appears to be running in a Kubernetes environment with KUBERNETES_SERVICE_PORT unset"))
+	}
+	if err != nil {
+		return "", err
+	}
+	return "https://" + net.JoinHostPort(host, port), nil
 }
