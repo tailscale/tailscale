@@ -1562,9 +1562,17 @@ func pktLenToPingSize(mtu tstun.WireMTU, is6 bool) int {
 // It should be called with the Conn.mu held.
 //
 // It reports whether m.TxID corresponds to a ping that this endpoint sent.
-func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip.AddrPort) (knownTxID bool) {
+func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip.AddrPort, vni virtualNetworkID) (knownTxID bool) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
+
+	if vni.isSet() {
+		// TODO(jwhited): check for matching [endpoint.bestAddr] once that data
+		//  structure is VNI-aware and [relayManager] can mutate it. We do not
+		//  need to reference any [endpointState] for Geneve-encapsulated disco,
+		//  we store nothing about them there.
+		return false
+	}
 
 	isDerp := src.Addr() == tailcfg.DerpMagicIPAddr
 

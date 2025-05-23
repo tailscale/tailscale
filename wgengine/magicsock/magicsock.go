@@ -1802,6 +1802,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 		return
 	}
 	var geneve packet.GeneveHeader
+	var vni virtualNetworkID
 	if isGeneveEncap {
 		err := geneve.Decode(msg)
 		if err != nil {
@@ -1810,6 +1811,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			c.logf("[unexpected] geneve header decoding error: %v", err)
 			return
 		}
+		vni.set(geneve.VNI)
 		msg = msg[packet.GeneveFixedHeaderLength:]
 	}
 	// The control bit should only be set for relay handshake messages
@@ -1923,33 +1925,30 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			c.logf("[unexpected] %T packets should not come from a relay server with Geneve control bit set", dm)
 			return
 		}
-		c.relayManager.handleBindUDPRelayEndpointChallenge(challenge, di, src, geneve.VNI)
+		c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(challenge, di, src, geneve.VNI)
 		return
 	}
 
 	switch dm := dm.(type) {
 	case *disco.Ping:
 		metricRecvDiscoPing.Add(1)
-		if isGeneveEncap {
-			// TODO(jwhited): handle Geneve-encapsulated disco ping.
-			return
-		}
-		c.handlePingLocked(dm, src, di, derpNodeSrc)
+		c.handlePingLocked(dm, src, vni, di, derpNodeSrc)
 	case *disco.Pong:
 		metricRecvDiscoPong.Add(1)
-		if isGeneveEncap {
-			// TODO(jwhited): handle Geneve-encapsulated disco pong.
-			return
-		}
 		// There might be multiple nodes for the sender's DiscoKey.
 		// Ask each to handle it, stopping once one reports that
 		// the Pong's TxID was theirs.
+		knownTxID := false
 		c.peerMap.forEachEndpointWithDiscoKey(sender, func(ep *endpoint) (keepGoing bool) {
-			if ep.handlePongConnLocked(dm, di, src) {
+			if ep.handlePongConnLocked(dm, di, src, vni) {
+				knownTxID = true
 				return false
 			}
 			return true
 		})
+		if !knownTxID && vni.isSet() {
+			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(dm, di, src, vni.get())
+		}
 	case *disco.CallMeMaybe, *disco.CallMeMaybeVia:
 		var via *disco.CallMeMaybeVia
 		isVia := false
@@ -2048,11 +2047,20 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 
 // di is the discoInfo of the source of the ping.
 // derpNodeSrc is non-zero if the ping arrived via DERP.
-func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInfo, derpNodeSrc key.NodePublic) {
+func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, vni virtualNetworkID, di *discoInfo, derpNodeSrc key.NodePublic) {
 	likelyHeartBeat := src == di.lastPingFrom && time.Since(di.lastPingTime) < 5*time.Second
 	di.lastPingFrom = src
 	di.lastPingTime = time.Now()
 	isDerp := src.Addr() == tailcfg.DerpMagicIPAddr
+
+	if vni.isSet() {
+		// TODO(jwhited): check for matching [endpoint.bestAddr] once that data
+		//  structure is VNI-aware and [relayManager] can mutate it. We do not
+		//  need to reference any [endpointState] for Geneve-encapsulated disco,
+		//  we store nothing about them there.
+		c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(dm, di, src, vni.get())
+		return
+	}
 
 	// If we can figure out with certainty which node key this disco
 	// message is for, eagerly update our IP:port<>node and disco<>node
