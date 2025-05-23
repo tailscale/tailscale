@@ -81,6 +81,13 @@ const (
 	NotifyInitialHealthState NotifyWatchOpt = 1 << 7 // if set, the first Notify message (sent immediately) will contain the current health.State of the client
 
 	NotifyRateLimit NotifyWatchOpt = 1 << 8 // if set, rate limit spammy netmap updates to every few seconds
+
+	// NotifyOmitLegacyNetmap, if set, causes the backend to not send Notify
+	// mesesages with the [Notify.NetMap] field populated. See that field's docs
+	// for background. Clients should use NodeUpdate, UserUpdate, etc.
+	// At some point in the future (maybe a year or two from 2025-01-04?), this will
+	// become the default and only way.
+	NotifyOmitLegacyNetmap NotifyWatchOpt = 1 << 9
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -102,12 +109,23 @@ type Notify struct {
 	// For State InUseOtherUser, ErrMessage is not critical and just contains the details.
 	ErrMessage *string
 
-	LoginFinished *empty.Message     // non-nil when/if the login process succeeded
-	State         *State             // if non-nil, the new or current IPN state
-	Prefs         *PrefsView         // if non-nil && Valid, the new or current preferences
-	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
-	Engine        *EngineStatus      // if non-nil, the new or current wireguard stats
-	BrowseToURL   *string            // if non-nil, UI should open a browser right now
+	LoginFinished *empty.Message // non-nil when/if the login process succeeded
+	State         *State         // if non-nil, the new or current IPN state
+	Prefs         *PrefsView     // if non-nil && Valid, the new or current preferences
+	Engine        *EngineStatus  // if non-nil, the new or current wireguard stats
+	BrowseToURL   *string        // if non-nil, UI should open a browser right now
+
+	// NetMap, if non-nil, the new or current network map.
+	//
+	// If [NotifyOmitLegacyNetmap] is used on an WatchIPNBus subscription, this
+	// field is always nil.
+	//
+	// Deprecated: while sent by default (as of 2025-01-04), it is a colossal
+	// type and on its way out. With large networks with many peers and high
+	// churn, sending this non-stop to GUI clients uses a lot of CPU and
+	// bandwidth. It was a quadratic mistake from day 1; see
+	// tailscale/tailscale#1909 and tailscale/tailscale#13390.
+	NetMap *netmap.NetworkMap // if non-nil, the new or current netmap
 
 	// FilesWaiting if non-nil means that files are buffered in
 	// the Tailscale daemon and ready for local transfer to the
@@ -153,7 +171,60 @@ type Notify struct {
 	// any changes to the user in the UI.
 	Health *health.State `json:",omitempty"`
 
+	// ResetNodesAndUsers, if true, means that all previously mentioned
+	// nodes and users should be forgotten.
+	//
+	// This is set to true when a new network map long poll to the control
+	// plane begins, but before any NodeUpdate or UserUpdate are sent.
+	ResetNodesAndUsers bool `json:",omitempty"`
+
+	// NodeUpdate is a map of node updates.
+	//
+	// The values are always non-nil.
+	NodeUpdate map[tailcfg.StableNodeID]*NodeUpdate `json:",omitempty"`
+
+	// UserUpdate is a map of user updates.
+	//
+	// The values are always non-nil.
+	UserUpdate map[tailcfg.UserID]*UserUpdate `json:",omitempty"`
+
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
+}
+
+// NodeUpdate describes a change to a node in the network map.
+type NodeUpdate struct {
+	// NodeID is the integer form of the Node ID being updated or deleted.
+	NodeID tailcfg.NodeID
+
+	// Deleted is true if the node has been deleted from the network map.
+	Deleted bool `json:",omitempty"`
+
+	// IsSelf is true if this node is the current node.
+	// False or omitted means it's a peer.
+	IsSelf bool `json:",omitempty"`
+
+	// New is the new node information, if the node has been updated.
+	// It maybe omitted for delta updates, depending on the type of update
+	// and the client's WatchIPNBus subscription options.
+	New *tailcfg.Node `json:",omitempty"`
+
+	// Patch, if non-nil, describes the minimal version of the change made to the node.
+	// When Patch and New are both non-nil, the New field represents the state
+	// after the Patch has been applied.
+	Patch *tailcfg.PeerChange `json:",omitempty"`
+}
+
+// UserUpdate describes a change to a user in the network map.
+type UserUpdate struct {
+	UserID tailcfg.UserID
+
+	// Deleted is true if the user has been deleted from the network map.
+	// That is, the user is no longer referenced by any node in the network map.
+	Deleted bool `json:",omitempty"`
+
+	// Profile is the new user profile, if the user has been newly added or
+	// updated. If Delete is true, this is omitted.
+	Profile *tailcfg.UserProfile `json:",omitempty"`
 }
 
 func (n Notify) String() string {
