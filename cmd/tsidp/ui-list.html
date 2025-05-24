@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Tailscale OIDC Identity Provider</title>
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+
+  <body>
+    {{template "header"}}
+
+    <main>
+      <div class="header-actions">
+        <div>
+          <h2>OIDC Clients</h2>
+          {{if .}}
+            <p class="client-count">{{len .}} client{{if ne (len .) 1}}s{{end}} configured</p>
+          {{end}}
+        </div>
+        <a href="/new" class="btn btn-primary">Add New Client</a>
+      </div>
+
+      {{if .}}
+      <table>
+        <thead>
+          <tr>
+            <td>Name</td>
+            <td>Client ID</td>
+            <td>Redirect URI</td>
+            <td>Status</td>
+            <td>Actions</td>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .}}
+          <tr>
+            <td>
+              {{if .Name}}
+                <strong>{{.Name}}</strong>
+              {{else}}
+                <span class="text-muted">Unnamed Client</span>
+              {{end}}
+            </td>
+            <td>
+              <code class="client-id">{{.ID}}</code>
+            </td>
+            <td>
+              <span class="redirect-uri">{{.RedirectURI}}</span>
+            </td>
+            <td>
+              {{if .HasSecret}}
+                <span class="status-active">Active</span>
+              {{else}}
+                <span class="status-inactive">No Secret</span>
+              {{end}}
+            </td>
+            <td>
+              <a href="/edit/{{.ID}}" class="btn btn-secondary btn-small">Edit</a>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <div class="empty-state">
+        <h3>No OIDC clients configured</h3>
+        <p>Create your first OIDC client to get started with authentication.</p>
+        <a href="/new" class="btn btn-primary">Add New Client</a>
+      </div>
+      {{end}}
+    </main>
+  </body>
+</html> 

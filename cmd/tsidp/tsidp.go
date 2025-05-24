@@ -452,13 +452,7 @@ func (s *idpServer) newMux() *http.ServeMux {
 	mux.HandleFunc("/userinfo", s.serveUserInfo)
 	mux.HandleFunc("/token", s.serveToken)
 	mux.HandleFunc("/clients/", s.serveClients)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			io.WriteString(w, "<html><body><h1>Tailscale OIDC IdP</h1>")
-			return
-		}
-		http.Error(w, "tsidp: not found", http.StatusNotFound)
-	})
+	mux.HandleFunc("/", s.handleUI)
 	return mux
 }
 
