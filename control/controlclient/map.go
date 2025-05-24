@@ -90,6 +90,7 @@ type mapSession struct {
 	lastDomain             string
 	lastDomainAuditLogID   string
 	lastHealth             []string
+	lastDisplayMessages    map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
 	lastPopBrowserURL      string
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
@@ -411,6 +412,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
+	}
+	if resp.DisplayMessages != nil {
+		ms.lastDisplayMessages = resp.DisplayMessages
 	}
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
@@ -833,12 +837,17 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 
 	// Convert all ms.lastHealth to the new [netmap.NetworkMap.DisplayMessages].
 	var msgs map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
-	for _, h := range ms.lastHealth {
-		mak.Set(&msgs, tailcfg.DisplayMessageID("control-health-"+strhash(h)), tailcfg.DisplayMessage{
-			Title:    "Coordination server reports an issue",
-			Severity: tailcfg.SeverityMedium,
-			Text:     "The coordination server is reporting a health issue: " + h,
-		})
+
+	if len(ms.lastDisplayMessages) != 0 {
+		msgs = ms.lastDisplayMessages
+	} else if len(ms.lastHealth) > 0 {
+		for _, h := range ms.lastHealth {
+			mak.Set(&msgs, tailcfg.DisplayMessageID("control-health-"+strhash(h)), tailcfg.DisplayMessage{
+				Title:    "Coordination server reports an issue",
+				Severity: tailcfg.SeverityMedium,
+				Text:     "The coordination server is reporting a health issue: " + h,
+			})
+		}
 	}
 
 	nm := &netmap.NetworkMap{

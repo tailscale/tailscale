@@ -1182,3 +1182,88 @@ func TestNetmapHealthIntegration(t *testing.T) {
 		t.Fatalf("CurrentStatus().Warnings[\"control-health*\"] different than expected (-want +got)\n%s", d)
 	}
 }
+
+func TestNetmapDisplayMessageIntegration(t *testing.T) {
+	ms := newTestMapSession(t, nil)
+	ht := health.Tracker{}
+
+	ht.SetIPNState("NeedsLogin", true)
+	ht.GotStreamedMapResponse()
+
+	nm := ms.netmapForResponse(&tailcfg.MapResponse{
+		DisplayMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+			"test-message": {
+				Title:               "Testing",
+				Text:                "This is a test message",
+				Severity:            tailcfg.SeverityHigh,
+				ImpactsConnectivity: true,
+				PrimaryAction: &tailcfg.DisplayMessageAction{
+					URL:   "https://www.example.com",
+					Label: "Learn more",
+				},
+			}},
+	})
+	ht.SetControlHealth(nm.DisplayMessages)
+
+	state := ht.CurrentState()
+	warning, ok := state.Warnings["test-message"]
+
+	if !ok {
+		t.Fatal("no warning found in current state with code 'test-message'")
+	}
+	if got, want := warning.Title, "Testing"; got != want {
+		t.Errorf("warning.Title = %q, want %q", got, want)
+	}
+	if got, want := warning.Severity, health.SeverityHigh; got != want {
+		t.Errorf("warning.Severity = %s, want %s", got, want)
+	}
+	if got, want := warning.Text, "This is a test message"; got != want {
+		t.Errorf("warning.Text = %q, want %q", got, want)
+	}
+	if got, want := warning.ImpactsConnectivity, true; got != want {
+		t.Errorf("warning.ImpactsConnectivity = %t, want %t", got, want)
+	}
+	if warning.PrimaryAction == nil {
+		t.Fatalf("warning.PrimaryAction = nil")
+	}
+	if got, want := warning.PrimaryAction.URL, "https://www.example.com"; got != want {
+		t.Errorf("warning.PrimaryAction.URL = %q, want %q", got, want)
+	}
+	if got, want := warning.PrimaryAction.Label, "Learn more"; got != want {
+		t.Errorf("warning.PrimaryAction.Label = %q, want %q", got, want)
+	}
+}
+
+func TestNetmapDisplayMessageClears(t *testing.T) {
+	ms := newTestMapSession(t, nil)
+	ht := health.Tracker{}
+
+	ht.SetIPNState("NeedsLogin", true)
+	ht.GotStreamedMapResponse()
+
+	nm := ms.netmapForResponse(&tailcfg.MapResponse{
+		DisplayMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+			"test-message": {},
+		},
+	})
+	ht.SetControlHealth(nm.DisplayMessages)
+
+	state := ht.CurrentState()
+	_, ok := state.Warnings["test-message"]
+
+	if !ok {
+		t.Fatal("no warning found in current state with code 'test-message'")
+	}
+
+	nm = ms.netmapForResponse(&tailcfg.MapResponse{
+		DisplayMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{},
+	})
+	ht.SetControlHealth(nm.DisplayMessages)
+
+	state = ht.CurrentState()
+	_, ok = state.Warnings["test-message"]
+
+	if ok {
+		t.Fatal("warning found with code 'test-message'; want warnings to be cleared")
+	}
+}
