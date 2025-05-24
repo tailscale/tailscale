@@ -12,4 +12,5 @@ const (
 	TailscaleSSHOnBut   = "Tailscale SSH enabled, but " // + ... something from caller
 	LockedOut           = "this node is locked out; it will not have connectivity until it is signed. For more info, see https://tailscale.com/s/locked-out"
 	WarnExitNodeUsage   = "The following issues on your machine will likely make usage of exit nodes impossible"
+	DisableRPFilter     = "Please set rp_filter=2 instead of rp_filter=1; see https://github.com/tailscale/tailscale/issues/3310"
 )
