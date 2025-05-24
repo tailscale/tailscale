@@ -90,6 +90,24 @@ case "$TARGET" in
       --annotations="${ANNOTATIONS}" \
       /usr/local/bin/k8s-nameserver
     ;;
+  tsidp)
+    DEFAULT_REPOS="tailscale/tsidp"
+    REPOS="${REPOS:-${DEFAULT_REPOS}}"
+    go run github.com/tailscale/mkctr \
+      --gopaths="tailscale.com/cmd/tsidp:/usr/local/bin/tsidp" \
+      --ldflags=" \
+        -X tailscale.com/version.longStamp=${VERSION_LONG} \
+        -X tailscale.com/version.shortStamp=${VERSION_SHORT} \
+        -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
+      --base="${BASE}" \
+      --tags="${TAGS}" \
+      --gotags="ts_package_container" \
+      --repos="${REPOS}" \
+      --push="${PUSH}" \
+      --target="${PLATFORM}" \
+      --annotations="${ANNOTATIONS}" \
+      /usr/local/bin/tsidp
+    ;;
   *)
     echo "unknown target: $TARGET"
     exit 1
