@@ -12,43 +12,45 @@
 
 ## Installation using Docker
 
-1. **Build the Docker Image**
+### Building from Source
 
-   The Dockerfile uses a multi-stage build process to:
-   - Build the `tsidp` binary from source
-   - Create a minimal Alpine-based image with just the necessary components
+The Tailscale project uses `mkctr` for building container images:
 
-   ```bash
-   # Clone the Tailscale repository
-   git clone https://github.com/tailscale/tailscale.git
-   cd tailscale
-   ```
+```bash
+# Clone the Tailscale repository
+git clone https://github.com/tailscale/tailscale.git
+cd tailscale
 
-   ```bash
-   # Build the Docker image
-   docker build -t tsidp:latest -f cmd/tsidp/Dockerfile .
-   ```
+# Build the tsidp image
+TARGET=tsidp ./build_docker.sh
+```
 
-2. **Run the Container**
+For development, you can publish to your own registry:
+```bash
+make publishdevtsidp REPO=ghcr.io/yourusername/tsidp
+```
 
-   Replace `YOUR_TAILSCALE_AUTHKEY` with your Tailscale authentication key.
+### Running the Container
 
-   ```bash
-   docker run -d \
-     --name tsidp \
-     -p 443:443 \
-     -e TS_AUTHKEY=YOUR_TAILSCALE_AUTHKEY \
-     -e TS_HOSTNAME=idp \
-     -v tsidp-data:/var/lib/tsidp \
-     tsidp:latest
-   ```
+Replace `YOUR_TAILSCALE_AUTHKEY` with your Tailscale authentication key:
 
-3. **Verify Installation**
-   ```bash
-   docker logs tsidp
-   ```
+```bash
+docker run -d \
+  --name tsidp \
+  -p 443:443 \
+  -e TS_AUTHKEY=YOUR_TAILSCALE_AUTHKEY \
+  -e TAILSCALE_USE_WIP_CODE=1 \
+  -v tsidp-data:/var/lib/tsidp \
+  tailscale/tsidp:unstable \
+  tsidp --hostname=idp --dir=/var/lib/tsidp
+```
 
-   Visit `https://idp.tailnet.ts.net` to confirm the service is running.
+### Verify Installation
+```bash
+docker logs tsidp
+```
+
+Visit `https://idp.tailnet.ts.net` to confirm the service is running.
 
 ## Usage Example: Proxmox Integration
 
