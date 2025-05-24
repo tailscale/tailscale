@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>
+      {{if .IsNew}}Add New Client{{else}}Edit Client{{end}} - Tailscale OIDC Identity Provider
+    </title>
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+
+  <body>
+    {{template "header"}}
+
+    <main>
+      <div class="form-container">
+        <div class="form-header">
+          <h2>
+            {{if .IsNew}}Add New OIDC Client{{else}}Edit OIDC Client{{end}}
+          </h2>
+          <a href="/" class="btn btn-secondary">← Back to Clients</a>
+        </div>
+
+        {{if .Success}}
+        <div class="alert alert-success">
+          {{.Success}}
+        </div>
+        {{end}}
+
+        {{if .Error}}
+        <div class="alert alert-error">
+          {{.Error}}
+        </div>
+        {{end}}
+
+        {{if and .Secret .IsNew}}
+        <div class="client-info">
+          <h3>Client Created Successfully!</h3>
+          <p class="warning">⚠️ Save both the Client ID and Secret now! The secret will not be shown again.</p>
+          
+                    <div class="form-group">
+            <label>Client ID</label>
+            <div class="secret-field">
+              <input type="text" value="{{.ID}}" readonly class="secret-input" id="client-id">
+              <button type="button" onclick="copyClientId(event)" class="btn btn-secondary btn-small">Copy</button>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>Client Secret</label>
+            <div class="secret-field">
+              <input type="text" value="{{.Secret}}" readonly class="secret-input" id="client-secret">
+              <button type="button" onclick="copySecret(event)" class="btn btn-secondary btn-small">Copy</button>
+            </div>
+          </div>
+        </div>
+        {{end}}
+
+        {{if and .Secret .IsEdit}}
+        <div class="secret-display">
+          <h3>New Client Secret</h3>
+          <p class="warning">⚠️ Save this secret now! It will not be shown again.</p>
+          <div class="secret-field">
+            <input type="text" value="{{.Secret}}" readonly class="secret-input" id="client-secret">
+            <button type="button" onclick="copySecret(event)" class="btn btn-secondary btn-small">Copy</button>
+          </div>
+        </div>
+        {{end}}
+
+        <form method="POST" class="client-form">
+          <div class="form-group">
+            <label for="name">Client Name</label>
+            <input 
+              type="text" 
+              id="name" 
+              name="name" 
+              value="{{.Name}}" 
+              placeholder="e.g., My Application"
+              class="form-input"
+            >
+            <div class="form-help">
+              A descriptive name for this OIDC client (optional).
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="redirect_uri">Redirect URI <span class="required">*</span></label>
+            <input 
+              type="url" 
+              id="redirect_uri" 
+              name="redirect_uri" 
+              value="{{.RedirectURI}}" 
+              placeholder="https://example.com/auth/callback"
+              class="form-input"
+              required
+            >
+            <div class="form-help">
+              The URL where users will be redirected after authentication.
+            </div>
+          </div>
+
+          {{if .IsEdit}}
+          <div class="form-group">
+            <label>Client ID</label>
+            <input 
+              type="text" 
+              value="{{.ID}}" 
+              readonly 
+              class="form-input form-input-readonly"
+            >
+            <div class="form-help">
+              The client ID cannot be changed.
+            </div>
+          </div>
+          {{end}}
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">
+              {{if .IsNew}}Create Client{{else}}Update Client{{end}}
+            </button>
+            
+            {{if .IsEdit}}
+            <button type="submit" name="action" value="regenerate_secret" class="btn btn-warning" 
+                    onclick="return confirm('Are you sure you want to regenerate the client secret? The old secret will stop working immediately.')">
+              Regenerate Secret
+            </button>
+            
+            <button type="submit" name="action" value="delete" class="btn btn-danger" 
+                    onclick="return confirm('Are you sure you want to delete this client? This cannot be undone.')">
+              Delete Client
+            </button>
+            {{end}}
+          </div>
+        </form>
+
+        {{if .IsEdit}}
+        <div class="client-info">
+          <h3>Client Information</h3>
+          <dl>
+            <dt>Client ID</dt>
+            <dd><code>{{.ID}}</code></dd>
+            <dt>Secret Status</dt>
+            <dd>
+              {{if .HasSecret}}
+                <span class="status-active">Secret configured</span>
+              {{else}}
+                <span class="status-inactive">No secret</span>
+              {{end}}
+            </dd>
+          </dl>
+        </div>
+        {{end}}
+      </div>
+    </main>
+
+    <script>
+      function copySecret(event) {
+        const secretInput = document.getElementById('client-secret');
+        secretInput.select();
+        secretInput.setSelectionRange(0, 99999); // For mobile devices
+        
+        navigator.clipboard.writeText(secretInput.value).then(function() {
+          const button = event.target;
+          const originalText = button.textContent;
+          button.textContent = 'Copied!';
+          button.classList.add('btn-success');
+          
+          setTimeout(function() {
+            button.textContent = originalText;
+            button.classList.remove('btn-success');
+          }, 2000);
+        }).catch(function(err) {
+          console.error('Failed to copy: ', err);
+          alert('Failed to copy to clipboard. Please copy manually.');
+        });
+      }
+      
+      function copyClientId(event) {
+        const clientIdInput = document.getElementById('client-id');
+        clientIdInput.select();
+        clientIdInput.setSelectionRange(0, 99999); // For mobile devices
+        
+        navigator.clipboard.writeText(clientIdInput.value).then(function() {
+          const button = event.target;
+          const originalText = button.textContent;
+          button.textContent = 'Copied!';
+          button.classList.add('btn-success');
+          
+          setTimeout(function() {
+            button.textContent = originalText;
+            button.classList.remove('btn-success');
+          }, 2000);
+        }).catch(function(err) {
+          console.error('Failed to copy: ', err);
+          alert('Failed to copy to clipboard. Please copy manually.');
+        });
+      }
+    </script>
+  </body>
+</html> 
