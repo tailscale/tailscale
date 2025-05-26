@@ -248,6 +248,9 @@ type forwarder struct {
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
+
+	srcNatPrefix netip.Prefix
+	ft *forwarder_tun
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, health *health.Tracker, knobs *controlknobs.Knobs) *forwarder {
@@ -397,21 +400,75 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 	f.cloudHostFallback = cloudHostFallback
 }
 
+// Set the source-NAT prefix
+func (f *forwarder) setSnatPrefix(srcNatPrefix netip.Prefix, selfAddrs []netip.Prefix) error {
+	f.srcNatPrefix = srcNatPrefix
+
+	if srcNatPrefix.IsValid() {
+		if f.ft == nil {
+			var err error
+			f.ft, err = newForwarderTun(f.logf, "tailscale0-dns")
+			if err != nil {
+				f.logf("newForwarderTun: Error: %v", err)
+				return err
+			}
+			f.logf("newForwarderTun: Success!")
+		} else {
+			f.logf("newForwarderTun: Already exists")
+		}
+		err := f.ft.setSnatPrefix(srcNatPrefix, selfAddrs)
+		if err != nil {
+			return err
+		}
+		f.logf("SNAT prefix set: %v", srcNatPrefix)
+	}
+	return nil
+}
+
 var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketListenerWithNetIP(new(net.ListenConfig))
 
-func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNetIP, error) {
+func (f *forwarder) packetListener(srcAddrPort, dstAddrPort netip.AddrPort) (nettype.PacketListenerWithNetIP, error) {
 	if f.linkSel == nil || initListenConfig == nil {
 		return stdNetPacketListener, nil
 	}
-	linkName := f.linkSel.PickLink(ip)
+	linkName := f.linkSel.PickLink(dstAddrPort.Addr())
 	if linkName == "" {
 		return stdNetPacketListener, nil
 	}
 	lc := new(net.ListenConfig)
-	if err := initListenConfig(lc, f.netMon, linkName); err != nil {
+
+	// initListenConfig may contain an OS-specific implementation to further configure
+	// the chosen packet listener.
+	if err := initListenConfig(lc, f.netMon, linkName, f.logf); err != nil {
 		return nil, err
 	}
 	return nettype.MakePacketListenerWithNetIP(lc), nil
+}
+
+func (f *forwarder) DialUDP(srcAddrPort, dstAddrPort netip.AddrPort) (net.Conn, error) {
+	// We have configured the TUN interface, so select it
+	if f.ft != nil {
+		return f.ft.DialUDP(srcAddrPort, dstAddrPort)
+	} else {
+		udpFam := "udp4"
+		if dstAddrPort.Addr().Is6() {
+			udpFam = "udp6"
+		}
+		return net.DialUDP(udpFam, nil, net.UDPAddrFromAddrPort(dstAddrPort))
+	}
+}
+
+func (f *forwarder) DialTCP(ctx context.Context, srcAddrPort, dstAddrPort netip.AddrPort) (net.Conn, error) {
+	// We have configured the TUN interface, so select it
+	if f.ft != nil {
+		return f.ft.DialTCP(ctx, srcAddrPort, dstAddrPort)
+	} else {
+		tcpFam := "tcp4"
+		if dstAddrPort.Addr().Is6() {
+			tcpFam = "tcp6"
+		}
+		return net.DialTCP(tcpFam, nil, net.TCPAddrFromAddrPort(dstAddrPort))
+	}
 }
 
 // getKnownDoHClientForProvider returns an HTTP client for a specific DoH
@@ -575,7 +632,9 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	}()
 
 	firstUDP := func(ctx context.Context) ([]byte, error) {
-		resp, err := f.sendUDP(ctx, fq, rr)
+		var resp []byte
+		var err error
+		resp, err = f.sendUDP(ctx, fq, rr)
 		if err != nil {
 			return nil, err
 		}
@@ -650,35 +709,43 @@ var errServerFailure = errors.New("response code indicates server issue")
 var errTxIDMismatch = errors.New("txid doesn't match")
 
 func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
+
+	// Obtain the external DNS resolver's IP:Port
 	ipp, ok := rr.name.IPPort()
 	if !ok {
 		metricDNSFwdErrorType.Add(1)
 		return nil, fmt.Errorf("unrecognized resolver type %q", rr.name.Addr)
 	}
 	metricDNSFwdUDP.Add(1)
+
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderUDP, f.logf)
 
-	ln, err := f.packetListener(ipp.Addr())
-	if err != nil {
-		return nil, err
-	}
+	// Generally a packet listener is configured on a specific network interface and a specific
+	// interface address (the source IP used in the DNS requests):
+	// 1. If we wish to unmask the requester tailnet node, we auto-generate the interface
+	//    address from the tailnet node IP using prefix substitution.  This is much like
+	//    the SNAT (source-network-address-translation) performed by a firewall.
+	//    If the destination DNS resolver is hosted within the local network we can then
+	//    route these unmasked DNS requests to it directly, and it can apply appropriate
+	//    DNS policy and log the query against the (unmasked) source tailnet node.
+	// 2. Alternately, we replace the requester tailnet node's IP with the IP of a local network
+	//    interface.  In some OS we require the destination IP of the DNS request "ipp.Addr()"
+	//    to select the interface appropriately (eg, based on the routing table).
+	// ln, err := f.packetListener(fq.addr, ipp)
 
-	// Specify the exact UDP family to work around https://github.com/golang/go/issues/52264
-	udpFam := "udp4"
-	if ipp.Addr().Is6() {
-		udpFam = "udp6"
+	// f.logf("sendUDP: src(%v) -> dst(%v)", fq.addr, ipp.Addr())
+	conn, connErr := f.DialUDP(fq.addr, ipp)
+	if connErr != nil {
+		f.logf("DialUDP failed: %v", connErr)
+		return nil, connErr
 	}
-	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
-	if err != nil {
-		f.logf("ListenPacket failed: %v", err)
-		return nil, err
-	}
+	
 	defer conn.Close()
 
 	fq.closeOnCtxDone.Add(conn)
 	defer fq.closeOnCtxDone.Remove(conn)
 
-	if _, err := conn.WriteToUDPAddrPort(fq.packet, ipp); err != nil {
+	if _, err := conn.Write(fq.packet); err != nil {
 		metricDNSFwdUDPErrorWrite.Add(1)
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -689,7 +756,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 
 	// The 1 extra byte is to detect packet truncation.
 	out := make([]byte, maxResponseBytes+1)
-	n, _, err := conn.ReadFromUDPAddrPort(out)
+	n, err := conn.Read(out)
 	if err != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -790,19 +857,14 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	metricDNSFwdTCP.Add(1)
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderTCP, f.logf)
 
-	// Specify the exact family to work around https://github.com/golang/go/issues/52264
-	tcpFam := "tcp4"
-	if ipp.Addr().Is6() {
-		tcpFam = "tcp6"
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, tcpQueryTimeout)
 	defer cancel()
 
-	conn, err := f.getDialerType()(ctx, tcpFam, ipp.String())
-	if err != nil {
-		return nil, err
+	conn, connErr := f.DialTCP(ctx, fq.addr, ipp)
+	if connErr != nil {
+		return nil, connErr
 	}
+
 	defer conn.Close()
 
 	fq.closeOnCtxDone.Add(conn)
@@ -903,6 +965,7 @@ type forwardQuery struct {
 	txid   txid
 	packet []byte
 	family string // "tcp" or "udp"
+	addr   netip.AddrPort // src of query request
 
 	// closeOnCtxDone lets send register values to Close if the
 	// caller's ctx expires. This avoids send from allocating its
@@ -987,6 +1050,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		txid:           getTxID(query.bs),
 		packet:         query.bs,
 		family:         query.family,
+		addr:           query.addr,
 		closeOnCtxDone: new(closePool),
 	}
 	defer fq.closeOnCtxDone.Close()
@@ -1095,7 +1159,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	}
 }
 
-var initListenConfig func(_ *net.ListenConfig, _ *netmon.Monitor, tunName string) error
+var initListenConfig func(_ *net.ListenConfig, _ *netmon.Monitor, tunName string, logf logger.Logf) error
 
 // nameFromQuery extracts the normalized query name from bs.
 func nameFromQuery(bs []byte) (dnsname.FQDN, dns.Type, error) {

@@ -452,6 +452,16 @@ func (v PrefsView) RelayServerPort() views.ValuePointer[int] {
 // TODO(bradfitz): delete this in 2025 sometime. See #12058.
 func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
 
+// Optional: explicit upstream DNS resolver (address + Port), UDP
+func (v PrefsView) DNSUpstreamResolver() netip.AddrPort { return v.ж.DNSUpstreamResolver }
+
+// Optional: apply source-NAT via this NETMAP prefix to all upstream DNS
+// requests from this exit-node.
+// This is only supported under Linux via a dedicated TUN interface
+// called tailscale0-dns
+// The phrase "default" will set the prefix to 10.64.0.0/10
+func (v PrefsView) DNSUpstreamSnatNetMap() netip.Prefix { return v.ж.DNSUpstreamSnatNetMap }
+
 // The Persist field is named 'Config' in the file for backward
 // compatibility with earlier versions.
 // TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -494,6 +504,8 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	DriveShares            []*drive.Share
 	RelayServerPort        *int
 	AllowSingleHosts       marshalAsTrueInJSON
+	DNSUpstreamResolver    netip.AddrPort
+	DNSUpstreamSnatNetMap  netip.Prefix
 	Persist                *persist.Persist
 }{})
 

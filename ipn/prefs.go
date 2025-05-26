@@ -292,6 +292,16 @@ type Prefs struct {
 	// TODO(bradfitz): delete this in 2025 sometime. See #12058.
 	AllowSingleHosts marshalAsTrueInJSON
 
+	// Optional: explicit upstream DNS resolver (address + Port), UDP
+	DNSUpstreamResolver netip.AddrPort
+
+	// Optional: apply source-NAT via this NETMAP prefix to all upstream DNS
+	// requests from this exit-node.
+	// This is only supported under Linux via a dedicated TUN interface
+	// called tailscale0-dns
+	// The phrase "default" will set the prefix to 10.64.0.0/10
+	DNSUpstreamSnatNetMap netip.Prefix
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
