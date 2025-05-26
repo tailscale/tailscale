@@ -1,5 +1,5 @@
 function hasbit(x, p)
-  return x % (p + p) >= p       
+  return bit.band(x, p) ~= 0
 end
 
 tsdebug_ll = Proto("tsdebug", "Tailscale debug")
@@ -128,6 +128,10 @@ function tsdisco_frame.dissector(buffer, pinfo, tree)
     if     message_type == 1 then subtree:add(DISCO_TYPE, "Ping")
     elseif message_type == 2 then subtree:add(DISCO_TYPE, "Pong")
     elseif message_type == 3 then subtree:add(DISCO_TYPE, "Call me maybe")
+    elseif message_type == 4 then subtree:add(DISCO_TYPE, "Bind UDP Relay Endpoint")
+    elseif message_type == 5 then subtree:add(DISCO_TYPE, "Bind UDP Relay Endpoint Challenge")
+    elseif message_type == 6 then subtree:add(DISCO_TYPE, "Bind UDP Relay Endpoint Answer")
+    elseif message_type == 7 then subtree:add(DISCO_TYPE, "Call me maybe via")
     end
 
     -- Message version
