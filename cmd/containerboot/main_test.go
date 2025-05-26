@@ -262,6 +262,29 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"authkey_file": func(env *testEnv) testCase {
+			authFile := filepath.Join(env.d, "authkey.txt")
+			if err := os.WriteFile(authFile, []byte("tskey-key"), 0600); err != nil {
+				t.Fatalf("Failed to write authkey file: %v", err)
+			}
+			return testCase{
+				// Userspace mode, ephemeral storage, authkey provided via file.
+				Env: map[string]string{
+					"TS_AUTHKEY_FILE": authFile,
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					},
+					{
+						Notify: runningNotify,
+					},
+				},
+			}
+		},
 		"authkey_disk_state": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{

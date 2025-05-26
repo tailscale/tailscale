@@ -85,7 +85,7 @@ type settings struct {
 
 func configFromEnv() (*settings, error) {
 	cfg := &settings{
-		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY", "TS_AUTHKEY_FILE", "TS_AUTH_KEY_FILE"}, ""),
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
 		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
@@ -365,9 +365,21 @@ func defaultEnvBoolPointer(name string) *bool {
 	return &ret
 }
 
+// defaultEnvs returns the value of the first envvar in names that is set,
+// or defVal if none are set. If the envvar ends with "_FILE", it reads the
+// value from the file specified by the envvar.
 func defaultEnvs(names []string, defVal string) string {
 	for _, name := range names {
-		if v, ok := os.LookupEnv(name); ok {
+		if strings.HasSuffix(name, "_FILE") {
+			if filepath, ok := os.LookupEnv(name); ok {
+				data, err := os.ReadFile(filepath)
+				if err != nil {
+					log.Printf("error reading env var %s from file %s: %v", name, filepath, err)
+					continue
+				}
+				return strings.TrimSpace(string(data))
+			}
+		} else if v, ok := os.LookupEnv(name); ok {
 			return v
 		}
 	}
