@@ -27,7 +27,7 @@ import (
 // same interface and subnet.
 var forceAllIPv6Endpoints = envknob.RegisterBool("TS_DEBUG_FORCE_ALL_IPV6_ENDPOINTS")
 
-// suppressInterfaces is a debug knob containing a list of interface names that should not be advertised as endpoints. 
+// suppressInterfaces is a debug knob containing a list of interface names that should not be advertised as endpoints.
 // Traffic may still flow over these interfaces if system routing makes the decision to do so.
 var excludeInterfaces = envknob.RegisterString("TS_DEBUG_EXCLUDE_INTERFACES")
 
