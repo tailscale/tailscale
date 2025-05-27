@@ -27,8 +27,9 @@ import (
 // same interface and subnet.
 var forceAllIPv6Endpoints = envknob.RegisterBool("TS_DEBUG_FORCE_ALL_IPV6_ENDPOINTS")
 
-// set a debug knob to exclude interfaces from the list of interfaces
-var excludedInterfaces = envknob.RegisterString("TS_DEBUG_EXCLUDED_INTERFACES")
+// suppressInterfaces is a debug knob containing a list of interface names that should not be advertised as endpoints. 
+// Traffic may still flow over these interfaces if system routing makes the decision to do so.
+var excludeInterfaces = envknob.RegisterString("TS_DEBUG_EXCLUDE_INTERFACES")
 
 // LoginEndpointForProxyDetermination is the URL used for testing
 // which HTTP proxy the system should use.
@@ -54,7 +55,7 @@ func isExcludedInterface(nif *net.Interface) bool {
 		return false
 	}
 
-	remain := excludedInterfaces()
+	remain := excludeInterfaces()
 	for remain != "" {
 		var candidate string
 		candidate, remain, _ = strings.Cut(remain, ",")
