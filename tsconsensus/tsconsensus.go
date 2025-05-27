@@ -32,6 +32,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -71,6 +72,7 @@ type Config struct {
 	MaxConnPool       int
 	ConnTimeout       time.Duration
 	ServeDebugMonitor bool
+	StateDirPath      string
 }
 
 // DefaultConfig returns a Config populated with default values ready for use.
@@ -223,10 +225,31 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 func startRaft(shutdownCtx context.Context, ts *tsnet.Server, fsm *raft.FSM, self selfRaftNode, auth *authorization, cfg Config) (*raft.Raft, error) {
 	cfg.Raft.LocalID = raft.ServerID(self.id)
 
-	// no persistence (for now?)
-	logStore := raft.NewInmemStore()
-	stableStore := raft.NewInmemStore()
-	snapshots := raft.NewInmemSnapshotStore()
+	var logStore raft.LogStore
+	var stableStore raft.StableStore
+	var snapStore raft.SnapshotStore
+
+	if cfg.StateDirPath == "" {
+		// comments in raft code say to only use for tests
+		logStore = raft.NewInmemStore()
+		stableStore = raft.NewInmemStore()
+		snapStore = raft.NewInmemSnapshotStore()
+	} else {
+		var err error
+		stableStore, logStore, err = boltStore(filepath.Join(cfg.StateDirPath, "store"))
+		if err != nil {
+			return nil, err
+		}
+		snaplogger := hclog.New(&hclog.LoggerOptions{
+			Name:   "raft-snap",
+			Output: cfg.Raft.LogOutput,
+			Level:  hclog.LevelFromString(cfg.Raft.LogLevel),
+		})
+		snapStore, err = raft.NewFileSnapshotStoreWithLogger(filepath.Join(cfg.StateDirPath, "snapstore"), 2, snaplogger)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// opens the listener on the raft port, raft will close it when it thinks it's appropriate
 	ln, err := ts.Listen("tcp", raftAddr(self.hostAddr, cfg))
@@ -234,7 +257,7 @@ func startRaft(shutdownCtx context.Context, ts *tsnet.Server, fsm *raft.FSM, sel
 		return nil, err
 	}
 
-	logger := hclog.New(&hclog.LoggerOptions{
+	transportLogger := hclog.New(&hclog.LoggerOptions{
 		Name:   "raft-net",
 		Output: cfg.Raft.LogOutput,
 		Level:  hclog.LevelFromString(cfg.Raft.LogLevel),
@@ -248,9 +271,9 @@ func startRaft(shutdownCtx context.Context, ts *tsnet.Server, fsm *raft.FSM, sel
 	},
 		cfg.MaxConnPool,
 		cfg.ConnTimeout,
-		logger)
+		transportLogger)
 
-	return raft.NewRaft(cfg.Raft, *fsm, logStore, stableStore, snapshots, transport)
+	return raft.NewRaft(cfg.Raft, *fsm, logStore, stableStore, snapStore, transport)
 }
 
 // A Consensus is the consensus algorithm for a tsnet.Server
