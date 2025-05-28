@@ -721,9 +721,10 @@ func (p *Prefs) ControlURLOrDefault() string {
 // of the platform it's running on.
 func (p *Prefs) DefaultRouteAll(goos string) bool {
 	switch goos {
-	case "windows":
+	case "windows", "android", "ios":
 		return true
 	case "darwin":
+		// Only true for macAppStore and macsys, false for darwin tailscaled.
 		return version.IsSandboxedMacOS()
 	default:
 		return false
