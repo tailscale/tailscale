@@ -154,6 +154,9 @@ func isNotableNotify(n *ipn.Notify) bool {
 		n.LoginFinished != nil ||
 		!n.DriveShares.IsNil() ||
 		n.Health != nil ||
+		n.ResetNodesAndUsers ||
+		n.NodeUpdate != nil ||
+		n.UserUpdate != nil ||
 		len(n.IncomingFiles) > 0 ||
 		len(n.OutgoingFiles) > 0 ||
 		n.FilesWaiting != nil
