@@ -25,7 +25,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/syncs"
-	"tailscale.com/tstime/rate"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -63,10 +62,8 @@ type Manager struct {
 	knobs    *controlknobs.Knobs // or nil
 	goos     string              // if empty, gets set to runtime.GOOS
 
-	mu sync.Mutex // guards following
-	// config is the last configuration we successfully compiled or nil if there
-	// was any failure applying the last configuration.
-	config *Config
+	mu     sync.Mutex // guards following
+	config *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
 }
 
 // NewManagers created a new manager from the given config.
@@ -93,22 +90,6 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 		goos:     goos,
 	}
 
-	// Rate limit our attempts to correct our DNS configuration.
-	// This is done on incoming queries, we don't want to spam it.
-	limiter := rate.NewLimiter(1.0/5.0, 1)
-
-	// This will recompile the DNS config, which in turn will requery the system
-	// DNS settings. The recovery func should triggered only when we are missing
-	// upstream nameservers and require them to forward a query.
-	m.resolver.SetMissingUpstreamRecovery(func() {
-		if limiter.Allow() {
-			m.logf("resolution failed due to missing upstream nameservers.  Recompiling DNS configuration.")
-			if err := m.RecompileDNSConfig(); err != nil {
-				m.logf("config recompilation failed: %v", err)
-			}
-		}
-	})
-
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.logf("using %T", m.os)
 	return m
@@ -117,7 +98,7 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 // Resolver returns the Manager's DNS Resolver.
 func (m *Manager) Resolver() *resolver.Resolver { return m.resolver }
 
-// RecompileDNSConfig sets the DNS config to the current value, which has
+// RecompileDNSConfig recompiles the last attempted DNS configuration, which has
 // the side effect of re-querying the OS's interface nameservers.  This should be used
 // on platforms where the interface nameservers can change.  Darwin, for example,
 // where the nameservers aren't always available when we process a major interface
@@ -127,14 +108,14 @@ func (m *Manager) Resolver() *resolver.Resolver { return m.resolver }
 // give a better or different result than when [Manager.Set] was last called.  The
 // logic for making that determination is up to the caller.
 //
-// It returns [ErrNoDNSConfig] if the [Manager] has no existing DNS configuration.
+// It returns [ErrNoDNSConfig] if [Manager.Set] has never been called.
 func (m *Manager) RecompileDNSConfig() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.config == nil {
-		return ErrNoDNSConfig
+	if m.config != nil {
+		return m.setLocked(*m.config)
 	}
-	return m.setLocked(*m.config)
+	return ErrNoDNSConfig
 }
 
 func (m *Manager) Set(cfg Config) error {
@@ -154,15 +135,15 @@ func (m *Manager) GetBaseConfig() (OSConfig, error) {
 func (m *Manager) setLocked(cfg Config) error {
 	syncs.AssertLocked(&m.mu)
 
-	// On errors, the 'set' config is cleared.
-	m.config = nil
-
 	m.logf("Set: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		cfg.WriteToBufioWriter(w)
 	}))
 
 	rcfg, ocfg, err := m.compileConfig(cfg)
 	if err != nil {
+		// On a compilation failure, set m.config set for later reuse by
+		// [Manager.RecompileDNSConfig] and return the error.
+		m.config = &cfg
 		return err
 	}
 
@@ -174,9 +155,11 @@ func (m *Manager) setLocked(cfg Config) error {
 	}))
 
 	if err := m.resolver.SetConfig(rcfg); err != nil {
+		m.config = nil
 		return err
 	}
 	if err := m.os.SetDNS(ocfg); err != nil {
+		m.config = nil
 		m.health.SetUnhealthy(osConfigurationSetWarnable, health.Args{health.ArgError: err.Error()})
 		return err
 	}
@@ -355,7 +338,10 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// that as the forwarder for all DNS traffic that quad-100 doesn't handle.
 	if isApple || !m.os.SupportsSplitDNS() {
 		// If the OS can't do native split-dns, read out the underlying
-		// resolver config and blend it into our config.
+		// resolver config and blend it into our config.  On apple platforms, [OSConfigurator.GetBaseConfig]
+		// has a tendency to temporarily fail if called immediately following
+		// an interface change.  These failures should be retried if/when the OS
+		// indicates that the DNS configuration has changed via [RecompileDNSConfig].
 		cfg, err := m.os.GetBaseConfig()
 		if err == nil {
 			baseCfg = &cfg
