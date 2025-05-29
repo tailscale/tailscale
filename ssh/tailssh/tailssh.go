@@ -281,7 +281,7 @@ func (c *conn) errBanner(message string, err error) error {
 	if err != nil {
 		c.logf("%s: %s", message, err)
 	}
-	if err := c.spac.SendAuthBanner("tailscale: " + message); err != nil {
+	if err := c.spac.SendAuthBanner("tailscale: " + message + "\n"); err != nil {
 		c.logf("failed to send auth banner: %s", err)
 	}
 	return errTerminal
@@ -324,9 +324,16 @@ func (c *conn) clientAuth(cm gossh.ConnMetadata) (perms *gossh.Permissions, retE
 		return nil, c.errBanner("failed to get connection info", err)
 	}
 
-	action, localUser, acceptEnv, err := c.evaluatePolicy()
-	if err != nil {
-		return nil, c.errBanner("failed to evaluate SSH policy", err)
+	action, localUser, acceptEnv, result := c.evaluatePolicy()
+	switch result {
+	case accepted:
+		// do nothing
+	case rejectedUser:
+		return nil, c.errBanner(fmt.Sprintf("tailnet policy does not permit you to SSH as user %q", c.info.sshUser), nil)
+	case rejected, noPolicy:
+		return nil, c.errBanner("tailnet policy does not permit you to SSH to this node", fmt.Errorf("failed to evaluate policy, result: %s", result))
+	default:
+		return nil, c.errBanner("failed to evaluate tailnet policy", fmt.Errorf("failed to evaluate policy, result: %s", result))
 	}
 
 	c.action0 = action
@@ -597,18 +604,23 @@ func (c *conn) setInfo(cm gossh.ConnMetadata) error {
 	return nil
 }
 
+type evalResult string
+
+const (
+	noPolicy     evalResult = "no policy"
+	rejected     evalResult = "rejected"
+	rejectedUser evalResult = "rejected user"
+	accepted     evalResult = "accept"
+)
+
 // evaluatePolicy returns the SSHAction and localUser after evaluating
 // the SSHPolicy for this conn.
-func (c *conn) evaluatePolicy() (_ *tailcfg.SSHAction, localUser string, acceptEnv []string, _ error) {
+func (c *conn) evaluatePolicy() (_ *tailcfg.SSHAction, localUser string, acceptEnv []string, result evalResult) {
 	pol, ok := c.sshPolicy()
 	if !ok {
-		return nil, "", nil, fmt.Errorf("tailssh: rejecting connection; no SSH policy")
+		return nil, "", nil, noPolicy
 	}
-	a, localUser, acceptEnv, ok := c.evalSSHPolicy(pol)
-	if !ok {
-		return nil, "", nil, fmt.Errorf("tailssh: rejecting connection; no matching policy")
-	}
-	return a, localUser, acceptEnv, nil
+	return c.evalSSHPolicy(pol)
 }
 
 // handleSessionPostSSHAuth runs an SSH session after the SSH-level authentication,
@@ -706,9 +718,9 @@ func (c *conn) newSSHSession(s ssh.Session) *sshSession {
 
 // isStillValid reports whether the conn is still valid.
 func (c *conn) isStillValid() bool {
-	a, localUser, _, err := c.evaluatePolicy()
-	c.vlogf("stillValid: %+v %v %v", a, localUser, err)
-	if err != nil {
+	a, localUser, _, result := c.evaluatePolicy()
+	c.vlogf("stillValid: %+v %v %v", a, localUser, result)
+	if result != accepted {
 		return false
 	}
 	if !a.Accept && a.HoldAndDelegate == "" {
@@ -1089,13 +1101,20 @@ func (c *conn) ruleExpired(r *tailcfg.SSHRule) bool {
 	return r.RuleExpires.Before(c.srv.now())
 }
 
-func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, ok bool) {
+func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, result evalResult) {
+	failedOnUser := false
 	for _, r := range pol.Rules {
 		if a, localUser, acceptEnv, err := c.matchRule(r); err == nil {
-			return a, localUser, acceptEnv, true
+			return a, localUser, acceptEnv, accepted
+		} else if errors.Is(err, errUserMatch) {
+			failedOnUser = true
 		}
 	}
-	return nil, "", nil, false
+	result = rejected
+	if failedOnUser {
+		result = rejectedUser
+	}
+	return nil, "", nil, result
 }
 
 // internal errors for testing; they don't escape to callers or logs.
@@ -1129,6 +1148,9 @@ func (c *conn) matchRule(r *tailcfg.SSHRule) (a *tailcfg.SSHAction, localUser st
 	if c.ruleExpired(r) {
 		return nil, "", nil, errRuleExpired
 	}
+	if !c.anyPrincipalMatches(r.Principals) {
+		return nil, "", nil, errPrincipalMatch
+	}
 	if !r.Action.Reject {
 		// For all but Reject rules, SSHUsers is required.
 		// If SSHUsers is nil or empty, mapLocalUser will return an
@@ -1137,9 +1159,6 @@ func (c *conn) matchRule(r *tailcfg.SSHRule) (a *tailcfg.SSHAction, localUser st
 		if localUser == "" {
 			return nil, "", nil, errUserMatch
 		}
-	}
-	if !c.anyPrincipalMatches(r.Principals) {
-		return nil, "", nil, errPrincipalMatch
 	}
 	return r.Action, localUser, r.AcceptEnv, nil
 }
