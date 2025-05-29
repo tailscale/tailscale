@@ -253,7 +253,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 		name          string
 		policy        *tailcfg.SSHPolicy
 		ci            *sshConnInfo
-		wantMatch     bool
+		wantResult    evalResult
 		wantUser      string
 		wantAcceptEnv []string
 	}{
@@ -299,10 +299,20 @@ func TestEvalSSHPolicy(t *testing.T) {
 			ci:            &sshConnInfo{sshUser: "alice"},
 			wantUser:      "thealice",
 			wantAcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
-			wantMatch:     true,
+			wantResult:    accepted,
 		},
 		{
-			name: "no-matches-returns-failure",
+			name: "no-matches-returns-rejected",
+			policy: &tailcfg.SSHPolicy{
+				Rules: []*tailcfg.SSHRule{},
+			},
+			ci:            &sshConnInfo{sshUser: "alice"},
+			wantUser:      "",
+			wantAcceptEnv: nil,
+			wantResult:    rejected,
+		},
+		{
+			name: "no-user-matches-returns-rejected-user",
 			policy: &tailcfg.SSHPolicy{
 				Rules: []*tailcfg.SSHRule{
 					{
@@ -340,7 +350,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 			ci:            &sshConnInfo{sshUser: "alice"},
 			wantUser:      "",
 			wantAcceptEnv: nil,
-			wantMatch:     false,
+			wantResult:    rejectedUser,
 		},
 	}
 	for _, tt := range tests {
@@ -349,14 +359,14 @@ func TestEvalSSHPolicy(t *testing.T) {
 				info: tt.ci,
 				srv:  &server{logf: tstest.WhileTestRunningLogger(t)},
 			}
-			got, gotUser, gotAcceptEnv, match := c.evalSSHPolicy(tt.policy)
-			if match != tt.wantMatch {
-				t.Errorf("match = %v; want %v", match, tt.wantMatch)
+			got, gotUser, gotAcceptEnv, result := c.evalSSHPolicy(tt.policy)
+			if result != tt.wantResult {
+				t.Errorf("result = %v; want %v", result, tt.wantResult)
 			}
 			if gotUser != tt.wantUser {
 				t.Errorf("user = %q; want %q", gotUser, tt.wantUser)
 			}
-			if tt.wantMatch == true && got == nil {
+			if tt.wantResult == accepted && got == nil {
 				t.Errorf("expected non-nil action on success")
 			}
 			if !slices.Equal(gotAcceptEnv, tt.wantAcceptEnv) {
@@ -467,7 +477,7 @@ func (ts *localState) NodeKey() key.NodePublic {
 func newSSHRule(action *tailcfg.SSHAction) *tailcfg.SSHRule {
 	return &tailcfg.SSHRule{
 		SSHUsers: map[string]string{
-			"*": currentUser,
+			"alice": currentUser,
 		},
 		Action: action,
 		Principals: []*tailcfg.SSHPrincipal{
@@ -789,6 +799,11 @@ func TestSSHAuthFlow(t *testing.T) {
 		Accept:  true,
 		Message: "Welcome to Tailscale SSH!",
 	})
+	bobRule := newSSHRule(&tailcfg.SSHAction{
+		Accept:  true,
+		Message: "Welcome to Tailscale SSH!",
+	})
+	bobRule.SSHUsers = map[string]string{"bob": "bob"}
 	rejectRule := newSSHRule(&tailcfg.SSHAction{
 		Reject:  true,
 		Message: "Go Away!",
@@ -808,7 +823,16 @@ func TestSSHAuthFlow(t *testing.T) {
 				sshEnabled: true,
 			},
 			authErr:     true,
-			wantBanners: []string{"tailscale: failed to evaluate SSH policy"},
+			wantBanners: []string{"tailscale: tailnet policy does not permit you to SSH to this node\n"},
+		},
+		{
+			name: "user-mismatch",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: bobRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "alice"` + "\n"},
 		},
 		{
 			name: "accept",
