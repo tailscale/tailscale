@@ -84,8 +84,43 @@ func TestSmallSet(t *testing.T) {
 							t.Errorf("contains(%v) mismatch after ops %s: normal=%v, small=%v", e, name(), normal.Contains(e), small.Contains(e))
 						}
 					}
+
+					if err := small.checkInvariants(); err != nil {
+						t.Errorf("checkInvariants failed after ops %s: %v", name(), err)
+					}
+
+					if !t.Failed() {
+						sole, ok := small.SoleElement()
+						if ok != (small.Len() == 1) {
+							t.Errorf("SoleElement ok mismatch after ops %s: SoleElement ok=%v, want=%v", name(), ok, !ok)
+						}
+						if ok && sole != smallEle[0] {
+							t.Errorf("SoleElement value mismatch after ops %s: SoleElement=%v, want=%v", name(), sole, smallEle[0])
+							t.Errorf("Internals: %+v", small)
+						}
+					}
 				}
 			}
 		}
 	}
+}
+
+func (s *SmallSet[T]) checkInvariants() error {
+	var zero T
+	if s.m != nil && s.one != zero {
+		return fmt.Errorf("both m and one are non-zero")
+	}
+	if s.m != nil {
+		switch len(s.m) {
+		case 0:
+			return fmt.Errorf("m is non-nil but empty")
+		case 1:
+			for k := range s.m {
+				if k != zero {
+					return fmt.Errorf("m contains exactly 1 non-zero element, %v", k)
+				}
+			}
+		}
+	}
+	return nil
 }

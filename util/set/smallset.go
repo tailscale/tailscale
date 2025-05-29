@@ -50,6 +50,15 @@ func (s SmallSet[T]) Contains(e T) bool {
 	return e != zero && s.one == e
 }
 
+// SoleElement returns the single value in the set, if the set has exactly one
+// element.
+//
+// If the set is empty or has more than one element, ok will be false and e will
+// be the zero value of T.
+func (s SmallSet[T]) SoleElement() (e T, ok bool) {
+	return s.one, s.Len() == 1
+}
+
 // Add adds e to the set.
 //
 // When storing a SmallSet in a map as a value type, it is important to
@@ -61,10 +70,15 @@ func (s *SmallSet[T]) Add(e T) {
 		s.m.Add(e)
 		return
 	}
-	// Size zero to one non-zero element.
-	if s.one == zero && e != zero {
-		s.one = e
-		return
+	// Non-zero elements can go into s.one.
+	if e != zero {
+		if s.one == zero {
+			s.one = e // Len 0 to Len 1
+			return
+		}
+		if s.one == e {
+			return // dup
+		}
 	}
 	// Need to make a multi map, either
 	// because we now have two items, or
@@ -73,7 +87,7 @@ func (s *SmallSet[T]) Add(e T) {
 	if s.one != zero {
 		s.m.Add(s.one) // move single item to multi
 	}
-	s.m.Add(e) // add new item
+	s.m.Add(e) // add new item, possibly zero
 	s.one = zero
 }
 
