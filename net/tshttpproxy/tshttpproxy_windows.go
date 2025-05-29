@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/alexbrainman/sspi/negotiate"
+	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
 	"tailscale.com/hostinfo"
 	"tailscale.com/syncs"
@@ -97,9 +98,7 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 		}
 		if err == windows.ERROR_INVALID_PARAMETER {
 			metricErrInvalidParameters.Add(1)
-			// Seen on Windows 8.1. (https://github.com/tailscale/tailscale/issues/879)
-			// TODO(bradfitz): figure this out.
-			setNoProxyUntil(time.Hour)
+			setNoProxyUntil(10 * time.Second)
 			proxyErrorf("tshttpproxy: winhttp: GetProxyForURL(%q): ERROR_INVALID_PARAMETER [unexpected]", urlStr)
 			return nil, nil
 		}
@@ -238,17 +237,30 @@ func (pi *winHTTPProxyInfo) free() {
 	}
 }
 
-var proxyForURLOpts = &winHTTPAutoProxyOptions{
-	DwFlags:           winHTTP_AUTOPROXY_ALLOW_AUTOCONFIG | winHTTP_AUTOPROXY_AUTO_DETECT,
-	DwAutoDetectFlags: winHTTP_AUTO_DETECT_TYPE_DHCP, // | winHTTP_AUTO_DETECT_TYPE_DNS_A,
-}
+var getProxyForURLOpts = sync.OnceValue(func() *winHTTPAutoProxyOptions {
+	opts := &winHTTPAutoProxyOptions{
+		DwFlags:           winHTTP_AUTOPROXY_AUTO_DETECT,
+		DwAutoDetectFlags: winHTTP_AUTO_DETECT_TYPE_DHCP | winHTTP_AUTO_DETECT_TYPE_DNS_A,
+	}
+	// Support for the WINHTTP_AUTOPROXY_ALLOW_AUTOCONFIG flag was added in Windows 10, version 1703.
+	//
+	// Using it on earlier versions causes GetProxyForURL to fail with ERROR_INVALID_PARAMETER,
+	// which prevents proxy detection and can lead to failures reaching the control server
+	// on environments where a proxy is required.
+	//
+	// https://web.archive.org/web/20250529044903/https://learn.microsoft.com/en-us/windows/win32/api/winhttp/ns-winhttp-winhttp_autoproxy_options
+	if wingoes.IsWin10BuildOrGreater(wingoes.Win10Build1703) {
+		opts.DwFlags |= winHTTP_AUTOPROXY_ALLOW_AUTOCONFIG
+	}
+	return opts
+})
 
 func (hi winHTTPInternet) GetProxyForURL(urlStr string) (string, error) {
 	var out winHTTPProxyInfo
 	err := winHTTPGetProxyForURL(
 		hi,
 		windows.StringToUTF16Ptr(urlStr),
-		proxyForURLOpts,
+		getProxyForURLOpts(),
 		&out,
 	)
 	if err != nil {
