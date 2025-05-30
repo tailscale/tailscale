@@ -64,6 +64,23 @@ func TestAtomicValue(t *testing.T) {
 			t.Fatalf("LoadOk = (%v, %v), want (nil, true)", got, gotOk)
 		}
 	}
+
+	{
+		c1, c2, c3 := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var v AtomicValue[chan struct{}]
+		if v.CompareAndSwap(c1, c2) != false {
+			t.Fatalf("CompareAndSwap = true, want false")
+		}
+		if v.CompareAndSwap(nil, c1) != true {
+			t.Fatalf("CompareAndSwap = false, want true")
+		}
+		if v.CompareAndSwap(c2, c3) != false {
+			t.Fatalf("CompareAndSwap = true, want false")
+		}
+		if v.CompareAndSwap(c1, c2) != true {
+			t.Fatalf("CompareAndSwap = false, want true")
+		}
+	}
 }
 
 func TestMutexValue(t *testing.T) {

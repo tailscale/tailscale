@@ -67,12 +67,18 @@ func (v *AtomicValue[T]) Swap(x T) (old T) {
 	if oldV != nil {
 		return oldV.(wrappedValue[T]).v
 	}
-	return old
+	return old // zero value of T
 }
 
 // CompareAndSwap executes the compare-and-swap operation for the Value.
+// It panics if T is not comparable.
 func (v *AtomicValue[T]) CompareAndSwap(oldV, newV T) (swapped bool) {
-	return v.v.CompareAndSwap(wrappedValue[T]{oldV}, wrappedValue[T]{newV})
+	var zero T
+	return v.v.CompareAndSwap(wrappedValue[T]{oldV}, wrappedValue[T]{newV}) ||
+		// In the edge-case where [atomic.Value.Store] is uninitialized
+		// and trying to compare with the zero value of T,
+		// then compare-and-swap with the nil any value.
+		(any(oldV) == any(zero) && v.v.CompareAndSwap(any(nil), wrappedValue[T]{newV}))
 }
 
 // MutexValue is a value protected by a mutex.
