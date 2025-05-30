@@ -71,12 +71,13 @@ func (c *RebindingUDPConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, e
 }
 
 // WriteBatchTo writes buffs to addr.
-func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) error {
+func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, offset int) error {
 	for {
 		pconn := *c.pconnAtomic.Load()
 		b, ok := pconn.(batchingConn)
 		if !ok {
 			for _, buf := range buffs {
+				buf = buf[offset:]
 				_, err := c.writeToUDPAddrPortWithInitPconn(pconn, buf, addr)
 				if err != nil {
 					return err
@@ -84,7 +85,7 @@ func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) err
 			}
 			return nil
 		}
-		err := b.WriteBatchTo(buffs, addr)
+		err := b.WriteBatchTo(buffs, addr, offset)
 		if err != nil {
 			if pconn != c.currentConn() {
 				continue

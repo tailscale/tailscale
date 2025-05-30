@@ -94,7 +94,7 @@ const (
 
 // coalesceMessages iterates msgs, coalescing them where possible while
 // maintaining datagram order. All msgs have their Addr field set to addr.
-func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, buffs [][]byte, msgs []ipv6.Message) int {
+func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, buffs [][]byte, msgs []ipv6.Message, offset int) int {
 	var (
 		base     = -1 // index of msg we are currently coalescing into
 		gsoSize  int  // segmentation size of msgs[base]
@@ -106,6 +106,7 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, buffs [][]byte, 
 		maxPayloadLen = maxIPv6PayloadLen
 	}
 	for i, buff := range buffs {
+		buff = buff[offset:]
 		if i > 0 {
 			msgLen := len(buff)
 			baseLenBefore := len(msgs[base].Buffers[0])
@@ -162,7 +163,7 @@ func (c *linuxBatchingConn) putSendBatch(batch *sendBatch) {
 	c.sendBatchPool.Put(batch)
 }
 
-func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) error {
+func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, offset int) error {
 	batch := c.getSendBatch()
 	defer c.putSendBatch(batch)
 	if addr.Addr().Is6() {
@@ -181,10 +182,10 @@ func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) er
 	)
 retry:
 	if c.txOffload.Load() {
-		n = c.coalesceMessages(batch.ua, buffs, batch.msgs)
+		n = c.coalesceMessages(batch.ua, buffs, batch.msgs, offset)
 	} else {
 		for i := range buffs {
-			batch.msgs[i].Buffers[0] = buffs[i]
+			batch.msgs[i].Buffers[0] = buffs[i][offset:]
 			batch.msgs[i].Addr = batch.ua
 			batch.msgs[i].OOB = batch.msgs[i].OOB[:0]
 		}

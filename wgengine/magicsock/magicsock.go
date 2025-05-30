@@ -1264,8 +1264,8 @@ func (c *Conn) networkDown() bool { return !c.networkUp.Load() }
 
 // Send implements conn.Bind.
 //
-// See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.Send
-func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) (err error) {
+// See https://pkg.go.dev/github.com/tailscale/wireguard-go/conn#Bind.Send
+func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
 	n := int64(len(buffs))
 	defer func() {
 		if err != nil {
@@ -1278,7 +1278,7 @@ func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) (err error) {
 		return errNetworkDown
 	}
 	if ep, ok := ep.(*endpoint); ok {
-		return ep.send(buffs)
+		return ep.send(buffs, offset)
 	}
 	// If it's not of type *endpoint, it's probably *lazyEndpoint, which means
 	// we don't actually know who the peer is and we're waiting for wireguard-go
@@ -1294,7 +1294,7 @@ var errNoUDP = errors.New("no UDP available on platform")
 
 var errUnsupportedConnType = errors.New("unsupported connection type")
 
-func (c *Conn) sendUDPBatch(addr netip.AddrPort, buffs [][]byte) (sent bool, err error) {
+func (c *Conn) sendUDPBatch(addr netip.AddrPort, buffs [][]byte, offset int) (sent bool, err error) {
 	isIPv6 := false
 	switch {
 	case addr.Addr().Is4():
@@ -1304,9 +1304,9 @@ func (c *Conn) sendUDPBatch(addr netip.AddrPort, buffs [][]byte) (sent bool, err
 		panic("bogus sendUDPBatch addr type")
 	}
 	if isIPv6 {
-		err = c.pconn6.WriteBatchTo(buffs, addr)
+		err = c.pconn6.WriteBatchTo(buffs, addr, offset)
 	} else {
-		err = c.pconn4.WriteBatchTo(buffs, addr)
+		err = c.pconn4.WriteBatchTo(buffs, addr, offset)
 	}
 	if err != nil {
 		var errGSO neterror.ErrUDPGSODisabled
