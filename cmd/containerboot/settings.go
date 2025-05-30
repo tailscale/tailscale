@@ -147,10 +147,67 @@ func configFromEnv() (*settings, error) {
 		}
 	}
 
+	// See https://github.com/tailscale/tailscale/issues/16108 for context- we
+	// do this to preserve the previous behaviour where --accept-dns could be
+	// set either via TS_ACCEPT_DNS or TS_EXTRA_ARGS.
+	acceptDNS := cfg.AcceptDNS != nil && *cfg.AcceptDNS
+	tsExtraArgs, acceptDNSNew := parseAcceptDNS(cfg.ExtraArgs, acceptDNS)
+	cfg.ExtraArgs = tsExtraArgs
+	if acceptDNS != acceptDNSNew {
+		cfg.AcceptDNS = &acceptDNSNew
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %v", err)
 	}
 	return cfg, nil
+}
+
+// parseAcceptDNS parses any values for Tailscale --accept-dns flag set via
+// TS_ACCEPT_DNS and TS_EXTRA_ARGS env vars. If TS_EXTRA_ARGS contains
+// --accept-dns flag, override the acceptDNS value with the one from
+// TS_EXTRA_ARGS.
+// The value of extraArgs can be empty string or one or more whitespace-separate
+// key value pairs for 'tailscale up' command. The value for boolean flags can
+// be omitted (default to true).
+func parseAcceptDNS(extraArgs string, acceptDNS bool) (string, bool) {
+	if !strings.Contains(extraArgs, "--accept-dns") {
+		return extraArgs, acceptDNS
+	}
+	// TODO(irbekrm): we should validate that TS_EXTRA_ARGS contains legit
+	// 'tailscale up' flag values separated by whitespace.
+	argsArr := strings.Fields(extraArgs)
+	i := -1
+	for key, val := range argsArr {
+		if strings.HasPrefix(val, "--accept-dns") {
+			i = key
+			break
+		}
+	}
+	if i == -1 {
+		return extraArgs, acceptDNS
+	}
+	a := strings.TrimSpace(argsArr[i])
+	var acceptDNSFromExtraArgsS string
+	keyval := strings.Split(a, "=")
+	if len(keyval) == 2 {
+		acceptDNSFromExtraArgsS = keyval[1]
+	} else if len(keyval) == 1 && keyval[0] == "--accept-dns" {
+		// If the arg is just --accept-dns, we assume it means true.
+		acceptDNSFromExtraArgsS = "true"
+	} else {
+		log.Printf("TS_EXTRA_ARGS contains --accept-dns, but it is not in the expected format --accept-dns=<true|false>, ignoring it")
+		return extraArgs, acceptDNS
+	}
+	acceptDNSFromExtraArgs, err := strconv.ParseBool(acceptDNSFromExtraArgsS)
+	if err != nil {
+		log.Printf("TS_EXTRA_ARGS contains --accept-dns=%q, which is not a valid boolean value, ignoring it", acceptDNSFromExtraArgsS)
+		return extraArgs, acceptDNS
+	}
+	if acceptDNSFromExtraArgs != acceptDNS {
+		log.Printf("TS_EXTRA_ARGS contains --accept-dns=%v, which overrides TS_ACCEPT_DNS=%v", acceptDNSFromExtraArgs, acceptDNS)
+	}
+	return strings.Join(append(argsArr[:i], argsArr[i+1:]...), " "), acceptDNSFromExtraArgs
 }
 
 func (s *settings) validate() error {
