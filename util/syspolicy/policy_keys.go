@@ -126,8 +126,8 @@ const (
 	// The default is "user-decides" unless otherwise stated.
 	PostureChecking Key = "PostureChecking"
 	// DeviceSerialNumber is the serial number of the device that is running Tailscale.
-	// This is used on iOS/tvOS to allow IT administrators to manually give us a serial number via MDM.
-	// We are unable to programmatically get the serial number from IOKit due to sandboxing restrictions.
+	// This is used on Android, iOS and tvOS to allow IT administrators to manually give us a serial number via MDM.
+	// We are unable to programmatically get the serial number on mobile due to sandboxing restrictions.
 	DeviceSerialNumber Key = "DeviceSerialNumber"
 
 	// ManagedByOrganizationName indicates the name of the organization managing the Tailscale
