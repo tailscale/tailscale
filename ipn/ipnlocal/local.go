@@ -6146,17 +6146,17 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		}
 	}
 
-	// Update funnel info in hostinfo and kick off control update if needed.
-	b.updateIngressLocked()
+	// Update funnel and service hash info in hostinfo and kick off control update if needed.
+	b.updateIngressAndServiceHashLocked(prefs)
 	b.setTCPPortsIntercepted(handlePorts)
 	b.setVIPServicesTCPPortsInterceptedLocked(vipServicesPorts)
 }
 
-// updateIngressLocked updates the hostinfo.WireIngress and hostinfo.IngressEnabled fields and kicks off a Hostinfo
-// update if the values have changed.
+// updateIngressAndServiceHashLocked updates the hostinfo.ServicesHash, hostinfo.WireIngress and
+// hostinfo.IngressEnabled fields and kicks off a Hostinfo update if the values have changed.
 //
 // b.mu must be held.
-func (b *LocalBackend) updateIngressLocked() {
+func (b *LocalBackend) updateIngressAndServiceHashLocked(prefs ipn.PrefsView) {
 	if b.hostinfo == nil {
 		return
 	}
@@ -6169,6 +6169,12 @@ func (b *LocalBackend) updateIngressLocked() {
 	if wire := b.shouldWireInactiveIngressLocked(); b.hostinfo.WireIngress != wire {
 		b.logf("Hostinfo.WireIngress changed to %v", wire)
 		b.hostinfo.WireIngress = wire
+		hostInfoChanged = true
+	}
+	latestHash := b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
+	if b.hostinfo.ServicesHash != latestHash {
+		b.logf("Hostinfo.ServicesHash changed to %s", latestHash)
+		b.hostinfo.ServicesHash = latestHash
 		hostInfoChanged = true
 	}
 	// Kick off a Hostinfo update to control if ingress status has changed.
