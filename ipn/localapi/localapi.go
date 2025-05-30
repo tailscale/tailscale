@@ -32,6 +32,7 @@ import (
 	"tailscale.com/clientupdate"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
+	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
@@ -82,71 +83,72 @@ var handler = map[string]LocalAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
-	"alpha-set-device-attrs":      (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
-	"bugreport":                   (*Handler).serveBugReport,
-	"check-ip-forwarding":         (*Handler).serveCheckIPForwarding,
-	"check-prefs":                 (*Handler).serveCheckPrefs,
-	"check-udp-gro-forwarding":    (*Handler).serveCheckUDPGROForwarding,
-	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
-	"debug":                       (*Handler).serveDebug,
-	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
-	"debug-dial-types":            (*Handler).serveDebugDialTypes,
-	"debug-log":                   (*Handler).serveDebugLog,
-	"debug-packet-filter-matches": (*Handler).serveDebugPacketFilterMatches,
-	"debug-packet-filter-rules":   (*Handler).serveDebugPacketFilterRules,
-	"debug-peer-endpoint-changes": (*Handler).serveDebugPeerEndpointChanges,
-	"debug-portmap":               (*Handler).serveDebugPortmap,
-	"derpmap":                     (*Handler).serveDERPMap,
-	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
-	"dial":                        (*Handler).serveDial,
-	"disconnect-control":          (*Handler).disconnectControl,
-	"dns-osconfig":                (*Handler).serveDNSOSConfig,
-	"dns-query":                   (*Handler).serveDNSQuery,
-	"drive/fileserver-address":    (*Handler).serveDriveServerAddr,
-	"drive/shares":                (*Handler).serveShares,
-	"goroutines":                  (*Handler).serveGoroutines,
-	"handle-push-message":         (*Handler).serveHandlePushMessage,
-	"id-token":                    (*Handler).serveIDToken,
-	"login-interactive":           (*Handler).serveLoginInteractive,
-	"logout":                      (*Handler).serveLogout,
-	"logtap":                      (*Handler).serveLogTap,
-	"metrics":                     (*Handler).serveMetrics,
-	"ping":                        (*Handler).servePing,
-	"pprof":                       (*Handler).servePprof,
-	"prefs":                       (*Handler).servePrefs,
-	"query-feature":               (*Handler).serveQueryFeature,
-	"reload-config":               (*Handler).reloadConfig,
-	"reset-auth":                  (*Handler).serveResetAuth,
-	"serve-config":                (*Handler).serveServeConfig,
-	"set-dns":                     (*Handler).serveSetDNS,
-	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
-	"set-gui-visible":             (*Handler).serveSetGUIVisible,
-	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
-	"set-udp-gro-forwarding":      (*Handler).serveSetUDPGROForwarding,
-	"set-use-exit-node-enabled":   (*Handler).serveSetUseExitNodeEnabled,
-	"start":                       (*Handler).serveStart,
-	"status":                      (*Handler).serveStatus,
-	"suggest-exit-node":           (*Handler).serveSuggestExitNode,
-	"tka/affected-sigs":           (*Handler).serveTKAAffectedSigs,
-	"tka/cosign-recovery-aum":     (*Handler).serveTKACosignRecoveryAUM,
-	"tka/disable":                 (*Handler).serveTKADisable,
-	"tka/force-local-disable":     (*Handler).serveTKALocalDisable,
-	"tka/generate-recovery-aum":   (*Handler).serveTKAGenerateRecoveryAUM,
-	"tka/init":                    (*Handler).serveTKAInit,
-	"tka/log":                     (*Handler).serveTKALog,
-	"tka/modify":                  (*Handler).serveTKAModify,
-	"tka/sign":                    (*Handler).serveTKASign,
-	"tka/status":                  (*Handler).serveTKAStatus,
-	"tka/submit-recovery-aum":     (*Handler).serveTKASubmitRecoveryAUM,
-	"tka/verify-deeplink":         (*Handler).serveTKAVerifySigningDeeplink,
-	"tka/wrap-preauth-key":        (*Handler).serveTKAWrapPreauthKey,
-	"update/check":                (*Handler).serveUpdateCheck,
-	"update/install":              (*Handler).serveUpdateInstall,
-	"update/progress":             (*Handler).serveUpdateProgress,
-	"upload-client-metrics":       (*Handler).serveUploadClientMetrics,
-	"usermetrics":                 (*Handler).serveUserMetrics,
-	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
-	"whois":                       (*Handler).serveWhoIs,
+	"alpha-set-device-attrs":       (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
+	"bugreport":                    (*Handler).serveBugReport,
+	"check-ip-forwarding":          (*Handler).serveCheckIPForwarding,
+	"check-prefs":                  (*Handler).serveCheckPrefs,
+	"check-reverse-path-filtering": (*Handler).serveCheckReversePathFiltering,
+	"check-udp-gro-forwarding":     (*Handler).serveCheckUDPGROForwarding,
+	"component-debug-logging":      (*Handler).serveComponentDebugLogging,
+	"debug":                        (*Handler).serveDebug,
+	"debug-derp-region":            (*Handler).serveDebugDERPRegion,
+	"debug-dial-types":             (*Handler).serveDebugDialTypes,
+	"debug-log":                    (*Handler).serveDebugLog,
+	"debug-packet-filter-matches":  (*Handler).serveDebugPacketFilterMatches,
+	"debug-packet-filter-rules":    (*Handler).serveDebugPacketFilterRules,
+	"debug-peer-endpoint-changes":  (*Handler).serveDebugPeerEndpointChanges,
+	"debug-portmap":                (*Handler).serveDebugPortmap,
+	"derpmap":                      (*Handler).serveDERPMap,
+	"dev-set-state-store":          (*Handler).serveDevSetStateStore,
+	"dial":                         (*Handler).serveDial,
+	"disconnect-control":           (*Handler).disconnectControl,
+	"dns-osconfig":                 (*Handler).serveDNSOSConfig,
+	"dns-query":                    (*Handler).serveDNSQuery,
+	"drive/fileserver-address":     (*Handler).serveDriveServerAddr,
+	"drive/shares":                 (*Handler).serveShares,
+	"goroutines":                   (*Handler).serveGoroutines,
+	"handle-push-message":          (*Handler).serveHandlePushMessage,
+	"id-token":                     (*Handler).serveIDToken,
+	"login-interactive":            (*Handler).serveLoginInteractive,
+	"logout":                       (*Handler).serveLogout,
+	"logtap":                       (*Handler).serveLogTap,
+	"metrics":                      (*Handler).serveMetrics,
+	"ping":                         (*Handler).servePing,
+	"pprof":                        (*Handler).servePprof,
+	"prefs":                        (*Handler).servePrefs,
+	"query-feature":                (*Handler).serveQueryFeature,
+	"reload-config":                (*Handler).reloadConfig,
+	"reset-auth":                   (*Handler).serveResetAuth,
+	"serve-config":                 (*Handler).serveServeConfig,
+	"set-dns":                      (*Handler).serveSetDNS,
+	"set-expiry-sooner":            (*Handler).serveSetExpirySooner,
+	"set-gui-visible":              (*Handler).serveSetGUIVisible,
+	"set-push-device-token":        (*Handler).serveSetPushDeviceToken,
+	"set-udp-gro-forwarding":       (*Handler).serveSetUDPGROForwarding,
+	"set-use-exit-node-enabled":    (*Handler).serveSetUseExitNodeEnabled,
+	"start":                        (*Handler).serveStart,
+	"status":                       (*Handler).serveStatus,
+	"suggest-exit-node":            (*Handler).serveSuggestExitNode,
+	"tka/affected-sigs":            (*Handler).serveTKAAffectedSigs,
+	"tka/cosign-recovery-aum":      (*Handler).serveTKACosignRecoveryAUM,
+	"tka/disable":                  (*Handler).serveTKADisable,
+	"tka/force-local-disable":      (*Handler).serveTKALocalDisable,
+	"tka/generate-recovery-aum":    (*Handler).serveTKAGenerateRecoveryAUM,
+	"tka/init":                     (*Handler).serveTKAInit,
+	"tka/log":                      (*Handler).serveTKALog,
+	"tka/modify":                   (*Handler).serveTKAModify,
+	"tka/sign":                     (*Handler).serveTKASign,
+	"tka/status":                   (*Handler).serveTKAStatus,
+	"tka/submit-recovery-aum":      (*Handler).serveTKASubmitRecoveryAUM,
+	"tka/verify-deeplink":          (*Handler).serveTKAVerifySigningDeeplink,
+	"tka/wrap-preauth-key":         (*Handler).serveTKAWrapPreauthKey,
+	"update/check":                 (*Handler).serveUpdateCheck,
+	"update/install":               (*Handler).serveUpdateInstall,
+	"update/progress":              (*Handler).serveUpdateProgress,
+	"upload-client-metrics":        (*Handler).serveUploadClientMetrics,
+	"usermetrics":                  (*Handler).serveUserMetrics,
+	"watch-ipn-bus":                (*Handler).serveWatchIPNBus,
+	"whois":                        (*Handler).serveWhoIs,
 }
 
 // Register registers a new LocalAPI handler for the given name.
@@ -1166,6 +1168,32 @@ func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request)
 	var warning string
 	if err := h.b.CheckIPForwarding(); err != nil {
 		warning = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Warning string
+	}{
+		Warning: warning,
+	})
+}
+
+func (h *Handler) serveCheckReversePathFiltering(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "reverse path filtering check access denied", http.StatusForbidden)
+		return
+	}
+	var warning string
+
+	state := h.b.Sys().NetMon.Get().InterfaceState()
+	warn, err := netutil.CheckReversePathFiltering(state)
+	if err == nil && len(warn) > 0 {
+		var msg strings.Builder
+		msg.WriteString(healthmsg.WarnExitNodeUsage + ":\n")
+		for _, w := range warn {
+			msg.WriteString("- " + w + "\n")
+		}
+		msg.WriteString(healthmsg.DisableRPFilter)
+		warning = msg.String()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(struct {
