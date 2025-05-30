@@ -3147,7 +3147,7 @@ func TestNetworkDownSendErrors(t *testing.T) {
 	defer conn.Close()
 
 	conn.SetNetworkUp(false)
-	if err := conn.Send([][]byte{{00}}, &lazyEndpoint{}); err == nil {
+	if err := conn.Send([][]byte{{00}}, &lazyEndpoint{}, 0); err == nil {
 		t.Error("expected error, got nil")
 	}
 	resp := httptest.NewRecorder()

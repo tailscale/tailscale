@@ -21,5 +21,5 @@ var (
 type batchingConn interface {
 	nettype.PacketConn
 	ReadBatch(msgs []ipv6.Message, flags int) (n int, err error)
-	WriteBatchTo(buffs [][]byte, addr netip.AddrPort) error
+	WriteBatchTo(buffs [][]byte, addr netip.AddrPort, offset int) error
 }
