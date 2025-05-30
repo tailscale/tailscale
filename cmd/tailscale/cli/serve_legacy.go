@@ -141,6 +141,7 @@ type localServeClient interface {
 	QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error)
 	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error)
 	IncrementCounter(ctx context.Context, name string, delta int) error
+	GetPrefs(ctx context.Context) (*ipn.Prefs, error)
 }
 
 // serveEnv is the environment the serve command runs within. All I/O should be
@@ -154,14 +155,16 @@ type serveEnv struct {
 	json bool // output JSON (status only for now)
 
 	// v2 specific flags
-	bg               bool      // background mode
-	setPath          string    // serve path
-	https            uint      // HTTP port
-	http             uint      // HTTP port
-	tcp              uint      // TCP port
-	tlsTerminatedTCP uint      // a TLS terminated TCP port
-	subcmd           serveMode // subcommand
-	yes              bool      // update without prompt
+	bg               bgBoolFlag // background mode
+	setPath          string     // serve path
+	https            uint       // HTTP port
+	http             uint       // HTTP port
+	tcp              uint       // TCP port
+	tlsTerminatedTCP uint       // a TLS terminated TCP port
+	subcmd           serveMode  // subcommand
+	yes              bool       // update without prompt
+	service          string     // service name
+	tun              bool       // redirect traffic to OS for service
 
 	lc localServeClient // localClient interface, specific to serve
 
@@ -354,12 +357,16 @@ func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, useTLS bo
 	if err != nil {
 		return err
 	}
-	if sc.IsTCPForwardingOnPort(srvPort) {
+	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
 		fmt.Fprintf(Stderr, "error: cannot serve web; already serving TCP\n")
 		return errHelp
 	}
 
-	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS)
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("getting client status: %w", err)
+	}
+	sc.SetWebHandler(st, h, dnsName, srvPort, mount, useTLS)
 
 	if !reflect.DeepEqual(cursc, sc) {
 		if err := e.lc.SetServeConfig(ctx, sc); err != nil {
@@ -411,11 +418,11 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, srvPort uint16, mou
 	if err != nil {
 		return err
 	}
-	if sc.IsTCPForwardingOnPort(srvPort) {
+	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
-	if !sc.WebHandlerExists(hp, mount) {
+	if !sc.WebHandlerExists(dnsName, hp, mount) {
 		return errors.New("error: handler does not exist")
 	}
 	sc.RemoveWebHandler(dnsName, srvPort, []string{mount}, false)
@@ -550,7 +557,7 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 
 	fwdAddr := "127.0.0.1:" + dstPortStr
 
-	if sc.IsServingWeb(srcPort) {
+	if sc.IsServingWeb(srcPort, "") {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
@@ -581,11 +588,15 @@ func (e *serveEnv) handleTCPServeRemove(ctx context.Context, src uint16) error {
 	if sc == nil {
 		sc = new(ipn.ServeConfig)
 	}
-	if sc.IsServingWeb(src) {
+	dnsName, err := e.getSelfDNSName(ctx)
+	if err != nil {
+		return err
+	}
+	if sc.IsServingWeb(src, dnsName) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
-	if ph := sc.GetTCPPortHandler(src); ph != nil {
-		sc.RemoveTCPForwarding(src)
+	if ph := sc.GetTCPPortHandler(src, dnsName); ph != nil {
+		sc.RemoveTCPForwarding(dnsName, src)
 		return e.lc.SetServeConfig(ctx, sc)
 	}
 	return errors.New("error: serve config does not exist")
@@ -682,7 +693,7 @@ func (e *serveEnv) printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) erro
 	}
 
 	scheme := "https"
-	if sc.IsServingHTTP(port) {
+	if sc.IsServingHTTP(port, host) {
 		scheme = "http"
 	}
 
