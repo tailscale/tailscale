@@ -41,97 +41,6 @@ import (
 	"tailscale.com/types/ptr"
 )
 
-// testEnv represents the environment needed for a single sub-test so that tests
-// can run in parallel.
-type testEnv struct {
-	kube            *kubeServer // Fake kube server.
-	lapi            *localAPI   // Local TS API server.
-	d               string      // Temp dir for the specific test.
-	argFile         string      // File with commands test_tailscale{,d}.sh were invoked with.
-	runningSockPath string      // Path to the running tailscaled socket.
-	localAddrPort   int         // Port for the containerboot HTTP server.
-	healthAddrPort  int         // Port for the (deprecated) containerboot health server.
-}
-
-func newTestEnv(t *testing.T) testEnv {
-	d := t.TempDir()
-
-	lapi := localAPI{FSRoot: d}
-	if err := lapi.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(lapi.Close)
-
-	kube := kubeServer{FSRoot: d}
-	kube.Start(t)
-	t.Cleanup(kube.Close)
-
-	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
-	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
-	egressCfg := egressSvcConfig("foo", "foo.tailnetxyz.ts.net")
-
-	dirs := []string{
-		"var/lib",
-		"usr/bin",
-		"tmp",
-		"dev/net",
-		"proc/sys/net/ipv4",
-		"proc/sys/net/ipv6/conf/all",
-		"etc/tailscaled",
-	}
-	for _, path := range dirs {
-		if err := os.MkdirAll(filepath.Join(d, path), 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	files := map[string][]byte{
-		"usr/bin/tailscaled":                    fakeTailscaled,
-		"usr/bin/tailscale":                     fakeTailscale,
-		"usr/bin/iptables":                      fakeTailscale,
-		"usr/bin/ip6tables":                     fakeTailscale,
-		"dev/net/tun":                           []byte(""),
-		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
-		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
-		"etc/tailscaled/cap-95.hujson":          mustJSON(t, tailscaledConf),
-		"etc/tailscaled/serve-config.json":      mustJSON(t, serveConf),
-		filepath.Join("etc/tailscaled/", egressservices.KeyEgressServices): mustJSON(t, egressCfg),
-		filepath.Join("etc/tailscaled/", egressservices.KeyHEPPings):       []byte("4"),
-	}
-	for path, content := range files {
-		// Making everything executable is a little weird, but the
-		// stuff that doesn't need to be executable doesn't care if we
-		// do make it executable.
-		if err := os.WriteFile(filepath.Join(d, path), content, 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	argFile := filepath.Join(d, "args")
-	runningSockPath := filepath.Join(d, "tmp/tailscaled.sock")
-	var localAddrPort, healthAddrPort int
-	for _, p := range []*int{&localAddrPort, &healthAddrPort} {
-		ln, err := net.Listen("tcp", ":0")
-		if err != nil {
-			t.Fatalf("Failed to open listener: %v", err)
-		}
-		if err := ln.Close(); err != nil {
-			t.Fatalf("Failed to close listener: %v", err)
-		}
-		port := ln.Addr().(*net.TCPAddr).Port
-		*p = port
-	}
-
-	return testEnv{
-		kube:            &kube,
-		lapi:            &lapi,
-		d:               d,
-		argFile:         argFile,
-		runningSockPath: runningSockPath,
-		localAddrPort:   localAddrPort,
-		healthAddrPort:  healthAddrPort,
-	}
-}
-
 func TestContainerBoot(t *testing.T) {
 	boot := filepath.Join(t.TempDir(), "containerboot")
 	if err := exec.Command("go", "build", "-ldflags", "-X main.testSleepDuration=1ms", "-o", boot, "tailscale.com/cmd/containerboot").Run(); err != nil {
@@ -515,6 +424,37 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"auth_key_once_extra_args_override_dns": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_AUTHKEY":    "tskey-key",
+					"TS_AUTH_ONCE":  "true",
+					"TS_ACCEPT_DNS": "false",
+					"TS_EXTRA_ARGS": "--accept-dns",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+						},
+					},
+					{
+						Notify: &ipn.Notify{
+							State: ptr.To(ipn.NeedsLogin),
+						},
+						WantCmds: []string{
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=true --authkey=tskey-key",
+						},
+					},
+					{
+						Notify: runningNotify,
+						WantCmds: []string{
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=true",
+						},
+					},
+				},
+			}
+		},
 		"kube_storage": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
@@ -759,6 +699,41 @@ func TestContainerBoot(t *testing.T) {
 						WantCmds: []string{
 							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --accept-routes",
+						},
+					}, {
+						Notify: runningNotify,
+					},
+				},
+			}
+		},
+		"extra_args_accept_dns": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_EXTRA_ARGS": "--accept-dns",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=true",
+						},
+					}, {
+						Notify: runningNotify,
+					},
+				},
+			}
+		},
+		"extra_args_accept_dns_overrides_env_var": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_ACCEPT_DNS": "true", // Overridden by TS_EXTRA_ARGS.
+					"TS_EXTRA_ARGS": "--accept-dns=false",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false",
 						},
 					}, {
 						Notify: runningNotify,
@@ -1602,5 +1577,96 @@ func egressSvcConfig(name, fqdn string) egressservices.Configs {
 				FQDN: fqdn,
 			},
 		},
+	}
+}
+
+// testEnv represents the environment needed for a single sub-test so that tests
+// can run in parallel.
+type testEnv struct {
+	kube            *kubeServer // Fake kube server.
+	lapi            *localAPI   // Local TS API server.
+	d               string      // Temp dir for the specific test.
+	argFile         string      // File with commands test_tailscale{,d}.sh were invoked with.
+	runningSockPath string      // Path to the running tailscaled socket.
+	localAddrPort   int         // Port for the containerboot HTTP server.
+	healthAddrPort  int         // Port for the (deprecated) containerboot health server.
+}
+
+func newTestEnv(t *testing.T) testEnv {
+	d := t.TempDir()
+
+	lapi := localAPI{FSRoot: d}
+	if err := lapi.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(lapi.Close)
+
+	kube := kubeServer{FSRoot: d}
+	kube.Start(t)
+	t.Cleanup(kube.Close)
+
+	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
+	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
+	egressCfg := egressSvcConfig("foo", "foo.tailnetxyz.ts.net")
+
+	dirs := []string{
+		"var/lib",
+		"usr/bin",
+		"tmp",
+		"dev/net",
+		"proc/sys/net/ipv4",
+		"proc/sys/net/ipv6/conf/all",
+		"etc/tailscaled",
+	}
+	for _, path := range dirs {
+		if err := os.MkdirAll(filepath.Join(d, path), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string][]byte{
+		"usr/bin/tailscaled":                    fakeTailscaled,
+		"usr/bin/tailscale":                     fakeTailscale,
+		"usr/bin/iptables":                      fakeTailscale,
+		"usr/bin/ip6tables":                     fakeTailscale,
+		"dev/net/tun":                           []byte(""),
+		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
+		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
+		"etc/tailscaled/cap-95.hujson":          mustJSON(t, tailscaledConf),
+		"etc/tailscaled/serve-config.json":      mustJSON(t, serveConf),
+		filepath.Join("etc/tailscaled/", egressservices.KeyEgressServices): mustJSON(t, egressCfg),
+		filepath.Join("etc/tailscaled/", egressservices.KeyHEPPings):       []byte("4"),
+	}
+	for path, content := range files {
+		// Making everything executable is a little weird, but the
+		// stuff that doesn't need to be executable doesn't care if we
+		// do make it executable.
+		if err := os.WriteFile(filepath.Join(d, path), content, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	argFile := filepath.Join(d, "args")
+	runningSockPath := filepath.Join(d, "tmp/tailscaled.sock")
+	var localAddrPort, healthAddrPort int
+	for _, p := range []*int{&localAddrPort, &healthAddrPort} {
+		ln, err := net.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatalf("Failed to open listener: %v", err)
+		}
+		if err := ln.Close(); err != nil {
+			t.Fatalf("Failed to close listener: %v", err)
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		*p = port
+	}
+
+	return testEnv{
+		kube:            &kube,
+		lapi:            &lapi,
+		d:               d,
+		argFile:         argFile,
+		runningSockPath: runningSockPath,
+		localAddrPort:   localAddrPort,
+		healthAddrPort:  healthAddrPort,
 	}
 }
