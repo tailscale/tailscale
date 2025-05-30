@@ -5,8 +5,12 @@
 
 package tpm
 
-import "tailscale.com/tailcfg"
+import (
+	"errors"
 
-func info() *tailcfg.TPMInfo {
-	return nil
+	"github.com/google/go-tpm/tpm2/transport"
+)
+
+func open() (transport.TPMCloser, error) {
+	return nil, errors.New("TPM not supported on this platform")
 }

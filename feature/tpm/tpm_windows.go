@@ -4,15 +4,10 @@
 package tpm
 
 import (
+	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/windowstpm"
-	"tailscale.com/tailcfg"
 )
 
-func info() *tailcfg.TPMInfo {
-	t, err := windowstpm.Open()
-	if err != nil {
-		return nil
-	}
-	defer t.Close()
-	return infoFromCapabilities(t)
+func open() (transport.TPMCloser, error) {
+	return windowstpm.Open()
 }
