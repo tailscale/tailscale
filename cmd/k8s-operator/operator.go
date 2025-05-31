@@ -259,6 +259,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:                            nsFilter,
+				&corev1.Service{}:                           nsFilter,
 				&corev1.ServiceAccount{}:                    nsFilter,
 				&corev1.Pod{}:                               nsFilter,
 				&corev1.ConfigMap{}:                         nsFilter,
@@ -590,6 +591,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}).
 		Named("proxygroup-reconciler").
+		Watches(&corev1.Service{}, ownedByProxyGroupFilter).
 		Watches(&appsv1.StatefulSet{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ConfigMap{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ServiceAccount{}, ownedByProxyGroupFilter).

@@ -2203,6 +2203,39 @@ spec:
                                   won't make it *more* imbalanced.
                                   It's a required field.
                                 type: string
+                tailnetListener:
+                  description: |-
+                    Configuration for listeners on proxies in order to facilitate
+                    'direct connections' from other devices on the tailnet.
+                  type: object
+                  required:
+                    - type
+                  properties:
+                    nodePortConfig:
+                      description: 'Configuration for listeners on proxies of `Type: NodePort`'
+                      type: object
+                      properties:
+                        portRanges:
+                          description: |-
+                            The port ranges to be used by the operator when configuring NodePort
+                            services as tailnet listeners. If not specified, ports are chosen by
+                            the Kubernetes Control Plane.
+                          type: array
+                          items:
+                            type: string
+                        selector:
+                          description: |-
+                            A selector which must match a node's labels for the proxies
+                            to advertise said node's ExternalIP's to the tailnet as a valid endpoint.
+                          type: object
+                          additionalProperties:
+                            type: string
+                    type:
+                      description: |-
+                        The type of listener to configure for the proxies.
+                        One of NodePort.
+                        Cannot change after creation
+                      type: string
                 tailscale:
                   description: |-
                     TailscaleConfig contains options to configure the tailscale-specific

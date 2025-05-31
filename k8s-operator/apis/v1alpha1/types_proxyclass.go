@@ -82,6 +82,39 @@ type ProxyClassSpec struct {
 	// renewed.
 	// +optional
 	UseLetsEncryptStagingEnvironment bool `json:"useLetsEncryptStagingEnvironment,omitempty"`
+	// Configuration for listeners on proxies in order to facilitate
+	// 'direct connections' from other devices on the tailnet.
+	// +optional
+	TailnetListenerConfig *TailnetListenerConfig `json:"tailnetListener,omitempty"`
+}
+
+type TailnetListenerConfig struct {
+	// The type of listener to configure for the proxies.
+	// One of NodePort.
+	// Cannot change after creation
+	// +enum
+	Type TailnetListenerConfigMode `json:"type"`
+	// Configuration for listeners on proxies of `Type: NodePort`
+	NodePortConfig *NodePortConfig `json:"nodePortConfig,omitempty"`
+}
+
+type TailnetListenerConfigMode string
+
+const (
+	// NodePort is the mode that will configure tailnet listeners
+	// for the proxies using the ports of the Kubernetes Nodes.
+	NodePort TailnetListenerConfigMode = "NodePort"
+)
+
+type NodePortConfig struct {
+	// The port ranges to be used by the operator when configuring NodePort
+	// services as tailnet listeners. If not specified, ports are chosen by
+	// the Kubernetes Control Plane.
+	// +optional
+	PortRanges []string `json:"portRanges,omitempty"`
+	// A selector which must match a node's labels for the proxies
+	// to advertise said node's ExternalIP's to the tailnet as a valid endpoint.
+	Selector map[string]string `json:"selector,omitempty"`
 }
 
 type TailscaleConfig struct {

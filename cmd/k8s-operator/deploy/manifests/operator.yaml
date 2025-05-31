@@ -2679,6 +2679,39 @@ spec:
                                                 type: array
                                         type: object
                                 type: object
+                            tailnetListener:
+                                description: |-
+                                    Configuration for listeners on proxies in order to facilitate
+                                    'direct connections' from other devices on the tailnet.
+                                properties:
+                                    nodePortConfig:
+                                        description: 'Configuration for listeners on proxies of `Type: NodePort`'
+                                        properties:
+                                            portRanges:
+                                                description: |-
+                                                    The port ranges to be used by the operator when configuring NodePort
+                                                    services as tailnet listeners. If not specified, ports are chosen by
+                                                    the Kubernetes Control Plane.
+                                                items:
+                                                    type: string
+                                                type: array
+                                            selector:
+                                                additionalProperties:
+                                                    type: string
+                                                description: |-
+                                                    A selector which must match a node's labels for the proxies
+                                                    to advertise said node's ExternalIP's to the tailnet as a valid endpoint.
+                                                type: object
+                                        type: object
+                                    type:
+                                        description: |-
+                                            The type of listener to configure for the proxies.
+                                            One of NodePort.
+                                            Cannot change after creation
+                                        type: string
+                                required:
+                                    - type
+                                type: object
                             tailscale:
                                 description: |-
                                     TailscaleConfig contains options to configure the tailscale-specific

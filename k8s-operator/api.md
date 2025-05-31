@@ -425,6 +425,23 @@ _Appears in:_
 | `ip` _string_ | IP is the ClusterIP of the Service fronting the deployed ts.net nameserver.<br />Currently you must manually update your cluster DNS config to add<br />this address as a stub nameserver for ts.net for cluster workloads to be<br />able to resolve MagicDNS names associated with egress or Ingress<br />proxies.<br />The IP address will change if you delete and recreate the DNSConfig. |  |  |
 
 
+#### NodePortConfig
+
+
+
+
+
+
+
+_Appears in:_
+- [TailnetListenerConfig](#tailnetlistenerconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `portRanges` _string array_ | The port ranges to be used by the operator when configuring NodePort<br />services as tailnet listeners. If not specified, ports are chosen by<br />the Kubernetes Control Plane. |  |  |
+| `selector` _object (keys:string, values:string)_ | A selector which must match a node's labels for the proxies<br />to advertise said node's ExternalIP's to the tailnet as a valid endpoint. |  |  |
+
+
 #### Pod
 
 
@@ -518,6 +535,7 @@ _Appears in:_
 | `metrics` _[Metrics](#metrics)_ | Configuration for proxy metrics. Metrics are currently not supported<br />for egress proxies and for Ingress proxies that have been configured<br />with tailscale.com/experimental-forward-cluster-traffic-via-ingress<br />annotation. Note that the metrics are currently considered unstable<br />and will likely change in breaking ways in the future - we only<br />recommend that you use those for debugging purposes. |  |  |
 | `tailscale` _[TailscaleConfig](#tailscaleconfig)_ | TailscaleConfig contains options to configure the tailscale-specific<br />parameters of proxies. |  |  |
 | `useLetsEncryptStagingEnvironment` _boolean_ | Set UseLetsEncryptStagingEnvironment to true to issue TLS<br />certificates for any HTTPS endpoints exposed to the tailnet from<br />LetsEncrypt's staging environment.<br />https://letsencrypt.org/docs/staging-environment/<br />This setting only affects Tailscale Ingress resources.<br />By default Ingress TLS certificates are issued from LetsEncrypt's<br />production environment.<br />Changing this setting true -> false, will result in any<br />existing certs being re-issued from the production environment.<br />Changing this setting false (default) -> true, when certs have already<br />been provisioned from production environment will NOT result in certs<br />being re-issued from the staging environment before they need to be<br />renewed. |  |  |
+| `tailnetListener` _[TailnetListenerConfig](#tailnetlistenerconfig)_ | Configuration for listeners on proxies in order to facilitate<br />'direct connections' from other devices on the tailnet. |  |  |
 
 
 #### ProxyClassStatus
@@ -1015,6 +1033,36 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
+
+
+#### TailnetListenerConfig
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyClassSpec](#proxyclassspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[TailnetListenerConfigMode](#tailnetlistenerconfigmode)_ | The type of listener to configure for the proxies.<br />One of NodePort.<br />Cannot change after creation |  |  |
+| `nodePortConfig` _[NodePortConfig](#nodeportconfig)_ | Configuration for listeners on proxies of `Type: NodePort` |  |  |
+
+
+#### TailnetListenerConfigMode
+
+_Underlying type:_ _string_
+
+
+
+
+
+_Appears in:_
+- [TailnetListenerConfig](#tailnetlistenerconfig)
+
 
 
 #### TailscaleConfig
