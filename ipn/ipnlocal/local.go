@@ -3289,6 +3289,16 @@ func (b *LocalBackend) popBrowserAuthNow(url string, keyExpired bool, recipient 
 //
 // b.mu must *not* be held.
 func (b *LocalBackend) validPopBrowserURL(urlStr string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.validPopBrowserURLLocked(urlStr)
+}
+
+// validPopBrowserURLLocked reports whether urlStr is a valid value for a
+// control server to send in a *URL field.
+//
+// b.mu must be held.
+func (b *LocalBackend) validPopBrowserURLLocked(urlStr string) bool {
 	if urlStr == "" {
 		return false
 	}
@@ -3296,7 +3306,7 @@ func (b *LocalBackend) validPopBrowserURL(urlStr string) bool {
 	if err != nil {
 		return false
 	}
-	serverURL := b.Prefs().ControlURLOrDefault()
+	serverURL := b.sanitizedPrefsLocked().ControlURLOrDefault()
 	if ipn.IsLoginServerSynonym(serverURL) {
 		// When connected to the official Tailscale control plane, only allow
 		// URLs from tailscale.com or its subdomains.
@@ -5830,7 +5840,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if nm != nil {
 		messages := make(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage)
 		for id, msg := range nm.DisplayMessages {
-			if msg.PrimaryAction != nil && !b.validPopBrowserURL(msg.PrimaryAction.URL) {
+			if msg.PrimaryAction != nil && !b.validPopBrowserURLLocked(msg.PrimaryAction.URL) {
 				msg.PrimaryAction = nil
 			}
 			messages[id] = msg
