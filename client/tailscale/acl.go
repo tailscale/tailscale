@@ -50,6 +50,18 @@ type NodeAttrGrant struct {
 	Attr []string `json:"attr,omitempty"`
 }
 
+// ACLAttrConfig defines the configuration for a custom attribute.
+type ACLAttrConfig struct {
+	// Type specifies the attribute type. Valid values: "string", "number", "bool".
+	Type string `json:"type,omitempty"`
+
+	// AllowSetByNode allows nodes to set this attribute themselves.
+	AllowSetByNode bool `json:"allowSetByNode,omitempty"`
+
+	// BroadcastToPeers lists target nodes to receive this attribute value.
+	BroadcastToPeers []string `json:"broadcastToPeers,omitempty"`
+}
+
 // ACLDetails contains all the details for an ACL.
 type ACLDetails struct {
 	Tests     []ACLTest           `json:"tests,omitempty"`
@@ -58,6 +70,9 @@ type ACLDetails struct {
 	TagOwners map[string][]string `json:"tagowners,omitempty"`
 	Hosts     map[string]string   `json:"hosts,omitempty"`
 	NodeAttrs []NodeAttrGrant     `json:"nodeAttrs,omitempty"`
+
+	// AttrConfig maps attribute names to their configuration.
+	AttrConfig map[string]ACLAttrConfig `json:"attrConfig,omitempty"`
 }
 
 // ACL contains an ACLDetails and metadata.
