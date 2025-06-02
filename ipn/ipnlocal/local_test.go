@@ -5374,6 +5374,7 @@ func TestDisplayMessagesURLFilter(t *testing.T) {
 	ht.SetIPNState("NeedsLogin", true)
 	ht.GotStreamedMapResponse()
 
+	defer b.lockAndGetUnlock()()
 	b.setNetMapLocked(&netmap.NetworkMap{
 		DisplayMessages: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
 			"test-message": {
