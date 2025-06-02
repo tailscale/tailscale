@@ -927,7 +927,7 @@ var (
 	errPingTooBig  = errors.New("ping size too big")
 )
 
-func (de *endpoint) send(buffs [][]byte) error {
+func (de *endpoint) send(buffs [][]byte, offset int) error {
 	de.mu.Lock()
 	if de.expired {
 		de.mu.Unlock()
@@ -961,7 +961,7 @@ func (de *endpoint) send(buffs [][]byte) error {
 	}
 	var err error
 	if udpAddr.IsValid() {
-		_, err = de.c.sendUDPBatch(udpAddr, buffs)
+		_, err = de.c.sendUDPBatch(udpAddr, buffs, offset)
 
 		// If the error is known to indicate that the endpoint is no longer
 		// usable, clear the endpoint statistics so that the next send will
@@ -972,7 +972,7 @@ func (de *endpoint) send(buffs [][]byte) error {
 
 		var txBytes int
 		for _, b := range buffs {
-			txBytes += len(b)
+			txBytes += len(b[offset:])
 		}
 
 		switch {
@@ -993,6 +993,7 @@ func (de *endpoint) send(buffs [][]byte) error {
 		allOk := true
 		var txBytes int
 		for _, buff := range buffs {
+			buff = buff[offset:]
 			const isDisco = false
 			ok, _ := de.c.sendAddr(derpAddr, de.publicKey, buff, isDisco)
 			txBytes += len(buff)
