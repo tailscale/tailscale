@@ -160,14 +160,8 @@ func (q *Parsed) decode4(b []byte) {
 
 	if fragOfs == 0 {
 		// This is the first fragment
-		if moreFrags && len(sub) < minFragBlks {
-			// Suspiciously short first fragment, dump it.
-			q.IPProto = unknown
-			return
-		}
-		// otherwise, this is either non-fragmented (the usual case)
-		// or a big enough initial fragment that we can read the
-		// whole subprotocol header.
+		// Every protocol below MUST check that it has at least one entire
+		// transport header in order to protect against fragment confusion.
 		switch q.IPProto {
 		case ipproto.ICMPv4:
 			if len(sub) < icmp4HeaderLength {
@@ -179,6 +173,10 @@ func (q *Parsed) decode4(b []byte) {
 			q.dataofs = q.subofs + icmp4HeaderLength
 			return
 		case ipproto.IGMP:
+			if len(sub) < igmpHeaderLength {
+				q.IPProto = unknown
+				return
+			}
 			// Keep IPProto, but don't parse anything else
 			// out.
 			return
@@ -211,6 +209,15 @@ func (q *Parsed) decode4(b []byte) {
 			q.Dst = withPort(q.Dst, binary.BigEndian.Uint16(sub[2:4]))
 			return
 		case ipproto.TSMP:
+			// Strictly disallow fragmented TSMP
+			if moreFrags {
+				q.IPProto = unknown
+				return
+			}
+			if len(sub) < minTSMPSize {
+				q.IPProto = unknown
+				return
+			}
 			// Inter-tailscale messages.
 			q.dataofs = q.subofs
 			return
@@ -223,8 +230,11 @@ func (q *Parsed) decode4(b []byte) {
 	} else {
 		// This is a fragment other than the first one.
 		if fragOfs < minFragBlks {
-			// First frag was suspiciously short, so we can't
-			// trust the followup either.
+			// disallow fragment offsets that are potentially inside of a
+			// transport header. This is notably asymmetric with the
+			// first-packet limit, that may allow a first-packet that requires a
+			// shorter offset than this limit, but without state to tie this
+			// to the first fragment we can not allow shorter packets.
 			q.IPProto = unknown
 			return
 		}
@@ -314,6 +324,10 @@ func (q *Parsed) decode6(b []byte) {
 		q.Dst = withPort(q.Dst, binary.BigEndian.Uint16(sub[2:4]))
 		return
 	case ipproto.TSMP:
+		if len(sub) < minTSMPSize {
+			q.IPProto = unknown
+			return
+		}
 		// Inter-tailscale messages.
 		q.dataofs = q.subofs
 		return
