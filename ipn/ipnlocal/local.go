@@ -2948,28 +2948,19 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	b.WatchNotificationsAs(ctx, nil, mask, onWatchAdded, fn)
 }
 
-// WatchNotificationsAs is like WatchNotifications but takes an [ipnauth.Actor]
+// WatchNotificationsAs is like [LocalBackend.WatchNotifications] but takes an [ipnauth.Actor]
 // as an additional parameter. If non-nil, the specified callback is invoked
 // only for notifications relevant to this actor.
 func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.Actor, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	ch := make(chan *ipn.Notify, 128)
 	sessionID := rands.HexString(16)
-	origFn := fn
 	if mask&ipn.NotifyNoPrivateKeys != 0 {
-		fn = func(n *ipn.Notify) bool {
-			if n.NetMap == nil || n.NetMap.PrivateKey.IsZero() {
-				return origFn(n)
-			}
-
-			// The netmap in n is shared across all watchers, so to mutate it for a
-			// single watcher we have to clone the notify and the netmap. We can
-			// make shallow clones, at least.
-			nm2 := *n.NetMap
-			n2 := *n
-			n2.NetMap = &nm2
-			n2.NetMap.PrivateKey = key.NodePrivate{}
-			return origFn(&n2)
-		}
+		fn = filterPrivateKeys(fn)
+	}
+	if mask&ipn.NotifyHealthActions == 0 {
+		// if UI does not support PrimaryAction in health warnings, append
+		// action URLs to the warning text instead.
+		fn = appendHealthActions(fn)
 	}
 
 	var ini *ipn.Notify
@@ -3058,6 +3049,53 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	}
 
 	sender.Run(ctx, ch)
+}
+
+// filterPrivateKeys returns an IPN listener func that wraps the supplied IPN
+// listener and zeroes out the PrivateKey in the NetMap passed to the wrapped
+// listener.
+func filterPrivateKeys(fn func(roNotify *ipn.Notify) (keepGoing bool)) func(*ipn.Notify) bool {
+	return func(n *ipn.Notify) bool {
+		if n.NetMap == nil || n.NetMap.PrivateKey.IsZero() {
+			return fn(n)
+		}
+
+		// The netmap in n is shared across all watchers, so to mutate it for a
+		// single watcher we have to clone the notify and the netmap. We can
+		// make shallow clones, at least.
+		nm2 := *n.NetMap
+		n2 := *n
+		n2.NetMap = &nm2
+		n2.NetMap.PrivateKey = key.NodePrivate{}
+		return fn(&n2)
+	}
+}
+
+// appendHealthActions returns an IPN listener func that wraps the supplied IPN
+// listener func and transforms health messages passed to the wrapped listener.
+// If health messages with PrimaryActions are present, it appends the label &
+// url in the PrimaryAction to the text of the message. For use for clients that
+// do not process the PrimaryAction.
+func appendHealthActions(fn func(roNotify *ipn.Notify) (keepGoing bool)) func(*ipn.Notify) bool {
+	return func(n *ipn.Notify) bool {
+		if n.Health == nil || len(n.Health.Warnings) == 0 {
+			return fn(n)
+		}
+
+		// Shallow clone the notify and health so we can mutate them
+		h2 := *n.Health
+		n2 := *n
+		n2.Health = &h2
+		n2.Health.Warnings = make(map[health.WarnableCode]health.UnhealthyState, len(n.Health.Warnings))
+		for k, v := range n.Health.Warnings {
+			if v.PrimaryAction != nil {
+				v.Text = fmt.Sprintf("%s %s: %s", v.Text, v.PrimaryAction.Label, v.PrimaryAction.URL)
+				v.PrimaryAction = nil
+			}
+			n2.Health.Warnings[k] = v
+		}
+		return fn(&n2)
+	}
 }
 
 // pollRequestEngineStatus calls b.e.RequestStatus every 2 seconds until ctx
