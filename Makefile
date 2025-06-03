@@ -22,7 +22,8 @@ updatedeps: ## Update depaware deps
 		tailscale.com/cmd/tailscale \
 		tailscale.com/cmd/derper \
 		tailscale.com/cmd/k8s-operator \
-		tailscale.com/cmd/stund
+		tailscale.com/cmd/stund \
+		tailscale.com/cmd/tsidp
 	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --update -goos=linux,darwin,windows,android,ios --internal \
 		tailscale.com/tsnet
 
@@ -34,7 +35,8 @@ depaware: ## Run depaware checks
 		tailscale.com/cmd/tailscale \
 		tailscale.com/cmd/derper \
 		tailscale.com/cmd/k8s-operator \
-		tailscale.com/cmd/stund
+		tailscale.com/cmd/stund \
+		tailscale.com/cmd/tsidp
 	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --check --goos=linux,darwin,windows,android,ios --internal \
 		tailscale.com/tsnet
 
@@ -113,6 +115,14 @@ publishdevnameserver: ## Build and publish k8s-nameserver image to location spec
 	@test "${REPO}" != "tailscale/k8s-nameserver" || (echo "REPO=... must not be tailscale/k8s-nameserver" && exit 1)
 	@test "${REPO}" != "ghcr.io/tailscale/k8s-nameserver" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-nameserver" && exit 1)
 	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-nameserver ./build_docker.sh
+
+publishdevtsidp: ## Build and publish tsidp image to location specified by ${REPO}
+	@test -n "${REPO}" || (echo "REPO=... required; e.g. REPO=ghcr.io/${USER}/tailscale" && exit 1)
+	@test "${REPO}" != "tailscale/tailscale" || (echo "REPO=... must not be tailscale/tailscale" && exit 1)
+	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
+	@test "${REPO}" != "tailscale/tsidp" || (echo "REPO=... must not be tailscale/tsidp" && exit 1)
+	@test "${REPO}" != "ghcr.io/tailscale/tsidp" || (echo "REPO=... must not be ghcr.io/tailscale/tsidp" && exit 1)
+	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=tsidp ./build_docker.sh
 
 .PHONY: sshintegrationtest
 sshintegrationtest: ## Run the SSH integration tests in various Docker containers
