@@ -353,12 +353,11 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 
 		var msg string
 		if turnOff {
-			if wasDefaultServe && forService {
-				delete(sc.Services, tailcfg.ServiceName(dnsName))
-			} else {
+			if !wasDefaultServe { // only unset serve when trying to unset with parameters.
 				err = e.unsetServe(sc, st, dnsName, srvType, srvPort, mount)
 			}
 		} else {
+			e.addServiceToPrefs(ctx, dnsName)
 			if err := e.validateConfig(parentSC, srvPort, srvType, dnsName); err != nil {
 				return err
 			}
@@ -367,7 +366,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 				target = args[0]
 			}
 			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, target, funnel)
-			msg = e.messageForPort(sc, st, prefs, dnsName, srvType, srvPort)
+			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
 			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
@@ -502,14 +501,13 @@ var (
 	msgDisableProxy         = "To disable the proxy, run: tailscale %s --%s=%d off"
 	msgDisableServiceProxy  = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
 	msgDisableServiceTun    = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
-	msgDisableService       = "To disable the service entirely, run: tailscale serve --service=%s off"
-	msgServiceNotAdvertised = "This service is not advertised on this node yet, use `tailscale advertise --services=svc:%s` to advertise it."
+	msgDisableService       = "To remove config for the service, run: tailscale serve clear --service=%s"
 	msgToExit               = "Press Ctrl+C to exit."
 )
 
 // messageForPort returns a message for the given port based on the
 // serve config and status.
-func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, prefs *ipn.Prefs, dnsName string, srvType serveType, srvPort uint16) string {
+func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
 	forService := ipn.IsServiceName(dnsName)
 	var hp ipn.HostPort
@@ -618,10 +616,6 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, pref
 	output.WriteString(fmt.Sprintf(msgRunningInBackground, subCmdUpper))
 	output.WriteString("\n")
 	if forService {
-		if !slices.Contains(prefs.AdvertiseServices, dnsName) {
-			output.WriteString(fmt.Sprintf(msgServiceNotAdvertised, dnsName))
-			output.WriteString("\n")
-		}
 		output.WriteString(fmt.Sprintf(msgDisableServiceProxy, dnsName, srvType.String(), srvPort))
 		output.WriteString("\n")
 		output.WriteString(fmt.Sprintf(msgDisableService, dnsName))
