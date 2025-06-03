@@ -385,6 +385,124 @@ var sctpDecode = Parsed{
 	Dst:       mustIPPort("100.74.70.3:456"),
 }
 
+var ipv4ShortFirstFragmentBuffer = []byte{
+	// IP header (20 bytes)
+	0x45, 0x00, 0x00, 0x4f, // Total length 79 bytes
+	0x00, 0x01, 0x20, 0x00, // ID, Flags (MoreFragments set, offset 0)
+	0x40, 0x06, 0x00, 0x00, // TTL, Protocol (TCP), Checksum
+	0x01, 0x02, 0x03, 0x04, // Source IP
+	0x05, 0x06, 0x07, 0x08, // Destination IP
+	// TCP header (20 bytes), but packet is truncated to 59 bytes of TCP data
+	// (total 79 bytes, 20 for IP)
+	0x00, 0x7b, 0x02, 0x37, 0x00, 0x00, 0x12, 0x34, 0x00, 0x00, 0x00, 0x00,
+	0x50, 0x12, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+	// Payload (39 bytes)
+	0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
+	0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
+	0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
+}
+
+var ipv4ShortFirstFragmentDecode = Parsed{
+	b:         ipv4ShortFirstFragmentBuffer,
+	subofs:    20,
+	dataofs:   40,
+	length:    len(ipv4ShortFirstFragmentBuffer),
+	IPVersion: 4,
+	IPProto:   ipproto.TCP,
+	Src:       mustIPPort("1.2.3.4:123"),
+	Dst:       mustIPPort("5.6.7.8:567"),
+	TCPFlags:  0x12, // SYN + ACK
+}
+
+var ipv4SmallOffsetFragmentBuffer = []byte{
+	// IP header (20 bytes)
+	0x45, 0x00, 0x00, 0x28, // Total length 40 bytes
+	0x00, 0x01, 0x20, 0x08, // ID, Flags (MoreFragments set, offset 8 bytes (0x08 / 8 = 1))
+	0x40, 0x06, 0x00, 0x00, // TTL, Protocol (TCP), Checksum
+	0x01, 0x02, 0x03, 0x04, // Source IP
+	0x05, 0x06, 0x07, 0x08, // Destination IP
+	// Payload (20 bytes) - this would be part of the TCP header in a real scenario
+	0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
+	0x61, 0x61, 0x61, 0x61,
+}
+
+var ipv4SmallOffsetFragmentDecode = Parsed{
+	b:         ipv4SmallOffsetFragmentBuffer,
+	subofs:    20, // subofs will still be set based on IHL
+	dataofs:   0,  // It's unknown, so dataofs should be 0
+	length:    len(ipv4SmallOffsetFragmentBuffer),
+	IPVersion: 4,
+	IPProto:   ipproto.Unknown, // Expected to be Unknown
+	Src:       mustIPPort("1.2.3.4:0"),
+	Dst:       mustIPPort("5.6.7.8:0"),
+}
+
+// First fragment packet missing exactly one byte of the TCP header
+var ipv4OneByteShortTCPHeaderBuffer = []byte{
+	// IP header (20 bytes)
+	0x45, 0x00, 0x00, 0x27, // Total length 51 bytes (20 IP + 19 TCP)
+	0x00, 0x01, 0x20, 0x00, // ID, Flags (MoreFragments set, offset 0)
+	0x40, 0x06, 0x00, 0x00, // TTL, Protocol (TCP), Checksum
+	0x01, 0x02, 0x03, 0x04, // Source IP
+	0x05, 0x06, 0x07, 0x08, // Destination IP
+	// TCP header - only 19 bytes (one byte short of the required 20)
+	0x00, 0x7b, 0x02, 0x37, // Source port, Destination port
+	0x00, 0x00, 0x12, 0x34, // Sequence number
+	0x00, 0x00, 0x00, 0x00, // Acknowledgment number
+	0x50, 0x12, 0x01, 0x00, // Data offset, flags, window size
+	0x00, 0x00, 0x00, // Checksum (missing the last byte of urgent pointer)
+}
+
+// IPv4 packet with maximum header length (60 bytes = 15 words) and a TCP header that's
+// one byte short of being complete
+var ipv4MaxHeaderShortTCPBuffer = []byte{
+	// IP header with max options (60 bytes)
+	0x4F, 0x00, 0x00, 0x4F, // Version (4) + IHL (15), ToS, Total length 79 bytes (60 IP + 19 TCP)
+	0x00, 0x01, 0x20, 0x00, // ID, Flags (MoreFragments set, offset 0)
+	0x40, 0x06, 0x00, 0x00, // TTL, Protocol (TCP), Checksum
+	0x01, 0x02, 0x03, 0x04, // Source IP
+	0x05, 0x06, 0x07, 0x08, // Destination IP
+	// IPv4 options (40 bytes)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	0x01, 0x01, 0x01, 0x01, // 4 NOP options (padding)
+	// TCP header - only 19 bytes (one byte short of the required 20)
+	0x00, 0x7b, 0x02, 0x37, // Source port, Destination port
+	0x00, 0x00, 0x12, 0x34, // Sequence number
+	0x00, 0x00, 0x00, 0x00, // Acknowledgment number
+	0x50, 0x12, 0x01, 0x00, // Data offset, flags, window size
+	0x00, 0x00, 0x00, // Checksum (missing the last byte of urgent pointer)
+}
+
+var ipv4MaxHeaderShortTCPDecode = Parsed{
+	b:         ipv4MaxHeaderShortTCPBuffer,
+	subofs:    60, // 60 bytes for full IPv4 header with max options
+	dataofs:   0,  // It's unknown, so dataofs should be 0
+	length:    len(ipv4MaxHeaderShortTCPBuffer),
+	IPVersion: 4,
+	IPProto:   ipproto.Unknown, // Expected to be Unknown
+	Src:       mustIPPort("1.2.3.4:0"),
+	Dst:       mustIPPort("5.6.7.8:0"),
+}
+
+var ipv4OneByteShortTCPHeaderDecode = Parsed{
+	b:         ipv4OneByteShortTCPHeaderBuffer,
+	subofs:    20,
+	dataofs:   0, // It's unknown, so dataofs should be 0
+	length:    len(ipv4OneByteShortTCPHeaderBuffer),
+	IPVersion: 4,
+	IPProto:   ipproto.Unknown, // Expected to be Unknown
+	Src:       mustIPPort("1.2.3.4:0"),
+	Dst:       mustIPPort("5.6.7.8:0"),
+}
+
 func TestParsedString(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -450,6 +568,10 @@ func TestDecode(t *testing.T) {
 		{"ipv4_sctp", sctpBuffer, sctpDecode},
 		{"ipv4_frag", tcp4MediumFragmentBuffer, tcp4MediumFragmentDecode},
 		{"ipv4_fragtooshort", tcp4ShortFragmentBuffer, tcp4ShortFragmentDecode},
+		{"ipv4_short_first_fragment", ipv4ShortFirstFragmentBuffer, ipv4ShortFirstFragmentDecode},
+		{"ipv4_small_offset_fragment", ipv4SmallOffsetFragmentBuffer, ipv4SmallOffsetFragmentDecode},
+		{"ipv4_one_byte_short_tcp_header", ipv4OneByteShortTCPHeaderBuffer, ipv4OneByteShortTCPHeaderDecode},
+		{"ipv4_max_header_short_tcp", ipv4MaxHeaderShortTCPBuffer, ipv4MaxHeaderShortTCPDecode},
 
 		{"ip97", mustHexDecode("4500 0019 d186 4000 4061 751d 644a 4603 6449 e549 6865 6c6c 6f"), Parsed{
 			IPVersion: 4,
