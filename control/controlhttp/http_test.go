@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -820,4 +821,14 @@ type closeTrackConn struct {
 func (c *closeTrackConn) Close() error {
 	c.d.noteClose(c)
 	return c.Conn.Close()
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "ios",
+		GOARCH: "arm64",
+		BadDeps: map[string]string{
+			"github.com/coder/websocket": "controlhttp client shouldn't link websockets on iOS",
+		},
+	}.Check(t)
 }
