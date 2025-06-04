@@ -453,7 +453,13 @@ func (c *Conn) receiveDisco(pc *socket.Conn, isIPV6 bool) {
 			metricRecvDiscoPacketIPv4.Add(1)
 		}
 
-		c.handleDiscoMessage(payload, srcAddr, key.NodePublic{}, discoRXPathRawSocket)
+		pt, isGeneveEncap := packetLooksLike(payload)
+		if pt == packetLooksLikeDisco && !isGeneveEncap {
+			// The BPF program matching on disco does not currently support
+			// Geneve encapsulation. isGeneveEncap should not return true if
+			// payload is disco.
+			c.handleDiscoMessage(payload, epAddr{ap: srcAddr}, false, key.NodePublic{}, discoRXPathRawSocket)
+		}
 	}
 }
 

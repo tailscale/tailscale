@@ -279,8 +279,8 @@ func (r *relayManager) handleCallMeMaybeVia(ep *endpoint, dm *disco.CallMeMaybeV
 // handleGeneveEncapDiscoMsgNotBestAddr handles reception of Geneve-encapsulated
 // disco messages if they are not associated with any known
 // [*endpoint.bestAddr].
-func (r *relayManager) handleGeneveEncapDiscoMsgNotBestAddr(dm disco.Message, di *discoInfo, src netip.AddrPort, vni uint32) {
-	relayManagerInputEvent(r, nil, &r.rxHandshakeDiscoMsgCh, relayHandshakeDiscoMsgEvent{msg: dm, disco: di.discoKey, from: src, vni: vni, at: time.Now()})
+func (r *relayManager) handleGeneveEncapDiscoMsgNotBestAddr(dm disco.Message, di *discoInfo, src epAddr) {
+	relayManagerInputEvent(r, nil, &r.rxHandshakeDiscoMsgCh, relayHandshakeDiscoMsgEvent{msg: dm, disco: di.discoKey, from: src.ap, vni: src.vni.get(), at: time.Now()})
 }
 
 // relayManagerInputEvent initializes [relayManager] if necessary, starts
@@ -437,6 +437,8 @@ func (r *relayManager) handleHandshakeWorkDoneRunLoop(done relayEndpointHandshak
 	}
 	// This relay endpoint is functional.
 	// TODO(jwhited): Set it on done.work.ep.bestAddr if it is a betterAddr().
+	//  We also need to conn.peerMap.setNodeKeyForEpAddr(), and ensure we clean
+	//  it up when bestAddr changes, too.
 }
 
 func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelayServerEndpointEvent) {
@@ -540,7 +542,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 	for _, addrPort := range work.se.AddrPorts {
 		if addrPort.IsValid() {
 			sentBindAny = true
-			go work.ep.c.sendDiscoMessage(addrPort, vni, key.NodePublic{}, work.se.ServerDisco, bind, discoVerboseLog)
+			go work.ep.c.sendDiscoMessage(epAddr{ap: addrPort, vni: vni}, key.NodePublic{}, work.se.ServerDisco, bind, discoVerboseLog)
 		}
 	}
 	if !sentBindAny {
@@ -580,9 +582,9 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		go func() {
 			if withAnswer != nil {
 				answer := &disco.BindUDPRelayEndpointAnswer{Answer: *withAnswer}
-				work.ep.c.sendDiscoMessage(to, vni, key.NodePublic{}, work.se.ServerDisco, answer, discoVerboseLog)
+				work.ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, work.se.ServerDisco, answer, discoVerboseLog)
 			}
-			work.ep.c.sendDiscoMessage(to, vni, key.NodePublic{}, epDisco.key, ping, discoVerboseLog)
+			work.ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, epDisco.key, ping, discoVerboseLog)
 		}()
 	}
 

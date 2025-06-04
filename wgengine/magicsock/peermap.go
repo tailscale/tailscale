@@ -4,8 +4,6 @@
 package magicsock
 
 import (
-	"net/netip"
-
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/util/set"
@@ -15,17 +13,17 @@ import (
 // peer.
 type peerInfo struct {
 	ep *endpoint // always non-nil.
-	// ipPorts is an inverted version of peerMap.byIPPort (below), so
+	// epAddrs is an inverted version of peerMap.byEpAddr (below), so
 	// that when we're deleting this node, we can rapidly find out the
-	// keys that need deleting from peerMap.byIPPort without having to
-	// iterate over every IPPort known for any peer.
-	ipPorts set.Set[netip.AddrPort]
+	// keys that need deleting from peerMap.byEpAddr without having to
+	// iterate over every epAddr known for any peer.
+	epAddrs set.Set[epAddr]
 }
 
 func newPeerInfo(ep *endpoint) *peerInfo {
 	return &peerInfo{
 		ep:      ep,
-		ipPorts: set.Set[netip.AddrPort]{},
+		epAddrs: set.Set[epAddr]{},
 	}
 }
 
@@ -35,7 +33,7 @@ func newPeerInfo(ep *endpoint) *peerInfo {
 // It doesn't do any locking; all access must be done with Conn.mu held.
 type peerMap struct {
 	byNodeKey map[key.NodePublic]*peerInfo
-	byIPPort  map[netip.AddrPort]*peerInfo
+	byEpAddr  map[epAddr]*peerInfo
 	byNodeID  map[tailcfg.NodeID]*peerInfo
 
 	// nodesOfDisco contains the set of nodes that are using a
@@ -46,7 +44,7 @@ type peerMap struct {
 func newPeerMap() peerMap {
 	return peerMap{
 		byNodeKey:    map[key.NodePublic]*peerInfo{},
-		byIPPort:     map[netip.AddrPort]*peerInfo{},
+		byEpAddr:     map[epAddr]*peerInfo{},
 		byNodeID:     map[tailcfg.NodeID]*peerInfo{},
 		nodesOfDisco: map[key.DiscoPublic]set.Set[key.NodePublic]{},
 	}
@@ -88,10 +86,10 @@ func (m *peerMap) endpointForNodeID(nodeID tailcfg.NodeID) (ep *endpoint, ok boo
 	return nil, false
 }
 
-// endpointForIPPort returns the endpoint for the peer we
-// believe to be at ipp, or nil if we don't know of any such peer.
-func (m *peerMap) endpointForIPPort(ipp netip.AddrPort) (ep *endpoint, ok bool) {
-	if info, ok := m.byIPPort[ipp]; ok {
+// endpointForEpAddr returns the endpoint for the peer we
+// believe to be at addr, or nil if we don't know of any such peer.
+func (m *peerMap) endpointForEpAddr(addr epAddr) (ep *endpoint, ok bool) {
+	if info, ok := m.byEpAddr[addr]; ok {
 		return info.ep, true
 	}
 	return nil, false
@@ -148,10 +146,10 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 		// TODO(raggi,catzkorn): this could mean that if a "isWireguardOnly"
 		// peer has, say, 192.168.0.2 and so does a tailscale peer, the
 		// wireguard one will win. That may not be the outcome that we want -
-		// perhaps we should prefer bestAddr.AddrPort if it is set?
+		// perhaps we should prefer bestAddr.epAddr.ap if it is set?
 		// see tailscale/tailscale#7994
 		for ipp := range ep.endpointState {
-			m.setNodeKeyForIPPort(ipp, ep.publicKey)
+			m.setNodeKeyForEpAddr(epAddr{ap: ipp}, ep.publicKey)
 		}
 		return
 	}
@@ -163,20 +161,20 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 	discoSet.Add(ep.publicKey)
 }
 
-// setNodeKeyForIPPort makes future peer lookups by ipp return the
+// setNodeKeyForEpAddr makes future peer lookups by addr return the
 // same endpoint as a lookup by nk.
 //
-// This should only be called with a fully verified mapping of ipp to
+// This should only be called with a fully verified mapping of addr to
 // nk, because calling this function defines the endpoint we hand to
-// WireGuard for packets received from ipp.
-func (m *peerMap) setNodeKeyForIPPort(ipp netip.AddrPort, nk key.NodePublic) {
-	if pi := m.byIPPort[ipp]; pi != nil {
-		delete(pi.ipPorts, ipp)
-		delete(m.byIPPort, ipp)
+// WireGuard for packets received from addr.
+func (m *peerMap) setNodeKeyForEpAddr(addr epAddr, nk key.NodePublic) {
+	if pi := m.byEpAddr[addr]; pi != nil {
+		delete(pi.epAddrs, addr)
+		delete(m.byEpAddr, addr)
 	}
 	if pi, ok := m.byNodeKey[nk]; ok {
-		pi.ipPorts.Add(ipp)
-		m.byIPPort[ipp] = pi
+		pi.epAddrs.Add(addr)
+		m.byEpAddr[addr] = pi
 	}
 }
 
@@ -203,7 +201,7 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 		// Unexpected. But no logger plumbed here to log so.
 		return
 	}
-	for ip := range pi.ipPorts {
-		delete(m.byIPPort, ip)
+	for ip := range pi.epAddrs {
+		delete(m.byEpAddr, ip)
 	}
 }

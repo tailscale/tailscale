@@ -5,6 +5,7 @@ package magicsock
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"golang.org/x/net/ipv6"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/packet"
 	"tailscale.com/types/nettype"
 )
 
@@ -71,14 +73,28 @@ func (c *RebindingUDPConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, e
 }
 
 // WriteBatchTo writes buffs to addr.
-func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, offset int) error {
+func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr epAddr, offset int) error {
+	if offset != packet.GeneveFixedHeaderLength {
+		return fmt.Errorf("RebindingUDPConn.WriteBatchTo: [unexpected] offset (%d) != Geneve header length (%d)", offset, packet.GeneveFixedHeaderLength)
+	}
 	for {
 		pconn := *c.pconnAtomic.Load()
 		b, ok := pconn.(batchingConn)
 		if !ok {
+			vniIsSet := addr.vni.isSet()
+			var gh packet.GeneveHeader
+			if vniIsSet {
+				gh = packet.GeneveHeader{
+					VNI: addr.vni.get(),
+				}
+			}
 			for _, buf := range buffs {
-				buf = buf[offset:]
-				_, err := c.writeToUDPAddrPortWithInitPconn(pconn, buf, addr)
+				if vniIsSet {
+					gh.Encode(buf)
+				} else {
+					buf = buf[offset:]
+				}
+				_, err := c.writeToUDPAddrPortWithInitPconn(pconn, buf, addr.ap)
 				if err != nil {
 					return err
 				}
