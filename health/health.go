@@ -1054,13 +1054,18 @@ func (t *Tracker) stringsLocked() []string {
 
 	warnLen := len(result)
 	for _, c := range t.controlMessages {
+		var msg string
 		if c.Title != "" && c.Text != "" {
-			result = append(result, c.Title+": "+c.Text)
+			msg = c.Title + ": " + c.Text
 		} else if c.Title != "" {
-			result = append(result, c.Title)
+			msg = c.Title + "."
 		} else if c.Text != "" {
-			result = append(result, c.Text)
+			msg = c.Text
 		}
+		if c.PrimaryAction != nil {
+			msg = msg + " " + c.PrimaryAction.Label + ": " + c.PrimaryAction.URL
+		}
+		result = append(result, msg)
 	}
 	sort.Strings(result[warnLen:])
 
