@@ -75,6 +75,8 @@ func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSON(b []byte) error {
 {{end}}
 {{define "viewSliceField"}}func (v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.SliceView[{{.FieldType}},{{.FieldViewName}}] { return views.SliceOfViews[{{.FieldType}},{{.FieldViewName}}](v.ж.{{.FieldName}}) }
 {{end}}
+{{define "viewValueSliceField"}}func (v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() views.ValueSliceView[{{.FieldType}},*{{.FieldType}},{{.FieldViewName}}] { return views.SliceOfValueViews[{{.FieldType}},*{{.FieldType}}](v.ж.{{.FieldName}}) }
+{{end}}
 {{define "viewField"}}func (v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() {{.FieldViewName}} { return v.ж.{{.FieldName}}.View() }
 {{end}}
 {{define "makeViewField"}}func (v {{.ViewName}}{{.TypeParamNames}}) {{.FieldName}}() {{.FieldViewName}} { return {{.MakeViewFnName}}(&v.ж.{{.FieldName}}) }
@@ -108,6 +110,9 @@ func init() {
 }
 
 func requiresCloning(t types.Type) (shallow, deep bool, base types.Type) {
+	if codegen.IsViewType(t) {
+		return false, false, t
+	}
 	switch v := t.(type) {
 	case *types.Pointer:
 		_, deep, base = requiresCloning(v.Elem())
@@ -198,6 +203,10 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 							writeTemplate("unsupportedField")
 						}
 						continue
+					case *types.Struct:
+						args.FieldViewName = appendNameSuffix(it.QualifiedName(elem), "View")
+						writeTemplate("viewValueSliceField")
+						continue
 					case *types.Interface:
 						if viewType := viewTypeForValueType(elem); viewType != nil {
 							args.FieldViewName = it.QualifiedName(viewType)
@@ -260,7 +269,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 			case *types.Struct, *types.Named, *types.Alias:
 				strucT := u
 				args.FieldType = it.QualifiedName(fieldType)
-				if codegen.ContainsPointers(strucT) {
+				if codegen.ContainsPointers(strucT) && !codegen.IsViewType(strucT) {
 					args.MapFn = "t.View()"
 					template = "mapFnField"
 					args.MapValueType = it.QualifiedName(mElem)

@@ -114,6 +114,7 @@ func (src *Map) Clone() *Map {
 			dst.StructWithPtr[k] = *(v.Clone())
 		}
 	}
+	dst.StructWithView = maps.Clone(src.StructWithView)
 	if dst.SliceIntPtr != nil {
 		dst.SliceIntPtr = map[string][]*int{}
 		for k := range src.SliceIntPtr {
@@ -136,6 +137,7 @@ var _MapCloneNeedsRegeneration = Map(struct {
 	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
 	StructWithoutPtrKey map[StructWithoutPtrs]int
 	StructWithPtr       map[string]StructWithPtrs
+	StructWithView      map[string]StructWithPtrsView
 	SliceIntPtr         map[string][]*int
 	PointerKey          map[*string]int
 	StructWithPtrKey    map[StructWithPtrs]int
@@ -179,6 +181,12 @@ func (src *StructWithSlices) Clone() *StructWithSlices {
 			dst.Structs[i] = *src.Structs[i].Clone()
 		}
 	}
+	if src.Views != nil {
+		dst.Views = make([]StructWithPtrsView, len(src.Views))
+		for i := range dst.Views {
+			dst.Views[i] = src.Views[i]
+		}
+	}
 	if src.Ints != nil {
 		dst.Ints = make([]*int, len(src.Ints))
 		for i := range dst.Ints {
@@ -201,6 +209,7 @@ var _StructWithSlicesCloneNeedsRegeneration = StructWithSlices(struct {
 	Prefixes       []netip.Prefix
 	Data           []byte
 	Structs        []StructWithPtrs
+	Views          []StructWithPtrsView
 	Ints           []*int
 }{})
 
