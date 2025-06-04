@@ -5,21 +5,23 @@ package kubetypes
 
 const (
 	// Hostinfo App values for the Tailscale Kubernetes Operator components.
-	AppOperator          = "k8s-operator"
-	AppProxy             = "k8s-proxy"
-	AppAPIServerProxy    = "k8s-operator-proxy"
-	AppIngressProxy      = "k8s-operator-ingress-proxy"
-	AppIngressResource   = "k8s-operator-ingress-resource"
-	AppEgressProxy       = "k8s-operator-egress-proxy"
-	AppConnector         = "k8s-operator-connector-resource"
-	AppProxyGroupEgress  = "k8s-operator-proxygroup-egress"
-	AppProxyGroupIngress = "k8s-operator-proxygroup-ingress"
+	AppOperator                = "k8s-operator"
+	AppProxyAPIServerProxy     = "k8s-proxy-api-server-proxy"
+	AppAPIServerProxy          = "k8s-operator-proxy"
+	AppIngressProxy            = "k8s-operator-ingress-proxy"
+	AppIngressResource         = "k8s-operator-ingress-resource"
+	AppEgressProxy             = "k8s-operator-egress-proxy"
+	AppConnector               = "k8s-operator-connector-resource"
+	AppProxyGroupEgress        = "k8s-operator-proxygroup-egress"
+	AppProxyGroupIngress       = "k8s-operator-proxygroup-ingress"
+	AppProxyGroupKubeAPIServer = "k8s-operator-proxygroup-kube-apiserver"
 
 	// Clientmetrics for Tailscale Kubernetes Operator components
 	MetricIngressProxyCount              = "k8s_ingress_proxies"      // L3
 	MetricIngressResourceCount           = "k8s_ingress_resources"    // L7
 	MetricIngressPGResourceCount         = "k8s_ingress_pg_resources" // L7 on ProxyGroup
 	MetricServicePGResourceCount         = "k8s_service_pg_resources" // L3 on ProxyGroup
+	MetricAPIServerProxyPGResourceCount  = "k8s_api_server_proxy_pg_resources"
 	MetricEgressProxyCount               = "k8s_egress_proxies"
 	MetricConnectorResourceCount         = "k8s_connector_resources"
 	MetricConnectorWithSubnetRouterCount = "k8s_connector_subnetrouter_resources"

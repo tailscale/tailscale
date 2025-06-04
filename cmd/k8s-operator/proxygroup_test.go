@@ -445,6 +445,41 @@ func TestProxyGroupTypes(t *testing.T) {
 			t.Errorf("unexpected volume mounts (-want +got):\n%s", diff)
 		}
 	})
+
+	t.Run("kubernetes_api_server_type", func(t *testing.T) {
+		pg := &tsapi.ProxyGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-k8s-apiserver",
+				UID:  "test-k8s-apiserver-uid",
+			},
+			Spec: tsapi.ProxyGroupSpec{
+				Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
+				Replicas: ptr.To[int32](1),
+			},
+		}
+		if err := fc.Create(context.Background(), pg); err != nil {
+			t.Fatal(err)
+		}
+
+		expectReconciled(t, reconciler, "", pg.Name)
+		verifyProxyGroupCounts(t, reconciler, 0, 0) // No ingress or egress counts for KubernetesAPIServer type.
+
+		sts := &appsv1.StatefulSet{}
+		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatalf("failed to get StatefulSet: %v", err)
+		}
+
+		// Verify the StatefulSet configuration for KubernetesAPIServer type.
+		if sts.Spec.Template.Spec.Containers[0].Name != "k8s-proxy" {
+			t.Errorf("unexpected container name %s, want k8s-proxy", sts.Spec.Template.Spec.Containers[0].Name)
+		}
+		if sts.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort != 443 {
+			t.Errorf("unexpected container port %d, want 443", sts.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort)
+		}
+		if sts.Spec.Template.Spec.Containers[0].Ports[0].Name != "https" {
+			t.Errorf("unexpected port name %s, want https", sts.Spec.Template.Spec.Containers[0].Ports[0].Name)
+		}
+	})
 }
 
 func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {

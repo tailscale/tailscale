@@ -114,12 +114,13 @@ type TailnetDevice struct {
 }
 
 // +kubebuilder:validation:Type=string
-// +kubebuilder:validation:Enum=egress;ingress
+// +kubebuilder:validation:Enum=egress;ingress;kube-apiserver
 type ProxyGroupType string
 
 const (
-	ProxyGroupTypeEgress  ProxyGroupType = "egress"
-	ProxyGroupTypeIngress ProxyGroupType = "ingress"
+	ProxyGroupTypeEgress              ProxyGroupType = "egress"
+	ProxyGroupTypeIngress             ProxyGroupType = "ingress"
+	ProxyGroupTypeKubernetesAPIServer ProxyGroupType = "kube-apiserver"
 )
 
 // +kubebuilder:validation:Type=string

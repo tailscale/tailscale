@@ -41,20 +41,20 @@ import (
 )
 
 const (
-	finalizerName = "tailscale.com/service-pg-finalizer"
+	proxyPGFinalizerName = "tailscale.com/proxy-pg-finalizer"
 
-	reasonIngressSvcInvalid              = "IngressSvcInvalid"
-	reasonIngressSvcValid                = "IngressSvcValid"
-	reasonIngressSvcConfigured           = "IngressSvcConfigured"
-	reasonIngressSvcNoBackendsConfigured = "IngressSvcNoBackendsConfigured"
-	reasonIngressSvcCreationFailed       = "IngressSvcCreationFailed"
+	reasonAPIServerProxyPGInvalid              = "APIServerProxyPGInvalid"
+	reasonAPIServerProxyPGValid                = "APIServerProxyPGValid"
+	reasonAPIServerProxyPGConfigured           = "APIServerProxyPGConfigured"
+	reasonAPIServerProxyPGNoBackendsConfigured = "APIServerProxyPGNoBackendsConfigured"
+	reasonAPIServerProxyPGCreationFailed       = "APIServerProxyPGCreationFailed"
 )
 
-var gaugePGServiceResources = clientmetric.NewGauge(kubetypes.MetricServicePGResourceCount)
+var gaugeAPIServerProxyPGResources = clientmetric.NewGauge(kubetypes.MetricAPIServerProxyPGResourceCount)
 
-// HAServiceReconciler is a controller that reconciles Tailscale Kubernetes
-// Services that should be exposed on an ingress ProxyGroup (in HA mode).
-type HAServiceReconciler struct {
+// APIServerProxyHAReconciler reconciles the Tailscale Services required for an
+// HA deployment of the API Server Proxy.
+type APIServerProxyHAReconciler struct {
 	client.Client
 	isDefaultLoadBalancer bool
 	recorder              record.EventRecorder
@@ -67,26 +67,13 @@ type HAServiceReconciler struct {
 
 	clock tstime.Clock
 
-	mu sync.Mutex // protects following
-	// managedServices is a set of all Service resources that we're currently
-	// managing. This is only used for metrics.
-	managedServices set.Slice[types.UID]
+	mu         sync.Mutex // protects following
+	managedPGs set.Slice[types.UID]
 }
 
-// Reconcile reconciles Services that should be exposed over Tailscale in HA
-// mode (on a ProxyGroup). It looks at all Services with
-// tailscale.com/proxy-group annotation. For each such Service, it ensures that
-// a Tailscale Service named after the hostname of the Service exists and is up to
-// date.
-// HA Servicees support multi-cluster Service setup.
-// Each Tailscale Service contains a list of owner references that uniquely identify
-// the operator.  When an Service that acts as a
-// backend is being deleted, the corresponding Tailscale Service is only deleted if the
-// only owner reference that it contains is for this operator. If other owner
-// references are found, then cleanup operation only removes this operator's owner
-// reference.
-func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
-	logger := r.logger.With("Service", req.NamespacedName)
+// Reconcile is the entry point for the controller.
+func (r *APIServerProxyHAReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
+	logger := r.logger.With("ProxyGroup", req.NamespacedName)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
 
@@ -128,15 +115,11 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	return reconcile.Result{}, nil
 }
 
-// maybeProvision ensures that a Tailscale Service for this Ingress exists and is up to date and that the serve config for the
-// corresponding ProxyGroup contains the Ingress backend's definition.
-// If a Tailscale Service does not exist, it will be created.
-// If a Tailscale Service exists, but only with owner references from other operator instances, an owner reference for this
-// operator instance is added.
-// If a Tailscale Service exists, but does not have an owner reference from any operator, we error
-// out assuming that this is an owner reference created by an unknown actor.
+// maybeProvision ensures that a Tailscale Service for this ProxyGroup exists
+// and is up to date.
+//
 // Returns true if the operation resulted in a Tailscale Service update.
-func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
+func (r *APIServerProxyHAReconciler) maybeProvision(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
 	oldSvcStatus := svc.Status.DeepCopy()
 	defer func() {
 		if !apiequality.Semantic.DeepEqual(oldSvcStatus, &svc.Status) {
@@ -188,8 +171,8 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 			return false, fmt.Errorf("failed to add finalizer: %w", err)
 		}
 		r.mu.Lock()
-		r.managedServices.Add(svc.UID)
-		gaugePGServiceResources.Set(int64(r.managedServices.Len()))
+		r.managedPGs.Add(svc.UID)
+		gaugePGServiceResources.Set(int64(r.managedPGs.Len()))
 		r.mu.Unlock()
 	}
 
@@ -379,7 +362,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 // Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
 // deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
 // corresponding to this Service.
-func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcChanged bool, err error) {
+func (r *APIServerProxyHAReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcChanged bool, err error) {
 	logger.Debugf("Ensuring any resources for Service are cleaned up")
 	ix := slices.Index(svc.Finalizers, finalizerName)
 	if ix < 0 {
@@ -430,7 +413,7 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 
 // Tailscale Services that are associated with the provided ProxyGroup and no longer managed this operator's instance are deleted, if not owned by other operator instances, else the owner reference is cleaned up.
 // Returns true if the operation resulted in existing Tailscale Service updates (owner reference removal).
-func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyGroupName string, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
+func (r *APIServerProxyHAReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyGroupName string, logger *zap.SugaredLogger) (svcsChanged bool, err error) {
 	cm, config, err := ingressSvcsConfigs(ctx, r.Client, proxyGroupName, r.tsNamespace)
 	if err != nil {
 		return false, fmt.Errorf("failed to get ingress service config: %s", err)
@@ -486,7 +469,7 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 	return svcsChanged, nil
 }
 
-func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
+func (r *APIServerProxyHAReconciler) deleteFinalizer(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
 	svc.Finalizers = slices.DeleteFunc(svc.Finalizers, func(f string) bool {
 		return f == finalizerName
 	})
@@ -497,21 +480,21 @@ func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.S
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.managedServices.Remove(svc.UID)
-	gaugePGServiceResources.Set(int64(r.managedServices.Len()))
+	r.managedPGs.Remove(svc.UID)
+	gaugePGServiceResources.Set(int64(r.managedPGs.Len()))
 	return nil
 }
 
-func (r *HAServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
+func (r *APIServerProxyHAReconciler) isTailscaleService(svc *corev1.Service) bool {
 	proxyGroup := svc.Annotations[AnnotationProxyGroup]
 	return r.shouldExpose(svc) && proxyGroup != ""
 }
 
-func (r *HAServiceReconciler) shouldExpose(svc *corev1.Service) bool {
+func (r *APIServerProxyHAReconciler) shouldExpose(svc *corev1.Service) bool {
 	return r.shouldExposeClusterIP(svc)
 }
 
-func (r *HAServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
+func (r *APIServerProxyHAReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
 	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
 		return false
 	}
@@ -519,7 +502,7 @@ func (r *HAServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
 }
 
 // tailnetCertDomain returns the base domain (TCD) of the current tailnet.
-func (r *HAServiceReconciler) tailnetCertDomain(ctx context.Context) (string, error) {
+func (r *APIServerProxyHAReconciler) tailnetCertDomain(ctx context.Context) (string, error) {
 	st, err := r.lc.StatusWithoutPeers(ctx)
 	if err != nil {
 		return "", fmt.Errorf("error getting tailscale status: %w", err)
@@ -531,7 +514,7 @@ func (r *HAServiceReconciler) tailnetCertDomain(ctx context.Context) (string, er
 // If a Tailscale Service is found, but contains other owner references, only removes this operator's owner reference.
 // If a Tailscale Service by the given name is not found or does not contain this operator's owner reference, do nothing.
 // It returns true if an existing Tailscale Service was updated to remove owner reference, as well as any error that occurred.
-func (r *HAServiceReconciler) cleanupTailscaleService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, err error) {
+func (r *APIServerProxyHAReconciler) cleanupTailscaleService(ctx context.Context, name tailcfg.ServiceName, logger *zap.SugaredLogger) (updated bool, err error) {
 	svc, err := r.tsClient.GetVIPService(ctx, name)
 	if isErrorFeatureFlagNotEnabled(err) {
 		msg := fmt.Sprintf("Unable to proceed with cleanup: %s.", msgFeatureFlagNotEnabled)
@@ -584,10 +567,10 @@ func (r *HAServiceReconciler) cleanupTailscaleService(ctx context.Context, name 
 	return true, r.tsClient.CreateOrUpdateVIPService(ctx, svc)
 }
 
-func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceName, replicaName, pgName string, wantsCfg *ingressservices.Config, logger *zap.SugaredLogger) (bool, error) {
+func (r *APIServerProxyHAReconciler) backendRoutesSetup(ctx context.Context, serviceName, replicaName, pgName string, wantsCfg *ingressservices.Config, logger *zap.SugaredLogger) (bool, error) {
 	logger.Debugf("checking backend routes for service '%s'", serviceName)
 	pod := &corev1.Pod{}
-	err := a.Get(ctx, client.ObjectKey{Namespace: a.tsNamespace, Name: replicaName}, pod)
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: replicaName}, pod)
 	if apierrors.IsNotFound(err) {
 		logger.Debugf("Pod %q not found", replicaName)
 		return false, nil
@@ -596,7 +579,7 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 		return false, fmt.Errorf("failed to get Pod: %w", err)
 	}
 	secret := &corev1.Secret{}
-	err = a.Get(ctx, client.ObjectKey{Namespace: a.tsNamespace, Name: replicaName}, secret)
+	err = r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: replicaName}, secret)
 	if apierrors.IsNotFound(err) {
 		logger.Debugf("Secret %q not found", replicaName)
 		return false, nil
@@ -623,45 +606,17 @@ func (a *HAServiceReconciler) backendRoutesSetup(ctx context.Context, serviceNam
 	return true, nil
 }
 
-func isCurrentStatus(gotCfgs ingressservices.Status, pod *corev1.Pod, logger *zap.SugaredLogger) (bool, error) {
-	ips := pod.Status.PodIPs
-	if len(ips) == 0 {
-		logger.Debugf("Pod %q does not yet have IPs, unable to determine if status is up to date", pod.Name)
-		return false, nil
-	}
-
-	if len(ips) > 2 {
-		return false, fmt.Errorf("pod 'status.PodIPs' can contain at most 2 IPs, got %d (%v)", len(ips), ips)
-	}
-	var podIPv4, podIPv6 string
-	for _, ip := range ips {
-		parsed, err := netip.ParseAddr(ip.IP)
-		if err != nil {
-			return false, fmt.Errorf("error parsing IP address %s: %w", ip.IP, err)
-		}
-		if parsed.Is4() {
-			podIPv4 = parsed.String()
-			continue
-		}
-		podIPv6 = parsed.String()
-	}
-	if podIPv4 != gotCfgs.PodIPv4 || podIPv6 != gotCfgs.PodIPv6 {
-		return false, nil
-	}
-	return true, nil
-}
-
-func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, svc *corev1.Service, pgName string, serviceName tailcfg.ServiceName, cfg *ingressservices.Config, shouldBeAdvertised bool, logger *zap.SugaredLogger) (err error) {
+func (r *APIServerProxyHAReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, svc *corev1.Service, pgName string, serviceName tailcfg.ServiceName, cfg *ingressservices.Config, shouldBeAdvertised bool, logger *zap.SugaredLogger) (err error) {
 	logger.Debugf("checking advertisement for service '%s'", serviceName)
 	// Get all config Secrets for this ProxyGroup.
 	// Get all Pods
 	secrets := &corev1.SecretList{}
-	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "config"))); err != nil {
+	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "config"))); err != nil {
 		return fmt.Errorf("failed to list config Secrets: %w", err)
 	}
 
 	if svc != nil && shouldBeAdvertised {
-		shouldBeAdvertised, err = a.checkEndpointsReady(ctx, svc, logger)
+		shouldBeAdvertised, err = r.checkEndpointsReady(ctx, svc, logger)
 		if err != nil {
 			return fmt.Errorf("failed to check readiness of Service '%s' endpoints: %w", svc.Name, err)
 		}
@@ -693,7 +648,7 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 					logger.Infof("[unexpected] unable to determine replica name from config Secret name %q, unable to determine if backend routing has been configured", secret.Name)
 					return nil
 				}
-				ready, err := a.backendRoutesSetup(ctx, serviceName.String(), replicaName, pgName, cfg, logger)
+				ready, err := r.backendRoutesSetup(ctx, serviceName.String(), replicaName, pgName, cfg, logger)
 				if err != nil {
 					return fmt.Errorf("error checking backend routes: %w", err)
 				}
@@ -712,7 +667,7 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 			updated = true
 		}
 		if updated {
-			if err := a.Update(ctx, &secret); err != nil {
+			if err := r.Update(ctx, &secret); err != nil {
 				return fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
 			}
 		}
@@ -720,10 +675,10 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	return nil
 }
 
-func (a *HAServiceReconciler) numberPodsAdvertising(ctx context.Context, pgName string, serviceName tailcfg.ServiceName) (int, error) {
+func (r *APIServerProxyHAReconciler) numberPodsAdvertising(ctx context.Context, pgName string, serviceName tailcfg.ServiceName) (int, error) {
 	// Get all state Secrets for this ProxyGroup.
 	secrets := &corev1.SecretList{}
-	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "state"))); err != nil {
+	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "state"))); err != nil {
 		return 0, fmt.Errorf("failed to list ProxyGroup %q state Secrets: %w", pgName, err)
 	}
 
@@ -749,7 +704,7 @@ func (a *HAServiceReconciler) numberPodsAdvertising(ctx context.Context, pgName 
 // nil, but does not contain an owner we return an error as this likely means
 // that the Tailscale Service was created by something other than a Tailscale
 // Kubernetes operator.
-func (r *HAServiceReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[string]string, error) {
+func (r *APIServerProxyHAReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[string]string, error) {
 	ref := OwnerRef{
 		OperatorID: r.operatorID,
 	}
@@ -788,7 +743,7 @@ func (r *HAServiceReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[s
 }
 
 // dnsNameForService returns the DNS name for the given Tailscale Service name.
-func (r *HAServiceReconciler) dnsNameForService(ctx context.Context, svc tailcfg.ServiceName) (string, error) {
+func (r *APIServerProxyHAReconciler) dnsNameForService(ctx context.Context, svc tailcfg.ServiceName) (string, error) {
 	s := svc.WithoutPrefix()
 	tcd, err := r.tailnetCertDomain(ctx)
 	if err != nil {
@@ -797,33 +752,7 @@ func (r *HAServiceReconciler) dnsNameForService(ctx context.Context, svc tailcfg
 	return s + "." + tcd, nil
 }
 
-// ingressSvcsConfig returns a ConfigMap that contains ingress services configuration for the provided ProxyGroup as well
-// as unmarshalled configuration from the ConfigMap.
-func ingressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs ingressservices.Configs, err error) {
-	name := pgIngressCMName(proxyGroupName)
-	cm = &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: tsNamespace,
-		},
-	}
-	err = cl.Get(ctx, client.ObjectKeyFromObject(cm), cm)
-	if apierrors.IsNotFound(err) { // ProxyGroup resources have not been created (yet)
-		return nil, nil, nil
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("error retrieving ingress services ConfigMap %s: %v", name, err)
-	}
-	cfgs = ingressservices.Configs{}
-	if len(cm.BinaryData[ingressservices.IngressConfigKey]) != 0 {
-		if err := json.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &cfgs); err != nil {
-			return nil, nil, fmt.Errorf("error unmarshaling ingress services config %v: %w", cm.BinaryData[ingressservices.IngressConfigKey], err)
-		}
-	}
-	return cm, cfgs, nil
-}
-
-func (r *HAServiceReconciler) getEndpointSlicesForService(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) ([]discoveryv1.EndpointSlice, error) {
+func (r *APIServerProxyHAReconciler) getEndpointSlicesForService(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) ([]discoveryv1.EndpointSlice, error) {
 	logger.Debugf("looking for endpoint slices for svc with name '%s' in namespace '%s' matching label '%s=%s'", svc.Name, svc.Namespace, discoveryv1.LabelServiceName, svc.Name)
 	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
 	labels := map[string]string{discoveryv1.LabelServiceName: svc.Name}
@@ -840,7 +769,7 @@ func (r *HAServiceReconciler) getEndpointSlicesForService(ctx context.Context, s
 	return eps.Items, nil
 }
 
-func (r *HAServiceReconciler) checkEndpointsReady(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) (bool, error) {
+func (r *APIServerProxyHAReconciler) checkEndpointsReady(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) (bool, error) {
 	epss, err := r.getEndpointSlicesForService(ctx, svc, logger)
 	if err != nil {
 		return false, fmt.Errorf("failed to list EndpointSlices for Service %q: %w", svc.Name, err)

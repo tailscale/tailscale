@@ -112,6 +112,7 @@ spec:
                   enum:
                     - egress
                     - ingress
+                    - kube-apiserver
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: ProxyGroup type is immutable

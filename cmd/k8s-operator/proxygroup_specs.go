@@ -29,6 +29,9 @@ const deletionGracePeriodSeconds int64 = 360
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
 func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		return kubeAPIServerStatefulSet(pg, namespace, image)
+	}
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -225,7 +228,137 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		// gracefully.
 		ss.Spec.Template.DeletionGracePeriodSeconds = ptr.To(deletionGracePeriodSeconds)
 	}
+
 	return ss, nil
+}
+
+func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string) (*appsv1.StatefulSet, error) {
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pg.Name,
+			Namespace:       namespace,
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr.To(pgReplicas(pg)),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: pgLabels(pg.Name, nil),
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:                       pg.Name,
+					Namespace:                  namespace,
+					Labels:                     pgLabels(pg.Name, nil),
+					DeletionGracePeriodSeconds: ptr.To[int64](10),
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: pg.Name,
+					Containers: []corev1.Container{
+						{
+							Name:  "tailscale",
+							Image: image,
+							Env: []corev1.EnvVar{
+								{
+									Name: "POD_NAME",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.name",
+										},
+									},
+								},
+								{
+									Name: "POD_UID",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.uid",
+										},
+									},
+								},
+								{
+									Name:  "TS_INTERNAL_APP",
+									Value: kubetypes.AppProxyGroupKubeAPIServer,
+								},
+								{
+									Name:  "TS_STATE",
+									Value: "kube:$(POD_NAME)",
+								},
+								{
+									Name:  "TS_K8S_PROXY_CONFIG",
+									Value: "/etc/tsconfig/$(POD_NAME)/config.json",
+								},
+								{
+									Name:  "TS_DEBUG_ACME_DIRECTORY_URL",
+									Value: "https://acme-staging-v02.api.letsencrypt.org/directory",
+								},
+								{
+									Name:  "TS_DEBUG_ACME",
+									Value: "true",
+								},
+							},
+							VolumeMounts: func() []corev1.VolumeMount {
+								var mounts []corev1.VolumeMount
+
+								// TODO(tomhjp): Read config directly from the secret instead. The
+								// mounts change on scaling up/down which causes unnecessary restarts
+								// for pods that haven't meaningfully changed.
+								for i := range pgReplicas(pg) {
+									mounts = append(mounts, corev1.VolumeMount{
+										Name:      fmt.Sprintf("k8s-proxy-config-%d", i),
+										ReadOnly:  true,
+										MountPath: fmt.Sprintf("/etc/tsconfig/%s-%d", pg.Name, i),
+									})
+								}
+
+								// mounts = append(mounts, corev1.VolumeMount{
+								// 	Name:      pgKubeAPIServerCMName(pg.Name),
+								// 	MountPath: "/etc/proxies",
+								// 	ReadOnly:  true,
+								// })
+
+								return mounts
+							}(),
+							Ports: []corev1.ContainerPort{
+								{
+									Name:          "k8s-proxy",
+									ContainerPort: 443,
+									Protocol:      corev1.ProtocolTCP,
+								},
+							},
+						},
+					},
+					Volumes: func() []corev1.Volume {
+						var volumes []corev1.Volume
+						for i := range pgReplicas(pg) {
+							volumes = append(volumes, corev1.Volume{
+								Name: fmt.Sprintf("k8s-proxy-config-%d", i),
+								VolumeSource: corev1.VolumeSource{
+									Secret: &corev1.SecretVolumeSource{
+										SecretName: pgConfigSecretName(pg.Name, i),
+									},
+								},
+							})
+						}
+
+						// volumes = append(volumes, corev1.Volume{
+						// 	Name: pgKubeAPIServerCMName(pg.Name),
+						// 	VolumeSource: corev1.VolumeSource{
+						// 		ConfigMap: &corev1.ConfigMapVolumeSource{
+						// 			LocalObjectReference: corev1.LocalObjectReference{
+						// 				Name: pgKubeAPIServerCMName(pg.Name),
+						// 			},
+						// 		},
+						// 	},
+						// })
+
+						return volumes
+					}(),
+				},
+			},
+		},
+	}
+
+	return sts, nil
 }
 
 func pgServiceAccount(pg *tsapi.ProxyGroup, namespace string) *corev1.ServiceAccount {
@@ -308,6 +441,44 @@ func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
 	}
 }
 
+func proxyClusterRole(pg *tsapi.ProxyGroup) *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            fmt.Sprintf("%s-impersonation", pg.Name),
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"users", "groups"},
+				Verbs:     []string{"impersonate"},
+			},
+		},
+	}
+}
+
+func proxyClusterRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pg.Name,
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      pg.Name,
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			Kind: "ClusterRole",
+			Name: fmt.Sprintf("%s-impersonation", pg.Name),
+		},
+	}
+}
+
 func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.Secret) {
 	for i := range pgReplicas(pg) {
 		secrets = append(secrets, &corev1.Secret{
@@ -385,6 +556,10 @@ func pgConfigSecretName(pgName string, i int32) string {
 
 func pgEgressCMName(pg string) string {
 	return fmt.Sprintf("%s-egress-config", pg)
+}
+
+func pgKubeAPIServerCMName(pg string) string {
+	return fmt.Sprintf("%s-kube-apiserver-config", pg)
 }
 
 // hasLocalAddrPortSet returns true if the proxyclass has the TS_LOCAL_ADDR_PORT env var set. For egress ProxyGroups,

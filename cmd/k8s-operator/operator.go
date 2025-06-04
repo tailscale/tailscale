@@ -72,6 +72,7 @@ func main() {
 		tsNamespace           = defaultEnv("OPERATOR_NAMESPACE", "")
 		tslogging             = defaultEnv("OPERATOR_LOGGING", "info")
 		image                 = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		k8sProxyImage         = defaultEnv("K8S_PROXY_IMAGE", "tailscale/k8s-proxy:latest")
 		priorityClassName     = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags                  = defaultEnv("PROXY_TAGS", "tag:k8s")
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
@@ -131,6 +132,7 @@ func main() {
 		tailscaleNamespace:            tsNamespace,
 		restConfig:                    restConfig,
 		proxyImage:                    image,
+		k8sProxyImage:                 k8sProxyImage,
 		proxyPriorityClassName:        priorityClassName,
 		proxyActAsDefaultLoadBalancer: isDefaultLoadBalancer,
 		proxyTags:                     tags,
@@ -392,7 +394,6 @@ func runReconcilers(opts reconcilerOpts) {
 		Complete(&HAServiceReconciler{
 			recorder:    eventRecorder,
 			tsClient:    opts.tsClient,
-			tsnetServer: opts.tsServer,
 			defaultTags: strings.Split(opts.proxyTags, ","),
 			Client:      mgr.GetClient(),
 			logger:      opts.log.Named("service-pg-reconciler"),
@@ -616,6 +617,7 @@ func runReconcilers(opts reconcilerOpts) {
 
 			tsNamespace:       opts.tailscaleNamespace,
 			proxyImage:        opts.proxyImage,
+			k8sProxyImage:     opts.k8sProxyImage,
 			defaultTags:       strings.Split(opts.proxyTags, ","),
 			tsFirewallMode:    opts.proxyFirewallMode,
 			defaultProxyClass: opts.defaultProxyClass,
@@ -637,6 +639,7 @@ type reconcilerOpts struct {
 	tailscaleNamespace string       // namespace in which operator resources will be deployed
 	restConfig         *rest.Config // config for connecting to the kube API server
 	proxyImage         string       // <proxy-image-repo>:<proxy-image-tag>
+	k8sProxyImage      string       // <k8s-proxy-image-repo>:<k8s-proxy-image-tag>
 	// proxyPriorityClassName isPriorityClass to be set for proxy Pods. This
 	// is a legacy mechanism for cluster resource configuration options -
 	// going forward use ProxyClass.

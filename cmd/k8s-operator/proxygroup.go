@@ -68,6 +68,7 @@ type ProxyGroupReconciler struct {
 	// User-specified defaults from the helm installation.
 	tsNamespace       string
 	proxyImage        string
+	k8sProxyImage     string
 	defaultTags       []string
 	tsFirewallMode    string
 	defaultProxyClass string
@@ -252,6 +253,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("error provisioning state Secrets: %w", err)
 		}
 	}
+
 	sa := pgServiceAccount(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
 		s.ObjectMeta.Labels = sa.ObjectMeta.Labels
@@ -260,6 +262,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning ServiceAccount: %w", err)
 	}
+
 	role := pgRole(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
 		r.ObjectMeta.Labels = role.ObjectMeta.Labels
@@ -269,6 +272,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning Role: %w", err)
 	}
+
 	roleBinding := pgRoleBinding(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, roleBinding, func(r *rbacv1.RoleBinding) {
 		r.ObjectMeta.Labels = roleBinding.ObjectMeta.Labels
@@ -279,6 +283,28 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning RoleBinding: %w", err)
 	}
+
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		clusterRole := proxyClusterRole(pg)
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, clusterRole, func(r *rbacv1.ClusterRole) {
+			r.ObjectMeta.Labels = role.ObjectMeta.Labels
+			r.ObjectMeta.Annotations = role.ObjectMeta.Annotations
+			r.Rules = role.Rules
+		}); err != nil {
+			return fmt.Errorf("error provisioning ClusterRole: %w", err)
+		}
+
+		clusterRoleBinding := proxyClusterRoleBinding(pg, r.tsNamespace)
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, clusterRoleBinding, func(r *rbacv1.ClusterRoleBinding) {
+			r.ObjectMeta.Labels = roleBinding.ObjectMeta.Labels
+			r.ObjectMeta.Annotations = roleBinding.ObjectMeta.Annotations
+			r.RoleRef = roleBinding.RoleRef
+			r.Subjects = roleBinding.Subjects
+		}); err != nil {
+			return fmt.Errorf("error provisioning ClusterRoleBinding: %w", err)
+		}
+	}
+
 	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
 		cm, hp := pgEgressCM(pg, r.tsNamespace)
 		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, cm, func(existing *corev1.ConfigMap) {
@@ -289,6 +315,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("error provisioning egress ConfigMap %q: %w", cm.Name, err)
 		}
 	}
+
 	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
 		cm := pgIngressCM(pg, r.tsNamespace)
 		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, cm, func(existing *corev1.ConfigMap) {
@@ -298,7 +325,13 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("error provisioning ingress ConfigMap %q: %w", cm.Name, err)
 		}
 	}
-	ss, err := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode, proxyClass)
+
+	defaultImage := r.proxyImage
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		defaultImage = r.k8sProxyImage
+	}
+
+	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, proxyClass)
 	if err != nil {
 		return fmt.Errorf("error generating StatefulSet spec: %w", err)
 	}
@@ -483,43 +516,80 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			}
 		}
 
-		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, existingCfgSecret)
-		if err != nil {
-			return "", fmt.Errorf("error creating tailscaled config: %w", err)
-		}
+		if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+			hostname := fmt.Sprintf("%s-%d", pg.Name, i)
 
-		for cap, cfg := range configs {
-			cfgJSON, err := json.Marshal(cfg)
+			if authKey == "" && existingCfgSecret != nil {
+				deviceAuthed := false
+				for _, d := range pg.Status.Devices {
+					if d.Hostname == hostname {
+						deviceAuthed = true
+						break
+					}
+				}
+				if !deviceAuthed {
+					existingCfg := map[string]any{}
+					if err := json.Unmarshal(existingCfgSecret.Data["config.json"], &existingCfg); err != nil {
+						return "", fmt.Errorf("error unmarshalling existing config: %w", err)
+					}
+					if existingAuthKey, ok := existingCfg["AuthKey"]; ok {
+						authKey, _ = existingAuthKey.(string)
+					}
+				}
+			}
+
+			cfg := map[string]any{
+				"Version":  "v1alpha1",
+				"Hostname": hostname,
+				"App":      kubetypes.AppProxyAPIServerProxy,
+			}
+			if authKey != "" {
+				cfg["AuthKey"] = authKey
+			}
+			cfgB, err := json.Marshal(cfg)
 			if err != nil {
-				return "", fmt.Errorf("error marshalling tailscaled config: %w", err)
+				return "", fmt.Errorf("error marshalling k8s-proxy config: %w", err)
 			}
-			mak.Set(&cfgSecret.Data, tsoperator.TailscaledConfigFileName(cap), cfgJSON)
-		}
+			mak.Set(&cfgSecret.Data, "config.json", cfgB)
+		} else {
+			configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, existingCfgSecret)
+			if err != nil {
+				return "", fmt.Errorf("error creating tailscaled config: %w", err)
+			}
 
-		// The config sha256 sum is a value for a hash annotation used to trigger
-		// pod restarts when tailscaled config changes. Any config changes apply
-		// to all replicas, so it is sufficient to only hash the config for the
-		// first replica.
-		//
-		// In future, we're aiming to eliminate restarts altogether and have
-		// pods dynamically reload their config when it changes.
-		if i == 0 {
-			sum := sha256.New()
-			for _, cfg := range configs {
-				// Zero out the auth key so it doesn't affect the sha256 hash when we
-				// remove it from the config after the pods have all authed. Otherwise
-				// all the pods will need to restart immediately after authing.
-				cfg.AuthKey = nil
-				b, err := json.Marshal(cfg)
+			for cap, cfg := range configs {
+				cfgJSON, err := json.Marshal(cfg)
 				if err != nil {
-					return "", err
+					return "", fmt.Errorf("error marshalling tailscaled config: %w", err)
 				}
-				if _, err := sum.Write(b); err != nil {
-					return "", err
-				}
+				mak.Set(&cfgSecret.Data, tsoperator.TailscaledConfigFileName(cap), cfgJSON)
 			}
 
-			configSHA256Sum = fmt.Sprintf("%x", sum.Sum(nil))
+			// The config sha256 sum is a value for a hash annotation used to trigger
+			// pod restarts when tailscaled config changes. Any config changes apply
+			// to all replicas, so it is sufficient to only hash the config for the
+			// first replica.
+			//
+			// In future, we're aiming to eliminate restarts altogether and have
+			// pods dynamically reload their config when it changes.
+			if i == 0 {
+				sum := sha256.New()
+				for _, cfg := range configs {
+					// Zero out the auth key so it doesn't affect the sha256 hash when we
+					// remove it from the config after the pods have all authed. Otherwise
+					// all the pods will need to restart immediately after authing.
+					cfg.AuthKey = nil
+					b, err := json.Marshal(cfg)
+					if err != nil {
+						return "", err
+					}
+					if _, err := sum.Write(b); err != nil {
+						return "", err
+					}
+				}
+
+				configSHA256Sum = fmt.Sprintf("%x", sum.Sum(nil))
+			}
 		}
 
 		if existingCfgSecret != nil {
