@@ -553,7 +553,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 				},
 			},
 		},
-		{
+		{ // error here
 			name: "combos",
 			steps: []step{
 				{
@@ -1063,65 +1063,73 @@ func TestValidateConfig(t *testing.T) {
 
 func TestSrcTypeFromFlags(t *testing.T) {
 	tests := []struct {
-		name               string
-		env                *serveEnv
-		expectedType       serveType
-		expectedPort       uint16
-		expectedErr        bool
-		expectedWasDefault bool
+		name                     string
+		env                      *serveEnv
+		expectedType             serveType
+		expectedPort             uint16
+		expectedErr              bool
+		expectedIsDefaultService bool
 	}{
 		{
-			name:               "only http set",
-			env:                &serveEnv{http: 80},
-			expectedType:       serveTypeHTTP,
-			expectedPort:       80,
-			expectedErr:        false,
-			expectedWasDefault: false,
+			name:                     "only http set",
+			env:                      &serveEnv{http: 80},
+			expectedType:             serveTypeHTTP,
+			expectedPort:             80,
+			expectedErr:              false,
+			expectedIsDefaultService: false,
 		},
 		{
-			name:               "only https set",
-			env:                &serveEnv{https: 10000},
-			expectedType:       serveTypeHTTPS,
-			expectedPort:       10000,
-			expectedErr:        false,
-			expectedWasDefault: false,
+			name:                     "only https set",
+			env:                      &serveEnv{https: 10000},
+			expectedType:             serveTypeHTTPS,
+			expectedPort:             10000,
+			expectedErr:              false,
+			expectedIsDefaultService: false,
 		},
 		{
-			name:               "only tcp set",
-			env:                &serveEnv{tcp: 8000},
-			expectedType:       serveTypeTCP,
-			expectedPort:       8000,
-			expectedErr:        false,
-			expectedWasDefault: false,
+			name:                     "only tcp set",
+			env:                      &serveEnv{tcp: 8000},
+			expectedType:             serveTypeTCP,
+			expectedPort:             8000,
+			expectedErr:              false,
+			expectedIsDefaultService: false,
 		},
 		{
-			name:               "only tls-terminated-tcp set",
-			env:                &serveEnv{tlsTerminatedTCP: 8080},
-			expectedType:       serveTypeTLSTerminatedTCP,
-			expectedPort:       8080,
-			expectedErr:        false,
-			expectedWasDefault: false,
+			name:                     "only tls-terminated-tcp set",
+			env:                      &serveEnv{tlsTerminatedTCP: 8080},
+			expectedType:             serveTypeTLSTerminatedTCP,
+			expectedPort:             8080,
+			expectedErr:              false,
+			expectedIsDefaultService: false,
 		},
 		{
-			name:               "defaults to https, port 443",
-			env:                &serveEnv{},
-			expectedType:       serveTypeHTTPS,
-			expectedPort:       443,
-			expectedErr:        false,
-			expectedWasDefault: true,
+			name:                     "defaults to https, port 443",
+			env:                      &serveEnv{},
+			expectedType:             serveTypeHTTPS,
+			expectedPort:             443,
+			expectedErr:              false,
+			expectedIsDefaultService: false,
 		},
 		{
-			name:               "multiple types set",
-			env:                &serveEnv{http: 80, https: 443},
-			expectedPort:       0,
-			expectedErr:        true,
-			expectedWasDefault: false,
+			name:                     "defaults to https, port 443 for service",
+			env:                      &serveEnv{service: "svc:foo"},
+			expectedType:             serveTypeHTTPS,
+			expectedPort:             443,
+			expectedErr:              false,
+			expectedIsDefaultService: true,
+		},
+		{
+			name:                     "multiple types set",
+			env:                      &serveEnv{http: 80, https: 443},
+			expectedPort:             0,
+			expectedErr:              true,
+			expectedIsDefaultService: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srcType, srcPort, explicitSet, err := srvTypeAndPortFromFlags(tt.env)
+			srcType, srcPort, isDefaultService, err := srvTypeAndPortFromFlags(tt.env)
 			if (err != nil) != tt.expectedErr {
 				t.Errorf("Expected error: %v, got: %v", tt.expectedErr, err)
 			}
@@ -1131,8 +1139,8 @@ func TestSrcTypeFromFlags(t *testing.T) {
 			if srcPort != tt.expectedPort {
 				t.Errorf("Expected srcPort: %d, got: %d", tt.expectedPort, srcPort)
 			}
-			if explicitSet != tt.expectedWasDefault {
-				t.Errorf("Expected defaultFlag: %v, got: %v", tt.expectedWasDefault, explicitSet)
+			if isDefaultService != tt.expectedIsDefaultService {
+				t.Errorf("Expected defaultFlag: %v, got: %v", tt.expectedIsDefaultService, isDefaultService)
 			}
 		})
 	}
@@ -1445,7 +1453,7 @@ func TestMessageForPort(t *testing.T) {
 			expected: strings.Join([]string{
 				msgServeAvailable,
 				"",
-				fmt.Sprintf(msgRunningTunServie, "foo.test.ts.net"),
+				fmt.Sprintf(msgRunningTunService, "foo.test.ts.net"),
 				fmt.Sprintf(msgDisableServiceTun, "svc:foo"),
 				fmt.Sprintf(msgDisableService, "svc:foo"),
 			}, "\n"),
@@ -1786,7 +1794,6 @@ func TestSetServe(t *testing.T) {
 				t.Fatalf("got no error; expected error.")
 			}
 			if !tt.expectErr && !reflect.DeepEqual(tt.cfg, tt.expected) {
-				t.Logf("got: %v", tt.cfg.Services["svc:bar"].TCP[80])
 				t.Fatalf("got: %v; expected: %v", tt.cfg, tt.expected)
 			}
 		})

@@ -558,13 +558,13 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 
 	fwdAddr := "127.0.0.1:" + dstPortStr
 
-	if sc.IsServingWeb(srcPort, "") {
-		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
-	}
-
 	dnsName, err := e.getSelfDNSName(ctx)
 	if err != nil {
 		return err
+	}
+
+	if sc.IsServingWeb(srcPort, dnsName) {
+		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
 	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, dnsName)

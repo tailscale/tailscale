@@ -46,7 +46,7 @@ type bgBoolFlag struct {
 	SetByUser bool // tracks if the flag was set by the user
 }
 
-// Set sets the boolean flag and wether it's explicitly set by user based on the string value.
+// Set sets the boolean flag and whether it's explicitly set by user based on the string value.
 func (b *bgBoolFlag) Set(s string) error {
 	if s == "true" {
 		b.Value = true
@@ -237,9 +237,11 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 			return e.lc.SetServeConfig(ctx, sc)
 		}
+
 		if err := e.validateArgs(subcmd, args); err != nil {
 			return err
 		}
+
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 		defer cancel()
 
@@ -264,7 +266,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return fmt.Errorf("failed to clean the mount point: %w", err)
 		}
 
-		srvType, srvPort, wasDefaultServe, err := srvTypeAndPortFromFlags(e)
+		srvType, srvPort, isDefaultService, err := srvTypeAndPortFromFlags(e)
 		if err != nil {
 			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
 			return errHelpFunc(subcmd)
@@ -312,7 +314,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if forService {
 			err = tailcfg.ServiceName(e.service).Validate()
 			if err != nil {
-				return fmt.Errorf("failed to parse service name: %w", err)
+				return fmt.Errorf("invalid service name: %w", err)
 			}
 			dnsName = e.service
 		}
@@ -347,7 +349,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var msg string
-		if turnOff && !wasDefaultServe {
+		if turnOff && !isDefaultService {
 			// only unset serve when trying to unset with type and port flags.
 			err = e.unsetServe(sc, st, dnsName, srvType, srvPort, mount)
 		} else {
@@ -510,7 +512,7 @@ var (
 	msgServeAvailable       = "Available within your tailnet:"
 	msgServiceIPNotAssigned = "This service doesn't have VIPs assigned yet, once VIP is assigned, it will be available in your Tailnet as:"
 	msgRunningInBackground  = "%s started and running in the background."
-	msgRunningTunServie     = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
+	msgRunningTunService    = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
 	msgDisableProxy         = "To disable the proxy, run: tailscale %s --%s=%d off"
 	msgDisableServiceProxy  = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
 	msgDisableServiceTun    = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
@@ -570,7 +572,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString("\n\n")
 		svc := sc.FindServiceConfig(svcName)
 		if srvType == serveTypeTun && svc.Tun {
-			output.WriteString(fmt.Sprintf(msgRunningTunServie, host))
+			output.WriteString(fmt.Sprintf(msgRunningTunService, host))
 			output.WriteString("\n")
 			output.WriteString(fmt.Sprintf(msgDisableServiceTun, dnsName))
 			output.WriteString("\n")
@@ -761,7 +763,7 @@ func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName 
 	return nil
 }
 
-func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, wasDefault bool, err error) {
+func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, isDefaultService bool, err error) {
 	sourceMap := map[serveType]uint{
 		serveTypeHTTP:             e.http,
 		serveTypeHTTPS:            e.https,
@@ -770,6 +772,7 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, wa
 	}
 
 	var srcTypeCount int
+	var defaultFlags bool
 
 	for k, v := range sourceMap {
 		if v != 0 {
@@ -779,14 +782,14 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, wa
 			srcTypeCount++
 			srvType = k
 			srvPort = uint16(v)
-			wasDefault = false
+			defaultFlags = false
 		}
 	}
 
 	if e.tun {
 		srcTypeCount++
 		srvType = serveTypeTun
-		wasDefault = false
+		defaultFlags = false
 	}
 
 	if srcTypeCount > 1 {
@@ -794,10 +797,9 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, wa
 	} else if srcTypeCount == 0 {
 		srvType = serveTypeHTTPS
 		srvPort = 443
-		wasDefault = true
+		defaultFlags = true
 	}
-
-	return srvType, srvPort, wasDefault, nil
+	return srvType, srvPort, defaultFlags && e.service != "", nil
 }
 
 // isLegacyInvocation helps transition customers who have been using the beta
@@ -911,7 +913,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		dnsNameForService := svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
 		hp = ipn.HostPort(net.JoinHostPort(dnsNameForService, portStr))
 		if svc, ok := sc.Services[svcName]; !ok || svc == nil {
-			return errors.New("error: service does not exist")
+			return errors.New("service does not exist")
 		} else {
 			webServeMap = svc.Web
 		}
@@ -940,7 +942,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	}
 
 	if !targetExists {
-		return errors.New("error: handler does not exist")
+		return errors.New("handler does not exist")
 	}
 
 	if len(mounts) > 1 {
@@ -965,7 +967,7 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, dnsName string, src uint1
 		return nil
 	}
 	if sc.GetTCPPortHandler(src, dnsName) == nil {
-		return errors.New("error: serve config does not exist")
+		return errors.New("serve config does not exist")
 	}
 	if sc.IsServingWeb(src, dnsName) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
@@ -981,10 +983,10 @@ func (e *serveEnv) removeTunServe(sc *ipn.ServeConfig, dnsName string) error {
 	svcName := tailcfg.ServiceName(dnsName)
 	svc, ok := sc.Services[svcName]
 	if !ok || svc == nil {
-		return errors.New("error: service does not exist")
+		return errors.New("service does not exist")
 	}
 	if !svc.Tun {
-		return errors.New("error: service is not being served in TUN mode")
+		return errors.New("service is not being served in TUN mode")
 	}
 	delete(sc.Services, svcName)
 	if len(sc.Services) == 0 {
