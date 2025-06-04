@@ -467,15 +467,24 @@ func TestControlHealth(t *testing.T) {
 	baseWarns := ht.CurrentState().Warnings
 	baseStrs := ht.Strings()
 
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+	msgs := map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
 		"control-health-test": {
 			Title: "Control health message",
-			Text:  "Extra help",
+			Text:  "Extra help.",
 		},
 		"control-health-title": {
 			Title: "Control health title only",
 		},
-	})
+		"control-health-with-action": {
+			Title: "Control health message",
+			Text:  "Extra help.",
+			PrimaryAction: &tailcfg.DisplayMessageAction{
+				URL:   "http://www.example.com",
+				Label: "Learn more",
+			},
+		},
+	}
+	ht.SetControlHealth(msgs)
 
 	t.Run("Warnings", func(t *testing.T) {
 		wantWarns := map[WarnableCode]UnhealthyState{
@@ -483,12 +492,22 @@ func TestControlHealth(t *testing.T) {
 				WarnableCode: "control-health-test",
 				Severity:     SeverityMedium,
 				Title:        "Control health message",
-				Text:         "Extra help",
+				Text:         "Extra help.",
 			},
 			"control-health-title": {
 				WarnableCode: "control-health-title",
 				Severity:     SeverityMedium,
 				Title:        "Control health title only",
+			},
+			"control-health-with-action": {
+				WarnableCode: "control-health-with-action",
+				Severity:     SeverityMedium,
+				Title:        "Control health message",
+				Text:         "Extra help.",
+				PrimaryAction: &UnhealthyStateAction{
+					URL:   "http://www.example.com",
+					Label: "Learn more",
+				},
 			},
 		}
 		state := ht.CurrentState()
@@ -505,8 +524,9 @@ func TestControlHealth(t *testing.T) {
 
 	t.Run("Strings()", func(t *testing.T) {
 		wantStrs := []string{
-			"Control health message: Extra help",
-			"Control health title only",
+			"Control health message: Extra help.",
+			"Control health message: Extra help. Learn more: http://www.example.com",
+			"Control health title only.",
 		}
 		var gotStrs []string
 		for _, s := range ht.Strings() {
@@ -527,8 +547,7 @@ func TestControlHealth(t *testing.T) {
 			Type: MetricLabelWarning,
 		}).String()
 		want := strconv.Itoa(
-			2 + // from SetControlHealth
-				len(baseStrs),
+			len(msgs) + len(baseStrs),
 		)
 		if got != want {
 			t.Errorf("metricsHealthMessage.Get(warning) = %q, want %q", got, want)
