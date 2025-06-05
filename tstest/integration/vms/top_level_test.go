@@ -14,17 +14,13 @@ import (
 	expect "github.com/tailscale/goexpect"
 )
 
-func TestRunUbuntu1804(t *testing.T) {
+func TestRunUbuntu2404(t *testing.T) {
 	testOneDistribution(t, 0, Distros[0])
 }
 
-func TestRunUbuntu2004(t *testing.T) {
-	testOneDistribution(t, 1, Distros[1])
-}
-
-func TestRunNixos2111(t *testing.T) {
+func TestRunNixos2505(t *testing.T) {
 	t.Parallel()
-	testOneDistribution(t, 2, Distros[2])
+	testOneDistribution(t, 1, Distros[1])
 }
 
 // TestMITMProxy is a smoke test for derphttp through a MITM proxy.
@@ -39,13 +35,7 @@ func TestRunNixos2111(t *testing.T) {
 func TestMITMProxy(t *testing.T) {
 	t.Parallel()
 	setupTests(t)
-	distro := Distros[2] // nixos-21.11
-
-	if distroRex.Unwrap().MatchString(distro.Name) {
-		t.Logf("%s matches %s", distro.Name, distroRex.Unwrap())
-	} else {
-		t.Skip("regex not matched")
-	}
+	distro := Distros[1] // nixos-25.05
 
 	ctx, done := context.WithCancel(context.Background())
 	t.Cleanup(done)
