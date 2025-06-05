@@ -44,9 +44,10 @@ const (
 type ProxyClassReconciler struct {
 	client.Client
 
-	recorder record.EventRecorder
-	logger   *zap.SugaredLogger
-	clock    tstime.Clock
+	recorder    record.EventRecorder
+	logger      *zap.SugaredLogger
+	clock       tstime.Clock
+	tsNamespace string
 
 	mu sync.Mutex // protects following
 
@@ -181,6 +182,17 @@ func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyCl
 	if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && len(pc.Spec.Metrics.ServiceMonitor.Labels) > 0 {
 		if errs := metavalidation.ValidateLabels(pc.Spec.Metrics.ServiceMonitor.Labels.Parse(), field.NewPath(".spec.metrics.serviceMonitor.labels")); errs != nil {
 			violations = append(violations, errs...)
+		}
+	}
+
+	if tlc := pc.Spec.TailnetListenerConfig; tlc != nil {
+		if tlc.Type == tsapi.TailnetListenerConfigMode(corev1.ServiceTypeNodePort) && tlc.NodePortConfig == nil {
+			violations = append(violations, field.TypeInvalid(field.NewPath("spec", "tailnetListener"), "nodePortConfig", fmt.Sprintf("cannot be empty if `spec.tailnetListener.Type` is set to `NodePort`")))
+		}
+		if tlc.NodePortConfig != nil && len(tlc.NodePortConfig.PortRanges) > 0 {
+			if _, err := validatePortRanges(ctx, pcr.Client, pcr.tsNamespace, tlc.NodePortConfig.PortRanges, pcr.logger); err != nil {
+				violations = append(violations, field.TypeInvalid(field.NewPath("spec", "tailnetListener", "nodePortConfig"), "portRanges", err.Error()))
+			}
 		}
 	}
 	// We do not validate embedded fields (security context, resource

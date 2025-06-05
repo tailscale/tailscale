@@ -101,6 +101,10 @@ type ProxyGroupStatus struct {
 	Devices []TailnetDevice `json:"devices,omitempty"`
 }
 
+type TailnetListener struct {
+	Endpoints []string `json:"endpoint"`
+}
+
 type TailnetDevice struct {
 	// Hostname is the fully qualified domain name of the device.
 	// If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
@@ -111,6 +115,10 @@ type TailnetDevice struct {
 	// assigned to the device.
 	// +optional
 	TailnetIPs []string `json:"tailnetIPs,omitempty"`
+
+	// TailnetListener is the configuration set on the device to facilitate direct
+	// connections
+	TailnetListeners []string `json:"tailnetListeners"`
 }
 
 // +kubebuilder:validation:Type=string
