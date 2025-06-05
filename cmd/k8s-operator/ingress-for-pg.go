@@ -318,9 +318,9 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		tags = strings.Split(tstr, ",")
 	}
 
-	tsSvcPorts := []string{"443"} // always 443 for Ingress
+	tsSvcPorts := []string{"tcp:443"} // always 443 for Ingress
 	if isHTTPEndpointEnabled(ing) {
-		tsSvcPorts = append(tsSvcPorts, "80")
+		tsSvcPorts = append(tsSvcPorts, "tcp:80")
 	}
 
 	tsSvc := &tailscale.VIPService{
