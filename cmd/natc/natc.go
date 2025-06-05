@@ -59,6 +59,7 @@ func main() {
 		wgPort          = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
 		clusterTag      = fs.String("cluster-tag", "", "optionally run in a consensus cluster with other nodes with this tag")
 		server          = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
+		clusterStateDir = fs.String("cluster-state-dir", "", "path to directory in which to store raft state")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -155,7 +156,7 @@ func main() {
 	var ipp ippool.IPPool
 	if *clusterTag != "" {
 		cipp := ippool.NewConsensusIPPool(addrPool)
-		err = cipp.StartConsensus(ctx, ts, *clusterTag)
+		err = cipp.StartConsensus(ctx, ts, *clusterTag, *clusterStateDir)
 		if err != nil {
 			log.Fatalf("StartConsensus: %v", err)
 		}
