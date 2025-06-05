@@ -66,10 +66,10 @@ var (
 		// fragmented, and we don't want to handle reassembly.
 		bpf.LoadAbsolute{Off: 6, Size: 2},
 		// More Fragments bit set means this is part of a fragmented packet.
-		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x2000, SkipTrue: 7, SkipFalse: 0},
+		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x2000, SkipTrue: 8, SkipFalse: 0},
 		// Non-zero fragment offset with MF=0 means this is the last
 		// fragment of packet.
-		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x1fff, SkipTrue: 6, SkipFalse: 0},
+		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x1fff, SkipTrue: 7, SkipFalse: 0},
 
 		// Load IP header length into X register.
 		bpf.LoadMemShift{Off: 0},
