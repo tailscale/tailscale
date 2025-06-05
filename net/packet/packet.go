@@ -51,10 +51,11 @@ type Parsed struct {
 	IPVersion uint8
 	// IPProto is the IP subprotocol (UDP, TCP, etc.). Valid iff IPVersion != 0.
 	IPProto ipproto.Proto
-	// SrcIP4 is the source address. Family matches IPVersion. Port is
-	// valid iff IPProto == TCP || IPProto == UDP.
+	// Src is the source address. Family matches IPVersion. Port is
+	// valid iff IPProto == TCP || IPProto == UDP || IPProto == SCTP.
 	Src netip.AddrPort
-	// DstIP4 is the destination address. Family matches IPVersion.
+	// Dst is the destination address. Family matches IPVersion. Port is
+	// valid iff IPProto == TCP || IPProto == UDP || IPProto == SCTP.
 	Dst netip.AddrPort
 	// TCPFlags is the packet's TCP flag bits. Valid iff IPProto == TCP.
 	TCPFlags TCPFlag
