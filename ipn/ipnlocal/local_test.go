@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -5422,10 +5423,11 @@ func TestDisplayMessages(t *testing.T) {
 	})
 
 	state := ht.CurrentState()
-	_, ok := state.Warnings["test-message"]
+	wantID := health.WarnableCode("control-health.test-message")
+	_, ok := state.Warnings[wantID]
 
 	if !ok {
-		t.Error("no warning found with id 'test-message'")
+		t.Errorf("no warning found with id %q", wantID)
 	}
 }
 
@@ -5455,14 +5457,15 @@ func TestDisplayMessagesURLFilter(t *testing.T) {
 	})
 
 	state := ht.CurrentState()
-	got, ok := state.Warnings["test-message"]
+	wantID := health.WarnableCode("control-health.test-message")
+	got, ok := state.Warnings[wantID]
 
 	if !ok {
-		t.Fatal("no warning found with id 'test-message'")
+		t.Fatalf("no warning found with id %q", wantID)
 	}
 
 	want := health.UnhealthyState{
-		WarnableCode: "test-message",
+		WarnableCode: wantID,
 		Title:        "Testing",
 		Severity:     health.SeverityHigh,
 	}
@@ -5494,12 +5497,14 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 		},
 	}
 
+	wantID := health.WarnableCode("control-health.test-message")
+
 	for _, tt := range []test{
 		{
 			name: "older-client-no-actions",
 			mask: 0,
 			wantWarning: health.UnhealthyState{
-				WarnableCode:  "test-message",
+				WarnableCode:  wantID,
 				Severity:      health.SeverityMedium,
 				Title:         "Message title",
 				Text:          "Message text. Learn more: https://example.com", // PrimaryAction appended to text
@@ -5510,7 +5515,7 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 			name: "new-client-with-actions",
 			mask: ipn.NotifyHealthActions,
 			wantWarning: health.UnhealthyState{
-				WarnableCode: "test-message",
+				WarnableCode: wantID,
 				Severity:     health.SeverityMedium,
 				Title:        "Message title",
 				Text:         "Message text.",
@@ -5530,17 +5535,20 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 
 			ipnWatcher := newNotificationWatcher(t, lb, nil)
 			ipnWatcher.watch(tt.mask, []wantedNotification{{
-				name: "test",
+				name: fmt.Sprintf("warning with ID %q", wantID),
 				cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
 					if n.Health == nil {
 						return false
 					}
-					got, ok := n.Health.Warnings["test-message"]
+					got, ok := n.Health.Warnings[wantID]
 					if ok {
 						if diff := cmp.Diff(tt.wantWarning, got); diff != "" {
 							t.Errorf("unexpected warning details (-want/+got):\n%s", diff)
 							return true // we failed the test so tell the watcher we've seen what we need to to stop it waiting
 						}
+					} else {
+						got := slices.Collect(maps.Keys(n.Health.Warnings))
+						t.Logf("saw warnings: %v", got)
 					}
 					return ok
 				},
