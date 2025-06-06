@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -59,7 +60,7 @@ func main() {
 		wgPort          = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
 		clusterTag      = fs.String("cluster-tag", "", "optionally run in a consensus cluster with other nodes with this tag")
 		server          = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
-		clusterStateDir = fs.String("cluster-state-dir", "", "path to directory in which to store raft state")
+		stateDir        = fs.String("state-dir", "", "path to directory in which to store app state")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -96,6 +97,7 @@ func main() {
 	}
 	ts := &tsnet.Server{
 		Hostname: *hostname,
+		Dir:      *stateDir,
 	}
 	ts.ControlURL = *server
 	if *wgPort != 0 {
@@ -156,7 +158,11 @@ func main() {
 	var ipp ippool.IPPool
 	if *clusterTag != "" {
 		cipp := ippool.NewConsensusIPPool(addrPool)
-		err = cipp.StartConsensus(ctx, ts, *clusterTag, *clusterStateDir)
+		clusterStateDir, err := getClusterStatePath(*stateDir)
+		if err != nil {
+			log.Fatalf("Creating cluster state dir failed: %v", err)
+		}
+		err = cipp.StartConsensus(ctx, ts, *clusterTag, clusterStateDir)
 		if err != nil {
 			log.Fatalf("StartConsensus: %v", err)
 		}
@@ -569,4 +575,29 @@ func proxyTCPConn(c net.Conn, dest string, ctor *connector) {
 	})
 
 	p.Start()
+}
+
+func getClusterStatePath(stateDirFlag string) (string, error) {
+	var dirPath string
+	if stateDirFlag != "" {
+		dirPath = stateDirFlag
+	} else {
+		confDir, err := os.UserConfigDir()
+		if err != nil {
+			return "", err
+		}
+		dirPath = filepath.Join(confDir, "nat-connector-state")
+	}
+	dirPath = filepath.Join(dirPath, "cluster")
+
+	if err := os.MkdirAll(dirPath, 0700); err != nil {
+		return "", err
+	}
+	if fi, err := os.Stat(dirPath); err != nil {
+		return "", err
+	} else if !fi.IsDir() {
+		return "", fmt.Errorf("%v is not a directory", dirPath)
+	}
+
+	return dirPath, nil
 }
