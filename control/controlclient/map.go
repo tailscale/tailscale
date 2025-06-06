@@ -853,7 +853,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 	} else if len(ms.lastHealth) > 0 {
 		// Convert all ms.lastHealth to the new [netmap.NetworkMap.DisplayMessages]
 		for _, h := range ms.lastHealth {
-			id := "control-health-" + strhash(h) // Unique ID in case there is more than one health message
+			id := "health-" + strhash(h) // Unique ID in case there is more than one health message
 			mak.Set(&msgs, tailcfg.DisplayMessageID(id), tailcfg.DisplayMessage{
 				Title:    "Coordination server reports an issue",
 				Severity: tailcfg.SeverityMedium,

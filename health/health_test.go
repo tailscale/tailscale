@@ -468,14 +468,14 @@ func TestControlHealth(t *testing.T) {
 	baseStrs := ht.Strings()
 
 	msgs := map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"control-health-test": {
+		"test": {
 			Title: "Control health message",
 			Text:  "Extra help.",
 		},
-		"control-health-title": {
+		"title": {
 			Title: "Control health title only",
 		},
-		"control-health-with-action": {
+		"with-action": {
 			Title: "Control health message",
 			Text:  "Extra help.",
 			PrimaryAction: &tailcfg.DisplayMessageAction{
@@ -488,19 +488,19 @@ func TestControlHealth(t *testing.T) {
 
 	t.Run("Warnings", func(t *testing.T) {
 		wantWarns := map[WarnableCode]UnhealthyState{
-			"control-health-test": {
-				WarnableCode: "control-health-test",
+			"control-health.test": {
+				WarnableCode: "control-health.test",
 				Severity:     SeverityMedium,
 				Title:        "Control health message",
 				Text:         "Extra help.",
 			},
-			"control-health-title": {
-				WarnableCode: "control-health-title",
+			"control-health.title": {
+				WarnableCode: "control-health.title",
 				Severity:     SeverityMedium,
 				Title:        "Control health title only",
 			},
-			"control-health-with-action": {
-				WarnableCode: "control-health-with-action",
+			"control-health.with-action": {
+				WarnableCode: "control-health.with-action",
 				Severity:     SeverityMedium,
 				Title:        "Control health message",
 				Text:         "Extra help.",
