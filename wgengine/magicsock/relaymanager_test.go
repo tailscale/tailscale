@@ -4,7 +4,6 @@
 package magicsock
 
 import (
-	"net/netip"
 	"testing"
 
 	"tailscale.com/disco"
@@ -25,6 +24,6 @@ func TestRelayManagerInitAndIdle(t *testing.T) {
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}
-	rm.handleGeneveEncapDiscoMsgNotBestAddr(&disco.BindUDPRelayEndpointChallenge{}, &discoInfo{}, netip.AddrPort{}, 0)
+	rm.handleGeneveEncapDiscoMsgNotBestAddr(&disco.BindUDPRelayEndpointChallenge{}, &discoInfo{}, epAddr{})
 	<-rm.runLoopStoppedCh
 }

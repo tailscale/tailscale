@@ -159,9 +159,13 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 		return make([]byte, len+packet.GeneveFixedHeaderLength, cap+packet.GeneveFixedHeaderLength)
 	}
 
+	vni1 := virtualNetworkID{}
+	vni1.set(1)
+
 	cases := []struct {
 		name     string
 		buffs    [][]byte
+		vni      virtualNetworkID
 		wantLens []int
 		wantGSO  []int
 	}{
@@ -174,6 +178,15 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{0},
 		},
 		{
+			name: "one message no coalesce vni.isSet",
+			buffs: [][]byte{
+				withGeneveSpace(1, 1),
+			},
+			vni:      vni1,
+			wantLens: []int{1 + packet.GeneveFixedHeaderLength},
+			wantGSO:  []int{0},
+		},
+		{
 			name: "two messages equal len coalesce",
 			buffs: [][]byte{
 				withGeneveSpace(1, 2),
@@ -183,6 +196,16 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{1},
 		},
 		{
+			name: "two messages equal len coalesce vni.isSet",
+			buffs: [][]byte{
+				withGeneveSpace(1, 2+packet.GeneveFixedHeaderLength),
+				withGeneveSpace(1, 1),
+			},
+			vni:      vni1,
+			wantLens: []int{2 + (2 * packet.GeneveFixedHeaderLength)},
+			wantGSO:  []int{1 + packet.GeneveFixedHeaderLength},
+		},
+		{
 			name: "two messages unequal len coalesce",
 			buffs: [][]byte{
 				withGeneveSpace(2, 3),
@@ -190,6 +213,16 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			},
 			wantLens: []int{3},
 			wantGSO:  []int{2},
+		},
+		{
+			name: "two messages unequal len coalesce vni.isSet",
+			buffs: [][]byte{
+				withGeneveSpace(2, 3+packet.GeneveFixedHeaderLength),
+				withGeneveSpace(1, 1),
+			},
+			vni:      vni1,
+			wantLens: []int{3 + (2 * packet.GeneveFixedHeaderLength)},
+			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength},
 		},
 		{
 			name: "three messages second unequal len coalesce",
@@ -202,6 +235,17 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			wantGSO:  []int{2, 0},
 		},
 		{
+			name: "three messages second unequal len coalesce vni.isSet",
+			buffs: [][]byte{
+				withGeneveSpace(2, 3+(2*packet.GeneveFixedHeaderLength)),
+				withGeneveSpace(1, 1),
+				withGeneveSpace(2, 2),
+			},
+			vni:      vni1,
+			wantLens: []int{3 + (2 * packet.GeneveFixedHeaderLength), 2 + packet.GeneveFixedHeaderLength},
+			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
+		},
+		{
 			name: "three messages limited cap coalesce",
 			buffs: [][]byte{
 				withGeneveSpace(2, 4),
@@ -210,6 +254,17 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			},
 			wantLens: []int{4, 2},
 			wantGSO:  []int{2, 0},
+		},
+		{
+			name: "three messages limited cap coalesce vni.isSet",
+			buffs: [][]byte{
+				withGeneveSpace(2, 4+packet.GeneveFixedHeaderLength),
+				withGeneveSpace(2, 2),
+				withGeneveSpace(2, 2),
+			},
+			vni:      vni1,
+			wantLens: []int{4 + (2 * packet.GeneveFixedHeaderLength), 2 + packet.GeneveFixedHeaderLength},
+			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
 		},
 	}
 
@@ -224,7 +279,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				msgs[i].Buffers = make([][]byte, 1)
 				msgs[i].OOB = make([]byte, 0, 2)
 			}
-			got := c.coalesceMessages(addr, tt.buffs, msgs, packet.GeneveFixedHeaderLength)
+			got := c.coalesceMessages(addr, tt.vni, tt.buffs, msgs, packet.GeneveFixedHeaderLength)
 			if got != len(tt.wantLens) {
 				t.Fatalf("got len %d want: %d", got, len(tt.wantLens))
 			}

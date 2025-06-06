@@ -740,8 +740,11 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		return 0, nil
 	}
 
-	ipp := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))
-	if c.handleDiscoMessage(b[:n], ipp, dm.src, discoRXPathDERP) {
+	srcAddr := epAddr{ap: netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))}
+	pt, isGeneveEncap := packetLooksLike(b[:n])
+	if pt == packetLooksLikeDisco &&
+		!isGeneveEncap { // We should never receive Geneve-encapsulated disco over DERP.
+		c.handleDiscoMessage(b[:n], srcAddr, false, dm.src, discoRXPathDERP)
 		return 0, nil
 	}
 
@@ -755,9 +758,9 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		return 0, nil
 	}
 
-	ep.noteRecvActivity(ipp, mono.Now())
+	ep.noteRecvActivity(srcAddr, mono.Now())
 	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, dm.n)
+		stats.UpdateRxPhysical(ep.nodeAddr, srcAddr.ap, 1, dm.n)
 	}
 
 	c.metrics.inboundPacketsDERPTotal.Add(1)

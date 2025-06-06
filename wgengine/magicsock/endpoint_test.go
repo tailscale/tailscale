@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dsnet/try"
 	"tailscale.com/types/key"
 )
 
@@ -154,7 +153,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 		lower = b
 		higher = a
 	}
-	addr := addrQuality{AddrPort: try.E1[netip.AddrPort](netip.ParseAddrPort("1.1.1.1:1"))}
+	addr := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("1.1.1.1:1")}}
 	newProbeUDPLifetime := func() *probeUDPLifetime {
 		return &probeUDPLifetime{
 			config: *defaultProbeUDPLifetimeConfig,
