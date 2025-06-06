@@ -112,7 +112,7 @@ func (t *Tracker) CurrentState() *State {
 
 	for id, msg := range t.lastNotifiedControlMessages {
 		state := UnhealthyState{
-			WarnableCode:        WarnableCode(id),
+			WarnableCode:        WarnableCode("control-health." + id),
 			Severity:            severityFromTailcfg(msg.Severity),
 			Title:               msg.Title,
 			Text:                msg.Text,

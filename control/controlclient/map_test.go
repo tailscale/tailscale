@@ -1340,14 +1340,14 @@ func TestNetmapHealthIntegration(t *testing.T) {
 	ht.SetControlHealth(nm.DisplayMessages)
 
 	want := map[health.WarnableCode]health.UnhealthyState{
-		"control-health-c0719e9a8d5d838d861dc6f675c899d2b309a3a65bb9fe6b11e5afcbf9a2c0b1": {
-			WarnableCode: "control-health-c0719e9a8d5d838d861dc6f675c899d2b309a3a65bb9fe6b11e5afcbf9a2c0b1",
+		"control-health.health-c0719e9a8d5d838d861dc6f675c899d2b309a3a65bb9fe6b11e5afcbf9a2c0b1": {
+			WarnableCode: "control-health.health-c0719e9a8d5d838d861dc6f675c899d2b309a3a65bb9fe6b11e5afcbf9a2c0b1",
 			Title:        "Coordination server reports an issue",
 			Severity:     health.SeverityMedium,
 			Text:         "The coordination server is reporting a health issue: Test message",
 		},
-		"control-health-1dc7017a73a3c55c0d6a8423e3813c7ab6562d9d3064c2ec6ac7822f61b1db9c": {
-			WarnableCode: "control-health-1dc7017a73a3c55c0d6a8423e3813c7ab6562d9d3064c2ec6ac7822f61b1db9c",
+		"control-health.health-1dc7017a73a3c55c0d6a8423e3813c7ab6562d9d3064c2ec6ac7822f61b1db9c": {
+			WarnableCode: "control-health.health-1dc7017a73a3c55c0d6a8423e3813c7ab6562d9d3064c2ec6ac7822f61b1db9c",
 			Title:        "Coordination server reports an issue",
 			Severity:     health.SeverityMedium,
 			Text:         "The coordination server is reporting a health issue: Another message",
@@ -1401,8 +1401,8 @@ func TestNetmapDisplayMessageIntegration(t *testing.T) {
 	}
 
 	want := map[health.WarnableCode]health.UnhealthyState{
-		"test-message": {
-			WarnableCode:        "test-message",
+		"control-health.test-message": {
+			WarnableCode:        "control-health.test-message",
 			Title:               "Testing",
 			Text:                "This is a test message",
 			Severity:            health.SeverityHigh,
