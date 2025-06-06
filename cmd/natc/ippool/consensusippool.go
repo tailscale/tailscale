@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -155,11 +153,7 @@ func (ipp *ConsensusIPPool) domainLookup(from tailcfg.NodeID, addr netip.Addr) (
 func (ipp *ConsensusIPPool) StartConsensus(ctx context.Context, ts *tsnet.Server, clusterTag string, clusterStateDir string) error {
 	cfg := tsconsensus.DefaultConfig()
 	cfg.ServeDebugMonitor = true
-	var err error
-	cfg.StateDirPath, err = getStatePath(clusterStateDir)
-	if err != nil {
-		return err
-	}
+	cfg.StateDirPath = clusterStateDir
 	cns, err := tsconsensus.Start(ctx, ts, ipp, clusterTag, cfg)
 	if err != nil {
 		return err
@@ -209,30 +203,6 @@ func (ps *consensusPerPeerState) unusedIPV4(ipset *netipx.IPSet, reuseDeadline t
 		}
 	}
 	return netip.Addr{}, false, "", errors.New("ip pool exhausted")
-}
-
-func getStatePath(pathFromFlag string) (string, error) {
-	var dirPath string
-	if pathFromFlag != "" {
-		dirPath = pathFromFlag
-	} else {
-		confDir, err := os.UserConfigDir()
-		if err != nil {
-			return "", err
-		}
-		dirPath = filepath.Join(confDir, "nat-connector-cluster-state")
-	}
-
-	if err := os.MkdirAll(dirPath, 0700); err != nil {
-		return "", err
-	}
-	if fi, err := os.Stat(dirPath); err != nil {
-		return "", err
-	} else if !fi.IsDir() {
-		return "", fmt.Errorf("%v is not a directory", dirPath)
-	}
-
-	return dirPath, nil
 }
 
 // isCloseToExpiry returns true if the lastUsed and now times are more than
