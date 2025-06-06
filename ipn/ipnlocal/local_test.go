@@ -5134,10 +5134,17 @@ func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
 	}
 }
 
-func TestUpdateIngressLocked(t *testing.T) {
+func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
+	prefs := ipn.NewPrefs().View()
+	previousSC := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:abc": {Tun: true},
+		},
+	}
 	tests := []struct {
 		name              string
 		hi                *tailcfg.Hostinfo
+		hasPreviousSC     bool // whether to overwrite the ServeConfig hash in the Hostinfo using previousSC
 		sc                *ipn.ServeConfig
 		wantIngress       bool
 		wantWireIngress   bool
@@ -5164,6 +5171,16 @@ func TestUpdateIngressLocked(t *testing.T) {
 			wantControlUpdate: true,
 		},
 		{
+			name: "empty_hostinfo_service_configured",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+			wantControlUpdate: true,
+		},
+		{
 			name: "empty_hostinfo_funnel_disabled",
 			hi:   &tailcfg.Hostinfo{},
 			sc: &ipn.ServeConfig{
@@ -5175,7 +5192,7 @@ func TestUpdateIngressLocked(t *testing.T) {
 			wantControlUpdate: true,
 		},
 		{
-			name: "empty_hostinfo_no_funnel",
+			name: "empty_hostinfo_no_funnel_no_service",
 			hi:   &tailcfg.Hostinfo{},
 			sc: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -5197,6 +5214,16 @@ func TestUpdateIngressLocked(t *testing.T) {
 			wantWireIngress: false, // implied by wantIngress
 		},
 		{
+			name:          "service_hash_no_change",
+			hi:            &tailcfg.Hostinfo{},
+			hasPreviousSC: true,
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+		},
+		{
 			name: "funnel_disabled_no_change",
 			hi: &tailcfg.Hostinfo{
 				WireIngress: true,
@@ -5207,6 +5234,13 @@ func TestUpdateIngressLocked(t *testing.T) {
 				},
 			},
 			wantWireIngress: true, // true if there is any AllowFunnel block
+		},
+		{
+			name:              "service_got_removed",
+			hi:                &tailcfg.Hostinfo{},
+			hasPreviousSC:     true,
+			sc:                &ipn.ServeConfig{},
+			wantControlUpdate: true,
 		},
 		{
 			name: "funnel_changes_to_disabled",
@@ -5235,12 +5269,35 @@ func TestUpdateIngressLocked(t *testing.T) {
 			wantWireIngress:   false, // implied by wantIngress
 			wantControlUpdate: true,
 		},
+		{
+			name: "both_funnel_and_service_changes",
+			hi: &tailcfg.Hostinfo{
+				IngressEnabled: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+			wantWireIngress:   true, // true if there is any AllowFunnel block
+			wantControlUpdate: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			b := newTestLocalBackend(t)
 			b.hostinfo = tt.hi
+			if tt.hasPreviousSC {
+				b.mu.Lock()
+				b.serveConfig = previousSC.View()
+				b.hostinfo.ServicesHash = b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
+				b.mu.Unlock()
+			}
 			b.serveConfig = tt.sc.View()
 			allDone := make(chan bool, 1)
 			defer b.goTracker.AddDoneCallback(func() {
@@ -5256,7 +5313,7 @@ func TestUpdateIngressLocked(t *testing.T) {
 			})()
 
 			was := b.goTracker.StartedGoroutines()
-			b.updateIngressLocked()
+			b.updateIngressAndServiceHashLocked(prefs)
 
 			if tt.hi != nil {
 				if tt.hi.IngressEnabled != tt.wantIngress {
@@ -5264,6 +5321,12 @@ func TestUpdateIngressLocked(t *testing.T) {
 				}
 				if tt.hi.WireIngress != tt.wantWireIngress {
 					t.Errorf("WireIngress = %v, want %v", tt.hi.WireIngress, tt.wantWireIngress)
+				}
+				b.mu.Lock()
+				svcHash := b.vipServiceHash(b.vipServicesFromPrefsLocked(prefs))
+				b.mu.Unlock()
+				if tt.hi.ServicesHash != svcHash {
+					t.Errorf("ServicesHash = %v, want %v", tt.hi.ServicesHash, svcHash)
 				}
 			}
 
