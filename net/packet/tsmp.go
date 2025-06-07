@@ -19,6 +19,8 @@ import (
 	"tailscale.com/types/ipproto"
 )
 
+const minTSMPSize = 7 // the rejected body is 7 bytes
+
 // TailscaleRejectedHeader is a TSMP message that says that one
 // Tailscale node has rejected the connection from another. Unlike a
 // TCP RST, this includes a reason.

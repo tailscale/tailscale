@@ -8,6 +8,7 @@ import (
 	"math"
 )
 
+const igmpHeaderLength = 8
 const tcpHeaderLength = 20
 const sctpHeaderLength = 12
 
