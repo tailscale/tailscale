@@ -24,6 +24,11 @@ import (
 // relayManager manages allocation, handshaking, and initial probing (disco
 // ping/pong) of [tailscale.com/net/udprelay.Server] endpoints. The zero value
 // is ready for use.
+//
+// [relayManager] methods can be called by [Conn] and [endpoint] while their .mu
+// mutexes are held. Therefore, in order to avoid deadlocks, [relayManager] must
+// never attempt to acquire those mutexes, including synchronous calls back
+// towards [Conn] or [endpoint] methods that acquire them.
 type relayManager struct {
 	initOnce sync.Once
 
@@ -164,6 +169,7 @@ func (r *relayManager) runLoop() {
 }
 
 type relayHandshakeDiscoMsgEvent struct {
+	conn  *Conn // for access to [Conn] if there is no associated [relayHandshakeWork]
 	msg   disco.Message
 	disco key.DiscoPublic
 	from  netip.AddrPort
@@ -366,7 +372,7 @@ func (r *relayManager) handleRxHandshakeDiscoMsgRunLoop(event relayHandshakeDisc
 		ok   bool
 	)
 	apv := addrPortVNI{event.from, event.vni}
-	switch event.msg.(type) {
+	switch msg := event.msg.(type) {
 	case *disco.BindUDPRelayEndpointChallenge:
 		work, ok = r.handshakeWorkByServerDiscoVNI[serverDiscoVNI{event.disco, event.vni}]
 		if !ok {
@@ -392,7 +398,29 @@ func (r *relayManager) handleRxHandshakeDiscoMsgRunLoop(event relayHandshakeDisc
 		// Update state so that future ping/pong will route to 'work'.
 		r.handshakeWorkAwaitingPong[work] = apv
 		r.addrPortVNIToHandshakeWork[apv] = work
-	case *disco.Ping, *disco.Pong:
+	case *disco.Ping:
+		// Always TX a pong. We might not have any associated work if ping
+		// reception raced with our call to [endpoint.relayEndpointReady()], so
+		// err on the side of enabling the remote side to use this path.
+		//
+		// Conn.handlePingLocked() makes efforts to suppress duplicate pongs
+		// where the same ping can be received both via raw socket and UDP
+		// socket on Linux. We make no such efforts here as the raw socket BPF
+		// program does not support Geneve-encapsulated disco, and is also
+		// disabled by default.
+		vni := virtualNetworkID{}
+		vni.set(event.vni)
+		go event.conn.sendDiscoMessage(epAddr{ap: event.from, vni: vni}, key.NodePublic{}, event.disco, &disco.Pong{
+			TxID: msg.TxID,
+			Src:  event.from,
+		}, discoVerboseLog)
+
+		work, ok = r.addrPortVNIToHandshakeWork[apv]
+		if !ok {
+			// No outstanding work tied to this [addrPortVNI], return early.
+			return
+		}
+	case *disco.Pong:
 		work, ok = r.addrPortVNIToHandshakeWork[apv]
 		if !ok {
 			// No outstanding work tied to this [addrPortVNI], discard.
@@ -436,9 +464,13 @@ func (r *relayManager) handleHandshakeWorkDoneRunLoop(done relayEndpointHandshak
 		return
 	}
 	// This relay endpoint is functional.
-	// TODO(jwhited): Set it on done.work.ep.bestAddr if it is a betterAddr().
-	//  We also need to conn.peerMap.setNodeKeyForEpAddr(), and ensure we clean
-	//  it up when bestAddr changes, too.
+	vni := virtualNetworkID{}
+	vni.set(done.work.se.VNI)
+	addr := epAddr{ap: done.pongReceivedFrom, vni: vni}
+	// ep.relayEndpointReady() must be called in a new goroutine to prevent
+	// deadlocks as it acquires [endpoint] & [Conn] mutexes. See [relayManager]
+	// docs for details.
+	go done.work.ep.relayEndpointReady(addr, done.latency)
 }
 
 func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelayServerEndpointEvent) {
@@ -613,6 +645,9 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 				// latency, so send another ping. Since the handshake is
 				// complete we do not need to send an answer in front of this
 				// one.
+				//
+				// We don't need to TX a pong, that was already handled for us
+				// in handleRxHandshakeDiscoMsgRunLoop().
 				txPing(msgEvent.from, nil)
 			case *disco.Pong:
 				at, ok := sentPingAt[msg.TxID]

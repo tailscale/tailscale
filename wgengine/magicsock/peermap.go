@@ -36,6 +36,18 @@ type peerMap struct {
 	byEpAddr  map[epAddr]*peerInfo
 	byNodeID  map[tailcfg.NodeID]*peerInfo
 
+	// relayEpAddrByNodeKey ensures we only hold a single relay
+	// [epAddr] (vni.isSet()) for a given node key in byEpAddr, vs letting them
+	// grow unbounded. Relay [epAddr]'s are dynamically created by
+	// [relayManager] during path discovery, and are only useful to track in
+	// peerMap so long as they are the endpoint.bestAddr. [relayManager] handles
+	// all creation and initial probing responsibilities otherwise, and it does
+	// not depend on [peerMap].
+	//
+	// Note: This doesn't address unbounded growth of non-relay epAddr's in
+	// byEpAddr. That issue is being tracked in http://go/corp/29422.
+	relayEpAddrByNodeKey map[key.NodePublic]epAddr
+
 	// nodesOfDisco contains the set of nodes that are using a
 	// DiscoKey. Usually those sets will be just one node.
 	nodesOfDisco map[key.DiscoPublic]set.Set[key.NodePublic]
@@ -43,10 +55,11 @@ type peerMap struct {
 
 func newPeerMap() peerMap {
 	return peerMap{
-		byNodeKey:    map[key.NodePublic]*peerInfo{},
-		byEpAddr:     map[epAddr]*peerInfo{},
-		byNodeID:     map[tailcfg.NodeID]*peerInfo{},
-		nodesOfDisco: map[key.DiscoPublic]set.Set[key.NodePublic]{},
+		byNodeKey:            map[key.NodePublic]*peerInfo{},
+		byEpAddr:             map[epAddr]*peerInfo{},
+		byNodeID:             map[tailcfg.NodeID]*peerInfo{},
+		relayEpAddrByNodeKey: map[key.NodePublic]epAddr{},
+		nodesOfDisco:         map[key.DiscoPublic]set.Set[key.NodePublic]{},
 	}
 }
 
@@ -171,8 +184,19 @@ func (m *peerMap) setNodeKeyForEpAddr(addr epAddr, nk key.NodePublic) {
 	if pi := m.byEpAddr[addr]; pi != nil {
 		delete(pi.epAddrs, addr)
 		delete(m.byEpAddr, addr)
+		if addr.vni.isSet() {
+			delete(m.relayEpAddrByNodeKey, pi.ep.publicKey)
+		}
 	}
 	if pi, ok := m.byNodeKey[nk]; ok {
+		if addr.vni.isSet() {
+			relay, ok := m.relayEpAddrByNodeKey[nk]
+			if ok {
+				delete(pi.epAddrs, relay)
+				delete(m.byEpAddr, relay)
+			}
+			m.relayEpAddrByNodeKey[nk] = addr
+		}
 		pi.epAddrs.Add(addr)
 		m.byEpAddr[addr] = pi
 	}
@@ -204,4 +228,5 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 	for ip := range pi.epAddrs {
 		delete(m.byEpAddr, ip)
 	}
+	delete(m.relayEpAddrByNodeKey, ep.publicKey)
 }
