@@ -99,6 +99,27 @@ type endpoint struct {
 	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
 }
 
+// relayEndpointReady considers addr as de.bestAddr. It is only called by
+// [relayManager] once it has determined addr is functional via [disco.Pong]
+// reception.
+func (de *endpoint) relayEndpointReady(addr epAddr, latency time.Duration) {
+	de.c.mu.Lock()
+	defer de.c.mu.Lock()
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	maybeBetter := addrQuality{addr, latency, pingSizeToPktLen(0, addr)}
+	if !betterAddr(maybeBetter, de.bestAddr) {
+		return
+	}
+
+	// Promote maybeBetter to bestAddr.
+	// TODO(jwhited): collapse path change logging with endpoint.handlePongConnLocked()
+	de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBetter.epAddr, maybeBetter.wireMTU)
+	de.setBestAddrLocked(maybeBetter)
+	de.c.peerMap.setNodeKeyForEpAddr(addr, de.publicKey)
+}
+
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
 	if v.epAddr != de.bestAddr.epAddr {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
@@ -1575,11 +1596,10 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	if src.vni.isSet() {
-		// TODO(jwhited): fall through once [relayManager] is able to set an
-		//  [epAddr] as de.bestAddr. We do not need to reference any
-		//  [endpointState] for Geneve-encapsulated disco, we store nothing
-		//  about them there.
+	if src.vni.isSet() && src != de.bestAddr.epAddr {
+		// "src" is not our bestAddr, but [relayManager] might be in the
+		// middle of probing it, awaiting pong reception. Make it aware.
+		de.c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(m, di, src)
 		return false
 	}
 
@@ -1605,7 +1625,9 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	now := mono.Now()
 	latency := now.Sub(sp.at)
 
-	if !isDerp {
+	if !isDerp && !src.vni.isSet() {
+		// Note: we check vni.isSet() as relay [epAddr]'s are not stored in
+		// endpointState, they are either de.bestAddr or not.
 		st, ok := de.endpointState[sp.to.ap]
 		if !ok {
 			// This is no longer an endpoint we care about.
