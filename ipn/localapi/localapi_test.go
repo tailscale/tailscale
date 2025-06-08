@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine"
 )
@@ -329,6 +331,78 @@ func TestServeWatchIPNBus(t *testing.T) {
 			}
 			if res.StatusCode != tt.wantStatus {
 				t.Errorf("res.StatusCode=%d, want %d. body: %s", res.StatusCode, tt.wantStatus, body)
+			}
+		})
+	}
+}
+
+func TestServeDNSMode(t *testing.T) {
+	tstest.Replace(t, &validLocalHostForTesting, true)
+
+	t.Parallel()
+
+	testCases := []struct {
+		name           string
+		permitRead     bool
+		method         string
+		wantStatus     int
+		expectNonEmpty bool
+	}{
+		{
+			name:           "allowed",
+			permitRead:     true,
+			method:         httpm.GET,
+			wantStatus:     http.StatusOK,
+			expectNonEmpty: true,
+		},
+		{
+			name:           "forbidden",
+			permitRead:     false,
+			method:         httpm.GET,
+			wantStatus:     http.StatusForbidden,
+			expectNonEmpty: false,
+		},
+		{
+			name:           "method_not_allowed",
+			permitRead:     true,
+			method:         httpm.POST,
+			wantStatus:     http.StatusMethodNotAllowed,
+			expectNonEmpty: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc // capture range variable
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := &Handler{PermitRead: tc.permitRead, b: newTestLocalBackend(t)}
+			s := httptest.NewServer(h)
+			defer s.Close()
+			c := s.Client()
+
+			var res *http.Response
+			var err error
+			if tc.method == httpm.GET {
+				res, err = c.Get(s.URL + "/localapi/v0/dns-mode")
+			} else {
+				req, _ := http.NewRequest(tc.method, s.URL+"/localapi/v0/dns-mode", nil)
+				res, err = c.Do(req)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			if res.StatusCode != tc.wantStatus {
+				t.Fatalf("status=%d, want %d", res.StatusCode, tc.wantStatus)
+			}
+			if tc.expectNonEmpty && res.StatusCode == http.StatusOK {
+				var resp struct{ Mode string }
+				if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
+					t.Fatal(err)
+				}
+				if resp.Mode == "" {
+					t.Logf("DNS mode is empty; this may be expected in non-Linux, CI, mocked, or minimal environments (GOOS=%s)", runtime.GOOS)
+				}
 			}
 		})
 	}

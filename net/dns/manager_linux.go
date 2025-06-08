@@ -50,6 +50,7 @@ func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ *controlknobs
 	if err != nil {
 		return nil, err
 	}
+	SetCurrentDNSMode(mode)
 	publishOnce.Do(func() {
 		sanitizedMode := strings.ReplaceAll(mode, "-", "_")
 		m := clientmetric.NewGauge(fmt.Sprintf("dns_manager_linux_mode_%s", sanitizedMode))
