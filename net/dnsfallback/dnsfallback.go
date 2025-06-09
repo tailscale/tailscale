@@ -286,7 +286,7 @@ func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(serverIP.String(), "443"))
 	}
-	tr.TLSClientConfig = tlsdial.Config(serverName, ht, tr.TLSClientConfig)
+	tr.TLSClientConfig = tlsdial.Config(ht, tr.TLSClientConfig)
 	c := &http.Client{Transport: tr}
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+serverName+"/bootstrap-dns?q="+url.QueryEscape(queryName), nil)
 	if err != nil {

@@ -7,10 +7,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"flag"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +23,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netx"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
 
@@ -554,5 +559,34 @@ func TestNotifyError(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatalf("context done before receiving error: %v", ctx.Err())
+	}
+}
+
+var liveNetworkTest = flag.Bool("live-net-tests", false, "run live network tests")
+
+func TestManualDial(t *testing.T) {
+	if !*liveNetworkTest {
+		t.Skip("skipping live network test without --live-net-tests")
+	}
+	dm := &tailcfg.DERPMap{}
+	res, err := http.Get("https://controlplane.tailscale.com/derpmap/default")
+	if err != nil {
+		t.Fatalf("fetching DERPMap: %v", err)
+	}
+	defer res.Body.Close()
+	if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+		t.Fatalf("decoding DERPMap: %v", err)
+	}
+
+	region := slices.Sorted(maps.Keys(dm.Regions))[0]
+
+	netMon := netmon.NewStatic()
+	rc := NewRegionClient(key.NewNode(), t.Logf, netMon, func() *tailcfg.DERPRegion {
+		return dm.Regions[region]
+	})
+	defer rc.Close()
+
+	if err := rc.Connect(context.Background()); err != nil {
+		t.Fatalf("rc.Connect: %v", err)
 	}
 }

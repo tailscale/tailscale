@@ -59,18 +59,26 @@ var mitmBlockWarnable = health.Register(&health.Warnable{
 	ImpactsConnectivity: true,
 })
 
-// Config returns a tls.Config for connecting to a server.
+// Config returns a tls.Config for connecting to a server that
+// uses system roots for validation but, if those fail, also tries
+// the baked-in LetsEncrypt roots as a fallback validation method.
+//
 // If base is non-nil, it's cloned as the base config before
 // being configured and returned.
 // If ht is non-nil, it's used to report health errors.
-func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
+func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 	var conf *tls.Config
 	if base == nil {
 		conf = new(tls.Config)
 	} else {
 		conf = base.Clone()
 	}
-	conf.ServerName = host
+
+	// Note: we do NOT set conf.ServerName here (as we accidentally did
+	// previously), as this path is also used when dialing an HTTPS proxy server
+	// (through which we'll send a CONNECT request to get a TCP connection to do
+	// the real TCP connection) because host is the ultimate hostname, but this
+	// tls.Config is used for both the proxy and the ultimate target.
 
 	if n := sslKeyLogFile; n != "" {
 		f, err := os.OpenFile(n, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -93,7 +101,9 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 	// (with the baked-in fallback root) in the VerifyConnection hook.
 	conf.InsecureSkipVerify = true
 	conf.VerifyConnection = func(cs tls.ConnectionState) (retErr error) {
-		if host == "log.tailscale.com" && hostinfo.IsNATLabGuestVM() {
+		dialedHost := cs.ServerName
+
+		if dialedHost == "log.tailscale.com" && hostinfo.IsNATLabGuestVM() {
 			// Allow log.tailscale.com TLS MITM for integration tests when
 			// the client's running within a NATLab VM.
 			return nil
@@ -116,7 +126,7 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 					// Show a dedicated warning.
 					m, ok := blockblame.VerifyCertificate(cert)
 					if ok {
-						log.Printf("tlsdial: server cert for %q looks like %q equipment (could be blocking Tailscale)", host, m.Name)
+						log.Printf("tlsdial: server cert seen while dialing %q looks like %q equipment (could be blocking Tailscale)", dialedHost, m.Name)
 						ht.SetUnhealthy(mitmBlockWarnable, health.Args{"manufacturer": m.Name})
 					} else {
 						ht.SetHealthy(mitmBlockWarnable)
@@ -135,7 +145,7 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 					ht.SetTLSConnectionError(cs.ServerName, nil)
 					if selfSignedIssuer != "" {
 						// Log the self-signed issuer, but don't treat it as an error.
-						log.Printf("tlsdial: warning: server cert for %q passed x509 validation but is self-signed by %q", host, selfSignedIssuer)
+						log.Printf("tlsdial: warning: server cert for %q passed x509 validation but is self-signed by %q", dialedHost, selfSignedIssuer)
 					}
 				}
 			}()
@@ -144,7 +154,7 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 		// First try doing x509 verification with the system's
 		// root CA pool.
 		opts := x509.VerifyOptions{
-			DNSName:       cs.ServerName,
+			DNSName:       dialedHost,
 			Intermediates: x509.NewCertPool(),
 		}
 		for _, cert := range cs.PeerCertificates[1:] {
@@ -152,7 +162,7 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 		}
 		_, errSys := cs.PeerCertificates[0].Verify(opts)
 		if debug() {
-			log.Printf("tlsdial(sys %q): %v", host, errSys)
+			log.Printf("tlsdial(sys %q): %v", dialedHost, errSys)
 		}
 
 		// Always verify with our baked-in Let's Encrypt certificate,
@@ -161,13 +171,11 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 		opts.Roots = bakedroots.Get()
 		_, bakedErr := cs.PeerCertificates[0].Verify(opts)
 		if debug() {
-			log.Printf("tlsdial(bake %q): %v", host, bakedErr)
+			log.Printf("tlsdial(bake %q): %v", dialedHost, bakedErr)
 		} else if bakedErr != nil {
-			if _, loaded := tlsdialWarningPrinted.LoadOrStore(host, true); !loaded {
-				if errSys == nil {
-					log.Printf("tlsdial: warning: server cert for %q is not a Let's Encrypt cert", host)
-				} else {
-					log.Printf("tlsdial: error: server cert for %q failed to verify and is not a Let's Encrypt cert", host)
+			if _, loaded := tlsdialWarningPrinted.LoadOrStore(dialedHost, true); !loaded {
+				if errSys != nil {
+					log.Printf("tlsdial: error: server cert for %q failed both system roots & Let's Encrypt root validation", dialedHost)
 				}
 			}
 		}
@@ -201,9 +209,6 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 	if c.ServerName == "" {
 		c.ServerName = certDNSName
 		return
-	}
-	if c.VerifyPeerCertificate != nil {
-		panic("refusing to override tls.Config.VerifyPeerCertificate")
 	}
 	// Set InsecureSkipVerify to prevent crypto/tls from doing its
 	// own cert verification, but do the same work that it'd do
@@ -257,29 +262,30 @@ func SetConfigExpectedCertHash(c *tls.Config, wantFullCertSHA256Hex string) {
 	if c.VerifyPeerCertificate != nil {
 		panic("refusing to override tls.Config.VerifyPeerCertificate")
 	}
+
 	// Set InsecureSkipVerify to prevent crypto/tls from doing its
 	// own cert verification, but do the same work that it'd do
-	// (but using certDNSName) in the VerifyPeerCertificate hook.
+	// (but using certDNSName) in the VerifyConnection hook.
 	c.InsecureSkipVerify = true
-	c.VerifyConnection = nil
-	c.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+
+	c.VerifyConnection = func(cs tls.ConnectionState) error {
+		dialedHost := cs.ServerName
 		var sawGoodCert bool
-		for _, rawCert := range rawCerts {
-			cert, err := x509.ParseCertificate(rawCert)
-			if err != nil {
-				return fmt.Errorf("ParseCertificate: %w", err)
-			}
+
+		for _, cert := range cs.PeerCertificates {
 			if strings.HasPrefix(cert.Subject.CommonName, derpconst.MetaCertCommonNamePrefix) {
 				continue
 			}
 			if sawGoodCert {
 				return errors.New("unexpected multiple certs presented")
 			}
-			if fmt.Sprintf("%02x", sha256.Sum256(rawCert)) != wantFullCertSHA256Hex {
+			if fmt.Sprintf("%02x", sha256.Sum256(cert.Raw)) != wantFullCertSHA256Hex {
 				return fmt.Errorf("cert hash does not match expected cert hash")
 			}
-			if err := cert.VerifyHostname(c.ServerName); err != nil {
-				return fmt.Errorf("cert does not match server name %q: %w", c.ServerName, err)
+			if dialedHost != "" { // it's empty when dialing a derper by IP with no hostname
+				if err := cert.VerifyHostname(dialedHost); err != nil {
+					return fmt.Errorf("cert does not match server name %q: %w", dialedHost, err)
+				}
 			}
 			now := time.Now()
 			if now.After(cert.NotAfter) {
@@ -302,12 +308,8 @@ func SetConfigExpectedCertHash(c *tls.Config, wantFullCertSHA256Hex string) {
 func NewTransport() *http.Transport {
 	return &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
 			var d tls.Dialer
-			d.Config = Config(host, nil, nil)
+			d.Config = Config(nil, nil)
 			return d.DialContext(ctx, network, addr)
 		},
 	}
