@@ -86,7 +86,7 @@ func TestFallbackRootWorks(t *testing.T) {
 		DisableKeepAlives: true, // for test cleanup ease
 	}
 	ht := new(health.Tracker)
-	tr.TLSClientConfig = Config("tlsdial.test", ht, tr.TLSClientConfig)
+	tr.TLSClientConfig = Config(ht, tr.TLSClientConfig)
 	c := &http.Client{Transport: tr}
 
 	ctr0 := atomic.LoadInt32(&counterFallbackOK)

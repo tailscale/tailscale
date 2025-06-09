@@ -7,6 +7,7 @@ package bakedroots
 
 import (
 	"crypto/x509"
+	"fmt"
 	"sync"
 
 	"tailscale.com/util/testenv"
@@ -14,7 +15,7 @@ import (
 
 // Get returns the baked-in roots.
 //
-// As of 2025-01-21, this includes only the LetsEncrypt ISRG Root X1 root.
+// As of 2025-01-21, this includes only the LetsEncrypt ISRG Root X1 & X2 roots.
 func Get() *x509.CertPool {
 	roots.once.Do(func() {
 		roots.parsePEM(append(
@@ -56,7 +57,7 @@ type rootsOnce struct {
 func (r *rootsOnce) parsePEM(caPEM []byte) {
 	p := x509.NewCertPool()
 	if !p.AppendCertsFromPEM(caPEM) {
-		panic("bogus PEM")
+		panic(fmt.Sprintf("bogus PEM: %q", caPEM))
 	}
 	r.p = p
 }
