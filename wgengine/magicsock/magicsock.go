@@ -2132,28 +2132,10 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 	di.lastPingTime = time.Now()
 	isDerp := src.ap.Addr() == tailcfg.DerpMagicIPAddr
 
-	if src.vni.isSet() {
-		// TODO(jwhited): check for matching [endpoint.bestAddr] once that data
-		//  structure is VNI-aware and [relayManager] can mutate it. We do not
-		//  need to reference any [endpointState] for Geneve-encapsulated disco,
-		//  we store nothing about them there.
-		c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(dm, di, src)
-		return
-	}
-
-	// If we can figure out with certainty which node key this disco
-	// message is for, eagerly update our IP:port<>node and disco<>node
-	// mappings to make p2p path discovery faster in simple
-	// cases. Without this, disco would still work, but would be
-	// reliant on DERP call-me-maybe to establish the disco<>node
-	// mapping, and on subsequent disco handlePongConnLocked to establish
-	// the IP:port<>disco mapping.
-	if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
-		if !isDerp {
-			c.peerMap.setNodeKeyForEpAddr(src, nk)
-		}
-	}
-
+	// numNodes tracks how many nodes (node keys) are associated with the disco
+	// key tied to this inbound ping. Multiple nodes may share the same disco
+	// key in the case of node sharing and users switching accounts.
+	var numNodes int
 	// If we got a ping over DERP, then derpNodeSrc is non-zero and we reply
 	// over DERP (in which case ipDst is also a DERP address).
 	// But if the ping was over UDP (ipDst is not a DERP address), then dstKey
@@ -2161,35 +2143,81 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 	// a dstKey if the dst ip:port is DERP.
 	dstKey := derpNodeSrc
 
-	// Remember this route if not present.
-	var numNodes int
-	var dup bool
-	if isDerp {
-		if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
-			if ep.addCandidateEndpoint(src.ap, dm.TxID) {
-				return
-			}
-			numNodes = 1
-		}
-	} else {
-		c.peerMap.forEachEndpointWithDiscoKey(di.discoKey, func(ep *endpoint) (keepGoing bool) {
-			if ep.addCandidateEndpoint(src.ap, dm.TxID) {
-				dup = true
-				return false
-			}
-			numNodes++
-			if numNodes == 1 && dstKey.IsZero() {
-				dstKey = ep.publicKey
-			}
-			return true
-		})
-		if dup {
+	switch {
+	case src.vni.isSet():
+		if isDerp {
+			c.logf("[unexpected] got Geneve-encapsulated disco ping from %v/%v over DERP", src, derpNodeSrc)
 			return
 		}
-		if numNodes > 1 {
-			// Zero it out if it's ambiguous, so sendDiscoMessage logging
-			// isn't confusing.
-			dstKey = key.NodePublic{}
+
+		var bestEpAddr epAddr
+		var discoKey key.DiscoPublic
+		ep, ok := c.peerMap.endpointForEpAddr(src)
+		if ok {
+			ep.mu.Lock()
+			bestEpAddr = ep.bestAddr.epAddr
+			ep.mu.Unlock()
+			disco := ep.disco.Load()
+			if disco != nil {
+				discoKey = disco.key
+			}
+		}
+
+		if src == bestEpAddr && discoKey == di.discoKey {
+			// We have an associated endpoint with src as its bestAddr. Set
+			// numNodes so we TX a pong further down.
+			numNodes = 1
+		} else {
+			// We have no [endpoint] in the [peerMap] for this relay [epAddr]
+			// using it as a bestAddr. [relayManager] might be in the middle of
+			// probing it or attempting to set it as best via
+			// [endpoint.relayEndpointReady()]. Make [relayManager] aware.
+			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(dm, di, src)
+			return
+		}
+	default: // no VNI
+		// If we can figure out with certainty which node key this disco
+		// message is for, eagerly update our [epAddr]<>node and disco<>node
+		// mappings to make p2p path discovery faster in simple
+		// cases. Without this, disco would still work, but would be
+		// reliant on DERP call-me-maybe to establish the disco<>node
+		// mapping, and on subsequent disco handlePongConnLocked to establish
+		// the IP:port<>disco mapping.
+		if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
+			if !isDerp {
+				c.peerMap.setNodeKeyForEpAddr(src, nk)
+			}
+		}
+
+		// Remember this route if not present.
+		var dup bool
+		if isDerp {
+			if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
+				if ep.addCandidateEndpoint(src.ap, dm.TxID) {
+					return
+				}
+				numNodes = 1
+			}
+		} else {
+			c.peerMap.forEachEndpointWithDiscoKey(di.discoKey, func(ep *endpoint) (keepGoing bool) {
+				if ep.addCandidateEndpoint(src.ap, dm.TxID) {
+					dup = true
+					return false
+				}
+				numNodes++
+				if numNodes == 1 && dstKey.IsZero() {
+					dstKey = ep.publicKey
+				}
+				return true
+			})
+			if dup {
+				return
+			}
+			if numNodes > 1 {
+				// Zero it out if it's ambiguous, so sendDiscoMessage logging
+				// isn't confusing.
+				dstKey = key.NodePublic{}
+			}
 		}
 	}
 
