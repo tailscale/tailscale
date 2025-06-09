@@ -206,7 +206,7 @@ func (r *relayManager) init() {
 		r.newServerEndpointCh = make(chan newRelayServerEndpointEvent)
 		r.rxHandshakeDiscoMsgCh = make(chan relayHandshakeDiscoMsgEvent)
 		r.runLoopStoppedCh = make(chan struct{}, 1)
-		go r.runLoop()
+		r.runLoopStoppedCh <- struct{}{}
 	})
 }
 
