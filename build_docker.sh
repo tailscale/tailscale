@@ -108,6 +108,46 @@ case "$TARGET" in
       --annotations="${ANNOTATIONS}" \
       /usr/local/bin/tsidp
     ;;
+  derper)
+    DEFAULT_REPOS="tailscale/derper"
+    REPOS="${REPOS:-${DEFAULT_REPOS}}"
+    go run github.com/tailscale/mkctr \
+      --gopaths="\
+        tailscale.com/cmd/tailscale:/usr/local/bin/tailscale, \
+        tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled, \
+        tailscale.com/cmd/derper:/usr/local/bin/derper, \
+        tailscale.com/cmd/containerboot:/usr/local/bin/containerboot" \
+      --ldflags="\
+        -X tailscale.com/version.longStamp=${VERSION_LONG} \
+        -X tailscale.com/version.shortStamp=${VERSION_SHORT} \
+        -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
+      --base="${BASE}" \
+      --tags="${TAGS}" \
+      --gotags="ts_package_container" \
+      --repos="${REPOS}" \
+      --push="${PUSH}" \
+      --target="${PLATFORM}" \
+      --annotations="${ANNOTATIONS}" \
+      /usr/local/bin/derper
+    ;;
+  derpprobe)
+    DEFAULT_REPOS="tailscale/derpprobe"
+    REPOS="${REPOS:-${DEFAULT_REPOS}}"
+    go run github.com/tailscale/mkctr \
+      --gopaths="tailscale.com/cmd/derpprobe:/usr/local/bin/derpprobe" \
+      --ldflags="\
+        -X tailscale.com/version.longStamp=${VERSION_LONG} \
+        -X tailscale.com/version.shortStamp=${VERSION_SHORT} \
+        -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
+      --base="${BASE}" \
+      --tags="${TAGS}" \
+      --gotags="ts_package_container" \
+      --repos="${REPOS}" \
+      --push="${PUSH}" \
+      --target="${PLATFORM}" \
+      --annotations="${ANNOTATIONS}" \
+      /usr/local/bin/derpprobe
+    ;;
   *)
     echo "unknown target: $TARGET"
     exit 1
