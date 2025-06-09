@@ -68,7 +68,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
-	verifyTailscaleService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
 	// Verify that Role and RoleBinding have been created for the first Ingress.
@@ -130,7 +130,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	populateTLSSecret(context.Background(), fc, "test-pg", "my-other-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "my-other-ingress")
 	verifyServeConfig(t, fc, "svc:my-other-svc", false)
-	verifyTailscaleService(t, ft, "svc:my-other-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-other-svc", []string{"tcp:443"})
 
 	// Verify that Role and RoleBinding have been created for the first Ingress.
 	// Do not verify the cert Secret as that was already verified implicitly above.
@@ -139,7 +139,7 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Verify first Ingress is still working
 	verifyServeConfig(t, fc, "svc:my-svc", false)
-	verifyTailscaleService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
 
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc", "svc:my-other-svc"})
 
@@ -244,7 +244,7 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:my-svc", false)
-	verifyTailscaleService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:my-svc"})
 
 	// Update the Ingress hostname and make sure the original Tailscale Service is deleted.
@@ -255,7 +255,7 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	populateTLSSecret(context.Background(), fc, "test-pg", "updated-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	verifyServeConfig(t, fc, "svc:updated-svc", false)
-	verifyTailscaleService(t, ft, "svc:updated-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:updated-svc", []string{"tcp:443"})
 	verifyTailscaledConfig(t, fc, []string{"svc:updated-svc"})
 
 	_, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName("svc:my-svc"))
@@ -475,7 +475,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	populateTLSSecret(context.Background(), fc, "test-pg", "my-svc.ts.net")
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	verifyTailscaleService(t, ft, "svc:my-svc", []string{"80", "443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:80", "tcp:443"})
 	verifyServeConfig(t, fc, "svc:my-svc", true)
 
 	// Verify Ingress status
@@ -528,7 +528,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 
 	// Verify reconciliation after removing HTTP
 	expectReconciled(t, ingPGR, "default", "test-ingress")
-	verifyTailscaleService(t, ft, "svc:my-svc", []string{"443"})
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
 	verifyServeConfig(t, fc, "svc:my-svc", false)
 
 	// Verify Ingress status
