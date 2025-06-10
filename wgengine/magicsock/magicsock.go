@@ -1128,7 +1128,10 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		// port mapping on their router to the same explicit
 		// port that tailscaled is running with. Worst case
 		// it's an invalid candidate mapping.
-		if port := c.port.Load(); nr.MappingVariesByDestIP.EqualBool(true) && port != 0 {
+		//
+		// However, no need to guess if we have explicit static
+		// endpoints configured.
+		if port := c.port.Load(); nr.MappingVariesByDestIP.EqualBool(true) && port != 0 && c.staticEndpoints.Len() == 0 {
 			addAddr(netip.AddrPortFrom(v4Addrs[0].Addr(), uint16(port)), tailcfg.EndpointSTUN4LocalPort)
 		}
 	}
