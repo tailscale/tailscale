@@ -20,6 +20,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,21 +34,53 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 )
 
 func TestClientInfoUnmarshal(t *testing.T) {
-	for i, in := range []string{
-		`{"Version":5,"MeshKey":"abc"}`,
-		`{"version":5,"meshKey":"abc"}`,
+	for i, in := range map[string]struct {
+		json    string
+		want    *clientInfo
+		wantErr string
+	}{
+		"empty": {
+			json: `{}`,
+			want: &clientInfo{},
+		},
+		"valid": {
+			json: `{"Version":5,"MeshKey":"6d529e9d4ef632d22d4a4214cb49da8f1ba1b72697061fb24e312984c35ec8d8"}`,
+			want: &clientInfo{MeshKey: must.Get(key.ParseDERPMesh("6d529e9d4ef632d22d4a4214cb49da8f1ba1b72697061fb24e312984c35ec8d8")), Version: 5},
+		},
+		"validLowerMeshKey": {
+			json: `{"version":5,"meshKey":"6d529e9d4ef632d22d4a4214cb49da8f1ba1b72697061fb24e312984c35ec8d8"}`,
+			want: &clientInfo{MeshKey: must.Get(key.ParseDERPMesh("6d529e9d4ef632d22d4a4214cb49da8f1ba1b72697061fb24e312984c35ec8d8")), Version: 5},
+		},
+		"invalidMeshKeyToShort": {
+			json:    `{"version":5,"meshKey":"abcdefg"}`,
+			wantErr: "invalid mesh key",
+		},
+		"invalidMeshKeyToLong": {
+			json:    `{"version":5,"meshKey":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}`,
+			wantErr: "invalid mesh key",
+		},
 	} {
-		var got clientInfo
-		if err := json.Unmarshal([]byte(in), &got); err != nil {
-			t.Fatalf("[%d]: %v", i, err)
-		}
-		want := clientInfo{Version: 5, MeshKey: "abc"}
-		if got != want {
-			t.Errorf("[%d]: got %+v; want %+v", i, got, want)
-		}
+		t.Run(i, func(t *testing.T) {
+			t.Parallel()
+			var got clientInfo
+			err := json.Unmarshal([]byte(in.json), &got)
+			if in.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), in.wantErr) {
+					t.Errorf("Unmarshal(%q) = %v, want error containing %q", in.json, err, in.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Unmarshal(%q) = %v, want no error", in.json, err)
+			}
+			if !got.Equal(in.want) {
+				t.Errorf("Unmarshal(%q) = %+v, want %+v", in.json, got, in.want)
+			}
+		})
 	}
 }
 
@@ -1681,43 +1714,43 @@ func TestIsMeshPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, tt := range map[string]struct {
-		info       *clientInfo
 		want       bool
+		meshKey    string
 		wantAllocs float64
 	}{
 		"nil": {
-			info:       nil,
 			want:       false,
 			wantAllocs: 0,
-		},
-		"empty": {
-			info:       &clientInfo{MeshKey: ""},
-			want:       false,
-			wantAllocs: 0,
-		},
-		"invalid": {
-			info:       &clientInfo{MeshKey: "invalid"},
-			want:       false,
-			wantAllocs: 2, // error message
 		},
 		"mismatch": {
-			info:       &clientInfo{MeshKey: "0badf00d00000000000000000000000000000000000000000000000000000000"},
+			meshKey:    "6d529e9d4ef632d22d4a4214cb49da8f1ba1b72697061fb24e312984c35ec8d8",
 			want:       false,
 			wantAllocs: 1,
 		},
 		"match": {
-			info:       &clientInfo{MeshKey: testMeshKey},
+			meshKey:    testMeshKey,
 			want:       true,
-			wantAllocs: 1,
+			wantAllocs: 0,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var got bool
+			var mKey key.DERPMesh
+			if tt.meshKey != "" {
+				mKey, err = key.ParseDERPMesh(tt.meshKey)
+				if err != nil {
+					t.Fatalf("ParseDERPMesh(%q) failed: %v", tt.meshKey, err)
+				}
+			}
+
+			info := clientInfo{
+				MeshKey: mKey,
+			}
 			allocs := testing.AllocsPerRun(1, func() {
-				got = s.isMeshPeer(tt.info)
+				got = s.isMeshPeer(&info)
 			})
 			if got != tt.want {
-				t.Fatalf("got %t, want %t: info = %#v", got, tt.want, tt.info)
+				t.Fatalf("got %t, want %t: info = %#v", got, tt.want, info)
 			}
 
 			if allocs != tt.wantAllocs && tt.want {

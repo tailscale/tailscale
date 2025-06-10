@@ -165,7 +165,7 @@ type clientInfo struct {
 	// trusted clients.  It's required to subscribe to the
 	// connection list & forward packets. It's empty for regular
 	// users.
-	MeshKey string `json:"meshKey,omitempty"`
+	MeshKey key.DERPMesh `json:"meshKey,omitempty,omitzero"`
 
 	// Version is the DERP protocol version that the client was built with.
 	// See the ProtocolVersion const.
@@ -179,10 +179,21 @@ type clientInfo struct {
 	IsProber bool `json:",omitempty"`
 }
 
+// Equal reports if two clientInfo values are equal.
+func (c *clientInfo) Equal(other *clientInfo) bool {
+	if c == nil || other == nil {
+		return c == other
+	}
+	if c.Version != other.Version || c.CanAckPings != other.CanAckPings || c.IsProber != other.IsProber {
+		return false
+	}
+	return c.MeshKey.Equal(other.MeshKey)
+}
+
 func (c *Client) sendClientKey() error {
 	msg, err := json.Marshal(clientInfo{
 		Version:     ProtocolVersion,
-		MeshKey:     c.meshKey.String(),
+		MeshKey:     c.meshKey,
 		CanAckPings: c.canAckPings,
 		IsProber:    c.isProber,
 	})
