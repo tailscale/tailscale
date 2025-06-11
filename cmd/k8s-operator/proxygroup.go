@@ -9,13 +9,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
@@ -122,7 +122,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		if !apiequality.Semantic.DeepEqual(oldPGStatus, &pg.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, pg); updateErr != nil {
-				err = errors.Wrap(err, updateErr.Error())
+				err = errors.Join(err, updateErr)
 			}
 		}
 		return reconcile.Result{}, err

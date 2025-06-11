@@ -427,7 +427,7 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 
 	pcLEStaging, pcLEStagingFalse, pcOther := proxyClassesForLEStagingTest()
 
-	testCases := testCasesForLEStagingTests(pcLEStaging, pcLEStagingFalse, pcOther)
+	testCases := testCasesForLEStagingTests()
 
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {

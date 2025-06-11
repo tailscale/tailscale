@@ -257,10 +257,12 @@ func TestProxyGroupTypes(t *testing.T) {
 		},
 		Spec: tsapi.ProxyClassSpec{},
 	}
+	// Passing ProxyGroup as status subresource is a way to get around fake
+	// client's limitations for updating resource statuses.
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
 		WithObjects(pc).
-		WithStatusSubresource(pc).
+		WithStatusSubresource(pc, &tsapi.ProxyGroup{}).
 		Build()
 	mustUpdateStatus(t, fc, "", pc.Name, func(p *tsapi.ProxyClass) {
 		p.Status.Conditions = []metav1.Condition{{
@@ -450,6 +452,7 @@ func TestProxyGroupTypes(t *testing.T) {
 func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
+		WithStatusSubresource(&tsapi.ProxyGroup{}).
 		Build()
 	reconciler := &ProxyGroupReconciler{
 		tsNamespace: tsNamespace,
@@ -693,7 +696,7 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 		pgType tsapi.ProxyGroupType
 	}
 	pcLEStaging, pcLEStagingFalse, pcOther := proxyClassesForLEStagingTest()
-	sharedTestCases := testCasesForLEStagingTests(pcLEStaging, pcLEStagingFalse, pcOther)
+	sharedTestCases := testCasesForLEStagingTests()
 	var tests []proxyGroupLETestCase
 	for _, tt := range sharedTestCases {
 		tests = append(tests, proxyGroupLETestCase{
@@ -715,9 +718,20 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 			builder := fake.NewClientBuilder().
 				WithScheme(tsapi.GlobalScheme)
 
+			pg := &tsapi.ProxyGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test",
+				},
+				Spec: tsapi.ProxyGroupSpec{
+					Type:       tt.pgType,
+					Replicas:   ptr.To[int32](1),
+					ProxyClass: tt.proxyClassPerResource,
+				},
+			}
+
 			// Pre-populate the fake client with ProxyClasses.
-			builder = builder.WithObjects(pcLEStaging, pcLEStagingFalse, pcOther).
-				WithStatusSubresource(pcLEStaging, pcLEStagingFalse, pcOther)
+			builder = builder.WithObjects(pcLEStaging, pcLEStagingFalse, pcOther, pg).
+				WithStatusSubresource(pcLEStaging, pcLEStagingFalse, pcOther, pg)
 
 			fc := builder.Build()
 
@@ -729,19 +743,6 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 				}
 				setProxyClassReady(t, fc, cl, name)
 			}
-
-			// Create ProxyGroup
-			pg := &tsapi.ProxyGroup{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
-				Spec: tsapi.ProxyGroupSpec{
-					Type:       tt.pgType,
-					Replicas:   ptr.To[int32](1),
-					ProxyClass: tt.proxyClassPerResource,
-				},
-			}
-			mustCreate(t, fc, pg)
 
 			reconciler := &ProxyGroupReconciler{
 				tsNamespace:       tsNamespace,
@@ -783,7 +784,7 @@ type leStagingTestCase struct {
 
 // Shared test cases for LE staging endpoint configuration for ProxyGroup and
 // non-HA Ingress.
-func testCasesForLEStagingTests(pcLEStaging, pcLEStagingFalse, pcOther *tsapi.ProxyClass) []leStagingTestCase {
+func testCasesForLEStagingTests() []leStagingTestCase {
 	return []leStagingTestCase{
 		{
 			name:                  "with_staging_proxyclass",
