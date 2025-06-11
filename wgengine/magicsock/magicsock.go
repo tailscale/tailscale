@@ -2507,6 +2507,11 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 	})
 }
 
+func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
+	// TODO(jwhited): implement once capVer is bumped
+	return false
+}
+
 // SetNetworkMap is called when the control client gets a new network
 // map from the control server. It must always be non-nil.
 //
@@ -3202,6 +3207,10 @@ func (c *Conn) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
 		case netmap.NodeMutationEndpoints:
 			ep.mu.Lock()
 			ep.setEndpointsLocked(views.SliceOf(m.Endpoints))
+			ep.mu.Unlock()
+		case netmap.NodeMutationCap:
+			ep.mu.Lock()
+			ep.relayCapable = capVerIsRelayCapable(m.Cap)
 			ep.mu.Unlock()
 		}
 	}
