@@ -1389,7 +1389,7 @@ func TestMessageForPort(t *testing.T) {
 			srvType: serveTypeHTTP,
 			srvPort: 80,
 			expected: strings.Join([]string{
-				msgServiceIPNotAssigned,
+				fmt.Sprintf(msgServiceIPNotAssigned, "svc:bar"),
 				"",
 				"http://bar.test.ts.net/",
 				"|-- proxy http://localhost:3000",

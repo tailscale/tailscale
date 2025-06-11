@@ -148,7 +148,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
-			fs.Var(&e.bg, "bg", "Run the command as a background process (default false)")
+			fs.Var(&e.bg, "bg", "Run the command as a background process (default false, when --service is set defaults to true).")
 			fs.StringVar(&e.setPath, "set-path", "", "Appends the specified path to the base URL for accessing the underlying service")
 			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
 			if subcmd == serve {
@@ -156,7 +156,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
-			fs.StringVar(&e.service, "service", "", "Name of the service to serve.")
+			fs.StringVar(&e.service, "service", "", "Serve for a service with distinct virtual IP instead on node itself.")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services")
 		}),
@@ -511,7 +511,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 var (
 	msgFunnelAvailable      = "Available on the internet:"
 	msgServeAvailable       = "Available within your tailnet:"
-	msgServiceIPNotAssigned = "This service doesn't have VIPs assigned yet, once VIP is assigned, it will be available in your Tailnet as:"
+	msgServiceIPNotAssigned = "This service %s is being served by this machine, but is not approved to have VIPs assigned yet. Once approved, it will be available in your Tailnet as:"
 	msgRunningInBackground  = "%s started and running in the background."
 	msgRunningTunService    = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
 	msgDisableProxy         = "To disable the proxy, run: tailscale %s --%s=%d off"
@@ -564,7 +564,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if err != nil || len(serviceIPMaps) == 0 || serviceIPMaps[0][svcName] == nil {
 			// The capmap does not contain IPs for this service yet. Usually this means
 			// the service hasn't been added to prefs and sent to control yet.
-			output.WriteString(msgServiceIPNotAssigned)
+			output.WriteString(fmt.Sprintf(msgServiceIPNotAssigned, svcName.String()))
 			ips = nil
 		} else {
 			output.WriteString(msgServeAvailable)

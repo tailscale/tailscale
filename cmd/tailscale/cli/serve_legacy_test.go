@@ -903,9 +903,7 @@ func (lc *fakeLocalServeClient) EditPrefs(ctx context.Context, prefs *ipn.Masked
 	if lc.prefs == nil {
 		lc.prefs = ipn.NewPrefs()
 	}
-	if prefs.AdvertiseServicesSet {
-		lc.prefs.AdvertiseServices = prefs.AdvertiseServices
-	}
+	lc.prefs.ApplyEdits(prefs)
 	return lc.prefs, nil
 }
 
