@@ -719,6 +719,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		Dialer:        sys.Dialer.Get(),
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
+		EventBus:      sys.Bus.Get(),
 		DriveForLocal: driveimpl.NewFileSystemForLocal(logf),
 	}
 

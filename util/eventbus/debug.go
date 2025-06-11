@@ -186,3 +186,12 @@ type hookFn[T any] struct {
 	ID uint64
 	Fn func(T)
 }
+
+// DebugEvent is a representation of an event used for debug clients.
+type DebugEvent struct {
+	Count int
+	Type  string
+	From  string
+	To    []string
+	Event any
+}

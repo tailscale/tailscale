@@ -414,6 +414,26 @@ func (lc *Client) TailDaemonLogs(ctx context.Context) (io.Reader, error) {
 	return res.Body, nil
 }
 
+// StreamBusEvents returns a stream of the Tailscale bus events as they arrive.
+// Close the context to stop the stream.
+// Expected response from the server is newline-delimited JSON.
+// The caller must close the reader when it is finished reading.
+func (lc *Client) StreamBusEvents(ctx context.Context) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"http://"+apitype.LocalAPIHost+"/localapi/v0/debug-bus-events", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := lc.doLocalRequestNiceError(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, errors.New(res.Status)
+	}
+	return res.Body, nil
+}
+
 // Pprof returns a pprof profile of the Tailscale daemon.
 func (lc *Client) Pprof(ctx context.Context, pprofType string, sec int) ([]byte, error) {
 	var secArg string

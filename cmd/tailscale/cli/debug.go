@@ -103,6 +103,12 @@ func debugCmd() *ffcli.Command {
 				})(),
 			},
 			{
+				Name:       "daemon-bus-events",
+				ShortUsage: "tailscale debug daemon-bus-events",
+				Exec:       runDaemonBusEvents,
+				ShortHelp:  "Watch events on the tailscaled bus",
+			},
+			{
 				Name:       "metrics",
 				ShortUsage: "tailscale debug metrics",
 				Exec:       runDaemonMetrics,
@@ -781,6 +787,24 @@ func runDaemonLogs(ctx context.Context, args []string) error {
 		} else {
 			fmt.Println(line.Text)
 		}
+	}
+}
+
+func runDaemonBusEvents(ctx context.Context, args []string) error {
+	logs, err := localClient.StreamBusEvents(ctx)
+	if err != nil {
+		return err
+	}
+	defer logs.Close()
+	d := json.NewDecoder(bufio.NewReader(logs))
+	for {
+		var line eventbus.DebugEvent
+		err := d.Decode(&line)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("[%d][%q][from: %q][to: %q] %s\n", line.Count, line.Type,
+			line.From, line.To, line.Event)
 	}
 }
 
