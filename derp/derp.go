@@ -36,8 +36,12 @@ const (
 	frameHeaderLen = 1 + 4 // frameType byte + 4 byte length
 	keyLen         = 32
 	maxInfoLen     = 1 << 20
-	keepAlive      = 60 * time.Second
 )
+
+// KeepAlive is the minimum frequency at which the DERP server sends
+// keep alive frames. The server adds some jitter, so this timing is not
+// exact, but 2x this value can be considered a missed keep alive.
+const KeepAlive = 60 * time.Second
 
 // ProtocolVersion is bumped whenever there's a wire-incompatible change.
 //   - version 1 (zero on wire): consistent box headers, in use by employee dev nodes a bit

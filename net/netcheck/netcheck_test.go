@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/derp"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
@@ -418,6 +419,39 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			forcedDERP:  2,
 			wantPrevLen: 2,
 			wantDERP:    1,
+		},
+		{
+			name: "no_data_keep_home",
+			steps: []step{
+				{0, report("d1", 2, "d2", 3)},
+				{30 * time.Second, report()},
+				{2 * time.Second, report()},
+				{2 * time.Second, report()},
+				{2 * time.Second, report()},
+				{2 * time.Second, report()},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+					1: startTime,
+				}),
+			},
+			wantPrevLen: 6,
+			wantDERP:    1,
+		},
+		{
+			name: "no_data_home_expires",
+			steps: []step{
+				{0, report("d1", 2, "d2", 3)},
+				{30 * time.Second, report()},
+				{2 * derp.KeepAlive, report()},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+					1: startTime,
+				}),
+			},
+			wantPrevLen: 3,
+			wantDERP:    0,
 		},
 	}
 	for _, tt := range tests {
