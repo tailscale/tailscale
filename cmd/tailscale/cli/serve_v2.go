@@ -713,7 +713,7 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 
 	// TODO: needs to account for multiple configs from foreground mode
 	if sc.IsServingWeb(srcPort, dnsName) {
-		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
+		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
 	}
 
 	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, dnsName)
