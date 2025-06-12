@@ -753,6 +753,7 @@ func newReport() *Report {
 
 // GetReportOpts contains options that can be passed to GetReport. Unless
 // specified, all fields are optional and can be left as their zero value.
+// At most one of OnlyTCP443 or OnlySTUN may be set.
 type GetReportOpts struct {
 	// GetLastDERPActivity is a callback that, if provided, should return
 	// the absolute time that the calling code last communicated with a
@@ -765,6 +766,8 @@ type GetReportOpts struct {
 	// OnlyTCP443 constrains netcheck reporting to measurements over TCP port
 	// 443.
 	OnlyTCP443 bool
+	// OnlySTUN constrains netcheck reporting to STUN measurements over UDP.
+	OnlySTUN bool
 }
 
 // getLastDERPActivity calls o.GetLastDERPActivity if both o and
@@ -790,6 +793,13 @@ func (c *Client) SetForcePreferredDERP(region int) {
 //
 // It may not be called concurrently with itself.
 func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetReportOpts) (_ *Report, reterr error) {
+	onlySTUN := false
+	if opts != nil && opts.OnlySTUN {
+		if opts.OnlyTCP443 {
+			return nil, errors.New("netcheck: only one of OnlySTUN or OnlyTCP443 may be set in opts")
+		}
+		onlySTUN = true
+	}
 	defer func() {
 		if reterr != nil {
 			metricNumGetReportError.Add(1)
@@ -865,6 +875,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	}()
 
 	if runtime.GOOS == "js" || runtime.GOOS == "tamago" || (runtime.GOOS == "plan9" && hostinfo.IsInVM86()) {
+		if onlySTUN {
+			return nil, errors.New("platform is restricted to HTTP, but OnlySTUN is set in opts")
+		}
 		if err := c.runHTTPOnlyChecks(ctx, last, rs, dm); err != nil {
 			return nil, err
 		}
@@ -896,7 +909,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	// it's unnecessary.
 	captivePortalDone := syncs.ClosedChan()
 	captivePortalStop := func() {}
-	if !rs.incremental {
+	if !rs.incremental && !onlySTUN {
 		// NOTE(andrew): we can't simply add this goroutine to the
 		// `NewWaitGroupChan` below, since we don't wait for that
 		// waitgroup to finish when exiting this function and thus get
@@ -970,9 +983,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	rs.stopTimers()
 
 	// Try HTTPS and ICMP latency check if all STUN probes failed due to
-	// UDP presumably being blocked.
+	// UDP presumably being blocked, and we are not constrained to only STUN.
 	// TODO: this should be moved into the probePlan, using probeProto probeHTTPS.
-	if !rs.anyUDP() && ctx.Err() == nil {
+	if !rs.anyUDP() && ctx.Err() == nil && !onlySTUN {
 		var wg sync.WaitGroup
 		var need []*tailcfg.DERPRegion
 		for rid, reg := range dm.Regions {

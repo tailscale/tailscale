@@ -156,7 +156,7 @@ func TestServer(t *testing.T) {
 
 	ipv4LoopbackAddr := netip.MustParseAddr("127.0.0.1")
 
-	server, _, err := NewServer(0, []netip.Addr{ipv4LoopbackAddr})
+	server, _, err := NewServer(t.Logf, 0, []netip.Addr{ipv4LoopbackAddr})
 	if err != nil {
 		t.Fatal(err)
 	}
