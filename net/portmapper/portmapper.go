@@ -515,7 +515,7 @@ func (c *Client) createMapping() {
 			GoodUntil: mapping.GoodUntil(),
 		})
 	}
-	if c.onChange != nil {
+	if c.onChange != nil && c.pubClient == nil {
 		go c.onChange()
 	}
 }
