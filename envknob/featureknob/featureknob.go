@@ -26,14 +26,6 @@ func CanRunTailscaleSSH() error {
 		if distro.Get() == distro.QNAP && !envknob.UseWIPCode() {
 			return errors.New("The Tailscale SSH server does not run on QNAP.")
 		}
-
-		// Setting SSH on Home Assistant causes trouble on startup
-		// (since the flag is not being passed to `tailscale up`).
-		// Although Tailscale SSH does work here,
-		// it's not terribly useful since it's running in a separate container.
-		if hostinfo.GetEnvType() == hostinfo.HomeAssistantAddOn {
-			return errors.New("The Tailscale SSH server does not run on HomeAssistant.")
-		}
 		// otherwise okay
 	case "darwin":
 		// okay only in tailscaled mode for now.
@@ -58,10 +50,5 @@ func CanUseExitNode() error {
 		distro.QNAP:
 		return errors.New("Tailscale exit nodes cannot be used on " + string(dist))
 	}
-
-	if hostinfo.GetEnvType() == hostinfo.HomeAssistantAddOn {
-		return errors.New("Tailscale exit nodes cannot be used on HomeAssistant.")
-	}
-
 	return nil
 }
