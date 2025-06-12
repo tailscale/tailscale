@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
@@ -189,7 +191,11 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 				return
 			}
 			if vs, ok := v.(string); ok && strings.HasSuffix(name, "version") {
-				fmt.Fprintf(w, "%s{version=%q} 1\n", name, vs)
+				if name == "version" {
+					fmt.Fprintf(w, "%s{version=%q,binary=%q} 1\n", name, vs, binaryName())
+				} else {
+					fmt.Fprintf(w, "%s{version=%q} 1\n", name, vs)
+				}
 				return
 			}
 			switch v := v.(type) {
@@ -307,6 +313,18 @@ func ExpvarDoHandler(expvarDoFunc func(f func(expvar.KeyValue))) func(http.Respo
 		}
 	}
 }
+
+var binaryName = sync.OnceValue(func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exe2, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return filepath.Base(exe)
+	}
+	return filepath.Base(exe2)
+})
 
 // PrometheusMetricsReflectRooter is an optional interface that expvar.Var implementations
 // can implement to indicate that they should be walked recursively with reflect to find
