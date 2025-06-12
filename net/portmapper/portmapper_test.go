@@ -5,6 +5,7 @@ package portmapper
 
 import (
 	"context"
+	"net/netip"
 	"os"
 	"reflect"
 	"strconv"
@@ -145,19 +146,21 @@ func TestUpdateEvent(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Close()
 
-	sub := eventbus.Subscribe[Mapping](bus.Client("TestUpdateEvent"))
+	tw := bus.Debugger().NewTestWatcher()
+	defer tw.Done()
+
 	c := newTestClient(t, igd, bus)
 	if _, err := c.Probe(t.Context()); err != nil {
 		t.Fatalf("Probe failed: %v", err)
 	}
 	c.GetCachedMappingOrStartCreatingOne()
-
-	select {
-	case evt := <-sub.Events():
-		t.Logf("Received portmap update: %+v", evt)
-	case <-sub.Done():
-		t.Error("Subscriber closed prematurely")
-	case <-time.After(5 * time.Second):
-		t.Error("Timed out waiting for an update event")
+	if err := eventbus.Expect[Mapping](tw, func(event Mapping) bool {
+		expected := netip.MustParseAddrPort("127.0.0.1:4242")
+		if event.External != expected {
+			t.Errorf("expected %v, got %v", expected, event.External)
+		}
+		return true
+	}); err != nil {
+		t.Error(err.Error())
 	}
 }
