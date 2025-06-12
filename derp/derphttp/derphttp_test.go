@@ -17,6 +17,7 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/types/key"
 )
 
@@ -370,6 +371,21 @@ func TestBreakWatcherConn(t *testing.T) {
 	watcherChan := make(chan int, 1)
 	breakerChan := make(chan bool, 1)
 
+	errNotifyChan := make(chan error, 1)
+	watcher1.SetErrorNotifyChan(errNotifyChan)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case err := <-errNotifyChan:
+			if err == nil {
+				t.Error("expected error, got nil")
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("timed out waiting for error notification")
+		}
+	}()
+
 	// Start the watcher thread (which connects to the watched server)
 	wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
 	go func() {
@@ -490,4 +506,57 @@ func TestProbe(t *testing.T) {
 			t.Errorf("for path %q got HTTP status %v; want %v", tt.path, got, tt.want)
 		}
 	}
+}
+
+func TestNotifyError(t *testing.T) {
+	defer func() { testHookWatchLookConnectResult = nil }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	priv := key.NewNode()
+	serverURL, s := newTestServer(t, priv)
+	defer s.Close()
+
+	pub := priv.Public()
+
+	// Test early error notification when c.connect fails.
+	watcher := newWatcherClient(t, priv, serverURL)
+	watcher.SetURLDialer(netx.DialFunc(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		t.Helper()
+		return nil, fmt.Errorf("test error: %s", addr)
+	}))
+	defer watcher.Close()
+
+	errCh := make(chan error, 1)
+	watcher.SetErrorNotifyChan(errCh)
+
+	testHookWatchLookConnectResult = func(err error, wasSelfConnect bool) bool {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error connecting to server, got nil")
+		}
+		if wasSelfConnect {
+			t.Error("wanted normal connect; got self connect")
+		}
+		return false
+	}
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t.Helper()
+		select {
+		case err := <-errCh:
+			if err == nil {
+				t.Error("expected error, got nil")
+			}
+		case <-ctx.Done():
+			t.Error("timed out waiting for error notification")
+		}
+	}()
+
+	watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove)
+	wg.Wait()
 }

@@ -121,6 +121,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 		// Make sure we're connected before calling s.ServerPublicKey.
 		_, _, err := c.connect(ctx, "RunWatchConnectionLoop")
 		if err != nil {
+			c.notifyError(err)
 			if f := testHookWatchLookConnectResult; f != nil && !f(err, false) {
 				return
 			}
@@ -141,6 +142,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 			if err != nil {
 				clear()
 				logf("Recv: %v", err)
+				c.notifyError(err)
 				sleep(retryInterval)
 				break
 			}
