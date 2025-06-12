@@ -119,6 +119,9 @@ type Report struct {
 	GlobalV4 netip.AddrPort
 	GlobalV6 netip.AddrPort
 
+	// DNSMode is the DNS manager mode returned by tailscaled.
+	DNSMode string
+
 	// CaptivePortal is set when we think there's a captive portal that is
 	// intercepting HTTP traffic.
 	CaptivePortal opt.Bool
@@ -765,6 +768,10 @@ type GetReportOpts struct {
 	// OnlyTCP443 constrains netcheck reporting to measurements over TCP port
 	// 443.
 	OnlyTCP443 bool
+
+	// DNSMode optionally specifies the DNS manager mode the caller wants
+	// stored in the resulting Report. If empty, DNSMode is left blank.
+	DNSMode string
 }
 
 // getLastDERPActivity calls o.GetLastDERPActivity if both o and
@@ -817,11 +824,15 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		return nil, errors.New("invalid concurrent call to GetReport")
 	}
 	now := c.timeNow()
+	r := newReport()
+	if opts != nil {
+		r.DNSMode = opts.DNSMode
+	}
 	rs := &reportState{
 		c:           c,
 		start:       now,
 		opts:        opts,
-		report:      newReport(),
+		report:      r,
 		inFlight:    map[stun.TxID]func(netip.AddrPort){},
 		stopProbeCh: make(chan struct{}, 1),
 	}
