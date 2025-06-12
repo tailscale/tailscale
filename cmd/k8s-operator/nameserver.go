@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -14,7 +15,6 @@ import (
 
 	_ "embed"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
@@ -106,7 +106,7 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, &dnsCfg.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := a.Client.Status().Update(ctx, dnsCfg); updateErr != nil {
-				err = errors.Wrap(err, updateErr.Error())
+				err = errors.Join(err, updateErr)
 			}
 		}
 		return res, err
