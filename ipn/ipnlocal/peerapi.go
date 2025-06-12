@@ -1015,12 +1015,14 @@ func (rbw *requestBodyWrapper) Read(b []byte) (int, error) {
 }
 
 func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request) {
+	h.logf("taildrive: handleServeDrive: received peerapi request %s: %q", r.Method, r.URL.Path)
 	if !h.ps.b.DriveSharingEnabled() {
 		h.logf("taildrive: not enabled")
 		http.Error(w, "taildrive not enabled", http.StatusNotFound)
 		return
 	}
 
+	h.logf("taildrive: handleServeDrive: checking peer caps")
 	capsMap := h.PeerCaps()
 	driveCaps, ok := capsMap[tailcfg.PeerCapabilityTaildrive]
 	if !ok {
@@ -1034,6 +1036,7 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 		rawPerms = append(rawPerms, []byte(cap))
 	}
 
+	h.logf("taildrive: handleServeDrive: parsing permissions")
 	p, err := drive.ParsePermissions(rawPerms)
 	if err != nil {
 		h.logf("taildrive: error parsing permissions: %v", err)
@@ -1041,6 +1044,7 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	h.logf("taildrive: handleServeDrive: getting DriveForRemote")
 	fs, ok := h.ps.b.sys.DriveForRemote.GetOK()
 	if !ok {
 		h.logf("taildrive: not supported on platform")
@@ -1054,6 +1058,10 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 		ReadCloser: r.Body,
 	}
 	r.Body = bw
+
+	defer func() {
+		h.logf("taildrive: after ServeHTTPWithPerms to %q, status was %d", r.URL.Path, wr.statusCode)
+	}()
 
 	if r.Method == httpm.PUT || r.Method == httpm.GET {
 		defer func() {
@@ -1072,6 +1080,7 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 	}
 
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, taildrivePrefix)
+	h.logf("taildrive: handleServeDrive: calling ServeHTTPWithPerms at: %s", r.URL.Path)
 	fs.ServeHTTPWithPerms(p, wr, r)
 }
 
