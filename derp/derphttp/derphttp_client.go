@@ -102,7 +102,6 @@ type Client struct {
 	tlsState     *tls.ConnectionState
 	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
 	clock        tstime.Clock
-	errNotifyCh  chan<- error // Chan to notify client owner of errors in RunWatchConnectionLoop
 }
 
 // ConnectedState describes the state of a derphttp Client.
@@ -1104,35 +1103,6 @@ func (c *Client) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.closed
-}
-
-// SetErrorNotifyChan sets the channel to which any errors internal to RunWatchConnectionLoop
-// will be sent. If the channel is nil, no errors will be sent.
-// If the channel is full, the error will be dropped. It is the caller's responsibility to
-// ensure that the channel is large enough and read from in a timely manner,
-// otherwise errors will be dropped.
-func (c *Client) SetErrorNotifyChan(ch chan<- error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.errNotifyCh = ch
-}
-
-// notifyError sends an error to the error notify channel, if set.
-// This function is used to report internal errors from the client to the caller
-// of RunWatchConnectionLoop.
-// If the error notify channel is nil, no errors will be sent.
-// If the channel is full, the error will be dropped to avoid blocking.
-func (c *Client) notifyError(err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.errNotifyCh != nil {
-		select {
-		case c.errNotifyCh <- err:
-		default:
-			// Channel was full, drop the error.
-			c.logf("derphttp: error notify channel full, dropping error: %v", err)
-		}
-	}
 }
 
 // Close closes the client. It will not automatically reconnect after

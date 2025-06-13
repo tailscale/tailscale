@@ -299,6 +299,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 	defer cancel()
 
 	watcherChan := make(chan int, 1)
+	errChan := make(chan error, 1)
 
 	// Start the watcher thread (which connects to the watched server)
 	wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
@@ -312,8 +313,11 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 			watcherChan <- peers
 		}
 		remove := func(m derp.PeerGoneMessage) { t.Logf("remove: %v", m.Peer.ShortString()); peers-- }
+		notifyErr := func(err error) {
+			errChan <- err
+		}
 
-		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
+		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, notifyErr)
 	}()
 
 	timer := time.NewTimer(5 * time.Second)
@@ -333,6 +337,15 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 		watcher1.breakConnection(watcher1.client)
 		// re-establish connection by sending a packet
 		watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+
+		select {
+		case err := <-errChan:
+			if err == nil {
+				t.Fatal("expected error from notifyError connection, got nil")
+			}
+		case <-timer.C:
+			t.Fatalf("watcher did not receive error notification after breaking connection")
+		}
 
 		timer.Reset(5 * time.Second)
 	}
@@ -371,21 +384,6 @@ func TestBreakWatcherConn(t *testing.T) {
 	watcherChan := make(chan int, 1)
 	breakerChan := make(chan bool, 1)
 
-	errNotifyChan := make(chan error, 1)
-	watcher1.SetErrorNotifyChan(errNotifyChan)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		select {
-		case err := <-errNotifyChan:
-			if err == nil {
-				t.Error("expected error, got nil")
-			}
-		case <-time.After(10 * time.Second):
-			t.Error("timed out waiting for error notification")
-		}
-	}()
-
 	// Start the watcher thread (which connects to the watched server)
 	wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
 	go func() {
@@ -401,7 +399,7 @@ func TestBreakWatcherConn(t *testing.T) {
 		}
 		remove := func(m derp.PeerGoneMessage) { t.Logf("remove: %v", m.Peer.ShortString()); peers-- }
 
-		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
+		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, noopNotifyError)
 	}()
 
 	timer := time.NewTimer(5 * time.Second)
@@ -430,6 +428,7 @@ func TestBreakWatcherConn(t *testing.T) {
 
 func noopAdd(derp.PeerPresentMessage) {}
 func noopRemove(derp.PeerGoneMessage) {}
+func noopNotifyError(error)           {}
 
 func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 	defer func() { testHookWatchLookConnectResult = nil }()
@@ -457,7 +456,7 @@ func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 		}
 		return false
 	}
-	watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove)
+	watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove, noopNotifyError)
 
 	// Test connecting to the server with a zero value for ignoreServerKey,
 	// so we should always connect.
@@ -471,7 +470,7 @@ func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 		}
 		return false
 	}
-	watcher.RunWatchConnectionLoop(ctx, key.NodePublic{}, t.Logf, noopAdd, noopRemove)
+	watcher.RunWatchConnectionLoop(ctx, key.NodePublic{}, t.Logf, noopAdd, noopRemove, noopNotifyError)
 }
 
 // verify that the LocalAddr method doesn't acquire the mutex.
@@ -510,7 +509,7 @@ func TestProbe(t *testing.T) {
 
 func TestNotifyError(t *testing.T) {
 	defer func() { testHookWatchLookConnectResult = nil }()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
 	priv := key.NewNode()
@@ -527,9 +526,6 @@ func TestNotifyError(t *testing.T) {
 	}))
 	defer watcher.Close()
 
-	errCh := make(chan error, 1)
-	watcher.SetErrorNotifyChan(errCh)
-
 	testHookWatchLookConnectResult = func(err error, wasSelfConnect bool) bool {
 		t.Helper()
 		if err == nil {
@@ -541,22 +537,20 @@ func TestNotifyError(t *testing.T) {
 		return false
 	}
 
-	var wg sync.WaitGroup
-	defer wg.Wait()
-	wg.Add(1)
+	errChan := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		t.Helper()
-		select {
-		case err := <-errCh:
-			if err == nil {
-				t.Error("expected error, got nil")
-			}
-		case <-ctx.Done():
-			t.Error("timed out waiting for error notification")
+		notifyError := func(err error) {
+			errChan <- err
 		}
+		watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove, notifyError)
 	}()
 
-	watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove)
-	wg.Wait()
+	select {
+	case err := <-errChan:
+		if err == nil {
+			t.Fatal("expected error from notifyError connection, got nil")
+		}
+	case <-ctx.Done():
+		t.Fatalf("context done before receiving error: %v", ctx.Err())
+	}
 }
