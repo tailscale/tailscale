@@ -113,15 +113,16 @@ func (c *Client) shouldPublish(t reflect.Type) bool {
 // Subscribe requests delivery of events of type T through the given
 // Queue. Panics if the queue already has a subscriber for T.
 func Subscribe[T any](c *Client) *Subscriber[T] {
-	return newSubscriber[T](c.subscribeState())
+	r := c.subscribeState()
+	s := newSubscriber[T](r)
+	r.addSubscriber(s)
+	return s
 }
 
 // Publisher returns a publisher for event type T using the given
 // client.
 func Publish[T any](c *Client) *Publisher[T] {
-	ret := newPublisher[T](c)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pub.Add(ret)
-	return ret
+	p := newPublisher[T](c)
+	c.addPublisher(p)
+	return p
 }
