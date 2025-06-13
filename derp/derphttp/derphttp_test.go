@@ -17,6 +17,7 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/types/key"
 )
 
@@ -298,6 +299,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 	defer cancel()
 
 	watcherChan := make(chan int, 1)
+	errChan := make(chan error, 1)
 
 	// Start the watcher thread (which connects to the watched server)
 	wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
@@ -311,8 +313,11 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 			watcherChan <- peers
 		}
 		remove := func(m derp.PeerGoneMessage) { t.Logf("remove: %v", m.Peer.ShortString()); peers-- }
+		notifyErr := func(err error) {
+			errChan <- err
+		}
 
-		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
+		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, notifyErr)
 	}()
 
 	timer := time.NewTimer(5 * time.Second)
@@ -332,6 +337,15 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 		watcher1.breakConnection(watcher1.client)
 		// re-establish connection by sending a packet
 		watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+
+		select {
+		case err := <-errChan:
+			if err == nil {
+				t.Fatal("expected error from notifyError connection, got nil")
+			}
+		case <-timer.C:
+			t.Fatalf("watcher did not receive error notification after breaking connection")
+		}
 
 		timer.Reset(5 * time.Second)
 	}
@@ -385,7 +399,7 @@ func TestBreakWatcherConn(t *testing.T) {
 		}
 		remove := func(m derp.PeerGoneMessage) { t.Logf("remove: %v", m.Peer.ShortString()); peers-- }
 
-		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
+		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, noopNotifyError)
 	}()
 
 	timer := time.NewTimer(5 * time.Second)
@@ -414,6 +428,7 @@ func TestBreakWatcherConn(t *testing.T) {
 
 func noopAdd(derp.PeerPresentMessage) {}
 func noopRemove(derp.PeerGoneMessage) {}
+func noopNotifyError(error)           {}
 
 func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 	defer func() { testHookWatchLookConnectResult = nil }()
@@ -441,7 +456,7 @@ func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 		}
 		return false
 	}
-	watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove)
+	watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove, noopNotifyError)
 
 	// Test connecting to the server with a zero value for ignoreServerKey,
 	// so we should always connect.
@@ -455,7 +470,7 @@ func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 		}
 		return false
 	}
-	watcher.RunWatchConnectionLoop(ctx, key.NodePublic{}, t.Logf, noopAdd, noopRemove)
+	watcher.RunWatchConnectionLoop(ctx, key.NodePublic{}, t.Logf, noopAdd, noopRemove, noopNotifyError)
 }
 
 // verify that the LocalAddr method doesn't acquire the mutex.
@@ -489,5 +504,53 @@ func TestProbe(t *testing.T) {
 		if got := rec.Result().StatusCode; got != tt.want {
 			t.Errorf("for path %q got HTTP status %v; want %v", tt.path, got, tt.want)
 		}
+	}
+}
+
+func TestNotifyError(t *testing.T) {
+	defer func() { testHookWatchLookConnectResult = nil }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	priv := key.NewNode()
+	serverURL, s := newTestServer(t, priv)
+	defer s.Close()
+
+	pub := priv.Public()
+
+	// Test early error notification when c.connect fails.
+	watcher := newWatcherClient(t, priv, serverURL)
+	watcher.SetURLDialer(netx.DialFunc(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		t.Helper()
+		return nil, fmt.Errorf("test error: %s", addr)
+	}))
+	defer watcher.Close()
+
+	testHookWatchLookConnectResult = func(err error, wasSelfConnect bool) bool {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error connecting to server, got nil")
+		}
+		if wasSelfConnect {
+			t.Error("wanted normal connect; got self connect")
+		}
+		return false
+	}
+
+	errChan := make(chan error, 1)
+	go func() {
+		notifyError := func(err error) {
+			errChan <- err
+		}
+		watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove, notifyError)
+	}()
+
+	select {
+	case err := <-errChan:
+		if err == nil {
+			t.Fatal("expected error from notifyError connection, got nil")
+		}
+	case <-ctx.Done():
+		t.Fatalf("context done before receiving error: %v", ctx.Err())
 	}
 }
