@@ -5,13 +5,11 @@ package eventbus
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
 	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"tailscale.com/tsweb"
 )
@@ -196,84 +194,4 @@ type DebugEvent struct {
 	From  string
 	To    []string
 	Event any
-}
-
-func (d *Debugger) NewTestWatcher() *TestWatcher {
-	tw := &TestWatcher{
-		mon:     d.WatchBus(),
-		TimeOut: 5 * time.Second,
-		done:    make(chan bool, 1),
-		events:  make(chan any, 100),
-	}
-	go tw.watch()
-	return tw
-}
-
-type TestWatcher struct {
-	mon     *Subscriber[RoutedEvent]
-	events  chan any
-	done    chan bool
-	TimeOut time.Duration
-}
-
-func Expect[T any](tw *TestWatcher, test func(event T) bool) error {
-	eventCount := 0
-	for {
-		select {
-		case event := <-tw.events:
-			eventCount = eventCount + 1
-			if ev, ok := event.(T); ok {
-				if test(ev) {
-					return nil
-				}
-			}
-		case <-time.After(tw.TimeOut):
-			return fmt.Errorf("timed out waiting for event, saw %d events", eventCount)
-		}
-	}
-}
-
-func ExpectAfter[A any, B any](tw *TestWatcher, test func(event A) bool, after func(event B) bool) error {
-	var testSeen *A
-	var afterSeen *B
-	eventCount := 0
-	for {
-		select {
-		case event := <-tw.events:
-			eventCount = eventCount + 1
-			if ev, ok := event.(B); ok {
-				if after(ev) {
-					afterSeen = &ev
-					if testSeen != nil {
-						return errors.New("the 'after' event appeared before the 'test' event")
-					}
-				}
-			} else if ev, ok := event.(A); ok {
-				if test(ev) {
-					testSeen = &ev
-					if afterSeen != nil {
-						return nil
-					}
-				}
-			}
-		case <-time.After(tw.TimeOut):
-			return fmt.Errorf("timed out waiting for event, saw %d events", eventCount)
-		}
-	}
-}
-
-func (tw *TestWatcher) watch() {
-	for {
-		select {
-		case event := <-tw.mon.Events():
-			tw.events <- event.Event
-		case <-tw.done:
-			tw.mon.Close()
-			return
-		}
-	}
-}
-
-func (tw *TestWatcher) Done() {
-	tw.done <- true
 }

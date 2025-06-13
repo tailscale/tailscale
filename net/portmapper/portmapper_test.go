@@ -5,7 +5,6 @@ package portmapper
 
 import (
 	"context"
-	"net/netip"
 	"os"
 	"reflect"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 func TestCreateOrGetMapping(t *testing.T) {
@@ -146,7 +146,7 @@ func TestUpdateEvent(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Close()
 
-	tw := bus.Debugger().NewTestWatcher()
+	tw := eventbustest.NewTestWatcher(bus.Debugger())
 	defer tw.Done()
 
 	c := newTestClient(t, igd, bus)
@@ -154,13 +154,7 @@ func TestUpdateEvent(t *testing.T) {
 		t.Fatalf("Probe failed: %v", err)
 	}
 	c.GetCachedMappingOrStartCreatingOne()
-	if err := eventbus.Expect[Mapping](tw, func(event Mapping) bool {
-		expected := netip.MustParseAddrPort("127.0.0.1:4242")
-		if event.External != expected {
-			t.Errorf("expected %v, got %v", expected, event.External)
-		}
-		return true
-	}); err != nil {
+	if err := eventbustest.Expect[Mapping](tw); err != nil {
 		t.Error(err.Error())
 	}
 }
