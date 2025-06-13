@@ -899,6 +899,7 @@ var _DERPRegionViewNeedsRegeneration = DERPRegion(struct {
 	RegionID        int
 	RegionCode      string
 	RegionName      string
+	RegionVendor    string
 	Latitude        float64
 	Longitude       float64
 	Avoid           bool

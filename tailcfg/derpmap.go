@@ -92,6 +92,10 @@ type DERPRegion struct {
 	// "San Francisco", "Singapore", "Frankfurt", etc.
 	RegionName string
 
+	// RegionVendor is the name of the hosting provider for the region:
+	// "NetActuate", "Digital Ocean", "Hetzner", etc.
+	RegionVendor string
+
 	// Latitude, Longitude are optional geographical coordinates of the DERP region's city, in degrees.
 	Latitude  float64 `json:",omitempty"`
 	Longitude float64 `json:",omitempty"`
