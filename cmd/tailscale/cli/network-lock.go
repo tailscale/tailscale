@@ -326,6 +326,9 @@ func runNetworkLockRemove(ctx context.Context, args []string) error {
 	if !st.Enabled {
 		return errors.New("tailnet lock is not enabled")
 	}
+	if len(st.TrustedKeys) == 1 {
+		return errors.New("cannot remove the last trusted signing key; use 'tailscale lock disable' to disable tailnet lock instead, or add another signing key before removing one")
+	}
 
 	if nlRemoveArgs.resign {
 		// Validate we are not removing trust in ourselves while resigning. This is because
