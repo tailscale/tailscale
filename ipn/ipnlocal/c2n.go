@@ -443,7 +443,7 @@ func findCmdTailscale() (string, error) {
 		}
 	case "windows":
 		ts = filepath.Join(filepath.Dir(self), "tailscale.exe")
-	case "freebsd":
+	case "freebsd", "openbsd":
 		if self == "/usr/local/bin/tailscaled" {
 			ts = "/usr/local/bin/tailscale"
 		}
