@@ -119,9 +119,5 @@ func Subscribe[T any](c *Client) *Subscriber[T] {
 // Publisher returns a publisher for event type T using the given
 // client.
 func Publish[T any](c *Client) *Publisher[T] {
-	ret := newPublisher[T](c)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pub.Add(ret)
-	return ret
+	return newPublisher[T](c)
 }
