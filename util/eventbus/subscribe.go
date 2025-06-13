@@ -91,7 +91,7 @@ func (q *subscribeState) pump(ctx context.Context) {
 			}
 		} else {
 			// Keep the cases in this select in sync with
-			// Subscriber.dispatch below. The only different should be
+			// Subscriber.dispatch below. The only difference should be
 			// that this select doesn't deliver queued values to
 			// anyone, and unconditionally accepts new values.
 			select {
@@ -134,9 +134,10 @@ func (s *subscribeState) subscribeTypes() []reflect.Type {
 	return ret
 }
 
-func (s *subscribeState) addSubscriber(t reflect.Type, sub subscriber) {
+func (s *subscribeState) addSubscriber(sub subscriber) {
 	s.outputsMu.Lock()
 	defer s.outputsMu.Unlock()
+	t := sub.subscribeType()
 	if s.outputs[t] != nil {
 		panic(fmt.Errorf("double subscription for event %s", t))
 	}
@@ -183,15 +184,10 @@ type Subscriber[T any] struct {
 }
 
 func newSubscriber[T any](r *subscribeState) *Subscriber[T] {
-	t := reflect.TypeFor[T]()
-
-	ret := &Subscriber[T]{
+	return &Subscriber[T]{
 		read:       make(chan T),
-		unregister: func() { r.deleteSubscriber(t) },
+		unregister: func() { r.deleteSubscriber(reflect.TypeFor[T]()) },
 	}
-	r.addSubscriber(t, ret)
-
-	return ret
 }
 
 func newMonitor[T any](attach func(fn func(T)) (cancel func())) *Subscriber[T] {
