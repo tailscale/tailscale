@@ -200,14 +200,14 @@ type LocalBackend struct {
 	portpollOnce             sync.Once        // guards starting readPoller
 	varRoot                  string           // or empty if SetVarRoot never called
 	logFlushFunc             func()           // or nil if SetLogFlusher wasn't called
-	em                       *expiryManager   // non-nil; TODO(nickkhyl): move to nodeContext
-	sshAtomicBool            atomic.Bool      // TODO(nickkhyl): move to nodeContext
+	em                       *expiryManager   // non-nil; TODO(nickkhyl): move to nodeBackend
+	sshAtomicBool            atomic.Bool      // TODO(nickkhyl): move to nodeBackend
 	// webClientAtomicBool controls whether the web client is running. This should
 	// be true unless the disable-web-client node attribute has been set.
-	webClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeContext
+	webClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeBackend
 	// exposeRemoteWebClientAtomicBool controls whether the web client is exposed over
 	// Tailscale on port 5252.
-	exposeRemoteWebClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeContext
+	exposeRemoteWebClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeBackend
 	shutdownCalled                  bool        // if Shutdown has been called
 	debugSink                       packet.CaptureSink
 	sockstatLogger                  *sockstatlog.Logger
@@ -228,10 +228,10 @@ type LocalBackend struct {
 	// is never called.
 	getTCPHandlerForFunnelFlow func(srcAddr netip.AddrPort, dstPort uint16) (handler func(net.Conn))
 
-	containsViaIPFuncAtomic                 syncs.AtomicValue[func(netip.Addr) bool]     // TODO(nickkhyl): move to nodeContext
-	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeContext
-	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool] // TODO(nickkhyl): move to nodeContext
-	numClientStatusCalls                    atomic.Uint32                                // TODO(nickkhyl): move to nodeContext
+	containsViaIPFuncAtomic                 syncs.AtomicValue[func(netip.Addr) bool]     // TODO(nickkhyl): move to nodeBackend
+	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeBackend
+	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool] // TODO(nickkhyl): move to nodeBackend
+	numClientStatusCalls                    atomic.Uint32                                // TODO(nickkhyl): move to nodeBackend
 
 	// goTracker accounts for all goroutines started by LocalBacked, primarily
 	// for testing and graceful shutdown purposes.
@@ -256,7 +256,7 @@ type LocalBackend struct {
 	//
 	// It is safe for reading with or without holding b.mu, but mutating it in place
 	// or creating a new one must be done with b.mu held. If both mutexes must be held,
-	// the LocalBackend's mutex must be acquired first before acquiring the nodeContext's mutex.
+	// the LocalBackend's mutex must be acquired first before acquiring the nodeBackend's mutex.
 	//
 	// We intend to relax this in the future and only require holding b.mu when replacing it,
 	// but that requires a better (strictly ordered?) state machine and better management
@@ -265,30 +265,30 @@ type LocalBackend struct {
 
 	conf           *conffile.Config   // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager    // mu guards access
-	filterHash     deephash.Sum       // TODO(nickkhyl): move to nodeContext
+	filterHash     deephash.Sum       // TODO(nickkhyl): move to nodeBackend
 	httpTestClient *http.Client       // for controlclient. nil by default, used by tests.
 	ccGen          clientGen          // function for producing controlclient; lazily populated
 	sshServer      SSHServer          // or nil, initialized lazily.
 	appConnector   *appc.AppConnector // or nil, initialized when configured.
 	// notifyCancel cancels notifications to the current SetNotifyCallback.
 	notifyCancel   context.CancelFunc
-	cc             controlclient.Client // TODO(nickkhyl): move to nodeContext
-	ccAuto         *controlclient.Auto  // if cc is of type *controlclient.Auto; TODO(nickkhyl): move to nodeContext
+	cc             controlclient.Client // TODO(nickkhyl): move to nodeBackend
+	ccAuto         *controlclient.Auto  // if cc is of type *controlclient.Auto; TODO(nickkhyl): move to nodeBackend
 	machinePrivKey key.MachinePrivate
-	tka            *tkaState // TODO(nickkhyl): move to nodeContext
-	state          ipn.State // TODO(nickkhyl): move to nodeContext
+	tka            *tkaState // TODO(nickkhyl): move to nodeBackend
+	state          ipn.State // TODO(nickkhyl): move to nodeBackend
 	capTailnetLock bool      // whether netMap contains the tailnet lock capability
 	// hostinfo is mutated in-place while mu is held.
-	hostinfo          *tailcfg.Hostinfo      // TODO(nickkhyl): move to nodeContext
-	nmExpiryTimer     tstime.TimerController // for updating netMap on node expiry; can be nil; TODO(nickkhyl): move to nodeContext
-	activeLogin       string                 // last logged LoginName from netMap; TODO(nickkhyl): move to nodeContext (or remove? it's in [ipn.LoginProfile]).
+	hostinfo          *tailcfg.Hostinfo      // TODO(nickkhyl): move to nodeBackend
+	nmExpiryTimer     tstime.TimerController // for updating netMap on node expiry; can be nil; TODO(nickkhyl): move to nodeBackend
+	activeLogin       string                 // last logged LoginName from netMap; TODO(nickkhyl): move to nodeBackend (or remove? it's in [ipn.LoginProfile]).
 	engineStatus      ipn.EngineStatus
 	endpoints         []tailcfg.Endpoint
 	blocked           bool
-	keyExpired        bool          // TODO(nickkhyl): move to nodeContext
-	authURL           string        // non-empty if not Running; TODO(nickkhyl): move to nodeContext
-	authURLTime       time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeContext
-	authActor         ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeContext
+	keyExpired        bool          // TODO(nickkhyl): move to nodeBackend
+	authURL           string        // non-empty if not Running; TODO(nickkhyl): move to nodeBackend
+	authURLTime       time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeBackend
+	authActor         ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeBackend
 	egg               bool
 	prevIfState       *netmon.State
 	peerAPIServer     *peerAPIServer // or nil
@@ -305,7 +305,7 @@ type LocalBackend struct {
 	lastSelfUpdateState ipnstate.SelfUpdateStatus
 	// capForcedNetfilter is the netfilter that control instructs Linux clients
 	// to use, unless overridden locally.
-	capForcedNetfilter string // TODO(nickkhyl): move to nodeContext
+	capForcedNetfilter string // TODO(nickkhyl): move to nodeBackend
 	// offlineAutoUpdateCancel stops offline auto-updates when called. It
 	// should be used via stopOfflineAutoUpdate and
 	// maybeStartOfflineAutoUpdate. It is nil when offline auto-updates are
@@ -317,7 +317,7 @@ type LocalBackend struct {
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON mem.RO                   // last JSON that was parsed into serveConfig
 	serveConfig       ipn.ServeConfigView      // or !Valid if none
-	ipVIPServiceMap   netmap.IPServiceMappings // map of VIPService IPs to their corresponding service names; TODO(nickkhyl): move to nodeContext
+	ipVIPServiceMap   netmap.IPServiceMappings // map of VIPService IPs to their corresponding service names; TODO(nickkhyl): move to nodeBackend
 
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
@@ -332,7 +332,7 @@ type LocalBackend struct {
 
 	// dialPlan is any dial plan that we've received from the control
 	// server during a previous connection; it is cleared on logout.
-	dialPlan atomic.Pointer[tailcfg.ControlDialPlan] // TODO(nickkhyl): maybe move to nodeContext?
+	dialPlan atomic.Pointer[tailcfg.ControlDialPlan] // TODO(nickkhyl): maybe move to nodeBackend?
 
 	// tkaSyncLock is used to make tkaSyncIfNeeded an exclusive
 	// section. This is needed to stop two map-responses in quick succession
