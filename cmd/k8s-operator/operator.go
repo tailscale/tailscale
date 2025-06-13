@@ -41,7 +41,6 @@ import (
 	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
@@ -231,17 +230,6 @@ waitOnline:
 	return s, tsc
 }
 
-// predicate function for filtering to ensure we *don't* reconcile on tailscale managed Kubernetes Services
-func serviceManagedResourceFilterPredicate() predicate.Predicate {
-	return predicate.NewPredicateFuncs(func(object client.Object) bool {
-		if svc, ok := object.(*corev1.Service); !ok {
-			return true
-		} else {
-			return !isManagedResource(svc)
-		}
-	})
-}
-
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
 func runReconcilers(opts reconcilerOpts) {
@@ -389,7 +377,6 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}).
-		WithEventFilter(serviceManagedResourceFilterPredicate()).
 		Named("service-pg-reconciler").
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).

@@ -101,6 +101,11 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		return res, fmt.Errorf("failed to get Service: %w", err)
 	}
 
+	// we don't want to reconcile on Services with `tailscale.com/managed: true` label
+	if isManagedResource(svc) {
+		return res, nil
+	}
+
 	hostname := nameForService(svc)
 	logger = logger.With("hostname", hostname)
 

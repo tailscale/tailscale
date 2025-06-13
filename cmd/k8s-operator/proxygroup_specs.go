@@ -40,7 +40,7 @@ func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *cor
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeNodePort,
 			Ports: []corev1.ServicePort{
-				// NOTE (ChaosInTheCRD): we set the ports once we've iterated over every svc and found any old configuration we want to persist
+				// NOTE(ChaosInTheCRD): we set the ports once we've iterated over every svc and found any old configuration we want to persist.
 				{
 					Name:     staticEndpointPortName,
 					Protocol: corev1.ProtocolUDP,
