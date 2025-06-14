@@ -252,7 +252,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, fmt.Errorf("error determining DNS name base: %w", err)
 	}
 	dnsName := hostname + "." + tcd
-	if err := r.ensureCertResources(ctx, pgName, dnsName, ing); err != nil {
+	if err := r.ensureCertResources(ctx, pg, dnsName, ing); err != nil {
 		return false, fmt.Errorf("error ensuring cert resources: %w", err)
 	}
 
@@ -931,18 +931,31 @@ func ownersAreSetAndEqual(a, b *tailscale.VIPService) bool {
 // (domain) is a valid Kubernetes resource name.
 // https://github.com/tailscale/tailscale/blob/8b1e7f646ee4730ad06c9b70c13e7861b964949b/util/dnsname/dnsname.go#L99
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#dns-subdomain-names
-func (r *HAIngressReconciler) ensureCertResources(ctx context.Context, pgName, domain string, ing *networkingv1.Ingress) error {
-	secret := certSecret(pgName, r.tsNamespace, domain, ing)
-	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, secret, nil); err != nil {
+func (r *HAIngressReconciler) ensureCertResources(ctx context.Context, pg *tsapi.ProxyGroup, domain string, ing *networkingv1.Ingress) error {
+	secret := certSecret(pg.Name, r.tsNamespace, domain, ing)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, secret, func(s *corev1.Secret) {
+		// Labels might have changed if the Ingress has been updated to use a
+		// different ProxyGroup.
+		s.Labels = secret.Labels
+	}); err != nil {
 		return fmt.Errorf("failed to create or update Secret %s: %w", secret.Name, err)
 	}
-	role := certSecretRole(pgName, r.tsNamespace, domain)
-	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, nil); err != nil {
+	role := certSecretRole(pg.Name, r.tsNamespace, domain)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
+		// Labels might have changed if the Ingress has been updated to use a
+		// different ProxyGroup.
+		r.Labels = role.Labels
+	}); err != nil {
 		return fmt.Errorf("failed to create or update Role %s: %w", role.Name, err)
 	}
-	rb := certSecretRoleBinding(pgName, r.tsNamespace, domain)
-	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, rb, nil); err != nil {
-		return fmt.Errorf("failed to create or update RoleBinding %s: %w", rb.Name, err)
+	rolebinding := certSecretRoleBinding(pg.Name, r.tsNamespace, domain)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, rolebinding, func(rb *rbacv1.RoleBinding) {
+		// Labels and subjects might have changed if the Ingress has been updated to use a
+		// different ProxyGroup.
+		rb.Labels = rolebinding.Labels
+		rb.Subjects = rolebinding.Subjects
+	}); err != nil {
+		return fmt.Errorf("failed to create or update RoleBinding %s: %w", rolebinding.Name, err)
 	}
 	return nil
 }

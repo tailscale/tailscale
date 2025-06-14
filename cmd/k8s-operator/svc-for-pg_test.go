@@ -46,7 +46,7 @@ func TestServicePGReconciler(t *testing.T) {
 
 		config = append(config, fmt.Sprintf("svc:default-%s", svc.Name))
 		verifyTailscaleService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
-		verifyTailscaledConfig(t, fc, config)
+		verifyTailscaledConfig(t, fc, "test-pg", config)
 	}
 
 	for i, svc := range svcs {
@@ -75,7 +75,7 @@ func TestServicePGReconciler(t *testing.T) {
 		}
 
 		config = removeEl(config, fmt.Sprintf("svc:default-%s", svc.Name))
-		verifyTailscaledConfig(t, fc, config)
+		verifyTailscaledConfig(t, fc, "test-pg", config)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	expectReconciled(t, svcPGR, "default", svc.Name)
 
 	verifyTailscaleService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
-	verifyTailscaledConfig(t, fc, []string{fmt.Sprintf("svc:default-%s", svc.Name)})
+	verifyTailscaledConfig(t, fc, "test-pg", []string{fmt.Sprintf("svc:default-%s", svc.Name)})
 
 	hostname := "foobarbaz"
 	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
@@ -100,7 +100,7 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	expectReconciled(t, svcPGR, "default", svc.Name)
 
 	verifyTailscaleService(t, ft, fmt.Sprintf("svc:%s", hostname), []string{"do-not-validate"})
-	verifyTailscaledConfig(t, fc, []string{fmt.Sprintf("svc:%s", hostname)})
+	verifyTailscaledConfig(t, fc, "test-pg", []string{fmt.Sprintf("svc:%s", hostname)})
 
 	_, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName(fmt.Sprintf("svc:default-%s", svc.Name)))
 	if err == nil {
@@ -334,7 +334,7 @@ func TestIgnoreRegularService(t *testing.T) {
 	mustCreate(t, fc, svc)
 	expectReconciled(t, pgr, "default", "test")
 
-	verifyTailscaledConfig(t, fc, nil)
+	verifyTailscaledConfig(t, fc, "test-pg", nil)
 
 	tsSvcs, err := ft.ListVIPServices(context.Background())
 	if err == nil {
