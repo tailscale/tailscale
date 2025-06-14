@@ -63,6 +63,7 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
+	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgint"
 )
 
@@ -502,6 +503,30 @@ func (o *Options) derpActiveFunc() func() {
 	return o.DERPActiveFunc
 }
 
+// NodeAddrsHostInfoUpdate represents an update event of the addresses and
+// [tailcfg.HostInfoView] for a node set. This event is published over an
+// [eventbus.Bus]. [magicsock.Conn] is the sole subscriber as of 2025-06. If
+// you are adding more subscribers consider moving this type out of magicsock.
+type NodeAddrsHostInfoUpdate struct {
+	NodesByID map[tailcfg.NodeID]NodeAddrsHostInfo
+	Complete  bool // true if NodesByID contains all known nodes, false if it may be a subset
+}
+
+// NodeAddrsHostInfo represents the addresses and [tailcfg.HostinfoView] for a
+// Tailscale node.
+type NodeAddrsHostInfo struct {
+	Addresses views.Slice[netip.Prefix]
+	Hostinfo  tailcfg.HostinfoView
+}
+
+// FilterUpdate represents an update event for a [*filter.Filter]. This event is
+// signaled over an [eventbus.Bus]. [magicsock.Conn] is the sole subscriber as
+// of 2025-06. If you are adding more subscribers consider moving this type out
+// of magicsock.
+type FilterUpdate struct {
+	*filter.Filter
+}
+
 // newConn is the error-free, network-listening-side-effect-free based
 // of NewConn. Mostly for tests.
 func newConn(logf logger.Logf) *Conn {
@@ -535,6 +560,20 @@ func newConn(logf logger.Logf) *Conn {
 	return c
 }
 
+// consumeEventbusTopic consumes events from sub and passes them to
+// handlerFn until sub.Done() is closed.
+func consumeEventbusTopic[T any](sub *eventbus.Subscriber[T], handlerFn func(t T)) {
+	defer sub.Close()
+	for {
+		select {
+		case evt := <-sub.Events():
+			handlerFn(evt)
+		case <-sub.Done():
+			return
+		}
+	}
+}
+
 // NewConn creates a magic Conn listening on opts.Port.
 // As the set of possible endpoints for a Conn changes, the
 // callback opts.EndpointsFunc is called.
@@ -562,17 +601,17 @@ func NewConn(opts Options) (*Conn, error) {
 		c.eventClient = c.eventBus.Client("magicsock.Conn")
 
 		pmSub := eventbus.Subscribe[portmapper.Mapping](c.eventClient)
-		go func() {
-			defer pmSub.Close()
-			for {
-				select {
-				case <-pmSub.Events():
-					c.onPortMapChanged()
-				case <-pmSub.Done():
-					return
-				}
-			}
-		}()
+		go consumeEventbusTopic(pmSub, func(_ portmapper.Mapping) {
+			c.onPortMapChanged()
+		})
+		filterSub := eventbus.Subscribe[FilterUpdate](c.eventClient)
+		go consumeEventbusTopic(filterSub, func(t FilterUpdate) {
+			// TODO(jwhited): implement
+		})
+		nodeSub := eventbus.Subscribe[NodeAddrsHostInfoUpdate](c.eventClient)
+		go consumeEventbusTopic(nodeSub, func(t NodeAddrsHostInfoUpdate) {
+			// TODO(jwhited): implement
+		})
 
 		// Disable the explicit callback from the portmapper, the subscriber handles it.
 		onPortMapChanged = nil
@@ -2798,6 +2837,10 @@ func (c *connBind) Close() error {
 		return nil
 	}
 	c.closed = true
+	// Close the [eventbus.Client].
+	if c.eventClient != nil {
+		c.eventClient.Close()
+	}
 	// Unblock all outstanding receives.
 	c.pconn4.Close()
 	c.pconn6.Close()

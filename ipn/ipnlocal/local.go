@@ -98,6 +98,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -514,7 +515,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
-	nb := newNodeBackend(ctx)
+	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
@@ -599,8 +600,15 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
 	}
-	// Auto-init one in tests for LocalBackend created without the NewLocalBackend constructor...
-	v := newNodeBackend(cmp.Or(b.ctx, context.Background()))
+	// Auto-init [nodeBackend] in tests for LocalBackend created without the
+	// NewLocalBackend() constructor. Same reasoning for checking b.sys.
+	var bus *eventbus.Bus
+	if b.sys == nil {
+		bus = eventbus.New()
+	} else {
+		bus = b.sys.Bus.Get()
+	}
+	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), bus)
 	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
 		v.ready()
 	}
@@ -7009,7 +7017,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		// down, so no need to do any work.
 		return nil
 	}
-	newNode := newNodeBackend(b.ctx)
+	newNode := newNodeBackend(b.ctx, b.sys.Bus.Get())
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
 		oldNode.shutdown(errNodeContextChanged)
 	}

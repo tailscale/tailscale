@@ -23,9 +23,11 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/magicsock"
 )
 
 // nodeBackend is node-specific [LocalBackend] state. It is usually the current node.
@@ -69,6 +71,11 @@ type nodeBackend struct {
 	// replaced with a new one.
 	filterAtomic atomic.Pointer[filter.Filter]
 
+	// initialized once and immutable
+	eventClient   *eventbus.Client
+	filterUpdates *eventbus.Publisher[magicsock.FilterUpdate]
+	nodeUpdates   *eventbus.Publisher[magicsock.NodeAddrsHostInfoUpdate]
+
 	// TODO(nickkhyl): maybe use sync.RWMutex?
 	mu sync.Mutex // protects the following fields
 
@@ -95,16 +102,20 @@ type nodeBackend struct {
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
 }
 
-func newNodeBackend(ctx context.Context) *nodeBackend {
+func newNodeBackend(ctx context.Context, bus *eventbus.Bus) *nodeBackend {
 	ctx, ctxCancel := context.WithCancelCause(ctx)
 	nb := &nodeBackend{
-		ctx:       ctx,
-		ctxCancel: ctxCancel,
-		readyCh:   make(chan struct{}),
+		ctx:         ctx,
+		ctxCancel:   ctxCancel,
+		eventClient: bus.Client("ipnlocal.nodeBackend"),
+		readyCh:     make(chan struct{}),
 	}
 	// Default filter blocks everything and logs nothing.
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
 	nb.filterAtomic.Store(noneFilter)
+	nb.filterUpdates = eventbus.Publish[magicsock.FilterUpdate](nb.eventClient)
+	nb.nodeUpdates = eventbus.Publish[magicsock.NodeAddrsHostInfoUpdate](nb.eventClient)
+	nb.filterUpdates.Publish(magicsock.FilterUpdate{Filter: nb.filterAtomic.Load()})
 	return nb
 }
 
@@ -418,9 +429,16 @@ func (nb *nodeBackend) updatePeersLocked() {
 		nb.peers[k] = tailcfg.NodeView{}
 	}
 
+	changed := magicsock.NodeAddrsHostInfoUpdate{
+		Complete: true,
+	}
 	// Second pass, add everything wanted.
 	for _, p := range nm.Peers {
 		mak.Set(&nb.peers, p.ID(), p)
+		mak.Set(&changed.NodesByID, p.ID(), magicsock.NodeAddrsHostInfo{
+			Addresses: p.Addresses(),
+			Hostinfo:  p.Hostinfo(),
+		})
 	}
 
 	// Third pass, remove deleted things.
@@ -429,6 +447,7 @@ func (nb *nodeBackend) updatePeersLocked() {
 			delete(nb.peers, k)
 		}
 	}
+	nb.nodeUpdates.Publish(changed)
 }
 
 func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
@@ -443,6 +462,9 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// call (e.g. its endpoints + online status both change)
 	var mutableNodes map[tailcfg.NodeID]*tailcfg.Node
 
+	changed := magicsock.NodeAddrsHostInfoUpdate{
+		Complete: false,
+	}
 	for _, m := range muts {
 		n, ok := mutableNodes[m.NodeIDBeingMutated()]
 		if !ok {
@@ -457,8 +479,14 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		m.Apply(n)
 	}
 	for nid, n := range mutableNodes {
-		nb.peers[nid] = n.View()
+		nv := n.View()
+		nb.peers[nid] = nv
+		mak.Set(&changed.NodesByID, nid, magicsock.NodeAddrsHostInfo{
+			Addresses: nv.Addresses(),
+			Hostinfo:  nv.Hostinfo(),
+		})
 	}
+	nb.nodeUpdates.Publish(changed)
 	return true
 }
 
@@ -480,6 +508,7 @@ func (nb *nodeBackend) filter() *filter.Filter {
 
 func (nb *nodeBackend) setFilter(f *filter.Filter) {
 	nb.filterAtomic.Store(f)
+	nb.filterUpdates.Publish(magicsock.FilterUpdate{Filter: f})
 }
 
 func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
@@ -545,6 +574,7 @@ func (nb *nodeBackend) doShutdown(cause error) {
 	defer nb.mu.Unlock()
 	nb.ctxCancel(cause)
 	nb.readyCh = nil
+	nb.eventClient.Close()
 }
 
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
