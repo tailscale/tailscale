@@ -187,7 +187,6 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 	if err := fc.Status().Update(context.Background(), pg); err != nil {
 		t.Fatal(err)
 	}
-	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 
 	ft := &fakeTSClient{}
 	zl, err := zap.NewDevelopment()
@@ -210,7 +209,6 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 		clock:       cl,
 		defaultTags: []string{"tag:k8s"},
 		tsNamespace: "operator-ns",
-		tsnetServer: fakeTsnetServer,
 		logger:      zl.Sugar(),
 		recorder:    record.NewFakeRecorder(10),
 		lc:          lc,
