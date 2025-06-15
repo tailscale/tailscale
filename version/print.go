@@ -20,6 +20,7 @@ var stringLazy = sync.OnceValue(func() string {
 	if gitCommit() != "" {
 		fmt.Fprintf(&ret, "  tailscale commit: %s%s\n", gitCommit(), dirtyString())
 	}
+	fmt.Fprintf(&ret, "  long version: %s\n", Long())
 	if extraGitCommitStamp != "" {
 		fmt.Fprintf(&ret, "  other commit: %s\n", extraGitCommitStamp)
 	}
