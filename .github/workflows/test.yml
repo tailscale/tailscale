@@ -15,6 +15,10 @@ env:
   #  - false: we expect fuzzing to be happy, and should report failure if it's not.
   #  - true: we expect fuzzing is broken, and should report failure if it start working.
   TS_FUZZ_CURRENTLY_BROKEN: false
+  # GOMODCACHE is the same definition on all OSes. Within the workspace, we use
+  # toplevel directories "src" (for the checked out source code), and "gomodcache"
+  # and other caches as siblings to follow.
+  GOMODCACHE: ${{ github.workspace }}/gomodcache
 
 on:
   push:
@@ -38,8 +42,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  gomod-cache:
+    runs-on: ubuntu-24.04
+    outputs:
+      cache-key: ${{ steps.hash.outputs.key }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: src
+      - name: Compute cache key from go.{mod,sum}
+        id: hash
+        run: echo "key=gomod-cross3-${{ hashFiles('src/go.mod', 'src/go.sum') }}" >> $GITHUB_OUTPUT
+      # See if the cache entry already exists to avoid downloading it
+      # and doing the cache write again.
+      - id: check-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: gomodcache # relative to workspace; see env note at top of file
+          key: ${{ steps.hash.outputs.key }}
+          lookup-only: true
+          enableCrossOsArchive: true
+      - name: Download modules
+        if: steps.check-cache.outputs.cache-hit != 'true'
+        working-directory: src
+        run: go mod download
+      - name: Cache Go modules
+        if: steps.check-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: gomodcache # relative to workspace; see env note at top of file
+          key: ${{ steps.hash.outputs.key }}
+          enableCrossOsArchive: true
+
   race-root-integration:
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
@@ -51,9 +89,19 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: build test wrapper
+      working-directory: src
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: integration tests as root
+      working-directory: src
       run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/
       env:
         TS_TEST_SHARD: ${{ matrix.shard }}
@@ -75,9 +123,18 @@ jobs:
             shard: '3/3'
           - goarch: "386" # thanks yaml
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: Restore Cache
       uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       with:
@@ -87,7 +144,6 @@ jobs:
         # fetched and extracted by tar
         path: |
           ~/.cache/go-build
-          ~/go/pkg/mod/cache
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
@@ -97,11 +153,13 @@ jobs:
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
     - name: build all
       if: matrix.buildflags == '' # skip on race builder
+      working-directory: src
       run: ./tool/go build ${{matrix.buildflags}} ./...
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: build variant CLIs
       if: matrix.buildflags == '' # skip on race builder
+      working-directory: src
       run: |
         export TS_USE_TOOLCHAIN=1
         ./build_dist.sh --extra-small ./cmd/tailscaled
@@ -116,19 +174,24 @@ jobs:
         sudo apt-get -y update
         sudo apt-get -y install qemu-user
     - name: build test wrapper
+      working-directory: src
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
+      working-directory: src
       run: NOBASHDEBUG=true PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
         TS_TEST_SHARD: ${{ matrix.shard }}
     - name: bench all
+      working-directory: src
       run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: check that no tracked files changed
+      working-directory: src
       run: git diff --no-ext-diff --name-only --exit-code || (echo "Build/test modified the files above."; exit 1)
     - name: check that no new files were added
+      working-directory: src
       run: |
         # Note: The "error: pathspec..." you see below is normal!
         # In the success case in which there are no new untracked files,
@@ -140,21 +203,32 @@ jobs:
           exit 1
         fi
     - name: Tidy cache
+      working-directory: src
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
-        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
+
   windows:
     runs-on: windows-2022
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
 
     - name: Install Go
       uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
       with:
-        go-version-file: go.mod
+        go-version-file: src/go.mod
         cache: false
+
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
 
     - name: Restore Cache
       uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
@@ -165,7 +239,6 @@ jobs:
         # fetched and extracted by tar
         path: |
           ~/.cache/go-build
-          ~/go/pkg/mod/cache
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
@@ -174,19 +247,22 @@ jobs:
           ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-go-2-
     - name: test
+      working-directory: src
       run: go run ./cmd/testwrapper ./...
     - name: bench all
+      working-directory: src
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
       run: go test ./... -bench . -benchtime 1x -run "^$"
     - name: Tidy cache
+      working-directory: src
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
-        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   privileged:
+    needs: gomod-cache
     runs-on: ubuntu-24.04
     container:
       image: golang:latest
@@ -194,36 +270,47 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: chown
+      working-directory: src
       run: chown -R $(id -u):$(id -g) $PWD
     - name: privileged tests
+      working-directory: src
       run: ./tool/go test ./util/linuxfw ./derp/xdp
 
   vm:
+    needs: gomod-cache
     runs-on: ["self-hosted", "linux", "vm"]
     # VM tests run with some privileges, don't let them run on 3p PRs.
     if: github.repository == 'tailscale/tailscale'
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: Run VM tests
+      working-directory: src
       run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
       env:
         HOME: "/var/lib/ghrunner/home"
         TMPDIR: "/tmp"
         XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
 
-  race-build:
-    runs-on: ubuntu-24.04
-    steps:
-    - name: checkout
-      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-    - name: build all
-      run: ./tool/go install -race ./cmd/...
-    - name: build tests
-      run: ./tool/go test -race -exec=true ./...
-
   cross: # cross-compile checks, build only.
+    needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
@@ -262,6 +349,8 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
     - name: Restore Cache
       uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       with:
@@ -271,7 +360,6 @@ jobs:
         # fetched and extracted by tar
         path: |
           ~/.cache/go-build
-          ~/go/pkg/mod/cache
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
@@ -279,7 +367,14 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: build all
+      working-directory: src
       run: ./tool/go build ./cmd/...
       env:
         GOOS: ${{ matrix.goos }}
@@ -287,30 +382,42 @@ jobs:
         GOARM: ${{ matrix.goarm }}
         CGO_ENABLED: "0"
     - name: build tests
+      working-directory: src
       run: ./tool/go test -exec=true ./...
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: "0"
     - name: Tidy cache
+      working-directory: src
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
-        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
-       #make it build a few smoke packages.
+       # make it build a few smoke packages.
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: build some
+      working-directory: src
       run: ./tool/go build ./ipn/... ./ssh/tailssh ./wgengine/ ./types/... ./control/controlclient
       env:
         GOOS: ios
         GOARCH: arm64
 
   crossmin: # cross-compile for platforms where we only check cmd/tailscale{,d}
+    needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
@@ -332,6 +439,8 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
     - name: Restore Cache
       uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       with:
@@ -341,7 +450,6 @@ jobs:
         # fetched and extracted by tar
         path: |
           ~/.cache/go-build
-          ~/go/pkg/mod/cache
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
@@ -349,7 +457,14 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: build core
+      working-directory: src
       run: ./tool/go build ./cmd/tailscale ./cmd/tailscaled
       env:
         GOOS: ${{ matrix.goos }}
@@ -357,24 +472,34 @@ jobs:
         GOARM: ${{ matrix.goarm }}
         CGO_ENABLED: "0"
     - name: Tidy cache
+      working-directory: src
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
-        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   android:
     # similar to cross above, but android fails to build a few pieces of the
     # repo. We should fix those pieces, they're small, but as a stepping stone,
     # only test the subset of android that our past smoke test checked.
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
       # Super minimal Android build that doesn't even use CGO and doesn't build everything that's needed
       # and is only arm64. But it's a smoke build: it's not meant to catch everything. But it'll catch
       # some Android breakages early.
       # TODO(bradfitz): better; see https://github.com/tailscale/tailscale/issues/4482
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: build some
+      working-directory: src
       run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/netmon ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version ./ssh/tailssh
       env:
         GOOS: android
@@ -382,9 +507,12 @@ jobs:
 
   wasm: # builds tsconnect, which is the only wasm build we support
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
     - name: Restore Cache
       uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       with:
@@ -394,7 +522,6 @@ jobs:
         # fetched and extracted by tar
         path: |
           ~/.cache/go-build
-          ~/go/pkg/mod/cache
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
@@ -402,28 +529,45 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-go-2-
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: build tsconnect client
+      working-directory: src
       run: ./tool/go build ./cmd/tsconnect/wasm ./cmd/tailscale/cli
       env:
         GOOS: js
         GOARCH: wasm
     - name: build tsconnect server
+      working-directory: src
       # Note, no GOOS/GOARCH in env on this build step, we're running a build
       # tool that handles the build itself.
       run: |
         ./tool/go run ./cmd/tsconnect --fast-compression build
         ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
     - name: Tidy cache
+      working-directory: src
       shell: bash
       run: |
         find $(go env GOCACHE) -type f -mmin +90 -delete
-        find $(go env GOMODCACHE)/cache -type f -mmin +90 -delete
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    - name: Set GOMODCACHE env
+      run: echo "GOMODCACHE=$HOME/.cache/go-mod" >> $GITHUB_ENV
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: test tailscale_go
       run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
 
@@ -477,7 +621,7 @@ jobs:
       uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@master
       with:
         oss-fuzz-project-name: 'tailscale'
-        fuzz-seconds: 300
+        fuzz-seconds: 150
         dry-run: false
         language: go
     - name: Set artifacts_path in env (workaround for actions/upload-artifact#176)
@@ -493,19 +637,40 @@ jobs:
 
   depaware:
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
+    - name: Set GOMODCACHE env
+      run: echo "GOMODCACHE=$HOME/.cache/go-mod" >> $GITHUB_ENV
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: check depaware
-      run: |
-        make depaware
+      working-directory: src
+      run: make depaware
 
   go_generate:
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: check that 'go generate' is clean
+      working-directory: src
       run: |
         pkgs=$(./tool/go list ./... | grep -Ev 'dnsfallback|k8s-operator|xdp')
         ./tool/go generate $pkgs
@@ -515,10 +680,20 @@ jobs:
 
   go_mod_tidy:
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: check that 'go mod tidy' is clean
+      working-directory: src
       run: |
         ./tool/go mod tidy
         echo
@@ -535,6 +710,7 @@ jobs:
 
   staticcheck:
     runs-on: ubuntu-24.04
+    needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
@@ -546,16 +722,22 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-    - name: install staticcheck
-      run: GOBIN=~/.local/bin ./tool/go install honnef.co/go/tools/cmd/staticcheck
+      with:
+        path: src
+    - name: Restore Go module cache
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: gomodcache
+        key: ${{ needs.gomod-cache.outputs.cache-key }}
+        enableCrossOsArchive: true
     - name: run staticcheck
+      working-directory: src
       run: |
         export GOROOT=$(./tool/go env GOROOT)
-        export PATH=$GOROOT/bin:$PATH
-        staticcheck -- $(./tool/go list ./... | grep -v tempfork)
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
+        ./tool/go run -exec \
+          "env GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}" \
+           honnef.co/go/tools/cmd/staticcheck -- \
+           $(env GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} ./tool/go list ./... | grep -v tempfork)
 
   notify_slack:
     if: always()
