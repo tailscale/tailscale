@@ -74,6 +74,7 @@ case "$REV" in
             echo "# Cleaning up old Go toolchain $hash" >&2
             rm -rf "$HOME/.cache/tsgo/$hash"
             rm -rf "$HOME/.cache/tsgo/$hash.extracted"
+            rm -rf "$HOME/.cache/tsgoroot/$hash"
         done
     fi
     ;;
