@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # gocross-wrapper.sh is a wrapper that can be aliased to 'go', which
-# transparently builds gocross using a "bootstrap" Go toolchain, and
-# then invokes gocross.
+# transparently runs the version of github.com/tailscale/go as specified repo's
+# go.toolchain.rev file.
+#
+# It also conditionally (if TS_USE_GOCROSS=1) builds gocross and uses it as a go
+# wrapper to inject certain go flags.
 
 set -euo pipefail
 
@@ -75,6 +78,14 @@ case "$REV" in
     fi
     ;;
 esac
+
+# gocross is opt-in as of 2025-06-16. See tailscale/corp#26717.
+# It's primarily used for xcode builds, and a bit still for Windows.
+# In the past we needed it for git version stamping on Linux etc, but
+# Go does that itself nowadays.
+if [ "${TS_USE_GOCROSS:-}" != "1" ]; then
+    exec "$toolchain/bin/go" "$@"
+fi
 
 if [[ -d "$toolchain" ]]; then
     # A toolchain exists, but is it recent enough to compile gocross? If not,
