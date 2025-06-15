@@ -161,7 +161,6 @@ jobs:
       if: matrix.buildflags == '' # skip on race builder
       working-directory: src
       run: |
-        export TS_USE_TOOLCHAIN=1
         ./build_dist.sh --extra-small ./cmd/tailscaled
         ./build_dist.sh --box ./cmd/tailscaled
         ./build_dist.sh --extra-small --box ./cmd/tailscaled
