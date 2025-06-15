@@ -62,7 +62,7 @@ func getToolchain() (toolchainDir, gorootDir string, err error) {
 
 	cache := filepath.Join(os.Getenv("HOME"), ".cache")
 	toolchainDir = filepath.Join(cache, "tsgo", rev)
-	gorootDir = filepath.Join(toolchainDir, "gocross-goroot")
+	gorootDir = filepath.Join(cache, "tsgoroot", rev)
 
 	// You might wonder why getting the toolchain also provisions and returns a
 	// path suitable for use as GOROOT. Wonder no longer!
