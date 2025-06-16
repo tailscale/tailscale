@@ -54,6 +54,7 @@ func main() {
 		hostname        = fs.String("hostname", "", "Hostname to register the service under")
 		siteID          = fs.Uint("site-id", 1, "an integer site ID to use for the ULA prefix which allows for multiple proxies to act in a HA configuration")
 		v4PfxStr        = fs.String("v4-pfx", "100.64.1.0/24", "comma-separated list of IPv4 prefixes to advertise")
+		dnsServers      = fs.String("dns-servers", "", "comma separated list of upstream DNS to use, including host and port (use system if empty)")
 		verboseTSNet    = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
 		printULA        = fs.Bool("print-ula", false, "print the ULA prefix and exit")
 		ignoreDstPfxStr = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
@@ -78,7 +79,7 @@ func main() {
 	}
 
 	var ignoreDstTable *bart.Table[bool]
-	for _, s := range strings.Split(*ignoreDstPfxStr, ",") {
+	for s := range strings.SplitSeq(*ignoreDstPfxStr, ",") {
 		s := strings.TrimSpace(s)
 		if s == "" {
 			continue
@@ -185,9 +186,35 @@ func main() {
 		ipPool:     ipp,
 		routes:     routes,
 		dnsAddr:    dnsAddr,
-		resolver:   net.DefaultResolver,
+		resolver:   getResolver(*dnsServers),
 	}
 	c.run(ctx, lc)
+}
+
+// getResolver parses serverFlag and returns either the default resolver, or a
+// resolver that uses the provided comma-separated DNS server AddrPort's, or
+// panics.
+func getResolver(serverFlag string) lookupNetIPer {
+	if serverFlag == "" {
+		return net.DefaultResolver
+	}
+	var addrs []string
+	for s := range strings.SplitSeq(serverFlag, ",") {
+		s = strings.TrimSpace(s)
+		addr, err := netip.ParseAddrPort(s)
+		if err != nil {
+			log.Fatalf("dns server provided: %q does not parse: %v", s, err)
+		}
+		addrs = append(addrs, addr.String())
+	}
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network string, address string) (net.Conn, error) {
+			var dialer net.Dialer
+			// TODO(raggi): perhaps something other than random?
+			return dialer.DialContext(ctx, network, addrs[rand.N(len(addrs))])
+		},
+	}
 }
 
 func calculateAddresses(prefixes []netip.Prefix) (*netipx.IPSet, netip.Addr, *netipx.IPSet) {
