@@ -166,7 +166,7 @@ type magicStack struct {
 }
 
 // newMagicStack builds and initializes an idle magicsock and
-// friends. You need to call conn.SetNetworkMap and dev.Reconfig
+// friends. You need to call conn.onNodeViewsUpdate and dev.Reconfig
 // before anything interesting happens.
 func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
 	privateKey := key.NewNode()
@@ -339,9 +339,13 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 
 		for i, m := range ms {
 			nm := buildNetmapLocked(i)
-			m.conn.SetNetworkMap(nm)
-			peerSet := make(set.Set[key.NodePublic], len(nm.Peers))
-			for _, peer := range nm.Peers {
+			nv := NodeViewsUpdate{
+				SelfNode: nm.SelfNode,
+				Peers:    nm.Peers,
+			}
+			m.conn.onNodeViewsUpdate(nv)
+			peerSet := make(set.Set[key.NodePublic], len(nv.Peers))
+			for _, peer := range nv.Peers {
 				peerSet.Add(peer.Key())
 			}
 			m.conn.UpdatePeers(peerSet)
@@ -1366,7 +1370,7 @@ func newTestConn(t testing.TB) *Conn {
 	return conn
 }
 
-// addTestEndpoint sets conn's network map to a single peer expected
+// addTestEndpoint sets conn's node views to a single peer expected
 // to receive packets from sendConn (or DERP), and returns that peer's
 // nodekey and discokey.
 func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.NodePublic, key.DiscoPublic) {
@@ -1375,7 +1379,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 	// codepath.
 	discoKey := key.DiscoPublicFromRaw32(mem.B([]byte{31: 1}))
 	nodeKey := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 31: 0}))
-	conn.SetNetworkMap(&netmap.NetworkMap{
+	conn.onNodeViewsUpdate(NodeViewsUpdate{
 		Peers: nodeViews([]*tailcfg.Node{
 			{
 				ID:        1,
@@ -1564,11 +1568,11 @@ func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 	return nv
 }
 
-// Test that a netmap update where node changes its node key but
+// Test that a node views update where node changes its node key but
 // doesn't change its disco key doesn't result in a broken state.
 //
 // https://github.com/tailscale/tailscale/issues/1391
-func TestSetNetworkMapChangingNodeKey(t *testing.T) {
+func TestOnNodeViewsUpdateChangingNodeKey(t *testing.T) {
 	conn := newTestConn(t)
 	t.Cleanup(func() { conn.Close() })
 	var buf tstest.MemLogger
@@ -1580,7 +1584,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	nodeKey1 := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 2: '1', 31: 0}))
 	nodeKey2 := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 2: '2', 31: 0}))
 
-	conn.SetNetworkMap(&netmap.NetworkMap{
+	conn.onNodeViewsUpdate(NodeViewsUpdate{
 		Peers: nodeViews([]*tailcfg.Node{
 			{
 				ID:        1,
@@ -1596,7 +1600,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	}
 
 	for range 3 {
-		conn.SetNetworkMap(&netmap.NetworkMap{
+		conn.onNodeViewsUpdate(NodeViewsUpdate{
 			Peers: nodeViews([]*tailcfg.Node{
 				{
 					ID:        2,
@@ -1921,7 +1925,7 @@ func eps(s ...string) []netip.AddrPort {
 	return eps
 }
 
-func TestStressSetNetworkMap(t *testing.T) {
+func TestStressOnNodeViewsUpdate(t *testing.T) {
 	t.Parallel()
 
 	conn := newTestConn(t)
@@ -1969,15 +1973,15 @@ func TestStressSetNetworkMap(t *testing.T) {
 				allPeers[j].Key = randNodeKey()
 			}
 		}
-		// Clone existing peers into a new netmap.
+		// Clone existing peers.
 		peers := make([]*tailcfg.Node, 0, len(allPeers))
 		for peerIdx, p := range allPeers {
 			if present[peerIdx] {
 				peers = append(peers, p.Clone())
 			}
 		}
-		// Set the netmap.
-		conn.SetNetworkMap(&netmap.NetworkMap{
+		// Set the node views.
+		conn.onNodeViewsUpdate(NodeViewsUpdate{
 			Peers: nodeViews(peers),
 		})
 		// Check invariants.
@@ -2102,10 +2106,10 @@ func TestRebindingUDPConn(t *testing.T) {
 }
 
 // https://github.com/tailscale/tailscale/issues/6680: don't ignore
-// SetNetworkMap calls when there are no peers. (A too aggressive fast path was
+// onNodeViewsUpdate calls when there are no peers. (A too aggressive fast path was
 // previously bailing out early, thinking there were no changes since all zero
-// peers didn't change, but the netmap has non-peer info in it too we shouldn't discard)
-func TestSetNetworkMapWithNoPeers(t *testing.T) {
+// peers didn't change, but the node views has non-peer info in it too we shouldn't discard)
+func TestOnNodeViewsUpdateWithNoPeers(t *testing.T) {
 	var c Conn
 	knobs := &controlknobs.Knobs{}
 	c.logf = logger.Discard
@@ -2114,9 +2118,9 @@ func TestSetNetworkMapWithNoPeers(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		v := !debugEnableSilentDisco()
 		envknob.Setenv("TS_DEBUG_ENABLE_SILENT_DISCO", fmt.Sprint(v))
-		nm := &netmap.NetworkMap{}
-		c.SetNetworkMap(nm)
-		t.Logf("ptr %d: %p", i, nm)
+		nv := NodeViewsUpdate{}
+		c.onNodeViewsUpdate(nv)
+		t.Logf("ptr %d: %p", i, nv)
 		if c.lastFlags.heartbeatDisabled != v {
 			t.Fatalf("call %d: didn't store netmap", i)
 		}
@@ -2213,7 +2217,11 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 			},
 		}),
 	}
-	m.conn.SetNetworkMap(nm)
+	nv := NodeViewsUpdate{
+		SelfNode: nm.SelfNode,
+		Peers:    nm.Peers,
+	}
+	m.conn.onNodeViewsUpdate(nv)
 
 	cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSubnetRoutes, "")
 	if err != nil {
@@ -2275,7 +2283,11 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 			},
 		}),
 	}
-	m.conn.SetNetworkMap(nm)
+	nv := NodeViewsUpdate{
+		SelfNode: nm.SelfNode,
+		Peers:    nm.Peers,
+	}
+	m.conn.onNodeViewsUpdate(nv)
 
 	cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSubnetRoutes, "")
 	if err != nil {
@@ -2312,7 +2324,11 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 // configures WG.
 func applyNetworkMap(t *testing.T, m *magicStack, nm *netmap.NetworkMap) {
 	t.Helper()
-	m.conn.SetNetworkMap(nm)
+	nv := NodeViewsUpdate{
+		SelfNode: nm.SelfNode,
+		Peers:    nm.Peers,
+	}
+	m.conn.onNodeViewsUpdate(nv)
 	// Make sure we can't use v6 to avoid test failures.
 	m.conn.noV6.Store(true)
 

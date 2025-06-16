@@ -72,9 +72,10 @@ type nodeBackend struct {
 	filterAtomic atomic.Pointer[filter.Filter]
 
 	// initialized once and immutable
-	eventClient   *eventbus.Client
-	filterUpdates *eventbus.Publisher[magicsock.FilterUpdate]
-	nodeUpdates   *eventbus.Publisher[magicsock.NodeAddrsHostInfoUpdate]
+	eventClient  *eventbus.Client
+	filterPub    *eventbus.Publisher[magicsock.FilterUpdate]
+	nodeViewsPub *eventbus.Publisher[magicsock.NodeViewsUpdate]
+	nodeMutsPub  *eventbus.Publisher[magicsock.NodeMutationsUpdate]
 
 	// TODO(nickkhyl): maybe use sync.RWMutex?
 	mu sync.Mutex // protects the following fields
@@ -113,9 +114,10 @@ func newNodeBackend(ctx context.Context, bus *eventbus.Bus) *nodeBackend {
 	// Default filter blocks everything and logs nothing.
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
 	nb.filterAtomic.Store(noneFilter)
-	nb.filterUpdates = eventbus.Publish[magicsock.FilterUpdate](nb.eventClient)
-	nb.nodeUpdates = eventbus.Publish[magicsock.NodeAddrsHostInfoUpdate](nb.eventClient)
-	nb.filterUpdates.Publish(magicsock.FilterUpdate{Filter: nb.filterAtomic.Load()})
+	nb.filterPub = eventbus.Publish[magicsock.FilterUpdate](nb.eventClient)
+	nb.nodeViewsPub = eventbus.Publish[magicsock.NodeViewsUpdate](nb.eventClient)
+	nb.nodeMutsPub = eventbus.Publish[magicsock.NodeMutationsUpdate](nb.eventClient)
+	nb.filterPub.Publish(magicsock.FilterUpdate{Filter: nb.filterAtomic.Load()})
 	return nb
 }
 
@@ -379,6 +381,12 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	nb.netMap = nm
 	nb.updateNodeByAddrLocked()
 	nb.updatePeersLocked()
+	nv := magicsock.NodeViewsUpdate{}
+	if nm != nil {
+		nv.SelfNode = nm.SelfNode
+		nv.Peers = nm.Peers
+	}
+	nb.nodeViewsPub.Publish(nv)
 }
 
 func (nb *nodeBackend) updateNodeByAddrLocked() {
@@ -429,16 +437,9 @@ func (nb *nodeBackend) updatePeersLocked() {
 		nb.peers[k] = tailcfg.NodeView{}
 	}
 
-	changed := magicsock.NodeAddrsHostInfoUpdate{
-		Complete: true,
-	}
 	// Second pass, add everything wanted.
 	for _, p := range nm.Peers {
 		mak.Set(&nb.peers, p.ID(), p)
-		mak.Set(&changed.NodesByID, p.ID(), magicsock.NodeAddrsHostInfo{
-			Addresses: p.Addresses(),
-			Hostinfo:  p.Hostinfo(),
-		})
 	}
 
 	// Third pass, remove deleted things.
@@ -447,7 +448,6 @@ func (nb *nodeBackend) updatePeersLocked() {
 			delete(nb.peers, k)
 		}
 	}
-	nb.nodeUpdates.Publish(changed)
 }
 
 func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
@@ -462,8 +462,8 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// call (e.g. its endpoints + online status both change)
 	var mutableNodes map[tailcfg.NodeID]*tailcfg.Node
 
-	changed := magicsock.NodeAddrsHostInfoUpdate{
-		Complete: false,
+	update := magicsock.NodeMutationsUpdate{
+		Mutations: make([]netmap.NodeMutation, 0, len(muts)),
 	}
 	for _, m := range muts {
 		n, ok := mutableNodes[m.NodeIDBeingMutated()]
@@ -475,18 +475,14 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			}
 			n = nv.AsStruct()
 			mak.Set(&mutableNodes, nv.ID(), n)
+			update.Mutations = append(update.Mutations, m)
 		}
 		m.Apply(n)
 	}
 	for nid, n := range mutableNodes {
-		nv := n.View()
-		nb.peers[nid] = nv
-		mak.Set(&changed.NodesByID, nid, magicsock.NodeAddrsHostInfo{
-			Addresses: nv.Addresses(),
-			Hostinfo:  nv.Hostinfo(),
-		})
+		nb.peers[nid] = n.View()
 	}
-	nb.nodeUpdates.Publish(changed)
+	nb.nodeMutsPub.Publish(update)
 	return true
 }
 
@@ -508,7 +504,7 @@ func (nb *nodeBackend) filter() *filter.Filter {
 
 func (nb *nodeBackend) setFilter(f *filter.Filter) {
 	nb.filterAtomic.Store(f)
-	nb.filterUpdates.Publish(magicsock.FilterUpdate{Filter: f})
+	nb.filterPub.Publish(magicsock.FilterUpdate{Filter: f})
 }
 
 func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
