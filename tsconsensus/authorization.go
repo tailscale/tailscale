@@ -87,29 +87,29 @@ func (a *authorization) Refresh(ctx context.Context) error {
 }
 
 func (a *authorization) AllowsHost(addr netip.Addr) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.peers == nil {
 		return false
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	return a.peers.addrs.Contains(addr)
 }
 
 func (a *authorization) SelfAllowed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.peers == nil {
 		return false
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	return a.peers.status.Self.Tags != nil && views.SliceContains(*a.peers.status.Self.Tags, a.tag)
 }
 
 func (a *authorization) AllowedPeers() views.Slice[*ipnstate.PeerStatus] {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.peers == nil {
 		return views.Slice[*ipnstate.PeerStatus]{}
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	return views.SliceOf(a.peers.statuses)
 }
 
