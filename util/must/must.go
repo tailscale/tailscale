@@ -23,3 +23,11 @@ func Get[T any](v T, err error) T {
 	}
 	return v
 }
+
+// Get2 returns v1 and v2 as is. It panics if err is non-nil.
+func Get2[T any, U any](v1 T, v2 U, err error) (T, U) {
+	if err != nil {
+		panic(err)
+	}
+	return v1, v2
+}
