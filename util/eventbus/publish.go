@@ -21,11 +21,7 @@ type Publisher[T any] struct {
 }
 
 func newPublisher[T any](c *Client) *Publisher[T] {
-	ret := &Publisher[T]{
-		client: c,
-	}
-	c.addPublisher(ret)
-	return ret
+	return &Publisher[T]{client: c}
 }
 
 // Close closes the publisher.

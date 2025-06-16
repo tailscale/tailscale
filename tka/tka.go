@@ -440,6 +440,13 @@ func aumVerify(aum AUM, state State, isGenesisAUM bool) error {
 			return fmt.Errorf("signature %d: %v", i, err)
 		}
 	}
+
+	if aum.MessageKind == AUMRemoveKey && len(state.Keys) == 1 {
+		if kid, err := state.Keys[0].ID(); err == nil && bytes.Equal(aum.KeyID, kid) {
+			return errors.New("cannot remove the last key in the state")
+		}
+	}
+
 	return nil
 }
 

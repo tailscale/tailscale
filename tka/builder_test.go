@@ -5,6 +5,7 @@ package tka
 
 import (
 	"crypto/ed25519"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -89,6 +90,20 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	}
 	if _, err := a.state.GetKey(key2.MustID()); err != ErrNoSuchKey {
 		t.Errorf("GetKey(key2).err = %v, want %v", err, ErrNoSuchKey)
+	}
+
+	// Check that removing the remaining key errors out.
+	b = a.NewUpdater(signer25519(priv))
+	if err := b.RemoveKey(key.MustID()); err != nil {
+		t.Fatalf("RemoveKey(%v) failed: %v", key, err)
+	}
+	updates, err = b.Finalize(storage)
+	if err != nil {
+		t.Fatalf("Finalize() failed: %v", err)
+	}
+	wantErr := "cannot remove the last key"
+	if err := a.Inform(storage, updates); err == nil || !strings.Contains(err.Error(), wantErr) {
+		t.Fatalf("expected Inform() to return error %q, got: %v", wantErr, err)
 	}
 }
 

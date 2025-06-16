@@ -5,6 +5,7 @@ package ipnlocal
 
 import (
 	"cmp"
+	"context"
 	"net/netip"
 	"slices"
 	"sync"
@@ -22,9 +23,11 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/magicsock"
 )
 
 // nodeBackend is node-specific [LocalBackend] state. It is usually the current node.
@@ -39,7 +42,7 @@ import (
 // Two pointers to different [nodeBackend] instances represent different local nodes.
 // However, there's currently a bug where a new [nodeBackend] might not be created
 // during an implicit node switch (see tailscale/corp#28014).
-
+//
 // In the future, we might want to include at least the following in this struct (in addition to the current fields).
 // However, not everything should be exported or otherwise made available to the outside world (e.g. [ipnext] extensions,
 // peer API handlers, etc.).
@@ -61,12 +64,23 @@ import (
 // Even if they're tied to the local node, instead of moving them here, we should extract the entire feature
 // into a separate package and have it install proper hooks.
 type nodeBackend struct {
+	ctx       context.Context         // canceled by [nodeBackend.shutdown]
+	ctxCancel context.CancelCauseFunc // cancels ctx
+
 	// filterAtomic is a stateful packet filter. Immutable once created, but can be
 	// replaced with a new one.
 	filterAtomic atomic.Pointer[filter.Filter]
 
+	// initialized once and immutable
+	eventClient   *eventbus.Client
+	filterUpdates *eventbus.Publisher[magicsock.FilterUpdate]
+	nodeUpdates   *eventbus.Publisher[magicsock.NodeAddrsHostInfoUpdate]
+
 	// TODO(nickkhyl): maybe use sync.RWMutex?
 	mu sync.Mutex // protects the following fields
+
+	shutdownOnce sync.Once     // guards calling [nodeBackend.shutdown]
+	readyCh      chan struct{} // closed by [nodeBackend.ready]; nil after shutdown
 
 	// NetMap is the most recently set full netmap from the controlclient.
 	// It can't be mutated in place once set. Because it can't be mutated in place,
@@ -88,12 +102,28 @@ type nodeBackend struct {
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
 }
 
-func newNodeBackend() *nodeBackend {
-	cn := &nodeBackend{}
+func newNodeBackend(ctx context.Context, bus *eventbus.Bus) *nodeBackend {
+	ctx, ctxCancel := context.WithCancelCause(ctx)
+	nb := &nodeBackend{
+		ctx:         ctx,
+		ctxCancel:   ctxCancel,
+		eventClient: bus.Client("ipnlocal.nodeBackend"),
+		readyCh:     make(chan struct{}),
+	}
 	// Default filter blocks everything and logs nothing.
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
-	cn.filterAtomic.Store(noneFilter)
-	return cn
+	nb.filterAtomic.Store(noneFilter)
+	nb.filterUpdates = eventbus.Publish[magicsock.FilterUpdate](nb.eventClient)
+	nb.nodeUpdates = eventbus.Publish[magicsock.NodeAddrsHostInfoUpdate](nb.eventClient)
+	nb.filterUpdates.Publish(magicsock.FilterUpdate{Filter: nb.filterAtomic.Load()})
+	return nb
+}
+
+// Context returns a context that is canceled when the [nodeBackend] shuts down,
+// either because [LocalBackend] is switching to a different [nodeBackend]
+// or is shutting down itself.
+func (nb *nodeBackend) Context() context.Context {
+	return nb.ctx
 }
 
 func (nb *nodeBackend) Self() tailcfg.NodeView {
@@ -399,9 +429,16 @@ func (nb *nodeBackend) updatePeersLocked() {
 		nb.peers[k] = tailcfg.NodeView{}
 	}
 
+	changed := magicsock.NodeAddrsHostInfoUpdate{
+		Complete: true,
+	}
 	// Second pass, add everything wanted.
 	for _, p := range nm.Peers {
 		mak.Set(&nb.peers, p.ID(), p)
+		mak.Set(&changed.NodesByID, p.ID(), magicsock.NodeAddrsHostInfo{
+			Addresses: p.Addresses(),
+			Hostinfo:  p.Hostinfo(),
+		})
 	}
 
 	// Third pass, remove deleted things.
@@ -410,6 +447,7 @@ func (nb *nodeBackend) updatePeersLocked() {
 			delete(nb.peers, k)
 		}
 	}
+	nb.nodeUpdates.Publish(changed)
 }
 
 func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
@@ -424,6 +462,9 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// call (e.g. its endpoints + online status both change)
 	var mutableNodes map[tailcfg.NodeID]*tailcfg.Node
 
+	changed := magicsock.NodeAddrsHostInfoUpdate{
+		Complete: false,
+	}
 	for _, m := range muts {
 		n, ok := mutableNodes[m.NodeIDBeingMutated()]
 		if !ok {
@@ -438,8 +479,14 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		m.Apply(n)
 	}
 	for nid, n := range mutableNodes {
-		nb.peers[nid] = n.View()
+		nv := n.View()
+		nb.peers[nid] = nv
+		mak.Set(&changed.NodesByID, nid, magicsock.NodeAddrsHostInfo{
+			Addresses: nv.Addresses(),
+			Hostinfo:  nv.Hostinfo(),
+		})
 	}
+	nb.nodeUpdates.Publish(changed)
 	return true
 }
 
@@ -461,6 +508,7 @@ func (nb *nodeBackend) filter() *filter.Filter {
 
 func (nb *nodeBackend) setFilter(f *filter.Filter) {
 	nb.filterAtomic.Store(f)
+	nb.filterUpdates.Publish(magicsock.FilterUpdate{Filter: f})
 }
 
 func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
@@ -473,6 +521,60 @@ func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (doh
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	return exitNodeCanProxyDNS(nb.netMap, nb.peers, exitNodeID)
+}
+
+// ready signals that [LocalBackend] has completed the switch to this [nodeBackend]
+// and any pending calls to [nodeBackend.Wait] must be unblocked.
+func (nb *nodeBackend) ready() {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if nb.readyCh != nil {
+		close(nb.readyCh)
+	}
+}
+
+// Wait blocks until [LocalBackend] completes the switch to this [nodeBackend]
+// and calls [nodeBackend.ready]. It returns an error if the provided context
+// is canceled or if the [nodeBackend] shuts down or is already shut down.
+//
+// It must not be called with the [LocalBackend]'s internal mutex held as [LocalBackend]
+// may need to acquire it to complete the switch.
+//
+// TODO(nickkhyl): Relax this restriction once [LocalBackend]'s state machine
+// runs in its own goroutine, or if we decide that waiting for the state machine
+// restart to finish isn't necessary for [LocalBackend] to consider the switch complete.
+// We mostly need this because of [LocalBackend.Start] acquiring b.mu and the fact that
+// methods like [LocalBackend.SwitchProfile] must report any errors returned by it.
+// Perhaps we could report those errors asynchronously as [health.Warnable]s?
+func (nb *nodeBackend) Wait(ctx context.Context) error {
+	nb.mu.Lock()
+	readyCh := nb.readyCh
+	nb.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-nb.ctx.Done():
+		return context.Cause(nb.ctx)
+	case <-readyCh:
+		return nil
+	}
+}
+
+// shutdown shuts down the [nodeBackend] and cancels its context
+// with the provided cause.
+func (nb *nodeBackend) shutdown(cause error) {
+	nb.shutdownOnce.Do(func() {
+		nb.doShutdown(cause)
+	})
+}
+
+func (nb *nodeBackend) doShutdown(cause error) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	nb.ctxCancel(cause)
+	nb.readyCh = nil
+	nb.eventClient.Close()
 }
 
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,

@@ -98,6 +98,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -168,6 +169,17 @@ type watchSession struct {
 
 var metricCaptivePortalDetected = clientmetric.NewCounter("captiveportal_detected")
 
+var (
+	// errShutdown indicates that the [LocalBackend.Shutdown] was called.
+	errShutdown = errors.New("shutting down")
+
+	// errNodeContextChanged indicates that [LocalBackend] has switched
+	// to a different [localNodeContext], usually due to a profile change.
+	// It is used as a context cancellation cause for the old context
+	// and can be returned when an operation is performed on it.
+	errNodeContextChanged = errors.New("profile changed")
+)
+
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -180,11 +192,11 @@ var metricCaptivePortalDetected = clientmetric.NewCounter("captiveportal_detecte
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx                      context.Context    // canceled by [LocalBackend.Shutdown]
-	ctxCancel                context.CancelFunc // cancels ctx
-	logf                     logger.Logf        // general logging
-	keyLogf                  logger.Logf        // for printing list of peers on change
-	statsLogf                logger.Logf        // for printing peers stats on change
+	ctx                      context.Context         // canceled by [LocalBackend.Shutdown]
+	ctxCancel                context.CancelCauseFunc // cancels ctx
+	logf                     logger.Logf             // general logging
+	keyLogf                  logger.Logf             // for printing list of peers on change
+	statsLogf                logger.Logf             // for printing peers stats on change
 	sys                      *tsd.System
 	health                   *health.Tracker // always non-nil
 	metrics                  metrics
@@ -463,7 +475,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	envknob.LogCurrent(logf)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	clock := tstime.StdClock{}
 
 	// Until we transition to a Running state, use a canceled context for
@@ -503,7 +515,10 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
-	b.currentNodeAtomic.Store(newNodeBackend())
+	nb := newNodeBackend(ctx, b.sys.Bus.Get())
+	b.currentNodeAtomic.Store(nb)
+	nb.ready()
+
 	mConn.SetNetInfoCallback(b.setNetInfo)
 
 	if sys.InitialConfig != nil {
@@ -585,9 +600,18 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
 	}
-	// Auto-init one in tests for LocalBackend created without the NewLocalBackend constructor...
-	v := newNodeBackend()
-	b.currentNodeAtomic.CompareAndSwap(nil, v)
+	// Auto-init [nodeBackend] in tests for LocalBackend created without the
+	// NewLocalBackend() constructor. Same reasoning for checking b.sys.
+	var bus *eventbus.Bus
+	if b.sys == nil {
+		bus = eventbus.New()
+	} else {
+		bus = b.sys.Bus.Get()
+	}
+	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), bus)
+	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
+		v.ready()
+	}
 	return b.currentNodeAtomic.Load()
 }
 
@@ -1089,8 +1113,9 @@ func (b *LocalBackend) Shutdown() {
 	if cc != nil {
 		cc.Shutdown()
 	}
+	b.ctxCancel(errShutdown)
+	b.currentNode().shutdown(errShutdown)
 	extHost.Shutdown()
-	b.ctxCancel()
 	b.e.Close()
 	<-b.e.Done()
 	b.awaitNoGoroutinesInTest()
@@ -6992,7 +7017,11 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		// down, so no need to do any work.
 		return nil
 	}
-	b.currentNodeAtomic.Store(newNodeBackend())
+	newNode := newNodeBackend(b.ctx, b.sys.Bus.Get())
+	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
+		oldNode.shutdown(errNodeContextChanged)
+	}
+	defer newNode.ready()
 	b.setNetMapLocked(nil) // Reset netmap.
 	b.updateFilterLocked(ipn.PrefsView{})
 	// Reset the NetworkMap in the engine
