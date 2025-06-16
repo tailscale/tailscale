@@ -4857,19 +4857,34 @@ func (b *LocalBackend) readvertiseAppConnectorRoutes() {
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
 func (b *LocalBackend) authReconfig() {
-	b.mu.Lock()
-	blocked := b.blocked
-	prefs := b.pm.CurrentPrefs()
-	cn := b.currentNode()
-	nm := cn.NetMap()
-	hasPAC := b.prevIfState.HasPAC()
-	disableSubnetsIfPAC := cn.SelfHasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
-	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
-	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, b.logf, version.OS())
-	// If the current node is an app connector, ensure the app connector machine is started
-	b.reconfigAppConnectorLocked(nm, prefs)
-	closing := b.shutdownCalled
-	b.mu.Unlock()
+	var (
+		blocked             bool
+		prefs               ipn.PrefsView
+		hasPAC              bool
+		cn                  *nodeBackend
+		nm                  *netmap.NetworkMap
+		disableSubnetsIfPAC bool
+		dohURL              string
+		dohURLOK            bool
+		dcfg                *dns.Config
+		closing             bool
+	)
+
+	func() { // make sure b.mu gets unlocked if anything below panics
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		blocked = b.blocked
+		prefs = b.pm.CurrentPrefs()
+		cn = b.currentNode()
+		nm = cn.NetMap()
+		hasPAC = b.prevIfState.HasPAC()
+		disableSubnetsIfPAC = cn.SelfHasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
+		dohURL, dohURLOK = cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
+		dcfg = cn.dnsConfigForNetmap(prefs, b.keyExpired, b.logf, version.OS())
+		// If the current node is an app connector, ensure the app connector machine is started
+		b.reconfigAppConnectorLocked(nm, prefs)
+		closing = b.shutdownCalled
+	}()
 
 	if closing {
 		b.logf("[v1] authReconfig: skipping because in shutdown")
