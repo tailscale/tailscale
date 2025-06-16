@@ -886,6 +886,7 @@ func (v *DERPRegionView) UnmarshalJSON(b []byte) error {
 func (v DERPRegionView) RegionID() int         { return v.ж.RegionID }
 func (v DERPRegionView) RegionCode() string    { return v.ж.RegionCode }
 func (v DERPRegionView) RegionName() string    { return v.ж.RegionName }
+func (v DERPRegionView) RegionVendor() string  { return v.ж.RegionVendor }
 func (v DERPRegionView) Latitude() float64     { return v.ж.Latitude }
 func (v DERPRegionView) Longitude() float64    { return v.ж.Longitude }
 func (v DERPRegionView) Avoid() bool           { return v.ж.Avoid }
