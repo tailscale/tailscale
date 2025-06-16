@@ -515,7 +515,16 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
-	nb := newNodeBackend(ctx, b.sys.Bus.Get())
+	var bus *eventbus.Bus
+	if b.sys != nil {
+		bus = b.sys.Bus.Get()
+	}
+	if bus == nil {
+		log.Printf("WARNING: sys.Bus is not set; using fallback bus.")
+		bus = eventbus.New()
+	}
+	nb := newNodeBackend(ctx, bus)
+
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
