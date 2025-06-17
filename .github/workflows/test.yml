@@ -232,10 +232,6 @@ jobs:
     - name: Restore Cache
       uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       with:
-        # Note: unlike the other setups, this is only grabbing the mod download
-        # cache, rather than the whole mod directory, as the download cache
-        # contains zips that can be unpacked in parallel faster than they can be
-        # fetched and extracted by tar
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
@@ -722,14 +718,40 @@ jobs:
   staticcheck:
     runs-on: ubuntu-24.04
     needs: gomod-cache
+    name: staticcheck (${{ matrix.name }})
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
-        goos: ["linux", "windows", "darwin"]
-        goarch: ["amd64"]
         include:
-          - goos: "windows"
-            goarch: "386"
+          - name: "macOS"
+            goos: "darwin"
+            goarch: "arm64"
+            flags: "--with-tags-all=darwin"
+          - name: "Windows"
+            goos: "windows"
+            goarch: "amd64"
+            flags: "--with-tags-all=windows"
+          - name: "Linux"
+            goos: "linux"
+            goarch: "amd64"
+            flags: "--with-tags-all=linux"
+          - name: "Portable (1/4)"
+            goos: "linux"
+            goarch: "amd64"
+            flags: "--without-tags-any=windows,darwin,linux --shard=1/4"
+          - name: "Portable (2/4)"
+            goos: "linux"
+            goarch: "amd64"
+            flags: "--without-tags-any=windows,darwin,linux --shard=2/4"
+          - name: "Portable (3/4)"
+            goos: "linux"
+            goarch: "amd64"
+            flags: "--without-tags-any=windows,darwin,linux --shard=3/4"
+          - name: "Portable (4/4)"
+            goos: "linux"
+            goarch: "amd64"
+            flags: "--without-tags-any=windows,darwin,linux --shard=4/4"
+
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -741,14 +763,14 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
-    - name: run staticcheck
+    - name: run staticcheck (${{ matrix.name }})
       working-directory: src
       run: |
         export GOROOT=$(./tool/go env GOROOT)
         ./tool/go run -exec \
           "env GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}" \
            honnef.co/go/tools/cmd/staticcheck -- \
-           $(env GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} ./tool/go list ./... | grep -v tempfork)
+           $(./tool/go run ./tool/listpkgs --ignore-3p --goos=${{ matrix.goos }} --goarch=${{ matrix.goarch }} ${{ matrix.flags }} ./...)
 
   notify_slack:
     if: always()
@@ -795,7 +817,7 @@ jobs:
             }]
           }
 
-  check_mergeability:
+  merge_blocker:
     if: always()
     runs-on: ubuntu-24.04
     needs:
@@ -813,6 +835,49 @@ jobs:
       - go_mod_tidy
       - licenses
       - staticcheck
+    steps:
+    - name: Decide if change is okay to merge
+      if: github.event_name != 'push'
+      uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+      with:
+        jobs: ${{ toJSON(needs) }}
+
+   # This waits on all the jobs which must never fail. Branch protection rules
+   # enforce these. No flaky tests are allowed in these jobs. (We don't want flaky
+   # tests anywhere, really, but a flaky test here prevents merging.)
+  check_mergeability_strict:
+    if: always()
+    runs-on: ubuntu-24.04
+    needs:
+      - android
+      - cross
+      - crossmin
+      - ios
+      - tailscale_go
+      - depaware
+      - go_generate
+      - go_mod_tidy
+      - licenses
+      - staticcheck
+    steps:
+    - name: Decide if change is okay to merge
+      if: github.event_name != 'push'
+      uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+      with:
+        jobs: ${{ toJSON(needs) }}
+
+  check_mergeability:
+    if: always()
+    runs-on: ubuntu-24.04
+    needs:
+      - check_mergeability_strict
+      - test
+      - windows
+      - vm
+      - wasm
+      - fuzz
+      - race-root-integration
+      - privileged
     steps:
     - name: Decide if change is okay to merge
       if: github.event_name != 'push'
