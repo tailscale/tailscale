@@ -5,6 +5,7 @@
 package tpm
 
 import (
+	"log"
 	"slices"
 	"sync"
 
@@ -62,6 +63,44 @@ func infoFromCapabilities(tpm transport.TPM) *tailcfg.TPMInfo {
 			continue
 		}
 		cap.apply(info, props.TPMProperty[0].Value)
+	}
+	{
+		resp, err := tpm2.GetCapability{
+			Capability:    tpm2.TPMCapCommands,
+			Property:      0,
+			PropertyCount: (1024 - 4 - 4) / 4,
+		}.Execute(tpm)
+		if err != nil {
+			log.Printf("GetCapability: %v", err)
+			return info
+		}
+		cmd, err := resp.CapabilityData.Data.Command()
+		if err != nil {
+			log.Printf("Data.Command: %v", err)
+			return info
+		}
+		for _, cc := range cmd.CommandAttributes {
+			log.Printf("supported command 0x%x", cc.CommandIndex)
+		}
+	}
+	{
+		resp, err := tpm2.GetCapability{
+			Capability:    tpm2.TPMCapAlgs,
+			Property:      0,
+			PropertyCount: (1024 - 4 - 4) / 4,
+		}.Execute(tpm)
+		if err != nil {
+			log.Printf("GetCapability: %v", err)
+			return info
+		}
+		alg, err := resp.CapabilityData.Data.Algorithms()
+		if err != nil {
+			log.Printf("Data.Command: %v", err)
+			return info
+		}
+		for _, a := range alg.AlgProperties {
+			log.Printf("supported algorithm 0x%x", a.Alg)
+		}
 	}
 	return info
 }
