@@ -64,7 +64,7 @@ buildmultiarchimage: ## Build (and optionally push) multiarch docker image
 check: staticcheck vet depaware buildwindows build386 buildlinuxarm buildwasm ## Perform basic checks and compilation tests
 
 staticcheck: ## Run staticcheck.io checks
-	./tool/go run honnef.co/go/tools/cmd/staticcheck -- $$(./tool/go list ./... | grep -v tempfork)
+	./tool/go run honnef.co/go/tools/cmd/staticcheck -- $$(./tool/go run ./tool/listpkgs --ignore-3p  ./...)
 
 kube-generate-all: kube-generate-deepcopy ## Refresh generated files for Tailscale Kubernetes Operator
 	./tool/go generate ./cmd/k8s-operator
