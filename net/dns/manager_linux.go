@@ -372,7 +372,7 @@ func resolvedIsActuallyResolver(logf logger.Logf, env newOSConfigEnv, dbg func(k
 func isLibnssResolveUsed(env newOSConfigEnv) error {
 	bs, err := env.fs.ReadFile("/etc/nsswitch.conf")
 	if err != nil {
-		return fmt.Errorf("reading /etc/resolv.conf: %w", err)
+		return fmt.Errorf("reading /etc/nsswitch.conf: %w", err)
 	}
 	for _, line := range strings.Split(string(bs), "\n") {
 		fields := strings.Fields(line)
