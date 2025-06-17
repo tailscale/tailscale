@@ -65,7 +65,7 @@ Notably, for the subject (the first line of description):
   | `foo/bar:fix memory leak` | BAD: no space after colon |
   | `foo/bar : fix memory leak` | BAD: space before colon |
   | `foo/bar: fix memory leak Fixes #123` | BAD: the "Fixes" shouldn't be part of the title |
-  | `!fixup reviewer feedback` | BAD: we don't check in fixup commits; the history should always bissect to a clean, working tree |
+  | `!fixup reviewer feedback` | BAD: we don't check in fixup commits; the history should always bisect to a clean, working tree |
 
 
 For the body (the rest of the description):
