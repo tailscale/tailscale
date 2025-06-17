@@ -247,6 +247,10 @@ func (h *peerAPIHandler) logf(format string, a ...any) {
 	h.ps.b.logf("peerapi: "+format, a...)
 }
 
+func (h *peerAPIHandler) logfv1(format string, a ...any) {
+	h.ps.b.logf("[v1] peerapi: "+format, a...)
+}
+
 // isAddressValid reports whether addr is a valid destination address for this
 // node originating from the peer.
 func (h *peerAPIHandler) isAddressValid(addr netip.Addr) bool {
@@ -1015,6 +1019,7 @@ func (rbw *requestBodyWrapper) Read(b []byte) (int, error) {
 }
 
 func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request) {
+	h.logfv1("taildrive: got %s request from %s", r.Method, h.peerNode.Key().ShortString())
 	if !h.ps.b.DriveSharingEnabled() {
 		h.logf("taildrive: not enabled")
 		http.Error(w, "taildrive not enabled", http.StatusNotFound)
@@ -1055,21 +1060,23 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 	}
 	r.Body = bw
 
-	if r.Method == httpm.PUT || r.Method == httpm.GET {
-		defer func() {
-			switch wr.statusCode {
-			case 304:
-				// 304s are particularly chatty so skip logging.
-			default:
-				contentType := "unknown"
-				if ct := wr.Header().Get("Content-Type"); ct != "" {
-					contentType = ct
-				}
-
-				h.logf("taildrive: share: %s from %s to %s: status-code=%d ext=%q content-type=%q tx=%.f rx=%.f", r.Method, h.peerNode.Key().ShortString(), h.selfNode.Key().ShortString(), wr.statusCode, parseDriveFileExtensionForLog(r.URL.Path), contentType, roundTraffic(wr.contentLength), roundTraffic(bw.bytesRead))
+	defer func() {
+		switch wr.statusCode {
+		case 304:
+			// 304s are particularly chatty so skip logging.
+		default:
+			log := h.logf
+			if r.Method != httpm.PUT && r.Method != httpm.GET {
+				log = h.logfv1
 			}
-		}()
-	}
+			contentType := "unknown"
+			if ct := wr.Header().Get("Content-Type"); ct != "" {
+				contentType = ct
+			}
+
+			log("taildrive: share: %s from %s to %s: status-code=%d ext=%q content-type=%q tx=%.f rx=%.f", r.Method, h.peerNode.Key().ShortString(), h.selfNode.Key().ShortString(), wr.statusCode, parseDriveFileExtensionForLog(r.URL.Path), contentType, roundTraffic(wr.contentLength), roundTraffic(bw.bytesRead))
+		}
+	}()
 
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, taildrivePrefix)
 	fs.ServeHTTPWithPerms(p, wr, r)
