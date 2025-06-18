@@ -1300,7 +1300,6 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 }
 
 func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
-	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
 	e.netMap = nm
 	e.mu.Unlock()

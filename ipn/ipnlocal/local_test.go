@@ -5,6 +5,7 @@ package ipnlocal
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	memro "go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
@@ -75,6 +77,12 @@ func inRemove(ip netip.Addr) bool {
 		}
 	}
 	return false
+}
+
+func makeNodeKeyFromID(nodeID tailcfg.NodeID) key.NodePublic {
+	raw := make([]byte, 32)
+	binary.BigEndian.PutUint64(raw[24:], uint64(nodeID))
+	return key.NodePublicFromRaw32(memro.B(raw))
 }
 
 func TestShrinkDefaultRoute(t *testing.T) {
@@ -794,6 +802,7 @@ func TestStatusPeerCapabilities(t *testing.T) {
 				(&tailcfg.Node{
 					ID:              1,
 					StableID:        "foo",
+					Key:             makeNodeKeyFromID(1),
 					IsWireGuardOnly: true,
 					Hostinfo:        (&tailcfg.Hostinfo{}).View(),
 					Capabilities:    []tailcfg.NodeCapability{tailcfg.CapabilitySSH},
@@ -804,6 +813,7 @@ func TestStatusPeerCapabilities(t *testing.T) {
 				(&tailcfg.Node{
 					ID:           2,
 					StableID:     "bar",
+					Key:          makeNodeKeyFromID(2),
 					Hostinfo:     (&tailcfg.Hostinfo{}).View(),
 					Capabilities: []tailcfg.NodeCapability{tailcfg.CapabilityAdmin},
 					CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
@@ -830,12 +840,14 @@ func TestStatusPeerCapabilities(t *testing.T) {
 				(&tailcfg.Node{
 					ID:              1,
 					StableID:        "foo",
+					Key:             makeNodeKeyFromID(1),
 					IsWireGuardOnly: true,
 					Hostinfo:        (&tailcfg.Hostinfo{}).View(),
 				}).View(),
 				(&tailcfg.Node{
 					ID:       2,
 					StableID: "bar",
+					Key:      makeNodeKeyFromID(2),
 					Hostinfo: (&tailcfg.Hostinfo{}).View(),
 				}).View(),
 			},
@@ -927,7 +939,11 @@ func TestUpdateNetmapDelta(t *testing.T) {
 
 	nm := &netmap.NetworkMap{}
 	for i := range 5 {
-		nm.Peers = append(nm.Peers, (&tailcfg.Node{ID: (tailcfg.NodeID(i) + 1)}).View())
+		id := tailcfg.NodeID(i + 1)
+		nm.Peers = append(nm.Peers, (&tailcfg.Node{
+			ID:  id,
+			Key: makeNodeKeyFromID(id),
+		}).View())
 	}
 	b.currentNode().SetNetMap(nm)
 
@@ -963,18 +979,22 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	wants := []*tailcfg.Node{
 		{
 			ID:       1,
+			Key:      makeNodeKeyFromID(1),
 			HomeDERP: 1,
 		},
 		{
 			ID:     2,
+			Key:    makeNodeKeyFromID(2),
 			Online: ptr.To(true),
 		},
 		{
 			ID:     3,
+			Key:    makeNodeKeyFromID(3),
 			Online: ptr.To(false),
 		},
 		{
 			ID:       4,
+			Key:      makeNodeKeyFromID(4),
 			LastSeen: ptr.To(someTime),
 		},
 	}
@@ -998,12 +1018,14 @@ func TestWhoIs(t *testing.T) {
 		SelfNode: (&tailcfg.Node{
 			ID:        1,
 			User:      10,
+			Key:       makeNodeKeyFromID(1),
 			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
 		}).View(),
 		Peers: []tailcfg.NodeView{
 			(&tailcfg.Node{
 				ID:        2,
 				User:      20,
+				Key:       makeNodeKeyFromID(2),
 				Addresses: []netip.Prefix{netip.MustParsePrefix("100.200.200.200/32")},
 			}).View(),
 		},
@@ -1593,6 +1615,7 @@ func dnsResponse(domain, address string) []byte {
 }
 
 func TestSetExitNodeIDPolicy(t *testing.T) {
+	zeroValHostinfoView := new(tailcfg.Hostinfo).View()
 	pfx := netip.MustParsePrefix
 	tests := []struct {
 		name                  string
@@ -1669,14 +1692,18 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				}).View(),
 				Peers: []tailcfg.NodeView{
 					(&tailcfg.Node{
+						ID:   201,
 						Name: "a.tailnet",
+						Key:  makeNodeKeyFromID(201),
 						Addresses: []netip.Prefix{
 							pfx("100.0.0.201/32"),
 							pfx("100::201/128"),
 						},
 					}).View(),
 					(&tailcfg.Node{
+						ID:   202,
 						Name: "b.tailnet",
+						Key:  makeNodeKeyFromID(202),
 						Addresses: []netip.Prefix{
 							pfx("100::202/128"),
 						},
@@ -1702,18 +1729,24 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				}).View(),
 				Peers: []tailcfg.NodeView{
 					(&tailcfg.Node{
+						ID:       123,
 						Name:     "a.tailnet",
 						StableID: tailcfg.StableNodeID("123"),
+						Key:      makeNodeKeyFromID(123),
 						Addresses: []netip.Prefix{
 							pfx("127.0.0.1/32"),
 							pfx("100::201/128"),
 						},
+						Hostinfo: zeroValHostinfoView,
 					}).View(),
 					(&tailcfg.Node{
+						ID:   202,
 						Name: "b.tailnet",
+						Key:  makeNodeKeyFromID(202),
 						Addresses: []netip.Prefix{
 							pfx("100::202/128"),
 						},
+						Hostinfo: zeroValHostinfoView,
 					}).View(),
 				},
 			},
@@ -1734,18 +1767,24 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				}).View(),
 				Peers: []tailcfg.NodeView{
 					(&tailcfg.Node{
+						ID:       123,
 						Name:     "a.tailnet",
 						StableID: tailcfg.StableNodeID("123"),
+						Key:      makeNodeKeyFromID(123),
 						Addresses: []netip.Prefix{
 							pfx("127.0.0.1/32"),
 							pfx("100::201/128"),
 						},
+						Hostinfo: zeroValHostinfoView,
 					}).View(),
 					(&tailcfg.Node{
+						ID:   202,
 						Name: "b.tailnet",
+						Key:  makeNodeKeyFromID(202),
 						Addresses: []netip.Prefix{
 							pfx("100::202/128"),
 						},
+						Hostinfo: zeroValHostinfoView,
 					}).View(),
 				},
 			},
@@ -1768,18 +1807,24 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				}).View(),
 				Peers: []tailcfg.NodeView{
 					(&tailcfg.Node{
+						ID:       123,
 						Name:     "a.tailnet",
 						StableID: tailcfg.StableNodeID("123"),
+						Key:      makeNodeKeyFromID(123),
 						Addresses: []netip.Prefix{
 							pfx("100.64.5.6/32"),
 							pfx("100::201/128"),
 						},
+						Hostinfo: zeroValHostinfoView,
 					}).View(),
 					(&tailcfg.Node{
+						ID:   202,
 						Name: "b.tailnet",
+						Key:  makeNodeKeyFromID(202),
 						Addresses: []netip.Prefix{
 							pfx("100::202/128"),
 						},
+						Hostinfo: zeroValHostinfoView,
 					}).View(),
 				},
 			},
@@ -1827,7 +1872,6 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.currentNode().SetNetMap(test.nm)
 			b.pm = pm
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
-
 			prefs := b.pm.prefs.AsStruct()
 			if changed := applySysPolicy(prefs, test.lastSuggestedExitNode, false) || setExitNodeID(prefs, test.nm); changed != test.prefsChanged {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
@@ -3218,6 +3262,7 @@ type peerOptFunc func(*tailcfg.Node)
 func makePeer(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
 	node := &tailcfg.Node{
 		ID:       id,
+		Key:      makeNodeKeyFromID(id),
 		StableID: tailcfg.StableNodeID(fmt.Sprintf("stable%d", id)),
 		Name:     fmt.Sprintf("peer%d", id),
 		HomeDERP: int(id),

@@ -918,6 +918,7 @@ func newTestBackend(t *testing.T) *LocalBackend {
 				ID:           152,
 				ComputedName: "some-peer",
 				User:         tailcfg.UserID(1),
+				Key:          makeNodeKeyFromID(152),
 				Addresses: []netip.Prefix{
 					netip.MustParsePrefix("100.150.151.152/32"),
 				},
@@ -927,6 +928,7 @@ func newTestBackend(t *testing.T) *LocalBackend {
 				ComputedName: "some-tagged-peer",
 				Tags:         []string{"tag:server", "tag:test"},
 				User:         tailcfg.UserID(1),
+				Key:          makeNodeKeyFromID(153),
 				Addresses: []netip.Prefix{
 					netip.MustParsePrefix("100.150.151.153/32"),
 				},
