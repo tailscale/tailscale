@@ -600,18 +600,14 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 
 	var ourNodeKey key.NodePublic
 	var nlPriv key.NLPrivate
+
 	b.mu.Lock()
-
-	if !b.capTailnetLock {
-		b.mu.Unlock()
-		return errors.New("not permitted to enable tailnet lock")
-	}
-
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
 		ourNodeKey = p.Persist().PublicNodeKey()
 		nlPriv = p.Persist().NetworkLockKey()
 	}
 	b.mu.Unlock()
+
 	if ourNodeKey.IsZero() || nlPriv.IsZero() {
 		return errors.New("no node-key: is tailscale logged in?")
 	}
@@ -669,6 +665,13 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	// Finalize enablement by transmitting signature for all nodes to Control.
 	_, err = b.tkaInitFinish(ourNodeKey, sigs, supportDisablement)
 	return err
+}
+
+// NetworkLockAllowed reports whether the node is allowed to use Tailnet Lock.
+func (b *LocalBackend) NetworkLockAllowed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.capTailnetLock
 }
 
 // Only use is in tests.

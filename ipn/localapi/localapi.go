@@ -1970,6 +1970,11 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.b.NetworkLockAllowed() {
+		http.Error(w, "Tailnet Lock is not supported on your pricing plan", http.StatusForbidden)
+		return
+	}
+
 	if err := h.b.NetworkLockInit(req.Keys, req.DisablementValues, req.SupportDisablement); err != nil {
 		http.Error(w, "initialization failed: "+err.Error(), http.StatusInternalServerError)
 		return
