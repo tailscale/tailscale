@@ -49,6 +49,7 @@ func newExtension(logf logger.Logf, b ipnext.SafeBackend) (ipnext.Extension, err
 		logf:       logger.WithPrefix(logf, "taildrop: "),
 	}
 	e.setPlatformDefaultDirectFileRoot()
+	setDefaultFileOps(e)
 	return e, nil
 }
 
@@ -89,28 +90,26 @@ type Extension struct {
 	outgoingFiles map[string]*ipn.OutgoingFile
 }
 
-// safDirectoryPrefix is used to determine if the directory is managed via SAF.
-const SafDirectoryPrefix = "content://"
-
-// PutMode controls how Manager.PutFile writes files to storage.
-//
-//	PutModeDirect    – write files directly to a filesystem path (default).
-//	PutModeAndroidSAF – use Android’s Storage Access Framework (SAF), where
-//	                      the OS manages the underlying directory permissions.
-type PutMode int
-
-const (
-	PutModeDirect PutMode = iota
-	PutModeAndroidSAF
-)
-
-// FileOps defines platform-specific file operations.
+// FileOps abstracts over both local‐FS paths and Android SAF URIs.
 type FileOps interface {
-	OpenFileWriter(filename string) (io.WriteCloser, string, error)
-
-	// RenamePartialFile finalizes a partial file.
-	// It returns the new SAF URI as a string and an error.
-	RenamePartialFile(partialUri, targetDirUri, targetName string) (string, error)
+	// OpenWriter creates (or truncates) a file identified by "dest"
+	// (either a filesystem path or a SAF URI).  If offset>0 it must
+	// seek/truncate appropriately or return an error. It returns:
+	//   wc     – an io.WriteCloser you can call Write()/Close() on
+	//   actual – the real identifier used (e.g. "<dest>.part" on disk or a SAF URI string)
+	//   err    – non-nil if opening or seeking failed
+	OpenWriter(partialStr string, dest string, offset int64, perm os.FileMode) (wc io.WriteCloser, actual string, err error)
+	// Base returns the “basename” of a file/URI for cleanup or keying purposes.
+	Base(pathOrURI string) string
+	// Remove deletes the given entry, where "name" is always a basename.
+	Remove(name string) error
+	// Join combines a directory identifier (path or tree‐URI) with a basename.
+	Join(dir, name string) string
+	// Rename attempts to atomically finalize a partial into its final name,
+	// returning the new identifier (path or URI) on success.
+	Rename(partial, finalName string) (newID string, err error)
+	// sDirect reports whether this writes files directly to a filesystem path
+	IsDirect() bool
 }
 
 func (e *Extension) Name() string {
@@ -178,21 +177,23 @@ func (e *Extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 
 	// If we have a netmap, create a taildrop manager.
 	fileRoot, isDirectFileMode := e.fileRoot(uid, activeLogin)
-	if fileRoot == "" {
+	if fileRoot == "" && runtime.GOOS != "android" {
 		e.logf("no Taildrop directory configured")
 	}
-	mode := PutModeDirect
-	if e.directFileRoot != "" && strings.HasPrefix(e.directFileRoot, SafDirectoryPrefix) {
-		mode = PutModeAndroidSAF
+
+	// pick default if none set
+	fops := e.FileOps
+	if fops == nil {
+		fops = defaultFileOps
 	}
+
 	e.setMgrLocked(managerOptions{
 		Logf:           e.logf,
 		Clock:          tstime.DefaultClock{Clock: e.sb.Clock()},
 		State:          e.stateStore,
 		Dir:            fileRoot,
 		DirectFileMode: isDirectFileMode,
-		FileOps:        e.FileOps,
-		Mode:           mode,
+		FileOps:        fops,
 		SendFileNotify: e.sendFileNotify,
 	}.New())
 }

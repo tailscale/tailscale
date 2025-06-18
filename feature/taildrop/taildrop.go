@@ -21,7 +21,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
@@ -91,9 +90,9 @@ type managerOptions struct {
 	// copy them out, and then delete them.
 	DirectFileMode bool
 
+	// FileOps abstracts platform-specific file operations needed for file transfers.
+	// This is currently being used for Android to use the Storage Access Framework.
 	FileOps FileOps
-
-	Mode PutMode
 
 	// SendFileNotify is called periodically while a file is actively
 	// receiving the contents for the file. There is a final call
@@ -110,9 +109,6 @@ type manager struct {
 	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
 	// deleter managers asynchronous deletion of files.
 	deleter fileDeleter
-
-	// renameMu is used to protect os.Rename calls so that they are atomic.
-	renameMu sync.Mutex
 
 	// totalReceived counts the cumulative total of received files.
 	totalReceived atomic.Int64
