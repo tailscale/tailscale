@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -128,6 +129,7 @@ func newStore(logf logger.Logf, path string) (ipn.StateStore, error) {
 			key:   key,
 			cache: make(map[ipn.StateKey][]byte),
 		}
+
 		if err := store.writeSealed(); err != nil {
 			return nil, fmt.Errorf("failed to write initial state file: %w", err)
 		}
@@ -185,6 +187,8 @@ func (s *tpmStore) WriteState(k ipn.StateKey, bs []byte) error {
 		return nil
 	}
 	s.cache[k] = bytes.Clone(bs)
+
+	s.logf("================ tpmStore.WriteState %q", k)
 
 	return s.writeSealed()
 }
@@ -314,14 +318,19 @@ func withSRK(logf logger.Logf, tpm transport.TPM, fn func(srk tpm2.AuthHandle) e
 
 // tpmSeal seals the data using SRK of the local TPM.
 func tpmSeal(logf logger.Logf, data []byte) (*tpmSealedData, error) {
+	start := time.Now()
 	tpm, err := open()
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
+	logf("tpm: open %v", time.Since(start))
+	start = time.Now()
 	defer tpm.Close()
 
 	var res *tpmSealedData
 	err = withSRK(logf, tpm, func(srk tpm2.AuthHandle) error {
+		logf("tpm: withSRK %v", time.Since(start))
+		start = time.Now()
 		sealCmd := tpm2.Create{
 			ParentHandle: srk,
 			InSensitive: tpm2.TPM2BSensitiveCreate{
@@ -345,6 +354,8 @@ func tpmSeal(logf logger.Logf, data []byte) (*tpmSealedData, error) {
 		if err != nil {
 			return fmt.Errorf("tpm2.Create: %w", err)
 		}
+		logf("tpm: tpm2.Create %v", time.Since(start))
+		start = time.Now()
 
 		res = &tpmSealedData{
 			Private: sealRes.OutPrivate.Buffer,
