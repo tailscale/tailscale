@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -824,4 +826,140 @@ func TestExtraUserInfo(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFunnelClientsPersistence(t *testing.T) {
+	testClients := map[string]*funnelClient{
+		"test-client-1": {
+			ID:          "test-client-1",
+			Secret:      "test-secret-1",
+			Name:        "Test Client 1",
+			RedirectURI: "https://example.com/callback",
+		},
+		"test-client-2": {
+			ID:          "test-client-2",
+			Secret:      "test-secret-2",
+			Name:        "Test Client 2",
+			RedirectURI: "https://example2.com/callback",
+		},
+	}
+
+	testData, err := json.Marshal(testClients)
+	if err != nil {
+		t.Fatalf("failed to marshal test data: %v", err)
+	}
+
+	tmpFile := t.TempDir() + "/oidc-funnel-clients.json"
+	if err := os.WriteFile(tmpFile, testData, 0600); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	t.Run("step1_load_from_existing_file", func(t *testing.T) {
+		srv := &idpServer{}
+
+		// Simulate the funnel clients loading logic from main()
+		srv.funnelClients = make(map[string]*funnelClient)
+		f, err := os.Open(tmpFile)
+		if err == nil {
+			if err := json.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
+				t.Fatalf("could not parse %s: %v", tmpFile, err)
+			}
+			f.Close()
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("could not open %s: %v", tmpFile, err)
+		}
+
+		// Verify clients were loaded correctly
+		if len(srv.funnelClients) != 2 {
+			t.Errorf("expected 2 clients, got %d", len(srv.funnelClients))
+		}
+
+		client1, ok := srv.funnelClients["test-client-1"]
+		if !ok {
+			t.Error("expected test-client-1 to be loaded")
+		} else {
+			if client1.Name != "Test Client 1" {
+				t.Errorf("expected client name 'Test Client 1', got '%s'", client1.Name)
+			}
+			if client1.Secret != "test-secret-1" {
+				t.Errorf("expected client secret 'test-secret-1', got '%s'", client1.Secret)
+			}
+		}
+	})
+
+	t.Run("step2_initialize_empty_when_no_file", func(t *testing.T) {
+		nonExistentFile := t.TempDir() + "/non-existent.json"
+
+		srv := &idpServer{}
+
+		// Simulate the funnel clients loading logic from main()
+		srv.funnelClients = make(map[string]*funnelClient)
+		f, err := os.Open(nonExistentFile)
+		if err == nil {
+			if err := json.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
+				t.Fatalf("could not parse %s: %v", nonExistentFile, err)
+			}
+			f.Close()
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("could not open %s: %v", nonExistentFile, err)
+		}
+
+		// Verify map is initialized but empty
+		if srv.funnelClients == nil {
+			t.Error("expected funnelClients map to be initialized")
+		}
+		if len(srv.funnelClients) != 0 {
+			t.Errorf("expected empty map, got %d clients", len(srv.funnelClients))
+		}
+	})
+
+	t.Run("step3_persist_and_reload_clients", func(t *testing.T) {
+		tmpFile2 := t.TempDir() + "/test-persistence.json"
+
+		// Create initial server with one client
+		srv1 := &idpServer{
+			funnelClients: make(map[string]*funnelClient),
+		}
+		srv1.funnelClients["new-client"] = &funnelClient{
+			ID:          "new-client",
+			Secret:      "new-secret",
+			Name:        "New Client",
+			RedirectURI: "https://new.example.com/callback",
+		}
+
+		// Save clients to file (simulating saveFunnelClients)
+		data, err := json.Marshal(srv1.funnelClients)
+		if err != nil {
+			t.Fatalf("failed to marshal clients: %v", err)
+		}
+		if err := os.WriteFile(tmpFile2, data, 0600); err != nil {
+			t.Fatalf("failed to write clients file: %v", err)
+		}
+
+		// Create new server instance and load clients
+		srv2 := &idpServer{}
+		srv2.funnelClients = make(map[string]*funnelClient)
+		f, err := os.Open(tmpFile2)
+		if err == nil {
+			if err := json.NewDecoder(f).Decode(&srv2.funnelClients); err != nil {
+				t.Fatalf("could not parse %s: %v", tmpFile2, err)
+			}
+			f.Close()
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("could not open %s: %v", tmpFile2, err)
+		}
+
+		// Verify the client was persisted correctly
+		loadedClient, ok := srv2.funnelClients["new-client"]
+		if !ok {
+			t.Error("expected new-client to be loaded after persistence")
+		} else {
+			if loadedClient.Name != "New Client" {
+				t.Errorf("expected client name 'New Client', got '%s'", loadedClient.Name)
+			}
+			if loadedClient.Secret != "new-secret" {
+				t.Errorf("expected client secret 'new-secret', got '%s'", loadedClient.Secret)
+			}
+		}
+	})
 }
