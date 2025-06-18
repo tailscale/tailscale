@@ -21,7 +21,7 @@ func (e *Extension) SetDirectFileRoot(root string) {
 // SetFileOps sets the platform specific file operations. This is used
 // to call Android's Storage Access Framework APIs.
 func (e *Extension) SetFileOps(fileOps FileOps) {
-	e.FileOps = fileOps
+	e.fileOps = fileOps
 }
 
 func (e *Extension) setPlatformDefaultDirectFileRoot() {

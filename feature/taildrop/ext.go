@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -75,7 +74,7 @@ type Extension struct {
 
 	// FileOps abstracts platform-specific file operations needed for file transfers.
 	// This is currently being used for Android to use the Storage Access Framework.
-	FileOps FileOps
+	fileOps FileOps
 
 	nodeBackendForTest ipnext.NodeBackend // if non-nil, pretend we're this node state for tests
 
@@ -87,30 +86,6 @@ type Extension struct {
 	mgr            atomic.Pointer[manager]           // mutex held to write; safe to read without lock;
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
-}
-
-// safDirectoryPrefix is used to determine if the directory is managed via SAF.
-const SafDirectoryPrefix = "content://"
-
-// PutMode controls how Manager.PutFile writes files to storage.
-//
-//	PutModeDirect    – write files directly to a filesystem path (default).
-//	PutModeAndroidSAF – use Android’s Storage Access Framework (SAF), where
-//	                      the OS manages the underlying directory permissions.
-type PutMode int
-
-const (
-	PutModeDirect PutMode = iota
-	PutModeAndroidSAF
-)
-
-// FileOps defines platform-specific file operations.
-type FileOps interface {
-	OpenFileWriter(filename string) (io.WriteCloser, string, error)
-
-	// RenamePartialFile finalizes a partial file.
-	// It returns the new SAF URI as a string and an error.
-	RenamePartialFile(partialUri, targetDirUri, targetName string) (string, error)
 }
 
 func (e *Extension) Name() string {
@@ -176,23 +151,34 @@ func (e *Extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 		return
 	}
 
-	// If we have a netmap, create a taildrop manager.
-	fileRoot, isDirectFileMode := e.fileRoot(uid, activeLogin)
-	if fileRoot == "" {
-		e.logf("no Taildrop directory configured")
+	// Use the provided [FileOps] implementation (typically for SAF access on Android),
+	// or create an [fsFileOps] instance rooted at fileRoot.
+	//
+	// A non-nil [FileOps] also implies that we are in DirectFileMode.
+	fops := e.fileOps
+	isDirectFileMode := fops != nil
+	if fops == nil {
+		var fileRoot string
+		if fileRoot, isDirectFileMode = e.fileRoot(uid, activeLogin); fileRoot == "" {
+			e.logf("no Taildrop directory configured")
+			e.setMgrLocked(nil)
+			return
+		}
+
+		var err error
+		if fops, err = newFileOps(fileRoot); err != nil {
+			e.logf("taildrop: cannot create FileOps: %v", err)
+			e.setMgrLocked(nil)
+			return
+		}
 	}
-	mode := PutModeDirect
-	if e.directFileRoot != "" && strings.HasPrefix(e.directFileRoot, SafDirectoryPrefix) {
-		mode = PutModeAndroidSAF
-	}
+
 	e.setMgrLocked(managerOptions{
 		Logf:           e.logf,
 		Clock:          tstime.DefaultClock{Clock: e.sb.Clock()},
 		State:          e.stateStore,
-		Dir:            fileRoot,
 		DirectFileMode: isDirectFileMode,
-		FileOps:        e.FileOps,
-		Mode:           mode,
+		fileOps:        fops,
 		SendFileNotify: e.sendFileNotify,
 	}.New())
 }
@@ -221,12 +207,7 @@ func (e *Extension) fileRoot(uid tailcfg.UserID, activeLogin string) (root strin
 	baseDir := fmt.Sprintf("%s-uid-%d",
 		strings.ReplaceAll(activeLogin, "@", "-"),
 		uid)
-	dir := filepath.Join(varRoot, "files", baseDir)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		e.logf("Taildrop disabled; error making directory: %v", err)
-		return "", false
-	}
-	return dir, false
+	return filepath.Join(varRoot, "files", baseDir), false
 }
 
 // hasCapFileSharing reports whether the current node has the file sharing
