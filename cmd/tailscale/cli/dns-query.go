@@ -9,11 +9,30 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"strings"
 	"text/tabwriter"
 
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/types/dnstype"
 )
+
+var dnsQueryCmd = &ffcli.Command{
+	Name:       "query",
+	ShortUsage: "tailscale dns query <name> [a|aaaa|cname|mx|ns|opt|ptr|srv|txt]",
+	Exec:       runDNSQuery,
+	ShortHelp:  "Perform a DNS query",
+	LongHelp: strings.TrimSpace(`
+The 'tailscale dns query' subcommand performs a DNS query for the specified name
+using the internal DNS forwarder (100.100.100.100).
+
+By default, the DNS query will request an A record. Another DNS record type can
+be specified as the second parameter.
+
+The output also provides information about the resolver(s) used to resolve the
+query.
+`),
+}
 
 func runDNSQuery(ctx context.Context, args []string) error {
 	if len(args) < 1 {
