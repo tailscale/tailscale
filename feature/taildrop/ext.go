@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -89,28 +90,29 @@ type Extension struct {
 	outgoingFiles map[string]*ipn.OutgoingFile
 }
 
-// safDirectoryPrefix is used to determine if the directory is managed via SAF.
-const SafDirectoryPrefix = "content://"
-
-// PutMode controls how Manager.PutFile writes files to storage.
-//
-//	PutModeDirect    – write files directly to a filesystem path (default).
-//	PutModeAndroidSAF – use Android’s Storage Access Framework (SAF), where
-//	                      the OS manages the underlying directory permissions.
-type PutMode int
-
-const (
-	PutModeDirect PutMode = iota
-	PutModeAndroidSAF
-)
-
-// FileOps defines platform-specific file operations.
+// FileOps abstracts over both local‐FS paths and Android SAF URIs.
 type FileOps interface {
-	OpenFileWriter(filename string) (io.WriteCloser, string, error)
+	// OpenWriter creates (or truncates) a file identified by "dest"
+	// (either a filesystem path or a SAF URI).  If offset>0 it must
+	// seek/truncate appropriately or return an error. It uses:
+	//   name   = user‑visible filename, e.g. "filename.pdf" concatenated
+	// with partial suffix
+	//   offset = resume point (0 = new)
+	//   perm   = posix perms (ignored by SAF)
+	// It returns:
+	//   wc     – an [io.WriteCloser] you can call Write()/Close() on
+	//   path – the real identifier used (e.g. "<dest>.part" on disk or a SAF URI string)
+	//   err    – non-nil if opening or seeking failed
+	OpenWriter(name string, offset int64, perm os.FileMode) (wc io.WriteCloser, path string, err error)
+	// Base returns the last element of path.
+	Base(path string) string
+	// Remove deletes the given entry, where "name" is always a basename.
+	Remove(name string) error
+	// Rename atomically renames oldPath to a new file named newName,
+	// returning the full new path or an error.
+	Rename(oldPath, newName string) (newPath string, err error)
 
-	// RenamePartialFile finalizes a partial file.
-	// It returns the new SAF URI as a string and an error.
-	RenamePartialFile(partialUri, targetDirUri, targetName string) (string, error)
+	ListDir(dir string) ([]fs.DirEntry, error)
 }
 
 func (e *Extension) Name() string {
@@ -176,23 +178,29 @@ func (e *Extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 		return
 	}
 
-	// If we have a netmap, create a taildrop manager.
+	/// If we have a netmap, create a taildrop manager.
 	fileRoot, isDirectFileMode := e.fileRoot(uid, activeLogin)
 	if fileRoot == "" {
-		e.logf("no Taildrop directory configured")
+		e.logf("DEBUG-ADDR=⟪taildrop⟫ no Taildrop directory configured")
 	}
-	mode := PutModeDirect
-	if e.directFileRoot != "" && strings.HasPrefix(e.directFileRoot, SafDirectoryPrefix) {
-		mode = PutModeAndroidSAF
+
+	// Pick the FileOps (use default if none provided)
+	fops := e.FileOps
+	if fops == nil {
+		fo, err := newDefaultFileOps(fileRoot)
+		if err != nil {
+			panic(fmt.Sprintf("taildrop: cannot create FileOps: %v", err))
+		}
+		fops = fo
 	}
+
 	e.setMgrLocked(managerOptions{
 		Logf:           e.logf,
 		Clock:          tstime.DefaultClock{Clock: e.sb.Clock()},
 		State:          e.stateStore,
 		Dir:            fileRoot,
 		DirectFileMode: isDirectFileMode,
-		FileOps:        e.FileOps,
-		Mode:           mode,
+		FileOps:        fops,
 		SendFileNotify: e.sendFileNotify,
 	}.New())
 }
