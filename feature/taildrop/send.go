@@ -75,7 +75,7 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 // offset to specify where to resume receiving data at.
 func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, length int64) (int64, error) {
 	switch {
-	case m == nil || m.opts.Dir == "":
+	case m == nil || m.opts.Dir == "" && m.opts.FileOps == nil:
 		return 0, ErrNoTaildrop
 	case !envknob.CanTaildrop():
 		return 0, ErrNoTaildrop
@@ -85,7 +85,7 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 
 	//Compute dstPath & avoid mid‑upload deletion
 	var dstPath string
-	if m.opts.Mode == PutModeDirect {
+	if m.opts.FileOps == nil {
 		var err error
 		dstPath, err = joinDir(m.opts.Dir, baseName)
 		if err != nil {
@@ -114,7 +114,7 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 	defer m.incomingFiles.Delete(partialFileKey)
 
 	// Open writer & populate inFile paths
-	wc, partialPath, err := m.openWriterAndPaths(id, m.opts.Mode, inFile, baseName, dstPath, offset)
+	wc, partialPath, err := m.openWriterAndPaths(id, inFile, baseName, dstPath, offset)
 	if err != nil {
 		return 0, m.redactAndLogError("Create", err)
 	}
@@ -155,8 +155,8 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 	inFile.mu.Unlock()
 
 	// Finalize rename
-	switch m.opts.Mode {
-	case PutModeDirect:
+	switch m.opts.FileOps {
+	case nil:
 		var finalDst string
 		finalDst, err = m.finalizeDirect(inFile, partialPath, dstPath, fileLength)
 		if err != nil {
@@ -164,7 +164,7 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 		}
 		inFile.finalPath = finalDst
 
-	case PutModeAndroidSAF:
+	default:
 		if err = m.finalizeSAF(partialPath, baseName); err != nil {
 			return 0, m.redactAndLogError("Rename", err)
 		}
@@ -180,15 +180,14 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 // The caller is responsible for closing the file on completion.
 func (m *manager) openWriterAndPaths(
 	id clientID,
-	mode PutMode,
 	inFile *incomingFile,
 	baseName string,
 	dstPath string,
 	offset int64,
 ) (wc io.WriteCloser, partialPath string, err error) {
-	switch mode {
+	switch m.opts.FileOps {
 
-	case PutModeDirect:
+	case nil:
 		partialPath = dstPath + id.partialSuffix()
 		f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_RDWR, 0o666)
 		if err != nil {
@@ -219,7 +218,7 @@ func (m *manager) openWriterAndPaths(
 		inFile.finalPath = dstPath
 		return wc, partialPath, nil
 
-	case PutModeAndroidSAF:
+	default:
 		if m.opts.FileOps == nil {
 			return nil, "", m.redactAndLogError("Create (SAF)", fmt.Errorf("missing FileOps"))
 		}
@@ -241,9 +240,6 @@ func (m *manager) openWriterAndPaths(
 		inFile.partialPath = uri
 		inFile.finalPath = baseName
 		return wc, partialPath, nil
-
-	default:
-		return nil, "", fmt.Errorf("unsupported PutMode: %v", mode)
 	}
 }
 
@@ -329,13 +325,10 @@ func (m *manager) finalizeDirect(
 func (m *manager) finalizeSAF(
 	partialPath, finalName string,
 ) error {
-	if m.opts.FileOps == nil {
-		return fmt.Errorf("missing FileOps for SAF finalize")
-	}
 	const maxTries = 10
 	name := finalName
 	for i := 0; i < maxTries; i++ {
-		newURI, err := m.opts.FileOps.RenamePartialFile(partialPath, m.opts.Dir, name)
+		newURI, err := m.opts.FileOps.RenamePartialFile(partialPath, name)
 		if err != nil {
 			return err
 		}
