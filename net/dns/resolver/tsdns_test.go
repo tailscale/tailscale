@@ -1106,10 +1106,6 @@ type linkSelFunc func(ip netip.Addr) string
 func (f linkSelFunc) PickLink(ip netip.Addr) string { return f(ip) }
 
 func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("skipping test on Windows; waiting for golang.org/issue/33097")
-	}
-
 	records := []any{
 		"no-records.test.",
 		dnsHandler(),
@@ -1405,9 +1401,6 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 // newWrapResolver returns a resolver that uses r (via handleExitNodeDNSQueryWithNetPkg)
 // to make DNS requests.
 func newWrapResolver(r *net.Resolver) *net.Resolver {
-	if runtime.GOOS == "windows" {
-		panic("doesn't work on Windows") // golang.org/issue/33097
-	}
 	return &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {

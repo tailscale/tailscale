@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"runtime"
 	"testing"
 	"time"
 
@@ -249,14 +248,6 @@ func TestGetDNSQueryCacheKey(t *testing.T) {
 }
 
 func getGoNetPacketDNSQuery(name string) []byte {
-	if runtime.GOOS == "windows" {
-		// On Windows, Go's net.Resolver doesn't use the DNS client.
-		// See https://github.com/golang/go/issues/33097 which
-		// was approved but not yet implemented.
-		// For now just pretend it's implemented to make this test
-		// pass on Windows with complicated the caller.
-		return makeQ(123, name)
-	}
 	res := make(chan []byte, 1)
 	r := &net.Resolver{
 		PreferGo: true,
