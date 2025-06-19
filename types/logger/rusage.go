@@ -15,7 +15,7 @@ func RusagePrefixLog(logf Logf) Logf {
 	return func(f string, argv ...any) {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
-		goMem := float64(m.HeapInuse+m.StackInuse) / (1 << 20)
+		goMem := float64(m.HeapInuse) / (1 << 20)
 		maxRSS := rusageMaxRSS()
 		pf := fmt.Sprintf("%.1fM/%.1fM %s", goMem, maxRSS, f)
 		logf(pf, argv...)

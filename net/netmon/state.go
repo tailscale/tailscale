@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
 	"runtime"
 	"slices"
@@ -18,7 +17,6 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/util/mak"
 )
 
@@ -154,7 +152,7 @@ func (i Interface) Addrs() ([]net.Addr, error) {
 	if i.AltAddrs != nil {
 		return i.AltAddrs, nil
 	}
-	return i.Interface.Addrs()
+	return nil, nil
 }
 
 // ForeachInterfaceAddress is a wrapper for GetList, then
@@ -502,13 +500,6 @@ func getState(optTSInterfaceName string) (*State, error) {
 	}
 
 	if s.AnyInterfaceUp() {
-		req, err := http.NewRequest("GET", LoginEndpointForProxyDetermination, nil)
-		if err != nil {
-			return nil, err
-		}
-		if u, err := tshttpproxy.ProxyFromEnvironment(req); err == nil && u != nil {
-			s.HTTPProxy = u.String()
-		}
 		if getPAC != nil {
 			s.PAC = getPAC()
 		}

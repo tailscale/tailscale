@@ -90,7 +90,7 @@ func FromDialer(logf logger.Logf, netMon *netmon.Monitor, d *net.Dialer) Dialer 
 	if disabled.Load() {
 		return d
 	}
-	d.Control = control(logf, netMon)
+	//d.Control = control(logf, netMon)
 	if wrapDialer != nil {
 		return wrapDialer(d)
 	}

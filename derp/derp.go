@@ -270,3 +270,22 @@ type Conn interface {
 	SetReadDeadline(time.Time) error
 	SetWriteDeadline(time.Time) error
 }
+
+type serverInfo struct {
+	Version int `json:"version,omitempty"`
+
+	TokenBucketBytesPerSecond int `json:",omitempty"`
+	TokenBucketBytesBurst     int `json:",omitempty"`
+}
+
+// IdealNodeHeader is the HTTP request header sent on DERP HTTP client requests
+// to indicate that they're connecting to their ideal (Region.Nodes[0]) node.
+// The HTTP header value is the name of the node they wish they were connected
+// to. This is an optional header.
+const IdealNodeHeader = "Ideal-Node"
+
+// FastStartHeader is the header (with value "1") that signals to the HTTP
+// server that the DERP HTTP client does not want the HTTP 101 response
+// headers and it will begin writing & reading the DERP protocol immediately
+// following its HTTP request.
+const FastStartHeader = "Derp-Fast-Start"

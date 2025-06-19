@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !linux || android
+//go:build !ts_omit_derpserver && (!linux || android)
 
 package derp
 

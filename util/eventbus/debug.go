@@ -10,8 +10,6 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-
-	"tailscale.com/tsweb"
 )
 
 // A Debugger offers access to a bus's privileged introspection and
@@ -136,8 +134,6 @@ func (d *Debugger) SubscribeTypes(client *Client) []reflect.Type {
 	d.checkClient(client)
 	return client.subscribeTypes()
 }
-
-func (d *Debugger) RegisterHTTP(td *tsweb.DebugHandler) { registerHTTPDebugger(d, td) }
 
 // A hook collects hook functions that can be run as a group.
 type hook[T any] struct {

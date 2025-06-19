@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_derpserver
+
 package derp
 
 // TODO(crawshaw): with predefined serverKey in clients and HMAC on packets we could skip TLS
@@ -59,12 +61,6 @@ import (
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.NodePublic]bool{}
-
-// IdealNodeHeader is the HTTP request header sent on DERP HTTP client requests
-// to indicate that they're connecting to their ideal (Region.Nodes[0]) node.
-// The HTTP header value is the name of the node they wish they were connected
-// to. This is an optional header.
-const IdealNodeHeader = "Ideal-Node"
 
 // IdealNodeContextKey is the context key used to pass the IdealNodeHeader value
 // from the HTTP handler to the DERP server's Accept method.
@@ -1503,13 +1499,6 @@ func (s *Server) noteClientActivity(c *sclient) {
 
 	// Append this client to the list of clients who spoke last.
 	dup.sendHistory = append(dup.sendHistory, c)
-}
-
-type serverInfo struct {
-	Version int `json:"version,omitempty"`
-
-	TokenBucketBytesPerSecond int `json:",omitempty"`
-	TokenBucketBytesBurst     int `json:",omitempty"`
 }
 
 func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) error {

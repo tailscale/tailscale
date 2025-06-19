@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_derpserver
+
 package derphttp
 
 import (
@@ -11,12 +13,6 @@ import (
 
 	"tailscale.com/derp"
 )
-
-// fastStartHeader is the header (with value "1") that signals to the HTTP
-// server that the DERP HTTP client does not want the HTTP 101 response
-// headers and it will begin writing & reading the DERP protocol immediately
-// following its HTTP request.
-const fastStartHeader = "Derp-Fast-Start"
 
 // Handler returns an http.Handler to be mounted at /derp, serving s.
 func Handler(s *derp.Server) http.Handler {
@@ -42,7 +38,7 @@ func Handler(s *derp.Server) http.Handler {
 			return
 		}
 
-		fastStart := r.Header.Get(fastStartHeader) == "1"
+		fastStart := r.Header.Get(derp.FastStartHeader) == "1"
 
 		h, ok := w.(http.Hijacker)
 		if !ok {

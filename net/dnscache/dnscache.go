@@ -21,7 +21,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/net/netx"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
@@ -133,26 +132,6 @@ func (r *Resolver) dlogf(format string, args ...any) {
 	if debug() || debugLogging.Load() {
 		logf("dnscache: "+format, args...)
 	}
-}
-
-// cloudHostResolver returns a Resolver for the current cloud hosting environment.
-// It currently only supports Google Cloud.
-func (r *Resolver) cloudHostResolver() (v *net.Resolver, ok bool) {
-	switch runtime.GOOS {
-	case "android", "ios", "darwin":
-		return nil, false
-	}
-	ip := cloudenv.Get().ResolverIP()
-	if ip == "" {
-		return nil, false
-	}
-	return &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, net.JoinHostPort(ip, "53"))
-		},
-	}, true
 }
 
 func (r *Resolver) ttl() time.Duration {
@@ -295,12 +274,6 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 		ips, err = r.LookupIPForTest(ctx, host)
 	} else {
 		ips, err = r.fwd().LookupNetIP(lookupCtx, "ip", host)
-	}
-	if err != nil || len(ips) == 0 {
-		if resolver, ok := r.cloudHostResolver(); ok {
-			r.dlogf("resolving %q via cloud resolver", host)
-			ips, err = resolver.LookupNetIP(lookupCtx, "ip", host)
-		}
 	}
 	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
 		lookupCtx, lookupCancel := context.WithTimeout(ctx, 30*time.Second)

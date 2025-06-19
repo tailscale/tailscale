@@ -24,7 +24,6 @@ import (
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
-	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/version"
@@ -63,7 +62,6 @@ func New() *tailcfg.Hostinfo {
 		GoVersion:       runtime.Version(),
 		Machine:         condCall(unameMachine),
 		DeviceModel:     deviceModelCached(),
-		Cloud:           string(cloudenv.Get()),
 		NoLogsNoSupport: envknob.NoLogsNoSupport(),
 		AllowsUpdate:    envknob.AllowsRemoteUpdate(),
 	}

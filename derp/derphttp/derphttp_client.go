@@ -32,14 +32,10 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/envknob"
-	"tailscale.com/health"
-	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/netns"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -54,11 +50,9 @@ import (
 // Send/Recv will completely re-establish the connection (unless Close
 // has been called).
 type Client struct {
-	TLSConfig     *tls.Config        // optional; nil means default
-	HealthTracker *health.Tracker    // optional; used if non-nil only
-	DNSCache      *dnscache.Resolver // optional; nil means no caching
-	MeshKey       key.DERPMesh       // optional; for trusted clients
-	IsProber      bool               // optional; for probers to optional declare themselves as such
+	TLSConfig *tls.Config  // optional; nil means default
+	MeshKey   key.DERPMesh // optional; for trusted clients
+	IsProber  bool         // optional; for probers to optional declare themselves as such
 
 	// WatchConnectionChanges is whether the client wishes to subscribe to
 	// notifications about clients connecting & disconnecting.
@@ -522,7 +516,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		// just to get routed into the server's HTTP Handler so it
 		// can Hijack the request, but we signal with a special header
 		// that we don't want to deal with its HTTP response.
-		req.Header.Set(fastStartHeader, "1") // suppresses the server's HTTP response
+		req.Header.Set(derp.FastStartHeader, "1") // suppresses the server's HTTP response
 		if err := req.Write(brw); err != nil {
 			return nil, 0, err
 		}
@@ -599,20 +593,8 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 		return c.dialer(ctx, "tcp", net.JoinHostPort(host, urlPort(c.url)))
 	}
 	hostOrIP := host
-	dialer := netns.NewDialer(c.logf, c.netMon)
 
-	if c.DNSCache != nil {
-		ip, _, _, err := c.DNSCache.LookupIP(ctx, host)
-		if err == nil {
-			hostOrIP = ip.String()
-		}
-		if err != nil && netns.IsSOCKSDialer(dialer) {
-			// Return an error if we're not using a dial
-			// proxy that can do DNS lookups for us.
-			return nil, err
-		}
-	}
-
+	var dialer net.Dialer
 	tcpConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(hostOrIP, urlPort(c.url)))
 	if err != nil {
 		return nil, fmt.Errorf("dial of %v: %v", host, err)
@@ -647,7 +629,7 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 }
 
 func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
-	tlsConf := tlsdial.Config(c.HealthTracker, c.TLSConfig)
+	tlsConf := tlsdial.Config(nil, c.TLSConfig)
 	if node != nil {
 		if node.InsecureForTests {
 			tlsConf.InsecureSkipVerify = true
@@ -699,7 +681,8 @@ func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tl
 }
 
 func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {
-	return netns.NewDialer(c.logf, c.netMon).DialContext(ctx, proto, addr)
+	var d net.Dialer
+	return d.DialContext(ctx, proto, addr)
 }
 
 // shouldDialProto reports whether an explicitly provided IPv4 or IPv6
@@ -723,18 +706,6 @@ const dialNodeTimeout = 1500 * time.Millisecond
 // TODO(bradfitz): longer if no options remain perhaps? ...  Or longer
 // overall but have dialRegion start overlapping races?
 func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, error) {
-	// First see if we need to use an HTTP proxy.
-	proxyReq := &http.Request{
-		Method: "GET", // doesn't really matter
-		URL: &url.URL{
-			Scheme: "https",
-			Host:   c.tlsServerName(n),
-			Path:   "/", // unused
-		},
-	}
-	if proxyURL, err := tshttpproxy.ProxyFromEnvironment(proxyReq); err == nil && proxyURL != nil {
-		return c.dialNodeUsingProxy(ctx, n, proxyURL)
-	}
 
 	type res struct {
 		c   net.Conn
@@ -825,71 +796,6 @@ func firstStr(a, b string) string {
 		return a
 	}
 	return b
-}
-
-// dialNodeUsingProxy connects to n using a CONNECT to the HTTP(s) proxy in proxyURL.
-func (c *Client) dialNodeUsingProxy(ctx context.Context, n *tailcfg.DERPNode, proxyURL *url.URL) (_ net.Conn, err error) {
-	pu := proxyURL
-	var proxyConn net.Conn
-	if pu.Scheme == "https" {
-		var d tls.Dialer
-		proxyConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(pu.Hostname(), firstStr(pu.Port(), "443")))
-	} else {
-		var d net.Dialer
-		proxyConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(pu.Hostname(), firstStr(pu.Port(), "80")))
-	}
-	defer func() {
-		if err != nil && proxyConn != nil {
-			// In a goroutine in case it's a *tls.Conn (that can block on Close)
-			// TODO(bradfitz): track the underlying tcp.Conn and just close that instead.
-			go proxyConn.Close()
-		}
-	}()
-	if err != nil {
-		return nil, err
-	}
-
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-done:
-			return
-		case <-ctx.Done():
-			proxyConn.Close()
-		}
-	}()
-
-	target := net.JoinHostPort(n.HostName, "443")
-
-	var authHeader string
-	if v, err := tshttpproxy.GetAuthHeader(pu); err != nil {
-		c.logf("derphttp: error getting proxy auth header for %v: %v", proxyURL, err)
-	} else if v != "" {
-		authHeader = fmt.Sprintf("Proxy-Authorization: %s\r\n", v)
-	}
-
-	if _, err := fmt.Fprintf(proxyConn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n%s\r\n", target, target, authHeader); err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, err
-	}
-
-	br := bufio.NewReader(proxyConn)
-	res, err := http.ReadResponse(br, nil)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		c.logf("derphttp: CONNECT dial to %s: %v", target, err)
-		return nil, err
-	}
-	c.logf("derphttp: CONNECT dial to %s: %v", target, res.Status)
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("invalid response status from HTTP proxy %s on CONNECT to %s: %v", pu, target, res.Status)
-	}
-	return proxyConn, nil
 }
 
 func (c *Client) Send(dstKey key.NodePublic, b []byte) error {
