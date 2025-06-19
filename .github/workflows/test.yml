@@ -210,6 +210,17 @@ jobs:
   windows:
     runs-on: windows-2022
     needs: gomod-cache
+    name: Windows (${{ matrix.name || matrix.shard}})
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        include:
+          - key: "win-bench"
+            name: "benchmarks"
+          - key: "win-shard-1-2"
+            shard: "1/2"
+          - key: "win-shard-2-2"
+            shard: "2/2"
     steps:
     - name: checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -237,14 +248,16 @@ jobs:
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
+        key: ${{ github.job }}-${{ matrix.key }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
         restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-go-2-
+          ${{ github.job }}-${{ matrix.key }}-go-2-${{ hashFiles('**/go.sum') }}
+          ${{ github.job }}-${{ matrix.key }}-go-2-
     - name: test
+      if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
-      run: go run ./cmd/testwrapper ./...
+      run: go run ./cmd/testwrapper sharded:${{ matrix.shard }}
     - name: bench all
+      if: matrix.key == 'win-bench'
       working-directory: src
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
