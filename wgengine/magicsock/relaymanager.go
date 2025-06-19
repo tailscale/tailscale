@@ -51,6 +51,7 @@ type relayManager struct {
 	cancelWorkCh          chan *endpoint
 	newServerEndpointCh   chan newRelayServerEndpointEvent
 	rxHandshakeDiscoMsgCh chan relayHandshakeDiscoMsgEvent
+	serversCh             chan set.Set[netip.AddrPort]
 
 	discoInfoMu            sync.Mutex // guards the following field
 	discoInfoByServerDisco map[key.DiscoPublic]*relayHandshakeDiscoInfo
@@ -174,7 +175,29 @@ func (r *relayManager) runLoop() {
 			if !r.hasActiveWorkRunLoop() {
 				return
 			}
+		case serversUpdate := <-r.serversCh:
+			r.handleServersUpdateRunLoop(serversUpdate)
+			if !r.hasActiveWorkRunLoop() {
+				return
+			}
 		}
+	}
+}
+
+func (r *relayManager) handleServersUpdateRunLoop(update set.Set[netip.AddrPort]) {
+	for k, v := range r.serversByAddrPort {
+		if !update.Contains(k) {
+			delete(r.serversByAddrPort, k)
+			delete(r.serversByDisco, v)
+		}
+	}
+	for _, v := range update.Slice() {
+		_, ok := r.serversByAddrPort[v]
+		if ok {
+			// don't zero known disco keys
+			continue
+		}
+		r.serversByAddrPort[v] = key.DiscoPublic{}
 	}
 }
 
@@ -215,6 +238,7 @@ func (r *relayManager) init() {
 		r.cancelWorkCh = make(chan *endpoint)
 		r.newServerEndpointCh = make(chan newRelayServerEndpointEvent)
 		r.rxHandshakeDiscoMsgCh = make(chan relayHandshakeDiscoMsgEvent)
+		r.serversCh = make(chan set.Set[netip.AddrPort])
 		r.runLoopStoppedCh = make(chan struct{}, 1)
 		r.runLoopStoppedCh <- struct{}{}
 	})
@@ -297,6 +321,11 @@ func (r *relayManager) handleCallMeMaybeVia(ep *endpoint, dm *disco.CallMeMaybeV
 // [*endpoint.bestAddr].
 func (r *relayManager) handleGeneveEncapDiscoMsgNotBestAddr(dm disco.Message, di *discoInfo, src epAddr) {
 	relayManagerInputEvent(r, nil, &r.rxHandshakeDiscoMsgCh, relayHandshakeDiscoMsgEvent{msg: dm, disco: di.discoKey, from: src.ap, vni: src.vni.get(), at: time.Now()})
+}
+
+// handleRelayServersSet handles an update of the complete relay server set.
+func (r *relayManager) handleRelayServersSet(servers set.Set[netip.AddrPort]) {
+	relayManagerInputEvent(r, nil, &r.serversCh, servers)
 }
 
 // relayManagerInputEvent initializes [relayManager] if necessary, starts

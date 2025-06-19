@@ -14,6 +14,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/netip"
 	"reflect"
@@ -348,17 +349,19 @@ type Conn struct {
 	// magicsock could do with any complexity reduction it can get.
 	netInfoLast *tailcfg.NetInfo
 
-	derpMap          *tailcfg.DERPMap              // nil (or zero regions/nodes) means DERP is disabled
-	peers            views.Slice[tailcfg.NodeView] // from last onNodeViewsUpdate update
-	lastFlags        debugFlags                    // at time of last onNodeViewsUpdate
-	firstAddrForTest netip.Addr                    // from last onNodeViewsUpdate update; for tests only
-	privateKey       key.NodePrivate               // WireGuard private key for this node
-	everHadKey       bool                          // whether we ever had a non-zero private key
-	myDerp           int                           // nearest DERP region ID; 0 means none/unknown
-	homeless         bool                          // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
-	derpStarted      chan struct{}                 // closed on first connection to DERP; for tests & cleaner Close
-	activeDerp       map[int]activeDerp            // DERP regionID -> connection to a node in that region
-	prevDerp         map[int]*syncs.WaitGroupChan
+	derpMap            *tailcfg.DERPMap              // nil (or zero regions/nodes) means DERP is disabled
+	self               tailcfg.NodeView              // from last onNodeViewsUpdate
+	peers              views.Slice[tailcfg.NodeView] // from last onNodeViewsUpdate, sorted by Node.ID; Note: [netmap.NodeMutation]'s rx'd in onNodeMutationsUpdate are never applied
+	filt               *filter.Filter                // from last onFilterUpdate
+	relayClientEnabled bool                          // whether we can allocate UDP relay endpoints on UDP relay servers
+	lastFlags          debugFlags                    // at time of last onNodeViewsUpdate
+	privateKey         key.NodePrivate               // WireGuard private key for this node
+	everHadKey         bool                          // whether we ever had a non-zero private key
+	myDerp             int                           // nearest DERP region ID; 0 means none/unknown
+	homeless           bool                          // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
+	derpStarted        chan struct{}                 // closed on first connection to DERP; for tests & cleaner Close
+	activeDerp         map[int]activeDerp            // DERP regionID -> connection to a node in that region
+	prevDerp           map[int]*syncs.WaitGroupChan
 
 	// derpRoute contains optional alternate routes to use as an
 	// optimization instead of contacting a peer via their home
@@ -516,7 +519,7 @@ func (o *Options) derpActiveFunc() func() {
 // this type out of magicsock.
 type NodeViewsUpdate struct {
 	SelfNode tailcfg.NodeView
-	Peers    []tailcfg.NodeView
+	Peers    []tailcfg.NodeView // sorted by Node.ID
 }
 
 // NodeMutationsUpdate represents an update event of one or more
@@ -2555,38 +2558,160 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 
 func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
 	// TODO(jwhited): implement once capVer is bumped
-	return false
+	return version == math.MinInt32
 }
 
+func capVerIsRelayServerCapable(version tailcfg.CapabilityVersion) bool {
+	// TODO(jwhited): implement once capVer is bumped
+	return version == math.MinInt32
+}
+
+// onFilterUpdate is called when a [FilterUpdate] is received over the
+// [eventbus.Bus].
 func (c *Conn) onFilterUpdate(f FilterUpdate) {
-	// TODO(jwhited): implement
+	c.mu.Lock()
+	c.filt = f.Filter
+	self := c.self
+	peers := c.peers
+	relayClientEnabled := c.relayClientEnabled
+	c.mu.Unlock() // release c.mu before potentially calling c.updateRelayServersSet which is O(m * n)
+
+	if !relayClientEnabled {
+		// Early return if we cannot operate as a relay client.
+		return
+	}
+
+	// The filter has changed, and we are operating as a relay server client.
+	// Re-evaluate it in order to produce an updated relay server set.
+	c.updateRelayServersSet(f.Filter, self, peers)
+}
+
+// updateRelayServersSet iterates all peers, evaluating filt for each one in
+// order to determine which peers are relay server candidates. filt, self, and
+// peers are passed as args (vs c.mu-guarded fields) to enable callers to
+// release c.mu before calling as this is O(m * n) (we iterate all cap rules 'm'
+// in filt for every peer 'n').
+// TODO: Optimize this so that it's not O(m * n). This might involve:
+//  1. Changes to [filter.Filter], e.g. adding a CapsWithValues() to check for
+//     a given capability instead of building and returning a map of all of
+//     them.
+//  2. Moving this work upstream into [nodeBackend] or similar, and publishing
+//     the computed result over the eventbus instead.
+func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView, peers views.Slice[tailcfg.NodeView]) {
+	relayServers := make(set.Set[netip.AddrPort])
+	for _, peer := range peers.All() {
+		peerAPI := peerAPIIfCandidateRelayServer(filt, self, peer)
+		if peerAPI.IsValid() {
+			relayServers.Add(peerAPI)
+		}
+	}
+	c.relayManager.handleRelayServersSet(relayServers)
+}
+
+// peerAPIIfCandidateRelayServer returns the peer API address of peer if it
+// is considered to be a candidate relay server upon evaluation against filt and
+// self, otherwise it returns a zero value.
+func peerAPIIfCandidateRelayServer(filt *filter.Filter, self, peer tailcfg.NodeView) netip.AddrPort {
+	if filt == nil ||
+		!self.Valid() ||
+		!peer.Valid() ||
+		!capVerIsRelayServerCapable(peer.Cap()) ||
+		!peer.Hostinfo().Valid() {
+		return netip.AddrPort{}
+	}
+	for _, peerPrefix := range peer.Addresses().All() {
+		if !peerPrefix.IsSingleIP() {
+			continue
+		}
+		peerAddr := peerPrefix.Addr()
+		for _, selfPrefix := range self.Addresses().All() {
+			if !selfPrefix.IsSingleIP() {
+				continue
+			}
+			selfAddr := selfPrefix.Addr()
+			if selfAddr.BitLen() == peerAddr.BitLen() { // same address family
+				if filt.CapsWithValues(peerAddr, selfAddr).HasCapability(tailcfg.PeerCapabilityRelayTarget) {
+					for _, s := range peer.Hostinfo().Services().All() {
+						if peerAddr.Is4() && s.Proto == tailcfg.PeerAPI4 ||
+							peerAddr.Is6() && s.Proto == tailcfg.PeerAPI6 {
+							return netip.AddrPortFrom(peerAddr, s.Port)
+						}
+					}
+					return netip.AddrPort{} // no peerAPI
+				} else {
+					// [nodeBackend.peerCapsLocked] only returns/considers the
+					// [tailcfg.PeerCapMap] between the passed src and the
+					// _first_ host (/32 or /128) address for self. We are
+					// consistent with that behavior here. If self and peer
+					// host addresses are of the same address family they either
+					// have the capability or not. We do not check against
+					// additional host addresses of the same address family.
+					return netip.AddrPort{}
+				}
+			}
+		}
+	}
+	return netip.AddrPort{}
 }
 
 // onNodeViewsUpdate is called when a [NodeViewsUpdate] is received over the
 // [eventbus.Bus].
 func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
+	peersChanged := c.updateNodes(update)
+
+	relayClientEnabled := update.SelfNode.Valid() &&
+		update.SelfNode.HasCap(tailcfg.NodeAttrRelayClient) &&
+		envknob.UseWIPCode()
+
+	c.mu.Lock()
+	relayClientChanged := c.relayClientEnabled != relayClientEnabled
+	c.relayClientEnabled = relayClientEnabled
+	filt := c.filt
+	self := c.self
+	peers := c.peers
+	c.mu.Unlock() // release c.mu before potentially calling c.updateRelayServersSet which is O(m * n)
+
+	if peersChanged || relayClientChanged {
+		if !relayClientEnabled {
+			c.relayManager.handleRelayServersSet(nil)
+		} else {
+			c.updateRelayServersSet(filt, self, peers)
+		}
+	}
+}
+
+// updateNodes updates [Conn] to reflect the [tailcfg.NodeView]'s contained
+// in update. It returns true if update.Peers was unequal to c.peers, otherwise
+// false.
+func (c *Conn) updateNodes(update NodeViewsUpdate) (peersChanged bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.closed {
-		return
+		return false
 	}
 
 	priorPeers := c.peers
 	metricNumPeers.Set(int64(len(update.Peers)))
 
-	// Update c.netMap regardless, before the following early return.
+	// Update c.self & c.peers regardless, before the following early return.
+	c.self = update.SelfNode
 	curPeers := views.SliceOf(update.Peers)
 	c.peers = curPeers
 
+	// [debugFlags] are mutable in [Conn.SetSilentDisco] &
+	// [Conn.SetProbeUDPLifetime]. These setters are passed [controlknobs.Knobs]
+	// values by [ipnlocal.LocalBackend] around netmap reception.
+	// [controlknobs.Knobs] are simply self [tailcfg.NodeCapability]'s. They are
+	// useful as a global view of notable feature toggles, but the magicsock
+	// setters are completely unnecessary as we have the same values right here
+	// (update.SelfNode.Capabilities) at a time they are considered most
+	// up-to-date.
+	// TODO: mutate [debugFlags] here instead of in various [Conn] setters.
 	flags := c.debugFlagsLocked()
-	if update.SelfNode.Valid() && update.SelfNode.Addresses().Len() > 0 {
-		c.firstAddrForTest = update.SelfNode.Addresses().At(0).Addr()
-	} else {
-		c.firstAddrForTest = netip.Addr{}
-	}
 
-	if nodesEqual(priorPeers, curPeers) && c.lastFlags == flags {
+	peersChanged = !nodesEqual(priorPeers, curPeers)
+	if !peersChanged && c.lastFlags == flags {
 		// The rest of this function is all adjusting state for peers that have
 		// changed. But if the set of peers is equal and the debug flags (for
 		// silent disco and probe UDP lifetime) haven't changed, there is no
@@ -2728,6 +2853,8 @@ func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
 			delete(c.discoInfo, dk)
 		}
 	}
+
+	return peersChanged
 }
 
 func devPanicf(format string, a ...any) {
@@ -3245,7 +3372,7 @@ func simpleDur(d time.Duration) time.Duration {
 }
 
 // onNodeMutationsUpdate is called when a [NodeMutationsUpdate] is received over
-// the [eventbus.Bus].
+// the [eventbus.Bus]. Note: It does not apply these mutations to c.peers.
 func (c *Conn) onNodeMutationsUpdate(update NodeMutationsUpdate) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
