@@ -263,13 +263,13 @@ func TestHTTPSWithProxy(t *testing.T) { testHTTPS(t, true) }
 func testHTTPS(t *testing.T, withProxy bool) {
 	bakedroots.ResetForTest(t, tlstest.TestRootCA())
 
-	controlLn, err := tls.Listen("tcp", "127.0.0.1:0", tlstest.ControlPlaneKeyPair.ServerTLSConfig())
+	controlLn, err := tls.Listen("tcp", "127.0.0.1:0", tlstest.ControlPlane.ServerTLSConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer controlLn.Close()
 
-	proxyLn, err := tls.Listen("tcp", "127.0.0.1:0", tlstest.ProxyServerKeyPair.ServerTLSConfig())
+	proxyLn, err := tls.Listen("tcp", "127.0.0.1:0", tlstest.ProxyServer.ServerTLSConfig())
 	if err != nil {
 		t.Fatal(err)
 	}

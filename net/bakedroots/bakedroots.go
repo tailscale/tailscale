@@ -26,16 +26,9 @@ func Get() *x509.CertPool {
 	return roots.p
 }
 
-// testingTB is a subset of testing.TB needed
-// to verify the caller isn't in a parallel test.
-type testingTB interface {
-	// Setenv panics if it's in a parallel test.
-	Setenv(k, v string)
-}
-
 // ResetForTest resets the cached roots for testing,
 // optionally setting them to caPEM if non-nil.
-func ResetForTest(tb testingTB, caPEM []byte) {
+func ResetForTest(tb testenv.TB, caPEM []byte) {
 	if !testenv.InTest() {
 		panic("not in test")
 	}
@@ -44,6 +37,10 @@ func ResetForTest(tb testingTB, caPEM []byte) {
 	roots = rootsOnce{}
 	if caPEM != nil {
 		roots.once.Do(func() { roots.parsePEM(caPEM) })
+		tb.Cleanup(func() {
+			// Reset the roots to real roots for any following test.
+			roots = rootsOnce{}
+		})
 	}
 }
 
