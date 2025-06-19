@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
@@ -1469,4 +1471,61 @@ func TestNetstackUDPLoopback(t *testing.T) {
 	}
 
 	d1.MustCleanShutdown(t)
+}
+
+func TestEncryptStateMigration(t *testing.T) {
+	if !hostinfo.New().TPM.Present() {
+		t.Skip("TPM not available")
+	}
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("--encrypt-state for tailscaled state not supported on this platform")
+	}
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+	n := NewTestNode(t, env)
+
+	runNode := func(t *testing.T, wantStateKeys []string) {
+		t.Helper()
+
+		// Run the node.
+		d := n.StartDaemon()
+		n.AwaitResponding()
+		n.MustUp()
+		n.AwaitRunning()
+
+		// Check the contents of the state file.
+		buf, err := os.ReadFile(n.stateFile)
+		if err != nil {
+			t.Fatalf("reading %q: %v", n.stateFile, err)
+		}
+		t.Logf("state file content:\n%s", buf)
+		var content map[string]any
+		if err := json.Unmarshal(buf, &content); err != nil {
+			t.Fatalf("parsing %q: %v", n.stateFile, err)
+		}
+		for _, k := range wantStateKeys {
+			if _, ok := content[k]; !ok {
+				t.Errorf("state file is missing key %q", k)
+			}
+		}
+
+		// Stop the node.
+		d.MustCleanShutdown(t)
+	}
+
+	wantPlaintextStateKeys := []string{"_machinekey", "_current-profile", "_profiles"}
+	wantEncryptedStateKeys := []string{"key", "nonce", "data"}
+	t.Run("regular-state", func(t *testing.T) {
+		n.encryptState = false
+		runNode(t, wantPlaintextStateKeys)
+	})
+	t.Run("migrate-to-encrypted", func(t *testing.T) {
+		n.encryptState = true
+		runNode(t, wantEncryptedStateKeys)
+	})
+	t.Run("migrate-to-plaintext", func(t *testing.T) {
+		n.encryptState = false
+		runNode(t, wantPlaintextStateKeys)
+	})
 }

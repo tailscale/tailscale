@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"net/url"
 	"regexp"
 	"strings"
@@ -252,4 +253,8 @@ func (s *awsStore) persistState() error {
 
 	_, err = s.ssmClient.PutParameter(context.TODO(), in)
 	return err
+}
+
+func (s *awsStore) All() iter.Seq2[ipn.StateKey, []byte] {
+	return s.memory.All()
 }

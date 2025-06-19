@@ -1013,17 +1013,13 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 }
 
 type testStateStorage struct {
-	mem     mem.Store
+	mem.Store
 	written atomic.Bool
-}
-
-func (s *testStateStorage) ReadState(id ipn.StateKey) ([]byte, error) {
-	return s.mem.ReadState(id)
 }
 
 func (s *testStateStorage) WriteState(id ipn.StateKey, bs []byte) error {
 	s.written.Store(true)
-	return s.mem.WriteState(id, bs)
+	return s.Store.WriteState(id, bs)
 }
 
 // awaitWrite clears the "I've seen writes" bit, in prep for a future

@@ -120,6 +120,10 @@ const (
 	LogSCMInteractions      Key = "LogSCMInteractions"
 	FlushDNSOnSessionUnlock Key = "FlushDNSOnSessionUnlock"
 
+	// EncryptState is a boolean setting that specifies whether to encrypt the
+	// tailscaled state file with a TPM device.
+	EncryptState Key = "EncryptState"
+
 	// PostureChecking indicates if posture checking is enabled and the client shall gather
 	// posture data.
 	// Key is a string value that specifies an option: "always", "never", "user-decides".
@@ -186,6 +190,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(ExitNodeID, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(ExitNodeIP, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(FlushDNSOnSessionUnlock, setting.DeviceSetting, setting.BooleanValue),
+	setting.NewDefinition(EncryptState, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(Hostname, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(LogSCMInteractions, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(LogTarget, setting.DeviceSetting, setting.StringValue),

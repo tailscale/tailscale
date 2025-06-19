@@ -569,11 +569,12 @@ type TestNode struct {
 	env              *TestEnv
 	tailscaledParser *nodeOutputParser
 
-	dir        string // temp dir for sock & state
-	configFile string // or empty for none
-	sockFile   string
-	stateFile  string
-	upFlagGOOS string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
+	dir          string // temp dir for sock & state
+	configFile   string // or empty for none
+	sockFile     string
+	stateFile    string
+	upFlagGOOS   string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
+	encryptState bool
 
 	mu        sync.Mutex
 	onLogLine []func([]byte)
@@ -640,7 +641,7 @@ func (n *TestNode) diskPrefs() *ipn.Prefs {
 	if _, err := os.ReadFile(n.stateFile); err != nil {
 		t.Fatalf("reading prefs: %v", err)
 	}
-	fs, err := store.NewFileStore(nil, n.stateFile)
+	fs, err := store.New(nil, n.stateFile)
 	if err != nil {
 		t.Fatalf("reading prefs, NewFileStore: %v", err)
 	}
@@ -821,6 +822,9 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	}
 	if n.configFile != "" {
 		cmd.Args = append(cmd.Args, "--config="+n.configFile)
+	}
+	if n.encryptState {
+		cmd.Args = append(cmd.Args, "--encrypt-state")
 	}
 	cmd.Env = append(os.Environ(),
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",

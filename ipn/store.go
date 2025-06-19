@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"net"
 	"strconv"
 )
@@ -83,6 +84,11 @@ type StateStore interface {
 	// instead, which only writes if the value is different from what's
 	// already in the store.
 	WriteState(id StateKey, bs []byte) error
+	// All returns an iterator over all StateStore keys. Using ReadState or
+	// WriteState is not safe while iterating and can lead to a deadlock.
+	// The order of keys in the iterator is not specified and may change
+	// between runs.
+	All() iter.Seq2[StateKey, []byte]
 }
 
 // WriteState is a wrapper around store.WriteState that only writes if
