@@ -177,14 +177,6 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			},
 			want: nil,
 		},
-		{
-			name: "patch-cap",
-			mr: fromChanges(&tailcfg.PeerChange{
-				NodeID: 1,
-				Cap:    2,
-			}),
-			want: muts(NodeMutationCap{1, 2}),
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -203,7 +195,6 @@ func TestMutationsFromMapResponse(t *testing.T) {
 					NodeMutationDERPHome{},
 					NodeMutationOnline{},
 					NodeMutationLastSeen{},
-					NodeMutationCap{},
 				)); diff != "" {
 				t.Errorf("wrong result (-want +got):\n%s", diff)
 			}

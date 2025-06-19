@@ -3263,10 +3263,6 @@ func (c *Conn) onNodeMutationsUpdate(update NodeMutationsUpdate) {
 			ep.mu.Lock()
 			ep.setEndpointsLocked(views.SliceOf(m.Endpoints))
 			ep.mu.Unlock()
-		case netmap.NodeMutationCap:
-			ep.mu.Lock()
-			ep.relayCapable = capVerIsRelayCapable(m.Cap)
-			ep.mu.Unlock()
 		}
 	}
 }
