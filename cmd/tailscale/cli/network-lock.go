@@ -17,12 +17,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/prompt"
 )
 
 var netlockCmd = &ffcli.Command{
@@ -367,6 +369,18 @@ func runNetworkLockRemove(ctx context.Context, args []string) error {
 				if err := localClient.NetworkLockSign(ctx, nodeKey, []byte(rotationKey)); err != nil {
 					return fmt.Errorf("failed to sign %v: %w", nodeKey, err)
 				}
+			}
+		}
+	} else {
+		if isatty.IsTerminal(os.Stdout.Fd()) {
+			fmt.Printf(`Warning
+Removal of a signing key(s) without resigning nodes (--re-sign=false)
+will cause any nodes signed by the the given key(s) to be locked out
+of the Tailscale network. Proceed with caution.
+`)
+			if !prompt.YesNo("Are you sure you want to remove the signing key(s)?") {
+				fmt.Printf("aborting removal of signing key(s)\n")
+				os.Exit(0)
 			}
 		}
 	}
