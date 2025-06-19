@@ -28,6 +28,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/prompt"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/version"
 )
@@ -757,7 +758,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 
 	if len(mounts) > 1 {
 		msg := fmt.Sprintf("Are you sure you want to delete %d handlers under port %s?", len(mounts), portStr)
-		if !e.yes && !promptYesNo(msg) {
+		if !e.yes && !prompt.YesNo(msg) {
 			return nil
 		}
 	}
