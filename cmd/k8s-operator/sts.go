@@ -951,7 +951,10 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 	return capVerConfigs, nil
 }
 
-func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
+// latestConfigFromSecret returns the ipn.ConfigVAlpha with the highest capver
+// as found in the Secret's key names, e.g. "cap-107.hujson" has capver 107.
+// If no config is found, it returns nil.
+func latestConfigFromSecret(s *corev1.Secret) (*ipn.ConfigVAlpha, error) {
 	latest := tailcfg.CapabilityVersion(-1)
 	latestStr := ""
 	for k, data := range s.Data {
@@ -968,12 +971,31 @@ func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
 			latest = v
 		}
 	}
+
+	var conf *ipn.ConfigVAlpha
+	if latestStr != "" {
+		conf = &ipn.ConfigVAlpha{}
+		if err := json.Unmarshal([]byte(s.Data[latestStr]), conf); err != nil {
+			return nil, fmt.Errorf("error unmarshaling tailscaled config from Secret %q in field %q: %w", s.Name, latestStr, err)
+		}
+	}
+
+	return conf, nil
+}
+
+func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
+	conf, err := latestConfigFromSecret(s)
+	if err != nil {
+		return nil, err
+	}
+
 	// Allow for configs that don't contain an auth key. Perhaps
 	// users have some mechanisms to delete them. Auth key is
 	// normally not needed after the initial login.
-	if latestStr != "" {
-		return readAuthKey(s, latestStr)
+	if conf != nil {
+		key = conf.AuthKey
 	}
+
 	return key, nil
 }
 

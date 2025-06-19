@@ -755,7 +755,7 @@ func verifyTailscaledConfig(t *testing.T, fc client.Client, pgName string, expec
 			Labels:    pgSecretLabels(pgName, "config"),
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): []byte(fmt.Sprintf(`{"Version":""%s}`, expected)),
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte(fmt.Sprintf(`{"Version":""%s}`, expected)),
 		},
 	})
 }
@@ -794,7 +794,7 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 			Labels:    pgSecretLabels(pgName, "config"),
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): []byte("{}"),
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte("{}"),
 		},
 	}
 	mustCreate(t, fc, pgCfgSecret)

@@ -446,28 +446,36 @@ func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) 
 		return tsapi.RecorderTailnetDevice{}, false, err
 	}
 
-	return getDeviceInfo(ctx, r.tsClient, secret)
+	pod := &corev1.Pod{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: fmt.Sprintf("%s-0", tsrName)}, pod); err != nil && !apierrors.IsNotFound(err) {
+		return tsapi.RecorderTailnetDevice{}, false, fmt.Errorf("failed to get Pod %s: %w", fmt.Sprintf("%s-%d", tsrName, 0), err)
+	}
+
+	return getDeviceInfo(secret, string(pod.UID))
 }
 
-func getDeviceInfo(ctx context.Context, tsClient tsClient, secret *corev1.Secret) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
-	prefs, ok, err := getDevicePrefs(secret)
-	if !ok || err != nil {
-		return tsapi.RecorderTailnetDevice{}, false, err
+func getDeviceInfo(secret *corev1.Secret, podUID string) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
+	secretPodUID := secret.Data[kubetypes.KeyPodUID]
+	if !strings.EqualFold(string(secretPodUID), podUID) {
+		// Current Pod has not yet written its UID to the state Secret, data may
+		// be stale.
+		return d, false, nil
 	}
 
-	// TODO(tomhjp): The profile info doesn't include addresses, which is why we
-	// need the API. Should we instead update the profile to include addresses?
-	device, err := tsClient.Device(ctx, string(prefs.Config.NodeID), nil)
-	if err != nil {
-		return tsapi.RecorderTailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
+	if ipsB := secret.Data[kubetypes.KeyDeviceIPs]; len(ipsB) > 0 {
+		ips := []string{}
+		if err := json.Unmarshal(ipsB, &ips); err != nil {
+			return tsapi.RecorderTailnetDevice{}, false, fmt.Errorf("failed to extract device IPs from state Secret %q: %w", secret.Name, err)
+		}
+		d.TailnetIPs = ips
 	}
 
-	d = tsapi.RecorderTailnetDevice{
-		Hostname:   device.Hostname,
-		TailnetIPs: device.Addresses,
-	}
-	if dnsName := prefs.Config.UserProfile.LoginName; dnsName != "" {
-		d.URL = fmt.Sprintf("https://%s", dnsName)
+	if fqdn := secret.Data[kubetypes.KeyDeviceFQDN]; len(fqdn) > 0 {
+		n := strings.TrimSuffix(string(fqdn), ".")
+		d.URL = fmt.Sprintf("https://%s", n)
+		if hostname, _, ok := strings.Cut(string(n), "."); ok {
+			d.Hostname = hostname
+		}
 	}
 
 	return d, true, nil

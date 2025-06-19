@@ -312,7 +312,7 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 	for i := range pgReplicas(pg) {
 		secrets = append(secrets, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            fmt.Sprintf("%s-%d", pg.Name, i),
+				Name:            pgStateSecretName(pg.Name, i),
 				Namespace:       namespace,
 				Labels:          pgSecretLabels(pg.Name, "state"),
 				OwnerReferences: pgOwnerReference(pg),
@@ -381,6 +381,10 @@ func pgReplicas(pg *tsapi.ProxyGroup) int32 {
 
 func pgConfigSecretName(pgName string, i int32) string {
 	return fmt.Sprintf("%s-%d-config", pgName, i)
+}
+
+func pgStateSecretName(pgName string, i int32) string {
+	return fmt.Sprintf("%s-%d", pgName, i)
 }
 
 func pgEgressCMName(pg string) string {

@@ -137,8 +137,16 @@ func ProxyClassIsReady(pc *tsapi.ProxyClass) bool {
 }
 
 func ProxyGroupIsReady(pg *tsapi.ProxyGroup) bool {
+	return proxyGroupCondition(pg, tsapi.ProxyGroupReady)
+}
+
+func ProxyGroupAtLeastOneReady(pg *tsapi.ProxyGroup) bool {
+	return proxyGroupCondition(pg, tsapi.ProxyGroupAtLeastOneReady)
+}
+
+func proxyGroupCondition(pg *tsapi.ProxyGroup, condType tsapi.ConditionType) bool {
 	idx := xslices.IndexFunc(pg.Status.Conditions, func(cond metav1.Condition) bool {
-		return cond.Type == string(tsapi.ProxyGroupReady)
+		return cond.Type == string(condType)
 	})
 	if idx == -1 {
 		return false
