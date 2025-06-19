@@ -7,6 +7,7 @@ package kubestore
 import (
 	"context"
 	"fmt"
+	"iter"
 	"log"
 	"net"
 	"os"
@@ -427,4 +428,8 @@ func sanitizeKey[T ~string](k T) string {
 		}
 		return '_'
 	}, string(k))
+}
+
+func (s *Store) All() iter.Seq2[ipn.StateKey, []byte] {
+	return s.memory.All()
 }

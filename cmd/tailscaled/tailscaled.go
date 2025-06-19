@@ -126,6 +126,7 @@ var args struct {
 	debug          string
 	port           uint16
 	statepath      string
+	encryptState   bool
 	statedir       string
 	socketpath     string
 	birdSocketPath string
@@ -193,6 +194,7 @@ func main() {
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, defaultPort()), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", "", "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM; use 'mem:' to not store state and register as an ephemeral node. If empty and --statedir is provided, the default is <statedir>/tailscaled.state. Default: "+paths.DefaultTailscaledStateFile())
+	flag.BoolVar(&args.encryptState, "encrypt-state", false, "encrypt the state file on disk; uses TPM on Linux and Windows, noop on all other platforms")
 	flag.StringVar(&args.statedir, "statedir", "", "path to directory for storage of config state, TLS certs, temporary incoming Taildrop files, etc. If empty, it's derived from --state when possible.")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
@@ -268,6 +270,23 @@ func main() {
 		}
 	}
 
+	if args.encryptState {
+		if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+			log.SetFlags(0)
+			log.Fatalf("--encrypt-state is not supported on %s", runtime.GOOS)
+		}
+		// Check if we have TPM support in this build.
+		if !store.KnownProviderPrefix("tpmseal:/") {
+			log.SetFlags(0)
+			log.Fatal("--encrypt-state is not supported on this device")
+		}
+		// Check for conflicting prefix in --state, like arn: or kube:.
+		if args.statepath != "" && store.KnownProviderPrefix(args.statepath) {
+			log.SetFlags(0)
+			log.Fatal("--encrypt-state can only be used with --state set to a local file path")
+		}
+	}
+
 	if args.disableLogs {
 		envknob.SetNoLogsNoSupport()
 	}
@@ -315,13 +334,17 @@ func trySynologyMigration(p string) error {
 }
 
 func statePathOrDefault() string {
+	var path string
 	if args.statepath != "" {
-		return args.statepath
+		path = args.statepath
 	}
-	if args.statedir != "" {
-		return filepath.Join(args.statedir, "tailscaled.state")
+	if path == "" && args.statedir != "" {
+		path = filepath.Join(args.statedir, "tailscaled.state")
 	}
-	return ""
+	if !store.KnownProviderPrefix(path) && args.encryptState {
+		path = "tpmseal:" + path
+	}
+	return path
 }
 
 // serverOptions is the configuration of the Tailscale node agent.

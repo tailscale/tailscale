@@ -7,12 +7,17 @@ package store
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"iter"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"testing"
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn"
@@ -53,11 +58,19 @@ func New(logf logger.Logf, path string) (ipn.StateStore, error) {
 		if strings.HasPrefix(path, prefix) {
 			// We can't strip the prefix here as some NewStoreFunc (like arn:)
 			// expect the prefix.
+			if prefix == "tpmseal:" {
+				if err := maybeMigrateLocalStateFile(logf, path); err != nil {
+					return nil, fmt.Errorf("failed to migrate existing state file to TPM-sealed format: %w", err)
+				}
+			}
 			return sf(logf, path)
 		}
 	}
 	if runtime.GOOS == "windows" {
 		path = TryWindowsAppDataMigration(logf, path)
+	}
+	if err := maybeMigrateLocalStateFile(logf, path); err != nil {
+		return nil, fmt.Errorf("failed to migrate existing TPM-sealed state file to plaintext format: %w", err)
 	}
 	return NewFileStore(logf, path)
 }
@@ -75,6 +88,29 @@ func Register(prefix string, fn Provider) {
 		panic(fmt.Sprintf("%q already registered", prefix))
 	}
 	mak.Set(&knownStores, prefix, fn)
+}
+
+// RegisterForTest registers a prefix to be used for NewStore in tests. An
+// existing registered prefix will be replaced.
+func RegisterForTest(t *testing.T, prefix string, fn Provider) {
+	if len(prefix) == 0 {
+		panic("prefix is empty")
+	}
+	old := maps.Clone(knownStores)
+	t.Cleanup(func() { knownStores = old })
+
+	mak.Set(&knownStores, prefix, fn)
+}
+
+// KnownProviderPrefix returns true if path uses one of the registered Provider
+// prefixes.
+func KnownProviderPrefix(path string) bool {
+	for prefix := range knownStores {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // TryWindowsAppDataMigration attempts to copy the Windows state file
@@ -178,4 +214,102 @@ func (s *FileStore) WriteState(id ipn.StateKey, bs []byte) error {
 		return err
 	}
 	return atomicfile.WriteFile(s.path, bs, 0600)
+}
+
+func (s *FileStore) All() iter.Seq2[ipn.StateKey, []byte] {
+	return func(yield func(ipn.StateKey, []byte) bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		for k, v := range s.cache {
+			if !yield(k, v) {
+				break
+			}
+		}
+	}
+}
+
+func maybeMigrateLocalStateFile(logf logger.Logf, arg string) error {
+	path, toTPM := strings.CutPrefix(arg, "tpmseal:")
+
+	// Extract JSON keys from the file on disk and guess what kind it is.
+	bs, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var content map[string]any
+	if err := json.Unmarshal(bs, &content); err != nil {
+		return fmt.Errorf("failed to unmarshal %q: %w", path, err)
+	}
+	keys := slices.Sorted(maps.Keys(content))
+	tpmKeys := []string{"key", "nonce", "data"}
+	slices.Sort(tpmKeys)
+	// TPM-sealed files will have exactly these keys.
+	existingFileSealed := slices.Equal(keys, tpmKeys)
+	// Plaintext files for nodes that registered at least once will have this
+	// key, plus other dynamic ones.
+	_, existingFilePlaintext := content["_machinekey"]
+	isTPM := existingFileSealed && !existingFilePlaintext
+
+	if isTPM == toTPM {
+		// No migration needed.
+		return nil
+	}
+
+	newTPMStore, ok := knownStores["tpmseal:"]
+	if !ok {
+		return fmt.Errorf("this build does not support TPM integration")
+	}
+
+	// Open from (old format) and to (new format) stores for migration. The
+	// "to" store will be at tmpPath.
+	var from, to ipn.StateStore
+	tmpPath := path + ".tmp"
+	if toTPM {
+		// Migrate plaintext file to be TPM-sealed.
+		from, err = NewFileStore(logf, path)
+		if err != nil {
+			return fmt.Errorf("NewFileStore(%q): %w", path, err)
+		}
+		to, err = newTPMStore(logf, "tpmseal:"+tmpPath)
+		if err != nil {
+			return fmt.Errorf("newTPMStore(%q): %w", tmpPath, err)
+		}
+	} else {
+		// Migrate TPM-selaed file to plaintext.
+		from, err = newTPMStore(logf, "tpmseal:"+path)
+		if err != nil {
+			return fmt.Errorf("newTPMStore(%q): %w", path, err)
+		}
+		to, err = NewFileStore(logf, tmpPath)
+		if err != nil {
+			return fmt.Errorf("NewFileStore(%q): %w", tmpPath, err)
+		}
+	}
+	defer os.Remove(tmpPath)
+
+	// Copy all the items. This is pretty inefficient, because both stores
+	// write the file to disk for each WriteState, but that's ok for a one-time
+	// migration.
+	for k, v := range from.All() {
+		if err := to.WriteState(k, v); err != nil {
+			return err
+		}
+	}
+
+	// Finally, overwrite the state file with the new one we created at
+	// tmpPath.
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+
+	if toTPM {
+		logf("migrated %q from plaintext to TPM-sealed format", path)
+	} else {
+		logf("migrated %q from TPM-sealed to plaintext format", path)
+	}
+	return nil
 }
