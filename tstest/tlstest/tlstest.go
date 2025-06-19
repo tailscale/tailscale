@@ -1,12 +1,14 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package tlstest contains code to help test Tailscale's client proxy support.
+// Package tlstest contains code to help test Tailscale's TLS support without
+// depending on real WebPKI roots or certificates during tests.
 package tlstest
 
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -19,32 +21,47 @@ import (
 	"time"
 )
 
-// Some baked-in ECDSA keys to speed up tests, not having to burn CPU to
-// generate them each time. We only make the certs (which have expiry times)
-// at runtime.
-//
-// They were made with:
-//
-//	openssl ecparam -name prime256v1 -genkey -noout -out root-ca.key
-var (
-	//go:embed testdata/root-ca.key
-	rootCAKeyPEM []byte
-
-	// TestProxyServerKey is the PEM private key for [TestProxyServerCert].
-	//
-	//go:embed testdata/proxy.tstest.key
-	TestProxyServerKey []byte
-
-	// TestControlPlaneKey is the PEM private key for [TestControlPlaneCert].
-	//
-	//go:embed testdata/controlplane.tstest.key
-	TestControlPlaneKey []byte
-)
-
 // TestRootCA returns a self-signed ECDSA root CA certificate (as PEM) for
 // testing purposes.
+//
+// Typical use in a test is like:
+//
+//	bakedroots.ResetForTest(t, tlstest.TestRootCA())
 func TestRootCA() []byte {
 	return bytes.Clone(testRootCAOncer())
+}
+
+// cache for [privateKey], so it always returns the same key for a given domain.
+var (
+	mu          sync.Mutex
+	privateKeys = make(map[string][]byte) // domain -> private key PEM
+)
+
+// caDomain is a fake domain name to repreesnt the private key for the root CA.
+const caDomain = "_root"
+
+// privateKey returns a PEM-encoded test ECDSA private key for the given domain.
+func privateKey(domain string) (pemBytes []byte) {
+	mu.Lock()
+	defer mu.Unlock()
+	if pemBytes, ok := privateKeys[domain]; ok {
+		return bytes.Clone(pemBytes)
+	}
+	defer func() { privateKeys[domain] = bytes.Clone(pemBytes) }()
+
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(fmt.Sprintf("failed to generate ECDSA key for %q: %v", domain, err))
+	}
+	der, err := x509.MarshalECPrivateKey(k)
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal ECDSA key for %q: %v", domain, err))
+	}
+	var buf bytes.Buffer
+	if err := pem.Encode(&buf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: der}); err != nil {
+		panic(fmt.Sprintf("failed to encode PEM: %v", err))
+	}
+	return buf.Bytes()
 }
 
 var testRootCAOncer = sync.OnceValue(func() []byte {
@@ -81,7 +98,7 @@ func pemCert(der []byte) []byte {
 }
 
 var rootCAKey = sync.OnceValue(func() *ecdsa.PrivateKey {
-	return mustParsePEM(rootCAKeyPEM, x509.ParseECPrivateKey)
+	return mustParsePEM(privateKey(caDomain), x509.ParseECPrivateKey)
 })
 
 func mustParsePEM[T any](pemBytes []byte, parse func([]byte) (T, error)) T {
@@ -96,16 +113,27 @@ func mustParsePEM[T any](pemBytes []byte, parse func([]byte) (T, error)) T {
 	return v
 }
 
-// KeyPair is a simple struct to hold a certificate and its private key.
-type KeyPair struct {
-	Domain string
-	KeyPEM []byte // PEM-encoded private key
-}
+// Domain is a fake domain name used in TLS tests.
+//
+// They don't have real DNS records. Tests are expected to fake DNS
+// lookups and dials for these domains.
+type Domain string
+
+// ProxyServer is a domain name for a hypothetical proxy server.
+const (
+	ProxyServer = Domain("proxy.tstest")
+
+	// ControlPlane is a domain name for a test control plane server.
+	ControlPlane = Domain("controlplane.tstest")
+
+	// Derper is a domain name for a test DERP server.
+	Derper = Domain("derp.tstest")
+)
 
 // ServerTLSConfig returns a TLS configuration suitable for a server
 // using the KeyPair's certificate and private key.
-func (p KeyPair) ServerTLSConfig() *tls.Config {
-	cert, err := tls.X509KeyPair(p.CertPEM(), p.KeyPEM)
+func (d Domain) ServerTLSConfig() *tls.Config {
+	cert, err := tls.X509KeyPair(d.CertPEM(), privateKey(string(d)))
 	if err != nil {
 		panic("invalid TLS key pair: " + err.Error())
 	}
@@ -114,24 +142,16 @@ func (p KeyPair) ServerTLSConfig() *tls.Config {
 	}
 }
 
-// ProxyServerKeyPair is a KeyPair for a test control plane server
-// with domain name "proxy.tstest".
-var ProxyServerKeyPair = KeyPair{
-	Domain: "proxy.tstest",
-	KeyPEM: TestProxyServerKey,
+// KeyPEM returns a PEM-encoded private key for the domain.
+func (d Domain) KeyPEM() []byte {
+	return privateKey(string(d))
 }
 
-// ControlPlaneKeyPair is a KeyPair for a test control plane server
-// with domain name "controlplane.tstest".
-var ControlPlaneKeyPair = KeyPair{
-	Domain: "controlplane.tstest",
-	KeyPEM: TestControlPlaneKey,
-}
-
-func (p KeyPair) CertPEM() []byte {
+// CertPEM returns a PEM-encoded certificate for the domain.
+func (d Domain) CertPEM() []byte {
 	caCert := mustParsePEM(TestRootCA(), x509.ParseCertificate)
-	caPriv := mustParsePEM(rootCAKeyPEM, x509.ParseECPrivateKey)
-	leafKey := mustParsePEM(p.KeyPEM, x509.ParseECPrivateKey)
+	caPriv := mustParsePEM(privateKey(caDomain), x509.ParseECPrivateKey)
+	leafKey := mustParsePEM(d.KeyPEM(), x509.ParseECPrivateKey)
 
 	serial, err := rand.Int(rand.Reader, big.NewInt(0).Lsh(big.NewInt(1), 128))
 	if err != nil {
@@ -141,14 +161,14 @@ func (p KeyPair) CertPEM() []byte {
 	now := time.Now().Add(-time.Hour)
 	tpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: p.Domain},
+		Subject:      pkix.Name{CommonName: string(d)},
 		NotBefore:    now,
 		NotAfter:     now.AddDate(2, 0, 0),
 
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              []string{p.Domain},
+		DNSNames:              []string{string(d)},
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, tpl, caCert, &leafKey.PublicKey, caPriv)
