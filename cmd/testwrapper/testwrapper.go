@@ -213,6 +213,16 @@ func main() {
 		return
 	}
 
+	// As a special case, if the packages looks like "sharded:1/2" then shell out to
+	// ./tool/listpkgs to cut up the package list pieces for each sharded builder.
+	if nOfM, ok := strings.CutPrefix(packages[0], "sharded:"); ok && len(packages) == 1 {
+		out, err := exec.Command("go", "run", "tailscale.com/tool/listpkgs", "-shard", nOfM, "./...").Output()
+		if err != nil {
+			log.Fatalf("failed to list packages for sharded test: %v", err)
+		}
+		packages = strings.Split(strings.TrimSpace(string(out)), "\n")
+	}
+
 	ctx := context.Background()
 	type nextRun struct {
 		tests   []*packageTests
