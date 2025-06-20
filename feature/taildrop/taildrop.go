@@ -91,9 +91,9 @@ type managerOptions struct {
 	// copy them out, and then delete them.
 	DirectFileMode bool
 
+	// FileOps abstracts platform-specific file operations needed for file transfers.
+	// This is currently being used for Android to use the Storage Access Framework.
 	FileOps FileOps
-
-	Mode PutMode
 
 	// SendFileNotify is called periodically while a file is actively
 	// receiving the contents for the file. There is a final call

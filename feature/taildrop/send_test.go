@@ -30,7 +30,7 @@ func (m *mockFileOps) OpenFileWriter(name string) (io.WriteCloser, string, error
 	return nopWriteCloser{m.writes}, "uri://" + name + ".partial", nil
 }
 
-func (m *mockFileOps) RenamePartialFile(partialPath, dir, finalName string) (string, error) {
+func (m *mockFileOps) RenamePartialFile(partialPath, finalName string) (string, error) {
 	if !m.renameOK {
 		m.renameOK = true
 		return "uri://" + finalName, nil
@@ -42,14 +42,13 @@ func TestPutFile(t *testing.T) {
 	const content = "hello, world"
 
 	tests := []struct {
-		name     string
-		mode     PutMode
+		name string
+
 		setup    func(t *testing.T) (*manager, string, *mockFileOps)
 		wantFile string
 	}{
 		{
-			name: "PutModeDirect",
-			mode: PutModeDirect,
+			name: "NonAndroid",
 			setup: func(t *testing.T) (*manager, string, *mockFileOps) {
 				dir := t.TempDir()
 				opts := managerOptions{
@@ -57,7 +56,7 @@ func TestPutFile(t *testing.T) {
 					Clock:          tstime.DefaultClock{},
 					State:          nil,
 					Dir:            dir,
-					Mode:           PutModeDirect,
+					FileOps:        nil,
 					DirectFileMode: true,
 					SendFileNotify: func() {},
 				}
@@ -67,10 +66,8 @@ func TestPutFile(t *testing.T) {
 			wantFile: "file.txt",
 		},
 		{
-			name: "PutModeAndroidSAF",
-			mode: PutModeAndroidSAF,
+			name: "Android",
 			setup: func(t *testing.T) (*manager, string, *mockFileOps) {
-				// SAF still needs a non-empty Dir to pass the guard.
 				dir := t.TempDir()
 				mops := &mockFileOps{}
 				opts := managerOptions{
@@ -78,7 +75,6 @@ func TestPutFile(t *testing.T) {
 					Clock:          tstime.DefaultClock{},
 					State:          nil,
 					Dir:            dir,
-					Mode:           PutModeAndroidSAF,
 					FileOps:        mops,
 					DirectFileMode: true,
 					SendFileNotify: func() {},
@@ -104,8 +100,8 @@ func TestPutFile(t *testing.T) {
 				t.Errorf("wrote %d bytes; want %d", n, len(content))
 			}
 
-			switch tc.mode {
-			case PutModeDirect:
+			switch tc.name {
+			case "NonAndroid":
 				path := filepath.Join(dir, tc.wantFile)
 				data, err := os.ReadFile(path)
 				if err != nil {
@@ -115,7 +111,7 @@ func TestPutFile(t *testing.T) {
 					t.Errorf("file contents = %q; want %q", got, content)
 				}
 
-			case PutModeAndroidSAF:
+			case "Android":
 				if mops.writes == nil {
 					t.Fatal("SAF writer was never created")
 				}
