@@ -177,11 +177,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		}
 	}
 
-	// done signifies if provisioning has arrived at a point where without manual intervention it cannot go further.
-	// if this boolean is set then we will remove the error so it is not returned from Reconcile(), as it would trigger
-	// a retry.
-	done := false
-	if done, err = r.maybeProvision(ctx, pg, proxyClass); err != nil {
+	isProvisioned, err := r.maybeProvision(ctx, pg, proxyClass)
+	if err != nil {
 		reason := reasonProxyGroupCreationFailed
 		msg := fmt.Sprintf("error provisioning ProxyGroup resources: %s", err)
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
@@ -193,11 +190,16 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			r.recorder.Eventf(pg, corev1.EventTypeWarning, reason, msg)
 		}
 
-		if done {
-			err = nil
-		}
-
 		return setStatusReady(pg, metav1.ConditionFalse, reason, msg)
+	}
+
+	if !isProvisioned {
+		if !apiequality.Semantic.DeepEqual(oldPGStatus, &pg.Status) {
+			// An error encountered here should get returned by the Reconcile function.
+			if updateErr := r.Client.Status().Update(ctx, pg); updateErr != nil {
+				return reconcile.Result{}, errors.Join(err, updateErr)
+			}
+		}
 	}
 
 	desiredReplicas := int(pgReplicas(pg))
@@ -242,7 +244,7 @@ func validateProxyClassForPG(logger *zap.SugaredLogger, pg *tsapi.ProxyGroup, pc
 	}
 }
 
-func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (done bool, err error) {
+func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (isProvisioned bool, err error) {
 	logger := r.logger(pg.Name)
 	r.mu.Lock()
 	r.ensureAddedToGaugeForProxyGroup(pg)
@@ -256,7 +258,10 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			wrappedErr := fmt.Errorf("error provisioning NodePort Services for static endpoints: %w", err)
 			var allocatePortErr *allocatePortsErr
 			if errors.As(err, &allocatePortErr) {
-				return true, wrappedErr
+				reason := reasonProxyGroupCreationFailed
+				msg := fmt.Sprintf("error provisioning ProxyGroup resources: %s", wrappedErr)
+				r.setStatusReady(pg, metav1.ConditionFalse, reason, msg, logger)
+				return false, nil
 			}
 			return false, wrappedErr
 		}
@@ -267,7 +272,10 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		wrappedErr := fmt.Errorf("error provisioning config Secrets: %w", err)
 		var selectorErr *FindStaticEndpointErr
 		if errors.As(err, &selectorErr) {
-			return true, wrappedErr
+			reason := reasonProxyGroupCreationFailed
+			msg := fmt.Sprintf("error provisioning ProxyGroup resources: %s", wrappedErr)
+			r.setStatusReady(pg, metav1.ConditionFalse, reason, msg, logger)
+			return false, nil
 		}
 		return false, wrappedErr
 	}
@@ -942,4 +950,9 @@ type nodeMetadata struct {
 	podUID  string
 	tsID    tailcfg.StableNodeID
 	dnsName string
+}
+
+func (pr *ProxyGroupReconciler) setStatusReady(pg *tsapi.ProxyGroup, status metav1.ConditionStatus, reason string, msg string, logger *zap.SugaredLogger) {
+	pr.recorder.Eventf(pg, corev1.EventTypeWarning, reason, msg)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, status, reason, msg, pg.Generation, pr.clock, logger)
 }
