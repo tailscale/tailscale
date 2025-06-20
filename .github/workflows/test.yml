@@ -220,6 +220,8 @@ jobs:
         include:
           - key: "win-bench"
             name: "benchmarks"
+          - key: "win-tool-go"
+            name: "./tool/go"
           - key: "win-shard-1-2"
             shard: "1/2"
           - key: "win-shard-2-2"
@@ -231,12 +233,14 @@ jobs:
         path: src
 
     - name: Install Go
+      if: matrix.key != 'win-tool-go'
       uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
       with:
         go-version-file: src/go.mod
         cache: false
 
     - name: Restore Go module cache
+      if: matrix.key != 'win-tool-go'
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       with:
         path: gomodcache
@@ -244,6 +248,7 @@ jobs:
         enableCrossOsArchive: true
 
     - name: Restore Cache
+      if: matrix.key != 'win-tool-go'
       uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       with:
         path: |
@@ -255,10 +260,17 @@ jobs:
         restore-keys: |
           ${{ github.job }}-${{ matrix.key }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ matrix.key }}-go-2-
+
+    - name: test-tool-go
+      if: matrix.key == 'win-tool-go'
+      working-directory: src
+      run: ./tool/go version
+
     - name: test
-      if: matrix.key != 'win-bench' # skip on bench builder
+      if: matrix.key != 'win-bench' && matrix.key != 'win-tool-go' # skip on bench builder
       working-directory: src
       run: go run ./cmd/testwrapper sharded:${{ matrix.shard }}
+
     - name: bench all
       if: matrix.key == 'win-bench'
       working-directory: src
@@ -266,7 +278,9 @@ jobs:
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
       run: go test ./... -bench . -benchtime 1x -run "^$"
+
     - name: Tidy cache
+      if: matrix.key != 'win-tool-go'
       working-directory: src
       shell: bash
       run: |
