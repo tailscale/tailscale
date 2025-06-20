@@ -623,7 +623,7 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 	printKey := func(key *tka.Key, prefix string) {
 		fmt.Fprintf(&stanza, "%sType: %s\n", prefix, key.Kind.String())
 		if keyID, err := key.ID(); err == nil {
-			fmt.Fprintf(&stanza, "%sKeyID: %x\n", prefix, keyID)
+			fmt.Fprintf(&stanza, "%sKeyID: tlpub:%x\n", prefix, keyID)
 		} else {
 			// Older versions of the client shouldn't explode when they encounter an
 			// unknown key type.
@@ -645,10 +645,10 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 	case tka.AUMAddKey.String():
 		printKey(aum.Key, "")
 	case tka.AUMRemoveKey.String():
-		fmt.Fprintf(&stanza, "KeyID: %x\n", aum.KeyID)
+		fmt.Fprintf(&stanza, "KeyID: tlpub:%x\n", aum.KeyID)
 
 	case tka.AUMUpdateKey.String():
-		fmt.Fprintf(&stanza, "KeyID: %x\n", aum.KeyID)
+		fmt.Fprintf(&stanza, "KeyID: tlpub:%x\n", aum.KeyID)
 		if aum.Votes != nil {
 			fmt.Fprintf(&stanza, "Votes: %d\n", aum.Votes)
 		}
