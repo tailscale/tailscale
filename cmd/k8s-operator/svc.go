@@ -440,19 +440,6 @@ func tailnetTargetAnnotation(svc *corev1.Service) string {
 	return svc.Annotations[annotationTailnetTargetIPOld]
 }
 
-// proxyClassForObject returns the proxy class for the given object. If the
-// object does not have a proxy class label, it returns the default proxy class
-func proxyClassForObject(o client.Object, proxyDefaultClass string) string {
-	proxyClass, exists := o.GetLabels()[LabelAnnotationProxyClass]
-	if !exists {
-		proxyClass, exists = o.GetAnnotations()[LabelAnnotationProxyClass]
-		if !exists {
-			proxyClass = proxyDefaultClass
-		}
-	}
-	return proxyClass
-}
-
 func proxyClassIsReady(ctx context.Context, name string, cl client.Client) (bool, error) {
 	proxyClass := new(tsapi.ProxyClass)
 	if err := cl.Get(ctx, types.NamespacedName{Name: name}, proxyClass); err != nil {
