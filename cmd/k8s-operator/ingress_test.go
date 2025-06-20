@@ -230,7 +230,8 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
 			Labels:      tsapi.Labels{"foo": "bar"},
 			Annotations: map[string]string{"bar.io/foo": "some-val"},
-			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
+			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}},
+		}},
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -285,7 +286,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	// 2. Ingress is updated to specify a ProxyClass, ProxyClass is not yet
 	// ready, so proxy resource configuration does not change.
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
-		mak.Set(&ing.ObjectMeta.Labels, LabelProxyClass, "custom-metadata")
+		mak.Set(&ing.ObjectMeta.Labels, LabelAnnotationProxyClass, "custom-metadata")
 	})
 	expectReconciled(t, ingR, "default", "test")
 	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeResourceReqs)
@@ -299,7 +300,8 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 				Status:             metav1.ConditionTrue,
 				Type:               string(tsapi.ProxyClassReady),
 				ObservedGeneration: pc.Generation,
-			}}}
+			}},
+		}
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = pc.Name
@@ -309,7 +311,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	// Ingress gets reconciled and the custom ProxyClass configuration is
 	// removed from the proxy resources.
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
-		delete(ing.ObjectMeta.Labels, LabelProxyClass)
+		delete(ing.ObjectMeta.Labels, LabelAnnotationProxyClass)
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = ""
@@ -325,14 +327,15 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 				Status:             metav1.ConditionTrue,
 				Type:               string(tsapi.ProxyClassReady),
 				ObservedGeneration: 1,
-			}}},
+			}},
+		},
 	}
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
 
 	// Create fake client with ProxyClass, IngressClass, Ingress with metrics ProxyClass, and Service
 	ing := ingress()
 	ing.Labels = map[string]string{
-		LabelProxyClass: "metrics",
+		LabelAnnotationProxyClass: "metrics",
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -421,6 +424,113 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 	// ServiceMonitor gets garbage collected when the Service is deleted - we cannot test that here.
 }
 
+func TestIngressProxyClassAnnotation(t *testing.T) {
+	cl := tstest.NewClock(tstest.ClockOpts{})
+	zl := zap.Must(zap.NewDevelopment())
+
+	pcLEStaging, pcLEStagingFalse, _ := proxyClassesForLEStagingTest()
+
+	testCases := []struct {
+		name                 string
+		proxyClassAnnotation string
+		proxyClassLabel      string
+		proxyClassDefault    string
+		expectedProxyClass   string
+		expectEvents         []string
+	}{
+		{
+			name:               "via_label",
+			proxyClassLabel:    pcLEStaging.Name,
+			expectedProxyClass: pcLEStaging.Name,
+		},
+		{
+			name:                 "via_annotation",
+			proxyClassAnnotation: pcLEStaging.Name,
+			expectedProxyClass:   pcLEStaging.Name,
+		},
+		{
+			name:               "via_default",
+			proxyClassDefault:  pcLEStaging.Name,
+			expectedProxyClass: pcLEStaging.Name,
+		},
+		{
+			name:                 "via_label_override_annotation",
+			proxyClassLabel:      pcLEStaging.Name,
+			proxyClassAnnotation: pcLEStagingFalse.Name,
+			expectedProxyClass:   pcLEStaging.Name,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme)
+
+			builder = builder.WithObjects(pcLEStaging, pcLEStagingFalse).
+				WithStatusSubresource(pcLEStaging, pcLEStagingFalse)
+
+			fc := builder.Build()
+
+			if tt.proxyClassAnnotation != "" || tt.proxyClassLabel != "" || tt.proxyClassDefault != "" {
+				name := tt.proxyClassDefault
+				if name == "" {
+					name = tt.proxyClassLabel
+					if name == "" {
+						name = tt.proxyClassAnnotation
+					}
+				}
+				setProxyClassReady(t, fc, cl, name)
+			}
+
+			mustCreate(t, fc, ingressClass())
+			mustCreate(t, fc, service())
+			ing := ingress()
+			if tt.proxyClassLabel != "" {
+				ing.Labels = map[string]string{
+					LabelAnnotationProxyClass: tt.proxyClassLabel,
+				}
+			}
+			if tt.proxyClassAnnotation != "" {
+				ing.Annotations = map[string]string{
+					LabelAnnotationProxyClass: tt.proxyClassAnnotation,
+				}
+			}
+			mustCreate(t, fc, ing)
+
+			ingR := &IngressReconciler{
+				Client: fc,
+				ssr: &tailscaleSTSReconciler{
+					Client:            fc,
+					tsClient:          &fakeTSClient{},
+					tsnetServer:       &fakeTSNetServer{certDomains: []string{"test-host"}},
+					defaultTags:       []string{"tag:test"},
+					operatorNamespace: "operator-ns",
+					proxyImage:        "tailscale/tailscale:test",
+				},
+				logger:            zl.Sugar(),
+				defaultProxyClass: tt.proxyClassDefault,
+			}
+
+			expectReconciled(t, ingR, "default", "test")
+
+			_, shortName := findGenName(t, fc, "default", "test", "ingress")
+			sts := &appsv1.StatefulSet{}
+			if err := fc.Get(context.Background(), client.ObjectKey{Namespace: "operator-ns", Name: shortName}, sts); err != nil {
+				t.Fatalf("failed to get StatefulSet: %v", err)
+			}
+
+			switch tt.expectedProxyClass {
+			case pcLEStaging.Name:
+				verifyEnvVar(t, sts, "TS_DEBUG_ACME_DIRECTORY_URL", letsEncryptStagingEndpoint)
+			case pcLEStagingFalse.Name:
+				verifyEnvVarNotPresent(t, sts, "TS_DEBUG_ACME_DIRECTORY_URL")
+			default:
+				t.Fatalf("unexpected expected ProxyClass %q", tt.expectedProxyClass)
+			}
+		})
+	}
+}
+
 func TestIngressLetsEncryptStaging(t *testing.T) {
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	zl := zap.Must(zap.NewDevelopment())
@@ -452,7 +562,7 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 			ing := ingress()
 			if tt.proxyClassPerResource != "" {
 				ing.Labels = map[string]string{
-					LabelProxyClass: tt.proxyClassPerResource,
+					LabelAnnotationProxyClass: tt.proxyClassPerResource,
 				}
 			}
 			mustCreate(t, fc, ing)

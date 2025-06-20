@@ -50,7 +50,7 @@ const (
 	// LabelProxyClass can be set by users on tailscale Ingresses and Services that define cluster ingress or
 	// cluster egress, to specify that configuration in this ProxyClass should be applied to resources created for
 	// the Ingress or Service.
-	LabelProxyClass = "tailscale.com/proxy-class"
+	LabelAnnotationProxyClass = "tailscale.com/proxy-class"
 
 	FinalizerName = "tailscale.com/finalizer"
 

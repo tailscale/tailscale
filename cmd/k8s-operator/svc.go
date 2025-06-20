@@ -41,6 +41,8 @@ const (
 	reasonProxyInvalid = "ProxyInvalid"
 	reasonProxyFailed  = "ProxyFailed"
 	reasonProxyPending = "ProxyPending"
+
+	indexServiceProxyClass = ".metadata.annotations.service-proxy-class"
 )
 
 type ServiceReconciler struct {
@@ -441,9 +443,12 @@ func tailnetTargetAnnotation(svc *corev1.Service) string {
 // proxyClassForObject returns the proxy class for the given object. If the
 // object does not have a proxy class label, it returns the default proxy class
 func proxyClassForObject(o client.Object, proxyDefaultClass string) string {
-	proxyClass, exists := o.GetLabels()[LabelProxyClass]
+	proxyClass, exists := o.GetLabels()[LabelAnnotationProxyClass]
 	if !exists {
-		proxyClass = proxyDefaultClass
+		proxyClass, exists = o.GetAnnotations()[LabelAnnotationProxyClass]
+		if !exists {
+			proxyClass = proxyDefaultClass
+		}
 	}
 	return proxyClass
 }
