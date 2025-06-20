@@ -208,7 +208,10 @@ jobs:
         find $(go env GOCACHE) -type f -mmin +90 -delete
 
   windows:
-    runs-on: windows-2022
+    # windows-8vpu is a 2022 GitHub-managed runner in our
+    # org with 8 cores and 32 GB of RAM:
+    # https://github.com/organizations/tailscale/settings/actions/github-hosted-runners/1
+    runs-on: windows-8vcpu
     needs: gomod-cache
     name: Windows (${{ matrix.name || matrix.shard}})
     strategy:
