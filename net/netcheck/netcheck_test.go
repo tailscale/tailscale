@@ -1049,3 +1049,33 @@ func TestNoUDPNilGetReportOpts(t *testing.T) {
 		t.Fatal("unexpected working UDP")
 	}
 }
+
+func TestGetReportOptDNSMode(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name    string
+		dnsMode string
+	}{
+		{"direct", "direct"},
+		{"system", "system"},
+		{"none", "none"},
+		{"empty", ""},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newTestClient(t)
+			ctx := t.Context()
+
+			dm := stuntest.DERPMapOf("1.2.3.4:1234")
+			r, err := c.GetReport(ctx, dm, &GetReportOpts{DNSMode: tc.dnsMode})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.DNSMode != tc.dnsMode {
+				t.Fatalf("DNSMode=%q, want %q", r.DNSMode, tc.dnsMode)
+			}
+		})
+	}
+}

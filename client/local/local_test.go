@@ -7,6 +7,8 @@ package local
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"testing"
@@ -59,6 +61,56 @@ func TestWhoIsPeerNotFound(t *testing.T) {
 	if err != ErrPeerNotFound {
 		t.Errorf("got (%v, %v), want ErrPeerNotFound", res, err)
 	}
+}
+
+func TestClientCurrentDNSMode(t *testing.T) {
+	nw := nettest.GetNetwork(t)
+	ts := nettest.NewHTTPServer(nw, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/localapi/v0/dns-mode" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"mode":"systemd-resolved"}`)
+	}))
+	defer ts.Close()
+
+	lc := &Client{
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nw.Dial(ctx, network, ts.Listener.Addr().String())
+		},
+	}
+	mode, err := lc.CurrentDNSMode(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != "systemd-resolved" {
+		t.Errorf("mode=%q, want systemd-resolved", mode)
+	}
+}
+
+func TestClientCurrentDNSModeErrors(t *testing.T) {
+	t.Run("network_error", func(t *testing.T) {
+		lc := &Client{Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nil, errors.New("dial failed")
+		}}
+		if _, err := lc.CurrentDNSMode(context.Background()); err == nil {
+			t.Error("expected error from dial failure")
+		}
+	})
+
+	t.Run("invalid_json", func(t *testing.T) {
+		nw := nettest.GetNetwork(t)
+		ts := nettest.NewHTTPServer(nw, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, "garbage")
+		}))
+		defer ts.Close()
+
+		lc := &Client{Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nw.Dial(ctx, network, ts.Listener.Addr().String())
+		}}
+		if _, err := lc.CurrentDNSMode(context.Background()); err == nil {
+			t.Error("expected JSON error")
+		}
+	})
 }
 
 func TestDeps(t *testing.T) {
