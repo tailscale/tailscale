@@ -62,7 +62,6 @@ type configOpts struct {
 	subnetRoutes                                   string
 	isExitNode                                     bool
 	isAppConnector                                 bool
-	confFileHash                                   string
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
 	proxyClass                                     string // configuration from the named ProxyClass should be applied to proxy resources
@@ -120,9 +119,6 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		ReadOnly:  true,
 		MountPath: "/etc/tsconfig",
 	}}
-	if opts.confFileHash != "" {
-		mak.Set(&annots, "tailscale.com/operator-last-set-config-file-hash", opts.confFileHash)
-	}
 	if opts.firewallMode != "" {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 			Name:  "TS_DEBUG_FIREWALL_MODE",
@@ -357,10 +353,6 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 				},
 			},
 		},
-	}
-	ss.Spec.Template.Annotations = map[string]string{}
-	if opts.confFileHash != "" {
-		ss.Spec.Template.Annotations["tailscale.com/operator-last-set-config-file-hash"] = opts.confFileHash
 	}
 	// If opts.proxyClass is set, retrieve the ProxyClass and apply
 	// configuration from that to the StatefulSet.
@@ -840,17 +832,6 @@ func (c *fakeTSClient) Deleted() []string {
 	c.Lock()
 	defer c.Unlock()
 	return c.deleted
-}
-
-// removeHashAnnotation can be used to remove declarative tailscaled config hash
-// annotation from proxy StatefulSets to make the tests more maintainable (so
-// that we don't have to change the annotation in each test case after any
-// change to the configfile contents).
-func removeHashAnnotation(sts *appsv1.StatefulSet) {
-	delete(sts.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash)
-	if len(sts.Spec.Template.Annotations) == 0 {
-		sts.Spec.Template.Annotations = nil
-	}
 }
 
 func removeResourceReqs(sts *appsv1.StatefulSet) {

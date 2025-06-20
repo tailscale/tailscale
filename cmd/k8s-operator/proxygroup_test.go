@@ -30,7 +30,6 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ptr"
-	"tailscale.com/util/mak"
 )
 
 const testProxyImage = "tailscale/tailscale:test"
@@ -40,7 +39,6 @@ var defaultProxyClassAnnotations = map[string]string{
 }
 
 func TestProxyGroup(t *testing.T) {
-	const initialCfgHash = "6632726be70cf224049580deb4d317bba065915b5fd415461d60ed621c91b196"
 
 	pc := &tsapi.ProxyClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -98,7 +96,7 @@ func TestProxyGroup(t *testing.T) {
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass default-pc is not yet in a ready state, waiting...", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, false, "", pc)
+		expectProxyGroupResources(t, fc, pg, false, pc)
 	})
 
 	t.Run("observe_ProxyGroupCreating_status_reason", func(t *testing.T) {
@@ -119,11 +117,11 @@ func TestProxyGroup(t *testing.T) {
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, "", pc)
+		expectProxyGroupResources(t, fc, pg, true, pc)
 		if expected := 1; reconciler.egressProxyGroups.Len() != expected {
 			t.Fatalf("expected %d egress ProxyGroups, got %d", expected, reconciler.egressProxyGroups.Len())
 		}
-		expectProxyGroupResources(t, fc, pg, true, "", pc)
+		expectProxyGroupResources(t, fc, pg, true, pc)
 		keyReq := tailscale.KeyCapabilities{
 			Devices: tailscale.KeyDeviceCapabilities{
 				Create: tailscale.KeyDeviceCreateCapabilities{
@@ -155,7 +153,7 @@ func TestProxyGroup(t *testing.T) {
 		}
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash, pc)
+		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
 
 	t.Run("scale_up_to_3", func(t *testing.T) {
@@ -166,7 +164,7 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash, pc)
+		expectProxyGroupResources(t, fc, pg, true, pc)
 
 		addNodeIDToStateSecrets(t, fc, pg)
 		expectReconciled(t, reconciler, "", pg.Name)
@@ -176,7 +174,7 @@ func TestProxyGroup(t *testing.T) {
 			TailnetIPs: []string{"1.2.3.4", "::1"},
 		})
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash, pc)
+		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
 
 	t.Run("scale_down_to_1", func(t *testing.T) {
@@ -189,21 +187,7 @@ func TestProxyGroup(t *testing.T) {
 
 		pg.Status.Devices = pg.Status.Devices[:1] // truncate to only the first device.
 		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, initialCfgHash, pc)
-	})
-
-	t.Run("trigger_config_change_and_observe_new_config_hash", func(t *testing.T) {
-		pc.Spec.TailscaleConfig = &tsapi.TailscaleConfig{
-			AcceptRoutes: true,
-		}
-		mustUpdate(t, fc, "", pc.Name, func(p *tsapi.ProxyClass) {
-			p.Spec = pc.Spec
-		})
-
-		expectReconciled(t, reconciler, "", pg.Name)
-
-		expectEqual(t, fc, pg)
-		expectProxyGroupResources(t, fc, pg, true, "518a86e9fae64f270f8e0ec2a2ea6ca06c10f725035d3d6caca132cd61e42a74", pc)
+		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
 
 	t.Run("enable_metrics", func(t *testing.T) {
@@ -608,7 +592,7 @@ func verifyEnvVarNotPresent(t *testing.T, sts *appsv1.StatefulSet, name string) 
 	}
 }
 
-func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup, shouldExist bool, cfgHash string, proxyClass *tsapi.ProxyClass) {
+func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup, shouldExist bool, proxyClass *tsapi.ProxyClass) {
 	t.Helper()
 
 	role := pgRole(pg, tsNamespace)
@@ -619,9 +603,6 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 		t.Fatal(err)
 	}
 	statefulSet.Annotations = defaultProxyClassAnnotations
-	if cfgHash != "" {
-		mak.Set(&statefulSet.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, cfgHash)
-	}
 
 	if shouldExist {
 		expectEqual(t, fc, role)

@@ -130,7 +130,7 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	want.Annotations = nil
 	want.ObjectMeta.Finalizers = []string{"tailscale.com/finalizer"}
@@ -268,7 +268,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	want := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
@@ -291,7 +291,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	expectEqual(t, fc, want)
 	expectEqual(t, fc, expectedSecret(t, fc, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 
 	// Change the tailscale-target-fqdn annotation which should update the
 	// StatefulSet
@@ -380,7 +380,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	want := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
@@ -403,7 +403,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	expectEqual(t, fc, want)
 	expectEqual(t, fc, expectedSecret(t, fc, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 
 	// Change the tailscale-target-ip annotation which should update the
 	// StatefulSet
@@ -631,7 +631,7 @@ func TestAnnotations(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	want := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
@@ -737,7 +737,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 
 	// Normally the Tailscale proxy pod would come up here and write its info
 	// into the secret. Simulate that, since it would have normally happened at
@@ -781,7 +781,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 	// None of the proxy machinery should have changed...
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	// ... but the service should have a LoadBalancer status.
 
 	want = &corev1.Service{
@@ -867,7 +867,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 
 	// Normally the Tailscale proxy pod would come up here and write its info
 	// into the secret. Simulate that, then verify reconcile again and verify
@@ -927,7 +927,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 
 	want = &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1007,7 +1007,7 @@ func TestCustomHostname(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	want := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
@@ -1118,7 +1118,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 		app:               kubetypes.AppIngressProxy,
 	}
 
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 }
 
 func TestProxyClassForService(t *testing.T) {
@@ -1188,7 +1188,7 @@ func TestProxyClassForService(t *testing.T) {
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// 2. The Service gets updated with tailscale.com/proxy-class label
 	// pointing at the 'custom-metadata' ProxyClass. The ProxyClass is not
@@ -1197,7 +1197,7 @@ func TestProxyClassForService(t *testing.T) {
 		mak.Set(&svc.Labels, LabelProxyClass, "custom-metadata")
 	})
 	expectReconciled(t, sr, "default", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 
 	// 3. ProxyClass is set to Ready, the Service gets reconciled by the
@@ -1213,7 +1213,7 @@ func TestProxyClassForService(t *testing.T) {
 	})
 	opts.proxyClass = pc.Name
 	expectReconciled(t, sr, "default", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 	expectEqual(t, fc, expectedSecret(t, fc, opts), removeAuthKeyIfExistsModifier(t))
 
 	// 4. tailscale.com/proxy-class label is removed from the Service, the
@@ -1224,7 +1224,7 @@ func TestProxyClassForService(t *testing.T) {
 	})
 	opts.proxyClass = ""
 	expectReconciled(t, sr, "default", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 }
 
 func TestDefaultLoadBalancer(t *testing.T) {
@@ -1280,7 +1280,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 		clusterTargetIP: "10.20.30.40",
 		app:             kubetypes.AppIngressProxy,
 	}
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 }
 
 func TestProxyFirewallMode(t *testing.T) {
@@ -1336,7 +1336,7 @@ func TestProxyFirewallMode(t *testing.T) {
 		clusterTargetIP: "10.20.30.40",
 		app:             kubetypes.AppIngressProxy,
 	}
-	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 }
 
 func Test_isMagicDNSName(t *testing.T) {
@@ -1617,7 +1617,7 @@ func Test_authKeyRemoval(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// 2. Apply update to the Secret that imitates the proxy setting device_id.
 	s := expectedSecret(t, fc, opts)
@@ -1691,7 +1691,7 @@ func Test_externalNameService(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// 2. Change the ExternalName and verify that changes get propagated.
 	mustUpdate(t, sr, "default", "test", func(s *corev1.Service) {
@@ -1699,7 +1699,7 @@ func Test_externalNameService(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 	opts.clusterTargetDNS = "bar.com"
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 }
 
 func Test_metricsResourceCreation(t *testing.T) {
