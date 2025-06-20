@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -237,8 +236,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	r.ensureAddedToGaugeForProxyGroup(pg)
 	r.mu.Unlock()
 
-	cfgHash, err := r.ensureConfigSecretsCreated(ctx, pg, proxyClass)
-	if err != nil {
+	if err := r.ensureConfigSecretsCreated(ctx, pg, proxyClass); err != nil {
 		return fmt.Errorf("error provisioning config Secrets: %w", err)
 	}
 	// State secrets are precreated so we can use the ProxyGroup CR as their owner ref.
@@ -306,33 +304,10 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		proxyType: string(pg.Spec.Type),
 	}
 	ss = applyProxyClassToStatefulSet(proxyClass, ss, cfg, logger)
-	capver, err := r.capVerForPG(ctx, pg, logger)
-	if err != nil {
-		return fmt.Errorf("error getting device info: %w", err)
-	}
 
 	updateSS := func(s *appsv1.StatefulSet) {
 
-		// This is a temporary workaround to ensure that egress ProxyGroup proxies with capver older than 110
-		// are restarted when tailscaled configfile contents have changed.
-		// This workaround ensures that:
-		// 1. The hash mechanism is used to trigger pod restarts for proxies below capver 110.
-		// 2. Proxies above capver are not unnecessarily restarted when the configfile contents change.
-		// 3. If the hash has alreay been set, but the capver is above 110, the old hash is preserved to avoid
-		// unnecessary pod restarts that could result in an update loop where capver cannot be determined for a
-		// restarting Pod and the hash is re-added again.
-		// Note that this workaround is only applied to egress ProxyGroups, because ingress ProxyGroup was added after capver 110.
-		// Note also that the hash annotation is only set on updates, not creation, because if the StatefulSet is
-		// being created, there is no need for a restart.
-		// TODO(irbekrm): remove this in 1.84.
-		hash := cfgHash
-		if capver >= 110 {
-			hash = s.Spec.Template.GetAnnotations()[podAnnotationLastSetConfigFileHash]
-		}
 		s.Spec = ss.Spec
-		if hash != "" && pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-			mak.Set(&s.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, hash)
-		}
 
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = ss.ObjectMeta.Annotations
@@ -449,9 +424,8 @@ func (r *ProxyGroupReconciler) deleteTailnetDevice(ctx context.Context, id tailc
 	return nil
 }
 
-func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (hash string, err error) {
+func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (err error) {
 	logger := r.logger(pg.Name)
-	var configSHA256Sum string
 	for i := range pgReplicas(pg) {
 		cfgSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
@@ -467,7 +441,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			logger.Debugf("Secret %s/%s already exists", cfgSecret.GetNamespace(), cfgSecret.GetName())
 			existingCfgSecret = cfgSecret.DeepCopy()
 		} else if !apierrors.IsNotFound(err) {
-			return "", err
+			return err
 		}
 
 		var authKey string
@@ -479,65 +453,39 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			}
 			authKey, err = newAuthKey(ctx, r.tsClient, tags)
 			if err != nil {
-				return "", err
+				return err
 			}
 		}
 
 		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, existingCfgSecret)
 		if err != nil {
-			return "", fmt.Errorf("error creating tailscaled config: %w", err)
+			return fmt.Errorf("error creating tailscaled config: %w", err)
 		}
 
 		for cap, cfg := range configs {
 			cfgJSON, err := json.Marshal(cfg)
 			if err != nil {
-				return "", fmt.Errorf("error marshalling tailscaled config: %w", err)
+				return fmt.Errorf("error marshalling tailscaled config: %w", err)
 			}
 			mak.Set(&cfgSecret.Data, tsoperator.TailscaledConfigFileName(cap), cfgJSON)
-		}
-
-		// The config sha256 sum is a value for a hash annotation used to trigger
-		// pod restarts when tailscaled config changes. Any config changes apply
-		// to all replicas, so it is sufficient to only hash the config for the
-		// first replica.
-		//
-		// In future, we're aiming to eliminate restarts altogether and have
-		// pods dynamically reload their config when it changes.
-		if i == 0 {
-			sum := sha256.New()
-			for _, cfg := range configs {
-				// Zero out the auth key so it doesn't affect the sha256 hash when we
-				// remove it from the config after the pods have all authed. Otherwise
-				// all the pods will need to restart immediately after authing.
-				cfg.AuthKey = nil
-				b, err := json.Marshal(cfg)
-				if err != nil {
-					return "", err
-				}
-				if _, err := sum.Write(b); err != nil {
-					return "", err
-				}
-			}
-
-			configSHA256Sum = fmt.Sprintf("%x", sum.Sum(nil))
 		}
 
 		if existingCfgSecret != nil {
 			if !apiequality.Semantic.DeepEqual(existingCfgSecret, cfgSecret) {
 				logger.Debugf("Updating the existing ProxyGroup config Secret %s", cfgSecret.Name)
 				if err := r.Update(ctx, cfgSecret); err != nil {
-					return "", err
+					return err
 				}
 			}
 		} else {
 			logger.Debugf("Creating a new config Secret %s for the ProxyGroup", cfgSecret.Name)
 			if err := r.Create(ctx, cfgSecret); err != nil {
-				return "", err
+				return err
 			}
 		}
 	}
 
-	return configSHA256Sum, nil
+	return nil
 }
 
 // ensureAddedToGaugeForProxyGroup ensures the gauge metric for the ProxyGroup resource is updated when the ProxyGroup
@@ -706,25 +654,4 @@ type nodeMetadata struct {
 	podUID  string
 	tsID    tailcfg.StableNodeID
 	dnsName string
-}
-
-// capVerForPG returns best effort capability version for the given ProxyGroup. It attempts to find it by looking at the
-// Secret + Pod for the replica with ordinal 0. Returns -1 if it is not possible to determine the capability version
-// (i.e there is no Pod yet).
-func (r *ProxyGroupReconciler) capVerForPG(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (tailcfg.CapabilityVersion, error) {
-	metas, err := r.getNodeMetadata(ctx, pg)
-	if err != nil {
-		return -1, fmt.Errorf("error getting node metadata: %w", err)
-	}
-	if len(metas) == 0 {
-		return -1, nil
-	}
-	dev, err := deviceInfo(metas[0].stateSecret, metas[0].podUID, logger)
-	if err != nil {
-		return -1, fmt.Errorf("error getting device info: %w", err)
-	}
-	if dev == nil {
-		return -1, nil
-	}
-	return dev.capver, nil
 }

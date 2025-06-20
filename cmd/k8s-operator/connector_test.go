@@ -80,7 +80,7 @@ func TestConnector(t *testing.T) {
 		app:          kubetypes.AppConnector,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// Connector status should get updated with the IP/hostname info when available.
 	const hostname = "foo.tailnetxyz.ts.net"
@@ -106,7 +106,7 @@ func TestConnector(t *testing.T) {
 	opts.subnetRoutes = "10.40.0.0/14,10.44.0.0/20"
 	expectReconciled(t, cr, "", "test")
 
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// Remove a route.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
@@ -114,7 +114,7 @@ func TestConnector(t *testing.T) {
 	})
 	opts.subnetRoutes = "10.44.0.0/20"
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// Remove the subnet router.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
@@ -122,7 +122,7 @@ func TestConnector(t *testing.T) {
 	})
 	opts.subnetRoutes = ""
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// Re-add the subnet router.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
@@ -132,7 +132,7 @@ func TestConnector(t *testing.T) {
 	})
 	opts.subnetRoutes = "10.44.0.0/20"
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// Delete the Connector.
 	if err = fc.Delete(context.Background(), cn); err != nil {
@@ -176,7 +176,7 @@ func TestConnector(t *testing.T) {
 		app:          kubetypes.AppConnector,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// Add an exit node.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
@@ -184,7 +184,7 @@ func TestConnector(t *testing.T) {
 	})
 	opts.isExitNode = true
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// Delete the Connector.
 	if err = fc.Delete(context.Background(), cn); err != nil {
@@ -262,7 +262,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		app:          kubetypes.AppConnector,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// 2. Update Connector to specify a ProxyClass. ProxyClass is not yet
 	// ready, so its configuration is NOT applied to the Connector
@@ -271,7 +271,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		conn.Spec.ProxyClass = "custom-metadata"
 	})
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// 3. ProxyClass is set to Ready by proxy-class reconciler. Connector
 	// get reconciled and configuration from the ProxyClass is applied to
@@ -286,7 +286,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 	})
 	opts.proxyClass = pc.Name
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
 	// 4. Connector.spec.proxyClass field is unset, Connector gets
 	// reconciled and configuration from the ProxyClass is removed from the
@@ -296,7 +296,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 	})
 	opts.proxyClass = ""
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 }
 
 func TestConnectorWithAppConnector(t *testing.T) {
@@ -352,7 +352,7 @@ func TestConnectorWithAppConnector(t *testing.T) {
 		isAppConnector: true,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
-	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation, removeResourceReqs)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 	// Connector's ready condition should be set to true
 
 	cn.ObjectMeta.Finalizers = append(cn.ObjectMeta.Finalizers, "tailscale.com/finalizer")
