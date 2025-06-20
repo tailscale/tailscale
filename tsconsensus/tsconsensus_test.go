@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
+	"tailscale.com/util/cibuild"
 	"tailscale.com/util/racebuild"
 )
 
@@ -113,6 +115,9 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 }
 
 func testConfig(t *testing.T) {
+	if runtime.GOOS == "windows" && cibuild.On() {
+		t.Skip("cmd/natc isn't supported on Windows, so skipping tsconsensus tests on CI for now; see https://github.com/tailscale/tailscale/issues/16340")
+	}
 	// -race AND Parallel makes things start to take too long.
 	if !racebuild.On {
 		t.Parallel()
