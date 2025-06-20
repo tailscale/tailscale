@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -71,6 +72,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/filter/filtertype"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 	"tailscale.com/wgengine/wglog"
@@ -275,7 +277,10 @@ func (s *magicStack) Status() *ipnstate.Status {
 func (s *magicStack) IP() netip.Addr {
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		s.conn.mu.Lock()
-		addr := s.conn.firstAddrForTest
+		var addr netip.Addr
+		if s.conn.self.Valid() && s.conn.self.Addresses().Len() > 0 {
+			addr = s.conn.self.Addresses().At(0).Addr()
+		}
 		s.conn.mu.Unlock()
 		if addr.IsValid() {
 			return addr
@@ -3374,6 +3379,201 @@ func Test_virtualNetworkID(t *testing.T) {
 			}
 			if v.get() != tt.want {
 				t.Fatalf("get(): %v != want: %v", v.get(), tt.want)
+			}
+		})
+	}
+}
+
+func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
+	selfOnlyIPv4 := &tailcfg.Node{
+		Cap: math.MinInt32,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("1.1.1.1/32"),
+		},
+	}
+	selfOnlyIPv6 := selfOnlyIPv4.Clone()
+	selfOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::1/128")
+
+	peerHostinfo := &tailcfg.Hostinfo{
+		Services: []tailcfg.Service{
+			{
+				Proto: tailcfg.PeerAPI4,
+				Port:  4,
+			},
+			{
+				Proto: tailcfg.PeerAPI6,
+				Port:  6,
+			},
+		},
+	}
+	peerOnlyIPv4 := &tailcfg.Node{
+		Cap: math.MinInt32,
+		CapMap: map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+			tailcfg.NodeAttrRelayServer: nil,
+		},
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("2.2.2.2/32"),
+		},
+		Hostinfo: peerHostinfo.View(),
+	}
+
+	peerOnlyIPv6 := peerOnlyIPv4.Clone()
+	peerOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::2/128")
+
+	peerOnlyIPv4ZeroCapVer := peerOnlyIPv4.Clone()
+	peerOnlyIPv4ZeroCapVer.Cap = 0
+
+	peerOnlyIPv4NilHostinfo := peerOnlyIPv4.Clone()
+	peerOnlyIPv4NilHostinfo.Hostinfo = tailcfg.HostinfoView{}
+
+	tests := []struct {
+		name string
+		filt *filter.Filter
+		self tailcfg.NodeView
+		peer tailcfg.NodeView
+		want netip.AddrPort
+	}{
+		{
+			name: "match v4",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self: selfOnlyIPv4.View(),
+			peer: peerOnlyIPv4.View(),
+			want: netip.MustParseAddrPort("2.2.2.2:4"),
+		},
+		{
+			name: "match v6",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("::1/128"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self: selfOnlyIPv6.View(),
+			peer: peerOnlyIPv6.View(),
+			want: netip.MustParseAddrPort("[::2]:6"),
+		},
+		{
+			name: "no match dst",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("::3/128"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self: selfOnlyIPv6.View(),
+			peer: peerOnlyIPv6.View(),
+		},
+		{
+			name: "no match peer cap",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("::1/128"),
+							Cap: tailcfg.PeerCapabilityIngress,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self: selfOnlyIPv6.View(),
+			peer: peerOnlyIPv6.View(),
+		},
+		{
+			name: "cap ver not relay capable",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self: peerOnlyIPv4.View(),
+			peer: peerOnlyIPv4ZeroCapVer.View(),
+		},
+		{
+			name: "nil filt",
+			filt: nil,
+			self: selfOnlyIPv4.View(),
+			peer: peerOnlyIPv4.View(),
+		},
+		{
+			name: "nil self",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self: tailcfg.NodeView{},
+			peer: peerOnlyIPv4.View(),
+		},
+		{
+			name: "nil peer",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self: selfOnlyIPv4.View(),
+			peer: tailcfg.NodeView{},
+		},
+		{
+			name: "nil peer hostinfo",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self: selfOnlyIPv4.View(),
+			peer: peerOnlyIPv4NilHostinfo.View(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := peerAPIIfCandidateRelayServer(tt.filt, tt.self, tt.peer); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("peerAPIIfCandidateRelayServer() = %v, want %v", got, tt.want)
 			}
 		})
 	}
