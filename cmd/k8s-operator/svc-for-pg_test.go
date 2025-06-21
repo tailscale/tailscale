@@ -142,7 +142,7 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 			Labels:    pgSecretLabels("test-pg", "config"),
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): []byte(`{"Version":""}`),
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte(`{"Version":""}`),
 		},
 	}
 

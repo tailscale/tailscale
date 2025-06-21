@@ -804,17 +804,6 @@ func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabili
 	return "secret-authkey", k, nil
 }
 
-func (c *fakeTSClient) Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error) {
-	return &tailscale.Device{
-		DeviceID: deviceID,
-		Hostname: "hostname-" + deviceID,
-		Addresses: []string{
-			"1.2.3.4",
-			"::1",
-		},
-	}, nil
-}
-
 func (c *fakeTSClient) DeleteDevice(ctx context.Context, deviceID string) error {
 	c.Lock()
 	defer c.Unlock()

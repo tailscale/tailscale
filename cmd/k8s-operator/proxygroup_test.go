@@ -463,7 +463,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			Namespace: tsNamespace,
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): existingConfigBytes,
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): existingConfigBytes,
 		},
 	})
 
@@ -500,7 +500,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			ResourceVersion: "2",
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): expectedConfigBytes,
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): expectedConfigBytes,
 		},
 	})
 }
@@ -660,8 +660,13 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 
 		mustUpdate(t, fc, tsNamespace, fmt.Sprintf("test-%d", i), func(s *corev1.Secret) {
 			s.Data = map[string][]byte{
-				currentProfileKey: []byte(key),
-				key:               bytes,
+				currentProfileKey:       []byte(key),
+				key:                     bytes,
+				kubetypes.KeyDeviceIPs:  []byte(`["1.2.3.4", "::1"]`),
+				kubetypes.KeyDeviceFQDN: []byte(fmt.Sprintf("hostname-nodeid-%d.tails-scales.ts.net", i)),
+				// TODO(tomhjp): We have two different mechanisms to retrieve device IDs.
+				// Consolidate on this one.
+				kubetypes.KeyDeviceID: []byte(fmt.Sprintf("nodeid-%d", i)),
 			}
 		})
 	}
