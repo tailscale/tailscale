@@ -9,10 +9,10 @@ import (
 	"flag"
 	"fmt"
 	"runtime"
-	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/clientupdate"
+	"tailscale.com/util/prompt"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -87,19 +87,5 @@ func confirmUpdate(ver string) bool {
 	}
 
 	msg := fmt.Sprintf("This will update Tailscale from %v to %v. Continue?", version.Short(), ver)
-	return promptYesNo(msg)
-}
-
-// PromptYesNo takes a question and prompts the user to answer the
-// question with a yes or no. It appends a [y/n] to the message.
-func promptYesNo(msg string) bool {
-	fmt.Print(msg + " [y/n] ")
-	var resp string
-	fmt.Scanln(&resp)
-	resp = strings.ToLower(resp)
-	switch resp {
-	case "y", "yes", "sure":
-		return true
-	}
-	return false
+	return prompt.YesNo(msg)
 }
