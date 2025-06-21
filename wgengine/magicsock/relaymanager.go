@@ -737,7 +737,7 @@ func (r *relayManager) allocateSingleServer(ctx context.Context, wg *sync.WaitGr
 	const reqTimeout = time.Second * 10
 	reqCtx, cancel := context.WithTimeout(ctx, reqTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, httpm.POST, "http://"+server.String()+"/relay/endpoint", &b)
+	req, err := http.NewRequestWithContext(reqCtx, httpm.POST, "http://"+server.String()+"/v0/relay/endpoint", &b)
 	if err != nil {
 		return
 	}
