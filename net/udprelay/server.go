@@ -63,13 +63,14 @@ type Server struct {
 	closeCh             chan struct{}
 	netChecker          *netcheck.Client
 
-	mu        sync.Mutex       // guards the following fields
-	addrPorts []netip.AddrPort // the ip:port pairs returned as candidate endpoints
-	closed    bool
-	lamportID uint64
-	vniPool   []uint32 // the pool of available VNIs
-	byVNI     map[uint32]*serverEndpoint
-	byDisco   map[pairOfDiscoPubKeys]*serverEndpoint
+	mu                sync.Mutex       // guards the following fields
+	addrDiscoveryOnce bool             // addrDiscovery completed once (successfully or unsuccessfully)
+	addrPorts         []netip.AddrPort // the ip:port pairs returned as candidate endpoints
+	closed            bool
+	lamportID         uint64
+	vniPool           []uint32 // the pool of available VNIs
+	byVNI             map[uint32]*serverEndpoint
+	byDisco           map[pairOfDiscoPubKeys]*serverEndpoint
 }
 
 // pairOfDiscoPubKeys is a pair of key.DiscoPublic. It must be constructed via
@@ -321,8 +322,7 @@ func NewServer(logf logger.Logf, port int, overrideAddrs []netip.Addr) (s *Serve
 	s.wg.Add(1)
 	go s.endpointGCLoop()
 	if len(overrideAddrs) > 0 {
-		var addrPorts set.Set[netip.AddrPort]
-		addrPorts.Make()
+		addrPorts := make(set.Set[netip.AddrPort], len(overrideAddrs))
 		for _, addr := range overrideAddrs {
 			if addr.IsValid() {
 				addrPorts.Add(netip.AddrPortFrom(addr, boundPort))
@@ -401,12 +401,12 @@ func (s *Server) addrDiscoveryLoop() {
 			}
 			s.mu.Lock()
 			s.addrPorts = addrPorts
+			s.addrDiscoveryOnce = true
 			s.mu.Unlock()
 		case <-s.closeCh:
 			return
 		}
 	}
-
 }
 
 func (s *Server) listenOn(port int) (uint16, error) {
@@ -521,10 +521,22 @@ func (s *Server) packetReadLoop() {
 
 var ErrServerClosed = errors.New("server closed")
 
+// ErrServerNotReady indicates the server is not ready. Allocation should be
+// requested after waiting for at least RetryAfter duration.
+type ErrServerNotReady struct {
+	RetryAfter time.Duration
+}
+
+func (e ErrServerNotReady) Error() string {
+	return fmt.Sprintf("server not ready, retry after %v", e.RetryAfter)
+}
+
 // AllocateEndpoint allocates an [endpoint.ServerEndpoint] for the provided pair
 // of [key.DiscoPublic]'s. If an allocation already exists for discoA and discoB
 // it is returned without modification/reallocation. AllocateEndpoint returns
-// [ErrServerClosed] if the server has been closed.
+// the following notable errors:
+//  1. [ErrServerClosed] if the server has been closed.
+//  2. [ErrServerNotReady] if the server is not ready.
 func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.ServerEndpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -533,6 +545,9 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	}
 
 	if len(s.addrPorts) == 0 {
+		if !s.addrDiscoveryOnce {
+			return endpoint.ServerEndpoint{}, ErrServerNotReady{RetryAfter: 3 * time.Second}
+		}
 		return endpoint.ServerEndpoint{}, errors.New("server addrPorts are not yet known")
 	}
 
