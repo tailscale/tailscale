@@ -1601,7 +1601,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	if src.vni.isSet() && src != de.bestAddr.epAddr {
 		// "src" is not our bestAddr, but [relayManager] might be in the
 		// middle of probing it, awaiting pong reception. Make it aware.
-		de.c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(m, di, src)
+		de.c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(de.c, m, di, src)
 		return false
 	}
 

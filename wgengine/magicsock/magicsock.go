@@ -2053,7 +2053,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			c.logf("[unexpected] %T packets should not come from a relay server with Geneve control bit set", dm)
 			return
 		}
-		c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(challenge, di, src)
+		c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, challenge, di, src)
 		return
 	}
 
@@ -2075,7 +2075,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			return true
 		})
 		if !knownTxID && src.vni.isSet() {
-			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(dm, di, src)
+			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, dm, di, src)
 		}
 	case *disco.CallMeMaybe, *disco.CallMeMaybeVia:
 		var via *disco.CallMeMaybeVia
@@ -2221,7 +2221,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 			// using it as a bestAddr. [relayManager] might be in the middle of
 			// probing it or attempting to set it as best via
 			// [endpoint.relayEndpointReady()]. Make [relayManager] aware.
-			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(dm, di, src)
+			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, dm, di, src)
 			return
 		}
 	default: // no VNI
