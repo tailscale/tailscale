@@ -567,11 +567,12 @@ func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelay
 	// We're ready to start a new handshake.
 	ctx, cancel := context.WithCancel(context.Background())
 	work := &relayHandshakeWork{
-		ep:     newServerEndpoint.ep,
-		se:     newServerEndpoint.se,
-		doneCh: make(chan relayEndpointHandshakeWorkDoneEvent, 1),
-		ctx:    ctx,
-		cancel: cancel,
+		ep:           newServerEndpoint.ep,
+		se:           newServerEndpoint.se,
+		rxDiscoMsgCh: make(chan relayHandshakeDiscoMsgEvent),
+		doneCh:       make(chan relayEndpointHandshakeWorkDoneEvent, 1),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 	if byServerDisco == nil {
 		byServerDisco = make(map[key.DiscoPublic]*relayHandshakeWork)
