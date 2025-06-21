@@ -7,6 +7,7 @@ package mem
 import (
 	"bytes"
 	"encoding/json"
+	"iter"
 	"sync"
 
 	xmaps "golang.org/x/exp/maps"
@@ -84,4 +85,17 @@ func (s *Store) ExportToJSON() ([]byte, error) {
 		return []byte("{}"), nil
 	}
 	return json.MarshalIndent(s.cache, "", "  ")
+}
+
+func (s *Store) All() iter.Seq2[ipn.StateKey, []byte] {
+	return func(yield func(ipn.StateKey, []byte) bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		for k, v := range s.cache {
+			if !yield(k, v) {
+				break
+			}
+		}
+	}
 }

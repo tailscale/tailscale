@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"log"
 	"os"
 	"path/filepath"
@@ -203,6 +204,19 @@ func (s *tpmStore) writeSealed() error {
 		return err
 	}
 	return atomicfile.WriteFile(s.path, buf, 0600)
+}
+
+func (s *tpmStore) All() iter.Seq2[ipn.StateKey, []byte] {
+	return func(yield func(ipn.StateKey, []byte) bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		for k, v := range s.cache {
+			if !yield(k, v) {
+				break
+			}
+		}
+	}
 }
 
 // The nested levels of encoding and encryption are confusing, so here's what's
