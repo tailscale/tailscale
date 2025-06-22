@@ -691,7 +691,6 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 				// unexpected message type, silently discard
 				continue
 			}
-			return
 		case <-timer.C:
 			// The handshake timed out.
 			return
