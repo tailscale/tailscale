@@ -14,7 +14,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/netip"
 	"reflect"
@@ -2558,12 +2557,14 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 
 func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
 	// TODO(jwhited): implement once capVer is bumped
-	return version == math.MinInt32
+	// return version == math.MinInt32
+	return true
 }
 
 func capVerIsRelayServerCapable(version tailcfg.CapabilityVersion) bool {
 	// TODO(jwhited): implement once capVer is bumped
-	return version == math.MinInt32
+	// return version == math.MinInt32
+	return true
 }
 
 // onFilterUpdate is called when a [FilterUpdate] is received over the
