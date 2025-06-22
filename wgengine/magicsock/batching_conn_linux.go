@@ -115,6 +115,7 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, vni virtualNetwo
 	var gh packet.GeneveHeader
 	if vniIsSet {
 		gh.VNI = vni.get()
+		gh.Protocol = packet.GeneveProtocolWireGuard
 	}
 	for i, buff := range buffs {
 		if vniIsSet {
@@ -203,6 +204,7 @@ retry:
 		var gh packet.GeneveHeader
 		if vniIsSet {
 			gh.VNI = addr.vni.get()
+			gh.Protocol = packet.GeneveProtocolWireGuard
 			offset -= packet.GeneveFixedHeaderLength
 		}
 		for i := range buffs {

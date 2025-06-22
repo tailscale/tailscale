@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -258,6 +259,7 @@ type relayHandshakeDiscoInfo struct {
 // the server disco key associated with 'work'. Callers must also call
 // derefDiscoInfoFor() when 'work' is complete.
 func (r *relayManager) ensureDiscoInfoFor(work *relayHandshakeWork) {
+	log.Printf("XXX: ensureDiscoInfoFor server=%v", work.se.ServerDisco.ShortString())
 	r.discoInfoMu.Lock()
 	defer r.discoInfoMu.Unlock()
 	di, ok := r.discoInfoByServerDisco[work.se.ServerDisco]
@@ -279,6 +281,7 @@ func (r *relayManager) ensureDiscoInfoFor(work *relayHandshakeWork) {
 // derefDiscoInfoFor decrements the reference count of the [*discoInfo]
 // associated with 'work'.
 func (r *relayManager) derefDiscoInfoFor(work *relayHandshakeWork) {
+	log.Printf("XXX: derefDiscoInfoFor server=%v", work.se.ServerDisco.ShortString())
 	r.discoInfoMu.Lock()
 	defer r.discoInfoMu.Unlock()
 	di, ok := r.discoInfoByServerDisco[work.se.ServerDisco]
@@ -429,6 +432,7 @@ func (r *relayManager) handleRxHandshakeDiscoMsgRunLoop(event relayHandshakeDisc
 		r.handshakeWorkAwaitingPong[work] = apv
 		r.addrPortVNIToHandshakeWork[apv] = work
 	case *disco.Ping:
+		event.conn.logf("XXX: handleRxHandshakeDiscoMsgRunLoop: got ping from=%v", event.from)
 		// Always TX a pong. We might not have any associated work if ping
 		// reception raced with our call to [endpoint.relayEndpointReady()], so
 		// err on the side of enabling the remote side to use this path.
@@ -451,6 +455,7 @@ func (r *relayManager) handleRxHandshakeDiscoMsgRunLoop(event relayHandshakeDisc
 			return
 		}
 	case *disco.Pong:
+		event.conn.logf("XXX: handleRxHandshakeDiscoMsgRunLoop: got pong from=%v", event.from)
 		work, ok = r.addrPortVNIToHandshakeWork[apv]
 		if !ok {
 			// No outstanding work tied to this [addrPortVNI], discard.
@@ -584,12 +589,13 @@ func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelay
 	byServerDisco[newServerEndpoint.se.ServerDisco] = work
 	r.handshakeWorkByServerDiscoVNI[sdv] = work
 
-	go r.handshakeServerEndpoint(work)
+	go r.handshakeServerEndpoint(work, newServerEndpoint.server.IsValid())
 }
 
-func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
+func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, sendCallMeMaybeVia bool) {
 	done := relayEndpointHandshakeWorkDoneEvent{work: work}
 	r.ensureDiscoInfoFor(work)
+	work.ep.c.logf("XXX: handshakeServerEndpoint starting")
 
 	defer func() {
 		r.derefDiscoInfoFor(work)
@@ -610,6 +616,30 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 	}
 	if !sentBindAny {
 		return
+	}
+
+	if sendCallMeMaybeVia {
+		work.ep.c.logf("XXX: handshakeServerEndpoint, sending CallMeMaybeVia")
+		// Send CallMeMaybeVia to peer if we allocated this endpoint.
+		callMeMaybeVia := &disco.CallMeMaybeVia{
+			ServerDisco:         work.se.ServerDisco,
+			LamportID:           work.se.LamportID,
+			VNI:                 work.se.VNI,
+			BindLifetime:        work.se.BindLifetime.Duration,
+			SteadyStateLifetime: work.se.SteadyStateLifetime.Duration,
+			AddrPorts:           work.se.AddrPorts,
+		}
+		go func() {
+			work.ep.mu.Lock()
+			derpAddr := work.ep.derpAddr
+			work.ep.mu.Unlock()
+			epDisco := work.ep.disco.Load()
+			if epDisco == nil {
+				return
+			}
+			sent, err := work.ep.c.sendDiscoMessage(epAddr{ap: derpAddr}, work.ep.publicKey, epDisco.key, callMeMaybeVia, discoVerboseLog)
+			work.ep.c.logf("XXX: handshakeServerEndpoint, CallMeMaybeVia sent=%v err=%v", sent, err)
+		}()
 	}
 
 	// Limit goroutine lifetime to a reasonable duration. This is intentionally
@@ -645,7 +675,8 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		go func() {
 			if withAnswer != nil {
 				answer := &disco.BindUDPRelayEndpointAnswer{Answer: *withAnswer}
-				work.ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, work.se.ServerDisco, answer, discoVerboseLog)
+				sent, err := work.ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, work.se.ServerDisco, answer, discoVerboseLog)
+				work.ep.c.logf("XXX: handshakeServerEndpoint tx answer sent=%v err=%v", sent, err)
 			}
 			work.ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, epDisco.key, ping, discoVerboseLog)
 		}()
@@ -656,10 +687,12 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 	for {
 		select {
 		case <-work.ctx.Done():
+			work.ep.c.logf("XXX: handshakeServerEndpoint, ctx Done")
 			return
 		case msgEvent := <-work.rxDiscoMsgCh:
 			switch msg := msgEvent.msg.(type) {
 			case *disco.BindUDPRelayEndpointChallenge:
+				work.ep.c.logf("XXX: handshakeServerEndpoint, got challenge")
 				if handshakeState >= disco.BindUDPRelayHandshakeStateAnswerSent {
 					continue
 				}
@@ -669,6 +702,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 				if handshakeState < disco.BindUDPRelayHandshakeStateAnswerSent {
 					continue
 				}
+				work.ep.c.logf("XXX: handshakeServerEndpoint got ping")
 				// An inbound ping from the remote peer indicates we completed a
 				// handshake with the relay server (our answer msg was
 				// received). Chances are our ping was dropped before the remote
@@ -681,6 +715,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 				// in handleRxHandshakeDiscoMsgRunLoop().
 				txPing(msgEvent.from, nil)
 			case *disco.Pong:
+				work.ep.c.logf("XXX: handshakeServerEndpoint got pong")
 				at, ok := sentPingAt[msg.TxID]
 				if !ok {
 					continue
@@ -689,12 +724,12 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 				// round-trip latency and return.
 				done.pongReceivedFrom = msgEvent.from
 				done.latency = time.Since(at)
+				work.ep.c.logf("XXX: handshakeServerEndpoint functional endpoint: %v", done)
 				return
 			default:
 				// unexpected message type, silently discard
 				continue
 			}
-			return
 		case <-timer.C:
 			// The handshake timed out.
 			return
@@ -780,8 +815,9 @@ func (r *relayManager) allocateSingleServer(ctx context.Context, wg *sync.WaitGr
 		se, err := doAllocate(ctx, server, [2]key.DiscoPublic{ep.c.discoPublic, remoteDisco.key})
 		if err == nil {
 			relayManagerInputEvent(r, ctx, &r.newServerEndpointCh, newRelayServerEndpointEvent{
-				ep: ep,
-				se: se,
+				ep:     ep,
+				se:     se,
+				server: server,
 			})
 			return
 		}

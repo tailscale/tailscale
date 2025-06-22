@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"slices"
@@ -209,6 +210,8 @@ func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []by
 		// unable to parse the Disco payload
 		return
 	}
+
+	log.Printf("XXX: handleSealedDiscoControlMsg: from=%v discoMsg=%T", from, discoMsg)
 
 	e.handleDiscoControlMsg(from, senderIndex, discoMsg, uw, serverDisco)
 }
