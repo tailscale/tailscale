@@ -85,7 +85,8 @@ func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr epAddr, offset int)
 			var gh packet.GeneveHeader
 			if vniIsSet {
 				gh = packet.GeneveHeader{
-					VNI: addr.vni.get(),
+					Protocol: packet.GeneveProtocolWireGuard,
+					VNI:      addr.vni.get(),
 				}
 			}
 			for _, buf := range buffs {
