@@ -100,7 +100,7 @@ shorter and easier to test.
 Updates #nnnn
 ```
 
-Please say `Updates` and not other common Github-recognized conventions (that is, don't use `For #nnnn`)
+Please say `Updates` and not other common GitHub-recognized conventions (that is, don't use `For #nnnn`)
 
 ## Public release notes
 
