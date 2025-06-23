@@ -8,9 +8,11 @@ package relayserver
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
@@ -184,6 +186,12 @@ func handlePeerAPIRelayAllocateEndpoint(h ipnlocal.PeerAPIHandler, w http.Respon
 	}
 	ep, err := rs.AllocateEndpoint(allocateEndpointReq.DiscoKeys[0], allocateEndpointReq.DiscoKeys[1])
 	if err != nil {
+		var notReady udprelay.ErrServerNotReady
+		if errors.As(err, &notReady) {
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", notReady.RetryAfter.Round(time.Second)/time.Second))
+			httpErrAndLog(err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		httpErrAndLog(err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -7,9 +7,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"sync"
 	"time"
 
@@ -716,46 +719,82 @@ func (r *relayManager) allocateAllServersRunLoop(ep *endpoint) {
 	}()
 }
 
-func (r *relayManager) allocateSingleServer(ctx context.Context, wg *sync.WaitGroup, server netip.AddrPort, ep *endpoint) {
-	// TODO(jwhited): introduce client metrics counters for notable failures
-	defer wg.Done()
-	var b bytes.Buffer
-	remoteDisco := ep.disco.Load()
-	if remoteDisco == nil {
-		return
-	}
+type errNotReady struct{ retryAfter time.Duration }
+
+func (e errNotReady) Error() string {
+	return fmt.Sprintf("server not ready, retry after %v", e.retryAfter)
+}
+
+const reqTimeout = time.Second * 10
+
+func doAllocate(ctx context.Context, server netip.AddrPort, discoKeys [2]key.DiscoPublic) (udprelay.ServerEndpoint, error) {
+	var reqBody bytes.Buffer
 	type allocateRelayEndpointReq struct {
 		DiscoKeys []key.DiscoPublic
 	}
 	a := &allocateRelayEndpointReq{
-		DiscoKeys: []key.DiscoPublic{ep.c.discoPublic, remoteDisco.key},
+		DiscoKeys: []key.DiscoPublic{discoKeys[0], discoKeys[1]},
 	}
-	err := json.NewEncoder(&b).Encode(a)
+	err := json.NewEncoder(&reqBody).Encode(a)
 	if err != nil {
-		return
+		return udprelay.ServerEndpoint{}, err
 	}
-	const reqTimeout = time.Second * 10
 	reqCtx, cancel := context.WithTimeout(ctx, reqTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, httpm.POST, "http://"+server.String()+"/v0/relay/endpoint", &b)
+	req, err := http.NewRequestWithContext(reqCtx, httpm.POST, "http://"+server.String()+"/v0/relay/endpoint", &reqBody)
 	if err != nil {
-		return
+		return udprelay.ServerEndpoint{}, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return
+		return udprelay.ServerEndpoint{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var se udprelay.ServerEndpoint
+		err = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&se)
+		return se, err
+	case http.StatusServiceUnavailable:
+		raHeader := resp.Header.Get("Retry-After")
+		raSeconds, err := strconv.ParseUint(raHeader, 10, 32)
+		if err == nil {
+			return udprelay.ServerEndpoint{}, errNotReady{retryAfter: time.Second * time.Duration(raSeconds)}
+		}
+		fallthrough
+	default:
+		return udprelay.ServerEndpoint{}, fmt.Errorf("non-200 status: %d", resp.StatusCode)
+	}
+}
+
+func (r *relayManager) allocateSingleServer(ctx context.Context, wg *sync.WaitGroup, server netip.AddrPort, ep *endpoint) {
+	// TODO(jwhited): introduce client metrics counters for notable failures
+	defer wg.Done()
+	remoteDisco := ep.disco.Load()
+	if remoteDisco == nil {
 		return
 	}
-	var se udprelay.ServerEndpoint
-	err = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&se)
-	if err != nil {
+	firstTry := true
+	for {
+		se, err := doAllocate(ctx, server, [2]key.DiscoPublic{ep.c.discoPublic, remoteDisco.key})
+		if err == nil {
+			relayManagerInputEvent(r, ctx, &r.newServerEndpointCh, newRelayServerEndpointEvent{
+				ep: ep,
+				se: se,
+			})
+			return
+		}
+		ep.c.logf("[v1] magicsock: relayManager: error allocating endpoint on %v for %v: %v", server, ep.discoShort(), err)
+		var notReady errNotReady
+		if firstTry && errors.As(err, &notReady) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(min(notReady.retryAfter, reqTimeout)):
+				firstTry = false
+				continue
+			}
+		}
 		return
 	}
-	relayManagerInputEvent(r, ctx, &r.newServerEndpointCh, newRelayServerEndpointEvent{
-		ep: ep,
-		se: se,
-	})
 }
