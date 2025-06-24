@@ -23,15 +23,12 @@ jobs:
           ./tool/go mod tidy
 
       - name: Get access token
-        uses: tibdex/github-app-token@3beb63f4bd073e61482598c45c71c1019b59b73a # v2.1.0
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
         id: generate-token
         with:
-          # TODO(will): this should use the code updater app rather than licensing.
-          # It has the same permissions, so not a big deal, but still.
-          app_id: ${{ secrets.LICENSING_APP_ID }}
-          installation_retrieval_mode: "id"
-          installation_retrieval_payload: ${{ secrets.LICENSING_APP_INSTALLATION_ID }}
-          private_key: ${{ secrets.LICENSING_APP_PRIVATE_KEY }}
+          # Get token for app: https://github.com/apps/tailscale-code-updater
+          app-id: ${{ secrets.CODE_UPDATER_APP_ID }}
+          private-key: ${{ secrets.CODE_UPDATER_APP_PRIVATE_KEY }}
 
       - name: Send pull request
         id: pull-request
