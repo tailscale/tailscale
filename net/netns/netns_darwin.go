@@ -33,10 +33,8 @@ var bindToInterfaceByRouteEnv = envknob.RegisterBool("TS_BIND_TO_INTERFACE_BY_RO
 
 var errInterfaceStateInvalid = errors.New("interface state invalid")
 
-// controlLogf marks c as necessary to dial in a separate network namespace.
-//
-// It's intentionally the same signature as net.Dialer.Control
-// and net.ListenConfig.Control.
+// controlLogf binds c to a particular interface as necessary to dial the
+// provided (network, address).
 func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address string, c syscall.RawConn) error {
 	if isLocalhost(address) {
 		// Don't bind to an interface for localhost connections.
