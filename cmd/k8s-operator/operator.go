@@ -39,6 +39,7 @@ import (
 	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
@@ -349,6 +350,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
+		WithEventFilter(ingressProxyGroupResourceFilterPredicate()).
 		Named("ingress-pg-reconciler").
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAIngressesFromSecret(mgr.GetClient(), startlog))).
@@ -375,6 +377,7 @@ func runReconcilers(opts reconcilerOpts) {
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}).
+		WithEventFilter(serviceProxyGroupResourceFilterPredicate()).
 		Named("service-pg-reconciler").
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
@@ -1380,6 +1383,30 @@ func indexPGIngresses(o client.Object) []string {
 		return nil
 	}
 	return []string{o.GetAnnotations()[AnnotationProxyGroup]}
+}
+
+// predicate function for filtering to ensure we *don't* reconcile on tailscale managed Kubernetes Ingresses that don't have a ProxyGroup annotation
+func ingressProxyGroupResourceFilterPredicate() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(object client.Object) bool {
+		if ing, ok := object.(*networkingv1.Ingress); !ok {
+			return false
+		} else {
+			_, ok := ing.Annotations[AnnotationProxyGroup]
+			return ok
+		}
+	})
+}
+
+// predicate function for filtering to ensure we *don't* reconcile on tailscale managed Kubernetes Services that don't have a ProxyGroup annotation
+func serviceProxyGroupResourceFilterPredicate() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(object client.Object) bool {
+		if svc, ok := object.(*corev1.Service); !ok {
+			return false
+		} else {
+			_, ok := svc.Annotations[AnnotationProxyGroup]
+			return ok
+		}
+	})
 }
 
 // serviceHandlerForIngressPG returns a handler for Service events that ensures that if the Service
