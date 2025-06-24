@@ -4853,6 +4853,11 @@ func (b *LocalBackend) readvertiseAppConnectorRoutes() {
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
 func (b *LocalBackend) authReconfig() {
+	// Wait for magicsock to process pending [eventbus] events,
+	// such as netmap updates. This should be completed before
+	// wireguard-go is reconfigured. See tailscale/tailscale#16369.
+	b.MagicConn().Synchronize()
+
 	b.mu.Lock()
 	blocked := b.blocked
 	prefs := b.pm.CurrentPrefs()
