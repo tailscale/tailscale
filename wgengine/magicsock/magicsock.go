@@ -167,6 +167,8 @@ type Conn struct {
 	filterSub    *eventbus.Subscriber[FilterUpdate]
 	nodeViewsSub *eventbus.Subscriber[NodeViewsUpdate]
 	nodeMutsSub  *eventbus.Subscriber[NodeMutationsUpdate]
+	syncSub      *eventbus.Subscriber[syncPoint]
+	syncPub      *eventbus.Publisher[syncPoint]
 	subsDoneCh   chan struct{} // closed when consumeEventbusTopics returns
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
@@ -538,6 +540,21 @@ type FilterUpdate struct {
 	*filter.Filter
 }
 
+// syncPoint is an event published over an [eventbus.Bus] by [Conn.Synchronize].
+// It serves as a synchronization point, allowing to wait until magicsock
+// has processed all pending events.
+type syncPoint chan struct{}
+
+// Wait blocks until [syncPoint.Signal] is called.
+func (s syncPoint) Wait() {
+	<-s
+}
+
+// Signal signals the sync point, unblocking the [syncPoint.Wait] call.
+func (s syncPoint) Signal() {
+	close(s)
+}
+
 // newConn is the error-free, network-listening-side-effect-free based
 // of NewConn. Mostly for tests.
 func newConn(logf logger.Logf) *Conn {
@@ -593,8 +610,23 @@ func (c *Conn) consumeEventbusTopics() {
 			c.onNodeViewsUpdate(nodeViews)
 		case nodeMuts := <-c.nodeMutsSub.Events():
 			c.onNodeMutationsUpdate(nodeMuts)
+		case syncPoint := <-c.syncSub.Events():
+			c.dlogf("magicsock: received sync point after reconfig")
+			syncPoint.Signal()
 		}
 	}
+}
+
+// Synchronize waits for all [eventbus] events published
+// prior to this call to be processed by the receiver.
+func (c *Conn) Synchronize() {
+	if c.syncPub == nil {
+		// Eventbus is not used; no need to synchronize (in certain tests).
+		return
+	}
+	sp := syncPoint(make(chan struct{}))
+	c.syncPub.Publish(sp)
+	sp.Wait()
 }
 
 // NewConn creates a magic Conn listening on opts.Port.
@@ -624,6 +656,8 @@ func NewConn(opts Options) (*Conn, error) {
 		c.filterSub = eventbus.Subscribe[FilterUpdate](c.eventClient)
 		c.nodeViewsSub = eventbus.Subscribe[NodeViewsUpdate](c.eventClient)
 		c.nodeMutsSub = eventbus.Subscribe[NodeMutationsUpdate](c.eventClient)
+		c.syncSub = eventbus.Subscribe[syncPoint](c.eventClient)
+		c.syncPub = eventbus.Publish[syncPoint](c.eventClient)
 		c.subsDoneCh = make(chan struct{})
 		go c.consumeEventbusTopics()
 	}

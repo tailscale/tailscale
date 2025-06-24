@@ -85,6 +85,12 @@ func makeNodeKeyFromID(nodeID tailcfg.NodeID) key.NodePublic {
 	return key.NodePublicFromRaw32(memro.B(raw))
 }
 
+func makeDiscoKeyFromID(nodeID tailcfg.NodeID) (ret key.DiscoPublic) {
+	raw := make([]byte, 32)
+	binary.BigEndian.PutUint64(raw[24:], uint64(nodeID))
+	return key.DiscoPublicFromRaw32(memro.B(raw))
+}
+
 func TestShrinkDefaultRoute(t *testing.T) {
 	tests := []struct {
 		route     string
