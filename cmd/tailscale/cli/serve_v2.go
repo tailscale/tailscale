@@ -42,6 +42,29 @@ type commandInfo struct {
 	LongHelp  string
 }
 
+type serviceNameFlag struct {
+	Value *tailcfg.ServiceName
+}
+
+func (s *serviceNameFlag) Set(sv string) error {
+	if sv == "" {
+		s.Value = new(tailcfg.ServiceName)
+		return nil
+	}
+	if err := tailcfg.ServiceName(sv).Validate(); err != nil {
+		return fmt.Errorf("invalid service name: %q", sv)
+	}
+	v := tailcfg.ServiceName(sv)
+	fmt.Printf("Setting service name to %q\n", v)
+	*s.Value = v
+	return nil
+}
+
+// String returns the string representation of service name.
+func (s *serviceNameFlag) String() string {
+	return fmt.Sprintf("%s", s.Value.String())
+}
+
 type bgBoolFlag struct {
 	Value     bool
 	SetByUser bool // tracks if the flag was set by the user
@@ -156,7 +179,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
-			fs.StringVar(&e.service, "service", "", "Serve for a service with distinct virtual IP instead on node itself.")
+			fs.Var(&serviceNameFlag{Value: &e.service}, "service", "Serve for a service with distinct virtual IP instead on node itself.")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services")
 		}),
@@ -220,9 +243,6 @@ func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
 // runServeCombined is the entry point for the "tailscale {serve,funnel}" commands.
 func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	e.subcmd = subcmd
-	if !e.bg.SetByUser {
-		e.bg.Value = e.service != ""
-	}
 
 	return func(ctx context.Context, args []string) error {
 		// Undocumented debug command (not using ffcli subcommands) to set raw
@@ -246,8 +266,13 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 		defer cancel()
 
+		forService := !e.service.IsEmpty()
+		if !e.bg.SetByUser {
+			e.bg.Value = forService
+		}
+
 		funnel := subcmd == funnel
-		if e.service != "" && funnel {
+		if !forService && funnel {
 			return errors.New("Error: --service flag is not supported with funnel")
 		}
 
@@ -258,7 +283,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
-		if e.service != "" && e.bg.SetByUser && !e.bg.Value {
+		if forService && e.bg.SetByUser && !e.bg.Value {
 			return errors.New("Error: --service flag is only compatible with background mode")
 		}
 
@@ -311,13 +336,8 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var watcher *tailscale.IPNBusWatcher
-		forService := e.service != ""
 		if forService {
-			err = tailcfg.ServiceName(e.service).Validate()
-			if err != nil {
-				return fmt.Errorf("invalid service name: %w", err)
-			}
-			dnsName = e.service
+			dnsName = e.service.String()
 		}
 		if !forService && srvType == serveTypeTun {
 			return errors.New("tun mode is only supported for services")
@@ -800,7 +820,7 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, is
 		srvPort = 443
 		defaultFlags = true
 	}
-	return srvType, srvPort, defaultFlags && e.service != "", nil
+	return srvType, srvPort, defaultFlags && !e.service.IsEmpty(), nil
 }
 
 // isLegacyInvocation helps transition customers who have been using the beta

@@ -945,6 +945,13 @@ func (sn ServiceName) WithoutPrefix() string {
 	return bareName
 }
 
+// IsEmpty reports whether the ServiceName is empty.
+func (sn ServiceName) IsEmpty() bool {
+	// An empty ServiceName is not valid, so we can use this to check if the
+	// ServiceName is set.
+	return sn == ""
+}
+
 // VIPService represents a service created on a tailnet from the
 // perspective of a node providing that service. These services
 // have an virtual IP (VIP) address pair distinct from the node's IPs.
