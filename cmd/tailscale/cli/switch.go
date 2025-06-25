@@ -122,40 +122,8 @@ func switchProfile(ctx context.Context, args []string) error {
 		errf("Failed to switch to account: %v\n", err)
 		os.Exit(1)
 	}
-	var profID ipn.ProfileID
-	// Allow matching by ID, Tailnet, Account, or Display Name
-	// in that order.
-	for _, p := range all {
-		if p.ID == ipn.ProfileID(args[0]) {
-			profID = p.ID
-			break
-		}
-	}
-	if profID == "" {
-		for _, p := range all {
-			if p.NetworkProfile.DomainName == args[0] {
-				profID = p.ID
-				break
-			}
-		}
-	}
-	if profID == "" {
-		for _, p := range all {
-			if p.Name == args[0] {
-				profID = p.ID
-				break
-			}
-		}
-	}
-	if profID == "" {
-		for _, p := range all {
-			if p.NetworkProfile.DisplayName == args[0] {
-				profID = p.ID
-				break
-			}
-		}
-	}
-	if profID == "" {
+	profID, ok := matchProfile(args[0], all)
+	if !ok {
 		errf("No profile named %q\n", args[0])
 		os.Exit(1)
 	}
@@ -229,7 +197,7 @@ func removeProfile(ctx context.Context, args []string) error {
 }
 
 func matchProfile(arg string, all []ipn.LoginProfile) (ipn.ProfileID, bool) {
-	// Allow matching by ID, Tailnet, or Account
+	// Allow matching by ID, Tailnet, Account, or Display Name
 	// in that order.
 	for _, p := range all {
 		if p.ID == ipn.ProfileID(arg) {
@@ -243,6 +211,11 @@ func matchProfile(arg string, all []ipn.LoginProfile) (ipn.ProfileID, bool) {
 	}
 	for _, p := range all {
 		if p.Name == arg {
+			return p.ID, true
+		}
+	}
+	for _, p := range all {
+		if p.NetworkProfile.DisplayName == arg {
 			return p.ID, true
 		}
 	}
