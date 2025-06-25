@@ -122,32 +122,8 @@ func switchProfile(ctx context.Context, args []string) error {
 		errf("Failed to switch to account: %v\n", err)
 		os.Exit(1)
 	}
-	var profID ipn.ProfileID
-	// Allow matching by ID, Tailnet, or Account
-	// in that order.
-	for _, p := range all {
-		if p.ID == ipn.ProfileID(args[0]) {
-			profID = p.ID
-			break
-		}
-	}
-	if profID == "" {
-		for _, p := range all {
-			if p.NetworkProfile.DomainName == args[0] {
-				profID = p.ID
-				break
-			}
-		}
-	}
-	if profID == "" {
-		for _, p := range all {
-			if p.Name == args[0] {
-				profID = p.ID
-				break
-			}
-		}
-	}
-	if profID == "" {
+	profID, ok := matchProfile(args[0], all)
+	if !ok {
 		errf("No profile named %q\n", args[0])
 		os.Exit(1)
 	}
