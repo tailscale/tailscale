@@ -339,18 +339,6 @@ func (sc *ServeConfig) FindConfig(port uint16) (*ServeConfig, bool) {
 	return nil, false
 }
 
-// FindServiceConfig finds the ServiceConfig for the given service name when it
-// is hosting the given port.
-func (sc *ServeConfig) FindServiceConfig(svcName tailcfg.ServiceName) *ServiceConfig {
-	if sc == nil {
-		return nil
-	}
-	if svc, ok := sc.Services[svcName]; ok && svc != nil {
-		return svc
-	}
-	return nil
-}
-
 // SetWebHandler sets the given HTTPHandler at the specified host, port,
 // and mount in the serve config. sc.TCP is also updated to reflect web
 // serving usage of the given port.

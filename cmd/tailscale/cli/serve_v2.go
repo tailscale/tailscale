@@ -444,7 +444,7 @@ func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe se
 	forService := ipn.IsServiceName(dnsName)
 	var tcpHandlerForPort *ipn.TCPPortHandler
 	if forService {
-		svc := sc.FindServiceConfig(tailcfg.ServiceName(dnsName))
+		svc := sc.Services[tailcfg.ServiceName(dnsName)]
 		if svc == nil {
 			return nil
 		}
@@ -591,7 +591,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			ips = serviceIPMaps[0][svcName]
 		}
 		output.WriteString("\n\n")
-		svc := sc.FindServiceConfig(svcName)
+		svc := sc.Services[svcName]
 		if srvType == serveTypeTun && svc.Tun {
 			output.WriteString(fmt.Sprintf(msgRunningTunService, host))
 			output.WriteString("\n")
