@@ -743,8 +743,11 @@ func (r *relayManager) allocateAllServersRunLoop(ep *endpoint) {
 	r.allocWorkByEndpoint[ep] = started
 	go func() {
 		started.wg.Wait()
-		started.cancel()
 		relayManagerInputEvent(r, ctx, &r.allocateWorkDoneCh, relayEndpointAllocWorkDoneEvent{work: started})
+		// cleanup context cancellation must come after the
+		// relayManagerInputEvent call, otherwise it returns early without
+		// writing the event to runLoop().
+		started.cancel()
 	}()
 }
 
