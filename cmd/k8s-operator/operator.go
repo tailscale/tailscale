@@ -813,7 +813,7 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handle
 		}
 
 		reqs := make([]reconcile.Request, 0)
-		seenSvcs := make(set.Set[string], len(svcList.Items))
+		seenSvcs := make(set.Set[string])
 		for _, svc := range svcList.Items {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&svc)})
 			seenSvcs.Add(fmt.Sprintf("%s/%s", svc.Namespace, svc.Name))
