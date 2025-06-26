@@ -348,7 +348,7 @@ func (sc *ServeConfig) SetWebHandler(st *ipnstate.Status, handler *HTTPHandler, 
 	webServerMap := &sc.Web
 	hostName := host
 	if svcName, ok := tailcfg.AsServiceName(host); ok {
-		hostName = svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+		hostName = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
 		if _, ok := sc.Services[svcName]; !ok {
 			mak.Set(&sc.Services, svcName, new(ServiceConfig))
 		}
@@ -458,8 +458,8 @@ func (sc *ServeConfig) RemoveWebHandler(host string, port uint16, mounts []strin
 // RemoveServiceWebHandler deletes the web handlers at all of the given mount points
 // for the provided host and port in the serve config for the given service.
 func (sc *ServeConfig) RemoveServiceWebHandler(st *ipnstate.Status, svcName tailcfg.ServiceName, port uint16, mounts []string) {
-	dnsNameForService := svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
-	hp := HostPort(net.JoinHostPort(dnsNameForService, strconv.Itoa(int(port))))
+	hostName := strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
+	hp := HostPort(net.JoinHostPort(hostName, strconv.Itoa(int(port))))
 
 	svc, ok := sc.Services[svcName]
 	if !ok || svc == nil {

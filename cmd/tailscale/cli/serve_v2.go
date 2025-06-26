@@ -932,7 +932,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if svc == nil {
 			return errors.New("service does not exist")
 		}
-		hostName = svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+		hostName = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
 		webServeMap = svc.Web
 	}
 
