@@ -177,8 +177,8 @@ func (sc *ServeConfig) GetWebHandler(dnsName string, hp HostPort, mount string) 
 	if sc == nil {
 		return nil
 	}
-	if IsServiceName(dnsName) {
-		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc.Web != nil {
+	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+		if svc, ok := sc.Services[svcName]; ok && svc.Web != nil {
 			if webCfg, ok := svc.Web[hp]; ok {
 				return webCfg.Handlers[mount]
 			}
@@ -197,8 +197,8 @@ func (sc *ServeConfig) GetTCPPortHandler(port uint16, dnsName string) *TCPPortHa
 	if sc == nil {
 		return nil
 	}
-	if IsServiceName(dnsName) {
-		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc != nil {
+	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+		if svc, ok := sc.Services[svcName]; ok && svc != nil {
 			return svc.TCP[port]
 		}
 		return nil
@@ -244,18 +244,6 @@ func (sc *ServeConfig) IsTCPForwardingAny() bool {
 	return false
 }
 
-// IsServiceName reports whether if the given string is a valid service name.
-func IsServiceName(s string) bool {
-	return tailcfg.ServiceName(s).Validate() == nil
-}
-
-// asServiceName reports whether if the given string is a valid service name,
-// and if so returns the name as a [tailcfg.ServiceName].
-func asServiceName(s string) (svcName tailcfg.ServiceName, ok bool) {
-	svcName = tailcfg.ServiceName(s)
-	return svcName, svcName.Validate() == nil
-}
-
 // IsTCPForwardingOnPort reports whether ServeConfig is currently forwarding
 // in TCPForward mode on the given port for a DNSName. DNSName will be either node's DNSName, or a
 // serviceName for service hosted on node. This is exclusive of Web/HTTPS serving.
@@ -263,9 +251,9 @@ func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, dnsName string) bool {
 	if sc == nil {
 		return false
 	}
-	forService := IsServiceName(dnsName)
-	if forService {
-		svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]
+
+	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+		svc, ok := sc.Services[svcName]
 		if !ok || svc == nil {
 			return false
 		}
@@ -293,7 +281,7 @@ func (sc *ServeConfig) IsServingHTTPS(port uint16, dnsName string) bool {
 		return false
 	}
 	var tcpHandlers map[uint16]*TCPPortHandler
-	if svcName, ok := asServiceName(dnsName); ok {
+	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
 		if svc := sc.Services[svcName]; svc != nil {
 			tcpHandlers = svc.TCP
 		}
@@ -315,8 +303,8 @@ func (sc *ServeConfig) IsServingHTTP(port uint16, dnsName string) bool {
 	if sc == nil {
 		return false
 	}
-	if IsServiceName(dnsName) {
-		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc != nil {
+	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+		if svc, ok := sc.Services[svcName]; ok && svc != nil {
 			if svc.TCP[port] != nil {
 				return svc.TCP[port].HTTP
 			}
@@ -359,8 +347,7 @@ func (sc *ServeConfig) SetWebHandler(st *ipnstate.Status, handler *HTTPHandler, 
 	tcpMap := &sc.TCP
 	webServerMap := &sc.Web
 	hostName := host
-	if IsServiceName(host) {
-		svcName := tailcfg.ServiceName(host)
+	if svcName, ok := tailcfg.AsServiceName(host); ok {
 		hostName = svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
 		if _, ok := sc.Services[svcName]; !ok {
 			mak.Set(&sc.Services, svcName, new(ServiceConfig))
@@ -403,8 +390,7 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 		sc = new(ServeConfig)
 	}
 	tcpPortHandler := &sc.TCP
-	if IsServiceName(host) {
-		svcName := tailcfg.ServiceName(host)
+	if svcName, ok := tailcfg.AsServiceName(host); ok {
 		svcConfig, ok := sc.Services[svcName]
 		if !ok {
 			svcConfig = new(ServiceConfig)
@@ -499,8 +485,8 @@ func (sc *ServeConfig) RemoveServiceWebHandler(st *ipnstate.Status, svcName tail
 // RemoveTCPForwarding deletes the TCP forwarding configuration for the given
 // port from the serve config.
 func (sc *ServeConfig) RemoveTCPForwarding(dnsName string, port uint16) {
-	if IsServiceName(dnsName) {
-		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc != nil {
+	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+		if svc := sc.Services[svcName]; svc != nil {
 			delete(svc.TCP, port)
 			if len(svc.TCP) == 0 {
 				svc.TCP = nil

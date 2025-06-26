@@ -915,6 +915,13 @@ type TPMInfo struct {
 // This is not related to the older [Service] used in [Hostinfo.Services].
 type ServiceName string
 
+// AsServiceName reports whether if the given string is a valid service name,
+// and if so returns the name as a [tailcfg.ServiceName].
+func AsServiceName(s string) (svcName ServiceName, ok bool) {
+	svcName = ServiceName(s)
+	return svcName, svcName.Validate() == nil
+}
+
 // Validate validates if the service name is formatted correctly.
 // We only allow valid DNS labels, since the expectation is that these will be
 // used as parts of domain names. All errors are [vizerror.Error].

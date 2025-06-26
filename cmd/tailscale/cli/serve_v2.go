@@ -440,10 +440,9 @@ const backgroundExistsMsg = "background configuration already exists, use `tails
 // validateConfig checks if the serve config is valid to serve the type wanted on the port.
 // dnsName is a FQDN or a serviceName (with `svc:` prefix).
 func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType, dnsName string) error {
-	forService := ipn.IsServiceName(dnsName)
 	var tcpHandlerForPort *ipn.TCPPortHandler
-	if forService {
-		svc := sc.Services[tailcfg.ServiceName(dnsName)]
+	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+		svc := sc.Services[svcName]
 		if svc == nil {
 			return nil
 		}
@@ -521,7 +520,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 
 	// update the serve config based on if funnel is enabled
 	// Since funnel is not supported for services, we only apply it for node's serve.
-	if !ipn.IsServiceName(dnsName) {
+	if _, ok := tailcfg.AsServiceName(dnsName); !ok {
 		e.applyFunnel(sc, dnsName, srvPort, allowFunnel)
 	}
 	return nil
@@ -544,14 +543,14 @@ var (
 // serve config and status.
 func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
-	forService := ipn.IsServiceName(dnsName)
+	svcName, forService := tailcfg.AsServiceName(dnsName)
 	var hp ipn.HostPort
 	var webConfig *ipn.WebServerConfig
 	var tcpHandler *ipn.TCPPortHandler
 	ips := st.TailscaleIPs
 	host := dnsName
 	if forService {
-		host = tailcfg.ServiceName(dnsName).WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+		host = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
 	}
 	hp = ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
 
@@ -578,7 +577,6 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		return "", ""
 	}
 	if forService {
-		svcName := tailcfg.ServiceName(dnsName)
 		serviceIPMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](st.Self.CapMap, tailcfg.NodeAttrServiceHost)
 		if err != nil || len(serviceIPMaps) == 0 || serviceIPMaps[0][svcName] == nil {
 			// The capmap does not contain IPs for this service yet. Usually this means
@@ -924,12 +922,12 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	if sc == nil {
 		return nil
 	}
-	forService := ipn.IsServiceName(dnsName)
+
 	portStr := strconv.Itoa(int(srvPort))
 	hostName := dnsName
 	webServeMap := sc.Web
+	svcName, forService := tailcfg.AsServiceName(dnsName)
 	if forService {
-		svcName := tailcfg.ServiceName(dnsName)
 		svc := sc.Services[svcName]
 		if svc == nil {
 			return errors.New("service does not exist")
