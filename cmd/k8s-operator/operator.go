@@ -854,7 +854,7 @@ func proxyClassHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) ha
 		}
 
 		reqs := make([]reconcile.Request, 0)
-		seenIngs := make(set.Set[string], len(ingList.Items))
+		seenIngs := make(set.Set[string])
 		for _, ing := range ingList.Items {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
 			seenIngs.Add(fmt.Sprintf("%s/%s", ing.Namespace, ing.Name))
