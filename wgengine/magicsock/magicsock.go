@@ -2592,12 +2592,12 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 
 func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
 	// TODO(jwhited): implement once capVer is bumped
-	return version == math.MinInt32
+	return version == math.MinInt32 || debugAssumeUDPRelayCapable()
 }
 
 func capVerIsRelayServerCapable(version tailcfg.CapabilityVersion) bool {
-	// TODO(jwhited): implement once capVer is bumped
-	return version == math.MinInt32
+	// TODO(jwhited): implement once capVer is bumped & update Test_peerAPIIfCandidateRelayServer
+	return version == math.MinInt32 || debugAssumeUDPRelayCapable()
 }
 
 // onFilterUpdate is called when a [FilterUpdate] is received over the
