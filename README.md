@@ -2,7 +2,7 @@
 
 https://tailscale.com
 
-Private WireGuard® networks made easy
+Private WireGuard® networks made easy!
 
 ## Overview
 
