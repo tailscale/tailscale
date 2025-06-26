@@ -1433,13 +1433,6 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 		return failf("no netmap")
 	}
 	n, ok = cn.NodeByID(nid)
-	if !ok {
-		// Check if this the self-node, which would not appear in peers.
-		if !nm.SelfNode.Valid() || nid != nm.SelfNode.ID() {
-			return zero, u, false
-		}
-		n = nm.SelfNode
-	}
 	up, ok := cn.UserByID(n.User())
 	if !ok {
 		return failf("no userprofile for node %v", n.Key())
