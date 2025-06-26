@@ -32,6 +32,7 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -49,11 +50,14 @@ const (
 
 	// Copied from k8s.io/apiserver/pkg/registry/generic/registry/store.go@cccad306d649184bf2a0e319ba830c53f65c445c
 	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
+
+	kubeAPIServerConfigFile = "config.json"
 )
 
 var (
-	gaugeEgressProxyGroupResources  = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
-	gaugeIngressProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupIngressCount)
+	gaugeEgressProxyGroupResources    = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
+	gaugeIngressProxyGroupResources   = clientmetric.NewGauge(kubetypes.MetricProxyGroupIngressCount)
+	gaugeAPIServerProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupAPIServerCount)
 )
 
 // ProxyGroupReconciler ensures cluster resources for a ProxyGroup definition.
@@ -66,14 +70,16 @@ type ProxyGroupReconciler struct {
 
 	// User-specified defaults from the helm installation.
 	tsNamespace       string
-	proxyImage        string
+	tsProxyImage      string
+	k8sProxyImage     string
 	defaultTags       []string
 	tsFirewallMode    string
 	defaultProxyClass string
 
-	mu                 sync.Mutex           // protects following
-	egressProxyGroups  set.Slice[types.UID] // for egress proxygroups gauge
-	ingressProxyGroups set.Slice[types.UID] // for ingress proxygroups gauge
+	mu                   sync.Mutex           // protects following
+	egressProxyGroups    set.Slice[types.UID] // for egress proxygroups gauge
+	ingressProxyGroups   set.Slice[types.UID] // for ingress proxygroups gauge
+	apiServerProxyGroups set.Slice[types.UID] // for kube-apiserver proxygroups gauge
 }
 
 func (r *ProxyGroupReconciler) logger(name string) *zap.SugaredLogger {
@@ -250,6 +256,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("error provisioning state Secrets: %w", err)
 		}
 	}
+
 	sa := pgServiceAccount(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
 		s.ObjectMeta.Labels = sa.ObjectMeta.Labels
@@ -258,6 +265,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning ServiceAccount: %w", err)
 	}
+
 	role := pgRole(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
 		r.ObjectMeta.Labels = role.ObjectMeta.Labels
@@ -267,6 +275,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning Role: %w", err)
 	}
+
 	roleBinding := pgRoleBinding(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, roleBinding, func(r *rbacv1.RoleBinding) {
 		r.ObjectMeta.Labels = roleBinding.ObjectMeta.Labels
@@ -277,6 +286,28 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning RoleBinding: %w", err)
 	}
+
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		clusterRole := proxyClusterRole(pg)
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, clusterRole, func(r *rbacv1.ClusterRole) {
+			r.ObjectMeta.Labels = clusterRole.ObjectMeta.Labels
+			r.ObjectMeta.Annotations = clusterRole.ObjectMeta.Annotations
+			r.Rules = clusterRole.Rules
+		}); err != nil {
+			return fmt.Errorf("error provisioning ClusterRole: %w", err)
+		}
+
+		clusterRoleBinding := proxyClusterRoleBinding(pg, r.tsNamespace)
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, clusterRoleBinding, func(r *rbacv1.ClusterRoleBinding) {
+			r.ObjectMeta.Labels = clusterRoleBinding.ObjectMeta.Labels
+			r.ObjectMeta.Annotations = clusterRoleBinding.ObjectMeta.Annotations
+			r.RoleRef = clusterRoleBinding.RoleRef
+			r.Subjects = clusterRoleBinding.Subjects
+		}); err != nil {
+			return fmt.Errorf("error provisioning ClusterRoleBinding: %w", err)
+		}
+	}
+
 	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
 		cm, hp := pgEgressCM(pg, r.tsNamespace)
 		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, cm, func(existing *corev1.ConfigMap) {
@@ -287,6 +318,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("error provisioning egress ConfigMap %q: %w", cm.Name, err)
 		}
 	}
+
 	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
 		cm := pgIngressCM(pg, r.tsNamespace)
 		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, cm, func(existing *corev1.ConfigMap) {
@@ -296,7 +328,13 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("error provisioning ingress ConfigMap %q: %w", cm.Name, err)
 		}
 	}
-	ss, err := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode, proxyClass)
+
+	defaultImage := r.tsProxyImage
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		defaultImage = r.k8sProxyImage
+	}
+
+	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, proxyClass)
 	if err != nil {
 		return fmt.Errorf("error generating StatefulSet spec: %w", err)
 	}
@@ -457,30 +495,71 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			}
 		}
 
-		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, existingCfgSecret)
-		if err != nil {
-			return fmt.Errorf("error creating tailscaled config: %w", err)
-		}
+		if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+			hostname := pgHostname(pg, i)
 
-		for cap, cfg := range configs {
-			cfgJSON, err := json.Marshal(cfg)
-			if err != nil {
-				return fmt.Errorf("error marshalling tailscaled config: %w", err)
-			}
-			mak.Set(&cfgSecret.Data, tsoperator.TailscaledConfigFileName(cap), cfgJSON)
-		}
-
-		if existingCfgSecret != nil {
-			if !apiequality.Semantic.DeepEqual(existingCfgSecret, cfgSecret) {
-				logger.Debugf("Updating the existing ProxyGroup config Secret %s", cfgSecret.Name)
-				if err := r.Update(ctx, cfgSecret); err != nil {
-					return err
+			if authKey == "" && existingCfgSecret != nil {
+				deviceAuthed := false
+				for _, d := range pg.Status.Devices {
+					if d.Hostname == hostname {
+						deviceAuthed = true
+						break
+					}
+				}
+				if !deviceAuthed {
+					existingCfg := conf.ConfigV1Alpha1{}
+					if err := json.Unmarshal(existingCfgSecret.Data[kubeAPIServerConfigFile], &existingCfg); err != nil {
+						return fmt.Errorf("error unmarshalling existing config: %w", err)
+					}
+					if existingCfg.AuthKey != nil {
+						authKey = *existingCfg.AuthKey
+					}
 				}
 			}
+
+			cfg := conf.VersionedConfig{
+				Version: "v1alpha1",
+				ConfigV1Alpha1: &conf.ConfigV1Alpha1{
+					Hostname: ptr.To(hostname),
+					State:    ptr.To(fmt.Sprintf("kube:%s-state", pgPodName(pg.Name, i))),
+					App:      ptr.To(kubetypes.AppProxyGroupKubeAPIServer),
+					// TODO(tomhjp): make it possible to switch auth mode via ProxyGroup spec.
+				},
+			}
+			if authKey != "" {
+				cfg.AuthKey = ptr.To(authKey)
+			}
+			cfgB, err := json.Marshal(cfg)
+			if err != nil {
+				return fmt.Errorf("error marshalling k8s-proxy config: %w", err)
+			}
+			mak.Set(&cfgSecret.Data, kubeAPIServerConfigFile, cfgB)
 		} else {
-			logger.Debugf("Creating a new config Secret %s for the ProxyGroup", cfgSecret.Name)
-			if err := r.Create(ctx, cfgSecret); err != nil {
-				return err
+			configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, existingCfgSecret)
+			if err != nil {
+				return fmt.Errorf("error creating tailscaled config: %w", err)
+			}
+
+			for cap, cfg := range configs {
+				cfgJSON, err := json.Marshal(cfg)
+				if err != nil {
+					return fmt.Errorf("error marshalling tailscaled config: %w", err)
+				}
+				mak.Set(&cfgSecret.Data, tsoperator.TailscaledConfigFileName(cap), cfgJSON)
+			}
+
+			if existingCfgSecret != nil {
+				if !apiequality.Semantic.DeepEqual(existingCfgSecret, cfgSecret) {
+					logger.Debugf("Updating the existing ProxyGroup config Secret %s", cfgSecret.Name)
+					if err := r.Update(ctx, cfgSecret); err != nil {
+						return err
+					}
+				}
+			} else {
+				logger.Debugf("Creating a new config Secret %s for the ProxyGroup", cfgSecret.Name)
+				if err := r.Create(ctx, cfgSecret); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -496,9 +575,12 @@ func (r *ProxyGroupReconciler) ensureAddedToGaugeForProxyGroup(pg *tsapi.ProxyGr
 		r.egressProxyGroups.Add(pg.UID)
 	case tsapi.ProxyGroupTypeIngress:
 		r.ingressProxyGroups.Add(pg.UID)
+	case tsapi.ProxyGroupTypeKubernetesAPIServer:
+		r.apiServerProxyGroups.Add(pg.UID)
 	}
 	gaugeEgressProxyGroupResources.Set(int64(r.egressProxyGroups.Len()))
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
+	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
 }
 
 // ensureRemovedFromGaugeForProxyGroup ensures the gauge metric for the ProxyGroup resource type is updated when the
@@ -509,9 +591,12 @@ func (r *ProxyGroupReconciler) ensureRemovedFromGaugeForProxyGroup(pg *tsapi.Pro
 		r.egressProxyGroups.Remove(pg.UID)
 	case tsapi.ProxyGroupTypeIngress:
 		r.ingressProxyGroups.Remove(pg.UID)
+	case tsapi.ProxyGroupTypeKubernetesAPIServer:
+		r.apiServerProxyGroups.Remove(pg.UID)
 	}
 	gaugeEgressProxyGroupResources.Set(int64(r.egressProxyGroups.Len()))
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
+	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
 }
 
 func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32, authKey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
@@ -520,11 +605,7 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32
 		AcceptDNS:    "false",
 		AcceptRoutes: "false", // AcceptRoutes defaults to true
 		Locked:       "false",
-		Hostname:     ptr.To(fmt.Sprintf("%s-%d", pg.Name, idx)),
-	}
-
-	if pg.Spec.HostnamePrefix != "" {
-		conf.Hostname = ptr.To(fmt.Sprintf("%s-%d", pg.Spec.HostnamePrefix, idx))
+		Hostname:     ptr.To(pgHostname(pg, idx)),
 	}
 
 	if shouldAcceptRoutes(class) {

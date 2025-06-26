@@ -2888,11 +2888,12 @@ spec:
                                 type: array
                             type:
                                 description: |-
-                                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
+                                    Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
                                     Type is immutable once a ProxyGroup is created.
                                 enum:
                                     - egress
                                     - ingress
+                                    - kube-apiserver
                                 type: string
                                 x-kubernetes-validations:
                                     - message: ProxyGroup type is immutable
@@ -4880,6 +4881,19 @@ rules:
         - get
         - list
         - watch
+    - apiGroups:
+        - rbac.authorization.k8s.io
+      resources:
+        - clusterroles
+        - clusterrolebindings
+      verbs:
+        - get
+        - create
+        - patch
+        - update
+        - list
+        - watch
+        - deletecollection
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

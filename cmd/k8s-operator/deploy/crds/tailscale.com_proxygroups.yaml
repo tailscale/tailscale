@@ -106,12 +106,13 @@ spec:
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                 type:
                   description: |-
-                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
+                    Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
                     Type is immutable once a ProxyGroup is created.
                   type: string
                   enum:
                     - egress
                     - ingress
+                    - kube-apiserver
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: ProxyGroup type is immutable
