@@ -1,6 +1,12 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-apiserver-auth-proxy
+  namespace: tailscale
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -17,6 +23,9 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: operator
+  namespace: tailscale
+- kind: ServiceAccount
+  name: kube-apiserver-auth-proxy
   namespace: tailscale
 roleRef:
   kind: ClusterRole

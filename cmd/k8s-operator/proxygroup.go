@@ -36,9 +36,11 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
@@ -49,6 +51,7 @@ const (
 	reasonProxyGroupCreationFailed = "ProxyGroupCreationFailed"
 	reasonProxyGroupReady          = "ProxyGroupReady"
 	reasonProxyGroupCreating       = "ProxyGroupCreating"
+	reasonProxyGroupInvalid        = "ProxyGroupInvalid"
 
 	// Copied from k8s.io/apiserver/pkg/registry/generic/registry/store.go@cccad306d649184bf2a0e319ba830c53f65c445c
 	optimisticLockErrorMsg  = "the object has been modified; please apply your changes to the latest version and try again"
@@ -63,12 +66,14 @@ const (
 	//
 	// tailcfg.CurrentCapabilityVersion was 106 when the ProxyGroup controller was
 	// first introduced.
-	pgMinCapabilityVersion = 106
+	pgMinCapabilityVersion  = 106
+	kubeAPIServerConfigFile = "config.hujson"
 )
 
 var (
-	gaugeEgressProxyGroupResources  = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
-	gaugeIngressProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupIngressCount)
+	gaugeEgressProxyGroupResources    = clientmetric.NewGauge(kubetypes.MetricProxyGroupEgressCount)
+	gaugeIngressProxyGroupResources   = clientmetric.NewGauge(kubetypes.MetricProxyGroupIngressCount)
+	gaugeAPIServerProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupAPIServerCount)
 )
 
 // ProxyGroupReconciler ensures cluster resources for a ProxyGroup definition.
@@ -81,15 +86,17 @@ type ProxyGroupReconciler struct {
 
 	// User-specified defaults from the helm installation.
 	tsNamespace       string
-	proxyImage        string
+	tsProxyImage      string
+	k8sProxyImage     string
 	defaultTags       []string
 	tsFirewallMode    string
 	defaultProxyClass string
 	loginServer       string
 
-	mu                 sync.Mutex           // protects following
-	egressProxyGroups  set.Slice[types.UID] // for egress proxygroups gauge
-	ingressProxyGroups set.Slice[types.UID] // for ingress proxygroups gauge
+	mu                   sync.Mutex           // protects following
+	egressProxyGroups    set.Slice[types.UID] // for egress proxygroups gauge
+	ingressProxyGroups   set.Slice[types.UID] // for ingress proxygroups gauge
+	apiServerProxyGroups set.Slice[types.UID] // for kube-apiserver proxygroups gauge
 }
 
 func (r *ProxyGroupReconciler) logger(name string) *zap.SugaredLogger {
@@ -153,6 +160,10 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, pg *tsapi.ProxyG
 		}
 	}
 
+	if err := r.validate(ctx, pg); err != nil {
+		return r.notReady(reasonProxyGroupInvalid, fmt.Sprintf("invalid ProxyGroup spec: %v", err))
+	}
+
 	proxyClassName := r.defaultProxyClass
 	if pg.Spec.ProxyClass != "" {
 		proxyClassName = pg.Spec.ProxyClass
@@ -190,6 +201,30 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, pg *tsapi.ProxyG
 	}
 
 	return staticEndpoints, nrr, nil
+}
+
+func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGroup) error {
+	if isAuthAPIServerProxy(pg) {
+		// Validate that the static ServiceAccount already exists.
+		sa := &corev1.ServiceAccount{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: r.tsNamespace, Name: authAPIServerProxySAName}, sa); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("the ServiceAccount %q used for the API server proxy in auth mode does not exist but should have been created during operator installation", authAPIServerProxySAName)
+			}
+
+			return fmt.Errorf("error validating that ServiceAccount %q exists: %w", authAPIServerProxySAName, err)
+		}
+	} else {
+		// Validate that the ServiceAccount we create won't overwrite the static one.
+		// TODO(tomhjp): This doesn't cover other controllers that could create a
+		// ServiceAccount. Perhaps should have some guards to ensure that an update
+		// would never change the ownership of a resource we expect to already be owned.
+		if pgServiceAccountName(pg) == authAPIServerProxySAName {
+			return fmt.Errorf("the name of the ProxyGroup %q conflicts with the static ServiceAccount used for the API server proxy in auth mode", pg.Name)
+		}
+	}
+
+	return nil
 }
 
 // validateProxyClassForPG applies custom validation logic for ProxyClass applied to ProxyGroup.
@@ -263,14 +298,21 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return r.notReadyErrf(pg, "error provisioning state Secrets: %w", err)
 		}
 	}
-	sa := pgServiceAccount(pg, r.tsNamespace)
-	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
-		s.ObjectMeta.Labels = sa.ObjectMeta.Labels
-		s.ObjectMeta.Annotations = sa.ObjectMeta.Annotations
-		s.ObjectMeta.OwnerReferences = sa.ObjectMeta.OwnerReferences
-	}); err != nil {
-		return r.notReadyErrf(pg, "error provisioning ServiceAccount: %w", err)
+
+	// auth mode kube-apiserver ProxyGroups use a statically created
+	// ServiceAccount to keep ClusterRole creation permissions limited to the
+	// helm chart installer.
+	if !isAuthAPIServerProxy(pg) {
+		sa := pgServiceAccount(pg, r.tsNamespace)
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
+			s.ObjectMeta.Labels = sa.ObjectMeta.Labels
+			s.ObjectMeta.Annotations = sa.ObjectMeta.Annotations
+			s.ObjectMeta.OwnerReferences = sa.ObjectMeta.OwnerReferences
+		}); err != nil {
+			return r.notReadyErrf(pg, "error provisioning ServiceAccount: %w", err)
+		}
 	}
+
 	role := pgRole(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
 		r.ObjectMeta.Labels = role.ObjectMeta.Labels
@@ -280,6 +322,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return r.notReadyErrf(pg, "error provisioning Role: %w", err)
 	}
+
 	roleBinding := pgRoleBinding(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, roleBinding, func(r *rbacv1.RoleBinding) {
 		r.ObjectMeta.Labels = roleBinding.ObjectMeta.Labels
@@ -290,6 +333,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return r.notReadyErrf(pg, "error provisioning RoleBinding: %w", err)
 	}
+
 	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
 		cm, hp := pgEgressCM(pg, r.tsNamespace)
 		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, cm, func(existing *corev1.ConfigMap) {
@@ -300,6 +344,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return r.notReadyErrf(pg, "error provisioning egress ConfigMap %q: %w", cm.Name, err)
 		}
 	}
+
 	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
 		cm := pgIngressCM(pg, r.tsNamespace)
 		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, cm, func(existing *corev1.ConfigMap) {
@@ -309,7 +354,12 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return r.notReadyErrf(pg, "error provisioning ingress ConfigMap %q: %w", cm.Name, err)
 		}
 	}
-	ss, err := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode, tailscaledPort, proxyClass)
+
+	defaultImage := r.tsProxyImage
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		defaultImage = r.k8sProxyImage
+	}
+	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, tailscaledPort, proxyClass)
 	if err != nil {
 		return r.notReadyErrf(pg, "error generating StatefulSet spec: %w", err)
 	}
@@ -702,17 +752,57 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			return nil, err
 		}
 
-		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices, r.loginServer)
-		if err != nil {
-			return nil, fmt.Errorf("error creating tailscaled config: %w", err)
-		}
+		if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+			hostname := pgHostname(pg, i)
 
-		for cap, cfg := range configs {
-			cfgJSON, err := json.Marshal(cfg)
-			if err != nil {
-				return nil, fmt.Errorf("error marshalling tailscaled config: %w", err)
+			if authKey == nil && existingCfgSecret != nil {
+				deviceAuthed := false
+				for _, d := range pg.Status.Devices {
+					if d.Hostname == hostname {
+						deviceAuthed = true
+						break
+					}
+				}
+				if !deviceAuthed {
+					existingCfg := conf.ConfigV1Alpha1{}
+					if err := json.Unmarshal(existingCfgSecret.Data[kubeAPIServerConfigFile], &existingCfg); err != nil {
+						return nil, fmt.Errorf("error unmarshalling existing config: %w", err)
+					}
+					if existingCfg.AuthKey != nil {
+						authKey = existingCfg.AuthKey
+					}
+				}
 			}
-			mak.Set(&cfgSecret.Data, tsoperator.TailscaledConfigFileName(cap), cfgJSON)
+			cfg := conf.VersionedConfig{
+				Version: "v1alpha1",
+				ConfigV1Alpha1: &conf.ConfigV1Alpha1{
+					Hostname: ptr.To(hostname),
+					State:    ptr.To(fmt.Sprintf("kube:%s", pgPodName(pg.Name, i))),
+					App:      ptr.To(kubetypes.AppProxyGroupKubeAPIServer),
+					AuthKey:  authKey,
+					KubeAPIServer: &conf.KubeAPIServer{
+						AuthMode: opt.NewBool(isAuthAPIServerProxy(pg)),
+					},
+				},
+			}
+			cfgB, err := json.Marshal(cfg)
+			if err != nil {
+				return nil, fmt.Errorf("error marshalling k8s-proxy config: %w", err)
+			}
+			mak.Set(&cfgSecret.Data, kubeAPIServerConfigFile, cfgB)
+		} else {
+			configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices, r.loginServer)
+			if err != nil {
+				return nil, fmt.Errorf("error creating tailscaled config: %w", err)
+			}
+
+			for cap, cfg := range configs {
+				cfgJSON, err := json.Marshal(cfg)
+				if err != nil {
+					return nil, fmt.Errorf("error marshalling tailscaled config: %w", err)
+				}
+				mak.Set(&cfgSecret.Data, tsoperator.TailscaledConfigFileName(cap), cfgJSON)
+			}
 		}
 
 		if existingCfgSecret != nil {
@@ -834,9 +924,12 @@ func (r *ProxyGroupReconciler) ensureAddedToGaugeForProxyGroup(pg *tsapi.ProxyGr
 		r.egressProxyGroups.Add(pg.UID)
 	case tsapi.ProxyGroupTypeIngress:
 		r.ingressProxyGroups.Add(pg.UID)
+	case tsapi.ProxyGroupTypeKubernetesAPIServer:
+		r.apiServerProxyGroups.Add(pg.UID)
 	}
 	gaugeEgressProxyGroupResources.Set(int64(r.egressProxyGroups.Len()))
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
+	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
 }
 
 // ensureRemovedFromGaugeForProxyGroup ensures the gauge metric for the ProxyGroup resource type is updated when the
@@ -847,9 +940,12 @@ func (r *ProxyGroupReconciler) ensureRemovedFromGaugeForProxyGroup(pg *tsapi.Pro
 		r.egressProxyGroups.Remove(pg.UID)
 	case tsapi.ProxyGroupTypeIngress:
 		r.ingressProxyGroups.Remove(pg.UID)
+	case tsapi.ProxyGroupTypeKubernetesAPIServer:
+		r.apiServerProxyGroups.Remove(pg.UID)
 	}
 	gaugeEgressProxyGroupResources.Set(int64(r.egressProxyGroups.Len()))
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
+	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
 }
 
 func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, authKey *string, staticEndpoints []netip.AddrPort, oldAdvertiseServices []string, loginServer string) (tailscaledConfigs, error) {
@@ -858,7 +954,7 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, a
 		AcceptDNS:         "false",
 		AcceptRoutes:      "false", // AcceptRoutes defaults to true
 		Locked:            "false",
-		Hostname:          ptr.To(fmt.Sprintf("%s-%d", pg.Name, idx)),
+		Hostname:          ptr.To(pgHostname(pg, idx)),
 		AdvertiseServices: oldAdvertiseServices,
 		AuthKey:           authKey,
 	}

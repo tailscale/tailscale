@@ -77,6 +77,7 @@ func main() {
 		tsNamespace           = defaultEnv("OPERATOR_NAMESPACE", "")
 		tslogging             = defaultEnv("OPERATOR_LOGGING", "info")
 		image                 = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		k8sProxyImage         = defaultEnv("K8S_PROXY_IMAGE", "tailscale/k8s-proxy:latest")
 		priorityClassName     = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags                  = defaultEnv("PROXY_TAGS", "tag:k8s")
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
@@ -109,17 +110,27 @@ func main() {
 	// The operator can run either as a plain operator or it can
 	// additionally act as api-server proxy
 	// https://tailscale.com/kb/1236/kubernetes-operator/?q=kubernetes#accessing-the-kubernetes-control-plane-using-an-api-server-proxy.
-	mode := apiproxy.ParseAPIProxyMode()
-	if mode == apiproxy.APIServerProxyModeDisabled {
+	mode := parseAPIProxyMode()
+	if mode == apiServerProxyModeDisabled {
 		hostinfo.SetApp(kubetypes.AppOperator)
 	} else {
-		hostinfo.SetApp(kubetypes.AppAPIServerProxy)
+		hostinfo.SetApp(kubetypes.AppInProcessAPIServerProxy)
 	}
 
 	s, tsc := initTSNet(zlog, loginServer)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
-	apiproxy.MaybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
+	if mode != apiServerProxyModeDisabled {
+		ap, err := apiproxy.NewAPIServerProxy(zlog, restConfig, s, mode == apiServerProxyModeEnabled)
+		if err != nil {
+			zlog.Fatalf("error creating API server proxy: %v", err)
+		}
+		go func() {
+			if err := ap.Run(context.Background()); err != nil {
+				zlog.Fatalf("error running API server proxy: %v", err)
+			}
+		}()
+	}
 	rOpts := reconcilerOpts{
 		log:                           zlog,
 		tsServer:                      s,
@@ -127,6 +138,7 @@ func main() {
 		tailscaleNamespace:            tsNamespace,
 		restConfig:                    restConfig,
 		proxyImage:                    image,
+		k8sProxyImage:                 k8sProxyImage,
 		proxyPriorityClassName:        priorityClassName,
 		proxyActAsDefaultLoadBalancer: isDefaultLoadBalancer,
 		proxyTags:                     tags,
@@ -411,7 +423,6 @@ func runReconcilers(opts reconcilerOpts) {
 		Complete(&HAServiceReconciler{
 			recorder:    eventRecorder,
 			tsClient:    opts.tsClient,
-			tsnetServer: opts.tsServer,
 			defaultTags: strings.Split(opts.proxyTags, ","),
 			Client:      mgr.GetClient(),
 			logger:      opts.log.Named("service-pg-reconciler"),
@@ -641,7 +652,8 @@ func runReconcilers(opts reconcilerOpts) {
 			tsClient: opts.tsClient,
 
 			tsNamespace:       opts.tailscaleNamespace,
-			proxyImage:        opts.proxyImage,
+			tsProxyImage:      opts.proxyImage,
+			k8sProxyImage:     opts.k8sProxyImage,
 			defaultTags:       strings.Split(opts.proxyTags, ","),
 			tsFirewallMode:    opts.proxyFirewallMode,
 			defaultProxyClass: opts.defaultProxyClass,
@@ -664,6 +676,7 @@ type reconcilerOpts struct {
 	tailscaleNamespace string       // namespace in which operator resources will be deployed
 	restConfig         *rest.Config // config for connecting to the kube API server
 	proxyImage         string       // <proxy-image-repo>:<proxy-image-tag>
+	k8sProxyImage      string       // <k8s-proxy-image-repo>:<k8s-proxy-image-tag>
 	// proxyPriorityClassName isPriorityClass to be set for proxy Pods. This
 	// is a legacy mechanism for cluster resource configuration options -
 	// going forward use ProxyClass.
