@@ -271,7 +271,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		funnel := subcmd == funnel
-		if !forService && funnel {
+		if forService && funnel {
 			return errors.New("Error: --service flag is not supported with funnel")
 		}
 
