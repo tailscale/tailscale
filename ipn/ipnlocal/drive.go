@@ -318,7 +318,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// - They are online
 				// - They are allowed to share at least one folder with us
 				cn := b.currentNode()
-				peer, ok := cn.PeerByID(peerID)
+				peer, ok := cn.NodeByID(peerID)
 				if !ok {
 					return false
 				}
