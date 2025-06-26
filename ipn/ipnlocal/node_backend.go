@@ -206,9 +206,14 @@ func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	return 0, false
 }
 
-func (nb *nodeBackend) PeerByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
+func (nb *nodeBackend) NodeByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
+	if nb.netMap != nil {
+		if self := nb.netMap.SelfNode; self.Valid() && self.ID() == id {
+			return self, true
+		}
+	}
 	n, ok := nb.peers[id]
 	return n, ok
 }

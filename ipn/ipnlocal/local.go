@@ -1391,7 +1391,7 @@ func profileFromView(v tailcfg.UserProfileView) tailcfg.UserProfile {
 func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	cn := b.currentNode()
 	if nid, ok := cn.NodeByKey(k); ok {
-		if n, ok := cn.PeerByID(nid); ok {
+		if n, ok := cn.NodeByID(nid); ok {
 			up, ok := cn.NetMap().UserProfiles[n.User()]
 			u = profileFromView(up)
 			return n, u, ok
@@ -1457,13 +1457,9 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 	if nm == nil {
 		return failf("no netmap")
 	}
-	n, ok = cn.PeerByID(nid)
+	n, ok = cn.NodeByID(nid)
 	if !ok {
-		// Check if this the self-node, which would not appear in peers.
-		if !nm.SelfNode.Valid() || nid != nm.SelfNode.ID() {
-			return zero, u, false
-		}
-		n = nm.SelfNode
+	    return zero, u, false
 	}
 	up, ok := cn.UserByID(n.User())
 	if !ok {
@@ -1968,7 +1964,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			if !ok || mo.Online {
 				continue
 			}
-			n, ok := cn.PeerByID(m.NodeIDBeingMutated())
+			n, ok := cn.NodeByID(m.NodeIDBeingMutated())
 			if !ok || n.StableID() != exitNodeID {
 				continue
 			}
@@ -7724,7 +7720,7 @@ func (b *LocalBackend) srcIPHasCapForFilter(srcIP netip.Addr, cap tailcfg.NodeCa
 	if !ok {
 		return false
 	}
-	n, ok := cn.PeerByID(nodeID)
+	n, ok := cn.NodeByID(nodeID)
 	if !ok {
 		return false
 	}

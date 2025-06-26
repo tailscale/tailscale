@@ -1005,7 +1005,7 @@ func TestUpdateNetmapDelta(t *testing.T) {
 		},
 	}
 	for _, want := range wants {
-		gotv, ok := b.currentNode().PeerByID(want.ID)
+		gotv, ok := b.currentNode().NodeByID(want.ID)
 		if !ok {
 			t.Errorf("netmap.Peer %v missing from b.profile.Peers", want.ID)
 			continue
