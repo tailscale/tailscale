@@ -55,7 +55,6 @@ func (s *serviceNameFlag) Set(sv string) error {
 		return fmt.Errorf("invalid service name: %q", sv)
 	}
 	v := tailcfg.ServiceName(sv)
-	fmt.Printf("Setting service name to %q\n", v)
 	*s.Value = v
 	return nil
 }
@@ -927,21 +926,19 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	}
 	forService := ipn.IsServiceName(dnsName)
 	portStr := strconv.Itoa(int(srvPort))
-	var hp ipn.HostPort
-	var webServeMap map[ipn.HostPort]*ipn.WebServerConfig
+	hostName := dnsName
+	webServeMap := sc.Web
 	if forService {
 		svcName := tailcfg.ServiceName(dnsName)
-		dnsNameForService := svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
-		hp = ipn.HostPort(net.JoinHostPort(dnsNameForService, portStr))
-		if svc, ok := sc.Services[svcName]; !ok || svc == nil {
+		svc := sc.Services[svcName]
+		if svc == nil {
 			return errors.New("service does not exist")
-		} else {
-			webServeMap = svc.Web
 		}
-	} else {
-		hp = ipn.HostPort(net.JoinHostPort(dnsName, portStr))
-		webServeMap = sc.Web
+		hostName = svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+		webServeMap = svc.Web
 	}
+
+	hp := ipn.HostPort(net.JoinHostPort(hostName, portStr))
 
 	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
 		return errors.New("cannot remove web handler; currently serving TCP")

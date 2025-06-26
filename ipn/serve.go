@@ -249,6 +249,13 @@ func IsServiceName(s string) bool {
 	return tailcfg.ServiceName(s).Validate() == nil
 }
 
+// asServiceName reports whether if the given string is a valid service name,
+// and if so returns the name as a [tailcfg.ServiceName].
+func asServiceName(s string) (svcName tailcfg.ServiceName, ok bool) {
+	svcName = tailcfg.ServiceName(s)
+	return svcName, svcName.Validate() == nil
+}
+
 // IsTCPForwardingOnPort reports whether ServeConfig is currently forwarding
 // in TCPForward mode on the given port for a DNSName. DNSName will be either node's DNSName, or a
 // serviceName for service hosted on node. This is exclusive of Web/HTTPS serving.
@@ -285,18 +292,20 @@ func (sc *ServeConfig) IsServingHTTPS(port uint16, dnsName string) bool {
 	if sc == nil {
 		return false
 	}
-	if IsServiceName(dnsName) {
-		if svc, ok := sc.Services[tailcfg.ServiceName(dnsName)]; ok && svc != nil {
-			if svc.TCP[port] != nil {
-				return svc.TCP[port].HTTPS
-			}
+	var tcpHandlers map[uint16]*TCPPortHandler
+	if svcName, ok := asServiceName(dnsName); ok {
+		if svc := sc.Services[svcName]; svc != nil {
+			tcpHandlers = svc.TCP
 		}
+	} else {
+		tcpHandlers = sc.TCP
+	}
+
+	th := tcpHandlers[port]
+	if th == nil {
 		return false
 	}
-	if sc.TCP[port] == nil {
-		return false
-	}
-	return sc.TCP[port].HTTPS
+	return th.HTTPS
 }
 
 // IsServingHTTP reports whether ServeConfig is currently serving HTTP on the
@@ -346,30 +355,28 @@ func (sc *ServeConfig) SetWebHandler(st *ipnstate.Status, handler *HTTPHandler, 
 	if sc == nil {
 		sc = new(ServeConfig)
 	}
-	var hp HostPort
-	var webCfg *WebServerConfig
+
+	tcpMap := &sc.TCP
+	webServerMap := &sc.Web
+	hostName := host
 	if IsServiceName(host) {
 		svcName := tailcfg.ServiceName(host)
-		dnsNameForService := svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
+		hostName = svcName.WithoutPrefix() + "." + st.CurrentTailnet.MagicDNSSuffix
 		if _, ok := sc.Services[svcName]; !ok {
 			mak.Set(&sc.Services, svcName, new(ServiceConfig))
 		}
-		mak.Set(&sc.Services[svcName].TCP, port, &TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
-		hp = HostPort(net.JoinHostPort(dnsNameForService, strconv.Itoa(int(port))))
-		if _, ok := sc.Services[svcName].Web[hp]; !ok {
-			mak.Set(&sc.Services[svcName].Web, hp, new(WebServerConfig))
-		}
-		mak.Set(&sc.Services[svcName].Web[hp].Handlers, mount, handler)
-		webCfg = sc.Services[svcName].Web[hp]
-	} else {
-		mak.Set(&sc.TCP, port, &TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
-		hp = HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
-		if _, ok := sc.Web[hp]; !ok {
-			mak.Set(&sc.Web, hp, new(WebServerConfig))
-		}
-		mak.Set(&sc.Web[hp].Handlers, mount, handler)
-		webCfg = sc.Web[hp]
+		tcpMap = &sc.Services[svcName].TCP
+		webServerMap = &sc.Services[svcName].Web
 	}
+
+	mak.Set(tcpMap, port, &TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
+	hp := HostPort(net.JoinHostPort(hostName, strconv.Itoa(int(port))))
+	webCfg, ok := (*webServerMap)[hp]
+	if !ok {
+		webCfg = new(WebServerConfig)
+		mak.Set(webServerMap, hp, webCfg)
+	}
+	mak.Set(&webCfg.Handlers, mount, handler)
 	// TODO(tylersmalley): handle multiple web handlers from foreground mode
 	for k, v := range webCfg.Handlers {
 		if v == handler {
@@ -395,20 +402,20 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 	if sc == nil {
 		sc = new(ServeConfig)
 	}
-	var tcpPortHandler *TCPPortHandler
+	tcpPortHandler := &sc.TCP
 	if IsServiceName(host) {
 		svcName := tailcfg.ServiceName(host)
-		if _, ok := sc.Services[svcName]; !ok {
-			mak.Set(&sc.Services, svcName, new(ServiceConfig))
+		svcConfig, ok := sc.Services[svcName]
+		if !ok {
+			svcConfig = new(ServiceConfig)
+			mak.Set(&sc.Services, svcName, svcConfig)
 		}
-		mak.Set(&sc.Services[svcName].TCP, port, &TCPPortHandler{TCPForward: fwdAddr})
-		tcpPortHandler = sc.Services[svcName].TCP[port]
-	} else {
-		mak.Set(&sc.TCP, port, &TCPPortHandler{TCPForward: fwdAddr})
-		tcpPortHandler = sc.TCP[port]
+		tcpPortHandler = &svcConfig.TCP
 	}
+	mak.Set(tcpPortHandler, port, &TCPPortHandler{TCPForward: fwdAddr})
+
 	if terminateTLS {
-		tcpPortHandler.TerminateTLS = host
+		(*tcpPortHandler)[port].TerminateTLS = host
 	}
 }
 
