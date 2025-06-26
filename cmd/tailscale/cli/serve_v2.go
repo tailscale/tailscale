@@ -527,16 +527,16 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 }
 
 var (
-	msgFunnelAvailable      = "Available on the internet:"
-	msgServeAvailable       = "Available within your tailnet:"
-	msgServiceIPNotAssigned = "This service %s is being served by this machine, but is not approved to have VIPs assigned yet. Once approved, it will be available in your Tailnet as:"
-	msgRunningInBackground  = "%s started and running in the background."
-	msgRunningTunService    = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
-	msgDisableProxy         = "To disable the proxy, run: tailscale %s --%s=%d off"
-	msgDisableServiceProxy  = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
-	msgDisableServiceTun    = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
-	msgDisableService       = "To remove config for the service, run: tailscale serve clear --service=%s"
-	msgToExit               = "Press Ctrl+C to exit."
+	msgFunnelAvailable        = "Available on the internet:"
+	msgServeAvailable         = "Available within your tailnet:"
+	msgServiceWaitingApproval = "This machine is configured as a service proxy for %s, but approval from an admin is required. Once approved, it will be available in your Tailnet as:"
+	msgRunningInBackground    = "%s started and running in the background."
+	msgRunningTunService      = "IPv4 and IPv6 traffic to %s is being routed to your operating system."
+	msgDisableProxy           = "To disable the proxy, run: tailscale %s --%s=%d off"
+	msgDisableServiceProxy    = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
+	msgDisableServiceTun      = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
+	msgDisableService         = "To remove config for the service, run: tailscale serve clear --service=%s"
+	msgToExit                 = "Press Ctrl+C to exit."
 )
 
 // messageForPort returns a message for the given port based on the
@@ -581,7 +581,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if err != nil || len(serviceIPMaps) == 0 || serviceIPMaps[0][svcName] == nil {
 			// The capmap does not contain IPs for this service yet. Usually this means
 			// the service hasn't been added to prefs and sent to control yet.
-			output.WriteString(fmt.Sprintf(msgServiceIPNotAssigned, svcName.String()))
+			output.WriteString(fmt.Sprintf(msgServiceWaitingApproval, svcName.String()))
 			ips = nil
 		} else {
 			output.WriteString(msgServeAvailable)
@@ -698,11 +698,11 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsNa
 	}
 
 	// TODO: validation needs to check nested foreground configs
-	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
+	if sc.IsTCPForwardingOnPort(dnsName, srvPort) {
 		return errors.New("cannot serve web; already serving TCP")
 	}
 
-	sc.SetWebHandler(st, h, dnsName, srvPort, mount, useTLS)
+	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS, st)
 
 	return nil
 }
@@ -938,7 +938,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 
 	hp := ipn.HostPort(net.JoinHostPort(hostName, portStr))
 
-	if sc.IsTCPForwardingOnPort(srvPort, dnsName) {
+	if sc.IsTCPForwardingOnPort(dnsName, srvPort) {
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 	var targetExists bool

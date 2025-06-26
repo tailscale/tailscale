@@ -247,7 +247,7 @@ func (sc *ServeConfig) IsTCPForwardingAny() bool {
 // IsTCPForwardingOnPort reports whether ServeConfig is currently forwarding
 // in TCPForward mode on the given port for a DNSName. DNSName will be either node's DNSName, or a
 // serviceName for service hosted on node. This is exclusive of Web/HTTPS serving.
-func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, dnsName string) bool {
+func (sc *ServeConfig) IsTCPForwardingOnPort(dnsName string, port uint16) bool {
 	if sc == nil {
 		return false
 	}
@@ -338,8 +338,9 @@ func (sc *ServeConfig) FindConfig(port uint16) (*ServeConfig, bool) {
 
 // SetWebHandler sets the given HTTPHandler at the specified host, port,
 // and mount in the serve config. sc.TCP is also updated to reflect web
-// serving usage of the given port.
-func (sc *ServeConfig) SetWebHandler(st *ipnstate.Status, handler *HTTPHandler, host string, port uint16, mount string, useTLS bool) {
+// serving usage of the given port. The st argument is needed when setting
+// a web handler for a service, other wise it can be nil.
+func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uint16, mount string, useTLS bool, st *ipnstate.Status) {
 	if sc == nil {
 		sc = new(ServeConfig)
 	}

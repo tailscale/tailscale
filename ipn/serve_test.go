@@ -235,7 +235,7 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.cfg.IsTCPForwardingOnPort(tt.port, tt.dns)
+			got := tt.cfg.IsTCPForwardingOnPort(tt.dns, tt.port)
 			if tt.want != got {
 				t.Errorf("IsTCPForwardingOnPort() = %v, want %v", got, tt.want)
 			}
