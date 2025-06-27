@@ -908,6 +908,9 @@ type TPMInfo struct {
 	SpecRevision int `json:",omitempty"`
 }
 
+// Present reports whether a TPM device is present on this machine.
+func (t *TPMInfo) Present() bool { return t != nil }
+
 // ServiceName is the name of a service, of the form `svc:dns-label`. Services
 // represent some kind of application provided for users of the tailnet with a
 // MagicDNS name and possibly dedicated IP addresses. Currently (2024-01-21),

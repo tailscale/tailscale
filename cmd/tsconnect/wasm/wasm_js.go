@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"log"
 	"math/rand/v2"
 	"net"
@@ -577,6 +578,29 @@ func (s *jsStateStore) ReadState(id ipn.StateKey) ([]byte, error) {
 func (s *jsStateStore) WriteState(id ipn.StateKey, bs []byte) error {
 	s.jsStateStorage.Call("setState", string(id), hex.EncodeToString(bs))
 	return nil
+}
+
+func (s *jsStateStore) All() iter.Seq2[ipn.StateKey, []byte] {
+	return func(yield func(ipn.StateKey, []byte) bool) {
+		jsValue := s.jsStateStorage.Call("all")
+		if jsValue.String() == "" {
+			return
+		}
+		buf, err := hex.DecodeString(jsValue.String())
+		if err != nil {
+			return
+		}
+		var state map[string][]byte
+		if err := json.Unmarshal(buf, &state); err != nil {
+			return
+		}
+
+		for k, v := range state {
+			if !yield(ipn.StateKey(k), v) {
+				break
+			}
+		}
+	}
 }
 
 func mapSlice[T any, M any](a []T, f func(T) M) []M {

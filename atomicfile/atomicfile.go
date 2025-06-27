@@ -48,5 +48,9 @@ func WriteFile(filename string, data []byte, perm os.FileMode) (err error) {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return rename(tmpName, filename)
+	return Rename(tmpName, filename)
 }
+
+// Rename srcFile to dstFile, similar to [os.Rename] but preserving file
+// attributes and ACLs on Windows.
+func Rename(srcFile, dstFile string) error { return rename(srcFile, dstFile) }

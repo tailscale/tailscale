@@ -10,4 +10,7 @@ export const sessionStateStorage: IPNStateStorage = {
   getState(id) {
     return window.sessionStorage[`ipn-state-${id}`] || ""
   },
+  all() {
+    return JSON.stringify(window.sessionStorage)
+  },
 }

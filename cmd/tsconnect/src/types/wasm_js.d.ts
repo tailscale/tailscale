@@ -44,6 +44,7 @@ declare global {
   interface IPNStateStorage {
     setState(id: string, value: string): void
     getState(id: string): string
+    all(): string
   }
 
   type IPNConfig = {
