@@ -217,6 +217,10 @@ func (s *tpmStore) All() iter.Seq2[ipn.StateKey, []byte] {
 	}
 }
 
+// Ensure tpmStore implements store.ExportableStore for migration to/from
+// store.FileStore.
+var _ store.ExportableStore = (*tpmStore)(nil)
+
 // The nested levels of encoding and encryption are confusing, so here's what's
 // going on in plain English.
 //
