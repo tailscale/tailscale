@@ -550,7 +550,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	ips := st.TailscaleIPs
 	host := dnsName
 	if forService {
-		host = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
+		host = svcName.WithoutPrefix()
 	}
 	hp = ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
 
@@ -617,11 +617,14 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		sort.Slice(mounts, func(i, j int) bool {
 			return len(mounts[i]) < len(mounts[j])
 		})
-
+		hostName := host
+		if forService {
+			hostName = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
+		}
 		for _, m := range mounts {
 			h := webConfig.Handlers[m]
 			t, d := srvTypeAndDesc(h)
-			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, host, portPart, m))
+			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, hostName, portPart, m))
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if tcpHandler != nil {
@@ -932,7 +935,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if svc == nil {
 			return errors.New("service does not exist")
 		}
-		hostName = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
+		hostName = svcName.WithoutPrefix()
 		webServeMap = svc.Web
 	}
 
