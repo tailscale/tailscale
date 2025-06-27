@@ -2203,6 +2203,51 @@ spec:
                                   won't make it *more* imbalanced.
                                   It's a required field.
                                 type: string
+                staticEndpoints:
+                  description: |-
+                    Configuration for 'static endpoints' on proxies in order to facilitate
+                    direct connections from other devices on the tailnet.
+                    See https://tailscale.com/kb/1445/kubernetes-operator-customization#static-endpoints.
+                  type: object
+                  required:
+                    - nodePort
+                  properties:
+                    nodePort:
+                      description: The configuration for static endpoints using NodePort Services.
+                      type: object
+                      required:
+                        - ports
+                      properties:
+                        ports:
+                          description: |-
+                            The port ranges from which the operator will select NodePorts for the Services.
+                            You must ensure that firewall rules allow UDP ingress traffic for these ports
+                            to the node's external IPs.
+                            The ports must be in the range of service node ports for the cluster (default `30000-32767`).
+                            See https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport.
+                          type: array
+                          minItems: 1
+                          items:
+                            type: object
+                            required:
+                              - port
+                            properties:
+                              endPort:
+                                description: |-
+                                  endPort indicates that the range of ports from port to endPort if set, inclusive,
+                                  should be used. This field cannot be defined if the port field is not defined.
+                                  The endPort must be either unset, or equal or greater than port.
+                                type: integer
+                              port:
+                                description: port represents a port selected to be used. This is a required field.
+                                type: integer
+                        selector:
+                          description: |-
+                            A selector which will be used to select the node's that will have their `ExternalIP`'s advertised
+                            by the ProxyGroup as Static Endpoints.
+                          type: object
+                          additionalProperties:
+                            type: string
                 tailscale:
                   description: |-
                     TailscaleConfig contains options to configure the tailscale-specific

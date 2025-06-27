@@ -26,7 +26,9 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	klabels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	toolscache "k8s.io/client-go/tools/cache"
@@ -39,6 +41,7 @@ import (
 	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
@@ -228,6 +231,17 @@ waitOnline:
 	return s, tsc
 }
 
+// predicate function for filtering to ensure we *don't* reconcile on tailscale managed Kubernetes Services
+func serviceManagedResourceFilterPredicate() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(object client.Object) bool {
+		if svc, ok := object.(*corev1.Service); !ok {
+			return false
+		} else {
+			return !isManagedResource(svc)
+		}
+	})
+}
+
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
 func runReconcilers(opts reconcilerOpts) {
@@ -374,7 +388,7 @@ func runReconcilers(opts reconcilerOpts) {
 	ingressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(ingressSvcFromEps(mgr.GetClient(), opts.log.Named("service-pg-reconciler")))
 	err = builder.
 		ControllerManagedBy(mgr).
-		For(&corev1.Service{}).
+		For(&corev1.Service{}, builder.WithPredicates(serviceManagedResourceFilterPredicate())).
 		Named("service-pg-reconciler").
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
@@ -519,16 +533,19 @@ func runReconcilers(opts reconcilerOpts) {
 	// ProxyClass reconciler gets triggered on ServiceMonitor CRD changes to ensure that any ProxyClasses, that
 	// define that a ServiceMonitor should be created, were set to invalid because the CRD did not exist get
 	// reconciled if the CRD is applied at a later point.
+	kPortRange := getServicesNodePortRange(context.Background(), mgr.GetClient(), opts.tailscaleNamespace, startlog)
 	serviceMonitorFilter := handler.EnqueueRequestsFromMapFunc(proxyClassesWithServiceMonitor(mgr.GetClient(), opts.log))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyClass{}).
 		Named("proxyclass-reconciler").
 		Watches(&apiextensionsv1.CustomResourceDefinition{}, serviceMonitorFilter).
 		Complete(&ProxyClassReconciler{
-			Client:   mgr.GetClient(),
-			recorder: eventRecorder,
-			logger:   opts.log.Named("proxyclass-reconciler"),
-			clock:    tstime.DefaultClock{},
+			Client:        mgr.GetClient(),
+			nodePortRange: kPortRange,
+			recorder:      eventRecorder,
+			tsNamespace:   opts.tailscaleNamespace,
+			logger:        opts.log.Named("proxyclass-reconciler"),
+			clock:         tstime.DefaultClock{},
 		})
 	if err != nil {
 		startlog.Fatal("could not create proxyclass reconciler: %v", err)
@@ -587,9 +604,11 @@ func runReconcilers(opts reconcilerOpts) {
 	// ProxyGroup reconciler.
 	ownedByProxyGroupFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.ProxyGroup{})
 	proxyClassFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForProxyGroup(mgr.GetClient(), startlog))
+	nodeFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(nodeHandlerForProxyGroup(mgr.GetClient(), opts.defaultProxyClass, startlog))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}).
 		Named("proxygroup-reconciler").
+		Watches(&corev1.Service{}, ownedByProxyGroupFilter).
 		Watches(&appsv1.StatefulSet{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ConfigMap{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ServiceAccount{}, ownedByProxyGroupFilter).
@@ -597,6 +616,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&rbacv1.Role{}, ownedByProxyGroupFilter).
 		Watches(&rbacv1.RoleBinding{}, ownedByProxyGroupFilter).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForProxyGroup).
+		Watches(&corev1.Node{}, nodeFilterForProxyGroup).
 		Complete(&ProxyGroupReconciler{
 			recorder: eventRecorder,
 			Client:   mgr.GetClient(),
@@ -834,6 +854,64 @@ func proxyClassHandlerForConnector(cl client.Client, logger *zap.SugaredLogger) 
 		for _, conn := range connList.Items {
 			if conn.Spec.ProxyClass == proxyClassName {
 				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&conn)})
+			}
+		}
+		return reqs
+	}
+}
+
+// nodeHandlerForProxyGroup returns a handler that, for a given Node, returns a
+// list of reconcile requests for ProxyGroups that should be reconciled for the
+// Node event. ProxyGroups need to be reconciled for Node events if they are
+// configured to expose tailscaled static endpoints to tailnet using NodePort
+// Services.
+func nodeHandlerForProxyGroup(cl client.Client, defaultProxyClass string, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		pgList := new(tsapi.ProxyGroupList)
+		if err := cl.List(ctx, pgList); err != nil {
+			logger.Debugf("error listing ProxyGroups for ProxyClass: %v", err)
+			return nil
+		}
+
+		reqs := make([]reconcile.Request, 0)
+		for _, pg := range pgList.Items {
+			if pg.Spec.ProxyClass == "" && defaultProxyClass == "" {
+				continue
+			}
+
+			pc := defaultProxyClass
+			if pc == "" {
+				pc = pg.Spec.ProxyClass
+			}
+
+			proxyClass := &tsapi.ProxyClass{}
+			if err := cl.Get(ctx, types.NamespacedName{Name: pc}, proxyClass); err != nil {
+				logger.Debugf("error getting ProxyClass %q: %v", pg.Spec.ProxyClass, err)
+				return nil
+			}
+
+			stat := proxyClass.Spec.StaticEndpoints
+			if stat == nil {
+				continue
+			}
+
+			// If the selector is empty, all nodes match.
+			// TODO(ChaosInTheCRD): think about how this must be handled if we want to limit the number of nodes used
+			if len(stat.NodePort.Selector) == 0 {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pg)})
+				continue
+			}
+
+			selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+				MatchLabels: stat.NodePort.Selector,
+			})
+			if err != nil {
+				logger.Debugf("error converting `spec.staticEndpoints.nodePort.selector` to Selector: %v", err)
+				return nil
+			}
+
+			if selector.Matches(klabels.Set(o.GetLabels())) {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pg)})
 			}
 		}
 		return reqs
