@@ -213,7 +213,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 			h.log.Info("finished uploading the recording")
 			return
 		}
-		msg := fmt.Sprintf("connection to the session recorder errorred: %v;", err)
+		msg := fmt.Sprintf("connection to the session recorder errored: %v;", err)
 		if h.failOpen {
 			msg += msg + "; failure mode is 'fail open'; continuing session without recording."
 			h.log.Info(msg)
