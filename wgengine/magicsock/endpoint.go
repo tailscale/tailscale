@@ -1129,7 +1129,12 @@ func (de *endpoint) discoPingTimeout(txid stun.TxID) {
 	if !ok {
 		return
 	}
-	if debugDisco() || !de.bestAddr.ap.IsValid() || mono.Now().After(de.trustBestAddrUntil) {
+	bestUntrusted := mono.Now().After(de.trustBestAddrUntil)
+	if sp.to == de.bestAddr.epAddr && sp.to.vni.isSet() && bestUntrusted {
+		// TODO(jwhited): consider applying this to direct UDP paths as well
+		de.clearBestAddrLocked()
+	}
+	if debugDisco() || !de.bestAddr.ap.IsValid() || bestUntrusted {
 		de.c.dlogf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort())
 	}
 	de.removeSentDiscoPingLocked(txid, sp, discoPingTimedOut)
