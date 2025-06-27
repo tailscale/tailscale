@@ -130,45 +130,45 @@ func TestHasPathHandler(t *testing.T) {
 
 func TestIsTCPForwardingOnPort(t *testing.T) {
 	tests := []struct {
-		name string
-		cfg  ServeConfig
-		dns  string
-		port uint16
-		want bool
+		name    string
+		cfg     ServeConfig
+		svcName tailcfg.ServiceName
+		port    uint16
+		want    bool
 	}{
 		{
-			name: "empty-config",
-			cfg:  ServeConfig{},
-			dns:  "foo.test.ts.net",
-			port: 80,
-			want: false,
+			name:    "empty-config",
+			cfg:     ServeConfig{},
+			svcName: "foo.test.ts.net",
+			port:    80,
+			want:    false,
 		},
 		{
 			name: "node-tcp-config-match",
 			cfg: ServeConfig{
 				TCP: map[uint16]*TCPPortHandler{80: {TCPForward: "10.0.0.123:3000"}},
 			},
-			dns:  "foo.test.ts.net",
-			port: 80,
-			want: true,
+			svcName: "foo.test.ts.net",
+			port:    80,
+			want:    true,
 		},
 		{
 			name: "node-tcp-config-no-match",
 			cfg: ServeConfig{
 				TCP: map[uint16]*TCPPortHandler{80: {TCPForward: "10.0.0.123:3000"}},
 			},
-			dns:  "foo.test.ts.net",
-			port: 443,
-			want: false,
+			svcName: "foo.test.ts.net",
+			port:    443,
+			want:    false,
 		},
 		{
 			name: "node-tcp-config-no-match-with-service",
 			cfg: ServeConfig{
 				TCP: map[uint16]*TCPPortHandler{80: {TCPForward: "10.0.0.123:3000"}},
 			},
-			dns:  "svc:bar",
-			port: 80,
-			want: false,
+			svcName: "svc:bar",
+			port:    80,
+			want:    false,
 		},
 		{
 			name: "node-web-config-no-match",
@@ -182,9 +182,9 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 					},
 				},
 			},
-			dns:  "foo.test.ts.net",
-			port: 80,
-			want: false,
+			svcName: "foo.test.ts.net",
+			port:    80,
+			want:    false,
 		},
 		{
 			name: "service-tcp-config-match",
@@ -195,9 +195,9 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 					},
 				},
 			},
-			dns:  "svc:foo",
-			port: 80,
-			want: true,
+			svcName: "svc:foo",
+			port:    80,
+			want:    true,
 		},
 		{
 			name: "service-tcp-config-no-match",
@@ -208,9 +208,9 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 					},
 				},
 			},
-			dns:  "svc:bar",
-			port: 80,
-			want: false,
+			svcName: "svc:bar",
+			port:    80,
+			want:    false,
 		},
 		{
 			name: "service-web-config-no-match",
@@ -228,14 +228,14 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 					},
 				},
 			},
-			dns:  "svc:foo",
-			port: 80,
-			want: false,
+			svcName: "svc:foo",
+			port:    80,
+			want:    false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.cfg.IsTCPForwardingOnPort(tt.dns, tt.port)
+			got := tt.cfg.IsTCPForwardingOnPort(tt.port, tt.svcName)
 			if tt.want != got {
 				t.Errorf("IsTCPForwardingOnPort() = %v, want %v", got, tt.want)
 			}

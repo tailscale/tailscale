@@ -245,14 +245,15 @@ func (sc *ServeConfig) IsTCPForwardingAny() bool {
 }
 
 // IsTCPForwardingOnPort reports whether ServeConfig is currently forwarding
-// in TCPForward mode on the given port for a DNSName. DNSName will be either node's DNSName, or a
-// serviceName for service hosted on node. This is exclusive of Web/HTTPS serving.
-func (sc *ServeConfig) IsTCPForwardingOnPort(dnsName string, port uint16) bool {
+// in TCPForward mode on the given port for local or a service. svcName will
+// either be empty string for local serve or a serviceName for service hosted
+// on node. Notice TCPForwarding is exclusive with Web/HTTPS serving.
+func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, svcName tailcfg.ServiceName) bool {
 	if sc == nil {
 		return false
 	}
 
-	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+	if err := svcName.Validate(); err == nil {
 		svc, ok := sc.Services[svcName]
 		if !ok || svc == nil {
 			return false
@@ -263,25 +264,26 @@ func (sc *ServeConfig) IsTCPForwardingOnPort(dnsName string, port uint16) bool {
 	} else if sc.TCP[port] == nil {
 		return false
 	}
-	return !sc.IsServingWeb(port, dnsName)
+	return !sc.IsServingWeb(port, svcName)
 }
 
-// IsServingWeb reports whether ServeConfig is currently serving Web
-// (HTTP/HTTPS) on the given port for a DNSName. DNSName will be either node's DNSName, or a
-// serviceName for service hosted on node. This is exclusive of TCPForwarding.
-func (sc *ServeConfig) IsServingWeb(port uint16, dnsName string) bool {
-	return sc.IsServingHTTP(port, dnsName) || sc.IsServingHTTPS(port, dnsName)
+// IsServingWeb reports whether ServeConfig is currently serving Web (HTTP/HTTPS)
+// on the given port for local or a service. DNSName will be either node's DNSName, or a
+// serviceName for service hosted on node. This is exclusive with TCPForwarding.
+func (sc *ServeConfig) IsServingWeb(port uint16, svcName tailcfg.ServiceName) bool {
+	return sc.IsServingHTTP(port, svcName) || sc.IsServingHTTPS(port, svcName)
 }
 
 // IsServingHTTPS reports whether ServeConfig is currently serving HTTPS on
-// the given port for a DNSName. DNSName will be either node's DNSName, or a
-// serviceName for service hosted on node. This is exclusive of HTTP and TCPForwarding.
-func (sc *ServeConfig) IsServingHTTPS(port uint16, dnsName string) bool {
+// the given port for local or a service. svcName will be either empty string
+// for local serve, or a serviceName for service hosted on node. This is exclusive
+// with HTTP and TCPForwarding.
+func (sc *ServeConfig) IsServingHTTPS(port uint16, svcName tailcfg.ServiceName) bool {
 	if sc == nil {
 		return false
 	}
 	var tcpHandlers map[uint16]*TCPPortHandler
-	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+	if err := svcName.Validate(); err == nil {
 		if svc := sc.Services[svcName]; svc != nil {
 			tcpHandlers = svc.TCP
 		}
@@ -297,14 +299,15 @@ func (sc *ServeConfig) IsServingHTTPS(port uint16, dnsName string) bool {
 }
 
 // IsServingHTTP reports whether ServeConfig is currently serving HTTP on the
-// given port for a DNSName. DNSName will be either node's DNSName, or a
-// serviceName for service hosted on node. This is exclusive of HTTPS and TCPForwarding.
-func (sc *ServeConfig) IsServingHTTP(port uint16, dnsName string) bool {
+// given port for local or a service. svcName will be either empty string for
+// local serve, or a serviceName for service hosted on node. This is exclusive
+// with HTTPS and TCPForwarding.
+func (sc *ServeConfig) IsServingHTTP(port uint16, svcName tailcfg.ServiceName) bool {
 	if sc == nil {
 		return false
 	}
-	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
-		if svc, ok := sc.Services[svcName]; ok && svc != nil {
+	if err := svcName.Validate(); err == nil {
+		if svc := sc.Services[svcName]; svc != nil {
 			if svc.TCP[port] != nil {
 				return svc.TCP[port].HTTP
 			}
