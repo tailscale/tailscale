@@ -5,23 +5,25 @@
 # values will be created in the operator namespace. If unset a Secret named
 # operator-oauth must be precreated or oauthSecretVolume needs to be adjusted.
 # This block will be overridden by oauthSecretVolume, if set.
-oauth: {}
-  # clientId: ""
-  # clientSecret: ""
+oauth:
+    {}
+    # clientId: ""
+    # clientSecret: ""
 
 # Secret volume.
 # If set it defines the volume the oauth secrets will be mounted from.
 # The volume needs to contain two files named `client_id` and `client_secret`.
 # If unset the volume will reference the Secret named operator-oauth.
 # This block will override the oauth block.
-oauthSecretVolume: {}
-  # csi:
-  #   driver: secrets-store.csi.k8s.io
-  #   readOnly: true
-  #   volumeAttributes:
-  #     secretProviderClass: tailscale-oauth
-  #
-  ## NAME is pre-defined!
+oauthSecretVolume:
+    {}
+    # csi:
+    #   driver: secrets-store.csi.k8s.io
+    #   readOnly: true
+    #   volumeAttributes:
+    #     secretProviderClass: tailscale-oauth
+    #
+    ## NAME is pre-defined!
 
 # installCRDs determines whether tailscale.com CRDs should be installed as part
 # of chart installation. We do not use Helm's CRD installation mechanism as that
@@ -30,51 +32,51 @@ oauthSecretVolume: {}
 installCRDs: true
 
 operatorConfig:
-  # ACL tag that operator will be tagged with. Operator must be made owner of
-  # these tags
-  # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
-  # Multiple tags are defined as array items and passed to the operator as a comma-separated string
-  defaultTags:
-    - "tag:k8s-operator"
+    # ACL tag that operator will be tagged with. Operator must be made owner of
+    # these tags
+    # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
+    # Multiple tags are defined as array items and passed to the operator as a comma-separated string
+    defaultTags:
+        - "tag:k8s-operator"
 
-  image:
-    # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/k8s-operator.
-    repository: tailscale/k8s-operator
-    # Digest will be prioritized over tag. If neither are set appVersion will be
-    # used.
-    tag: ""
-    digest: ""
-    pullPolicy: Always
-  logging: "info" # info, debug, dev
-  hostname: "tailscale-operator"
-  nodeSelector:
-    kubernetes.io/os: linux
+    image:
+        # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/k8s-operator.
+        repository: tailscale/k8s-operator
+        # Digest will be prioritized over tag. If neither are set appVersion will be
+        # used.
+        tag: ""
+        digest: ""
+        pullPolicy: Always
+    logging: "info" # info, debug, dev
+    hostname: "tailscale-operator"
+    nodeSelector:
+        kubernetes.io/os: linux
 
-  resources: {}
+    resources: {}
 
-  podAnnotations: {}
-  podLabels: {}
+    podAnnotations: {}
+    podLabels: {}
 
-  serviceAccountAnnotations: {}
-  # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/tailscale-operator-role
+    serviceAccountAnnotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/tailscale-operator-role
 
-  tolerations: []
+    tolerations: []
 
-  affinity: {}
+    affinity: {}
 
-  podSecurityContext: {}
+    podSecurityContext: {}
 
-  securityContext: {}
+    securityContext: {}
 
-  extraEnv: []
-  # - name: EXTRA_VAR1
-  #   value: "value1"
-  # - name: EXTRA_VAR2
-  #   value: "value2"
+    extraEnv: []
+    # - name: EXTRA_VAR1
+    #   value: "value1"
+    # - name: EXTRA_VAR2
+    #   value: "value2"
 
 # In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
 ingressClass:
-  enabled: true
+    enabled: true
 
 # proxyConfig contains configuraton that will be applied to any ingress/egress
 # proxies created by the operator.
@@ -85,29 +87,36 @@ ingressClass:
 # If you need more configuration options, take a look at ProxyClass:
 # https://tailscale.com/kb/1445/kubernetes-operator-customization#cluster-resource-customization-using-proxyclass-custom-resource
 proxyConfig:
-  image:
-    # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/tailscale.
-    repository: tailscale/tailscale
-    # Digest will be prioritized over tag. If neither are set appVersion will be
-    # used.
-    tag: ""
-    digest: ""
-  # ACL tag that operator will tag proxies with. Operator must be made owner of
-  # these tags
-  # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
-  # Multiple tags can be passed as a comma-separated string i.e 'tag:k8s-proxies,tag:prod'.
-  # Note that if you pass multiple tags to this field via `--set` flag to helm upgrade/install commands you must escape the comma (for example, "tag:k8s-proxies\,tag:prod"). See https://github.com/helm/helm/issues/1556
-  defaultTags: "tag:k8s"
-  firewallMode: auto
-  # If defined, this proxy class will be used as the default proxy class for
-  # service and ingress resources that do not have a proxy class defined. It
-  # does not apply to Connector resources.
-  defaultProxyClass: ""
+    image:
+        # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/tailscale.
+        repository: tailscale/tailscale
+        # Digest will be prioritized over tag. If neither are set appVersion will be
+        # used.
+        tag: ""
+        digest: ""
+    # ACL tag that operator will tag proxies with. Operator must be made owner of
+    # these tags
+    # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
+    # Multiple tags can be passed as a comma-separated string i.e 'tag:k8s-proxies,tag:prod'.
+    # Note that if you pass multiple tags to this field via `--set` flag to helm upgrade/install commands you must escape the comma (for example, "tag:k8s-proxies\,tag:prod"). See https://github.com/helm/helm/issues/1556
+    defaultTags: "tag:k8s"
+    firewallMode: auto
+    # If defined, this proxy class will be used as the default proxy class for
+    # service and ingress resources that do not have a proxy class defined. It
+    # does not apply to Connector resources.
+    defaultProxyClass: ""
 
 # apiServerProxyConfig allows to configure whether the operator should expose
 # Kubernetes API server.
 # https://tailscale.com/kb/1437/kubernetes-operator-api-server-proxy
 apiServerProxyConfig:
-  mode: "false" # "true", "false", "noauth"
+    # Set to "true" to enable the ClusterRole permissions required for the API
+    # server proxy to impersonate groups and users based on tailnet ACL grants.
+    # Required to deploy ProxyGroups of type "kube-apiserver" in auth mode.
+    authEnabled: "false" # "true", "false"
+
+    # If true or noauth, the operator will run an in-process API server proxy.
+    # Deprecated: use apiServerProxyConfig.authEnabled instead.
+    mode: "false" # "true", "false", "noauth"
 
 imagePullSecrets: []

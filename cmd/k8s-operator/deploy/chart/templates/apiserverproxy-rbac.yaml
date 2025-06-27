@@ -1,7 +1,18 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 
-{{ if eq .Values.apiServerProxyConfig.mode "true" }}
+# The ServiceAccount that ProxyGroups of type "api-server" will use.
+# Does not need any special permissions unless auth is enabled.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-server-proxy
+  namespace: {{ .Release.Namespace }}
+---
+# If deprecated setting used, enable both legacy and new workflows.
+# If new setting used, enable only new workflow.
+{{ if or (eq .Values.apiServerProxyConfig.mode "true")
+  (eq .Values.apiServerProxyConfig.authEnabled "true") }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -16,8 +27,13 @@ kind: ClusterRoleBinding
 metadata:
   name: tailscale-auth-proxy
 subjects:
+{{- if eq .Values.apiServerProxyConfig.mode "true" }}
 - kind: ServiceAccount
   name: operator
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+- kind: ServiceAccount
+  name: api-server-proxy
   namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole

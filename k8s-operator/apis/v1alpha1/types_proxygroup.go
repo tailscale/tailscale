@@ -49,7 +49,7 @@ type ProxyGroupList struct {
 }
 
 type ProxyGroupSpec struct {
-	// Type of the ProxyGroup proxies. Supported types are egress and ingress.
+	// Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
 	// Type is immutable once a ProxyGroup is created.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ProxyGroup type is immutable"
 	Type ProxyGroupType `json:"type"`
@@ -114,12 +114,13 @@ type TailnetDevice struct {
 }
 
 // +kubebuilder:validation:Type=string
-// +kubebuilder:validation:Enum=egress;ingress
+// +kubebuilder:validation:Enum=egress;ingress;kube-apiserver
 type ProxyGroupType string
 
 const (
-	ProxyGroupTypeEgress  ProxyGroupType = "egress"
-	ProxyGroupTypeIngress ProxyGroupType = "ingress"
+	ProxyGroupTypeEgress              ProxyGroupType = "egress"
+	ProxyGroupTypeIngress             ProxyGroupType = "ingress"
+	ProxyGroupTypeKubernetesAPIServer ProxyGroupType = "kube-apiserver"
 )
 
 // +kubebuilder:validation:Type=string

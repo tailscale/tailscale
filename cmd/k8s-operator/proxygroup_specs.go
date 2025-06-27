@@ -29,6 +29,9 @@ const deletionGracePeriodSeconds int64 = 360
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
 func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		return kubeAPIServerStatefulSet(pg, namespace, image)
+	}
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -135,6 +138,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Value: "$(POD_NAME)",
 			},
 			{
+				// TODO(tomhjp): This is tsrecorder-specific and does nothing. Delete.
 				Name:  "TS_STATE",
 				Value: "kube:$(POD_NAME)",
 			},
@@ -225,7 +229,122 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		// gracefully.
 		ss.Spec.Template.DeletionGracePeriodSeconds = ptr.To(deletionGracePeriodSeconds)
 	}
+
 	return ss, nil
+}
+
+func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string) (*appsv1.StatefulSet, error) {
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pg.Name,
+			Namespace:       namespace,
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr.To(pgReplicas(pg)),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: pgLabels(pg.Name, nil),
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:                       pg.Name,
+					Namespace:                  namespace,
+					Labels:                     pgLabels(pg.Name, nil),
+					DeletionGracePeriodSeconds: ptr.To[int64](10),
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: pg.Name,
+					Containers: []corev1.Container{
+						{
+							Name:  "k8s-proxy",
+							Image: image,
+							Env: []corev1.EnvVar{
+								{
+									// Used as default hostname and in Secret names.
+									Name: "POD_NAME",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.name",
+										},
+									},
+								},
+								{
+									// Used by kubeclient to post Events about the Pod's lifecycle.
+									Name: "POD_UID",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.uid",
+										},
+									},
+								},
+								{
+									// Used in an interpolated env var if metrics enabled.
+									Name: "POD_IP",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "status.podIP",
+										},
+									},
+								},
+								{
+									// Included for completeness with POD_IP and easier backwards compatibility in future.
+									Name: "POD_IPS",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "status.podIPs",
+										},
+									},
+								},
+								{
+									Name:  "TS_K8S_PROXY_CONFIG",
+									Value: "/etc/tsconfig/$(POD_NAME)/config.json",
+								},
+							},
+							VolumeMounts: func() []corev1.VolumeMount {
+								var mounts []corev1.VolumeMount
+
+								// TODO(tomhjp): Read config directly from the Secret instead.
+								for i := range pgReplicas(pg) {
+									mounts = append(mounts, corev1.VolumeMount{
+										Name:      fmt.Sprintf("k8s-proxy-config-%d", i),
+										ReadOnly:  true,
+										MountPath: fmt.Sprintf("/etc/tsconfig/%s-%d", pg.Name, i),
+									})
+								}
+
+								return mounts
+							}(),
+							Ports: []corev1.ContainerPort{
+								{
+									Name:          "k8s-proxy",
+									ContainerPort: 443,
+									Protocol:      corev1.ProtocolTCP,
+								},
+							},
+						},
+					},
+					Volumes: func() []corev1.Volume {
+						var volumes []corev1.Volume
+						for i := range pgReplicas(pg) {
+							volumes = append(volumes, corev1.Volume{
+								Name: fmt.Sprintf("k8s-proxy-config-%d", i),
+								VolumeSource: corev1.VolumeSource{
+									Secret: &corev1.SecretVolumeSource{
+										SecretName: pgConfigSecretName(pg.Name, i),
+									},
+								},
+							})
+						}
+
+						return volumes
+					}(),
+				},
+			},
+		},
+	}
+
+	return sts, nil
 }
 
 func pgServiceAccount(pg *tsapi.ProxyGroup, namespace string) *corev1.ServiceAccount {
@@ -265,9 +384,11 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 				},
 				ResourceNames: func() (secrets []string) {
 					for i := range pgReplicas(pg) {
+						podName := pgPodName(pg.Name, i)
 						secrets = append(secrets,
 							pgConfigSecretName(pg.Name, i),   // Config with auth key.
-							fmt.Sprintf("%s-%d", pg.Name, i), // State.
+							podName,                          // State for tailscale/tailscale.
+							fmt.Sprintf("%s-state", podName), // State for tailscale/k8s-proxy.
 						)
 					}
 					return secrets
@@ -308,11 +429,54 @@ func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
 	}
 }
 
+func proxyClusterRole(pg *tsapi.ProxyGroup) *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            fmt.Sprintf("%s-impersonation", pg.Name),
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"users", "groups"},
+				Verbs:     []string{"impersonate"},
+			},
+		},
+	}
+}
+
+func proxyClusterRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pg.Name,
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      pg.Name,
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			Kind: "ClusterRole",
+			Name: fmt.Sprintf("%s-impersonation", pg.Name),
+		},
+	}
+}
+
 func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.Secret) {
 	for i := range pgReplicas(pg) {
 		secrets = append(secrets, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            fmt.Sprintf("%s-%d", pg.Name, i),
+				Name: func() string {
+					if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+						return fmt.Sprintf("%s-%d-state", pg.Name, i)
+					}
+					return fmt.Sprintf("%s-%d", pg.Name, i)
+				}(),
 				Namespace:       namespace,
 				Labels:          pgSecretLabels(pg.Name, "state"),
 				OwnerReferences: pgOwnerReference(pg),
@@ -377,6 +541,18 @@ func pgReplicas(pg *tsapi.ProxyGroup) int32 {
 	}
 
 	return 2
+}
+
+func pgPodName(pgName string, i int32) string {
+	return fmt.Sprintf("%s-%d", pgName, i)
+}
+
+func pgHostname(pg *tsapi.ProxyGroup, i int32) string {
+	if pg.Spec.HostnamePrefix != "" {
+		return fmt.Sprintf("%s-%d", pg.Spec.HostnamePrefix, i)
+	}
+
+	return fmt.Sprintf("%s-%d", pg.Name, i)
 }
 
 func pgConfigSecretName(pgName string, i int32) string {
