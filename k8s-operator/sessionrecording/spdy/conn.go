@@ -4,11 +4,12 @@
 //go:build !plan9
 
 // Package spdy contains functionality for parsing SPDY streaming sessions. This
-// is used for 'kubectl exec' session recording.
+// is used for 'kubectl exec/attach' session recording.
 package spdy
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -24,29 +25,50 @@ import (
 )
 
 // New wraps the provided network connection and returns a connection whose reads and writes will get triggered as data is received on the hijacked connection.
-// The connection must be a hijacked connection for a 'kubectl exec' session using SPDY.
+// The connection must be a hijacked connection for a 'kubectl exec/attach' session using SPDY.
 // The hijacked connection is used to transmit SPDY streams between Kubernetes client ('kubectl') and the destination container.
 // Data read from the underlying network connection is data sent via one of the SPDY streams from the client to the container.
 // Data written to the underlying connection is data sent from the container to the client.
 // We parse the data and send everything for the stdout/stderr streams to the configured tsrecorder as an asciinema recording with the provided header.
 // https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#background-remotecommand-subprotocol
-func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, hasTerm bool, log *zap.SugaredLogger) net.Conn {
-	return &conn{
-		Conn:               nc,
-		rec:                rec,
-		ch:                 ch,
-		log:                log,
-		hasTerm:            hasTerm,
-		initialTermSizeSet: make(chan struct{}),
+func New(ctx context.Context, nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, hasTerm bool, log *zap.SugaredLogger) (net.Conn, error) {
+	lc := &conn{
+		Conn:                  nc,
+		ctx:                   ctx,
+		rec:                   rec,
+		ch:                    ch,
+		log:                   log,
+		hasTerm:               hasTerm,
+		initialCastHeaderSent: make(chan struct{}, 1),
 	}
+
+	// if there is no term, we don't need to wait for a resize message
+	if !hasTerm {
+		var err error
+		lc.writeCastHeaderOnce.Do(func() {
+			// If this is a session with a terminal attached,
+			// we must wait for the terminal width and
+			// height to be parsed from a resize message
+			// before sending CastHeader, else tsrecorder
+			// will not be able to play this recording.
+			err = lc.rec.WriteCastHeader(ch)
+			close(lc.initialCastHeaderSent)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("error writing CastHeader: %w", err)
+		}
+	}
+
+	return lc, nil
 }
 
 // conn is a wrapper around net.Conn. It reads the bytestream for a 'kubectl
-// exec' session streamed using SPDY protocol, sends session recording data to
+// exec/attach' session streamed using SPDY protocol, sends session recording data to
 // the configured recorder and forwards the raw bytes to the original
 // destination.
 type conn struct {
 	net.Conn
+	ctx context.Context
 	// rec knows how to send data written to it to a tsrecorder instance.
 	rec *tsrecorder.Client
 
@@ -63,7 +85,7 @@ type conn struct {
 	// CastHeader must be sent before any payload. If the session has a
 	// terminal attached, the CastHeader must have '.Width' and '.Height'
 	// fields set for the tsrecorder UI to be able to play the recording.
-	// For 'kubectl exec' sessions, terminal width and height are sent as a
+	// For 'kubectl exec/attach' sessions, terminal width and height are sent as a
 	// resize message on resize stream from the client when the session
 	// starts as well as at any time the client detects a terminal change.
 	// We can intercept the resize message on Read calls. As there is no
@@ -79,15 +101,10 @@ type conn struct {
 	// writeCastHeaderOnce is used to ensure CastHeader gets sent to tsrecorder once.
 	writeCastHeaderOnce sync.Once
 	hasTerm             bool // whether the session had TTY attached
-	// initialTermSizeSet channel gets sent a value once, when the Read has
-	// received a resize message and set the initial terminal size. It must
-	// be set to a buffered channel to prevent Reads being blocked on the
-	// first stdout/stderr write reading from the channel.
-	initialTermSizeSet chan struct{}
-	// sendInitialTermSizeSetOnce is used to ensure that a value is sent to
-	// initialTermSizeSet channel only once, when the initial resize message
-	// is received.
-	sendinitialTermSizeSetOnce sync.Once
+	// initialCastHeaderSent is a channel to ensure that the cast
+	// header is the first thing that is streamed to the session recorder.
+	// Otherwise the stream will fail.
+	initialCastHeaderSent chan struct{}
 
 	zlibReqReader zlibReader
 	// writeBuf is used to store data written to the connection that has not
@@ -124,7 +141,7 @@ func (c *conn) Read(b []byte) (int, error) {
 	}
 	c.readBuf.Next(len(sf.Raw)) // advance buffer past the parsed frame
 
-	if !sf.Ctrl { // data frame
+	if !sf.Ctrl && c.hasTerm { // data frame
 		switch sf.StreamID {
 		case c.resizeStreamID.Load():
 
@@ -140,10 +157,19 @@ func (c *conn) Read(b []byte) (int, error) {
 			// subsequent resize message, we need to send asciinema
 			// resize message.
 			var isInitialResize bool
-			c.sendinitialTermSizeSetOnce.Do(func() {
+			c.writeCastHeaderOnce.Do(func() {
 				isInitialResize = true
-				close(c.initialTermSizeSet) // unblock sending of CastHeader
+				// If this is a session with a terminal attached,
+				// we must wait for the terminal width and
+				// height to be parsed from a resize message
+				// before sending CastHeader, else tsrecorder
+				// will not be able to play this recording.
+				err = c.rec.WriteCastHeader(c.ch)
+				close(c.initialCastHeaderSent)
 			})
+			if err != nil {
+				return 0, fmt.Errorf("error writing CastHeader: %w", err)
+			}
 			if !isInitialResize {
 				if err := c.rec.WriteResize(c.ch.Height, c.ch.Width); err != nil {
 					return 0, fmt.Errorf("error writing resize message: %w", err)
@@ -190,24 +216,14 @@ func (c *conn) Write(b []byte) (int, error) {
 	if !sf.Ctrl {
 		switch sf.StreamID {
 		case c.stdoutStreamID.Load(), c.stderrStreamID.Load():
-			var err error
-			c.writeCastHeaderOnce.Do(func() {
-				// If this is a session with a terminal attached,
-				// we must wait for the terminal width and
-				// height to be parsed from a resize message
-				// before sending CastHeader, else tsrecorder
-				// will not be able to play this recording.
-				if c.hasTerm {
-					c.log.Debugf("write: waiting for the initial terminal size to be set before proceeding with sending the first payload")
-					<-c.initialTermSizeSet
+			// we must wait for confirmation that the initial cast header was sent before proceeding with any more writes
+			select {
+			case <-c.ctx.Done():
+				return 0, c.ctx.Err()
+			case <-c.initialCastHeaderSent:
+				if err := c.rec.WriteOutput(sf.Payload); err != nil {
+					return 0, fmt.Errorf("error sending payload to session recorder: %w", err)
 				}
-				err = c.rec.WriteCastHeader(c.ch)
-			})
-			if err != nil {
-				return 0, fmt.Errorf("error writing CastHeader: %w", err)
-			}
-			if err := c.rec.WriteOutput(sf.Payload); err != nil {
-				return 0, fmt.Errorf("error sending payload to session recorder: %w", err)
 			}
 		}
 	}
