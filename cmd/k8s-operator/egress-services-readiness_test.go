@@ -137,7 +137,7 @@ func setReady(svc *corev1.Service, cl tstime.Clock, l *zap.SugaredLogger, replic
 }
 
 func setPGReady(pg *tsapi.ProxyGroup, cl tstime.Clock, l *zap.SugaredLogger) {
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, "foo", "foo", pg.Generation, cl, l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, "foo", "foo", pg.Generation, cl, l)
 }
 
 func setEndpointForReplica(pg *tsapi.ProxyGroup, ordinal int32, eps *discoveryv1.EndpointSlice) {

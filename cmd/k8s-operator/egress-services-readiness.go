@@ -102,7 +102,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		msg = err.Error()
 		return res, err
 	}
-	if !tsoperator.ProxyGroupIsReady(pg) {
+	if !tsoperator.ProxyGroupAvailable(pg) {
 		l.Infof("ProxyGroup for Service is not ready, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
