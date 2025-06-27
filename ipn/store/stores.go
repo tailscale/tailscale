@@ -235,6 +235,23 @@ func (s *FileStore) All() iter.Seq2[ipn.StateKey, []byte] {
 	}
 }
 
+// Ensure FileStore implements ExportableStore for migration to/from
+// tpm.tpmStore.
+var _ ExportableStore = (*FileStore)(nil)
+
+// ExportableStore is an ipn.StateStore that can export all of its contents.
+// This interface is optional to implement, and used for migrating the state
+// between different store implementations.
+type ExportableStore interface {
+	ipn.StateStore
+
+	// All returns an iterator over all store keys. Using ReadState or
+	// WriteState is not safe while iterating and can lead to a deadlock. The
+	// order of keys in the iterator is not specified and may change between
+	// runs.
+	All() iter.Seq2[ipn.StateKey, []byte]
+}
+
 func maybeMigrateLocalStateFile(logf logger.Logf, path string) error {
 	path, toTPM := strings.CutPrefix(path, TPMPrefix)
 
@@ -297,10 +314,15 @@ func maybeMigrateLocalStateFile(logf logger.Logf, path string) error {
 	}
 	defer os.Remove(tmpPath)
 
+	fromExp, ok := from.(ExportableStore)
+	if !ok {
+		return fmt.Errorf("%T does not implement the exportableStore interface", from)
+	}
+
 	// Copy all the items. This is pretty inefficient, because both stores
 	// write the file to disk for each WriteState, but that's ok for a one-time
 	// migration.
-	for k, v := range from.All() {
+	for k, v := range fromExp.All() {
 		if err := to.WriteState(k, v); err != nil {
 			return err
 		}

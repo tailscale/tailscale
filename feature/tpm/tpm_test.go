@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"os"
 	"path/filepath"
@@ -20,8 +21,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
-	"tailscale.com/ipn/store/mem"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 )
 
 func TestPropToString(t *testing.T) {
@@ -251,7 +252,9 @@ func TestMigrateStateToTPM(t *testing.T) {
 			if err != nil {
 				t.Fatalf("migration failed: %v", err)
 			}
-			gotContent := maps.Collect(s.All())
+			gotContent := maps.Collect(s.(interface {
+				All() iter.Seq2[ipn.StateKey, []byte]
+			}).All())
 			if diff := cmp.Diff(content, gotContent); diff != "" {
 				t.Errorf("unexpected content after migration, diff:\n%s", diff)
 			}
@@ -285,7 +288,7 @@ func tpmSupported() bool {
 
 type mockTPMSealProvider struct {
 	path string
-	mem.Store
+	data map[ipn.StateKey][]byte
 }
 
 func newMockTPMSeal(logf logger.Logf, path string) (ipn.StateStore, error) {
@@ -293,7 +296,7 @@ func newMockTPMSeal(logf logger.Logf, path string) (ipn.StateStore, error) {
 	if !ok {
 		return nil, fmt.Errorf("%q missing tpmseal: prefix", path)
 	}
-	s := &mockTPMSealProvider{path: path, Store: mem.Store{}}
+	s := &mockTPMSealProvider{path: path}
 	buf, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, s.flushState()
@@ -312,24 +315,28 @@ func newMockTPMSeal(logf logger.Logf, path string) (ipn.StateStore, error) {
 	if data.Key == "" || data.Nonce == "" {
 		return nil, fmt.Errorf("%q missing key or nonce", path)
 	}
-	for k, v := range data.Data {
-		s.Store.WriteState(k, v)
-	}
+	s.data = data.Data
 	return s, nil
 }
 
+func (p *mockTPMSealProvider) ReadState(k ipn.StateKey) ([]byte, error) {
+	return p.data[k], nil
+}
+
 func (p *mockTPMSealProvider) WriteState(k ipn.StateKey, v []byte) error {
-	if err := p.Store.WriteState(k, v); err != nil {
-		return err
-	}
+	mak.Set(&p.data, k, v)
 	return p.flushState()
+}
+
+func (p *mockTPMSealProvider) All() iter.Seq2[ipn.StateKey, []byte] {
+	return maps.All(p.data)
 }
 
 func (p *mockTPMSealProvider) flushState() error {
 	data := map[string]any{
 		"key":   "foo",
 		"nonce": "bar",
-		"data":  maps.Collect(p.Store.All()),
+		"data":  p.data,
 	}
 	buf, err := json.Marshal(data)
 	if err != nil {
