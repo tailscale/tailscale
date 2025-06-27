@@ -381,7 +381,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if len(args) > 0 {
 				target = args[0]
 			}
-			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, target, funnel)
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel)
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -491,12 +491,12 @@ func serveFromPortHandler(tcp *ipn.TCPPortHandler) serveType {
 	}
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
 		useTLS := srvType == serveTypeHTTPS
-		err := e.applyWebServe(sc, st, dnsName, srvPort, useTLS, mount, target)
+		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
@@ -549,8 +549,10 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	var tcpHandler *ipn.TCPPortHandler
 	ips := st.TailscaleIPs
 	host := dnsName
+	displayedHost := dnsName
 	if forService {
-		host = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
+		displayedHost = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
+		host = svcName.WithoutPrefix()
 	}
 	hp = ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
 
@@ -590,7 +592,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString("\n\n")
 		svc := sc.Services[svcName]
 		if srvType == serveTypeTun && svc.Tun {
-			output.WriteString(fmt.Sprintf(msgRunningTunService, host))
+			output.WriteString(fmt.Sprintf(msgRunningTunService, displayedHost))
 			output.WriteString("\n")
 			output.WriteString(fmt.Sprintf(msgDisableServiceTun, dnsName))
 			output.WriteString("\n")
@@ -617,11 +619,10 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		sort.Slice(mounts, func(i, j int) bool {
 			return len(mounts[i]) < len(mounts[j])
 		})
-
 		for _, m := range mounts {
 			h := webConfig.Handlers[m]
 			t, d := srvTypeAndDesc(h)
-			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, host, portPart, m))
+			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, displayedHost, portPart, m))
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if tcpHandler != nil {
@@ -632,7 +633,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			tlsStatus = "TLS terminated"
 		}
 
-		output.WriteString(fmt.Sprintf("|-- tcp://%s (%s)\n", hp, tlsStatus))
+		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", displayedHost, srvPort, tlsStatus))
 		for _, a := range ips {
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
@@ -661,7 +662,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	return output.String()
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16, useTLS bool, mount, target string) error {
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target string) error {
 	h := new(ipn.HTTPHandler)
 	switch {
 	case strings.HasPrefix(target, "text:"):
@@ -702,7 +703,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsNa
 		return errors.New("cannot serve web; already serving TCP")
 	}
 
-	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS, st)
+	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS)
 
 	return nil
 }
@@ -932,7 +933,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if svc == nil {
 			return errors.New("service does not exist")
 		}
-		hostName = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
+		hostName = svcName.WithoutPrefix()
 		webServeMap = svc.Web
 	}
 

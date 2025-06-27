@@ -268,7 +268,7 @@ func serveOnLocalTailscaled(ctx context.Context, lc *local.Client, st *ipnstate.
 	foregroundSc.SetFunnel(serverURL, dstPort, shouldFunnel)
 	foregroundSc.SetWebHandler(&ipn.HTTPHandler{
 		Proxy: fmt.Sprintf("https://%s", net.JoinHostPort(serverURL, strconv.Itoa(int(dstPort)))),
-	}, serverURL, uint16(*flagPort), "/", true, st)
+	}, serverURL, uint16(*flagPort), "/", true)
 	err = lc.SetServeConfig(ctx, sc)
 	if err != nil {
 		return nil, watcherChan, fmt.Errorf("could not set serve config: %v", err)

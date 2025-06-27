@@ -1016,6 +1016,7 @@ func (b *LocalBackend) webServerConfig(hostname string, forVIPService tailcfg.Se
 		return c, false
 	}
 	if forVIPService != "" {
+		key = ipn.HostPort(fmt.Sprintf("%s:%v", forVIPService.WithoutPrefix(), port))
 		return b.serveConfig.FindServiceWeb(forVIPService, key)
 	}
 	return b.serveConfig.FindWeb(key)

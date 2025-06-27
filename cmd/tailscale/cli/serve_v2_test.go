@@ -1321,7 +1321,7 @@ func TestMessageForPort(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"foo.test.ts.net:80": {
+							"foo:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1365,7 +1365,7 @@ func TestMessageForPort(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar.test.ts.net:80": {
+							"bar:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1409,7 +1409,7 @@ func TestMessageForPort(t *testing.T) {
 							2200: {HTTPS: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"foo.test.ts.net:2200": {
+							"foo:2200": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1654,12 +1654,9 @@ func TestSetServe(t *testing.T) {
 		expectErr   bool
 	}{
 		{
-			name: "add new handler",
-			desc: "add a new http handler to empty config",
-			cfg:  &ipn.ServeConfig{},
-			st: &ipnstate.Status{
-				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
-			},
+			name:      "add new handler",
+			desc:      "add a new http handler to empty config",
+			cfg:       &ipn.ServeConfig{},
 			dnsName:   "foo.test.ts.net",
 			srvType:   serveTypeHTTP,
 			srvPort:   80,
@@ -1689,9 +1686,6 @@ func TestSetServe(t *testing.T) {
 					},
 				},
 			},
-			st: &ipnstate.Status{
-				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
-			},
 			dnsName:   "foo.test.ts.net",
 			srvType:   serveTypeHTTP,
 			srvPort:   80,
@@ -1714,9 +1708,6 @@ func TestSetServe(t *testing.T) {
 			cfg: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "http://localhost:3000"}},
 			},
-			st: &ipnstate.Status{
-				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
-			},
 			dnsName:   "foo.test.ts.net",
 			srvType:   serveTypeHTTP,
 			srvPort:   80,
@@ -1728,9 +1719,7 @@ func TestSetServe(t *testing.T) {
 			name: "add new service handler",
 			desc: "add a new service TCP handler to empty config",
 			cfg:  &ipn.ServeConfig{},
-			st: &ipnstate.Status{
-				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
-			},
+
 			dnsName: "svc:bar",
 			srvType: serveTypeTCP,
 			srvPort: 80,
@@ -1752,9 +1741,6 @@ func TestSetServe(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "127.0.0.1:3000"}},
 					},
 				},
-			},
-			st: &ipnstate.Status{
-				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
 			},
 			dnsName: "svc:bar",
 			srvType: serveTypeTCP,
@@ -1778,9 +1764,6 @@ func TestSetServe(t *testing.T) {
 					},
 				},
 			},
-			st: &ipnstate.Status{
-				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
-			},
 			dnsName:   "svc:bar",
 			srvType:   serveTypeHTTP,
 			srvPort:   80,
@@ -1789,12 +1772,9 @@ func TestSetServe(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "add new service handler",
-			desc: "add a new service HTTP handler to empty config",
-			cfg:  &ipn.ServeConfig{},
-			st: &ipnstate.Status{
-				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
-			},
+			name:      "add new service handler",
+			desc:      "add a new service HTTP handler to empty config",
+			cfg:       &ipn.ServeConfig{},
 			dnsName:   "svc:bar",
 			srvType:   serveTypeHTTP,
 			srvPort:   80,
@@ -1805,7 +1785,7 @@ func TestSetServe(t *testing.T) {
 					"svc:bar": {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar.test.ts.net:80": {
+							"bar:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1816,12 +1796,131 @@ func TestSetServe(t *testing.T) {
 			},
 		},
 		{
-			name: "add new service handler",
-			desc: "add a new service handler in tun mode to empty config",
-			cfg:  &ipn.ServeConfig{},
-			st: &ipnstate.Status{
-				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
+			name: "update existing service handler",
+			desc: "update an existing service HTTP handler",
+			cfg: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:bar": {
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"bar:80": {
+								Handlers: map[string]*ipn.HTTPHandler{
+									"/": {Proxy: "http://localhost:3000"},
+								},
+							},
+						},
+					},
+				},
 			},
+			dnsName:   "svc:bar",
+			srvType:   serveTypeHTTP,
+			srvPort:   80,
+			mountPath: "/",
+			target:    "http://localhost:3001",
+			expected: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:bar": {
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"bar:80": {
+								Handlers: map[string]*ipn.HTTPHandler{
+									"/": {Proxy: "http://localhost:3001"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "add new service handler",
+			desc: "add a new service HTTP handler to existing service config",
+			cfg: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:bar": {
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"bar:80": {
+								Handlers: map[string]*ipn.HTTPHandler{
+									"/": {Proxy: "http://localhost:3000"},
+								},
+							},
+						},
+					},
+				},
+			},
+			dnsName:   "svc:bar",
+			srvType:   serveTypeHTTP,
+			srvPort:   88,
+			mountPath: "/",
+			target:    "http://localhost:3001",
+			expected: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:bar": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80: {HTTP: true},
+							88: {HTTP: true},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"bar:80": {
+								Handlers: map[string]*ipn.HTTPHandler{
+									"/": {Proxy: "http://localhost:3000"},
+								},
+							},
+							"bar:88": {
+								Handlers: map[string]*ipn.HTTPHandler{
+									"/": {Proxy: "http://localhost:3001"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "add new service mount",
+			desc: "add a new service mount to existing service config",
+			cfg: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:bar": {
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"bar:80": {
+								Handlers: map[string]*ipn.HTTPHandler{
+									"/": {Proxy: "http://localhost:3000"},
+								},
+							},
+						},
+					},
+				},
+			},
+			dnsName:   "svc:bar",
+			srvType:   serveTypeHTTP,
+			srvPort:   80,
+			mountPath: "/added",
+			target:    "http://localhost:3001",
+			expected: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:bar": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80: {HTTP: true},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"bar:80": {
+								Handlers: map[string]*ipn.HTTPHandler{
+									"/":      {Proxy: "http://localhost:3000"},
+									"/added": {Proxy: "http://localhost:3001"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:    "add new service handler",
+			desc:    "add a new service handler in tun mode to empty config",
+			cfg:     &ipn.ServeConfig{},
 			dnsName: "svc:bar",
 			srvType: serveTypeTun,
 			expected: &ipn.ServeConfig{
@@ -1835,7 +1934,7 @@ func TestSetServe(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := e.setServe(tt.cfg, tt.st, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel)
+			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel)
 			if err != nil && !tt.expectErr {
 				t.Fatalf("got error: %v; did not expect error.", err)
 			}
@@ -1843,7 +1942,8 @@ func TestSetServe(t *testing.T) {
 				t.Fatalf("got no error; expected error.")
 			}
 			if !tt.expectErr && !reflect.DeepEqual(tt.cfg, tt.expected) {
-				t.Fatalf("got: %v; expected: %v", tt.cfg, tt.expected)
+				svcName := tailcfg.ServiceName(tt.dnsName)
+				t.Fatalf("got: %v; expected: %v", tt.cfg.Services[svcName], tt.expected.Services[svcName])
 			}
 		})
 	}
@@ -1899,7 +1999,7 @@ func TestUnsetServe(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar.test.ts.net:80": {
+							"bar:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1965,7 +2065,7 @@ func TestUnsetServe(t *testing.T) {
 					80: {HTTP: true},
 				},
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:80": {
+					"foo:80": {
 						Handlers: map[string]*ipn.HTTPHandler{
 							"/": {Proxy: "http://localhost:3000"},
 						},
@@ -1993,7 +2093,7 @@ func TestUnsetServe(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar.test.ts.net:80": {
+							"bar:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -2042,7 +2142,7 @@ func TestUnsetServe(t *testing.T) {
 					80: {HTTP: true},
 				},
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:80": {
+					"foo:80": {
 						Handlers: map[string]*ipn.HTTPHandler{
 							"/": {Proxy: "http://localhost:3000"},
 						},
@@ -2068,7 +2168,7 @@ func TestUnsetServe(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar.test.ts.net:80": {
+							"bar:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},

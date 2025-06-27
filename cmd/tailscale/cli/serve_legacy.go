@@ -363,7 +363,7 @@ func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, useTLS bo
 		return errHelp
 	}
 
-	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS, nil)
+	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS)
 
 	if !reflect.DeepEqual(cursc, sc) {
 		if err := e.lc.SetServeConfig(ctx, sc); err != nil {
