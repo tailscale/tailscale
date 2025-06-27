@@ -205,11 +205,12 @@ type ConnectorStatus struct {
 type ConditionType string
 
 const (
-	ConnectorReady  ConditionType = `ConnectorReady`
-	ProxyClassReady ConditionType = `ProxyClassReady`
-	ProxyGroupReady ConditionType = `ProxyGroupReady`
-	ProxyReady      ConditionType = `TailscaleProxyReady` // a Tailscale-specific condition type for corev1.Service
-	RecorderReady   ConditionType = `RecorderReady`
+	ConnectorReady      ConditionType = `ConnectorReady`
+	ProxyClassReady     ConditionType = `ProxyClassReady`
+	ProxyGroupReady     ConditionType = `ProxyGroupReady`     // All proxy Pods running.
+	ProxyGroupAvailable ConditionType = `ProxyGroupAvailable` // At least one proxy Pod running.
+	ProxyReady          ConditionType = `TailscaleProxyReady` // a Tailscale-specific condition type for corev1.Service
+	RecorderReady       ConditionType = `RecorderReady`
 	// EgressSvcValid gets set on a user configured ExternalName Service that defines a tailnet target to be exposed
 	// on a ProxyGroup.
 	// Set to true if the user provided configuration is valid.

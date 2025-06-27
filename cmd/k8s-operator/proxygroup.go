@@ -52,6 +52,17 @@ const (
 	// Copied from k8s.io/apiserver/pkg/registry/generic/registry/store.go@cccad306d649184bf2a0e319ba830c53f65c445c
 	optimisticLockErrorMsg  = "the object has been modified; please apply your changes to the latest version and try again"
 	staticEndpointsMaxAddrs = 2
+
+	// The minimum tailcfg.CapabilityVersion that deployed clients are expected
+	// to support to be compatible with the current ProxyGroup controller.
+	// If the controller needs to depend on newer client behaviour, it should
+	// maintain backwards compatible logic for older capability versions for 3
+	// stable releases, as per documentation on supported version drift:
+	// https://tailscale.com/kb/1236/kubernetes-operator#supported-versions
+	//
+	// tailcfg.CurrentCapabilityVersion was 106 when the ProxyGroup controller was
+	// first introduced.
+	pgMinCapabilityVersion = 106
 )
 
 var (
@@ -204,14 +215,27 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	desiredReplicas := int(pgReplicas(pg))
+
+	// Set ProxyGroupAvailable condition.
+	status := metav1.ConditionFalse
+	reason := reasonProxyGroupCreating
+	message := fmt.Sprintf("%d/%d ProxyGroup pods running", len(pg.Status.Devices), desiredReplicas)
+	if len(pg.Status.Devices) > 0 {
+		status = metav1.ConditionTrue
+		if len(pg.Status.Devices) == desiredReplicas {
+			reason = reasonProxyGroupReady
+		}
+	}
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, status, reason, message, pg.Generation, r.clock, logger)
+
+	// Set ProxyGroupReady condition.
 	if len(pg.Status.Devices) < desiredReplicas {
-		message := fmt.Sprintf("%d/%d ProxyGroup pods running", len(pg.Status.Devices), desiredReplicas)
 		logger.Debug(message)
 		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreating, message)
 	}
 
 	if len(pg.Status.Devices) > desiredReplicas {
-		message := fmt.Sprintf("waiting for %d ProxyGroup pods to shut down", len(pg.Status.Devices)-desiredReplicas)
+		message = fmt.Sprintf("waiting for %d ProxyGroup pods to shut down", len(pg.Status.Devices)-desiredReplicas)
 		logger.Debug(message)
 		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreating, message)
 	}
@@ -524,17 +548,13 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, pg 
 		if err := r.deleteTailnetDevice(ctx, m.tsID, logger); err != nil {
 			return err
 		}
-		if err := r.Delete(ctx, m.stateSecret); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("error deleting state Secret %s: %w", m.stateSecret.Name, err)
-			}
+		if err := r.Delete(ctx, m.stateSecret); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("error deleting state Secret %q: %w", m.stateSecret.Name, err)
 		}
 		configSecret := m.stateSecret.DeepCopy()
 		configSecret.Name += "-config"
-		if err := r.Delete(ctx, configSecret); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("error deleting config Secret %s: %w", configSecret.Name, err)
-			}
+		if err := r.Delete(ctx, configSecret); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("error deleting config Secret %q: %w", configSecret.Name, err)
 		}
 		// NOTE(ChaosInTheCRD): we shouldn't need to get the service first, checking for a not found error should be enough
 		svc := &corev1.Service{
@@ -635,16 +655,37 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			return nil, err
 		}
 
-		var authKey string
+		var authKey *string
 		if existingCfgSecret == nil {
 			logger.Debugf("Creating authkey for new ProxyGroup proxy")
 			tags := pg.Spec.Tags.Stringify()
 			if len(tags) == 0 {
 				tags = r.defaultTags
 			}
-			authKey, err = newAuthKey(ctx, r.tsClient, tags)
+			key, err := newAuthKey(ctx, r.tsClient, tags)
 			if err != nil {
 				return nil, err
+			}
+			authKey = &key
+		}
+
+		if authKey == nil {
+			// Get state Secret to check if it's already authed.
+			stateSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      pgStateSecretName(pg.Name, i),
+					Namespace: r.tsNamespace,
+				},
+			}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(stateSecret), stateSecret); err != nil && !apierrors.IsNotFound(err) {
+				return nil, err
+			}
+
+			if shouldRetainAuthKey(stateSecret) && existingCfgSecret != nil {
+				authKey, err = authKeyFromSecret(existingCfgSecret)
+				if err != nil {
+					return nil, fmt.Errorf("error retrieving auth key from existing config Secret: %w", err)
+				}
 			}
 		}
 
@@ -661,7 +702,14 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			}
 		}
 
-		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, existingCfgSecret, endpoints[replicaName])
+		// AdvertiseServices config is set by ingress-pg-reconciler, so make sure we
+		// don't overwrite it if already set.
+		existingAdvertiseServices, err := extractAdvertiseServicesConfig(existingCfgSecret)
+		if err != nil {
+			return nil, err
+		}
+
+		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, endpoints[replicaName], existingAdvertiseServices)
 		if err != nil {
 			return nil, fmt.Errorf("error creating tailscaled config: %w", err)
 		}
@@ -811,20 +859,22 @@ func (r *ProxyGroupReconciler) ensureRemovedFromGaugeForProxyGroup(pg *tsapi.Pro
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 }
 
-func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32, authKey string, oldSecret *corev1.Secret, staticEndpoints []netip.AddrPort) (tailscaledConfigs, error) {
+func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, authKey *string, staticEndpoints []netip.AddrPort, oldAdvertiseServices []string) (tailscaledConfigs, error) {
 	conf := &ipn.ConfigVAlpha{
-		Version:      "alpha0",
-		AcceptDNS:    "false",
-		AcceptRoutes: "false", // AcceptRoutes defaults to true
-		Locked:       "false",
-		Hostname:     ptr.To(fmt.Sprintf("%s-%d", pg.Name, idx)),
+		Version:           "alpha0",
+		AcceptDNS:         "false",
+		AcceptRoutes:      "false", // AcceptRoutes defaults to true
+		Locked:            "false",
+		Hostname:          ptr.To(fmt.Sprintf("%s-%d", pg.Name, idx)),
+		AdvertiseServices: oldAdvertiseServices,
+		AuthKey:           authKey,
 	}
 
 	if pg.Spec.HostnamePrefix != "" {
 		conf.Hostname = ptr.To(fmt.Sprintf("%s-%d", pg.Spec.HostnamePrefix, idx))
 	}
 
-	if shouldAcceptRoutes(class) {
+	if shouldAcceptRoutes(pc) {
 		conf.AcceptRoutes = "true"
 	}
 
@@ -832,51 +882,26 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32
 		conf.StaticEndpoints = staticEndpoints
 	}
 
-	deviceAuthed := false
-	for _, d := range pg.Status.Devices {
-		if d.Hostname == *conf.Hostname {
-			deviceAuthed = true
-			break
-		}
-	}
-
-	if authKey != "" {
-		conf.AuthKey = &authKey
-	} else if !deviceAuthed {
-		key, err := authKeyFromSecret(oldSecret)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving auth key from Secret: %w", err)
-		}
-		conf.AuthKey = key
-	}
-	capVerConfigs := make(map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha)
-
-	// AdvertiseServices config is set by ingress-pg-reconciler, so make sure we
-	// don't overwrite it here.
-	if err := copyAdvertiseServicesConfig(conf, oldSecret, 106); err != nil {
-		return nil, err
-	}
-	capVerConfigs[106] = *conf
-	return capVerConfigs, nil
+	return map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha{
+		pgMinCapabilityVersion: *conf,
+	}, nil
 }
 
-func copyAdvertiseServicesConfig(conf *ipn.ConfigVAlpha, oldSecret *corev1.Secret, capVer tailcfg.CapabilityVersion) error {
-	if oldSecret == nil {
-		return nil
+func extractAdvertiseServicesConfig(cfgSecret *corev1.Secret) ([]string, error) {
+	if cfgSecret == nil {
+		return nil, nil
 	}
 
-	oldConfB := oldSecret.Data[tsoperator.TailscaledConfigFileName(capVer)]
-	if len(oldConfB) == 0 {
-		return nil
+	conf, err := latestConfigFromSecret(cfgSecret)
+	if err != nil {
+		return nil, err
 	}
 
-	var oldConf ipn.ConfigVAlpha
-	if err := json.Unmarshal(oldConfB, &oldConf); err != nil {
-		return fmt.Errorf("error unmarshalling existing config: %w", err)
+	if conf == nil {
+		return nil, nil
 	}
-	conf.AdvertiseServices = oldConf.AdvertiseServices
 
-	return nil
+	return conf.AdvertiseServices, nil
 }
 
 func (r *ProxyGroupReconciler) validate(_ *tsapi.ProxyGroup) error {
@@ -914,7 +939,7 @@ func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.Pr
 			dnsName:     prefs.Config.UserProfile.LoginName,
 		}
 		pod := &corev1.Pod{}
-		if err := r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: secret.Name}, pod); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: fmt.Sprintf("%s-%d", pg.Name, ordinal)}, pod); err != nil && !apierrors.IsNotFound(err) {
 			return nil, err
 		} else if err == nil {
 			nm.podUID = string(pod.UID)
@@ -932,17 +957,23 @@ func (r *ProxyGroupReconciler) getDeviceInfo(ctx context.Context, staticEndpoint
 	}
 
 	for _, m := range metadata {
-		device, ok, err := getDeviceInfo(ctx, r.tsClient, m.stateSecret)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
+		if !strings.EqualFold(string(m.stateSecret.Data[kubetypes.KeyPodUID]), m.podUID) {
+			// Current Pod has not yet written its UID to the state Secret, data may
+			// be stale.
 			continue
 		}
 
-		dev := tsapi.TailnetDevice{
-			Hostname:   device.Hostname,
-			TailnetIPs: device.TailnetIPs,
+		device := tsapi.TailnetDevice{}
+		if ipsB := m.stateSecret.Data[kubetypes.KeyDeviceIPs]; len(ipsB) > 0 {
+			ips := []string{}
+			if err := json.Unmarshal(ipsB, &ips); err != nil {
+				return nil, fmt.Errorf("failed to extract device IPs from state Secret %q: %w", m.stateSecret.Name, err)
+			}
+			device.TailnetIPs = ips
+		}
+
+		if hostname, _, ok := strings.Cut(string(m.stateSecret.Data[kubetypes.KeyDeviceFQDN]), "."); ok {
+			device.Hostname = hostname
 		}
 
 		if ep, ok := staticEndpoints[device.Hostname]; ok && len(ep) > 0 {
@@ -950,10 +981,10 @@ func (r *ProxyGroupReconciler) getDeviceInfo(ctx context.Context, staticEndpoint
 			for _, e := range ep {
 				eps = append(eps, e.String())
 			}
-			dev.StaticEndpoints = eps
+			device.StaticEndpoints = eps
 		}
 
-		devices = append(devices, dev)
+		devices = append(devices, device)
 	}
 
 	return devices, nil

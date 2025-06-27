@@ -877,6 +877,7 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 		if expected := 1; reconciler.egressProxyGroups.Len() != expected {
@@ -913,6 +914,7 @@ func TestProxyGroup(t *testing.T) {
 			},
 		}
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "2/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
@@ -924,12 +926,14 @@ func TestProxyGroup(t *testing.T) {
 		})
 		expectReconciled(t, reconciler, "", pg.Name)
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 
 		addNodeIDToStateSecrets(t, fc, pg)
 		expectReconciled(t, reconciler, "", pg.Name)
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "3/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		pg.Status.Devices = append(pg.Status.Devices, tsapi.TailnetDevice{
 			Hostname:   "hostname-nodeid-2",
 			TailnetIPs: []string{"1.2.3.4", "::1"},
@@ -947,6 +951,7 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		pg.Status.Devices = pg.Status.Devices[:1] // truncate to only the first device.
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "1/1 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
@@ -1224,7 +1229,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			Namespace: tsNamespace,
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): existingConfigBytes,
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): existingConfigBytes,
 		},
 	})
 
@@ -1261,7 +1266,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			ResourceVersion: "2",
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): expectedConfigBytes,
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): expectedConfigBytes,
 		},
 	})
 }
@@ -1421,8 +1426,13 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 
 		mustUpdate(t, fc, tsNamespace, fmt.Sprintf("test-%d", i), func(s *corev1.Secret) {
 			s.Data = map[string][]byte{
-				currentProfileKey: []byte(key),
-				key:               bytes,
+				currentProfileKey:       []byte(key),
+				key:                     bytes,
+				kubetypes.KeyDeviceIPs:  []byte(`["1.2.3.4", "::1"]`),
+				kubetypes.KeyDeviceFQDN: []byte(fmt.Sprintf("hostname-nodeid-%d.tails-scales.ts.net", i)),
+				// TODO(tomhjp): We have two different mechanisms to retrieve device IDs.
+				// Consolidate on this one.
+				kubetypes.KeyDeviceID: []byte(fmt.Sprintf("nodeid-%d", i)),
 			}
 		})
 	}

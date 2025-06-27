@@ -531,7 +531,7 @@ func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, s
 		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 		return false, nil
 	}
-	if !tsoperator.ProxyGroupIsReady(pg) {
+	if !tsoperator.ProxyGroupAvailable(pg) {
 		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, esr.clock, l)
 		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 	}

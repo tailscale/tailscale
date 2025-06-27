@@ -188,6 +188,14 @@ func run() error {
 		if err := cfg.setupKube(bootCtx, kc); err != nil {
 			return fmt.Errorf("error setting up for running on Kubernetes: %w", err)
 		}
+		// Clear out any state from previous runs of containerboot. Check
+		// hasKubeStateStore because although we know we're in kube, that
+		// doesn't guarantee the state store is properly configured.
+		if hasKubeStateStore(cfg) {
+			if err := kc.resetContainerbootState(bootCtx, cfg.PodUID); err != nil {
+				return fmt.Errorf("error clearing previous state from Secret: %w", err)
+			}
+		}
 	}
 
 	client, daemonProcess, err := startTailscaled(bootCtx, cfg)
@@ -367,11 +375,6 @@ authLoop:
 		if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
 			return fmt.Errorf("failed to unset serve config: %w", err)
 		}
-		if hasKubeStateStore(cfg) {
-			if err := kc.storeHTTPSEndpoint(ctx, ""); err != nil {
-				return fmt.Errorf("failed to update HTTPS endpoint in tailscale state: %w", err)
-			}
-		}
 	}
 
 	if hasKubeStateStore(cfg) && isTwoStepConfigAuthOnce(cfg) {
@@ -381,12 +384,6 @@ authLoop:
 		log.Printf("Deleting authkey from kube secret")
 		if err := kc.deleteAuthKey(ctx); err != nil {
 			return fmt.Errorf("deleting authkey from kube secret: %w", err)
-		}
-	}
-
-	if hasKubeStateStore(cfg) {
-		if err := kc.storeCapVerUID(ctx, cfg.PodUID); err != nil {
-			return fmt.Errorf("storing capability version and UID: %w", err)
 		}
 	}
 
