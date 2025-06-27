@@ -639,7 +639,11 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 		return "", fmt.Errorf("decoding: %w", err)
 	}
 
-	fmt.Fprintf(&stanza, "%supdate %x (%s)%s\n", terminalYellow, update.Hash, update.Change, terminalClear)
+	tkaHead, err := aum.Hash().MarshalText()
+	if err != nil {
+		return "", fmt.Errorf("decoding AUM hash: %w", err)
+	}
+	fmt.Fprintf(&stanza, "%supdate %s (%s)%s\n", terminalYellow, string(tkaHead), update.Change, terminalClear)
 
 	switch update.Change {
 	case tka.AUMAddKey.String():
