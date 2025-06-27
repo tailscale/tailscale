@@ -168,6 +168,8 @@ func runAPIServerProxy(ts *tsnet.Server, rt http.RoundTripper, log *zap.SugaredL
 	mux.HandleFunc("/", ap.serveDefault)
 	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
 	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecWS)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachWS)
 
 	hs := &http.Server{
 		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
@@ -211,16 +213,28 @@ func (ap *apiserverProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 // serveExecSPDY serves 'kubectl exec' requests for sessions streamed over SPDY,
 // optionally configuring the kubectl exec sessions to be recorded.
 func (ap *apiserverProxy) serveExecSPDY(w http.ResponseWriter, r *http.Request) {
-	ap.execForProto(w, r, ksr.SPDYProtocol)
+	ap.subForProto(w, r, ksr.ExecSubcommand, ksr.SPDYProtocol)
 }
 
 // serveExecWS serves 'kubectl exec' requests for sessions streamed over WebSocket,
 // optionally configuring the kubectl exec sessions to be recorded.
 func (ap *apiserverProxy) serveExecWS(w http.ResponseWriter, r *http.Request) {
-	ap.execForProto(w, r, ksr.WSProtocol)
+	ap.subForProto(w, r, ksr.ExecSubcommand, ksr.WSProtocol)
 }
 
-func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, proto ksr.Protocol) {
+// serveExecSPDY serves 'kubectl attach' requests for sessions streamed over SPDY,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *apiserverProxy) serveAttachSPDY(w http.ResponseWriter, r *http.Request) {
+	ap.subForProto(w, r, ksr.AttachSubcommand, ksr.SPDYProtocol)
+}
+
+// serveExecWS serves 'kubectl attach' requests for sessions streamed over WebSocket,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *apiserverProxy) serveAttachWS(w http.ResponseWriter, r *http.Request) {
+	ap.subForProto(w, r, ksr.AttachSubcommand, ksr.WSProtocol)
+}
+
+func (ap *apiserverProxy) subForProto(w http.ResponseWriter, r *http.Request, subcommand string, proto ksr.Protocol) {
 	const (
 		podNameKey       = "pod"
 		namespaceNameKey = "namespace"
@@ -235,7 +249,7 @@ func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 	counterNumRequestsProxied.Add(1)
 	failOpen, addrs, err := determineRecorderConfig(who)
 	if err != nil {
-		ap.log.Errorf("error trying to determine whether the 'kubectl exec' session needs to be recorded: %v", err)
+		ap.log.Errorf("error trying to determine whether the 'kubectl %s' session needs to be recorded: %v", subcommand, err)
 		return
 	}
 	if failOpen && len(addrs) == 0 { // will not record
@@ -244,8 +258,8 @@ func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 	}
 	ksr.CounterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
 	if !failOpen && len(addrs) == 0 {
-		msg := "forbidden: 'kubectl exec' session must be recorded, but no recorders are available."
-		ap.log.Error(msg)
+		msg := "forbidden: 'kubectl %s' session must be recorded, but no recorders are available."
+		ap.log.Error(fmt.Sprintf(msg, subcommand))
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
@@ -266,16 +280,17 @@ func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 	}
 
 	opts := ksr.HijackerOpts{
-		Req:       r,
-		W:         w,
-		Proto:     proto,
-		TS:        ap.ts,
-		Who:       who,
-		Addrs:     addrs,
-		FailOpen:  failOpen,
-		Pod:       r.PathValue(podNameKey),
-		Namespace: r.PathValue(namespaceNameKey),
-		Log:       ap.log,
+		Req:        r,
+		W:          w,
+		Proto:      proto,
+		Subcommand: subcommand,
+		TS:         ap.ts,
+		Who:        who,
+		Addrs:      addrs,
+		FailOpen:   failOpen,
+		Pod:        r.PathValue(podNameKey),
+		Namespace:  r.PathValue(namespaceNameKey),
+		Log:        ap.log,
 	}
 	h := ksr.New(opts)
 

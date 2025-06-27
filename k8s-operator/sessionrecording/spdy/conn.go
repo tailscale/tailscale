@@ -4,7 +4,7 @@
 //go:build !plan9
 
 // Package spdy contains functionality for parsing SPDY streaming sessions. This
-// is used for 'kubectl exec' session recording.
+// is used for 'kubectl exec/attach' session recording.
 package spdy
 
 import (
@@ -24,7 +24,7 @@ import (
 )
 
 // New wraps the provided network connection and returns a connection whose reads and writes will get triggered as data is received on the hijacked connection.
-// The connection must be a hijacked connection for a 'kubectl exec' session using SPDY.
+// The connection must be a hijacked connection for a 'kubectl exec/attach' session using SPDY.
 // The hijacked connection is used to transmit SPDY streams between Kubernetes client ('kubectl') and the destination container.
 // Data read from the underlying network connection is data sent via one of the SPDY streams from the client to the container.
 // Data written to the underlying connection is data sent from the container to the client.
@@ -32,17 +32,18 @@ import (
 // https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#background-remotecommand-subprotocol
 func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, hasTerm bool, log *zap.SugaredLogger) net.Conn {
 	return &conn{
-		Conn:               nc,
-		rec:                rec,
-		ch:                 ch,
-		log:                log,
-		hasTerm:            hasTerm,
-		initialTermSizeSet: make(chan struct{}),
+		Conn:                  nc,
+		rec:                   rec,
+		ch:                    ch,
+		log:                   log,
+		hasTerm:               hasTerm,
+		initialTermSizeSet:    make(chan struct{}),
+		initialCastHeaderSent: false,
 	}
 }
 
 // conn is a wrapper around net.Conn. It reads the bytestream for a 'kubectl
-// exec' session streamed using SPDY protocol, sends session recording data to
+// exec/attach' session streamed using SPDY protocol, sends session recording data to
 // the configured recorder and forwards the raw bytes to the original
 // destination.
 type conn struct {
@@ -63,7 +64,7 @@ type conn struct {
 	// CastHeader must be sent before any payload. If the session has a
 	// terminal attached, the CastHeader must have '.Width' and '.Height'
 	// fields set for the tsrecorder UI to be able to play the recording.
-	// For 'kubectl exec' sessions, terminal width and height are sent as a
+	// For 'kubectl exec/attach' sessions, terminal width and height are sent as a
 	// resize message on resize stream from the client when the session
 	// starts as well as at any time the client detects a terminal change.
 	// We can intercept the resize message on Read calls. As there is no
@@ -84,6 +85,10 @@ type conn struct {
 	// be set to a buffered channel to prevent Reads being blocked on the
 	// first stdout/stderr write reading from the channel.
 	initialTermSizeSet chan struct{}
+	// initialCastHeaderSent is a boolean that is set to ensure that the cast
+	// header is the first thing that is streamed to the session recorder.
+	// Otherwise the stream will fail.
+	initialCastHeaderSent bool
 	// sendInitialTermSizeSetOnce is used to ensure that a value is sent to
 	// initialTermSizeSet channel only once, when the initial resize message
 	// is received.
@@ -144,7 +149,7 @@ func (c *conn) Read(b []byte) (int, error) {
 				isInitialResize = true
 				close(c.initialTermSizeSet) // unblock sending of CastHeader
 			})
-			if !isInitialResize {
+			if !isInitialResize && c.initialCastHeaderSent {
 				if err := c.rec.WriteResize(c.ch.Height, c.ch.Width); err != nil {
 					return 0, fmt.Errorf("error writing resize message: %w", err)
 				}
@@ -206,6 +211,7 @@ func (c *conn) Write(b []byte) (int, error) {
 			if err != nil {
 				return 0, fmt.Errorf("error writing CastHeader: %w", err)
 			}
+			c.initialCastHeaderSent = true
 			if err := c.rec.WriteOutput(sf.Payload); err != nil {
 				return 0, fmt.Errorf("error sending payload to session recorder: %w", err)
 			}

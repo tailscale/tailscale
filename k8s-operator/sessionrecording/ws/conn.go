@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-// package ws has functionality to parse 'kubectl exec' sessions streamed using
+// package ws has functionality to parse 'kubectl exec/attach' sessions streamed using
 // WebSocket protocol.
 package ws
 
@@ -24,7 +24,7 @@ import (
 )
 
 // New wraps the provided network connection and returns a connection whose reads and writes will get triggered as data is received on the hijacked connection.
-// The connection must be a hijacked connection for a 'kubectl exec' session using WebSocket protocol and a *.channel.k8s.io subprotocol.
+// The connection must be a hijacked connection for a 'kubectl exec/attach' session using WebSocket protocol and a *.channel.k8s.io subprotocol.
 // The hijacked connection is used to transmit *.channel.k8s.io streams between Kubernetes client ('kubectl') and the destination proxy controlled by Kubernetes.
 // Data read from the underlying network connection is data sent via one of the streams from the client to the container.
 // Data written to the underlying connection is data sent from the container to the client.
@@ -32,20 +32,21 @@ import (
 // https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#proposal-new-remotecommand-sub-protocol-version---v5channelk8sio
 func New(c net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, hasTerm bool, log *zap.SugaredLogger) net.Conn {
 	return &conn{
-		Conn:               c,
-		rec:                rec,
-		ch:                 ch,
-		hasTerm:            hasTerm,
-		log:                log,
-		initialTermSizeSet: make(chan struct{}, 1),
+		Conn:                  c,
+		rec:                   rec,
+		ch:                    ch,
+		hasTerm:               hasTerm,
+		log:                   log,
+		initialTermSizeSet:    make(chan struct{}, 1),
+		initialCastHeaderSent: false,
 	}
 }
 
 // conn is a wrapper around net.Conn. It reads the bytestream
-// for a 'kubectl exec' session, sends session recording data to the configured
+// for a 'kubectl exec/attach' session, sends session recording data to the configured
 // recorder and forwards the raw bytes to the original destination.
 // A new conn is created per session.
-// conn only knows to how to read a 'kubectl exec' session that is streamed using WebSocket protocol.
+// conn only knows to how to read a 'kubectl exec/attach' session that is streamed using WebSocket protocol.
 // https://www.rfc-editor.org/rfc/rfc6455
 type conn struct {
 	net.Conn
@@ -56,7 +57,7 @@ type conn struct {
 	// CastHeader must be sent before any payload. If the session has a
 	// terminal attached, the CastHeader must have '.Width' and '.Height'
 	// fields set for the tsrecorder UI to be able to play the recording.
-	// For 'kubectl exec' sessions, terminal width and height are sent as a
+	// For 'kubectl exec/attach' sessions, terminal width and height are sent as a
 	// resize message on resize stream from the client when the session
 	// starts as well as at any time the client detects a terminal change.
 	// We can intercept the resize message on Read calls. As there is no
@@ -77,6 +78,10 @@ type conn struct {
 	// be set to a buffered channel to prevent Reads being blocked on the
 	// first stdout/stderr write reading from the channel.
 	initialTermSizeSet chan struct{}
+	// initialCastHeaderSent is a boolean that is set to ensure that the cast
+	// header is the first thing that is streamed to the session recorder.
+	// Otherwise the stream will fail.
+	initialCastHeaderSent bool
 	// sendInitialTermSizeSetOnce is used to ensure that a value is sent to
 	// initialTermSizeSet channel only once, when the initial resize message
 	// is received.
@@ -191,7 +196,7 @@ func (c *conn) Read(b []byte) (int, error) {
 				isInitialResize = true
 				close(c.initialTermSizeSet) // unblock sending of CastHeader
 			})
-			if !isInitialResize {
+			if !isInitialResize && c.initialCastHeaderSent {
 				if err := c.rec.WriteResize(c.ch.Height, c.ch.Width); err != nil {
 					return 0, fmt.Errorf("error writing resize message: %w", err)
 				}
@@ -268,6 +273,7 @@ func (c *conn) Write(b []byte) (int, error) {
 			if err != nil {
 				return 0, fmt.Errorf("error writing CastHeader: %w", err)
 			}
+			c.initialCastHeaderSent = true
 			if err := c.rec.WriteOutput(writeMsg.payload); err != nil {
 				return 0, fmt.Errorf("error writing message to recorder: %v", err)
 			}
@@ -321,6 +327,7 @@ func (c *conn) writeMsgIsIncomplete() bool {
 func (c *conn) readMsgIsIncomplete() bool {
 	return c.currentReadMsg != nil && !c.currentReadMsg.isFinalized
 }
+
 func (c *conn) curReadMsgType() (messageType, error) {
 	if c.currentReadMsg != nil {
 		return c.currentReadMsg.typ, nil
