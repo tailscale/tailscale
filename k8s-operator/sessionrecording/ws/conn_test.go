@@ -65,7 +65,7 @@ func Test_conn_Read(t *testing.T) {
 				log:  zl.Sugar(),
 			}
 			for i, input := range tt.inputs {
-				c.initialTermSizeSet = make(chan struct{})
+				c.initialCastHeaderSent = make(chan struct{})
 				if err := tc.WriteReadBufBytes(input); err != nil {
 					t.Fatalf("writing bytes to test conn: %v", err)
 				}
@@ -171,16 +171,13 @@ func Test_conn_Write(t *testing.T) {
 					Width:  tt.width,
 					Height: tt.height,
 				},
-				rec:                rec,
-				initialTermSizeSet: make(chan struct{}),
-				hasTerm:            tt.hasTerm,
+				rec:                   rec,
+				initialCastHeaderSent: make(chan struct{}),
+				hasTerm:               tt.hasTerm,
 			}
 			if !tt.firstWrite {
 				// This test case does not intend to test that cast header gets written once.
 				c.writeCastHeaderOnce.Do(func() {})
-			}
-			if tt.sendInitialResize {
-				close(c.initialTermSizeSet)
 			}
 			for i, input := range tt.inputs {
 				_, err := c.Write(input)
