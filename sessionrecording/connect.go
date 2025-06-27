@@ -216,7 +216,7 @@ func connectV2(ctx context.Context, hc *http.Client, ap netip.AddrPort) (io.Writ
 		for {
 			var frame v2ResponseFrame
 			if err := dec.Decode(&frame); err != nil {
-				if !errors.Is(err, io.EOF) {
+				if !errors.Is(err, io.EOF) && !strings.Contains(bodyBuffer.String(), "json decode: EOF") {
 					errChan <- fmt.Errorf("recording: unexpected error receiving acks: unable to decode body %q: %w", bodyBuffer.String(), err)
 				}
 				return
