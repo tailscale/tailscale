@@ -45,6 +45,7 @@ type relayManager struct {
 	handshakeWorkByServerDiscoVNI        map[serverDiscoVNI]*relayHandshakeWork
 	handshakeWorkAwaitingPong            map[*relayHandshakeWork]addrPortVNI
 	addrPortVNIToHandshakeWork           map[addrPortVNI]*relayHandshakeWork
+	handshakeGeneration                  uint32
 
 	// ===================================================================
 	// The following chan fields serve event inputs to a single goroutine,
@@ -590,7 +591,12 @@ func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelay
 		go r.sendCallMeMaybeVia(work.ep, work.se)
 	}
 
-	go r.handshakeServerEndpoint(work)
+	r.handshakeGeneration++
+	if r.handshakeGeneration == 0 { // generation must be nonzero
+		r.handshakeGeneration++
+	}
+
+	go r.handshakeServerEndpoint(work, r.handshakeGeneration)
 }
 
 // sendCallMeMaybeVia sends a [disco.CallMeMaybeVia] to ep over DERP. It must be
@@ -616,7 +622,7 @@ func (r *relayManager) sendCallMeMaybeVia(ep *endpoint, se udprelay.ServerEndpoi
 	ep.c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, epDisco.key, callMeMaybeVia, discoVerboseLog)
 }
 
-func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
+func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, generation uint32) {
 	done := relayEndpointHandshakeWorkDoneEvent{work: work}
 	r.ensureDiscoInfoFor(work)
 
@@ -627,8 +633,21 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		work.cancel()
 	}()
 
+	epDisco := work.ep.disco.Load()
+	if epDisco == nil {
+		return
+	}
+
+	common := disco.BindUDPRelayEndpointCommon{
+		VNI:        work.se.VNI,
+		Generation: generation,
+		RemoteKey:  epDisco.key,
+	}
+
 	sentBindAny := false
-	bind := &disco.BindUDPRelayEndpoint{}
+	bind := &disco.BindUDPRelayEndpoint{
+		BindUDPRelayEndpointCommon: common,
+	}
 	vni := virtualNetworkID{}
 	vni.set(work.se.VNI)
 	for _, addrPort := range work.se.AddrPorts {
@@ -661,10 +680,6 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		if len(sentPingAt) == limitPings {
 			return
 		}
-		epDisco := work.ep.disco.Load()
-		if epDisco == nil {
-			return
-		}
 		txid := stun.NewTxID()
 		sentPingAt[txid] = time.Now()
 		ping := &disco.Ping{
@@ -673,11 +688,22 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		}
 		go func() {
 			if withAnswer != nil {
-				answer := &disco.BindUDPRelayEndpointAnswer{Answer: *withAnswer}
+				answer := &disco.BindUDPRelayEndpointAnswer{BindUDPRelayEndpointCommon: common}
+				answer.Challenge = *withAnswer
 				work.ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, work.se.ServerDisco, answer, discoVerboseLog)
 			}
 			work.ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, epDisco.key, ping, discoVerboseLog)
 		}()
+	}
+
+	validateVNIAndRemoteKey := func(common disco.BindUDPRelayEndpointCommon) error {
+		if common.VNI != work.se.VNI {
+			return errors.New("mismatching VNI")
+		}
+		if common.RemoteKey.Compare(epDisco.key) != 0 {
+			return errors.New("mismatching RemoteKey")
+		}
+		return nil
 	}
 
 	// This for{select{}} is responsible for handshaking and tx'ing ping/pong
@@ -689,6 +715,10 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		case msgEvent := <-work.rxDiscoMsgCh:
 			switch msg := msgEvent.msg.(type) {
 			case *disco.BindUDPRelayEndpointChallenge:
+				err := validateVNIAndRemoteKey(msg.BindUDPRelayEndpointCommon)
+				if err != nil {
+					continue
+				}
 				if handshakeState >= disco.BindUDPRelayHandshakeStateAnswerSent {
 					continue
 				}

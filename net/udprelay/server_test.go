@@ -19,23 +19,27 @@ import (
 )
 
 type testClient struct {
-	vni    uint32
-	local  key.DiscoPrivate
-	server key.DiscoPublic
-	uc     *net.UDPConn
+	vni                 uint32
+	handshakeGeneration uint32
+	local               key.DiscoPrivate
+	remote              key.DiscoPublic
+	server              key.DiscoPublic
+	uc                  *net.UDPConn
 }
 
-func newTestClient(t *testing.T, vni uint32, serverEndpoint netip.AddrPort, local key.DiscoPrivate, server key.DiscoPublic) *testClient {
+func newTestClient(t *testing.T, vni uint32, serverEndpoint netip.AddrPort, local key.DiscoPrivate, remote, server key.DiscoPublic) *testClient {
 	rAddr := &net.UDPAddr{IP: serverEndpoint.Addr().AsSlice(), Port: int(serverEndpoint.Port())}
 	uc, err := net.DialUDP("udp4", nil, rAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &testClient{
-		vni:    vni,
-		local:  local,
-		server: server,
-		uc:     uc,
+		vni:                 vni,
+		handshakeGeneration: 1,
+		local:               local,
+		remote:              remote,
+		server:              server,
+		uc:                  uc,
 	}
 }
 
@@ -137,13 +141,35 @@ func (c *testClient) readControlDiscoMsg(t *testing.T) disco.Message {
 }
 
 func (c *testClient) handshake(t *testing.T) {
-	c.writeControlDiscoMsg(t, &disco.BindUDPRelayEndpoint{})
+	generation := c.handshakeGeneration
+	c.handshakeGeneration++
+	common := disco.BindUDPRelayEndpointCommon{
+		VNI:        c.vni,
+		Generation: generation,
+		RemoteKey:  c.remote,
+	}
+	c.writeControlDiscoMsg(t, &disco.BindUDPRelayEndpoint{
+		BindUDPRelayEndpointCommon: common,
+	})
 	msg := c.readControlDiscoMsg(t)
 	challenge, ok := msg.(*disco.BindUDPRelayEndpointChallenge)
 	if !ok {
-		t.Fatal("unexepcted disco message type")
+		t.Fatal("unexpected disco message type")
 	}
-	c.writeControlDiscoMsg(t, &disco.BindUDPRelayEndpointAnswer{Answer: challenge.Challenge})
+	if challenge.Generation != common.Generation {
+		t.Fatalf("rx'd challenge.Generation (%d) != %d", challenge.Generation, common.Generation)
+	}
+	if challenge.VNI != common.VNI {
+		t.Fatalf("rx'd challenge.VNI (%d) != %d", challenge.VNI, common.VNI)
+	}
+	if challenge.RemoteKey != common.RemoteKey {
+		t.Fatalf("rx'd challenge.RemoteKey (%v) != %v", challenge.RemoteKey, common.RemoteKey)
+	}
+	answer := &disco.BindUDPRelayEndpointAnswer{
+		BindUDPRelayEndpointCommon: common,
+	}
+	answer.Challenge = challenge.Challenge
+	c.writeControlDiscoMsg(t, answer)
 }
 
 func (c *testClient) close() {
@@ -179,9 +205,9 @@ func TestServer(t *testing.T) {
 	if len(endpoint.AddrPorts) != 1 {
 		t.Fatalf("unexpected endpoint.AddrPorts: %v", endpoint.AddrPorts)
 	}
-	tcA := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, endpoint.ServerDisco)
+	tcA := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, discoB.Public(), endpoint.ServerDisco)
 	defer tcA.close()
-	tcB := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, endpoint.ServerDisco)
+	tcB := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, discoA.Public(), endpoint.ServerDisco)
 	defer tcB.close()
 
 	tcA.handshake(t)
@@ -208,5 +234,31 @@ func TestServer(t *testing.T) {
 	rxFromB := tcA.readDataPkt(t)
 	if !bytes.Equal(txToA, rxFromB) {
 		t.Fatal("unexpected msg B->A")
+	}
+
+	tcAOnNewPort := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, discoB.Public(), endpoint.ServerDisco)
+	tcAOnNewPort.handshakeGeneration = tcA.handshakeGeneration + 1
+	defer tcAOnNewPort.close()
+
+	// Handshake client A on a new source IP:port, verify we receive packets on the new binding
+	tcAOnNewPort.handshake(t)
+	txToAOnNewPort := []byte{7, 8, 9}
+	tcB.writeDataPkt(t, txToAOnNewPort)
+	rxFromB = tcAOnNewPort.readDataPkt(t)
+	if !bytes.Equal(txToAOnNewPort, rxFromB) {
+		t.Fatal("unexpected msg B->A")
+	}
+
+	tcBOnNewPort := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, discoA.Public(), endpoint.ServerDisco)
+	tcBOnNewPort.handshakeGeneration = tcB.handshakeGeneration + 1
+	defer tcBOnNewPort.close()
+
+	// Handshake client B on a new source IP:port, verify we receive packets on the new binding
+	tcBOnNewPort.handshake(t)
+	txToBOnNewPort := []byte{7, 8, 9}
+	tcAOnNewPort.writeDataPkt(t, txToBOnNewPort)
+	rxFromA = tcBOnNewPort.readDataPkt(t)
+	if !bytes.Equal(txToBOnNewPort, rxFromA) {
+		t.Fatal("unexpected msg A->B")
 	}
 }
