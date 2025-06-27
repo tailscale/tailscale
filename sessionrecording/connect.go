@@ -6,6 +6,7 @@
 package sessionrecording
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -207,12 +208,16 @@ func connectV2(ctx context.Context, hc *http.Client, ap netip.AddrPort) (io.Writ
 		defer close(acks)
 		defer resp.Body.Close()
 		defer pw.Close()
-		dec := json.NewDecoder(resp.Body)
+
+		var bodyBuffer bytes.Buffer
+		teeReader := io.TeeReader(resp.Body, &bodyBuffer)
+		dec := json.NewDecoder(teeReader)
+
 		for {
 			var frame v2ResponseFrame
 			if err := dec.Decode(&frame); err != nil {
 				if !errors.Is(err, io.EOF) {
-					errChan <- fmt.Errorf("recording: unexpected error receiving acks: %w", err)
+					errChan <- fmt.Errorf("recording: unexpected error receiving acks: unable to decode body %q: %w", bodyBuffer.String(), err)
 				}
 				return
 			}
