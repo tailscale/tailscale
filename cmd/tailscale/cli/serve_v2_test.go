@@ -1321,7 +1321,7 @@ func TestMessageForPort(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"foo.test.ts.net:80": {
+							"foo:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1365,7 +1365,7 @@ func TestMessageForPort(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar.test.ts.net:80": {
+							"bar:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1409,7 +1409,7 @@ func TestMessageForPort(t *testing.T) {
 							2200: {HTTPS: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"foo.test.ts.net:2200": {
+							"foo:2200": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},

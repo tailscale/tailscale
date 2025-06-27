@@ -549,7 +549,9 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	var tcpHandler *ipn.TCPPortHandler
 	ips := st.TailscaleIPs
 	host := dnsName
+	displayedHost := dnsName
 	if forService {
+		displayedHost = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
 		host = svcName.WithoutPrefix()
 	}
 	hp = ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
@@ -590,7 +592,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString("\n\n")
 		svc := sc.Services[svcName]
 		if srvType == serveTypeTun && svc.Tun {
-			output.WriteString(fmt.Sprintf(msgRunningTunService, host))
+			output.WriteString(fmt.Sprintf(msgRunningTunService, displayedHost))
 			output.WriteString("\n")
 			output.WriteString(fmt.Sprintf(msgDisableServiceTun, dnsName))
 			output.WriteString("\n")
@@ -617,14 +619,10 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		sort.Slice(mounts, func(i, j int) bool {
 			return len(mounts[i]) < len(mounts[j])
 		})
-		hostName := host
-		if forService {
-			hostName = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
-		}
 		for _, m := range mounts {
 			h := webConfig.Handlers[m]
 			t, d := srvTypeAndDesc(h)
-			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, hostName, portPart, m))
+			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, displayedHost, portPart, m))
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if tcpHandler != nil {
@@ -635,7 +633,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			tlsStatus = "TLS terminated"
 		}
 
-		output.WriteString(fmt.Sprintf("|-- tcp://%s (%s)\n", hp, tlsStatus))
+		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", displayedHost, srvPort, tlsStatus))
 		for _, a := range ips {
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
