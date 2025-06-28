@@ -1383,7 +1383,14 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 
 	// tailscaled-based verification:
 	if s.verifyClientsLocalTailscaled {
-		_, err := s.localClient.WhoIsNodeKey(ctx, clientKey)
+		status, err := s.localClient.StatusWithoutPeers(ctx)
+		if err != nil {
+			return fmt.Errorf("can not get status: %w", err)
+		}
+		if status.Self.PublicKey == clientKey {
+			return nil
+		}
+		_, err = s.localClient.WhoIsNodeKey(ctx, clientKey)
 		if err == tailscale.ErrPeerNotFound {
 			return fmt.Errorf("peer %v not authorized (not found in local tailscaled)", clientKey)
 		}
