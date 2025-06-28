@@ -14,7 +14,7 @@ import (
 
 func TestRelayManagerInitAndIdle(t *testing.T) {
 	rm := relayManager{}
-	rm.allocateAndHandshakeAllServers(&endpoint{})
+	rm.startUDPRelayPathDiscoveryFor(&endpoint{}, addrQuality{}, false)
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}
@@ -22,7 +22,7 @@ func TestRelayManagerInitAndIdle(t *testing.T) {
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}
-	rm.handleCallMeMaybeVia(&endpoint{c: &Conn{discoPrivate: key.NewDisco()}}, &disco.CallMeMaybeVia{ServerDisco: key.NewDisco().Public()})
+	rm.handleCallMeMaybeVia(&endpoint{c: &Conn{discoPrivate: key.NewDisco()}}, addrQuality{}, false, &disco.CallMeMaybeVia{ServerDisco: key.NewDisco().Public()})
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}
