@@ -2137,6 +2137,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		}
 		ep.mu.Lock()
 		relayCapable := ep.relayCapable
+		lastBest := ep.bestAddr
+		lastBestIsTrusted := mono.Now().Before(ep.trustBestAddrUntil)
 		ep.mu.Unlock()
 		if isVia && !relayCapable {
 			c.logf("magicsock: disco: ignoring %s from %v; %v is not known to be relay capable", msgType, sender.ShortString(), sender.ShortString())
@@ -2156,7 +2158,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 				c.discoShort, epDisco.short, via.ServerDisco.ShortString(),
 				ep.publicKey.ShortString(), derpStr(src.String()),
 				len(via.AddrPorts))
-			c.relayManager.handleCallMeMaybeVia(ep, via)
+			c.relayManager.handleCallMeMaybeVia(ep, lastBest, lastBestIsTrusted, via)
 		} else {
 			c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
 				c.discoShort, epDisco.short,
@@ -2254,7 +2256,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 			// We have no [endpoint] in the [peerMap] for this relay [epAddr]
 			// using it as a bestAddr. [relayManager] might be in the middle of
 			// probing it or attempting to set it as best via
-			// [endpoint.relayEndpointReady()]. Make [relayManager] aware.
+			// [endpoint.udpRelayEndpointReady()]. Make [relayManager] aware.
 			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, dm, di, src)
 			return
 		}
