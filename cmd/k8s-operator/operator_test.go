@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -20,8 +21,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/k8s-operator/apis/v1alpha1"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/dns/resolvconffile"
@@ -1121,6 +1124,182 @@ func TestCustomPriorityClassName(t *testing.T) {
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 }
 
+func TestServiceProxyClassAnnotation(t *testing.T) {
+	cl := tstest.NewClock(tstest.ClockOpts{})
+	zl := zap.Must(zap.NewDevelopment())
+
+	pcIfNotPresent := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "if-not-present",
+		},
+		Spec: tsapi.ProxyClassSpec{
+			StatefulSet: &tsapi.StatefulSet{
+				Pod: &tsapi.Pod{
+					TailscaleContainer: &v1alpha1.Container{
+						ImagePullPolicy: corev1.PullIfNotPresent,
+					},
+				},
+			},
+		},
+	}
+
+	pcAlways := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "always",
+		},
+		Spec: tsapi.ProxyClassSpec{
+			StatefulSet: &tsapi.StatefulSet{
+				Pod: &tsapi.Pod{
+					TailscaleContainer: &v1alpha1.Container{
+						ImagePullPolicy: corev1.PullAlways,
+					},
+				},
+			},
+		},
+	}
+
+	builder := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme)
+	builder = builder.WithObjects(pcIfNotPresent, pcAlways).
+		WithStatusSubresource(pcIfNotPresent, pcAlways)
+	fc := builder.Build()
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeLoadBalancer,
+		},
+	}
+
+	mustCreate(t, fc, svc)
+
+	testCases := []struct {
+		name                 string
+		proxyClassAnnotation string
+		proxyClassLabel      string
+		proxyClassDefault    string
+		expectedProxyClass   string
+		expectEvents         []string
+	}{
+		{
+			name:               "via_label",
+			proxyClassLabel:    pcIfNotPresent.Name,
+			expectedProxyClass: pcIfNotPresent.Name,
+		},
+		{
+			name:                 "via_annotation",
+			proxyClassAnnotation: pcIfNotPresent.Name,
+			expectedProxyClass:   pcIfNotPresent.Name,
+		},
+		{
+			name:               "via_default",
+			proxyClassDefault:  pcIfNotPresent.Name,
+			expectedProxyClass: pcIfNotPresent.Name,
+		},
+		{
+			name:                 "via_label_override_annotation",
+			proxyClassLabel:      pcIfNotPresent.Name,
+			proxyClassAnnotation: pcAlways.Name,
+			expectedProxyClass:   pcIfNotPresent.Name,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			ft := &fakeTSClient{}
+
+			if tt.proxyClassAnnotation != "" || tt.proxyClassLabel != "" || tt.proxyClassDefault != "" {
+				name := tt.proxyClassDefault
+				if name == "" {
+					name = tt.proxyClassLabel
+					if name == "" {
+						name = tt.proxyClassAnnotation
+					}
+				}
+				setProxyClassReady(t, fc, cl, name)
+			}
+
+			sr := &ServiceReconciler{
+				Client: fc,
+				ssr: &tailscaleSTSReconciler{
+					Client:            fc,
+					tsClient:          ft,
+					defaultTags:       []string{"tag:k8s"},
+					operatorNamespace: "operator-ns",
+					proxyImage:        "tailscale/tailscale",
+				},
+				defaultProxyClass:     tt.proxyClassDefault,
+				logger:                zl.Sugar(),
+				clock:                 cl,
+				isDefaultLoadBalancer: true,
+			}
+
+			if tt.proxyClassLabel != "" {
+				svc.Labels = map[string]string{
+					LabelAnnotationProxyClass: tt.proxyClassLabel,
+				}
+			}
+			if tt.proxyClassAnnotation != "" {
+				svc.Annotations = map[string]string{
+					LabelAnnotationProxyClass: tt.proxyClassAnnotation,
+				}
+			}
+
+			mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+				s.Labels = svc.Labels
+				s.Annotations = svc.Annotations
+			})
+
+			expectReconciled(t, sr, "default", "test")
+
+			list := &corev1.ServiceList{}
+			fc.List(context.Background(), list, client.InNamespace("default"))
+
+			for _, i := range list.Items {
+				t.Logf("found service %s", i.Name)
+			}
+
+			slist := &corev1.SecretList{}
+			fc.List(context.Background(), slist, client.InNamespace("operator-ns"))
+			for _, i := range slist.Items {
+				l, _ := json.Marshal(i.Labels)
+				t.Logf("found secret %q with labels %q ", i.Name, string(l))
+			}
+
+			_, shortName := findGenName(t, fc, "default", "test", "svc")
+			sts := &appsv1.StatefulSet{}
+			if err := fc.Get(context.Background(), client.ObjectKey{Namespace: "operator-ns", Name: shortName}, sts); err != nil {
+				t.Fatalf("failed to get StatefulSet: %v", err)
+			}
+
+			switch tt.expectedProxyClass {
+			case pcIfNotPresent.Name:
+				for _, cont := range sts.Spec.Template.Spec.Containers {
+					if cont.Name == "tailscale" && cont.ImagePullPolicy != corev1.PullIfNotPresent {
+						t.Fatalf("ImagePullPolicy %q does not match ProxyClass %q with value %q", cont.ImagePullPolicy, pcIfNotPresent.Name, pcIfNotPresent.Spec.StatefulSet.Pod.TailscaleContainer.ImagePullPolicy)
+					}
+				}
+			case pcAlways.Name:
+				for _, cont := range sts.Spec.Template.Spec.Containers {
+					if cont.Name == "tailscale" && cont.ImagePullPolicy != corev1.PullAlways {
+						t.Fatalf("ImagePullPolicy %q does not match ProxyClass %q with value %q", cont.ImagePullPolicy, pcAlways.Name, pcAlways.Spec.StatefulSet.Pod.TailscaleContainer.ImagePullPolicy)
+					}
+				}
+			default:
+				t.Fatalf("unexpected expected ProxyClass %q", tt.expectedProxyClass)
+			}
+		})
+	}
+}
+
 func TestProxyClassForService(t *testing.T) {
 	// Setup
 	pc := &tsapi.ProxyClass{
@@ -1132,7 +1311,9 @@ func TestProxyClassForService(t *testing.T) {
 			StatefulSet: &tsapi.StatefulSet{
 				Labels:      tsapi.Labels{"foo": "bar"},
 				Annotations: map[string]string{"bar.io/foo": "some-val"},
-				Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
+				Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}},
+			},
+		},
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -1194,7 +1375,7 @@ func TestProxyClassForService(t *testing.T) {
 	// pointing at the 'custom-metadata' ProxyClass. The ProxyClass is not
 	// yet ready, so no changes are actually applied to the proxy resources.
 	mustUpdate(t, fc, "default", "test", func(svc *corev1.Service) {
-		mak.Set(&svc.Labels, LabelProxyClass, "custom-metadata")
+		mak.Set(&svc.Labels, LabelAnnotationProxyClass, "custom-metadata")
 	})
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
@@ -1209,7 +1390,8 @@ func TestProxyClassForService(t *testing.T) {
 				Status:             metav1.ConditionTrue,
 				Type:               string(tsapi.ProxyClassReady),
 				ObservedGeneration: pc.Generation,
-			}}}
+			}},
+		}
 	})
 	opts.proxyClass = pc.Name
 	expectReconciled(t, sr, "default", "test")
@@ -1220,7 +1402,7 @@ func TestProxyClassForService(t *testing.T) {
 	// configuration from the ProxyClass is removed from the cluster
 	// resources.
 	mustUpdate(t, fc, "default", "test", func(svc *corev1.Service) {
-		delete(svc.Labels, LabelProxyClass)
+		delete(svc.Labels, LabelAnnotationProxyClass)
 	})
 	opts.proxyClass = ""
 	expectReconciled(t, sr, "default", "test")
@@ -1439,7 +1621,8 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 			IngressClassName: ptr.To(tailscaleIngressClassName),
 			Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
 				Paths: []networkingv1.HTTPIngressPath{
-					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}}}},
+					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}}},
+				},
 			}}}},
 		},
 	})
@@ -1466,7 +1649,8 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 		Spec: networkingv1.IngressSpec{
 			Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
 				Paths: []networkingv1.HTTPIngressPath{
-					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "non-ts-backend"}}}},
+					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "non-ts-backend"}}},
+				},
 			}}}},
 		},
 	})
@@ -1565,6 +1749,7 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 		})
 	}
 }
+
 func Test_authKeyRemoval(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
@@ -1711,14 +1896,15 @@ func Test_metricsResourceCreation(t *testing.T) {
 				Status:             metav1.ConditionTrue,
 				Type:               string(tsapi.ProxyClassReady),
 				ObservedGeneration: 1,
-			}}},
+			}},
+		},
 	}
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
-			Labels:    map[string]string{LabelProxyClass: "metrics"},
+			Labels:    map[string]string{LabelAnnotationProxyClass: "metrics"},
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",

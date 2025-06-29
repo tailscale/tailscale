@@ -54,6 +54,7 @@ import (
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/set"
 	"tailscale.com/version"
 )
 
@@ -307,6 +308,7 @@ func runReconcilers(opts reconcilerOpts) {
 		proxyPriorityClassName: opts.proxyPriorityClassName,
 		tsFirewallMode:         opts.proxyFirewallMode,
 	}
+
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("service-reconciler").
@@ -327,6 +329,10 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not create service reconciler: %v", err)
 	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(corev1.Service), indexServiceProxyClass, indexProxyClass); err != nil {
+		startlog.Fatalf("failed setting up ProxyClass indexer for Services: %v", err)
+	}
+
 	ingressChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("ingress"))
 	// If a ProxyClassChanges, enqueue all Ingresses labeled with that
 	// ProxyClass's name.
@@ -351,6 +357,10 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not create ingress reconciler: %v", err)
 	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), new(networkingv1.Ingress), indexIngressProxyClass, indexProxyClass); err != nil {
+		startlog.Fatalf("failed setting up ProxyClass indexer for Ingresses: %v", err)
+	}
+
 	lc, err := opts.tsServer.LocalClient()
 	if err != nil {
 		startlog.Fatalf("could not get local client: %v", err)
@@ -797,6 +807,16 @@ func managedResourceHandlerForType(typ string) handler.MapFunc {
 	}
 }
 
+// indexProxyClass is used to select ProxyClass-backed objects which are
+// locally indexed in the cache for efficient listing without requiring labels.
+func indexProxyClass(o client.Object) []string {
+	if !hasProxyClassAnnotation(o) {
+		return nil
+	}
+
+	return []string{o.GetAnnotations()[LabelAnnotationProxyClass]}
+}
+
 // proxyClassHandlerForSvc returns a handler that, for a given ProxyClass,
 // returns a list of reconcile requests for all Services labeled with
 // tailscale.com/proxy-class: <proxy class name>.
@@ -804,16 +824,37 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handle
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		svcList := new(corev1.ServiceList)
 		labels := map[string]string{
-			LabelProxyClass: o.GetName(),
+			LabelAnnotationProxyClass: o.GetName(),
 		}
+
 		if err := cl.List(ctx, svcList, client.MatchingLabels(labels)); err != nil {
 			logger.Debugf("error listing Services for ProxyClass: %v", err)
 			return nil
 		}
+
 		reqs := make([]reconcile.Request, 0)
+		seenSvcs := make(set.Set[string])
 		for _, svc := range svcList.Items {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&svc)})
+			seenSvcs.Add(fmt.Sprintf("%s/%s", svc.Namespace, svc.Name))
 		}
+
+		svcAnnotationList := new(corev1.ServiceList)
+		if err := cl.List(ctx, svcAnnotationList, client.MatchingFields{indexServiceProxyClass: o.GetName()}); err != nil {
+			logger.Debugf("error listing Services for ProxyClass: %v", err)
+			return nil
+		}
+
+		for _, svc := range svcAnnotationList.Items {
+			nsname := fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)
+			if seenSvcs.Contains(nsname) {
+				continue
+			}
+
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&svc)})
+			seenSvcs.Add(nsname)
+		}
+
 		return reqs
 	}
 }
@@ -825,16 +866,36 @@ func proxyClassHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) ha
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		ingList := new(networkingv1.IngressList)
 		labels := map[string]string{
-			LabelProxyClass: o.GetName(),
+			LabelAnnotationProxyClass: o.GetName(),
 		}
 		if err := cl.List(ctx, ingList, client.MatchingLabels(labels)); err != nil {
 			logger.Debugf("error listing Ingresses for ProxyClass: %v", err)
 			return nil
 		}
+
 		reqs := make([]reconcile.Request, 0)
+		seenIngs := make(set.Set[string])
 		for _, ing := range ingList.Items {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
+			seenIngs.Add(fmt.Sprintf("%s/%s", ing.Namespace, ing.Name))
 		}
+
+		ingAnnotationList := new(networkingv1.IngressList)
+		if err := cl.List(ctx, ingAnnotationList, client.MatchingFields{indexIngressProxyClass: o.GetName()}); err != nil {
+			logger.Debugf("error listing Ingreses for ProxyClass: %v", err)
+			return nil
+		}
+
+		for _, ing := range ingAnnotationList.Items {
+			nsname := fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)
+			if seenIngs.Contains(nsname) {
+				continue
+			}
+
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
+			seenIngs.Add(nsname)
+		}
+
 		return reqs
 	}
 }
@@ -1498,6 +1559,10 @@ func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) han
 
 func hasProxyGroupAnnotation(obj client.Object) bool {
 	return obj.GetAnnotations()[AnnotationProxyGroup] != ""
+}
+
+func hasProxyClassAnnotation(obj client.Object) bool {
+	return obj.GetAnnotations()[LabelAnnotationProxyClass] != ""
 }
 
 func id(ctx context.Context, lc *local.Client) (string, error) {

@@ -50,7 +50,7 @@ const (
 	// LabelProxyClass can be set by users on tailscale Ingresses and Services that define cluster ingress or
 	// cluster egress, to specify that configuration in this ProxyClass should be applied to resources created for
 	// the Ingress or Service.
-	LabelProxyClass = "tailscale.com/proxy-class"
+	LabelAnnotationProxyClass = "tailscale.com/proxy-class"
 
 	FinalizerName = "tailscale.com/finalizer"
 
@@ -1125,6 +1125,22 @@ func nameForService(svc *corev1.Service) string {
 		return h
 	}
 	return svc.Namespace + "-" + svc.Name
+}
+
+// proxyClassForObject returns the proxy class for the given object. If the
+// object does not have a proxy class label, it returns the default proxy class
+func proxyClassForObject(o client.Object, proxyDefaultClass string) string {
+	proxyClass, exists := o.GetLabels()[LabelAnnotationProxyClass]
+	if exists {
+		return proxyClass
+	}
+
+	proxyClass, exists = o.GetAnnotations()[LabelAnnotationProxyClass]
+	if exists {
+		return proxyClass
+	}
+
+	return proxyDefaultClass
 }
 
 func isValidFirewallMode(m string) bool {
