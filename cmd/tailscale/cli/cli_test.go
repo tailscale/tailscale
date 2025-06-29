@@ -971,6 +971,9 @@ func TestPrefFlagMapping(t *testing.T) {
 			// Used internally by LocalBackend as part of exit node usage toggling.
 			// No CLI flag for this.
 			continue
+		case "StaticEndpoints":
+			// Currently limited to setting via config file.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

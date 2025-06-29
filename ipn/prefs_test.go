@@ -55,6 +55,7 @@ func TestPrefsEqual(t *testing.T) {
 		"Egg",
 		"AdvertiseRoutes",
 		"AdvertiseServices",
+		"StaticEndpoints",
 		"NoSNAT",
 		"NoStatefulFiltering",
 		"NetfilterMode",
@@ -343,6 +344,16 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{AdvertiseServices: []string{"svc:tux", "svc:xenia"}},
 			&Prefs{AdvertiseServices: []string{"svc:tux", "svc:amelie"}},
+			false,
+		},
+		{
+			&Prefs{StaticEndpoints: []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:0"), netip.MustParseAddrPort("[::1]:80")}},
+			&Prefs{StaticEndpoints: []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:0"), netip.MustParseAddrPort("[::1]:80")}},
+			true,
+		},
+		{
+			&Prefs{StaticEndpoints: []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:0"), netip.MustParseAddrPort("[::1]:80")}},
+			&Prefs{StaticEndpoints: []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:99"), netip.MustParseAddrPort("[::1]:80")}},
 			false,
 		},
 		{

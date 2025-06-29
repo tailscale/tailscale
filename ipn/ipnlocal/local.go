@@ -26,7 +26,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -821,26 +820,19 @@ func (b *LocalBackend) initPrefsFromConfig(conf *conffile.Config) error {
 	if err := b.pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
 		return err
 	}
-	b.setStaticEndpointsFromConfigLocked(conf)
 	b.conf = conf
 	return nil
 }
 
-func (b *LocalBackend) setStaticEndpointsFromConfigLocked(conf *conffile.Config) {
-	if conf.Parsed.StaticEndpoints == nil && (b.conf == nil || b.conf.Parsed.StaticEndpoints == nil) {
-		return
-	}
-
+func (b *LocalBackend) setStaticEndpointsFromPrefsLocked(prefs ipn.PrefsView) {
 	// Ensure that magicsock conn has the up to date static wireguard
 	// endpoints. Setting the endpoints here triggers an asynchronous update
 	// of the node's advertised endpoints.
-	if b.conf == nil && len(conf.Parsed.StaticEndpoints) != 0 || !reflect.DeepEqual(conf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints) {
-		ms, ok := b.sys.MagicSock.GetOK()
-		if !ok {
-			b.logf("[unexpected] ReloadConfig: MagicSock not set")
-		} else {
-			ms.SetStaticEndpoints(views.SliceOf(conf.Parsed.StaticEndpoints))
-		}
+	ms, ok := b.sys.MagicSock.GetOK()
+	if !ok {
+		b.logf("[unexpected] setStaticEndpointsFromPrefsLocked: MagicSock not set")
+	} else {
+		ms.SetStaticEndpoints(prefs.StaticEndpoints())
 	}
 }
 
@@ -864,7 +856,6 @@ func (b *LocalBackend) setConfigLockedOnEntry(conf *conffile.Config, unlock unlo
 		return fmt.Errorf("error parsing config to prefs: %w", err)
 	}
 	p.ApplyEdits(&mp)
-	b.setStaticEndpointsFromConfigLocked(conf)
 	b.setPrefsLockedOnEntry(p, unlock)
 
 	b.conf = conf
@@ -1459,7 +1450,7 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 	}
 	n, ok = cn.NodeByID(nid)
 	if !ok {
-	    return zero, u, false
+		return zero, u, false
 	}
 	up, ok := cn.UserByID(n.User())
 	if !ok {
@@ -2299,6 +2290,9 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		b.logf("Start: serverMode=%v", inServerMode)
 	}
 	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
+	if prefs.StaticEndpoints().Len() > 0 {
+		b.setStaticEndpointsFromPrefsLocked(prefs)
+	}
 
 	persistv := prefs.Persist().AsStruct()
 	if persistv == nil {
@@ -4458,6 +4452,9 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	cc := b.cc
 
 	b.updateFilterLocked(newp.View())
+	if !views.SliceEqual(oldp.StaticEndpoints(), newp.View().StaticEndpoints()) {
+		b.setStaticEndpointsFromPrefsLocked(newp.View())
+	}
 
 	if oldp.ShouldSSHBeRunning() && !newp.ShouldSSHBeRunning() {
 		if b.sshServer != nil {

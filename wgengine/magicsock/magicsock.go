@@ -17,7 +17,6 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -919,7 +918,7 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 // Static endpoints are endpoints explicitly configured by user.
 func (c *Conn) SetStaticEndpoints(ep views.Slice[netip.AddrPort]) {
 	c.mu.Lock()
-	if reflect.DeepEqual(c.staticEndpoints.AsSlice(), ep.AsSlice()) {
+	if views.SliceEqual(c.staticEndpoints, ep) {
 		return
 	}
 	c.staticEndpoints = ep

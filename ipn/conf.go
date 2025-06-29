@@ -155,5 +155,10 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	if c.AdvertiseServices != nil {
 		mp.AdvertiseServices = c.AdvertiseServices
 	}
+	// Always true because we can't distinguish in JSON between unset and empty.
+	mp.StaticEndpointsSet = true
+	if c.StaticEndpoints != nil {
+		mp.StaticEndpoints = c.StaticEndpoints
+	}
 	return mp, nil
 }

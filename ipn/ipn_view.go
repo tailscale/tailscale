@@ -154,6 +154,9 @@ func (v PrefsView) AdvertiseRoutes() views.Slice[netip.Prefix] {
 func (v PrefsView) AdvertiseServices() views.Slice[string] {
 	return views.SliceOf(v.ж.AdvertiseServices)
 }
+func (v PrefsView) StaticEndpoints() views.Slice[netip.AddrPort] {
+	return views.SliceOf(v.ж.StaticEndpoints)
+}
 func (v PrefsView) NoSNAT() bool                          { return v.ж.NoSNAT }
 func (v PrefsView) NoStatefulFiltering() opt.Bool         { return v.ж.NoStatefulFiltering }
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }
@@ -194,6 +197,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
 	AdvertiseServices      []string
+	StaticEndpoints        []netip.AddrPort
 	NoSNAT                 bool
 	NoStatefulFiltering    opt.Bool
 	NetfilterMode          preftype.NetfilterMode

@@ -51,6 +51,7 @@ func (src *Prefs) Clone() *Prefs {
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
 	dst.AdvertiseServices = append(src.AdvertiseServices[:0:0], src.AdvertiseServices...)
+	dst.StaticEndpoints = append(src.StaticEndpoints[:0:0], src.StaticEndpoints...)
 	if src.DriveShares != nil {
 		dst.DriveShares = make([]*drive.Share, len(src.DriveShares))
 		for i := range dst.DriveShares {
@@ -89,6 +90,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
 	AdvertiseServices      []string
+	StaticEndpoints        []netip.AddrPort
 	NoSNAT                 bool
 	NoStatefulFiltering    opt.Bool
 	NetfilterMode          preftype.NetfilterMode

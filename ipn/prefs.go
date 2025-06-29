@@ -186,6 +186,10 @@ type Prefs struct {
 	// control server.
 	AdvertiseServices []string
 
+	// StaticEndpoints are additional, user-defined endpoints that this node
+	// should advertise amongst its wireguard endpoints.
+	StaticEndpoints []netip.AddrPort `json:",omitempty"`
+
 	// NoSNAT specifies whether to source NAT traffic going to
 	// destinations in AdvertiseRoutes. The default is to apply source
 	// NAT, which makes the traffic appear to come from the router
@@ -340,6 +344,7 @@ type MaskedPrefs struct {
 	EggSet                    bool                `json:",omitempty"`
 	AdvertiseRoutesSet        bool                `json:",omitempty"`
 	AdvertiseServicesSet      bool                `json:",omitempty"`
+	StaticEndpointsSet        bool                `json:",omitempty"`
 	NoSNATSet                 bool                `json:",omitempty"`
 	NoStatefulFilteringSet    bool                `json:",omitempty"`
 	NetfilterModeSet          bool                `json:",omitempty"`
@@ -552,6 +557,9 @@ func (p *Prefs) pretty(goos string) string {
 	if len(p.AdvertiseServices) > 0 {
 		fmt.Fprintf(&sb, "services=%s ", strings.Join(p.AdvertiseServices, ","))
 	}
+	if len(p.StaticEndpoints) > 0 {
+		fmt.Fprintf(&sb, "staticEndpoints=%v ", p.StaticEndpoints)
+	}
 	if goos == "linux" {
 		fmt.Fprintf(&sb, "nf=%v ", p.NetfilterMode)
 	}
@@ -627,6 +635,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		slices.Equal(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		slices.Equal(p.AdvertiseTags, p2.AdvertiseTags) &&
 		slices.Equal(p.AdvertiseServices, p2.AdvertiseServices) &&
+		slices.Equal(p.StaticEndpoints, p2.StaticEndpoints) &&
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&
