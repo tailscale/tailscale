@@ -918,6 +918,13 @@ func (t *TPMInfo) Present() bool { return t != nil }
 // This is not related to the older [Service] used in [Hostinfo.Services].
 type ServiceName string
 
+// AsServiceName reports whether if the given string is a valid service name,
+// and if so returns the name as a [tailcfg.ServiceName].
+func AsServiceName(s string) (svcName ServiceName, ok bool) {
+	svcName = ServiceName(s)
+	return svcName, svcName.Validate() == nil
+}
+
 // Validate validates if the service name is formatted correctly.
 // We only allow valid DNS labels, since the expectation is that these will be
 // used as parts of domain names. All errors are [vizerror.Error].
@@ -946,6 +953,13 @@ func (sn ServiceName) WithoutPrefix() string {
 		return ""
 	}
 	return bareName
+}
+
+// IsEmpty reports whether the ServiceName is empty.
+func (sn ServiceName) IsEmpty() bool {
+	// An empty ServiceName is not valid, so we can use this to check if the
+	// ServiceName is set.
+	return sn == ""
 }
 
 // VIPService represents a service created on a tailnet from the
