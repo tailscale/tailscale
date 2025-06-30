@@ -1459,7 +1459,7 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 	}
 	n, ok = cn.NodeByID(nid)
 	if !ok {
-	    return zero, u, false
+		return zero, u, false
 	}
 	up, ok := cn.UserByID(n.User())
 	if !ok {
@@ -5960,6 +5960,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 // the number of bytesRead.
 type responseBodyWrapper struct {
 	io.ReadCloser
+	logVerbose    bool
 	bytesRx       int64
 	bytesTx       int64
 	log           logger.Logf
@@ -5981,8 +5982,22 @@ func (rbw *responseBodyWrapper) logAccess(err string) {
 
 	// Some operating systems create and copy lots of 0 length hidden files for
 	// tracking various states. Omit these to keep logs from being too verbose.
-	if rbw.contentLength > 0 {
-		rbw.log("taildrive: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q", rbw.method, rbw.selfNodeKey, rbw.shareNodeKey, rbw.statusCode, rbw.fileExtension, rbw.contentType, roundTraffic(rbw.contentLength), roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
+	if rbw.logVerbose || rbw.contentLength > 0 {
+		levelPrefix := ""
+		if rbw.logVerbose {
+			levelPrefix = "[v1] "
+		}
+		rbw.log(
+			"%staildrive: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q",
+			levelPrefix,
+			rbw.method,
+			rbw.selfNodeKey,
+			rbw.shareNodeKey,
+			rbw.statusCode,
+			rbw.fileExtension,
+			rbw.contentType,
+			roundTraffic(rbw.contentLength),
+			roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
 	}
 }
 
@@ -6037,17 +6052,8 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 
 	defer func() {
 		contentType := "unknown"
-		switch req.Method {
-		case httpm.PUT:
-			if ct := req.Header.Get("Content-Type"); ct != "" {
-				contentType = ct
-			}
-		case httpm.GET:
-			if ct := resp.Header.Get("Content-Type"); ct != "" {
-				contentType = ct
-			}
-		default:
-			return
+		if ct := req.Header.Get("Content-Type"); ct != "" {
+			contentType = ct
 		}
 
 		dt.b.mu.Lock()
@@ -6061,6 +6067,7 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 
 		rbw := responseBodyWrapper{
 			log:           dt.b.logf,
+			logVerbose:    req.Method != httpm.GET && req.Method != httpm.PUT, // other requests like PROPFIND are quite chatty, so we log those at verbose level
 			method:        req.Method,
 			bytesTx:       int64(bw.bytesRead),
 			selfNodeKey:   selfNodeKey,

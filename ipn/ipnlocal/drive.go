@@ -306,10 +306,12 @@ func (b *LocalBackend) updateDrivePeersLocked(nm *netmap.NetworkMap) {
 }
 
 func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Remote {
+	b.logf("[v1] taildrive: setting up drive remotes from peers")
 	driveRemotes := make([]*drive.Remote, 0, len(nm.Peers))
 	for _, p := range nm.Peers {
 		peerID := p.ID()
 		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), taildrivePrefix[1:])
+		b.logf("[v1] taildrive: appending remote for peer %d: %s", peerID, url)
 		driveRemotes = append(driveRemotes, &drive.Remote{
 			Name: p.DisplayName(false),
 			URL:  url,
@@ -320,6 +322,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				cn := b.currentNode()
 				peer, ok := cn.NodeByID(peerID)
 				if !ok {
+					b.logf("[v1] taildrive: Available(): peer %d not found", peerID)
 					return false
 				}
 
@@ -332,14 +335,17 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// The netmap.Peers slice is not updated in all cases.
 				// It should be fixed now that we use PeerByIDOk.
 				if !peer.Online().Get() {
+					b.logf("[v1] taildrive: Available(): peer %d offline", peerID)
 					return false
 				}
 
 				// Check that the peer is allowed to share with us.
 				if cn.PeerHasCap(peer, tailcfg.PeerCapabilityTaildriveSharer) {
+					b.logf("[v1] taildrive: Available(): peer %d available", peerID)
 					return true
 				}
 
+				b.logf("[v1] taildrive: Available(): peer %d not allowed to share", peerID)
 				return false
 			},
 		})
