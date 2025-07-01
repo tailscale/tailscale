@@ -22,6 +22,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -207,7 +208,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						},
 					},
 					expectedIPs:       []netip.Addr{},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning NodePort Services for static endpoints: failed to allocate NodePorts to ProxyGroup Services: not enough available ports to allocate all replicas (needed 4, got 3). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass \"default-pc\" must have bigger range allocated"},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning NodePort Services for static endpoints: failed to allocate NodePorts to ProxyGroup Services: not enough available ports to allocate all replicas (needed 4, got 3). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass \"default-pc\" must have bigger range allocated"},
 					expectedErr:       "",
 					expectStatefulSet: false,
 				},
@@ -265,7 +266,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						{name: "node2", addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeInternalIP}}, labels: map[string]string{"zone": "eu-central"}},
 					},
 					expectedIPs:       []netip.Addr{},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
 					expectedErr:       "",
 					expectStatefulSet: false,
 				},
@@ -309,7 +310,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						},
 					},
 					expectedIPs:       []netip.Addr{},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to find any `status.addresses` of type \"ExternalIP\" on nodes using configured Selectors on `spec.staticEndpoints.nodePort.selectors` for ProxyClass \"default-pc\""},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to find any `status.addresses` of type \"ExternalIP\" on nodes using configured Selectors on `spec.staticEndpoints.nodePort.selectors` for ProxyClass \"default-pc\""},
 					expectedErr:       "",
 					expectStatefulSet: false,
 				},
@@ -576,7 +577,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						},
 					},
 					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
 					expectStatefulSet: true,
 				},
 			},
@@ -855,7 +856,8 @@ func TestProxyGroup(t *testing.T) {
 	t.Run("proxyclass_not_ready", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass default-pc is not yet in a ready state, waiting...", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass \"default-pc\" is not yet in a ready state, waiting...", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, false, pc)
 	})
@@ -1413,6 +1415,7 @@ func expectSecrets(t *testing.T, fc client.WithWatch, expected []string) {
 }
 
 func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup) {
+	t.Helper()
 	const key = "profile-abc"
 	for i := range pgReplicas(pg) {
 		bytes, err := json.Marshal(map[string]any{
@@ -1424,6 +1427,17 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 			t.Fatal(err)
 		}
 
+		podUID := fmt.Sprintf("pod-uid-%d", i)
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%d", pg.Name, i),
+				Namespace: "tailscale",
+				UID:       types.UID(podUID),
+			},
+		}
+		if _, err := createOrUpdate(context.Background(), fc, "tailscale", pod, nil); err != nil {
+			t.Fatalf("failed to create or update Pod %s: %v", pod.Name, err)
+		}
 		mustUpdate(t, fc, tsNamespace, fmt.Sprintf("test-%d", i), func(s *corev1.Secret) {
 			s.Data = map[string][]byte{
 				currentProfileKey:       []byte(key),
@@ -1433,6 +1447,7 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 				// TODO(tomhjp): We have two different mechanisms to retrieve device IDs.
 				// Consolidate on this one.
 				kubetypes.KeyDeviceID: []byte(fmt.Sprintf("nodeid-%d", i)),
+				kubetypes.KeyPodUID:   []byte(podUID),
 			}
 		})
 	}
