@@ -126,7 +126,6 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 	de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBest.epAddr, maybeBest.wireMTU)
 	de.setBestAddrLocked(maybeBest)
 	de.trustBestAddrUntil = mono.Now().Add(trustUDPAddrDuration)
-	de.c.peerMap.setNodeKeyForEpAddr(maybeBest.epAddr, de.publicKey)
 }
 
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
