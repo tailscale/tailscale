@@ -46,12 +46,13 @@ func (s State) String() string {
 		"Running"}[s]
 }
 
-// EngineStatus contains WireGuard engine stats.
+// EngineStatus contains WireGuard engine metadata and stats.
 type EngineStatus struct {
 	RBytes, WBytes int64
 	NumLive        int
 	LiveDERPs      int // number of active DERP connections
 	LivePeers      map[key.NodePublic]ipnstate.PeerStatusLite
+	LocalAddrs     []tailcfg.Endpoint // the set of possible endpoints for the magic conn
 }
 
 // NotifyWatchOpt is a bitmask of options about what type of Notify messages

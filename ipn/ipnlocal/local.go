@@ -3813,6 +3813,7 @@ func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer tai
 func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineStatus) {
 	var peerStats, peerKeys strings.Builder
 
+	ret.LocalAddrs = s.LocalAddrs
 	ret.LiveDERPs = s.DERPs
 	ret.LivePeers = map[key.NodePublic]ipnstate.PeerStatusLite{}
 	for _, p := range s.Peers {
