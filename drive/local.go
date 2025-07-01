@@ -17,7 +17,7 @@ import (
 // Remote represents a remote Taildrive node.
 type Remote struct {
 	Name      string
-	URL       string
+	URL       func() string
 	Available func() bool
 }
 
