@@ -826,10 +826,21 @@ func TestStatusPeerCapabilities(t *testing.T) {
 						tailcfg.CapabilityAdmin: {`{"test": "true}`},
 					}),
 				}).View(),
+				(&tailcfg.Node{
+					ID:           3,
+					StableID:     "baz",
+					Key:          makeNodeKeyFromID(3),
+					Hostinfo:     (&tailcfg.Hostinfo{}).View(),
+					Capabilities: []tailcfg.NodeCapability{tailcfg.CapabilityOwner},
+					CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+						tailcfg.CapabilityOwner: nil,
+					}),
+				}).View(),
 			},
 			expectedPeerCapabilities: map[tailcfg.StableNodeID][]tailcfg.NodeCapability{
 				tailcfg.StableNodeID("foo"): {tailcfg.CapabilitySSH},
 				tailcfg.StableNodeID("bar"): {tailcfg.CapabilityAdmin},
+				tailcfg.StableNodeID("baz"): {tailcfg.CapabilityOwner},
 			},
 			expectedPeerCapMap: map[tailcfg.StableNodeID]tailcfg.NodeCapMap{
 				tailcfg.StableNodeID("foo"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
@@ -837,6 +848,9 @@ func TestStatusPeerCapabilities(t *testing.T) {
 				}),
 				tailcfg.StableNodeID("bar"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
 					tailcfg.CapabilityAdmin: {`{"test": "true}`},
+				}),
+				tailcfg.StableNodeID("baz"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+					tailcfg.CapabilityOwner: nil,
 				}),
 			},
 		},
