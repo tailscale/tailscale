@@ -81,7 +81,7 @@ func (s *FileSystemForLocal) SetRemotes(domain string, remotes []*drive.Remote, 
 				Name:      remote.Name,
 				Available: remote.Available,
 			},
-			BaseURL:   func() (string, error) { return remote.URL, nil },
+			BaseURL:   func() (string, error) { return remote.URL(), nil },
 			Transport: transport,
 		})
 	}
