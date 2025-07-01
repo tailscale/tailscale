@@ -2244,6 +2244,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
 	hostinfo.AppConnector.Set(b.appConnector != nil)
+	hostinfo.StateEncrypted = b.stateEncrypted()
 	b.logf.JSON(1, "Hostinfo", hostinfo)
 
 	// TODO(apenwarr): avoid the need to reinit controlclient.
@@ -7801,3 +7802,29 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 var (
 	metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
 )
+
+func (b *LocalBackend) stateEncrypted() opt.Bool {
+	switch runtime.GOOS {
+	case "android", "ios":
+		return opt.NewBool(true)
+	case "darwin":
+		switch {
+		case version.IsMacAppStore():
+			return opt.NewBool(true)
+		case version.IsMacSysExt():
+			// MacSys still stores its state in plaintext on disk in addition to
+			// the Keychain. A future release will clean up the on-disk state
+			// files.
+			// TODO(#15830): always return true here once MacSys is fully migrated.
+			sp, _ := syspolicy.GetBoolean(syspolicy.EncryptState, false)
+			return opt.NewBool(sp)
+		default:
+			// Probably self-compiled tailscaled, we don't use the Keychain
+			// there.
+			return opt.NewBool(false)
+		}
+	default:
+		_, ok := b.store.(ipn.EncryptedStateStore)
+		return opt.NewBool(ok)
+	}
+}
