@@ -134,7 +134,11 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	return reconcile.Result{}, errors.Join(err, r.maybeUpdateStatus(ctx, logger, pg, oldPGStatus, nrr, staticEndpoints))
 }
 
-func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (staticEndpoints map[string][]netip.AddrPort, _ *notReadyReason, _ error) {
+// reconcilePG handles all reconciliation of a ProxyGroup that is not marked
+// for deletion. It is separated out from Reconcile to make a clear separation
+// between reconciling the ProxyGroup, and posting the status of its created
+// resources onto the ProxyGroup status field.
+func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (map[string][]netip.AddrPort, *notReadyReason, error) {
 	if !slices.Contains(pg.Finalizers, FinalizerName) {
 		// This log line is printed exactly once during initial provisioning,
 		// because once the finalizer is in place this block gets skipped. So,
@@ -208,7 +212,7 @@ func validateProxyClassForPG(logger *zap.SugaredLogger, pg *tsapi.ProxyGroup, pc
 	}
 }
 
-func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (staticEndpoints map[string][]netip.AddrPort, _ *notReadyReason, err error) {
+func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (map[string][]netip.AddrPort, *notReadyReason, error) {
 	logger := r.logger(pg.Name)
 	r.mu.Lock()
 	r.ensureAddedToGaugeForProxyGroup(pg)
@@ -217,6 +221,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	svcToNodePorts := make(map[string]uint16)
 	var tailscaledPort *uint16
 	if proxyClass != nil && proxyClass.Spec.StaticEndpoints != nil {
+		var err error
 		svcToNodePorts, tailscaledPort, err = r.ensureNodePortServiceCreated(ctx, pg, proxyClass)
 		if err != nil {
 			wrappedErr := fmt.Errorf("error provisioning NodePort Services for static endpoints: %w", err)
@@ -228,7 +233,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		}
 	}
 
-	staticEndpoints, err = r.ensureConfigSecretsCreated(ctx, pg, proxyClass, svcToNodePorts)
+	staticEndpoints, err := r.ensureConfigSecretsCreated(ctx, pg, proxyClass, svcToNodePorts)
 	if err != nil {
 		wrappedErr := fmt.Errorf("error provisioning config Secrets: %w", err)
 		var selectorErr *FindStaticEndpointErr
@@ -937,7 +942,7 @@ func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.Pr
 }
 
 // getRunningProxies will return status for all proxy Pods whose state Secret
-// has an up to date Pod UID.
+// has an up to date Pod UID and at least a hostname.
 func (r *ProxyGroupReconciler) getRunningProxies(ctx context.Context, pg *tsapi.ProxyGroup, staticEndpoints map[string][]netip.AddrPort) (devices []tsapi.TailnetDevice, _ error) {
 	metadata, err := r.getNodeMetadata(ctx, pg)
 	if err != nil {
@@ -952,16 +957,18 @@ func (r *ProxyGroupReconciler) getRunningProxies(ctx context.Context, pg *tsapi.
 		}
 
 		device := tsapi.TailnetDevice{}
+		if hostname, _, ok := strings.Cut(string(m.stateSecret.Data[kubetypes.KeyDeviceFQDN]), "."); ok {
+			device.Hostname = hostname
+		} else {
+			continue
+		}
+
 		if ipsB := m.stateSecret.Data[kubetypes.KeyDeviceIPs]; len(ipsB) > 0 {
 			ips := []string{}
 			if err := json.Unmarshal(ipsB, &ips); err != nil {
 				return nil, fmt.Errorf("failed to extract device IPs from state Secret %q: %w", m.stateSecret.Name, err)
 			}
 			device.TailnetIPs = ips
-		}
-
-		if hostname, _, ok := strings.Cut(string(m.stateSecret.Data[kubetypes.KeyDeviceFQDN]), "."); ok {
-			device.Hostname = hostname
 		}
 
 		// TODO(tomhjp): This is our input to the proxy, but we should instead
