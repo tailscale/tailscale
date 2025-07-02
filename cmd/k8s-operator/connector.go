@@ -7,14 +7,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"errors"
 
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
@@ -26,6 +25,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -199,6 +199,7 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		},
 		ProxyClassName: proxyClass,
 		proxyType:      proxyTypeConnector,
+		LoginServer:    a.ssr.loginServer,
 	}
 
 	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {

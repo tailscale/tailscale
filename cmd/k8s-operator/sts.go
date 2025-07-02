@@ -27,6 +27,7 @@ import (
 	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
+
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
@@ -138,6 +139,9 @@ type tailscaleSTSConfig struct {
 	ProxyClassName string // name of ProxyClass if one needs to be applied to the proxy
 
 	ProxyClass *tsapi.ProxyClass // ProxyClass that needs to be applied to the proxy (if there is one)
+
+	// LoginServer denotes the URL of the control plane that should be used by the proxy.
+	LoginServer string
 }
 
 type connector struct {
@@ -162,6 +166,7 @@ type tailscaleSTSReconciler struct {
 	proxyImage             string
 	proxyPriorityClassName string
 	tsFirewallMode         string
+	loginServer            string
 }
 
 func (sts tailscaleSTSReconciler) validate() error {
@@ -908,6 +913,10 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 		Hostname:            &stsC.Hostname,
 		NoStatefulFiltering: "true", // Explicitly enforce default value, see #14216
 		AppConnector:        &ipn.AppConnectorPrefs{Advertise: false},
+	}
+
+	if stsC.LoginServer != "" {
+		conf.ServerURL = &stsC.LoginServer
 	}
 
 	if stsC.Connector != nil {

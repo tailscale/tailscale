@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/internal/client/tailscale"
+	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 )
 
@@ -19,10 +20,9 @@ import (
 // call should be performed on the default tailnet for the provided credentials.
 const (
 	defaultTailnet = "-"
-	defaultBaseURL = "https://api.tailscale.com"
 )
 
-func newTSClient(ctx context.Context, clientIDPath, clientSecretPath string) (tsClient, error) {
+func newTSClient(ctx context.Context, clientIDPath, clientSecretPath, loginServer string) (tsClient, error) {
 	clientID, err := os.ReadFile(clientIDPath)
 	if err != nil {
 		return nil, fmt.Errorf("error reading client ID %q: %w", clientIDPath, err)
@@ -31,14 +31,22 @@ func newTSClient(ctx context.Context, clientIDPath, clientSecretPath string) (ts
 	if err != nil {
 		return nil, fmt.Errorf("reading client secret %q: %w", clientSecretPath, err)
 	}
+	const tokenURLPath = "/api/v2/oauth/token"
+	tokenURL := fmt.Sprintf("%s%s", ipn.DefaultControlURL, tokenURLPath)
+	if loginServer != "" {
+		tokenURL = fmt.Sprintf("%s%s", loginServer, tokenURLPath)
+	}
 	credentials := clientcredentials.Config{
 		ClientID:     string(clientID),
 		ClientSecret: string(clientSecret),
-		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
+		TokenURL:     tokenURL,
 	}
 	c := tailscale.NewClient(defaultTailnet, nil)
 	c.UserAgent = "tailscale-k8s-operator"
 	c.HTTPClient = credentials.Client(ctx)
+	if loginServer != "" {
+		c.BaseURL = loginServer
+	}
 	return c, nil
 }
 
