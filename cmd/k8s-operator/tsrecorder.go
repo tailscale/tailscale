@@ -59,6 +59,7 @@ type RecorderReconciler struct {
 	clock       tstime.Clock
 	tsNamespace string
 	tsClient    tsClient
+	loginServer string
 
 	mu        sync.Mutex           // protects following
 	recorders set.Slice[types.UID] // for recorders gauge
@@ -202,7 +203,7 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 	}); err != nil {
 		return fmt.Errorf("error creating RoleBinding: %w", err)
 	}
-	ss := tsrStatefulSet(tsr, r.tsNamespace)
+	ss := tsrStatefulSet(tsr, r.tsNamespace, r.loginServer)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels
 		s.ObjectMeta.Annotations = ss.ObjectMeta.Annotations
