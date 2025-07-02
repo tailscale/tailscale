@@ -188,6 +188,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	ServicesHash    string
 	Location        *Location
 	TPM             *TPMInfo
+	StateEncrypted  opt.Bool
 }{})
 
 // Clone makes a deep copy of NetInfo.

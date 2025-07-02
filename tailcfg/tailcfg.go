@@ -162,7 +162,8 @@ type CapabilityVersion int
 //   - 115: 2025-03-07: Client understands DERPRegion.NoMeasureNoHome.
 //   - 116: 2025-05-05: Client serves MagicDNS "AAAA" if NodeAttrMagicDNSPeerAAAA set on self node
 //   - 117: 2025-05-28: Client understands DisplayMessages (structured health messages), but not necessarily PrimaryAction.
-const CurrentCapabilityVersion CapabilityVersion = 117
+//   - 118: 2025-07-01: Client sends Hostinfo.StateEncrypted to report whether the state file is encrypted at rest (#15830)
+const CurrentCapabilityVersion CapabilityVersion = 118
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -878,6 +879,12 @@ type Hostinfo struct {
 	Location *Location `json:",omitempty"`
 
 	TPM *TPMInfo `json:",omitempty"` // TPM device metadata, if available
+	// StateEncrypted reports whether the node state is stored encrypted on
+	// disk. The actual mechanism is platform-specific:
+	//   * Apple nodes use the Keychain
+	//   * Linux and Windows nodes use the TPM
+	//   * Android apps use EncryptedSharedPreferences
+	StateEncrypted opt.Bool `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.

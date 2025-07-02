@@ -303,6 +303,7 @@ func (v HostinfoView) ServicesHash() string                   { return v.ж.Serv
 func (v HostinfoView) Location() LocationView                 { return v.ж.Location.View() }
 func (v HostinfoView) TPM() views.ValuePointer[TPMInfo]       { return views.ValuePointerOf(v.ж.TPM) }
 
+func (v HostinfoView) StateEncrypted() opt.Bool   { return v.ж.StateEncrypted }
 func (v HostinfoView) Equal(v2 HostinfoView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -346,6 +347,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	ServicesHash    string
 	Location        *Location
 	TPM             *TPMInfo
+	StateEncrypted  opt.Bool
 }{})
 
 // View returns a read-only view of NetInfo.
