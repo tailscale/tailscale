@@ -85,6 +85,12 @@ func makeNodeKeyFromID(nodeID tailcfg.NodeID) key.NodePublic {
 	return key.NodePublicFromRaw32(memro.B(raw))
 }
 
+func makeDiscoKeyFromID(nodeID tailcfg.NodeID) (ret key.DiscoPublic) {
+	raw := make([]byte, 32)
+	binary.BigEndian.PutUint64(raw[24:], uint64(nodeID))
+	return key.DiscoPublicFromRaw32(memro.B(raw))
+}
+
 func TestShrinkDefaultRoute(t *testing.T) {
 	tests := []struct {
 		route     string
@@ -820,10 +826,21 @@ func TestStatusPeerCapabilities(t *testing.T) {
 						tailcfg.CapabilityAdmin: {`{"test": "true}`},
 					}),
 				}).View(),
+				(&tailcfg.Node{
+					ID:           3,
+					StableID:     "baz",
+					Key:          makeNodeKeyFromID(3),
+					Hostinfo:     (&tailcfg.Hostinfo{}).View(),
+					Capabilities: []tailcfg.NodeCapability{tailcfg.CapabilityOwner},
+					CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+						tailcfg.CapabilityOwner: nil,
+					}),
+				}).View(),
 			},
 			expectedPeerCapabilities: map[tailcfg.StableNodeID][]tailcfg.NodeCapability{
 				tailcfg.StableNodeID("foo"): {tailcfg.CapabilitySSH},
 				tailcfg.StableNodeID("bar"): {tailcfg.CapabilityAdmin},
+				tailcfg.StableNodeID("baz"): {tailcfg.CapabilityOwner},
 			},
 			expectedPeerCapMap: map[tailcfg.StableNodeID]tailcfg.NodeCapMap{
 				tailcfg.StableNodeID("foo"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
@@ -831,6 +848,9 @@ func TestStatusPeerCapabilities(t *testing.T) {
 				}),
 				tailcfg.StableNodeID("bar"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
 					tailcfg.CapabilityAdmin: {`{"test": "true}`},
+				}),
+				tailcfg.StableNodeID("baz"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+					tailcfg.CapabilityOwner: nil,
 				}),
 			},
 		},
@@ -999,7 +1019,7 @@ func TestUpdateNetmapDelta(t *testing.T) {
 		},
 	}
 	for _, want := range wants {
-		gotv, ok := b.currentNode().PeerByID(want.ID)
+		gotv, ok := b.currentNode().NodeByID(want.ID)
 		if !ok {
 			t.Errorf("netmap.Peer %v missing from b.profile.Peers", want.ID)
 			continue

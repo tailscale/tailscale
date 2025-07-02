@@ -398,6 +398,23 @@ func (lc *Client) IncrementCounter(ctx context.Context, name string, delta int) 
 	return err
 }
 
+// IncrementGauge increments the value of a Tailscale daemon's gauge
+// metric by the given delta. If the metric has yet to exist, a new gauge
+// metric is created and initialized to delta. The delta value can be negative.
+func (lc *Client) IncrementGauge(ctx context.Context, name string, delta int) error {
+	type metricUpdate struct {
+		Name  string `json:"name"`
+		Type  string `json:"type"`
+		Value int    `json:"value"` // amount to increment by
+	}
+	_, err := lc.send(ctx, "POST", "/localapi/v0/upload-client-metrics", 200, jsonBody([]metricUpdate{{
+		Name:  name,
+		Type:  "gauge",
+		Value: delta,
+	}}))
+	return err
+}
+
 // TailDaemonLogs returns a stream the Tailscale daemon's logs as they arrive.
 // Close the context to stop the stream.
 func (lc *Client) TailDaemonLogs(ctx context.Context) (io.Reader, error) {

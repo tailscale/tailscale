@@ -75,11 +75,12 @@ type endpoint struct {
 	// mu protects all following fields.
 	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
 
-	heartBeatTimer *time.Timer    // nil when idle
-	lastSendExt    mono.Time      // last time there were outgoing packets sent to this peer from an external trigger (e.g. wireguard-go or disco pingCLI)
-	lastSendAny    mono.Time      // last time there were outgoing packets sent this peer from any trigger, internal or external to magicsock
-	lastFullPing   mono.Time      // last time we pinged all disco or wireguard only endpoints
-	derpAddr       netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
+	heartBeatTimer            *time.Timer    // nil when idle
+	lastSendExt               mono.Time      // last time there were outgoing packets sent to this peer from an external trigger (e.g. wireguard-go or disco pingCLI)
+	lastSendAny               mono.Time      // last time there were outgoing packets sent this peer from any trigger, internal or external to magicsock
+	lastFullPing              mono.Time      // last time we pinged all disco or wireguard only endpoints
+	lastUDPRelayPathDiscovery mono.Time      // last time we ran UDP relay path discovery
+	derpAddr                  netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
 	bestAddr           addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
 	bestAddrAt         mono.Time   // time best address re-confirmed
@@ -99,25 +100,32 @@ type endpoint struct {
 	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
 }
 
-// relayEndpointReady determines whether the given relay addr should be
-// installed as de.bestAddr. It is only called by [relayManager] once it has
-// determined addr is functional via [disco.Pong] reception.
-func (de *endpoint) relayEndpointReady(addr epAddr, latency time.Duration) {
+// udpRelayEndpointReady determines whether the given relay [addrQuality] should
+// be installed as de.bestAddr. It is only called by [relayManager] once it has
+// determined maybeBest is functional via [disco.Pong] reception.
+func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 	de.c.mu.Lock()
 	defer de.c.mu.Unlock()
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	maybeBetter := addrQuality{addr, latency, pingSizeToPktLen(0, addr)}
-	if !betterAddr(maybeBetter, de.bestAddr) {
+	if maybeBest.relayServerDisco.Compare(de.bestAddr.relayServerDisco) == 0 {
+		// TODO(jwhited): add some observability for this case, e.g. did we
+		//  flip transports during a de.bestAddr transition from untrusted to
+		//  trusted?
+		//
+		// If these are equal we must set maybeBest as bestAddr, otherwise we
+		// could leave a stale bestAddr if it goes over a different
+		// address family or src.
+	} else if !betterAddr(maybeBest, de.bestAddr) {
 		return
 	}
 
-	// Promote maybeBetter to bestAddr.
+	// Promote maybeBest to bestAddr.
 	// TODO(jwhited): collapse path change logging with endpoint.handlePongConnLocked()
-	de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBetter.epAddr, maybeBetter.wireMTU)
-	de.setBestAddrLocked(maybeBetter)
-	de.c.peerMap.setNodeKeyForEpAddr(addr, de.publicKey)
+	de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBest.epAddr, maybeBest.wireMTU)
+	de.setBestAddrLocked(maybeBest)
+	de.trustBestAddrUntil = mono.Now().Add(trustUDPAddrDuration)
 }
 
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
@@ -851,6 +859,10 @@ func (de *endpoint) heartbeat() {
 		de.sendDiscoPingsLocked(now, true)
 	}
 
+	if de.wantUDPRelayPathDiscoveryLocked(now) {
+		de.discoverUDPRelayPathsLocked(now)
+	}
+
 	de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
 }
 
@@ -861,6 +873,47 @@ func (de *endpoint) setHeartbeatDisabled(v bool) {
 	de.heartbeatDisabled = v
 }
 
+// discoverUDPRelayPathsLocked starts UDP relay path discovery.
+func (de *endpoint) discoverUDPRelayPathsLocked(now mono.Time) {
+	// TODO(jwhited): return early if there are no relay servers set, otherwise
+	//  we spin up and down relayManager.runLoop unnecessarily.
+	de.lastUDPRelayPathDiscovery = now
+	lastBest := de.bestAddr
+	lastBestIsTrusted := mono.Now().Before(de.trustBestAddrUntil)
+	de.c.relayManager.startUDPRelayPathDiscoveryFor(de, lastBest, lastBestIsTrusted)
+}
+
+// wantUDPRelayPathDiscoveryLocked reports whether we should kick off UDP relay
+// path discovery.
+func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
+	if runtime.GOOS == "js" {
+		return false
+	}
+	if !de.relayCapable {
+		return false
+	}
+	if de.bestAddr.isDirect() && now.Before(de.trustBestAddrUntil) {
+		return false
+	}
+	if !de.lastUDPRelayPathDiscovery.IsZero() && now.Sub(de.lastUDPRelayPathDiscovery) < discoverUDPRelayPathsInterval {
+		return false
+	}
+	// TODO(jwhited): consider applying 'goodEnoughLatency' suppression here,
+	//  but not until we have a strategy for triggering CallMeMaybeVia regularly
+	//  and/or enabling inbound packets to act as a UDP relay path discovery
+	//  trigger, otherwise clients without relay servers may fall off a UDP
+	//  relay path and never come back. They are dependent on the remote side
+	//  regularly TX'ing CallMeMaybeVia, which currently only happens as part
+	//  of full UDP relay path discovery.
+	if now.After(de.trustBestAddrUntil) {
+		return true
+	}
+	if !de.lastUDPRelayPathDiscovery.IsZero() && now.Sub(de.lastUDPRelayPathDiscovery) >= upgradeUDPRelayInterval {
+		return true
+	}
+	return false
+}
+
 // wantFullPingLocked reports whether we should ping to all our peers looking for
 // a better path.
 //
@@ -869,7 +922,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 	if runtime.GOOS == "js" {
 		return false
 	}
-	if !de.bestAddr.ap.IsValid() || de.lastFullPing.IsZero() {
+	if !de.bestAddr.isDirect() || de.lastFullPing.IsZero() {
 		return true
 	}
 	if now.After(de.trustBestAddrUntil) {
@@ -878,7 +931,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 	if de.bestAddr.latency <= goodEnoughLatency {
 		return false
 	}
-	if now.Sub(de.lastFullPing) >= upgradeInterval {
+	if now.Sub(de.lastFullPing) >= upgradeUDPDirectInterval {
 		return true
 	}
 	return false
@@ -964,9 +1017,16 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		if startWGPing {
 			de.sendWireGuardOnlyPingsLocked(now)
 		}
-	} else if !udpAddr.ap.IsValid() || now.After(de.trustBestAddrUntil) {
+	} else if !udpAddr.isDirect() || now.After(de.trustBestAddrUntil) {
 		de.sendDiscoPingsLocked(now, true)
 	}
+	// TODO(jwhited): consider triggering UDP relay path discovery here under
+	//  certain conditions. We currently only trigger it in heartbeat(), which
+	//  is both good and bad. It's good because the first heartbeat() tick is 3s
+	//  after the first packet, which gives us time to discover a UDP direct
+	//  path and potentially avoid what would be wasted UDP relay path discovery
+	//  work. It's bad because we might not discover a UDP direct path, and we
+	//  incur a 3s delay before we try to discover a UDP relay path.
 	de.noteTxActivityExtTriggerLocked(now)
 	de.lastSendAny = now
 	de.mu.Unlock()
@@ -1078,7 +1138,12 @@ func (de *endpoint) discoPingTimeout(txid stun.TxID) {
 	if !ok {
 		return
 	}
-	if debugDisco() || !de.bestAddr.ap.IsValid() || mono.Now().After(de.trustBestAddrUntil) {
+	bestUntrusted := mono.Now().After(de.trustBestAddrUntil)
+	if sp.to == de.bestAddr.epAddr && sp.to.vni.isSet() && bestUntrusted {
+		// TODO(jwhited): consider applying this to direct UDP paths as well
+		de.clearBestAddrLocked()
+	}
+	if debugDisco() || !de.bestAddr.ap.IsValid() || bestUntrusted {
 		de.c.dlogf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort())
 	}
 	de.removeSentDiscoPingLocked(txid, sp, discoPingTimedOut)
@@ -1275,13 +1340,6 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		// sent so our firewall ports are probably open and now
 		// would be a good time for them to connect.
 		go de.c.enqueueCallMeMaybe(derpAddr, de)
-
-		// Schedule allocation of relay endpoints. We make no considerations for
-		// current relay endpoints or best UDP path state for now, keep it
-		// simple.
-		if de.relayCapable {
-			go de.c.relayManager.allocateAndHandshakeAllServers(de)
-		}
 	}
 }
 
@@ -1665,7 +1723,16 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		thisPong := addrQuality{sp.to, latency, tstun.WireMTU(pingSizeToPktLen(sp.size, sp.to))}
+		thisPong := addrQuality{
+			epAddr:  sp.to,
+			latency: latency,
+			wireMTU: pingSizeToPktLen(sp.size, sp.to),
+		}
+		// TODO(jwhited): consider checking de.trustBestAddrUntil as well. If
+		//  de.bestAddr is untrusted we may want to clear it, otherwise we could
+		//  get stuck with a forever untrusted bestAddr that blackholes, since
+		//  we don't clear direct UDP paths on disco ping timeout (see
+		//  discoPingTimeout).
 		if betterAddr(thisPong, de.bestAddr) {
 			if src.vni.isSet() {
 				// This would be unexpected. Switching to a Geneve-encapsulated
@@ -1703,6 +1770,12 @@ type epAddr struct {
 	vni virtualNetworkID // vni.isSet() indicates if this [epAddr] involves a Geneve header
 }
 
+// isDirect returns true if e.ap is valid and not tailcfg.DerpMagicIPAddr,
+// and a VNI is not set.
+func (e epAddr) isDirect() bool {
+	return e.ap.IsValid() && e.ap.Addr() != tailcfg.DerpMagicIPAddr && !e.vni.isSet()
+}
+
 func (e epAddr) String() string {
 	if !e.vni.isSet() {
 		return e.ap.String()
@@ -1710,14 +1783,17 @@ func (e epAddr) String() string {
 	return fmt.Sprintf("%v:vni:%d", e.ap.String(), e.vni.get())
 }
 
-// addrQuality is an [epAddr] with an associated latency and path mtu.
+// addrQuality is an [epAddr], an optional [key.DiscoPublic] if a relay server
+// is associated, a round-trip latency measurement, and path mtu.
 type addrQuality struct {
 	epAddr
-	latency time.Duration
-	wireMTU tstun.WireMTU
+	relayServerDisco key.DiscoPublic // only relevant if epAddr.vni.isSet(), otherwise zero value
+	latency          time.Duration
+	wireMTU          tstun.WireMTU
 }
 
 func (a addrQuality) String() string {
+	// TODO(jwhited): consider including relayServerDisco
 	return fmt.Sprintf("%v@%v+%v", a.epAddr, a.latency, a.wireMTU)
 }
 

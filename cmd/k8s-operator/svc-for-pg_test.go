@@ -142,7 +142,7 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 			Labels:    pgSecretLabels("test-pg", "config"),
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): []byte(`{"Version":""}`),
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte(`{"Version":""}`),
 		},
 	}
 
@@ -179,7 +179,7 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 	// Set ProxyGroup status to ready
 	pg.Status.Conditions = []metav1.Condition{
 		{
-			Type:               string(tsapi.ProxyGroupReady),
+			Type:               string(tsapi.ProxyGroupAvailable),
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: 1,
 		},

@@ -1391,7 +1391,7 @@ func profileFromView(v tailcfg.UserProfileView) tailcfg.UserProfile {
 func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	cn := b.currentNode()
 	if nid, ok := cn.NodeByKey(k); ok {
-		if n, ok := cn.PeerByID(nid); ok {
+		if n, ok := cn.NodeByID(nid); ok {
 			up, ok := cn.NetMap().UserProfiles[n.User()]
 			u = profileFromView(up)
 			return n, u, ok
@@ -1457,13 +1457,9 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 	if nm == nil {
 		return failf("no netmap")
 	}
-	n, ok = cn.PeerByID(nid)
+	n, ok = cn.NodeByID(nid)
 	if !ok {
-		// Check if this the self-node, which would not appear in peers.
-		if !nm.SelfNode.Valid() || nid != nm.SelfNode.ID() {
-			return zero, u, false
-		}
-		n = nm.SelfNode
+		return zero, u, false
 	}
 	up, ok := cn.UserByID(n.User())
 	if !ok {
@@ -1968,7 +1964,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			if !ok || mo.Online {
 				continue
 			}
-			n, ok := cn.PeerByID(m.NodeIDBeingMutated())
+			n, ok := cn.NodeByID(m.NodeIDBeingMutated())
 			if !ok || n.StableID() != exitNodeID {
 				continue
 			}
@@ -2248,6 +2244,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
 	hostinfo.AppConnector.Set(b.appConnector != nil)
+	hostinfo.StateEncrypted = b.stateEncrypted()
 	b.logf.JSON(1, "Hostinfo", hostinfo)
 
 	// TODO(apenwarr): avoid the need to reinit controlclient.
@@ -4853,6 +4850,11 @@ func (b *LocalBackend) readvertiseAppConnectorRoutes() {
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
 func (b *LocalBackend) authReconfig() {
+	// Wait for magicsock to process pending [eventbus] events,
+	// such as netmap updates. This should be completed before
+	// wireguard-go is reconfigured. See tailscale/tailscale#16369.
+	b.MagicConn().Synchronize()
+
 	b.mu.Lock()
 	blocked := b.blocked
 	prefs := b.pm.CurrentPrefs()
@@ -5959,6 +5961,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 // the number of bytesRead.
 type responseBodyWrapper struct {
 	io.ReadCloser
+	logVerbose    bool
 	bytesRx       int64
 	bytesTx       int64
 	log           logger.Logf
@@ -5980,8 +5983,22 @@ func (rbw *responseBodyWrapper) logAccess(err string) {
 
 	// Some operating systems create and copy lots of 0 length hidden files for
 	// tracking various states. Omit these to keep logs from being too verbose.
-	if rbw.contentLength > 0 {
-		rbw.log("taildrive: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q", rbw.method, rbw.selfNodeKey, rbw.shareNodeKey, rbw.statusCode, rbw.fileExtension, rbw.contentType, roundTraffic(rbw.contentLength), roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
+	if rbw.logVerbose || rbw.contentLength > 0 {
+		levelPrefix := ""
+		if rbw.logVerbose {
+			levelPrefix = "[v1] "
+		}
+		rbw.log(
+			"%staildrive: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q",
+			levelPrefix,
+			rbw.method,
+			rbw.selfNodeKey,
+			rbw.shareNodeKey,
+			rbw.statusCode,
+			rbw.fileExtension,
+			rbw.contentType,
+			roundTraffic(rbw.contentLength),
+			roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
 	}
 }
 
@@ -6036,17 +6053,8 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 
 	defer func() {
 		contentType := "unknown"
-		switch req.Method {
-		case httpm.PUT:
-			if ct := req.Header.Get("Content-Type"); ct != "" {
-				contentType = ct
-			}
-		case httpm.GET:
-			if ct := resp.Header.Get("Content-Type"); ct != "" {
-				contentType = ct
-			}
-		default:
-			return
+		if ct := req.Header.Get("Content-Type"); ct != "" {
+			contentType = ct
 		}
 
 		dt.b.mu.Lock()
@@ -6060,6 +6068,7 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 
 		rbw := responseBodyWrapper{
 			log:           dt.b.logf,
+			logVerbose:    req.Method != httpm.GET && req.Method != httpm.PUT, // other requests like PROPFIND are quite chatty, so we log those at verbose level
 			method:        req.Method,
 			bytesTx:       int64(bw.bytesRead),
 			selfNodeKey:   selfNodeKey,
@@ -7719,7 +7728,7 @@ func (b *LocalBackend) srcIPHasCapForFilter(srcIP netip.Addr, cap tailcfg.NodeCa
 	if !ok {
 		return false
 	}
-	n, ok := cn.PeerByID(nodeID)
+	n, ok := cn.NodeByID(nodeID)
 	if !ok {
 		return false
 	}
@@ -7793,3 +7802,29 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 var (
 	metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
 )
+
+func (b *LocalBackend) stateEncrypted() opt.Bool {
+	switch runtime.GOOS {
+	case "android", "ios":
+		return opt.NewBool(true)
+	case "darwin":
+		switch {
+		case version.IsMacAppStore():
+			return opt.NewBool(true)
+		case version.IsMacSysExt():
+			// MacSys still stores its state in plaintext on disk in addition to
+			// the Keychain. A future release will clean up the on-disk state
+			// files.
+			// TODO(#15830): always return true here once MacSys is fully migrated.
+			sp, _ := syspolicy.GetBoolean(syspolicy.EncryptState, false)
+			return opt.NewBool(sp)
+		default:
+			// Probably self-compiled tailscaled, we don't use the Keychain
+			// there.
+			return opt.NewBool(false)
+		}
+	default:
+		_, ok := b.store.(ipn.EncryptedStateStore)
+		return opt.NewBool(ok)
+	}
+}

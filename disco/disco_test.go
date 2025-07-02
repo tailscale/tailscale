@@ -16,6 +16,15 @@ import (
 )
 
 func TestMarshalAndParse(t *testing.T) {
+	relayHandshakeCommon := BindUDPRelayEndpointCommon{
+		VNI:        1,
+		Generation: 2,
+		RemoteKey:  key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 30: 30, 31: 31})),
+		Challenge: [BindUDPRelayChallengeLen]byte{
+			0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+		},
+	}
+
 	tests := []struct {
 		name string
 		want string
@@ -86,26 +95,24 @@ func TestMarshalAndParse(t *testing.T) {
 		},
 		{
 			name: "bind_udp_relay_endpoint",
-			m:    &BindUDPRelayEndpoint{},
-			want: "04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+			m: &BindUDPRelayEndpoint{
+				relayHandshakeCommon,
+			},
+			want: "04 00 00 00 00 01 00 00 00 02 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f",
 		},
 		{
 			name: "bind_udp_relay_endpoint_challenge",
 			m: &BindUDPRelayEndpointChallenge{
-				Challenge: [BindUDPRelayEndpointChallengeLen]byte{
-					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-				},
+				relayHandshakeCommon,
 			},
-			want: "05 00 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f",
+			want: "05 00 00 00 00 01 00 00 00 02 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f",
 		},
 		{
 			name: "bind_udp_relay_endpoint_answer",
 			m: &BindUDPRelayEndpointAnswer{
-				Answer: [bindUDPRelayEndpointAnswerLen]byte{
-					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-				},
+				relayHandshakeCommon,
 			},
-			want: "06 00 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f",
+			want: "06 00 00 00 00 01 00 00 00 02 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f",
 		},
 		{
 			name: "call_me_maybe_via",

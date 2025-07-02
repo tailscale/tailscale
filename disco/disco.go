@@ -321,79 +321,131 @@ const (
 	BindUDPRelayHandshakeStateAnswerReceived
 )
 
-// bindUDPRelayEndpointLen is the length of a marshalled BindUDPRelayEndpoint
-// message, without the message header.
-const bindUDPRelayEndpointLen = BindUDPRelayEndpointChallengeLen
+// bindUDPRelayEndpointCommonLen is the length of a marshalled
+// [BindUDPRelayEndpointCommon], without the message header.
+const bindUDPRelayEndpointCommonLen = 72
+
+// BindUDPRelayChallengeLen is the length of the Challenge field carried in
+// [BindUDPRelayEndpointChallenge] & [BindUDPRelayEndpointAnswer] messages.
+const BindUDPRelayChallengeLen = 32
+
+// BindUDPRelayEndpointCommon contains fields that are common across all 3
+// UDP relay handshake message types. All 4 field values are expected to be
+// consistent for the lifetime of a handshake besides Challenge, which is
+// irrelevant in a [BindUDPRelayEndpoint] message.
+type BindUDPRelayEndpointCommon struct {
+	// VNI is the Geneve header Virtual Network Identifier field value, which
+	// must match this disco-sealed value upon reception. If they are
+	// non-matching it indicates the cleartext Geneve header was tampered with
+	// and/or mangled.
+	VNI uint32
+	// Generation represents the handshake generation. Clients must set a new,
+	// nonzero value at the start of every handshake.
+	Generation uint32
+	// RemoteKey is the disco key of the remote peer participating over this
+	// relay endpoint.
+	RemoteKey key.DiscoPublic
+	// Challenge is set by the server in a [BindUDPRelayEndpointChallenge]
+	// message, and expected to be echoed back by the client in a
+	// [BindUDPRelayEndpointAnswer] message. Its value is irrelevant in a
+	// [BindUDPRelayEndpoint] message, where it simply serves a padding purpose
+	// ensuring all handshake messages are equal in size.
+	Challenge [BindUDPRelayChallengeLen]byte
+}
+
+// encode encodes m in b. b must be at least bindUDPRelayEndpointCommonLen bytes
+// long.
+func (m *BindUDPRelayEndpointCommon) encode(b []byte) {
+	binary.BigEndian.PutUint32(b, m.VNI)
+	b = b[4:]
+	binary.BigEndian.PutUint32(b, m.Generation)
+	b = b[4:]
+	m.RemoteKey.AppendTo(b[:0])
+	b = b[key.DiscoPublicRawLen:]
+	copy(b, m.Challenge[:])
+}
+
+// decode decodes m from b.
+func (m *BindUDPRelayEndpointCommon) decode(b []byte) error {
+	if len(b) < bindUDPRelayEndpointCommonLen {
+		return errShort
+	}
+	m.VNI = binary.BigEndian.Uint32(b)
+	b = b[4:]
+	m.Generation = binary.BigEndian.Uint32(b)
+	b = b[4:]
+	m.RemoteKey = key.DiscoPublicFromRaw32(mem.B(b[:key.DiscoPublicRawLen]))
+	b = b[key.DiscoPublicRawLen:]
+	copy(m.Challenge[:], b[:BindUDPRelayChallengeLen])
+	return nil
+}
 
 // BindUDPRelayEndpoint is the first messaged transmitted from UDP relay client
-// towards UDP relay server as part of the 3-way bind handshake. It is padded to
-// match the length of BindUDPRelayEndpointChallenge. This message type is
-// currently considered experimental and is not yet tied to a
+// towards UDP relay server as part of the 3-way bind handshake. This message
+// type is currently considered experimental and is not yet tied to a
 // tailcfg.CapabilityVersion.
 type BindUDPRelayEndpoint struct {
+	BindUDPRelayEndpointCommon
 }
 
 func (m *BindUDPRelayEndpoint) AppendMarshal(b []byte) []byte {
-	ret, _ := appendMsgHeader(b, TypeBindUDPRelayEndpoint, v0, bindUDPRelayEndpointLen)
+	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpoint, v0, bindUDPRelayEndpointCommonLen)
+	m.BindUDPRelayEndpointCommon.encode(d)
 	return ret
 }
 
 func parseBindUDPRelayEndpoint(ver uint8, p []byte) (m *BindUDPRelayEndpoint, err error) {
 	m = new(BindUDPRelayEndpoint)
+	err = m.BindUDPRelayEndpointCommon.decode(p)
+	if err != nil {
+		return nil, err
+	}
 	return m, nil
 }
-
-// BindUDPRelayEndpointChallengeLen is the length of a marshalled
-// BindUDPRelayEndpointChallenge message, without the message header.
-const BindUDPRelayEndpointChallengeLen = 32
 
 // BindUDPRelayEndpointChallenge is transmitted from UDP relay server towards
 // UDP relay client in response to a BindUDPRelayEndpoint message as part of the
 // 3-way bind handshake. This message type is currently considered experimental
 // and is not yet tied to a tailcfg.CapabilityVersion.
 type BindUDPRelayEndpointChallenge struct {
-	Challenge [BindUDPRelayEndpointChallengeLen]byte
+	BindUDPRelayEndpointCommon
 }
 
 func (m *BindUDPRelayEndpointChallenge) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpointChallenge, v0, BindUDPRelayEndpointChallengeLen)
-	copy(d, m.Challenge[:])
+	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpointChallenge, v0, bindUDPRelayEndpointCommonLen)
+	m.BindUDPRelayEndpointCommon.encode(d)
 	return ret
 }
 
 func parseBindUDPRelayEndpointChallenge(ver uint8, p []byte) (m *BindUDPRelayEndpointChallenge, err error) {
-	if len(p) < BindUDPRelayEndpointChallengeLen {
-		return nil, errShort
-	}
 	m = new(BindUDPRelayEndpointChallenge)
-	copy(m.Challenge[:], p[:])
+	err = m.BindUDPRelayEndpointCommon.decode(p)
+	if err != nil {
+		return nil, err
+	}
 	return m, nil
 }
-
-// bindUDPRelayEndpointAnswerLen is the length of a marshalled
-// BindUDPRelayEndpointAnswer message, without the message header.
-const bindUDPRelayEndpointAnswerLen = BindUDPRelayEndpointChallengeLen
 
 // BindUDPRelayEndpointAnswer is transmitted from UDP relay client to UDP relay
 // server in response to a BindUDPRelayEndpointChallenge message. This message
 // type is currently considered experimental and is not yet tied to a
 // tailcfg.CapabilityVersion.
 type BindUDPRelayEndpointAnswer struct {
-	Answer [bindUDPRelayEndpointAnswerLen]byte
+	BindUDPRelayEndpointCommon
 }
 
 func (m *BindUDPRelayEndpointAnswer) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpointAnswer, v0, bindUDPRelayEndpointAnswerLen)
-	copy(d, m.Answer[:])
+	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpointAnswer, v0, bindUDPRelayEndpointCommonLen)
+	m.BindUDPRelayEndpointCommon.encode(d)
 	return ret
 }
 
 func parseBindUDPRelayEndpointAnswer(ver uint8, p []byte) (m *BindUDPRelayEndpointAnswer, err error) {
-	if len(p) < bindUDPRelayEndpointAnswerLen {
-		return nil, errShort
-	}
 	m = new(BindUDPRelayEndpointAnswer)
-	copy(m.Answer[:], p[:])
+	err = m.BindUDPRelayEndpointCommon.decode(p)
+	if err != nil {
+		return nil, err
+	}
 	return m, nil
 }
 

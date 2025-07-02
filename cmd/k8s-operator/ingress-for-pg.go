@@ -182,7 +182,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 		return false, fmt.Errorf("getting ProxyGroup %q: %w", pgName, err)
 	}
-	if !tsoperator.ProxyGroupIsReady(pg) {
+	if !tsoperator.ProxyGroupAvailable(pg) {
 		logger.Infof("ProxyGroup is not (yet) ready")
 		return false, nil
 	}
@@ -666,7 +666,7 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	}
 
 	// Validate TLS configuration
-	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && (len(ing.Spec.TLS) > 1 || len(ing.Spec.TLS[0].Hosts) > 1) {
+	if len(ing.Spec.TLS) > 0 && (len(ing.Spec.TLS) > 1 || len(ing.Spec.TLS[0].Hosts) > 1) {
 		errs = append(errs, fmt.Errorf("Ingress contains invalid TLS block %v: only a single TLS entry with a single host is allowed", ing.Spec.TLS))
 	}
 
@@ -683,7 +683,7 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	}
 
 	// Validate ProxyGroup readiness
-	if !tsoperator.ProxyGroupIsReady(pg) {
+	if !tsoperator.ProxyGroupAvailable(pg) {
 		errs = append(errs, fmt.Errorf("ProxyGroup %q is not ready", pg.Name))
 	}
 

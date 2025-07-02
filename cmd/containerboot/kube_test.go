@@ -8,13 +8,18 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn"
+	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
+	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tailcfg"
 )
 
 func TestSetupKube(t *testing.T) {
@@ -236,5 +241,80 @@ func TestWaitForConsistentState(t *testing.T) {
 	data[string(ipn.CurrentProfileStateKey)] = []byte("")
 	if err := kc.waitForConsistentState(ctx); err != nil {
 		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestResetContainerbootState(t *testing.T) {
+	capver := fmt.Appendf(nil, "%d", tailcfg.CurrentCapabilityVersion)
+	for name, tc := range map[string]struct {
+		podUID   string
+		initial  map[string][]byte
+		expected map[string][]byte
+	}{
+		"empty_initial": {
+			podUID:  "1234",
+			initial: map[string][]byte{},
+			expected: map[string][]byte{
+				kubetypes.KeyCapVer: capver,
+				kubetypes.KeyPodUID: []byte("1234"),
+			},
+		},
+		"empty_initial_no_pod_uid": {
+			initial: map[string][]byte{},
+			expected: map[string][]byte{
+				kubetypes.KeyCapVer: capver,
+			},
+		},
+		"only_relevant_keys_updated": {
+			podUID: "1234",
+			initial: map[string][]byte{
+				kubetypes.KeyCapVer:              []byte("1"),
+				kubetypes.KeyPodUID:              []byte("5678"),
+				kubetypes.KeyDeviceID:            []byte("device-id"),
+				kubetypes.KeyDeviceFQDN:          []byte("device-fqdn"),
+				kubetypes.KeyDeviceIPs:           []byte(`["192.0.2.1"]`),
+				kubetypes.KeyHTTPSEndpoint:       []byte("https://example.com"),
+				egressservices.KeyEgressServices: []byte("egress-services"),
+				ingressservices.IngressConfigKey: []byte("ingress-config"),
+				"_current-profile":               []byte("current-profile"),
+				"_machinekey":                    []byte("machine-key"),
+				"_profiles":                      []byte("profiles"),
+				"_serve_e0ce":                    []byte("serve-e0ce"),
+				"profile-e0ce":                   []byte("profile-e0ce"),
+			},
+			expected: map[string][]byte{
+				kubetypes.KeyCapVer: capver,
+				kubetypes.KeyPodUID: []byte("1234"),
+				// Cleared keys.
+				kubetypes.KeyDeviceID:            nil,
+				kubetypes.KeyDeviceFQDN:          nil,
+				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyHTTPSEndpoint:       nil,
+				egressservices.KeyEgressServices: nil,
+				ingressservices.IngressConfigKey: nil,
+				// Tailscaled keys not included in patch.
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var actual map[string][]byte
+			kc := &kubeClient{stateSecret: "foo", Client: &kubeclient.FakeClient{
+				GetSecretImpl: func(context.Context, string) (*kubeapi.Secret, error) {
+					return &kubeapi.Secret{
+						Data: tc.initial,
+					}, nil
+				},
+				StrategicMergePatchSecretImpl: func(ctx context.Context, name string, secret *kubeapi.Secret, _ string) error {
+					actual = secret.Data
+					return nil
+				},
+			}}
+			if err := kc.resetContainerbootState(context.Background(), tc.podUID); err != nil {
+				t.Fatalf("resetContainerbootState() error = %v", err)
+			}
+			if diff := cmp.Diff(tc.expected, actual); diff != "" {
+				t.Errorf("resetContainerbootState() mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

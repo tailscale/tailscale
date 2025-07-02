@@ -44,22 +44,24 @@ const (
 type ProxyClassReconciler struct {
 	client.Client
 
-	recorder record.EventRecorder
-	logger   *zap.SugaredLogger
-	clock    tstime.Clock
+	recorder    record.EventRecorder
+	logger      *zap.SugaredLogger
+	clock       tstime.Clock
+	tsNamespace string
 
 	mu sync.Mutex // protects following
 
 	// managedProxyClasses is a set of all ProxyClass resources that we're currently
 	// managing. This is only used for metrics.
 	managedProxyClasses set.Slice[types.UID]
+	// nodePortRange is the NodePort range set for the Kubernetes Cluster. This is used
+	// when validating port ranges configured by users for spec.StaticEndpoints
+	nodePortRange *tsapi.PortRange
 }
 
-var (
-	// gaugeProxyClassResources tracks the number of ProxyClass resources
-	// that we're currently managing.
-	gaugeProxyClassResources = clientmetric.NewGauge("k8s_proxyclass_resources")
-)
+// gaugeProxyClassResources tracks the number of ProxyClass resources
+// that we're currently managing.
+var gaugeProxyClassResources = clientmetric.NewGauge("k8s_proxyclass_resources")
 
 func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	logger := pcr.logger.With("ProxyClass", req.Name)
@@ -96,7 +98,7 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	pcr.mu.Unlock()
 
 	oldPCStatus := pc.Status.DeepCopy()
-	if errs := pcr.validate(ctx, pc); errs != nil {
+	if errs := pcr.validate(ctx, pc, logger); errs != nil {
 		msg := fmt.Sprintf(messageProxyClassInvalid, errs.ToAggregate().Error())
 		pcr.recorder.Event(pc, corev1.EventTypeWarning, reasonProxyClassInvalid, msg)
 		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, pc.Generation, pcr.clock, logger)
@@ -112,7 +114,7 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	return reconcile.Result{}, nil
 }
 
-func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyClass) (violations field.ErrorList) {
+func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyClass, logger *zap.SugaredLogger) (violations field.ErrorList) {
 	if sts := pc.Spec.StatefulSet; sts != nil {
 		if len(sts.Labels) > 0 {
 			if errs := metavalidation.ValidateLabels(sts.Labels.Parse(), field.NewPath(".spec.statefulSet.labels")); errs != nil {
@@ -181,6 +183,17 @@ func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyCl
 	if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && len(pc.Spec.Metrics.ServiceMonitor.Labels) > 0 {
 		if errs := metavalidation.ValidateLabels(pc.Spec.Metrics.ServiceMonitor.Labels.Parse(), field.NewPath(".spec.metrics.serviceMonitor.labels")); errs != nil {
 			violations = append(violations, errs...)
+		}
+	}
+
+	if stat := pc.Spec.StaticEndpoints; stat != nil {
+		if err := validateNodePortRanges(ctx, pcr.Client, pcr.nodePortRange, pc); err != nil {
+			var prs tsapi.PortRanges = stat.NodePort.Ports
+			violations = append(violations, field.TypeInvalid(field.NewPath("spec", "staticEndpoints", "nodePort", "ports"), prs.String(), err.Error()))
+		}
+
+		if len(stat.NodePort.Selector) < 1 {
+			logger.Debug("no Selectors specified on `spec.staticEndpoints.nodePort.selectors` field")
 		}
 	}
 	// We do not validate embedded fields (security context, resource

@@ -164,7 +164,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 		return false, fmt.Errorf("getting ProxyGroup %q: %w", pgName, err)
 	}
-	if !tsoperator.ProxyGroupIsReady(pg) {
+	if !tsoperator.ProxyGroupAvailable(pg) {
 		logger.Infof("ProxyGroup is not (yet) ready")
 		return false, nil
 	}

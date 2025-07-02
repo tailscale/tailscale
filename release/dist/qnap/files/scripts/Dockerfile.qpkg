@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
@@ -10,7 +10,7 @@ RUN apt-get update -y && \
     patch
 
 # Install QNAP QDK (force a specific version to pick up updates)
-RUN git clone https://github.com/tailscale/QDK.git && cd /QDK && git reset --hard 9a31a67387c583d19a81a378dcf7c25e2abe231d
+RUN git clone https://github.com/tailscale/QDK.git && cd /QDK && git reset --hard 6aba74f6b4c8ea0c30b8aec9f3476f428f6a58a1
 RUN cd /QDK && ./InstallToUbuntu.sh install
 ENV PATH="/usr/share/QDK/bin:${PATH}"
 

@@ -460,6 +460,7 @@ func TestContainerBoot(t *testing.T) {
 				Env: map[string]string{
 					"KUBERNETES_SERVICE_HOST":       env.kube.Host,
 					"KUBERNETES_SERVICE_PORT_HTTPS": env.kube.Port,
+					"POD_UID":                       "some-pod-uid",
 				},
 				KubeSecret: map[string]string{
 					"authkey": "tskey-key",
@@ -471,17 +472,20 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
 						},
 						WantKubeSecret: map[string]string{
-							"authkey": "tskey-key",
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
+							kubetypes.KeyPodUID: "some-pod-uid",
 						},
 					},
 					{
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
-							"authkey":          "tskey-key",
-							"device_fqdn":      "test-node.test.ts.net",
-							"device_id":        "myID",
-							"device_ips":       `["100.64.0.1"]`,
-							"tailscale_capver": capver,
+							"authkey":           "tskey-key",
+							"device_fqdn":       "test-node.test.ts.net",
+							"device_id":         "myID",
+							"device_ips":        `["100.64.0.1"]`,
+							kubetypes.KeyCapVer: capver,
+							kubetypes.KeyPodUID: "some-pod-uid",
 						},
 					},
 				},
@@ -554,7 +558,8 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
 						},
 						WantKubeSecret: map[string]string{
-							"authkey": "tskey-key",
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 					{
@@ -565,7 +570,8 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
 						},
 						WantKubeSecret: map[string]string{
-							"authkey": "tskey-key",
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 					{
@@ -574,10 +580,10 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
 						},
 						WantKubeSecret: map[string]string{
-							"device_fqdn":      "test-node.test.ts.net",
-							"device_id":        "myID",
-							"device_ips":       `["100.64.0.1"]`,
-							"tailscale_capver": capver,
+							"device_fqdn":       "test-node.test.ts.net",
+							"device_id":         "myID",
+							"device_ips":        `["100.64.0.1"]`,
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 				},
@@ -599,17 +605,18 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
 						},
 						WantKubeSecret: map[string]string{
-							"authkey": "tskey-key",
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 					{
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
-							"authkey":          "tskey-key",
-							"device_fqdn":      "test-node.test.ts.net",
-							"device_id":        "myID",
-							"device_ips":       `["100.64.0.1"]`,
-							"tailscale_capver": capver,
+							"authkey":           "tskey-key",
+							"device_fqdn":       "test-node.test.ts.net",
+							"device_id":         "myID",
+							"device_ips":        `["100.64.0.1"]`,
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 					{
@@ -624,11 +631,11 @@ func TestContainerBoot(t *testing.T) {
 							},
 						},
 						WantKubeSecret: map[string]string{
-							"authkey":          "tskey-key",
-							"device_fqdn":      "new-name.test.ts.net",
-							"device_id":        "newID",
-							"device_ips":       `["100.64.0.1"]`,
-							"tailscale_capver": capver,
+							"authkey":           "tskey-key",
+							"device_fqdn":       "new-name.test.ts.net",
+							"device_id":         "newID",
+							"device_ips":        `["100.64.0.1"]`,
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 				},
@@ -912,18 +919,19 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
 						},
 						WantKubeSecret: map[string]string{
-							"authkey": "tskey-key",
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 					{
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
-							"authkey":          "tskey-key",
-							"device_fqdn":      "test-node.test.ts.net",
-							"device_id":        "myID",
-							"device_ips":       `["100.64.0.1"]`,
-							"https_endpoint":   "no-https",
-							"tailscale_capver": capver,
+							"authkey":           "tskey-key",
+							"device_fqdn":       "test-node.test.ts.net",
+							"device_id":         "myID",
+							"device_ips":        `["100.64.0.1"]`,
+							"https_endpoint":    "no-https",
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 				},
@@ -947,7 +955,8 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
 						},
 						WantKubeSecret: map[string]string{
-							"authkey": "tskey-key",
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
 						},
 						EndpointStatuses: map[string]int{
 							egressSvcTerminateURL(env.localAddrPort): 200,
@@ -956,12 +965,12 @@ func TestContainerBoot(t *testing.T) {
 					{
 						Notify: runningNotify,
 						WantKubeSecret: map[string]string{
-							"egress-services":  mustBase64(t, egressStatus),
-							"authkey":          "tskey-key",
-							"device_fqdn":      "test-node.test.ts.net",
-							"device_id":        "myID",
-							"device_ips":       `["100.64.0.1"]`,
-							"tailscale_capver": capver,
+							"egress-services":   string(mustJSON(t, egressStatus)),
+							"authkey":           "tskey-key",
+							"device_fqdn":       "test-node.test.ts.net",
+							"device_id":         "myID",
+							"device_ips":        `["100.64.0.1"]`,
+							kubetypes.KeyCapVer: capver,
 						},
 						EndpointStatuses: map[string]int{
 							egressSvcTerminateURL(env.localAddrPort): 200,
@@ -1002,7 +1011,8 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
 						},
 						WantKubeSecret: map[string]string{
-							"authkey": "tskey-key",
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
 						},
 					},
 					{
@@ -1016,10 +1026,11 @@ func TestContainerBoot(t *testing.T) {
 							// Missing "_current-profile" key.
 						},
 						WantKubeSecret: map[string]string{
-							"authkey":      "tskey-key",
-							"_machinekey":  "foo",
-							"_profiles":    "foo",
-							"profile-baff": "foo",
+							"authkey":           "tskey-key",
+							"_machinekey":       "foo",
+							"_profiles":         "foo",
+							"profile-baff":      "foo",
+							kubetypes.KeyCapVer: capver,
 						},
 						WantLog: "Waiting for tailscaled to finish writing state to Secret \"tailscale\"",
 					},
@@ -1029,11 +1040,12 @@ func TestContainerBoot(t *testing.T) {
 							"_current-profile": "foo",
 						},
 						WantKubeSecret: map[string]string{
-							"authkey":          "tskey-key",
-							"_machinekey":      "foo",
-							"_profiles":        "foo",
-							"profile-baff":     "foo",
-							"_current-profile": "foo",
+							"authkey":           "tskey-key",
+							"_machinekey":       "foo",
+							"_profiles":         "foo",
+							"profile-baff":      "foo",
+							"_current-profile":  "foo",
+							kubetypes.KeyCapVer: capver,
 						},
 						WantLog:      "HTTP server at [::]:9002 closed",
 						WantExitCode: ptr.To(0),
@@ -1061,7 +1073,7 @@ func TestContainerBoot(t *testing.T) {
 				fmt.Sprintf("TS_TEST_SOCKET=%s", env.lapi.Path),
 				fmt.Sprintf("TS_SOCKET=%s", env.runningSockPath),
 				fmt.Sprintf("TS_TEST_ONLY_ROOT=%s", env.d),
-				fmt.Sprint("TS_TEST_FAKE_NETFILTER=true"),
+				"TS_TEST_FAKE_NETFILTER=true",
 			}
 			for k, v := range tc.Env {
 				cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
@@ -1489,10 +1501,7 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 		}
 		switch r.Header.Get("Content-Type") {
 		case "application/json-patch+json":
-			req := []struct {
-				Op   string `json:"op"`
-				Path string `json:"path"`
-			}{}
+			req := []kubeclient.JSONPatch{}
 			if err := json.Unmarshal(bs, &req); err != nil {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
@@ -1503,23 +1512,20 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 						panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
 					}
 					delete(k.secret, strings.TrimPrefix(op.Path, "/data/"))
-				case "replace":
+				case "add", "replace":
 					path, ok := strings.CutPrefix(op.Path, "/data/")
 					if !ok {
 						panic(fmt.Sprintf("unsupported json-patch path %q", op.Path))
 					}
-					req := make([]kubeclient.JSONPatch, 0)
-					if err := json.Unmarshal(bs, &req); err != nil {
-						panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
+					val, ok := op.Value.(string)
+					if !ok {
+						panic(fmt.Sprintf("unsupported json patch value %v: cannot be converted to string", op.Value))
 					}
-
-					for _, patch := range req {
-						val, ok := patch.Value.(string)
-						if !ok {
-							panic(fmt.Sprintf("unsupported json patch value %v: cannot be converted to string", patch.Value))
-						}
-						k.secret[path] = val
+					v, err := base64.StdEncoding.DecodeString(val)
+					if err != nil {
+						panic(fmt.Sprintf("json patch value %q is not base64 encoded: %v", val, err))
 					}
+					k.secret[path] = string(v)
 				default:
 					panic(fmt.Sprintf("unsupported json-patch op %q", op.Op))
 				}

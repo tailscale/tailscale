@@ -62,6 +62,12 @@ var (
 	//
 	//lint:ignore U1000 used on Linux/Darwin only
 	debugPMTUD = envknob.RegisterBool("TS_DEBUG_PMTUD")
+	// debugAssumeUDPRelayCapable forces magicsock to assume that all peers are
+	// UDP relay capable clients and servers. This will eventually be replaced
+	// by a [tailcfg.CapabilityVersion] comparison. It enables early testing of
+	// the UDP relay feature before we have established related
+	// [tailcfg.CapabilityVersion]'s.
+	debugAssumeUDPRelayCapable = envknob.RegisterBool("TS_DEBUG_ASSUME_UDP_RELAY_CAPABLE")
 	// Hey you! Adding a new debugknob? Make sure to stub it out in the
 	// debugknobs_stubs.go file too.
 )

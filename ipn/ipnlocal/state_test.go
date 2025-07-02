@@ -1013,17 +1013,13 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 }
 
 type testStateStorage struct {
-	mem     mem.Store
+	mem.Store
 	written atomic.Bool
-}
-
-func (s *testStateStorage) ReadState(id ipn.StateKey) ([]byte, error) {
-	return s.mem.ReadState(id)
 }
 
 func (s *testStateStorage) WriteState(id ipn.StateKey, bs []byte) error {
 	s.written.Store(true)
-	return s.mem.WriteState(id, bs)
+	return s.Store.WriteState(id, bs)
 }
 
 // awaitWrite clears the "I've seen writes" bit, in prep for a future
@@ -1114,6 +1110,8 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	disconnect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: false}, WantRunningSet: true}
 	node1 := testNetmapForNode(1, "node-1", []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")})
 	node2 := testNetmapForNode(2, "node-2", []netip.Prefix{netip.MustParsePrefix("100.64.1.2/32")})
+	node3 := testNetmapForNode(3, "node-3", []netip.Prefix{netip.MustParsePrefix("100.64.1.3/32")})
+	node3.Peers = []tailcfg.NodeView{node1.SelfNode, node2.SelfNode}
 	routesWithQuad100 := func(extra ...netip.Prefix) []netip.Prefix {
 		return append(extra, netip.MustParsePrefix("100.100.100.100/32"))
 	}
@@ -1308,6 +1306,40 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Hosts:  hostsFor(node1),
 			},
 		},
+		{
+			name: "Start/Connect/Login/WithPeers",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node3)
+			},
+			wantState: ipn.Starting,
+			wantCfg: &wgcfg.Config{
+				Name:   "tailscale",
+				NodeID: node3.SelfNode.StableID(),
+				Peers: []wgcfg.Peer{
+					{
+						PublicKey: node1.SelfNode.Key(),
+						DiscoKey:  node1.SelfNode.DiscoKey(),
+					},
+					{
+						PublicKey: node2.SelfNode.Key(),
+						DiscoKey:  node2.SelfNode.DiscoKey(),
+					},
+				},
+				Addresses: node3.SelfNode.Addresses().AsSlice(),
+			},
+			wantRouterCfg: &router.Config{
+				SNATSubnetRoutes: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				LocalAddrs:       node3.SelfNode.Addresses().AsSlice(),
+				Routes:           routesWithQuad100(),
+			},
+			wantDNSCfg: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:  hostsFor(node3),
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1322,8 +1354,18 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				t.Errorf("State: got %v; want %v", gotState, tt.wantState)
 			}
 
+			if engine.Config() != nil {
+				for _, p := range engine.Config().Peers {
+					pKey := p.PublicKey.UntypedHexString()
+					_, err := lb.MagicConn().ParseEndpoint(pKey)
+					if err != nil {
+						t.Errorf("ParseEndpoint(%q) failed: %v", pKey, err)
+					}
+				}
+			}
+
 			opts := []cmp.Option{
-				cmpopts.EquateComparable(key.NodePublic{}, netip.Addr{}, netip.Prefix{}),
+				cmpopts.EquateComparable(key.NodePublic{}, key.DiscoPublic{}, netip.Addr{}, netip.Prefix{}),
 			}
 			if diff := cmp.Diff(tt.wantCfg, engine.Config(), opts...); diff != "" {
 				t.Errorf("wgcfg.Config(+got -want): %v", diff)
@@ -1356,6 +1398,8 @@ func testNetmapForNode(userID tailcfg.UserID, name string, addresses []netip.Pre
 		Addresses:         addresses,
 		MachineAuthorized: true,
 	}
+	self.Key = makeNodeKeyFromID(self.ID)
+	self.DiscoKey = makeDiscoKeyFromID(self.ID)
 	return &netmap.NetworkMap{
 		SelfNode: self.View(),
 		Name:     self.Name,
@@ -1403,6 +1447,7 @@ func newLocalBackendWithMockEngineAndControl(t *testing.T, enableLogging bool) (
 
 	magicConn, err := magicsock.NewConn(magicsock.Options{
 		Logf:              logf,
+		EventBus:          sys.Bus.Get(),
 		NetMon:            dialer.NetMon(),
 		Metrics:           sys.UserMetricsRegistry(),
 		HealthTracker:     sys.HealthTracker(),

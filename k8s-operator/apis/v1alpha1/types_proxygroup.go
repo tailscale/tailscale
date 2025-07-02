@@ -111,6 +111,10 @@ type TailnetDevice struct {
 	// assigned to the device.
 	// +optional
 	TailnetIPs []string `json:"tailnetIPs,omitempty"`
+
+	// StaticEndpoints are user configured, 'static' endpoints by which tailnet peers can reach this device.
+	// +optional
+	StaticEndpoints []string `json:"staticEndpoints,omitempty"`
 }
 
 // +kubebuilder:validation:Type=string

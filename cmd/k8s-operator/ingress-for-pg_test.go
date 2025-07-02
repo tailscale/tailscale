@@ -305,7 +305,7 @@ func TestValidateIngress(t *testing.T) {
 		Status: tsapi.ProxyGroupStatus{
 			Conditions: []metav1.Condition{
 				{
-					Type:               string(tsapi.ProxyGroupReady),
+					Type:               string(tsapi.ProxyGroupAvailable),
 					Status:             metav1.ConditionTrue,
 					ObservedGeneration: 1,
 				},
@@ -399,7 +399,7 @@ func TestValidateIngress(t *testing.T) {
 				Status: tsapi.ProxyGroupStatus{
 					Conditions: []metav1.Condition{
 						{
-							Type:               string(tsapi.ProxyGroupReady),
+							Type:               string(tsapi.ProxyGroupAvailable),
 							Status:             metav1.ConditionFalse,
 							ObservedGeneration: 1,
 						},
@@ -755,7 +755,7 @@ func verifyTailscaledConfig(t *testing.T, fc client.Client, pgName string, expec
 			Labels:    pgSecretLabels(pgName, "config"),
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): []byte(fmt.Sprintf(`{"Version":""%s}`, expected)),
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte(fmt.Sprintf(`{"Version":""%s}`, expected)),
 		},
 	})
 }
@@ -794,13 +794,13 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 			Labels:    pgSecretLabels(pgName, "config"),
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): []byte("{}"),
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte("{}"),
 		},
 	}
 	mustCreate(t, fc, pgCfgSecret)
 	pg.Status.Conditions = []metav1.Condition{
 		{
-			Type:               string(tsapi.ProxyGroupReady),
+			Type:               string(tsapi.ProxyGroupAvailable),
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: 1,
 		},

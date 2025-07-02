@@ -19,6 +19,7 @@
             <string id="SINCE_V1_80">Tailscale version 1.80.0 and later</string>
             <string id="SINCE_V1_82">Tailscale version 1.82.0 and later</string>
             <string id="SINCE_V1_84">Tailscale version 1.84.0 and later</string>
+            <string id="SINCE_V1_86">Tailscale version 1.86.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
@@ -67,7 +68,7 @@ If you disable or do not configure this policy setting, an interactive user logi
 See https://tailscale.com/kb/1315/mdm-keys#set-an-auth-key for more details.]]></string>
             <string id="ExitNodeID">Require using a specific Exit Node</string>
             <string id="ExitNodeID_Help"><![CDATA[This policy can be used to require always using the specified Exit Node whenever the Tailscale client is connected.
-    
+
 If you enable this policy, set it to the ID of an exit node. The ID is visible on the Machines page of the admin console, or can be queried using the Tailscale API. If the specified exit node is unavailable, this device will have no Internet access unless Tailscale is disconnected. Alternatively, you can set it to "auto:any" (without quotes), which allows the Tailscale client to automatically select the most suitable exit node.
 
 If you disable this policy or supply an empty exit node ID, then usage of exit nodes will be disallowed.
@@ -278,6 +279,14 @@ See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more d
 If you enable or don't configure this policy, the onboarding flow will be shown to new users who have not yet signed in to a Tailscale account.
 
 If you disable this policy, the onboarding flow will never be shown.]]></string>
+            <string id="EncryptState">Encrypt client state file stored on disk</string>
+            <string id="EncryptState_Help"><![CDATA[This policy configures encryption of the Tailscale client state file on disk.
+
+If you enable this policy, the state file will be encrypted using the local TPM device. If a local TPM device is not present or not accessible, Tailscale will fail to start.
+
+                If you disable this policy, the state file is stored in plaintext.
+
+If the policy is unconfigured, state encryption will be enabled on newer client versions when the device has a properly-configured TPM.]]></string>
         </stringTable>
         <presentationTable>
             <presentation id="LoginURL">

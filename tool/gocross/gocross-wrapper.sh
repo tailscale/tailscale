@@ -133,6 +133,12 @@ fi
 
 repo_root="${BASH_SOURCE%/*}/../.."
 
+# Some scripts/package systems set GOROOT even though they should only be
+# setting $PATH. Stop them from breaking builds - go(1) respects GOROOT and
+# so if it is left on here, compilation units depending on our Go fork will
+# fail (such as those which depend on our net/ patches).
+unset GOROOT
+
 # gocross is opt-in as of 2025-06-16. See tailscale/corp#26717
 # and comment above in this file.
 if [ "${TS_USE_GOCROSS:-}" != "1" ]; then

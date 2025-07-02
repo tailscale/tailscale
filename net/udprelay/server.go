@@ -96,12 +96,13 @@ type serverEndpoint struct {
 	// indexing of this array aligns with the following fields, e.g.
 	// discoSharedSecrets[0] is the shared secret to use when sealing
 	// Disco protocol messages for transmission towards discoPubKeys[0].
-	discoPubKeys       pairOfDiscoPubKeys
-	discoSharedSecrets [2]key.DiscoShared
-	handshakeState     [2]disco.BindUDPRelayHandshakeState
-	addrPorts          [2]netip.AddrPort
-	lastSeen           [2]time.Time // TODO(jwhited): consider using mono.Time
-	challenge          [2][disco.BindUDPRelayEndpointChallengeLen]byte
+	discoPubKeys        pairOfDiscoPubKeys
+	discoSharedSecrets  [2]key.DiscoShared
+	handshakeGeneration [2]uint32         // or zero if a handshake has never started for that relay leg
+	handshakeAddrPorts  [2]netip.AddrPort // or zero value if a handshake has never started for that relay leg
+	boundAddrPorts      [2]netip.AddrPort // or zero value if a handshake has never completed for that relay leg
+	lastSeen            [2]time.Time      // TODO(jwhited): consider using mono.Time
+	challenge           [2][disco.BindUDPRelayChallengeLen]byte
 
 	lamportID   uint64
 	vni         uint32
@@ -112,69 +113,77 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 	if senderIndex != 0 && senderIndex != 1 {
 		return
 	}
-	handshakeState := e.handshakeState[senderIndex]
-	if handshakeState == disco.BindUDPRelayHandshakeStateAnswerReceived {
-		// this sender is already bound
-		return
+
+	otherSender := 0
+	if senderIndex == 0 {
+		otherSender = 1
 	}
+
+	validateVNIAndRemoteKey := func(common disco.BindUDPRelayEndpointCommon) error {
+		if common.VNI != e.vni {
+			return errors.New("mismatching VNI")
+		}
+		if common.RemoteKey.Compare(e.discoPubKeys[otherSender]) != 0 {
+			return errors.New("mismatching RemoteKey")
+		}
+		return nil
+	}
+
 	switch discoMsg := discoMsg.(type) {
 	case *disco.BindUDPRelayEndpoint:
-		switch handshakeState {
-		case disco.BindUDPRelayHandshakeStateInit:
-			// set sender addr
-			e.addrPorts[senderIndex] = from
-			fallthrough
-		case disco.BindUDPRelayHandshakeStateChallengeSent:
-			if from != e.addrPorts[senderIndex] {
-				// this is a later arriving bind from a different source, or
-				// a retransmit and the sender's source has changed, discard
-				return
-			}
-			m := new(disco.BindUDPRelayEndpointChallenge)
-			copy(m.Challenge[:], e.challenge[senderIndex][:])
-			reply := make([]byte, packet.GeneveFixedHeaderLength, 512)
-			gh := packet.GeneveHeader{Control: true, VNI: e.vni, Protocol: packet.GeneveProtocolDisco}
-			err := gh.Encode(reply)
-			if err != nil {
-				return
-			}
-			reply = append(reply, disco.Magic...)
-			reply = serverDisco.AppendTo(reply)
-			box := e.discoSharedSecrets[senderIndex].Seal(m.AppendMarshal(nil))
-			reply = append(reply, box...)
-			uw.WriteMsgUDPAddrPort(reply, nil, from)
-			// set new state
-			e.handshakeState[senderIndex] = disco.BindUDPRelayHandshakeStateChallengeSent
-			return
-		default:
-			// disco.BindUDPRelayEndpoint is unexpected in all other handshake states
+		err := validateVNIAndRemoteKey(discoMsg.BindUDPRelayEndpointCommon)
+		if err != nil {
+			// silently drop
 			return
 		}
+		if discoMsg.Generation == 0 {
+			// Generation must be nonzero, silently drop
+			return
+		}
+		if e.handshakeGeneration[senderIndex] == discoMsg.Generation {
+			// we've seen this generation before, silently drop
+			return
+		}
+		e.handshakeGeneration[senderIndex] = discoMsg.Generation
+		e.handshakeAddrPorts[senderIndex] = from
+		m := new(disco.BindUDPRelayEndpointChallenge)
+		m.VNI = e.vni
+		m.Generation = discoMsg.Generation
+		m.RemoteKey = e.discoPubKeys[otherSender]
+		rand.Read(e.challenge[senderIndex][:])
+		copy(m.Challenge[:], e.challenge[senderIndex][:])
+		reply := make([]byte, packet.GeneveFixedHeaderLength, 512)
+		gh := packet.GeneveHeader{Control: true, VNI: e.vni, Protocol: packet.GeneveProtocolDisco}
+		err = gh.Encode(reply)
+		if err != nil {
+			return
+		}
+		reply = append(reply, disco.Magic...)
+		reply = serverDisco.AppendTo(reply)
+		box := e.discoSharedSecrets[senderIndex].Seal(m.AppendMarshal(nil))
+		reply = append(reply, box...)
+		uw.WriteMsgUDPAddrPort(reply, nil, from)
+		return
 	case *disco.BindUDPRelayEndpointAnswer:
-		switch handshakeState {
-		case disco.BindUDPRelayHandshakeStateChallengeSent:
-			if from != e.addrPorts[senderIndex] {
-				// sender source has changed
-				return
-			}
-			if !bytes.Equal(discoMsg.Answer[:], e.challenge[senderIndex][:]) {
-				// bad answer
-				return
-			}
-			// sender is now bound
-			// TODO: Consider installing a fast path via netfilter or similar to
-			// relay (NAT) data packets for this serverEndpoint.
-			e.handshakeState[senderIndex] = disco.BindUDPRelayHandshakeStateAnswerReceived
-			// record last seen as bound time
-			e.lastSeen[senderIndex] = time.Now()
-			return
-		default:
-			// disco.BindUDPRelayEndpointAnswer is unexpected in all other handshake
-			// states, or we've already handled it
+		err := validateVNIAndRemoteKey(discoMsg.BindUDPRelayEndpointCommon)
+		if err != nil {
+			// silently drop
 			return
 		}
+		generation := e.handshakeGeneration[senderIndex]
+		if generation == 0 || // we have no active handshake
+			generation != discoMsg.Generation || // mismatching generation for the active handshake
+			e.handshakeAddrPorts[senderIndex] != from || // mismatching source for the active handshake
+			!bytes.Equal(e.challenge[senderIndex][:], discoMsg.Challenge[:]) { // mismatching answer for the active handshake
+			// silently drop
+			return
+		}
+		// Handshake complete. Update the binding for this sender.
+		e.boundAddrPorts[senderIndex] = from
+		e.lastSeen[senderIndex] = time.Now() // record last seen as bound time
+		return
 	default:
-		// unexpected Disco message type
+		// unexpected message types, silently drop
 		return
 	}
 }
@@ -225,23 +234,18 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 		}
 		var to netip.AddrPort
 		switch {
-		case from == e.addrPorts[0]:
+		case from == e.boundAddrPorts[0]:
 			e.lastSeen[0] = time.Now()
-			to = e.addrPorts[1]
-		case from == e.addrPorts[1]:
+			to = e.boundAddrPorts[1]
+		case from == e.boundAddrPorts[1]:
 			e.lastSeen[1] = time.Now()
-			to = e.addrPorts[0]
+			to = e.boundAddrPorts[0]
 		default:
 			// unrecognized source
 			return
 		}
 		// relay packet
 		uw.WriteMsgUDPAddrPort(b, nil, to)
-		return
-	}
-
-	if e.isBound() {
-		// control packet, but serverEndpoint is already bound
 		return
 	}
 
@@ -267,11 +271,11 @@ func (e *serverEndpoint) isExpired(now time.Time, bindLifetime, steadyStateLifet
 	return false
 }
 
-// isBound returns true if both clients have completed their 3-way handshake,
+// isBound returns true if both clients have completed a 3-way handshake,
 // otherwise false.
 func (e *serverEndpoint) isBound() bool {
-	return e.handshakeState[0] == disco.BindUDPRelayHandshakeStateAnswerReceived &&
-		e.handshakeState[1] == disco.BindUDPRelayHandshakeStateAnswerReceived
+	return e.boundAddrPorts[0].IsValid() &&
+		e.boundAddrPorts[1].IsValid()
 }
 
 // NewServer constructs a [Server] listening on 0.0.0.0:'port'. IPv6 is not yet
@@ -591,8 +595,6 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	e.discoSharedSecrets[0] = s.disco.Shared(e.discoPubKeys[0])
 	e.discoSharedSecrets[1] = s.disco.Shared(e.discoPubKeys[1])
 	e.vni, s.vniPool = s.vniPool[0], s.vniPool[1:]
-	rand.Read(e.challenge[0][:])
-	rand.Read(e.challenge[1][:])
 
 	s.byDisco[pair] = e
 	s.byVNI[e.vni] = e

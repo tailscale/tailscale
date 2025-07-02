@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
@@ -32,14 +35,772 @@ import (
 	"tailscale.com/types/ptr"
 )
 
-const testProxyImage = "tailscale/tailscale:test"
+const (
+	testProxyImage = "tailscale/tailscale:test"
+	initialCfgHash = "6632726be70cf224049580deb4d317bba065915b5fd415461d60ed621c91b196"
+)
 
-var defaultProxyClassAnnotations = map[string]string{
-	"some-annotation": "from-the-proxy-class",
+var (
+	defaultProxyClassAnnotations = map[string]string{
+		"some-annotation": "from-the-proxy-class",
+	}
+
+	defaultReplicas             = ptr.To(int32(2))
+	defaultStaticEndpointConfig = &tsapi.StaticEndpointsConfig{
+		NodePort: &tsapi.NodePortConfig{
+			Ports: []tsapi.PortRange{
+				{Port: 30001}, {Port: 30002},
+			},
+			Selector: map[string]string{
+				"foo/bar": "baz",
+			},
+		},
+	}
+)
+
+func TestProxyGroupWithStaticEndpoints(t *testing.T) {
+	type testNodeAddr struct {
+		ip       string
+		addrType corev1.NodeAddressType
+	}
+
+	type testNode struct {
+		name      string
+		addresses []testNodeAddr
+		labels    map[string]string
+	}
+
+	type reconcile struct {
+		staticEndpointConfig *tsapi.StaticEndpointsConfig
+		replicas             *int32
+		nodes                []testNode
+		expectedIPs          []netip.Addr
+		expectedEvents       []string
+		expectedErr          string
+		expectStatefulSet    bool
+	}
+
+	testCases := []struct {
+		name        string
+		description string
+		reconciles  []reconcile
+	}{
+		{
+			// the reconciler should manage to create static endpoints when Nodes have IPv6 addresses.
+			name: "IPv6",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+						NodePort: &tsapi.NodePortConfig{
+							Ports: []tsapi.PortRange{
+								{Port: 3001},
+								{Port: 3005},
+								{Port: 3007},
+								{Port: 3009},
+							},
+							Selector: map[string]string{
+								"foo/bar": "baz",
+							},
+						},
+					},
+					replicas: ptr.To(int32(4)),
+					nodes: []testNode{
+						{
+							name:      "foobar",
+							addresses: []testNodeAddr{{ip: "2001:0db8::1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "foobarbaz",
+							addresses: []testNodeAddr{{ip: "2001:0db8::2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "foobarbazz",
+							addresses: []testNodeAddr{{ip: "2001:0db8::3", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("2001:0db8::1"), netip.MustParseAddr("2001:0db8::2"), netip.MustParseAddr("2001:0db8::3")},
+					expectedEvents:    []string{},
+					expectedErr:       "",
+					expectStatefulSet: true,
+				},
+			},
+		},
+		{
+			// declaring specific ports (with no `endPort`s) in the `spec.staticEndpoints.nodePort` should work.
+			name: "SpecificPorts",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+						NodePort: &tsapi.NodePortConfig{
+							Ports: []tsapi.PortRange{
+								{Port: 3001},
+								{Port: 3005},
+								{Port: 3007},
+								{Port: 3009},
+							},
+							Selector: map[string]string{
+								"foo/bar": "baz",
+							},
+						},
+					},
+					replicas: ptr.To(int32(4)),
+					nodes: []testNode{
+						{
+							name:      "foobar",
+							addresses: []testNodeAddr{{ip: "192.168.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "foobarbaz",
+							addresses: []testNodeAddr{{ip: "192.168.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "foobarbazz",
+							addresses: []testNodeAddr{{ip: "192.168.0.3", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("192.168.0.1"), netip.MustParseAddr("192.168.0.2"), netip.MustParseAddr("192.168.0.3")},
+					expectedEvents:    []string{},
+					expectedErr:       "",
+					expectStatefulSet: true,
+				},
+			},
+		},
+		{
+			// if too narrow a range of `spec.staticEndpoints.nodePort.Ports` on the proxyClass should result in no StatefulSet being created.
+			name: "NotEnoughPorts",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+						NodePort: &tsapi.NodePortConfig{
+							Ports: []tsapi.PortRange{
+								{Port: 3001},
+								{Port: 3005},
+								{Port: 3007},
+							},
+							Selector: map[string]string{
+								"foo/bar": "baz",
+							},
+						},
+					},
+					replicas: ptr.To(int32(4)),
+					nodes: []testNode{
+						{
+							name:      "foobar",
+							addresses: []testNodeAddr{{ip: "192.168.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "foobarbaz",
+							addresses: []testNodeAddr{{ip: "192.168.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "foobarbazz",
+							addresses: []testNodeAddr{{ip: "192.168.0.3", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning NodePort Services for static endpoints: failed to allocate NodePorts to ProxyGroup Services: not enough available ports to allocate all replicas (needed 4, got 3). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass \"default-pc\" must have bigger range allocated"},
+					expectedErr:       "",
+					expectStatefulSet: false,
+				},
+			},
+		},
+		{
+			// when supplying a variety of ranges that are not clashing, the reconciler should manage to create a StatefulSet.
+			name: "NonClashingRanges",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+						NodePort: &tsapi.NodePortConfig{
+							Ports: []tsapi.PortRange{
+								{Port: 3000, EndPort: 3002},
+								{Port: 3003, EndPort: 3005},
+								{Port: 3006},
+							},
+							Selector: map[string]string{
+								"foo/bar": "baz",
+							},
+						},
+					},
+					replicas: ptr.To(int32(3)),
+					nodes: []testNode{
+						{name: "node1", addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+						{name: "node2", addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+						{name: "node3", addresses: []testNodeAddr{{ip: "10.0.0.3", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"foo/bar": "baz"}},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2"), netip.MustParseAddr("10.0.0.3")},
+					expectedEvents:    []string{},
+					expectedErr:       "",
+					expectStatefulSet: true,
+				},
+			},
+		},
+		{
+			// when there isn't a node that matches the selector, the ProxyGroup enters a failed state as there are no valid Static Endpoints.
+			// while it does create an event on the resource, It does not return an error
+			name: "NoMatchingNodes",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+						NodePort: &tsapi.NodePortConfig{
+							Ports: []tsapi.PortRange{
+								{Port: 3000, EndPort: 3005},
+							},
+							Selector: map[string]string{
+								"zone": "us-west",
+							},
+						},
+					},
+					replicas: defaultReplicas,
+					nodes: []testNode{
+						{name: "node1", addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}}, labels: map[string]string{"zone": "eu-central"}},
+						{name: "node2", addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeInternalIP}}, labels: map[string]string{"zone": "eu-central"}},
+					},
+					expectedIPs:       []netip.Addr{},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
+					expectedErr:       "",
+					expectStatefulSet: false,
+				},
+			},
+		},
+		{
+			// when all the nodes have only have addresses of type InternalIP populated in their status, the ProxyGroup enters a failed state as there are no valid Static Endpoints.
+			// while it does create an event on the resource, It does not return an error
+			name: "AllInternalIPAddresses",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: &tsapi.StaticEndpointsConfig{
+						NodePort: &tsapi.NodePortConfig{
+							Ports: []tsapi.PortRange{
+								{Port: 3001},
+								{Port: 3005},
+								{Port: 3007},
+								{Port: 3009},
+							},
+							Selector: map[string]string{
+								"foo/bar": "baz",
+							},
+						},
+					},
+					replicas: ptr.To(int32(4)),
+					nodes: []testNode{
+						{
+							name:      "foobar",
+							addresses: []testNodeAddr{{ip: "192.168.0.1", addrType: corev1.NodeInternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "foobarbaz",
+							addresses: []testNodeAddr{{ip: "192.168.0.2", addrType: corev1.NodeInternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "foobarbazz",
+							addresses: []testNodeAddr{{ip: "192.168.0.3", addrType: corev1.NodeInternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to find any `status.addresses` of type \"ExternalIP\" on nodes using configured Selectors on `spec.staticEndpoints.nodePort.selectors` for ProxyClass \"default-pc\""},
+					expectedErr:       "",
+					expectStatefulSet: false,
+				},
+			},
+		},
+		{
+			// When the node's (and some of their addresses) change between reconciles, the reconciler should first pick addresses that
+			// have been used previously (provided that they are still populated on a node that matches the selector)
+			name: "NodeIPChangesAndPersists",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node3",
+							addresses: []testNodeAddr{{ip: "10.0.0.3", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
+					expectStatefulSet: true,
+				},
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.10", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node3",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectStatefulSet: true,
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
+				},
+			},
+		},
+		{
+			// given a new node being created with a new IP, and a node previously used for Static Endpoints being removed, the Static Endpoints should be updated
+			// correctly
+			name: "NodeIPChangesWithNewNode",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
+					expectStatefulSet: true,
+				},
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node3",
+							addresses: []testNodeAddr{{ip: "10.0.0.3", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.3")},
+					expectStatefulSet: true,
+				},
+			},
+		},
+		{
+			// when all the node IPs change, they should all update
+			name: "AllNodeIPsChange",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
+					expectStatefulSet: true,
+				},
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.100", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.200", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.100"), netip.MustParseAddr("10.0.0.200")},
+					expectStatefulSet: true,
+				},
+			},
+		},
+		{
+			// if there are less ExternalIPs after changes to the nodes between reconciles, the reconciler should complete without issues
+			name: "LessExternalIPsAfterChange",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
+					expectStatefulSet: true,
+				},
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeInternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1")},
+					expectStatefulSet: true,
+				},
+			},
+		},
+		{
+			// if node address parsing fails (given an invalid address), the reconciler should continue without failure and find other
+			// valid addresses
+			name: "NodeAddressParsingFails",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "invalid-ip", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.2")},
+					expectStatefulSet: true,
+				},
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "invalid-ip", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.2")},
+					expectStatefulSet: true,
+				},
+			},
+		},
+		{
+			// if the node's become unlabeled, the ProxyGroup should enter a ProxyGroupInvalid state, but the reconciler should not fail
+			name: "NodesBecomeUnlabeled",
+			reconciles: []reconcile{
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node1",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+						{
+							name:      "node2",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{"foo/bar": "baz"},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
+					expectStatefulSet: true,
+				},
+				{
+					staticEndpointConfig: defaultStaticEndpointConfig,
+					replicas:             defaultReplicas,
+					nodes: []testNode{
+						{
+							name:      "node3",
+							addresses: []testNodeAddr{{ip: "10.0.0.1", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{},
+						},
+						{
+							name:      "node4",
+							addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeExternalIP}},
+							labels:    map[string]string{},
+						},
+					},
+					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
+					expectStatefulSet: true,
+				},
+			},
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			tsClient := &fakeTSClient{}
+			zl, _ := zap.NewDevelopment()
+			fr := record.NewFakeRecorder(10)
+			cl := tstest.NewClock(tstest.ClockOpts{})
+
+			pc := &tsapi.ProxyClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "default-pc",
+				},
+				Spec: tsapi.ProxyClassSpec{
+					StatefulSet: &tsapi.StatefulSet{
+						Annotations: defaultProxyClassAnnotations,
+					},
+				},
+				Status: tsapi.ProxyClassStatus{
+					Conditions: []metav1.Condition{{
+						Type:               string(tsapi.ProxyClassReady),
+						Status:             metav1.ConditionTrue,
+						Reason:             reasonProxyClassValid,
+						Message:            reasonProxyClassValid,
+						LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
+					}},
+				},
+			}
+
+			pg := &tsapi.ProxyGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test",
+					Finalizers: []string{"tailscale.com/finalizer"},
+				},
+				Spec: tsapi.ProxyGroupSpec{
+					Type:       tsapi.ProxyGroupTypeEgress,
+					ProxyClass: pc.Name,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithObjects(pc, pg).
+				WithStatusSubresource(pc, pg).
+				WithScheme(tsapi.GlobalScheme).
+				Build()
+
+			reconciler := &ProxyGroupReconciler{
+				tsNamespace:       tsNamespace,
+				proxyImage:        testProxyImage,
+				defaultTags:       []string{"tag:test-tag"},
+				tsFirewallMode:    "auto",
+				defaultProxyClass: "default-pc",
+
+				Client:   fc,
+				tsClient: tsClient,
+				recorder: fr,
+				clock:    cl,
+			}
+
+			for i, r := range tt.reconciles {
+				createdNodes := []corev1.Node{}
+				t.Run(tt.name, func(t *testing.T) {
+					for _, n := range r.nodes {
+						no := &corev1.Node{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:   n.name,
+								Labels: n.labels,
+							},
+							Status: corev1.NodeStatus{
+								Addresses: []corev1.NodeAddress{},
+							},
+						}
+						for _, addr := range n.addresses {
+							no.Status.Addresses = append(no.Status.Addresses, corev1.NodeAddress{
+								Type:    addr.addrType,
+								Address: addr.ip,
+							})
+						}
+						if err := fc.Create(context.Background(), no); err != nil {
+							t.Fatalf("failed to create node %q: %v", n.name, err)
+						}
+						createdNodes = append(createdNodes, *no)
+						t.Logf("created node %q with data", n.name)
+					}
+
+					reconciler.l = zl.Sugar().With("TestName", tt.name).With("Reconcile", i)
+					pg.Spec.Replicas = r.replicas
+					pc.Spec.StaticEndpoints = r.staticEndpointConfig
+
+					createOrUpdate(context.Background(), fc, "", pg, func(o *tsapi.ProxyGroup) {
+						o.Spec.Replicas = pg.Spec.Replicas
+					})
+
+					createOrUpdate(context.Background(), fc, "", pc, func(o *tsapi.ProxyClass) {
+						o.Spec.StaticEndpoints = pc.Spec.StaticEndpoints
+					})
+
+					if r.expectedErr != "" {
+						expectError(t, reconciler, "", pg.Name)
+					} else {
+						expectReconciled(t, reconciler, "", pg.Name)
+					}
+					expectEvents(t, fr, r.expectedEvents)
+
+					sts := &appsv1.StatefulSet{}
+					err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts)
+					if r.expectStatefulSet {
+						if err != nil {
+							t.Fatalf("failed to get StatefulSet: %v", err)
+						}
+
+						for j := range 2 {
+							sec := &corev1.Secret{}
+							if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: fmt.Sprintf("%s-%d-config", pg.Name, j)}, sec); err != nil {
+								t.Fatalf("failed to get state Secret for replica %d: %v", j, err)
+							}
+
+							config := &ipn.ConfigVAlpha{}
+							foundConfig := false
+							for _, d := range sec.Data {
+								if err := json.Unmarshal(d, config); err == nil {
+									foundConfig = true
+									break
+								}
+							}
+							if !foundConfig {
+								t.Fatalf("could not unmarshal config from secret data for replica %d", j)
+							}
+
+							if len(config.StaticEndpoints) > staticEndpointsMaxAddrs {
+								t.Fatalf("expected %d StaticEndpoints in config Secret, but got %d for replica %d. Found Static Endpoints: %v", staticEndpointsMaxAddrs, len(config.StaticEndpoints), j, config.StaticEndpoints)
+							}
+
+							for _, e := range config.StaticEndpoints {
+								if !slices.Contains(r.expectedIPs, e.Addr()) {
+									t.Fatalf("found unexpected static endpoint IP %q for replica %d. Expected one of %v", e.Addr().String(), j, r.expectedIPs)
+								}
+								if c := r.staticEndpointConfig; c != nil && c.NodePort.Ports != nil {
+									var ports tsapi.PortRanges = c.NodePort.Ports
+									found := false
+									for port := range ports.All() {
+										if port == e.Port() {
+											found = true
+											break
+										}
+									}
+
+									if !found {
+										t.Fatalf("found unexpected static endpoint port %d for replica %d. Expected one of %v .", e.Port(), j, ports.All())
+									}
+								} else {
+									if e.Port() != 3001 && e.Port() != 3002 {
+										t.Fatalf("found unexpected static endpoint port %d for replica %d. Expected 3001 or 3002.", e.Port(), j)
+									}
+								}
+							}
+						}
+
+						pgroup := &tsapi.ProxyGroup{}
+						err = fc.Get(context.Background(), client.ObjectKey{Name: pg.Name}, pgroup)
+						if err != nil {
+							t.Fatalf("failed to get ProxyGroup %q: %v", pg.Name, err)
+						}
+
+						t.Logf("getting proxygroup after reconcile")
+						for _, d := range pgroup.Status.Devices {
+							t.Logf("found device %q", d.Hostname)
+							for _, e := range d.StaticEndpoints {
+								t.Logf("found static endpoint %q", e)
+							}
+						}
+					} else {
+						if err == nil {
+							t.Fatal("expected error when getting Statefulset")
+						}
+					}
+				})
+
+				// node cleanup between reconciles
+				// we created a new set of nodes for each
+				for _, n := range createdNodes {
+					err := fc.Delete(context.Background(), &n)
+					if err != nil && !apierrors.IsNotFound(err) {
+						t.Fatalf("failed to delete node: %v", err)
+					}
+				}
+			}
+
+			t.Run("delete_and_cleanup", func(t *testing.T) {
+				reconciler := &ProxyGroupReconciler{
+					tsNamespace:       tsNamespace,
+					proxyImage:        testProxyImage,
+					defaultTags:       []string{"tag:test-tag"},
+					tsFirewallMode:    "auto",
+					defaultProxyClass: "default-pc",
+
+					Client:   fc,
+					tsClient: tsClient,
+					recorder: fr,
+					l:        zl.Sugar().With("TestName", tt.name).With("Reconcile", "cleanup"),
+					clock:    cl,
+				}
+
+				if err := fc.Delete(context.Background(), pg); err != nil {
+					t.Fatalf("error deleting ProxyGroup: %v", err)
+				}
+
+				expectReconciled(t, reconciler, "", pg.Name)
+				expectMissing[tsapi.ProxyGroup](t, fc, "", pg.Name)
+
+				if err := fc.Delete(context.Background(), pc); err != nil {
+					t.Fatalf("error deleting ProxyClass: %v", err)
+				}
+				expectMissing[tsapi.ProxyClass](t, fc, "", pc.Name)
+			})
+		})
+	}
 }
 
 func TestProxyGroup(t *testing.T) {
-
 	pc := &tsapi.ProxyClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "default-pc",
@@ -116,6 +877,7 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 		if expected := 1; reconciler.egressProxyGroups.Len() != expected {
@@ -152,6 +914,7 @@ func TestProxyGroup(t *testing.T) {
 			},
 		}
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "2/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
@@ -163,12 +926,14 @@ func TestProxyGroup(t *testing.T) {
 		})
 		expectReconciled(t, reconciler, "", pg.Name)
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 
 		addNodeIDToStateSecrets(t, fc, pg)
 		expectReconciled(t, reconciler, "", pg.Name)
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "3/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		pg.Status.Devices = append(pg.Status.Devices, tsapi.TailnetDevice{
 			Hostname:   "hostname-nodeid-2",
 			TailnetIPs: []string{"1.2.3.4", "::1"},
@@ -186,6 +951,7 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		pg.Status.Devices = pg.Status.Devices[:1] // truncate to only the first device.
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "1/1 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
@@ -463,7 +1229,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			Namespace: tsNamespace,
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): existingConfigBytes,
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): existingConfigBytes,
 		},
 	})
 
@@ -500,7 +1266,7 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			ResourceVersion: "2",
 		},
 		Data: map[string][]byte{
-			tsoperator.TailscaledConfigFileName(106): expectedConfigBytes,
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): expectedConfigBytes,
 		},
 	})
 }
@@ -598,7 +1364,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	role := pgRole(pg, tsNamespace)
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
-	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", proxyClass)
+	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", nil, proxyClass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,8 +1426,13 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 
 		mustUpdate(t, fc, tsNamespace, fmt.Sprintf("test-%d", i), func(s *corev1.Secret) {
 			s.Data = map[string][]byte{
-				currentProfileKey: []byte(key),
-				key:               bytes,
+				currentProfileKey:       []byte(key),
+				key:                     bytes,
+				kubetypes.KeyDeviceIPs:  []byte(`["1.2.3.4", "::1"]`),
+				kubetypes.KeyDeviceFQDN: []byte(fmt.Sprintf("hostname-nodeid-%d.tails-scales.ts.net", i)),
+				// TODO(tomhjp): We have two different mechanisms to retrieve device IDs.
+				// Consolidate on this one.
+				kubetypes.KeyDeviceID: []byte(fmt.Sprintf("nodeid-%d", i)),
 			}
 		})
 	}

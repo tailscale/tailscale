@@ -6,13 +6,23 @@ package tpm
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"iter"
+	"maps"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
+	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 )
 
 func TestPropToString(t *testing.T) {
@@ -29,11 +39,9 @@ func TestPropToString(t *testing.T) {
 }
 
 func skipWithoutTPM(t testing.TB) {
-	tpm, err := open()
-	if err != nil {
+	if !tpmSupported() {
 		t.Skip("TPM not available")
 	}
-	tpm.Close()
 }
 
 func TestSealUnseal(t *testing.T) {
@@ -67,7 +75,7 @@ func TestSealUnseal(t *testing.T) {
 func TestStore(t *testing.T) {
 	skipWithoutTPM(t)
 
-	path := storePrefix + filepath.Join(t.TempDir(), "state")
+	path := store.TPMPrefix + filepath.Join(t.TempDir(), "state")
 	store, err := newStore(t.Logf, path)
 	if err != nil {
 		t.Fatal(err)
@@ -179,4 +187,160 @@ func BenchmarkStore(b *testing.B) {
 			})
 		})
 	}
+}
+
+func TestMigrateStateToTPM(t *testing.T) {
+	if !tpmSupported() {
+		t.Logf("using mock tpmseal provider")
+		store.RegisterForTest(t, store.TPMPrefix, newMockTPMSeal)
+	}
+
+	storePath := filepath.Join(t.TempDir(), "store")
+	// Make sure migration doesn't cause a failure when no state file exists.
+	if _, err := store.New(t.Logf, store.TPMPrefix+storePath); err != nil {
+		t.Fatalf("store.New failed for new tpmseal store: %v", err)
+	}
+	os.Remove(storePath)
+
+	initial, err := store.New(t.Logf, storePath)
+	if err != nil {
+		t.Fatalf("store.New failed for new file store: %v", err)
+	}
+
+	// Populate initial state file.
+	content := map[ipn.StateKey][]byte{
+		"foo": []byte("bar"),
+		"baz": []byte("qux"),
+	}
+	for k, v := range content {
+		if err := initial.WriteState(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Expected file keys for plaintext and sealed versions of state.
+	keysPlaintext := []string{"foo", "baz"}
+	keysTPMSeal := []string{"key", "nonce", "data"}
+
+	for _, tt := range []struct {
+		desc     string
+		path     string
+		wantKeys []string
+	}{
+		{
+			desc:     "plaintext-to-plaintext",
+			path:     storePath,
+			wantKeys: keysPlaintext,
+		},
+		{
+			desc:     "plaintext-to-tpmseal",
+			path:     store.TPMPrefix + storePath,
+			wantKeys: keysTPMSeal,
+		},
+		{
+			desc:     "tpmseal-to-tpmseal",
+			path:     store.TPMPrefix + storePath,
+			wantKeys: keysTPMSeal,
+		},
+		{
+			desc:     "tpmseal-to-plaintext",
+			path:     storePath,
+			wantKeys: keysPlaintext,
+		},
+	} {
+		t.Run(tt.desc, func(t *testing.T) {
+			s, err := store.New(t.Logf, tt.path)
+			if err != nil {
+				t.Fatalf("migration failed: %v", err)
+			}
+			gotContent := maps.Collect(s.(interface {
+				All() iter.Seq2[ipn.StateKey, []byte]
+			}).All())
+			if diff := cmp.Diff(content, gotContent); diff != "" {
+				t.Errorf("unexpected content after migration, diff:\n%s", diff)
+			}
+
+			buf, err := os.ReadFile(storePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var data map[string]any
+			if err := json.Unmarshal(buf, &data); err != nil {
+				t.Fatal(err)
+			}
+			gotKeys := slices.Collect(maps.Keys(data))
+			slices.Sort(gotKeys)
+			slices.Sort(tt.wantKeys)
+			if diff := cmp.Diff(gotKeys, tt.wantKeys); diff != "" {
+				t.Errorf("unexpected content keys after migration, diff:\n%s", diff)
+			}
+		})
+	}
+}
+
+func tpmSupported() bool {
+	tpm, err := open()
+	if err != nil {
+		return false
+	}
+	tpm.Close()
+	return true
+}
+
+type mockTPMSealProvider struct {
+	path string
+	data map[ipn.StateKey][]byte
+}
+
+func newMockTPMSeal(logf logger.Logf, path string) (ipn.StateStore, error) {
+	path, ok := strings.CutPrefix(path, store.TPMPrefix)
+	if !ok {
+		return nil, fmt.Errorf("%q missing tpmseal: prefix", path)
+	}
+	s := &mockTPMSealProvider{path: path}
+	buf, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return s, s.flushState()
+	}
+	if err != nil {
+		return nil, err
+	}
+	var data struct {
+		Key   string
+		Nonce string
+		Data  map[ipn.StateKey][]byte
+	}
+	if err := json.Unmarshal(buf, &data); err != nil {
+		return nil, err
+	}
+	if data.Key == "" || data.Nonce == "" {
+		return nil, fmt.Errorf("%q missing key or nonce", path)
+	}
+	s.data = data.Data
+	return s, nil
+}
+
+func (p *mockTPMSealProvider) ReadState(k ipn.StateKey) ([]byte, error) {
+	return p.data[k], nil
+}
+
+func (p *mockTPMSealProvider) WriteState(k ipn.StateKey, v []byte) error {
+	mak.Set(&p.data, k, v)
+	return p.flushState()
+}
+
+func (p *mockTPMSealProvider) All() iter.Seq2[ipn.StateKey, []byte] {
+	return maps.All(p.data)
+}
+
+func (p *mockTPMSealProvider) flushState() error {
+	data := map[string]any{
+		"key":   "foo",
+		"nonce": "bar",
+		"data":  p.data,
+	}
+	buf, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p.path, buf, 0600)
 }

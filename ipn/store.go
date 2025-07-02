@@ -113,3 +113,9 @@ func ReadStoreInt(store StateStore, id StateKey) (int64, error) {
 func PutStoreInt(store StateStore, id StateKey, val int64) error {
 	return WriteState(store, id, fmt.Appendf(nil, "%d", val))
 }
+
+// EncryptedStateStore is a marker interface implemented by StateStores that
+// encrypt data at rest.
+type EncryptedStateStore interface {
+	stateStoreIsEncrypted()
+}

@@ -89,4 +89,14 @@
 // The [Debugger], obtained through [Bus.Debugger], provides
 // introspection facilities to monitor events flowing through the bus,
 // and inspect publisher and subscriber state.
+//
+// Additionally, a debug command exists for monitoring the eventbus:
+//
+//	tailscale debug daemon-bus-events
+//
+// # Testing facilities
+//
+// Helpers for testing code with the eventbus can be found in:
+//
+//	eventbus/eventbustest
 package eventbus

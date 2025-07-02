@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,12 +24,43 @@ import (
 	"tailscale.com/types/ptr"
 )
 
-// deletionGracePeriodSeconds is set to 6 minutes to ensure that the pre-stop hook of these proxies have enough chance to terminate gracefully.
-const deletionGracePeriodSeconds int64 = 360
+const (
+	// deletionGracePeriodSeconds is set to 6 minutes to ensure that the pre-stop hook of these proxies have enough chance to terminate gracefully.
+	deletionGracePeriodSeconds int64 = 360
+	staticEndpointPortName           = "static-endpoint-port"
+)
+
+func pgNodePortServiceName(proxyGroupName string, replica int32) string {
+	return fmt.Sprintf("%s-%d-nodeport", proxyGroupName, replica)
+}
+
+func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       namespace,
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeNodePort,
+			Ports: []corev1.ServicePort{
+				// NOTE(ChaosInTheCRD): we set the ports once we've iterated over every svc and found any old configuration we want to persist.
+				{
+					Name:     staticEndpointPortName,
+					Protocol: corev1.ProtocolUDP,
+				},
+			},
+			Selector: map[string]string{
+				appsv1.StatefulSetPodNameLabel: strings.TrimSuffix(name, "-nodeport"),
+			},
+		},
+	}
+}
 
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
-func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
+func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, port *uint16, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -142,6 +174,13 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
 			},
+		}
+
+		if port != nil {
+			envs = append(envs, corev1.EnvVar{
+				Name:  "PORT",
+				Value: strconv.Itoa(int(*port)),
+			})
 		}
 
 		if tsFirewallMode != "" {
@@ -312,7 +351,7 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 	for i := range pgReplicas(pg) {
 		secrets = append(secrets, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            fmt.Sprintf("%s-%d", pg.Name, i),
+				Name:            pgStateSecretName(pg.Name, i),
 				Namespace:       namespace,
 				Labels:          pgSecretLabels(pg.Name, "state"),
 				OwnerReferences: pgOwnerReference(pg),
@@ -381,6 +420,10 @@ func pgReplicas(pg *tsapi.ProxyGroup) int32 {
 
 func pgConfigSecretName(pgName string, i int32) string {
 	return fmt.Sprintf("%s-%d-config", pgName, i)
+}
+
+func pgStateSecretName(pgName string, i int32) string {
+	return fmt.Sprintf("%s-%d", pgName, i)
 }
 
 func pgEgressCMName(pg string) string {

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"log"
 	"os"
 	"path/filepath"
@@ -37,7 +38,7 @@ func init() {
 	hostinfo.RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {
 		hi.TPM = infoOnce()
 	})
-	store.Register(storePrefix, newStore)
+	store.Register(store.TPMPrefix, newStore)
 }
 
 func info() *tailcfg.TPMInfo {
@@ -103,10 +104,8 @@ func propToString(v uint32) string {
 	return string(slices.DeleteFunc(chars, func(b byte) bool { return b < ' ' || b > '~' }))
 }
 
-const storePrefix = "tpmseal:"
-
 func newStore(logf logger.Logf, path string) (ipn.StateStore, error) {
-	path = strings.TrimPrefix(path, storePrefix)
+	path = strings.TrimPrefix(path, store.TPMPrefix)
 	if err := paths.MkStateDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("creating state directory: %w", err)
 	}
@@ -160,6 +159,8 @@ func newStore(logf logger.Logf, path string) (ipn.StateStore, error) {
 // tpmStore is an ipn.StateStore that stores the state in a secretbox-encrypted
 // file using a TPM-sealed symmetric key.
 type tpmStore struct {
+	ipn.EncryptedStateStore
+
 	logf logger.Logf
 	path string
 	key  [32]byte
@@ -204,6 +205,23 @@ func (s *tpmStore) writeSealed() error {
 	}
 	return atomicfile.WriteFile(s.path, buf, 0600)
 }
+
+func (s *tpmStore) All() iter.Seq2[ipn.StateKey, []byte] {
+	return func(yield func(ipn.StateKey, []byte) bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		for k, v := range s.cache {
+			if !yield(k, v) {
+				break
+			}
+		}
+	}
+}
+
+// Ensure tpmStore implements store.ExportableStore for migration to/from
+// store.FileStore.
+var _ store.ExportableStore = (*tpmStore)(nil)
 
 // The nested levels of encoding and encryption are confusing, so here's what's
 // going on in plain English.

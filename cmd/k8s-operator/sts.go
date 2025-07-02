@@ -50,7 +50,7 @@ const (
 	// LabelProxyClass can be set by users on tailscale Ingresses and Services that define cluster ingress or
 	// cluster egress, to specify that configuration in this ProxyClass should be applied to resources created for
 	// the Ingress or Service.
-	LabelProxyClass = "tailscale.com/proxy-class"
+	LabelAnnotationProxyClass = "tailscale.com/proxy-class"
 
 	FinalizerName = "tailscale.com/finalizer"
 
@@ -897,14 +897,6 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 	}
 }
 
-func readAuthKey(secret *corev1.Secret, key string) (*string, error) {
-	origConf := &ipn.ConfigVAlpha{}
-	if err := json.Unmarshal([]byte(secret.Data[key]), origConf); err != nil {
-		return nil, fmt.Errorf("error unmarshaling previous tailscaled config in %q: %w", key, err)
-	}
-	return origConf.AuthKey, nil
-}
-
 // tailscaledConfig takes a proxy config, a newly generated auth key if generated and a Secret with the previous proxy
 // state and auth key and returns tailscaled config files for currently supported proxy versions.
 func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
@@ -951,7 +943,10 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 	return capVerConfigs, nil
 }
 
-func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
+// latestConfigFromSecret returns the ipn.ConfigVAlpha with the highest capver
+// as found in the Secret's key names, e.g. "cap-107.hujson" has capver 107.
+// If no config is found, it returns nil.
+func latestConfigFromSecret(s *corev1.Secret) (*ipn.ConfigVAlpha, error) {
 	latest := tailcfg.CapabilityVersion(-1)
 	latestStr := ""
 	for k, data := range s.Data {
@@ -968,12 +963,31 @@ func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
 			latest = v
 		}
 	}
+
+	var conf *ipn.ConfigVAlpha
+	if latestStr != "" {
+		conf = &ipn.ConfigVAlpha{}
+		if err := json.Unmarshal([]byte(s.Data[latestStr]), conf); err != nil {
+			return nil, fmt.Errorf("error unmarshaling tailscaled config from Secret %q in field %q: %w", s.Name, latestStr, err)
+		}
+	}
+
+	return conf, nil
+}
+
+func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
+	conf, err := latestConfigFromSecret(s)
+	if err != nil {
+		return nil, err
+	}
+
 	// Allow for configs that don't contain an auth key. Perhaps
 	// users have some mechanisms to delete them. Auth key is
 	// normally not needed after the initial login.
-	if latestStr != "" {
-		return readAuthKey(s, latestStr)
+	if conf != nil {
+		key = conf.AuthKey
 	}
+
 	return key, nil
 }
 
@@ -1111,6 +1125,22 @@ func nameForService(svc *corev1.Service) string {
 		return h
 	}
 	return svc.Namespace + "-" + svc.Name
+}
+
+// proxyClassForObject returns the proxy class for the given object. If the
+// object does not have a proxy class label, it returns the default proxy class
+func proxyClassForObject(o client.Object, proxyDefaultClass string) string {
+	proxyClass, exists := o.GetLabels()[LabelAnnotationProxyClass]
+	if exists {
+		return proxyClass
+	}
+
+	proxyClass, exists = o.GetAnnotations()[LabelAnnotationProxyClass]
+	if exists {
+		return proxyClass
+	}
+
+	return proxyDefaultClass
 }
 
 func isValidFirewallMode(m string) bool {

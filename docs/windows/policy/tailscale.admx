@@ -66,6 +66,10 @@
                   displayName="$(string.SINCE_V1_84)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_86"
+                  displayName="$(string.SINCE_V1_86)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -364,6 +368,16 @@
       <elements>
         <text id="KeyExpirationNoticePrompt" valueName="KeyExpirationNotice" required="true" />
       </elements>
+    </policy>
+    <policy name="EncryptState" class="Machine" displayName="$(string.EncryptState)" explainText="$(string.EncryptState_Help)" key="Software\Policies\Tailscale" valueName="EncryptState">
+      <parentCategory ref="Top_Category" />
+      <supportedOn ref="SINCE_V1_86" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
     </policy>
   </policies>
 </policyDefinitions>

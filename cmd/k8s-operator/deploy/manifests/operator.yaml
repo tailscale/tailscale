@@ -2679,6 +2679,51 @@ spec:
                                                 type: array
                                         type: object
                                 type: object
+                            staticEndpoints:
+                                description: |-
+                                    Configuration for 'static endpoints' on proxies in order to facilitate
+                                    direct connections from other devices on the tailnet.
+                                    See https://tailscale.com/kb/1445/kubernetes-operator-customization#static-endpoints.
+                                properties:
+                                    nodePort:
+                                        description: The configuration for static endpoints using NodePort Services.
+                                        properties:
+                                            ports:
+                                                description: |-
+                                                    The port ranges from which the operator will select NodePorts for the Services.
+                                                    You must ensure that firewall rules allow UDP ingress traffic for these ports
+                                                    to the node's external IPs.
+                                                    The ports must be in the range of service node ports for the cluster (default `30000-32767`).
+                                                    See https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport.
+                                                items:
+                                                    properties:
+                                                        endPort:
+                                                            description: |-
+                                                                endPort indicates that the range of ports from port to endPort if set, inclusive,
+                                                                should be used. This field cannot be defined if the port field is not defined.
+                                                                The endPort must be either unset, or equal or greater than port.
+                                                            type: integer
+                                                        port:
+                                                            description: port represents a port selected to be used. This is a required field.
+                                                            type: integer
+                                                    required:
+                                                        - port
+                                                    type: object
+                                                minItems: 1
+                                                type: array
+                                            selector:
+                                                additionalProperties:
+                                                    type: string
+                                                description: |-
+                                                    A selector which will be used to select the node's that will have their `ExternalIP`'s advertised
+                                                    by the ProxyGroup as Static Endpoints.
+                                                type: object
+                                        required:
+                                            - ports
+                                        type: object
+                                required:
+                                    - nodePort
+                                type: object
                             tailscale:
                                 description: |-
                                     TailscaleConfig contains options to configure the tailscale-specific
@@ -2976,6 +3021,11 @@ spec:
                                                 If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
                                                 node.
                                             type: string
+                                        staticEndpoints:
+                                            description: StaticEndpoints are user configured, 'static' endpoints by which tailnet peers can reach this device.
+                                            items:
+                                                type: string
+                                            type: array
                                         tailnetIPs:
                                             description: |-
                                                 TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
@@ -4791,6 +4841,14 @@ kind: ClusterRole
 metadata:
     name: tailscale-operator
 rules:
+    - apiGroups:
+        - ""
+      resources:
+        - nodes
+      verbs:
+        - get
+        - list
+        - watch
     - apiGroups:
         - ""
       resources:

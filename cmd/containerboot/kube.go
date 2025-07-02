@@ -18,12 +18,15 @@ import (
 	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/set"
 )
 
 // kubeClient is a wrapper around Tailscale's internal kube client that knows how to talk to the kube API server. We use
@@ -117,20 +120,39 @@ func (kc *kubeClient) deleteAuthKey(ctx context.Context) error {
 	return nil
 }
 
-// storeCapVerUID stores the current capability version of tailscale and, if provided, UID of the Pod in the tailscale
-// state Secret.
-// These two fields are used by the Kubernetes Operator to observe the current capability version of tailscaled running in this container.
-func (kc *kubeClient) storeCapVerUID(ctx context.Context, podUID string) error {
-	capVerS := fmt.Sprintf("%d", tailcfg.CurrentCapabilityVersion)
-	d := map[string][]byte{
-		kubetypes.KeyCapVer: []byte(capVerS),
+// resetContainerbootState resets state from previous runs of containerboot to
+// ensure the operator doesn't use stale state when a Pod is first recreated.
+func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string) error {
+	existingSecret, err := kc.GetSecret(ctx, kc.stateSecret)
+	if err != nil {
+		return fmt.Errorf("failed to read state Secret %q to reset state: %w", kc.stateSecret, err)
+	}
+
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			kubetypes.KeyCapVer: fmt.Appendf(nil, "%d", tailcfg.CurrentCapabilityVersion),
+		},
 	}
 	if podUID != "" {
-		d[kubetypes.KeyPodUID] = []byte(podUID)
+		s.Data[kubetypes.KeyPodUID] = []byte(podUID)
 	}
-	s := &kubeapi.Secret{
-		Data: d,
+
+	toClear := set.SetOf([]string{
+		kubetypes.KeyDeviceID,
+		kubetypes.KeyDeviceFQDN,
+		kubetypes.KeyDeviceIPs,
+		kubetypes.KeyHTTPSEndpoint,
+		egressservices.KeyEgressServices,
+		ingressservices.IngressConfigKey,
+	})
+	for key := range existingSecret.Data {
+		if toClear.Contains(key) {
+			// It's fine to leave the key in place as a debugging breadcrumb,
+			// it should get a new value soon.
+			s.Data[key] = nil
+		}
 	}
+
 	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, "tailscale-container")
 }
 

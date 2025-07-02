@@ -167,6 +167,8 @@ type Conn struct {
 	filterSub    *eventbus.Subscriber[FilterUpdate]
 	nodeViewsSub *eventbus.Subscriber[NodeViewsUpdate]
 	nodeMutsSub  *eventbus.Subscriber[NodeMutationsUpdate]
+	syncSub      *eventbus.Subscriber[syncPoint]
+	syncPub      *eventbus.Publisher[syncPoint]
 	subsDoneCh   chan struct{} // closed when consumeEventbusTopics returns
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
@@ -538,6 +540,21 @@ type FilterUpdate struct {
 	*filter.Filter
 }
 
+// syncPoint is an event published over an [eventbus.Bus] by [Conn.Synchronize].
+// It serves as a synchronization point, allowing to wait until magicsock
+// has processed all pending events.
+type syncPoint chan struct{}
+
+// Wait blocks until [syncPoint.Signal] is called.
+func (s syncPoint) Wait() {
+	<-s
+}
+
+// Signal signals the sync point, unblocking the [syncPoint.Wait] call.
+func (s syncPoint) Signal() {
+	close(s)
+}
+
 // newConn is the error-free, network-listening-side-effect-free based
 // of NewConn. Mostly for tests.
 func newConn(logf logger.Logf) *Conn {
@@ -593,8 +610,23 @@ func (c *Conn) consumeEventbusTopics() {
 			c.onNodeViewsUpdate(nodeViews)
 		case nodeMuts := <-c.nodeMutsSub.Events():
 			c.onNodeMutationsUpdate(nodeMuts)
+		case syncPoint := <-c.syncSub.Events():
+			c.dlogf("magicsock: received sync point after reconfig")
+			syncPoint.Signal()
 		}
 	}
+}
+
+// Synchronize waits for all [eventbus] events published
+// prior to this call to be processed by the receiver.
+func (c *Conn) Synchronize() {
+	if c.syncPub == nil {
+		// Eventbus is not used; no need to synchronize (in certain tests).
+		return
+	}
+	sp := syncPoint(make(chan struct{}))
+	c.syncPub.Publish(sp)
+	sp.Wait()
 }
 
 // NewConn creates a magic Conn listening on opts.Port.
@@ -624,6 +656,8 @@ func NewConn(opts Options) (*Conn, error) {
 		c.filterSub = eventbus.Subscribe[FilterUpdate](c.eventClient)
 		c.nodeViewsSub = eventbus.Subscribe[NodeViewsUpdate](c.eventClient)
 		c.nodeMutsSub = eventbus.Subscribe[NodeMutationsUpdate](c.eventClient)
+		c.syncSub = eventbus.Subscribe[syncPoint](c.eventClient)
+		c.syncPub = eventbus.Publish[syncPoint](c.eventClient)
 		c.subsDoneCh = make(chan struct{})
 		go c.consumeEventbusTopics()
 	}
@@ -1661,8 +1695,13 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		c.mu.Unlock()
 		if !ok {
 			if c.controlKnobs != nil && c.controlKnobs.DisableCryptorouting.Load() {
+				// Note: UDP relay is dependent on cryptorouting enablement. We
+				// only update Geneve-encapsulated [epAddr]s in the [peerMap]
+				// via [lazyEndpoint].
 				return nil, 0, false
 			}
+			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
+			//  for the same batch & [epAddr] src.
 			return &lazyEndpoint{c: c, src: src}, size, true
 		}
 		cache.epAddr = src
@@ -1670,6 +1709,8 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		cache.gen = de.numStopAndReset()
 		ep = de
 	}
+	// TODO(jwhited): consider the implications of not recording this receive
+	//  activity due to an early [lazyEndpoint] return above.
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	ep.noteRecvActivity(src, now)
@@ -2103,6 +2144,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		}
 		ep.mu.Lock()
 		relayCapable := ep.relayCapable
+		lastBest := ep.bestAddr
+		lastBestIsTrusted := mono.Now().Before(ep.trustBestAddrUntil)
 		ep.mu.Unlock()
 		if isVia && !relayCapable {
 			c.logf("magicsock: disco: ignoring %s from %v; %v is not known to be relay capable", msgType, sender.ShortString(), sender.ShortString())
@@ -2122,7 +2165,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 				c.discoShort, epDisco.short, via.ServerDisco.ShortString(),
 				ep.publicKey.ShortString(), derpStr(src.String()),
 				len(via.AddrPorts))
-			c.relayManager.handleCallMeMaybeVia(ep, via)
+			c.relayManager.handleCallMeMaybeVia(ep, lastBest, lastBestIsTrusted, via)
 		} else {
 			c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
 				c.discoShort, epDisco.short,
@@ -2220,7 +2263,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 			// We have no [endpoint] in the [peerMap] for this relay [epAddr]
 			// using it as a bestAddr. [relayManager] might be in the middle of
 			// probing it or attempting to set it as best via
-			// [endpoint.relayEndpointReady()]. Make [relayManager] aware.
+			// [endpoint.udpRelayEndpointReady()]. Make [relayManager] aware.
 			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, dm, di, src)
 			return
 		}
@@ -2558,12 +2601,12 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 
 func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
 	// TODO(jwhited): implement once capVer is bumped
-	return version == math.MinInt32
+	return version == math.MinInt32 || debugAssumeUDPRelayCapable()
 }
 
 func capVerIsRelayServerCapable(version tailcfg.CapabilityVersion) bool {
-	// TODO(jwhited): implement once capVer is bumped
-	return version == math.MinInt32
+	// TODO(jwhited): implement once capVer is bumped & update Test_peerAPIIfCandidateRelayServer
+	return version == math.MinInt32 || debugAssumeUDPRelayCapable()
 }
 
 // onFilterUpdate is called when a [FilterUpdate] is received over the
@@ -3161,9 +3204,9 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.netMon)).ListenPacket(ctx, network, addr)
 }
 
-// bindSocket initializes rucPtr if necessary and binds a UDP socket to it.
+// bindSocket binds a UDP socket to ruc.
 // Network indicates the UDP socket type; it must be "udp4" or "udp6".
-// If rucPtr had an existing UDP socket bound, it closes that socket.
+// If ruc had an existing UDP socket bound, it closes that socket.
 // The caller is responsible for informing the portMapper of any changes.
 // If curPortFate is set to dropCurrentPort, no attempt is made to reuse
 // the current port.
@@ -3460,9 +3503,17 @@ const (
 	// keep NAT mappings alive.
 	sessionActiveTimeout = 45 * time.Second
 
-	// upgradeInterval is how often we try to upgrade to a better path
-	// even if we have some non-DERP route that works.
-	upgradeInterval = 1 * time.Minute
+	// upgradeUDPDirectInterval is how often we try to upgrade to a better,
+	// direct UDP path even if we have some direct UDP path that works.
+	upgradeUDPDirectInterval = 1 * time.Minute
+
+	// upgradeUDPRelayInterval is how often we try to discover UDP relay paths
+	// even if we have a UDP relay path that works.
+	upgradeUDPRelayInterval = 1 * time.Minute
+
+	// discoverUDPRelayPathsInterval is the minimum time between UDP relay path
+	// discovery.
+	discoverUDPRelayPathsInterval = 30 * time.Second
 
 	// heartbeatInterval is how often pings to the best UDP address
 	// are sent.
@@ -3749,14 +3800,27 @@ func (le *lazyEndpoint) DstIP() netip.Addr   { return netip.Addr{} }
 func (le *lazyEndpoint) SrcToString() string { return le.src.String() }
 func (le *lazyEndpoint) DstToString() string { return "dst" }
 func (le *lazyEndpoint) DstToBytes() []byte  { return nil }
-func (le *lazyEndpoint) GetPeerEndpoint(peerPublicKey [32]byte) conn.Endpoint {
+
+// FromPeer implements [conn.PeerAwareEndpoint]. We return a [*lazyEndpoint] in
+// our [conn.ReceiveFunc]s when we are unable to identify the peer at WireGuard
+// packet reception time, pre-decryption. If wireguard-go successfully decrypts
+// the packet it calls us here, and we update our [peerMap] in order to
+// associate le.src with peerPublicKey.
+func (le *lazyEndpoint) FromPeer(peerPublicKey [32]byte) {
 	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
 	le.c.mu.Lock()
 	defer le.c.mu.Unlock()
 	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)
 	if !ok {
-		return nil
+		return
 	}
-	le.c.logf("magicsock: lazyEndpoint.GetPeerEndpoint(%v) found: %v", pubKey.ShortString(), ep.nodeAddr)
-	return ep
+	// TODO(jwhited): Consider [lazyEndpoint] effectiveness as a means to make
+	//  this the sole call site for setNodeKeyForEpAddr. If this is the sole
+	//  call site, and we always update the mapping based on successful
+	//  Cryptokey Routing identification events, then we can go ahead and make
+	//  [epAddr]s singular per peer (like they are for Geneve-encapsulated ones
+	//  already).
+	//  See http://go/corp/29422 & http://go/corp/30042
+	le.c.peerMap.setNodeKeyForEpAddr(le.src, pubKey)
+	le.c.logf("magicsock: lazyEndpoint.FromPeer(%v) setting epAddr(%v) in peerMap for node(%v)", pubKey.ShortString(), le.src, ep.nodeAddr)
 }

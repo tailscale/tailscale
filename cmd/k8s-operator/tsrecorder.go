@@ -446,18 +446,15 @@ func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) 
 		return tsapi.RecorderTailnetDevice{}, false, err
 	}
 
-	return getDeviceInfo(ctx, r.tsClient, secret)
-}
-
-func getDeviceInfo(ctx context.Context, tsClient tsClient, secret *corev1.Secret) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
 	prefs, ok, err := getDevicePrefs(secret)
 	if !ok || err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, err
 	}
 
 	// TODO(tomhjp): The profile info doesn't include addresses, which is why we
-	// need the API. Should we instead update the profile to include addresses?
-	device, err := tsClient.Device(ctx, string(prefs.Config.NodeID), nil)
+	// need the API. Should maybe update tsrecorder to write IPs to the state
+	// Secret like containerboot does.
+	device, err := r.tsClient.Device(ctx, string(prefs.Config.NodeID), nil)
 	if err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
 	}

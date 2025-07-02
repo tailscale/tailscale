@@ -162,7 +162,8 @@ type CapabilityVersion int
 //   - 115: 2025-03-07: Client understands DERPRegion.NoMeasureNoHome.
 //   - 116: 2025-05-05: Client serves MagicDNS "AAAA" if NodeAttrMagicDNSPeerAAAA set on self node
 //   - 117: 2025-05-28: Client understands DisplayMessages (structured health messages), but not necessarily PrimaryAction.
-const CurrentCapabilityVersion CapabilityVersion = 117
+//   - 118: 2025-07-01: Client sends Hostinfo.StateEncrypted to report whether the state file is encrypted at rest (#15830)
+const CurrentCapabilityVersion CapabilityVersion = 118
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -878,6 +879,12 @@ type Hostinfo struct {
 	Location *Location `json:",omitempty"`
 
 	TPM *TPMInfo `json:",omitempty"` // TPM device metadata, if available
+	// StateEncrypted reports whether the node state is stored encrypted on
+	// disk. The actual mechanism is platform-specific:
+	//   * Apple nodes use the Keychain
+	//   * Linux and Windows nodes use the TPM
+	//   * Android apps use EncryptedSharedPreferences
+	StateEncrypted opt.Bool `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
@@ -907,6 +914,9 @@ type TPMInfo struct {
 	// Before revision 184, TCG used the "01.83" format for revision 183.
 	SpecRevision int `json:",omitempty"`
 }
+
+// Present reports whether a TPM device is present on this machine.
+func (t *TPMInfo) Present() bool { return t != nil }
 
 // ServiceName is the name of a service, of the form `svc:dns-label`. Services
 // represent some kind of application provided for users of the tailnet with a
@@ -2262,10 +2272,10 @@ type Debug struct {
 	Exit *int `json:",omitempty"`
 }
 
-func (id ID) String() string      { return fmt.Sprintf("id:%x", int64(id)) }
-func (id UserID) String() string  { return fmt.Sprintf("userid:%x", int64(id)) }
-func (id LoginID) String() string { return fmt.Sprintf("loginid:%x", int64(id)) }
-func (id NodeID) String() string  { return fmt.Sprintf("nodeid:%x", int64(id)) }
+func (id ID) String() string      { return fmt.Sprintf("id:%d", int64(id)) }
+func (id UserID) String() string  { return fmt.Sprintf("userid:%d", int64(id)) }
+func (id LoginID) String() string { return fmt.Sprintf("loginid:%d", int64(id)) }
+func (id NodeID) String() string  { return fmt.Sprintf("nodeid:%d", int64(id)) }
 
 // Equal reports whether n and n2 are equal.
 func (n *Node) Equal(n2 *Node) bool {
@@ -2364,6 +2374,7 @@ type NodeCapability string
 const (
 	CapabilityFileSharing        NodeCapability = "https://tailscale.com/cap/file-sharing"
 	CapabilityAdmin              NodeCapability = "https://tailscale.com/cap/is-admin"
+	CapabilityOwner              NodeCapability = "https://tailscale.com/cap/is-owner"
 	CapabilitySSH                NodeCapability = "https://tailscale.com/cap/ssh"                   // feature enabled/available
 	CapabilitySSHRuleIn          NodeCapability = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
 	CapabilityDataPlaneAuditLogs NodeCapability = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
