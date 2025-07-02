@@ -137,7 +137,7 @@ func (e *extension) relayServerOrInit() (relayServer, error) {
 		return nil, errors.New("TAILSCALE_USE_WIP_CODE envvar is not set")
 	}
 	var err error
-	e.server, _, err = udprelay.NewServer(e.logf, *e.port, nil)
+	e.server, err = udprelay.NewServer(e.logf, *e.port, nil)
 	if err != nil {
 		return nil, err
 	}

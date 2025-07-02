@@ -29,7 +29,7 @@ type testClient struct {
 
 func newTestClient(t *testing.T, vni uint32, serverEndpoint netip.AddrPort, local key.DiscoPrivate, remote, server key.DiscoPublic) *testClient {
 	rAddr := &net.UDPAddr{IP: serverEndpoint.Addr().AsSlice(), Port: int(serverEndpoint.Port())}
-	uc, err := net.DialUDP("udp4", nil, rAddr)
+	uc, err := net.DialUDP("udp", nil, rAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,85 +180,101 @@ func TestServer(t *testing.T) {
 	discoA := key.NewDisco()
 	discoB := key.NewDisco()
 
-	ipv4LoopbackAddr := netip.MustParseAddr("127.0.0.1")
-
-	server, _, err := NewServer(t.Logf, 0, []netip.Addr{ipv4LoopbackAddr})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-
-	endpoint, err := server.AllocateEndpoint(discoA.Public(), discoB.Public())
-	if err != nil {
-		t.Fatal(err)
-	}
-	dupEndpoint, err := server.AllocateEndpoint(discoA.Public(), discoB.Public())
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name          string
+		overrideAddrs []netip.Addr
+	}{
+		{
+			name:          "over ipv4",
+			overrideAddrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
+		},
+		{
+			name:          "over ipv6",
+			overrideAddrs: []netip.Addr{netip.MustParseAddr("::1")},
+		},
 	}
 
-	// We expect the same endpoint details pre-handshake.
-	if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
-		t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
-	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			server, err := NewServer(t.Logf, 0, tt.overrideAddrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
 
-	if len(endpoint.AddrPorts) != 1 {
-		t.Fatalf("unexpected endpoint.AddrPorts: %v", endpoint.AddrPorts)
-	}
-	tcA := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, discoB.Public(), endpoint.ServerDisco)
-	defer tcA.close()
-	tcB := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, discoA.Public(), endpoint.ServerDisco)
-	defer tcB.close()
+			endpoint, err := server.AllocateEndpoint(discoA.Public(), discoB.Public())
+			if err != nil {
+				t.Fatal(err)
+			}
+			dupEndpoint, err := server.AllocateEndpoint(discoA.Public(), discoB.Public())
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	tcA.handshake(t)
-	tcB.handshake(t)
+			// We expect the same endpoint details pre-handshake.
+			if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
+				t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
+			}
 
-	dupEndpoint, err = server.AllocateEndpoint(discoA.Public(), discoB.Public())
-	if err != nil {
-		t.Fatal(err)
-	}
-	// We expect the same endpoint details post-handshake.
-	if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
-		t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
-	}
+			if len(endpoint.AddrPorts) != 1 {
+				t.Fatalf("unexpected endpoint.AddrPorts: %v", endpoint.AddrPorts)
+			}
+			tcA := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, discoB.Public(), endpoint.ServerDisco)
+			defer tcA.close()
+			tcB := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, discoA.Public(), endpoint.ServerDisco)
+			defer tcB.close()
 
-	txToB := []byte{1, 2, 3}
-	tcA.writeDataPkt(t, txToB)
-	rxFromA := tcB.readDataPkt(t)
-	if !bytes.Equal(txToB, rxFromA) {
-		t.Fatal("unexpected msg A->B")
-	}
+			tcA.handshake(t)
+			tcB.handshake(t)
 
-	txToA := []byte{4, 5, 6}
-	tcB.writeDataPkt(t, txToA)
-	rxFromB := tcA.readDataPkt(t)
-	if !bytes.Equal(txToA, rxFromB) {
-		t.Fatal("unexpected msg B->A")
-	}
+			dupEndpoint, err = server.AllocateEndpoint(discoA.Public(), discoB.Public())
+			if err != nil {
+				t.Fatal(err)
+			}
+			// We expect the same endpoint details post-handshake.
+			if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
+				t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
+			}
 
-	tcAOnNewPort := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, discoB.Public(), endpoint.ServerDisco)
-	tcAOnNewPort.handshakeGeneration = tcA.handshakeGeneration + 1
-	defer tcAOnNewPort.close()
+			txToB := []byte{1, 2, 3}
+			tcA.writeDataPkt(t, txToB)
+			rxFromA := tcB.readDataPkt(t)
+			if !bytes.Equal(txToB, rxFromA) {
+				t.Fatal("unexpected msg A->B")
+			}
 
-	// Handshake client A on a new source IP:port, verify we receive packets on the new binding
-	tcAOnNewPort.handshake(t)
-	txToAOnNewPort := []byte{7, 8, 9}
-	tcB.writeDataPkt(t, txToAOnNewPort)
-	rxFromB = tcAOnNewPort.readDataPkt(t)
-	if !bytes.Equal(txToAOnNewPort, rxFromB) {
-		t.Fatal("unexpected msg B->A")
-	}
+			txToA := []byte{4, 5, 6}
+			tcB.writeDataPkt(t, txToA)
+			rxFromB := tcA.readDataPkt(t)
+			if !bytes.Equal(txToA, rxFromB) {
+				t.Fatal("unexpected msg B->A")
+			}
 
-	tcBOnNewPort := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, discoA.Public(), endpoint.ServerDisco)
-	tcBOnNewPort.handshakeGeneration = tcB.handshakeGeneration + 1
-	defer tcBOnNewPort.close()
+			tcAOnNewPort := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, discoB.Public(), endpoint.ServerDisco)
+			tcAOnNewPort.handshakeGeneration = tcA.handshakeGeneration + 1
+			defer tcAOnNewPort.close()
 
-	// Handshake client B on a new source IP:port, verify we receive packets on the new binding
-	tcBOnNewPort.handshake(t)
-	txToBOnNewPort := []byte{7, 8, 9}
-	tcAOnNewPort.writeDataPkt(t, txToBOnNewPort)
-	rxFromA = tcBOnNewPort.readDataPkt(t)
-	if !bytes.Equal(txToBOnNewPort, rxFromA) {
-		t.Fatal("unexpected msg A->B")
+			// Handshake client A on a new source IP:port, verify we receive packets on the new binding
+			tcAOnNewPort.handshake(t)
+			txToAOnNewPort := []byte{7, 8, 9}
+			tcB.writeDataPkt(t, txToAOnNewPort)
+			rxFromB = tcAOnNewPort.readDataPkt(t)
+			if !bytes.Equal(txToAOnNewPort, rxFromB) {
+				t.Fatal("unexpected msg B->A")
+			}
+
+			tcBOnNewPort := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, discoA.Public(), endpoint.ServerDisco)
+			tcBOnNewPort.handshakeGeneration = tcB.handshakeGeneration + 1
+			defer tcBOnNewPort.close()
+
+			// Handshake client B on a new source IP:port, verify we receive packets on the new binding
+			tcBOnNewPort.handshake(t)
+			txToBOnNewPort := []byte{7, 8, 9}
+			tcAOnNewPort.writeDataPkt(t, txToBOnNewPort)
+			rxFromA = tcBOnNewPort.readDataPkt(t)
+			if !bytes.Equal(txToBOnNewPort, rxFromA) {
+				t.Fatal("unexpected msg A->B")
+			}
+		})
 	}
 }
