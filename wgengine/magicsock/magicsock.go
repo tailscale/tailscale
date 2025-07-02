@@ -2703,7 +2703,7 @@ func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
 	peersChanged := c.updateNodes(update)
 
 	relayClientEnabled := update.SelfNode.Valid() &&
-		update.SelfNode.HasCap(tailcfg.NodeAttrRelayClient) &&
+		!update.SelfNode.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
 		envknob.UseWIPCode()
 
 	c.mu.Lock()
