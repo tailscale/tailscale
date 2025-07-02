@@ -1695,8 +1695,13 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		c.mu.Unlock()
 		if !ok {
 			if c.controlKnobs != nil && c.controlKnobs.DisableCryptorouting.Load() {
+				// Note: UDP relay is dependent on cryptorouting enablement. We
+				// only update Geneve-encapsulated [epAddr]s in the [peerMap]
+				// via [lazyEndpoint].
 				return nil, 0, false
 			}
+			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
+			//  for the same batch & [epAddr] src.
 			return &lazyEndpoint{c: c, src: src}, size, true
 		}
 		cache.epAddr = src
@@ -1704,6 +1709,8 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		cache.gen = de.numStopAndReset()
 		ep = de
 	}
+	// TODO(jwhited): consider the implications of not recording this receive
+	//  activity due to an early [lazyEndpoint] return above.
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	ep.noteRecvActivity(src, now)
@@ -3793,14 +3800,27 @@ func (le *lazyEndpoint) DstIP() netip.Addr   { return netip.Addr{} }
 func (le *lazyEndpoint) SrcToString() string { return le.src.String() }
 func (le *lazyEndpoint) DstToString() string { return "dst" }
 func (le *lazyEndpoint) DstToBytes() []byte  { return nil }
-func (le *lazyEndpoint) GetPeerEndpoint(peerPublicKey [32]byte) conn.Endpoint {
+
+// FromPeer implements [conn.PeerAwareEndpoint]. We return a [*lazyEndpoint] in
+// our [conn.ReceiveFunc]s when we are unable to identify the peer at WireGuard
+// packet reception time, pre-decryption. If wireguard-go successfully decrypts
+// the packet it calls us here, and we update our [peerMap] in order to
+// associate le.src with peerPublicKey.
+func (le *lazyEndpoint) FromPeer(peerPublicKey [32]byte) {
 	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
 	le.c.mu.Lock()
 	defer le.c.mu.Unlock()
 	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)
 	if !ok {
-		return nil
+		return
 	}
-	le.c.logf("magicsock: lazyEndpoint.GetPeerEndpoint(%v) found: %v", pubKey.ShortString(), ep.nodeAddr)
-	return ep
+	// TODO(jwhited): Consider [lazyEndpoint] effectiveness as a means to make
+	//  this the sole call site for setNodeKeyForEpAddr. If this is the sole
+	//  call site, and we always update the mapping based on successful
+	//  Cryptokey Routing identification events, then we can go ahead and make
+	//  [epAddr]s singular per peer (like they are for Geneve-encapsulated ones
+	//  already).
+	//  See http://go/corp/29422 & http://go/corp/30042
+	le.c.peerMap.setNodeKeyForEpAddr(le.src, pubKey)
+	le.c.logf("magicsock: lazyEndpoint.FromPeer(%v) setting epAddr(%v) in peerMap for node(%v)", pubKey.ShortString(), le.src, ep.nodeAddr)
 }
