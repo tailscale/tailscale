@@ -3197,9 +3197,9 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.netMon)).ListenPacket(ctx, network, addr)
 }
 
-// bindSocket initializes rucPtr if necessary and binds a UDP socket to it.
+// bindSocket binds a UDP socket to ruc.
 // Network indicates the UDP socket type; it must be "udp4" or "udp6".
-// If rucPtr had an existing UDP socket bound, it closes that socket.
+// If ruc had an existing UDP socket bound, it closes that socket.
 // The caller is responsible for informing the portMapper of any changes.
 // If curPortFate is set to dropCurrentPort, no attempt is made to reuse
 // the current port.
