@@ -590,3 +590,39 @@ func TestManualDial(t *testing.T) {
 		t.Fatalf("rc.Connect: %v", err)
 	}
 }
+
+func TestURLDial(t *testing.T) {
+	if !*liveNetworkTest {
+		t.Skip("skipping live network test without --live-net-tests")
+	}
+	dm := &tailcfg.DERPMap{}
+	res, err := http.Get("https://controlplane.tailscale.com/derpmap/default")
+	if err != nil {
+		t.Fatalf("fetching DERPMap: %v", err)
+	}
+	defer res.Body.Close()
+	if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+		t.Fatalf("decoding DERPMap: %v", err)
+	}
+
+	// find a valid target DERP host to test against
+	var hostname string
+	for _, reg := range dm.Regions {
+		for _, node := range reg.Nodes {
+			if !node.STUNOnly && node.CanPort80 && node.CertName == "" || node.CertName == node.HostName {
+				hostname = node.HostName
+				break
+			}
+		}
+		if hostname != "" {
+			break
+		}
+	}
+	netMon := netmon.NewStatic()
+	c, err := NewClient(key.NewNode(), "https://"+hostname+"/", t.Logf, netMon)
+	defer c.Close()
+
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("rc.Connect: %v", err)
+	}
+}
