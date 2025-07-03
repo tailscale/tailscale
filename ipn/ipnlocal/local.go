@@ -2001,20 +2001,6 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 	return false
 }
 
-// pickNewAutoExitNode picks a new automatic exit node if needed.
-func (b *LocalBackend) pickNewAutoExitNode() {
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
-
-	newPrefs := b.setAutoExitNodeIDLockedOnEntry(unlock)
-	if !newPrefs.Valid() {
-		// Unchanged.
-		return
-	}
-
-	b.send(ipn.Notify{Prefs: &newPrefs})
-}
-
 // setExitNodeID updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
 func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
@@ -5840,40 +5826,37 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	}
 	cc.SetNetInfo(ni)
 	if refresh {
-		unlock := b.lockAndGetUnlock()
-		defer unlock()
-		b.setAutoExitNodeIDLockedOnEntry(unlock)
+		b.pickNewAutoExitNode()
 	}
 }
 
-func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) (newPrefs ipn.PrefsView) {
-	var zero ipn.PrefsView
+// pickNewAutoExitNode picks a new automatic exit node if needed.
+func (b *LocalBackend) pickNewAutoExitNode() {
+	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
 	prefs := b.pm.CurrentPrefs()
 	if !prefs.Valid() {
 		b.logf("[unexpected]: received tailnet exit node ID pref change callback but current prefs are nil")
-		return zero
+		return
 	}
 	prefsClone := prefs.AsStruct()
 	newSuggestion, err := b.suggestExitNodeLocked(nil)
 	if err != nil {
 		b.logf("setAutoExitNodeID: %v", err)
-		return zero
+		return
 	}
 	if prefsClone.ExitNodeID == newSuggestion.ID {
-		return zero
+		return
 	}
 	prefsClone.ExitNodeID = newSuggestion.ID
-	newPrefs, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
+	_, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
 		Prefs:         *prefsClone,
 		ExitNodeIDSet: true,
 	}, unlock)
 	if err != nil {
 		b.logf("setAutoExitNodeID: failed to apply exit node ID preference: %v", err)
-		return zero
 	}
-	return newPrefs
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
