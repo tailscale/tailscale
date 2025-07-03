@@ -912,13 +912,14 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	hadPAC := b.prevIfState.HasPAC()
 	b.prevIfState = ifst
 	b.pauseOrResumeControlClientLocked()
-	if delta.Major && shouldAutoExitNode() {
+	prefs := b.pm.CurrentPrefs()
+	if delta.Major && prefs.AutoExitNode().IsSet() {
 		b.refreshAutoExitNode = true
 	}
 
 	var needReconfig bool
 	// If the network changed and we're using an exit node and allowing LAN access, we may need to reconfigure.
-	if delta.Major && b.pm.CurrentPrefs().ExitNodeID() != "" && b.pm.CurrentPrefs().ExitNodeAllowLANAccess() {
+	if delta.Major && prefs.ExitNodeID() != "" && prefs.ExitNodeAllowLANAccess() {
 		b.logf("linkChange: in state %v; updating LAN routes", b.state)
 		needReconfig = true
 	}
@@ -941,8 +942,8 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 
 	// If the local network configuration has changed, our filter may
 	// need updating to tweak default routes.
-	b.updateFilterLocked(b.pm.CurrentPrefs())
-	updateExitNodeUsageWarning(b.pm.CurrentPrefs(), delta.New, b.health)
+	b.updateFilterLocked(prefs)
+	updateExitNodeUsageWarning(prefs, delta.New, b.health)
 
 	cn := b.currentNode()
 	nm := cn.NetMap()
@@ -1623,17 +1624,17 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			prefsChanged = true
 		}
 	}
-	if shouldAutoExitNode() {
+	if applySysPolicy(prefs, b.overrideAlwaysOn) {
+		prefsChanged = true
+	}
+	if prefs.AutoExitNode.IsSet() {
 		// Re-evaluate exit node suggestion in case circumstances have changed.
 		_, err := b.suggestExitNodeLocked(curNetMap)
 		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
 			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
 		}
 	}
-	if applySysPolicy(prefs, b.lastSuggestedExitNode, b.overrideAlwaysOn) {
-		prefsChanged = true
-	}
-	if setExitNodeID(prefs, curNetMap) {
+	if setExitNodeID(prefs, b.lastSuggestedExitNode, curNetMap) {
 		prefsChanged = true
 	}
 
@@ -1800,7 +1801,7 @@ var preferencePolicies = []preferencePolicyInfo{
 
 // applySysPolicy overwrites configured preferences with policies that may be
 // configured by the system administrator in an OS-specific way.
-func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID, overrideAlwaysOn bool) (anyChange bool) {
+func applySysPolicy(prefs *ipn.Prefs, overrideAlwaysOn bool) (anyChange bool) {
 	if controlURL, err := syspolicy.GetString(syspolicy.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
 		prefs.ControlURL = controlURL
 		anyChange = true
@@ -1839,21 +1840,51 @@ func applySysPolicy(prefs *ipn.Prefs, lastSuggestedExitNode tailcfg.StableNodeID
 
 	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
 		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
-		if shouldAutoExitNode() && lastSuggestedExitNode != "" {
-			exitNodeID = lastSuggestedExitNode
-		}
-		// Note: when exitNodeIDStr == "auto" && lastSuggestedExitNode == "",
-		// then exitNodeID is now "auto" which will never match a peer's node ID.
-		// When there is no a peer matching the node ID, traffic will blackhole,
-		// preventing accidental non-exit-node usage when a policy is in effect that requires an exit node.
-		if prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid() {
+
+		// Try to parse the policy setting value as an "auto:"-prefixed [ipn.ExitNodeExpression],
+		// and update prefs if it differs from the current one.
+		// This includes cases where it was previously an expression but no longer is,
+		// or where it wasn't before but now is.
+		autoExitNode, useAutoExitNode := parseAutoExitNodeID(exitNodeID)
+		if prefs.AutoExitNode != autoExitNode {
+			prefs.AutoExitNode = autoExitNode
 			anyChange = true
 		}
-		prefs.ExitNodeID = exitNodeID
-		prefs.ExitNodeIP = netip.Addr{}
+		// Additionally, if the specified exit node ID is an expression,
+		// meaning an exit node is required but we don't yet have a valid exit node ID,
+		// we should set exitNodeID to a value that is never a valid [tailcfg.StableNodeID],
+		// to install a blackhole route and prevent accidental non-exit-node usage
+		// until the expression is evaluated and an actual exit node is selected.
+		// We use "auto:any" for this purpose, primarily for compatibility with
+		// older clients (in case a user downgrades to an earlier version)
+		// and GUIs/CLIs that have special handling for it.
+		if useAutoExitNode {
+			exitNodeID = unresolvedExitNodeID
+		}
+
+		// If the current exit node ID doesn't match the one enforced by the policy setting,
+		// and the policy either requires a specific exit node ID,
+		// or requires an auto exit node ID and the current one isn't allowed,
+		// then update the exit node ID.
+		if prefs.ExitNodeID != exitNodeID {
+			if !useAutoExitNode || !isAllowedAutoExitNodeID(prefs.ExitNodeID) {
+				prefs.ExitNodeID = exitNodeID
+				anyChange = true
+			}
+		}
+
+		// If the exit node IP is set, clear it. When ExitNodeIP is set in the prefs,
+		// it takes precedence over the ExitNodeID.
+		if prefs.ExitNodeIP.IsValid() {
+			prefs.ExitNodeIP = netip.Addr{}
+			anyChange = true
+		}
 	} else if exitNodeIPStr, _ := syspolicy.GetString(syspolicy.ExitNodeIP, ""); exitNodeIPStr != "" {
-		exitNodeIP, err := netip.ParseAddr(exitNodeIPStr)
-		if exitNodeIP.IsValid() && err == nil {
+		if prefs.AutoExitNode != "" {
+			prefs.AutoExitNode = "" // mutually exclusive with ExitNodeIP
+			anyChange = true
+		}
+		if exitNodeIP, err := netip.ParseAddr(exitNodeIPStr); err == nil {
 			if prefs.ExitNodeID != "" || prefs.ExitNodeIP != exitNodeIP {
 				anyChange = true
 			}
@@ -1901,7 +1932,7 @@ func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
 func (b *LocalBackend) applySysPolicy() (_ ipn.PrefsView, anyChange bool) {
 	unlock := b.lockAndGetUnlock()
 	prefs := b.pm.CurrentPrefs().AsStruct()
-	if !applySysPolicy(prefs, b.lastSuggestedExitNode, b.overrideAlwaysOn) {
+	if !applySysPolicy(prefs, b.overrideAlwaysOn) {
 		unlock.UnlockEarly()
 		return prefs.View(), false
 	}
@@ -1957,8 +1988,8 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// If auto exit nodes are enabled and our exit node went offline,
 	// we need to schedule picking a new one.
 	// TODO(nickkhyl): move the auto exit node logic to a feature package.
-	if shouldAutoExitNode() {
-		exitNodeID := b.pm.prefs.ExitNodeID()
+	if prefs := b.pm.CurrentPrefs(); prefs.AutoExitNode().IsSet() {
+		exitNodeID := prefs.ExitNodeID()
 		for _, m := range muts {
 			mo, ok := m.(netmap.NodeMutationOnline)
 			if !ok || mo.Online {
@@ -2001,9 +2032,27 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 	return false
 }
 
-// setExitNodeID updates prefs to reference an exit node by ID, rather
+// setExitNodeID updates prefs to either use the suggestedExitNodeID if AutoExitNode is enabled,
+// or resolve ExitNodeIP to an ID and use that. It returns whether prefs was mutated.
+func setExitNodeID(prefs *ipn.Prefs, suggestedExitNodeID tailcfg.StableNodeID, nm *netmap.NetworkMap) (prefsChanged bool) {
+	if prefs.AutoExitNode.IsSet() {
+		newExitNodeID := cmp.Or(suggestedExitNodeID, unresolvedExitNodeID)
+		if prefs.ExitNodeID != newExitNodeID {
+			prefs.ExitNodeID = newExitNodeID
+			prefsChanged = true
+		}
+		if prefs.ExitNodeIP.IsValid() {
+			prefs.ExitNodeIP = netip.Addr{}
+			prefsChanged = true
+		}
+		return prefsChanged
+	}
+	return resolveExitNodeIP(prefs, nm)
+}
+
+// resolveExitNodeIP updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
-func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
+func resolveExitNodeIP(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
 	if nm == nil {
 		// No netmap, can't resolve anything.
 		return false
@@ -2265,8 +2314,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	// And also apply syspolicy settings to the current profile.
 	// This is important in two cases: when opts.UpdatePrefs is not nil,
 	// and when Always Mode is enabled and we need to set WantRunning to true.
-	if newp := b.pm.CurrentPrefs().AsStruct(); applySysPolicy(newp, b.lastSuggestedExitNode, b.overrideAlwaysOn) {
-		setExitNodeID(newp, cn.NetMap())
+	if newp := b.pm.CurrentPrefs().AsStruct(); applySysPolicy(newp, b.overrideAlwaysOn) {
+		setExitNodeID(newp, b.lastSuggestedExitNode, cn.NetMap())
 		b.pm.setPrefsNoPermCheck(newp.View())
 	}
 	prefs := b.pm.CurrentPrefs()
@@ -4187,12 +4236,23 @@ func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
 	mp := &ipn.MaskedPrefs{}
 	if v {
 		mp.ExitNodeIDSet = true
-		mp.ExitNodeID = tailcfg.StableNodeID(p0.InternalExitNodePrior())
+		mp.ExitNodeID = p0.InternalExitNodePrior()
+		if expr, ok := parseAutoExitNodeID(mp.ExitNodeID); ok {
+			mp.AutoExitNodeSet = true
+			mp.AutoExitNode = expr
+			mp.ExitNodeID = unresolvedExitNodeID
+		}
 	} else {
 		mp.ExitNodeIDSet = true
 		mp.ExitNodeID = ""
+		mp.AutoExitNodeSet = true
+		mp.AutoExitNode = ""
 		mp.InternalExitNodePriorSet = true
-		mp.InternalExitNodePrior = p0.ExitNodeID()
+		if p0.AutoExitNode().IsSet() {
+			mp.InternalExitNodePrior = tailcfg.StableNodeID(autoExitNodePrefix + p0.AutoExitNode())
+		} else {
+			mp.InternalExitNodePrior = p0.ExitNodeID()
+		}
 	}
 	return b.editPrefsLockedOnEntry(mp, unlock)
 }
@@ -4227,6 +4287,13 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 	if mp.ExitNodeIDSet && mp.ExitNodeID == "" {
 		mp.InternalExitNodePrior = ""
 		mp.InternalExitNodePriorSet = true
+	}
+
+	// Disable automatic exit node selection if the user explicitly sets
+	// ExitNodeID or ExitNodeIP.
+	if mp.ExitNodeIDSet || mp.ExitNodeIPSet {
+		mp.AutoExitNodeSet = true
+		mp.AutoExitNode = ""
 	}
 
 	// Acquire the lock before checking the profile access to prevent
@@ -4428,9 +4495,14 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	// applySysPolicy returns whether it updated newp,
 	// but everything in this function treats b.prefs as completely new
 	// anyway, so its return value can be ignored here.
-	applySysPolicy(newp, b.lastSuggestedExitNode, b.overrideAlwaysOn)
+	applySysPolicy(newp, b.overrideAlwaysOn)
+	if newp.AutoExitNode.IsSet() {
+		if _, err := b.suggestExitNodeLocked(nil); err != nil {
+			b.logf("failed to select auto exit node: %v", err)
+		}
+	}
 	// setExitNodeID does likewise. No-op if no exit node resolution is needed.
-	setExitNodeID(newp, netMap)
+	setExitNodeID(newp, b.lastSuggestedExitNode, netMap)
 
 	// We do this to avoid holding the lock while doing everything else.
 
@@ -7630,10 +7702,53 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 	return earthRadiusMeters * c
 }
 
-// shouldAutoExitNode checks for the auto exit node MDM policy.
-func shouldAutoExitNode() bool {
-	exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, "")
-	return exitNodeIDStr == "auto:any"
+const (
+	// autoExitNodePrefix is the prefix used in [syspolicy.ExitNodeID] values
+	// to indicate that the string following the prefix is an [ipn.ExitNodeExpression].
+	autoExitNodePrefix = "auto:"
+
+	// unresolvedExitNodeID is a special [tailcfg.StableNodeID] value
+	// used as an exit node ID to install a blackhole route, preventing
+	// accidental non-exit-node usage until the [ipn.ExitNodeExpression]
+	// is evaluated and an actual exit node is selected.
+	//
+	// We use "auto:any" for compatibility with older, pre-[ipn.ExitNodeExpression]
+	// clients that have been using "auto:any" for this purpose for a long time.
+	unresolvedExitNodeID tailcfg.StableNodeID = "auto:any"
+)
+
+// isAutoExitNodeID reports whether the given [tailcfg.StableNodeID] is
+// actually an "auto:"-prefixed [ipn.ExitNodeExpression].
+func isAutoExitNodeID(id tailcfg.StableNodeID) bool {
+	_, ok := parseAutoExitNodeID(id)
+	return ok
+}
+
+// parseAutoExitNodeID attempts to parse the given [tailcfg.StableNodeID]
+// as an [ExitNodeExpression].
+//
+// It returns the parsed expression and true on success,
+// or an empty string and false if the input does not appear to be
+// an [ExitNodeExpression] (i.e., it doesn't start with "auto:").
+//
+// It is mainly used to parse the [syspolicy.ExitNodeID] value
+// when it is set to "auto:<expression>" (e.g., auto:any).
+func parseAutoExitNodeID(id tailcfg.StableNodeID) (_ ipn.ExitNodeExpression, ok bool) {
+	if expr, ok := strings.CutPrefix(string(id), autoExitNodePrefix); ok && expr != "" {
+		return ipn.ExitNodeExpression(expr), true
+	}
+	return "", false
+}
+
+func isAllowedAutoExitNodeID(exitNodeID tailcfg.StableNodeID) bool {
+	if exitNodeID == "" {
+		return false // an exit node is required
+	}
+	if nodes, _ := syspolicy.GetStringArray(syspolicy.AllowedSuggestedExitNodes, nil); nodes != nil {
+		return slices.Contains(nodes, string(exitNodeID))
+
+	}
+	return true // no policy configured; allow all exit nodes
 }
 
 // startAutoUpdate triggers an auto-update attempt. The actual update happens

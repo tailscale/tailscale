@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	memro "go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
@@ -587,6 +588,391 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 		InternalExitNodePriorSet: true,
 	}); err == nil {
 		t.Fatalf("unexpected success; want an error trying to set an internal field")
+	}
+}
+
+func makeExitNode(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
+	return makePeer(id, append([]peerOptFunc{withCap(26), withSuggest(), withExitRoutes()}, opts...)...)
+}
+
+func TestConfigureExitNode(t *testing.T) {
+	controlURL := "https://localhost:1/"
+	exitNode1 := makeExitNode(1, withName("node-1"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	exitNode2 := makeExitNode(2, withName("node-2"), withDERP(2), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+	selfNode := makeExitNode(3, withName("node-3"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.3/32")))
+	clientNetmap := buildNetmapWithPeers(selfNode, exitNode1, exitNode2)
+
+	report := &netcheck.Report{
+		RegionLatency: map[int]time.Duration{
+			1: 5 * time.Millisecond,
+			2: 10 * time.Millisecond,
+		},
+		PreferredDERP: 1,
+	}
+
+	tests := []struct {
+		name               string
+		prefs              ipn.Prefs
+		netMap             *netmap.NetworkMap
+		report             *netcheck.Report
+		changePrefs        *ipn.MaskedPrefs
+		useExitNodeEnabled *bool
+		exitNodeIDPolicy   *tailcfg.StableNodeID
+		exitNodeIPPolicy   *netip.Addr
+		wantPrefs          ipn.Prefs
+	}{
+		{
+			name: "exit-node-id-via-prefs", // set exit node ID via prefs
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap: clientNetmap,
+			report: report,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:         ipn.Prefs{ExitNodeID: exitNode1.StableID()},
+				ExitNodeIDSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode1.StableID(),
+			},
+		},
+		{
+			name: "exit-node-ip-via-prefs", // set exit node IP via prefs (should be resolved to an ID)
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap: clientNetmap,
+			report: report,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:         ipn.Prefs{ExitNodeIP: exitNode1.Addresses().At(0).Addr()},
+				ExitNodeIPSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode1.StableID(),
+			},
+		},
+		{
+			name: "auto-exit-node-via-prefs/any", // set auto exit node via prefs
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap: clientNetmap,
+			report: report,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:           ipn.Prefs{AutoExitNode: "any"},
+				AutoExitNodeSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode1.StableID(),
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-exit-node-via-prefs/set-exit-node-id-via-prefs", // setting exit node ID explicitly should disable auto exit node
+			prefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				AutoExitNode: "any",
+				ExitNodeID:   exitNode1.StableID(),
+			},
+			netMap: clientNetmap,
+			report: report,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:         ipn.Prefs{ExitNodeID: exitNode2.StableID()},
+				ExitNodeIDSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode2.StableID(),
+				AutoExitNode: "", // should be unset
+			},
+		},
+		{
+			name: "auto-exit-node-via-prefs/any/no-report", // set auto exit node via prefs, but no report means we can't resolve the exit node ID
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap: clientNetmap,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:           ipn.Prefs{AutoExitNode: "any"},
+				AutoExitNodeSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   unresolvedExitNodeID, // cannot resolve; traffic will be dropped
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-exit-node-via-prefs/any/no-netmap", // similarly, but without a netmap (no exit node should be selected)
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			report: report,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:           ipn.Prefs{AutoExitNode: "any"},
+				AutoExitNodeSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   unresolvedExitNodeID, // cannot resolve; traffic will be dropped
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-exit-node-via-prefs/foo", // set auto exit node via prefs with an unknown/unsupported expression
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap: clientNetmap,
+			report: report,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:           ipn.Prefs{AutoExitNode: "foo"},
+				AutoExitNodeSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode1.StableID(), // unknown exit node expressions should work as "any"
+				AutoExitNode: "foo",
+			},
+		},
+		{
+			name: "auto-exit-node-via-prefs/off", // toggle the exit node off after it was set to "any"
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap: clientNetmap,
+			report: report,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:           ipn.Prefs{AutoExitNode: "any"},
+				AutoExitNodeSet: true,
+			},
+			useExitNodeEnabled: ptr.To(false),
+			wantPrefs: ipn.Prefs{
+				ControlURL:            controlURL,
+				ExitNodeID:            "",
+				AutoExitNode:          "",
+				InternalExitNodePrior: "auto:any",
+			},
+		},
+		{
+			name: "auto-exit-node-via-prefs/on", // toggle the exit node on
+			prefs: ipn.Prefs{
+				ControlURL:            controlURL,
+				InternalExitNodePrior: "auto:any",
+			},
+			netMap:             clientNetmap,
+			report:             report,
+			useExitNodeEnabled: ptr.To(true),
+			wantPrefs: ipn.Prefs{
+				ControlURL:            controlURL,
+				ExitNodeID:            exitNode1.StableID(),
+				AutoExitNode:          "any",
+				InternalExitNodePrior: "auto:any",
+			},
+		},
+		{
+			name: "id-via-policy", // set exit node ID via syspolicy
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           clientNetmap,
+			exitNodeIDPolicy: ptr.To(exitNode1.StableID()),
+			wantPrefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode1.StableID(),
+			},
+		},
+		{
+			name: "id-via-policy/cannot-override-via-prefs/by-id", // syspolicy should take precedence over prefs
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           clientNetmap,
+			exitNodeIDPolicy: ptr.To(exitNode1.StableID()),
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ExitNodeID: exitNode2.StableID(), // this should be ignored
+				},
+				ExitNodeIDSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode1.StableID(),
+			},
+		},
+		{
+			name: "id-via-policy/cannot-override-via-prefs/by-ip", // syspolicy should take precedence over prefs
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           clientNetmap,
+			exitNodeIDPolicy: ptr.To(exitNode1.StableID()),
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					ExitNodeIP: exitNode2.Addresses().At(0).Addr(), // this should be ignored
+				},
+				ExitNodeIPSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode1.StableID(),
+			},
+		},
+		{
+			name: "id-via-policy/cannot-override-via-prefs/by-auto-expr", // syspolicy should take precedence over prefs
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           clientNetmap,
+			exitNodeIDPolicy: ptr.To(exitNode1.StableID()),
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					AutoExitNode: "any", // this should be ignored
+				},
+				AutoExitNodeSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode1.StableID(),
+			},
+		},
+		{
+			name: "ip-via-policy", // set exit node IP via syspolicy (should be resolved to an ID)
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           clientNetmap,
+			exitNodeIPPolicy: ptr.To(exitNode2.Addresses().At(0).Addr()),
+			wantPrefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode2.StableID(),
+			},
+		},
+		{
+			name: "auto-any-via-policy", // set auto exit node via syspolicy (an exit node should be selected)
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           clientNetmap,
+			report:           report,
+			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode1.StableID(),
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-any-via-policy/no-report", // set auto exit node via syspolicy without a netcheck report (no exit node should be selected)
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           clientNetmap,
+			report:           nil,
+			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   unresolvedExitNodeID,
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-any-via-policy/no-netmap", // similarly, but without a netmap (no exit node should be selected)
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           nil,
+			report:           report,
+			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   unresolvedExitNodeID,
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-foo-via-policy", // set auto exit node via syspolicy with an unknown/unsupported expression
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:           clientNetmap,
+			report:           report,
+			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:foo")),
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode1.StableID(), // unknown exit node expressions should work as "any"
+				AutoExitNode: "foo",
+			},
+		},
+		{
+			name: "auto-any-via-policy/toggle-off", // cannot toggle off the exit node if it was set via syspolicy
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap:             clientNetmap,
+			report:             report,
+			exitNodeIDPolicy:   ptr.To(tailcfg.StableNodeID("auto:any")),
+			useExitNodeEnabled: ptr.To(false), // should be ignored
+			wantPrefs: ipn.Prefs{
+				ControlURL:            controlURL,
+				ExitNodeID:            exitNode1.StableID(), // still enforced by the policy setting
+				AutoExitNode:          "any",
+				InternalExitNodePrior: "auto:any",
+			},
+		},
+	}
+	syspolicy.RegisterWellKnownSettingsForTest(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Configure policy settings, if any.
+			var settings []source.TestSetting[string]
+			if tt.exitNodeIDPolicy != nil {
+				settings = append(settings, source.TestSettingOf(syspolicy.ExitNodeID, string(*tt.exitNodeIDPolicy)))
+			}
+			if tt.exitNodeIPPolicy != nil {
+				settings = append(settings, source.TestSettingOf(syspolicy.ExitNodeIP, tt.exitNodeIPPolicy.String()))
+			}
+			if settings != nil {
+				syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, source.NewTestStoreOf(t, settings...))
+			} else {
+				// No syspolicy settings, so don't register a store.
+				// This allows the test to run in parallel with other tests.
+				t.Parallel()
+			}
+
+			// Create a new LocalBackend with the given prefs.
+			// Any syspolicy settings will be applied to the initial prefs.
+			lb := newTestLocalBackend(t)
+			lb.SetPrefsForTest(tt.prefs.Clone())
+			// Then set the netcheck report and netmap, if any.
+			if tt.report != nil {
+				lb.MagicConn().SetLastNetcheckReportForTest(t.Context(), tt.report)
+			}
+			if tt.netMap != nil {
+				lb.SetControlClientStatus(lb.cc, controlclient.Status{NetMap: tt.netMap})
+			}
+
+			// If we have a changePrefs, apply it.
+			if tt.changePrefs != nil {
+				lb.EditPrefs(tt.changePrefs)
+			}
+
+			// If we need to flip exit node toggle on or off, do it.
+			if tt.useExitNodeEnabled != nil {
+				lb.SetUseExitNodeEnabled(*tt.useExitNodeEnabled)
+			}
+
+			// Now check the prefs.
+			opts := []cmp.Option{
+				cmpopts.EquateComparable(netip.Addr{}, netip.Prefix{}),
+			}
+			if diff := cmp.Diff(&tt.wantPrefs, lb.Prefs().AsStruct(), opts...); diff != "" {
+				t.Errorf("Prefs(+got -want): %v", diff)
+			}
+		})
 	}
 }
 
@@ -1646,6 +2032,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 		prefs                 *ipn.Prefs
 		exitNodeIPWant        string
 		exitNodeIDWant        string
+		autoExitNodeWant      ipn.ExitNodeExpression
 		prefsChanged          bool
 		nm                    *netmap.NetworkMap
 		lastSuggestedExitNode tailcfg.StableNodeID
@@ -1850,19 +2237,38 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			},
 		},
 		{
-			name:                  "ExitNodeID key is set to auto and last suggested exit node is populated",
+			name:                  "ExitNodeID key is set to auto:any and last suggested exit node is populated",
 			exitNodeIDKey:         true,
 			exitNodeID:            "auto:any",
 			lastSuggestedExitNode: "123",
 			exitNodeIDWant:        "123",
+			autoExitNodeWant:      "any",
 			prefsChanged:          true,
 		},
 		{
-			name:           "ExitNodeID key is set to auto and last suggested exit node is not populated",
-			exitNodeIDKey:  true,
-			exitNodeID:     "auto:any",
-			prefsChanged:   true,
-			exitNodeIDWant: "auto:any",
+			name:             "ExitNodeID key is set to auto:any and last suggested exit node is not populated",
+			exitNodeIDKey:    true,
+			exitNodeID:       "auto:any",
+			exitNodeIDWant:   "auto:any",
+			autoExitNodeWant: "any",
+			prefsChanged:     true,
+		},
+		{
+			name:                  "ExitNodeID key is set to auto:foo and last suggested exit node is populated",
+			exitNodeIDKey:         true,
+			exitNodeID:            "auto:foo",
+			lastSuggestedExitNode: "123",
+			exitNodeIDWant:        "123",
+			autoExitNodeWant:      "foo",
+			prefsChanged:          true,
+		},
+		{
+			name:             "ExitNodeID key is set to auto:foo and last suggested exit node is not populated",
+			exitNodeIDKey:    true,
+			exitNodeID:       "auto:foo",
+			exitNodeIDWant:   "auto:any", // should be "auto:any" for compatibility with existing clients
+			autoExitNodeWant: "foo",
+			prefsChanged:     true,
 		},
 	}
 
@@ -1893,7 +2299,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.pm = pm
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
 			prefs := b.pm.prefs.AsStruct()
-			if changed := applySysPolicy(prefs, test.lastSuggestedExitNode, false) || setExitNodeID(prefs, test.nm); changed != test.prefsChanged {
+			if changed := applySysPolicy(prefs, false) || setExitNodeID(prefs, test.lastSuggestedExitNode, test.nm); changed != test.prefsChanged {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 
@@ -1903,15 +2309,18 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			// preferences to change.
 			b.SetPrefsForTest(pm.CurrentPrefs().AsStruct())
 
-			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
-				t.Errorf("got %v want %v", got, test.exitNodeIDWant)
+			if got := b.Prefs().ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
+				t.Errorf("ExitNodeID: got %q; want %q", got, test.exitNodeIDWant)
 			}
-			if got := b.pm.prefs.ExitNodeIP(); test.exitNodeIPWant == "" {
+			if got := b.Prefs().ExitNodeIP(); test.exitNodeIPWant == "" {
 				if got.String() != "invalid IP" {
-					t.Errorf("got %v want invalid IP", got)
+					t.Errorf("ExitNodeIP: got %v want invalid IP", got)
 				}
 			} else if got.String() != test.exitNodeIPWant {
-				t.Errorf("got %v want %v", got, test.exitNodeIPWant)
+				t.Errorf("ExitNodeIP: got %q; want %q", got, test.exitNodeIPWant)
+			}
+			if got := b.Prefs().AutoExitNode(); got != test.autoExitNodeWant {
+				t.Errorf("AutoExitNode: got %q; want %q", got, test.autoExitNodeWant)
 			}
 		})
 	}
@@ -2459,7 +2868,7 @@ func TestApplySysPolicy(t *testing.T) {
 			t.Run("unit", func(t *testing.T) {
 				prefs := tt.prefs.Clone()
 
-				gotAnyChange := applySysPolicy(prefs, "", false)
+				gotAnyChange := applySysPolicy(prefs, false)
 
 				if gotAnyChange && prefs.Equals(&tt.prefs) {
 					t.Errorf("anyChange but prefs is unchanged: %v", prefs.Pretty())
@@ -2607,7 +3016,7 @@ func TestPreferencePolicyInfo(t *testing.T) {
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
 
-					gotAnyChange := applySysPolicy(prefs, "", false)
+					gotAnyChange := applySysPolicy(prefs, false)
 
 					if gotAnyChange != tt.wantChange {
 						t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantChange)
@@ -3288,12 +3697,14 @@ type peerOptFunc func(*tailcfg.Node)
 
 func makePeer(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
 	node := &tailcfg.Node{
-		ID:       id,
-		Key:      makeNodeKeyFromID(id),
-		StableID: tailcfg.StableNodeID(fmt.Sprintf("stable%d", id)),
-		Name:     fmt.Sprintf("peer%d", id),
-		Online:   ptr.To(true),
-		HomeDERP: int(id),
+		ID:                id,
+		Key:               makeNodeKeyFromID(id),
+		DiscoKey:          makeDiscoKeyFromID(id),
+		StableID:          tailcfg.StableNodeID(fmt.Sprintf("stable%d", id)),
+		Name:              fmt.Sprintf("peer%d", id),
+		Online:            ptr.To(true),
+		MachineAuthorized: true,
+		HomeDERP:          int(id),
 	}
 	for _, opt := range opts {
 		opt(node)
@@ -3360,6 +3771,12 @@ func withOnline(isOnline bool) peerOptFunc {
 func withNodeKey() peerOptFunc {
 	return func(n *tailcfg.Node) {
 		n.Key = key.NewNode().Public()
+	}
+}
+
+func withAddresses(addresses ...netip.Prefix) peerOptFunc {
+	return func(n *tailcfg.Node) {
+		n.Addresses = append(n.Addresses, addresses...)
 	}
 }
 
@@ -4065,9 +4482,9 @@ func TestShouldAutoExitNode(t *testing.T) {
 			expectedBool:          false,
 		},
 		{
-			name:                  "auto prefix invalid suffix",
+			name:                  "auto prefix unknown suffix",
 			exitNodeIDPolicyValue: "auto:foo",
-			expectedBool:          false,
+			expectedBool:          true, // "auto:{unknown}" is treated as "auto:any"
 		},
 	}
 
@@ -4075,14 +4492,68 @@ func TestShouldAutoExitNode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
-				syspolicy.ExitNodeID, tt.exitNodeIDPolicyValue,
-			))
-			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
-
-			got := shouldAutoExitNode()
+			got := isAutoExitNodeID(tailcfg.StableNodeID(tt.exitNodeIDPolicyValue))
 			if got != tt.expectedBool {
 				t.Fatalf("expected %v got %v for %v policy value", tt.expectedBool, got, tt.exitNodeIDPolicyValue)
+			}
+		})
+	}
+}
+
+func TestParseAutoExitNodeID(t *testing.T) {
+	tests := []struct {
+		name       string
+		exitNodeID string
+		wantOk     bool
+		wantExpr   ipn.ExitNodeExpression
+	}{
+		{
+			name:       "empty expr",
+			exitNodeID: "",
+			wantOk:     false,
+			wantExpr:   "",
+		},
+		{
+			name:       "no auto prefix",
+			exitNodeID: "foo",
+			wantOk:     false,
+			wantExpr:   "",
+		},
+		{
+			name:       "auto:any",
+			exitNodeID: "auto:any",
+			wantOk:     true,
+			wantExpr:   ipn.AnyExitNode,
+		},
+		{
+			name:       "auto:foo",
+			exitNodeID: "auto:foo",
+			wantOk:     true,
+			wantExpr:   "foo",
+		},
+		{
+			name:       "auto prefix but empty suffix",
+			exitNodeID: "auto:",
+			wantOk:     false,
+			wantExpr:   "",
+		},
+		{
+			name:       "auto prefix no colon",
+			exitNodeID: "auto",
+			wantOk:     false,
+			wantExpr:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotExpr, gotOk := parseAutoExitNodeID(tailcfg.StableNodeID(tt.exitNodeID))
+			if gotOk != tt.wantOk || gotExpr != tt.wantExpr {
+				if tt.wantOk {
+					t.Fatalf("got %v (%q); want %v (%q)", gotOk, gotExpr, tt.wantOk, tt.wantExpr)
+				} else {
+					t.Fatalf("got %v (%q); want false", gotOk, gotExpr)
+				}
 			}
 		})
 	}

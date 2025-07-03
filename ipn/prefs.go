@@ -94,6 +94,25 @@ type Prefs struct {
 	ExitNodeID tailcfg.StableNodeID
 	ExitNodeIP netip.Addr
 
+	// AutoExitNode is an optional expression that specifies whether and how
+	// tailscaled should pick an exit node automatically.
+	//
+	// If specified, tailscaled will use an exit node based on the expression,
+	// and will re-evaluate the selection periodically as network conditions,
+	// available exit nodes, or policy settings change. A blackhole route will
+	// be installed to prevent traffic from escaping to the local network until
+	// an exit node is selected. It takes precedence over ExitNodeID and ExitNodeIP.
+	//
+	// If empty, tailscaled will not automatically select an exit node.
+	//
+	// If the specified expression is invalid or unsupported by the client,
+	// it falls back to the behavior of [AnyExitNode].
+	//
+	// As of 2025-07-02, the only supported value is [AnyExitNode].
+	// It's a string rather than a boolean to allow future extensibility
+	// (e.g., AutoExitNode = "mullvad" or AutoExitNode = "geo:us").
+	AutoExitNode ExitNodeExpression `json:",omitempty"`
+
 	// InternalExitNodePrior is the most recently used ExitNodeID in string form. It is set by
 	// the backend on transition from exit node on to off and used by the
 	// backend.
@@ -325,6 +344,7 @@ type MaskedPrefs struct {
 	RouteAllSet               bool                `json:",omitempty"`
 	ExitNodeIDSet             bool                `json:",omitempty"`
 	ExitNodeIPSet             bool                `json:",omitempty"`
+	AutoExitNodeSet           bool                `json:",omitempty"`
 	InternalExitNodePriorSet  bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
 	ExitNodeAllowLANAccessSet bool                `json:",omitempty"`
 	CorpDNSSet                bool                `json:",omitempty"`
@@ -533,6 +553,9 @@ func (p *Prefs) pretty(goos string) string {
 	} else if !p.ExitNodeID.IsZero() {
 		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
 	}
+	if p.AutoExitNode.IsSet() {
+		fmt.Fprintf(&sb, "auto=%v ", p.AutoExitNode)
+	}
 	if len(p.AdvertiseRoutes) > 0 || goos == "linux" {
 		fmt.Fprintf(&sb, "routes=%v ", p.AdvertiseRoutes)
 	}
@@ -609,6 +632,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.RouteAll == p2.RouteAll &&
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
+		p.AutoExitNode == p2.AutoExitNode &&
 		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
@@ -804,6 +828,7 @@ func isRemoteIP(st *ipnstate.Status, ip netip.Addr) bool {
 func (p *Prefs) ClearExitNode() {
 	p.ExitNodeID = ""
 	p.ExitNodeIP = netip.Addr{}
+	p.AutoExitNode = ""
 }
 
 // ExitNodeLocalIPError is returned when the requested IP address for an exit
@@ -1042,4 +1067,24 @@ func (p *LoginProfile) Equals(p2 *LoginProfile) bool {
 		p.NodeID == p2.NodeID &&
 		p.LocalUserID == p2.LocalUserID &&
 		p.ControlURL == p2.ControlURL
+}
+
+// ExitNodeExpression is a string that specifies how an exit node
+// should be selected. An empty string means that no exit node
+// should be selected.
+//
+// As of 2025-07-02, the only supported value is [AnyExitNode].
+type ExitNodeExpression string
+
+// AnyExitNode indicates that the exit node should be automatically
+// selected from the pool of available exit nodes, excluding any
+// disallowed by policy (e.g., [syspolicy.AllowedSuggestedExitNodes]).
+// The exact implementation is subject to change, but exit nodes
+// offering the best performance will be preferred.
+const AnyExitNode ExitNodeExpression = "any"
+
+// IsSet reports whether the expression is non-empty and can be used
+// to select an exit node.
+func (e ExitNodeExpression) IsSet() bool {
+	return e != ""
 }

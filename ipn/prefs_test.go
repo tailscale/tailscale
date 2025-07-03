@@ -40,6 +40,7 @@ func TestPrefsEqual(t *testing.T) {
 		"RouteAll",
 		"ExitNodeID",
 		"ExitNodeIP",
+		"AutoExitNode",
 		"InternalExitNodePrior",
 		"ExitNodeAllowLANAccess",
 		"CorpDNS",
@@ -147,6 +148,17 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{ExitNodeIP: netip.MustParseAddr("1.2.3.4")},
 			&Prefs{ExitNodeIP: netip.MustParseAddr("1.2.3.4")},
+			true,
+		},
+
+		{
+			&Prefs{AutoExitNode: ""},
+			&Prefs{AutoExitNode: "auto:any"},
+			false,
+		},
+		{
+			&Prefs{AutoExitNode: "auto:any"},
+			&Prefs{AutoExitNode: "auto:any"},
 			true,
 		},
 
