@@ -6,6 +6,7 @@ package ipnlocal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"sync"
@@ -1108,10 +1109,17 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	enableLogging := false
 	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
 	disconnect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: false}, WantRunningSet: true}
-	node1 := testNetmapForNode(1, "node-1", []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")})
-	node2 := testNetmapForNode(2, "node-2", []netip.Prefix{netip.MustParsePrefix("100.64.1.2/32")})
-	node3 := testNetmapForNode(3, "node-3", []netip.Prefix{netip.MustParsePrefix("100.64.1.3/32")})
-	node3.Peers = []tailcfg.NodeView{node1.SelfNode, node2.SelfNode}
+	node1 := buildNetmapWithPeers(
+		makePeer(1, withName("node-1"), withAddresses(netip.MustParsePrefix("100.64.1.1/32"))),
+	)
+	node2 := buildNetmapWithPeers(
+		makePeer(2, withName("node-2"), withAddresses(netip.MustParsePrefix("100.64.1.2/32"))),
+	)
+	node3 := buildNetmapWithPeers(
+		makePeer(3, withName("node-3"), withAddresses(netip.MustParsePrefix("100.64.1.3/32"))),
+		node1.SelfNode,
+		node2.SelfNode,
+	)
 	routesWithQuad100 := func(extra ...netip.Prefix) []netip.Prefix {
 		return append(extra, netip.MustParsePrefix("100.100.100.100/32"))
 	}
@@ -1380,33 +1388,75 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	}
 }
 
-func testNetmapForNode(userID tailcfg.UserID, name string, addresses []netip.Prefix) *netmap.NetworkMap {
+func buildNetmapWithPeers(self tailcfg.NodeView, peers ...tailcfg.NodeView) *netmap.NetworkMap {
 	const (
-		domain         = "example.com"
-		magicDNSSuffix = ".test.ts.net"
+		firstAutoUserID = tailcfg.UserID(10000)
+		domain          = "example.com"
+		magicDNSSuffix  = ".test.ts.net"
 	)
-	user := &tailcfg.UserProfile{
-		ID:          userID,
-		DisplayName: name,
-		LoginName:   strings.Join([]string{name, domain}, "@"),
+
+	users := make(map[tailcfg.UserID]tailcfg.UserProfileView)
+	makeUserForNode := func(n *tailcfg.Node) {
+		var user *tailcfg.UserProfile
+		if n.User == 0 {
+			n.User = firstAutoUserID + tailcfg.UserID(n.ID)
+			user = &tailcfg.UserProfile{
+				DisplayName: n.Name,
+				LoginName:   n.Name,
+			}
+		} else if _, ok := users[n.User]; !ok {
+			user = &tailcfg.UserProfile{
+				DisplayName: fmt.Sprintf("User %d", n.User),
+				LoginName:   fmt.Sprintf("user-%d", n.User),
+			}
+		}
+		if user != nil {
+			user.ID = n.User
+			user.LoginName = strings.Join([]string{user.LoginName, domain}, "@")
+			users[n.User] = user.View()
+		}
 	}
-	self := &tailcfg.Node{
-		ID:                tailcfg.NodeID(1000 + userID),
-		StableID:          tailcfg.StableNodeID("stable-" + name),
-		User:              user.ID,
-		Name:              name + magicDNSSuffix,
-		Addresses:         addresses,
-		MachineAuthorized: true,
+
+	derpmap := &tailcfg.DERPMap{
+		Regions: make(map[int]*tailcfg.DERPRegion),
 	}
-	self.Key = makeNodeKeyFromID(self.ID)
-	self.DiscoKey = makeDiscoKeyFromID(self.ID)
+	makeDERPRegionForNode := func(n *tailcfg.Node) {
+		if n.HomeDERP == 0 {
+			return // no DERP region
+		}
+		if _, ok := derpmap.Regions[n.HomeDERP]; !ok {
+			r := &tailcfg.DERPRegion{
+				RegionID:   n.HomeDERP,
+				RegionName: fmt.Sprintf("Region %d", n.HomeDERP),
+			}
+			r.Nodes = append(r.Nodes, &tailcfg.DERPNode{
+				Name:     fmt.Sprintf("%da", n.HomeDERP),
+				RegionID: n.HomeDERP,
+			})
+			derpmap.Regions[n.HomeDERP] = r
+		}
+	}
+
+	updateNode := func(n tailcfg.NodeView) tailcfg.NodeView {
+		mut := n.AsStruct()
+		makeUserForNode(mut)
+		makeDERPRegionForNode(mut)
+		mut.Name = mut.Name + magicDNSSuffix
+		return mut.View()
+	}
+
+	self = updateNode(self)
+	for i := range peers {
+		peers[i] = updateNode(peers[i])
+	}
+
 	return &netmap.NetworkMap{
-		SelfNode: self.View(),
-		Name:     self.Name,
-		Domain:   domain,
-		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
-			user.ID: user.View(),
-		},
+		SelfNode:     self,
+		Name:         self.Name(),
+		Domain:       domain,
+		Peers:        peers,
+		UserProfiles: users,
+		DERPMap:      derpmap,
 	}
 }
 

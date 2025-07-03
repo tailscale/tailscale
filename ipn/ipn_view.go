@@ -135,6 +135,7 @@ func (v PrefsView) ControlURL() string                          { return v.ж.Co
 func (v PrefsView) RouteAll() bool                              { return v.ж.RouteAll }
 func (v PrefsView) ExitNodeID() tailcfg.StableNodeID            { return v.ж.ExitNodeID }
 func (v PrefsView) ExitNodeIP() netip.Addr                      { return v.ж.ExitNodeIP }
+func (v PrefsView) AutoExitNode() ExitNodeExpression            { return v.ж.AutoExitNode }
 func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.InternalExitNodePrior }
 func (v PrefsView) ExitNodeAllowLANAccess() bool                { return v.ж.ExitNodeAllowLANAccess }
 func (v PrefsView) CorpDNS() bool                               { return v.ж.CorpDNS }
@@ -179,6 +180,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	RouteAll               bool
 	ExitNodeID             tailcfg.StableNodeID
 	ExitNodeIP             netip.Addr
+	AutoExitNode           ExitNodeExpression
 	InternalExitNodePrior  tailcfg.StableNodeID
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
