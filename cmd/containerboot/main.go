@@ -133,7 +133,9 @@ import (
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	kubeutils "tailscale.com/k8s-operator"
 	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/kubetypes"
@@ -198,6 +200,11 @@ func run() error {
 	bootCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
+	var tailscaledConfigAuthkey string
+	if isOneStepConfig(cfg) {
+		tailscaledConfigAuthkey = authkeyFromTailscaledConfig(cfg.TailscaledConfigFilePath)
+	}
+
 	var kc *kubeClient
 	if cfg.InKubernetes {
 		kc, err = newKubeClient(cfg.Root, cfg.KubeSecret)
@@ -211,7 +218,7 @@ func run() error {
 		// hasKubeStateStore because although we know we're in kube, that
 		// doesn't guarantee the state store is properly configured.
 		if hasKubeStateStore(cfg) {
-			if err := kc.resetContainerbootState(bootCtx, cfg.PodUID); err != nil {
+			if err := kc.resetContainerbootState(bootCtx, cfg.PodUID, tailscaledConfigAuthkey); err != nil {
 				return fmt.Errorf("error clearing previous state from Secret: %w", err)
 			}
 		}
@@ -330,7 +337,7 @@ func run() error {
 		if err := tailscaleUp(bootCtx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %w", err)
 		}
-		w, err = client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
+		w, err = client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState|ipn.NotifyInitialHealthState)
 		if err != nil {
 			return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
 		}
@@ -356,7 +363,15 @@ authLoop:
 				if isOneStepConfig(cfg) {
 					// This could happen if this is the first time tailscaled was run for this
 					// device and the auth key was not passed via the configfile.
-					return fmt.Errorf("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in: ensure you pass a valid auth key in the config file.")
+					if hasKubeStateStore(cfg) {
+						setErr := kc.setReissueAuthKey(bootCtx, tailscaledConfigAuthkey)
+						if setErr != nil {
+							return fmt.Errorf("failed to set reissue_authkey in Kubernetes Secret after NeedsLogin state change: %w", setErr)
+						}
+
+						return errors.New("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in; auth key reissue from operator requested")
+					}
+					return errors.New("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in: ensure you pass a valid auth key in the config file")
 				}
 				if err := authTailscale(); err != nil {
 					return fmt.Errorf("failed to auth tailscale: %w", err)
@@ -373,6 +388,21 @@ authLoop:
 				break authLoop
 			default:
 				log.Printf("tailscaled in state %q, waiting", *n.State)
+			}
+		}
+
+		if n.Health != nil {
+			// This can happen if the config has an auth key but its invalid,
+			// for example if it was single-use and already got used, but the
+			// device state was lost.
+			if _, ok := n.Health.Warnings[health.LoginStateWarnable.Code]; ok {
+				if isOneStepConfig(cfg) && hasKubeStateStore(cfg) {
+					err := kc.setReissueAuthKey(bootCtx, tailscaledConfigAuthkey)
+					if err != nil {
+						return fmt.Errorf("failed to set reissue_authkey in Kubernetes Secret after login state warning: %w", err)
+					}
+					return errors.New("tailscaled failed to log in with the auth key from its config file; auth key reissue from operator requested")
+				}
 			}
 		}
 	}
@@ -400,9 +430,9 @@ authLoop:
 		// We were told to only auth once, so any secret-bound
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
-		log.Printf("Deleting authkey from kube secret")
+		log.Printf("Deleting authkey from Kubernetes Secret")
 		if err := kc.deleteAuthKey(ctx); err != nil {
-			return fmt.Errorf("deleting authkey from kube secret: %w", err)
+			return fmt.Errorf("deleting authkey from Kubernetes Secret: %w", err)
 		}
 	}
 
@@ -956,4 +986,12 @@ func serviceIPsFromNetMap(nm *netmap.NetworkMap, fqdn dnsname.FQDN) []netip.Pref
 	}
 
 	return prefixes
+}
+
+func authkeyFromTailscaledConfig(path string) string {
+	if cfg, err := conffile.Load(path); err == nil && cfg.Parsed.AuthKey != nil {
+		return *cfg.Parsed.AuthKey
+	}
+
+	return ""
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -717,6 +718,7 @@ func runReconcilers(opts reconcilerOpts) {
 			tsFirewallMode:    opts.proxyFirewallMode,
 			defaultProxyClass: opts.defaultProxyClass,
 			loginServer:       opts.tsServer.ControlURL,
+			authKeyRateLimits: make(map[string]*rate.Limiter),
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)

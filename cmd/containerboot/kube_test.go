@@ -248,25 +248,42 @@ func TestResetContainerbootState(t *testing.T) {
 	capver := fmt.Appendf(nil, "%d", tailcfg.CurrentCapabilityVersion)
 	for name, tc := range map[string]struct {
 		podUID   string
+		authkey  string
 		initial  map[string][]byte
 		expected map[string][]byte
 	}{
 		"empty_initial": {
 			podUID:  "1234",
+			authkey: "new-authkey",
 			initial: map[string][]byte{},
 			expected: map[string][]byte{
 				kubetypes.KeyCapVer: capver,
 				kubetypes.KeyPodUID: []byte("1234"),
+				// Cleared keys.
+				kubetypes.KeyDeviceID:            nil,
+				kubetypes.KeyDeviceFQDN:          nil,
+				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyHTTPSEndpoint:       nil,
+				egressservices.KeyEgressServices: nil,
+				ingressservices.IngressConfigKey: nil,
 			},
 		},
 		"empty_initial_no_pod_uid": {
 			initial: map[string][]byte{},
 			expected: map[string][]byte{
 				kubetypes.KeyCapVer: capver,
+				// Cleared keys.
+				kubetypes.KeyDeviceID:            nil,
+				kubetypes.KeyDeviceFQDN:          nil,
+				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyHTTPSEndpoint:       nil,
+				egressservices.KeyEgressServices: nil,
+				ingressservices.IngressConfigKey: nil,
 			},
 		},
 		"only_relevant_keys_updated": {
-			podUID: "1234",
+			podUID:  "1234",
+			authkey: "new-authkey",
 			initial: map[string][]byte{
 				kubetypes.KeyCapVer:              []byte("1"),
 				kubetypes.KeyPodUID:              []byte("5678"),
@@ -295,6 +312,57 @@ func TestResetContainerbootState(t *testing.T) {
 				// Tailscaled keys not included in patch.
 			},
 		},
+		"new_authkey_issued": {
+			initial: map[string][]byte{
+				kubetypes.KeyReissueAuthkey: []byte("old-authkey"),
+			},
+			authkey: "new-authkey",
+			expected: map[string][]byte{
+				kubetypes.KeyCapVer:         capver,
+				kubetypes.KeyReissueAuthkey: nil,
+				// Cleared keys.
+				kubetypes.KeyDeviceID:            nil,
+				kubetypes.KeyDeviceFQDN:          nil,
+				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyHTTPSEndpoint:       nil,
+				egressservices.KeyEgressServices: nil,
+				ingressservices.IngressConfigKey: nil,
+			},
+		},
+		"authkey_not_yet_updated": {
+			initial: map[string][]byte{
+				kubetypes.KeyReissueAuthkey: []byte("old-authkey"),
+			},
+			authkey: "old-authkey",
+			expected: map[string][]byte{
+				kubetypes.KeyCapVer: capver,
+				// reissue_authkey not cleared.
+				// Cleared keys.
+				kubetypes.KeyDeviceID:            nil,
+				kubetypes.KeyDeviceFQDN:          nil,
+				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyHTTPSEndpoint:       nil,
+				egressservices.KeyEgressServices: nil,
+				ingressservices.IngressConfigKey: nil,
+			},
+		},
+		"authkey_deleted_from_config": {
+			initial: map[string][]byte{
+				kubetypes.KeyReissueAuthkey: []byte("old-authkey"),
+			},
+			authkey: "",
+			expected: map[string][]byte{
+				kubetypes.KeyCapVer: capver,
+				// reissue_authkey not cleared.
+				// Cleared keys.
+				kubetypes.KeyDeviceID:            nil,
+				kubetypes.KeyDeviceFQDN:          nil,
+				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyHTTPSEndpoint:       nil,
+				egressservices.KeyEgressServices: nil,
+				ingressservices.IngressConfigKey: nil,
+			},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var actual map[string][]byte
@@ -309,11 +377,11 @@ func TestResetContainerbootState(t *testing.T) {
 					return nil
 				},
 			}}
-			if err := kc.resetContainerbootState(context.Background(), tc.podUID); err != nil {
+			if err := kc.resetContainerbootState(context.Background(), tc.podUID, tc.authkey); err != nil {
 				t.Fatalf("resetContainerbootState() error = %v", err)
 			}
-			if diff := cmp.Diff(tc.expected, actual); diff != "" {
-				t.Errorf("resetContainerbootState() mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(actual, tc.expected); diff != "" {
+				t.Errorf("Merge patch mismatch (-got +want):\n%s", diff)
 			}
 		})
 	}
