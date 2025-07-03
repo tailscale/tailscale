@@ -2166,8 +2166,8 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 }
 
 func TestSetControlClientStatusAutoExitNode(t *testing.T) {
-	peer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes(), withNodeKey())
-	peer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withNodeKey())
+	peer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes(), withOnline(true), withNodeKey())
+	peer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withOnline(true), withNodeKey())
 	derpMap := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
 			1: {
@@ -2210,22 +2210,25 @@ func TestSetControlClientStatusAutoExitNode(t *testing.T) {
 	))
 	syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 	b.currentNode().SetNetMap(nm)
-	b.lastSuggestedExitNode = peer1.StableID()
+	// Peer 2 should be the initial exit node, as it's better than peer 1
+	// in terms of latency and DERP region.
+	b.lastSuggestedExitNode = peer2.StableID()
 	b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, report)
 	b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
-	firstExitNode := b.Prefs().ExitNodeID()
-	newPeer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes(), withOnline(false), withNodeKey())
+	offlinePeer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withOnline(false), withNodeKey())
 	updatedNetmap := &netmap.NetworkMap{
 		Peers: []tailcfg.NodeView{
-			newPeer1,
-			peer2,
+			peer1,
+			offlinePeer2,
 		},
 		DERPMap: derpMap,
 	}
 	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: updatedNetmap})
-	lastExitNode := b.Prefs().ExitNodeID()
-	if firstExitNode == lastExitNode {
-		t.Errorf("did not switch exit nodes despite auto exit node going offline")
+	// But now that peer 2 is offline, we should switch to peer 1.
+	wantExitNode := peer1.StableID()
+	gotExitNode := b.Prefs().ExitNodeID()
+	if gotExitNode != wantExitNode {
+		t.Errorf("did not switch exit nodes despite auto exit node going offline: got %q; want %q", gotExitNode, wantExitNode)
 	}
 }
 
@@ -3289,6 +3292,7 @@ func makePeer(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
 		Key:      makeNodeKeyFromID(id),
 		StableID: tailcfg.StableNodeID(fmt.Sprintf("stable%d", id)),
 		Name:     fmt.Sprintf("peer%d", id),
+		Online:   ptr.To(true),
 		HomeDERP: int(id),
 	}
 	for _, opt := range opts {
