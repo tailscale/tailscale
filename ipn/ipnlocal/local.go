@@ -7433,7 +7433,7 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSug
 	}
 	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
 	for _, peer := range netMap.Peers {
-		if !peer.Valid() {
+		if !peer.Valid() || !peer.Online().Get() {
 			continue
 		}
 		if allowList != nil && !allowList.Contains(peer.StableID()) {
