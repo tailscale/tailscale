@@ -57,6 +57,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
@@ -2327,8 +2328,6 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 }
 
 func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
-	t.Skip("TODO(tailscale/tailscale#16455): suggestExitNode does not check for online status of exit nodes")
-
 	peer1 := makePeer(1, withCap(26), withSuggest(), withOnline(true), withExitRoutes())
 	peer2 := makePeer(2, withCap(26), withSuggest(), withOnline(true), withExitRoutes())
 	derpMap := &tailcfg.DERPMap{
@@ -4278,7 +4277,11 @@ func TestSuggestExitNode(t *testing.T) {
 				allowList = set.SetOf(tt.allowPolicy)
 			}
 
-			got, err := suggestExitNode(tt.lastReport, tt.netMap, tt.lastSuggestion, selectRegion, selectNode, allowList)
+			nb := newNodeBackend(t.Context(), eventbus.New())
+			defer nb.shutdown(errShutdown)
+			nb.SetNetMap(tt.netMap)
+
+			got, err := suggestExitNode(tt.lastReport, nb, tt.lastSuggestion, selectRegion, selectNode, allowList)
 			if got.Name != tt.wantName {
 				t.Errorf("name=%v, want %v", got.Name, tt.wantName)
 			}

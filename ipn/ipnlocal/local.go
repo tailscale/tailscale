@@ -1947,10 +1947,7 @@ func (b *LocalBackend) sysPolicyChanged(policy *rsop.PolicyChange) {
 	if policy.HasChanged(syspolicy.AllowedSuggestedExitNodes) {
 		b.refreshAllowedSuggestions()
 		// Re-evaluate exit node suggestion now that the policy setting has changed.
-		b.mu.Lock()
-		_, err := b.suggestExitNodeLocked(nil)
-		b.mu.Unlock()
-		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
+		if _, err := b.SuggestExitNode(); err != nil && !errors.Is(err, ErrNoPreferredDERP) {
 			b.logf("failed to select auto exit node: %v", err)
 		}
 		// If [syspolicy.ExitNodeID] is set to `auto:any`, the suggested exit node ID
@@ -4490,7 +4487,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	// anyway, so its return value can be ignored here.
 	applySysPolicy(newp, b.overrideAlwaysOn)
 	if newp.AutoExitNode.IsSet() {
-		if _, err := b.suggestExitNodeLocked(nil); err != nil {
+		if _, err := b.suggestExitNodeLocked(); err != nil {
 			b.logf("failed to select auto exit node: %v", err)
 		}
 	}
@@ -5918,7 +5915,7 @@ func (b *LocalBackend) resolveExitNode() (changed bool) {
 	nm := b.currentNode().NetMap()
 	prefs := b.pm.CurrentPrefs().AsStruct()
 	if prefs.AutoExitNode.IsSet() {
-		_, err := b.suggestExitNodeLocked(nil)
+		_, err := b.suggestExitNodeLocked()
 		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
 			b.logf("failed to select auto exit node: %v", err)
 		}
@@ -7445,19 +7442,12 @@ var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 // Peers are selected based on having a DERP home that is the lowest latency to this device. For peers
 // without a DERP home, we look for geographic proximity to this device's DERP home.
 //
-// netMap is an optional netmap to use that overrides b.netMap (needed for SetControlClientStatus before b.netMap is updated).
-// If netMap is nil, then b.netMap is used.
-//
 // b.mu.lock() must be held.
-func (b *LocalBackend) suggestExitNodeLocked(netMap *netmap.NetworkMap) (response apitype.ExitNodeSuggestionResponse, err error) {
-	// netMap is an optional netmap to use that overrides b.netMap (needed for SetControlClientStatus before b.netMap is updated). If netMap is nil, then b.netMap is used.
-	if netMap == nil {
-		netMap = b.NetMap()
-	}
+func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
 	prevSuggestion := b.lastSuggestedExitNode
 
-	res, err := suggestExitNode(lastReport, netMap, prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
+	res, err := suggestExitNode(lastReport, b.currentNode(), prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
 	if err != nil {
 		return res, err
 	}
@@ -7468,7 +7458,7 @@ func (b *LocalBackend) suggestExitNodeLocked(netMap *netmap.NetworkMap) (respons
 func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.suggestExitNodeLocked(nil)
+	return b.suggestExitNodeLocked()
 }
 
 // getAllowedSuggestions returns a set of exit nodes permitted by the most recent
@@ -7512,22 +7502,23 @@ func fillAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
 	return s
 }
 
-func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+	netMap := nb.NetMap()
 	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
 	}
-	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
-	for _, peer := range netMap.Peers {
+	// Use [nodeBackend.AppendMatchingPeers] instead of the netmap directly,
+	// since the netmap doesn't include delta updates (e.g., home DERP or Online
+	// status changes) from the control plane since the last full update.
+	candidates := nb.AppendMatchingPeers(nil, func(peer tailcfg.NodeView) bool {
 		if !peer.Valid() || !peer.Online().Get() {
-			continue
+			return false
 		}
 		if allowList != nil && !allowList.Contains(peer.StableID()) {
-			continue
+			return false
 		}
-		if peer.CapMap().Contains(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
-			candidates = append(candidates, peer)
-		}
-	}
+		return peer.CapMap().Contains(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs())
+	})
 	if len(candidates) == 0 {
 		return res, nil
 	}
