@@ -1478,12 +1478,12 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 		ns.logf("netstack: could not connect to local backend server at %s: %v", dialAddr.String(), err)
 		return
 	}
-	defer backend.Close()
 
 	backendLocalAddr := backend.LocalAddr().(*net.TCPAddr)
 	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
 	if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP); err != nil {
 		ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
+		backend.Close()
 		return
 	}
 	defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
@@ -1499,20 +1499,41 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	if client == nil {
 		return
 	}
-	defer client.Close()
 
+	// As of 2025-07-03, backend is always either a net.TCPConn
+	// from stdDialer.DialContext, or nil from hangDialer in
+	// tests (in which case we would have errored out by now),
+	// so this conversion should always succeed.
+	backendTCPConn, backendIsNetTCPConn := backend.(*net.TCPConn)
 	connClosed := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(backend, client)
+		if err != nil {
+			err = fmt.Errorf("client -> backend: %w", err)
+		}
 		connClosed <- err
+		if backendIsNetTCPConn {
+			backendTCPConn.CloseWrite()
+		}
+		client.CloseRead()
 	}()
 	go func() {
 		_, err := io.Copy(client, backend)
+		if err != nil {
+			err = fmt.Errorf("backend -> client: %w", err)
+		}
+		if backendIsNetTCPConn {
+			backendTCPConn.CloseRead()
+		}
+		client.CloseWrite()
 		connClosed <- err
 	}()
-	err = <-connClosed
-	if err != nil {
-		ns.logf("proxy connection closed with error: %v", err)
+	// Wait for both ends of the connection to close.
+	for range 2 {
+		err = <-connClosed
+		if err != nil {
+			ns.logf("proxy connection closed with error: %v", err)
+		}
 	}
 	ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
 	return
