@@ -325,10 +325,9 @@ func (r *relayManager) handleCallMeMaybeVia(ep *endpoint, lastBest addrQuality, 
 	})
 }
 
-// handleGeneveEncapDiscoMsgNotBestAddr handles reception of Geneve-encapsulated
-// disco messages if they are not associated with any known
-// [*endpoint.bestAddr].
-func (r *relayManager) handleGeneveEncapDiscoMsgNotBestAddr(conn *Conn, dm disco.Message, di *discoInfo, src epAddr) {
+// handleGeneveEncapDiscoMsg handles reception of Geneve-encapsulated disco
+// messages.
+func (r *relayManager) handleGeneveEncapDiscoMsg(conn *Conn, dm disco.Message, di *discoInfo, src epAddr) {
 	relayManagerInputEvent(r, nil, &r.rxHandshakeDiscoMsgCh, relayHandshakeDiscoMsgEvent{conn: conn, msg: dm, disco: di.discoKey, from: src.ap, vni: src.vni.get(), at: time.Now()})
 }
 
