@@ -5835,23 +5835,16 @@ func (b *LocalBackend) pickNewAutoExitNode() {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
-	prefs := b.pm.CurrentPrefs()
-	if !prefs.Valid() {
-		b.logf("[unexpected]: received tailnet exit node ID pref change callback but current prefs are nil")
-		return
-	}
-	prefsClone := prefs.AsStruct()
 	newSuggestion, err := b.suggestExitNodeLocked(nil)
 	if err != nil {
 		b.logf("setAutoExitNodeID: %v", err)
 		return
 	}
-	if prefsClone.ExitNodeID == newSuggestion.ID {
+	if b.pm.CurrentPrefs().ExitNodeID() == newSuggestion.ID {
 		return
 	}
-	prefsClone.ExitNodeID = newSuggestion.ID
 	_, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
-		Prefs:         *prefsClone,
+		Prefs:         ipn.Prefs{ExitNodeID: newSuggestion.ID},
 		ExitNodeIDSet: true,
 	}, unlock)
 	if err != nil {
