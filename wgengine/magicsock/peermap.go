@@ -17,13 +17,12 @@ type peerInfo struct {
 	// that when we're deleting this node, we can rapidly find out the
 	// keys that need deleting from peerMap.byEpAddr without having to
 	// iterate over every epAddr known for any peer.
-	epAddrs set.Set[epAddr]
+	epAddr epAddr
 }
 
 func newPeerInfo(ep *endpoint) *peerInfo {
 	return &peerInfo{
-		ep:      ep,
-		epAddrs: set.Set[epAddr]{},
+		ep: ep,
 	}
 }
 
@@ -36,18 +35,6 @@ type peerMap struct {
 	byEpAddr  map[epAddr]*peerInfo
 	byNodeID  map[tailcfg.NodeID]*peerInfo
 
-	// relayEpAddrByNodeKey ensures we only hold a single relay
-	// [epAddr] (vni.isSet()) for a given node key in byEpAddr, vs letting them
-	// grow unbounded. Relay [epAddr]'s are dynamically created by
-	// [relayManager] during path discovery, and are only useful to track in
-	// peerMap so long as they are the endpoint.bestAddr. [relayManager] handles
-	// all creation and initial probing responsibilities otherwise, and it does
-	// not depend on [peerMap].
-	//
-	// Note: This doesn't address unbounded growth of non-relay epAddr's in
-	// byEpAddr. That issue is being tracked in http://go/corp/29422.
-	relayEpAddrByNodeKey map[key.NodePublic]epAddr
-
 	// nodesOfDisco contains the set of nodes that are using a
 	// DiscoKey. Usually those sets will be just one node.
 	nodesOfDisco map[key.DiscoPublic]set.Set[key.NodePublic]
@@ -55,11 +42,10 @@ type peerMap struct {
 
 func newPeerMap() peerMap {
 	return peerMap{
-		byNodeKey:            map[key.NodePublic]*peerInfo{},
-		byEpAddr:             map[epAddr]*peerInfo{},
-		byNodeID:             map[tailcfg.NodeID]*peerInfo{},
-		relayEpAddrByNodeKey: map[key.NodePublic]epAddr{},
-		nodesOfDisco:         map[key.DiscoPublic]set.Set[key.NodePublic]{},
+		byNodeKey:    map[key.NodePublic]*peerInfo{},
+		byEpAddr:     map[epAddr]*peerInfo{},
+		byNodeID:     map[tailcfg.NodeID]*peerInfo{},
+		nodesOfDisco: map[key.DiscoPublic]set.Set[key.NodePublic]{},
 	}
 }
 
@@ -154,16 +140,8 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 		delete(m.nodesOfDisco[oldDiscoKey], ep.publicKey)
 	}
 	if ep.isWireguardOnly {
-		// If the peer is a WireGuard only peer, add all of its endpoints.
-
-		// TODO(raggi,catzkorn): this could mean that if a "isWireguardOnly"
-		// peer has, say, 192.168.0.2 and so does a tailscale peer, the
-		// wireguard one will win. That may not be the outcome that we want -
-		// perhaps we should prefer bestAddr.epAddr.ap if it is set?
-		// see tailscale/tailscale#7994
-		for ipp := range ep.endpointState {
-			m.setNodeKeyForEpAddr(epAddr{ap: ipp}, ep.publicKey)
-		}
+		// If the peer is a WireGuard only peer, return early. There is no disco
+		// tracking for WireGuard peers.
 		return
 	}
 	discoSet := m.nodesOfDisco[epDisco.key]
@@ -174,6 +152,21 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 	discoSet.Add(ep.publicKey)
 }
 
+// clearEpAddrForNodeKey clears the [epAddr] associated with nk. This is
+// called by an [*endpoint] when wireguard-go signals a mismatch between
+// a Cryptokey Routing identification outcome and the peer we believe to be
+// associated with the packet.
+//
+// NATs (including UDP relay servers) can cause collisions of [epAddr]s across
+// peers. This function resolves such collisions when they occur. A subsequent
+// lookup via endpointForEpAddr() will fail, leading to resolution via
+// [*lazyEndpoint] Cryptokey Routing identification.
+func (m *peerMap) clearEpAddrForNodeKey(nk key.NodePublic) {
+	if pi := m.byNodeKey[nk]; pi != nil {
+		delete(m.byEpAddr, pi.epAddr)
+	}
+}
+
 // setNodeKeyForEpAddr makes future peer lookups by addr return the
 // same endpoint as a lookup by nk.
 //
@@ -182,22 +175,11 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 // WireGuard for packets received from addr.
 func (m *peerMap) setNodeKeyForEpAddr(addr epAddr, nk key.NodePublic) {
 	if pi := m.byEpAddr[addr]; pi != nil {
-		delete(pi.epAddrs, addr)
+		pi.epAddr = epAddr{}
 		delete(m.byEpAddr, addr)
-		if addr.vni.isSet() {
-			delete(m.relayEpAddrByNodeKey, pi.ep.publicKey)
-		}
 	}
 	if pi, ok := m.byNodeKey[nk]; ok {
-		if addr.vni.isSet() {
-			relay, ok := m.relayEpAddrByNodeKey[nk]
-			if ok {
-				delete(pi.epAddrs, relay)
-				delete(m.byEpAddr, relay)
-			}
-			m.relayEpAddrByNodeKey[nk] = addr
-		}
-		pi.epAddrs.Add(addr)
+		pi.epAddr = addr
 		m.byEpAddr[addr] = pi
 	}
 }
@@ -225,8 +207,5 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 		// Unexpected. But no logger plumbed here to log so.
 		return
 	}
-	for ip := range pi.epAddrs {
-		delete(m.byEpAddr, ip)
-	}
-	delete(m.relayEpAddrByNodeKey, ep.publicKey)
+	delete(m.byEpAddr, pi.epAddr)
 }

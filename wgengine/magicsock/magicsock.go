@@ -1694,12 +1694,6 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		de, ok := c.peerMap.endpointForEpAddr(src)
 		c.mu.Unlock()
 		if !ok {
-			if c.controlKnobs != nil && c.controlKnobs.DisableCryptorouting.Load() {
-				// Note: UDP relay is dependent on cryptorouting enablement. We
-				// only update Geneve-encapsulated [epAddr]s in the [peerMap]
-				// via [lazyEndpoint].
-				return nil, 0, false
-			}
 			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
 			//  for the same batch & [epAddr] src.
 			return &lazyEndpoint{c: c, src: src}, size, true
@@ -2242,45 +2236,13 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 			return
 		}
 
-		var bestEpAddr epAddr
-		var discoKey key.DiscoPublic
-		ep, ok := c.peerMap.endpointForEpAddr(src)
-		if ok {
-			ep.mu.Lock()
-			bestEpAddr = ep.bestAddr.epAddr
-			ep.mu.Unlock()
-			disco := ep.disco.Load()
-			if disco != nil {
-				discoKey = disco.key
-			}
-		}
-
-		if src == bestEpAddr && discoKey == di.discoKey {
-			// We have an associated endpoint with src as its bestAddr. Set
-			// numNodes so we TX a pong further down.
-			numNodes = 1
-		} else {
-			// We have no [endpoint] in the [peerMap] for this relay [epAddr]
-			// using it as a bestAddr. [relayManager] might be in the middle of
-			// probing it or attempting to set it as best via
-			// [endpoint.udpRelayEndpointReady()]. Make [relayManager] aware.
-			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, dm, di, src)
-			return
-		}
+		// [relayManager] might be in the middle of probing src or attempting to
+		// set it as best via [endpoint.udpRelayEndpointReady()]. Make
+		// [relayManager] aware. [relayManager] is always responsible for
+		// handling all pings received over Geneve-encapsulated paths.
+		c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, dm, di, src)
+		return
 	default: // no VNI
-		// If we can figure out with certainty which node key this disco
-		// message is for, eagerly update our [epAddr]<>node and disco<>node
-		// mappings to make p2p path discovery faster in simple
-		// cases. Without this, disco would still work, but would be
-		// reliant on DERP call-me-maybe to establish the disco<>node
-		// mapping, and on subsequent disco handlePongConnLocked to establish
-		// the IP:port<>disco mapping.
-		if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
-			if !isDerp {
-				c.peerMap.setNodeKeyForEpAddr(src, nk)
-			}
-		}
-
 		// Remember this route if not present.
 		var dup bool
 		if isDerp {

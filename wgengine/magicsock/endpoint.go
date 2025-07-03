@@ -128,6 +128,21 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 	de.trustBestAddrUntil = mono.Now().Add(trustUDPAddrDuration)
 }
 
+// MaybePeer implements [conn.PeerVerifyEndpoint].
+func (de *endpoint) MaybePeer() [32]byte {
+	return de.publicKey.Raw32()
+}
+
+// FromPeer implements [conn.PeerAwareEndpoint].
+func (de *endpoint) FromPeer(peerPublicKey [32]byte) {
+	de.c.mu.Lock()
+	defer de.c.mu.Unlock()
+	if de.publicKey.Raw32() != peerPublicKey {
+		de.c.peerMap.clearEpAddrForNodeKey(de.publicKey)
+		de.c.logf("magicsock: clearing epAddr for node %v %v", de.nodeAddr, de.discoShort())
+	}
+}
+
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
 	if v.epAddr != de.bestAddr.epAddr {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
@@ -1693,8 +1708,6 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			// This is no longer an endpoint we care about.
 			return
 		}
-
-		de.c.peerMap.setNodeKeyForEpAddr(src, de.publicKey)
 
 		st.addPongReplyLocked(pongReply{
 			latency: latency,
