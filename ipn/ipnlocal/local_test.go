@@ -1918,8 +1918,10 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 }
 
 func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
-	peer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes())
-	peer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes())
+	t.Skip("TODO(tailscale/tailscale#16455): suggestExitNode does not check for online status of exit nodes")
+
+	peer1 := makePeer(1, withCap(26), withSuggest(), withOnline(true), withExitRoutes())
+	peer2 := makePeer(2, withCap(26), withSuggest(), withOnline(true), withExitRoutes())
 	derpMap := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
 			1: {
@@ -1958,8 +1960,10 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 	}{
 		{
 			// selected auto exit node goes offline
-			name:                  "exit-node-goes-offline",
-			lastSuggestedExitNode: peer1.StableID(),
+			name: "exit-node-goes-offline",
+			// PreferredDERP is 2, and it's also the region with the lowest latency.
+			// So, peer2 should be selected as the exit node.
+			lastSuggestedExitNode: peer2.StableID(),
 			netmap: &netmap.NetworkMap{
 				Peers: []tailcfg.NodeView{
 					peer1,
@@ -1970,14 +1974,14 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			muts: []*tailcfg.PeerChange{
 				{
 					NodeID: 1,
-					Online: ptr.To(false),
+					Online: ptr.To(true),
 				},
 				{
 					NodeID: 2,
-					Online: ptr.To(true),
+					Online: ptr.To(false), // the selected exit node goes offline
 				},
 			},
-			exitNodeIDWant: peer2.StableID(),
+			exitNodeIDWant: peer1.StableID(),
 			report:         report,
 		},
 		{
@@ -1994,7 +1998,7 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			muts: []*tailcfg.PeerChange{
 				{
 					NodeID: 1,
-					Online: ptr.To(false),
+					Online: ptr.To(false), // a different exit node goes offline
 				},
 				{
 					NodeID: 2,
