@@ -9,6 +9,9 @@ oauth: {}
   # clientId: ""
   # clientSecret: ""
 
+# URL of the control plane to be used by all resources managed by the operator.
+loginServer: ""
+
 # Secret volume.
 # If set it defines the volume the oauth secrets will be mounted from.
 # The volume needs to contain two files named `client_id` and `client_secret`.
@@ -71,9 +74,6 @@ operatorConfig:
   #   value: "value1"
   # - name: EXTRA_VAR2
   #   value: "value2"
-
-  # URL of the control plane to be used by all resources managed by the operator.
-  loginServer: ""
 
 # In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
 ingressClass:

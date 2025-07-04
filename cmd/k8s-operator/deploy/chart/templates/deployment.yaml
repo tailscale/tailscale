@@ -69,7 +69,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: OPERATOR_LOGIN_SERVER
-              value: {{ .Values.operatorConfig.loginServer }}
+              value: {{ .Values.loginServer }}
             - name: CLIENT_ID_FILE
               value: /oauth/client_id
             - name: CLIENT_SECRET_FILE
