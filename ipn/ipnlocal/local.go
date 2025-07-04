@@ -1624,7 +1624,11 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			prefsChanged = true
 		}
 	}
-	if applySysPolicy(prefs, b.overrideAlwaysOn) {
+	// We primarily need this to apply syspolicy to the prefs if an implicit profile
+	// switch is about to happen.
+	// TODO(nickkhyl): remove this once we improve handling of implicit profile switching
+	// in tailscale/corp#28014 and we apply syspolicy when the switch actually happens.
+	if b.reconcilePrefsLocked(prefs) {
 		prefsChanged = true
 	}
 
@@ -1911,21 +1915,21 @@ func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
 	if unregister, err = syspolicy.RegisterChangeCallback(b.sysPolicyChanged); err != nil {
 		return nil, fmt.Errorf("syspolicy: LocalBacked failed to register policy change callback: %v", err)
 	}
-	if prefs, anyChange := b.applySysPolicy(); anyChange {
+	if prefs, anyChange := b.reconcilePrefs(); anyChange {
 		b.logf("syspolicy: changed initial profile prefs: %v", prefs.Pretty())
 	}
 	b.refreshAllowedSuggestions()
 	return unregister, nil
 }
 
-// applySysPolicy overwrites the current profile's preferences with policies
+// reconcilePrefs overwrites the current profile's preferences with policies
 // that may be configured by the system administrator in an OS-specific way.
 //
 // b.mu must not be held.
-func (b *LocalBackend) applySysPolicy() (_ ipn.PrefsView, anyChange bool) {
+func (b *LocalBackend) reconcilePrefs() (_ ipn.PrefsView, anyChange bool) {
 	unlock := b.lockAndGetUnlock()
 	prefs := b.pm.CurrentPrefs().AsStruct()
-	if !applySysPolicy(prefs, b.overrideAlwaysOn) {
+	if !b.reconcilePrefsLocked(prefs) {
 		unlock.UnlockEarly()
 		return prefs.View(), false
 	}
@@ -1954,7 +1958,7 @@ func (b *LocalBackend) sysPolicyChanged(policy *rsop.PolicyChange) {
 		// will be used when [applySysPolicy] updates the current profile's prefs.
 	}
 
-	if prefs, anyChange := b.applySysPolicy(); anyChange {
+	if prefs, anyChange := b.reconcilePrefs(); anyChange {
 		b.logf("syspolicy: changed profile prefs: %v", prefs.Pretty())
 	}
 }
@@ -2302,26 +2306,32 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.setStateLocked(ipn.NoState)
 
 	cn := b.currentNode()
+
+	prefsChanged := false
+	newPrefs := b.pm.CurrentPrefs().AsStruct()
 	if opts.UpdatePrefs != nil {
-		oldPrefs := b.pm.CurrentPrefs()
-		newPrefs := opts.UpdatePrefs.Clone()
-		newPrefs.Persist = oldPrefs.Persist().AsStruct()
-		pv := newPrefs.View()
-		if err := b.pm.SetPrefs(pv, cn.NetworkProfile()); err != nil {
-			b.logf("failed to save UpdatePrefs state: %v", err)
+		newPrefs = opts.UpdatePrefs.Clone()
+		prefsChanged = true
+	}
+	// Apply any syspolicy overrides, resolve exit node ID, etc.
+	// As of 2025-07-03, this is primarily needed in two cases:
+	//  - when opts.UpdatePrefs is not nil
+	//  - when Always Mode is enabled and we need to set WantRunning to true
+	if b.reconcilePrefsLocked(newPrefs) {
+		prefsChanged = true
+	}
+	if prefsChanged {
+		// Neither opts.UpdatePrefs nor prefs reconciliation
+		// is allowed to modify Persist; retain the old value.
+		newPrefs.Persist = b.pm.CurrentPrefs().Persist().AsStruct()
+		if err := b.pm.SetPrefs(newPrefs.View(), cn.NetworkProfile()); err != nil {
+			b.logf("failed to save updated and reconciled prefs: %v", err)
 		}
 	}
+	prefs := newPrefs.View()
 
 	// Reset the always-on override whenever Start is called.
 	b.resetAlwaysOnOverrideLocked()
-	// And also apply syspolicy settings to the current profile.
-	// This is important in two cases: when opts.UpdatePrefs is not nil,
-	// and when Always Mode is enabled and we need to set WantRunning to true.
-	if newp := b.pm.CurrentPrefs().AsStruct(); applySysPolicy(newp, b.overrideAlwaysOn) {
-		setExitNodeID(newp, b.lastSuggestedExitNode, cn.NetMap())
-		b.pm.setPrefsNoPermCheck(newp.View())
-	}
-	prefs := b.pm.CurrentPrefs()
 	b.setAtomicValuesFromPrefsLocked(prefs)
 
 	wantRunning := prefs.WantRunning()
@@ -4495,17 +4505,11 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// applySysPolicy returns whether it updated newp,
-	// but everything in this function treats b.prefs as completely new
+	// Apply reconciliation to the prefs, such as policy overrides,
+	// exit node resolution, and so on. The call returns whether it updated
+	// newp, but everything in this function treats newp as completely new
 	// anyway, so its return value can be ignored here.
-	applySysPolicy(newp, b.overrideAlwaysOn)
-	if newp.AutoExitNode.IsSet() {
-		if _, err := b.suggestExitNodeLocked(); err != nil {
-			b.logf("failed to select auto exit node: %v", err)
-		}
-	}
-	// setExitNodeID does likewise. No-op if no exit node resolution is needed.
-	setExitNodeID(newp, b.lastSuggestedExitNode, netMap)
+	b.reconcilePrefsLocked(newp)
 
 	// We do this to avoid holding the lock while doing everything else.
 
@@ -5927,14 +5931,8 @@ func (b *LocalBackend) resolveExitNode() (changed bool) {
 
 	nm := b.currentNode().NetMap()
 	prefs := b.pm.CurrentPrefs().AsStruct()
-	if prefs.AutoExitNode.IsSet() {
-		_, err := b.suggestExitNodeLocked()
-		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
-			b.logf("failed to select auto exit node: %v", err)
-		}
-	}
-	if !setExitNodeID(prefs, b.lastSuggestedExitNode, nm) {
-		return false // no changes
+	if !b.resolveExitNodeInPrefsLocked(prefs) {
+		return
 	}
 
 	if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
@@ -5945,6 +5943,45 @@ func (b *LocalBackend) resolveExitNode() (changed bool) {
 	}
 	b.sendToLocked(ipn.Notify{Prefs: ptr.To(prefs.View())}, allClients)
 	return true
+}
+
+// reconcilePrefsLocked applies policy overrides, exit node resolution,
+// and other post-processing to the prefs, and reports whether the prefs
+// were modified as a result.
+//
+// It must not perform any reconfiguration, as the prefs are not yet effective.
+//
+// b.mu must be held.
+func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs) (changed bool) {
+	if applySysPolicy(prefs, b.overrideAlwaysOn) {
+		changed = true
+	}
+	if b.resolveExitNodeInPrefsLocked(prefs) {
+		changed = true
+	}
+	if changed {
+		b.logf("prefs reconciled: %v", prefs.Pretty())
+	}
+	return changed
+}
+
+// resolveExitNodeInPrefsLocked determines which exit node to use
+// based on the specified prefs and netmap. It updates the exit node ID
+// in the prefs if needed, and returns true if the exit node has changed.
+//
+// b.mu must be held.
+func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs) (changed bool) {
+	if prefs.AutoExitNode.IsSet() {
+		_, err := b.suggestExitNodeLocked()
+		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
+			b.logf("failed to select auto exit node: %v", err)
+		}
+	}
+	if setExitNodeID(prefs, b.lastSuggestedExitNode, b.currentNode().NetMap()) {
+		b.logf("exit node resolved: %v", prefs.ExitNodeID)
+		return true
+	}
+	return false
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly

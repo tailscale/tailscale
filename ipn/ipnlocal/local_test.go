@@ -2390,7 +2390,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.pm = pm
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
 			prefs := b.pm.prefs.AsStruct()
-			if changed := applySysPolicy(prefs, false) || setExitNodeID(prefs, test.lastSuggestedExitNode, test.nm); changed != test.prefsChanged {
+			if changed := b.reconcilePrefsLocked(prefs); changed != test.prefsChanged {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 
