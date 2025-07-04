@@ -10,12 +10,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -634,10 +637,11 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 				tsFirewallMode:    "auto",
 				defaultProxyClass: "default-pc",
 
-				Client:   fc,
-				tsClient: tsClient,
-				recorder: fr,
-				clock:    cl,
+				Client:            fc,
+				tsClient:          tsClient,
+				recorder:          fr,
+				clock:             cl,
+				authKeyRateLimits: make(map[string]*rate.Limiter),
 			}
 
 			for i, r := range tt.reconciles {
@@ -777,11 +781,12 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 					tsFirewallMode:    "auto",
 					defaultProxyClass: "default-pc",
 
-					Client:   fc,
-					tsClient: tsClient,
-					recorder: fr,
-					l:        zl.Sugar().With("TestName", tt.name).With("Reconcile", "cleanup"),
-					clock:    cl,
+					Client:            fc,
+					tsClient:          tsClient,
+					recorder:          fr,
+					l:                 zl.Sugar().With("TestName", tt.name).With("Reconcile", "cleanup"),
+					clock:             cl,
+					authKeyRateLimits: make(map[string]*rate.Limiter),
 				}
 
 				if err := fc.Delete(context.Background(), pg); err != nil {
@@ -837,11 +842,12 @@ func TestProxyGroup(t *testing.T) {
 		tsFirewallMode:    "auto",
 		defaultProxyClass: "default-pc",
 
-		Client:   fc,
-		tsClient: tsClient,
-		recorder: fr,
-		l:        zl.Sugar(),
-		clock:    cl,
+		Client:            fc,
+		tsClient:          tsClient,
+		recorder:          fr,
+		l:                 zl.Sugar(),
+		clock:             cl,
+		authKeyRateLimits: make(map[string]*rate.Limiter),
 	}
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
 	opts := configOpts{
@@ -1024,12 +1030,13 @@ func TestProxyGroupTypes(t *testing.T) {
 
 	zl, _ := zap.NewDevelopment()
 	reconciler := &ProxyGroupReconciler{
-		tsNamespace: tsNamespace,
-		proxyImage:  testProxyImage,
-		Client:      fc,
-		l:           zl.Sugar(),
-		tsClient:    &fakeTSClient{},
-		clock:       tstest.NewClock(tstest.ClockOpts{}),
+		tsNamespace:       tsNamespace,
+		proxyImage:        testProxyImage,
+		Client:            fc,
+		l:                 zl.Sugar(),
+		tsClient:          &fakeTSClient{},
+		clock:             tstest.NewClock(tstest.ClockOpts{}),
+		authKeyRateLimits: make(map[string]*rate.Limiter),
 	}
 
 	t.Run("egress_type", func(t *testing.T) {
@@ -1205,12 +1212,13 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 		WithStatusSubresource(&tsapi.ProxyGroup{}).
 		Build()
 	reconciler := &ProxyGroupReconciler{
-		tsNamespace: tsNamespace,
-		proxyImage:  testProxyImage,
-		Client:      fc,
-		l:           zap.Must(zap.NewDevelopment()).Sugar(),
-		tsClient:    &fakeTSClient{},
-		clock:       tstest.NewClock(tstest.ClockOpts{}),
+		tsNamespace:       tsNamespace,
+		proxyImage:        testProxyImage,
+		Client:            fc,
+		l:                 zap.Must(zap.NewDevelopment()).Sugar(),
+		tsClient:          &fakeTSClient{},
+		clock:             tstest.NewClock(tstest.ClockOpts{}),
+		authKeyRateLimits: make(map[string]*rate.Limiter),
 	}
 
 	existingServices := []string{"svc1", "svc2"}
@@ -1269,6 +1277,189 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): expectedConfigBytes,
 		},
 	})
+}
+
+func TestProxyGroupGetAuthKey(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test",
+			Finalizers: []string{"tailscale.com/finalizer"},
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type:     tsapi.ProxyGroupTypeEgress,
+			Replicas: ptr.To[int32](1),
+		},
+	}
+	tsClient := &fakeTSClient{}
+
+	// Variables to reference in test cases.
+	existingAuthKey := ptr.To("existing-auth-key")
+	newAuthKey := ptr.To("new-authkey")
+	configWith := func(authKey *string) map[string][]byte {
+		value := []byte("{}")
+		if authKey != nil {
+			value = fmt.Appendf(nil, `{"AuthKey": "%s"}`, *authKey)
+		}
+		return map[string][]byte{
+			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): value,
+		}
+	}
+
+	initTest := func() (*ProxyGroupReconciler, client.WithWatch) {
+		fc := fake.NewClientBuilder().
+			WithScheme(tsapi.GlobalScheme).
+			WithObjects(pg).
+			WithStatusSubresource(pg).
+			Build()
+		zl, _ := zap.NewDevelopment()
+		fr := record.NewFakeRecorder(1)
+		cl := tstest.NewClock(tstest.ClockOpts{})
+		reconciler := &ProxyGroupReconciler{
+			tsNamespace:    tsNamespace,
+			proxyImage:     testProxyImage,
+			defaultTags:    []string{"tag:test-tag"},
+			tsFirewallMode: "auto",
+
+			Client:            fc,
+			tsClient:          tsClient,
+			recorder:          fr,
+			l:                 zl.Sugar(),
+			clock:             cl,
+			authKeyRateLimits: make(map[string]*rate.Limiter),
+		}
+		reconciler.ensureStateAddedForProxyGroup(pg)
+
+		return reconciler, fc
+	}
+
+	// Config Secret: exists or not, has key or not.
+	// State Secret: has device ID or not, requested reissue or not.
+	for name, tc := range map[string]struct {
+		configData      map[string][]byte
+		stateData       map[string][]byte
+		expectedAuthKey *string
+		expectReissue   bool
+	}{
+		"no_secrets_needs_new": {
+			expectedAuthKey: newAuthKey, // New ProxyGroup or manually cleared Pod.
+		},
+		"no_config_secret_state_authed_ok": {
+			stateData: map[string][]byte{
+				kubetypes.KeyDeviceID: []byte("nodeid-0"),
+			},
+			expectedAuthKey: newAuthKey, // Always create an auth key if we're creating the config Secret.
+		},
+		"config_secret_without_key_state_authed_with_reissue_needs_new": {
+			configData: configWith(nil),
+			stateData: map[string][]byte{
+				kubetypes.KeyDeviceID:       []byte("nodeid-0"),
+				kubetypes.KeyReissueAuthkey: []byte(""),
+			},
+			expectedAuthKey: newAuthKey,
+			expectReissue:   true, // Device is authed but reissue was requested.
+		},
+		"config_secret_with_key_state_with_reissue_stale_ok": {
+			configData: configWith(existingAuthKey),
+			stateData: map[string][]byte{
+				kubetypes.KeyReissueAuthkey: []byte("some-older-authkey"),
+			},
+			expectedAuthKey: existingAuthKey, // Config's auth key is different from the one marked for reissue.
+		},
+		"config_secret_with_key_state_with_reissue_existing_key_needs_new": {
+			configData: configWith(existingAuthKey),
+			stateData: map[string][]byte{
+				kubetypes.KeyDeviceID:       []byte("nodeid-0"),
+				kubetypes.KeyReissueAuthkey: []byte(*existingAuthKey),
+			},
+			expectedAuthKey: newAuthKey,
+			expectReissue:   true, // Current config's auth key is marked for reissue.
+		},
+		"config_secret_without_key_no_state_ok": {
+			configData:      configWith(nil),
+			expectedAuthKey: nil, // Proxy will set reissue_authkey and then next reconcile will reissue.
+		},
+		"config_secret_without_key_state_authed_ok": {
+			configData: configWith(nil),
+			stateData: map[string][]byte{
+				kubetypes.KeyDeviceID: []byte("nodeid-0"),
+			},
+			expectedAuthKey: nil, // Device is already authed.
+		},
+		"config_secret_with_key_state_authed_ok": {
+			configData: configWith(existingAuthKey),
+			stateData: map[string][]byte{
+				kubetypes.KeyDeviceID: []byte("nodeid-0"),
+			},
+			expectedAuthKey: nil, // Auth key getting removed because device is authed.
+		},
+		"config_secret_with_key_no_state_keeps_existing": {
+			configData:      configWith(existingAuthKey),
+			expectedAuthKey: existingAuthKey, // No state, waiting for containerboot to try the auth key.
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tsClient.deleted = tsClient.deleted[:0] // Reset deleted devices for each test case.
+			reconciler, fc := initTest()
+			var cfgSecret *corev1.Secret
+			if tc.configData != nil {
+				cfgSecret = &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      pgConfigSecretName(pg.Name, 0),
+						Namespace: tsNamespace,
+					},
+					Data: tc.configData,
+				}
+			}
+			if tc.stateData != nil {
+				mustCreate(t, fc, &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      pgStateSecretName(pg.Name, 0),
+						Namespace: tsNamespace,
+					},
+					Data: tc.stateData,
+				})
+			}
+
+			authKey, err := reconciler.getAuthKey(context.Background(), pg, cfgSecret, 0, reconciler.l.With("TestName", t.Name()))
+			if err != nil {
+				t.Fatalf("unexpected error getting auth key: %v", err)
+			}
+			if !reflect.DeepEqual(authKey, tc.expectedAuthKey) {
+				deref := func(s *string) string {
+					if s == nil {
+						return "<nil>"
+					}
+					return *s
+				}
+				t.Errorf("expected auth key %v, got %v", deref(tc.expectedAuthKey), deref(authKey))
+			}
+
+			// Use the device deletion as a proxy for the fact the new auth key
+			// was due to a reissue.
+			switch {
+			case tc.expectReissue && len(tsClient.deleted) != 1:
+				t.Errorf("expected 1 deleted device, got %v", tsClient.deleted)
+			case !tc.expectReissue && len(tsClient.deleted) != 0:
+				t.Errorf("expected no deleted devices, got %v", tsClient.deleted)
+			}
+
+			if tc.expectReissue {
+				// Trigger the rate limit in a tight loop. Up to 100 iterations
+				// to allow for CI that is extremely slow, but should happen on
+				// first try for any reasonable machine.
+				for range 100 {
+					_, err := reconciler.getAuthKey(context.Background(), pg, cfgSecret, 0, reconciler.l.With("TestName", t.Name()))
+					if err != nil {
+						if !strings.Contains(err.Error(), "rate limit exceeded") {
+							t.Fatalf("unexpected error getting auth key: %v", err)
+						}
+						return // Expected rate limit error.
+					}
+				}
+				t.Fatal("expected rate limit error, but got none")
+			}
+		})
+	}
 }
 
 func proxyClassesForLEStagingTest() (*tsapi.ProxyClass, *tsapi.ProxyClass, *tsapi.ProxyClass) {
@@ -1505,6 +1696,7 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 				tsClient:          &fakeTSClient{},
 				l:                 zl.Sugar(),
 				clock:             cl,
+				authKeyRateLimits: make(map[string]*rate.Limiter),
 			}
 
 			expectReconciled(t, reconciler, "", pg.Name)

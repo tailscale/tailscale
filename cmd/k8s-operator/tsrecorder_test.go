@@ -233,7 +233,7 @@ func TestRecorder(t *testing.T) {
 func expectRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.Recorder, shouldExist bool) {
 	t.Helper()
 
-	auth := tsrAuthSecret(tsr, tsNamespace, "secret-authkey")
+	auth := tsrAuthSecret(tsr, tsNamespace, "new-authkey")
 	state := tsrStateSecret(tsr, tsNamespace)
 	role := tsrRole(tsr, tsNamespace)
 	roleBinding := tsrRoleBinding(tsr, tsNamespace)

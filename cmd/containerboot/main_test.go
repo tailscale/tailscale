@@ -31,6 +31,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/sys/unix"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
@@ -40,6 +41,8 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
 )
+
+const configFileAuthKey = "some-auth-key"
 
 func TestContainerBoot(t *testing.T) {
 	boot := filepath.Join(t.TempDir(), "containerboot")
@@ -781,6 +784,101 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"sets_reissue_authkey_if_needs_login": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR": filepath.Join(env.d, "etc/tailscaled/"),
+					"KUBERNETES_SERVICE_HOST":              env.kube.Host,
+					"KUBERNETES_SERVICE_PORT_HTTPS":        env.kube.Port,
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled/cap-95.hujson",
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer: capver,
+						},
+					}, {
+						Notify: &ipn.Notify{
+							State: ptr.To(ipn.NeedsLogin),
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer:         capver,
+							kubetypes.KeyReissueAuthkey: configFileAuthKey,
+						},
+						WantExitCode: ptr.To(1),
+						WantLog:      "invalid state: tailscaled daemon started with a config file, but tailscale is not logged in; auth key reissue from operator requested",
+					},
+				},
+			}
+		},
+		"sets_reissue_authkey_if_auth_fails": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR": filepath.Join(env.d, "etc/tailscaled/"),
+					"KUBERNETES_SERVICE_HOST":              env.kube.Host,
+					"KUBERNETES_SERVICE_PORT_HTTPS":        env.kube.Port,
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled/cap-95.hujson",
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer: capver,
+						},
+					}, {
+						Notify: &ipn.Notify{
+							Health: &health.State{
+								Warnings: map[health.WarnableCode]health.UnhealthyState{
+									health.LoginStateWarnable.Code: {},
+								},
+							},
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer:         capver,
+							kubetypes.KeyReissueAuthkey: configFileAuthKey,
+						},
+						WantExitCode: ptr.To(1),
+						WantLog:      "tailscaled failed to log in with the auth key from its config file; auth key reissue from operator requested",
+					},
+				},
+			}
+		},
+		"clears_reissue_authkey_on_change": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR": filepath.Join(env.d, "etc/tailscaled/"),
+					"KUBERNETES_SERVICE_HOST":              env.kube.Host,
+					"KUBERNETES_SERVICE_PORT_HTTPS":        env.kube.Port,
+				},
+				KubeSecret: map[string]string{
+					kubetypes.KeyReissueAuthkey: "some-older-authkey",
+					"foo":                       "bar", // Check not everything is cleared.
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled/cap-95.hujson",
+						},
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer: capver,
+							"foo":               "bar",
+						},
+					}, {
+						Notify: runningNotify,
+						WantKubeSecret: map[string]string{
+							kubetypes.KeyCapVer:     capver,
+							"foo":                   "bar",
+							kubetypes.KeyDeviceFQDN: "test-node.test.ts.net",
+							kubetypes.KeyDeviceID:   "myID",
+							kubetypes.KeyDeviceIPs:  `["100.64.0.1"]`,
+						},
+					},
+				},
+			}
+		},
 		"metrics_enabled": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
@@ -1113,21 +1211,6 @@ func TestContainerBoot(t *testing.T) {
 					}
 				}
 
-				if p.WantExitCode != nil {
-					state, err := cmd.Process.Wait()
-					if err != nil {
-						t.Fatal(err)
-					}
-					if state.ExitCode() != *p.WantExitCode {
-						t.Fatalf("phase %d: want exit code %d, got %d", i, *p.WantExitCode, state.ExitCode())
-					}
-
-					// Early test return, we don't expect the successful startup log message.
-					return
-				}
-
-				wantCmds = append(wantCmds, p.WantCmds...)
-				waitArgs(t, 2*time.Second, env.d, env.argFile, strings.Join(wantCmds, "\n"))
 				err := tstest.WaitFor(2*time.Second, func() error {
 					if p.WantKubeSecret != nil {
 						got := env.kube.Secret()
@@ -1145,6 +1228,23 @@ func TestContainerBoot(t *testing.T) {
 				if err != nil {
 					t.Fatalf("phase %d: %v", i, err)
 				}
+
+				if p.WantExitCode != nil {
+					state, err := cmd.Process.Wait()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if state.ExitCode() != *p.WantExitCode {
+						t.Fatalf("phase %d: want exit code %d, got %d", i, *p.WantExitCode, state.ExitCode())
+					}
+
+					// Early test return, we don't expect the successful startup log message.
+					return
+				}
+
+				wantCmds = append(wantCmds, p.WantCmds...)
+				waitArgs(t, 2*time.Second, env.d, env.argFile, strings.Join(wantCmds, "\n"))
+
 				err = tstest.WaitFor(2*time.Second, func() error {
 					for path, want := range p.WantFiles {
 						gotBs, err := os.ReadFile(filepath.Join(env.d, path))
@@ -1538,7 +1638,11 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
 			for key, val := range req.Data {
-				k.secret[key] = string(val)
+				if val == nil {
+					delete(k.secret, key)
+				} else {
+					k.secret[key] = string(val)
+				}
 			}
 		default:
 			panic(fmt.Sprintf("unknown content type %q", r.Header.Get("Content-Type")))
@@ -1546,12 +1650,6 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 	default:
 		panic(fmt.Sprintf("unhandled HTTP request %s %s", r.Method, r.URL))
 	}
-}
-
-func mustBase64(t *testing.T, v any) string {
-	b := mustJSON(t, v)
-	s := base64.StdEncoding.WithPadding('=').EncodeToString(b)
-	return s
 }
 
 func mustJSON(t *testing.T, v any) []byte {
@@ -1611,7 +1709,7 @@ func newTestEnv(t *testing.T) testEnv {
 	kube.Start(t)
 	t.Cleanup(kube.Close)
 
-	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To("foo"), Version: "alpha0"}
+	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: ptr.To(configFileAuthKey), Version: "alpha0"}
 	serveConf := ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}}}
 	egressCfg := egressSvcConfig("foo", "foo.tailnetxyz.ts.net")
 
