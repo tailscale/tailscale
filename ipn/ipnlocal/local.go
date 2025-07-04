@@ -2026,7 +2026,20 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 // or resolve ExitNodeIP to an ID and use that. It returns whether prefs was mutated.
 func setExitNodeID(prefs *ipn.Prefs, suggestedExitNodeID tailcfg.StableNodeID, nm *netmap.NetworkMap) (prefsChanged bool) {
 	if prefs.AutoExitNode.IsSet() {
-		newExitNodeID := cmp.Or(suggestedExitNodeID, unresolvedExitNodeID)
+		var newExitNodeID tailcfg.StableNodeID
+		if !suggestedExitNodeID.IsZero() {
+			// If we have a suggested exit node, use it.
+			newExitNodeID = suggestedExitNodeID
+		} else if isAllowedAutoExitNodeID(prefs.ExitNodeID) {
+			// If we don't have a suggested exit node, but the prefs already
+			// specify an allowed auto exit node ID, retain it.
+			newExitNodeID = prefs.ExitNodeID
+		} else {
+			// Otherwise, use [unresolvedExitNodeID] to install a blackhole route,
+			// preventing traffic from leaking to the local network until an actual
+			// exit node is selected.
+			newExitNodeID = unresolvedExitNodeID
+		}
 		if prefs.ExitNodeID != newExitNodeID {
 			prefs.ExitNodeID = newExitNodeID
 			prefsChanged = true

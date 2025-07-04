@@ -620,6 +620,7 @@ func TestConfigureExitNode(t *testing.T) {
 		useExitNodeEnabled *bool
 		exitNodeIDPolicy   *tailcfg.StableNodeID
 		exitNodeIPPolicy   *netip.Addr
+		exitNodeAllowedIDs []tailcfg.StableNodeID // nil if all IDs are allowed for auto exit nodes
 		wantPrefs          ipn.Prefs
 	}{
 		{
@@ -895,6 +896,91 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 		},
 		{
+			name: "auto-any-via-policy/no-netmap/with-existing", // set auto exit node via syspolicy without a netmap, but with a previously set exit node ID
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode2.StableID(), // should be retained
+			},
+			netMap:             nil,
+			report:             report,
+			exitNodeIDPolicy:   ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeAllowedIDs: nil, // not configured, so all exit node IDs are implicitly allowed
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode2.StableID(),
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-any-via-policy/no-netmap/with-allowed-existing", // same, but now with a syspolicy setting that explicitly allows the existing exit node ID
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode2.StableID(), // should be retained
+			},
+			netMap:           nil,
+			report:           report,
+			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeAllowedIDs: []tailcfg.StableNodeID{
+				exitNode2.StableID(), // the current exit node ID is allowed
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode2.StableID(),
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-any-via-policy/no-netmap/with-disallowed-existing", // same, but now with a syspolicy setting that does not allow the existing exit node ID
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode2.StableID(), // not allowed by [syspolicy.AllowedSuggestedExitNodes]
+			},
+			netMap:           nil,
+			report:           report,
+			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeAllowedIDs: []tailcfg.StableNodeID{
+				exitNode1.StableID(), // a different exit node ID; the current one is not allowed
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   unresolvedExitNodeID, // we don't have a netmap yet, and the current exit node ID is not allowed; block traffic
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-any-via-policy/with-netmap/with-allowed-existing", // same, but now with a syspolicy setting that does not allow the existing exit node ID
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode1.StableID(), // not allowed by [syspolicy.AllowedSuggestedExitNodes]
+			},
+			netMap:           clientNetmap,
+			report:           report,
+			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			exitNodeAllowedIDs: []tailcfg.StableNodeID{
+				exitNode2.StableID(), // a different exit node ID; the current one is not allowed
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode2.StableID(), // we have a netmap; switch to the best allowed exit node
+				AutoExitNode: "any",
+			},
+		},
+		{
+			name: "auto-any-via-policy/with-netmap/switch-to-better", // if all exit nodes are allowed, switch to the best one once we have a netmap
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+				ExitNodeID: exitNode2.StableID(),
+			},
+			netMap:           clientNetmap,
+			report:           report,
+			exitNodeIDPolicy: ptr.To(tailcfg.StableNodeID("auto:any")),
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode1.StableID(), // switch to the best exit node
+				AutoExitNode: "any",
+			},
+		},
+		{
 			name: "auto-foo-via-policy", // set auto exit node via syspolicy with an unknown/unsupported expression
 			prefs: ipn.Prefs{
 				ControlURL: controlURL,
@@ -929,19 +1015,23 @@ func TestConfigureExitNode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Configure policy settings, if any.
-			var settings []source.TestSetting[string]
+			store := source.NewTestStore(t)
 			if tt.exitNodeIDPolicy != nil {
-				settings = append(settings, source.TestSettingOf(syspolicy.ExitNodeID, string(*tt.exitNodeIDPolicy)))
+				store.SetStrings(source.TestSettingOf(syspolicy.ExitNodeID, string(*tt.exitNodeIDPolicy)))
 			}
 			if tt.exitNodeIPPolicy != nil {
-				settings = append(settings, source.TestSettingOf(syspolicy.ExitNodeIP, tt.exitNodeIPPolicy.String()))
+				store.SetStrings(source.TestSettingOf(syspolicy.ExitNodeIP, tt.exitNodeIPPolicy.String()))
 			}
-			if settings != nil {
-				syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, source.NewTestStoreOf(t, settings...))
-			} else {
+			if tt.exitNodeAllowedIDs != nil {
+				store.SetStringLists(source.TestSettingOf(syspolicy.AllowedSuggestedExitNodes, toStrings(tt.exitNodeAllowedIDs)))
+			}
+			if store.IsEmpty() {
 				// No syspolicy settings, so don't register a store.
 				// This allows the test to run in parallel with other tests.
 				t.Parallel()
+			} else {
+				// Register the store for syspolicy settings to make them available to the LocalBackend.
+				syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, store)
 			}
 
 			// Create a new LocalBackend with the given prefs.
@@ -6126,4 +6216,12 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 			ipnWatcher.check()
 		})
 	}
+}
+
+func toStrings[T ~string](in []T) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = string(v)
+	}
+	return out
 }
