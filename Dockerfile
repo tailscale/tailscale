@@ -7,6 +7,15 @@
 # Tailscale images are currently built using https://github.com/tailscale/mkctr,
 # and the build script can be found in ./build_docker.sh.
 #
+# If you want to build local images for testing, you can use make.
+#
+# To build a Tailscale image and push to the local docker registry:
+#
+#   $ REPO=local/tailscale TAGS=v0.0.1 PLATFORM=local  make publishdevimage
+#
+# To build a Tailscale image and push to a remote docker registry:
+#
+#   $ REPO=<your-registry>/<your-repo>/tailscale TAGS=v0.0.1  make publishdevimage
 #
 # This Dockerfile includes all the tailscale binaries.
 #
