@@ -83,6 +83,7 @@ func main() {
 		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 		loginServer           = strings.TrimSuffix(defaultEnv("OPERATOR_LOGIN_SERVER", ""), "/")
+		ingressClassName      = defaultEnv("OPERATOR_INGRESS_CLASS_NAME", "tailscale")
 	)
 
 	var opts []kzap.Opts
@@ -133,6 +134,7 @@ func main() {
 		proxyFirewallMode:             tsFirewallMode,
 		defaultProxyClass:             defaultProxyClass,
 		loginServer:                   loginServer,
+		ingressClassName:              ingressClassName,
 	}
 	runReconcilers(rOpts)
 }
@@ -343,7 +345,7 @@ func runReconcilers(opts reconcilerOpts) {
 	// ProxyClass's name.
 	proxyClassFilterForIngress := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForIngress(mgr.GetClient(), startlog))
 	// Enque Ingress if a managed Service or backend Service associated with a tailscale Ingress changes.
-	svcHandlerForIngress := handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngress(mgr.GetClient(), startlog))
+	svcHandlerForIngress := handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngress(mgr.GetClient(), startlog, opts.ingressClassName))
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
@@ -358,6 +360,7 @@ func runReconcilers(opts reconcilerOpts) {
 			Client:            mgr.GetClient(),
 			logger:            opts.log.Named("ingress-reconciler"),
 			defaultProxyClass: opts.defaultProxyClass,
+			ingressClassName:  opts.ingressClassName,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ingress reconciler: %v", err)
@@ -379,19 +382,20 @@ func runReconcilers(opts reconcilerOpts) {
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
 		Named("ingress-pg-reconciler").
-		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog))).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngressPG(mgr.GetClient(), startlog, opts.ingressClassName))).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAIngressesFromSecret(mgr.GetClient(), startlog))).
 		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
 		Complete(&HAIngressReconciler{
-			recorder:    eventRecorder,
-			tsClient:    opts.tsClient,
-			tsnetServer: opts.tsServer,
-			defaultTags: strings.Split(opts.proxyTags, ","),
-			Client:      mgr.GetClient(),
-			logger:      opts.log.Named("ingress-pg-reconciler"),
-			lc:          lc,
-			operatorID:  id,
-			tsNamespace: opts.tailscaleNamespace,
+			recorder:         eventRecorder,
+			tsClient:         opts.tsClient,
+			tsnetServer:      opts.tsServer,
+			defaultTags:      strings.Split(opts.proxyTags, ","),
+			Client:           mgr.GetClient(),
+			logger:           opts.log.Named("ingress-pg-reconciler"),
+			lc:               lc,
+			operatorID:       id,
+			tsNamespace:      opts.tailscaleNamespace,
+			ingressClassName: opts.ingressClassName,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ingress-pg-reconciler: %v", err)
@@ -697,6 +701,9 @@ type reconcilerOpts struct {
 	defaultProxyClass string
 	// loginServer is the coordination server URL that should be used by managed resources.
 	loginServer string
+	// ingressClassName is the name of the ingress class used by reconcilers of Ingress resources. This defaults
+	// to "tailscale" but can be customised.
+	ingressClassName string
 }
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each
@@ -1015,7 +1022,7 @@ func proxyClassHandlerForProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 // The Services of interest are backend Services for tailscale Ingress and
 // managed Services for an StatefulSet for a proxy configured for tailscale
 // Ingress
-func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger, ingressClassName string) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		if isManagedByType(o, "ingress") {
 			ingName := parentFromObjectLabels(o)
@@ -1028,7 +1035,7 @@ func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handl
 		}
 		reqs := make([]reconcile.Request, 0)
 		for _, ing := range ingList.Items {
-			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != tailscaleIngressClassName {
+			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != ingressClassName {
 				return nil
 			}
 			if hasProxyGroupAnnotation(&ing) {
@@ -1533,7 +1540,7 @@ func indexPGIngresses(o client.Object) []string {
 // serviceHandlerForIngressPG returns a handler for Service events that ensures that if the Service
 // associated with an event is a backend Service for a tailscale Ingress with ProxyGroup annotation,
 // the associated Ingress gets reconciled.
-func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger, ingressClassName string) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		ingList := networkingv1.IngressList{}
 		if err := cl.List(ctx, &ingList, client.InNamespace(o.GetNamespace())); err != nil {
@@ -1542,7 +1549,7 @@ func serviceHandlerForIngressPG(cl client.Client, logger *zap.SugaredLogger) han
 		}
 		reqs := make([]reconcile.Request, 0)
 		for _, ing := range ingList.Items {
-			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != tailscaleIngressClassName {
+			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != ingressClassName {
 				continue
 			}
 			if !hasProxyGroupAnnotation(&ing) {

@@ -438,7 +438,12 @@ func TestValidateIngress(t *testing.T) {
 				WithObjects(tt.ing).
 				WithLists(&networkingv1.IngressList{Items: tt.existingIngs}).
 				Build()
+
 			r := &HAIngressReconciler{Client: fc}
+			if tt.ing.Spec.IngressClassName != nil {
+				r.ingressClassName = *tt.ing.Spec.IngressClassName
+			}
+
 			err := r.validateIngress(context.Background(), tt.ing, tt.pg)
 			if (err == nil && tt.wantErr != "") || (err != nil && err.Error() != tt.wantErr) {
 				t.Errorf("validateIngress() error = %v, wantErr %v", err, tt.wantErr)
@@ -841,14 +846,15 @@ func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeT
 	}
 
 	ingPGR := &HAIngressReconciler{
-		Client:      fc,
-		tsClient:    ft,
-		defaultTags: []string{"tag:k8s"},
-		tsNamespace: "operator-ns",
-		tsnetServer: fakeTsnetServer,
-		logger:      zl.Sugar(),
-		recorder:    record.NewFakeRecorder(10),
-		lc:          lc,
+		Client:           fc,
+		tsClient:         ft,
+		defaultTags:      []string{"tag:k8s"},
+		tsNamespace:      "operator-ns",
+		tsnetServer:      fakeTsnetServer,
+		logger:           zl.Sugar(),
+		recorder:         record.NewFakeRecorder(10),
+		lc:               lc,
+		ingressClassName: tsIngressClass.Name,
 	}
 
 	return ingPGR, fc, ft

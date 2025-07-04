@@ -77,6 +77,10 @@ operatorConfig:
 
 # In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
 ingressClass:
+  # Allows for customization of the ingress class name used by the operator to identify ingresses to reconcile. This does
+  # not allow multiple operator instances to manage different ingresses, but provides an onboarding route for users that
+  # may have previously set up ingress classes named "tailscale" prior to using the operator.
+  name: "tailscale"
   enabled: true
 
 # proxyConfig contains configuraton that will be applied to any ingress/egress
