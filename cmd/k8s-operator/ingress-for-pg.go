@@ -68,14 +68,15 @@ var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGRes
 type HAIngressReconciler struct {
 	client.Client
 
-	recorder    record.EventRecorder
-	logger      *zap.SugaredLogger
-	tsClient    tsClient
-	tsnetServer tsnetServer
-	tsNamespace string
-	lc          localClient
-	defaultTags []string
-	operatorID  string // stableID of the operator's Tailscale device
+	recorder         record.EventRecorder
+	logger           *zap.SugaredLogger
+	tsClient         tsClient
+	tsnetServer      tsnetServer
+	tsNamespace      string
+	lc               localClient
+	defaultTags      []string
+	operatorID       string // stableID of the operator's Tailscale device
+	ingressClassName string
 
 	mu sync.Mutex // protects following
 	// managedIngresses is a set of all ingress resources that we're currently
@@ -162,7 +163,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, fmt.Errorf("error getting Tailscale Service %q: %w", hostname, err)
 	}
 
-	if err := validateIngressClass(ctx, r.Client); err != nil {
+	if err := validateIngressClass(ctx, r.Client, r.ingressClassName); err != nil {
 		logger.Infof("error validating tailscale IngressClass: %v.", err)
 		return false, nil
 	}
@@ -645,7 +646,7 @@ func (r *HAIngressReconciler) tailnetCertDomain(ctx context.Context) (string, er
 func (r *HAIngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 	isTSIngress := ing != nil &&
 		ing.Spec.IngressClassName != nil &&
-		*ing.Spec.IngressClassName == tailscaleIngressClassName
+		*ing.Spec.IngressClassName == r.ingressClassName
 	pgAnnot := ing.Annotations[AnnotationProxyGroup]
 	return isTSIngress && pgAnnot != ""
 }
