@@ -22,4 +22,6 @@ $ kubectl explain proxyclass
 $ kubectl explain recorder
 $ kubectl explain dnsconfig
 
-$ kubectl --namespace={{ .Release.Namespace }} get pods
+If you're interested to explore what resources were created:
+
+$ kubectl --namespace={{ .Release.Namespace }} get all -l app.kubernetes.io/managed-by=Helm
