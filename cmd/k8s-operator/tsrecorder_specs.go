@@ -17,7 +17,7 @@ import (
 	"tailscale.com/version"
 )
 
-func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
+func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
@@ -59,7 +59,7 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
 							ImagePullPolicy: tsr.Spec.StatefulSet.Pod.Container.ImagePullPolicy,
 							Resources:       tsr.Spec.StatefulSet.Pod.Container.Resources,
 							SecurityContext: tsr.Spec.StatefulSet.Pod.Container.SecurityContext,
-							Env:             env(tsr),
+							Env:             env(tsr, loginServer),
 							EnvFrom: func() []corev1.EnvFromSource {
 								if tsr.Spec.Storage.S3 == nil || tsr.Spec.Storage.S3.Credentials.Secret.Name == "" {
 									return nil
@@ -201,7 +201,7 @@ func tsrStateSecret(tsr *tsapi.Recorder, namespace string) *corev1.Secret {
 	}
 }
 
-func env(tsr *tsapi.Recorder) []corev1.EnvVar {
+func env(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {
 	envs := []corev1.EnvVar{
 		{
 			Name: "TS_AUTHKEY",
@@ -238,6 +238,10 @@ func env(tsr *tsapi.Recorder) []corev1.EnvVar {
 		{
 			Name:  "TSRECORDER_HOSTNAME",
 			Value: "$(POD_NAME)",
+		},
+		{
+			Name:  "TSRECORDER_LOGIN_SERVER",
+			Value: loginServer,
 		},
 	}
 

@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
@@ -85,6 +86,7 @@ type ProxyGroupReconciler struct {
 	defaultTags       []string
 	tsFirewallMode    string
 	defaultProxyClass string
+	loginServer       string
 
 	mu                 sync.Mutex           // protects following
 	egressProxyGroups  set.Slice[types.UID] // for egress proxygroups gauge
@@ -701,7 +703,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			return nil, err
 		}
 
-		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices)
+		configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices, r.loginServer)
 		if err != nil {
 			return nil, fmt.Errorf("error creating tailscaled config: %w", err)
 		}
@@ -851,7 +853,7 @@ func (r *ProxyGroupReconciler) ensureRemovedFromGaugeForProxyGroup(pg *tsapi.Pro
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 }
 
-func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, authKey *string, staticEndpoints []netip.AddrPort, oldAdvertiseServices []string) (tailscaledConfigs, error) {
+func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, authKey *string, staticEndpoints []netip.AddrPort, oldAdvertiseServices []string, loginServer string) (tailscaledConfigs, error) {
 	conf := &ipn.ConfigVAlpha{
 		Version:           "alpha0",
 		AcceptDNS:         "false",
@@ -860,6 +862,10 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, a
 		Hostname:          ptr.To(fmt.Sprintf("%s-%d", pg.Name, idx)),
 		AdvertiseServices: oldAdvertiseServices,
 		AuthKey:           authKey,
+	}
+
+	if loginServer != "" {
+		conf.ServerURL = &loginServer
 	}
 
 	if pg.Spec.HostnamePrefix != "" {

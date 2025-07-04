@@ -25,7 +25,10 @@ import (
 	"tailscale.com/tstest"
 )
 
-const tsNamespace = "tailscale"
+const (
+	tsNamespace   = "tailscale"
+	tsLoginServer = "example.tailscale.com"
+)
 
 func TestRecorder(t *testing.T) {
 	tsr := &tsapi.Recorder{
@@ -51,6 +54,7 @@ func TestRecorder(t *testing.T) {
 		recorder:    fr,
 		l:           zl.Sugar(),
 		clock:       cl,
+		loginServer: tsLoginServer,
 	}
 
 	t.Run("invalid_spec_gives_an_error_condition", func(t *testing.T) {
@@ -234,7 +238,7 @@ func expectRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.Recor
 	role := tsrRole(tsr, tsNamespace)
 	roleBinding := tsrRoleBinding(tsr, tsNamespace)
 	serviceAccount := tsrServiceAccount(tsr, tsNamespace)
-	statefulSet := tsrStatefulSet(tsr, tsNamespace)
+	statefulSet := tsrStatefulSet(tsr, tsNamespace, tsLoginServer)
 
 	if shouldExist {
 		expectEqual(t, fc, auth)

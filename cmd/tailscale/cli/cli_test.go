@@ -971,6 +971,10 @@ func TestPrefFlagMapping(t *testing.T) {
 			// Used internally by LocalBackend as part of exit node usage toggling.
 			// No CLI flag for this.
 			continue
+		case "AutoExitNode":
+			// TODO(nickkhyl): should be handled by tailscale {set,up} --exit-node.
+			// See tailscale/tailscale#16459.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

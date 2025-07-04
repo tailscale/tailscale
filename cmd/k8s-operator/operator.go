@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
@@ -81,6 +82,7 @@ func main() {
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
 		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
+		loginServer           = strings.TrimSuffix(defaultEnv("OPERATOR_LOGIN_SERVER", ""), "/")
 	)
 
 	var opts []kzap.Opts
@@ -114,7 +116,7 @@ func main() {
 		hostinfo.SetApp(kubetypes.AppAPIServerProxy)
 	}
 
-	s, tsc := initTSNet(zlog)
+	s, tsc := initTSNet(zlog, loginServer)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	apiproxy.MaybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
@@ -130,6 +132,7 @@ func main() {
 		proxyTags:                     tags,
 		proxyFirewallMode:             tsFirewallMode,
 		defaultProxyClass:             defaultProxyClass,
+		loginServer:                   loginServer,
 	}
 	runReconcilers(rOpts)
 }
@@ -137,7 +140,7 @@ func main() {
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
-func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
+func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, tsClient) {
 	var (
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
 		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
@@ -149,13 +152,14 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 	if clientIDPath == "" || clientSecretPath == "" {
 		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
 	}
-	tsc, err := newTSClient(context.Background(), clientIDPath, clientSecretPath)
+	tsc, err := newTSClient(context.Background(), clientIDPath, clientSecretPath, loginServer)
 	if err != nil {
 		startlog.Fatalf("error creating Tailscale client: %v", err)
 	}
 	s := &tsnet.Server{
-		Hostname: hostname,
-		Logf:     zlog.Named("tailscaled").Debugf,
+		Hostname:   hostname,
+		Logf:       zlog.Named("tailscaled").Debugf,
+		ControlURL: loginServer,
 	}
 	if p := os.Getenv("TS_PORT"); p != "" {
 		port, err := strconv.ParseUint(p, 10, 16)
@@ -307,6 +311,7 @@ func runReconcilers(opts reconcilerOpts) {
 		proxyImage:             opts.proxyImage,
 		proxyPriorityClassName: opts.proxyPriorityClassName,
 		tsFirewallMode:         opts.proxyFirewallMode,
+		loginServer:            opts.tsServer.ControlURL,
 	}
 
 	err = builder.
@@ -606,6 +611,7 @@ func runReconcilers(opts reconcilerOpts) {
 			l:           opts.log.Named("recorder-reconciler"),
 			clock:       tstime.DefaultClock{},
 			tsClient:    opts.tsClient,
+			loginServer: opts.loginServer,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
@@ -639,6 +645,7 @@ func runReconcilers(opts reconcilerOpts) {
 			defaultTags:       strings.Split(opts.proxyTags, ","),
 			tsFirewallMode:    opts.proxyFirewallMode,
 			defaultProxyClass: opts.defaultProxyClass,
+			loginServer:       opts.tsServer.ControlURL,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)
@@ -688,6 +695,8 @@ type reconcilerOpts struct {
 	// class for proxies that do not have a ProxyClass set.
 	// this is defined by an operator env variable.
 	defaultProxyClass string
+	// loginServer is the coordination server URL that should be used by managed resources.
+	loginServer string
 }
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each

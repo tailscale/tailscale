@@ -524,7 +524,7 @@ func (s *system) addRemote(name string) string {
 	for name, r := range s.remotes {
 		remotes = append(remotes, &drive.Remote{
 			Name: name,
-			URL:  fmt.Sprintf("http://%s", r.l.Addr()),
+			URL:  func() string { return fmt.Sprintf("http://%s", r.l.Addr()) },
 		})
 	}
 	s.local.fs.SetRemotes(

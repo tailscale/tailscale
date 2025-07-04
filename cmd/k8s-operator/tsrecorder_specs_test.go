@@ -90,7 +90,7 @@ func TestRecorderSpecs(t *testing.T) {
 			},
 		}
 
-		ss := tsrStatefulSet(tsr, tsNamespace)
+		ss := tsrStatefulSet(tsr, tsNamespace, tsLoginServer)
 
 		// StatefulSet-level.
 		if diff := cmp.Diff(ss.Annotations, tsr.Spec.StatefulSet.Annotations); diff != "" {
@@ -124,7 +124,7 @@ func TestRecorderSpecs(t *testing.T) {
 		}
 
 		// Container-level.
-		if diff := cmp.Diff(ss.Spec.Template.Spec.Containers[0].Env, env(tsr)); diff != "" {
+		if diff := cmp.Diff(ss.Spec.Template.Spec.Containers[0].Env, env(tsr, tsLoginServer)); diff != "" {
 			t.Errorf("(-got +want):\n%s", diff)
 		}
 		if diff := cmp.Diff(ss.Spec.Template.Spec.Containers[0].Image, tsr.Spec.StatefulSet.Pod.Container.Image); diff != "" {

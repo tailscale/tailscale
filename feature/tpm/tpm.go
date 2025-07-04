@@ -159,6 +159,8 @@ func newStore(logf logger.Logf, path string) (ipn.StateStore, error) {
 // tpmStore is an ipn.StateStore that stores the state in a secretbox-encrypted
 // file using a TPM-sealed symmetric key.
 type tpmStore struct {
+	ipn.EncryptedStateStore
+
 	logf logger.Logf
 	path string
 	key  [32]byte

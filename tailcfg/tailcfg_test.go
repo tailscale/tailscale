@@ -69,6 +69,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"ServicesHash",
 		"Location",
 		"TPM",
+		"StateEncrypted",
 	}
 	if have := fieldsOf(reflect.TypeFor[Hostinfo]()); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
