@@ -1363,12 +1363,18 @@ func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
 		metricSendDataNetworkDown.Add(n)
 		return errNetworkDown
 	}
-	if ep, ok := ep.(*endpoint); ok {
+	switch ep := ep.(type) {
+	case *endpoint:
 		return ep.send(buffs, offset)
+	case *lazyEndpoint:
+		// A [*lazyEndpoint] may end up on this TX codepath when wireguard-go is
+		// deemed "under handshake load" and ends up transmitting a cookie reply
+		// using the received [conn.Endpoint] in [device.SendHandshakeCookie].
+		if ep.src.ap.Addr().Is6() {
+			return c.pconn6.WriteBatchTo(buffs, ep.src, offset)
+		}
+		return c.pconn4.WriteBatchTo(buffs, ep.src, offset)
 	}
-	// If it's not of type *endpoint, it's probably *lazyEndpoint, which means
-	// we don't actually know who the peer is and we're waiting for wireguard-go
-	// to switch the endpoint. See go/corp/20732.
 	return nil
 }
 
@@ -1702,6 +1708,11 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 			}
 			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
 			//  for the same batch & [epAddr] src.
+			//
+			// TODO(jwhited): implement [lazyEndpoint] integration to call
+			//  [endpoint.noteRecvActivity], which triggers just-in-time
+			//  wireguard-go configuration of the peer, prior to peer lookup
+			//  within wireguard-go.
 			return &lazyEndpoint{c: c, src: src}, size, true
 		}
 		cache.epAddr = src
@@ -1709,8 +1720,6 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		cache.gen = de.numStopAndReset()
 		ep = de
 	}
-	// TODO(jwhited): consider the implications of not recording this receive
-	//  activity due to an early [lazyEndpoint] return above.
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	ep.noteRecvActivity(src, now)
