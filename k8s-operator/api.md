@@ -658,7 +658,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup<br />resources. Known condition types are `ProxyGroupReady`. |  |  |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup<br />resources. Known condition types are `ProxyGroupReady`, `ProxyGroupAvailable`.<br />`ProxyGroupReady` indicates all ProxyGroup resources are fully reconciled<br />and ready. `ProxyGroupAvailable` indicates that at least one proxy is<br />ready to serve traffic. |  |  |
 | `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the ProxyGroup StatefulSet. |  |  |
 
 
