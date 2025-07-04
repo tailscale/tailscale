@@ -154,6 +154,13 @@ func (s *TestStore) RegisterChangeCallback(callback func()) (unregister func(), 
 	}, nil
 }
 
+// IsEmpty reports whether the store does not contain any settings.
+func (s *TestStore) IsEmpty() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.mr) == 0
+}
+
 // ReadString implements [Store].
 func (s *TestStore) ReadString(key setting.Key) (string, error) {
 	defer s.recordRead(key, setting.StringValue)
