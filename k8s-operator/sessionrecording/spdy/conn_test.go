@@ -112,15 +112,15 @@ func Test_Writes(t *testing.T) {
 					Width:  tt.width,
 					Height: tt.height,
 				},
-				initialTermSizeSet: make(chan struct{}),
-				hasTerm:            tt.hasTerm,
+				initialCastHeaderSent: make(chan struct{}),
+				hasTerm:               tt.hasTerm,
 			}
 			if !tt.firstWrite {
 				// this test case does not intend to test that cast header gets written once
 				c.writeCastHeaderOnce.Do(func() {})
 			}
 			if tt.sendInitialResize {
-				close(c.initialTermSizeSet)
+				close(c.initialCastHeaderSent)
 			}
 
 			c.stdoutStreamID.Store(stdoutStreamID)
@@ -216,10 +216,10 @@ func Test_Reads(t *testing.T) {
 			sr := &fakes.TestSessionRecorder{}
 			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 			c := &conn{
-				Conn:               tc,
-				log:                zl.Sugar(),
-				rec:                rec,
-				initialTermSizeSet: make(chan struct{}),
+				Conn:                  tc,
+				log:                   zl.Sugar(),
+				rec:                   rec,
+				initialCastHeaderSent: make(chan struct{}),
 			}
 			c.resizeStreamID.Store(tt.resizeStreamIDBeforeRead)
 
