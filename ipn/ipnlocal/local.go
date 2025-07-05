@@ -1627,16 +1627,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if applySysPolicy(prefs, b.overrideAlwaysOn) {
 		prefsChanged = true
 	}
-	if prefs.AutoExitNode.IsSet() {
-		// Re-evaluate exit node suggestion in case circumstances have changed.
-		_, err := b.suggestExitNodeLocked(curNetMap)
-		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
-			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
-		}
-	}
-	if setExitNodeID(prefs, b.lastSuggestedExitNode, curNetMap) {
-		prefsChanged = true
-	}
 
 	// Until recently, we did not store the account's tailnet name. So check if this is the case,
 	// and backfill it on incoming status update.
@@ -1653,6 +1643,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		}); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
+
+		b.sendToLocked(ipn.Notify{Prefs: ptr.To(prefs.View())}, allClients)
 	}
 
 	// initTKALocked is dependent on CurrentProfile.ID, which is initialized
@@ -1695,16 +1687,17 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	b.mu.Unlock()
 
 	// Now complete the lock-free parts of what we started while locked.
-	if prefsChanged {
-		b.send(ipn.Notify{Prefs: ptr.To(prefs.View())})
-	}
-
 	if st.NetMap != nil {
+		// Check and update the exit node if needed, now that we have a new netmap.
+		b.RefreshExitNode()
+
 		if envknob.NoLogsNoSupport() && st.NetMap.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
 			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
 			b.health.SetLocalLogConfigHealth(errors.New(msg))
 			// Connecting to this tailnet without logging is forbidden; boot us outta here.
 			b.mu.Lock()
+			// Get the current prefs again, since we unlocked above.
+			prefs := b.pm.CurrentPrefs().AsStruct()
 			prefs.WantRunning = false
 			p := prefs.View()
 			if err := b.pm.SetPrefs(p, ipn.NetworkProfile{
@@ -1999,7 +1992,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			if !ok || n.StableID() != exitNodeID {
 				continue
 			}
-			b.goTracker.Go(b.pickNewAutoExitNode)
+			b.goTracker.Go(b.RefreshExitNode)
 			break
 		}
 	}
@@ -5898,30 +5891,50 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	}
 	cc.SetNetInfo(ni)
 	if refresh {
-		b.pickNewAutoExitNode()
+		b.RefreshExitNode()
 	}
 }
 
-// pickNewAutoExitNode picks a new automatic exit node if needed.
-func (b *LocalBackend) pickNewAutoExitNode() {
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
+// RefreshExitNode determines which exit node to use based on the current
+// prefs and netmap and switches to it if needed.
+func (b *LocalBackend) RefreshExitNode() {
+	if b.resolveExitNode() {
+		b.authReconfig()
+	}
+}
 
-	newSuggestion, err := b.suggestExitNodeLocked(nil)
-	if err != nil {
-		b.logf("setAutoExitNodeID: %v", err)
-		return
+// resolveExitNode determines which exit node to use based on the current
+// prefs and netmap. It updates the exit node ID in the prefs if needed,
+// sends a notification to clients, and returns true if the exit node has changed.
+//
+// It is the caller's responsibility to reconfigure routes and actually
+// start using the selected exit node, if needed.
+//
+// b.mu must not be held.
+func (b *LocalBackend) resolveExitNode() (changed bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	nm := b.currentNode().NetMap()
+	prefs := b.pm.CurrentPrefs().AsStruct()
+	if prefs.AutoExitNode.IsSet() {
+		_, err := b.suggestExitNodeLocked(nil)
+		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
+			b.logf("failed to select auto exit node: %v", err)
+		}
 	}
-	if b.pm.CurrentPrefs().ExitNodeID() == newSuggestion.ID {
-		return
+	if !setExitNodeID(prefs, b.lastSuggestedExitNode, nm) {
+		return false // no changes
 	}
-	_, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
-		Prefs:         ipn.Prefs{ExitNodeID: newSuggestion.ID},
-		ExitNodeIDSet: true,
-	}, unlock)
-	if err != nil {
-		b.logf("setAutoExitNodeID: failed to apply exit node ID preference: %v", err)
+
+	if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
+		MagicDNSName: nm.MagicDNSSuffix(),
+		DomainName:   nm.DomainName(),
+	}); err != nil {
+		b.logf("failed to save exit node changes: %v", err)
 	}
+	b.sendToLocked(ipn.Notify{Prefs: ptr.To(prefs.View())}, allClients)
+	return true
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
