@@ -6,7 +6,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -22,6 +21,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -207,7 +207,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						},
 					},
 					expectedIPs:       []netip.Addr{},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning NodePort Services for static endpoints: failed to allocate NodePorts to ProxyGroup Services: not enough available ports to allocate all replicas (needed 4, got 3). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass \"default-pc\" must have bigger range allocated"},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning NodePort Services for static endpoints: failed to allocate NodePorts to ProxyGroup Services: not enough available ports to allocate all replicas (needed 4, got 3). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass \"default-pc\" must have bigger range allocated"},
 					expectedErr:       "",
 					expectStatefulSet: false,
 				},
@@ -265,7 +265,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						{name: "node2", addresses: []testNodeAddr{{ip: "10.0.0.2", addrType: corev1.NodeInternalIP}}, labels: map[string]string{"zone": "eu-central"}},
 					},
 					expectedIPs:       []netip.Addr{},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning config Secrets: could not find static endpoints for replica \"test-0\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
 					expectedErr:       "",
 					expectStatefulSet: false,
 				},
@@ -309,7 +309,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						},
 					},
 					expectedIPs:       []netip.Addr{},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to find any `status.addresses` of type \"ExternalIP\" on nodes using configured Selectors on `spec.staticEndpoints.nodePort.selectors` for ProxyClass \"default-pc\""},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning config Secrets: could not find static endpoints for replica \"test-0\": failed to find any `status.addresses` of type \"ExternalIP\" on nodes using configured Selectors on `spec.staticEndpoints.nodePort.selectors` for ProxyClass \"default-pc\""},
 					expectedErr:       "",
 					expectStatefulSet: false,
 				},
@@ -576,7 +576,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						},
 					},
 					expectedIPs:       []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning ProxyGroup resources: error provisioning config Secrets: could not find static endpoints for replica \"test-0-nodeport\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning config Secrets: could not find static endpoints for replica \"test-0\": failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass \"default-pc\""},
 					expectStatefulSet: true,
 				},
 			},
@@ -659,7 +659,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 								Address: addr.ip,
 							})
 						}
-						if err := fc.Create(context.Background(), no); err != nil {
+						if err := fc.Create(t.Context(), no); err != nil {
 							t.Fatalf("failed to create node %q: %v", n.name, err)
 						}
 						createdNodes = append(createdNodes, *no)
@@ -670,11 +670,11 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 					pg.Spec.Replicas = r.replicas
 					pc.Spec.StaticEndpoints = r.staticEndpointConfig
 
-					createOrUpdate(context.Background(), fc, "", pg, func(o *tsapi.ProxyGroup) {
+					createOrUpdate(t.Context(), fc, "", pg, func(o *tsapi.ProxyGroup) {
 						o.Spec.Replicas = pg.Spec.Replicas
 					})
 
-					createOrUpdate(context.Background(), fc, "", pc, func(o *tsapi.ProxyClass) {
+					createOrUpdate(t.Context(), fc, "", pc, func(o *tsapi.ProxyClass) {
 						o.Spec.StaticEndpoints = pc.Spec.StaticEndpoints
 					})
 
@@ -686,7 +686,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 					expectEvents(t, fr, r.expectedEvents)
 
 					sts := &appsv1.StatefulSet{}
-					err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts)
+					err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts)
 					if r.expectStatefulSet {
 						if err != nil {
 							t.Fatalf("failed to get StatefulSet: %v", err)
@@ -694,7 +694,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 
 						for j := range 2 {
 							sec := &corev1.Secret{}
-							if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: fmt.Sprintf("%s-%d-config", pg.Name, j)}, sec); err != nil {
+							if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: fmt.Sprintf("%s-%d-config", pg.Name, j)}, sec); err != nil {
 								t.Fatalf("failed to get state Secret for replica %d: %v", j, err)
 							}
 
@@ -740,7 +740,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						}
 
 						pgroup := &tsapi.ProxyGroup{}
-						err = fc.Get(context.Background(), client.ObjectKey{Name: pg.Name}, pgroup)
+						err = fc.Get(t.Context(), client.ObjectKey{Name: pg.Name}, pgroup)
 						if err != nil {
 							t.Fatalf("failed to get ProxyGroup %q: %v", pg.Name, err)
 						}
@@ -762,7 +762,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 				// node cleanup between reconciles
 				// we created a new set of nodes for each
 				for _, n := range createdNodes {
-					err := fc.Delete(context.Background(), &n)
+					err := fc.Delete(t.Context(), &n)
 					if err != nil && !apierrors.IsNotFound(err) {
 						t.Fatalf("failed to delete node: %v", err)
 					}
@@ -784,14 +784,14 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 					clock:    cl,
 				}
 
-				if err := fc.Delete(context.Background(), pg); err != nil {
+				if err := fc.Delete(t.Context(), pg); err != nil {
 					t.Fatalf("error deleting ProxyGroup: %v", err)
 				}
 
 				expectReconciled(t, reconciler, "", pg.Name)
 				expectMissing[tsapi.ProxyGroup](t, fc, "", pg.Name)
 
-				if err := fc.Delete(context.Background(), pc); err != nil {
+				if err := fc.Delete(t.Context(), pc); err != nil {
 					t.Fatalf("error deleting ProxyClass: %v", err)
 				}
 				expectMissing[tsapi.ProxyClass](t, fc, "", pc.Name)
@@ -855,7 +855,8 @@ func TestProxyGroup(t *testing.T) {
 	t.Run("proxyclass_not_ready", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass default-pc is not yet in a ready state, waiting...", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass \"default-pc\" is not yet in a ready state, waiting...", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, false, pc)
 	})
@@ -870,7 +871,7 @@ func TestProxyGroup(t *testing.T) {
 				LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 			}},
 		}
-		if err := fc.Status().Update(context.Background(), pc); err != nil {
+		if err := fc.Status().Update(t.Context(), pc); err != nil {
 			t.Fatal(err)
 		}
 
@@ -978,7 +979,7 @@ func TestProxyGroup(t *testing.T) {
 	})
 
 	t.Run("delete_and_cleanup", func(t *testing.T) {
-		if err := fc.Delete(context.Background(), pg); err != nil {
+		if err := fc.Delete(t.Context(), pg); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1049,7 +1050,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		verifyProxyGroupCounts(t, reconciler, 0, 1)
 
 		sts := &appsv1.StatefulSet{}
-		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
 			t.Fatalf("failed to get StatefulSet: %v", err)
 		}
 		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupEgress)
@@ -1059,7 +1060,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		// Verify that egress configuration has been set up.
 		cm := &corev1.ConfigMap{}
 		cmName := fmt.Sprintf("%s-egress-config", pg.Name)
-		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: cmName}, cm); err != nil {
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: cmName}, cm); err != nil {
 			t.Fatalf("failed to get ConfigMap: %v", err)
 		}
 
@@ -1135,7 +1136,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		sts := &appsv1.StatefulSet{}
-		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
 			t.Fatalf("failed to get StatefulSet: %v", err)
 		}
 
@@ -1155,7 +1156,7 @@ func TestProxyGroupTypes(t *testing.T) {
 				Replicas: ptr.To[int32](0),
 			},
 		}
-		if err := fc.Create(context.Background(), pg); err != nil {
+		if err := fc.Create(t.Context(), pg); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1163,7 +1164,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		verifyProxyGroupCounts(t, reconciler, 1, 2)
 
 		sts := &appsv1.StatefulSet{}
-		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
 			t.Fatalf("failed to get StatefulSet: %v", err)
 		}
 		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupIngress)
@@ -1306,7 +1307,7 @@ func proxyClassesForLEStagingTest() (*tsapi.ProxyClass, *tsapi.ProxyClass, *tsap
 func setProxyClassReady(t *testing.T, fc client.Client, cl *tstest.Clock, name string) *tsapi.ProxyClass {
 	t.Helper()
 	pc := &tsapi.ProxyClass{}
-	if err := fc.Get(context.Background(), client.ObjectKey{Name: name}, pc); err != nil {
+	if err := fc.Get(t.Context(), client.ObjectKey{Name: name}, pc); err != nil {
 		t.Fatal(err)
 	}
 	pc.Status = tsapi.ProxyClassStatus{
@@ -1319,7 +1320,7 @@ func setProxyClassReady(t *testing.T, fc client.Client, cl *tstest.Clock, name s
 			ObservedGeneration: pc.Generation,
 		}},
 	}
-	if err := fc.Status().Update(context.Background(), pc); err != nil {
+	if err := fc.Status().Update(t.Context(), pc); err != nil {
 		t.Fatal(err)
 	}
 	return pc
@@ -1398,7 +1399,7 @@ func expectSecrets(t *testing.T, fc client.WithWatch, expected []string) {
 	t.Helper()
 
 	secrets := &corev1.SecretList{}
-	if err := fc.List(context.Background(), secrets); err != nil {
+	if err := fc.List(t.Context(), secrets); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1413,6 +1414,7 @@ func expectSecrets(t *testing.T, fc client.WithWatch, expected []string) {
 }
 
 func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup) {
+	t.Helper()
 	const key = "profile-abc"
 	for i := range pgReplicas(pg) {
 		bytes, err := json.Marshal(map[string]any{
@@ -1424,6 +1426,17 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 			t.Fatal(err)
 		}
 
+		podUID := fmt.Sprintf("pod-uid-%d", i)
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%d", pg.Name, i),
+				Namespace: "tailscale",
+				UID:       types.UID(podUID),
+			},
+		}
+		if _, err := createOrUpdate(t.Context(), fc, "tailscale", pod, nil); err != nil {
+			t.Fatalf("failed to create or update Pod %s: %v", pod.Name, err)
+		}
 		mustUpdate(t, fc, tsNamespace, fmt.Sprintf("test-%d", i), func(s *corev1.Secret) {
 			s.Data = map[string][]byte{
 				currentProfileKey:       []byte(key),
@@ -1433,6 +1446,7 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 				// TODO(tomhjp): We have two different mechanisms to retrieve device IDs.
 				// Consolidate on this one.
 				kubetypes.KeyDeviceID: []byte(fmt.Sprintf("nodeid-%d", i)),
+				kubetypes.KeyPodUID:   []byte(podUID),
 			}
 		})
 	}
@@ -1512,7 +1526,7 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 			// Verify that the StatefulSet created for ProxyGrup has
 			// the expected setting for the staging endpoint.
 			sts := &appsv1.StatefulSet{}
-			if err := fc.Get(context.Background(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
 				t.Fatalf("failed to get StatefulSet: %v", err)
 			}
 

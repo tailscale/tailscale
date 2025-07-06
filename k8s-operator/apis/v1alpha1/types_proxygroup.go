@@ -88,7 +88,11 @@ type ProxyGroupSpec struct {
 
 type ProxyGroupStatus struct {
 	// List of status conditions to indicate the status of the ProxyGroup
-	// resources. Known condition types are `ProxyGroupReady`.
+	// resources. Known condition types are `ProxyGroupReady`, `ProxyGroupAvailable`.
+	// `ProxyGroupReady` indicates all ProxyGroup resources are fully reconciled
+	// and ready. `ProxyGroupAvailable` indicates that at least one proxy is
+	// ready to serve traffic.
+	//
 	// +listType=map
 	// +listMapKey=type
 	// +optional
