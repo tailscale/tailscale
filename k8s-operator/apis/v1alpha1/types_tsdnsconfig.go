@@ -82,6 +82,9 @@ type Nameserver struct {
 	// Nameserver image. Defaults to tailscale/k8s-nameserver:unstable.
 	// +optional
 	Image *NameserverImage `json:"image,omitempty"`
+	// Service configuration.
+	// +optional
+	Service *NameserverService `json:"service,omitempty"`
 }
 
 type NameserverImage struct {
@@ -91,6 +94,12 @@ type NameserverImage struct {
 	// Tag defaults to unstable.
 	// +optional
 	Tag string `json:"tag,omitempty"`
+}
+
+type NameserverService struct {
+	// ClusterIP sets the static IP of the service used by the nameserver.
+	// +optional
+	ClusterIP string `json:"clusterIP,omitempty"`
 }
 
 type DNSConfigStatus struct {
@@ -105,7 +114,7 @@ type DNSConfigStatus struct {
 
 type NameserverStatus struct {
 	// IP is the ClusterIP of the Service fronting the deployed ts.net nameserver.
-	// Currently you must manually update your cluster DNS config to add
+	// Currently, you must manually update your cluster DNS config to add
 	// this address as a stub nameserver for ts.net for cluster workloads to be
 	// able to resolve MagicDNS names associated with egress or Ingress
 	// proxies.
