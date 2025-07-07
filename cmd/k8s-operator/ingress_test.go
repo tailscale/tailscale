@@ -36,7 +36,8 @@ func TestTailscaleIngress(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingR := &IngressReconciler{
-		Client: fc,
+		Client:           fc,
+		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
 			tsClient:          ft,
@@ -120,7 +121,8 @@ func TestTailscaleIngressHostname(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingR := &IngressReconciler{
-		Client: fc,
+		Client:           fc,
+		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
 			tsClient:          ft,
@@ -245,7 +247,8 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingR := &IngressReconciler{
-		Client: fc,
+		Client:           fc,
+		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
 			tsClient:          ft,
@@ -350,7 +353,8 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingR := &IngressReconciler{
-		Client: fc,
+		Client:           fc,
+		ingressClassName: "tailscale",
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
 			tsClient:          ft,
@@ -498,7 +502,8 @@ func TestIngressProxyClassAnnotation(t *testing.T) {
 			mustCreate(t, fc, ing)
 
 			ingR := &IngressReconciler{
-				Client: fc,
+				Client:           fc,
+				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
 					tsClient:          &fakeTSClient{},
@@ -568,7 +573,8 @@ func TestIngressLetsEncryptStaging(t *testing.T) {
 			mustCreate(t, fc, ing)
 
 			ingR := &IngressReconciler{
-				Client: fc,
+				Client:           fc,
+				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
 					tsClient:          &fakeTSClient{},
@@ -675,8 +681,9 @@ func TestEmptyPath(t *testing.T) {
 				t.Fatal(err)
 			}
 			ingR := &IngressReconciler{
-				recorder: fr,
-				Client:   fc,
+				recorder:         fr,
+				Client:           fc,
+				ingressClassName: "tailscale",
 				ssr: &tailscaleSTSReconciler{
 					Client:            fc,
 					tsClient:          ft,

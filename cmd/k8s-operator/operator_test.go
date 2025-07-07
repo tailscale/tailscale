@@ -1549,6 +1549,8 @@ func Test_isMagicDNSName(t *testing.T) {
 }
 
 func Test_serviceHandlerForIngress(t *testing.T) {
+	const tailscaleIngressClassName = "tailscale"
+
 	fc := fake.NewFakeClient()
 	zl, err := zap.NewDevelopment()
 	if err != nil {
@@ -1578,7 +1580,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	}
 	mustCreate(t, fc, svc1)
 	wantReqs := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-1", Name: "ing-1"}}}
-	gotReqs := serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), svc1)
+	gotReqs := serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), svc1)
 	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
 	}
@@ -1605,7 +1607,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	}
 	mustCreate(t, fc, backendSvc)
 	wantReqs = []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-2", Name: "ing-2"}}}
-	gotReqs = serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), backendSvc)
+	gotReqs = serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), backendSvc)
 	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
 	}
@@ -1634,7 +1636,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	}
 	mustCreate(t, fc, backendSvc2)
 	wantReqs = []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-3", Name: "ing-3"}}}
-	gotReqs = serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), backendSvc2)
+	gotReqs = serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), backendSvc2)
 	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
 	}
@@ -1661,7 +1663,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 		},
 	}
 	mustCreate(t, fc, nonTSBackend)
-	gotReqs = serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), nonTSBackend)
+	gotReqs = serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), nonTSBackend)
 	if len(gotReqs) > 0 {
 		t.Errorf("unexpected reconcile request for a Service that does not belong to a Tailscale Ingress: %#+v\n", gotReqs)
 	}
@@ -1675,7 +1677,7 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 		},
 	}
 	mustCreate(t, fc, someSvc)
-	gotReqs = serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), someSvc)
+	gotReqs = serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), someSvc)
 	if len(gotReqs) > 0 {
 		t.Errorf("unexpected reconcile request for a Service that does not belong to any Ingress: %#+v\n", gotReqs)
 	}
