@@ -427,10 +427,9 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 				},
 				ResourceNames: func() (secrets []string) {
 					for i := range pgReplicas(pg) {
-						podName := pgPodName(pg.Name, i)
 						secrets = append(secrets,
 							pgConfigSecretName(pg.Name, i), // Config with auth key.
-							podName,                        // State.
+							pgPodName(pg.Name, i),          // State.
 						)
 					}
 					return secrets

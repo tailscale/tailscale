@@ -226,6 +226,4 @@ const (
 
 	IngressSvcValid      ConditionType = `TailscaleIngressSvcValid`
 	IngressSvcConfigured ConditionType = `TailscaleIngressSvcConfigured`
-
-	APIServerProxyReady ConditionType = `APIServerProxyReady`
 )

@@ -963,10 +963,6 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, a
 		conf.ServerURL = &loginServer
 	}
 
-	if pg.Spec.HostnamePrefix != "" {
-		conf.Hostname = ptr.To(fmt.Sprintf("%s-%d", pg.Spec.HostnamePrefix, idx))
-	}
-
 	if shouldAcceptRoutes(pc) {
 		conf.AcceptRoutes = "true"
 	}
