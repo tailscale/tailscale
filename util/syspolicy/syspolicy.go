@@ -56,6 +56,27 @@ func MustRegisterStoreForTest(tb testenv.TB, name string, scope setting.PolicySc
 	return reg
 }
 
+// HasAnyOf returns whether at least one of the specified policy settings is configured,
+// or an error if no keys are provided or the check fails.
+func HasAnyOf(keys ...Key) (bool, error) {
+	if len(keys) == 0 {
+		return false, errors.New("at least one key must be specified")
+	}
+	policy, err := rsop.PolicyFor(setting.DefaultScope())
+	if err != nil {
+		return false, err
+	}
+	effective := policy.Get()
+	for _, k := range keys {
+		_, err := effective.GetErr(k)
+		if errors.Is(err, setting.ErrNotConfigured) || errors.Is(err, setting.ErrNoSuchKey) {
+			continue
+		}
+		return err == nil, err // err may be nil or non-nil
+	}
+	return false, nil
+}
+
 // GetString returns a string policy setting with the specified key,
 // or defaultValue if it does not exist.
 func GetString(key Key, defaultValue string) (string, error) {
