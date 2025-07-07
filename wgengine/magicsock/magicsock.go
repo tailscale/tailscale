@@ -3774,12 +3774,12 @@ func (c *Conn) SetLastNetcheckReportForTest(ctx context.Context, report *netchec
 	c.lastNetCheckReport.Store(report)
 }
 
-// lazyEndpoint is a wireguard conn.Endpoint for when magicsock received a
+// lazyEndpoint is a wireguard [conn.Endpoint] for when magicsock received a
 // non-disco (presumably WireGuard) packet from a UDP address from which we
-// can't map to a Tailscale peer. But Wireguard most likely can, once it
-// decrypts it. So we implement the conn.PeerAwareEndpoint interface
+// can't map to a Tailscale peer. But WireGuard most likely can, once it
+// decrypts it. So we implement the [conn.PeerAwareEndpoint] interface
 // from https://github.com/tailscale/wireguard-go/pull/27 to allow WireGuard
-// to tell us who it is later and get the correct conn.Endpoint.
+// to tell us who it is later and get the correct [conn.Endpoint].
 type lazyEndpoint struct {
 	c   *Conn
 	src epAddr
@@ -3788,12 +3788,26 @@ type lazyEndpoint struct {
 var _ conn.PeerAwareEndpoint = (*lazyEndpoint)(nil)
 var _ conn.Endpoint = (*lazyEndpoint)(nil)
 
-func (le *lazyEndpoint) ClearSrc()           {}
-func (le *lazyEndpoint) SrcIP() netip.Addr   { return le.src.ap.Addr() }
-func (le *lazyEndpoint) DstIP() netip.Addr   { return netip.Addr{} }
-func (le *lazyEndpoint) SrcToString() string { return le.src.String() }
-func (le *lazyEndpoint) DstToString() string { return "dst" }
-func (le *lazyEndpoint) DstToBytes() []byte  { return nil }
+func (le *lazyEndpoint) ClearSrc()         {}
+func (le *lazyEndpoint) SrcIP() netip.Addr { return netip.Addr{} }
+
+// DstIP returns the remote address of the peer.
+//
+// Note: DstIP is used internally by wireguard-go as part of handshake DoS
+// mitigation.
+func (le *lazyEndpoint) DstIP() netip.Addr { return le.src.ap.Addr() }
+
+func (le *lazyEndpoint) SrcToString() string { return "" }
+func (le *lazyEndpoint) DstToString() string { return le.src.String() }
+
+// DstToBytes returns a binary representation of the remote address of the peer.
+//
+// Note: DstToBytes is used internally by wireguard-go as part of handshake DoS
+// mitigation.
+func (le *lazyEndpoint) DstToBytes() []byte {
+	b, _ := le.src.ap.MarshalBinary()
+	return b
+}
 
 // FromPeer implements [conn.PeerAwareEndpoint]. We return a [*lazyEndpoint] in
 // our [conn.ReceiveFunc]s when we are unable to identify the peer at WireGuard
