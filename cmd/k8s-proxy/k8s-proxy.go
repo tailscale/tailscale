@@ -19,6 +19,7 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/sync/errgroup"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"tailscale.com/hostinfo"
@@ -27,7 +28,6 @@ import (
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/state"
-	"tailscale.com/syncs"
 	"tailscale.com/tsnet"
 )
 
@@ -47,10 +47,6 @@ func run(logger *zap.SugaredLogger) error {
 	if configFile == "" {
 		return errors.New("TS_K8S_PROXY_CONFIG unset")
 	}
-
-	// ctx to live for the lifetime of the process.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// TODO(tomhjp): Support reloading config.
 	// TODO(tomhjp): Support reading config from a Secret.
@@ -99,6 +95,10 @@ func run(logger *zap.SugaredLogger) error {
 		ts.Hostname = *cfg.Parsed.Hostname
 	}
 
+	// ctx to live for the lifetime of the process.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	// Make sure we crash loop if Up doesn't complete in reasonable time.
 	upCtx, upCancel := context.WithTimeout(ctx, time.Minute)
 	defer upCancel()
@@ -107,29 +107,31 @@ func run(logger *zap.SugaredLogger) error {
 	}
 	defer ts.Close()
 
-	lc, err := ts.LocalClient()
-	if err != nil {
-		return fmt.Errorf("error getting local client: %w", err)
-	}
+	group, groupCtx := errgroup.WithContext(ctx)
 
-	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
-	if err != nil {
-		return fmt.Errorf("error watching IPN bus: %w", err)
-	}
-	defer w.Close()
-
-	errs := make(chan error)
-	wg := syncs.WaitGroup{}
+	// Setup for updating state keys.
 	if podUID != "" {
-		wg.Go(func() {
-			err := state.KeepKeysUpdated(st, w.Next)
-			if err != nil && err != ctx.Err() {
-				errs <- fmt.Errorf("error keeping state keys updated: %w", err)
+		lc, err := ts.LocalClient()
+		if err != nil {
+			return fmt.Errorf("error getting local client: %w", err)
+		}
+		w, err := lc.WatchIPNBus(groupCtx, ipn.NotifyInitialNetMap)
+		if err != nil {
+			return fmt.Errorf("error watching IPN bus: %w", err)
+		}
+		defer w.Close()
+
+		group.Go(func() error {
+			if err := state.KeepKeysUpdated(st, w.Next); err != nil && err != groupCtx.Err() {
+				return fmt.Errorf("error keeping state keys updated: %w", err)
 			}
+
+			return nil
 		})
 	}
 
-	restConfig, err := getRestConfig()
+	// Setup for the API server proxy.
+	restConfig, err := getRestConfig(logger)
 	if err != nil {
 		return fmt.Errorf("error getting rest config: %w", err)
 	}
@@ -147,25 +149,15 @@ func run(logger *zap.SugaredLogger) error {
 
 	// TODO(tomhjp): Work out whether we should use TS_CERT_SHARE_MODE or not,
 	// and possibly issue certs upfront here before serving.
-	wg.Go(func() {
-		if err := ap.Run(ctx); err != nil {
-			errs <- fmt.Errorf("error running api server proxy: %w", err)
+	group.Go(func() error {
+		if err := ap.Run(groupCtx); err != nil {
+			return fmt.Errorf("error running API server proxy: %w", err)
 		}
+
+		return nil
 	})
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case err = <-errs:
-		logger.Errorf("Shutting down due to error: %v", err)
-	case s := <-sig:
-		logger.Infof("Received %s, shutting down", s)
-	}
-
-	cancel()
-	wg.Wait()
-
-	return err
+	return group.Wait()
 }
 
 func getStateStore(path *string, logger *zap.SugaredLogger) (ipn.StateStore, error) {
@@ -183,19 +175,23 @@ func getStateStore(path *string, logger *zap.SugaredLogger) (ipn.StateStore, err
 	return st, nil
 }
 
-func getRestConfig() (*rest.Config, error) {
+func getRestConfig(logger *zap.SugaredLogger) (*rest.Config, error) {
 	restConfig, err := rest.InClusterConfig()
-	if err == nil {
+	switch err {
+	case nil:
 		return restConfig, nil
+	case rest.ErrNotInCluster:
+		logger.Info("Not running in-cluster, falling back to kubeconfig")
+	default:
+		return nil, fmt.Errorf("error getting in-cluster config: %w", err)
 	}
-	inClusterErr := fmt.Errorf("could not use in-cluster config: %w", err)
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, nil)
 	restConfig, err = clientConfig.ClientConfig()
-	if err == nil {
-		return restConfig, nil
+	if err != nil {
+		return nil, fmt.Errorf("error loading kubeconfig: %w", err)
 	}
 
-	return nil, errors.Join(inClusterErr, fmt.Errorf("could not use kubeconfig: %w", err))
+	return restConfig, nil
 }

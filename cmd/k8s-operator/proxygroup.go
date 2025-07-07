@@ -214,14 +214,16 @@ func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGrou
 
 			return fmt.Errorf("error validating that ServiceAccount %q exists: %w", authAPIServerProxySAName, err)
 		}
-	} else {
-		// Validate that the ServiceAccount we create won't overwrite the static one.
-		// TODO(tomhjp): This doesn't cover other controllers that could create a
-		// ServiceAccount. Perhaps should have some guards to ensure that an update
-		// would never change the ownership of a resource we expect to already be owned.
-		if pgServiceAccountName(pg) == authAPIServerProxySAName {
-			return fmt.Errorf("the name of the ProxyGroup %q conflicts with the static ServiceAccount used for the API server proxy in auth mode", pg.Name)
-		}
+
+		return nil
+	}
+
+	// Validate that the ServiceAccount we create won't overwrite the static one.
+	// TODO(tomhjp): This doesn't cover other controllers that could create a
+	// ServiceAccount. Perhaps should have some guards to ensure that an update
+	// would never change the ownership of a resource we expect to already be owned.
+	if pgServiceAccountName(pg) == authAPIServerProxySAName {
+		return fmt.Errorf("the name of the ProxyGroup %q conflicts with the static ServiceAccount used for the API server proxy in auth mode", pg.Name)
 	}
 
 	return nil
@@ -776,7 +778,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			cfg := conf.VersionedConfig{
 				Version: "v1alpha1",
 				ConfigV1Alpha1: &conf.ConfigV1Alpha1{
-					Hostname: ptr.To(hostname),
+					Hostname: &hostname,
 					State:    ptr.To(fmt.Sprintf("kube:%s", pgPodName(pg.Name, i))),
 					App:      ptr.To(kubetypes.AppProxyGroupKubeAPIServer),
 					AuthKey:  authKey,

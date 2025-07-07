@@ -70,6 +70,9 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse URL %w", err)
 	}
+	if u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("the API server proxy requires host and scheme but got: %q", restConfig.Host)
+	}
 
 	lc, err := ts.LocalClient()
 	if err != nil {
