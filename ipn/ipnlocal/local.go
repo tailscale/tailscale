@@ -178,6 +178,10 @@ var (
 	// It is used as a context cancellation cause for the old context
 	// and can be returned when an operation is performed on it.
 	errNodeContextChanged = errors.New("profile changed")
+
+	// errManagedByPolicy indicates the operation is blocked
+	// because the target state is managed by a GP/MDM policy.
+	errManagedByPolicy = errors.New("managed by policy")
 )
 
 // LocalBackend is the glue between the major pieces of the Tailscale
@@ -3477,12 +3481,14 @@ func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
 		b.logf("using tailnet default auto-update setting: %v", au)
 		prefsClone := prefs.AsStruct()
 		prefsClone.AutoUpdate.Apply = opt.NewBool(au)
-		_, err := b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
-			Prefs: *prefsClone,
-			AutoUpdateSet: ipn.AutoUpdatePrefsMask{
-				ApplySet: true,
-			},
-		}, unlock)
+		_, err := b.editPrefsLockedOnEntry(
+			ipnauth.Self,
+			&ipn.MaskedPrefs{
+				Prefs: *prefsClone,
+				AutoUpdateSet: ipn.AutoUpdatePrefsMask{
+					ApplySet: true,
+				},
+			}, unlock)
 		if err != nil {
 			b.logf("failed to apply tailnet-wide default for auto-updates (%v): %v", au, err)
 			return
@@ -4224,7 +4230,7 @@ func (b *LocalBackend) checkAutoUpdatePrefsLocked(p *ipn.Prefs) error {
 // On success, it returns the resulting prefs (or current prefs, in the case of no change).
 // Setting the value to false when use of an exit node is already false is not an error,
 // nor is true when the exit node is already in use.
-func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
+func (b *LocalBackend) SetUseExitNodeEnabled(actor ipnauth.Actor, v bool) (ipn.PrefsView, error) {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
@@ -4267,7 +4273,7 @@ func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
 			mp.InternalExitNodePrior = p0.ExitNodeID()
 		}
 	}
-	return b.editPrefsLockedOnEntry(mp, unlock)
+	return b.editPrefsLockedOnEntry(actor, mp, unlock)
 }
 
 // MaybeClearAppConnector clears the routes from any AppConnector if
@@ -4296,30 +4302,83 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 		return ipn.PrefsView{}, errors.New("can't set Internal fields")
 	}
 
-	// Zeroing the ExitNodeId via localAPI must also zero the prior exit node.
-	if mp.ExitNodeIDSet && mp.ExitNodeID == "" {
+	return b.editPrefsLockedOnEntry(actor, mp, b.lockAndGetUnlock())
+}
+
+// checkEditPrefsAccessLocked checks whether the current user has access
+// to apply the prefs changes in mp.
+//
+// It returns an error if the user is not allowed, or nil otherwise.
+//
+// b.mu must be held.
+func (b *LocalBackend) checkEditPrefsAccessLocked(actor ipnauth.Actor, mp *ipn.MaskedPrefs) error {
+	var errs []error
+
+	if mp.RunSSHSet && mp.RunSSH && !envknob.CanSSHD() {
+		errs = append(errs, errors.New("Tailscale SSH server administratively disabled"))
+	}
+
+	// Check if the user is allowed to disconnect Tailscale.
+	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
+		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.extHost.AuditLogger()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// Prevent users from changing exit node preferences
+	// when exit node usage is managed by policy.
+	if mp.ExitNodeIDSet || mp.ExitNodeIPSet || mp.AutoExitNodeSet {
+		// TODO(nickkhyl): Allow users to override ExitNode policy settings
+		// if the ExitNode.AllowUserOverride policy permits it.
+		// (Policy setting name and details are TBD. See tailscale/corp#29969)
+		isManaged, err := syspolicy.HasAnyOf(syspolicy.ExitNodeID, syspolicy.ExitNodeIP)
+		if err != nil {
+			err = fmt.Errorf("policy check failed: %w", err)
+		} else if isManaged {
+			err = errManagedByPolicy
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("exit node cannot be changed: %w", err))
+		}
+	}
+
+	return multierr.New(errs...)
+}
+
+// adjustEditPrefsLocked applies additional changes to mp if necessary,
+// such as zeroing out mutually exclusive fields.
+//
+// It must not assume that the changes in mp will actually be applied.
+//
+// b.mu must be held.
+func (b *LocalBackend) adjustEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs) {
+	// Zeroing the ExitNodeID via localAPI must also zero the prior exit node.
+	if mp.ExitNodeIDSet && mp.ExitNodeID == "" && !mp.InternalExitNodePriorSet {
 		mp.InternalExitNodePrior = ""
 		mp.InternalExitNodePriorSet = true
 	}
 
 	// Disable automatic exit node selection if the user explicitly sets
 	// ExitNodeID or ExitNodeIP.
-	if mp.ExitNodeIDSet || mp.ExitNodeIPSet {
+	if (mp.ExitNodeIDSet || mp.ExitNodeIPSet) && !mp.AutoExitNodeSet {
 		mp.AutoExitNodeSet = true
 		mp.AutoExitNode = ""
 	}
+}
 
-	// Acquire the lock before checking the profile access to prevent
-	// TOCTOU issues caused by the current profile changing between the
-	// check and the actual edit.
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
-	if mp.WantRunningSet && !mp.WantRunning && b.pm.CurrentPrefs().WantRunning() {
-		if err := actor.CheckProfileAccess(b.pm.CurrentProfile(), ipnauth.Disconnect, b.extHost.AuditLogger()); err != nil {
-			b.logf("check profile access failed: %v", err)
-			return ipn.PrefsView{}, err
-		}
-
+// onEditPrefsLocked is called when prefs are edited (typically, via LocalAPI),
+// just before the changes in newPrefs are set for the current profile.
+//
+// The changes in mp have been allowed, but the resulting [ipn.Prefs]
+// have not yet been applied and may be subject to reconciliation
+// by [LocalBackend.reconcilePrefsLocked], either before or after being set.
+//
+// This method handles preference edits, typically initiated by the user,
+// as opposed to reconfiguring the backend when the final prefs are set.
+//
+// b.mu must be held; mp must not be mutated by this method.
+func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, oldPrefs, newPrefs ipn.PrefsView) {
+	if mp.WantRunningSet && !mp.WantRunning && oldPrefs.WantRunning() {
 		// If a user has enough rights to disconnect, such as when [syspolicy.AlwaysOn]
 		// is disabled, or [syspolicy.AlwaysOnOverrideWithReason] is also set and the user
 		// provides a reason for disconnecting, then we should not force the "always on"
@@ -4331,7 +4390,18 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 		}
 	}
 
-	return b.editPrefsLockedOnEntry(mp, unlock)
+	// This is recorded here in the EditPrefs path, not the setPrefs path on purpose.
+	// recordForEdit records metrics related to edits and changes, not the final state.
+	// If, in the future, we want to record gauge-metrics related to the state of prefs,
+	// that should be done in the setPrefs path.
+	e := prefsMetricsEditEvent{
+		change:                mp,
+		pNew:                  newPrefs,
+		pOld:                  oldPrefs,
+		node:                  b.currentNode(),
+		lastSuggestedExitNode: b.lastSuggestedExitNode,
+	}
+	e.record()
 }
 
 // startReconnectTimerLocked sets a timer to automatically set WantRunning to true
@@ -4368,7 +4438,7 @@ func (b *LocalBackend) startReconnectTimerLocked(d time.Duration) {
 		}
 
 		mp := &ipn.MaskedPrefs{WantRunningSet: true, Prefs: ipn.Prefs{WantRunning: true}}
-		if _, err := b.editPrefsLockedOnEntry(mp, unlock); err != nil {
+		if _, err := b.editPrefsLockedOnEntry(ipnauth.Self, mp, unlock); err != nil {
 			b.logf("failed to automatically reconnect as %q after %v: %v", cp.Name(), d, err)
 		} else {
 			b.logf("automatically reconnected as %q after %v", cp.Name(), d)
@@ -4399,8 +4469,18 @@ func (b *LocalBackend) stopReconnectTimerLocked() {
 
 // Warning: b.mu must be held on entry, but it unlocks it on the way out.
 // TODO(bradfitz): redo the locking on all these weird methods like this.
-func (b *LocalBackend) editPrefsLockedOnEntry(mp *ipn.MaskedPrefs, unlock unlockOnce) (ipn.PrefsView, error) {
+func (b *LocalBackend) editPrefsLockedOnEntry(actor ipnauth.Actor, mp *ipn.MaskedPrefs, unlock unlockOnce) (ipn.PrefsView, error) {
 	defer unlock() // for error paths
+
+	// Check if the changes in mp are allowed.
+	if err := b.checkEditPrefsAccessLocked(actor, mp); err != nil {
+		b.logf("EditPrefs(%v): %v", mp.Pretty(), err)
+		return ipn.PrefsView{}, err
+	}
+
+	// Apply additional changes to mp if necessary,
+	// such as clearing mutually exclusive fields.
+	b.adjustEditPrefsLocked(actor, mp)
 
 	if mp.EggSet {
 		mp.EggSet = false
@@ -4416,29 +4496,18 @@ func (b *LocalBackend) editPrefsLockedOnEntry(mp *ipn.MaskedPrefs, unlock unlock
 		b.logf("EditPrefs check error: %v", err)
 		return ipn.PrefsView{}, err
 	}
-	if p1.RunSSH && !envknob.CanSSHD() {
-		b.logf("EditPrefs requests SSH, but disabled by envknob; returning error")
-		return ipn.PrefsView{}, errors.New("Tailscale SSH server administratively disabled.")
-	}
+
 	if p1.View().Equals(p0) {
 		return stripKeysFromPrefs(p0), nil
 	}
 
 	b.logf("EditPrefs: %v", mp.Pretty())
-	newPrefs := b.setPrefsLockedOnEntry(p1, unlock)
 
-	// This is recorded here in the EditPrefs path, not the setPrefs path on purpose.
-	// recordForEdit records metrics related to edits and changes, not the final state.
-	// If, in the future, we want to record gauge-metrics related to the state of prefs,
-	// that should be done in the setPrefs path.
-	e := prefsMetricsEditEvent{
-		change:                mp,
-		pNew:                  p1.View(),
-		pOld:                  p0,
-		node:                  b.currentNode(),
-		lastSuggestedExitNode: b.lastSuggestedExitNode,
-	}
-	e.record()
+	// Perform any actions required when prefs are edited (typically by a user),
+	// before the modified prefs are actually set for the current profile.
+	b.onEditPrefsLocked(actor, mp, p0, p1.View())
+
+	newPrefs := b.setPrefsLockedOnEntry(p1, unlock)
 
 	// Note: don't perform any actions for the new prefs here. Not
 	// every prefs change goes through EditPrefs. Put your actions
@@ -5829,11 +5898,16 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 	// delete it later.
 	profile := b.pm.CurrentProfile()
 
-	_, err := b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
-		WantRunningSet: true,
-		LoggedOutSet:   true,
-		Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
-	}, unlock)
+	// TODO(nickkhyl): change [LocalBackend.Logout] to accept an [ipnauth.Actor].
+	// This will allow enforcing Always On mode when a user tries to log out
+	// while logged in and connected. See tailscale/corp#26249.
+	_, err := b.editPrefsLockedOnEntry(
+		ipnauth.TODO,
+		&ipn.MaskedPrefs{
+			WantRunningSet: true,
+			LoggedOutSet:   true,
+			Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
+		}, unlock)
 	if err != nil {
 		return err
 	}
