@@ -112,7 +112,7 @@ type serverEndpoint struct {
 	allocatedAt time.Time
 }
 
-func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, uw udpWriter, serverDisco key.DiscoPublic) {
+func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, conn *net.UDPConn, serverDisco key.DiscoPublic) {
 	if senderIndex != 0 && senderIndex != 1 {
 		return
 	}
@@ -165,7 +165,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 		reply = serverDisco.AppendTo(reply)
 		box := e.discoSharedSecrets[senderIndex].Seal(m.AppendMarshal(nil))
 		reply = append(reply, box...)
-		uw.WriteMsgUDPAddrPort(reply, nil, from)
+		conn.WriteMsgUDPAddrPort(reply, nil, from)
 		return
 	case *disco.BindUDPRelayEndpointAnswer:
 		err := validateVNIAndRemoteKey(discoMsg.BindUDPRelayEndpointCommon)
@@ -191,7 +191,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 	}
 }
 
-func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []byte, uw udpWriter, serverDisco key.DiscoPublic) {
+func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []byte, conn *net.UDPConn, serverDisco key.DiscoPublic) {
 	senderRaw, isDiscoMsg := disco.Source(b)
 	if !isDiscoMsg {
 		// Not a Disco message
@@ -222,14 +222,10 @@ func (e *serverEndpoint) handleSealedDiscoControlMsg(from netip.AddrPort, b []by
 		return
 	}
 
-	e.handleDiscoControlMsg(from, senderIndex, discoMsg, uw, serverDisco)
+	e.handleDiscoControlMsg(from, senderIndex, discoMsg, conn, serverDisco)
 }
 
-type udpWriter interface {
-	WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n, oobn int, err error)
-}
-
-func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeader, b []byte, uw udpWriter, serverDisco key.DiscoPublic) {
+func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeader, b []byte, rxSocket, otherAFSocket *net.UDPConn, serverDisco key.DiscoPublic) {
 	if !gh.Control {
 		if !e.isBound() {
 			// not a control packet, but serverEndpoint isn't bound
@@ -247,8 +243,16 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 			// unrecognized source
 			return
 		}
-		// relay packet
-		uw.WriteMsgUDPAddrPort(b, nil, to)
+		// Relay the packet towards the other party via the socket associated
+		// with the destination's address family. If source and destination
+		// address families are matching we tx on the same socket the packet
+		// was received (rxSocket), otherwise we use the "other" socket
+		// (otherAFSocket). [Server] makes no use of dual-stack sockets.
+		if from.Addr().Is4() == to.Addr().Is4() {
+			rxSocket.WriteMsgUDPAddrPort(b, nil, to)
+		} else if otherAFSocket != nil {
+			otherAFSocket.WriteMsgUDPAddrPort(b, nil, to)
+		}
 		return
 	}
 
@@ -258,7 +262,7 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 	}
 
 	msg := b[packet.GeneveFixedHeaderLength:]
-	e.handleSealedDiscoControlMsg(from, msg, uw, serverDisco)
+	e.handleSealedDiscoControlMsg(from, msg, rxSocket, serverDisco)
 }
 
 func (e *serverEndpoint) isExpired(now time.Time, bindLifetime, steadyStateLifetime time.Duration) bool {
@@ -346,10 +350,10 @@ func NewServer(logf logger.Logf, port int, overrideAddrs []netip.Addr) (s *Serve
 	}
 
 	s.wg.Add(1)
-	go s.packetReadLoop(s.uc4)
+	go s.packetReadLoop(s.uc4, s.uc6)
 	if s.uc6 != nil {
 		s.wg.Add(1)
-		go s.packetReadLoop(s.uc6)
+		go s.packetReadLoop(s.uc6, s.uc4)
 	}
 	s.wg.Add(1)
 	go s.endpointGCLoop()
@@ -531,7 +535,7 @@ func (s *Server) endpointGCLoop() {
 	}
 }
 
-func (s *Server) handlePacket(from netip.AddrPort, b []byte, uw udpWriter) {
+func (s *Server) handlePacket(from netip.AddrPort, b []byte, rxSocket, otherAFSocket *net.UDPConn) {
 	if stun.Is(b) && b[1] == 0x01 {
 		// A b[1] value of 0x01 (STUN method binding) is sufficiently
 		// non-overlapping with the Geneve header where the LSB is always 0
@@ -555,10 +559,10 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte, uw udpWriter) {
 		return
 	}
 
-	e.handlePacket(from, gh, b, uw, s.discoPublic)
+	e.handlePacket(from, gh, b, rxSocket, otherAFSocket, s.discoPublic)
 }
 
-func (s *Server) packetReadLoop(uc *net.UDPConn) {
+func (s *Server) packetReadLoop(readFromSocket, otherSocket *net.UDPConn) {
 	defer func() {
 		s.wg.Done()
 		s.Close()
@@ -566,11 +570,11 @@ func (s *Server) packetReadLoop(uc *net.UDPConn) {
 	b := make([]byte, 1<<16-1)
 	for {
 		// TODO: extract laddr from IP_PKTINFO for use in reply
-		n, from, err := uc.ReadFromUDPAddrPort(b)
+		n, from, err := readFromSocket.ReadFromUDPAddrPort(b)
 		if err != nil {
 			return
 		}
-		s.handlePacket(from, b[:n], uc)
+		s.handlePacket(from, b[:n], readFromSocket, otherSocket)
 	}
 }
 

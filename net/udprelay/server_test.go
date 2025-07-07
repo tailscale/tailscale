@@ -181,8 +181,9 @@ func TestServer(t *testing.T) {
 	discoB := key.NewDisco()
 
 	cases := []struct {
-		name          string
-		overrideAddrs []netip.Addr
+		name                string
+		overrideAddrs       []netip.Addr
+		forceClientsMixedAF bool
 	}{
 		{
 			name:          "over ipv4",
@@ -191,6 +192,11 @@ func TestServer(t *testing.T) {
 		{
 			name:          "over ipv6",
 			overrideAddrs: []netip.Addr{netip.MustParseAddr("::1")},
+		},
+		{
+			name:                "mixed address families",
+			overrideAddrs:       []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
+			forceClientsMixedAF: true,
 		},
 	}
 
@@ -216,16 +222,47 @@ func TestServer(t *testing.T) {
 				t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
 			}
 
-			if len(endpoint.AddrPorts) != 1 {
+			if len(endpoint.AddrPorts) < 1 {
 				t.Fatalf("unexpected endpoint.AddrPorts: %v", endpoint.AddrPorts)
 			}
-			tcA := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, discoB.Public(), endpoint.ServerDisco)
+			tcAServerEndpointAddr := endpoint.AddrPorts[0]
+			tcA := newTestClient(t, endpoint.VNI, tcAServerEndpointAddr, discoA, discoB.Public(), endpoint.ServerDisco)
 			defer tcA.close()
-			tcB := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, discoA.Public(), endpoint.ServerDisco)
+			tcBServerEndpointAddr := tcAServerEndpointAddr
+			if tt.forceClientsMixedAF {
+				foundMixedAF := false
+				for _, addr := range endpoint.AddrPorts {
+					if addr.Addr().Is4() != tcBServerEndpointAddr.Addr().Is4() {
+						tcBServerEndpointAddr = addr
+						foundMixedAF = true
+					}
+				}
+				if !foundMixedAF {
+					t.Fatal("force clients to mixed address families is set, but relay server lacks address family diversity")
+				}
+			}
+			tcB := newTestClient(t, endpoint.VNI, tcBServerEndpointAddr, discoB, discoA.Public(), endpoint.ServerDisco)
 			defer tcB.close()
 
-			tcA.handshake(t)
-			tcB.handshake(t)
+			for i := 0; i < 2; i++ {
+				// We handshake both clients twice to guarantee server-side
+				// packet reading goroutines, which are independent across
+				// address families, have seen an answer from both clients
+				// before proceeding. This is needed because the test assumes
+				// that B's handshake is complete (the first send is A->B below),
+				// but the server may not have handled B's handshake answer
+				// before it handles A's data pkt towards B.
+				//
+				// Data transmissions following "re-handshakes" orient so that
+				// the sender is the same as the party that performed the
+				// handshake, for the same reasons.
+				//
+				// [magicsock.relayManager] is not prone to this issue as both
+				// parties transmit data packets immediately following their
+				// handshake answer.
+				tcA.handshake(t)
+				tcB.handshake(t)
+			}
 
 			dupEndpoint, err = server.AllocateEndpoint(discoA.Public(), discoB.Public())
 			if err != nil {
@@ -250,30 +287,32 @@ func TestServer(t *testing.T) {
 				t.Fatal("unexpected msg B->A")
 			}
 
-			tcAOnNewPort := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoA, discoB.Public(), endpoint.ServerDisco)
+			tcAOnNewPort := newTestClient(t, endpoint.VNI, tcAServerEndpointAddr, discoA, discoB.Public(), endpoint.ServerDisco)
 			tcAOnNewPort.handshakeGeneration = tcA.handshakeGeneration + 1
 			defer tcAOnNewPort.close()
 
-			// Handshake client A on a new source IP:port, verify we receive packets on the new binding
+			// Handshake client A on a new source IP:port, verify we can send packets on the new binding
 			tcAOnNewPort.handshake(t)
-			txToAOnNewPort := []byte{7, 8, 9}
-			tcB.writeDataPkt(t, txToAOnNewPort)
-			rxFromB = tcAOnNewPort.readDataPkt(t)
-			if !bytes.Equal(txToAOnNewPort, rxFromB) {
-				t.Fatal("unexpected msg B->A")
+
+			fromAOnNewPort := []byte{7, 8, 9}
+			tcAOnNewPort.writeDataPkt(t, fromAOnNewPort)
+			rxFromA = tcB.readDataPkt(t)
+			if !bytes.Equal(fromAOnNewPort, rxFromA) {
+				t.Fatal("unexpected msg A->B")
 			}
 
-			tcBOnNewPort := newTestClient(t, endpoint.VNI, endpoint.AddrPorts[0], discoB, discoA.Public(), endpoint.ServerDisco)
+			tcBOnNewPort := newTestClient(t, endpoint.VNI, tcBServerEndpointAddr, discoB, discoA.Public(), endpoint.ServerDisco)
 			tcBOnNewPort.handshakeGeneration = tcB.handshakeGeneration + 1
 			defer tcBOnNewPort.close()
 
-			// Handshake client B on a new source IP:port, verify we receive packets on the new binding
+			// Handshake client B on a new source IP:port, verify we can send packets on the new binding
 			tcBOnNewPort.handshake(t)
-			txToBOnNewPort := []byte{7, 8, 9}
-			tcAOnNewPort.writeDataPkt(t, txToBOnNewPort)
-			rxFromA = tcBOnNewPort.readDataPkt(t)
-			if !bytes.Equal(txToBOnNewPort, rxFromA) {
-				t.Fatal("unexpected msg A->B")
+
+			fromBOnNewPort := []byte{7, 8, 9}
+			tcBOnNewPort.writeDataPkt(t, fromBOnNewPort)
+			rxFromB = tcAOnNewPort.readDataPkt(t)
+			if !bytes.Equal(fromBOnNewPort, rxFromB) {
+				t.Fatal("unexpected msg B->A")
 			}
 		})
 	}
