@@ -1910,7 +1910,7 @@ func (h *Handler) serveSetUseExitNodeEnabled(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid 'enabled' parameter", http.StatusBadRequest)
 		return
 	}
-	prefs, err := h.b.SetUseExitNodeEnabled(v)
+	prefs, err := h.b.SetUseExitNodeEnabled(h.Actor, v)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

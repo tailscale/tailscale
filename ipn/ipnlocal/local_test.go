@@ -501,29 +501,30 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 
 func TestZeroExitNodeViaLocalAPI(t *testing.T) {
 	lb := newTestLocalBackend(t)
+	user := &ipnauth.TestActor{}
 
 	// Give it an initial exit node in use.
-	if _, err := lb.EditPrefs(&ipn.MaskedPrefs{
+	if _, err := lb.EditPrefsAs(&ipn.MaskedPrefs{
 		ExitNodeIDSet: true,
 		Prefs: ipn.Prefs{
 			ExitNodeID: "foo",
 		},
-	}); err != nil {
+	}, user); err != nil {
 		t.Fatalf("enabling first exit node: %v", err)
 	}
 
 	// SetUseExitNodeEnabled(false) "remembers" the prior exit node.
-	if _, err := lb.SetUseExitNodeEnabled(false); err != nil {
+	if _, err := lb.SetUseExitNodeEnabled(user, false); err != nil {
 		t.Fatal("expected failure")
 	}
 
 	// Zero the exit node
-	pv, err := lb.EditPrefs(&ipn.MaskedPrefs{
+	pv, err := lb.EditPrefsAs(&ipn.MaskedPrefs{
 		ExitNodeIDSet: true,
 		Prefs: ipn.Prefs{
 			ExitNodeID: "",
 		},
-	})
+	}, user)
 
 	if err != nil {
 		t.Fatalf("enabling first exit node: %v", err)
@@ -539,29 +540,30 @@ func TestZeroExitNodeViaLocalAPI(t *testing.T) {
 
 func TestSetUseExitNodeEnabled(t *testing.T) {
 	lb := newTestLocalBackend(t)
+	user := &ipnauth.TestActor{}
 
 	// Can't turn it on if it never had an old value.
-	if _, err := lb.SetUseExitNodeEnabled(true); err == nil {
+	if _, err := lb.SetUseExitNodeEnabled(user, true); err == nil {
 		t.Fatal("expected success")
 	}
 
 	// But we can turn it off when it's already off.
-	if _, err := lb.SetUseExitNodeEnabled(false); err != nil {
+	if _, err := lb.SetUseExitNodeEnabled(user, false); err != nil {
 		t.Fatal("expected failure")
 	}
 
 	// Give it an initial exit node in use.
-	if _, err := lb.EditPrefs(&ipn.MaskedPrefs{
+	if _, err := lb.EditPrefsAs(&ipn.MaskedPrefs{
 		ExitNodeIDSet: true,
 		Prefs: ipn.Prefs{
 			ExitNodeID: "foo",
 		},
-	}); err != nil {
+	}, user); err != nil {
 		t.Fatalf("enabling first exit node: %v", err)
 	}
 
 	// Now turn off that exit node.
-	if prefs, err := lb.SetUseExitNodeEnabled(false); err != nil {
+	if prefs, err := lb.SetUseExitNodeEnabled(user, false); err != nil {
 		t.Fatal("expected failure")
 	} else {
 		if g, w := prefs.ExitNodeID(), tailcfg.StableNodeID(""); g != w {
@@ -573,7 +575,7 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 	}
 
 	// And turn it back on.
-	if prefs, err := lb.SetUseExitNodeEnabled(true); err != nil {
+	if prefs, err := lb.SetUseExitNodeEnabled(user, true); err != nil {
 		t.Fatal("expected failure")
 	} else {
 		if g, w := prefs.ExitNodeID(), tailcfg.StableNodeID("foo"); g != w {
@@ -585,9 +587,9 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 	}
 
 	// Verify we block setting an Internal field.
-	if _, err := lb.EditPrefs(&ipn.MaskedPrefs{
+	if _, err := lb.EditPrefsAs(&ipn.MaskedPrefs{
 		InternalExitNodePriorSet: true,
-	}); err == nil {
+	}, user); err == nil {
 		t.Fatalf("unexpected success; want an error trying to set an internal field")
 	}
 }
@@ -612,16 +614,18 @@ func TestConfigureExitNode(t *testing.T) {
 	}
 
 	tests := []struct {
-		name               string
-		prefs              ipn.Prefs
-		netMap             *netmap.NetworkMap
-		report             *netcheck.Report
-		changePrefs        *ipn.MaskedPrefs
-		useExitNodeEnabled *bool
-		exitNodeIDPolicy   *tailcfg.StableNodeID
-		exitNodeIPPolicy   *netip.Addr
-		exitNodeAllowedIDs []tailcfg.StableNodeID // nil if all IDs are allowed for auto exit nodes
-		wantPrefs          ipn.Prefs
+		name                  string
+		prefs                 ipn.Prefs
+		netMap                *netmap.NetworkMap
+		report                *netcheck.Report
+		changePrefs           *ipn.MaskedPrefs
+		useExitNodeEnabled    *bool
+		exitNodeIDPolicy      *tailcfg.StableNodeID
+		exitNodeIPPolicy      *netip.Addr
+		exitNodeAllowedIDs    []tailcfg.StableNodeID // nil if all IDs are allowed for auto exit nodes
+		wantChangePrefsErr    error                  // if non-nil, the error we expect from [LocalBackend.EditPrefsAs]
+		wantPrefs             ipn.Prefs
+		wantExitNodeToggleErr error // if non-nil, the error we expect from [LocalBackend.SetUseExitNodeEnabled]
 	}{
 		{
 			name: "exit-node-id-via-prefs", // set exit node ID via prefs
@@ -804,6 +808,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
+			wantChangePrefsErr: errManagedByPolicy,
 		},
 		{
 			name: "id-via-policy/cannot-override-via-prefs/by-ip", // syspolicy should take precedence over prefs
@@ -822,6 +827,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
+			wantChangePrefsErr: errManagedByPolicy,
 		},
 		{
 			name: "id-via-policy/cannot-override-via-prefs/by-auto-expr", // syspolicy should take precedence over prefs
@@ -840,6 +846,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
+			wantChangePrefsErr: errManagedByPolicy,
 		},
 		{
 			name: "ip-via-policy", // set exit node IP via syspolicy (should be resolved to an ID)
@@ -999,15 +1006,16 @@ func TestConfigureExitNode(t *testing.T) {
 			prefs: ipn.Prefs{
 				ControlURL: controlURL,
 			},
-			netMap:             clientNetmap,
-			report:             report,
-			exitNodeIDPolicy:   ptr.To(tailcfg.StableNodeID("auto:any")),
-			useExitNodeEnabled: ptr.To(false), // should be ignored
+			netMap:                clientNetmap,
+			report:                report,
+			exitNodeIDPolicy:      ptr.To(tailcfg.StableNodeID("auto:any")),
+			useExitNodeEnabled:    ptr.To(false), // should fail with an error
+			wantExitNodeToggleErr: errManagedByPolicy,
 			wantPrefs: ipn.Prefs{
 				ControlURL:            controlURL,
 				ExitNodeID:            exitNode1.StableID(), // still enforced by the policy setting
 				AutoExitNode:          "any",
-				InternalExitNodePrior: "auto:any",
+				InternalExitNodePrior: "",
 			},
 		},
 	}
@@ -1046,14 +1054,17 @@ func TestConfigureExitNode(t *testing.T) {
 				lb.SetControlClientStatus(lb.cc, controlclient.Status{NetMap: tt.netMap})
 			}
 
+			user := &ipnauth.TestActor{}
 			// If we have a changePrefs, apply it.
 			if tt.changePrefs != nil {
-				lb.EditPrefs(tt.changePrefs)
+				_, err := lb.EditPrefsAs(tt.changePrefs, user)
+				checkError(t, err, tt.wantChangePrefsErr, true)
 			}
 
 			// If we need to flip exit node toggle on or off, do it.
 			if tt.useExitNodeEnabled != nil {
-				lb.SetUseExitNodeEnabled(*tt.useExitNodeEnabled)
+				_, err := lb.SetUseExitNodeEnabled(user, *tt.useExitNodeEnabled)
+				checkError(t, err, tt.wantExitNodeToggleErr, true)
 			}
 
 			// Now check the prefs.
@@ -6215,6 +6226,18 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 			// Assert that we got the expected notification
 			ipnWatcher.check()
 		})
+	}
+}
+
+func checkError(tb testing.TB, got, want error, fatal bool) {
+	tb.Helper()
+	f := tb.Errorf
+	if fatal {
+		f = tb.Fatalf
+	}
+	if (want == nil) != (got == nil) ||
+		(want != nil && got != nil && want.Error() != got.Error() && !errors.Is(got, want)) {
+		f("gotErr: %v; wantErr: %v", got, want)
 	}
 }
 

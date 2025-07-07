@@ -72,7 +72,10 @@ func HasAnyOf(keys ...Key) (bool, error) {
 		if errors.Is(err, setting.ErrNotConfigured) || errors.Is(err, setting.ErrNoSuchKey) {
 			continue
 		}
-		return err == nil, err // err may be nil or non-nil
+		if err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	return false, nil
 }
