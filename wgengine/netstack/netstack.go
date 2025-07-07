@@ -1520,21 +1520,29 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 			err = fmt.Errorf("client -> backend: %w", err)
 		}
 		connClosed <- err
+		err = nil
 		if backendIsTCPCloser {
-			backendTCPCloser.CloseWrite()
+			err = backendTCPCloser.CloseWrite()
 		}
-		client.CloseRead()
+		err = errors.Join(err, client.CloseRead())
+		if err != nil {
+			ns.logf("client -> backend close connection: %v", err)
+		}
 	}()
 	go func() {
 		_, err := io.Copy(client, backend)
 		if err != nil {
 			err = fmt.Errorf("backend -> client: %w", err)
 		}
-		if backendIsTCPCloser {
-			backendTCPCloser.CloseRead()
-		}
-		client.CloseWrite()
 		connClosed <- err
+		err = nil
+		if backendIsTCPCloser {
+			err = backendTCPCloser.CloseRead()
+		}
+		err = errors.Join(err, client.CloseWrite())
+		if err != nil {
+			ns.logf("backend -> client close connection: %v", err)
+		}
 	}()
 	// Wait for both ends of the connection to close.
 	for range 2 {
