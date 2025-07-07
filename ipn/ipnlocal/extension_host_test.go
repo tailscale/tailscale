@@ -1230,7 +1230,7 @@ func (e *testExtension) InitCalled() bool {
 func (e *testExtension) Shutdown() (err error) {
 	e.t.Helper()
 	e.mu.Lock()
-	e.mu.Unlock()
+	defer e.mu.Unlock()
 	if e.ShutdownHook != nil {
 		err = e.ShutdownHook(e)
 	}
