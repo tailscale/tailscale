@@ -1435,6 +1435,13 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
+// tcpCloser is an interface to abstract around various TCPConn types that
+// allow closing of the read and write streams independently of each other.
+type tcpCloser interface {
+	CloseRead() error
+	CloseWrite() error
+}
+
 func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) (handled bool) {
 	dialAddrStr := dialAddr.String()
 	if debugNetstack() {
@@ -1501,18 +1508,48 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	}
 	defer client.Close()
 
+	// As of 2025-07-03, backend is always either a net.TCPConn
+	// from stdDialer.DialContext (which has the requisite functions),
+	// or nil from hangDialer in tests (in which case we would have
+	// errored out by now), so this conversion should always succeed.
+	backendTCPCloser, backendIsTCPCloser := backend.(tcpCloser)
 	connClosed := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(backend, client)
+		if err != nil {
+			err = fmt.Errorf("client -> backend: %w", err)
+		}
 		connClosed <- err
+		err = nil
+		if backendIsTCPCloser {
+			err = backendTCPCloser.CloseWrite()
+		}
+		err = errors.Join(err, client.CloseRead())
+		if err != nil {
+			ns.logf("client -> backend close connection: %v", err)
+		}
 	}()
 	go func() {
 		_, err := io.Copy(client, backend)
+		if err != nil {
+			err = fmt.Errorf("backend -> client: %w", err)
+		}
 		connClosed <- err
+		err = nil
+		if backendIsTCPCloser {
+			err = backendTCPCloser.CloseRead()
+		}
+		err = errors.Join(err, client.CloseWrite())
+		if err != nil {
+			ns.logf("backend -> client close connection: %v", err)
+		}
 	}()
-	err = <-connClosed
-	if err != nil {
-		ns.logf("proxy connection closed with error: %v", err)
+	// Wait for both ends of the connection to close.
+	for range 2 {
+		err = <-connClosed
+		if err != nil {
+			ns.logf("proxy connection closed with error: %v", err)
+		}
 	}
 	ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
 	return
