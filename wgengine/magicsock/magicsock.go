@@ -2103,7 +2103,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			c.logf("[unexpected] %T packets should not come from a relay server with Geneve control bit set", dm)
 			return
 		}
-		c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, challenge, di, src)
+		c.relayManager.handleGeneveEncapDiscoMsg(c, challenge, di, src)
 		return
 	}
 
@@ -2125,7 +2125,10 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			return true
 		})
 		if !knownTxID && src.vni.isSet() {
-			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, dm, di, src)
+			// If it's an unknown TxID, and it's Geneve-encapsulated, then
+			// make [relayManager] aware. It might be in the middle of probing
+			// src.
+			c.relayManager.handleGeneveEncapDiscoMsg(c, dm, di, src)
 		}
 	case *disco.CallMeMaybe, *disco.CallMeMaybeVia:
 		var via *disco.CallMeMaybeVia
@@ -2233,6 +2236,35 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 	di.lastPingTime = time.Now()
 	isDerp := src.ap.Addr() == tailcfg.DerpMagicIPAddr
 
+	if src.vni.isSet() {
+		if isDerp {
+			c.logf("[unexpected] got Geneve-encapsulated disco ping from %v/%v over DERP", src, derpNodeSrc)
+			return
+		}
+
+		// [relayManager] is always responsible for handling (replying) to
+		// Geneve-encapsulated [disco.Ping] messages in the interest of
+		// simplicity. It might be in the middle of probing src, so it must be
+		// made aware.
+		c.relayManager.handleGeneveEncapDiscoMsg(c, dm, di, src)
+		return
+	}
+
+	// This is a naked [disco.Ping] without a VNI.
+
+	// If we can figure out with certainty which node key this disco
+	// message is for, eagerly update our [epAddr]<>node and disco<>node
+	// mappings to make p2p path discovery faster in simple
+	// cases. Without this, disco would still work, but would be
+	// reliant on DERP call-me-maybe to establish the disco<>node
+	// mapping, and on subsequent disco handlePongConnLocked to establish
+	// the IP:port<>disco mapping.
+	if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
+		if !isDerp {
+			c.peerMap.setNodeKeyForEpAddr(src, nk)
+		}
+	}
+
 	// numNodes tracks how many nodes (node keys) are associated with the disco
 	// key tied to this inbound ping. Multiple nodes may share the same disco
 	// key in the case of node sharing and users switching accounts.
@@ -2244,81 +2276,34 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 	// a dstKey if the dst ip:port is DERP.
 	dstKey := derpNodeSrc
 
-	switch {
-	case src.vni.isSet():
-		if isDerp {
-			c.logf("[unexpected] got Geneve-encapsulated disco ping from %v/%v over DERP", src, derpNodeSrc)
-			return
-		}
-
-		var bestEpAddr epAddr
-		var discoKey key.DiscoPublic
-		ep, ok := c.peerMap.endpointForEpAddr(src)
-		if ok {
-			ep.mu.Lock()
-			bestEpAddr = ep.bestAddr.epAddr
-			ep.mu.Unlock()
-			disco := ep.disco.Load()
-			if disco != nil {
-				discoKey = disco.key
-			}
-		}
-
-		if src == bestEpAddr && discoKey == di.discoKey {
-			// We have an associated endpoint with src as its bestAddr. Set
-			// numNodes so we TX a pong further down.
-			numNodes = 1
-		} else {
-			// We have no [endpoint] in the [peerMap] for this relay [epAddr]
-			// using it as a bestAddr. [relayManager] might be in the middle of
-			// probing it or attempting to set it as best via
-			// [endpoint.udpRelayEndpointReady()]. Make [relayManager] aware.
-			c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(c, dm, di, src)
-			return
-		}
-	default: // no VNI
-		// If we can figure out with certainty which node key this disco
-		// message is for, eagerly update our [epAddr]<>node and disco<>node
-		// mappings to make p2p path discovery faster in simple
-		// cases. Without this, disco would still work, but would be
-		// reliant on DERP call-me-maybe to establish the disco<>node
-		// mapping, and on subsequent disco handlePongConnLocked to establish
-		// the IP:port<>disco mapping.
-		if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
-			if !isDerp {
-				c.peerMap.setNodeKeyForEpAddr(src, nk)
-			}
-		}
-
-		// Remember this route if not present.
-		var dup bool
-		if isDerp {
-			if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
-				if ep.addCandidateEndpoint(src.ap, dm.TxID) {
-					return
-				}
-				numNodes = 1
-			}
-		} else {
-			c.peerMap.forEachEndpointWithDiscoKey(di.discoKey, func(ep *endpoint) (keepGoing bool) {
-				if ep.addCandidateEndpoint(src.ap, dm.TxID) {
-					dup = true
-					return false
-				}
-				numNodes++
-				if numNodes == 1 && dstKey.IsZero() {
-					dstKey = ep.publicKey
-				}
-				return true
-			})
-			if dup {
+	// Remember this route if not present.
+	var dup bool
+	if isDerp {
+		if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
+			if ep.addCandidateEndpoint(src.ap, dm.TxID) {
 				return
 			}
-			if numNodes > 1 {
-				// Zero it out if it's ambiguous, so sendDiscoMessage logging
-				// isn't confusing.
-				dstKey = key.NodePublic{}
+			numNodes = 1
+		}
+	} else {
+		c.peerMap.forEachEndpointWithDiscoKey(di.discoKey, func(ep *endpoint) (keepGoing bool) {
+			if ep.addCandidateEndpoint(src.ap, dm.TxID) {
+				dup = true
+				return false
 			}
+			numNodes++
+			if numNodes == 1 && dstKey.IsZero() {
+				dstKey = ep.publicKey
+			}
+			return true
+		})
+		if dup {
+			return
+		}
+		if numNodes > 1 {
+			// Zero it out if it's ambiguous, so sendDiscoMessage logging
+			// isn't confusing.
+			dstKey = key.NodePublic{}
 		}
 	}
 

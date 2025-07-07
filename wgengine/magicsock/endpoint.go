@@ -1656,13 +1656,6 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	if src.vni.isSet() && src != de.bestAddr.epAddr {
-		// "src" is not our bestAddr, but [relayManager] might be in the
-		// middle of probing it, awaiting pong reception. Make it aware.
-		de.c.relayManager.handleGeneveEncapDiscoMsgNotBestAddr(de.c, m, di, src)
-		return false
-	}
-
 	isDerp := src.ap.Addr() == tailcfg.DerpMagicIPAddr
 
 	sp, ok := de.sentPing[m.TxID]
