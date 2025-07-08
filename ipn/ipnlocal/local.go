@@ -2071,6 +2071,14 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 //
 // b.mu must be held.
 func (b *LocalBackend) resolveAutoExitNodeLocked(prefs *ipn.Prefs) (prefsChanged bool) {
+	// As of 2025-07-08, the only supported auto exit node expression is [ipn.AnyExitNode].
+	//
+	// However, to maintain forward compatibility with future auto exit node expressions,
+	// we treat any non-empty AutoExitNode as [ipn.AnyExitNode].
+	//
+	// If and when we support additional auto exit node expressions, this method should be updated
+	// to handle them appropriately, while still falling back to [ipn.AnyExitNode] or a more appropriate
+	// default for unknown (or partially supported) expressions.
 	if !prefs.AutoExitNode.IsSet() {
 		return false
 	}
