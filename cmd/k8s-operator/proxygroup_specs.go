@@ -300,7 +300,7 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string) (*a
 					ServiceAccountName: pgServiceAccountName(pg),
 					Containers: []corev1.Container{
 						{
-							Name:  "k8s-proxy",
+							Name:  mainContainerName,
 							Image: image,
 							Env: []corev1.EnvVar{
 								{

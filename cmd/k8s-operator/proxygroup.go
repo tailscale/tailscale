@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	dockerref "github.com/distribution/reference"
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
@@ -161,10 +162,6 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, pg *tsapi.ProxyG
 		}
 	}
 
-	if err := r.validate(ctx, pg); err != nil {
-		return r.notReady(reasonProxyGroupInvalid, fmt.Sprintf("invalid ProxyGroup spec: %v", err))
-	}
-
 	proxyClassName := r.defaultProxyClass
 	if pg.Spec.ProxyClass != "" {
 		proxyClassName = pg.Spec.ProxyClass
@@ -182,12 +179,15 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, pg *tsapi.ProxyG
 		if err != nil {
 			return r.notReadyErrf(pg, "error getting ProxyGroup's ProxyClass %q: %w", proxyClassName, err)
 		}
-		validateProxyClassForPG(logger, pg, proxyClass)
 		if !tsoperator.ProxyClassIsReady(proxyClass) {
 			msg := fmt.Sprintf("the ProxyGroup's ProxyClass %q is not yet in a ready state, waiting...", proxyClassName)
 			logger.Info(msg)
 			return r.notReady(reasonProxyGroupCreating, msg)
 		}
+	}
+
+	if err := r.validate(ctx, pg, proxyClass, logger); err != nil {
+		return r.notReady(reasonProxyGroupInvalid, fmt.Sprintf("invalid ProxyGroup spec: %v", err))
 	}
 
 	staticEndpoints, nrr, err := r.maybeProvision(ctx, pg, proxyClass)
@@ -204,39 +204,7 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, pg *tsapi.ProxyG
 	return staticEndpoints, nrr, nil
 }
 
-func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGroup) error {
-	if isAuthAPIServerProxy(pg) {
-		// Validate that the static ServiceAccount already exists.
-		sa := &corev1.ServiceAccount{}
-		if err := r.Get(ctx, types.NamespacedName{Namespace: r.tsNamespace, Name: authAPIServerProxySAName}, sa); err != nil {
-			if apierrors.IsNotFound(err) {
-				return fmt.Errorf("the ServiceAccount %q used for the API server proxy in auth mode does not exist but "+
-					"should have been created during operator installation; use apiServerProxyConfig.allowImpersonation=true "+
-					"in the helm chart, or authproxy-rbac.yaml from the static manifests", authAPIServerProxySAName)
-			}
-
-			return fmt.Errorf("error validating that ServiceAccount %q exists: %w", authAPIServerProxySAName, err)
-		}
-
-		return nil
-	}
-
-	// Validate that the ServiceAccount we create won't overwrite the static one.
-	// TODO(tomhjp): This doesn't cover other controllers that could create a
-	// ServiceAccount. Perhaps should have some guards to ensure that an update
-	// would never change the ownership of a resource we expect to already be owned.
-	if pgServiceAccountName(pg) == authAPIServerProxySAName {
-		return fmt.Errorf("the name of the ProxyGroup %q conflicts with the static ServiceAccount used for the API server proxy in auth mode", pg.Name)
-	}
-
-	return nil
-}
-
-// validateProxyClassForPG applies custom validation logic for ProxyClass applied to ProxyGroup.
-func validateProxyClassForPG(logger *zap.SugaredLogger, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) {
-	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
-		return
-	}
+func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, logger *zap.SugaredLogger) error {
 	// Our custom logic for ensuring minimum downtime ProxyGroup update rollouts relies on the local health check
 	// beig accessible on the replica Pod IP:9002. This address can also be modified by users, via
 	// TS_LOCAL_ADDR_PORT env var.
@@ -248,13 +216,69 @@ func validateProxyClassForPG(logger *zap.SugaredLogger, pg *tsapi.ProxyGroup, pc
 	// shouldn't need to set their own).
 	//
 	// TODO(irbekrm): maybe disallow configuring this env var in future (in Tailscale 1.84 or later).
-	if hasLocalAddrPortSet(pc) {
+	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress && hasLocalAddrPortSet(pc) {
 		msg := fmt.Sprintf("ProxyClass %s applied to an egress ProxyGroup has TS_LOCAL_ADDR_PORT env var set to a custom value."+
 			"This will disable the ProxyGroup graceful failover mechanism, so you might experience downtime when ProxyGroup pods are restarted."+
 			"In future we will remove the ability to set custom TS_LOCAL_ADDR_PORT for egress ProxyGroups."+
 			"Please raise an issue if you expect that this will cause issues for your workflow.", pc.Name)
 		logger.Warn(msg)
 	}
+
+	// image is the value of pc.Spec.StatefulSet.Pod.TailscaleContainer.Image or ""
+	// imagePath is a slash-delimited path ending with the image name, e.g.
+	// "tailscale/tailscale" or maybe "k8s-proxy" if hosted at example.com/k8s-proxy.
+	var image, imagePath string
+	if pc != nil &&
+		pc.Spec.StatefulSet != nil &&
+		pc.Spec.StatefulSet.Pod != nil &&
+		pc.Spec.StatefulSet.Pod.TailscaleContainer != nil {
+		image, err := dockerref.ParseNormalizedNamed(pc.Spec.StatefulSet.Pod.TailscaleContainer.Image)
+		if err != nil {
+			// Shouldn't be possible as the ProxyClass won't be marked ready
+			// without successfully parsing the image.
+			return fmt.Errorf("error parsing %q as a container image reference: %w", pc.Spec.StatefulSet.Pod.TailscaleContainer.Image, err)
+		}
+		imagePath = dockerref.Path(image)
+	}
+
+	var errs []error
+	if isAuthAPIServerProxy(pg) {
+		// Validate that the static ServiceAccount already exists.
+		sa := &corev1.ServiceAccount{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: r.tsNamespace, Name: authAPIServerProxySAName}, sa); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return fmt.Errorf("error validating that ServiceAccount %q exists: %w", authAPIServerProxySAName, err)
+			}
+
+			errs = append(errs, fmt.Errorf("the ServiceAccount %q used for the API server proxy in auth mode does not exist but "+
+				"should have been created during operator installation; use apiServerProxyConfig.allowImpersonation=true "+
+				"in the helm chart, or authproxy-rbac.yaml from the static manifests", authAPIServerProxySAName))
+		}
+	} else {
+		// Validate that the ServiceAccount we create won't overwrite the static one.
+		// TODO(tomhjp): This doesn't cover other controllers that could create a
+		// ServiceAccount. Perhaps should have some guards to ensure that an update
+		// would never change the ownership of a resource we expect to already be owned.
+		if pgServiceAccountName(pg) == authAPIServerProxySAName {
+			errs = append(errs, fmt.Errorf("the name of the ProxyGroup %q conflicts with the static ServiceAccount used for the API server proxy in auth mode", pg.Name))
+		}
+	}
+
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		if strings.HasSuffix(imagePath, "tailscale") {
+			errs = append(errs, fmt.Errorf("the configured ProxyClass %q specifies to use image %q but expected a %q image for ProxyGroup of type %q", pc.Name, image, "k8s-proxy", pg.Spec.Type))
+		}
+
+		if pc.Spec.StatefulSet != nil && pc.Spec.StatefulSet.Pod != nil && pc.Spec.StatefulSet.Pod.TailscaleInitContainer != nil {
+			errs = append(errs, fmt.Errorf("the configured ProxyClass %q specifies Tailscale init container config, but ProxyGroups of type %q do not use init containers", pc.Name, pg.Spec.Type))
+		}
+	} else {
+		if strings.HasSuffix(imagePath, "k8s-proxy") {
+			errs = append(errs, fmt.Errorf("the configured ProxyClass %q specifies to use image %q but expected a %q image for ProxyGroup of type %q", pc.Name, image, "tailscale", pg.Spec.Type))
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (map[string][]netip.AddrPort, *notReadyReason, error) {

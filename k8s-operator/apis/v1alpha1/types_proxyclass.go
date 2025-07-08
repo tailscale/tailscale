@@ -264,6 +264,7 @@ type Pod struct {
 	// +optional
 	TailscaleContainer *Container `json:"tailscaleContainer,omitempty"`
 	// Configuration for the proxy init container that enables forwarding.
+	// Not valid to apply to ProxyGroups of type "kube-apiserver".
 	// +optional
 	TailscaleInitContainer *Container `json:"tailscaleInitContainer,omitempty"`
 	// Proxy Pod's security context.
@@ -364,12 +365,21 @@ type Container struct {
 	// the future.
 	// +optional
 	Env []Env `json:"env,omitempty"`
-	// Container image name. By default images are pulled from
-	// docker.io/tailscale/tailscale, but the official images are also
-	// available at ghcr.io/tailscale/tailscale. Specifying image name here
-	// will override any proxy image values specified via the Kubernetes
-	// operator's Helm chart values or PROXY_IMAGE env var in the operator
-	// Deployment.
+	// Container image name. By default images are pulled from docker.io/tailscale,
+	// but the official images are also available at ghcr.io/tailscale.
+	//
+	// For all uses except on ProxyGroups of type "kube-apiserver", this image must
+	// be either tailscale/tailscale, or an equivalent mirror of that image.
+	// To apply to ProxyGroups of type "kube-apiserver", this image must be
+	// tailscale/k8s-proxy or a mirror of that image.
+	//
+	// For "tailscale/tailscale"-based proxies, specifying image name here will
+	// override any proxy image values specified via the Kubernetes operator's
+	// Helm chart values or PROXY_IMAGE env var in the operator Deployment.
+	// For "tailscale/k8s-proxy"-based proxies, there is currently no way to
+	// configure your own default, and this field is the only way to use a
+	// custom image.
+	//
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
 	// +optional
 	Image string `json:"image,omitempty"`

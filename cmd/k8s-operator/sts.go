@@ -102,6 +102,8 @@ const (
 	defaultLocalAddrPort  = 9002 // metrics and health check port
 
 	letsEncryptStagingEndpoint = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+	mainContainerName = "tailscale"
 )
 
 var (
@@ -903,7 +905,7 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 }
 
 func isMainContainer(c *corev1.Container) bool {
-	return c.Name == "tailscale" || c.Name == "k8s-proxy"
+	return c.Name == mainContainerName
 }
 
 // tailscaledConfig takes a proxy config, a newly generated auth key if generated and a Secret with the previous proxy

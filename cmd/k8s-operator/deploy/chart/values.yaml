@@ -88,6 +88,13 @@ ingressClass:
 # If you need more configuration options, take a look at ProxyClass:
 # https://tailscale.com/kb/1445/kubernetes-operator-customization#cluster-resource-customization-using-proxyclass-custom-resource
 proxyConfig:
+  # Configure the proxy image to use instead of the default tailscale/tailscale:latest.
+  # Applying a ProxyClass with `spec.statefulSet.pod.tailscaleContainer.image`
+  # set will override any defaults here.
+  #
+  # Note that ProxyGroups of type "kube-apiserver" use a different default image,
+  # tailscale/k8s-proxy:latest, and it is currently only possible to override
+  # that image via the same ProxyClass field.
   image:
     # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/tailscale.
     repository: tailscale/tailscale
