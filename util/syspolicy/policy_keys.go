@@ -54,6 +54,15 @@ const (
 	ExitNodeID Key = "ExitNodeID"
 	ExitNodeIP Key = "ExitNodeIP" // default ""; if blank, no exit node is forced. Value is exit node IP.
 
+	// AllowExitNodeOverride is a boolean key that allows the user to override exit node policy settings
+	// and manually select an exit node. It does not allow disabling exit node usage entirely.
+	// It is typically used in conjunction with [ExitNodeID] set to "auto:any".
+	//
+	// Warning: This policy setting is experimental and may change, be renamed or removed in the future.
+	// It may also not be fully supported by all Tailscale clients until it is out of experimental status.
+	// See tailscale/corp#29969.
+	AllowExitNodeOverride Key = "ExitNode.AllowOverride"
+
 	// Keys with a string value that specifies an option: "always", "never", "user-decides".
 	// The default is "user-decides" unless otherwise stated. Enforcement of
 	// these policies is typically performed in ipnlocal.applySysPolicy(). GUIs
@@ -173,6 +182,7 @@ const (
 var implicitDefinitions = []*setting.Definition{
 	// Device policy settings (can only be configured on a per-device basis):
 	setting.NewDefinition(AllowedSuggestedExitNodes, setting.DeviceSetting, setting.StringListValue),
+	setting.NewDefinition(AllowExitNodeOverride, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(AlwaysOn, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(AlwaysOnOverrideWithReason, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(ApplyUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),

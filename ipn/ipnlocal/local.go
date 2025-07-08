@@ -414,6 +414,19 @@ type LocalBackend struct {
 	// reconnectTimer is used to schedule a reconnect by setting [ipn.Prefs.WantRunning]
 	// to true after a delay, or nil if no reconnect is scheduled.
 	reconnectTimer tstime.TimerController
+
+	// overrideExitNodePolicy is whether the user has overridden the exit node policy
+	// by manually selecting an exit node, as allowed by [syspolicy.AllowExitNodeOverride].
+	//
+	// If true, the [syspolicy.ExitNodeID] and [syspolicy.ExitNodeIP] policy settings are ignored,
+	// and the suggested exit node is not applied automatically.
+	//
+	// It is cleared when the user switches back to the state required by policy (typically, auto:any),
+	// or when switching profiles, connecting/disconnecting Tailscale, restarting the client,
+	// or on similar events.
+	//
+	// See tailscale/corp#29969.
+	overrideExitNodePolicy bool
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -1841,7 +1854,8 @@ func (b *LocalBackend) applySysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
 		}
 	}
 
-	if b.applyExitNodeSysPolicyLocked(prefs) {
+	// Only apply the exit node policy if the user hasn't overridden it.
+	if !b.overrideExitNodePolicy && b.applyExitNodeSysPolicyLocked(prefs) {
 		anyChange = true
 	}
 
@@ -1957,12 +1971,20 @@ func (b *LocalBackend) reconcilePrefs() (_ ipn.PrefsView, anyChange bool) {
 // sysPolicyChanged is a callback triggered by syspolicy when it detects
 // a change in one or more syspolicy settings.
 func (b *LocalBackend) sysPolicyChanged(policy *rsop.PolicyChange) {
-	if policy.HasChanged(syspolicy.AlwaysOn) || policy.HasChanged(syspolicy.AlwaysOnOverrideWithReason) {
+	if policy.HasChangedAnyOf(syspolicy.AlwaysOn, syspolicy.AlwaysOnOverrideWithReason) {
 		// If the AlwaysOn or the AlwaysOnOverrideWithReason policy has changed,
 		// we should reset the overrideAlwaysOn flag, as the override might
 		// no longer be valid.
 		b.mu.Lock()
 		b.overrideAlwaysOn = false
+		b.mu.Unlock()
+	}
+
+	if policy.HasChangedAnyOf(syspolicy.ExitNodeID, syspolicy.ExitNodeIP, syspolicy.AllowExitNodeOverride) {
+		// Reset the exit node override if a policy that enforces exit node usage
+		// or allows the user to override automatic exit node selection has changed.
+		b.mu.Lock()
+		b.overrideExitNodePolicy = false
 		b.mu.Unlock()
 	}
 
@@ -4320,12 +4342,12 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 }
 
 // checkEditPrefsAccessLocked checks whether the current user has access
-// to apply the prefs changes in mp.
+// to apply the changes in mp to the given prefs.
 //
 // It returns an error if the user is not allowed, or nil otherwise.
 //
 // b.mu must be held.
-func (b *LocalBackend) checkEditPrefsAccessLocked(actor ipnauth.Actor, mp *ipn.MaskedPrefs) error {
+func (b *LocalBackend) checkEditPrefsAccessLocked(actor ipnauth.Actor, prefs ipn.PrefsView, mp *ipn.MaskedPrefs) error {
 	var errs []error
 
 	if mp.RunSSHSet && mp.RunSSH && !envknob.CanSSHD() {
@@ -4342,14 +4364,18 @@ func (b *LocalBackend) checkEditPrefsAccessLocked(actor ipnauth.Actor, mp *ipn.M
 	// Prevent users from changing exit node preferences
 	// when exit node usage is managed by policy.
 	if mp.ExitNodeIDSet || mp.ExitNodeIPSet || mp.AutoExitNodeSet {
-		// TODO(nickkhyl): Allow users to override ExitNode policy settings
-		// if the ExitNode.AllowUserOverride policy permits it.
-		// (Policy setting name and details are TBD. See tailscale/corp#29969)
 		isManaged, err := syspolicy.HasAnyOf(syspolicy.ExitNodeID, syspolicy.ExitNodeIP)
 		if err != nil {
 			err = fmt.Errorf("policy check failed: %w", err)
 		} else if isManaged {
-			err = errManagedByPolicy
+			// Allow users to override ExitNode policy settings and select an exit node manually
+			// if permitted by [syspolicy.AllowExitNodeOverride].
+			//
+			// Disabling exit node usage entirely is not allowed.
+			allowExitNodeOverride, _ := syspolicy.GetBoolean(syspolicy.AllowExitNodeOverride, false)
+			if !allowExitNodeOverride || b.changeDisablesExitNodeLocked(prefs, mp) {
+				err = errManagedByPolicy
+			}
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("exit node cannot be changed: %w", err))
@@ -4359,17 +4385,68 @@ func (b *LocalBackend) checkEditPrefsAccessLocked(actor ipnauth.Actor, mp *ipn.M
 	return multierr.New(errs...)
 }
 
+// changeDisablesExitNodeLocked reports whether applying the change
+// to the given prefs would disable exit node usage.
+//
+// In other words, it returns true if prefs.ExitNodeID is non-empty
+// initially, but would become empty after applying the given change.
+//
+// It applies the same adjustments and resolves the exit node in the prefs
+// as done during actual edits. While not optimal performance-wise,
+// changing the exit node via LocalAPI isn't a hot path, and reusing
+// the same logic ensures consistency and simplifies maintenance.
+//
+// b.mu must be held.
+func (b *LocalBackend) changeDisablesExitNodeLocked(prefs ipn.PrefsView, change *ipn.MaskedPrefs) bool {
+	if !change.AutoExitNodeSet && !change.ExitNodeIDSet && !change.ExitNodeIPSet {
+		// The change does not affect exit node usage.
+		return false
+	}
+
+	if prefs.ExitNodeID() == "" {
+		// Exit node usage is already disabled.
+		// Note that we do not check for ExitNodeIP here.
+		// If ExitNodeIP hasn't been resolved to a node,
+		// it's not enabled yet.
+		return false
+	}
+
+	// First, apply the adjustments to a copy of the changes,
+	// e.g., clear AutoExitNode if ExitNodeID is set.
+	tmpChange := ptr.To(*change)
+	tmpChange.Prefs = *change.Prefs.Clone()
+	b.adjustEditPrefsLocked(prefs, tmpChange)
+
+	// Then apply the adjusted changes to a copy of the current prefs,
+	// and resolve the exit node in the prefs.
+	tmpPrefs := prefs.AsStruct()
+	tmpPrefs.ApplyEdits(tmpChange)
+	b.resolveExitNodeInPrefsLocked(tmpPrefs)
+
+	// If ExitNodeID is empty after applying the changes,
+	// but wasn't empty before, then the change disables
+	// exit node usage.
+	return tmpPrefs.ExitNodeID == ""
+
+}
+
 // adjustEditPrefsLocked applies additional changes to mp if necessary,
 // such as zeroing out mutually exclusive fields.
 //
 // It must not assume that the changes in mp will actually be applied.
 //
 // b.mu must be held.
-func (b *LocalBackend) adjustEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs) {
+func (b *LocalBackend) adjustEditPrefsLocked(prefs ipn.PrefsView, mp *ipn.MaskedPrefs) {
 	// Zeroing the ExitNodeID via localAPI must also zero the prior exit node.
 	if mp.ExitNodeIDSet && mp.ExitNodeID == "" && !mp.InternalExitNodePriorSet {
 		mp.InternalExitNodePrior = ""
 		mp.InternalExitNodePriorSet = true
+	}
+
+	// Clear ExitNodeID if AutoExitNode is disabled and ExitNodeID is still unresolved.
+	if mp.AutoExitNodeSet && mp.AutoExitNode == "" && prefs.ExitNodeID() == unresolvedExitNodeID {
+		mp.ExitNodeIDSet = true
+		mp.ExitNodeID = ""
 	}
 
 	// Disable automatic exit node selection if the user explicitly sets
@@ -4401,6 +4478,22 @@ func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, o
 
 		if reconnectAfter, _ := syspolicy.GetDuration(syspolicy.ReconnectAfter, 0); reconnectAfter > 0 {
 			b.startReconnectTimerLocked(reconnectAfter)
+		}
+	}
+
+	if oldPrefs.WantRunning() != newPrefs.WantRunning() {
+		// Connecting to or disconnecting from Tailscale clears the override,
+		// unless the user is also explicitly changing the exit node (see below).
+		b.overrideExitNodePolicy = false
+	}
+	if mp.AutoExitNodeSet || mp.ExitNodeIDSet || mp.ExitNodeIPSet {
+		if allowExitNodeOverride, _ := syspolicy.GetBoolean(syspolicy.AllowExitNodeOverride, false); allowExitNodeOverride {
+			// If applying exit node policy settings to the new prefs results in no change,
+			// the user is not overriding the policy. Otherwise, it is an override.
+			b.overrideExitNodePolicy = b.applyExitNodeSysPolicyLocked(newPrefs.AsStruct())
+		} else {
+			// Overrides are not allowed; clear the override flag.
+			b.overrideExitNodePolicy = false
 		}
 	}
 
@@ -4486,15 +4579,17 @@ func (b *LocalBackend) stopReconnectTimerLocked() {
 func (b *LocalBackend) editPrefsLockedOnEntry(actor ipnauth.Actor, mp *ipn.MaskedPrefs, unlock unlockOnce) (ipn.PrefsView, error) {
 	defer unlock() // for error paths
 
+	p0 := b.pm.CurrentPrefs()
+
 	// Check if the changes in mp are allowed.
-	if err := b.checkEditPrefsAccessLocked(actor, mp); err != nil {
+	if err := b.checkEditPrefsAccessLocked(actor, p0, mp); err != nil {
 		b.logf("EditPrefs(%v): %v", mp.Pretty(), err)
 		return ipn.PrefsView{}, err
 	}
 
 	// Apply additional changes to mp if necessary,
 	// such as clearing mutually exclusive fields.
-	b.adjustEditPrefsLocked(actor, mp)
+	b.adjustEditPrefsLocked(p0, mp)
 
 	if mp.EggSet {
 		mp.EggSet = false
@@ -4502,7 +4597,6 @@ func (b *LocalBackend) editPrefsLockedOnEntry(actor ipnauth.Actor, mp *ipn.Maske
 		b.goTracker.Go(b.doSetHostinfoFilterServices)
 	}
 
-	p0 := b.pm.CurrentPrefs()
 	p1 := b.pm.CurrentPrefs().AsStruct()
 	p1.ApplyEdits(mp)
 
@@ -7231,6 +7325,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
 	b.keyExpired = false
+	b.overrideExitNodePolicy = false
 	b.resetAlwaysOnOverrideLocked()
 	b.extHost.NotifyProfileChange(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())

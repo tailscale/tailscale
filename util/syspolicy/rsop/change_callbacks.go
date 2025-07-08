@@ -59,6 +59,11 @@ func (c PolicyChange) HasChanged(key setting.Key) bool {
 	}
 }
 
+// HasChangedAnyOf reports whether any of the specified policy settings has changed.
+func (c PolicyChange) HasChangedAnyOf(keys ...setting.Key) bool {
+	return slices.ContainsFunc(keys, c.HasChanged)
+}
+
 // policyChangeCallbacks are the callbacks to invoke when the effective policy changes.
 // It is safe for concurrent use.
 type policyChangeCallbacks struct {
