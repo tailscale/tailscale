@@ -231,7 +231,8 @@ func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGrou
 	if pc != nil &&
 		pc.Spec.StatefulSet != nil &&
 		pc.Spec.StatefulSet.Pod != nil &&
-		pc.Spec.StatefulSet.Pod.TailscaleContainer != nil {
+		pc.Spec.StatefulSet.Pod.TailscaleContainer != nil &&
+		pc.Spec.StatefulSet.Pod.TailscaleContainer.Image != "" {
 		image, err := dockerref.ParseNormalizedNamed(pc.Spec.StatefulSet.Pod.TailscaleContainer.Image)
 		if err != nil {
 			// Shouldn't be possible as the ProxyClass won't be marked ready
@@ -269,7 +270,7 @@ func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGrou
 			errs = append(errs, fmt.Errorf("the configured ProxyClass %q specifies to use image %q but expected a %q image for ProxyGroup of type %q", pc.Name, image, "k8s-proxy", pg.Spec.Type))
 		}
 
-		if pc.Spec.StatefulSet != nil && pc.Spec.StatefulSet.Pod != nil && pc.Spec.StatefulSet.Pod.TailscaleInitContainer != nil {
+		if pc != nil && pc.Spec.StatefulSet != nil && pc.Spec.StatefulSet.Pod != nil && pc.Spec.StatefulSet.Pod.TailscaleInitContainer != nil {
 			errs = append(errs, fmt.Errorf("the configured ProxyClass %q specifies Tailscale init container config, but ProxyGroups of type %q do not use init containers", pc.Name, pg.Spec.Type))
 		}
 	} else {

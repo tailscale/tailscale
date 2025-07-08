@@ -1226,8 +1226,8 @@ func TestProxyGroupTypes(t *testing.T) {
 		}
 
 		// Verify the StatefulSet configuration for KubernetesAPIServer type.
-		if sts.Spec.Template.Spec.Containers[0].Name != "k8s-proxy" {
-			t.Errorf("unexpected container name %s, want k8s-proxy", sts.Spec.Template.Spec.Containers[0].Name)
+		if sts.Spec.Template.Spec.Containers[0].Name != mainContainerName {
+			t.Errorf("unexpected container name %s, want %s", sts.Spec.Template.Spec.Containers[0].Name, mainContainerName)
 		}
 		if sts.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort != 443 {
 			t.Errorf("unexpected container port %d, want 443", sts.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort)
