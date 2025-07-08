@@ -3777,16 +3777,44 @@ func (c *Conn) SetLastNetcheckReportForTest(ctx context.Context, report *netchec
 // lazyEndpoint is a wireguard [conn.Endpoint] for when magicsock received a
 // non-disco (presumably WireGuard) packet from a UDP address from which we
 // can't map to a Tailscale peer. But WireGuard most likely can, once it
-// decrypts it. So we implement the [conn.PeerAwareEndpoint] interface
-// from https://github.com/tailscale/wireguard-go/pull/27 to allow WireGuard
-// to tell us who it is later and get the correct [conn.Endpoint].
+// decrypts it. So we implement the [conn.InitiationAwareEndpoint] and
+// [conn.PeerAwareEndpoint] interfaces, to allow WireGuard to tell us who it is
+// later, just-in-time to configure the peer, and set the associated [epAddr]
+// in the [peerMap]. Future receives on the associated [epAddr] will then be
+// resolvable directly to an [*endpoint].
 type lazyEndpoint struct {
 	c   *Conn
 	src epAddr
 }
 
+var _ conn.InitiationAwareEndpoint = (*lazyEndpoint)(nil)
 var _ conn.PeerAwareEndpoint = (*lazyEndpoint)(nil)
 var _ conn.Endpoint = (*lazyEndpoint)(nil)
+
+// InitiationMessagePublicKey implements [conn.InitiationAwareEndpoint].
+// wireguard-go calls us here if we passed it a [*lazyEndpoint] for an
+// initiation message, for which it might not have the relevant peer configured,
+// enabling us to just-in-time configure it and note its activity via
+// [*endpoint.noteRecvActivity], before it performs peer lookup and attempts
+// decryption.
+//
+// Reception of all other WireGuard message types implies pre-existing knowledge
+// of the peer by wireguard-go for it to do useful work. See
+// [userspaceEngine.maybeReconfigWireguardLocked] &
+// [userspaceEngine.noteRecvActivity] for more details around just-in-time
+// wireguard-go peer (de)configuration.
+func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
+	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
+	le.c.mu.Lock()
+	defer le.c.mu.Unlock()
+	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)
+	if !ok {
+		return
+	}
+	now := mono.Now()
+	ep.lastRecvUDPAny.StoreAtomic(now)
+	ep.noteRecvActivity(le.src, now)
+}
 
 func (le *lazyEndpoint) ClearSrc()         {}
 func (le *lazyEndpoint) SrcIP() netip.Addr { return netip.Addr{} }
