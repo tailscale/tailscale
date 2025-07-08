@@ -21,6 +21,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/dns"
@@ -607,7 +608,7 @@ func TestStateMachine(t *testing.T) {
 	store.awaitWrite()
 	t.Logf("\n\nLogout")
 	notifies.expect(5)
-	b.Logout(context.Background())
+	b.Logout(context.Background(), ipnauth.Self)
 	{
 		nn := notifies.drain(5)
 		previousCC.assertCalls("pause", "Logout", "unpause", "Shutdown")
@@ -637,7 +638,7 @@ func TestStateMachine(t *testing.T) {
 	// A second logout should be a no-op as we are in the NeedsLogin state.
 	t.Logf("\n\nLogout2")
 	notifies.expect(0)
-	b.Logout(context.Background())
+	b.Logout(context.Background(), ipnauth.Self)
 	{
 		notifies.drain(0)
 		cc.assertCalls()
@@ -650,7 +651,7 @@ func TestStateMachine(t *testing.T) {
 	// AuthCantContinue state.
 	t.Logf("\n\nLogout3")
 	notifies.expect(3)
-	b.Logout(context.Background())
+	b.Logout(context.Background(), ipnauth.Self)
 	{
 		notifies.drain(0)
 		cc.assertCalls()

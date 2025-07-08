@@ -27,6 +27,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store/mem"
@@ -336,7 +337,7 @@ func (i *jsIPN) logout() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		i.lb.Logout(ctx)
+		i.lb.Logout(ctx, ipnauth.Self)
 	}()
 }
 
