@@ -90,7 +90,7 @@ require (
 	github.com/tailscale/setec v0.0.0-20250205144240-8898a29c3fbb
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
-	github.com/tailscale/wireguard-go v0.0.0-20250701223756-24483d7a0003
+	github.com/tailscale/wireguard-go v0.0.0-20250707220504-1f398ae148a8
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0
