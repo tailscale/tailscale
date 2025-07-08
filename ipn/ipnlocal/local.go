@@ -1800,9 +1800,11 @@ var preferencePolicies = []preferencePolicyInfo{
 	},
 }
 
-// applySysPolicy overwrites configured preferences with policies that may be
+// applySysPolicyLocked overwrites configured preferences with policies that may be
 // configured by the system administrator in an OS-specific way.
-func applySysPolicy(prefs *ipn.Prefs, overrideAlwaysOn bool) (anyChange bool) {
+//
+// b.mu must be held.
+func (b *LocalBackend) applySysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
 	if controlURL, err := syspolicy.GetString(syspolicy.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
 		prefs.ControlURL = controlURL
 		anyChange = true
@@ -1839,6 +1841,34 @@ func applySysPolicy(prefs *ipn.Prefs, overrideAlwaysOn bool) (anyChange bool) {
 		}
 	}
 
+	if b.applyExitNodeSysPolicyLocked(prefs) {
+		anyChange = true
+	}
+
+	if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); alwaysOn && !b.overrideAlwaysOn && !prefs.WantRunning {
+		prefs.WantRunning = true
+		anyChange = true
+	}
+
+	for _, opt := range preferencePolicies {
+		if po, err := syspolicy.GetPreferenceOption(opt.key); err == nil {
+			curVal := opt.get(prefs.View())
+			newVal := po.ShouldEnable(curVal)
+			if curVal != newVal {
+				opt.set(prefs, newVal)
+				anyChange = true
+			}
+		}
+	}
+
+	return anyChange
+}
+
+// applyExitNodeSysPolicyLocked applies the exit node policy settings to prefs
+// and reports whether any change was made.
+//
+// b.mu must be held.
+func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
 	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
 		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
 
@@ -1891,22 +1921,6 @@ func applySysPolicy(prefs *ipn.Prefs, overrideAlwaysOn bool) (anyChange bool) {
 			}
 			prefs.ExitNodeID = ""
 			prefs.ExitNodeIP = exitNodeIP
-		}
-	}
-
-	if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); alwaysOn && !overrideAlwaysOn && !prefs.WantRunning {
-		prefs.WantRunning = true
-		anyChange = true
-	}
-
-	for _, opt := range preferencePolicies {
-		if po, err := syspolicy.GetPreferenceOption(opt.key); err == nil {
-			curVal := opt.get(prefs.View())
-			newVal := po.ShouldEnable(curVal)
-			if curVal != newVal {
-				opt.set(prefs, newVal)
-				anyChange = true
-			}
 		}
 	}
 
@@ -6024,7 +6038,7 @@ func (b *LocalBackend) resolveExitNode() (changed bool) {
 //
 // b.mu must be held.
 func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs) (changed bool) {
-	if applySysPolicy(prefs, b.overrideAlwaysOn) {
+	if b.applySysPolicyLocked(prefs) {
 		changed = true
 	}
 	if b.resolveExitNodeInPrefsLocked(prefs) {
