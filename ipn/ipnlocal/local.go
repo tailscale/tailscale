@@ -2030,47 +2030,48 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 	return false
 }
 
-// setExitNodeID updates prefs to either use the suggestedExitNodeID if AutoExitNode is enabled,
-// or resolve ExitNodeIP to an ID and use that. It returns whether prefs was mutated.
-func setExitNodeID(prefs *ipn.Prefs, suggestedExitNodeID tailcfg.StableNodeID, nm *netmap.NetworkMap) (prefsChanged bool) {
-	if prefs.AutoExitNode.IsSet() {
-		var newExitNodeID tailcfg.StableNodeID
-		if !suggestedExitNodeID.IsZero() {
-			// If we have a suggested exit node, use it.
-			newExitNodeID = suggestedExitNodeID
-		} else if isAllowedAutoExitNodeID(prefs.ExitNodeID) {
-			// If we don't have a suggested exit node, but the prefs already
-			// specify an allowed auto exit node ID, retain it.
-			newExitNodeID = prefs.ExitNodeID
-		} else {
-			// Otherwise, use [unresolvedExitNodeID] to install a blackhole route,
-			// preventing traffic from leaking to the local network until an actual
-			// exit node is selected.
-			newExitNodeID = unresolvedExitNodeID
-		}
-		if prefs.ExitNodeID != newExitNodeID {
-			prefs.ExitNodeID = newExitNodeID
-			prefsChanged = true
-		}
-		if prefs.ExitNodeIP.IsValid() {
-			prefs.ExitNodeIP = netip.Addr{}
-			prefsChanged = true
-		}
-		return prefsChanged
-	}
-	return resolveExitNodeIP(prefs, nm)
-}
-
-// resolveExitNodeIP updates prefs to reference an exit node by ID, rather
-// than by IP. It returns whether prefs was mutated.
-func resolveExitNodeIP(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
-	if nm == nil {
-		// No netmap, can't resolve anything.
+// resolveAutoExitNodeLocked computes a suggested exit node and updates prefs
+// to use it if AutoExitNode is enabled, and reports whether prefs was mutated.
+//
+// b.mu must be held.
+func (b *LocalBackend) resolveAutoExitNodeLocked(prefs *ipn.Prefs) (prefsChanged bool) {
+	if !prefs.AutoExitNode.IsSet() {
 		return false
 	}
+	if _, err := b.suggestExitNodeLocked(); err != nil && !errors.Is(err, ErrNoPreferredDERP) {
+		b.logf("failed to select auto exit node: %v", err) // non-fatal, see below
+	}
+	var newExitNodeID tailcfg.StableNodeID
+	if !b.lastSuggestedExitNode.IsZero() {
+		// If we have a suggested exit node, use it.
+		newExitNodeID = b.lastSuggestedExitNode
+	} else if isAllowedAutoExitNodeID(prefs.ExitNodeID) {
+		// If we don't have a suggested exit node, but the prefs already
+		// specify an allowed auto exit node ID, retain it.
+		newExitNodeID = prefs.ExitNodeID
+	} else {
+		// Otherwise, use [unresolvedExitNodeID] to install a blackhole route,
+		// preventing traffic from leaking to the local network until an actual
+		// exit node is selected.
+		newExitNodeID = unresolvedExitNodeID
+	}
+	if prefs.ExitNodeID != newExitNodeID {
+		prefs.ExitNodeID = newExitNodeID
+		prefsChanged = true
+	}
+	if prefs.ExitNodeIP.IsValid() {
+		prefs.ExitNodeIP = netip.Addr{}
+		prefsChanged = true
+	}
+	return prefsChanged
+}
 
-	// If we have a desired IP on file, try to find the corresponding
-	// node.
+// resolveExitNodeIPLocked updates prefs to reference an exit node by ID, rather
+// than by IP. It returns whether prefs was mutated.
+//
+// b.mu must be held.
+func (b *LocalBackend) resolveExitNodeIPLocked(prefs *ipn.Prefs) (prefsChanged bool) {
+	// If we have a desired IP on file, try to find the corresponding node.
 	if !prefs.ExitNodeIP.IsValid() {
 		return false
 	}
@@ -2081,20 +2082,19 @@ func resolveExitNodeIP(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bo
 		prefsChanged = true
 	}
 
-	oldExitNodeID := prefs.ExitNodeID
-	for _, peer := range nm.Peers {
-		for _, addr := range peer.Addresses().All() {
-			if !addr.IsSingleIP() || addr.Addr() != prefs.ExitNodeIP {
-				continue
-			}
+	cn := b.currentNode()
+	if nid, ok := cn.NodeByAddr(prefs.ExitNodeIP); ok {
+		if node, ok := cn.NodeByID(nid); ok {
 			// Found the node being referenced, upgrade prefs to
 			// reference it directly for next time.
-			prefs.ExitNodeID = peer.StableID()
+			prefs.ExitNodeID = node.StableID()
 			prefs.ExitNodeIP = netip.Addr{}
-			return prefsChanged || oldExitNodeID != prefs.ExitNodeID
+			// Cleared ExitNodeIP, so prefs changed
+			// even if the ID stayed the same.
+			prefsChanged = true
+
 		}
 	}
-
 	return prefsChanged
 }
 
@@ -6042,17 +6042,13 @@ func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs) (changed bool) {
 //
 // b.mu must be held.
 func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs) (changed bool) {
-	if prefs.AutoExitNode.IsSet() {
-		_, err := b.suggestExitNodeLocked()
-		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
-			b.logf("failed to select auto exit node: %v", err)
-		}
+	if b.resolveAutoExitNodeLocked(prefs) {
+		changed = true
 	}
-	if setExitNodeID(prefs, b.lastSuggestedExitNode, b.currentNode().NetMap()) {
-		b.logf("exit node resolved: %v", prefs.ExitNodeID)
-		return true
+	if b.resolveExitNodeIPLocked(prefs) {
+		changed = true
 	}
-	return false
+	return changed
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
