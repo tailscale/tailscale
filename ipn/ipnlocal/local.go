@@ -1077,7 +1077,7 @@ func (b *LocalBackend) Shutdown() {
 		ctx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
 		defer cancel()
 		t0 := time.Now()
-		err := b.Logout(ctx) // best effort
+		err := b.Logout(ctx, ipnauth.Self) // best effort
 		td := time.Since(t0).Round(time.Millisecond)
 		if err != nil {
 			b.logf("failed to log out ephemeral node on shutdown after %v: %v", td, err)
@@ -5884,7 +5884,7 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 
 // Logout logs out the current profile, if any, and waits for the logout to
 // complete.
-func (b *LocalBackend) Logout(ctx context.Context) error {
+func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
@@ -5898,11 +5898,8 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 	// delete it later.
 	profile := b.pm.CurrentProfile()
 
-	// TODO(nickkhyl): change [LocalBackend.Logout] to accept an [ipnauth.Actor].
-	// This will allow enforcing Always On mode when a user tries to log out
-	// while logged in and connected. See tailscale/corp#26249.
 	_, err := b.editPrefsLockedOnEntry(
-		ipnauth.TODO,
+		actor,
 		&ipn.MaskedPrefs{
 			WantRunningSet: true,
 			LoggedOutSet:   true,

@@ -1460,7 +1460,7 @@ func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
-	err := h.b.Logout(r.Context())
+	err := h.b.Logout(r.Context(), h.Actor)
 	if err == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
