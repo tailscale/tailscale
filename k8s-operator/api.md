@@ -21,6 +21,21 @@
 
 
 
+#### APIServerProxyMode
+
+_Underlying type:_ _string_
+
+
+
+_Validation:_
+- Enum: [auth noauth]
+- Type: string
+
+_Appears in:_
+- [KubeAPIServerConfig](#kubeapiserverconfig)
+
+
+
 #### AppConnector
 
 
@@ -326,7 +341,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `authMode` _boolean_ | AuthMode enables auth mode for the API Server proxy. In auth mode,<br />requests from the tailnet proxied over to the Kubernetes API server<br />are additionally impersonated using the sender's tailnet identity. |  |  |
+| `mode` _[APIServerProxyMode](#apiserverproxymode)_ | Mode to run the API server proxy in. Supported modes are auth and noauth.<br />In auth mode, requests from the tailnet proxied over to the Kubernetes<br />API server are additionally impersonated using the sender's tailnet identity.<br />If not specified, defaults to auth mode. |  | Enum: [auth noauth] <br />Type: string <br /> |
 
 
 #### LabelValue
@@ -659,7 +674,7 @@ _Appears in:_
 | `replicas` _integer_ | Replicas specifies how many replicas to create the StatefulSet with.<br />Defaults to 2. |  | Minimum: 0 <br /> |
 | `hostnamePrefix` _[HostnamePrefix](#hostnameprefix)_ | HostnamePrefix is the hostname prefix to use for tailnet devices created<br />by the ProxyGroup. Each device will have the integer number from its<br />StatefulSet pod appended to this prefix to form the full hostname.<br />HostnamePrefix can contain lower case letters, numbers and dashes, it<br />must not start with a dash and must be between 1 and 62 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}$` <br />Type: string <br /> |
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that contains<br />configuration options that should be applied to the resources created<br />for this ProxyGroup. If unset, and there is no default ProxyClass<br />configured, the operator will create resources with the default<br />configuration. |  |  |
-| `kubeAPIServerConfig` _[KubeAPIServerConfig](#kubeapiserverconfig)_ | KubeAPIServerConfig contains configuration specific to the kube-apiserver<br />ProxyGroup type. This field is only used when Type is set to "kube-apiserver". |  |  |
+| `kubeAPIServer` _[KubeAPIServerConfig](#kubeapiserverconfig)_ | KubeAPIServer contains configuration specific to the kube-apiserver<br />ProxyGroup type. This field is only used when Type is set to "kube-apiserver". |  |  |
 
 
 #### ProxyGroupStatus

@@ -85,10 +85,10 @@ type ProxyGroupSpec struct {
 	// +optional
 	ProxyClass string `json:"proxyClass,omitempty"`
 
-	// KubeAPIServerConfig contains configuration specific to the kube-apiserver
+	// KubeAPIServer contains configuration specific to the kube-apiserver
 	// ProxyGroup type. This field is only used when Type is set to "kube-apiserver".
 	// +optional
-	KubeAPIServerConfig *KubeAPIServerConfig `json:"kubeAPIServerConfig,omitempty"`
+	KubeAPIServer *KubeAPIServerConfig `json:"kubeAPIServer,omitempty"`
 }
 
 type ProxyGroupStatus struct {
@@ -137,14 +137,24 @@ const (
 )
 
 // +kubebuilder:validation:Type=string
+// +kubebuilder:validation:Enum=auth;noauth
+type APIServerProxyMode string
+
+const (
+	APIServerProxyModeAuth   APIServerProxyMode = "auth"
+	APIServerProxyModeNoAuth APIServerProxyMode = "noauth"
+)
+
+// +kubebuilder:validation:Type=string
 // +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]{0,61}$`
 type HostnamePrefix string
 
 // KubeAPIServerConfig contains configuration specific to the kube-apiserver ProxyGroup type.
 type KubeAPIServerConfig struct {
-	// AuthMode enables auth mode for the API Server proxy. In auth mode,
-	// requests from the tailnet proxied over to the Kubernetes API server
-	// are additionally impersonated using the sender's tailnet identity.
+	// Mode to run the API server proxy in. Supported modes are auth and noauth.
+	// In auth mode, requests from the tailnet proxied over to the Kubernetes
+	// API server are additionally impersonated using the sender's tailnet identity.
+	// If not specified, defaults to auth mode.
 	// +optional
-	AuthMode *bool `json:"authMode,omitempty"`
+	Mode *APIServerProxyMode `json:"mode,omitempty"`
 }

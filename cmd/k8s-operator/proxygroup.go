@@ -50,6 +50,7 @@ import (
 const (
 	reasonProxyGroupCreationFailed = "ProxyGroupCreationFailed"
 	reasonProxyGroupReady          = "ProxyGroupReady"
+	reasonProxyGroupAvailable      = "ProxyGroupAvailable"
 	reasonProxyGroupCreating       = "ProxyGroupCreating"
 	reasonProxyGroupInvalid        = "ProxyGroupInvalid"
 
@@ -209,7 +210,9 @@ func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGrou
 		sa := &corev1.ServiceAccount{}
 		if err := r.Get(ctx, types.NamespacedName{Namespace: r.tsNamespace, Name: authAPIServerProxySAName}, sa); err != nil {
 			if apierrors.IsNotFound(err) {
-				return fmt.Errorf("the ServiceAccount %q used for the API server proxy in auth mode does not exist but should have been created during operator installation", authAPIServerProxySAName)
+				return fmt.Errorf("the ServiceAccount %q used for the API server proxy in auth mode does not exist but "+
+					"should have been created during operator installation; use apiServerProxyConfig.allowImpersonation=true "+
+					"in the helm chart, or authproxy-rbac.yaml from the static manifests", authAPIServerProxySAName)
 			}
 
 			return fmt.Errorf("error validating that ServiceAccount %q exists: %w", authAPIServerProxySAName, err)
@@ -423,7 +426,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	if len(devices) > 0 {
 		status = metav1.ConditionTrue
 		if len(devices) == desiredReplicas {
-			reason = reasonProxyGroupReady
+			reason = reasonProxyGroupAvailable
 		}
 	}
 	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, status, reason, message, 0, r.clock, logger)

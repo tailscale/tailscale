@@ -26,6 +26,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	klabels "k8s.io/apimachinery/pkg/labels"
@@ -632,13 +633,14 @@ func runReconcilers(opts reconcilerOpts) {
 	ownedByProxyGroupFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.ProxyGroup{})
 	proxyClassFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForProxyGroup(mgr.GetClient(), startlog))
 	nodeFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(nodeHandlerForProxyGroup(mgr.GetClient(), opts.defaultProxyClass, startlog))
+	saFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(serviceAccountHandlerForProxyGroup(mgr.GetClient(), startlog))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}).
 		Named("proxygroup-reconciler").
 		Watches(&corev1.Service{}, ownedByProxyGroupFilter).
 		Watches(&appsv1.StatefulSet{}, ownedByProxyGroupFilter).
 		Watches(&corev1.ConfigMap{}, ownedByProxyGroupFilter).
-		Watches(&corev1.ServiceAccount{}, ownedByProxyGroupFilter).
+		Watches(&corev1.ServiceAccount{}, saFilterForProxyGroup).
 		Watches(&corev1.Secret{}, ownedByProxyGroupFilter).
 		Watches(&rbacv1.Role{}, ownedByProxyGroupFilter).
 		Watches(&rbacv1.RoleBinding{}, ownedByProxyGroupFilter).
@@ -1002,8 +1004,8 @@ func nodeHandlerForProxyGroup(cl client.Client, defaultProxyClass string, logger
 }
 
 // proxyClassHandlerForProxyGroup returns a handler that, for a given ProxyClass,
-// returns a list of reconcile requests for all Connectors that have
-// .spec.proxyClass set.
+// returns a list of reconcile requests for all ProxyGroups that have
+// .spec.proxyClass set to that ProxyClass.
 func proxyClassHandlerForProxyGroup(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		pgList := new(tsapi.ProxyGroupList)
@@ -1016,6 +1018,37 @@ func proxyClassHandlerForProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 		for _, pg := range pgList.Items {
 			if pg.Spec.ProxyClass == proxyClassName {
 				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pg)})
+			}
+		}
+		return reqs
+	}
+}
+
+// serviceAccountHandlerForProxyGroup returns a handler that, for a given ServiceAccount,
+// returns a list of reconcile requests for all ProxyGroups that use that ServiceAccount.
+// For most ProxyGroups, this will be a dedicated ServiceAccount owned by a specific
+// ProxyGroup. But for kube-apiserver ProxyGroups running in auth mode, they use a shared
+// static ServiceAccount named "kube-apiserver-auth-proxy".
+func serviceAccountHandlerForProxyGroup(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		pgList := new(tsapi.ProxyGroupList)
+		if err := cl.List(ctx, pgList); err != nil {
+			logger.Debugf("error listing ProxyGroups for ServiceAccount: %v", err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		saName := o.GetName()
+		for _, pg := range pgList.Items {
+			if saName == authAPIServerProxySAName && isAuthAPIServerProxy(&pg) {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pg)})
+			}
+			expectedOwner := pgOwnerReference(&pg)[0]
+			saOwnerRefs := o.GetOwnerReferences()
+			for _, ref := range saOwnerRefs {
+				if apiequality.Semantic.DeepEqual(ref, expectedOwner) {
+					reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pg)})
+					break
+				}
 			}
 		}
 		return reqs

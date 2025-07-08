@@ -111,13 +111,15 @@ proxyConfig:
 # Kubernetes API server.
 # https://tailscale.com/kb/1437/kubernetes-operator-api-server-proxy
 apiServerProxyConfig:
-  # Set to "true" to enable the ClusterRole permissions required for the API
-  # server proxy to impersonate groups and users based on tailnet ACL grants.
-  # Required to deploy ProxyGroups of type "kube-apiserver" in auth mode.
-  authEnabled: "false" # "true", "false"
+  # Set to "true" to create the ClusterRole permissions required for the API
+  # server proxy's auth mode. In auth mode, the API server proxy impersonates
+  # groups and users based on tailnet ACL grants. Required for ProxyGroups of
+  # type "kube-apiserver" running in auth mode.
+  allowImpersonation: "false" # "true", "false"
 
   # If true or noauth, the operator will run an in-process API server proxy.
-  # Deprecated: use apiServerProxyConfig.authEnabled instead.
+  # You can deploy a ProxyGroup of type "kube-apiserver" to run a high
+  # availability set of API server proxies instead.
   mode: "false" # "true", "false", "noauth"
 
 imagePullSecrets: []

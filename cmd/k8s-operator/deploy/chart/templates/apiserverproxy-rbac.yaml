@@ -1,10 +1,10 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 
-# If deprecated setting used, enable both legacy and new workflows.
+# If old setting used, enable both old (operator) and new (ProxyGroup) workflows.
 # If new setting used, enable only new workflow.
 {{ if or (eq .Values.apiServerProxyConfig.mode "true")
-  (eq .Values.apiServerProxyConfig.authEnabled "true") }}
+  (eq .Values.apiServerProxyConfig.allowImpersonation "true") }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

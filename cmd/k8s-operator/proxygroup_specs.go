@@ -481,10 +481,14 @@ func pgServiceAccountName(pg *tsapi.ProxyGroup) string {
 }
 
 func isAuthAPIServerProxy(pg *tsapi.ProxyGroup) bool {
-	return pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer &&
-		pg.Spec.KubeAPIServerConfig != nil &&
-		pg.Spec.KubeAPIServerConfig.AuthMode != nil &&
-		*pg.Spec.KubeAPIServerConfig.AuthMode
+	if pg.Spec.Type != tsapi.ProxyGroupTypeKubernetesAPIServer {
+		return false
+	}
+
+	// The default is auth mode.
+	return pg.Spec.KubeAPIServer == nil ||
+		pg.Spec.KubeAPIServer.Mode == nil ||
+		*pg.Spec.KubeAPIServer.Mode == tsapi.APIServerProxyModeAuth
 }
 
 func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.Secret) {
