@@ -1003,6 +1003,23 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 		},
 		{
+			name: "auto-foo-via-edit-prefs", // set auto exit node via EditPrefs with an unknown/unsupported expression
+			prefs: ipn.Prefs{
+				ControlURL: controlURL,
+			},
+			netMap: clientNetmap,
+			report: report,
+			changePrefs: &ipn.MaskedPrefs{
+				Prefs:           ipn.Prefs{AutoExitNode: "foo"},
+				AutoExitNodeSet: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:   controlURL,
+				ExitNodeID:   exitNode1.StableID(), // unknown exit node expressions should work as "any"
+				AutoExitNode: "foo",
+			},
+		},
+		{
 			name: "auto-any-via-policy/toggle-off", // cannot toggle off the exit node if it was set via syspolicy
 			prefs: ipn.Prefs{
 				ControlURL: controlURL,
