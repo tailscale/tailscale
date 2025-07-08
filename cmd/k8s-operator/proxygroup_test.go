@@ -915,7 +915,7 @@ func TestProxyGroup(t *testing.T) {
 			},
 		}
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "2/2 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "2/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
@@ -934,7 +934,7 @@ func TestProxyGroup(t *testing.T) {
 		addNodeIDToStateSecrets(t, fc, pg)
 		expectReconciled(t, reconciler, "", pg.Name)
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "3/3 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "3/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		pg.Status.Devices = append(pg.Status.Devices, tsapi.TailnetDevice{
 			Hostname:   "hostname-nodeid-2",
 			TailnetIPs: []string{"1.2.3.4", "::1"},
@@ -952,7 +952,7 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		pg.Status.Devices = pg.Status.Devices[:1] // truncate to only the first device.
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupReady, "1/1 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "1/1 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 	})
@@ -1208,6 +1208,9 @@ func TestProxyGroupTypes(t *testing.T) {
 			Spec: tsapi.ProxyGroupSpec{
 				Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
 				Replicas: ptr.To[int32](2),
+				KubeAPIServer: &tsapi.KubeAPIServerConfig{
+					Mode: ptr.To(tsapi.APIServerProxyModeNoAuth),
+				},
 			},
 		}
 		if err := fc.Create(t.Context(), pg); err != nil {
