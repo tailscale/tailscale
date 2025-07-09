@@ -701,9 +701,16 @@ type PingResult struct {
 	Err            string
 	LatencySeconds float64
 
-	// Endpoint is the ip:port if direct UDP was used.
-	// It is not currently set for TSMP pings.
+	// Endpoint is a string of the form "{ip}:{port}" if direct UDP was used. It
+	// is not currently set for TSMP.
 	Endpoint string
+
+	// PeerRelay is a string of the form "{ip}:{port}:vni:{vni}" if a peer
+	// relay was used. It is not currently set for TSMP. Note that this field
+	// is not omitted during JSON encoding if it contains a zero value. This is
+	// done for consistency with the Endpoint field; this structure is exposed
+	// externally via localAPI, so we want to maintain the existing convention.
+	PeerRelay string
 
 	// DERPRegionID is non-zero DERP region ID if DERP was used.
 	// It is not currently set for TSMP pings.
@@ -739,6 +746,7 @@ func (pr *PingResult) ToPingResponse(pingType tailcfg.PingType) *tailcfg.PingRes
 		Err:            pr.Err,
 		LatencySeconds: pr.LatencySeconds,
 		Endpoint:       pr.Endpoint,
+		PeerRelay:      pr.PeerRelay,
 		DERPRegionID:   pr.DERPRegionID,
 		DERPRegionCode: pr.DERPRegionCode,
 		PeerAPIPort:    pr.PeerAPIPort,

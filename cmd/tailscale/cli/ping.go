@@ -152,7 +152,9 @@ func runPing(ctx context.Context, args []string) error {
 		}
 		latency := time.Duration(pr.LatencySeconds * float64(time.Second)).Round(time.Millisecond)
 		via := pr.Endpoint
-		if pr.DERPRegionID != 0 {
+		if pr.PeerRelay != "" {
+			via = fmt.Sprintf("peer-relay(%s)", pr.PeerRelay)
+		} else if pr.DERPRegionID != 0 {
 			via = fmt.Sprintf("DERP(%s)", pr.DERPRegionCode)
 		}
 		if via == "" {
