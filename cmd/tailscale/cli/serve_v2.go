@@ -200,6 +200,16 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				Exec:       e.runServeReset,
 				FlagSet:    e.newFlags("serve-reset", nil),
 			},
+			{
+				Name:       "drain",
+				ShortUsage: fmt.Sprintf("tailscale %s drain <service>", info.Name),
+				ShortHelp:  "Drain a service from the current node",
+				LongHelp: "Make the current node no longer accept new connections for the specified service.\n" +
+					"Existing connections will continue to work until they are closed, but no new connections will be accepted.\n" +
+					"Use this command to gracefully remove a service from the current node without disrupting existing connections.\n" +
+					"<service> should be a service name (e.g., svc:my-service).",
+				Exec: e.runServeDrain,
+			},
 		},
 	}
 }
@@ -426,6 +436,32 @@ func (e *serveEnv) addServiceToPrefs(ctx context.Context, serviceName string) er
 		return nil // already advertised
 	}
 	advertisedServices = append(advertisedServices, serviceName)
+	_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		AdvertiseServicesSet: true,
+		Prefs: ipn.Prefs{
+			AdvertiseServices: advertisedServices,
+		},
+	})
+	return err
+}
+
+func (e *serveEnv) removeServiceFromPrefs(ctx context.Context, serviceName string) error {
+	prefs, err := e.lc.GetPrefs(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting prefs: %w", err)
+	}
+	if len(prefs.AdvertiseServices) == 0 {
+		return nil // nothing to remove
+	}
+	var advertisedServices []string
+	for _, svc := range prefs.AdvertiseServices {
+		if svc != serviceName {
+			advertisedServices = append(advertisedServices, svc)
+		}
+	}
+	if len(advertisedServices) == len(prefs.AdvertiseServices) {
+		return nil // serviceName not found in prefs
+	}
 	_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
 		Prefs: ipn.Prefs{

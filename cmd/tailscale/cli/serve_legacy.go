@@ -749,6 +749,21 @@ func (e *serveEnv) runServeReset(ctx context.Context, args []string) error {
 	sc := new(ipn.ServeConfig)
 	return e.lc.SetServeConfig(ctx, sc)
 }
+func (e *serveEnv) runServeDrain(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errHelp
+	}
+	if len(args) != 1 {
+		fmt.Fprintf(Stderr, "error: invalid number of arguments\n\n")
+		return errHelp
+	}
+	svc := args[0]
+	err := tailcfg.ServiceName(svc).Validate()
+	if err != nil {
+		return fmt.Errorf("failed to parse service name: %w", err)
+	}
+	return e.removeServiceFromPrefs(ctx, svc)
+}
 
 // parseServePort parses a port number from a string and returns it as a
 // uint16. It returns an error if the port number is invalid or zero.
