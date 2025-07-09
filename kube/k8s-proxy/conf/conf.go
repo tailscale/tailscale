@@ -53,6 +53,7 @@ type ConfigV1Alpha1 struct {
 	LogLevel      *string        `json:",omitempty"` // "debug", "info". Defaults to "info".
 	App           *string        `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
 	KubeAPIServer *KubeAPIServer `json:",omitempty"` // Config specific to the API Server proxy.
+	ServerURL     *string        `json:",omitempty"` // URL of the Tailscale coordination server.
 }
 
 type KubeAPIServer struct {

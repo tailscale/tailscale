@@ -91,6 +91,11 @@ func run(logger *zap.SugaredLogger) error {
 		Store:    st,
 		AuthKey:  authKey,
 	}
+
+	if cfg.Parsed.ServerURL != nil {
+		ts.ControlURL = *cfg.Parsed.ServerURL
+	}
+
 	if cfg.Parsed.Hostname != nil {
 		ts.Hostname = *cfg.Parsed.Hostname
 	}
