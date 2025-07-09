@@ -1407,6 +1407,60 @@ func TestPrefsChangeDisablesExitNode(t *testing.T) {
 	}
 }
 
+func TestExitNodeNotifyOrder(t *testing.T) {
+	const controlURL = "https://localhost:1/"
+
+	report := &netcheck.Report{
+		RegionLatency: map[int]time.Duration{
+			1: 5 * time.Millisecond,
+			2: 10 * time.Millisecond,
+		},
+		PreferredDERP: 1,
+	}
+
+	exitNode1 := makeExitNode(1, withName("node-1"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	exitNode2 := makeExitNode(2, withName("node-2"), withDERP(2), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+	selfNode := makeExitNode(3, withName("node-3"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.3/32")))
+	clientNetmap := buildNetmapWithPeers(selfNode, exitNode1, exitNode2)
+
+	lb := newTestLocalBackend(t)
+	lb.sys.MagicSock.Get().SetLastNetcheckReportForTest(lb.ctx, report)
+	lb.SetPrefsForTest(&ipn.Prefs{
+		ControlURL:   controlURL,
+		AutoExitNode: ipn.AnyExitNode,
+	})
+
+	nw := newNotificationWatcher(t, lb, ipnauth.Self)
+
+	// Updating the netmap should trigger both a netmap notification
+	// and an exit node ID notification (since an exit node is selected).
+	// The netmap notification should be sent first.
+	nw.watch(0, []wantedNotification{
+		wantNetmapNotify(clientNetmap),
+		wantExitNodeIDNotify(exitNode1.StableID()),
+	})
+	lb.SetControlClientStatus(lb.cc, controlclient.Status{NetMap: clientNetmap})
+	nw.check()
+}
+
+func wantNetmapNotify(want *netmap.NetworkMap) wantedNotification {
+	return wantedNotification{
+		name: "Netmap",
+		cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			return n.NetMap == want
+		},
+	}
+}
+
+func wantExitNodeIDNotify(want tailcfg.StableNodeID) wantedNotification {
+	return wantedNotification{
+		name: fmt.Sprintf("ExitNodeID-%s", want),
+		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			return n.Prefs != nil && n.Prefs.Valid() && n.Prefs.ExitNodeID() == want
+		},
+	}
+}
+
 func TestInternalAndExternalInterfaces(t *testing.T) {
 	type interfacePrefix struct {
 		i   netmon.Interface
