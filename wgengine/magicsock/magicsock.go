@@ -3437,7 +3437,7 @@ func (c *Conn) onNodeMutationsUpdate(update NodeMutationsUpdate) {
 	}
 }
 
-// UpdateStatus implements the interface nede by ipnstate.StatusBuilder.
+// UpdateStatus implements the interface needed by ipnstate.StatusBuilder.
 //
 // This method adds in the magicsock-specific information only. Most
 // of the status is otherwise populated by LocalBackend.

@@ -251,9 +251,10 @@ type PeerStatus struct {
 	PrimaryRoutes *views.Slice[netip.Prefix] `json:",omitempty"`
 
 	// Endpoints:
-	Addrs   []string
-	CurAddr string // one of Addrs, or unique if roaming
-	Relay   string // DERP region
+	Addrs     []string
+	CurAddr   string // one of Addrs, or unique if roaming
+	Relay     string // DERP region
+	PeerRelay string // peer relay address (ip:port:vni)
 
 	RxBytes        int64
 	TxBytes        int64
@@ -450,6 +451,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.Relay; v != "" {
 		e.Relay = v
+	}
+	if v := st.PeerRelay; v != "" {
+		e.PeerRelay = v
 	}
 	if v := st.UserID; v != 0 {
 		e.UserID = v
