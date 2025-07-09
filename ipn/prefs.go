@@ -1088,3 +1088,25 @@ const AnyExitNode ExitNodeExpression = "any"
 func (e ExitNodeExpression) IsSet() bool {
 	return e != ""
 }
+
+const (
+	// AutoExitNodePrefix is the prefix used in [syspolicy.ExitNodeID] values and CLI
+	// to indicate that the string following the prefix is an [ipn.ExitNodeExpression].
+	AutoExitNodePrefix = "auto:"
+)
+
+// ParseAutoExitNodeString attempts to parse the given string
+// as an [ExitNodeExpression].
+//
+// It returns the parsed expression and true on success,
+// or an empty string and false if the input does not appear to be
+// an [ExitNodeExpression] (i.e., it doesn't start with "auto:").
+//
+// It is mainly used to parse the [syspolicy.ExitNodeID] value
+// when it is set to "auto:<expression>" (e.g., auto:any).
+func ParseAutoExitNodeString[T ~string](s T) (_ ExitNodeExpression, ok bool) {
+	if expr, ok := strings.CutPrefix(string(s), AutoExitNodePrefix); ok && expr != "" {
+		return ExitNodeExpression(expr), true
+	}
+	return "", false
+}

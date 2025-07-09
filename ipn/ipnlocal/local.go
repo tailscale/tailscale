@@ -1890,7 +1890,7 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 		// and update prefs if it differs from the current one.
 		// This includes cases where it was previously an expression but no longer is,
 		// or where it wasn't before but now is.
-		autoExitNode, useAutoExitNode := parseAutoExitNodeID(exitNodeID)
+		autoExitNode, useAutoExitNode := ipn.ParseAutoExitNodeString(exitNodeID)
 		if prefs.AutoExitNode != autoExitNode {
 			prefs.AutoExitNode = autoExitNode
 			anyChange = true
@@ -4292,7 +4292,7 @@ func (b *LocalBackend) SetUseExitNodeEnabled(actor ipnauth.Actor, v bool) (ipn.P
 	if v {
 		mp.ExitNodeIDSet = true
 		mp.ExitNodeID = p0.InternalExitNodePrior()
-		if expr, ok := parseAutoExitNodeID(mp.ExitNodeID); ok {
+		if expr, ok := ipn.ParseAutoExitNodeString(mp.ExitNodeID); ok {
 			mp.AutoExitNodeSet = true
 			mp.AutoExitNode = expr
 			mp.ExitNodeID = unresolvedExitNodeID
@@ -4304,7 +4304,7 @@ func (b *LocalBackend) SetUseExitNodeEnabled(actor ipnauth.Actor, v bool) (ipn.P
 		mp.AutoExitNode = ""
 		mp.InternalExitNodePriorSet = true
 		if p0.AutoExitNode().IsSet() {
-			mp.InternalExitNodePrior = tailcfg.StableNodeID(autoExitNodePrefix + p0.AutoExitNode())
+			mp.InternalExitNodePrior = tailcfg.StableNodeID(ipn.AutoExitNodePrefix + p0.AutoExitNode())
 		} else {
 			mp.InternalExitNodePrior = p0.ExitNodeID()
 		}
@@ -7933,10 +7933,6 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 }
 
 const (
-	// autoExitNodePrefix is the prefix used in [syspolicy.ExitNodeID] values
-	// to indicate that the string following the prefix is an [ipn.ExitNodeExpression].
-	autoExitNodePrefix = "auto:"
-
 	// unresolvedExitNodeID is a special [tailcfg.StableNodeID] value
 	// used as an exit node ID to install a blackhole route, preventing
 	// accidental non-exit-node usage until the [ipn.ExitNodeExpression]
@@ -7946,29 +7942,6 @@ const (
 	// clients that have been using "auto:any" for this purpose for a long time.
 	unresolvedExitNodeID tailcfg.StableNodeID = "auto:any"
 )
-
-// isAutoExitNodeID reports whether the given [tailcfg.StableNodeID] is
-// actually an "auto:"-prefixed [ipn.ExitNodeExpression].
-func isAutoExitNodeID(id tailcfg.StableNodeID) bool {
-	_, ok := parseAutoExitNodeID(id)
-	return ok
-}
-
-// parseAutoExitNodeID attempts to parse the given [tailcfg.StableNodeID]
-// as an [ExitNodeExpression].
-//
-// It returns the parsed expression and true on success,
-// or an empty string and false if the input does not appear to be
-// an [ExitNodeExpression] (i.e., it doesn't start with "auto:").
-//
-// It is mainly used to parse the [syspolicy.ExitNodeID] value
-// when it is set to "auto:<expression>" (e.g., auto:any).
-func parseAutoExitNodeID(id tailcfg.StableNodeID) (_ ipn.ExitNodeExpression, ok bool) {
-	if expr, ok := strings.CutPrefix(string(id), autoExitNodePrefix); ok && expr != "" {
-		return ipn.ExitNodeExpression(expr), true
-	}
-	return "", false
-}
 
 func isAllowedAutoExitNodeID(exitNodeID tailcfg.StableNodeID) bool {
 	if exitNodeID == "" {
