@@ -4229,6 +4229,23 @@ func withLocation(loc tailcfg.LocationView) peerOptFunc {
 	}
 }
 
+func withLocationPriority(pri int) peerOptFunc {
+	return func(n *tailcfg.Node) {
+		var hi *tailcfg.Hostinfo
+		if n.Hostinfo.Valid() {
+			hi = n.Hostinfo.AsStruct()
+		} else {
+			hi = new(tailcfg.Hostinfo)
+		}
+		if hi.Location == nil {
+			hi.Location = new(tailcfg.Location)
+		}
+		hi.Location.Priority = pri
+
+		n.Hostinfo = hi.View()
+	}
+}
+
 func withExitRoutes() peerOptFunc {
 	return func(n *tailcfg.Node) {
 		n.AllowedIPs = append(n.AllowedIPs, tsaddr.ExitRoutes()...)
@@ -4890,6 +4907,406 @@ func TestSuggestExitNodeLongLatDistance(t *testing.T) {
 			const maxError = 10000 // 10km
 			if math.Abs(got-tt.want) > maxError {
 				t.Errorf("distance=%vm, want within %vm of %vm", got, maxError, tt.want)
+			}
+		})
+	}
+}
+
+func TestSuggestExitNodeTrafficSteering(t *testing.T) {
+	city := &tailcfg.Location{
+		Country:     "Canada",
+		CountryCode: "CA",
+		City:        "Montreal",
+		CityCode:    "MTR",
+		Latitude:    45.5053,
+		Longitude:   -73.5525,
+	}
+	noLatLng := &tailcfg.Location{
+		Country:     "Canada",
+		CountryCode: "CA",
+		City:        "Montreal",
+		CityCode:    "MTR",
+	}
+
+	selfNode := tailcfg.Node{
+		ID: 0, // randomness is seeded off NetMap.SelfNode.ID
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.1.1/32"),
+			netip.MustParsePrefix("fe70::1/128"),
+		},
+		CapMap: tailcfg.NodeCapMap{
+			tailcfg.NodeAttrTrafficSteering: []tailcfg.RawMessage{},
+		},
+	}
+
+	for _, tt := range []struct {
+		name string
+
+		netMap      *netmap.NetworkMap
+		lastExit    tailcfg.StableNodeID
+		allowPolicy []tailcfg.StableNodeID
+
+		wantID   tailcfg.StableNodeID
+		wantName string
+		wantLoc  *tailcfg.Location
+		wantPri  int
+
+		wantErr error
+	}{
+		{
+			name:    "no-netmap",
+			netMap:  nil,
+			wantErr: ErrNoNetMap,
+		},
+		{
+			name: "no-nodes",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers:    []tailcfg.NodeView{},
+			},
+			wantID: "",
+		},
+		{
+			name: "no-exit-nodes",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1),
+				},
+			},
+			wantID: "",
+		},
+		{
+			name: "exit-node-without-suggestion",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes()),
+				},
+			},
+			wantID: "",
+		},
+		{
+			name: "suggested-exit-node-without-routes",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withSuggest()),
+				},
+			},
+			wantID: "",
+		},
+		{
+			name: "suggested-exit-node",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest()),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+		},
+		{
+			name: "many-suggested-exit-nodes",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(3,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(4,
+						withExitRoutes(),
+						withSuggest()),
+				},
+			},
+			wantID:   "stable3",
+			wantName: "peer3",
+		},
+		{
+			name: "suggested-exit-node-was-last-suggested",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(3,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(4,
+						withExitRoutes(),
+						withSuggest()),
+				},
+			},
+			lastExit: "stable2", // overrides many-suggested-exit-nodes
+			wantID:   "stable2",
+			wantName: "peer2",
+		},
+		{
+			name: "suggested-exit-node-was-never-suggested",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(3,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(4,
+						withExitRoutes(),
+						withSuggest()),
+				},
+			},
+			lastExit: "stable10",
+			wantID:   "stable3", // matches many-suggested-exit-nodes
+			wantName: "peer3",
+		},
+		{
+			name: "exit-nodes-with-and-without-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(1)),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest()),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+			wantPri:  1,
+		},
+		{
+			name: "exit-nodes-without-and-with-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(1)),
+				},
+			},
+			wantID:   "stable2",
+			wantName: "peer2",
+			wantPri:  1,
+		},
+		{
+			name: "exit-nodes-with-negative-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(-1)),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(-2)),
+					makePeer(3,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(-3)),
+					makePeer(4,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(-4)),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+			wantPri:  -1,
+		},
+		{
+			name: "exit-nodes-no-priority-beats-negative-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(-1)),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(-2)),
+					makePeer(3,
+						withExitRoutes(),
+						withSuggest()),
+				},
+			},
+			wantID:   "stable3",
+			wantName: "peer3",
+		},
+		{
+			name: "exit-nodes-same-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(1)),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(2)), // top
+					makePeer(3,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(1)),
+					makePeer(4,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(2)), // top
+					makePeer(5,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(2)), // top
+					makePeer(6,
+						withExitRoutes(),
+						withSuggest()),
+					makePeer(7,
+						withExitRoutes(),
+						withSuggest(),
+						withLocationPriority(2)), // top
+				},
+			},
+			wantID:   "stable5",
+			wantName: "peer5",
+			wantPri:  2,
+		},
+		{
+			name: "suggested-exit-node-with-city",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(),
+						withLocation(city.View())),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+			wantLoc:  city,
+		},
+		{
+			name: "suggested-exit-node-with-city-and-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(),
+						withLocation(city.View()),
+						withLocationPriority(1)),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+			wantLoc:  city,
+			wantPri:  1,
+		},
+		{
+			name: "suggested-exit-node-without-latlng",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(),
+						withLocation(noLatLng.View())),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+			wantLoc:  noLatLng,
+		},
+		{
+			name: "suggested-exit-node-without-latlng-with-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(),
+						withLocation(noLatLng.View()),
+						withLocationPriority(1)),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+			wantLoc:  noLatLng,
+			wantPri:  1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var allowList set.Set[tailcfg.StableNodeID]
+			if tt.allowPolicy != nil {
+				allowList = set.SetOf(tt.allowPolicy)
+			}
+
+			// HACK: NetMap.AllCaps is populated by Control:
+			if tt.netMap != nil {
+				caps := maps.Keys(tt.netMap.SelfNode.CapMap().AsMap())
+				tt.netMap.AllCaps = set.SetOf(slices.Collect(caps))
+			}
+
+			nb := newNodeBackend(t.Context(), eventbus.New())
+			defer nb.shutdown(errShutdown)
+			nb.SetNetMap(tt.netMap)
+
+			got, err := suggestExitNodeUsingTrafficSteering(nb, tt.lastExit, allowList)
+			if tt.wantErr == nil && err != nil {
+				t.Fatalf("err=%v, want nil", err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err=%v, want %v", err, tt.wantErr)
+			}
+
+			if got.Name != tt.wantName {
+				t.Errorf("name=%q, want %q", got.Name, tt.wantName)
+			}
+
+			if got.ID != tt.wantID {
+				t.Errorf("ID=%q, want %q", got.ID, tt.wantID)
+			}
+
+			wantLoc := tt.wantLoc
+			if tt.wantPri != 0 {
+				if wantLoc == nil {
+					wantLoc = new(tailcfg.Location)
+				}
+				wantLoc.Priority = tt.wantPri
+			}
+			if diff := cmp.Diff(got.Location.AsStruct(), wantLoc); diff != "" {
+				t.Errorf("location mismatch (+want -got)\n%s", diff)
 			}
 		})
 	}

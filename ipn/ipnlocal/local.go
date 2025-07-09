@@ -7675,13 +7675,10 @@ func allowedAutoRoute(ipp netip.Prefix) bool {
 
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 
-// suggestExitNodeLocked computes a suggestion based on the current netmap and last netcheck report. If
-// there are multiple equally good options, one is selected at random, so the result is not stable. To be
-// eligible for consideration, the peer must have NodeAttrSuggestExitNode in its CapMap.
-//
-// Currently, peers with a DERP home are preferred over those without (typically this means Mullvad).
-// Peers are selected based on having a DERP home that is the lowest latency to this device. For peers
-// without a DERP home, we look for geographic proximity to this device's DERP home.
+// suggestExitNodeLocked computes a suggestion based on the current netmap and
+// other optional factors. If there are multiple equally good options, one may
+// be selected at random, so the result is not stable. To be eligible for
+// consideration, the peer must have NodeAttrSuggestExitNode in its CapMap.
 //
 // b.mu.lock() must be held.
 func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
@@ -7743,7 +7740,32 @@ func fillAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
 	return s
 }
 
+// suggestExitNode returns a suggestion for reasonably good exit node based on
+// the current netmap and the previous suggestion.
 func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+	switch {
+	case nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering):
+		// The traffic-steering feature flag is enabled on this tailnet.
+		return suggestExitNodeUsingTrafficSteering(nb, prevSuggestion, allowList)
+	default:
+		return suggestExitNodeUsingDERP(report, nb, prevSuggestion, selectRegion, selectNode, allowList)
+	}
+}
+
+// suggestExitNodeUsingDERP is the classic algorithm used to suggest exit nodes,
+// before traffic steering was implemented. This handles the plain failover
+// case, in addition to the optional Regional Routing.
+//
+// It computes a suggestion based on the current netmap and last netcheck
+// report. If there are multiple equally good options, one is selected at
+// random, so the result is not stable. To be eligible for consideration, the
+// peer must have NodeAttrSuggestExitNode in its CapMap.
+//
+// Currently, peers with a DERP home are preferred over those without (typically
+// this means Mullvad). Peers are selected based on having a DERP home that is
+// the lowest latency to this device. For peers without a DERP home, we look for
+// geographic proximity to this device's DERP home.
+func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	netMap := nb.NetMap()
 	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
@@ -7857,6 +7879,104 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 	res.ID = chosen.StableID()
 	res.Name = chosen.Name()
 	if hi := chosen.Hostinfo(); hi.Valid() {
+		if loc := hi.Location(); loc.Valid() {
+			res.Location = loc
+		}
+	}
+	return res, nil
+}
+
+var ErrNoNetMap = errors.New("no network map, try again later")
+
+// suggestExitNodeUsingTrafficSteering uses traffic steering priority scores to
+// pick one of the best exit nodes. These priorities are provided by Control in
+// the node’s [tailcfg.Location]. To be eligible for consideration, the node
+// must have NodeAttrSuggestExitNode in its CapMap.
+func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, prev tailcfg.StableNodeID, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
+	nm := nb.NetMap()
+	if nm == nil {
+		return apitype.ExitNodeSuggestionResponse{}, ErrNoNetMap
+	}
+
+	if !nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering) {
+		panic("missing traffic-steering capability")
+	}
+
+	peers := nm.Peers
+	nodes := make([]tailcfg.NodeView, 0, len(peers))
+
+	for _, p := range peers {
+		if !p.Valid() {
+			continue
+		}
+		if allowed != nil && !allowed.Contains(p.StableID()) {
+			continue
+		}
+		if !p.CapMap().Contains(tailcfg.NodeAttrSuggestExitNode) {
+			continue
+		}
+		if !tsaddr.ContainsExitRoutes(p.AllowedIPs()) {
+			continue
+		}
+		if p.StableID() == prev {
+			// Prevent flapping: since prev is a valid suggestion,
+			// force prev to be the only valid pick.
+			nodes = []tailcfg.NodeView{p}
+			break
+		}
+		nodes = append(nodes, p)
+	}
+
+	var pick tailcfg.NodeView
+
+	scores := make(map[tailcfg.NodeID]int, len(nodes))
+	score := func(n tailcfg.NodeView) int {
+		id := n.ID()
+		s, ok := scores[id]
+		if !ok {
+			s = 0 // score of zero means incomparable
+			if hi := n.Hostinfo(); hi.Valid() {
+				if loc := hi.Location(); loc.Valid() {
+					s = loc.Priority()
+				}
+			}
+			scores[id] = s
+		}
+		return s
+	}
+
+	if len(nodes) > 0 {
+		// Find the highest scoring exit nodes.
+		slices.SortFunc(nodes, func(a, b tailcfg.NodeView) int {
+			return cmp.Compare(score(b), score(a)) // reverse sort
+		})
+
+		// Find the top exit nodes, which all have the same score.
+		topI := len(nodes)
+		ts := score(nodes[0])
+		for i, n := range nodes[1:] {
+			if score(n) < ts {
+				// n is the first node with a lower score.
+				// Make nodes[:topI] to slice the top exit nodes.
+				topI = i + 1
+				break
+			}
+		}
+
+		// TODO(sfllaw): add a temperature knob so that this client has
+		// a chance of picking the next best option.
+		randSeed := uint64(nm.SelfNode.ID())
+		pick = nodes[rands.IntN(randSeed, topI)]
+	}
+
+	if !pick.Valid() {
+		return apitype.ExitNodeSuggestionResponse{}, nil
+	}
+	res := apitype.ExitNodeSuggestionResponse{
+		ID:   pick.StableID(),
+		Name: pick.Name(),
+	}
+	if hi := pick.Hostinfo(); hi.Valid() {
 		if loc := hi.Location(); loc.Valid() {
 			res.Location = loc
 		}
