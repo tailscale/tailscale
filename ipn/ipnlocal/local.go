@@ -1709,9 +1709,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 	// Now complete the lock-free parts of what we started while locked.
 	if st.NetMap != nil {
-		// Check and update the exit node if needed, now that we have a new netmap.
-		b.RefreshExitNode()
-
 		if envknob.NoLogsNoSupport() && st.NetMap.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
 			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
 			b.health.SetLocalLogConfigHealth(errors.New(msg))
@@ -1751,6 +1748,16 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.health.SetDERPMap(st.NetMap.DERPMap)
 
 		b.send(ipn.Notify{NetMap: st.NetMap})
+
+		// Check and update the exit node if needed, now that we have a new netmap.
+		//
+		// This must happen after the netmap change is sent via [ipn.Notify],
+		// so the GUI can correctly display the exit node if it has changed
+		// since the last netmap was sent.
+		//
+		// Otherwise, it might briefly show the exit node as offline and display a warning,
+		// if the node wasn't online or wasn't advertising default routes in the previous netmap.
+		b.RefreshExitNode()
 	}
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
