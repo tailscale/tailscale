@@ -6,10 +6,12 @@
 package spdy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"tailscale.com/k8s-operator/sessionrecording/fakes"
@@ -29,15 +31,11 @@ func Test_Writes(t *testing.T) {
 	}
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	tests := []struct {
-		name              string
-		inputs            [][]byte
-		wantForwarded     []byte
-		wantRecorded      []byte
-		firstWrite        bool
-		width             int
-		height            int
-		sendInitialResize bool
-		hasTerm           bool
+		name          string
+		inputs        [][]byte
+		wantForwarded []byte
+		wantRecorded  []byte
+		hasTerm       bool
 	}{
 		{
 			name:          "single_write_control_frame_with_payload",
@@ -78,24 +76,17 @@ func Test_Writes(t *testing.T) {
 			wantRecorded:  fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
 		{
-			name:              "single_first_write_stdout_data_frame_with_payload_sess_has_terminal",
-			inputs:            [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
-			wantForwarded:     []byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
-			wantRecorded:      append(fakes.AsciinemaResizeMsg(t, 10, 20), fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
-			width:             10,
-			height:            20,
-			hasTerm:           true,
-			firstWrite:        true,
-			sendInitialResize: true,
+			name:          "single_first_write_stdout_data_frame_with_payload_sess_has_terminal",
+			inputs:        [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
+			wantForwarded: []byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
+			wantRecorded:  fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
+			hasTerm:       true,
 		},
 		{
 			name:          "single_first_write_stdout_data_frame_with_payload_sess_does_not_have_terminal",
 			inputs:        [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
 			wantForwarded: []byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
-			wantRecorded:  append(fakes.AsciinemaResizeMsg(t, 10, 20), fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
-			width:         10,
-			height:        20,
-			firstWrite:    true,
+			wantRecorded:  fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
 	}
 	for _, tt := range tests {
@@ -104,29 +95,25 @@ func Test_Writes(t *testing.T) {
 			sr := &fakes.TestSessionRecorder{}
 			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 			c := &conn{
-				Conn: tc,
-				log:  zl.Sugar(),
-				rec:  rec,
-				ch: sessionrecording.CastHeader{
-					Width:  tt.width,
-					Height: tt.height,
-				},
-				initialTermSizeSet: make(chan struct{}),
-				hasTerm:            tt.hasTerm,
+				ctx:                   ctx,
+				Conn:                  tc,
+				log:                   zl.Sugar(),
+				rec:                   rec,
+				ch:                    sessionrecording.CastHeader{},
+				initialCastHeaderSent: make(chan struct{}),
+				hasTerm:               tt.hasTerm,
 			}
-			if !tt.firstWrite {
-				// this test case does not intend to test that cast header gets written once
-				c.writeCastHeaderOnce.Do(func() {})
-			}
-			if tt.sendInitialResize {
-				close(c.initialTermSizeSet)
-			}
+
+			c.writeCastHeaderOnce.Do(func() {
+				close(c.initialCastHeaderSent)
+			})
 
 			c.stdoutStreamID.Store(stdoutStreamID)
 			c.stderrStreamID.Store(stderrStreamID)
 			for i, input := range tt.inputs {
-				c.hasTerm = tt.hasTerm
 				if _, err := c.Write(input); err != nil {
 					t.Errorf("[%d] spdyRemoteConnRecorder.Write() unexpected error %v", i, err)
 				}
@@ -171,11 +158,25 @@ func Test_Reads(t *testing.T) {
 		wantResizeStreamID       uint32
 		wantWidth                int
 		wantHeight               int
+		wantRecorded             []byte
 		resizeStreamIDBeforeRead uint32
 	}{
 		{
 			name:                     "resize_data_frame_single_read",
 			inputs:                   [][]byte{append([]byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, uint8(len(resizeMsg))}, resizeMsg...)},
+			wantRecorded:             fakes.AsciinemaCastHeaderMsg(t, 10, 20),
+			resizeStreamIDBeforeRead: 1,
+			wantWidth:                10,
+			wantHeight:               20,
+		},
+		{
+			name: "resize_data_frame_many",
+			inputs: [][]byte{
+				append([]byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, uint8(len(resizeMsg))}, resizeMsg...),
+				append([]byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, uint8(len(resizeMsg))}, resizeMsg...),
+			},
+			wantRecorded: append(fakes.AsciinemaCastHeaderMsg(t, 10, 20), fakes.AsciinemaCastResizeMsg(t, 10, 20)...),
+
 			resizeStreamIDBeforeRead: 1,
 			wantWidth:                10,
 			wantHeight:               20,
@@ -183,6 +184,7 @@ func Test_Reads(t *testing.T) {
 		{
 			name:                     "resize_data_frame_two_reads",
 			inputs:                   [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, uint8(len(resizeMsg))}, resizeMsg},
+			wantRecorded:             fakes.AsciinemaCastHeaderMsg(t, 10, 20),
 			resizeStreamIDBeforeRead: 1,
 			wantWidth:                10,
 			wantHeight:               20,
@@ -215,11 +217,15 @@ func Test_Reads(t *testing.T) {
 			tc := &fakes.TestConn{}
 			sr := &fakes.TestSessionRecorder{}
 			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 			c := &conn{
-				Conn:               tc,
-				log:                zl.Sugar(),
-				rec:                rec,
-				initialTermSizeSet: make(chan struct{}),
+				ctx:                   ctx,
+				Conn:                  tc,
+				log:                   zl.Sugar(),
+				rec:                   rec,
+				initialCastHeaderSent: make(chan struct{}),
+				hasTerm:               true,
 			}
 			c.resizeStreamID.Store(tt.resizeStreamIDBeforeRead)
 
@@ -250,6 +256,12 @@ func Test_Reads(t *testing.T) {
 				if tt.wantHeight != c.ch.Height {
 					t.Errorf("want height: %v, got %v", tt.wantHeight, c.ch.Height)
 				}
+			}
+
+			// Assert that the expected bytes have been forwarded to the session recorder.
+			gotRecorded := sr.Bytes()
+			if !reflect.DeepEqual(gotRecorded, tt.wantRecorded) {
+				t.Errorf("expected bytes not recorded, wants\n%v\ngot\n%v", tt.wantRecorded, gotRecorded)
 			}
 		})
 	}
