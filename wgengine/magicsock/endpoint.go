@@ -1961,10 +1961,11 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	ps.Active = now.Sub(de.lastSendExt) < sessionActiveTimeout
 
 	if udpAddr, derpAddr, _ := de.addrForSendLocked(now); udpAddr.ap.IsValid() && !derpAddr.IsValid() {
-		// TODO(jwhited): if udpAddr.vni.isSet() we are using a Tailscale client
-		//  as a UDP relay; update PeerStatus and its interpretation by
-		//  "tailscale status" to make this clear.
-		ps.CurAddr = udpAddr.String()
+		if udpAddr.vni.isSet() {
+			ps.PeerRelay = udpAddr.String()
+		} else {
+			ps.CurAddr = udpAddr.String()
+		}
 	}
 }
 
