@@ -64,9 +64,9 @@ func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *cor
 
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
-func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, port *uint16, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
+func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, port *uint16, proxyClass *tsapi.ProxyClass, loginServer string) (*appsv1.StatefulSet, error) {
 	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
-		return kubeAPIServerStatefulSet(pg, namespace, image)
+		return kubeAPIServerStatefulSet(pg, namespace, image, loginServer)
 	}
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
@@ -276,7 +276,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 	return ss, nil
 }
 
-func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string) (*appsv1.StatefulSet, error) {
+func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image, loginServer string) (*appsv1.StatefulSet, error) {
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
@@ -342,6 +342,10 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string) (*a
 								{
 									Name:  "TS_K8S_PROXY_CONFIG",
 									Value: filepath.Join("/etc/tsconfig/$(POD_NAME)/", kubeAPIServerConfigFile),
+								},
+								{
+									Name:  "TS_K8S_PROXY_LOGIN_SERVER",
+									Value: loginServer,
 								},
 							},
 							VolumeMounts: func() []corev1.VolumeMount {

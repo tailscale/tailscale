@@ -1049,6 +1049,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		l:            zl.Sugar(),
 		tsClient:     &fakeTSClient{},
 		clock:        tstest.NewClock(tstest.ClockOpts{}),
+		loginServer:  "https://test.tailscale.com",
 	}
 
 	t.Run("egress_type", func(t *testing.T) {
@@ -1242,6 +1243,8 @@ func TestProxyGroupTypes(t *testing.T) {
 		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
 			t.Fatalf("failed to get StatefulSet: %v", err)
 		}
+
+		verifyEnvVar(t, sts, "TS_K8S_PROXY_LOGIN_SERVER", reconciler.loginServer)
 
 		// Verify the StatefulSet configuration for KubernetesAPIServer type.
 		if sts.Spec.Template.Spec.Containers[0].Name != mainContainerName {
@@ -1588,7 +1591,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	role := pgRole(pg, tsNamespace)
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
-	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", nil, proxyClass)
+	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", nil, proxyClass, "")
 	if err != nil {
 		t.Fatal(err)
 	}

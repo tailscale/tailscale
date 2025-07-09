@@ -389,7 +389,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
 		defaultImage = r.k8sProxyImage
 	}
-	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, tailscaledPort, proxyClass)
+	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, tailscaledPort, proxyClass, r.loginServer)
 	if err != nil {
 		return r.notReadyErrf(pg, "error generating StatefulSet spec: %w", err)
 	}
