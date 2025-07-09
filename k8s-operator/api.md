@@ -21,6 +21,21 @@
 
 
 
+#### APIServerProxyMode
+
+_Underlying type:_ _string_
+
+
+
+_Validation:_
+- Enum: [auth noauth]
+- Type: string
+
+_Appears in:_
+- [KubeAPIServerConfig](#kubeapiserverconfig)
+
+
+
 #### AppConnector
 
 
@@ -142,7 +157,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `env` _[Env](#env) array_ | List of environment variables to set in the container.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables<br />Note that environment variables provided here will take precedence<br />over Tailscale-specific environment variables set by the operator,<br />however running proxies with custom values for Tailscale environment<br />variables (i.e TS_USERSPACE) is not recommended and might break in<br />the future. |  |  |
-| `image` _string_ | Container image name. By default images are pulled from<br />docker.io/tailscale/tailscale, but the official images are also<br />available at ghcr.io/tailscale/tailscale. Specifying image name here<br />will override any proxy image values specified via the Kubernetes<br />operator's Helm chart values or PROXY_IMAGE env var in the operator<br />Deployment.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  |  |
+| `image` _string_ | Container image name. By default images are pulled from docker.io/tailscale,<br />but the official images are also available at ghcr.io/tailscale.<br />For all uses except on ProxyGroups of type "kube-apiserver", this image must<br />be either tailscale/tailscale, or an equivalent mirror of that image.<br />To apply to ProxyGroups of type "kube-apiserver", this image must be<br />tailscale/k8s-proxy or a mirror of that image.<br />For "tailscale/tailscale"-based proxies, specifying image name here will<br />override any proxy image values specified via the Kubernetes operator's<br />Helm chart values or PROXY_IMAGE env var in the operator Deployment.<br />For "tailscale/k8s-proxy"-based proxies, there is currently no way to<br />configure your own default, and this field is the only way to use a<br />custom image.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  |  |
 | `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#pullpolicy-v1-core)_ | Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  | Enum: [Always Never IfNotPresent] <br /> |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#resourcerequirements-v1-core)_ | Container resource requirements.<br />By default Tailscale Kubernetes operator does not apply any resource<br />requirements. The amount of resources required wil depend on the<br />amount of resources the operator needs to parse, usage patterns and<br />cluster size.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources |  |  |
 | `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context.<br />Security context specified here will override the security context set by the operator.<br />By default the operator sets the Tailscale container and the Tailscale init container to privileged<br />for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.<br />You can reduce the permissions of the Tailscale container to cap NET_ADMIN by<br />installing device plugin in your cluster and configuring the proxies tun device to be created<br />by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  |  |
@@ -313,6 +328,22 @@ _Appears in:_
 
 
 
+#### KubeAPIServerConfig
+
+
+
+KubeAPIServerConfig contains configuration specific to the kube-apiserver ProxyGroup type.
+
+
+
+_Appears in:_
+- [ProxyGroupSpec](#proxygroupspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `mode` _[APIServerProxyMode](#apiserverproxymode)_ | Mode to run the API server proxy in. Supported modes are auth and noauth.<br />In auth mode, requests from the tailnet proxied over to the Kubernetes<br />API server are additionally impersonated using the sender's tailnet identity.<br />If not specified, defaults to auth mode. |  | Enum: [auth noauth] <br />Type: string <br /> |
+
+
 #### LabelValue
 
 _Underlying type:_ _string_
@@ -459,7 +490,7 @@ _Appears in:_
 | `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the proxy Pod.<br />Any annotations specified here will be merged with the default<br />annotations applied to the Pod by the Tailscale Kubernetes operator.<br />Annotations must be valid Kubernetes annotations.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
 | `affinity` _[Affinity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#affinity-v1-core)_ | Proxy Pod's affinity rules.<br />By default, the Tailscale Kubernetes operator does not apply any affinity rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity |  |  |
 | `tailscaleContainer` _[Container](#container)_ | Configuration for the proxy container running tailscale. |  |  |
-| `tailscaleInitContainer` _[Container](#container)_ | Configuration for the proxy init container that enables forwarding. |  |  |
+| `tailscaleInitContainer` _[Container](#container)_ | Configuration for the proxy init container that enables forwarding.<br />Not valid to apply to ProxyGroups of type "kube-apiserver". |  |  |
 | `securityContext` _[PodSecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#podsecuritycontext-v1-core)_ | Proxy Pod's security context.<br />By default Tailscale Kubernetes operator does not apply any Pod<br />security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2 |  |  |
 | `imagePullSecrets` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#localobjectreference-v1-core) array_ | Proxy Pod's image pull Secrets.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec |  |  |
 | `nodeName` _string_ | Proxy Pod's node name.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
@@ -638,11 +669,12 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `type` _[ProxyGroupType](#proxygrouptype)_ | Type of the ProxyGroup proxies. Supported types are egress and ingress.<br />Type is immutable once a ProxyGroup is created. |  | Enum: [egress ingress] <br />Type: string <br /> |
+| `type` _[ProxyGroupType](#proxygrouptype)_ | Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.<br />Type is immutable once a ProxyGroup is created. |  | Enum: [egress ingress kube-apiserver] <br />Type: string <br /> |
 | `tags` _[Tags](#tags)_ | Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a ProxyGroup device has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
 | `replicas` _integer_ | Replicas specifies how many replicas to create the StatefulSet with.<br />Defaults to 2. |  | Minimum: 0 <br /> |
 | `hostnamePrefix` _[HostnamePrefix](#hostnameprefix)_ | HostnamePrefix is the hostname prefix to use for tailnet devices created<br />by the ProxyGroup. Each device will have the integer number from its<br />StatefulSet pod appended to this prefix to form the full hostname.<br />HostnamePrefix can contain lower case letters, numbers and dashes, it<br />must not start with a dash and must be between 1 and 62 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}$` <br />Type: string <br /> |
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that contains<br />configuration options that should be applied to the resources created<br />for this ProxyGroup. If unset, and there is no default ProxyClass<br />configured, the operator will create resources with the default<br />configuration. |  |  |
+| `kubeAPIServer` _[KubeAPIServerConfig](#kubeapiserverconfig)_ | KubeAPIServer contains configuration specific to the kube-apiserver<br />ProxyGroup type. This field is only used when Type is set to "kube-apiserver". |  |  |
 
 
 #### ProxyGroupStatus
@@ -669,7 +701,7 @@ _Underlying type:_ _string_
 
 
 _Validation:_
-- Enum: [egress ingress]
+- Enum: [egress ingress kube-apiserver]
 - Type: string
 
 _Appears in:_

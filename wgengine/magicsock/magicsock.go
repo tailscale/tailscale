@@ -1708,11 +1708,6 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 			}
 			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
 			//  for the same batch & [epAddr] src.
-			//
-			// TODO(jwhited): implement [lazyEndpoint] integration to call
-			//  [endpoint.noteRecvActivity], which triggers just-in-time
-			//  wireguard-go configuration of the peer, prior to peer lookup
-			//  within wireguard-go.
 			return &lazyEndpoint{c: c, src: src}, size, true
 		}
 		cache.epAddr = src

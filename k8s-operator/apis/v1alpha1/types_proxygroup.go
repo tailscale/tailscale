@@ -49,7 +49,7 @@ type ProxyGroupList struct {
 }
 
 type ProxyGroupSpec struct {
-	// Type of the ProxyGroup proxies. Supported types are egress and ingress.
+	// Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
 	// Type is immutable once a ProxyGroup is created.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ProxyGroup type is immutable"
 	Type ProxyGroupType `json:"type"`
@@ -84,6 +84,11 @@ type ProxyGroupSpec struct {
 	// configuration.
 	// +optional
 	ProxyClass string `json:"proxyClass,omitempty"`
+
+	// KubeAPIServer contains configuration specific to the kube-apiserver
+	// ProxyGroup type. This field is only used when Type is set to "kube-apiserver".
+	// +optional
+	KubeAPIServer *KubeAPIServerConfig `json:"kubeAPIServer,omitempty"`
 }
 
 type ProxyGroupStatus struct {
@@ -122,14 +127,34 @@ type TailnetDevice struct {
 }
 
 // +kubebuilder:validation:Type=string
-// +kubebuilder:validation:Enum=egress;ingress
+// +kubebuilder:validation:Enum=egress;ingress;kube-apiserver
 type ProxyGroupType string
 
 const (
-	ProxyGroupTypeEgress  ProxyGroupType = "egress"
-	ProxyGroupTypeIngress ProxyGroupType = "ingress"
+	ProxyGroupTypeEgress              ProxyGroupType = "egress"
+	ProxyGroupTypeIngress             ProxyGroupType = "ingress"
+	ProxyGroupTypeKubernetesAPIServer ProxyGroupType = "kube-apiserver"
+)
+
+// +kubebuilder:validation:Type=string
+// +kubebuilder:validation:Enum=auth;noauth
+type APIServerProxyMode string
+
+const (
+	APIServerProxyModeAuth   APIServerProxyMode = "auth"
+	APIServerProxyModeNoAuth APIServerProxyMode = "noauth"
 )
 
 // +kubebuilder:validation:Type=string
 // +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]{0,61}$`
 type HostnamePrefix string
+
+// KubeAPIServerConfig contains configuration specific to the kube-apiserver ProxyGroup type.
+type KubeAPIServerConfig struct {
+	// Mode to run the API server proxy in. Supported modes are auth and noauth.
+	// In auth mode, requests from the tailnet proxied over to the Kubernetes
+	// API server are additionally impersonated using the sender's tailnet identity.
+	// If not specified, defaults to auth mode.
+	// +optional
+	Mode *APIServerProxyMode `json:"mode,omitempty"`
+}

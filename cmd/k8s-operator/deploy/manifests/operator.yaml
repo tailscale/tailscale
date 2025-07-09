@@ -1852,12 +1852,21 @@ spec:
                                                         type: array
                                                     image:
                                                         description: |-
-                                                            Container image name. By default images are pulled from
-                                                            docker.io/tailscale/tailscale, but the official images are also
-                                                            available at ghcr.io/tailscale/tailscale. Specifying image name here
-                                                            will override any proxy image values specified via the Kubernetes
-                                                            operator's Helm chart values or PROXY_IMAGE env var in the operator
-                                                            Deployment.
+                                                            Container image name. By default images are pulled from docker.io/tailscale,
+                                                            but the official images are also available at ghcr.io/tailscale.
+
+                                                            For all uses except on ProxyGroups of type "kube-apiserver", this image must
+                                                            be either tailscale/tailscale, or an equivalent mirror of that image.
+                                                            To apply to ProxyGroups of type "kube-apiserver", this image must be
+                                                            tailscale/k8s-proxy or a mirror of that image.
+
+                                                            For "tailscale/tailscale"-based proxies, specifying image name here will
+                                                            override any proxy image values specified via the Kubernetes operator's
+                                                            Helm chart values or PROXY_IMAGE env var in the operator Deployment.
+                                                            For "tailscale/k8s-proxy"-based proxies, there is currently no way to
+                                                            configure your own default, and this field is the only way to use a
+                                                            custom image.
+
                                                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
                                                         type: string
                                                     imagePullPolicy:
@@ -2129,7 +2138,9 @@ spec:
                                                         type: object
                                                 type: object
                                             tailscaleInitContainer:
-                                                description: Configuration for the proxy init container that enables forwarding.
+                                                description: |-
+                                                    Configuration for the proxy init container that enables forwarding.
+                                                    Not valid to apply to ProxyGroups of type "kube-apiserver".
                                                 properties:
                                                     debug:
                                                         description: |-
@@ -2182,12 +2193,21 @@ spec:
                                                         type: array
                                                     image:
                                                         description: |-
-                                                            Container image name. By default images are pulled from
-                                                            docker.io/tailscale/tailscale, but the official images are also
-                                                            available at ghcr.io/tailscale/tailscale. Specifying image name here
-                                                            will override any proxy image values specified via the Kubernetes
-                                                            operator's Helm chart values or PROXY_IMAGE env var in the operator
-                                                            Deployment.
+                                                            Container image name. By default images are pulled from docker.io/tailscale,
+                                                            but the official images are also available at ghcr.io/tailscale.
+
+                                                            For all uses except on ProxyGroups of type "kube-apiserver", this image must
+                                                            be either tailscale/tailscale, or an equivalent mirror of that image.
+                                                            To apply to ProxyGroups of type "kube-apiserver", this image must be
+                                                            tailscale/k8s-proxy or a mirror of that image.
+
+                                                            For "tailscale/tailscale"-based proxies, specifying image name here will
+                                                            override any proxy image values specified via the Kubernetes operator's
+                                                            Helm chart values or PROXY_IMAGE env var in the operator Deployment.
+                                                            For "tailscale/k8s-proxy"-based proxies, there is currently no way to
+                                                            configure your own default, and this field is the only way to use a
+                                                            custom image.
+
                                                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
                                                         type: string
                                                     imagePullPolicy:
@@ -2904,6 +2924,22 @@ spec:
                                     must not start with a dash and must be between 1 and 62 characters long.
                                 pattern: ^[a-z0-9][a-z0-9-]{0,61}$
                                 type: string
+                            kubeAPIServer:
+                                description: |-
+                                    KubeAPIServer contains configuration specific to the kube-apiserver
+                                    ProxyGroup type. This field is only used when Type is set to "kube-apiserver".
+                                properties:
+                                    mode:
+                                        description: |-
+                                            Mode to run the API server proxy in. Supported modes are auth and noauth.
+                                            In auth mode, requests from the tailnet proxied over to the Kubernetes
+                                            API server are additionally impersonated using the sender's tailnet identity.
+                                            If not specified, defaults to auth mode.
+                                        enum:
+                                            - auth
+                                            - noauth
+                                        type: string
+                                type: object
                             proxyClass:
                                 description: |-
                                     ProxyClass is the name of the ProxyClass custom resource that contains
@@ -2933,11 +2969,12 @@ spec:
                                 type: array
                             type:
                                 description: |-
-                                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
+                                    Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
                                     Type is immutable once a ProxyGroup is created.
                                 enum:
                                     - egress
                                     - ingress
+                                    - kube-apiserver
                                 type: string
                                 x-kubernetes-validations:
                                     - message: ProxyGroup type is immutable
