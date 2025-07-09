@@ -115,6 +115,18 @@
       <supportedOn ref="SINCE_V1_56" />
       <elements>
         <text id="ExitNodeIDPrompt" valueName="ExitNodeID" required="true" />
+        <enum id="ExitNode_UserOverride" valueName="ExitNode.AllowOverride">
+          <item displayName="$(string.NotAllowed)">
+            <value>
+              <decimal value="0" />
+            </value>
+          </item>
+          <item displayName="$(string.Allowed)">
+            <value>
+              <decimal value="1" />
+            </value>
+          </item>
+        </enum>
       </elements>
     </policy>
     <policy name="AllowedSuggestedExitNodes" class="Machine" displayName="$(string.AllowedSuggestedExitNodes)" explainText="$(string.AllowedSuggestedExitNodes_Help)" presentation="$(presentation.AllowedSuggestedExitNodes)" key="Software\Policies\Tailscale\AllowedSuggestedExitNodes">

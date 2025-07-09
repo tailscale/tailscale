@@ -23,6 +23,7 @@
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
+            <string id="Allowed">Allowed</string>
             <string id="AllowedWithAudit">Allowed (with audit)</string>
             <string id="NotAllowed">Not Allowed</string>
             <string id="LoginURL">Require using a specific Tailscale coordination server</string>
@@ -69,7 +70,7 @@ See https://tailscale.com/kb/1315/mdm-keys#set-an-auth-key for more details.]]><
             <string id="ExitNodeID">Require using a specific Exit Node</string>
             <string id="ExitNodeID_Help"><![CDATA[This policy can be used to require always using the specified Exit Node whenever the Tailscale client is connected.
 
-If you enable this policy, set it to the ID of an exit node. The ID is visible on the Machines page of the admin console, or can be queried using the Tailscale API. If the specified exit node is unavailable, this device will have no Internet access unless Tailscale is disconnected. Alternatively, you can set it to "auto:any" (without quotes), which allows the Tailscale client to automatically select the most suitable exit node.
+If you enable this policy, set it to the ID of an exit node. The ID is visible on the Machines page of the admin console, or can be queried using the Tailscale API. If the specified exit node is unavailable, this device will have no Internet access unless Tailscale is disconnected. Alternatively, you can set it to "auto:any" (without quotes), which allows the Tailscale client to automatically select the most suitable exit node. Optionally, you can allow users to temporarily override the exit node by selecting a different one from the Exit Node submenu in the Tailscale menu or via the CLI, without allowing them to disable exit node usage entirely.
 
 If you disable this policy or supply an empty exit node ID, then usage of exit nodes will be disallowed.
 
@@ -323,6 +324,7 @@ If the policy is unconfigured, state encryption will be enabled on newer client 
                 <textBox refId="ExitNodeIDPrompt">
                     <label>Exit Node:</label>
                 </textBox>
+                <dropdownList refId="ExitNode_UserOverride" noSort="true" defaultItem="0">User override:</dropdownList>
             </presentation>
             <presentation id="DNSRegistration">
                 <dropdownList refId="DNSRegistration_Mode" noSort="true" defaultItem="0">Registration mode:</dropdownList>
