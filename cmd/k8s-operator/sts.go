@@ -935,7 +935,7 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 
 	if newAuthkey != "" {
 		conf.AuthKey = &newAuthkey
-	} else if shouldRetainAuthKey(oldSecret) {
+	} else if !deviceAuthed(oldSecret) {
 		key, err := authKeyFromSecret(oldSecret)
 		if err != nil {
 			return nil, fmt.Errorf("error retrieving auth key from Secret: %w", err)
@@ -984,6 +984,8 @@ func latestConfigFromSecret(s *corev1.Secret) (*ipn.ConfigVAlpha, error) {
 	return conf, nil
 }
 
+// authKeyFromSecret returns the auth key from the latest config version if
+// found, or else nil.
 func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
 	conf, err := latestConfigFromSecret(s)
 	if err != nil {
@@ -1000,13 +1002,13 @@ func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
 	return key, nil
 }
 
-// shouldRetainAuthKey returns true if the state stored in a proxy's state Secret suggests that auth key should be
-// retained (because the proxy has not yet successfully authenticated).
-func shouldRetainAuthKey(s *corev1.Secret) bool {
+// deviceAuthed returns true if the state stored in a proxy's state Secret
+// suggests that the proxy has successfully authenticated.
+func deviceAuthed(s *corev1.Secret) bool {
 	if s == nil {
-		return false // nothing to retain here
+		return false // No state Secret means no device state.
 	}
-	return len(s.Data["device_id"]) == 0 // proxy has not authed yet
+	return len(s.Data["device_id"]) > 0
 }
 
 func shouldAcceptRoutes(pc *tsapi.ProxyClass) bool {
