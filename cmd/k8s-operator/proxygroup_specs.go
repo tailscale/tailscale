@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +29,9 @@ const (
 	// deletionGracePeriodSeconds is set to 6 minutes to ensure that the pre-stop hook of these proxies have enough chance to terminate gracefully.
 	deletionGracePeriodSeconds int64 = 360
 	staticEndpointPortName           = "static-endpoint-port"
+	// authAPIServerProxySAName is the ServiceAccount deployed by the helm chart
+	// if apiServerProxy.authEnabled is true.
+	authAPIServerProxySAName = "kube-apiserver-auth-proxy"
 )
 
 func pgNodePortServiceName(proxyGroupName string, replica int32) string {
@@ -61,6 +65,9 @@ func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *cor
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
 func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, port *uint16, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
+	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		return kubeAPIServerStatefulSet(pg, namespace, image)
+	}
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -167,6 +174,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Value: "$(POD_NAME)",
 			},
 			{
+				// TODO(tomhjp): This is tsrecorder-specific and does nothing. Delete.
 				Name:  "TS_STATE",
 				Value: "kube:$(POD_NAME)",
 			},
@@ -264,7 +272,122 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		// gracefully.
 		ss.Spec.Template.DeletionGracePeriodSeconds = ptr.To(deletionGracePeriodSeconds)
 	}
+
 	return ss, nil
+}
+
+func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string) (*appsv1.StatefulSet, error) {
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pg.Name,
+			Namespace:       namespace,
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr.To(pgReplicas(pg)),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: pgLabels(pg.Name, nil),
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:                       pg.Name,
+					Namespace:                  namespace,
+					Labels:                     pgLabels(pg.Name, nil),
+					DeletionGracePeriodSeconds: ptr.To[int64](10),
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: pgServiceAccountName(pg),
+					Containers: []corev1.Container{
+						{
+							Name:  mainContainerName,
+							Image: image,
+							Env: []corev1.EnvVar{
+								{
+									// Used as default hostname and in Secret names.
+									Name: "POD_NAME",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.name",
+										},
+									},
+								},
+								{
+									// Used by kubeclient to post Events about the Pod's lifecycle.
+									Name: "POD_UID",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.uid",
+										},
+									},
+								},
+								{
+									// Used in an interpolated env var if metrics enabled.
+									Name: "POD_IP",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "status.podIP",
+										},
+									},
+								},
+								{
+									// Included for completeness with POD_IP and easier backwards compatibility in future.
+									Name: "POD_IPS",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "status.podIPs",
+										},
+									},
+								},
+								{
+									Name:  "TS_K8S_PROXY_CONFIG",
+									Value: filepath.Join("/etc/tsconfig/$(POD_NAME)/", kubeAPIServerConfigFile),
+								},
+							},
+							VolumeMounts: func() []corev1.VolumeMount {
+								var mounts []corev1.VolumeMount
+
+								// TODO(tomhjp): Read config directly from the Secret instead.
+								for i := range pgReplicas(pg) {
+									mounts = append(mounts, corev1.VolumeMount{
+										Name:      fmt.Sprintf("k8s-proxy-config-%d", i),
+										ReadOnly:  true,
+										MountPath: fmt.Sprintf("/etc/tsconfig/%s-%d", pg.Name, i),
+									})
+								}
+
+								return mounts
+							}(),
+							Ports: []corev1.ContainerPort{
+								{
+									Name:          "k8s-proxy",
+									ContainerPort: 443,
+									Protocol:      corev1.ProtocolTCP,
+								},
+							},
+						},
+					},
+					Volumes: func() []corev1.Volume {
+						var volumes []corev1.Volume
+						for i := range pgReplicas(pg) {
+							volumes = append(volumes, corev1.Volume{
+								Name: fmt.Sprintf("k8s-proxy-config-%d", i),
+								VolumeSource: corev1.VolumeSource{
+									Secret: &corev1.SecretVolumeSource{
+										SecretName: pgConfigSecretName(pg.Name, i),
+									},
+								},
+							})
+						}
+
+						return volumes
+					}(),
+				},
+			},
+		},
+	}
+
+	return sts, nil
 }
 
 func pgServiceAccount(pg *tsapi.ProxyGroup, namespace string) *corev1.ServiceAccount {
@@ -305,8 +428,8 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 				ResourceNames: func() (secrets []string) {
 					for i := range pgReplicas(pg) {
 						secrets = append(secrets,
-							pgConfigSecretName(pg.Name, i),   // Config with auth key.
-							fmt.Sprintf("%s-%d", pg.Name, i), // State.
+							pgConfigSecretName(pg.Name, i), // Config with auth key.
+							pgPodName(pg.Name, i),          // State.
 						)
 					}
 					return secrets
@@ -336,7 +459,7 @@ func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      pg.Name,
+				Name:      pgServiceAccountName(pg),
 				Namespace: namespace,
 			},
 		},
@@ -345,6 +468,27 @@ func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
 			Name: pg.Name,
 		},
 	}
+}
+
+// kube-apiserver proxies in auth mode use a static ServiceAccount. Everything
+// else uses a per-ProxyGroup ServiceAccount.
+func pgServiceAccountName(pg *tsapi.ProxyGroup) string {
+	if isAuthAPIServerProxy(pg) {
+		return authAPIServerProxySAName
+	}
+
+	return pg.Name
+}
+
+func isAuthAPIServerProxy(pg *tsapi.ProxyGroup) bool {
+	if pg.Spec.Type != tsapi.ProxyGroupTypeKubernetesAPIServer {
+		return false
+	}
+
+	// The default is auth mode.
+	return pg.Spec.KubeAPIServer == nil ||
+		pg.Spec.KubeAPIServer.Mode == nil ||
+		*pg.Spec.KubeAPIServer.Mode == tsapi.APIServerProxyModeAuth
 }
 
 func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.Secret) {
@@ -416,6 +560,18 @@ func pgReplicas(pg *tsapi.ProxyGroup) int32 {
 	}
 
 	return 2
+}
+
+func pgPodName(pgName string, i int32) string {
+	return fmt.Sprintf("%s-%d", pgName, i)
+}
+
+func pgHostname(pg *tsapi.ProxyGroup, i int32) string {
+	if pg.Spec.HostnamePrefix != "" {
+		return fmt.Sprintf("%s-%d", pg.Spec.HostnamePrefix, i)
+	}
+
+	return fmt.Sprintf("%s-%d", pg.Name, i)
 }
 
 func pgConfigSecretName(pgName string, i int32) string {

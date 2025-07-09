@@ -239,7 +239,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	// This checks and ensures that Tailscale Service's owner references are updated
 	// for this Ingress and errors if that is not possible (i.e. because it
 	// appears that the Tailscale Service has been created by a non-operator actor).
-	updatedAnnotations, err := r.ownerAnnotations(existingTSSvc)
+	updatedAnnotations, err := ownerAnnotations(r.operatorID, existingTSSvc)
 	if err != nil {
 		const instr = "To proceed, you can either manually delete the existing Tailscale Service or choose a different MagicDNS name at `.spec.tls.hosts[0] in the Ingress definition"
 		msg := fmt.Sprintf("error ensuring ownership of Tailscale Service %s: %v. %s", hostname, err, instr)
@@ -867,9 +867,9 @@ type OwnerRef struct {
 // nil, but does not contain an owner reference we return an error as this likely means
 // that the Service was created by somthing other than a Tailscale
 // Kubernetes operator.
-func (r *HAIngressReconciler) ownerAnnotations(svc *tailscale.VIPService) (map[string]string, error) {
+func ownerAnnotations(operatorID string, svc *tailscale.VIPService) (map[string]string, error) {
 	ref := OwnerRef{
-		OperatorID: r.operatorID,
+		OperatorID: operatorID,
 	}
 	if svc == nil {
 		c := ownerAnnotationValue{OwnerRefs: []OwnerRef{ref}}

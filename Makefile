@@ -92,37 +92,37 @@ pushspk: spk ## Push and install synology package on ${SYNO_HOST} host
 	scp tailscale.spk root@${SYNO_HOST}:
 	ssh root@${SYNO_HOST} /usr/syno/bin/synopkg install tailscale.spk
 
-publishdevimage: ## Build and publish tailscale image to location specified by ${REPO}
-	@test -n "${REPO}" || (echo "REPO=... required; e.g. REPO=ghcr.io/${USER}/tailscale" && exit 1)
-	@test "${REPO}" != "tailscale/tailscale" || (echo "REPO=... must not be tailscale/tailscale" && exit 1)
-	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
-	@test "${REPO}" != "tailscale/k8s-operator" || (echo "REPO=... must not be tailscale/k8s-operator" && exit 1)
-	@test "${REPO}" != "ghcr.io/tailscale/k8s-operator" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-operator" && exit 1)
+.PHONY: check-image-repo
+check-image-repo:
+	@if [ -z "$(REPO)" ]; then \
+		echo "REPO=... required; e.g. REPO=ghcr.io/$$USER/tailscale" >&2; \
+		exit 1; \
+	fi
+	@for repo in tailscale/tailscale ghcr.io/tailscale/tailscale \
+		tailscale/k8s-operator ghcr.io/tailscale/k8s-operator \
+		tailscale/k8s-nameserver ghcr.io/tailscale/k8s-nameserver \
+		tailscale/tsidp ghcr.io/tailscale/tsidp \
+		tailscale/k8s-proxy ghcr.io/tailscale/k8s-proxy; do \
+		if [ "$(REPO)" = "$$repo" ]; then \
+			echo "REPO=... must not be $$repo" >&2; \
+			exit 1; \
+		fi; \
+	done
+
+publishdevimage: check-image-repo ## Build and publish tailscale image to location specified by ${REPO}
 	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=client ./build_docker.sh
 
-publishdevoperator: ## Build and publish k8s-operator image to location specified by ${REPO}
-	@test -n "${REPO}" || (echo "REPO=... required; e.g. REPO=ghcr.io/${USER}/tailscale" && exit 1)
-	@test "${REPO}" != "tailscale/tailscale" || (echo "REPO=... must not be tailscale/tailscale" && exit 1)
-	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
-	@test "${REPO}" != "tailscale/k8s-operator" || (echo "REPO=... must not be tailscale/k8s-operator" && exit 1)
-	@test "${REPO}" != "ghcr.io/tailscale/k8s-operator" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-operator" && exit 1)
+publishdevoperator: check-image-repo ## Build and publish k8s-operator image to location specified by ${REPO}
 	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-operator ./build_docker.sh
 
-publishdevnameserver: ## Build and publish k8s-nameserver image to location specified by ${REPO}
-	@test -n "${REPO}" || (echo "REPO=... required; e.g. REPO=ghcr.io/${USER}/tailscale" && exit 1)
-	@test "${REPO}" != "tailscale/tailscale" || (echo "REPO=... must not be tailscale/tailscale" && exit 1)
-	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
-	@test "${REPO}" != "tailscale/k8s-nameserver" || (echo "REPO=... must not be tailscale/k8s-nameserver" && exit 1)
-	@test "${REPO}" != "ghcr.io/tailscale/k8s-nameserver" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-nameserver" && exit 1)
+publishdevnameserver: check-image-repo ## Build and publish k8s-nameserver image to location specified by ${REPO}
 	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-nameserver ./build_docker.sh
 
-publishdevtsidp: ## Build and publish tsidp image to location specified by ${REPO}
-	@test -n "${REPO}" || (echo "REPO=... required; e.g. REPO=ghcr.io/${USER}/tailscale" && exit 1)
-	@test "${REPO}" != "tailscale/tailscale" || (echo "REPO=... must not be tailscale/tailscale" && exit 1)
-	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
-	@test "${REPO}" != "tailscale/tsidp" || (echo "REPO=... must not be tailscale/tsidp" && exit 1)
-	@test "${REPO}" != "ghcr.io/tailscale/tsidp" || (echo "REPO=... must not be ghcr.io/tailscale/tsidp" && exit 1)
+publishdevtsidp: check-image-repo ## Build and publish tsidp image to location specified by ${REPO}
 	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=tsidp ./build_docker.sh
+
+publishdevproxy: check-image-repo ## Build and publish k8s-proxy image to location specified by ${REPO}
+	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-proxy ./build_docker.sh
 
 .PHONY: sshintegrationtest
 sshintegrationtest: ## Run the SSH integration tests in various Docker containers

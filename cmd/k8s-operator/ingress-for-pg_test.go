@@ -12,8 +12,10 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -647,6 +649,53 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	}
 	if !reflect.DeepEqual(o.OwnerRefs, wantOwnerRefs) {
 		t.Errorf("incorrect owner refs after deletion\ngot:  %+v\nwant: %+v", o.OwnerRefs, wantOwnerRefs)
+	}
+}
+
+func TestOwnerAnnotations(t *testing.T) {
+	singleSelfOwner := map[string]string{
+		ownerAnnotation: `{"ownerRefs":[{"operatorID":"self-id"}]}`,
+	}
+
+	for name, tc := range map[string]struct {
+		svc             *tailscale.VIPService
+		wantAnnotations map[string]string
+		wantErr         string
+	}{
+		"no_svc": {
+			svc:             nil,
+			wantAnnotations: singleSelfOwner,
+		},
+		"empty_svc": {
+			svc:     &tailscale.VIPService{},
+			wantErr: "likely a resource created by something other than the Tailscale Kubernetes operator",
+		},
+		"already_owner": {
+			svc: &tailscale.VIPService{
+				Annotations: singleSelfOwner,
+			},
+			wantAnnotations: singleSelfOwner,
+		},
+		"add_owner": {
+			svc: &tailscale.VIPService{
+				Annotations: map[string]string{
+					ownerAnnotation: `{"ownerRefs":[{"operatorID":"operator-2"}]}`,
+				},
+			},
+			wantAnnotations: map[string]string{
+				ownerAnnotation: `{"ownerRefs":[{"operatorID":"operator-2"},{"operatorID":"self-id"}]}`,
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ownerAnnotations("self-id", tc.svc)
+			if tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("ownerAnnotations() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if diff := cmp.Diff(tc.wantAnnotations, got); diff != "" {
+				t.Errorf("ownerAnnotations() mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

@@ -77,6 +77,22 @@ spec:
                     must not start with a dash and must be between 1 and 62 characters long.
                   type: string
                   pattern: ^[a-z0-9][a-z0-9-]{0,61}$
+                kubeAPIServer:
+                  description: |-
+                    KubeAPIServer contains configuration specific to the kube-apiserver
+                    ProxyGroup type. This field is only used when Type is set to "kube-apiserver".
+                  type: object
+                  properties:
+                    mode:
+                      description: |-
+                        Mode to run the API server proxy in. Supported modes are auth and noauth.
+                        In auth mode, requests from the tailnet proxied over to the Kubernetes
+                        API server are additionally impersonated using the sender's tailnet identity.
+                        If not specified, defaults to auth mode.
+                      type: string
+                      enum:
+                        - auth
+                        - noauth
                 proxyClass:
                   description: |-
                     ProxyClass is the name of the ProxyClass custom resource that contains
@@ -106,12 +122,13 @@ spec:
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                 type:
                   description: |-
-                    Type of the ProxyGroup proxies. Supported types are egress and ingress.
+                    Type of the ProxyGroup proxies. Supported types are egress, ingress, and kube-apiserver.
                     Type is immutable once a ProxyGroup is created.
                   type: string
                   enum:
                     - egress
                     - ingress
+                    - kube-apiserver
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: ProxyGroup type is immutable
