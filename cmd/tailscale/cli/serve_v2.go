@@ -200,6 +200,13 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				Exec:       e.runServeReset,
 				FlagSet:    e.newFlags("serve-reset", nil),
 			},
+			{
+				Name:       "clear",
+				ShortUsage: fmt.Sprintf("tailscale %s clear <service>", info.Name),
+				ShortHelp:  "Remove all config for a service",
+				LongHelp:   "Remove all handlers configured for the specified service.",
+				Exec:       e.runServeClear,
+			},
 		},
 	}
 }

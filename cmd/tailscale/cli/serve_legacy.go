@@ -750,6 +750,30 @@ func (e *serveEnv) runServeReset(ctx context.Context, args []string) error {
 	return e.lc.SetServeConfig(ctx, sc)
 }
 
+func (e *serveEnv) runServeClear(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errHelp
+	}
+	if len(args) != 1 {
+		fmt.Fprintf(Stderr, "error: invalid number of arguments\n\n")
+		return errHelp
+	}
+	svc := args[0]
+	err := tailcfg.ServiceName(svc).Validate()
+	if err != nil {
+		return fmt.Errorf("failed to parse service name: %w", err)
+	}
+	sc, err := e.lc.GetServeConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting serve config: %w", err)
+	}
+	if _, ok := sc.Services[tailcfg.ServiceName(svc)]; !ok {
+		return fmt.Errorf("service %q not found in serve config", svc)
+	}
+	delete(sc.Services, tailcfg.ServiceName(svc))
+	return e.lc.SetServeConfig(ctx, sc)
+}
+
 // parseServePort parses a port number from a string and returns it as a
 // uint16. It returns an error if the port number is invalid or zero.
 func parseServePort(s string) (uint16, error) {
