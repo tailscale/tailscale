@@ -2618,8 +2618,8 @@ func (c *Conn) onFilterUpdate(f FilterUpdate) {
 	c.updateRelayServersSet(f.Filter, self, peers)
 }
 
-// updateRelayServersSet iterates all peers, evaluating filt for each one in
-// order to determine which peers are relay server candidates. filt, self, and
+// updateRelayServersSet iterates all peers and self, evaluating filt for each
+// one in order to determine which are relay server candidates. filt, self, and
 // peers are passed as args (vs c.mu-guarded fields) to enable callers to
 // release c.mu before calling as this is O(m * n) (we iterate all cap rules 'm'
 // in filt for every peer 'n').
@@ -2631,8 +2631,9 @@ func (c *Conn) onFilterUpdate(f FilterUpdate) {
 //     the computed result over the eventbus instead.
 func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView, peers views.Slice[tailcfg.NodeView]) {
 	relayServers := make(set.Set[netip.AddrPort])
-	for _, peer := range peers.All() {
-		peerAPI := peerAPIIfCandidateRelayServer(filt, self, peer)
+	nodes := append(peers.AsSlice(), self)
+	for _, maybeCandidate := range nodes {
+		peerAPI := peerAPIIfCandidateRelayServer(filt, self, maybeCandidate)
 		if peerAPI.IsValid() {
 			relayServers.Add(peerAPI)
 		}
@@ -2640,33 +2641,34 @@ func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView,
 	c.relayManager.handleRelayServersSet(relayServers)
 }
 
-// peerAPIIfCandidateRelayServer returns the peer API address of peer if it
-// is considered to be a candidate relay server upon evaluation against filt and
-// self, otherwise it returns a zero value.
-func peerAPIIfCandidateRelayServer(filt *filter.Filter, self, peer tailcfg.NodeView) netip.AddrPort {
+// peerAPIIfCandidateRelayServer returns the peer API address of maybeCandidate
+// if it is considered to be a candidate relay server upon evaluation against
+// filt and self, otherwise it returns a zero value. self and maybeCandidate
+// may be equal.
+func peerAPIIfCandidateRelayServer(filt *filter.Filter, self, maybeCandidate tailcfg.NodeView) netip.AddrPort {
 	if filt == nil ||
 		!self.Valid() ||
-		!peer.Valid() ||
-		!capVerIsRelayServerCapable(peer.Cap()) ||
-		!peer.Hostinfo().Valid() {
+		!maybeCandidate.Valid() ||
+		!capVerIsRelayServerCapable(maybeCandidate.Cap()) ||
+		!maybeCandidate.Hostinfo().Valid() {
 		return netip.AddrPort{}
 	}
-	for _, peerPrefix := range peer.Addresses().All() {
-		if !peerPrefix.IsSingleIP() {
+	for _, maybeCandidatePrefix := range maybeCandidate.Addresses().All() {
+		if !maybeCandidatePrefix.IsSingleIP() {
 			continue
 		}
-		peerAddr := peerPrefix.Addr()
+		maybeCandidateAddr := maybeCandidatePrefix.Addr()
 		for _, selfPrefix := range self.Addresses().All() {
 			if !selfPrefix.IsSingleIP() {
 				continue
 			}
 			selfAddr := selfPrefix.Addr()
-			if selfAddr.BitLen() == peerAddr.BitLen() { // same address family
-				if filt.CapsWithValues(peerAddr, selfAddr).HasCapability(tailcfg.PeerCapabilityRelayTarget) {
-					for _, s := range peer.Hostinfo().Services().All() {
-						if peerAddr.Is4() && s.Proto == tailcfg.PeerAPI4 ||
-							peerAddr.Is6() && s.Proto == tailcfg.PeerAPI6 {
-							return netip.AddrPortFrom(peerAddr, s.Port)
+			if selfAddr.BitLen() == maybeCandidateAddr.BitLen() { // same address family
+				if filt.CapsWithValues(maybeCandidateAddr, selfAddr).HasCapability(tailcfg.PeerCapabilityRelayTarget) {
+					for _, s := range maybeCandidate.Hostinfo().Services().All() {
+						if maybeCandidateAddr.Is4() && s.Proto == tailcfg.PeerAPI4 ||
+							maybeCandidateAddr.Is6() && s.Proto == tailcfg.PeerAPI6 {
+							return netip.AddrPortFrom(maybeCandidateAddr, s.Port)
 						}
 					}
 					return netip.AddrPort{} // no peerAPI
@@ -2674,10 +2676,11 @@ func peerAPIIfCandidateRelayServer(filt *filter.Filter, self, peer tailcfg.NodeV
 					// [nodeBackend.peerCapsLocked] only returns/considers the
 					// [tailcfg.PeerCapMap] between the passed src and the
 					// _first_ host (/32 or /128) address for self. We are
-					// consistent with that behavior here. If self and peer
-					// host addresses are of the same address family they either
-					// have the capability or not. We do not check against
-					// additional host addresses of the same address family.
+					// consistent with that behavior here. If self and
+					// maybeCandidate host addresses are of the same address
+					// family they either have the capability or not. We do not
+					// check against additional host addresses of the same
+					// address family.
 					return netip.AddrPort{}
 				}
 			}
