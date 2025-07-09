@@ -213,6 +213,13 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 					"<service> should be a service name (e.g., svc:my-service).",
 				Exec: e.runServeDrain,
 			},
+			{
+				Name:       "clear",
+				ShortUsage: fmt.Sprintf("tailscale %s clear <service>", info.Name),
+				ShortHelp:  "Remove all config for a service",
+				LongHelp:   "Remove all handlers configured for the specified service.",
+				Exec:       e.runServeClear,
+			},
 		},
 	}
 }
