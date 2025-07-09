@@ -3385,16 +3385,7 @@ func Test_virtualNetworkID(t *testing.T) {
 }
 
 func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
-	selfOnlyIPv4 := &tailcfg.Node{
-		Cap: math.MinInt32,
-		Addresses: []netip.Prefix{
-			netip.MustParsePrefix("1.1.1.1/32"),
-		},
-	}
-	selfOnlyIPv6 := selfOnlyIPv4.Clone()
-	selfOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::1/128")
-
-	peerHostinfo := &tailcfg.Hostinfo{
+	hostInfo := &tailcfg.Hostinfo{
 		Services: []tailcfg.Service{
 			{
 				Proto: tailcfg.PeerAPI4,
@@ -3406,12 +3397,23 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 			},
 		},
 	}
+
+	selfOnlyIPv4 := &tailcfg.Node{
+		Cap: math.MinInt32,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("1.1.1.1/32"),
+		},
+		Hostinfo: hostInfo.View(),
+	}
+	selfOnlyIPv6 := selfOnlyIPv4.Clone()
+	selfOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::1/128")
+
 	peerOnlyIPv4 := &tailcfg.Node{
 		Cap: math.MinInt32,
 		Addresses: []netip.Prefix{
 			netip.MustParsePrefix("2.2.2.2/32"),
 		},
-		Hostinfo: peerHostinfo.View(),
+		Hostinfo: hostInfo.View(),
 	}
 
 	peerOnlyIPv6 := peerOnlyIPv4.Clone()
@@ -3424,11 +3426,11 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 	peerOnlyIPv4NilHostinfo.Hostinfo = tailcfg.HostinfoView{}
 
 	tests := []struct {
-		name string
-		filt *filter.Filter
-		self tailcfg.NodeView
-		peer tailcfg.NodeView
-		want netip.AddrPort
+		name           string
+		filt           *filter.Filter
+		self           tailcfg.NodeView
+		maybeCandidate tailcfg.NodeView
+		want           netip.AddrPort
 	}{
 		{
 			name: "match v4",
@@ -3443,9 +3445,26 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 					},
 				},
 			}, nil, nil, nil, nil, nil),
-			self: selfOnlyIPv4.View(),
-			peer: peerOnlyIPv4.View(),
-			want: netip.MustParseAddrPort("2.2.2.2:4"),
+			self:           selfOnlyIPv4.View(),
+			maybeCandidate: peerOnlyIPv4.View(),
+			want:           netip.MustParseAddrPort("2.2.2.2:4"),
+		},
+		{
+			name: "match v4 self",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{selfOnlyIPv4.Addresses[0]},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: selfOnlyIPv4.Addresses[0],
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self:           selfOnlyIPv4.View(),
+			maybeCandidate: selfOnlyIPv4.View(),
+			want:           netip.AddrPortFrom(selfOnlyIPv4.Addresses[0].Addr(), 4),
 		},
 		{
 			name: "match v6",
@@ -3460,9 +3479,26 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 					},
 				},
 			}, nil, nil, nil, nil, nil),
-			self: selfOnlyIPv6.View(),
-			peer: peerOnlyIPv6.View(),
-			want: netip.MustParseAddrPort("[::2]:6"),
+			self:           selfOnlyIPv6.View(),
+			maybeCandidate: peerOnlyIPv6.View(),
+			want:           netip.MustParseAddrPort("[::2]:6"),
+		},
+		{
+			name: "match v6 self",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{selfOnlyIPv6.Addresses[0]},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: selfOnlyIPv6.Addresses[0],
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self:           selfOnlyIPv6.View(),
+			maybeCandidate: selfOnlyIPv6.View(),
+			want:           netip.AddrPortFrom(selfOnlyIPv6.Addresses[0].Addr(), 6),
 		},
 		{
 			name: "no match dst",
@@ -3477,8 +3513,8 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 					},
 				},
 			}, nil, nil, nil, nil, nil),
-			self: selfOnlyIPv6.View(),
-			peer: peerOnlyIPv6.View(),
+			self:           selfOnlyIPv6.View(),
+			maybeCandidate: peerOnlyIPv6.View(),
 		},
 		{
 			name: "no match peer cap",
@@ -3493,8 +3529,8 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 					},
 				},
 			}, nil, nil, nil, nil, nil),
-			self: selfOnlyIPv6.View(),
-			peer: peerOnlyIPv6.View(),
+			self:           selfOnlyIPv6.View(),
+			maybeCandidate: peerOnlyIPv6.View(),
 		},
 		{
 			name: "cap ver not relay capable",
@@ -3509,14 +3545,14 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 					},
 				},
 			}, nil, nil, nil, nil, nil),
-			self: peerOnlyIPv4.View(),
-			peer: peerOnlyIPv4ZeroCapVer.View(),
+			self:           peerOnlyIPv4.View(),
+			maybeCandidate: peerOnlyIPv4ZeroCapVer.View(),
 		},
 		{
-			name: "nil filt",
-			filt: nil,
-			self: selfOnlyIPv4.View(),
-			peer: peerOnlyIPv4.View(),
+			name:           "nil filt",
+			filt:           nil,
+			self:           selfOnlyIPv4.View(),
+			maybeCandidate: peerOnlyIPv4.View(),
 		},
 		{
 			name: "nil self",
@@ -3531,8 +3567,8 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 					},
 				},
 			}, nil, nil, nil, nil, nil),
-			self: tailcfg.NodeView{},
-			peer: peerOnlyIPv4.View(),
+			self:           tailcfg.NodeView{},
+			maybeCandidate: peerOnlyIPv4.View(),
 		},
 		{
 			name: "nil peer",
@@ -3547,8 +3583,8 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 					},
 				},
 			}, nil, nil, nil, nil, nil),
-			self: selfOnlyIPv4.View(),
-			peer: tailcfg.NodeView{},
+			self:           selfOnlyIPv4.View(),
+			maybeCandidate: tailcfg.NodeView{},
 		},
 		{
 			name: "nil peer hostinfo",
@@ -3563,13 +3599,13 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 					},
 				},
 			}, nil, nil, nil, nil, nil),
-			self: selfOnlyIPv4.View(),
-			peer: peerOnlyIPv4NilHostinfo.View(),
+			self:           selfOnlyIPv4.View(),
+			maybeCandidate: peerOnlyIPv4NilHostinfo.View(),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := peerAPIIfCandidateRelayServer(tt.filt, tt.self, tt.peer); !reflect.DeepEqual(got, tt.want) {
+			if got := peerAPIIfCandidateRelayServer(tt.filt, tt.self, tt.maybeCandidate); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("peerAPIIfCandidateRelayServer() = %v, want %v", got, tt.want)
 			}
 		})
