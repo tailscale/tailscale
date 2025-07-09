@@ -919,6 +919,11 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// EventError provides the JSON encoding of internal errors from event processing.
+type EventError struct {
+	Error string
+}
+
 // serveDebugBusEvents taps into the tailscaled/utils/eventbus and streams
 // events to the client.
 func (h *Handler) serveDebugBusEvents(w http.ResponseWriter, r *http.Request) {
@@ -971,7 +976,16 @@ func (h *Handler) serveDebugBusEvents(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if msg, err := json.Marshal(data); err != nil {
-				fmt.Fprintf(w, `{"Event":"[ERROR] failed to marshal JSON for %T"}\n`, event.Event)
+				data.Event = EventError{Error: fmt.Sprintf(
+					"failed to marshal JSON for %T", event.Event,
+				)}
+				if errMsg, err := json.Marshal(data); err != nil {
+					fmt.Fprintf(w,
+						`{"Count": %d, "Event":"[ERROR] failed to marshal JSON for %T\n"}`,
+						i, event.Event)
+				} else {
+					w.Write(errMsg)
+				}
 			} else {
 				w.Write(msg)
 			}
