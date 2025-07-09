@@ -972,8 +972,7 @@ func TestPrefFlagMapping(t *testing.T) {
 			// No CLI flag for this.
 			continue
 		case "AutoExitNode":
-			// TODO(nickkhyl): should be handled by tailscale {set,up} --exit-node.
-			// See tailscale/tailscale#16459.
+			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
@@ -1335,6 +1334,27 @@ func TestUpdatePrefs(t *testing.T) {
 			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
 				if newPrefs.AppConnector.Advertise {
 					t.Errorf("prefs.AppConnector.Advertise not unset")
+				}
+			},
+		},
+		{
+			name:  "auto_exit_node",
+			flags: []string{"--exit-node=auto:any"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:    ipn.DefaultControlURL,
+				CorpDNS:       true,                 // enabled by [ipn.NewPrefs] by default
+				NetfilterMode: preftype.NetfilterOn, // enabled by [ipn.NewPrefs] by default
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				WantRunningSet:  true, // enabled by default for tailscale up
+				AutoExitNodeSet: true,
+				ExitNodeIDSet:   true, // we want ExitNodeID cleared
+				ExitNodeIPSet:   true, // same for ExitNodeIP
+			},
+			env: upCheckEnv{backendState: "Running"},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if newPrefs.AutoExitNode != ipn.AnyExitNode {
+					t.Errorf("AutoExitNode: got %q; want %q", newPrefs.AutoExitNode, ipn.AnyExitNode)
 				}
 			},
 		},
