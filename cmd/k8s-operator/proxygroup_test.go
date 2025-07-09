@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	kube "tailscale.com/k8s-operator"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -815,6 +816,7 @@ func TestProxyGroup(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Finalizers: []string{"tailscale.com/finalizer"},
+			Generation: 1,
 		},
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeEgress,
@@ -856,9 +858,12 @@ func TestProxyGroup(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass \"default-pc\" is not yet in a ready state, waiting...", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass \"default-pc\" is not yet in a ready state, waiting...", 1, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, false, pc)
+		if kube.ProxyGroupAvailable(pg) {
+			t.Fatal("expected ProxyGroup to not be available")
+		}
 	})
 
 	t.Run("observe_ProxyGroupCreating_status_reason", func(t *testing.T) {
@@ -874,13 +879,19 @@ func TestProxyGroup(t *testing.T) {
 		if err := fc.Status().Update(t.Context(), pc); err != nil {
 			t.Fatal(err)
 		}
-
+		pg.ObjectMeta.Generation = 2
+		mustUpdate(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
+			p.ObjectMeta.Generation = pg.ObjectMeta.Generation
+		})
 		expectReconciled(t, reconciler, "", pg.Name)
 
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 2, cl, zl.Sugar())
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
+		if kube.ProxyGroupAvailable(pg) {
+			t.Fatal("expected ProxyGroup to not be available")
+		}
 		if expected := 1; reconciler.egressProxyGroups.Len() != expected {
 			t.Fatalf("expected %d egress ProxyGroups, got %d", expected, reconciler.egressProxyGroups.Len())
 		}
@@ -902,6 +913,10 @@ func TestProxyGroup(t *testing.T) {
 
 	t.Run("simulate_successful_device_auth", func(t *testing.T) {
 		addNodeIDToStateSecrets(t, fc, pg)
+		pg.ObjectMeta.Generation = 3
+		mustUpdate(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
+			p.ObjectMeta.Generation = pg.ObjectMeta.Generation
+		})
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		pg.Status.Devices = []tsapi.TailnetDevice{
@@ -914,10 +929,13 @@ func TestProxyGroup(t *testing.T) {
 				TailnetIPs: []string{"1.2.3.4", "::1"},
 			},
 		}
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 3, cl, zl.Sugar())
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "2/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
+		if !kube.ProxyGroupAvailable(pg) {
+			t.Fatal("expected ProxyGroup to be available")
+		}
 	})
 
 	t.Run("scale_up_to_3", func(t *testing.T) {
@@ -926,14 +944,14 @@ func TestProxyGroup(t *testing.T) {
 			p.Spec = pg.Spec
 		})
 		expectReconciled(t, reconciler, "", pg.Name)
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 3, cl, zl.Sugar())
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupCreating, "2/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
 		expectProxyGroupResources(t, fc, pg, true, pc)
 
 		addNodeIDToStateSecrets(t, fc, pg)
 		expectReconciled(t, reconciler, "", pg.Name)
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 3, cl, zl.Sugar())
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "3/3 ProxyGroup pods running", 0, cl, zl.Sugar())
 		pg.Status.Devices = append(pg.Status.Devices, tsapi.TailnetDevice{
 			Hostname:   "hostname-nodeid-2",
