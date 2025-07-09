@@ -2607,14 +2607,16 @@ const (
 	// only needs to be present in [NodeCapMap] to take effect.
 	NodeAttrDisableRelayServer NodeCapability = "disable-relay-server"
 
-	// NodeAttrDisableRelayClient prevents the node from allocating UDP relay
-	// server endpoints itself; the node may still bind into and relay traffic
-	// using endpoints allocated by its peers. This attribute can be added to
-	// the node dynamically; if added while the node is already running, the
-	// node will be unable to allocate UDP relay server endpoints after it next
-	// updates its network map. There are no expected values for this key in
-	// [NodeCapMap]; the key only needs to be present in [NodeCapMap] to take
-	// effect.
+	// NodeAttrDisableRelayClient prevents the node from both allocating UDP
+	// relay server endpoints itself, and from using endpoints allocated by
+	// its peers. This attribute can be added to the node dynamically; if added
+	// while the node is already running, the node will be unable to allocate
+	// endpoints after it next updates its network map, and will be immediately
+	// unable to use new paths via a UDP relay server. Setting this attribute
+	// dynamically does not remove any existing paths, including paths that
+	// traverse a UDP relay server. There are no expected values for this key
+	// in [NodeCapMap]; the key only needs to be present in [NodeCapMap] to
+	// take effect.
 	NodeAttrDisableRelayClient NodeCapability = "disable-relay-client"
 
 	// NodeAttrMagicDNSPeerAAAA is a capability that tells the node's MagicDNS

@@ -355,7 +355,7 @@ type Conn struct {
 	self               tailcfg.NodeView              // from last onNodeViewsUpdate
 	peers              views.Slice[tailcfg.NodeView] // from last onNodeViewsUpdate, sorted by Node.ID; Note: [netmap.NodeMutation]'s rx'd in onNodeMutationsUpdate are never applied
 	filt               *filter.Filter                // from last onFilterUpdate
-	relayClientEnabled bool                          // whether we can allocate UDP relay endpoints on UDP relay servers
+	relayClientEnabled bool                          // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
 	lastFlags          debugFlags                    // at time of last onNodeViewsUpdate
 	privateKey         key.NodePrivate               // WireGuard private key for this node
 	everHadKey         bool                          // whether we ever had a non-zero private key
@@ -2149,6 +2149,14 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			c.logf("magicsock: disco: ignoring %s from %v; %v is unknown", msgType, sender.ShortString(), derpNodeSrc.ShortString())
 			return
 		}
+		// If the "disable-relay-client" node attr is set for this node, it
+		// can't be a UDP relay client, so drop any CallMeMaybeVia messages it
+		// receives.
+		if isVia && !c.relayClientEnabled {
+			c.logf("magicsock: disco: ignoring %s from %v; disable-relay-client node attr is set", msgType, sender.ShortString())
+			return
+		}
+
 		ep.mu.Lock()
 		relayCapable := ep.relayCapable
 		lastBest := ep.bestAddr
