@@ -815,6 +815,11 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 					},
 				},
 			}
+
+			if r.loginServer != "" {
+				cfg.ServerURL = &r.loginServer
+			}
+
 			cfgB, err := json.Marshal(cfg)
 			if err != nil {
 				return nil, fmt.Errorf("error marshalling k8s-proxy config: %w", err)
