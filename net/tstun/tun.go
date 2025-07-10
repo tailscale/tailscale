@@ -24,6 +24,9 @@ import (
 // CrateTAP is the hook set by feature/tap.
 var CreateTAP feature.Hook[func(logf logger.Logf, tapName, bridgeName string) (tun.Device, error)]
 
+// modprobeTunHook is a Linux-specific hook to run "/sbin/modprobe tun".
+var modprobeTunHook feature.Hook[func() error]
+
 // New returns a tun.Device for the requested device name, along with
 // the OS-dependent name that was allocated to the device.
 func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
@@ -51,7 +54,22 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		if runtime.GOOS == "plan9" {
 			cleanUpPlan9Interfaces()
 		}
-		dev, err = tun.CreateTUN(tunName, int(DefaultTUNMTU()))
+		// Try to create the TUN device up to two times. If it fails
+		// the first time and we're on Linux, try a desperate
+		// "modprobe tun" to load the tun module and try again.
+		for try := range 2 {
+			dev, err = tun.CreateTUN(tunName, int(DefaultTUNMTU()))
+			if err == nil || !modprobeTunHook.IsSet() {
+				if try > 0 {
+					logf("created TUN device %q after doing `modprobe tun`", tunName)
+				}
+				break
+			}
+			if modprobeTunHook.Get()() != nil {
+				// modprobe failed; no point trying again.
+				break
+			}
+		}
 	}
 	if err != nil {
 		return nil, "", err

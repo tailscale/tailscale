@@ -31,6 +31,7 @@ const (
 	Unraid    = Distro("unraid")
 	Alpine    = Distro("alpine")
 	UBNT      = Distro("ubnt") // Ubiquiti Networks
+	JetKVM    = Distro("jetkvm")
 )
 
 var distro lazy.SyncValue[Distro]
@@ -102,6 +103,8 @@ func linuxDistro() Distro {
 		return Unraid
 	case have("/etc/alpine-release"):
 		return Alpine
+	case haveDir("/userdata/jetkvm") && haveDir("/sys/kernel/config/usb_gadget/jetkvm"):
+		return JetKVM
 	}
 	return ""
 }

@@ -23,6 +23,11 @@ func detectFirewallMode(logf logger.Logf, prefHint string) FirewallMode {
 		hostinfo.SetFirewallMode("nft-gokrazy")
 		return FirewallModeNfTables
 	}
+	if distro.Get() == distro.JetKVM {
+		// JetKVM doesn't have iptables.
+		hostinfo.SetFirewallMode("nft-jetkvm")
+		return FirewallModeNfTables
+	}
 
 	mode := envknob.String("TS_DEBUG_FIREWALL_MODE")
 	// If the envknob isn't set, fall back to the pref suggested by c2n or
