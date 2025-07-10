@@ -761,14 +761,21 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 			enableEndpoints(ss, metricsEnabled, debugEnabled)
 		}
 	}
-	if pc.Spec.UseLetsEncryptStagingEnvironment && (stsCfg.proxyType == proxyTypeIngressResource || stsCfg.proxyType == string(tsapi.ProxyGroupTypeIngress)) {
-		for i, c := range ss.Spec.Template.Spec.Containers {
-			if isMainContainer(&c) {
-				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env, corev1.EnvVar{
-					Name:  "TS_DEBUG_ACME_DIRECTORY_URL",
-					Value: letsEncryptStagingEndpoint,
-				})
-				break
+
+	if stsCfg != nil {
+		usesLetsEncrypt := stsCfg.proxyType == proxyTypeIngressResource ||
+			stsCfg.proxyType == string(tsapi.ProxyGroupTypeIngress) ||
+			stsCfg.proxyType == string(tsapi.ProxyGroupTypeKubernetesAPIServer)
+
+		if pc.Spec.UseLetsEncryptStagingEnvironment && usesLetsEncrypt {
+			for i, c := range ss.Spec.Template.Spec.Containers {
+				if isMainContainer(&c) {
+					ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env, corev1.EnvVar{
+						Name:  "TS_DEBUG_ACME_DIRECTORY_URL",
+						Value: letsEncryptStagingEndpoint,
+					})
+					break
+				}
 			}
 		}
 	}
