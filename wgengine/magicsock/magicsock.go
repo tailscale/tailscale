@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
+	"github.com/tailscale/wireguard-go/device"
 	"go4.org/mem"
 	"golang.org/x/net/ipv6"
 
@@ -1632,6 +1633,16 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 	}
 }
 
+// looksLikeInitiationMsg returns true if b looks like a WireGuard initiation
+// message, otherwise it returns false.
+func looksLikeInitiationMsg(b []byte) bool {
+	if len(b) == device.MessageInitiationSize &&
+		binary.BigEndian.Uint32(b) == device.MessageInitiationType {
+		return true
+	}
+	return false
+}
+
 // receiveIP is the shared bits of ReceiveIPv4 and ReceiveIPv6.
 //
 // size is the length of 'b' to report up to wireguard-go (only relevant if
@@ -1717,9 +1728,17 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	}
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
-	ep.noteRecvActivity(src, now)
+	connNoted := ep.noteRecvActivity(src, now)
 	if stats := c.stats.Load(); stats != nil {
 		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, len(b))
+	}
+	if src.vni.isSet() && (connNoted || looksLikeInitiationMsg(b)) {
+		// connNoted is periodic, but we also want to verify if the peer is who
+		// we believe for all initiation messages, otherwise we could get
+		// unlucky and fail to JIT configure the "correct" peer.
+		// TODO(jwhited): relax this to include direct connections
+		//  See http://go/corp/29422 & http://go/corp/30042
+		return rxPacketVerifyEndpoint{endpoint: ep, src: src}, size, true
 	}
 	return ep, size, true
 }

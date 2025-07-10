@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go4.org/mem"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
@@ -499,8 +500,9 @@ func (de *endpoint) initFakeUDPAddr() {
 }
 
 // noteRecvActivity records receive activity on de, and invokes
-// Conn.noteRecvActivity no more than once every 10s.
-func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) {
+// [Conn.noteRecvActivity] no more than once every 10s, returning true if it
+// was called, otherwise false.
+func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 	if de.isWireguardOnly {
 		de.mu.Lock()
 		de.bestAddr.ap = src.ap
@@ -524,10 +526,12 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) {
 		de.lastRecvWG.StoreAtomic(now)
 
 		if de.c.noteRecvActivity == nil {
-			return
+			return false
 		}
 		de.c.noteRecvActivity(de.publicKey)
+		return true
 	}
+	return false
 }
 
 func (de *endpoint) discoShort() string {
@@ -2023,4 +2027,63 @@ func (de *endpoint) setDERPHome(regionID uint16) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	de.derpAddr = netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))
+}
+
+// rxPacketVerifyEndpoint wraps an [*endpoint] and implements
+// [conn.PeerAwareEndpoint] & [conn.InitiationAwareEndpoint]. We return an
+// [rxPacketVerifyEndpoint] in our [conn.ReceiveFunc]s periodically and for
+// all WireGuard initiation messages to resolve any potential [epAddr]
+// collisions.
+//
+// [epAddr] collisions have a higher chance of occurrence for packets received
+// over peer relays versus direct connections, as peer relay connections do not
+// upsert into [peerMap] around disco packet reception, but direct connections
+// do.
+//
+// We believe the packet from src was from the wrapped [*endpoint], but want to
+// verify with a Cryptokey Routing outcome from wireguard-go, and/or
+// just-in-time configure the potentially differing peer before wireguard-go
+// tries to decrypt.
+type rxPacketVerifyEndpoint struct {
+	*endpoint
+	src epAddr
+}
+
+// InitiationMessagePublicKey implements [conn.InitiationAwareEndpoint].
+func (r rxPacketVerifyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
+	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
+	if pubKey.Compare(r.endpoint.publicKey) == 0 {
+		return
+	}
+	r.endpoint.c.mu.Lock()
+	defer r.endpoint.c.mu.Unlock()
+	ep, ok := r.endpoint.c.peerMap.endpointForNodeKey(pubKey)
+	if !ok {
+		return
+	}
+	now := mono.Now()
+	ep.lastRecvUDPAny.StoreAtomic(now)
+	ep.noteRecvActivity(r.src, now)
+	// [ep.noteRecvActivity] may end up JIT configuring the peer, but we don't
+	// update [peerMap] as wireguard-go hasn't decrypted the initiation
+	// message yet. wireguard-go will call us below in
+	// [rxPacketVerifyEndpoint.FromPeer] if it successfully decrypts the
+	// message, at which point it's safe to insert r.src into the [peerMap]
+	// for ep, which will resolve the [epAddr] collision.
+}
+
+// FromPeer implements [conn.PeerAwareEndpoint].
+func (r rxPacketVerifyEndpoint) FromPeer(peerPublicKey [32]byte) {
+	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
+	if pubKey.Compare(r.endpoint.publicKey) == 0 {
+		return
+	}
+	r.endpoint.c.mu.Lock()
+	defer r.endpoint.c.mu.Unlock()
+	ep, ok := r.endpoint.c.peerMap.endpointForNodeKey(pubKey)
+	if !ok {
+		return
+	}
+	r.endpoint.c.peerMap.setNodeKeyForEpAddr(r.src, pubKey)
+	r.endpoint.c.logf("magicsock: rxPacketVerifyEndpoint.FromPeer(%v) setting epAddr(%v) in peerMap for node(%v)", pubKey.ShortString(), r.src, ep.nodeAddr)
 }
