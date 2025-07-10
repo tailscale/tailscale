@@ -2622,6 +2622,10 @@ const (
 	// NodeAttrMagicDNSPeerAAAA is a capability that tells the node's MagicDNS
 	// server to answer AAAA queries about its peers. See tailscale/tailscale#1152.
 	NodeAttrMagicDNSPeerAAAA NodeCapability = "magicdns-aaaa"
+
+	// NodeAttrTrafficSteering configures the node to use the traffic
+	// steering subsystem for via routes. See tailscale/corp#29966.
+	NodeAttrTrafficSteering NodeCapability = "traffic-steering"
 )
 
 // SetDNSRequest is a request to add a DNS record.
