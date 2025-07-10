@@ -499,8 +499,9 @@ func (de *endpoint) initFakeUDPAddr() {
 }
 
 // noteRecvActivity records receive activity on de, and invokes
-// Conn.noteRecvActivity no more than once every 10s.
-func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) {
+// Conn.noteRecvActivity no more than once every 10s, returning true if it
+// was called, otherwise false.
+func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 	if de.isWireguardOnly {
 		de.mu.Lock()
 		de.bestAddr.ap = src.ap
@@ -524,10 +525,12 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) {
 		de.lastRecvWG.StoreAtomic(now)
 
 		if de.c.noteRecvActivity == nil {
-			return
+			return false
 		}
 		de.c.noteRecvActivity(de.publicKey)
+		return true
 	}
+	return false
 }
 
 func (de *endpoint) discoShort() string {

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
+	"github.com/tailscale/wireguard-go/device"
 	"go4.org/mem"
 	"golang.org/x/net/ipv6"
 
@@ -1632,6 +1633,16 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 	}
 }
 
+// looksLikeInitiationMsg returns true if b looks like a WireGuard initiation
+// message, otherwise it returns false.
+func looksLikeInitiationMsg(b []byte) bool {
+	if len(b) == device.MessageInitiationSize &&
+		binary.BigEndian.Uint32(b) == device.MessageInitiationType {
+		return true
+	}
+	return false
+}
+
 // receiveIP is the shared bits of ReceiveIPv4 and ReceiveIPv6.
 //
 // size is the length of 'b' to report up to wireguard-go (only relevant if
@@ -1717,9 +1728,17 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	}
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
-	ep.noteRecvActivity(src, now)
+	connNoted := ep.noteRecvActivity(src, now)
 	if stats := c.stats.Load(); stats != nil {
 		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, len(b))
+	}
+	if src.vni.isSet() && (connNoted || looksLikeInitiationMsg(b)) {
+		// connNoted is periodic, but we also want to verify if the peer is who
+		// we believe for all initiation messages, otherwise we could get
+		// unlucky and fail to JIT configure the "correct" peer.
+		// TODO(jwhited): relax this to include direct connections
+		//  See http://go/corp/29422 & http://go/corp/30042
+		return &lazyEndpoint{c: c, maybeEP: ep, src: src}, size, true
 	}
 	return ep, size, true
 }
@@ -3787,11 +3806,19 @@ func (c *Conn) SetLastNetcheckReportForTest(ctx context.Context, report *netchec
 // decrypts it. So we implement the [conn.InitiationAwareEndpoint] and
 // [conn.PeerAwareEndpoint] interfaces, to allow WireGuard to tell us who it is
 // later, just-in-time to configure the peer, and set the associated [epAddr]
-// in the [peerMap]. Future receives on the associated [epAddr] will then be
-// resolvable directly to an [*endpoint].
+// in the [peerMap]. Future receives on the associated [epAddr] will then
+// resolve directly to an [*endpoint].
+//
+// We also sometimes (see [Conn.receiveIP]) return a [*lazyEndpoint] to
+// wireguard-go to verify an [epAddr] resolves to the [*endpoint] (maybeEP) we
+// believe it to be, to resolve [epAddr] collisions across peers. [epAddr]
+// collisions have a higher chance of occurrence for packets received over peer
+// relays versus direct connections, as peer relay connections do not upsert
+// into [peerMap] around disco packet reception, but direct connections do.
 type lazyEndpoint struct {
-	c   *Conn
-	src epAddr
+	c       *Conn
+	maybeEP *endpoint // or nil if unknown
+	src     epAddr
 }
 
 var _ conn.InitiationAwareEndpoint = (*lazyEndpoint)(nil)
@@ -3812,6 +3839,9 @@ var _ conn.Endpoint = (*lazyEndpoint)(nil)
 // wireguard-go peer (de)configuration.
 func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
 	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
+	if le.maybeEP != nil && pubKey.Compare(le.maybeEP.publicKey) == 0 {
+		return
+	}
 	le.c.mu.Lock()
 	defer le.c.mu.Unlock()
 	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)
@@ -3821,6 +3851,11 @@ func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
 	now := mono.Now()
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	ep.noteRecvActivity(le.src, now)
+	// [ep.noteRecvActivity] may end up JIT configuring the peer, but we don't
+	// update [peerMap] as wireguard-go hasn't decrypted the initiation
+	// message yet. wireguard-go will call us below in [lazyEndpoint.FromPeer]
+	// if it successfully decrypts the message, at which point it's safe to
+	// insert le.src into the [peerMap] for ep.
 }
 
 func (le *lazyEndpoint) ClearSrc()         {}
@@ -3845,12 +3880,16 @@ func (le *lazyEndpoint) DstToBytes() []byte {
 }
 
 // FromPeer implements [conn.PeerAwareEndpoint]. We return a [*lazyEndpoint] in
-// our [conn.ReceiveFunc]s when we are unable to identify the peer at WireGuard
-// packet reception time, pre-decryption. If wireguard-go successfully decrypts
-// the packet it calls us here, and we update our [peerMap] in order to
-// associate le.src with peerPublicKey.
+// [Conn.receiveIP] when we are unable to identify the peer at WireGuard
+// packet reception time, pre-decryption, or we want wireguard-go to verify who
+// we believe it to be (le.maybeEP). If wireguard-go successfully decrypts the
+// packet it calls us here, and we update our [peerMap] to associate le.src with
+// peerPublicKey.
 func (le *lazyEndpoint) FromPeer(peerPublicKey [32]byte) {
 	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
+	if le.maybeEP != nil && pubKey.Compare(le.maybeEP.publicKey) == 0 {
+		return
+	}
 	le.c.mu.Lock()
 	defer le.c.mu.Unlock()
 	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)

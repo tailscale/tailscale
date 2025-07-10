@@ -3611,3 +3611,43 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 		})
 	}
 }
+
+func Test_looksLikeInitiationMsg(t *testing.T) {
+	initMsg := make([]byte, device.MessageInitiationSize)
+	binary.BigEndian.PutUint32(initMsg, device.MessageInitiationType)
+	initMsgSizeTransportType := make([]byte, device.MessageInitiationSize)
+	binary.BigEndian.PutUint32(initMsgSizeTransportType, device.MessageTransportType)
+	tests := []struct {
+		name string
+		b    []byte
+		want bool
+	}{
+		{
+			name: "valid initiation",
+			b:    initMsg,
+			want: true,
+		},
+		{
+			name: "invalid message type field",
+			b:    initMsgSizeTransportType,
+			want: false,
+		},
+		{
+			name: "too small",
+			b:    initMsg[:device.MessageInitiationSize-1],
+			want: false,
+		},
+		{
+			name: "too big",
+			b:    append(initMsg, 0),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := looksLikeInitiationMsg(tt.b); got != tt.want {
+				t.Errorf("looksLikeInitiationMsg() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
