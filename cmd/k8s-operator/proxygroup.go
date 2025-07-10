@@ -824,6 +824,10 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 				cfg.AcceptRoutes = &proxyClass.Spec.TailscaleConfig.AcceptRoutes
 			}
 
+			if len(endpoints[nodePortSvcName]) > 0 {
+				cfg.StaticEndpoints = endpoints[nodePortSvcName]
+			}
+
 			cfgB, err := json.Marshal(cfg)
 			if err != nil {
 				return nil, fmt.Errorf("error marshalling k8s-proxy config: %w", err)
