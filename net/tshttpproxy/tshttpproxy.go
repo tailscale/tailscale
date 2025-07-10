@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
+	"tailscale.com/envknob"
 	"tailscale.com/util/mak"
 )
 
@@ -37,6 +38,10 @@ var (
 	config       *httpproxy.Config // used to create proxyFunc
 	proxyFunc    func(*url.URL) (*url.URL, error)
 )
+
+func init() {
+	envknob.ApplyDiskConfig()
+}
 
 func getProxyFunc() func(*url.URL) (*url.URL, error) {
 	// Create config/proxyFunc if it's not created
