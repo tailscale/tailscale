@@ -61,6 +61,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	// Setup
 	proxyClassAllOpts := &tsapi.ProxyClass{
 		Spec: tsapi.ProxyClassSpec{
+			UseLetsEncryptStagingEnvironment: true,
 			StatefulSet: &tsapi.StatefulSet{
 				Labels:      tsapi.Labels{"foo": "bar"},
 				Annotations: map[string]string{"foo.io/bar": "foo"},
@@ -292,6 +293,10 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
 		t.Errorf("Unexpected result applying ProxyClass with metrics enabled to a StatefulSet (-got +want):\n%s", diff)
 	}
+
+	// 8. A Kubernetes API proxy with letsencrypt staging enabled
+	gotSS = applyProxyClassToStatefulSet(proxyClassAllOpts, nonUserspaceProxySS.DeepCopy(), &tailscaleSTSConfig{proxyType: string(tsapi.ProxyGroupTypeKubernetesAPIServer)}, zl.Sugar())
+	verifyEnvVar(t, gotSS, "TS_DEBUG_ACME_DIRECTORY_URL", letsEncryptStagingEndpoint)
 }
 
 func Test_mergeStatefulSetLabelsOrAnnots(t *testing.T) {
