@@ -688,8 +688,9 @@ func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error
 // IPTablesCleanUp removes all Tailscale added iptables rules.
 // Any errors that occur are logged to the provided logf.
 func IPTablesCleanUp(logf logger.Logf) {
-	if distro.Get() == distro.Gokrazy {
-		// Gokrazy uses nftables and doesn't have the "iptables" command.
+	switch distro.Get() {
+	case distro.Gokrazy, distro.JetKVM:
+		// These use nftables and don't have the "iptables" command.
 		// Avoid log spam on cleanup. (#12277)
 		return
 	}
