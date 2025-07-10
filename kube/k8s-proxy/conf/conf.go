@@ -54,6 +54,7 @@ type ConfigV1Alpha1 struct {
 	App           *string        `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
 	KubeAPIServer *KubeAPIServer `json:",omitempty"` // Config specific to the API Server proxy.
 	ServerURL     *string        `json:",omitempty"` // URL of the Tailscale coordination server.
+	AcceptRoutes  *bool          `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
 }
 
 type KubeAPIServer struct {

@@ -114,12 +114,13 @@ func run(logger *zap.SugaredLogger) error {
 
 	group, groupCtx := errgroup.WithContext(ctx)
 
+	lc, err := ts.LocalClient()
+	if err != nil {
+		return fmt.Errorf("error getting local client: %w", err)
+	}
+
 	// Setup for updating state keys.
 	if podUID != "" {
-		lc, err := ts.LocalClient()
-		if err != nil {
-			return fmt.Errorf("error getting local client: %w", err)
-		}
 		w, err := lc.WatchIPNBus(groupCtx, ipn.NotifyInitialNetMap)
 		if err != nil {
 			return fmt.Errorf("error watching IPN bus: %w", err)
@@ -133,6 +134,16 @@ func run(logger *zap.SugaredLogger) error {
 
 			return nil
 		})
+	}
+
+	if cfg.Parsed.AcceptRoutes != nil {
+		_, err = lc.EditPrefs(groupCtx, &ipn.MaskedPrefs{
+			RouteAllSet: true,
+			Prefs:       ipn.Prefs{RouteAll: *cfg.Parsed.AcceptRoutes},
+		})
+		if err != nil {
+			return fmt.Errorf("error editing prefs: %w", err)
+		}
 	}
 
 	// Setup for the API server proxy.
