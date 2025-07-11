@@ -51,22 +51,22 @@ func (s *serviceNameFlag) Set(sv string) error {
 		s.Value = new(tailcfg.ServiceName)
 		return nil
 	}
-	if err := tailcfg.ServiceName(sv).Validate(); err != nil {
+	v := tailcfg.ServiceName(sv)
+	if err := v.Validate(); err != nil {
 		return fmt.Errorf("invalid service name: %q", sv)
 	}
-	v := tailcfg.ServiceName(sv)
 	*s.Value = v
 	return nil
 }
 
 // String returns the string representation of service name.
 func (s *serviceNameFlag) String() string {
-	return fmt.Sprintf("%s", s.Value.String())
+	return s.Value.String()
 }
 
 type bgBoolFlag struct {
-	Value     bool
-	SetByUser bool // tracks if the flag was set by the user
+	Value bool
+	IsSet bool // tracks if the flag was set by the user
 }
 
 // Set sets the boolean flag and whether it's explicitly set by user based on the string value.
@@ -78,7 +78,7 @@ func (b *bgBoolFlag) Set(s string) error {
 	} else {
 		return fmt.Errorf("invalid boolean value: %s", s)
 	}
-	b.SetByUser = true
+	b.IsSet = true
 	return nil
 }
 
@@ -265,8 +265,8 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 		defer cancel()
 
-		forService := !e.service.IsEmpty()
-		if !e.bg.SetByUser {
+		forService := e.service != ""
+		if !e.bg.IsSet {
 			e.bg.Value = forService
 		}
 
@@ -282,7 +282,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
-		if forService && e.bg.SetByUser && !e.bg.Value {
+		if forService && !e.bg.Value {
 			return errors.New("Error: --service flag is only compatible with background mode")
 		}
 
@@ -818,7 +818,7 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, is
 		srvPort = 443
 		defaultFlags = true
 	}
-	return srvType, srvPort, defaultFlags && !e.service.IsEmpty(), nil
+	return srvType, srvPort, defaultFlags && e.service != "", nil
 }
 
 // isLegacyInvocation helps transition customers who have been using the beta
