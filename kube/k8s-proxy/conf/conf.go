@@ -10,6 +10,7 @@ package conf
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 
 	"github.com/tailscale/hujson"
@@ -55,6 +56,9 @@ type ConfigV1Alpha1 struct {
 	KubeAPIServer *KubeAPIServer `json:",omitempty"` // Config specific to the API Server proxy.
 	ServerURL     *string        `json:",omitempty"` // URL of the Tailscale coordination server.
 	AcceptRoutes  *bool          `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
+	// StaticEndpoints are additional, user-defined endpoints that this node
+	// should advertise amongst its wireguard endpoints.
+	StaticEndpoints []netip.AddrPort `json:",omitempty"`
 }
 
 type KubeAPIServer struct {

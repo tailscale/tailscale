@@ -66,7 +66,7 @@ func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *cor
 // applied over the top after.
 func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string, port *uint16, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
 	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
-		return kubeAPIServerStatefulSet(pg, namespace, image)
+		return kubeAPIServerStatefulSet(pg, namespace, image, port)
 	}
 	ss := new(appsv1.StatefulSet)
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
@@ -276,7 +276,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 	return ss, nil
 }
 
-func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string) (*appsv1.StatefulSet, error) {
+func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, port *uint16) (*appsv1.StatefulSet, error) {
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
@@ -302,48 +302,59 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string) (*a
 						{
 							Name:  mainContainerName,
 							Image: image,
-							Env: []corev1.EnvVar{
-								{
-									// Used as default hostname and in Secret names.
-									Name: "POD_NAME",
-									ValueFrom: &corev1.EnvVarSource{
-										FieldRef: &corev1.ObjectFieldSelector{
-											FieldPath: "metadata.name",
+							Env: func() []corev1.EnvVar {
+								envs := []corev1.EnvVar{
+									{
+										// Used as default hostname and in Secret names.
+										Name: "POD_NAME",
+										ValueFrom: &corev1.EnvVarSource{
+											FieldRef: &corev1.ObjectFieldSelector{
+												FieldPath: "metadata.name",
+											},
 										},
 									},
-								},
-								{
-									// Used by kubeclient to post Events about the Pod's lifecycle.
-									Name: "POD_UID",
-									ValueFrom: &corev1.EnvVarSource{
-										FieldRef: &corev1.ObjectFieldSelector{
-											FieldPath: "metadata.uid",
+									{
+										// Used by kubeclient to post Events about the Pod's lifecycle.
+										Name: "POD_UID",
+										ValueFrom: &corev1.EnvVarSource{
+											FieldRef: &corev1.ObjectFieldSelector{
+												FieldPath: "metadata.uid",
+											},
 										},
 									},
-								},
-								{
-									// Used in an interpolated env var if metrics enabled.
-									Name: "POD_IP",
-									ValueFrom: &corev1.EnvVarSource{
-										FieldRef: &corev1.ObjectFieldSelector{
-											FieldPath: "status.podIP",
+									{
+										// Used in an interpolated env var if metrics enabled.
+										Name: "POD_IP",
+										ValueFrom: &corev1.EnvVarSource{
+											FieldRef: &corev1.ObjectFieldSelector{
+												FieldPath: "status.podIP",
+											},
 										},
 									},
-								},
-								{
-									// Included for completeness with POD_IP and easier backwards compatibility in future.
-									Name: "POD_IPS",
-									ValueFrom: &corev1.EnvVarSource{
-										FieldRef: &corev1.ObjectFieldSelector{
-											FieldPath: "status.podIPs",
+									{
+										// Included for completeness with POD_IP and easier backwards compatibility in future.
+										Name: "POD_IPS",
+										ValueFrom: &corev1.EnvVarSource{
+											FieldRef: &corev1.ObjectFieldSelector{
+												FieldPath: "status.podIPs",
+											},
 										},
 									},
-								},
-								{
-									Name:  "TS_K8S_PROXY_CONFIG",
-									Value: filepath.Join("/etc/tsconfig/$(POD_NAME)/", kubeAPIServerConfigFile),
-								},
-							},
+									{
+										Name:  "TS_K8S_PROXY_CONFIG",
+										Value: filepath.Join("/etc/tsconfig/$(POD_NAME)/", kubeAPIServerConfigFile),
+									},
+								}
+
+								if port != nil {
+									envs = append(envs, corev1.EnvVar{
+										Name:  "PORT",
+										Value: strconv.Itoa(int(*port)),
+									})
+								}
+
+								return envs
+							}(),
 							VolumeMounts: func() []corev1.VolumeMount {
 								var mounts []corev1.VolumeMount
 
