@@ -14,7 +14,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/netip"
 	"reflect"
@@ -2616,14 +2615,8 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 	})
 }
 
-func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
-	// TODO(jwhited): implement once capVer is bumped
-	return version == math.MinInt32 || debugAssumeUDPRelayCapable()
-}
-
-func capVerIsRelayServerCapable(version tailcfg.CapabilityVersion) bool {
-	// TODO(jwhited): implement once capVer is bumped & update Test_peerAPIIfCandidateRelayServer
-	return version == math.MinInt32 || debugAssumeUDPRelayCapable()
+func capVerIsRelayClientAndServerCapable(version tailcfg.CapabilityVersion) bool {
+	return version >= 119
 }
 
 // onFilterUpdate is called when a [FilterUpdate] is received over the
@@ -2677,7 +2670,7 @@ func peerAPIIfCandidateRelayServer(filt *filter.Filter, self, maybeCandidate tai
 	if filt == nil ||
 		!self.Valid() ||
 		!maybeCandidate.Valid() ||
-		!capVerIsRelayServerCapable(maybeCandidate.Cap()) ||
+		!capVerIsRelayClientAndServerCapable(maybeCandidate.Cap()) ||
 		!maybeCandidate.Hostinfo().Valid() {
 		return netip.AddrPort{}
 	}
@@ -2724,8 +2717,7 @@ func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
 
 	relayClientEnabled := update.SelfNode.Valid() &&
 		!update.SelfNode.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
-		!update.SelfNode.HasCap(tailcfg.NodeAttrOnlyTCP443) &&
-		envknob.UseWIPCode()
+		!update.SelfNode.HasCap(tailcfg.NodeAttrOnlyTCP443)
 
 	c.mu.Lock()
 	relayClientChanged := c.relayClientEnabled != relayClientEnabled

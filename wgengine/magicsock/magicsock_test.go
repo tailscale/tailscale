@@ -3399,7 +3399,7 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 	}
 
 	selfOnlyIPv4 := &tailcfg.Node{
-		Cap: math.MinInt32,
+		Cap: 119,
 		Addresses: []netip.Prefix{
 			netip.MustParsePrefix("1.1.1.1/32"),
 		},
@@ -3409,7 +3409,7 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 	selfOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::1/128")
 
 	peerOnlyIPv4 := &tailcfg.Node{
-		Cap: math.MinInt32,
+		Cap: 119,
 		Addresses: []netip.Prefix{
 			netip.MustParsePrefix("2.2.2.2/32"),
 		},

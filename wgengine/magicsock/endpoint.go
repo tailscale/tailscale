@@ -1485,7 +1485,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 
 	de.setEndpointsLocked(n.Endpoints())
 
-	de.relayCapable = capVerIsRelayCapable(n.Cap())
+	de.relayCapable = capVerIsRelayClientAndServerCapable(n.Cap())
 }
 
 func (de *endpoint) setEndpointsLocked(eps interface {
