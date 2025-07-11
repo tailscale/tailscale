@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
@@ -132,9 +131,6 @@ func (e *extension) relayServerOrInit() (relayServer, error) {
 	}
 	if e.hasNodeAttrDisableRelayServer {
 		return nil, errors.New("disable-relay-server node attribute is present")
-	}
-	if !envknob.UseWIPCode() {
-		return nil, errors.New("TAILSCALE_USE_WIP_CODE envvar is not set")
 	}
 	var err error
 	e.server, err = udprelay.NewServer(e.logf, *e.port, nil)

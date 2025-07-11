@@ -2724,8 +2724,7 @@ func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
 
 	relayClientEnabled := update.SelfNode.Valid() &&
 		!update.SelfNode.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
-		!update.SelfNode.HasCap(tailcfg.NodeAttrOnlyTCP443) &&
-		envknob.UseWIPCode()
+		!update.SelfNode.HasCap(tailcfg.NodeAttrOnlyTCP443)
 
 	c.mu.Lock()
 	relayClientChanged := c.relayClientEnabled != relayClientEnabled
