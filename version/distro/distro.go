@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"tailscale.com/types/lazy"
 	"tailscale.com/util/lineiter"
@@ -103,10 +104,18 @@ func linuxDistro() Distro {
 		return Unraid
 	case have("/etc/alpine-release"):
 		return Alpine
-	case haveDir("/userdata/jetkvm") && haveDir("/sys/kernel/config/usb_gadget/jetkvm"):
+	case runtime.GOARCH == "arm" && isDeviceModel("JetKVM"):
 		return JetKVM
 	}
 	return ""
+}
+
+func isDeviceModel(want string) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	v, _ := os.ReadFile("/sys/firmware/devicetree/base/model")
+	return want == strings.Trim(string(v), "\x00\r\n\t ")
 }
 
 func freebsdDistro() Distro {
