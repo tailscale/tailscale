@@ -39,6 +39,8 @@ type fileDeleter struct {
 	group       syncs.WaitGroup
 	shutdownCtx context.Context
 	shutdown    context.CancelFunc
+	// fs is the filesystem abstraction for delete
+	fs FileOps
 }
 
 // deleteFile is a specific file to delete after deleteDelay.
@@ -52,13 +54,16 @@ func (d *fileDeleter) Init(m *manager, eventHook func(string)) {
 	d.clock = m.opts.Clock
 	d.dir = m.opts.Dir
 	d.event = eventHook
+	d.fs = m.opts.FileOps
+	if d.fs == nil {
+		d.fs = defaultFileOps
+	}
 
 	d.byName = make(map[string]*list.Element)
 	d.emptySignal = make(chan struct{})
 	d.shutdownCtx, d.shutdown = context.WithCancel(context.Background())
 
 	// From a cold-start, load the list of partial and deleted files.
-	//
 	// Only run this if we have ever received at least one file
 	// to avoid ever touching the taildrop directory on systems (e.g., MacOS)
 	// that pop up a security dialog window upon first access.
@@ -93,8 +98,8 @@ func (d *fileDeleter) Init(m *manager, eventHook func(string)) {
 			case strings.HasSuffix(de.Name(), deletedSuffix):
 				// Best-effort immediate deletion of deleted files.
 				name := strings.TrimSuffix(de.Name(), deletedSuffix)
-				if os.Remove(filepath.Join(d.dir, name)) == nil {
-					if os.Remove(filepath.Join(d.dir, de.Name())) == nil {
+				if d.fs.Remove(filepath.Join(d.dir, name)) == nil {
+					if d.fs.Remove(filepath.Join(d.dir, de.Name())) == nil {
 						break
 					}
 				}
@@ -149,13 +154,13 @@ func (d *fileDeleter) waitAndDelete(wait time.Duration) {
 
 			// Delete the expired file.
 			if name, ok := strings.CutSuffix(file.name, deletedSuffix); ok {
-				if err := os.Remove(filepath.Join(d.dir, name)); err != nil && !os.IsNotExist(err) {
+				if err := d.fs.Remove(filepath.Join(d.dir, name)); err != nil && !os.IsNotExist(err) {
 					d.logf("could not delete: %v", redactError(err))
 					failed = append(failed, elem)
 					continue
 				}
 			}
-			if err := os.Remove(filepath.Join(d.dir, file.name)); err != nil && !os.IsNotExist(err) {
+			if err := d.fs.Remove(filepath.Join(d.dir, file.name)); err != nil && !os.IsNotExist(err) {
 				d.logf("could not delete: %v", redactError(err))
 				failed = append(failed, elem)
 				continue

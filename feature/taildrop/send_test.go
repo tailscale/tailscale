@@ -19,37 +19,42 @@ type nopWriteCloser struct{ *bytes.Buffer }
 
 func (nwc nopWriteCloser) Close() error { return nil }
 
-// mockFileOps implements just enough of the FileOps interface for SAF tests.
+// mockFileOps implements the taildrop.FileOps interface for testing SAF mode.
 type mockFileOps struct {
 	writes   *bytes.Buffer
 	renameOK bool
 }
 
-func (m *mockFileOps) OpenFileWriter(name string) (io.WriteCloser, string, error) {
+func (m *mockFileOps) OpenWriter(partialString string, name string, offset int64, perm os.FileMode) (io.WriteCloser, string, error) {
 	m.writes = new(bytes.Buffer)
-	return nopWriteCloser{m.writes}, "uri://" + name + ".partial", nil
+	// return a no‐op closer around the buffer, plus a fake “URI”
+	return nopWriteCloser{m.writes}, "uri://" + name + partialString, nil
 }
 
-func (m *mockFileOps) RenamePartialFile(partialPath, dir, finalName string) (string, error) {
+func (m *mockFileOps) Base(pathOrURI string) string { return filepath.Base(pathOrURI) }
+func (m *mockFileOps) Join(dir, name string) string { return dir + "/" + name }
+func (m *mockFileOps) Remove(name string) error     { return nil }
+
+func (m *mockFileOps) Rename(partialURI, finalName string) (string, error) {
 	if !m.renameOK {
 		m.renameOK = true
 		return "uri://" + finalName, nil
 	}
 	return "", io.ErrUnexpectedEOF
 }
+func (m *mockFileOps) IsDirect() bool { return false }
 
 func TestPutFile(t *testing.T) {
 	const content = "hello, world"
 
 	tests := []struct {
-		name     string
-		mode     PutMode
+		name string
+
 		setup    func(t *testing.T) (*manager, string, *mockFileOps)
 		wantFile string
 	}{
 		{
-			name: "PutModeDirect",
-			mode: PutModeDirect,
+			name: "NonAndroid",
 			setup: func(t *testing.T) (*manager, string, *mockFileOps) {
 				dir := t.TempDir()
 				opts := managerOptions{
@@ -57,7 +62,7 @@ func TestPutFile(t *testing.T) {
 					Clock:          tstime.DefaultClock{},
 					State:          nil,
 					Dir:            dir,
-					Mode:           PutModeDirect,
+					FileOps:        nil,
 					DirectFileMode: true,
 					SendFileNotify: func() {},
 				}
@@ -67,10 +72,8 @@ func TestPutFile(t *testing.T) {
 			wantFile: "file.txt",
 		},
 		{
-			name: "PutModeAndroidSAF",
-			mode: PutModeAndroidSAF,
+			name: "Android",
 			setup: func(t *testing.T) (*manager, string, *mockFileOps) {
-				// SAF still needs a non-empty Dir to pass the guard.
 				dir := t.TempDir()
 				mops := &mockFileOps{}
 				opts := managerOptions{
@@ -78,7 +81,6 @@ func TestPutFile(t *testing.T) {
 					Clock:          tstime.DefaultClock{},
 					State:          nil,
 					Dir:            dir,
-					Mode:           PutModeAndroidSAF,
 					FileOps:        mops,
 					DirectFileMode: true,
 					SendFileNotify: func() {},
@@ -104,8 +106,8 @@ func TestPutFile(t *testing.T) {
 				t.Errorf("wrote %d bytes; want %d", n, len(content))
 			}
 
-			switch tc.mode {
-			case PutModeDirect:
+			switch tc.name {
+			case "NonAndroid":
 				path := filepath.Join(dir, tc.wantFile)
 				data, err := os.ReadFile(path)
 				if err != nil {
@@ -115,7 +117,7 @@ func TestPutFile(t *testing.T) {
 					t.Errorf("file contents = %q; want %q", got, content)
 				}
 
-			case PutModeAndroidSAF:
+			case "Android":
 				if mops.writes == nil {
 					t.Fatal("SAF writer was never created")
 				}
