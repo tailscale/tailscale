@@ -488,14 +488,17 @@ func (s *Server) listenOn(port int) error {
 // Close closes the server.
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
 		s.uc4.Close()
 		if s.uc6 != nil {
 			s.uc6.Close()
 		}
 		close(s.closeCh)
 		s.wg.Wait()
+		// s.mu must not be held while s.wg.Wait'ing, otherwise we can
+		// deadlock. The goroutines we are waiting on to return can also
+		// acquire s.mu.
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		clear(s.byVNI)
 		clear(s.byDisco)
 		s.vniPool = nil
@@ -564,6 +567,12 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte, rxSocket, otherAFSo
 
 func (s *Server) packetReadLoop(readFromSocket, otherSocket *net.UDPConn) {
 	defer func() {
+		// We intentionally close the [Server] if we encounter a socket read
+		// error below, at least until socket "re-binding" is implemented as
+		// part of http://go/corp/30118.
+		//
+		// Decrementing this [sync.WaitGroup] _before_ calling [Server.Close] is
+		// intentional as [Server.Close] waits on it.
 		s.wg.Done()
 		s.Close()
 	}()
