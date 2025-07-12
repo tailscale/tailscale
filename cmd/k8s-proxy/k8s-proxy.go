@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -172,6 +173,30 @@ func run(logger *zap.SugaredLogger) error {
 
 		return nil
 	})
+
+	if cfg.Parsed.HealthCheckAddr != nil {
+		mux := http.NewServeMux()
+		health := &http.Server{Addr: *cfg.Parsed.HealthCheckAddr, Handler: mux}
+		ipV4, _ := ts.TailscaleIPs()
+		registerHealthHandlers(mux, ipV4.String())
+
+		group.Go(func() error {
+			return health.ListenAndServe()
+		})
+		group.Go(func() error {
+			// TODO(davidsbond): Use the ipn bus to check for address changes in NetMap and set health.update to
+			// whether we have at least 1 address. Like how it's done in containerboot. The problem is right now we
+			// seem to pass the Next() method into state.KeepKeysUpdated, which means we likely need to capture from
+			// that Next and fan out to the health check.
+			return nil
+		})
+		group.Go(func() error {
+			<-groupCtx.Done()
+			sCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			return health.Shutdown(sCtx)
+		})
+	}
 
 	return group.Wait()
 }

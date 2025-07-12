@@ -47,14 +47,15 @@ type VersionedConfig struct {
 }
 
 type ConfigV1Alpha1 struct {
-	AuthKey       *string        `json:",omitempty"` // Tailscale auth key to use.
-	Hostname      *string        `json:",omitempty"` // Tailscale device hostname.
-	State         *string        `json:",omitempty"` // Path to the Tailscale state.
-	LogLevel      *string        `json:",omitempty"` // "debug", "info". Defaults to "info".
-	App           *string        `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
-	KubeAPIServer *KubeAPIServer `json:",omitempty"` // Config specific to the API Server proxy.
-	ServerURL     *string        `json:",omitempty"` // URL of the Tailscale coordination server.
-	AcceptRoutes  *bool          `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
+	AuthKey         *string        `json:",omitempty"` // Tailscale auth key to use.
+	Hostname        *string        `json:",omitempty"` // Tailscale device hostname.
+	State           *string        `json:",omitempty"` // Path to the Tailscale state.
+	LogLevel        *string        `json:",omitempty"` // "debug", "info". Defaults to "info".
+	App             *string        `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
+	KubeAPIServer   *KubeAPIServer `json:",omitempty"` // Config specific to the API Server proxy.
+	ServerURL       *string        `json:",omitempty"` // URL of the Tailscale coordination server.
+	AcceptRoutes    *bool          `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
+	HealthCheckAddr *string        `json:",omitempty"` // The host:port to use for serving HTTP health checks.
 }
 
 type KubeAPIServer struct {
