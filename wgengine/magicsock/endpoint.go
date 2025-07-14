@@ -106,24 +106,27 @@ type endpoint struct {
 func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
+	now := mono.Now()
+	curBestAddrTrusted := now.Before(de.trustBestAddrUntil)
+	sameRelayServer := de.bestAddr.vni.isSet() && maybeBest.relayServerDisco.Compare(de.bestAddr.relayServerDisco) == 0
 
-	if maybeBest.relayServerDisco.Compare(de.bestAddr.relayServerDisco) == 0 {
-		// TODO(jwhited): add some observability for this case, e.g. did we
-		//  flip transports during a de.bestAddr transition from untrusted to
-		//  trusted?
+	if !curBestAddrTrusted ||
+		sameRelayServer ||
+		betterAddr(maybeBest, de.bestAddr) {
+		// We must set maybeBest as de.bestAddr if:
+		//   1. de.bestAddr is untrusted. betterAddr does not consider
+		//      time-based trust.
+		//   2. maybeBest & de.bestAddr are on the same relay. If the maybeBest
+		//      handshake happened to use a different source address/transport,
+		//      the relay will drop packets from the 'old' de.bestAddr's.
+		//   3. maybeBest is a 'betterAddr'.
 		//
-		// If these are equal we must set maybeBest as bestAddr, otherwise we
-		// could leave a stale bestAddr if it goes over a different
-		// address family or src.
-	} else if !betterAddr(maybeBest, de.bestAddr) {
-		return
+		// TODO(jwhited): add observability around !curBestAddrTrusted and sameRelayServer
+		// TODO(jwhited): collapse path change logging with endpoint.handlePongConnLocked()
+		de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBest.epAddr, maybeBest.wireMTU)
+		de.setBestAddrLocked(maybeBest)
+		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 	}
-
-	// Promote maybeBest to bestAddr.
-	// TODO(jwhited): collapse path change logging with endpoint.handlePongConnLocked()
-	de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBest.epAddr, maybeBest.wireMTU)
-	de.setBestAddrLocked(maybeBest)
-	de.trustBestAddrUntil = mono.Now().Add(trustUDPAddrDuration)
 }
 
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
