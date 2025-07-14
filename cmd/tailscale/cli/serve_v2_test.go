@@ -1027,7 +1027,7 @@ func TestValidateConfig(t *testing.T) {
 				},
 			},
 			dns:       "svc:foo",
-			serveType: serveTypeTun,
+			serveType: serveTypeTUN,
 			wantErr:   true,
 		},
 		{
@@ -1498,7 +1498,7 @@ func TestMessageForPort(t *testing.T) {
 			},
 			prefs:   &ipn.Prefs{AdvertiseServices: []string{"svc:foo"}},
 			dnsName: "svc:foo",
-			srvType: serveTypeTun,
+			srvType: serveTypeTUN,
 			expected: strings.Join([]string{
 				msgServeAvailable,
 				"",
@@ -1922,7 +1922,7 @@ func TestSetServe(t *testing.T) {
 			desc:    "add a new service handler in tun mode to empty config",
 			cfg:     &ipn.ServeConfig{},
 			dnsName: "svc:bar",
-			srvType: serveTypeTun,
+			srvType: serveTypeTUN,
 			expected: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:bar": {
@@ -2032,7 +2032,7 @@ func TestUnsetServe(t *testing.T) {
 				CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
 			},
 			dnsName:   "svc:bar",
-			srvType:   serveTypeTun,
+			srvType:   serveTypeTUN,
 			expected:  &ipn.ServeConfig{},
 			expectErr: false,
 		},

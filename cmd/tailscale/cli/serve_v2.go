@@ -65,20 +65,18 @@ func (s *serviceNameFlag) String() string {
 }
 
 type bgBoolFlag struct {
-	Value     bool
-	SetByUser bool // tracks if the flag was set by the user
+	Value bool
+	IsSet bool // tracks if the flag was set by the user
 }
 
 // Set sets the boolean flag and whether it's explicitly set by user based on the string value.
 func (b *bgBoolFlag) Set(s string) error {
-	if s == "true" {
-		b.Value = true
-	} else if s == "false" {
-		b.Value = false
-	} else {
-		return fmt.Errorf("invalid boolean value: %s", s)
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return err
 	}
-	b.SetByUser = true
+	b.Value = v
+	b.IsSet = true
 	return nil
 }
 
@@ -87,7 +85,10 @@ func (b *bgBoolFlag) IsBoolFlag() bool { return true }
 
 // String returns the string representation of the boolean flag.
 func (b *bgBoolFlag) String() string {
-	return fmt.Sprintf("%t", b.Value)
+	if !b.IsSet {
+		return "default"
+	}
+	return strconv.FormatBool(b.Value)
 }
 
 var serveHelpCommon = strings.TrimSpace(`
@@ -122,7 +123,7 @@ const (
 	serveTypeHTTP
 	serveTypeTCP
 	serveTypeTLSTerminatedTCP
-	serveTypeTun
+	serveTypeTUN
 )
 
 var infoMap = map[serveMode]commandInfo{
@@ -266,7 +267,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		defer cancel()
 
 		forService := e.service != ""
-		if !e.bg.SetByUser {
+		if !e.bg.IsSet {
 			e.bg.Value = forService
 		}
 
@@ -282,7 +283,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
-		if forService && e.bg.SetByUser && !e.bg.Value {
+		if forService && !e.bg.Value {
 			return errors.New("Error: --service flag is only compatible with background mode")
 		}
 
@@ -338,7 +339,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if forService {
 			dnsName = e.service.String()
 		}
-		if !forService && srvType == serveTypeTun {
+		if !forService && srvType == serveTypeTUN {
 			return errors.New("tun mode is only supported for services")
 		}
 		wantFg := !forService && !e.bg.Value && !turnOff
@@ -446,10 +447,10 @@ func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe se
 		if svc == nil {
 			return nil
 		}
-		if wantServe == serveTypeTun && (svc.TCP != nil || svc.Web != nil) {
+		if wantServe == serveTypeTUN && (svc.TCP != nil || svc.Web != nil) {
 			return errors.New("service already has a TCP or Web handler, cannot serve in TUN mode")
 		}
-		if svc.Tun && wantServe != serveTypeTun {
+		if svc.Tun && wantServe != serveTypeTUN {
 			return errors.New("service is already being served in TUN mode")
 		}
 		if svc.TCP[port] == nil {
@@ -508,7 +509,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
 		}
-	case serveTypeTun:
+	case serveTypeTUN:
 		svcName := tailcfg.ServiceName(dnsName)
 		if _, ok := sc.Services[svcName]; !ok {
 			mak.Set(&sc.Services, svcName, new(ipn.ServiceConfig))
@@ -591,7 +592,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		}
 		output.WriteString("\n\n")
 		svc := sc.Services[svcName]
-		if srvType == serveTypeTun && svc.Tun {
+		if srvType == serveTypeTUN && svc.Tun {
 			output.WriteString(fmt.Sprintf(msgRunningTunService, displayedHost))
 			output.WriteString("\n")
 			output.WriteString(fmt.Sprintf(msgDisableServiceTun, dnsName))
@@ -768,7 +769,7 @@ func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName 
 		if err != nil {
 			return fmt.Errorf("failed to remove TCP serve: %w", err)
 		}
-	case serveTypeTun:
+	case serveTypeTUN:
 		err := e.removeTunServe(sc, dnsName)
 		if err != nil {
 			return fmt.Errorf("failed to remove TUN serve: %w", err)
@@ -807,7 +808,7 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, is
 
 	if e.tun {
 		srcTypeCount++
-		srvType = serveTypeTun
+		srvType = serveTypeTUN
 		defaultFlags = false
 	}
 
