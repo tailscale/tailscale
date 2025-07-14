@@ -4,7 +4,7 @@
 package main
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"strings"
 	"testing"
 

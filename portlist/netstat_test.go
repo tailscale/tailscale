@@ -7,7 +7,7 @@ package portlist
 
 import (
 	"bufio"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"strings"
 	"testing"

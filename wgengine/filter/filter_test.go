@@ -5,7 +5,7 @@ package filter
 
 import (
 	"encoding/hex"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"flag"
 	"fmt"
 	"net/netip"

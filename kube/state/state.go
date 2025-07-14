@@ -11,7 +11,7 @@
 package state
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 
 	"tailscale.com/ipn"

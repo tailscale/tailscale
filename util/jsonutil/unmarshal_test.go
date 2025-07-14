@@ -4,7 +4,7 @@
 package jsonutil
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"reflect"
 	"testing"
 )

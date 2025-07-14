@@ -6,7 +6,7 @@ package controlclient
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"io"
 	"math"
 	"net/http"

@@ -7,7 +7,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"net"
 	"net/http"

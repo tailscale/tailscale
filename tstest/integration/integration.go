@@ -11,7 +11,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"flag"
 	"fmt"
 	"io"

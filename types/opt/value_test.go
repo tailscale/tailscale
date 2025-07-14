@@ -4,7 +4,7 @@
 package opt
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"reflect"
 	"testing"
 
@@ -95,7 +95,7 @@ func TestValue(t *testing.T) {
 				ExplicitUnset: Value[bool]{},
 			},
 			want: bools.IfElse(
-				// Detect whether v1 "encoding/json" supports `omitzero` or not.
+				// Detect whether v1 "github.com/go-json-experiment/json/v1" supports `omitzero` or not.
 				// TODO(Go1.24): Remove this after `omitzero` is supported.
 				string(must.Get(json.Marshal(struct {
 					X int `json:",omitzero"`

@@ -8,7 +8,7 @@ package jsonutil
 
 import (
 	"bytes"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"sync"
 )
 

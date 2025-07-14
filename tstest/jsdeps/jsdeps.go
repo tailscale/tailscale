@@ -11,7 +11,7 @@ import (
 	_ "bytes"
 	_ "context"
 	_ "encoding/hex"
-	_ "encoding/json"
+	_ "github.com/go-json-experiment/json/v1"
 	_ "fmt"
 	_ "log"
 	_ "math/rand/v2"

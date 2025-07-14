@@ -6,7 +6,7 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"flag"
 	"io"
 	"log"

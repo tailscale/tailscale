@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"math/rand/v2"

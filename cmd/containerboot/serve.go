@@ -8,7 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"log"
 	"os"
 	"path/filepath"

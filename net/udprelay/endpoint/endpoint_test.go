@@ -4,7 +4,7 @@
 package endpoint
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"math"
 	"net/netip"
 	"testing"

@@ -4,7 +4,7 @@
 package netmon
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"net"
 	"net/netip"
 	"testing"

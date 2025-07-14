@@ -14,7 +14,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"io"
 	"log"

@@ -9,7 +9,7 @@ package fakes
 
 import (
 	"bytes"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"math/rand"
 	"net"

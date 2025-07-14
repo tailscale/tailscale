@@ -27,7 +27,7 @@ package main
 import (
 	"cmp"
 	"encoding/base64"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"flag"
 	"fmt"
 	"io"

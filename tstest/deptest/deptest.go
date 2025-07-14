@@ -7,7 +7,7 @@
 package deptest
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"os"
 	"os/exec"
 	"path/filepath"

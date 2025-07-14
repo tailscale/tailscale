@@ -6,7 +6,7 @@ package ipnlocal
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"hash/crc32"

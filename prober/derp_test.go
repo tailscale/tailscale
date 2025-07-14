@@ -7,7 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"net"
 	"net/http"
 	"net/http/httptest"

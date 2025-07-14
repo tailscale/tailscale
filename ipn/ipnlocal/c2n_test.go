@@ -6,7 +6,7 @@ package ipnlocal
 import (
 	"cmp"
 	"crypto/x509"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"net/http/httptest"
 	"net/url"
 	"os"

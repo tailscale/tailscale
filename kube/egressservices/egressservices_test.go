@@ -4,7 +4,7 @@
 package egressservices
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"

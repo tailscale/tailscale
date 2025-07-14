@@ -6,7 +6,7 @@ package logtail
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"io"
 	"net/http"
 	"net/http/httptest"

@@ -4,7 +4,7 @@
 package rate
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"math"
 	"sync"
@@ -184,7 +184,7 @@ func (r *Value) normalizedIntegral() float64 {
 }
 
 type jsonValue struct {
-	// TODO: Use v2 "encoding/json" for native time.Duration formatting.
+	// TODO: Use v2 "github.com/go-json-experiment/json/v1" for native time.Duration formatting.
 	HalfLife string    `json:"halfLife,omitempty,omitzero"`
 	Value    float64   `json:"value,omitempty,omitzero"`
 	Updated  mono.Time `json:"updated,omitempty,omitzero"`

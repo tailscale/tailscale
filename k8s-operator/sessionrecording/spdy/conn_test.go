@@ -7,7 +7,7 @@ package spdy
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"reflect"
 	"testing"

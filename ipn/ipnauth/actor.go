@@ -5,7 +5,7 @@ package ipnauth
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 
 	"tailscale.com/client/tailscale/apitype"

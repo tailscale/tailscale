@@ -11,7 +11,7 @@ package flowtrack
 
 import (
 	"container/list"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"net/netip"
 

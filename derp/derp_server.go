@@ -15,7 +15,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"expvar"
 	"fmt"

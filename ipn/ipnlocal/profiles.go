@@ -6,7 +6,7 @@ package ipnlocal
 import (
 	"cmp"
 	"crypto/rand"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"runtime"

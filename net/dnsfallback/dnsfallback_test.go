@@ -5,7 +5,7 @@ package dnsfallback
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"flag"
 	"os"
 	"path/filepath"

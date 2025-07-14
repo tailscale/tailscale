@@ -8,7 +8,7 @@ package main
 import (
 	"bytes"
 	"embed"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"io"
 	"io/fs"
