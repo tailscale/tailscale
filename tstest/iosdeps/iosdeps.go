@@ -12,7 +12,7 @@ import (
 	_ "context"
 	_ "crypto/rand"
 	_ "crypto/sha256"
-	_ "encoding/json"
+	_ "github.com/go-json-experiment/json/v1"
 	_ "errors"
 	_ "fmt"
 	_ "io"

@@ -11,7 +11,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"encoding/pem"
 	"errors"
 	"fmt"

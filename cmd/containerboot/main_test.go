@@ -9,7 +9,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/base64"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"encoding/pem"
 	"errors"
 	"fmt"

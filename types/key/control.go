@@ -3,7 +3,7 @@
 
 package key
 
-import "encoding/json"
+import "github.com/go-json-experiment/json/v1"
 
 // ControlPrivate is a Tailscale control plane private key.
 //

@@ -5,7 +5,7 @@ package vms
 
 import (
 	_ "embed"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"log"
 
 	"github.com/tailscale/hujson"

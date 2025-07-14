@@ -10,7 +10,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/asn1"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"expvar"
 	"fmt"

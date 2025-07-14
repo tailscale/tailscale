@@ -8,7 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"io"
 	"net"
 	"net/http"

@@ -8,7 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	_ "embed"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"flag"
 	"html/template"

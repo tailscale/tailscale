@@ -6,7 +6,7 @@ package cloudenv
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"log"
 	"math/rand/v2"
 	"net"

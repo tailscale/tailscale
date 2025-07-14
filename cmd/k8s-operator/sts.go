@@ -8,7 +8,7 @@ package main
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"net/http"

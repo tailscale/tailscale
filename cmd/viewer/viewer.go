@@ -125,7 +125,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 	if !ok || codegen.IsViewType(t) {
 		return
 	}
-	it.Import("encoding/json")
+	it.Import("github.com/go-json-experiment/json/v1")
 	it.Import("errors")
 
 	args := struct {

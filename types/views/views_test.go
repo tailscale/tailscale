@@ -5,7 +5,7 @@ package views
 
 import (
 	"bytes"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"net/netip"
 	"reflect"

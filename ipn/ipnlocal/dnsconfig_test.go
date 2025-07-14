@@ -5,7 +5,7 @@ package ipnlocal
 
 import (
 	"cmp"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"net/netip"
 	"reflect"
 	"testing"

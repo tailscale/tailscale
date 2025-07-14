@@ -14,7 +14,7 @@ import (
 	_ "crypto/sha512" // need for EC keys
 	"encoding/asn1"
 	"encoding/base64"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"math/big"

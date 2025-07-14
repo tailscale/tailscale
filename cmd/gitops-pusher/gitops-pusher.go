@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"flag"
 	"fmt"
 	"io"

@@ -5,7 +5,7 @@ package ipproto
 
 import (
 	"encoding"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"testing"
 

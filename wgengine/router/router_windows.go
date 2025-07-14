@@ -6,7 +6,7 @@ package router
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"io"
 	"net/netip"

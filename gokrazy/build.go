@@ -11,7 +11,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"flag"
 	"fmt"

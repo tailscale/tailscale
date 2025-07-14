@@ -10,7 +10,7 @@ package tailcfg
 import (
 	"bytes"
 	"cmp"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"maps"

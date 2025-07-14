@@ -7,7 +7,7 @@ package acme
 import (
 	"crypto"
 	"crypto/x509"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"net/http"

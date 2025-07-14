@@ -4,7 +4,7 @@
 package tailcfg_test
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"net/netip"
 	"os"
 	"reflect"

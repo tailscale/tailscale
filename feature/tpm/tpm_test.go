@@ -6,7 +6,7 @@ package tpm
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"iter"

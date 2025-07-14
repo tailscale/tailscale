@@ -32,7 +32,7 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"encoding/pem"
 	"errors"
 	"fmt"

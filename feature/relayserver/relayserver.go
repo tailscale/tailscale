@@ -6,7 +6,7 @@
 package relayserver
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"fmt"
 	"io"

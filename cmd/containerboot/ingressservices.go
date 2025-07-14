@@ -7,7 +7,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"log"
 	"net/netip"

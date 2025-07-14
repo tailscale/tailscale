@@ -5,7 +5,7 @@ package ipnlocal
 
 import (
 	"crypto/x509"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"encoding/pem"
 	"errors"
 	"fmt"

@@ -8,7 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"errors"
 	"flag"
 	"fmt"

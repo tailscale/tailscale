@@ -5,7 +5,7 @@
 package wakeonlan
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"log"
 	"net"
 	"net/http"

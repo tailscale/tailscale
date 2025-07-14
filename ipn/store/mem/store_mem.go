@@ -6,7 +6,7 @@ package mem
 
 import (
 	"bytes"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"sync"
 
 	xmaps "golang.org/x/exp/maps"

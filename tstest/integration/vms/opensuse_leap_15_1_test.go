@@ -6,7 +6,7 @@
 package vms
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"os"
 	"path/filepath"
 	"testing"

@@ -6,7 +6,7 @@
 package main
 
 import (
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"fmt"
 	"math/rand/v2"
 	"testing"

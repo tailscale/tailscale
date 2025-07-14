@@ -11,7 +11,7 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"flag"
 	"fmt"
 	"io"

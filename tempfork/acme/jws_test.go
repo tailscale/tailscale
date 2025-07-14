@@ -12,7 +12,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"encoding/pem"
 	"fmt"
 	"io"

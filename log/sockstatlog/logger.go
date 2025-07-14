@@ -9,7 +9,7 @@ package sockstatlog
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	"github.com/go-json-experiment/json/v1"
 	"io"
 	"net/http"
 	"os"
