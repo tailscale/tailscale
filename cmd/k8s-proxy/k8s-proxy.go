@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -61,6 +62,20 @@ func run(logger *zap.SugaredLogger) error {
 			return fmt.Errorf("error parsing log level %q: %w", *cfg.Parsed.LogLevel, err)
 		}
 		logger = logger.WithOptions(zap.IncreaseLevel(level))
+	}
+
+	// TODO:(ChaosInTheCRD) This is a temporary workaround until we can set static endpoints using prefs
+	if se := cfg.Parsed.StaticEndpoints; len(se) > 0 {
+		logger.Debugf("setting static endpoints '%v' via TS_DEBUG_PRETENDPOINT environment variable", cfg.Parsed.StaticEndpoints)
+		ses := make([]string, len(se))
+		for i, e := range se {
+			ses[i] = e.String()
+		}
+
+		err := os.Setenv("TS_DEBUG_PRETENDPOINT", strings.Join(ses, ","))
+		if err != nil {
+			return err
+		}
 	}
 
 	if cfg.Parsed.App != nil {
