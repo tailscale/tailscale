@@ -1,0 +1,15 @@
+---
+version: '3.8'
+services:
+  tailscaled:
+    image: tailscale/tailscale:latest
+    container_name: tailscaled
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ./tailscale-state:/var/lib
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+    command: tailscaled
