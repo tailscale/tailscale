@@ -620,6 +620,9 @@ func (c *conn) evaluatePolicy() (_ *tailcfg.SSHAction, localUser string, acceptE
 	if !ok {
 		return nil, "", nil, noPolicy
 	}
+	polJSON, _ := json.Marshal(pol)
+	fmt.Println("evaluatePolicy: ", string(polJSON))
+
 	return c.evalSSHPolicy(pol)
 }
 
