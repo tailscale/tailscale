@@ -2171,7 +2171,10 @@ func (m DisplayMessage) Equal(o DisplayMessage) bool {
 	return m.Title == o.Title &&
 		m.Text == o.Text &&
 		m.Severity == o.Severity &&
-		m.ImpactsConnectivity == o.ImpactsConnectivity
+		m.ImpactsConnectivity == o.ImpactsConnectivity &&
+		(m.PrimaryAction == nil) == (o.PrimaryAction == nil) &&
+		(m.PrimaryAction == nil || (m.PrimaryAction.URL == o.PrimaryAction.URL &&
+			m.PrimaryAction.Label == o.PrimaryAction.Label))
 }
 
 // DisplayMessageSeverity represents how serious a [DisplayMessage] is. Analogous

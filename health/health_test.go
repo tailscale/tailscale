@@ -555,98 +555,88 @@ func TestControlHealth(t *testing.T) {
 	})
 }
 
-func TestControlHealthNotifiesOnSet(t *testing.T) {
-	ht := Tracker{}
-	ht.SetIPNState("NeedsLogin", true)
-	ht.GotStreamedMapResponse()
-
-	gotNotified := false
-	ht.registerSyncWatcher(func(_ Change) {
-		gotNotified = true
-	})
-
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"test": {},
-	})
-
-	if !gotNotified {
-		t.Errorf("watcher did not get called, want it to be called")
+func TestControlHealthNotifies(t *testing.T) {
+	type test struct {
+		name         string
+		initialState map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
+		newState     map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
+		wantNotify   bool
 	}
-}
-
-func TestControlHealthNotifiesOnChange(t *testing.T) {
-	ht := Tracker{}
-	ht.SetIPNState("NeedsLogin", true)
-	ht.GotStreamedMapResponse()
-
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"test-1": {},
-	})
-
-	gotNotified := false
-	ht.registerSyncWatcher(func(_ Change) {
-		gotNotified = true
-	})
-
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"test-2": {},
-	})
-
-	if !gotNotified {
-		t.Errorf("watcher did not get called, want it to be called")
-	}
-}
-
-func TestControlHealthNotifiesOnDetailsChange(t *testing.T) {
-	ht := Tracker{}
-	ht.SetIPNState("NeedsLogin", true)
-	ht.GotStreamedMapResponse()
-
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"test-1": {
-			Title: "Title",
+	tests := []test{
+		{
+			name: "no-change",
+			initialState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test": {},
+			},
+			newState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test": {},
+			},
+			wantNotify: false,
 		},
-	})
-
-	gotNotified := false
-	ht.registerSyncWatcher(func(_ Change) {
-		gotNotified = true
-	})
-
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"test-1": {
-			Title: "Updated title",
+		{
+			name:         "on-set",
+			initialState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{},
+			newState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test": {},
+			},
+			wantNotify: true,
 		},
-	})
-
-	if !gotNotified {
-		t.Errorf("watcher did not get called, want it to be called")
+		{
+			name: "details-change",
+			initialState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test": {
+					Title: "Title",
+				},
+			},
+			newState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test": {
+					Title: "Updated title",
+				},
+			},
+			wantNotify: true,
+		},
+		{
+			name: "action-changes",
+			initialState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test": {
+					PrimaryAction: &tailcfg.DisplayMessageAction{
+						URL:   "http://www.example.com/a/123456",
+						Label: "Sign in",
+					},
+				},
+			},
+			newState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test": {
+					PrimaryAction: &tailcfg.DisplayMessageAction{
+						URL:   "http://www.example.com/a/abcdefg",
+						Label: "Sign in",
+					},
+				},
+			},
+			wantNotify: true,
+		},
 	}
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ht := Tracker{}
+			ht.SetIPNState("NeedsLogin", true)
+			ht.GotStreamedMapResponse()
 
-func TestControlHealthNoNotifyOnUnchanged(t *testing.T) {
-	ht := Tracker{}
-	ht.SetIPNState("NeedsLogin", true)
-	ht.GotStreamedMapResponse()
+			if len(test.initialState) != 0 {
+				ht.SetControlHealth(test.initialState)
+			}
 
-	// Set up an existing control health issue
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"test": {},
-	})
+			gotNotified := false
+			ht.registerSyncWatcher(func(_ Change) {
+				gotNotified = true
+			})
 
-	// Now register our watcher
-	gotNotified := false
-	ht.registerSyncWatcher(func(_ Change) {
-		gotNotified = true
-	})
+			ht.SetControlHealth(test.newState)
 
-	// Send the same control health message again - should not notify
-	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
-		"test": {},
-	})
-
-	if gotNotified {
-		t.Errorf("watcher got called, want it to not be called")
+			if gotNotified != test.wantNotify {
+				t.Errorf("notified: got %v, want %v", gotNotified, test.wantNotify)
+			}
+		})
 	}
 }
 
