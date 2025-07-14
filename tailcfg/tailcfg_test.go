@@ -881,76 +881,129 @@ func TestCheckTag(t *testing.T) {
 }
 
 func TestDisplayMessageEqual(t *testing.T) {
-	base := DisplayMessage{
-		Title:               "title",
-		Text:                "text",
-		Severity:            SeverityHigh,
-		ImpactsConnectivity: false,
-	}
-
 	type test struct {
 		name      string
-		value     DisplayMessage
+		value1    DisplayMessage
+		value2    DisplayMessage
 		wantEqual bool
 	}
 
 	for _, test := range []test{
 		{
 			name: "same",
-			value: DisplayMessage{
+			value1: DisplayMessage{
 				Title:               "title",
 				Text:                "text",
 				Severity:            SeverityHigh,
 				ImpactsConnectivity: false,
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			value2: DisplayMessage{
+				Title:               "title",
+				Text:                "text",
+				Severity:            SeverityHigh,
+				ImpactsConnectivity: false,
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
 			},
 			wantEqual: true,
 		},
 		{
 			name: "different-title",
-			value: DisplayMessage{
-				Title:               "different title",
-				Text:                "text",
-				Severity:            SeverityHigh,
-				ImpactsConnectivity: false,
+			value1: DisplayMessage{
+				Title: "title",
+			},
+			value2: DisplayMessage{
+				Title: "different title",
 			},
 			wantEqual: false,
 		},
 		{
 			name: "different-text",
-			value: DisplayMessage{
-				Title:               "title",
-				Text:                "different text",
-				Severity:            SeverityHigh,
-				ImpactsConnectivity: false,
+			value1: DisplayMessage{
+				Text: "some text",
+			},
+			value2: DisplayMessage{
+				Text: "different text",
 			},
 			wantEqual: false,
 		},
 		{
 			name: "different-severity",
-			value: DisplayMessage{
-				Title:               "title",
-				Text:                "text",
-				Severity:            SeverityMedium,
-				ImpactsConnectivity: false,
+			value1: DisplayMessage{
+				Severity: SeverityHigh,
+			},
+			value2: DisplayMessage{
+				Severity: SeverityMedium,
 			},
 			wantEqual: false,
 		},
 		{
 			name: "different-impactsConnectivity",
-			value: DisplayMessage{
-				Title:               "title",
-				Text:                "text",
-				Severity:            SeverityHigh,
+			value1: DisplayMessage{
 				ImpactsConnectivity: true,
+			},
+			value2: DisplayMessage{
+				ImpactsConnectivity: false,
+			},
+			wantEqual: false,
+		},
+		{
+			name:   "different-primaryAction-nil-non-nil",
+			value1: DisplayMessage{},
+			value2: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-primaryAction-url",
+			value1: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			value2: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://zombo.com",
+					Label: "Open",
+				},
+			},
+			wantEqual: false,
+		},
+		{
+			name: "different-primaryAction-label",
+			value1: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Open",
+				},
+			},
+			value2: DisplayMessage{
+				PrimaryAction: &DisplayMessageAction{
+					URL:   "https://example.com",
+					Label: "Learn more",
+				},
 			},
 			wantEqual: false,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := base.Equal(test.value)
+			got := test.value1.Equal(test.value2)
 
 			if got != test.wantEqual {
-				t.Errorf("Equal: got %t, want %t", got, test.wantEqual)
+				value1 := must.Get(json.MarshalIndent(test.value1, "", "  "))
+				value2 := must.Get(json.MarshalIndent(test.value2, "", "  "))
+				t.Errorf("value1.Equal(value2): got %t, want %t\nvalue1:\n%s\nvalue2:\n%s", got, test.wantEqual, value1, value2)
 			}
 		})
 	}
