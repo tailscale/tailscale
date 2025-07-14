@@ -66,13 +66,15 @@ type CastHeader struct {
 	Kubernetes *Kubernetes `json:"kubernetes,omitempty"`
 }
 
-// Kubernetes contains 'kubectl exec' session specific information for
+// Kubernetes contains 'kubectl exec/attach' session specific information for
 // tsrecorder.
 type Kubernetes struct {
-	// PodName is the name of the Pod being exec-ed.
+	// PodName is the name of the Pod the session was recorded for.
 	PodName string
-	// Namespace is the namespace in which is the Pod that is being exec-ed.
+	// Namespace is the namespace in which the Pod the session was recorded for exists in.
 	Namespace string
-	// Container is the container being exec-ed.
+	// Container is the container the session was recorded for.
 	Container string
+	// SessionType is the type of session that was executed (e.g., exec, attach)
+	SessionType string
 }

@@ -25,6 +25,7 @@ func New(conn io.WriteCloser, clock tstime.Clock, start time.Time, failOpen bool
 		clock:    clock,
 		conn:     conn,
 		failOpen: failOpen,
+		logger:   logger,
 	}
 }
 
