@@ -51,17 +51,17 @@ func (s *serviceNameFlag) Set(sv string) error {
 		s.Value = new(tailcfg.ServiceName)
 		return nil
 	}
-	if err := tailcfg.ServiceName(sv).Validate(); err != nil {
+	v := tailcfg.ServiceName(sv)
+	if err := v.Validate(); err != nil {
 		return fmt.Errorf("invalid service name: %q", sv)
 	}
-	v := tailcfg.ServiceName(sv)
 	*s.Value = v
 	return nil
 }
 
 // String returns the string representation of service name.
 func (s *serviceNameFlag) String() string {
-	return fmt.Sprintf("%s", s.Value.String())
+	return s.Value.String()
 }
 
 type bgBoolFlag struct {
@@ -265,7 +265,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 		defer cancel()
 
-		forService := !e.service.IsEmpty()
+		forService := e.service != ""
 		if !e.bg.SetByUser {
 			e.bg.Value = forService
 		}
@@ -818,7 +818,7 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, is
 		srvPort = 443
 		defaultFlags = true
 	}
-	return srvType, srvPort, defaultFlags && !e.service.IsEmpty(), nil
+	return srvType, srvPort, defaultFlags && e.service != "", nil
 }
 
 // isLegacyInvocation helps transition customers who have been using the beta

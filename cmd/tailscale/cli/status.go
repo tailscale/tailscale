@@ -24,6 +24,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/dnsname"
 )
 
@@ -69,6 +70,8 @@ var statusArgs struct {
 	self    bool   // in CLI mode, show status of local machine
 	peers   bool   // in CLI mode, show status of peer machines
 }
+
+const noService tailcfg.ServiceName = ""
 
 func runStatus(ctx context.Context, args []string) error {
 	if len(args) > 0 {
@@ -260,7 +263,7 @@ func printFunnelStatus(ctx context.Context) {
 		}
 		sni, portStr, _ := net.SplitHostPort(string(hp))
 		p, _ := strconv.ParseUint(portStr, 10, 16)
-		isTCP := sc.IsTCPForwardingOnPort(uint16(p), "")
+		isTCP := sc.IsTCPForwardingOnPort(uint16(p), noService)
 		url := "https://"
 		if isTCP {
 			url = "tcp://"
