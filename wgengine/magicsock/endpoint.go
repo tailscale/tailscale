@@ -104,8 +104,6 @@ type endpoint struct {
 // be installed as de.bestAddr. It is only called by [relayManager] once it has
 // determined maybeBest is functional via [disco.Pong] reception.
 func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
-	de.c.mu.Lock()
-	defer de.c.mu.Unlock()
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
