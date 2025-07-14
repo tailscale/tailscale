@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 )
 
@@ -361,6 +362,94 @@ func Test_epAddr_isDirectUDP(t *testing.T) {
 			}
 			if got := e.isDirect(); got != tt.want {
 				t.Errorf("isDirect() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
+	directAddrQuality := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:7")}}
+	peerRelayAddrQuality := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.2:77")}, latency: time.Second}
+	peerRelayAddrQuality.vni.set(1)
+	peerRelayAddrQualityHigherLatencySameServer := addrQuality{
+		epAddr:  epAddr{ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni},
+		latency: peerRelayAddrQuality.latency * 10,
+	}
+	peerRelayAddrQualityHigherLatencyDiffServer := addrQuality{
+		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni},
+		latency:          peerRelayAddrQuality.latency * 10,
+		relayServerDisco: key.NewDisco().Public(),
+	}
+	peerRelayAddrQualityLowerLatencyDiffServer := addrQuality{
+		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.4:77"), vni: peerRelayAddrQuality.vni},
+		latency:          peerRelayAddrQuality.latency / 10,
+		relayServerDisco: key.NewDisco().Public(),
+	}
+	peerRelayAddrQualityEqualLatencyDiffServer := addrQuality{
+		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.4:77"), vni: peerRelayAddrQuality.vni},
+		latency:          peerRelayAddrQuality.latency,
+		relayServerDisco: key.NewDisco().Public(),
+	}
+	tests := []struct {
+		name               string
+		curBestAddr        addrQuality
+		trustBestAddrUntil mono.Time
+		maybeBest          addrQuality
+		wantBestAddr       addrQuality
+	}{
+		{
+			name:               "bestAddr trusted direct",
+			curBestAddr:        directAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQuality,
+			wantBestAddr:       directAddrQuality,
+		},
+		{
+			name:               "bestAddr untrusted direct",
+			curBestAddr:        directAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(-1 * time.Hour),
+			maybeBest:          peerRelayAddrQuality,
+			wantBestAddr:       peerRelayAddrQuality,
+		},
+		{
+			name:               "maybeBest same relay server higher latency bestAddr trusted",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQualityHigherLatencySameServer,
+			wantBestAddr:       peerRelayAddrQualityHigherLatencySameServer,
+		},
+		{
+			name:               "maybeBest diff relay server higher latency bestAddr trusted",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQualityHigherLatencyDiffServer,
+			wantBestAddr:       peerRelayAddrQuality,
+		},
+		{
+			name:               "maybeBest diff relay server lower latency bestAddr trusted",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQualityLowerLatencyDiffServer,
+			wantBestAddr:       peerRelayAddrQualityLowerLatencyDiffServer,
+		},
+		{
+			name:               "maybeBest diff relay server equal latency bestAddr trusted",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			maybeBest:          peerRelayAddrQualityEqualLatencyDiffServer,
+			wantBestAddr:       peerRelayAddrQuality,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			de := &endpoint{
+				c:                  &Conn{logf: func(msg string, args ...any) { return }},
+				bestAddr:           tt.curBestAddr,
+				trustBestAddrUntil: tt.trustBestAddrUntil,
+			}
+			de.udpRelayEndpointReady(tt.maybeBest)
+			if de.bestAddr != tt.wantBestAddr {
+				t.Errorf("de.bestAddr = %v, want %v", de.bestAddr, tt.wantBestAddr)
 			}
 		})
 	}
