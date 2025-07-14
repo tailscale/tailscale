@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"reflect"
 	"strings"
 	"syscall"
 	"time"
@@ -21,20 +22,37 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/utils/strings/slices"
+	"tailscale.com/client/local"
+	"tailscale.com/cmd/k8s-proxy/internal/config"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
+	"tailscale.com/kube/certs"
 	"tailscale.com/kube/k8s-proxy/conf"
+	klc "tailscale.com/kube/localclient"
+	"tailscale.com/kube/services"
 	"tailscale.com/kube/state"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
 func main() {
-	logger := zap.Must(zap.NewProduction()).Sugar()
+	encoderCfg := zap.NewProductionEncoderConfig()
+	encoderCfg.EncodeTime = zapcore.RFC3339TimeEncoder
+	logger := zap.Must(zap.Config{
+		Level:            zap.NewAtomicLevelAt(zap.DebugLevel),
+		Encoding:         "json",
+		OutputPaths:      []string{"stderr"},
+		ErrorOutputPaths: []string{"stderr"},
+		EncoderConfig:    encoderCfg,
+	}.Build()).Sugar()
 	defer logger.Sync()
+
 	if err := run(logger); err != nil {
 		logger.Fatal(err.Error())
 	}
@@ -42,18 +60,58 @@ func main() {
 
 func run(logger *zap.SugaredLogger) error {
 	var (
-		configFile = os.Getenv("TS_K8S_PROXY_CONFIG")
+		configPath = os.Getenv("TS_K8S_PROXY_CONFIG")
 		podUID     = os.Getenv("POD_UID")
 	)
-	if configFile == "" {
+	if configPath == "" {
 		return errors.New("TS_K8S_PROXY_CONFIG unset")
 	}
 
-	// TODO(tomhjp): Support reloading config.
-	// TODO(tomhjp): Support reading config from a Secret.
-	cfg, err := conf.Load(configFile)
+	// serveCtx to live for the lifetime of the process, only gets cancelled
+	// once the Tailscale Service has been drained
+	serveCtx, serveCancel := context.WithCancel(context.Background())
+	defer serveCancel()
+
+	// ctx to cancel to start the shutdown process.
+	ctx, cancel := context.WithCancel(serveCtx)
+	defer cancel()
+
+	sigsChan := make(chan os.Signal, 1)
+	signal.Notify(sigsChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case s := <-sigsChan:
+			logger.Infof("Received shutdown signal %s, exiting", s)
+			cancel()
+		}
+	}()
+
+	var group *errgroup.Group
+	group, ctx = errgroup.WithContext(ctx)
+
+	restConfig, err := getRestConfig(logger)
 	if err != nil {
-		return fmt.Errorf("error loading config file %q: %w", configFile, err)
+		return fmt.Errorf("error getting rest config: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("error creating Kubernetes clientset: %w", err)
+	}
+
+	// Load and watch config.
+	cfgChan := make(chan *conf.Config)
+	cfgLoader := config.NewConfigLoader(logger, clientset.CoreV1(), cfgChan)
+	group.Go(func() error {
+		return cfgLoader.WatchConfig(ctx, configPath)
+	})
+
+	// Get initial config.
+	var cfg *conf.Config
+	select {
+	case <-ctx.Done():
+		return group.Wait()
+	case cfg = <-cfgChan:
 	}
 
 	if cfg.Parsed.LogLevel != nil {
@@ -80,6 +138,14 @@ func run(logger *zap.SugaredLogger) error {
 
 	if cfg.Parsed.App != nil {
 		hostinfo.SetApp(*cfg.Parsed.App)
+	}
+
+	// TODO(tomhjp): Pass this setting directly into the store instead of using
+	// environment variables.
+	if cfg.Parsed.APIServerProxy != nil && cfg.Parsed.APIServerProxy.IssueCerts.EqualBool(true) {
+		os.Setenv("TS_CERT_SHARE_MODE", "rw")
+	} else {
+		os.Setenv("TS_CERT_SHARE_MODE", "ro")
 	}
 
 	st, err := getStateStore(cfg.Parsed.State, logger)
@@ -115,10 +181,6 @@ func run(logger *zap.SugaredLogger) error {
 		ts.Hostname = *cfg.Parsed.Hostname
 	}
 
-	// ctx to live for the lifetime of the process.
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
 	// Make sure we crash loop if Up doesn't complete in reasonable time.
 	upCtx, upCancel := context.WithTimeout(ctx, time.Minute)
 	defer upCancel()
@@ -126,9 +188,6 @@ func run(logger *zap.SugaredLogger) error {
 		return fmt.Errorf("error starting tailscale server: %w", err)
 	}
 	defer ts.Close()
-
-	group, groupCtx := errgroup.WithContext(ctx)
-
 	lc, err := ts.LocalClient()
 	if err != nil {
 		return fmt.Errorf("error getting local client: %w", err)
@@ -136,23 +195,13 @@ func run(logger *zap.SugaredLogger) error {
 
 	// Setup for updating state keys.
 	if podUID != "" {
-		w, err := lc.WatchIPNBus(groupCtx, ipn.NotifyInitialNetMap)
-		if err != nil {
-			return fmt.Errorf("error watching IPN bus: %w", err)
-		}
-		defer w.Close()
-
 		group.Go(func() error {
-			if err := state.KeepKeysUpdated(st, w.Next); err != nil && err != groupCtx.Err() {
-				return fmt.Errorf("error keeping state keys updated: %w", err)
-			}
-
-			return nil
+			return state.KeepKeysUpdated(ctx, st, klc.New(lc))
 		})
 	}
 
 	if cfg.Parsed.AcceptRoutes != nil {
-		_, err = lc.EditPrefs(groupCtx, &ipn.MaskedPrefs{
+		_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 			RouteAllSet: true,
 			Prefs:       ipn.Prefs{RouteAll: *cfg.Parsed.AcceptRoutes},
 		})
@@ -161,34 +210,97 @@ func run(logger *zap.SugaredLogger) error {
 		}
 	}
 
-	// Setup for the API server proxy.
-	restConfig, err := getRestConfig(logger)
-	if err != nil {
-		return fmt.Errorf("error getting rest config: %w", err)
+	// TODO(tomhjp): There seems to be a bug that on restart the device does
+	// not get reassigned it's already working Service IPs unless we clear and
+	// reset the serve config.
+	if err := lc.SetServeConfig(ctx, &ipn.ServeConfig{}); err != nil {
+		return fmt.Errorf("error clearing existing ServeConfig: %w", err)
 	}
-	authMode := true
-	if cfg.Parsed.KubeAPIServer != nil {
-		v, ok := cfg.Parsed.KubeAPIServer.AuthMode.Get()
-		if ok {
-			authMode = v
+
+	var cm *certs.CertManager
+	if shouldIssueCerts(cfg) {
+		logger.Infof("Will issue TLS certs for Tailscale Service")
+		cm = certs.NewCertManager(klc.New(lc), logger.Infof)
+	}
+	if err := setServeConfig(ctx, lc, cm, apiServerProxyService(cfg)); err != nil {
+		return err
+	}
+
+	if cfg.Parsed.AdvertiseServices != nil {
+		if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+			AdvertiseServicesSet: true,
+			Prefs: ipn.Prefs{
+				AdvertiseServices: cfg.Parsed.AdvertiseServices,
+			},
+		}); err != nil {
+			return fmt.Errorf("error setting prefs AdvertiseServices: %w", err)
 		}
 	}
-	ap, err := apiproxy.NewAPIServerProxy(logger.Named("apiserver-proxy"), restConfig, ts, authMode)
+
+	// Setup for the API server proxy.
+	authMode := true
+	if cfg.Parsed.APIServerProxy != nil && cfg.Parsed.APIServerProxy.AuthMode.EqualBool(false) {
+		authMode = false
+	}
+	ap, err := apiproxy.NewAPIServerProxy(logger.Named("apiserver-proxy"), restConfig, ts, authMode, false)
 	if err != nil {
 		return fmt.Errorf("error creating api server proxy: %w", err)
 	}
 
-	// TODO(tomhjp): Work out whether we should use TS_CERT_SHARE_MODE or not,
-	// and possibly issue certs upfront here before serving.
 	group.Go(func() error {
-		if err := ap.Run(groupCtx); err != nil {
+		if err := ap.Run(serveCtx); err != nil {
 			return fmt.Errorf("error running API server proxy: %w", err)
 		}
 
 		return nil
 	})
 
-	return group.Wait()
+	for {
+		select {
+		case <-ctx.Done():
+			// Context cancelled, exit.
+			logger.Info("Context cancelled, exiting")
+			shutdownCtx, shutdownCancel := context.WithTimeout(serveCtx, 20*time.Second)
+			unadvertiseErr := services.EnsureServicesNotAdvertised(shutdownCtx, lc, logger.Infof)
+			shutdownCancel()
+			serveCancel()
+			return errors.Join(unadvertiseErr, group.Wait())
+		case cfg = <-cfgChan:
+			// Handle config reload.
+			// TODO(tomhjp): Make auth mode reloadable.
+			var prefs ipn.MaskedPrefs
+			cfgLogger := logger
+			currentPrefs, err := lc.GetPrefs(ctx)
+			if err != nil {
+				return fmt.Errorf("error getting current prefs: %w", err)
+			}
+			if !slices.Equal(currentPrefs.AdvertiseServices, cfg.Parsed.AdvertiseServices) {
+				cfgLogger = cfgLogger.With("AdvertiseServices", fmt.Sprintf("%v -> %v", currentPrefs.AdvertiseServices, cfg.Parsed.AdvertiseServices))
+				prefs.AdvertiseServicesSet = true
+				prefs.Prefs.AdvertiseServices = cfg.Parsed.AdvertiseServices
+			}
+			if cfg.Parsed.Hostname != nil && *cfg.Parsed.Hostname != currentPrefs.Hostname {
+				cfgLogger = cfgLogger.With("Hostname", fmt.Sprintf("%s -> %s", currentPrefs.Hostname, *cfg.Parsed.Hostname))
+				prefs.HostnameSet = true
+				prefs.Hostname = *cfg.Parsed.Hostname
+			}
+			if cfg.Parsed.AcceptRoutes != nil && *cfg.Parsed.AcceptRoutes != currentPrefs.RouteAll {
+				cfgLogger = cfgLogger.With("AcceptRoutes", fmt.Sprintf("%v -> %v", currentPrefs.RouteAll, *cfg.Parsed.AcceptRoutes))
+				prefs.RouteAllSet = true
+				prefs.Prefs.RouteAll = *cfg.Parsed.AcceptRoutes
+			}
+			if !prefs.IsEmpty() {
+				if _, err := lc.EditPrefs(ctx, &prefs); err != nil {
+					return fmt.Errorf("error editing prefs: %w", err)
+				}
+			}
+			if err := setServeConfig(ctx, lc, cm, apiServerProxyService(cfg)); err != nil {
+				return fmt.Errorf("error setting serve config: %w", err)
+			}
+
+			cfgLogger.Infof("Config reloaded")
+		}
+	}
 }
 
 func getStateStore(path *string, logger *zap.SugaredLogger) (ipn.StateStore, error) {
@@ -225,4 +337,80 @@ func getRestConfig(logger *zap.SugaredLogger) (*rest.Config, error) {
 	}
 
 	return restConfig, nil
+}
+
+func apiServerProxyService(cfg *conf.Config) tailcfg.ServiceName {
+	if cfg.Parsed.APIServerProxy != nil &&
+		cfg.Parsed.APIServerProxy.Enabled.EqualBool(true) &&
+		cfg.Parsed.APIServerProxy.ServiceName != nil &&
+		*cfg.Parsed.APIServerProxy.ServiceName != "" {
+		return tailcfg.ServiceName(*cfg.Parsed.APIServerProxy.ServiceName)
+	}
+
+	return ""
+}
+
+func shouldIssueCerts(cfg *conf.Config) bool {
+	return cfg.Parsed.APIServerProxy != nil &&
+		cfg.Parsed.APIServerProxy.IssueCerts.EqualBool(true)
+}
+
+// setServeConfig sets up serve config such that it's serving for the passed in
+// Tailscale Service, and does nothing if it's already up to date.
+func setServeConfig(ctx context.Context, lc *local.Client, cm *certs.CertManager, name tailcfg.ServiceName) error {
+	existingServeConfig, err := lc.GetServeConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting existing serve config: %w", err)
+	}
+
+	// Ensure serve config is cleared if no Tailscale Service.
+	if name == "" {
+		if reflect.DeepEqual(*existingServeConfig, ipn.ServeConfig{}) {
+			// Already up to date.
+			return nil
+		}
+
+		if cm != nil {
+			cm.EnsureCertLoops(ctx, &ipn.ServeConfig{})
+		}
+		return lc.SetServeConfig(ctx, &ipn.ServeConfig{})
+	}
+
+	status, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting local client status: %w", err)
+	}
+	serviceHostPort := ipn.HostPort(fmt.Sprintf("%s.%s:443", name.WithoutPrefix(), status.CurrentTailnet.MagicDNSSuffix))
+
+	serveConfig := ipn.ServeConfig{
+		// Configure for the Service hostname.
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			name: {
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {
+						HTTPS: true,
+					},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					serviceHostPort: {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {
+								Proxy: fmt.Sprintf("http://%s:80", strings.TrimSuffix(status.Self.DNSName, ".")),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if reflect.DeepEqual(*existingServeConfig, serveConfig) {
+		// Already up to date.
+		return nil
+	}
+
+	if cm != nil {
+		cm.EnsureCertLoops(ctx, &serveConfig)
+	}
+	return lc.SetServeConfig(ctx, &serveConfig)
 }

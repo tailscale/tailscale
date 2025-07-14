@@ -342,6 +342,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `mode` _[APIServerProxyMode](#apiserverproxymode)_ | Mode to run the API server proxy in. Supported modes are auth and noauth.<br />In auth mode, requests from the tailnet proxied over to the Kubernetes<br />API server are additionally impersonated using the sender's tailnet identity.<br />If not specified, defaults to auth mode. |  | Enum: [auth noauth] <br />Type: string <br /> |
+| `serviceName` _string_ | ServiceName is the name of the Tailscale Service to create. Must have a<br />prefix of "svc:" and the remaining characters must be a valid DNS label<br />no longer than 63 characters. If not specified, a name will be generated<br />based on the ProxyGroup name. |  | Pattern: `^svc:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$` <br />Type: string <br /> |
 
 
 #### LabelValue

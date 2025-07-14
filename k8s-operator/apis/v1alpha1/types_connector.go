@@ -226,4 +226,7 @@ const (
 
 	IngressSvcValid      ConditionType = `TailscaleIngressSvcValid`
 	IngressSvcConfigured ConditionType = `TailscaleIngressSvcConfigured`
+
+	PGTailscaleServiceValid      ConditionType = `TailscaleServiceValid`      // The Tailscale Service for the ProxyGroup is valid.
+	PGTailscaleServiceConfigured ConditionType = `TailscaleServiceConfigured` // At least one of the ProxyGroup's Pods is advertising the Tailscale Service.
 )

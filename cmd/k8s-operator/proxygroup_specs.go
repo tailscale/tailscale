@@ -7,7 +7,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -342,7 +341,7 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 									},
 									{
 										Name:  "TS_K8S_PROXY_CONFIG",
-										Value: filepath.Join("/etc/tsconfig/$(POD_NAME)/", kubeAPIServerConfigFile),
+										Value: "kube:$(POD_NAME)-config",
 									},
 								}
 
@@ -355,20 +354,6 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 
 								return envs
 							}(),
-							VolumeMounts: func() []corev1.VolumeMount {
-								var mounts []corev1.VolumeMount
-
-								// TODO(tomhjp): Read config directly from the Secret instead.
-								for i := range pgReplicas(pg) {
-									mounts = append(mounts, corev1.VolumeMount{
-										Name:      fmt.Sprintf("k8s-proxy-config-%d", i),
-										ReadOnly:  true,
-										MountPath: fmt.Sprintf("/etc/tsconfig/%s-%d", pg.Name, i),
-									})
-								}
-
-								return mounts
-							}(),
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "k8s-proxy",
@@ -378,21 +363,6 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 							},
 						},
 					},
-					Volumes: func() []corev1.Volume {
-						var volumes []corev1.Volume
-						for i := range pgReplicas(pg) {
-							volumes = append(volumes, corev1.Volume{
-								Name: fmt.Sprintf("k8s-proxy-config-%d", i),
-								VolumeSource: corev1.VolumeSource{
-									Secret: &corev1.SecretVolumeSource{
-										SecretName: pgConfigSecretName(pg.Name, i),
-									},
-								},
-							})
-						}
-
-						return volumes
-					}(),
 				},
 			},
 		},
@@ -426,6 +396,7 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 				Resources: []string{"secrets"},
 				Verbs: []string{
 					"list",
+					"watch", // For k8s-proxy.
 				},
 			},
 			{
@@ -508,7 +479,7 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            pgStateSecretName(pg.Name, i),
 				Namespace:       namespace,
-				Labels:          pgSecretLabels(pg.Name, "state"),
+				Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState),
 				OwnerReferences: pgOwnerReference(pg),
 			},
 		})

@@ -54,4 +54,10 @@ const (
 
 	LabelManaged    = "tailscale.com/managed"
 	LabelSecretType = "tailscale.com/secret-type" // "config", "state" "certs"
+
+	LabelSecretTypeConfig = "config"
+	LabelSecretTypeState  = "state"
+	LabelSecretTypeCerts  = "certs"
+
+	KubeAPIServerConfigFile = "config.hujson"
 )

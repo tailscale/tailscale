@@ -68,8 +68,7 @@ const (
 	//
 	// tailcfg.CurrentCapabilityVersion was 106 when the ProxyGroup controller was
 	// first introduced.
-	pgMinCapabilityVersion  = 106
-	kubeAPIServerConfigFile = "config.hujson"
+	pgMinCapabilityVersion = 106
 )
 
 var (
@@ -714,7 +713,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            pgConfigSecretName(pg.Name, i),
 				Namespace:       r.tsNamespace,
-				Labels:          pgSecretLabels(pg.Name, "config"),
+				Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig),
 				OwnerReferences: pgOwnerReference(pg),
 			},
 		}
@@ -775,13 +774,6 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			}
 		}
 
-		// AdvertiseServices config is set by ingress-pg-reconciler, so make sure we
-		// don't overwrite it if already set.
-		existingAdvertiseServices, err := extractAdvertiseServicesConfig(existingCfgSecret)
-		if err != nil {
-			return nil, err
-		}
-
 		if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
 			hostname := pgHostname(pg, i)
 
@@ -795,7 +787,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 				}
 				if !deviceAuthed {
 					existingCfg := conf.ConfigV1Alpha1{}
-					if err := json.Unmarshal(existingCfgSecret.Data[kubeAPIServerConfigFile], &existingCfg); err != nil {
+					if err := json.Unmarshal(existingCfgSecret.Data[kubetypes.KubeAPIServerConfigFile], &existingCfg); err != nil {
 						return nil, fmt.Errorf("error unmarshalling existing config: %w", err)
 					}
 					if existingCfg.AuthKey != nil {
@@ -803,17 +795,38 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 					}
 				}
 			}
+
 			cfg := conf.VersionedConfig{
 				Version: "v1alpha1",
 				ConfigV1Alpha1: &conf.ConfigV1Alpha1{
-					Hostname: &hostname,
+					AuthKey:  authKey,
 					State:    ptr.To(fmt.Sprintf("kube:%s", pgPodName(pg.Name, i))),
 					App:      ptr.To(kubetypes.AppProxyGroupKubeAPIServer),
-					AuthKey:  authKey,
-					KubeAPIServer: &conf.KubeAPIServer{
-						AuthMode: opt.NewBool(isAuthAPIServerProxy(pg)),
+					LogLevel: ptr.To(logger.Level().String()),
+
+					// Reloadable fields.
+					Hostname: &hostname,
+					APIServerProxy: &conf.APIServerProxyConfig{
+						Enabled:    opt.NewBool(true),
+						AuthMode:   opt.NewBool(isAuthAPIServerProxy(pg)),
+						IssueCerts: opt.NewBool(i == 0),
 					},
 				},
+			}
+
+			// Copy over config that the apiserver-proxy-service-reconciler sets.
+			if existingCfgSecret != nil {
+				if k8sProxyCfg, ok := cfgSecret.Data[kubetypes.KubeAPIServerConfigFile]; ok {
+					k8sCfg := &conf.ConfigV1Alpha1{}
+					if err := json.Unmarshal(k8sProxyCfg, k8sCfg); err != nil {
+						return nil, fmt.Errorf("failed to unmarshal kube-apiserver config: %w", err)
+					}
+
+					cfg.AdvertiseServices = k8sCfg.AdvertiseServices
+					if k8sCfg.APIServerProxy != nil {
+						cfg.APIServerProxy.ServiceName = k8sCfg.APIServerProxy.ServiceName
+					}
+				}
 			}
 
 			if r.loginServer != "" {
@@ -832,8 +845,15 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			if err != nil {
 				return nil, fmt.Errorf("error marshalling k8s-proxy config: %w", err)
 			}
-			mak.Set(&cfgSecret.Data, kubeAPIServerConfigFile, cfgB)
+			mak.Set(&cfgSecret.Data, kubetypes.KubeAPIServerConfigFile, cfgB)
 		} else {
+			// AdvertiseServices config is set by ingress-pg-reconciler, so make sure we
+			// don't overwrite it if already set.
+			existingAdvertiseServices, err := extractAdvertiseServicesConfig(existingCfgSecret)
+			if err != nil {
+				return nil, err
+			}
+
 			configs, err := pgTailscaledConfig(pg, proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices, r.loginServer)
 			if err != nil {
 				return nil, fmt.Errorf("error creating tailscaled config: %w", err)
@@ -1024,16 +1044,16 @@ func extractAdvertiseServicesConfig(cfgSecret *corev1.Secret) ([]string, error) 
 		return nil, nil
 	}
 
-	conf, err := latestConfigFromSecret(cfgSecret)
+	cfg, err := latestConfigFromSecret(cfgSecret)
 	if err != nil {
 		return nil, err
 	}
 
-	if conf == nil {
+	if cfg == nil {
 		return nil, nil
 	}
 
-	return conf.AdvertiseServices, nil
+	return cfg.AdvertiseServices, nil
 }
 
 // getNodeMetadata gets metadata for all the pods owned by this ProxyGroup by
@@ -1045,7 +1065,7 @@ func extractAdvertiseServicesConfig(cfgSecret *corev1.Secret) ([]string, error) 
 func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.ProxyGroup) (metadata []nodeMetadata, _ error) {
 	// List all state Secrets owned by this ProxyGroup.
 	secrets := &corev1.SecretList{}
-	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, "state"))); err != nil {
+	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState))); err != nil {
 		return nil, fmt.Errorf("failed to list state Secrets: %w", err)
 	}
 	for _, secret := range secrets.Items {

@@ -17,6 +17,7 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
+	"tailscale.com/kube/kubetypes"
 )
 
 func TestWriteState(t *testing.T) {
@@ -516,7 +517,7 @@ func TestNewWithClient(t *testing.T) {
 	)
 
 	certSecretsLabels := map[string]string{
-		"tailscale.com/secret-type": "certs",
+		"tailscale.com/secret-type": kubetypes.LabelSecretTypeCerts,
 		"tailscale.com/managed":     "true",
 		"tailscale.com/proxy-group": "ingress-proxies",
 	}
@@ -582,7 +583,7 @@ func TestNewWithClient(t *testing.T) {
 				makeSecret("app2.tailnetxyz.ts.net", certSecretsLabels, "2"),
 				makeSecret("some-other-secret", nil, "3"),
 				makeSecret("app3.other-proxies.ts.net", map[string]string{
-					"tailscale.com/secret-type": "certs",
+					"tailscale.com/secret-type": kubetypes.LabelSecretTypeCerts,
 					"tailscale.com/managed":     "true",
 					"tailscale.com/proxy-group": "some-other-proxygroup",
 				}, "4"),
@@ -606,7 +607,7 @@ func TestNewWithClient(t *testing.T) {
 				makeSecret("app2.tailnetxyz.ts.net", certSecretsLabels, "2"),
 				makeSecret("some-other-secret", nil, "3"),
 				makeSecret("app3.other-proxies.ts.net", map[string]string{
-					"tailscale.com/secret-type": "certs",
+					"tailscale.com/secret-type": kubetypes.LabelSecretTypeCerts,
 					"tailscale.com/managed":     "true",
 					"tailscale.com/proxy-group": "some-other-proxygroup",
 				}, "4"),

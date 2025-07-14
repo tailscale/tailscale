@@ -11,11 +11,13 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
+	klc "tailscale.com/kube/localclient"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/deephash"
 )
@@ -56,12 +58,20 @@ func SetInitialKeys(store ipn.StateStore, podUID string) error {
 // cancelled or it hits an error. The passed in next function is expected to be
 // from a local.IPNBusWatcher that is at least subscribed to
 // ipn.NotifyInitialNetMap.
-func KeepKeysUpdated(store ipn.StateStore, next func() (ipn.Notify, error)) error {
-	var currentDeviceID, currentDeviceIPs, currentDeviceFQDN deephash.Sum
+func KeepKeysUpdated(ctx context.Context, store ipn.StateStore, lc klc.LocalClient) error {
+	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
+	if err != nil {
+		return fmt.Errorf("error watching IPN bus: %w", err)
+	}
+	defer w.Close()
 
+	var currentDeviceID, currentDeviceIPs, currentDeviceFQDN deephash.Sum
 	for {
-		n, err := next() // Blocks on a streaming LocalAPI HTTP call.
+		n, err := w.Next() // Blocks on a streaming LocalAPI HTTP call.
 		if err != nil {
+			if err == ctx.Err() {
+				return nil
+			}
 			return err
 		}
 		if n.NetMap == nil {

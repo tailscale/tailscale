@@ -19,7 +19,9 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/kube/certs"
 	"tailscale.com/kube/kubetypes"
+	klc "tailscale.com/kube/localclient"
 	"tailscale.com/types/netmap"
 )
 
@@ -52,11 +54,9 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 
 	var certDomain string
 	var prevServeConfig *ipn.ServeConfig
-	var cm certManager
+	var cm *certs.CertManager
 	if cfg.CertShareMode == "rw" {
-		cm = certManager{
-			lc: lc,
-		}
+		cm = certs.NewCertManager(klc.New(lc), log.Printf)
 	}
 	for {
 		select {
@@ -93,7 +93,7 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 		if cfg.CertShareMode != "rw" {
 			continue
 		}
-		if err := cm.ensureCertLoops(ctx, sc); err != nil {
+		if err := cm.EnsureCertLoops(ctx, sc); err != nil {
 			log.Fatalf("serve proxy: error ensuring cert loops: %v", err)
 		}
 	}

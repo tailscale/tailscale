@@ -6,8 +6,6 @@
 package conf
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -57,12 +55,7 @@ func TestVersionedConfig(t *testing.T) {
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "config.json")
-			if err := os.WriteFile(path, []byte(tc.inputConfig), 0644); err != nil {
-				t.Fatalf("failed to write config file: %v", err)
-			}
-			cfg, err := Load(path)
+			cfg, err := Load([]byte(tc.inputConfig))
 			switch {
 			case tc.expectedError == "" && err != nil:
 				t.Fatalf("unexpected error: %v", err)

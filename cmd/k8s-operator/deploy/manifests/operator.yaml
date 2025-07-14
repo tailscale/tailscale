@@ -2939,6 +2939,14 @@ spec:
                                             - auth
                                             - noauth
                                         type: string
+                                    serviceName:
+                                        description: |-
+                                            ServiceName is the name of the Tailscale Service to create. Must have a
+                                            prefix of "svc:" and the remaining characters must be a valid DNS label
+                                            no longer than 63 characters. If not specified, a name will be generated
+                                            based on the ProxyGroup name.
+                                        pattern: ^svc:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                                        type: string
                                 type: object
                             proxyClass:
                                 description: |-

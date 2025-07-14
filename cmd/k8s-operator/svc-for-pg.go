@@ -41,7 +41,7 @@ import (
 )
 
 const (
-	finalizerName = "tailscale.com/service-pg-finalizer"
+	svcPGFinalizerName = "tailscale.com/service-pg-finalizer"
 
 	reasonIngressSvcInvalid              = "IngressSvcInvalid"
 	reasonIngressSvcValid                = "IngressSvcValid"
@@ -174,13 +174,13 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 
-	if !slices.Contains(svc.Finalizers, finalizerName) {
+	if !slices.Contains(svc.Finalizers, svcPGFinalizerName) {
 		// This log line is printed exactly once during initial provisioning,
 		// because once the finalizer is in place this block gets skipped. So,
 		// this is a nice place to tell the operator that the high level,
 		// multi-reconcile operation is underway.
 		logger.Infof("exposing Service over tailscale")
-		svc.Finalizers = append(svc.Finalizers, finalizerName)
+		svc.Finalizers = append(svc.Finalizers, svcPGFinalizerName)
 		if err := r.Update(ctx, svc); err != nil {
 			return false, fmt.Errorf("failed to add finalizer: %w", err)
 		}
@@ -378,7 +378,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 // corresponding to this Service.
 func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger) (svcChanged bool, err error) {
 	logger.Debugf("Ensuring any resources for Service are cleaned up")
-	ix := slices.Index(svc.Finalizers, finalizerName)
+	ix := slices.Index(svc.Finalizers, svcPGFinalizerName)
 	if ix < 0 {
 		logger.Debugf("no finalizer, nothing to do")
 		return false, nil
@@ -485,12 +485,12 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 
 func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
 	svc.Finalizers = slices.DeleteFunc(svc.Finalizers, func(f string) bool {
-		return f == finalizerName
+		return f == svcPGFinalizerName
 	})
-	logger.Debugf("ensure %q finalizer is removed", finalizerName)
+	logger.Debugf("ensure %q finalizer is removed", svcPGFinalizerName)
 
 	if err := r.Update(ctx, svc); err != nil {
-		return fmt.Errorf("failed to remove finalizer %q: %w", finalizerName, err)
+		return fmt.Errorf("failed to remove finalizer %q: %w", svcPGFinalizerName, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -653,7 +653,7 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	// Get all config Secrets for this ProxyGroup.
 	// Get all Pods
 	secrets := &corev1.SecretList{}
-	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "config"))); err != nil {
+	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig))); err != nil {
 		return fmt.Errorf("failed to list config Secrets: %w", err)
 	}
 
@@ -720,7 +720,7 @@ func (a *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 func (a *HAServiceReconciler) numberPodsAdvertising(ctx context.Context, pgName string, serviceName tailcfg.ServiceName) (int, error) {
 	// Get all state Secrets for this ProxyGroup.
 	secrets := &corev1.SecretList{}
-	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "state"))); err != nil {
+	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, kubetypes.LabelSecretTypeState))); err != nil {
 		return 0, fmt.Errorf("failed to list ProxyGroup %q state Secrets: %w", pgName, err)
 	}
 
