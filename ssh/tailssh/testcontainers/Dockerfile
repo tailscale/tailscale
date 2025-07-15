@@ -4,7 +4,7 @@ FROM ${BASE}
 ARG BASE
 
 RUN echo "Install openssh, needed for scp. Also install python3"
-RUN if echo "$BASE" | grep "ubuntu:"; then apt-get update -y && apt-get install -y openssh-client python3 python3-pip; fi
+RUN if echo "$BASE" | grep "ubuntu:"; then apt-get update -y && apt-get install -y libc6 openssh-client python3 python3-pip; fi
 RUN if echo "$BASE" | grep "alpine:"; then apk add openssh python3 py3-pip; fi
 
 RUN echo "Install paramiko"
