@@ -3,6 +3,7 @@ services:
   tailscaled:
     image: tailscale/tailscale:latest
     container_name: tailscaled
+    hostname: tailscaled
     network_mode: host
     restart: unless-stopped
     volumes:
@@ -15,3 +16,4 @@ services:
       - TS_AUTHKEY=${TS_AUTHKEY}
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:-}
