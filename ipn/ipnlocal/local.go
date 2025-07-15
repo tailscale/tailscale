@@ -7907,6 +7907,9 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, prev tailcfg.StableNod
 		if !p.Valid() {
 			return false
 		}
+		if !p.Online().Get() {
+			return false
+		}
 		if allowed != nil && !allowed.Contains(p.StableID()) {
 			return false
 		}
