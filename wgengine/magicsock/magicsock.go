@@ -14,7 +14,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/netip"
 	"reflect"
@@ -2616,14 +2615,10 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 	})
 }
 
+// capVerIsRelayCapable returns true if version is relay client and server
+// capable, otherwise it returns false.
 func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
-	// TODO(jwhited): implement once capVer is bumped
-	return version == math.MinInt32 || debugAssumeUDPRelayCapable()
-}
-
-func capVerIsRelayServerCapable(version tailcfg.CapabilityVersion) bool {
-	// TODO(jwhited): implement once capVer is bumped & update Test_peerAPIIfCandidateRelayServer
-	return version == math.MinInt32 || debugAssumeUDPRelayCapable()
+	return version >= 120
 }
 
 // onFilterUpdate is called when a [FilterUpdate] is received over the
@@ -2677,8 +2672,14 @@ func peerAPIIfCandidateRelayServer(filt *filter.Filter, self, maybeCandidate tai
 	if filt == nil ||
 		!self.Valid() ||
 		!maybeCandidate.Valid() ||
-		!capVerIsRelayServerCapable(maybeCandidate.Cap()) ||
 		!maybeCandidate.Hostinfo().Valid() {
+		return netip.AddrPort{}
+	}
+	if maybeCandidate.ID() != self.ID() && !capVerIsRelayCapable(maybeCandidate.Cap()) {
+		// If maybeCandidate's [tailcfg.CapabilityVersion] is not relay-capable,
+		// we skip it. If maybeCandidate happens to be self, then this check is
+		// unnecessary as self is always capable from this point (the statically
+		// compiled [tailcfg.CurrentCapabilityVersion]) forward.
 		return netip.AddrPort{}
 	}
 	for _, maybeCandidatePrefix := range maybeCandidate.Addresses().All() {
