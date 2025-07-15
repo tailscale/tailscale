@@ -181,7 +181,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.Var(&serviceNameFlag{Value: &e.service}, "service", "Serve for a service with distinct virtual IP instead on node itself.")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
-			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services")
+			fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services. Refer to docs for more information.")
 		}),
 		UsageFunc: usageFuncNoDefaultValues,
 		Subcommands: []*ffcli.Command{
@@ -292,7 +292,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return fmt.Errorf("failed to clean the mount point: %w", err)
 		}
 
-		srvType, srvPort, isDefaultService, err := srvTypeAndPortFromFlags(e)
+		srvType, srvPort, err := srvTypeAndPortFromFlags(e)
 		if err != nil {
 			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
 			return errHelpFunc(subcmd)
@@ -342,7 +342,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if !forService && srvType == serveTypeTUN {
 			return errors.New("tun mode is only supported for services")
 		}
-		wantFg := !forService && !e.bg.Value && !turnOff
+		wantFg := !e.bg.Value && !turnOff
 		if wantFg {
 			// validate the config before creating a WatchIPNBus session
 			if err := e.validateConfig(parentSC, srvPort, srvType, dnsName); err != nil {
@@ -370,7 +370,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var msg string
-		if turnOff && !isDefaultService {
+		if turnOff {
 			// only unset serve when trying to unset with type and port flags.
 			err = e.unsetServe(sc, st, dnsName, srvType, srvPort, mount)
 		} else {
@@ -783,7 +783,7 @@ func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName 
 	return nil
 }
 
-func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, isDefaultService bool, err error) {
+func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, err error) {
 	sourceMap := map[serveType]uint{
 		serveTypeHTTP:             e.http,
 		serveTypeHTTPS:            e.https,
@@ -792,34 +792,31 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, is
 	}
 
 	var srcTypeCount int
-	var defaultFlags bool
 
 	for k, v := range sourceMap {
 		if v != 0 {
 			if v > math.MaxUint16 {
-				return 0, 0, false, fmt.Errorf("port number %d is too high for %s flag", v, srvType)
+				return 0, 0, fmt.Errorf("port number %d is too high for %s flag", v, srvType)
 			}
 			srcTypeCount++
 			srvType = k
 			srvPort = uint16(v)
-			defaultFlags = false
 		}
 	}
 
 	if e.tun {
 		srcTypeCount++
 		srvType = serveTypeTUN
-		defaultFlags = false
 	}
 
 	if srcTypeCount > 1 {
-		return 0, 0, false, fmt.Errorf("cannot serve multiple types for a single mount point")
-	} else if srcTypeCount == 0 {
-		srvType = serveTypeHTTPS
-		srvPort = 443
-		defaultFlags = true
+		return 0, 0, fmt.Errorf("cannot serve multiple types for a single mount point")
 	}
-	return srvType, srvPort, defaultFlags && e.service != "", nil
+	if srcTypeCount == 0 {
+		return serveTypeHTTPS, 443, nil
+	}
+
+	return srvType, srvPort, nil
 }
 
 // isLegacyInvocation helps transition customers who have been using the beta
