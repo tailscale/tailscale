@@ -1,0 +1,5 @@
+# Environment file with secrets
+.env
+
+# Tailscale state directory
+tailscale-state/
