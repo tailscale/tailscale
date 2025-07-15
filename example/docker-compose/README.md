@@ -87,3 +87,39 @@ TS_LOCAL_ADDR_PORT=:9002
 # DNS configuration
 TS_ACCEPT_DNS=true
 ```
+
+## Advanced Usage
+
+### Sidecar Pattern
+You can use Tailscale as a sidecar container to provide secure networking for other services. Here's an example with nginx:
+
+```yaml
+---
+services:
+  tailscaled:
+    image: tailscale/tailscale:latest
+    hostname: tailscaled-nginx
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=--advertise-tags=tag:container
+    volumes:
+      - ./tailscale-state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+    restart: unless-stopped
+  
+  nginx:
+    image: nginx
+    depends_on:
+      - tailscaled
+    network_mode: service:tailscaled
+```
+
+In this pattern:
+- The `nginx` service shares the network namespace with `tailscaled`
+- All traffic to/from nginx goes through the Tailscale connection
+- The nginx service is accessible via the Tailscale network
