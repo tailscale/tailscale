@@ -4,7 +4,7 @@
 //go:build !plan9
 
 // Package sessionrecording contains functionality for recording Kubernetes API
-// server proxy 'kubectl exec' sessions.
+// server proxy 'kubectl exec/attach' sessions.
 package sessionrecording
 
 import (
@@ -35,13 +35,19 @@ import (
 )
 
 const (
-	SPDYProtocol Protocol = "SPDY"
-	WSProtocol   Protocol = "WebSocket"
+	SPDYProtocol      Protocol    = "SPDY"
+	WSProtocol        Protocol    = "WebSocket"
+	ExecSessionType   SessionType = "exec"
+	AttachSessionType SessionType = "attach"
 )
 
 // Protocol is the streaming protocol of the hijacked session. Supported
 // protocols are SPDY and WebSocket.
 type Protocol string
+
+// SessionType is the type of session initiated with `kubectl`
+// (`exec` or `attach`)
+type SessionType string
 
 var (
 	// CounterSessionRecordingsAttempted counts the number of session recording attempts.
@@ -63,25 +69,27 @@ func New(opts HijackerOpts) *Hijacker {
 		failOpen:          opts.FailOpen,
 		proto:             opts.Proto,
 		log:               opts.Log,
+		sessionType:       opts.SessionType,
 		connectToRecorder: sessionrecording.ConnectToRecorder,
 	}
 }
 
 type HijackerOpts struct {
-	TS        *tsnet.Server
-	Req       *http.Request
-	W         http.ResponseWriter
-	Who       *apitype.WhoIsResponse
-	Addrs     []netip.AddrPort
-	Log       *zap.SugaredLogger
-	Pod       string
-	Namespace string
-	FailOpen  bool
-	Proto     Protocol
+	TS          *tsnet.Server
+	Req         *http.Request
+	W           http.ResponseWriter
+	Who         *apitype.WhoIsResponse
+	Addrs       []netip.AddrPort
+	Log         *zap.SugaredLogger
+	Pod         string
+	Namespace   string
+	FailOpen    bool
+	Proto       Protocol
+	SessionType SessionType
 }
 
 // Hijacker implements [net/http.Hijacker] interface.
-// It must be configured with an http request for a 'kubectl exec' session that
+// It must be configured with an http request for a 'kubectl exec/attach' session that
 // needs to be recorded. It knows how to hijack the connection and configure for
 // the session contents to be sent to a tsrecorder instance.
 type Hijacker struct {
@@ -90,12 +98,13 @@ type Hijacker struct {
 	req               *http.Request
 	who               *apitype.WhoIsResponse
 	log               *zap.SugaredLogger
-	pod               string           // pod being exec-d
-	ns                string           // namespace of the pod being exec-d
+	pod               string           // pod being exec/attach-d
+	ns                string           // namespace of the pod being exec/attach-d
 	addrs             []netip.AddrPort // tsrecorder addresses
 	failOpen          bool             // whether to fail open if recording fails
 	connectToRecorder RecorderDialFn
-	proto             Protocol // streaming protocol
+	proto             Protocol    // streaming protocol
+	sessionType       SessionType // subcommand, e.g., "exec, attach"
 }
 
 // RecorderDialFn dials the specified netip.AddrPorts that should be tsrecorder
@@ -105,7 +114,7 @@ type Hijacker struct {
 // after having been established, an error is sent down the channel.
 type RecorderDialFn func(context.Context, []netip.AddrPort, netx.DialFunc) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error)
 
-// Hijack hijacks a 'kubectl exec' session and configures for the session
+// Hijack hijacks a 'kubectl exec/attach' session and configures for the session
 // contents to be sent to a recorder.
 func (h *Hijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	h.log.Infof("recorder addrs: %v, failOpen: %v", h.addrs, h.failOpen)
@@ -114,7 +123,7 @@ func (h *Hijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return nil, nil, fmt.Errorf("error hijacking connection: %w", err)
 	}
 
-	conn, err := h.setUpRecording(context.Background(), reqConn)
+	conn, err := h.setUpRecording(h.req.Context(), reqConn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error setting up session recording: %w", err)
 	}
@@ -138,7 +147,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		err     error
 		errChan <-chan error
 	)
-	h.log.Infof("kubectl exec session will be recorded, recorders: %v, fail open policy: %t", h.addrs, h.failOpen)
+	h.log.Infof("kubectl %s session will be recorded, recorders: %v, fail open policy: %t", h.sessionType, h.addrs, h.failOpen)
 	qp := h.req.URL.Query()
 	container := strings.Join(qp[containerKey], "")
 	var recorderAddr net.Addr
@@ -161,7 +170,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		}
 		return nil, errors.New(msg)
 	} else {
-		h.log.Infof("exec session to container %q in Pod %q namespace %q will be recorded, the recording will be sent to a tsrecorder instance at %q", container, h.pod, h.ns, recorderAddr)
+		h.log.Infof("%s session to container %q in Pod %q namespace %q will be recorded, the recording will be sent to a tsrecorder instance at %q", h.sessionType, container, h.pod, h.ns, recorderAddr)
 	}
 
 	cl := tstime.DefaultClock{}
@@ -190,9 +199,15 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	var lc net.Conn
 	switch h.proto {
 	case SPDYProtocol:
-		lc = spdy.New(conn, rec, ch, hasTerm, h.log)
+		lc, err = spdy.New(ctx, conn, rec, ch, hasTerm, h.log)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize spdy connection: %w", err)
+		}
 	case WSProtocol:
-		lc = ws.New(conn, rec, ch, hasTerm, h.log)
+		lc, err = ws.New(ctx, conn, rec, ch, hasTerm, h.log)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize websocket connection: %w", err)
+		}
 	default:
 		return nil, fmt.Errorf("unknown protocol: %s", h.proto)
 	}
@@ -209,7 +224,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 			h.log.Info("finished uploading the recording")
 			return
 		}
-		msg := fmt.Sprintf("connection to the session recorder errorred: %v;", err)
+		msg := fmt.Sprintf("connection to the session recorder errored: %v;", err)
 		if h.failOpen {
 			msg += msg + "; failure mode is 'fail open'; continuing session without recording."
 			h.log.Info(msg)

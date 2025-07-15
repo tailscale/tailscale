@@ -91,7 +91,7 @@ func Test_Hijacker(t *testing.T) {
 				who:      &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{}},
 				log:      zl.Sugar(),
 				ts:       &tsnet.Server{},
-				req:      &http.Request{URL: &url.URL{}},
+				req:      &http.Request{URL: &url.URL{RawQuery: "tty=true"}},
 				proto:    tt.proto,
 			}
 			ctx := context.Background()

@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/transport"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/k8s-operator/sessionrecording"
 	ksr "tailscale.com/k8s-operator/sessionrecording"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
@@ -49,6 +50,7 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 	if !authMode {
 		restConfig = rest.AnonymousClientConfig(restConfig)
 	}
+
 	cfg, err := restConfig.TransportConfig()
 	if err != nil {
 		return nil, fmt.Errorf("could not get rest.TransportConfig(): %w", err)
@@ -111,6 +113,8 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 	mux.HandleFunc("/", ap.serveDefault)
 	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
 	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecWS)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachWS)
 
 	ap.hs = &http.Server{
 		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
@@ -165,19 +169,31 @@ func (ap *APIServerProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 	ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
-// serveExecSPDY serves 'kubectl exec' requests for sessions streamed over SPDY,
+// serveExecSPDY serves '/exec' requests for sessions streamed over SPDY,
 // optionally configuring the kubectl exec sessions to be recorded.
 func (ap *APIServerProxy) serveExecSPDY(w http.ResponseWriter, r *http.Request) {
-	ap.execForProto(w, r, ksr.SPDYProtocol)
+	ap.sessionForProto(w, r, ksr.ExecSessionType, ksr.SPDYProtocol)
 }
 
-// serveExecWS serves 'kubectl exec' requests for sessions streamed over WebSocket,
+// serveExecWS serves '/exec' requests for sessions streamed over WebSocket,
 // optionally configuring the kubectl exec sessions to be recorded.
 func (ap *APIServerProxy) serveExecWS(w http.ResponseWriter, r *http.Request) {
-	ap.execForProto(w, r, ksr.WSProtocol)
+	ap.sessionForProto(w, r, ksr.ExecSessionType, ksr.WSProtocol)
 }
 
-func (ap *APIServerProxy) execForProto(w http.ResponseWriter, r *http.Request, proto ksr.Protocol) {
+// serveExecSPDY serves '/attach' requests for sessions streamed over SPDY,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *APIServerProxy) serveAttachSPDY(w http.ResponseWriter, r *http.Request) {
+	ap.sessionForProto(w, r, ksr.AttachSessionType, ksr.SPDYProtocol)
+}
+
+// serveExecWS serves '/attach' requests for sessions streamed over WebSocket,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *APIServerProxy) serveAttachWS(w http.ResponseWriter, r *http.Request) {
+	ap.sessionForProto(w, r, ksr.AttachSessionType, ksr.WSProtocol)
+}
+
+func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request, sessionType sessionrecording.SessionType, proto ksr.Protocol) {
 	const (
 		podNameKey       = "pod"
 		namespaceNameKey = "namespace"
@@ -192,7 +208,7 @@ func (ap *APIServerProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 	counterNumRequestsProxied.Add(1)
 	failOpen, addrs, err := determineRecorderConfig(who)
 	if err != nil {
-		ap.log.Errorf("error trying to determine whether the 'kubectl exec' session needs to be recorded: %v", err)
+		ap.log.Errorf("error trying to determine whether the 'kubectl %s' session needs to be recorded: %v", sessionType, err)
 		return
 	}
 	if failOpen && len(addrs) == 0 { // will not record
@@ -201,7 +217,7 @@ func (ap *APIServerProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 	}
 	ksr.CounterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
 	if !failOpen && len(addrs) == 0 {
-		msg := "forbidden: 'kubectl exec' session must be recorded, but no recorders are available."
+		msg := fmt.Sprintf("forbidden: 'kubectl %s' session must be recorded, but no recorders are available.", sessionType)
 		ap.log.Error(msg)
 		http.Error(w, msg, http.StatusForbidden)
 		return
@@ -223,16 +239,17 @@ func (ap *APIServerProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 	}
 
 	opts := ksr.HijackerOpts{
-		Req:       r,
-		W:         w,
-		Proto:     proto,
-		TS:        ap.ts,
-		Who:       who,
-		Addrs:     addrs,
-		FailOpen:  failOpen,
-		Pod:       r.PathValue(podNameKey),
-		Namespace: r.PathValue(namespaceNameKey),
-		Log:       ap.log,
+		Req:         r,
+		W:           w,
+		Proto:       proto,
+		SessionType: sessionType,
+		TS:          ap.ts,
+		Who:         who,
+		Addrs:       addrs,
+		FailOpen:    failOpen,
+		Pod:         r.PathValue(podNameKey),
+		Namespace:   r.PathValue(namespaceNameKey),
+		Log:         ap.log,
 	}
 	h := ksr.New(opts)
 
