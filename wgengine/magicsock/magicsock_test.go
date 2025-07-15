@@ -3399,7 +3399,11 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 	}
 
 	selfOnlyIPv4 := &tailcfg.Node{
-		Cap: math.MinInt32,
+		ID: 1,
+		// Intentionally set a value < 120 to verify the statically compiled
+		// [tailcfg.CurrentCapabilityVersion] is used when self is
+		// maybeCandidate.
+		Cap: 119,
 		Addresses: []netip.Prefix{
 			netip.MustParsePrefix("1.1.1.1/32"),
 		},
@@ -3409,12 +3413,16 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 	selfOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::1/128")
 
 	peerOnlyIPv4 := &tailcfg.Node{
-		Cap: math.MinInt32,
+		ID:  2,
+		Cap: 120,
 		Addresses: []netip.Prefix{
 			netip.MustParsePrefix("2.2.2.2/32"),
 		},
 		Hostinfo: hostInfo.View(),
 	}
+
+	peerOnlyIPv4NotCapable := peerOnlyIPv4.Clone()
+	peerOnlyIPv4NotCapable.Cap = 119
 
 	peerOnlyIPv6 := peerOnlyIPv4.Clone()
 	peerOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::2/128")
@@ -3499,6 +3507,22 @@ func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
 			self:           selfOnlyIPv6.View(),
 			maybeCandidate: selfOnlyIPv6.View(),
 			want:           netip.AddrPortFrom(selfOnlyIPv6.Addresses[0].Addr(), 6),
+		},
+		{
+			name: "peer incapable",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self:           selfOnlyIPv4.View(),
+			maybeCandidate: peerOnlyIPv4NotCapable.View(),
 		},
 		{
 			name: "no match dst",
