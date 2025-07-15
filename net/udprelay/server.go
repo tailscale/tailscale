@@ -581,6 +581,7 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket *net.UDPConn) {
 		// TODO: extract laddr from IP_PKTINFO for use in reply
 		n, from, err := readFromSocket.ReadFromUDPAddrPort(b)
 		if err != nil {
+			s.logf("error reading from socket(%v): %v", readFromSocket.LocalAddr(), err)
 			return
 		}
 		s.handlePacket(from, b[:n], readFromSocket, otherSocket)
