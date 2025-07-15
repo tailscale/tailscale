@@ -7902,32 +7902,31 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, prev tailcfg.StableNod
 		panic("missing traffic-steering capability")
 	}
 
-	peers := nm.Peers
-	nodes := make([]tailcfg.NodeView, 0, len(peers))
-
-	for _, p := range peers {
+	var force tailcfg.NodeView
+	nodes := nb.AppendMatchingPeers(nil, func(p tailcfg.NodeView) bool {
 		if !p.Valid() {
-			continue
+			return false
 		}
 		if allowed != nil && !allowed.Contains(p.StableID()) {
-			continue
+			return false
 		}
 		if !p.CapMap().Contains(tailcfg.NodeAttrSuggestExitNode) {
-			continue
+			return false
 		}
 		if !tsaddr.ContainsExitRoutes(p.AllowedIPs()) {
-			continue
+			return false
 		}
 		if p.StableID() == prev {
 			// Prevent flapping: since prev is a valid suggestion,
 			// force prev to be the only valid pick.
-			nodes = []tailcfg.NodeView{p}
-			break
+			force = p
+			return false
 		}
-		nodes = append(nodes, p)
+		return true
+	})
+	if force.Valid() {
+		nodes = append(nodes[:0], force)
 	}
-
-	var pick tailcfg.NodeView
 
 	scores := make(map[tailcfg.NodeID]int, len(nodes))
 	score := func(n tailcfg.NodeView) int {
@@ -7945,7 +7944,11 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, prev tailcfg.StableNod
 		return s
 	}
 
-	if len(nodes) > 0 {
+	var pick tailcfg.NodeView
+	if len(nodes) == 1 {
+		pick = nodes[0]
+	}
+	if len(nodes) > 1 {
 		// Find the highest scoring exit nodes.
 		slices.SortFunc(nodes, func(a, b tailcfg.NodeView) int {
 			return cmp.Compare(score(b), score(a)) // reverse sort
