@@ -545,7 +545,6 @@ var (
 func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
 	svcName, forService := tailcfg.AsServiceName(dnsName)
-	var hp ipn.HostPort
 	var webConfig *ipn.WebServerConfig
 	var tcpHandler *ipn.TCPPortHandler
 	ips := st.TailscaleIPs
@@ -555,7 +554,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		displayedHost = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
 		host = svcName.WithoutPrefix()
 	}
-	hp = ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
+	hp := ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
 
 	scheme := "https"
 	if sc.IsServingHTTP(srvPort, svcName) {
@@ -621,16 +620,14 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			return len(mounts[i]) < len(mounts[j])
 		})
 		for _, m := range mounts {
-			h := webConfig.Handlers[m]
-			t, d := srvTypeAndDesc(h)
+			t, d := srvTypeAndDesc(webConfig.Handlers[m])
 			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, displayedHost, portPart, m))
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if tcpHandler != nil {
-		h := tcpHandler
 
 		tlsStatus := "TLS over TCP"
-		if h.TerminateTLS != "" {
+		if tcpHandler.TerminateTLS != "" {
 			tlsStatus = "TLS terminated"
 		}
 
@@ -639,7 +636,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
 		}
-		output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", h.TCPForward))
+		output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", tcpHandler.TCPForward))
 	}
 
 	if !forService && !e.bg.Value {
