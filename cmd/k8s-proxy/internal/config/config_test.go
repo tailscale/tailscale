@@ -15,7 +15,9 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/ptr"
@@ -125,19 +127,8 @@ func TestWatchConfig(t *testing.T) {
 							t.Fatalf("error writing namespace file: %v", err)
 						}
 						writeFile = func(t *testing.T, content string) {
-							s := &corev1.Secret{
-								ObjectMeta: metav1.ObjectMeta{
-									Name: "config-secret",
-								},
-								Data: map[string][]byte{
-									kubetypes.KubeAPIServerConfigFile: []byte(content),
-								},
-							}
-							if _, err := cl.CoreV1().Secrets("default").Create(t.Context(), s, metav1.CreateOptions{}); err != nil {
-								if _, updateErr := cl.CoreV1().Secrets("default").Update(t.Context(), s, metav1.UpdateOptions{}); updateErr != nil {
-									t.Fatalf("error writing config Secret %q: %v", cfgPath, updateErr)
-								}
-							}
+							s := secretFrom(content)
+							mustCreateOrUpdate(t, cl, s)
 						}
 					}
 					configChan := make(chan *conf.Config)
@@ -187,5 +178,85 @@ func TestWatchConfig(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestWatchConfigSecret_Rewatches(t *testing.T) {
+	root := t.TempDir()
+	cl := fake.NewClientset()
+	var watchCount int
+	var watcher *watch.RaceFreeFakeWatcher
+	expected := []string{
+		`{"version": "v1alpha1", "authKey": "abc123"}`,
+		`{"version": "v1alpha1", "authKey": "def456"}`,
+		`{"version": "v1alpha1", "authKey": "ghi789"}`,
+	}
+	cl.PrependWatchReactor("secrets", func(action ktesting.Action) (handled bool, ret watch.Interface, err error) {
+		watcher = watch.NewRaceFreeFake()
+		watcher.Add(secretFrom(expected[watchCount]))
+		if action.GetVerb() == "watch" && action.GetResource().Resource == "secrets" {
+			watchCount++
+		}
+		return true, watcher, nil
+	})
+
+	nsFilePath := filepath.Join(root, namespacePath)
+	if err := os.MkdirAll(filepath.Dir(nsFilePath), 0o755); err != nil {
+		t.Fatalf("error creating namespace directory: %v", err)
+	}
+	if err := os.WriteFile(nsFilePath, []byte("default"), 0o644); err != nil {
+		t.Fatalf("error writing namespace file: %v", err)
+	}
+	configChan := make(chan *conf.Config)
+	l := NewConfigLoader(zap.Must(zap.NewDevelopment()).Sugar(), cl.CoreV1(), configChan)
+	l.root = root
+
+	mustCreateOrUpdate(t, cl, secretFrom(expected[0]))
+
+	errs := make(chan error)
+	go func() {
+		errs <- l.watchConfigSecretChanges(t.Context(), "config-secret")
+	}()
+
+	for i := range 2 {
+		select {
+		case cfg := <-configChan:
+			if exp := expected[i]; cfg.Parsed.AuthKey == nil || !strings.Contains(exp, *cfg.Parsed.AuthKey) {
+				t.Fatalf("expected config to have authKey %q, got: %v", exp, cfg.Parsed.AuthKey)
+			}
+			if i == 0 {
+				watcher.Stop()
+			}
+		case err := <-errs:
+			t.Fatalf("unexpected error: %v", err)
+		case <-l.cfgIgnored:
+			t.Fatalf("expected config to be reloaded, but got ignored signal")
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for expected event")
+		}
+	}
+
+	if watchCount != 2 {
+		t.Fatalf("expected 2 watch API calls, got %d", watchCount)
+	}
+}
+
+func secretFrom(content string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "config-secret",
+		},
+		Data: map[string][]byte{
+			kubetypes.KubeAPIServerConfigFile: []byte(content),
+		},
+	}
+}
+
+func mustCreateOrUpdate(t *testing.T, cl *fake.Clientset, s *corev1.Secret) {
+	t.Helper()
+	if _, err := cl.CoreV1().Secrets("default").Create(t.Context(), s, metav1.CreateOptions{}); err != nil {
+		if _, updateErr := cl.CoreV1().Secrets("default").Update(t.Context(), s, metav1.UpdateOptions{}); updateErr != nil {
+			t.Fatalf("error writing config Secret %q: %v", s.Name, updateErr)
+		}
 	}
 }

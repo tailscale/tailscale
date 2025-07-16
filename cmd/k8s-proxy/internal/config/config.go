@@ -26,6 +26,7 @@ import (
 	clientcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/testenv"
 )
 
@@ -180,13 +181,21 @@ func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretName 
 			Kind:       "Secret",
 			APIVersion: "v1",
 		},
-		FieldSelector: fmt.Sprintf("metadata.name=%s", secretName),
-		Watch:         true,
+		// Re-watch regularly to avoid relying on long-lived connections.
+		// See https://github.com/kubernetes-client/javascript/issues/596#issuecomment-786419380
+		TimeoutSeconds: ptr.To(int64(600)),
+		FieldSelector:  fmt.Sprintf("metadata.name=%s", secretName),
+		Watch:          true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to watch config Secret %q: %w", secretName, err)
 	}
-	defer w.Stop()
+	defer func() {
+		// May not be the original watcher by the time we exit.
+		if w != nil {
+			w.Stop()
+		}
+	}()
 
 	// Get the initial config Secret now we've got the watcher set up.
 	secret, err := secrets.Get(ctx, secretName, metav1.GetOptions{})
@@ -204,7 +213,24 @@ func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretName 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case ev := <-w.ResultChan():
+		case ev, ok := <-w.ResultChan():
+			if !ok {
+				w.Stop()
+				w, err = secrets.Watch(ctx, metav1.ListOptions{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Secret",
+						APIVersion: "v1",
+					},
+					TimeoutSeconds: ptr.To(int64(600)),
+					FieldSelector:  fmt.Sprintf("metadata.name=%s", secretName),
+					Watch:          true,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to re-watch config Secret %q: %w", secretName, err)
+				}
+				continue
+			}
+
 			switch ev.Type {
 			case watch.Added, watch.Modified:
 				// New config available to load.
@@ -216,15 +242,15 @@ func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretName 
 				if secret == nil || secret.Data == nil {
 					continue
 				}
-			case watch.Deleted, watch.Bookmark:
-				// Ignore, no action required.
-				continue
+				if err := l.configFromSecret(ctx, secret); err != nil {
+					return fmt.Errorf("error reloading config Secret %q: %v", secret.Name, err)
+				}
 			case watch.Error:
 				return fmt.Errorf("error watching config Secret %q: %v", secretName, ev.Object)
+			default:
+				// Ignore, no action required.
+				continue
 			}
-		}
-		if err := l.configFromSecret(ctx, secret); err != nil {
-			return fmt.Errorf("error reloading config Secret %q: %v", secret.Name, err)
 		}
 	}
 }
