@@ -354,11 +354,13 @@ func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uin
 	hostName := host
 	if svcName := tailcfg.AsServiceName(host); svcName != tailcfg.NoService {
 		hostName = svcName.WithoutPrefix()
-		if _, ok := sc.Services[svcName]; !ok {
-			mak.Set(&sc.Services, svcName, new(ServiceConfig))
+		svc, ok := sc.Services[svcName]
+		if !ok {
+			svc = new(ServiceConfig)
+			mak.Set(&sc.Services, svcName, svc)
 		}
-		tcpMap = &sc.Services[svcName].TCP
-		webServerMap = &sc.Services[svcName].Web
+		tcpMap = &svc.TCP
+		webServerMap = &svc.Web
 	}
 
 	mak.Set(tcpMap, port, &TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
@@ -430,9 +432,9 @@ func (sc *ServeConfig) SetFunnel(host string, port uint16, setOn bool) {
 	}
 }
 
-// RemoveWebHandler deletes the web handlers at all of the given mount points
-// for the provided host and port in the serve config for node. If cleanupFunnel is
-// true, this also removes the funnel value for this port if no handlers remain.
+// RemoveWebHandler deletes the web handlers at all of the given mount points for the
+// provided host and port in the serve config for the node (as opposed to a service).
+// If cleanupFunnel is true, this also removes the funnel value for this port if no handlers remain.
 func (sc *ServeConfig) RemoveWebHandler(host string, port uint16, mounts []string, cleanupFunnel bool) {
 	hp := HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
 
