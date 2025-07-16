@@ -697,7 +697,10 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		}
 		h.b.DebugForcePreferDERP(n)
 	case "peer-relay-servers":
-		servers := h.b.DebugPeerRelayServers()
+		servers := h.b.DebugPeerRelayServers().Slice()
+		slices.SortFunc(servers, func(a, b netip.AddrPort) int {
+			return a.Compare(b)
+		})
 		err = json.NewEncoder(w).Encode(servers)
 		if err == nil {
 			return
