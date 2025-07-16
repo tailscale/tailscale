@@ -139,7 +139,7 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 		{
 			name:    "empty-config",
 			cfg:     ServeConfig{},
-			svcName: tailcfg.NoService,
+			svcName: "",
 			port:    80,
 			want:    false,
 		},
@@ -148,7 +148,7 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 			cfg: ServeConfig{
 				TCP: map[uint16]*TCPPortHandler{80: {TCPForward: "10.0.0.123:3000"}},
 			},
-			svcName: tailcfg.NoService,
+			svcName: "",
 			port:    80,
 			want:    true,
 		},
@@ -157,7 +157,7 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 			cfg: ServeConfig{
 				TCP: map[uint16]*TCPPortHandler{80: {TCPForward: "10.0.0.123:3000"}},
 			},
-			svcName: tailcfg.NoService,
+			svcName: "",
 			port:    443,
 			want:    false,
 		},
@@ -182,7 +182,7 @@ func TestIsTCPForwardingOnPort(t *testing.T) {
 					},
 				},
 			},
-			svcName: tailcfg.NoService,
+			svcName: "",
 			port:    80,
 			want:    false,
 		},

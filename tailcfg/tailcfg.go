@@ -923,7 +923,7 @@ const NoService ServiceName = ""
 func AsServiceName(s string) ServiceName {
 	svcName := ServiceName(s)
 	if err := svcName.Validate(); err != nil {
-		return NoService
+		return ""
 	}
 	return svcName
 }

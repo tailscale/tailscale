@@ -177,7 +177,7 @@ func (sc *ServeConfig) GetWebHandler(dnsName string, hp HostPort, mount string) 
 	if sc == nil {
 		return nil
 	}
-	if svcName := tailcfg.AsServiceName(dnsName); svcName != tailcfg.NoService {
+	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
 		if svc, ok := sc.Services[svcName]; ok && svc.Web != nil {
 			if webCfg, ok := svc.Web[hp]; ok {
 				return webCfg.Handlers[mount]
@@ -198,7 +198,7 @@ func (sc *ServeConfig) GetTCPPortHandler(port uint16, svcName tailcfg.ServiceNam
 	if sc == nil {
 		return nil
 	}
-	if svcName != tailcfg.NoService {
+	if svcName != "" {
 		if svc, ok := sc.Services[svcName]; ok && svc != nil {
 			return svc.TCP[port]
 		}
@@ -254,7 +254,7 @@ func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, svcName tailcfg.Servic
 		return false
 	}
 
-	if svcName != tailcfg.NoService {
+	if svcName != "" {
 		svc, ok := sc.Services[svcName]
 		if !ok || svc == nil {
 			return false
@@ -284,7 +284,7 @@ func (sc *ServeConfig) IsServingHTTPS(port uint16, svcName tailcfg.ServiceName) 
 		return false
 	}
 	var tcpHandlers map[uint16]*TCPPortHandler
-	if svcName != tailcfg.NoService {
+	if svcName != "" {
 		if svc := sc.Services[svcName]; svc != nil {
 			tcpHandlers = svc.TCP
 		}
@@ -307,7 +307,7 @@ func (sc *ServeConfig) IsServingHTTP(port uint16, svcName tailcfg.ServiceName) b
 	if sc == nil {
 		return false
 	}
-	if svcName != tailcfg.NoService {
+	if svcName != "" {
 		if svc := sc.Services[svcName]; svc != nil {
 			if svc.TCP[port] != nil {
 				return svc.TCP[port].HTTP
@@ -352,7 +352,7 @@ func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uin
 	tcpMap := &sc.TCP
 	webServerMap := &sc.Web
 	hostName := host
-	if svcName := tailcfg.AsServiceName(host); svcName != tailcfg.NoService {
+	if svcName := tailcfg.AsServiceName(host); svcName != "" {
 		hostName = svcName.WithoutPrefix()
 		svc, ok := sc.Services[svcName]
 		if !ok {
@@ -397,7 +397,7 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 		sc = new(ServeConfig)
 	}
 	tcpPortHandler := &sc.TCP
-	if svcName := tailcfg.AsServiceName(host); svcName != tailcfg.NoService {
+	if svcName := tailcfg.AsServiceName(host); svcName != "" {
 		svcConfig, ok := sc.Services[svcName]
 		if !ok {
 			svcConfig = new(ServiceConfig)
@@ -492,7 +492,7 @@ func (sc *ServeConfig) RemoveServiceWebHandler(st *ipnstate.Status, svcName tail
 // RemoveTCPForwarding deletes the TCP forwarding configuration for the given
 // port from the serve config.
 func (sc *ServeConfig) RemoveTCPForwarding(dnsName string, port uint16) {
-	if svcName := tailcfg.AsServiceName(dnsName); svcName != tailcfg.NoService {
+	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
 		if svc := sc.Services[svcName]; svc != nil {
 			delete(svc.TCP, port)
 			if len(svc.TCP) == 0 {

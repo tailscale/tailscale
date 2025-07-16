@@ -126,6 +126,8 @@ const (
 	serveTypeTUN
 )
 
+const noService tailcfg.ServiceName = ""
+
 var infoMap = map[serveMode]commandInfo{
 	serve: {
 		Name:      "serve",
@@ -336,7 +338,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var watcher *tailscale.IPNBusWatcher
-		svcName := tailcfg.NoService
+		svcName := noService
 
 		if forService {
 			svcName = e.service
@@ -447,7 +449,7 @@ const backgroundExistsMsg = "background configuration already exists, use `tails
 // dnsName is a FQDN or a serviceName (with `svc:` prefix).
 func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType, svcName tailcfg.ServiceName) error {
 	var tcpHandlerForPort *ipn.TCPPortHandler
-	if svcName != tailcfg.NoService {
+	if svcName != noService {
 		svc := sc.Services[svcName]
 		if svc == nil {
 			return nil
@@ -478,8 +480,8 @@ func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe se
 	existingServe := serveFromPortHandler(tcpHandlerForPort)
 	if wantServe != existingServe {
 		target := svcName
-		if target == tailcfg.NoService {
-			target = "local node"
+		if target == noService {
+			target = "machine"
 		}
 		return fmt.Errorf("want to serve %q but port is already serving %q for %q", wantServe, existingServe, target)
 	}
@@ -531,7 +533,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 
 	// update the serve config based on if funnel is enabled
 	// Since funnel is not supported for services, we only apply it for node's serve.
-	if svcName := tailcfg.AsServiceName(dnsName); svcName == tailcfg.NoService {
+	if svcName := tailcfg.AsServiceName(dnsName); svcName == noService {
 		e.applyFunnel(sc, dnsName, srvPort, allowFunnel)
 	}
 	return nil
@@ -555,7 +557,7 @@ var (
 func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
 	svcName := tailcfg.AsServiceName(dnsName)
-	forService := svcName != tailcfg.NoService
+	forService := svcName != noService
 	var webConfig *ipn.WebServerConfig
 	var tcpHandler *ipn.TCPPortHandler
 	ips := st.TailscaleIPs
@@ -936,7 +938,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	hostName := dnsName
 	webServeMap := sc.Web
 	svcName := tailcfg.AsServiceName(dnsName)
-	forService := svcName != tailcfg.NoService
+	forService := svcName != noService
 	if forService {
 		svc := sc.Services[svcName]
 		if svc == nil {

@@ -24,7 +24,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
-	"tailscale.com/tailcfg"
 	"tailscale.com/util/dnsname"
 )
 
@@ -261,7 +260,7 @@ func printFunnelStatus(ctx context.Context) {
 		}
 		sni, portStr, _ := net.SplitHostPort(string(hp))
 		p, _ := strconv.ParseUint(portStr, 10, 16)
-		isTCP := sc.IsTCPForwardingOnPort(uint16(p), tailcfg.NoService)
+		isTCP := sc.IsTCPForwardingOnPort(uint16(p), noService)
 		url := "https://"
 		if isTCP {
 			url = "tcp://"
