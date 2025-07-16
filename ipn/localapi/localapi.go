@@ -696,6 +696,12 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		h.b.DebugForcePreferDERP(n)
+	case "peer-relay-servers":
+		servers := h.b.DebugPeerRelayServers()
+		err = json.NewEncoder(w).Encode(servers)
+		if err == nil {
+			return
+		}
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:

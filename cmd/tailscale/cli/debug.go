@@ -356,6 +356,12 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Print Go's runtime/debug.BuildInfo",
 				Exec:       runGoBuildInfo,
 			},
+			{
+				Name:       "peer-relay-servers",
+				ShortUsage: "tailscale debug peer-relay-servers",
+				ShortHelp:  "Print the current set of candidate peer relay servers",
+				Exec:       runPeerRelayServers,
+			},
 		}...),
 	}
 }
@@ -1325,5 +1331,19 @@ func runDebugResolve(ctx context.Context, args []string) error {
 	for _, ip := range ips {
 		fmt.Printf("%s\n", ip)
 	}
+	return nil
+}
+
+func runPeerRelayServers(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("unexpected arguments")
+	}
+	v, err := localClient.DebugResultJSON(ctx, "peer-relay-servers")
+	if err != nil {
+		return err
+	}
+	e := json.NewEncoder(os.Stdout)
+	e.SetIndent("", "  ")
+	e.Encode(v)
 	return nil
 }
