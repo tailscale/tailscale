@@ -177,7 +177,7 @@ func (sc *ServeConfig) GetWebHandler(dnsName string, hp HostPort, mount string) 
 	if sc == nil {
 		return nil
 	}
-	if svcName, err := tailcfg.AsServiceName(dnsName); err == nil {
+	if svcName := tailcfg.AsServiceName(dnsName); svcName != tailcfg.NoService {
 		if svc, ok := sc.Services[svcName]; ok && svc.Web != nil {
 			if webCfg, ok := svc.Web[hp]; ok {
 				return webCfg.Handlers[mount]
@@ -352,7 +352,7 @@ func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uin
 	tcpMap := &sc.TCP
 	webServerMap := &sc.Web
 	hostName := host
-	if svcName, err := tailcfg.AsServiceName(host); err == nil {
+	if svcName := tailcfg.AsServiceName(host); svcName != tailcfg.NoService {
 		hostName = svcName.WithoutPrefix()
 		if _, ok := sc.Services[svcName]; !ok {
 			mak.Set(&sc.Services, svcName, new(ServiceConfig))
@@ -395,7 +395,7 @@ func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTL
 		sc = new(ServeConfig)
 	}
 	tcpPortHandler := &sc.TCP
-	if svcName, err := tailcfg.AsServiceName(host); err == nil {
+	if svcName := tailcfg.AsServiceName(host); svcName != tailcfg.NoService {
 		svcConfig, ok := sc.Services[svcName]
 		if !ok {
 			svcConfig = new(ServiceConfig)
@@ -490,7 +490,7 @@ func (sc *ServeConfig) RemoveServiceWebHandler(st *ipnstate.Status, svcName tail
 // RemoveTCPForwarding deletes the TCP forwarding configuration for the given
 // port from the serve config.
 func (sc *ServeConfig) RemoveTCPForwarding(dnsName string, port uint16) {
-	if svcName, err := tailcfg.AsServiceName(dnsName); err == nil {
+	if svcName := tailcfg.AsServiceName(dnsName); svcName != tailcfg.NoService {
 		if svc := sc.Services[svcName]; svc != nil {
 			delete(svc.TCP, port)
 			if len(svc.TCP) == 0 {

@@ -531,7 +531,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 
 	// update the serve config based on if funnel is enabled
 	// Since funnel is not supported for services, we only apply it for node's serve.
-	if _, err := tailcfg.AsServiceName(dnsName); err != nil {
+	if svcName := tailcfg.AsServiceName(dnsName); svcName == tailcfg.NoService {
 		e.applyFunnel(sc, dnsName, srvPort, allowFunnel)
 	}
 	return nil
@@ -554,8 +554,8 @@ var (
 // serve config and status.
 func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
-	svcName, err := tailcfg.AsServiceName(dnsName)
-	forService := err == nil
+	svcName := tailcfg.AsServiceName(dnsName)
+	forService := svcName != tailcfg.NoService
 	var webConfig *ipn.WebServerConfig
 	var tcpHandler *ipn.TCPPortHandler
 	ips := st.TailscaleIPs
@@ -708,7 +708,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 	}
 
 	// TODO: validation needs to check nested foreground configs
-	svcName, _ := tailcfg.AsServiceName(dnsName)
+	svcName := tailcfg.AsServiceName(dnsName)
 	if sc.IsTCPForwardingOnPort(srvPort, svcName) {
 		return errors.New("cannot serve web; already serving TCP")
 	}
@@ -740,7 +740,7 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
-	svcName, _ := tailcfg.AsServiceName(dnsName)
+	svcName := tailcfg.AsServiceName(dnsName)
 	if sc.IsServingWeb(srcPort, svcName) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
 	}
@@ -935,8 +935,8 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	portStr := strconv.Itoa(int(srvPort))
 	hostName := dnsName
 	webServeMap := sc.Web
-	svcName, err := tailcfg.AsServiceName(dnsName)
-	forService := err == nil
+	svcName := tailcfg.AsServiceName(dnsName)
+	forService := svcName != tailcfg.NoService
 	if forService {
 		svc := sc.Services[svcName]
 		if svc == nil {
@@ -992,7 +992,7 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, dnsName string, src uint1
 	if sc == nil {
 		return nil
 	}
-	svcName, _ := tailcfg.AsServiceName(dnsName)
+	svcName := tailcfg.AsServiceName(dnsName)
 	if sc.GetTCPPortHandler(src, svcName) == nil {
 		return errors.New("serve config does not exist")
 	}
