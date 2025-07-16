@@ -57,6 +57,7 @@ type relayManager struct {
 	newServerEndpointCh   chan newRelayServerEndpointEvent
 	rxHandshakeDiscoMsgCh chan relayHandshakeDiscoMsgEvent
 	serversCh             chan set.Set[netip.AddrPort]
+	getServersCh          chan chan set.Set[netip.AddrPort]
 
 	discoInfoMu            sync.Mutex // guards the following field
 	discoInfoByServerDisco map[key.DiscoPublic]*relayHandshakeDiscoInfo
@@ -185,8 +186,27 @@ func (r *relayManager) runLoop() {
 			if !r.hasActiveWorkRunLoop() {
 				return
 			}
+		case getServersCh := <-r.getServersCh:
+			r.handleGetServersRunLoop(getServersCh)
+			if !r.hasActiveWorkRunLoop() {
+				return
+			}
 		}
 	}
+}
+
+func (r *relayManager) handleGetServersRunLoop(getServersCh chan set.Set[netip.AddrPort]) {
+	servers := make(set.Set[netip.AddrPort], len(r.serversByAddrPort))
+	for server := range r.serversByAddrPort {
+		servers.Add(server)
+	}
+	getServersCh <- servers
+}
+
+func (r *relayManager) getServers() set.Set[netip.AddrPort] {
+	ch := make(chan set.Set[netip.AddrPort])
+	relayManagerInputEvent(r, nil, &r.getServersCh, ch)
+	return <-ch
 }
 
 func (r *relayManager) handleServersUpdateRunLoop(update set.Set[netip.AddrPort]) {
@@ -244,6 +264,7 @@ func (r *relayManager) init() {
 		r.newServerEndpointCh = make(chan newRelayServerEndpointEvent)
 		r.rxHandshakeDiscoMsgCh = make(chan relayHandshakeDiscoMsgEvent)
 		r.serversCh = make(chan set.Set[netip.AddrPort])
+		r.getServersCh = make(chan chan set.Set[netip.AddrPort])
 		r.runLoopStoppedCh = make(chan struct{}, 1)
 		r.runLoopStoppedCh <- struct{}{}
 	})

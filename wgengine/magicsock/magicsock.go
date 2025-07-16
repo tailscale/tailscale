@@ -3907,3 +3907,8 @@ func (le *lazyEndpoint) FromPeer(peerPublicKey [32]byte) {
 	le.c.peerMap.setNodeKeyForEpAddr(le.src, pubKey)
 	le.c.logf("magicsock: lazyEndpoint.FromPeer(%v) setting epAddr(%v) in peerMap for node(%v)", pubKey.ShortString(), le.src, ep.nodeAddr)
 }
+
+// PeerRelays returns the current set of candidate peer relays.
+func (c *Conn) PeerRelays() set.Set[netip.AddrPort] {
+	return c.relayManager.getServers()
+}

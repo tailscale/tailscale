@@ -6956,6 +6956,10 @@ func (b *LocalBackend) DebugReSTUN() error {
 	return nil
 }
 
+func (b *LocalBackend) DebugPeerRelayServers() set.Set[netip.AddrPort] {
+	return b.MagicConn().PeerRelays()
+}
+
 // ControlKnobs returns the node's control knobs.
 func (b *LocalBackend) ControlKnobs() *controlknobs.Knobs {
 	return b.sys.ControlKnobs()
