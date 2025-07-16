@@ -64,7 +64,7 @@ func (client *Client) GetVIPService(ctx context.Context, name tailcfg.ServiceNam
 	return svc, nil
 }
 
-// ListVIPServices retrieves lists all existing Services.
+// ListVIPServices retrieves all existing Services and returns them as a list.
 func (client *Client) ListVIPServices(ctx context.Context) (*VIPServiceList, error) {
 	path := client.BuildTailnetURL("vip-services")
 	req, err := http.NewRequestWithContext(ctx, httpm.GET, path, nil)
