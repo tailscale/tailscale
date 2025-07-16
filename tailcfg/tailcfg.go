@@ -917,9 +917,9 @@ type ServiceName string
 
 // AsServiceName reports whether if the given string is a valid service name,
 // and if so returns the name as a [tailcfg.ServiceName].
-func AsServiceName(s string) (svcName ServiceName, ok bool) {
+func AsServiceName(s string) (svcName ServiceName, err error) {
 	svcName = ServiceName(s)
-	return svcName, svcName.Validate() == nil
+	return svcName, svcName.Validate()
 }
 
 // Validate validates if the service name is formatted correctly.

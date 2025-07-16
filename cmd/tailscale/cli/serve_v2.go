@@ -442,7 +442,7 @@ const backgroundExistsMsg = "background configuration already exists, use `tails
 // dnsName is a FQDN or a serviceName (with `svc:` prefix).
 func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType, dnsName string) error {
 	var tcpHandlerForPort *ipn.TCPPortHandler
-	if svcName, ok := tailcfg.AsServiceName(dnsName); ok {
+	if svcName, err := tailcfg.AsServiceName(dnsName); err == nil {
 		svc := sc.Services[svcName]
 		if svc == nil {
 			return nil
@@ -521,7 +521,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 
 	// update the serve config based on if funnel is enabled
 	// Since funnel is not supported for services, we only apply it for node's serve.
-	if _, ok := tailcfg.AsServiceName(dnsName); !ok {
+	if _, err := tailcfg.AsServiceName(dnsName); err != nil {
 		e.applyFunnel(sc, dnsName, srvPort, allowFunnel)
 	}
 	return nil
@@ -544,7 +544,8 @@ var (
 // serve config and status.
 func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
-	svcName, forService := tailcfg.AsServiceName(dnsName)
+	svcName, err := tailcfg.AsServiceName(dnsName)
+	forService := err == nil
 	var webConfig *ipn.WebServerConfig
 	var tcpHandler *ipn.TCPPortHandler
 	ips := st.TailscaleIPs
@@ -922,7 +923,8 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	portStr := strconv.Itoa(int(srvPort))
 	hostName := dnsName
 	webServeMap := sc.Web
-	svcName, forService := tailcfg.AsServiceName(dnsName)
+	svcName, err := tailcfg.AsServiceName(dnsName)
+	forService := err == nil
 	if forService {
 		svc := sc.Services[svcName]
 		if svc == nil {
