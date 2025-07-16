@@ -5012,7 +5012,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantName: "peer1",
 		},
 		{
-			name: "many-suggested-exit-nodes",
+			name: "suggest-exit-node-stable-pick",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
@@ -5030,53 +5030,8 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 						withSuggest()),
 				},
 			},
+			// Change this, if the hashing function changes.
 			wantID:   "stable3",
-			wantName: "peer3",
-		},
-		{
-			name: "suggested-exit-node-was-last-suggested",
-			netMap: &netmap.NetworkMap{
-				SelfNode: selfNode.View(),
-				Peers: []tailcfg.NodeView{
-					makePeer(1,
-						withExitRoutes(),
-						withSuggest()),
-					makePeer(2,
-						withExitRoutes(),
-						withSuggest()),
-					makePeer(3,
-						withExitRoutes(),
-						withSuggest()),
-					makePeer(4,
-						withExitRoutes(),
-						withSuggest()),
-				},
-			},
-			lastExit: "stable2", // overrides many-suggested-exit-nodes
-			wantID:   "stable2",
-			wantName: "peer2",
-		},
-		{
-			name: "suggested-exit-node-was-never-suggested",
-			netMap: &netmap.NetworkMap{
-				SelfNode: selfNode.View(),
-				Peers: []tailcfg.NodeView{
-					makePeer(1,
-						withExitRoutes(),
-						withSuggest()),
-					makePeer(2,
-						withExitRoutes(),
-						withSuggest()),
-					makePeer(3,
-						withExitRoutes(),
-						withSuggest()),
-					makePeer(4,
-						withExitRoutes(),
-						withSuggest()),
-				},
-			},
-			lastExit: "stable10",
-			wantID:   "stable3", // matches many-suggested-exit-nodes
 			wantName: "peer3",
 		},
 		{
@@ -5282,7 +5237,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			defer nb.shutdown(errShutdown)
 			nb.SetNetMap(tt.netMap)
 
-			got, err := suggestExitNodeUsingTrafficSteering(nb, tt.lastExit, allowList)
+			got, err := suggestExitNodeUsingTrafficSteering(nb, allowList)
 			if tt.wantErr == nil && err != nil {
 				t.Fatalf("err=%v, want nil", err)
 			}
