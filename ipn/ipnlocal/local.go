@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -7750,7 +7751,7 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 	switch {
 	case nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering):
 		// The traffic-steering feature flag is enabled on this tailnet.
-		return suggestExitNodeUsingTrafficSteering(nb, prevSuggestion, allowList)
+		return suggestExitNodeUsingTrafficSteering(nb, allowList)
 	default:
 		return suggestExitNodeUsingDERP(report, nb, prevSuggestion, selectRegion, selectNode, allowList)
 	}
@@ -7896,9 +7897,14 @@ var ErrNoNetMap = errors.New("no network map, try again later")
 // pick one of the best exit nodes. These priorities are provided by Control in
 // the node’s [tailcfg.Location]. To be eligible for consideration, the node
 // must have NodeAttrSuggestExitNode in its CapMap.
-func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, prev tailcfg.StableNodeID, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
+func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcfg.StableNodeID]) (apitype.ExitNodeSuggestionResponse, error) {
 	nm := nb.NetMap()
 	if nm == nil {
+		return apitype.ExitNodeSuggestionResponse{}, ErrNoNetMap
+	}
+
+	self := nb.Self()
+	if !self.Valid() {
 		return apitype.ExitNodeSuggestionResponse{}, ErrNoNetMap
 	}
 
@@ -7923,12 +7929,6 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, prev tailcfg.StableNod
 		if !tsaddr.ContainsExitRoutes(p.AllowedIPs()) {
 			return false
 		}
-		if p.StableID() == prev {
-			// Prevent flapping: since prev is a valid suggestion,
-			// force prev to be the only valid pick.
-			force = p
-			return false
-		}
 		return true
 	})
 	if force.Valid() {
@@ -7950,6 +7950,7 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, prev tailcfg.StableNod
 		}
 		return s
 	}
+	rdvHash := makeRendezvousHasher(self.ID())
 
 	var pick tailcfg.NodeView
 	if len(nodes) == 1 {
@@ -7958,25 +7959,18 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, prev tailcfg.StableNod
 	if len(nodes) > 1 {
 		// Find the highest scoring exit nodes.
 		slices.SortFunc(nodes, func(a, b tailcfg.NodeView) int {
-			return cmp.Compare(score(b), score(a)) // reverse sort
-		})
-
-		// Find the top exit nodes, which all have the same score.
-		topI := len(nodes)
-		ts := score(nodes[0])
-		for i, n := range nodes[1:] {
-			if score(n) < ts {
-				// n is the first node with a lower score.
-				// Make nodes[:topI] to slice the top exit nodes.
-				topI = i + 1
-				break
+			c := cmp.Compare(score(b), score(a)) // Highest score first.
+			if c == 0 {
+				// Rendezvous hashing for reliably picking the
+				// same node from a list: tailscale/tailscale#16551.
+				return cmp.Compare(rdvHash(b.ID()), rdvHash(a.ID()))
 			}
-		}
+			return c
+		})
 
 		// TODO(sfllaw): add a temperature knob so that this client has
 		// a chance of picking the next best option.
-		randSeed := uint64(nm.SelfNode.ID())
-		pick = nodes[rands.IntN(randSeed, topI)]
+		pick = nodes[0]
 	}
 
 	if !pick.Valid() {
@@ -8075,6 +8069,19 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 	const earthRadiusMeters = 6371000
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusMeters * c
+}
+
+// makeRendezvousHasher returns a function that hashes a node ID to a uint64.
+// https://en.wikipedia.org/wiki/Rendezvous_hashing
+func makeRendezvousHasher(seed tailcfg.NodeID) func(tailcfg.NodeID) uint64 {
+	en := binary.BigEndian
+	return func(n tailcfg.NodeID) uint64 {
+		var b [16]byte
+		en.PutUint64(b[:], uint64(seed))
+		en.PutUint64(b[8:], uint64(n))
+		v := sha256.Sum256(b[:])
+		return en.Uint64(v[:])
+	}
 }
 
 const (
