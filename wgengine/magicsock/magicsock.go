@@ -87,9 +87,11 @@ const (
 type Path string
 
 const (
-	PathDirectIPv4 Path = "direct_ipv4"
-	PathDirectIPv6 Path = "direct_ipv6"
-	PathDERP       Path = "derp"
+	PathDirectIPv4    Path = "direct_ipv4"
+	PathDirectIPv6    Path = "direct_ipv6"
+	PathDERP          Path = "derp"
+	PathPeerRelayIPv4 Path = "peer_relay_ipv4"
+	PathPeerRelayIPv6 Path = "peer_relay_ipv6"
 )
 
 type pathLabel struct {
@@ -97,6 +99,8 @@ type pathLabel struct {
 	// - direct_ipv4
 	// - direct_ipv6
 	// - derp
+	// - peer_relay_ipv4
+	// - peer_relay_ipv6
 	Path Path
 }
 
@@ -108,27 +112,35 @@ type pathLabel struct {
 type metrics struct {
 	// inboundPacketsTotal is the total number of inbound packets received,
 	// labeled by the path the packet took.
-	inboundPacketsIPv4Total expvar.Int
-	inboundPacketsIPv6Total expvar.Int
-	inboundPacketsDERPTotal expvar.Int
+	inboundPacketsIPv4Total          expvar.Int
+	inboundPacketsIPv6Total          expvar.Int
+	inboundPacketsDERPTotal          expvar.Int
+	inboundPacketsPeerRelayIPv4Total expvar.Int
+	inboundPacketsPeerRelayIPv6Total expvar.Int
 
 	// inboundBytesTotal is the total number of inbound bytes received,
 	// labeled by the path the packet took.
-	inboundBytesIPv4Total expvar.Int
-	inboundBytesIPv6Total expvar.Int
-	inboundBytesDERPTotal expvar.Int
+	inboundBytesIPv4Total          expvar.Int
+	inboundBytesIPv6Total          expvar.Int
+	inboundBytesDERPTotal          expvar.Int
+	inboundBytesPeerRelayIPv4Total expvar.Int
+	inboundBytesPeerRelayIPv6Total expvar.Int
 
 	// outboundPacketsTotal is the total number of outbound packets sent,
 	// labeled by the path the packet took.
-	outboundPacketsIPv4Total expvar.Int
-	outboundPacketsIPv6Total expvar.Int
-	outboundPacketsDERPTotal expvar.Int
+	outboundPacketsIPv4Total          expvar.Int
+	outboundPacketsIPv6Total          expvar.Int
+	outboundPacketsDERPTotal          expvar.Int
+	outboundPacketsPeerRelayIPv4Total expvar.Int
+	outboundPacketsPeerRelayIPv6Total expvar.Int
 
 	// outboundBytesTotal is the total number of outbound bytes sent,
 	// labeled by the path the packet took.
-	outboundBytesIPv4Total expvar.Int
-	outboundBytesIPv6Total expvar.Int
-	outboundBytesDERPTotal expvar.Int
+	outboundBytesIPv4Total          expvar.Int
+	outboundBytesIPv6Total          expvar.Int
+	outboundBytesDERPTotal          expvar.Int
+	outboundBytesPeerRelayIPv4Total expvar.Int
+	outboundBytesPeerRelayIPv6Total expvar.Int
 
 	// outboundPacketsDroppedErrors is the total number of outbound packets
 	// dropped due to errors.
@@ -723,6 +735,8 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	pathDirectV4 := pathLabel{Path: PathDirectIPv4}
 	pathDirectV6 := pathLabel{Path: PathDirectIPv6}
 	pathDERP := pathLabel{Path: PathDERP}
+	pathPeerRelayV4 := pathLabel{Path: PathPeerRelayIPv4}
+	pathPeerRelayV6 := pathLabel{Path: PathPeerRelayIPv6}
 	inboundPacketsTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
 		reg,
 		"tailscaled_inbound_packets_total",
@@ -755,25 +769,37 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	metricRecvDataPacketsIPv4.Register(&m.inboundPacketsIPv4Total)
 	metricRecvDataPacketsIPv6.Register(&m.inboundPacketsIPv6Total)
 	metricRecvDataPacketsDERP.Register(&m.inboundPacketsDERPTotal)
+	metricRecvDataPacketsPeerRelayIPv4.Register(&m.inboundPacketsPeerRelayIPv4Total)
+	metricRecvDataPacketsPeerRelayIPv6.Register(&m.inboundPacketsPeerRelayIPv6Total)
 	metricSendUDP.Register(&m.outboundPacketsIPv4Total)
 	metricSendUDP.Register(&m.outboundPacketsIPv6Total)
 	metricSendDERP.Register(&m.outboundPacketsDERPTotal)
+	metricSendPeerRelay.Register(&m.outboundPacketsPeerRelayIPv4Total)
+	metricSendPeerRelay.Register(&m.outboundPacketsPeerRelayIPv6Total)
 
 	inboundPacketsTotal.Set(pathDirectV4, &m.inboundPacketsIPv4Total)
 	inboundPacketsTotal.Set(pathDirectV6, &m.inboundPacketsIPv6Total)
 	inboundPacketsTotal.Set(pathDERP, &m.inboundPacketsDERPTotal)
+	inboundPacketsTotal.Set(pathPeerRelayV4, &m.inboundPacketsPeerRelayIPv4Total)
+	inboundPacketsTotal.Set(pathPeerRelayV6, &m.inboundPacketsPeerRelayIPv6Total)
 
 	inboundBytesTotal.Set(pathDirectV4, &m.inboundBytesIPv4Total)
 	inboundBytesTotal.Set(pathDirectV6, &m.inboundBytesIPv6Total)
 	inboundBytesTotal.Set(pathDERP, &m.inboundBytesDERPTotal)
+	inboundBytesTotal.Set(pathPeerRelayV4, &m.inboundBytesPeerRelayIPv4Total)
+	inboundBytesTotal.Set(pathPeerRelayV6, &m.inboundBytesPeerRelayIPv6Total)
 
 	outboundPacketsTotal.Set(pathDirectV4, &m.outboundPacketsIPv4Total)
 	outboundPacketsTotal.Set(pathDirectV6, &m.outboundPacketsIPv6Total)
 	outboundPacketsTotal.Set(pathDERP, &m.outboundPacketsDERPTotal)
+	outboundPacketsTotal.Set(pathPeerRelayV4, &m.outboundPacketsPeerRelayIPv4Total)
+	outboundPacketsTotal.Set(pathPeerRelayV6, &m.outboundPacketsPeerRelayIPv6Total)
 
 	outboundBytesTotal.Set(pathDirectV4, &m.outboundBytesIPv4Total)
 	outboundBytesTotal.Set(pathDirectV6, &m.outboundBytesIPv6Total)
 	outboundBytesTotal.Set(pathDERP, &m.outboundBytesDERPTotal)
+	outboundBytesTotal.Set(pathPeerRelayV4, &m.outboundBytesPeerRelayIPv4Total)
+	outboundBytesTotal.Set(pathPeerRelayV6, &m.outboundBytesPeerRelayIPv6Total)
 
 	outboundPacketsDroppedErrors.Set(usermetric.DropLabels{Reason: usermetric.ReasonError}, &m.outboundPacketsDroppedErrors)
 
@@ -786,8 +812,11 @@ func deregisterMetrics(m *metrics) {
 	metricRecvDataPacketsIPv4.UnregisterAll()
 	metricRecvDataPacketsIPv6.UnregisterAll()
 	metricRecvDataPacketsDERP.UnregisterAll()
+	metricRecvDataPacketsPeerRelayIPv4.UnregisterAll()
+	metricRecvDataPacketsPeerRelayIPv6.UnregisterAll()
 	metricSendUDP.UnregisterAll()
 	metricSendDERP.UnregisterAll()
+	metricSendPeerRelay.UnregisterAll()
 }
 
 // InstallCaptureHook installs a callback which is called to
@@ -1415,23 +1444,37 @@ func (c *Conn) sendUDPBatch(addr epAddr, buffs [][]byte, offset int) (sent bool,
 
 // sendUDP sends UDP packet b to ipp.
 // See sendAddr's docs on the return value meanings.
-func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool) (sent bool, err error) {
+func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool, isGeneveEncap bool) (sent bool, err error) {
 	if runtime.GOOS == "js" {
 		return false, errNoUDP
 	}
 	sent, err = c.sendUDPStd(ipp, b)
 	if err != nil {
-		metricSendUDPError.Add(1)
+		if isGeneveEncap {
+			metricSendPeerRelayError.Add(1)
+		} else {
+			metricSendUDPError.Add(1)
+		}
 		c.maybeRebindOnError(err)
 	} else {
 		if sent && !isDisco {
 			switch {
 			case ipp.Addr().Is4():
-				c.metrics.outboundPacketsIPv4Total.Add(1)
-				c.metrics.outboundBytesIPv4Total.Add(int64(len(b)))
+				if isGeneveEncap {
+					c.metrics.outboundPacketsPeerRelayIPv4Total.Add(1)
+					c.metrics.outboundBytesPeerRelayIPv4Total.Add(int64(len(b)))
+				} else {
+					c.metrics.outboundPacketsIPv4Total.Add(1)
+					c.metrics.outboundBytesIPv4Total.Add(int64(len(b)))
+				}
 			case ipp.Addr().Is6():
-				c.metrics.outboundPacketsIPv6Total.Add(1)
-				c.metrics.outboundBytesIPv6Total.Add(int64(len(b)))
+				if isGeneveEncap {
+					c.metrics.outboundPacketsPeerRelayIPv6Total.Add(1)
+					c.metrics.outboundBytesPeerRelayIPv6Total.Add(int64(len(b)))
+				} else {
+					c.metrics.outboundPacketsIPv6Total.Add(1)
+					c.metrics.outboundBytesIPv6Total.Add(int64(len(b)))
+				}
 			}
 		}
 	}
@@ -1506,9 +1549,9 @@ func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) 
 // An example of when they might be different: sending to an
 // IPv6 address when the local machine doesn't have IPv6 support
 // returns (false, nil); it's not an error, but nothing was sent.
-func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, isDisco bool) (sent bool, err error) {
+func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, isDisco bool, isGeneveEncap bool) (sent bool, err error) {
 	if addr.Addr() != tailcfg.DerpMagicIPAddr {
-		return c.sendUDP(addr, b, isDisco)
+		return c.sendUDP(addr, b, isDisco, isGeneveEncap)
 	}
 
 	regionID := int(addr.Port())
@@ -1562,7 +1605,9 @@ func (c *Conn) putReceiveBatch(batch *receiveBatch) {
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
 	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
 		&c.metrics.inboundPacketsIPv4Total,
+		&c.metrics.inboundPacketsPeerRelayIPv4Total,
 		&c.metrics.inboundBytesIPv4Total,
+		&c.metrics.inboundBytesPeerRelayIPv4Total,
 	)
 }
 
@@ -1570,13 +1615,15 @@ func (c *Conn) receiveIPv4() conn.ReceiveFunc {
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
 	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
 		&c.metrics.inboundPacketsIPv6Total,
+		&c.metrics.inboundPacketsPeerRelayIPv6Total,
 		&c.metrics.inboundBytesIPv6Total,
+		&c.metrics.inboundBytesPeerRelayIPv6Total,
 	)
 }
 
 // mkReceiveFunc creates a ReceiveFunc reading from ruc.
 // The provided healthItem and metrics are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, packetMetric, bytesMetric *expvar.Int) conn.ReceiveFunc {
+func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 
@@ -1612,12 +1659,21 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 					continue
 				}
 				ipp := msg.Addr.(*net.UDPAddr).AddrPort()
-				if ep, size, ok := c.receiveIP(msg.Buffers[0][:msg.N], ipp, &epCache); ok {
-					if packetMetric != nil {
-						packetMetric.Add(1)
-					}
-					if bytesMetric != nil {
-						bytesMetric.Add(int64(msg.N))
+				if ep, size, isGeneveEncap, ok := c.receiveIP(msg.Buffers[0][:msg.N], ipp, &epCache); ok {
+					if isGeneveEncap {
+						if peerRelayPacketMetric != nil {
+							peerRelayPacketMetric.Add(1)
+						}
+						if peerRelayBytesMetric != nil {
+							peerRelayBytesMetric.Add(int64(msg.N))
+						}
+					} else {
+						if directPacketMetric != nil {
+							directPacketMetric.Add(1)
+						}
+						if directBytesMetric != nil {
+							directBytesMetric.Add(int64(msg.N))
+						}
 					}
 					eps[i] = ep
 					sizes[i] = size
@@ -1646,11 +1702,14 @@ func looksLikeInitiationMsg(b []byte) bool {
 // receiveIP is the shared bits of ReceiveIPv4 and ReceiveIPv6.
 //
 // size is the length of 'b' to report up to wireguard-go (only relevant if
-// 'ok' is true)
+// 'ok' is true).
+//
+// isGeneveEncap is whether 'b' is encapsulated by a Geneve header (only
+// relevant if 'ok' is true).
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCache) (_ conn.Endpoint, size int, ok bool) {
+func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCache) (_ conn.Endpoint, size int, isGeneveEncap bool, ok bool) {
 	var ep *endpoint
 	size = len(b)
 
@@ -1663,7 +1722,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 			// Decode only returns an error when 'b' is too short, and
 			// 'isGeneveEncap' indicates it's a sufficient length.
 			c.logf("[unexpected] geneve header decoding error: %v", err)
-			return nil, 0, false
+			return nil, 0, false, false
 		}
 		src.vni.set(geneve.VNI)
 	}
@@ -1678,10 +1737,10 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		// [disco.MessageType], but we assert it should be handshake-related.
 		shouldByRelayHandshakeMsg := geneve.Control == true
 		c.handleDiscoMessage(b, src, shouldByRelayHandshakeMsg, key.NodePublic{}, discoRXPathUDP)
-		return nil, 0, false
+		return nil, 0, false, false
 	case packetLooksLikeSTUNBinding:
 		c.netChecker.ReceiveSTUNPacket(b, ipp)
-		return nil, 0, false
+		return nil, 0, false, false
 	default:
 		// Fall through for all other packet types as they are assumed to
 		// be potentially WireGuard.
@@ -1691,7 +1750,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		// If we have no private key, we're logged out or
 		// stopped. Don't try to pass these wireguard packets
 		// up to wireguard-go; it'll just complain (issue 1167).
-		return nil, 0, false
+		return nil, 0, false, false
 	}
 
 	if src.vni.isSet() {
@@ -1715,11 +1774,11 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 				// Note: UDP relay is dependent on cryptorouting enablement. We
 				// only update Geneve-encapsulated [epAddr]s in the [peerMap]
 				// via [lazyEndpoint].
-				return nil, 0, false
+				return nil, 0, false, false
 			}
 			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
 			//  for the same batch & [epAddr] src.
-			return &lazyEndpoint{c: c, src: src}, size, true
+			return &lazyEndpoint{c: c, src: src}, size, isGeneveEncap, true
 		}
 		cache.epAddr = src
 		cache.de = de
@@ -1738,9 +1797,9 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		// unlucky and fail to JIT configure the "correct" peer.
 		// TODO(jwhited): relax this to include direct connections
 		//  See http://go/corp/29422 & http://go/corp/30042
-		return &lazyEndpoint{c: c, maybeEP: ep, src: src}, size, true
+		return &lazyEndpoint{c: c, maybeEP: ep, src: src}, size, isGeneveEncap, true
 	}
-	return ep, size, true
+	return ep, size, isGeneveEncap, true
 }
 
 // discoLogLevel controls the verbosity of discovery log messages.
@@ -1861,7 +1920,7 @@ func (c *Conn) sendDiscoMessage(dst epAddr, dstKey key.NodePublic, dstDisco key.
 	box := di.sharedKey.Seal(m.AppendMarshal(nil))
 	pkt = append(pkt, box...)
 	const isDisco = true
-	sent, err = c.sendAddr(dst.ap, dstKey, pkt, isDisco)
+	sent, err = c.sendAddr(dst.ap, dstKey, pkt, isDisco, dst.vni.isSet())
 	if sent {
 		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco()) {
 			node := "?"
@@ -2149,13 +2208,15 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		isVia := false
 		msgType := "CallMeMaybe"
 		cmm, ok := dm.(*disco.CallMeMaybe)
-		if !ok {
+		if ok {
+			metricRecvDiscoCallMeMaybe.Add(1)
+		} else {
+			metricRecvDiscoCallMeMaybeVia.Add(1)
 			via = dm.(*disco.CallMeMaybeVia)
 			msgType = "CallMeMaybeVia"
 			isVia = true
 		}
 
-		metricRecvDiscoCallMeMaybe.Add(1)
 		if !isDERP || derpNodeSrc.IsZero() {
 			// CallMeMaybe{Via} messages should only come via DERP.
 			c.logf("[unexpected] %s packets should only come via DERP", msgType)
@@ -2164,7 +2225,11 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		nodeKey := derpNodeSrc
 		ep, ok := c.peerMap.endpointForNodeKey(nodeKey)
 		if !ok {
-			metricRecvDiscoCallMeMaybeBadNode.Add(1)
+			if isVia {
+				metricRecvDiscoCallMeMaybeViaBadNode.Add(1)
+			} else {
+				metricRecvDiscoCallMeMaybeBadNode.Add(1)
+			}
 			c.logf("magicsock: disco: ignoring %s from %v; %v is unknown", msgType, sender.ShortString(), derpNodeSrc.ShortString())
 			return
 		}
@@ -2190,7 +2255,11 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			return
 		}
 		if epDisco.key != di.discoKey {
-			metricRecvDiscoCallMeMaybeBadDisco.Add(1)
+			if isVia {
+				metricRecvDiscoCallMeMaybeViaBadDisco.Add(1)
+			} else {
+				metricRecvDiscoCallMeMaybeBadDisco.Add(1)
+			}
 			c.logf("[unexpected] %s from peer via DERP whose netmap discokey != disco source", msgType)
 			return
 		}
@@ -3695,15 +3764,19 @@ var (
 	metricSendDERPErrorQueue  = clientmetric.NewCounter("magicsock_send_derp_error_queue")
 	metricSendUDP             = clientmetric.NewAggregateCounter("magicsock_send_udp")
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
+	metricSendPeerRelay       = clientmetric.NewAggregateCounter("magicsock_send_peer_relay")
+	metricSendPeerRelayError  = clientmetric.NewCounter("magicsock_send_peer_relay_error")
 	metricSendDERP            = clientmetric.NewAggregateCounter("magicsock_send_derp")
 	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
 
 	// Data packets (non-disco)
-	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
-	metricSendDataNetworkDown = clientmetric.NewCounter("magicsock_send_data_network_down")
-	metricRecvDataPacketsDERP = clientmetric.NewAggregateCounter("magicsock_recv_data_derp")
-	metricRecvDataPacketsIPv4 = clientmetric.NewAggregateCounter("magicsock_recv_data_ipv4")
-	metricRecvDataPacketsIPv6 = clientmetric.NewAggregateCounter("magicsock_recv_data_ipv6")
+	metricSendData                     = clientmetric.NewCounter("magicsock_send_data")
+	metricSendDataNetworkDown          = clientmetric.NewCounter("magicsock_send_data_network_down")
+	metricRecvDataPacketsDERP          = clientmetric.NewAggregateCounter("magicsock_recv_data_derp")
+	metricRecvDataPacketsIPv4          = clientmetric.NewAggregateCounter("magicsock_recv_data_ipv4")
+	metricRecvDataPacketsIPv6          = clientmetric.NewAggregateCounter("magicsock_recv_data_ipv6")
+	metricRecvDataPacketsPeerRelayIPv4 = clientmetric.NewAggregateCounter("magicsock_recv_data_peer_relay_ipv4")
+	metricRecvDataPacketsPeerRelayIPv6 = clientmetric.NewAggregateCounter("magicsock_recv_data_peer_relay_ipv6")
 
 	// Disco packets
 	metricSendDiscoUDP               = clientmetric.NewCounter("magicsock_disco_send_udp")
@@ -3719,15 +3792,18 @@ var (
 	metricRecvDiscoBadKey            = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
 	metricRecvDiscoBadParse          = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
 
-	metricRecvDiscoUDP                 = clientmetric.NewCounter("magicsock_disco_recv_udp")
-	metricRecvDiscoDERP                = clientmetric.NewCounter("magicsock_disco_recv_derp")
-	metricRecvDiscoPing                = clientmetric.NewCounter("magicsock_disco_recv_ping")
-	metricRecvDiscoPong                = clientmetric.NewCounter("magicsock_disco_recv_pong")
-	metricRecvDiscoCallMeMaybe         = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe")
-	metricRecvDiscoCallMeMaybeBadNode  = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_node")
-	metricRecvDiscoCallMeMaybeBadDisco = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_disco")
-	metricRecvDiscoDERPPeerNotHere     = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_not_here")
-	metricRecvDiscoDERPPeerGoneUnknown = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_gone_unknown")
+	metricRecvDiscoUDP                    = clientmetric.NewCounter("magicsock_disco_recv_udp")
+	metricRecvDiscoDERP                   = clientmetric.NewCounter("magicsock_disco_recv_derp")
+	metricRecvDiscoPing                   = clientmetric.NewCounter("magicsock_disco_recv_ping")
+	metricRecvDiscoPong                   = clientmetric.NewCounter("magicsock_disco_recv_pong")
+	metricRecvDiscoCallMeMaybe            = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe")
+	metricRecvDiscoCallMeMaybeVia         = clientmetric.NewCounter("magicsock_disco_recv_callmemaybevia")
+	metricRecvDiscoCallMeMaybeBadNode     = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_node")
+	metricRecvDiscoCallMeMaybeViaBadNode  = clientmetric.NewCounter("magicsock_disco_recv_callmemaybevia_bad_node")
+	metricRecvDiscoCallMeMaybeBadDisco    = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_disco")
+	metricRecvDiscoCallMeMaybeViaBadDisco = clientmetric.NewCounter("magicsock_disco_recv_callmemaybevia_bad_disco")
+	metricRecvDiscoDERPPeerNotHere        = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_not_here")
+	metricRecvDiscoDERPPeerGoneUnknown    = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_gone_unknown")
 	// metricDERPHomeChange is how many times our DERP home region DI has
 	// changed from non-zero to a different non-zero.
 	metricDERPHomeChange = clientmetric.NewCounter("derp_home_change")

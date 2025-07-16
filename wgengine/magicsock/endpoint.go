@@ -1064,11 +1064,21 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 
 		switch {
 		case udpAddr.ap.Addr().Is4():
-			de.c.metrics.outboundPacketsIPv4Total.Add(int64(len(buffs)))
-			de.c.metrics.outboundBytesIPv4Total.Add(int64(txBytes))
+			if udpAddr.vni.isSet() {
+				de.c.metrics.outboundPacketsPeerRelayIPv4Total.Add(int64(len(buffs)))
+				de.c.metrics.outboundBytesPeerRelayIPv4Total.Add(int64(txBytes))
+			} else {
+				de.c.metrics.outboundPacketsIPv4Total.Add(int64(len(buffs)))
+				de.c.metrics.outboundBytesIPv4Total.Add(int64(txBytes))
+			}
 		case udpAddr.ap.Addr().Is6():
-			de.c.metrics.outboundPacketsIPv6Total.Add(int64(len(buffs)))
-			de.c.metrics.outboundBytesIPv6Total.Add(int64(txBytes))
+			if udpAddr.vni.isSet() {
+				de.c.metrics.outboundPacketsPeerRelayIPv6Total.Add(int64(len(buffs)))
+				de.c.metrics.outboundBytesPeerRelayIPv6Total.Add(int64(txBytes))
+			} else {
+				de.c.metrics.outboundPacketsIPv6Total.Add(int64(len(buffs)))
+				de.c.metrics.outboundBytesIPv6Total.Add(int64(txBytes))
+			}
 		}
 
 		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.
@@ -1082,7 +1092,8 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		for _, buff := range buffs {
 			buff = buff[offset:]
 			const isDisco = false
-			ok, _ := de.c.sendAddr(derpAddr, de.publicKey, buff, isDisco)
+			const isGeneveEncap = false
+			ok, _ := de.c.sendAddr(derpAddr, de.publicKey, buff, isDisco, isGeneveEncap)
 			txBytes += len(buff)
 			if !ok {
 				allOk = false
