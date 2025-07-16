@@ -46,9 +46,17 @@ main() {
 			ubuntu|pop|neon|zorin|tuxedo)
 				OS="ubuntu"
 				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
-				    VERSION="$UBUNTU_CODENAME"
+					VERSION="$UBUNTU_CODENAME"
 				else
-				    VERSION="$VERSION_CODENAME"
+					VERSION="$VERSION_CODENAME"
+				fi
+				if [ "$VERSION" = "devel" ]; then
+					echo "Your distribution identifies as Ubuntu but reports VERSION_CODENAME=devel."
+					echo "Tailscale does not publish packages for 'devel' or rolling-release codenames."
+					echo "Please set your /etc/os-release codename to match a supported Ubuntu release"
+					echo "(jammy, noble, etc.) OR use the static binaries at:"
+					echo "https://pkgs.tailscale.com/$TRACK/#static"
+					exit 1
 				fi
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
