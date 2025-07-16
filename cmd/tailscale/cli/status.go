@@ -262,7 +262,7 @@ func printFunnelStatus(ctx context.Context) {
 		}
 		sni, portStr, _ := net.SplitHostPort(string(hp))
 		p, _ := strconv.ParseUint(portStr, 10, 16)
-		isTCP := sc.IsTCPForwardingOnPort(uint16(p))
+		isTCP := sc.IsTCPForwardingOnPort(uint16(p), noService)
 		url := "https://"
 		if isTCP {
 			url = "tcp://"
