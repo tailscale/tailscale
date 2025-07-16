@@ -71,8 +71,6 @@ var statusArgs struct {
 	peers   bool   // in CLI mode, show status of peer machines
 }
 
-const noService tailcfg.ServiceName = ""
-
 func runStatus(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unexpected non-flag arguments to 'tailscale status'")
@@ -263,7 +261,7 @@ func printFunnelStatus(ctx context.Context) {
 		}
 		sni, portStr, _ := net.SplitHostPort(string(hp))
 		p, _ := strconv.ParseUint(portStr, 10, 16)
-		isTCP := sc.IsTCPForwardingOnPort(uint16(p), noService)
+		isTCP := sc.IsTCPForwardingOnPort(uint16(p), tailcfg.NoService)
 		url := "https://"
 		if isTCP {
 			url = "tcp://"

@@ -877,7 +877,7 @@ func TestValidateConfig(t *testing.T) {
 		name      string
 		desc      string
 		cfg       *ipn.ServeConfig
-		dns       string
+		svc       tailcfg.ServiceName
 		servePort uint16
 		serveType serveType
 		bg        bgBoolFlag
@@ -887,7 +887,7 @@ func TestValidateConfig(t *testing.T) {
 			name:      "nil_config",
 			desc:      "when config is nil, all requests valid",
 			cfg:       nil,
-			dns:       "node.test.ts.net",
+			svc:       tailcfg.NoService,
 			servePort: 3000,
 			serveType: serveTypeHTTPS,
 		},
@@ -899,7 +899,7 @@ func TestValidateConfig(t *testing.T) {
 					443: {HTTPS: true},
 				},
 			},
-			dns:       "node.test.ts.net",
+			svc:       tailcfg.NoService,
 			bg:        bgBoolFlag{true, false},
 			servePort: 10000,
 			serveType: serveTypeHTTPS,
@@ -912,7 +912,7 @@ func TestValidateConfig(t *testing.T) {
 					443: {TCPForward: "http://localhost:4545"},
 				},
 			},
-			dns:       "node.test.ts.net",
+			svc:       tailcfg.NoService,
 			bg:        bgBoolFlag{true, false},
 			servePort: 443,
 			serveType: serveTypeTCP,
@@ -925,7 +925,7 @@ func TestValidateConfig(t *testing.T) {
 					443: {HTTPS: true},
 				},
 			},
-			dns:       "node.test.ts.net",
+			svc:       tailcfg.NoService,
 			bg:        bgBoolFlag{true, false},
 			servePort: 443,
 			serveType: serveTypeHTTP,
@@ -946,7 +946,7 @@ func TestValidateConfig(t *testing.T) {
 					},
 				},
 			},
-			dns:       "node.test.ts.net",
+			svc:       tailcfg.NoService,
 			servePort: 4040,
 			serveType: serveTypeTCP,
 		},
@@ -962,7 +962,7 @@ func TestValidateConfig(t *testing.T) {
 					},
 				},
 			},
-			dns:       "node.test.ts.net",
+			svc:       tailcfg.NoService,
 			servePort: 3000,
 			serveType: serveTypeTCP,
 			wantErr:   true,
@@ -977,7 +977,7 @@ func TestValidateConfig(t *testing.T) {
 					},
 				},
 			},
-			dns:       "svc:foo",
+			svc:       "svc:foo",
 			servePort: 8080,
 			serveType: serveTypeTCP,
 		},
@@ -993,7 +993,7 @@ func TestValidateConfig(t *testing.T) {
 					},
 				},
 			},
-			dns:       "svc:foo",
+			svc:       "svc:foo",
 			servePort: 443,
 			serveType: serveTypeTCP,
 		},
@@ -1009,7 +1009,7 @@ func TestValidateConfig(t *testing.T) {
 					},
 				},
 			},
-			dns:       "svc:foo",
+			svc:       "svc:foo",
 			servePort: 443,
 			serveType: serveTypeHTTP,
 			wantErr:   true,
@@ -1026,7 +1026,7 @@ func TestValidateConfig(t *testing.T) {
 					},
 				},
 			},
-			dns:       "svc:foo",
+			svc:       "svc:foo",
 			serveType: serveTypeTUN,
 			wantErr:   true,
 		},
@@ -1040,7 +1040,7 @@ func TestValidateConfig(t *testing.T) {
 					},
 				},
 			},
-			dns:       "svc:foo",
+			svc:       "svc:foo",
 			serveType: serveTypeTCP,
 			servePort: 443,
 			wantErr:   true,
@@ -1050,7 +1050,7 @@ func TestValidateConfig(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			se := serveEnv{bg: tc.bg}
-			err := se.validateConfig(tc.cfg, tc.servePort, tc.serveType, tc.dns)
+			err := se.validateConfig(tc.cfg, tc.servePort, tc.serveType, tc.svc)
 			if err == nil && tc.wantErr {
 				t.Fatal("expected an error but got nil")
 			}

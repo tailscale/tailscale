@@ -191,13 +191,14 @@ func (sc *ServeConfig) GetWebHandler(dnsName string, hp HostPort, mount string) 
 	return sc.Web[hp].Handlers[mount]
 }
 
-// GetTCPPortHandler returns the TCPPortHandler for the given port.
-// If the port is not configured, nil is returned.
-func (sc *ServeConfig) GetTCPPortHandler(port uint16, dnsName string) *TCPPortHandler {
+// GetTCPPortHandler returns the TCPPortHandler for the given port. If the port
+// is not configured, nil is returned. Parameter svcName can be tailcfg.NoService
+// for local serve or a service name for a service hosted on node.
+func (sc *ServeConfig) GetTCPPortHandler(port uint16, svcName tailcfg.ServiceName) *TCPPortHandler {
 	if sc == nil {
 		return nil
 	}
-	if svcName, err := tailcfg.AsServiceName(dnsName); err == nil {
+	if svcName != tailcfg.NoService {
 		if svc, ok := sc.Services[svcName]; ok && svc != nil {
 			return svc.TCP[port]
 		}
@@ -246,14 +247,14 @@ func (sc *ServeConfig) IsTCPForwardingAny() bool {
 
 // IsTCPForwardingOnPort reports whether ServeConfig is currently forwarding
 // in TCPForward mode on the given port for local or a service. svcName will
-// either be empty string for local serve or a serviceName for service hosted
-// on node. Notice TCPForwarding is exclusive with Web/HTTPS serving.
+// either be noService (empty string) for local serve or a serviceName for service
+// hosted on node. Notice TCPForwarding is exclusive with Web/HTTPS serving.
 func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, svcName tailcfg.ServiceName) bool {
 	if sc == nil {
 		return false
 	}
 
-	if err := svcName.Validate(); err == nil {
+	if svcName != tailcfg.NoService {
 		svc, ok := sc.Services[svcName]
 		if !ok || svc == nil {
 			return false
@@ -268,14 +269,14 @@ func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, svcName tailcfg.Servic
 }
 
 // IsServingWeb reports whether ServeConfig is currently serving Web (HTTP/HTTPS)
-// on the given port for local or a service. DNSName will be either node's DNSName, or a
-// serviceName for service hosted on node. This is exclusive with TCPForwarding.
+// on the given port for local or a service. svcName will be either tailcfg.NoService,
+// or a serviceName for service hosted on node. This is exclusive with TCPForwarding.
 func (sc *ServeConfig) IsServingWeb(port uint16, svcName tailcfg.ServiceName) bool {
 	return sc.IsServingHTTP(port, svcName) || sc.IsServingHTTPS(port, svcName)
 }
 
 // IsServingHTTPS reports whether ServeConfig is currently serving HTTPS on
-// the given port for local or a service. svcName will be either empty string
+// the given port for local or a service. svcName will be either tailcfg.NoService
 // for local serve, or a serviceName for service hosted on node. This is exclusive
 // with HTTP and TCPForwarding.
 func (sc *ServeConfig) IsServingHTTPS(port uint16, svcName tailcfg.ServiceName) bool {
@@ -283,7 +284,7 @@ func (sc *ServeConfig) IsServingHTTPS(port uint16, svcName tailcfg.ServiceName) 
 		return false
 	}
 	var tcpHandlers map[uint16]*TCPPortHandler
-	if err := svcName.Validate(); err == nil {
+	if svcName != tailcfg.NoService {
 		if svc := sc.Services[svcName]; svc != nil {
 			tcpHandlers = svc.TCP
 		}
@@ -299,14 +300,14 @@ func (sc *ServeConfig) IsServingHTTPS(port uint16, svcName tailcfg.ServiceName) 
 }
 
 // IsServingHTTP reports whether ServeConfig is currently serving HTTP on the
-// given port for local or a service. svcName will be either empty string for
+// given port for local or a service. svcName will be either tailcfg.NoService for
 // local serve, or a serviceName for service hosted on node. This is exclusive
 // with HTTPS and TCPForwarding.
 func (sc *ServeConfig) IsServingHTTP(port uint16, svcName tailcfg.ServiceName) bool {
 	if sc == nil {
 		return false
 	}
-	if err := svcName.Validate(); err == nil {
+	if svcName != tailcfg.NoService {
 		if svc := sc.Services[svcName]; svc != nil {
 			if svc.TCP[port] != nil {
 				return svc.TCP[port].HTTP
@@ -342,7 +343,7 @@ func (sc *ServeConfig) FindConfig(port uint16) (*ServeConfig, bool) {
 // SetWebHandler sets the given HTTPHandler at the specified host, port,
 // and mount in the serve config. sc.TCP is also updated to reflect web
 // serving usage of the given port. The st argument is needed when setting
-// a web handler for a service, other wise it can be nil.
+// a web handler for a service, otherwise it can be nil.
 func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uint16, mount string, useTLS bool) {
 	if sc == nil {
 		sc = new(ServeConfig)

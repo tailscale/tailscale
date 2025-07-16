@@ -915,11 +915,17 @@ type TPMInfo struct {
 // This is not related to the older [Service] used in [Hostinfo.Services].
 type ServiceName string
 
-// AsServiceName reports whether if the given string is a valid service name,
-// and if so returns the name as a [tailcfg.ServiceName].
+const NoService ServiceName = ""
+
+// AsServiceName reports whether the given string is a valid service name.
+// If so returns the name as a [tailcfg.ServiceName], other wise return
+// tailcfg.NoService and an error.
 func AsServiceName(s string) (svcName ServiceName, err error) {
 	svcName = ServiceName(s)
-	return svcName, svcName.Validate()
+	if err := svcName.Validate(); err != nil {
+		return NoService, err
+	}
+	return svcName, nil
 }
 
 // Validate validates if the service name is formatted correctly.

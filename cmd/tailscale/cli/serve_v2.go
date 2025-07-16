@@ -336,7 +336,10 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var watcher *tailscale.IPNBusWatcher
+		svcName := tailcfg.NoService
+
 		if forService {
+			svcName = e.service
 			dnsName = e.service.String()
 		}
 		if !forService && srvType == serveTypeTUN {
@@ -345,7 +348,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		wantFg := !e.bg.Value && !turnOff
 		if wantFg {
 			// validate the config before creating a WatchIPNBus session
-			if err := e.validateConfig(parentSC, srvPort, srvType, dnsName); err != nil {
+			if err := e.validateConfig(parentSC, srvPort, srvType, svcName); err != nil {
 				return err
 			}
 
@@ -374,10 +377,12 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			// only unset serve when trying to unset with type and port flags.
 			err = e.unsetServe(sc, st, dnsName, srvType, srvPort, mount)
 		} else {
-			if err := e.validateConfig(parentSC, srvPort, srvType, dnsName); err != nil {
+			if err := e.validateConfig(parentSC, srvPort, srvType, svcName); err != nil {
 				return err
 			}
-			e.addServiceToPrefs(ctx, dnsName)
+			if forService {
+				e.addServiceToPrefs(ctx, svcName.String())
+			}
 			target := ""
 			if len(args) > 0 {
 				target = args[0]
@@ -440,9 +445,9 @@ const backgroundExistsMsg = "background configuration already exists, use `tails
 
 // validateConfig checks if the serve config is valid to serve the type wanted on the port.
 // dnsName is a FQDN or a serviceName (with `svc:` prefix).
-func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType, dnsName string) error {
+func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType, svcName tailcfg.ServiceName) error {
 	var tcpHandlerForPort *ipn.TCPPortHandler
-	if svcName, err := tailcfg.AsServiceName(dnsName); err == nil {
+	if svcName != tailcfg.NoService {
 		svc := sc.Services[svcName]
 		if svc == nil {
 			return nil
@@ -472,7 +477,11 @@ func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe se
 	}
 	existingServe := serveFromPortHandler(tcpHandlerForPort)
 	if wantServe != existingServe {
-		return fmt.Errorf("want to serve %q but port is already serving %q for %q", wantServe, existingServe, dnsName)
+		target := svcName
+		if target == tailcfg.NoService {
+			target = "local node"
+		}
+		return fmt.Errorf("want to serve %q but port is already serving %q for %q", wantServe, existingServe, target)
 	}
 	return nil
 }
@@ -510,6 +519,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
 		}
 	case serveTypeTUN:
+		// Caller checks that TUN mode is only supported for services.
 		svcName := tailcfg.ServiceName(dnsName)
 		if _, ok := sc.Services[svcName]; !ok {
 			mak.Set(&sc.Services, svcName, new(ipn.ServiceConfig))
@@ -698,7 +708,8 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 	}
 
 	// TODO: validation needs to check nested foreground configs
-	if sc.IsTCPForwardingOnPort(srvPort, tailcfg.ServiceName(dnsName)) {
+	svcName, _ := tailcfg.AsServiceName(dnsName)
+	if sc.IsTCPForwardingOnPort(srvPort, svcName) {
 		return errors.New("cannot serve web; already serving TCP")
 	}
 
@@ -729,7 +740,8 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
-	if sc.IsServingWeb(srcPort, tailcfg.ServiceName(dnsName)) {
+	svcName, _ := tailcfg.AsServiceName(dnsName)
+	if sc.IsServingWeb(srcPort, svcName) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
 	}
 
@@ -936,7 +948,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 
 	hp := ipn.HostPort(net.JoinHostPort(hostName, portStr))
 
-	if sc.IsTCPForwardingOnPort(srvPort, tailcfg.ServiceName(dnsName)) {
+	if sc.IsTCPForwardingOnPort(srvPort, svcName) {
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 	var targetExists bool
@@ -967,7 +979,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	}
 
 	if forService {
-		sc.RemoveServiceWebHandler(st, tailcfg.ServiceName(dnsName), srvPort, mounts)
+		sc.RemoveServiceWebHandler(st, svcName, srvPort, mounts)
 	} else {
 		sc.RemoveWebHandler(dnsName, srvPort, mounts, true)
 	}
@@ -980,10 +992,11 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, dnsName string, src uint1
 	if sc == nil {
 		return nil
 	}
-	if sc.GetTCPPortHandler(src, dnsName) == nil {
+	svcName, _ := tailcfg.AsServiceName(dnsName)
+	if sc.GetTCPPortHandler(src, svcName) == nil {
 		return errors.New("serve config does not exist")
 	}
-	if sc.IsServingWeb(src, tailcfg.ServiceName(dnsName)) {
+	if sc.IsServingWeb(src, svcName) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
 	sc.RemoveTCPForwarding(dnsName, src)
