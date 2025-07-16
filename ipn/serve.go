@@ -166,18 +166,18 @@ type HTTPHandler struct {
 
 // WebHandlerExists reports whether if the ServeConfig Web handler exists for
 // the given host:port and mount point.
-func (sc *ServeConfig) WebHandlerExists(dnsName string, hp HostPort, mount string) bool {
-	h := sc.GetWebHandler(dnsName, hp, mount)
+func (sc *ServeConfig) WebHandlerExists(svcName tailcfg.ServiceName, hp HostPort, mount string) bool {
+	h := sc.GetWebHandler(svcName, hp, mount)
 	return h != nil
 }
 
 // GetWebHandler returns the HTTPHandler for the given host:port and mount point.
 // Returns nil if the handler does not exist.
-func (sc *ServeConfig) GetWebHandler(dnsName string, hp HostPort, mount string) *HTTPHandler {
+func (sc *ServeConfig) GetWebHandler(svcName tailcfg.ServiceName, hp HostPort, mount string) *HTTPHandler {
 	if sc == nil {
 		return nil
 	}
-	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
+	if svcName != "" {
 		if svc, ok := sc.Services[svcName]; ok && svc.Web != nil {
 			if webCfg, ok := svc.Web[hp]; ok {
 				return webCfg.Handlers[mount]
@@ -491,15 +491,15 @@ func (sc *ServeConfig) RemoveServiceWebHandler(st *ipnstate.Status, svcName tail
 
 // RemoveTCPForwarding deletes the TCP forwarding configuration for the given
 // port from the serve config.
-func (sc *ServeConfig) RemoveTCPForwarding(dnsName string, port uint16) {
-	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
+func (sc *ServeConfig) RemoveTCPForwarding(svcName tailcfg.ServiceName, port uint16) {
+	if svcName != "" {
 		if svc := sc.Services[svcName]; svc != nil {
 			delete(svc.TCP, port)
 			if len(svc.TCP) == 0 {
 				svc.TCP = nil
 			}
 			if len(svc.Web) == 0 && len(svc.TCP) == 0 {
-				delete(sc.Services, tailcfg.ServiceName(dnsName))
+				delete(sc.Services, svcName)
 			}
 			if len(sc.Services) == 0 {
 				sc.Services = nil

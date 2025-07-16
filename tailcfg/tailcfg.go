@@ -915,11 +915,8 @@ type TPMInfo struct {
 // This is not related to the older [Service] used in [Hostinfo.Services].
 type ServiceName string
 
-const NoService ServiceName = ""
-
 // AsServiceName reports whether the given string is a valid service name.
-// If so returns the name as a [tailcfg.ServiceName], other wise return
-// tailcfg.NoService.
+// If so returns the name as a [tailcfg.ServiceName], otherwise returns "".
 func AsServiceName(s string) ServiceName {
 	svcName := ServiceName(s)
 	if err := svcName.Validate(); err != nil {

@@ -965,7 +965,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			}
 		}
 	} else {
-		targetExists = sc.WebHandlerExists(dnsName, hp, mount)
+		targetExists = sc.WebHandlerExists(svcName, hp, mount)
 		mounts = []string{mount}
 	}
 
@@ -1001,7 +1001,7 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, dnsName string, src uint1
 	if sc.IsServingWeb(src, svcName) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
-	sc.RemoveTCPForwarding(dnsName, src)
+	sc.RemoveTCPForwarding(svcName, src)
 	return nil
 }
 

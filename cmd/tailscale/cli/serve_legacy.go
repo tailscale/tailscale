@@ -419,7 +419,7 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, srvPort uint16, mou
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
-	if !sc.WebHandlerExists(dnsName, hp, mount) {
+	if !sc.WebHandlerExists(noService, hp, mount) {
 		return errors.New("error: handler does not exist")
 	}
 	sc.RemoveWebHandler(dnsName, srvPort, []string{mount}, false)
@@ -585,15 +585,11 @@ func (e *serveEnv) handleTCPServeRemove(ctx context.Context, src uint16) error {
 	if sc == nil {
 		sc = new(ipn.ServeConfig)
 	}
-	dnsName, err := e.getSelfDNSName(ctx)
-	if err != nil {
-		return err
-	}
 	if sc.IsServingWeb(src, noService) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
 	if ph := sc.GetTCPPortHandler(src, noService); ph != nil {
-		sc.RemoveTCPForwarding(dnsName, src)
+		sc.RemoveTCPForwarding(noService, src)
 		return e.lc.SetServeConfig(ctx, sc)
 	}
 	return errors.New("error: serve config does not exist")

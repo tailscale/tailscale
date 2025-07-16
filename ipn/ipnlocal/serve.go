@@ -1013,12 +1013,11 @@ func (b *LocalBackend) webServerConfig(hostname string, forVIPService tailcfg.Se
 	if !b.serveConfig.Valid() {
 		return c, false
 	}
-	var key ipn.HostPort
 	if forVIPService != "" {
-		key = ipn.HostPort(net.JoinHostPort(forVIPService.WithoutPrefix(), fmt.Sprintf("%d", port)))
+		key := ipn.HostPort(net.JoinHostPort(forVIPService.WithoutPrefix(), fmt.Sprintf("%d", port)))
 		return b.serveConfig.FindServiceWeb(forVIPService, key)
 	}
-	key = ipn.HostPort(net.JoinHostPort(hostname, fmt.Sprintf("%d", port)))
+	key := ipn.HostPort(net.JoinHostPort(hostname, fmt.Sprintf("%d", port)))
 	return b.serveConfig.FindWeb(key)
 }
 
