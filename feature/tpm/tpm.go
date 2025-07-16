@@ -44,8 +44,10 @@ func init() {
 func info() *tailcfg.TPMInfo {
 	tpm, err := open()
 	if err != nil {
+		log.Printf("TPM: error opening: %v", err)
 		return nil
 	}
+	log.Printf("TPM: successfully opened")
 	defer tpm.Close()
 
 	info := new(tailcfg.TPMInfo)
@@ -74,10 +76,12 @@ func info() *tailcfg.TPMInfo {
 			PropertyCount: 1,
 		}.Execute(tpm)
 		if err != nil {
+			log.Printf("TPM: GetCapability %v: %v", cap.prop, err)
 			continue
 		}
 		props, err := resp.CapabilityData.Data.TPMProperties()
 		if err != nil {
+			log.Printf("TPM: GetCapability %v: %v", cap.prop, err)
 			continue
 		}
 		if len(props.TPMProperty) == 0 {
