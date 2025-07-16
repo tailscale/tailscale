@@ -51,6 +51,7 @@ const (
 	darwin  = "darwin"
 	freebsd = "freebsd"
 	openbsd = "openbsd"
+	windows = "windows"
 )
 
 func init() {
@@ -80,20 +81,22 @@ func tryExecInDir(ctx context.Context, dir string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Assume that the following executables exist, are executable, and
-	// immediately return.
-	var name string
-	switch runtime.GOOS {
-	case "windows":
-		windir := os.Getenv("windir")
-		name = filepath.Join(windir, "system32", "doskey.exe")
-	default:
-		name = "/bin/true"
+	run := func(path string) error {
+		cmd := exec.CommandContext(ctx, path)
+		cmd.Dir = dir
+		return cmd.Run()
 	}
 
-	cmd := exec.CommandContext(ctx, name)
-	cmd.Dir = dir
-	return cmd.Run()
+	// Assume that the following executables exist, are executable, and
+	// immediately return.
+	if runtime.GOOS == windows {
+		windir := os.Getenv("windir")
+		return run(filepath.Join(windir, "system32", "doskey.exe"))
+	}
+	if err := run("/bin/true"); !errors.Is(err, exec.ErrNotFound) { // including nil
+		return err
+	}
+	return run("/usr/bin/true")
 }
 
 // newIncubatorCommand returns a new exec.Cmd configured with
@@ -107,7 +110,7 @@ func tryExecInDir(ctx context.Context, dir string) error {
 // The returned Cmd.Env is guaranteed to be nil; the caller populates it.
 func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err error) {
 	defer func() {
-		if cmd.Env != nil {
+		if cmd != nil && cmd.Env != nil {
 			panic("internal error")
 		}
 	}()
