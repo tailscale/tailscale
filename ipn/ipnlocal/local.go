@@ -99,7 +99,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/util/eventbus"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -618,15 +617,7 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
 	}
-	// Auto-init [nodeBackend] in tests for LocalBackend created without the
-	// NewLocalBackend() constructor. Same reasoning for checking b.sys.
-	var bus *eventbus.Bus
-	if b.sys == nil {
-		bus = eventbus.New()
-	} else {
-		bus = b.sys.Bus.Get()
-	}
-	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), bus)
+	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.sys.Bus.Get())
 	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
 		v.ready()
 	}

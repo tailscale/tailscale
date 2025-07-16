@@ -21,10 +21,10 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/util/eventbus"
 	"tailscale.com/util/must"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
@@ -156,10 +156,9 @@ func TestHandlePeerAPI(t *testing.T) {
 				selfNode.CapMap = tailcfg.NodeCapMap{tailcfg.CapabilityDebug: nil}
 			}
 			var e peerAPITestEnv
-			lb := &LocalBackend{
-				logf:  e.logBuf.Logf,
-				clock: &tstest.Clock{},
-			}
+			lb := newTestLocalBackend(t)
+			lb.logf = e.logBuf.Logf
+			lb.clock = &tstest.Clock{}
 			lb.currentNode().SetNetMap(&netmap.NetworkMap{SelfNode: selfNode.View()})
 			e.ph = &peerAPIHandler{
 				isSelf:   tt.isSelf,
@@ -195,20 +194,20 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.isSelf = false
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-	bus := eventbus.New()
-	defer bus.Close()
+	sys := tsd.NewSystem()
+	t.Cleanup(sys.Bus.Get().Close)
 
 	ht := new(health.Tracker)
-	reg := new(usermetric.Registry)
-	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, bus)
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
-	h.ps = &peerAPIServer{
-		b: &LocalBackend{
-			e:     eng,
-			pm:    pm,
-			store: pm.Store(),
-		},
-	}
+	reg := new(usermetric.Registry)
+	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
+	sys.Set(pm.Store())
+	sys.Set(eng)
+
+	b := newTestLocalBackendWithSys(t, sys)
+	b.pm = pm
+
+	h.ps = &peerAPIServer{b: b}
 	if h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly offering exit node")
 	}
@@ -250,12 +249,12 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-		bus := eventbus.New()
-		defer bus.Close()
+		sys := tsd.NewSystem()
+		t.Cleanup(sys.Bus.Get().Close)
 
 		ht := new(health.Tracker)
 		reg := new(usermetric.Registry)
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, bus)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 		var a *appc.AppConnector
 		if shouldStore {
@@ -263,16 +262,14 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		} else {
 			a = appc.NewAppConnector(t.Logf, &appctest.RouteCollector{}, nil, nil)
 		}
-		h.ps = &peerAPIServer{
-			b: &LocalBackend{
-				e:     eng,
-				pm:    pm,
-				store: pm.Store(),
-				// configure as an app connector just to enable the API.
-				appConnector: a,
-			},
-		}
+		sys.Set(pm.Store())
+		sys.Set(eng)
 
+		b := newTestLocalBackendWithSys(t, sys)
+		b.pm = pm
+		b.appConnector = a // configure as an app connector just to enable the API.
+
+		h.ps = &peerAPIServer{b: b}
 		h.ps.resolver = &fakeResolver{build: func(b *dnsmessage.Builder) {
 			b.CNAMEResource(
 				dnsmessage.ResourceHeader{
@@ -326,27 +323,29 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-		bus := eventbus.New()
-		defer bus.Close()
+		sys := tsd.NewSystem()
+		t.Cleanup(sys.Bus.Get().Close)
+
 		rc := &appctest.RouteCollector{}
 		ht := new(health.Tracker)
-		reg := new(usermetric.Registry)
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, bus)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
+
+		reg := new(usermetric.Registry)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
 		var a *appc.AppConnector
 		if shouldStore {
 			a = appc.NewAppConnector(t.Logf, rc, &appc.RouteInfo{}, fakeStoreRoutes)
 		} else {
 			a = appc.NewAppConnector(t.Logf, rc, nil, nil)
 		}
-		h.ps = &peerAPIServer{
-			b: &LocalBackend{
-				e:            eng,
-				pm:           pm,
-				store:        pm.Store(),
-				appConnector: a,
-			},
-		}
+		sys.Set(pm.Store())
+		sys.Set(eng)
+
+		b := newTestLocalBackendWithSys(t, sys)
+		b.pm = pm
+		b.appConnector = a
+
+		h.ps = &peerAPIServer{b: b}
 		h.ps.b.appConnector.UpdateDomains([]string{"example.com"})
 		h.ps.b.appConnector.Wait(ctx)
 
@@ -393,12 +392,13 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-		bus := eventbus.New()
-		defer bus.Close()
+		sys := tsd.NewSystem()
+		t.Cleanup(sys.Bus.Get().Close)
+
 		ht := new(health.Tracker)
 		reg := new(usermetric.Registry)
 		rc := &appctest.RouteCollector{}
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, bus)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 		var a *appc.AppConnector
 		if shouldStore {
@@ -406,14 +406,14 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		} else {
 			a = appc.NewAppConnector(t.Logf, rc, nil, nil)
 		}
-		h.ps = &peerAPIServer{
-			b: &LocalBackend{
-				e:            eng,
-				pm:           pm,
-				store:        pm.Store(),
-				appConnector: a,
-			},
-		}
+		sys.Set(pm.Store())
+		sys.Set(eng)
+
+		b := newTestLocalBackendWithSys(t, sys)
+		b.pm = pm
+		b.appConnector = a
+
+		h.ps = &peerAPIServer{b: b}
 		h.ps.b.appConnector.UpdateDomains([]string{"www.example.com"})
 		h.ps.b.appConnector.Wait(ctx)
 

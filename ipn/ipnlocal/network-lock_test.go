@@ -28,6 +28,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/tsd"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
@@ -935,18 +936,21 @@ func TestTKAForceDisable(t *testing.T) {
 	defer ts.Close()
 
 	cc := fakeControlClient(t, client)
-	b := LocalBackend{
-		varRoot: temp,
-		cc:      cc,
-		ccAuto:  cc,
-		logf:    t.Logf,
-		tka: &tkaState{
-			authority: authority,
-			storage:   chonk,
-		},
-		pm:    pm,
-		store: pm.Store(),
+	sys := tsd.NewSystem()
+	sys.Set(pm.Store())
+
+	b := newTestLocalBackendWithSys(t, sys)
+	b.SetVarRoot(temp)
+	b.SetControlClientGetterForTesting(func(controlclient.Options) (controlclient.Client, error) {
+		return cc, nil
+	})
+	b.mu.Lock()
+	b.tka = &tkaState{
+		authority: authority,
+		storage:   chonk,
 	}
+	b.pm = pm
+	b.mu.Unlock()
 
 	if err := b.NetworkLockForceLocalDisable(); err != nil {
 		t.Fatalf("NetworkLockForceLocalDisable() failed: %v", err)

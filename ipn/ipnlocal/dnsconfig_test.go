@@ -377,7 +377,7 @@ func peersMap(s []tailcfg.NodeView) map[tailcfg.NodeID]tailcfg.NodeView {
 }
 
 func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {
-	b := &LocalBackend{}
+	b := newTestLocalBackend(t)
 	if b.allowExitNodeDNSProxyToServeName("google.com") {
 		t.Fatal("unexpected true on backend with nil NetMap")
 	}

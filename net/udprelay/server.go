@@ -291,6 +291,9 @@ func NewServer(logf logger.Logf, port int, overrideAddrs []netip.Addr) (s *Serve
 		s.vniPool = append(s.vniPool, uint32(i))
 	}
 
+	// TODO(creachadair): Find a way to plumb this in during initialization.
+	// As-written, messages published here will not be seen by other components
+	// in a running client.
 	bus := eventbus.New()
 	s.bus = bus
 	netMon, err := netmon.New(s.bus, logf)
