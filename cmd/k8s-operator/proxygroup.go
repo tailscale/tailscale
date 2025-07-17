@@ -466,6 +466,12 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	case len(devices) < desiredReplicas:
 	case len(devices) > desiredReplicas:
 		message = fmt.Sprintf("waiting for %d ProxyGroup pods to shut down", len(devices)-desiredReplicas)
+	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && !tsoperator.ProxyGroupTailscaleServiceValid(pg):
+		reason = reasonProxyGroupInvalid
+		message = "waiting for configured Tailscale Service to be marked valid"
+	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && !tsoperator.ProxyGroupTailscaleServiceConfigured(pg):
+		reason = reasonProxyGroupCreating
+		message = "waiting for proxies to start advertising the configured Tailscale Service"
 	default:
 		status = metav1.ConditionTrue
 		reason = reasonProxyGroupReady

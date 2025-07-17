@@ -146,6 +146,16 @@ func ProxyGroupAvailable(pg *tsapi.ProxyGroup) bool {
 	return cond != nil && cond.Status == metav1.ConditionTrue
 }
 
+func ProxyGroupTailscaleServiceValid(pg *tsapi.ProxyGroup) bool {
+	cond := proxyGroupCondition(pg, tsapi.PGTailscaleServiceValid)
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
+}
+
+func ProxyGroupTailscaleServiceConfigured(pg *tsapi.ProxyGroup) bool {
+	cond := proxyGroupCondition(pg, tsapi.PGTailscaleServiceConfigured)
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
+}
+
 func proxyGroupCondition(pg *tsapi.ProxyGroup, condType tsapi.ConditionType) *metav1.Condition {
 	idx := xslices.IndexFunc(pg.Status.Conditions, func(cond metav1.Condition) bool {
 		return cond.Type == string(condType)
