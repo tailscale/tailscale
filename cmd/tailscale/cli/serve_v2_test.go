@@ -1215,24 +1215,24 @@ func TestAddServiceToPrefs(t *testing.T) {
 func TestRemoveServiceFromPrefs(t *testing.T) {
 	tests := []struct {
 		name          string
-		dnsName       string
+		svcName       tailcfg.ServiceName
 		startServices []string
 		expected      []string
 	}{
 		{
 			name:     "remove service from empty prefs",
-			dnsName:  "svc:foo",
+			svcName:  "svc:foo",
 			expected: []string{},
 		},
 		{
 			name:          "remove existing service from prefs",
-			dnsName:       "svc:foo",
+			svcName:       "svc:foo",
 			startServices: []string{"svc:foo"},
 			expected:      []string{},
 		},
 		{
 			name:          "remove service not in prefs",
-			dnsName:       "svc:bar",
+			svcName:       "svc:bar",
 			startServices: []string{"svc:foo"},
 			expected:      []string{"svc:foo"},
 		},
@@ -1249,12 +1249,12 @@ func TestRemoveServiceFromPrefs(t *testing.T) {
 				},
 			})
 			e := &serveEnv{lc: lc, bg: bgBoolFlag{true, false}}
-			err := e.removeServiceFromPrefs(ctx, tt.dnsName)
+			err := e.removeServiceFromPrefs(ctx, tt.svcName)
 			if err != nil {
-				t.Fatalf("removeServiceFromPrefs(%q) returned unexpected error: %v", tt.dnsName, err)
+				t.Fatalf("removeServiceFromPrefs(%q) returned unexpected error: %v", tt.svcName, err)
 			}
 			if !slices.Equal(lc.prefs.AdvertiseServices, tt.expected) {
-				t.Errorf("removeServiceFromPrefs(%q) = %v, want %v", tt.dnsName, lc.prefs.AdvertiseServices, tt.expected)
+				t.Errorf("removeServiceFromPrefs(%q) = %v, want %v", tt.svcName, lc.prefs.AdvertiseServices, tt.expected)
 			}
 		})
 	}

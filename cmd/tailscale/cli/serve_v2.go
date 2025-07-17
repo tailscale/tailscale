@@ -453,7 +453,7 @@ func (e *serveEnv) addServiceToPrefs(ctx context.Context, serviceName string) er
 	return err
 }
 
-func (e *serveEnv) removeServiceFromPrefs(ctx context.Context, serviceName string) error {
+func (e *serveEnv) removeServiceFromPrefs(ctx context.Context, serviceName tailcfg.ServiceName) error {
 	prefs, err := e.lc.GetPrefs(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting prefs: %w", err)
@@ -461,22 +461,32 @@ func (e *serveEnv) removeServiceFromPrefs(ctx context.Context, serviceName strin
 	if len(prefs.AdvertiseServices) == 0 {
 		return nil // nothing to remove
 	}
-	var advertisedServices []string
-	for _, svc := range prefs.AdvertiseServices {
-		if svc != serviceName {
-			advertisedServices = append(advertisedServices, svc)
-		}
-	}
-	if len(advertisedServices) == len(prefs.AdvertiseServices) {
-		return nil // serviceName not found in prefs
+	initialLen := len(prefs.AdvertiseServices)
+	prefs.AdvertiseServices = slices.DeleteFunc(prefs.AdvertiseServices, func(s string) bool { return s == serviceName.String() })
+	if initialLen == len(prefs.AdvertiseServices) {
+		return nil // serviceName not advertised
 	}
 	_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
-		Prefs: ipn.Prefs{
-			AdvertiseServices: advertisedServices,
-		},
+		Prefs:                *prefs,
 	})
 	return err
+}
+
+func (e *serveEnv) runServeDrain(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errHelp
+	}
+	if len(args) != 1 {
+		fmt.Fprintf(Stderr, "error: invalid number of arguments\n\n")
+		return errHelp
+	}
+	svc := args[0]
+	svcName := tailcfg.AsServiceName(svc)
+	if svcName == noService {
+		return fmt.Errorf("failed to parse service name: %s", svc)
+	}
+	return e.removeServiceFromPrefs(ctx, svcName)
 }
 
 const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
