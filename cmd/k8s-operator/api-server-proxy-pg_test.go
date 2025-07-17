@@ -212,7 +212,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		p.Spec.KubeAPIServer = pg.Spec.KubeAPIServer
 	})
 	expectReconciled(t, r, "", pgName)
-	tsSvc, err = ft.GetVIPService(t.Context(), "svc:"+pgName)
+	_, err = ft.GetVIPService(t.Context(), "svc:"+pgName)
 	if !isErrorTailscaleServiceNotFound(err) {
 		t.Fatalf("Expected 404, got: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectMissing[corev1.Secret](t, fc, ns, updatedDomain)
 	expectMissing[rbacv1.Role](t, fc, ns, updatedDomain)
 	expectMissing[rbacv1.RoleBinding](t, fc, ns, updatedDomain)
-	tsSvc, err = ft.GetVIPService(t.Context(), updatedServiceName)
+	_, err = ft.GetVIPService(t.Context(), updatedServiceName)
 	if !isErrorTailscaleServiceNotFound(err) {
 		t.Fatalf("Expected 404, got: %v", err)
 	}
