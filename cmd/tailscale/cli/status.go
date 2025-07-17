@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -17,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -150,15 +150,12 @@ func runStatus(ctx context.Context, args []string) error {
 		os.Exit(1)
 	}
 
-	var buf bytes.Buffer
-	f := func(format string, a ...any) { fmt.Fprintf(&buf, format, a...) }
+	// set up the tabwriter for aligned tabular output
+	w := tabwriter.NewWriter(Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus")
+	fmt.Fprintln(w, "--\t--------\t-----\t--\t------")
+
 	printPS := func(ps *ipnstate.PeerStatus) {
-		f("%-15s %-20s %-12s %-7s ",
-			firstIPString(ps.TailscaleIPs),
-			dnsOrQuoteHostname(st, ps),
-			ownerLogin(st, ps),
-			ps.OS,
-		)
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
 
@@ -222,16 +219,24 @@ func runStatus(ctx context.Context, args []string) error {
 		}
 
 		// only print "-" if the statusParts are empty (no status at all)
+		var status string
 		if len(statusParts) == 0 {
-			f("-")
+			status = "-"
 		} else {
-			f(strings.Join(statusParts, "; "))
+			status = strings.Join(statusParts, "; ")
 		}
 
 		if anyTraffic {
-			f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
+			status += fmt.Sprintf(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
 		}
-		f("\n")
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			firstIPString(ps.TailscaleIPs),
+			dnsOrQuoteHostname(st, ps),
+			ownerLogin(st, ps),
+			ps.OS,
+			status,
+		)
 	}
 
 	if statusArgs.self && st.Self != nil {
@@ -262,7 +267,10 @@ func runStatus(ctx context.Context, args []string) error {
 			printPS(ps)
 		}
 	}
-	Stdout.Write(buf.Bytes())
+
+	// write out tabwriter table
+	w.Flush()
+
 	if locBasedExitNode {
 		outln()
 		printf("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
