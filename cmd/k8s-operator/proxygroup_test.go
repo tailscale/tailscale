@@ -31,8 +31,11 @@ import (
 	kube "tailscale.com/k8s-operator"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 )
 
@@ -1254,6 +1257,90 @@ func TestProxyGroupTypes(t *testing.T) {
 			t.Errorf("unexpected port name %s, want k8s-proxy", sts.Spec.Template.Spec.Containers[0].Ports[0].Name)
 		}
 	})
+}
+
+func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithStatusSubresource(&tsapi.ProxyGroup{}).
+		Build()
+
+	reconciler := &ProxyGroupReconciler{
+		tsNamespace:  tsNamespace,
+		tsProxyImage: testProxyImage,
+		Client:       fc,
+		l:            zap.Must(zap.NewDevelopment()).Sugar(),
+		tsClient:     &fakeTSClient{},
+		clock:        tstest.NewClock(tstest.ClockOpts{}),
+	}
+
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-k8s-apiserver",
+			UID:  "test-k8s-apiserver-uid",
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
+			Replicas: ptr.To[int32](1),
+			KubeAPIServer: &tsapi.KubeAPIServerConfig{
+				Mode: ptr.To(tsapi.APIServerProxyModeNoAuth), // Avoid needing to pre-create the static ServiceAccount.
+			},
+		},
+	}
+	if err := fc.Create(t.Context(), pg); err != nil {
+		t.Fatal(err)
+	}
+	expectReconciled(t, reconciler, "", pg.Name)
+
+	cfg := conf.VersionedConfig{
+		Version: "v1alpha1",
+		ConfigV1Alpha1: &conf.ConfigV1Alpha1{
+			AuthKey:  ptr.To("secret-authkey"),
+			State:    ptr.To(fmt.Sprintf("kube:%s", pgPodName(pg.Name, 0))),
+			App:      ptr.To(kubetypes.AppProxyGroupKubeAPIServer),
+			LogLevel: ptr.To("debug"),
+
+			Hostname: ptr.To("test-k8s-apiserver-0"),
+			APIServerProxy: &conf.APIServerProxyConfig{
+				Enabled:    opt.NewBool(true),
+				AuthMode:   opt.NewBool(false),
+				IssueCerts: opt.NewBool(true),
+			},
+		},
+	}
+	cfgB, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("failed to marshal config: %v", err)
+	}
+
+	cfgSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pgConfigSecretName(pg.Name, 0),
+			Namespace:       tsNamespace,
+			Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Data: map[string][]byte{
+			kubetypes.KubeAPIServerConfigFile: cfgB,
+		},
+	}
+	expectEqual(t, fc, cfgSecret)
+
+	// Now simulate the kube-apiserver services reconciler updating config,
+	// then check the proxygroup reconciler doesn't overwrite it.
+	cfg.APIServerProxy.ServiceName = ptr.To(tailcfg.ServiceName("svc:some-svc-name"))
+	cfg.AdvertiseServices = []string{"svc:should-not-be-overwritten"}
+	cfgB, err = json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("failed to marshal config: %v", err)
+	}
+	mustUpdate(t, fc, tsNamespace, cfgSecret.Name, func(s *corev1.Secret) {
+		s.Data[kubetypes.KubeAPIServerConfigFile] = cfgB
+	})
+	expectReconciled(t, reconciler, "", pg.Name)
+
+	cfgSecret.Data[kubetypes.KubeAPIServerConfigFile] = cfgB
+	expectEqual(t, fc, cfgSecret)
 }
 
 func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {

@@ -284,6 +284,10 @@ func (r *APIServerProxyServiceReconciler) maybeDeleteStaleServices(ctx context.C
 		if err := r.tsClient.DeleteVIPService(ctx, svc.Name); err != nil && !isErrorTailscaleServiceNotFound(err) {
 			return fmt.Errorf("error deleting Tailscale Service %s: %w", svc.Name, err)
 		}
+
+		if err = cleanupCertResources(ctx, r.Client, r.lc, r.tsNamespace, pg.Name, svc.Name); err != nil {
+			return fmt.Errorf("failed to clean up cert resources: %w", err)
+		}
 	}
 
 	return nil
@@ -339,6 +343,10 @@ func (r *APIServerProxyServiceReconciler) maybeAdvertiseServices(ctx context.Con
 	if err != nil {
 		return fmt.Errorf("error checking TLS credentials provisioned for Tailscale Service %q: %w", serviceName, err)
 	}
+	var advertiseServices []string
+	if shouldBeAdvertised {
+		advertiseServices = []string{serviceName.String()}
+	}
 
 	for _, s := range cfgSecrets.Items {
 		if len(s.Data[kubetypes.KubeAPIServerConfigFile]) == 0 {
@@ -352,7 +360,7 @@ func (r *APIServerProxyServiceReconciler) maybeAdvertiseServices(ctx context.Con
 		}
 
 		if cfg.Parsed.APIServerProxy == nil {
-			return fmt.Errorf("[unexpected] config Secret %q does not contain APIServerProxy config", s.Name)
+			return fmt.Errorf("config Secret %q does not contain APIServerProxy config", s.Name)
 		}
 
 		existingCfgSecret := s.DeepCopy()
@@ -364,18 +372,8 @@ func (r *APIServerProxyServiceReconciler) maybeAdvertiseServices(ctx context.Con
 		}
 
 		// Update the services to advertise if required.
-		idx := slices.Index(cfg.Parsed.AdvertiseServices, serviceName.String())
-		isAdvertised := idx >= 0
-		switch {
-		case isAdvertised == shouldBeAdvertised:
-			// Already up to date.
-		case isAdvertised:
-			// Needs to be removed.
-			cfg.Parsed.AdvertiseServices = slices.Delete(cfg.Parsed.AdvertiseServices, idx, idx+1)
-			updated = true
-		case shouldBeAdvertised:
-			// Needs to be added.
-			cfg.Parsed.AdvertiseServices = append(cfg.Parsed.AdvertiseServices, serviceName.String())
+		if !slices.Equal(cfg.Parsed.AdvertiseServices, advertiseServices) {
+			cfg.Parsed.AdvertiseServices = advertiseServices
 			updated = true
 		}
 
