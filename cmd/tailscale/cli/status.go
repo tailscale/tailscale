@@ -17,7 +17,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
@@ -162,25 +161,7 @@ func runStatus(ctx context.Context, args []string) error {
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
 
-		var lastseen string
-		if !ps.LastSeen.IsZero() {
-			now := time.Now()
-			duration := now.Sub(ps.LastSeen)
-			// an edge case during testing showed "-1m ago"
-			duration = max(duration, 0)
-
-			switch {
-			case duration < time.Hour:
-				minutes := int(duration.Minutes())
-				lastseen = fmt.Sprintf("%dm ago", minutes)
-			case duration < 24*time.Hour:
-				hours := int(duration.Hours())
-				lastseen = fmt.Sprintf("%dh ago", hours)
-			default:
-				days := int(duration.Hours() / 24)
-				lastseen = fmt.Sprintf("%dd ago", days)
-			}
-		}
+		lastseen := CalculateLastSeenTime(ps)
 
 		// prepare status components to join consistently with "; "
 		var statusParts []string
