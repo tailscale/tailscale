@@ -899,8 +899,16 @@ func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
 	if de.bestAddr.isDirect() && now.Before(de.trustBestAddrUntil) {
 		return false
 	}
-	if !de.lastUDPRelayPathDiscovery.IsZero() && now.Sub(de.lastUDPRelayPathDiscovery) < discoverUDPRelayPathsInterval {
-		return false
+	if de.lastUDPRelayPathDiscovery.IsZero() {
+		return true
+	}
+	// TODO(jwhited): consider suppressing peer relay path discovery if
+	//  time since de.lastSendExt is greater than some value (maybe 2x
+	//  heartbeatInterval). Otherwise, [endpoint.heartbeat] can be extended
+	//  fairly inefficiently into the future as peer relay path discovery moves
+	//  de.lastSendExt forward.
+	if now.Sub(de.lastUDPRelayPathDiscovery) > discoverUDPRelayPathsInterval {
+		return true
 	}
 	// TODO(jwhited): consider applying 'goodEnoughLatency' suppression here,
 	//  but not until we have a strategy for triggering CallMeMaybeVia regularly
@@ -909,12 +917,6 @@ func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
 	//  relay path and never come back. They are dependent on the remote side
 	//  regularly TX'ing CallMeMaybeVia, which currently only happens as part
 	//  of full UDP relay path discovery.
-	if now.After(de.trustBestAddrUntil) {
-		return true
-	}
-	if !de.lastUDPRelayPathDiscovery.IsZero() && now.Sub(de.lastUDPRelayPathDiscovery) >= upgradeUDPRelayInterval {
-		return true
-	}
 	return false
 }
 
