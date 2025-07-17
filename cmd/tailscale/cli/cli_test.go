@@ -964,7 +964,7 @@ func TestPrefFlagMapping(t *testing.T) {
 			// flag for this.
 			continue
 		case "AdvertiseServices":
-			// Handled by the tailscale advertise subcommand, we don't want a
+			// Handled by the tailscale serve subcommand, we don't want a
 			// CLI flag for this.
 			continue
 		case "InternalExitNodePrior":
