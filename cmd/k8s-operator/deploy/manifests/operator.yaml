@@ -2885,15 +2885,22 @@ spec:
             openAPIV3Schema:
                 description: |-
                     ProxyGroup defines a set of Tailscale devices that will act as proxies.
-                    Currently only egress ProxyGroups are supported.
+                    Depending on spec.Type, it can be a group of egress, ingress, or kube-apiserver
+                    proxies. In addition to running a highly available set of proxies, ingress
+                    and egress ProxyGroups also allow for serving many annotated Services from a
+                    single set of proxies to minimise resource consumption.
 
-                    Use the tailscale.com/proxy-group annotation on a Service to specify that
-                    the egress proxy should be implemented by a ProxyGroup instead of a single
-                    dedicated proxy. In addition to running a highly available set of proxies,
-                    ProxyGroup also allows for serving many annotated Services from a single
-                    set of proxies to minimise resource consumption.
+                    For ingress and egress, use the tailscale.com/proxy-group annotation on a
+                    Service to specify that the proxy should be implemented by a ProxyGroup
+                    instead of a single dedicated proxy.
 
-                    More info: https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
+                    More info:
+                    * https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
+                    * https://tailscale.com/kb/1439/kubernetes-operator-cluster-ingress
+
+                    For kube-apiserver, the ProxyGroup is a standalone resource. Use the
+                    spec.kubeAPIServer field to configure options specific to the kube-apiserver
+                    ProxyGroup type.
                 properties:
                     apiVersion:
                         description: |-
