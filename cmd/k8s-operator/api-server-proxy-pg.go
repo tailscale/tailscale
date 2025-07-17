@@ -216,7 +216,7 @@ func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, se
 
 	// 5. Clean up any stale Tailscale Services from previous resource versions.
 	if err = r.maybeDeleteStaleServices(ctx, pg, logger); err != nil {
-		return fmt.Errorf("failed to delete old Tailscale Services: %w", err)
+		return fmt.Errorf("failed to delete stale Tailscale Services: %w", err)
 	}
 
 	return nil
@@ -224,7 +224,7 @@ func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, se
 
 // maybeCleanup ensures that any resources, such as a Tailscale Service created for this Service, are cleaned up when the
 // Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
-// deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
+// deleted if it does not contain any other owner references. If it does, the cleanup only removes the owner reference
 // corresponding to this Service.
 func (r *APIServerProxyServiceReconciler) maybeCleanup(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (err error) {
 	ix := slices.Index(pg.Finalizers, proxyPGFinalizerName)
@@ -280,7 +280,7 @@ func (r *APIServerProxyServiceReconciler) maybeDeleteStaleServices(ctx context.C
 			continue
 		}
 
-		logger.Infof("Deleting Tailscale Service %s owned by ProxyGroup %s", svc.Name, pg.Name)
+		logger.Infof("Deleting Tailscale Service %s", svc.Name)
 		if err := r.tsClient.DeleteVIPService(ctx, svc.Name); err != nil && !isErrorTailscaleServiceNotFound(err) {
 			return fmt.Errorf("error deleting Tailscale Service %s: %w", svc.Name, err)
 		}
@@ -413,7 +413,7 @@ func serviceNameForAPIServerProxy(pg *tsapi.ProxyGroup) tailcfg.ServiceName {
 // exclusiveOwnerAnnotations returns the updated annotations required to ensure this
 // instance of the operator is the exclusive owner. If the Tailscale Service is not
 // nil, but does not contain an owner reference we return an error as this likely means
-// that the Service was created by somthing other than a Tailscale Kubernetes operator.
+// that the Service was created by something other than a Tailscale Kubernetes operator.
 // We also error if it is already owned by another operator instance, as we do not
 // want to load balance a kube-apiserver ProxyGroup across multiple clusters.
 func exclusiveOwnerAnnotations(pg *tsapi.ProxyGroup, operatorID string, svc *tailscale.VIPService) (map[string]string, error) {
