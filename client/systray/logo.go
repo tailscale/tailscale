@@ -210,6 +210,14 @@ var (
 	red  = color.NRGBA{229, 111, 74, 255}
 )
 
+func init() {
+	if IsWindowsDarkMode() {
+		fg = color.NRGBA{0, 0, 0, 255}  // black dots
+		bg = color.NRGBA{0, 0, 0, 0}    // transparent background
+		gray = color.NRGBA{0, 0, 0, 60} // dark gray
+	}
+}
+
 // render returns a PNG image of the logo.
 func (logo tsLogo) render() *bytes.Buffer {
 	const borderUnits = 1
