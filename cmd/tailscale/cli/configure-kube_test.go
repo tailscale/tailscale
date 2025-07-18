@@ -6,6 +6,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ func TestKubeconfig(t *testing.T) {
 	const fqdn = "foo.tail-scale.ts.net"
 	tests := []struct {
 		name    string
+		http    bool
 		in      string
 		want    string
 		wantErr error
@@ -39,6 +41,27 @@ kind: Pod`,
 clusters:
 - cluster:
     server: https://foo.tail-scale.ts.net
+  name: foo.tail-scale.ts.net
+contexts:
+- context:
+    cluster: foo.tail-scale.ts.net
+    user: tailscale-auth
+  name: foo.tail-scale.ts.net
+current-context: foo.tail-scale.ts.net
+kind: Config
+users:
+- name: tailscale-auth
+  user:
+    token: unused`,
+		},
+		{
+			name: "empty_http",
+			http: true,
+			in:   "",
+			want: `apiVersion: v1
+clusters:
+- cluster:
+    server: http://foo.tail-scale.ts.net
   name: foo.tail-scale.ts.net
 contexts:
 - context:
@@ -202,7 +225,11 @@ users:
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := updateKubeconfig([]byte(tt.in), fqdn)
+			scheme := "https://"
+			if tt.http {
+				scheme = "http://"
+			}
+			got, err := updateKubeconfig([]byte(tt.in), scheme, fqdn)
 			if err != nil {
 				if err != tt.wantErr {
 					t.Fatalf("updateKubeconfig() error = %v, wantErr %v", err, tt.wantErr)
@@ -217,5 +244,32 @@ users:
 				t.Errorf("Kubeconfig() mismatch (-want +got):\n%s", d)
 			}
 		})
+	}
+}
+
+func TestGetInputs(t *testing.T) {
+	for _, arg := range []string{
+		"foo.tail-scale.ts.net",
+		"foo",
+		"127.0.0.1",
+	} {
+		for _, prefix := range []string{"", "https://", "http://"} {
+			for _, httpFlag := range []bool{false, true} {
+				expectedHost := arg
+				expectedHTTP := (httpFlag && !strings.HasPrefix(prefix, "https://")) || strings.HasPrefix(prefix, "http://")
+				t.Run(fmt.Sprintf("%s%s_http=%v", prefix, arg, httpFlag), func(t *testing.T) {
+					host, http, err := getInputs(prefix+arg, httpFlag)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if host != expectedHost {
+						t.Errorf("host = %v, want %v", host, expectedHost)
+					}
+					if http != expectedHTTP {
+						t.Errorf("http = %v, want %v", http, expectedHTTP)
+					}
+				})
+			}
+		}
 	}
 }
