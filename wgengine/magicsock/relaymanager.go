@@ -870,7 +870,11 @@ func doAllocate(ctx context.Context, server netip.AddrPort, discoKeys [2]key.Dis
 	if err != nil {
 		return udprelay.ServerEndpoint{}, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	transport := &http.Transport{
+		DisableKeepAlives: true, // this transport is meant to be used once
+	}
+	client := &http.Client{Transport: transport}
+	resp, err := client.Do(req)
 	if err != nil {
 		return udprelay.ServerEndpoint{}, err
 	}
