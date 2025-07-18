@@ -515,7 +515,8 @@ func (e *serveEnv) runServeClear(ctx context.Context, args []string) error {
 		return fmt.Errorf("error getting serve config: %w", err)
 	}
 	if _, ok := sc.Services[svc]; !ok {
-		return fmt.Errorf("service %s not found in serve config", svc)
+		log.Printf("service %s not found in serve config, nothing to clear", svc)
+		return nil
 	}
 	delete(sc.Services, svc)
 	if err := e.removeServiceFromPrefs(ctx, svc); err != nil {
