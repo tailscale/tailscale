@@ -13,6 +13,7 @@ import (
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=pg
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ProxyGroupReady")].reason`,description="Status of the deployed ProxyGroup resources."
+// +kubebuilder:printcolumn:name="URL",type="string",JSONPath=`.status.url`,description="URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if any. Only applies to ProxyGroups of type kube-apiserver."
 // +kubebuilder:printcolumn:name="Type",type="string",JSONPath=`.spec.type`,description="ProxyGroup type."
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
@@ -100,10 +101,20 @@ type ProxyGroupSpec struct {
 
 type ProxyGroupStatus struct {
 	// List of status conditions to indicate the status of the ProxyGroup
-	// resources. Known condition types are `ProxyGroupReady`, `ProxyGroupAvailable`.
-	// `ProxyGroupReady` indicates all ProxyGroup resources are fully reconciled
-	// and ready. `ProxyGroupAvailable` indicates that at least one proxy is
-	// ready to serve traffic.
+	// resources. Known condition types include `ProxyGroupReady` and
+	// `ProxyGroupAvailable`.
+	//
+	// * `ProxyGroupReady` indicates all ProxyGroup resources are reconciled and
+	//   all expected conditions are true.
+	// * `ProxyGroupAvailable` indicates that at least one proxy is ready to
+	//   serve traffic.
+	//
+	// For ProxyGroups of type kube-apiserver, there are two additional conditions:
+	//
+	// * `KubeAPIServerProxyConfigured` indicates that at least one API server
+	//   proxy is configured and ready to serve traffic.
+	// * `KubeAPIServerProxyValid` indicates that spec.kubeAPIServer config is
+	//   valid.
 	//
 	// +listType=map
 	// +listMapKey=type
@@ -115,6 +126,11 @@ type ProxyGroupStatus struct {
 	// +listMapKey=hostname
 	// +optional
 	Devices []TailnetDevice `json:"devices,omitempty"`
+
+	// URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if
+	// any. Only applies to ProxyGroups of type kube-apiserver.
+	// +optional
+	URL string `json:"url,omitempty"`
 }
 
 type TailnetDevice struct {
@@ -165,12 +181,12 @@ type KubeAPIServerConfig struct {
 	// +optional
 	Mode *APIServerProxyMode `json:"mode,omitempty"`
 
-	// ServiceName is the name of the Tailscale Service to create. Must have a
-	// prefix of "svc:" and the remaining characters must be a valid DNS label
-	// no longer than 63 characters. If not specified, a name will be generated
-	// based on the ProxyGroup name.
+	// Hostname is the hostname with which to expose the Kubernetes API server
+	// proxies. Must be a valid DNS label no longer than 63 characters. If not
+	// specified, the name of the ProxyGroup is used as the hostname. Must be
+	// unique across the whole tailnet.
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Pattern=`^svc:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
 	// +optional
-	ServiceName string `json:"serviceName,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
 }

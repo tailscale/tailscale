@@ -152,7 +152,7 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 
 	errs := make(chan error)
 	go func() {
-		ap.log.Infof("API server proxy in %q mode is listening on %s", mode, tsLn.Addr())
+		ap.log.Infof("API server proxy in %s mode is listening on tailnet addresses %s", mode, tsLn.Addr())
 		if err := serve(tsLn); err != nil && err != http.ErrServerClosed {
 			errs <- fmt.Errorf("error serving: %w", err)
 		}

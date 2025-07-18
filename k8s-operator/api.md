@@ -342,7 +342,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `mode` _[APIServerProxyMode](#apiserverproxymode)_ | Mode to run the API server proxy in. Supported modes are auth and noauth.<br />In auth mode, requests from the tailnet proxied over to the Kubernetes<br />API server are additionally impersonated using the sender's tailnet identity.<br />If not specified, defaults to auth mode. |  | Enum: [auth noauth] <br />Type: string <br /> |
-| `serviceName` _string_ | ServiceName is the name of the Tailscale Service to create. Must have a<br />prefix of "svc:" and the remaining characters must be a valid DNS label<br />no longer than 63 characters. If not specified, a name will be generated<br />based on the ProxyGroup name. |  | Pattern: `^svc:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$` <br />Type: string <br /> |
+| `hostname` _string_ | Hostname is the hostname with which to expose the Kubernetes API server<br />proxies. Must be a valid DNS label no longer than 63 characters. If not<br />specified, the name of the ProxyGroup is used as the hostname. Must be<br />unique across the whole tailnet. |  | Pattern: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$` <br />Type: string <br /> |
 
 
 #### LabelValue
@@ -698,8 +698,9 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup<br />resources. Known condition types are `ProxyGroupReady`, `ProxyGroupAvailable`.<br />`ProxyGroupReady` indicates all ProxyGroup resources are fully reconciled<br />and ready. `ProxyGroupAvailable` indicates that at least one proxy is<br />ready to serve traffic. |  |  |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup<br />resources. Known condition types include `ProxyGroupReady` and<br />`ProxyGroupAvailable`.<br />* `ProxyGroupReady` indicates all ProxyGroup resources are reconciled and<br />  all expected conditions are true.<br />* `ProxyGroupAvailable` indicates that at least one proxy is ready to<br />  serve traffic.<br />For ProxyGroups of type kube-apiserver, there are two additional conditions:<br />* `KubeAPIServerProxyConfigured` indicates that at least one API server<br />  proxy is configured and ready to serve traffic.<br />* `KubeAPIServerProxyValid` indicates that spec.kubeAPIServer config is<br />  valid. |  |  |
 | `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the ProxyGroup StatefulSet. |  |  |
+| `url` _string_ | URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if<br />any. Only applies to ProxyGroups of type kube-apiserver. |  |  |
 
 
 #### ProxyGroupType

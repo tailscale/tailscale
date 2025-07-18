@@ -20,6 +20,10 @@ spec:
           jsonPath: .status.conditions[?(@.type == "ProxyGroupReady")].reason
           name: Status
           type: string
+        - description: URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if any. Only applies to ProxyGroups of type kube-apiserver.
+          jsonPath: .status.url
+          name: URL
+          type: string
         - description: ProxyGroup type.
           jsonPath: .spec.type
           name: Type
@@ -90,6 +94,14 @@ spec:
                     ProxyGroup type. This field is only used when Type is set to "kube-apiserver".
                   type: object
                   properties:
+                    hostname:
+                      description: |-
+                        Hostname is the hostname with which to expose the Kubernetes API server
+                        proxies. Must be a valid DNS label no longer than 63 characters. If not
+                        specified, the name of the ProxyGroup is used as the hostname. Must be
+                        unique across the whole tailnet.
+                      type: string
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                     mode:
                       description: |-
                         Mode to run the API server proxy in. Supported modes are auth and noauth.
@@ -100,14 +112,6 @@ spec:
                       enum:
                         - auth
                         - noauth
-                    serviceName:
-                      description: |-
-                        ServiceName is the name of the Tailscale Service to create. Must have a
-                        prefix of "svc:" and the remaining characters must be a valid DNS label
-                        no longer than 63 characters. If not specified, a name will be generated
-                        based on the ProxyGroup name.
-                      type: string
-                      pattern: ^svc:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 proxyClass:
                   description: |-
                     ProxyClass is the name of the ProxyClass custom resource that contains
@@ -156,10 +160,20 @@ spec:
                 conditions:
                   description: |-
                     List of status conditions to indicate the status of the ProxyGroup
-                    resources. Known condition types are `ProxyGroupReady`, `ProxyGroupAvailable`.
-                    `ProxyGroupReady` indicates all ProxyGroup resources are fully reconciled
-                    and ready. `ProxyGroupAvailable` indicates that at least one proxy is
-                    ready to serve traffic.
+                    resources. Known condition types include `ProxyGroupReady` and
+                    `ProxyGroupAvailable`.
+
+                    * `ProxyGroupReady` indicates all ProxyGroup resources are reconciled and
+                      all expected conditions are true.
+                    * `ProxyGroupAvailable` indicates that at least one proxy is ready to
+                      serve traffic.
+
+                    For ProxyGroups of type kube-apiserver, there are two additional conditions:
+
+                    * `KubeAPIServerProxyConfigured` indicates that at least one API server
+                      proxy is configured and ready to serve traffic.
+                    * `KubeAPIServerProxyValid` indicates that spec.kubeAPIServer config is
+                      valid.
                   type: array
                   items:
                     description: Condition contains details for one aspect of the current state of this API Resource.
@@ -246,6 +260,11 @@ spec:
                   x-kubernetes-list-map-keys:
                     - hostname
                   x-kubernetes-list-type: map
+                url:
+                  description: |-
+                    URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if
+                    any. Only applies to ProxyGroups of type kube-apiserver.
+                  type: string
       served: true
       storage: true
       subresources:

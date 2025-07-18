@@ -95,6 +95,18 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	}
 
 	ft := &fakeTSClient{}
+	ingressTSSvc := &tailscale.VIPService{
+		Name:    "svc:some-ingress-hostname",
+		Comment: managedTSServiceComment,
+		Annotations: map[string]string{
+			// No resource field.
+			ownerAnnotation: `{"ownerRefs":[{"operatorID":"self-id"}]}`,
+		},
+		Ports: []string{"tcp:443"},
+		Tags:  []string{"tag:k8s"},
+		Addrs: []string{"5.6.7.8"},
+	}
+	ft.CreateOrUpdateVIPService(t.Context(), ingressTSSvc)
 
 	lc := &fakeLocalClient{
 		status: &ipnstate.Status{
@@ -124,15 +136,9 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	}
 	expectReconciled(t, r, "", pgName)
 	pg.ObjectMeta.Finalizers = []string{proxyPGFinalizerName}
-	tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceValid, metav1.ConditionFalse, reasonPGTailscaleServiceInvalid, "", 1, r.clock, r.logger)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceConfigured, metav1.ConditionFalse, reasonPGTailscaleServiceNoBackends, "", 1, r.clock, r.logger)
-	omitStatusConditionMessages := func(p *tsapi.ProxyGroup) {
-		for i := range p.Status.Conditions {
-			// Don't bother validating the message.
-			p.Status.Conditions[i].Message = ""
-		}
-	}
-	expectEqual(t, fc, pg, omitStatusConditionMessages)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionFalse, reasonKubeAPIServerProxyInvalid, "", 1, r.clock, r.logger)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 	expectMissing[corev1.Secret](t, fc, ns, defaultDomain)
 	expectMissing[rbacv1.Role](t, fc, ns, defaultDomain)
 	expectMissing[rbacv1.RoleBinding](t, fc, ns, defaultDomain)
@@ -164,9 +170,9 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	if !reflect.DeepEqual(tsSvc, expectedTSSvc) {
 		t.Fatalf("expected Tailscale Service to be %+v, got %+v", expectedTSSvc, tsSvc)
 	}
-	tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceValid, metav1.ConditionTrue, reasonPGTailscaleServiceValid, "", 1, r.clock, r.logger)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceConfigured, metav1.ConditionFalse, reasonPGTailscaleServiceNoBackends, "", 1, r.clock, r.logger)
-	expectEqual(t, fc, pg, omitStatusConditionMessages)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.logger)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
 	expectedCfg.APIServerProxy.ServiceName = ptr.To(tailcfg.ServiceName("svc:" + pgName))
 	expectCfg(&expectedCfg)
@@ -184,7 +190,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectedCfg.AdvertiseServices = []string{"svc:" + pgName}
 	expectCfg(&expectedCfg)
 
-	expectEqual(t, fc, pg, omitStatusConditionMessages) // Unchanged status.
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages) // Unchanged status.
 
 	// Simulate Pod prefs updated with advertised services; should see Configured condition updated to true.
 	mustCreate(t, fc, &corev1.Secret{
@@ -199,14 +205,15 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		},
 	})
 	expectReconciled(t, r, "", pgName)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceConfigured, metav1.ConditionTrue, reasonPGTailscaleServiceConfigured, "", 1, r.clock, r.logger)
-	expectEqual(t, fc, pg, omitStatusConditionMessages)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
+	pg.Status.URL = "https://" + defaultDomain
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
 	// Rename the Tailscale Service - old one + cert resources should be cleaned up.
 	updatedServiceName := tailcfg.ServiceName("svc:test-pg-renamed")
 	updatedDomain := "test-pg-renamed.ts.net"
 	pg.Spec.KubeAPIServer = &tsapi.KubeAPIServerConfig{
-		ServiceName: updatedServiceName.String(),
+		Hostname: updatedServiceName.WithoutPrefix(),
 	}
 	mustUpdate(t, fc, "", pgName, func(p *tsapi.ProxyGroup) {
 		p.Spec.KubeAPIServer = pg.Spec.KubeAPIServer
@@ -228,8 +235,9 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectedCfg.APIServerProxy.ServiceName = ptr.To(updatedServiceName)
 	expectedCfg.AdvertiseServices = nil
 	expectCfg(&expectedCfg)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceConfigured, metav1.ConditionFalse, reasonPGTailscaleServiceNoBackends, "", 1, r.clock, r.logger)
-	expectEqual(t, fc, pg, omitStatusConditionMessages)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
+	pg.Status.URL = ""
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
 	expectEqual(t, fc, certSecret(pgName, ns, updatedDomain, pg))
 	expectEqual(t, fc, certSecretRole(pgName, ns, updatedDomain))
@@ -237,6 +245,19 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectMissing[corev1.Secret](t, fc, ns, defaultDomain)
 	expectMissing[rbacv1.Role](t, fc, ns, defaultDomain)
 	expectMissing[rbacv1.RoleBinding](t, fc, ns, defaultDomain)
+
+	// Check we get the new hostname in the status once ready.
+	if err := populateTLSSecret(t.Context(), fc, pgName, updatedDomain); err != nil {
+		t.Fatalf("populating TLS Secret: %v", err)
+	}
+	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(s *corev1.Secret) {
+		s.Data["profile-foo"] = []byte(`{"AdvertiseServices":["svc:test-pg"],"Config":{"NodeID":"node-foo"}}`)
+	})
+	expectReconciled(t, r, "", pgName)
+	expectedCfg.AdvertiseServices = []string{updatedServiceName.String()}
+	expectCfg(&expectedCfg)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
+	pg.Status.URL = "https://" + updatedDomain
 
 	// Delete the ProxyGroup and verify Tailscale Service and cert resources are cleaned up.
 	if err := fc.Delete(t.Context(), pg); err != nil {
@@ -249,6 +270,15 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	_, err = ft.GetVIPService(t.Context(), updatedServiceName)
 	if !isErrorTailscaleServiceNotFound(err) {
 		t.Fatalf("Expected 404, got: %v", err)
+	}
+
+	// Ingress Tailscale Service should not be affected.
+	svc, err := ft.GetVIPService(t.Context(), ingressTSSvc.Name)
+	if err != nil {
+		t.Fatalf("getting ingress Tailscale Service: %v", err)
+	}
+	if !reflect.DeepEqual(svc, ingressTSSvc) {
+		t.Fatalf("expected ingress Tailscale Service to be unmodified %+v, got %+v", ingressTSSvc, svc)
 	}
 }
 
@@ -343,5 +373,12 @@ func TestExclusiveOwnerAnnotations(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func omitPGStatusConditionMessages(p *tsapi.ProxyGroup) {
+	for i := range p.Status.Conditions {
+		// Don't bother validating the message.
+		p.Status.Conditions[i].Message = ""
 	}
 }

@@ -35,13 +35,13 @@ import (
 const (
 	proxyPGFinalizerName = "tailscale.com/kube-apiserver-finalizer"
 
-	// Reasons for PGTailscaleServiceValid condition.
-	reasonPGTailscaleServiceInvalid = "TailscaleServiceInvalid"
-	reasonPGTailscaleServiceValid   = "TailscaleServiceValid"
+	// Reasons for KubeAPIServerProxyValid condition.
+	reasonKubeAPIServerProxyInvalid = "KubeAPIServerProxyInvalid"
+	reasonKubeAPIServerProxyValid   = "KubeAPIServerProxyValid"
 
-	// Reasons for PGTailscaleServiceConfigured condition.
-	reasonPGTailscaleServiceConfigured = "TailscaleServiceConfigured"
-	reasonPGTailscaleServiceNoBackends = "TailscaleServiceNoBackends"
+	// Reasons for KubeAPIServerProxyConfigured condition.
+	reasonKubeAPIServerProxyConfigured = "KubeAPIServerProxyConfigured"
+	reasonKubeAPIServerProxyNoBackends = "KubeAPIServerProxyNoBackends"
 )
 
 // APIServerProxyServiceReconciler reconciles the Tailscale Services required for an
@@ -85,11 +85,7 @@ func (r *APIServerProxyServiceReconciler) Reconcile(ctx context.Context, req rec
 
 	err = r.maybeProvision(ctx, serviceName, pg, logger)
 	if err != nil {
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-		} else {
-			return reconcile.Result{}, err
-		}
+		return reconcile.Result{}, err
 	}
 
 	return reconcile.Result{}, nil
@@ -100,6 +96,7 @@ func (r *APIServerProxyServiceReconciler) Reconcile(ctx context.Context, req rec
 //
 // Returns true if the operation resulted in a Tailscale Service update.
 func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (err error) {
+	var dnsName string
 	oldPGStatus := pg.Status.DeepCopy()
 	defer func() {
 		podsAdvertising, podsErr := numberPodsAdvertising(ctx, r.Client, r.tsNamespace, pg.Name, serviceName)
@@ -111,16 +108,20 @@ func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, se
 		// Update the ProxyGroup status with the Tailscale Service information
 		// Update the condition based on how many pods are advertising the service
 		conditionStatus := metav1.ConditionFalse
-		conditionReason := reasonPGTailscaleServiceNoBackends
+		conditionReason := reasonKubeAPIServerProxyNoBackends
 		conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", podsAdvertising, pgReplicas(pg))
 
+		pg.Status.URL = ""
 		if podsAdvertising > 0 {
 			// At least one pod is advertising the service, consider it configured
 			conditionStatus = metav1.ConditionTrue
-			conditionReason = reasonPGTailscaleServiceConfigured
+			conditionReason = reasonKubeAPIServerProxyConfigured
+			if dnsName != "" {
+				pg.Status.URL = "https://" + dnsName
+			}
 		}
 
-		tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceConfigured, conditionStatus, conditionReason, conditionMessage, pg.Generation, r.clock, logger)
+		tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, conditionStatus, conditionReason, conditionMessage, pg.Generation, r.clock, logger)
 
 		if !apiequality.Semantic.DeepEqual(oldPGStatus, &pg.Status) {
 			// An error encountered here should get returned by the Reconcile function.
@@ -150,7 +151,7 @@ func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, se
 	if isErrorFeatureFlagNotEnabled(err) {
 		logger.Warn(msgFeatureFlagNotEnabled)
 		r.recorder.Event(pg, corev1.EventTypeWarning, warningTailscaleServiceFeatureFlagNotEnabled, msgFeatureFlagNotEnabled)
-		tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceValid, metav1.ConditionFalse, reasonPGTailscaleServiceInvalid, msgFeatureFlagNotEnabled, pg.Generation, r.clock, logger)
+		tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionFalse, reasonKubeAPIServerProxyInvalid, msgFeatureFlagNotEnabled, pg.Generation, r.clock, logger)
 		return nil
 	}
 	if err != nil && !isErrorTailscaleServiceNotFound(err) {
@@ -163,12 +164,12 @@ func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, se
 		msg := fmt.Sprintf("error ensuring exclusive ownership of Tailscale Service %s: %v. %s", serviceName, err, instr)
 		logger.Warn(msg)
 		r.recorder.Event(pg, corev1.EventTypeWarning, "InvalidTailscaleService", msg)
-		tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceValid, metav1.ConditionFalse, reasonPGTailscaleServiceInvalid, msg, pg.Generation, r.clock, logger)
+		tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionFalse, reasonKubeAPIServerProxyInvalid, msg, pg.Generation, r.clock, logger)
 		return nil
 	}
 
 	// After getting this far, we know the Tailscale Service is valid.
-	tsoperator.SetProxyGroupCondition(pg, tsapi.PGTailscaleServiceValid, metav1.ConditionTrue, reasonPGTailscaleServiceValid, reasonPGTailscaleServiceValid, pg.Generation, r.clock, logger)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, reasonKubeAPIServerProxyValid, pg.Generation, r.clock, logger)
 
 	// Service tags are limited to matching the ProxyGroup's tags until we have
 	// support for querying peer caps for a Service-bound request.
@@ -204,13 +205,17 @@ func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, se
 	if err != nil {
 		return fmt.Errorf("error determining DNS name base: %w", err)
 	}
-	dnsName := serviceName.WithoutPrefix() + "." + tcd
+	dnsName = serviceName.WithoutPrefix() + "." + tcd
 	if err = r.ensureCertResources(ctx, pg, dnsName); err != nil {
 		return fmt.Errorf("error ensuring cert resources: %w", err)
 	}
 
 	// 4. Configure the Pods to advertise the Tailscale Service.
 	if err = r.maybeAdvertiseServices(ctx, pg, serviceName, logger); err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+			return nil
+		}
 		return fmt.Errorf("error updating advertised Tailscale Services: %w", err)
 	}
 
@@ -276,7 +281,7 @@ func (r *APIServerProxyServiceReconciler) maybeDeleteStaleServices(ctx context.C
 		}
 
 		owner := owners.OwnerRefs[0]
-		if owner.Resource.Kind != "ProxyGroup" || owner.Resource.UID != string(pg.UID) {
+		if owner.Resource == nil || owner.Resource.Kind != "ProxyGroup" || owner.Resource.UID != string(pg.UID) {
 			continue
 		}
 
@@ -403,8 +408,8 @@ func (r *APIServerProxyServiceReconciler) maybeAdvertiseServices(ctx context.Con
 }
 
 func serviceNameForAPIServerProxy(pg *tsapi.ProxyGroup) tailcfg.ServiceName {
-	if pg.Spec.KubeAPIServer != nil && pg.Spec.KubeAPIServer.ServiceName != "" {
-		return tailcfg.ServiceName(pg.Spec.KubeAPIServer.ServiceName)
+	if pg.Spec.KubeAPIServer != nil && pg.Spec.KubeAPIServer.Hostname != "" {
+		return tailcfg.ServiceName("svc:" + pg.Spec.KubeAPIServer.Hostname)
 	}
 
 	return tailcfg.ServiceName("svc:" + pg.Name)
