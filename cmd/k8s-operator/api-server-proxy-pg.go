@@ -80,11 +80,20 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 
 	if markedForDeletion(pg) {
 		logger.Debugf("ProxyGroup is being deleted, ensuring any created resources are cleaned up")
-		return res, r.maybeCleanup(ctx, serviceName, pg, logger)
+		if err = r.maybeCleanup(ctx, serviceName, pg, logger); strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+			return res, nil
+		}
+
+		return res, err
 	}
 
 	err = r.maybeProvision(ctx, serviceName, pg, logger)
 	if err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+			return reconcile.Result{}, nil
+		}
 		return reconcile.Result{}, err
 	}
 
@@ -212,10 +221,6 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 
 	// 4. Configure the Pods to advertise the Tailscale Service.
 	if err = r.maybeAdvertiseServices(ctx, pg, serviceName, logger); err != nil {
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-			return nil
-		}
 		return fmt.Errorf("error updating advertised Tailscale Services: %w", err)
 	}
 

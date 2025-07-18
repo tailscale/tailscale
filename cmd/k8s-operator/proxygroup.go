@@ -126,6 +126,10 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		}
 
 		if done, err := r.maybeCleanup(ctx, pg); err != nil {
+			if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+				logger.Infof("optimistic lock error, retrying: %s", err)
+				return reconcile.Result{}, nil
+			}
 			return reconcile.Result{}, err
 		} else if !done {
 			logger.Debugf("ProxyGroup resource cleanup not yet finished, will retry...")
@@ -423,6 +427,10 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	defer func() {
 		if !apiequality.Semantic.DeepEqual(*oldPGStatus, pg.Status) {
 			if updateErr := r.Client.Status().Update(ctx, pg); updateErr != nil {
+				if strings.Contains(updateErr.Error(), optimisticLockErrorMsg) {
+					logger.Infof("optimistic lock error updating status, retrying: %s", err)
+					updateErr = nil
+				}
 				err = errors.Join(err, updateErr)
 			}
 		}
