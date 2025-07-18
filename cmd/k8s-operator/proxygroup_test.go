@@ -1376,7 +1376,7 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 			Hostname: ptr.To("test-k8s-apiserver-0"),
 			APIServerProxy: &conf.APIServerProxyConfig{
 				Enabled:    opt.NewBool(true),
-				AuthMode:   opt.NewBool(false),
+				Mode:       ptr.To(kubetypes.APIServerProxyModeNoAuth),
 				IssueCerts: opt.NewBool(true),
 			},
 		},

@@ -9,30 +9,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"tailscale.com/kube/kubetypes"
+	"tailscale.com/types/ptr"
 )
 
-type apiServerProxyMode int
-
-func (a apiServerProxyMode) String() string {
-	switch a {
-	case apiServerProxyModeDisabled:
-		return "disabled"
-	case apiServerProxyModeEnabled:
-		return "auth"
-	case apiServerProxyModeNoAuth:
-		return "noauth"
-	default:
-		return "unknown"
-	}
-}
-
-const (
-	apiServerProxyModeDisabled apiServerProxyMode = iota
-	apiServerProxyModeEnabled
-	apiServerProxyModeNoAuth
-)
-
-func parseAPIProxyMode() apiServerProxyMode {
+func parseAPIProxyMode() *kubetypes.APIServerProxyMode {
 	haveAuthProxyEnv := os.Getenv("AUTH_PROXY") != ""
 	haveAPIProxyEnv := os.Getenv("APISERVER_PROXY") != ""
 	switch {
@@ -41,21 +23,21 @@ func parseAPIProxyMode() apiServerProxyMode {
 	case haveAuthProxyEnv:
 		var authProxyEnv = defaultBool("AUTH_PROXY", false) // deprecated
 		if authProxyEnv {
-			return apiServerProxyModeEnabled
+			return ptr.To(kubetypes.APIServerProxyModeAuth)
 		}
-		return apiServerProxyModeDisabled
+		return nil
 	case haveAPIProxyEnv:
 		var apiProxyEnv = defaultEnv("APISERVER_PROXY", "") // true, false or "noauth"
 		switch apiProxyEnv {
 		case "true":
-			return apiServerProxyModeEnabled
+			return ptr.To(kubetypes.APIServerProxyModeAuth)
 		case "false", "":
-			return apiServerProxyModeDisabled
+			return nil
 		case "noauth":
-			return apiServerProxyModeNoAuth
+			return ptr.To(kubetypes.APIServerProxyModeNoAuth)
 		default:
 			panic(fmt.Sprintf("unknown APISERVER_PROXY value %q", apiProxyEnv))
 		}
 	}
-	return apiServerProxyModeDisabled
+	return nil
 }

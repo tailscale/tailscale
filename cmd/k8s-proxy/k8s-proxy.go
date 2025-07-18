@@ -34,6 +34,7 @@ import (
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	"tailscale.com/kube/certs"
 	"tailscale.com/kube/k8s-proxy/conf"
+	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/kube/services"
 	"tailscale.com/kube/state"
@@ -238,11 +239,11 @@ func run(logger *zap.SugaredLogger) error {
 	}
 
 	// Setup for the API server proxy.
-	authMode := true
-	if cfg.Parsed.APIServerProxy != nil && cfg.Parsed.APIServerProxy.AuthMode.EqualBool(false) {
-		authMode = false
+	mode := kubetypes.APIServerProxyModeAuth
+	if cfg.Parsed.APIServerProxy != nil && cfg.Parsed.APIServerProxy.Mode != nil {
+		mode = *cfg.Parsed.APIServerProxy.Mode
 	}
-	ap, err := apiproxy.NewAPIServerProxy(logger.Named("apiserver-proxy"), restConfig, ts, authMode, false)
+	ap, err := apiproxy.NewAPIServerProxy(logger.Named("apiserver-proxy"), restConfig, ts, mode, false)
 	if err != nil {
 		return fmt.Errorf("error creating api server proxy: %w", err)
 	}
