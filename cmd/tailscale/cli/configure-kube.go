@@ -9,16 +9,26 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"k8s.io/client-go/util/homedir"
 	"sigs.k8s.io/yaml"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/netmap"
 	"tailscale.com/version"
 )
+
+var configureKubeconfigArgs struct {
+	http bool // Use HTTP instead of HTTPS (default) for the auth proxy.
+}
 
 func configureKubeconfigCmd() *ffcli.Command {
 	return &ffcli.Command{
@@ -34,6 +44,7 @@ See: https://tailscale.com/s/k8s-auth-proxy
 `),
 		FlagSet: (func() *flag.FlagSet {
 			fs := newFlagSet("kubeconfig")
+			fs.BoolVar(&configureKubeconfigArgs.http, "http", false, "Use HTTP instead of HTTPS to connect to the auth proxy. Ignored if you include a scheme in the hostname argument.")
 			return fs
 		})(),
 		Exec: runConfigureKubeconfig,
@@ -70,10 +81,18 @@ func kubeconfigPath() (string, error) {
 }
 
 func runConfigureKubeconfig(ctx context.Context, args []string) error {
-	if len(args) != 1 {
-		return errors.New("unknown arguments")
+	if len(args) != 1 || args[0] == "" {
+		return flag.ErrHelp
 	}
-	hostOrFQDN := args[0]
+	hostOrFQDNOrIP := args[0]
+	http := configureKubeconfigArgs.http
+	if strings.HasPrefix(hostOrFQDNOrIP, "http://") {
+		_, hostOrFQDNOrIP, _ = strings.Cut(hostOrFQDNOrIP, "http://")
+		http = true
+	} else if strings.HasPrefix(hostOrFQDNOrIP, "https://") {
+		_, hostOrFQDNOrIP, _ = strings.Cut(hostOrFQDNOrIP, "https://")
+		http = false
+	}
 
 	st, err := localClient.Status(ctx)
 	if err != nil {
@@ -82,19 +101,28 @@ func runConfigureKubeconfig(ctx context.Context, args []string) error {
 	if st.BackendState != "Running" {
 		return errors.New("Tailscale is not running")
 	}
-	targetFQDN, ok := nodeDNSNameFromArg(st, hostOrFQDN)
-	if !ok {
-		return fmt.Errorf("no peer found with hostname %q", hostOrFQDN)
+	nm, err := getNetMap(ctx)
+	if err != nil {
+		return err
+	}
+
+	targetFQDN, err := nodeOrServiceDNSNameFromArg(st, nm, hostOrFQDNOrIP)
+	if err != nil {
+		return err
 	}
 	targetFQDN = strings.TrimSuffix(targetFQDN, ".")
 	var kubeconfig string
 	if kubeconfig, err = kubeconfigPath(); err != nil {
 		return err
 	}
-	if err = setKubeconfigForPeer(targetFQDN, kubeconfig); err != nil {
+	scheme := "https://"
+	if http {
+		scheme = "http://"
+	}
+	if err = setKubeconfigForPeer(scheme, targetFQDN, kubeconfig); err != nil {
 		return err
 	}
-	printf("kubeconfig configured for %q\n", hostOrFQDN)
+	printf("kubeconfig configured for %q at URL %q\n", targetFQDN, scheme+targetFQDN)
 	return nil
 }
 
@@ -116,7 +144,7 @@ func appendOrSetNamed(dst []any, name string, val map[string]any) []any {
 
 var errInvalidKubeconfig = errors.New("invalid kubeconfig")
 
-func updateKubeconfig(cfgYaml []byte, fqdn string) ([]byte, error) {
+func updateKubeconfig(cfgYaml []byte, scheme, fqdn string) ([]byte, error) {
 	var cfg map[string]any
 	if len(cfgYaml) > 0 {
 		if err := yaml.Unmarshal(cfgYaml, &cfg); err != nil {
@@ -139,7 +167,7 @@ func updateKubeconfig(cfgYaml []byte, fqdn string) ([]byte, error) {
 	cfg["clusters"] = appendOrSetNamed(clusters, fqdn, map[string]any{
 		"name": fqdn,
 		"cluster": map[string]string{
-			"server": "https://" + fqdn,
+			"server": scheme + fqdn,
 		},
 	})
 
@@ -172,7 +200,7 @@ func updateKubeconfig(cfgYaml []byte, fqdn string) ([]byte, error) {
 	return yaml.Marshal(cfg)
 }
 
-func setKubeconfigForPeer(fqdn, filePath string) error {
+func setKubeconfigForPeer(scheme, fqdn, filePath string) error {
 	dir := filepath.Dir(filePath)
 	if _, err := os.Stat(dir); err != nil {
 		if !os.IsNotExist(err) {
@@ -191,9 +219,81 @@ func setKubeconfigForPeer(fqdn, filePath string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("reading kubeconfig: %w", err)
 	}
-	b, err = updateKubeconfig(b, fqdn)
+	b, err = updateKubeconfig(b, scheme, fqdn)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(filePath, b, 0600)
+}
+
+// nodeOrServiceDNSNameFromArg returns the PeerStatus.DNSName value from a peer
+// in st that matches the input arg which can be a base name, full DNS name, or
+// an IP. If none is found, it looks for a Tailscale Service
+func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, nm *netmap.NetworkMap, arg string) (string, error) {
+	// First check for a node DNS name.
+	if dnsName, ok := nodeDNSNameFromArg(st, arg); ok {
+		return dnsName, nil
+	}
+
+	// If not found, check for a Tailscale Service DNS name.
+	rec, ok := serviceDNSRecordFromNetMap(nm, st.CurrentTailnet.MagicDNSSuffix, arg)
+	if !ok {
+		return "", fmt.Errorf("no peer found for %q", arg)
+	}
+
+	// Validate we can see a peer advertising the Tailscale Service.
+	ip, _ := netip.ParseAddr(rec.Value)
+	for _, ps := range st.Peer {
+		for _, allowedIP := range ps.AllowedIPs.All() {
+			if allowedIP.Contains(ip) {
+				return rec.Name, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("%q may be a Tailscale Service, but is not currently reachable on any known peer", arg)
+}
+
+func getNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	watcher, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
+	if err != nil {
+		return nil, err
+	}
+	defer watcher.Close()
+
+	n, err := watcher.Next()
+	if err != nil {
+		return nil, err
+	}
+
+	return n.NetMap, nil
+}
+
+func serviceDNSRecordFromNetMap(nm *netmap.NetworkMap, tcd, arg string) (rec tailcfg.DNSRecord, ok bool) {
+	ip, _ := netip.ParseAddr(arg)
+	for _, rec := range nm.DNS.ExtraRecords {
+		if ip.IsValid() {
+			recIP, _ := netip.ParseAddr(rec.Value)
+			if recIP == ip {
+				return rec, true
+			}
+			continue
+		}
+
+		if strings.EqualFold(strings.TrimSuffix(arg, "."), strings.TrimSuffix(rec.Name, ".")) {
+			return rec, true
+		}
+		base, after, ok := strings.Cut(rec.Name, ".")
+		if ok &&
+			strings.EqualFold(strings.TrimSuffix(after, "."), strings.TrimSuffix(tcd, ".")) &&
+			strings.EqualFold(base, arg) {
+
+			return rec, true
+		}
+	}
+
+	return tailcfg.DNSRecord{}, false
 }
