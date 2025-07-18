@@ -75,6 +75,7 @@ func TestDeleter(t *testing.T) {
 	m.opts.Clock = tstime.DefaultClock{Clock: clock}
 	m.opts.Dir = dir
 	m.opts.State = must.Get(mem.New(nil, ""))
+	m.opts.FileOps = &mockFileOps{root: dir}
 	must.Do(m.opts.State.WriteState(ipn.TaildropReceivedKey, []byte{1}))
 	fd.Init(&m, eventHook)
 	defer fd.Shutdown()
@@ -147,6 +148,7 @@ func TestDeleterInitWithoutTaildrop(t *testing.T) {
 	m.opts.Logf = t.Logf
 	m.opts.Dir = t.TempDir()
 	m.opts.State = must.Get(mem.New(nil, ""))
+	m.opts.FileOps = &mockFileOps{root: t.TempDir()}
 	fd.Init(&m, func(event string) { t.Errorf("unexpected event: %v", event) })
 	fd.Shutdown()
 }

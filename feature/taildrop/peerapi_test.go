@@ -474,11 +474,13 @@ func TestHandlePeerAPI(t *testing.T) {
 			if !tt.omitRoot {
 				rootDir = t.TempDir()
 			}
+			fo, _ := newDefaultFileOps(rootDir)
 
 			var e peerAPITestEnv
 			e.taildrop = managerOptions{
-				Logf: e.logBuf.Logf,
-				Dir:  rootDir,
+				Logf:    e.logBuf.Logf,
+				Dir:     rootDir,
+				FileOps: fo,
 			}.New()
 
 			ext := &fakeExtension{
@@ -525,9 +527,11 @@ func TestHandlePeerAPI(t *testing.T) {
 // a bit. So test that we work around that sufficiently.
 func TestFileDeleteRace(t *testing.T) {
 	dir := t.TempDir()
+	fo, _ := newDefaultFileOps(dir)
 	taildropMgr := managerOptions{
-		Logf: t.Logf,
-		Dir:  dir,
+		Logf:    t.Logf,
+		Dir:     dir,
+		FileOps: fo,
 	}.New()
 
 	ph := &peerAPIHandler{

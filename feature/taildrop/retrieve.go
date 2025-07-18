@@ -20,73 +20,77 @@ import (
 
 // HasFilesWaiting reports whether any files are buffered in [Handler.Dir].
 // This always returns false when [Handler.DirectFileMode] is false.
-func (m *manager) HasFilesWaiting() (has bool) {
+func (m *manager) HasFilesWaiting() bool {
 	if m == nil || m.opts.Dir == "" || m.opts.DirectFileMode {
 		return false
 	}
 
-	// Optimization: this is usually empty, so avoid opening
-	// the directory and checking. We can't cache the actual
-	// has-files-or-not values as the macOS/iOS client might
-	// in the future use+delete the files directly. So only
-	// keep this negative cache.
-	totalReceived := m.totalReceived.Load()
-	if totalReceived == m.emptySince.Load() {
+	// Negative‑result cache
+	total := m.totalReceived.Load()
+	if total == m.emptySince.Load() {
 		return false
 	}
 
-	// Check whether there is at least one one waiting file.
-	err := rangeDir(m.opts.Dir, func(de fs.DirEntry) bool {
+	des, err := m.opts.FileOps.ListDir(m.opts.Dir)
+	if err != nil {
+		return false
+	}
+
+	// Build a set of filenames present in Dir
+	have := make(map[string]struct{}, len(des))
+	for _, de := range des {
+		have[de.Name()] = struct{}{}
+	}
+
+	for _, de := range des {
 		name := de.Name()
 		if isPartialOrDeleted(name) || !de.Type().IsRegular() {
-			return true
+			continue
 		}
-		_, err := os.Stat(filepath.Join(m.opts.Dir, name+deletedSuffix))
-		if os.IsNotExist(err) {
-			has = true
-			return false
+		if _, ok := have[name+deletedSuffix]; ok {
+			continue // already handled
 		}
+		// Found at least one downloadable file
 		return true
-	})
-
-	// If there are no more waiting files, record totalReceived as emptySince
-	// so that we can short-circuit the expensive directory traversal
-	// if no files have been received after the start of this call.
-	if err == nil && !has {
-		m.emptySince.Store(totalReceived)
 	}
-	return has
+
+	// No waiting files → update negative‑result cache
+	m.emptySince.Store(total)
+	return false
 }
 
 // WaitingFiles returns the list of files that have been sent by a
 // peer that are waiting in [Handler.Dir].
 // This always returns nil when [Handler.DirectFileMode] is false.
-func (m *manager) WaitingFiles() (ret []apitype.WaitingFile, err error) {
+func (m *manager) WaitingFiles() ([]apitype.WaitingFile, error) {
 	if m == nil || m.opts.Dir == "" {
 		return nil, ErrNoTaildrop
 	}
 	if m.opts.DirectFileMode {
 		return nil, nil
 	}
-	if err := rangeDir(m.opts.Dir, func(de fs.DirEntry) bool {
+	des, err := m.opts.FileOps.ListDir(m.opts.Dir)
+	if err != nil {
+		return nil, redactError(err)
+	}
+	var ret []apitype.WaitingFile
+	for _, de := range des {
 		name := de.Name()
 		if isPartialOrDeleted(name) || !de.Type().IsRegular() {
-			return true
+			continue
 		}
-		_, err := os.Stat(filepath.Join(m.opts.Dir, name+deletedSuffix))
-		if os.IsNotExist(err) {
-			fi, err := de.Info()
-			if err != nil {
-				return true
-			}
-			ret = append(ret, apitype.WaitingFile{
-				Name: filepath.Base(name),
-				Size: fi.Size(),
-			})
+		// A corresponding .deleted marker means the file was already handled.
+		if _, err := os.Stat(filepath.Join(m.opts.Dir, name+deletedSuffix)); err == nil {
+			continue
 		}
-		return true
-	}); err != nil {
-		return nil, redactError(err)
+		fi, err := de.Info()
+		if err != nil {
+			continue // skip unreadable entry
+		}
+		ret = append(ret, apitype.WaitingFile{
+			Name: filepath.Base(name),
+			Size: fi.Size(),
+		})
 	}
 	sort.Slice(ret, func(i, j int) bool { return ret[i].Name < ret[j].Name })
 	return ret, nil
