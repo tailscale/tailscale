@@ -468,7 +468,9 @@ func (e *serveEnv) removeServiceFromPrefs(ctx context.Context, serviceName tailc
 	}
 	_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
-		Prefs:                *prefs,
+		Prefs: ipn.Prefs{
+			AdvertiseServices: prefs.AdvertiseServices,
+		},
 	})
 	return err
 }
@@ -482,9 +484,9 @@ func (e *serveEnv) runServeDrain(ctx context.Context, args []string) error {
 		return errHelp
 	}
 	svc := args[0]
-	svcName := tailcfg.AsServiceName(svc)
-	if svcName == noService {
-		return fmt.Errorf("failed to parse service name: %s", svc)
+	svcName := tailcfg.ServiceName(svc)
+	if err := svcName.Validate(); err != nil {
+		return fmt.Errorf("invalid service name: %s", err)
 	}
 	return e.removeServiceFromPrefs(ctx, svcName)
 }
