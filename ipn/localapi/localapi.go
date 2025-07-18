@@ -93,6 +93,7 @@ var handler = map[string]LocalAPIHandler{
 	"component-debug-logging":      (*Handler).serveComponentDebugLogging,
 	"debug":                        (*Handler).serveDebug,
 	"debug-bus-events":             (*Handler).serveDebugBusEvents,
+	"debug-bus-graph":              (*Handler).serveEventBusGraph,
 	"debug-derp-region":            (*Handler).serveDebugDERPRegion,
 	"debug-dial-types":             (*Handler).serveDebugDialTypes,
 	"debug-log":                    (*Handler).serveDebugLog,
@@ -1002,6 +1003,55 @@ func (h *Handler) serveDebugBusEvents(w http.ResponseWriter, r *http.Request) {
 			i++
 		}
 	}
+}
+
+// serveEventBusGraph taps into the event bus and dumps out the active graph of
+// publishers and subscribers. It does not represent anything about the messages
+// exchanged.
+func (h *Handler) serveEventBusGraph(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.GET {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	bus, ok := h.LocalBackend().Sys().Bus.GetOK()
+	if !ok {
+		http.Error(w, "event bus not running", http.StatusPreconditionFailed)
+		return
+	}
+
+	debugger := bus.Debugger()
+	clients := debugger.Clients()
+
+	graph := map[string]eventbus.DebugTopic{}
+
+	for _, client := range clients {
+		for _, pub := range debugger.PublishTypes(client) {
+			topic, ok := graph[pub.Name()]
+			if !ok {
+				topic = eventbus.DebugTopic{Name: pub.Name()}
+			}
+			topic.Publisher = client.Name()
+			graph[pub.Name()] = topic
+		}
+		for _, sub := range debugger.SubscribeTypes(client) {
+			topic, ok := graph[sub.Name()]
+			if !ok {
+				topic = eventbus.DebugTopic{Name: sub.Name()}
+			}
+			topic.Subscribers = append(topic.Subscribers, client.Name())
+			graph[sub.Name()] = topic
+		}
+	}
+
+	// The top level map is not really needed for the client, convert to a list.
+	topics := eventbus.DebugTopics{}
+	for _, v := range graph {
+		topics.Topics = append(topics.Topics, v)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(topics)
 }
 
 func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Request) {

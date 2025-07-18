@@ -432,6 +432,12 @@ func (lc *Client) TailDaemonLogs(ctx context.Context) (io.Reader, error) {
 	return res.Body, nil
 }
 
+// EventBusGraph returns a graph of active publishers and subscribers in the eventbus
+// as a [eventbus.DebugTopics]
+func (lc *Client) EventBusGraph(ctx context.Context) ([]byte, error) {
+	return lc.get200(ctx, "/localapi/v0/debug-bus-graph")
+}
+
 // StreamBusEvents returns an iterator of Tailscale bus events as they arrive.
 // Each pair is a valid event and a nil error, or a zero event a non-nil error.
 // In case of error, the iterator ends after the pair reporting the error.

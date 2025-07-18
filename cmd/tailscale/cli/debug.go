@@ -6,6 +6,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -107,6 +108,17 @@ func debugCmd() *ffcli.Command {
 				ShortUsage: "tailscale debug daemon-bus-events",
 				Exec:       runDaemonBusEvents,
 				ShortHelp:  "Watch events on the tailscaled bus",
+			},
+			{
+				Name:       "daemon-bus-graph",
+				ShortUsage: "tailscale debug daemon-bus-graph",
+				Exec:       runDaemonBusGraph,
+				ShortHelp:  "Print graph for the tailscaled bus",
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("debug-bus-graph")
+					fs.StringVar(&daemonBusGraphArgs.format, "format", "json", "output format [json/dot]")
+					return fs
+				})(),
 			},
 			{
 				Name:       "metrics",
@@ -805,6 +817,50 @@ func runDaemonBusEvents(ctx context.Context, args []string) error {
 			line.From, line.To, line.Event)
 	}
 	return nil
+}
+
+var daemonBusGraphArgs struct {
+	format string
+}
+
+func runDaemonBusGraph(ctx context.Context, args []string) error {
+	graph, err := localClient.EventBusGraph(ctx)
+	if err != nil {
+		return err
+	}
+	if format := daemonBusGraphArgs.format; format != "json" && format != "dot" {
+		return fmt.Errorf("unrecognized output format %q", format)
+	}
+	if daemonBusGraphArgs.format == "dot" {
+		var topics eventbus.DebugTopics
+		if err := json.Unmarshal(graph, &topics); err != nil {
+			return fmt.Errorf("unable to parse json: %w", err)
+		}
+		fmt.Print(generateDOTGraph(topics.Topics))
+	} else {
+		fmt.Print(string(graph))
+	}
+	return nil
+}
+
+// generateDOTGraph generates the DOT graph format based on the events
+func generateDOTGraph(topics []eventbus.DebugTopic) string {
+	var sb strings.Builder
+	sb.WriteString("digraph event_bus {\n")
+
+	for _, topic := range topics {
+		// If no subscribers, still ensure the topic is drawn
+		if len(topic.Subscribers) == 0 {
+			topic.Subscribers = append(topic.Subscribers, "no-subscribers")
+		}
+		for _, subscriber := range topic.Subscribers {
+			fmt.Fprintf(&sb, "\t%q -> %q [label=%q];\n",
+				topic.Publisher, subscriber, cmp.Or(topic.Name, "???"))
+		}
+	}
+
+	sb.WriteString("}\n")
+	return sb.String()
 }
 
 var metricsArgs struct {
