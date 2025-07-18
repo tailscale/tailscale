@@ -160,40 +160,55 @@ func runStatus(ctx context.Context, args []string) error {
 		)
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
-		var offline string
-		if !ps.Online {
-			offline = "; offline"
-		}
+
+		lastseen := CalculateLastSeenTime(ps)
+
+		// prepare status components to join consistently with "; "
+		var statusParts []string
+
 		if !ps.Active {
 			if ps.ExitNode {
-				f("idle; exit node" + offline)
+				statusParts = append(statusParts, "idle")
+				statusParts = append(statusParts, "exit node")
 			} else if ps.ExitNodeOption {
-				f("idle; offers exit node" + offline)
+				statusParts = append(statusParts, "idle")
+				statusParts = append(statusParts, "offers exit node")
 			} else if anyTraffic {
-				f("idle" + offline)
+				statusParts = append(statusParts, "idle")
+				statusParts = append(statusParts, "offline, "+lastseen)
 			} else if !ps.Online {
-				f("offline")
+				statusParts = append(statusParts, "offline, "+lastseen)
 			} else {
-				f("-")
+				// nothing, ultimately displayed as "-"
 			}
 		} else {
-			f("active; ")
+			// always start with "active"
+			statusParts = append(statusParts, "active")
+
 			if ps.ExitNode {
-				f("exit node; ")
+				statusParts = append(statusParts, "exit node")
 			} else if ps.ExitNodeOption {
-				f("offers exit node; ")
+				statusParts = append(statusParts, "offers exit node")
 			}
 			if relay != "" && ps.CurAddr == "" && ps.PeerRelay == "" {
-				f("relay %q", relay)
+				statusParts = append(statusParts, fmt.Sprintf(`relay %q`, relay))
 			} else if ps.CurAddr != "" {
-				f("direct %s", ps.CurAddr)
+				statusParts = append(statusParts, fmt.Sprintf("direct %s", ps.CurAddr))
 			} else if ps.PeerRelay != "" {
-				f("peer-relay %s", ps.PeerRelay)
+				statusParts = append(statusParts, fmt.Sprintf("peer-relay %s", ps.PeerRelay))
 			}
 			if !ps.Online {
-				f("; offline")
+				statusParts = append(statusParts, "offline, "+lastseen)
 			}
 		}
+
+		// only print "-" if the statusParts are empty (no status at all)
+		if len(statusParts) == 0 {
+			f("-")
+		} else {
+			f(strings.Join(statusParts, "; "))
+		}
+
 		if anyTraffic {
 			f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
 		}

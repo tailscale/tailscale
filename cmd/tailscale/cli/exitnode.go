@@ -43,7 +43,8 @@ func exitNodeCmd() *ffcli.Command {
 				ShortUsage: "tailscale exit-node suggest",
 				ShortHelp:  "Suggest the best available exit node",
 				Exec:       runExitNodeSuggest,
-			}},
+			},
+		},
 			(func() []*ffcli.Command {
 				if !envknob.UseWIPCode() {
 					return nil
@@ -171,17 +172,19 @@ func hasAnyExitNodeSuggestions(peers []*ipnstate.PeerStatus) bool {
 
 // peerStatus returns a string representing the current state of
 // a peer. If there is no notable state, a - is returned.
-func peerStatus(peer *ipnstate.PeerStatus) string {
-	if !peer.Active {
-		if peer.ExitNode {
-			return "selected but offline"
+func peerStatus(ps *ipnstate.PeerStatus) string {
+	lastseen := CalculateLastSeenTime(ps)
+
+	if !ps.Active {
+		if ps.ExitNode {
+			return fmt.Sprintf("selected but offline, %s", lastseen)
 		}
-		if !peer.Online {
-			return "offline"
+		if !ps.Online {
+			return fmt.Sprintf("offline, %s", lastseen)
 		}
 	}
 
-	if peer.ExitNode {
+	if ps.ExitNode {
 		return "selected"
 	}
 
