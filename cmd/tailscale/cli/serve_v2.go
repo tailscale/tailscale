@@ -213,6 +213,13 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 					"<service> should be a service name (e.g., svc:my-service).",
 				Exec: e.runServeDrain,
 			},
+			{
+				Name:       "clear",
+				ShortUsage: fmt.Sprintf("tailscale %s clear <service>", info.Name),
+				ShortHelp:  "Remove all config for a service",
+				LongHelp:   "Remove all handlers configured for the specified service.",
+				Exec:       e.runServeClear,
+			},
 		},
 	}
 }
@@ -486,9 +493,36 @@ func (e *serveEnv) runServeDrain(ctx context.Context, args []string) error {
 	svc := args[0]
 	svcName := tailcfg.ServiceName(svc)
 	if err := svcName.Validate(); err != nil {
-		return fmt.Errorf("invalid service name: %s", err)
+		return fmt.Errorf("invalid service name: %w", err)
 	}
 	return e.removeServiceFromPrefs(ctx, svcName)
+}
+
+func (e *serveEnv) runServeClear(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errHelp
+	}
+	if len(args) != 1 {
+		fmt.Fprintf(Stderr, "error: invalid number of arguments\n\n")
+		return errHelp
+	}
+	svc := tailcfg.ServiceName(args[0])
+	if err := svc.Validate(); err != nil {
+		return fmt.Errorf("invalid service name: %w", err)
+	}
+	sc, err := e.lc.GetServeConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting serve config: %w", err)
+	}
+	if _, ok := sc.Services[svc]; !ok {
+		log.Printf("service %s not found in serve config, nothing to clear", svc)
+		return nil
+	}
+	delete(sc.Services, svc)
+	if err := e.removeServiceFromPrefs(ctx, svc); err != nil {
+		return fmt.Errorf("error removing service %s from prefs: %w", svc, err)
+	}
+	return e.lc.SetServeConfig(ctx, sc)
 }
 
 const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
