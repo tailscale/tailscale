@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"os"
 	"os/user"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -70,12 +69,14 @@ func runSSH(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// hostForSSH is the hostname we'll tell OpenSSH we're
-	// connecting to, so we have to maintain fewer entries in the
-	// known_hosts files.
-	hostForSSH := host
-	if v, ok := nodeDNSNameFromArg(st, host); ok {
-		hostForSSH = v
+	var knownHosts *os.File
+
+	ps, ok := nodeDetailsFromArg(st, host)
+	if ok {
+		knownHosts, err = writeTempKnownHosts(ps)
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 
 	ssh, err := findSSH()
@@ -84,23 +85,22 @@ func runSSH(ctx context.Context, args []string) error {
 		// of failing. But for now:
 		return fmt.Errorf("no system 'ssh' command found: %w", err)
 	}
-	knownHostsFile, err := writeKnownHosts(st)
-	if err != nil {
-		return err
-	}
 
 	argv := []string{ssh}
 
 	if envknob.Bool("TS_DEBUG_SSH_EXEC") {
 		argv = append(argv, "-vvv")
 	}
-	argv = append(argv,
-		// Only trust SSH hosts that we know about.
-		"-o", fmt.Sprintf("UserKnownHostsFile %q", knownHostsFile),
-		"-o", "UpdateHostKeys no",
-		"-o", "StrictHostKeyChecking yes",
-		"-o", "CanonicalizeHostname no", // https://github.com/tailscale/tailscale/issues/10348
-	)
+
+	if knownHosts != nil {
+		argv = append(argv,
+			// Only trust SSH hosts that we know about.
+			"-o", fmt.Sprintf("UserKnownHostsFile %q", knownHosts.Name()),
+			"-o", "UpdateHostKeys no",
+			"-o", "StrictHostKeyChecking yes",
+			"-o", "CanonicalizeHostname no", // https://github.com/tailscale/tailscale/issues/10348
+		)
+	}
 
 	// MagicDNS is usually working on macOS anyway and they're not in userspace
 	// mode, so 'nc' isn't very useful.
@@ -129,49 +129,69 @@ func runSSH(ctx context.Context, args []string) error {
 	// to use a different one, we'll later be making stock ssh
 	// work well by default too. (doing things like automatically
 	// setting known_hosts, etc)
-	argv = append(argv, username+"@"+hostForSSH)
+	argv = append(argv, username+"@"+host)
 
 	argv = append(argv, argRest...)
 
 	if envknob.Bool("TS_DEBUG_SSH_EXEC") {
 		log.Printf("Running: %q, %q ...", ssh, argv)
 	}
-
 	return execSSH(ssh, argv)
 }
 
-func writeKnownHosts(st *ipnstate.Status) (knownHostsFile string, err error) {
-	confDir, err := os.UserConfigDir()
+func writeTempKnownHosts(ps *ipnstate.PeerStatus) (*os.File, error) {
+	// Use default tmp directory
+	f, err := os.CreateTemp("", "ssh_known_hosts_*")
 	if err != nil {
-		return "", err
+		return f, err
 	}
-	tsConfDir := filepath.Join(confDir, "tailscale")
-	if err := os.MkdirAll(tsConfDir, 0700); err != nil {
-		return "", err
-	}
-	knownHostsFile = filepath.Join(tsConfDir, "ssh_known_hosts")
-	want := genKnownHosts(st)
-	if cur, err := os.ReadFile(knownHostsFile); err != nil || !bytes.Equal(cur, want) {
-		if err := os.WriteFile(knownHostsFile, want, 0644); err != nil {
-			return "", err
+
+	var buf bytes.Buffer
+
+	for _, hk := range ps.SSH_HostKeys {
+		hostKey := strings.TrimSpace(hk)
+		if strings.ContainsAny(hostKey, "\n\r") { // invalid
+			continue
+		}
+		fmt.Fprintf(&buf, "%s %s\n", ps.DNSName, hostKey)
+		for _, ip := range ps.TailscaleIPs {
+			fmt.Fprintf(&buf, "%s %s\n", ip.String(), hostKey)
 		}
 	}
-	return knownHostsFile, nil
+
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		return f, err
+	}
+	if err := f.Close(); err != nil {
+		return f, err
+	}
+
+	return f, err
 }
 
-func genKnownHosts(st *ipnstate.Status) []byte {
-	var buf bytes.Buffer
-	for _, k := range st.Peers() {
-		ps := st.Peer[k]
-		for _, hk := range ps.SSH_HostKeys {
-			hostKey := strings.TrimSpace(hk)
-			if strings.ContainsAny(hostKey, "\n\r") { // invalid
-				continue
+func nodeDetailsFromArg(st *ipnstate.Status, arg string) (*ipnstate.PeerStatus, bool) {
+	if arg == "" {
+		return nil, false
+	}
+	argIP, _ := netip.ParseAddr(arg)
+
+	for _, ps := range st.Peer {
+		if argIP.IsValid() {
+			for _, ip := range ps.TailscaleIPs {
+				if ip == argIP {
+					return ps, true
+				}
 			}
-			fmt.Fprintf(&buf, "%s %s\n", ps.DNSName, hostKey)
+			continue
+		}
+		if strings.EqualFold(strings.TrimSuffix(arg, "."), strings.TrimSuffix(ps.DNSName, ".")) {
+			return ps, true
+		}
+		if base, _, ok := strings.Cut(ps.DNSName, "."); ok && strings.EqualFold(base, arg) {
+			return ps, true
 		}
 	}
-	return buf.Bytes()
+	return nil, false
 }
 
 // nodeDNSNameFromArg returns the PeerStatus.DNSName value from a peer
@@ -182,6 +202,7 @@ func nodeDNSNameFromArg(st *ipnstate.Status, arg string) (dnsName string, ok boo
 		return
 	}
 	argIP, _ := netip.ParseAddr(arg)
+
 	for _, ps := range st.Peer {
 		dnsName = ps.DNSName
 		if argIP.IsValid() {
