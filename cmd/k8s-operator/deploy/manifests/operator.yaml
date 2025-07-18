@@ -389,6 +389,13 @@ spec:
                                                 description: Tag defaults to unstable.
                                                 type: string
                                         type: object
+                                    service:
+                                        description: Service configuration.
+                                        properties:
+                                            clusterIP:
+                                                description: ClusterIP sets the static IP of the service used by the nameserver.
+                                                type: string
+                                        type: object
                                 type: object
                         required:
                             - nameserver
@@ -462,7 +469,7 @@ spec:
                                     ip:
                                         description: |-
                                             IP is the ClusterIP of the Service fronting the deployed ts.net nameserver.
-                                            Currently you must manually update your cluster DNS config to add
+                                            Currently, you must manually update your cluster DNS config to add
                                             this address as a stub nameserver for ts.net for cluster workloads to be
                                             able to resolve MagicDNS names associated with egress or Ingress
                                             proxies.

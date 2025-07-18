@@ -7,13 +7,12 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
-
-	_ "embed"
 
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
@@ -183,6 +182,10 @@ func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsa
 	if tsDNSCfg.Spec.Nameserver.Image != nil && tsDNSCfg.Spec.Nameserver.Image.Tag != "" {
 		dCfg.imageTag = tsDNSCfg.Spec.Nameserver.Image.Tag
 	}
+	if tsDNSCfg.Spec.Nameserver.Service != nil {
+		dCfg.clusterIP = tsDNSCfg.Spec.Nameserver.Service.ClusterIP
+	}
+
 	for _, deployable := range []deployable{saDeployable, deployDeployable, svcDeployable, cmDeployable} {
 		if err := deployable.updateObj(ctx, dCfg, a.Client); err != nil {
 			return fmt.Errorf("error reconciling %s: %w", deployable.kind, err)
@@ -213,6 +216,7 @@ type deployConfig struct {
 	labels    map[string]string
 	ownerRefs []metav1.OwnerReference
 	namespace string
+	clusterIP string
 }
 
 var (
@@ -267,6 +271,7 @@ var (
 			svc.ObjectMeta.Labels = cfg.labels
 			svc.ObjectMeta.OwnerReferences = cfg.ownerRefs
 			svc.ObjectMeta.Namespace = cfg.namespace
+			svc.Spec.ClusterIP = cfg.clusterIP
 			_, err := createOrUpdate[corev1.Service](ctx, kubeClient, cfg.namespace, svc, func(*corev1.Service) {})
 			return err
 		},
