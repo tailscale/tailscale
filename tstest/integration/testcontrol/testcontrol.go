@@ -1000,7 +1000,11 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		s.mu.Lock()
 		peerAddress := s.masquerades[p.Key][node.Key]
 		routes := s.nodeSubnetRoutes[p.Key]
+		peerCapMap := maps.Clone(s.nodeCapMaps[p.Key])
 		s.mu.Unlock()
+		if peerCapMap != nil {
+			p.CapMap = peerCapMap
+		}
 		if peerAddress.IsValid() {
 			if peerAddress.Is6() {
 				p.Addresses[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
