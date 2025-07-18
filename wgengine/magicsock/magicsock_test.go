@@ -179,7 +179,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	t.Helper()
 
 	bus := eventbus.New()
-	defer bus.Close()
+	t.Cleanup(bus.Close)
 
 	netMon, err := netmon.New(bus, logf)
 	if err != nil {
@@ -191,6 +191,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
+		EventBus:               bus,
 		Metrics:                &reg,
 		Logf:                   logf,
 		HealthTracker:          ht,
@@ -406,7 +407,7 @@ func TestNewConn(t *testing.T) {
 	}
 
 	bus := eventbus.New()
-	defer bus.Close()
+	t.Cleanup(bus.Close)
 
 	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
 	if err != nil {
@@ -424,6 +425,7 @@ func TestNewConn(t *testing.T) {
 		EndpointsFunc:     epFunc,
 		Logf:              t.Logf,
 		NetMon:            netMon,
+		EventBus:          bus,
 		Metrics:           new(usermetric.Registry),
 	})
 	if err != nil {
@@ -542,7 +544,7 @@ func TestDeviceStartStop(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	bus := eventbus.New()
-	defer bus.Close()
+	t.Cleanup(bus.Close)
 
 	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
 	if err != nil {
@@ -554,6 +556,7 @@ func TestDeviceStartStop(t *testing.T) {
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {},
 		Logf:          t.Logf,
 		NetMon:        netMon,
+		EventBus:      bus,
 		Metrics:       new(usermetric.Registry),
 	})
 	if err != nil {
@@ -1349,7 +1352,7 @@ func newTestConn(t testing.TB) *Conn {
 	port := pickPort(t)
 
 	bus := eventbus.New()
-	defer bus.Close()
+	t.Cleanup(bus.Close)
 
 	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
 	if err != nil {
@@ -1359,6 +1362,7 @@ func newTestConn(t testing.TB) *Conn {
 
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
+		EventBus:               bus,
 		HealthTracker:          new(health.Tracker),
 		Metrics:                new(usermetric.Registry),
 		DisablePortMapper:      true,
@@ -3147,6 +3151,7 @@ func TestNetworkDownSendErrors(t *testing.T) {
 		Logf:              t.Logf,
 		NetMon:            netMon,
 		Metrics:           reg,
+		EventBus:          bus,
 	}))
 	defer conn.Close()
 

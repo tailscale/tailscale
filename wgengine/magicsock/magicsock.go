@@ -645,8 +645,11 @@ func (c *Conn) Synchronize() {
 // As the set of possible endpoints for a Conn changes, the
 // callback opts.EndpointsFunc is called.
 func NewConn(opts Options) (*Conn, error) {
-	if opts.NetMon == nil {
+	switch {
+	case opts.NetMon == nil:
 		return nil, errors.New("magicsock.Options.NetMon must be non-nil")
+	case opts.EventBus == nil:
+		return nil, errors.New("magicsock.Options.EventBus must be non-nil")
 	}
 
 	c := newConn(opts.logf())
@@ -659,20 +662,18 @@ func NewConn(opts Options) (*Conn, error) {
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
 
-	if c.eventBus != nil {
-		c.eventClient = c.eventBus.Client("magicsock.Conn")
+	c.eventClient = c.eventBus.Client("magicsock.Conn")
 
-		// Subscribe calls must return before NewConn otherwise published
-		// events can be missed.
-		c.pmSub = eventbus.Subscribe[portmapper.Mapping](c.eventClient)
-		c.filterSub = eventbus.Subscribe[FilterUpdate](c.eventClient)
-		c.nodeViewsSub = eventbus.Subscribe[NodeViewsUpdate](c.eventClient)
-		c.nodeMutsSub = eventbus.Subscribe[NodeMutationsUpdate](c.eventClient)
-		c.syncSub = eventbus.Subscribe[syncPoint](c.eventClient)
-		c.syncPub = eventbus.Publish[syncPoint](c.eventClient)
-		c.subsDoneCh = make(chan struct{})
-		go c.consumeEventbusTopics()
-	}
+	// Subscribe calls must return before NewConn otherwise published
+	// events can be missed.
+	c.pmSub = eventbus.Subscribe[portmapper.Mapping](c.eventClient)
+	c.filterSub = eventbus.Subscribe[FilterUpdate](c.eventClient)
+	c.nodeViewsSub = eventbus.Subscribe[NodeViewsUpdate](c.eventClient)
+	c.nodeMutsSub = eventbus.Subscribe[NodeMutationsUpdate](c.eventClient)
+	c.syncSub = eventbus.Subscribe[syncPoint](c.eventClient)
+	c.syncPub = eventbus.Publish[syncPoint](c.eventClient)
+	c.subsDoneCh = make(chan struct{})
+	go c.consumeEventbusTopics()
 
 	// Don't log the same log messages possibly every few seconds in our
 	// portmapper.
@@ -3138,10 +3139,8 @@ func (c *Conn) Close() error {
 	//     deadlock with c.Close().
 	//  2. Conn.consumeEventbusTopics event handlers may not guard against
 	//     undesirable post/in-progress Conn.Close() behaviors.
-	if c.eventClient != nil {
-		c.eventClient.Close()
-		<-c.subsDoneCh
-	}
+	c.eventClient.Close()
+	<-c.subsDoneCh
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
