@@ -9,5 +9,9 @@ import (
 )
 
 func open() (transport.TPMCloser, error) {
+	tpm, err := linuxtpm.Open("/dev/tpmrm0")
+	if err == nil {
+		return tpm, nil
+	}
 	return linuxtpm.Open("/dev/tpm0")
 }
