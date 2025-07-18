@@ -428,7 +428,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 		if !apiequality.Semantic.DeepEqual(*oldPGStatus, pg.Status) {
 			if updateErr := r.Client.Status().Update(ctx, pg); updateErr != nil {
 				if strings.Contains(updateErr.Error(), optimisticLockErrorMsg) {
-					logger.Infof("optimistic lock error updating status, retrying: %s", err)
+					logger.Infof("optimistic lock error updating status, retrying: %s", updateErr)
 					updateErr = nil
 				}
 				err = errors.Join(err, updateErr)

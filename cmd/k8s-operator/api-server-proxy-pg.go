@@ -80,7 +80,7 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 
 	if markedForDeletion(pg) {
 		logger.Debugf("ProxyGroup is being deleted, ensuring any created resources are cleaned up")
-		if err = r.maybeCleanup(ctx, serviceName, pg, logger); strings.Contains(err.Error(), optimisticLockErrorMsg) {
+		if err = r.maybeCleanup(ctx, serviceName, pg, logger); err != nil && strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
 			return res, nil
 		}
