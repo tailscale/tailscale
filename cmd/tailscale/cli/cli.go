@@ -260,7 +260,6 @@ change in the future.
 			debugCmd(),
 			driveCmd,
 			idTokenCmd,
-			advertiseCmd(),
 			configureHostCmd(),
 		),
 		FlagSet: rootfs,
