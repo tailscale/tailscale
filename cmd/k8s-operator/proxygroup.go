@@ -450,6 +450,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, status, reason, message, 0, r.clock, logger)
 
 	// Set ProxyGroupReady condition.
+	tsSvcValid, tsSvcSet := tsoperator.KubeAPIServerProxyValid(pg)
 	status = metav1.ConditionFalse
 	reason = reasonProxyGroupCreating
 	switch {
@@ -457,13 +458,13 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 		// If we failed earlier, that reason takes precedence.
 		reason = nrr.reason
 		message = nrr.message
-	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && !tsoperator.ProxyGroupTailscaleServiceValid(pg):
+	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && tsSvcSet && !tsSvcValid:
 		reason = reasonProxyGroupInvalid
 		message = "waiting for config in spec.kubeAPIServer to be marked valid"
 	case len(devices) < desiredReplicas:
 	case len(devices) > desiredReplicas:
 		message = fmt.Sprintf("waiting for %d ProxyGroup pods to shut down", len(devices)-desiredReplicas)
-	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && !tsoperator.ProxyGroupTailscaleServiceConfigured(pg):
+	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && !tsoperator.KubeAPIServerProxyConfigured(pg):
 		reason = reasonProxyGroupCreating
 		message = "waiting for proxies to start advertising the kube-apiserver proxy's hostname"
 	default:

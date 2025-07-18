@@ -146,12 +146,12 @@ func ProxyGroupAvailable(pg *tsapi.ProxyGroup) bool {
 	return cond != nil && cond.Status == metav1.ConditionTrue
 }
 
-func ProxyGroupTailscaleServiceValid(pg *tsapi.ProxyGroup) bool {
+func KubeAPIServerProxyValid(pg *tsapi.ProxyGroup) (valid bool, set bool) {
 	cond := proxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid)
-	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation, cond != nil
 }
 
-func ProxyGroupTailscaleServiceConfigured(pg *tsapi.ProxyGroup) bool {
+func KubeAPIServerProxyConfigured(pg *tsapi.ProxyGroup) bool {
 	cond := proxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured)
 	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
 }

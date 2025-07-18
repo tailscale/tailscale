@@ -118,14 +118,7 @@ func TestWatchConfig(t *testing.T) {
 							}
 						}
 					} else {
-						cfgPath = "kube:config-secret"
-						nsFilePath := filepath.Join(root, namespacePath)
-						if err := os.MkdirAll(filepath.Dir(nsFilePath), 0o755); err != nil {
-							t.Fatalf("error creating namespace directory: %v", err)
-						}
-						if err := os.WriteFile(nsFilePath, []byte("default"), 0o644); err != nil {
-							t.Fatalf("error writing namespace file: %v", err)
-						}
+						cfgPath = "kube:default/config-secret"
 						writeFile = func(t *testing.T, content string) {
 							s := secretFrom(content)
 							mustCreateOrUpdate(t, cl, s)
@@ -133,7 +126,6 @@ func TestWatchConfig(t *testing.T) {
 					}
 					configChan := make(chan *conf.Config)
 					l := NewConfigLoader(zap.Must(zap.NewDevelopment()).Sugar(), cl.CoreV1(), configChan)
-					l.root = root
 					l.cfgIgnored = make(chan struct{})
 					errs := make(chan error)
 					ctx, cancel := context.WithCancel(t.Context())
@@ -182,7 +174,6 @@ func TestWatchConfig(t *testing.T) {
 }
 
 func TestWatchConfigSecret_Rewatches(t *testing.T) {
-	root := t.TempDir()
 	cl := fake.NewClientset()
 	var watchCount int
 	var watcher *watch.RaceFreeFakeWatcher
@@ -200,22 +191,14 @@ func TestWatchConfigSecret_Rewatches(t *testing.T) {
 		return true, watcher, nil
 	})
 
-	nsFilePath := filepath.Join(root, namespacePath)
-	if err := os.MkdirAll(filepath.Dir(nsFilePath), 0o755); err != nil {
-		t.Fatalf("error creating namespace directory: %v", err)
-	}
-	if err := os.WriteFile(nsFilePath, []byte("default"), 0o644); err != nil {
-		t.Fatalf("error writing namespace file: %v", err)
-	}
 	configChan := make(chan *conf.Config)
 	l := NewConfigLoader(zap.Must(zap.NewDevelopment()).Sugar(), cl.CoreV1(), configChan)
-	l.root = root
 
 	mustCreateOrUpdate(t, cl, secretFrom(expected[0]))
 
 	errs := make(chan error)
 	go func() {
-		errs <- l.watchConfigSecretChanges(t.Context(), "config-secret")
+		errs <- l.watchConfigSecretChanges(t.Context(), "default", "config-secret")
 	}()
 
 	for i := range 2 {

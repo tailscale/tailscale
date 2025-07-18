@@ -1297,7 +1297,7 @@ func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
 	expectReconciled(t, r, "", pg.Name)
 	pg.ObjectMeta.Finalizers = append(pg.ObjectMeta.Finalizers, FinalizerName)
 	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "", 0, r.clock, r.l)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupInvalid, "", 1, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.l)
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
 	// Set kube-apiserver valid.

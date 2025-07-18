@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/yaml"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -340,8 +341,11 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 										},
 									},
 									{
-										Name:  "TS_K8S_PROXY_CONFIG",
-										Value: "kube:$(POD_NAME)-config",
+										Name: "TS_K8S_PROXY_CONFIG",
+										Value: "kube:" + types.NamespacedName{
+											Namespace: namespace,
+											Name:      "$(POD_NAME)-config",
+										}.String(),
 									},
 								}
 

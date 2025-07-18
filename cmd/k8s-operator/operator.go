@@ -633,7 +633,7 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
 	}
 
-	// API Server Proxy HA Reconciler.
+	// kube-apiserver's Tailscale Service reconciler.
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}, builder.WithPredicates(
@@ -642,12 +642,12 @@ func runReconcilers(opts reconcilerOpts) {
 				return ok && pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer
 			}),
 		)).
-		Named("apiserver-proxy-service-reconciler").
+		Named("kube-apiserver-ts-service-reconciler").
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(kubeAPIServerPGsFromSecret(mgr.GetClient(), startlog))).
-		Complete(&APIServerProxyServiceReconciler{
+		Complete(&KubeAPIServerTSServiceReconciler{
 			Client:      mgr.GetClient(),
 			recorder:    eventRecorder,
-			logger:      opts.log.Named("apiserver-proxy-service-reconciler"),
+			logger:      opts.log.Named("kube-apiserver-ts-service-reconciler"),
 			tsClient:    opts.tsClient,
 			tsNamespace: opts.tailscaleNamespace,
 			lc:          lc,
@@ -656,7 +656,7 @@ func runReconcilers(opts reconcilerOpts) {
 			clock:       tstime.DefaultClock{},
 		})
 	if err != nil {
-		startlog.Fatalf("could not create API server proxy HA reconciler: %v", err)
+		startlog.Fatalf("could not create Kubernetes API server Tailscale Service reconciler: %v", err)
 	}
 
 	// ProxyGroup reconciler.

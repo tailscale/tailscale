@@ -116,7 +116,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		},
 	}
 
-	r := &APIServerProxyServiceReconciler{
+	r := &KubeAPIServerTSServiceReconciler{
 		Client:      fc,
 		tsClient:    ft,
 		defaultTags: []string{"tag:k8s"},

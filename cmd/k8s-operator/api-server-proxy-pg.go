@@ -44,9 +44,9 @@ const (
 	reasonKubeAPIServerProxyNoBackends = "KubeAPIServerProxyNoBackends"
 )
 
-// APIServerProxyServiceReconciler reconciles the Tailscale Services required for an
+// KubeAPIServerTSServiceReconciler reconciles the Tailscale Services required for an
 // HA deployment of the API Server Proxy.
-type APIServerProxyServiceReconciler struct {
+type KubeAPIServerTSServiceReconciler struct {
 	client.Client
 	recorder    record.EventRecorder
 	logger      *zap.SugaredLogger
@@ -60,7 +60,7 @@ type APIServerProxyServiceReconciler struct {
 }
 
 // Reconcile is the entry point for the controller.
-func (r *APIServerProxyServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
+func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	logger := r.logger.With("ProxyGroup", req.Name)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
@@ -95,7 +95,7 @@ func (r *APIServerProxyServiceReconciler) Reconcile(ctx context.Context, req rec
 // and is up to date.
 //
 // Returns true if the operation resulted in a Tailscale Service update.
-func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (err error) {
+func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (err error) {
 	var dnsName string
 	oldPGStatus := pg.Status.DeepCopy()
 	defer func() {
@@ -231,7 +231,7 @@ func (r *APIServerProxyServiceReconciler) maybeProvision(ctx context.Context, se
 // Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
 // deleted if it does not contain any other owner references. If it does, the cleanup only removes the owner reference
 // corresponding to this Service.
-func (r *APIServerProxyServiceReconciler) maybeCleanup(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (err error) {
+func (r *KubeAPIServerTSServiceReconciler) maybeCleanup(ctx context.Context, serviceName tailcfg.ServiceName, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (err error) {
 	ix := slices.Index(pg.Finalizers, proxyPGFinalizerName)
 	if ix < 0 {
 		logger.Debugf("no finalizer, nothing to do")
@@ -258,7 +258,7 @@ func (r *APIServerProxyServiceReconciler) maybeCleanup(ctx context.Context, serv
 
 // maybeDeleteStaleServices deletes Services that have previously been created for
 // this ProxyGroup but are no longer needed.
-func (r *APIServerProxyServiceReconciler) maybeDeleteStaleServices(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) error {
+func (r *KubeAPIServerTSServiceReconciler) maybeDeleteStaleServices(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) error {
 	serviceName := serviceNameForAPIServerProxy(pg)
 
 	svcs, err := r.tsClient.ListVIPServices(ctx)
@@ -298,7 +298,7 @@ func (r *APIServerProxyServiceReconciler) maybeDeleteStaleServices(ctx context.C
 	return nil
 }
 
-func (r *APIServerProxyServiceReconciler) deleteFinalizer(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) error {
+func (r *KubeAPIServerTSServiceReconciler) deleteFinalizer(ctx context.Context, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) error {
 	pg.Finalizers = slices.DeleteFunc(pg.Finalizers, func(f string) bool {
 		return f == proxyPGFinalizerName
 	})
@@ -310,7 +310,7 @@ func (r *APIServerProxyServiceReconciler) deleteFinalizer(ctx context.Context, p
 	return nil
 }
 
-func (r *APIServerProxyServiceReconciler) ensureCertResources(ctx context.Context, pg *tsapi.ProxyGroup, domain string) error {
+func (r *KubeAPIServerTSServiceReconciler) ensureCertResources(ctx context.Context, pg *tsapi.ProxyGroup, domain string) error {
 	secret := certSecret(pg.Name, r.tsNamespace, domain, pg)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, secret, func(s *corev1.Secret) {
 		s.Labels = secret.Labels
@@ -335,7 +335,7 @@ func (r *APIServerProxyServiceReconciler) ensureCertResources(ctx context.Contex
 	return nil
 }
 
-func (r *APIServerProxyServiceReconciler) maybeAdvertiseServices(ctx context.Context, pg *tsapi.ProxyGroup, serviceName tailcfg.ServiceName, logger *zap.SugaredLogger) error {
+func (r *KubeAPIServerTSServiceReconciler) maybeAdvertiseServices(ctx context.Context, pg *tsapi.ProxyGroup, serviceName tailcfg.ServiceName, logger *zap.SugaredLogger) error {
 	// Get all config Secrets for this ProxyGroup
 	cfgSecrets := &corev1.SecretList{}
 	if err := r.List(ctx, cfgSecrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig))); err != nil {

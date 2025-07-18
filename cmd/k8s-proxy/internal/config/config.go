@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	clientcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"tailscale.com/kube/k8s-proxy/conf"
@@ -30,12 +31,9 @@ import (
 	"tailscale.com/util/testenv"
 )
 
-const namespacePath = "var/run/secrets/kubernetes.io/serviceaccount/namespace"
-
 type configLoader struct {
 	logger *zap.SugaredLogger
 	client clientcorev1.CoreV1Interface
-	root   string // Root path, field exists for testing.
 
 	cfgChan  chan<- *conf.Config
 	previous []byte
@@ -48,16 +46,19 @@ func NewConfigLoader(logger *zap.SugaredLogger, client clientcorev1.CoreV1Interf
 	return &configLoader{
 		logger:  logger,
 		client:  client,
-		root:    "/",
 		cfgChan: cfgChan,
 	}
 }
 
 func (l *configLoader) WatchConfig(ctx context.Context, path string) error {
-	secretName, isKubeSecret := strings.CutPrefix(path, "kube:")
+	secretNamespacedName, isKubeSecret := strings.CutPrefix(path, "kube:")
 	if isKubeSecret {
-		if err := l.watchConfigSecretChanges(ctx, secretName); err != nil && !errors.Is(err, context.Canceled) {
-			return fmt.Errorf("error watching config Secret %q: %w", secretName, err)
+		secretNamespace, secretName, ok := strings.Cut(secretNamespacedName, string(types.Separator))
+		if !ok {
+			return fmt.Errorf("invalid Kubernetes Secret reference %q, expected format <namespace>/<name>", path)
+		}
+		if err := l.watchConfigSecretChanges(ctx, secretNamespace, secretName); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("error watching config Secret %q: %w", secretNamespacedName, err)
 		}
 
 		return nil
@@ -168,14 +169,8 @@ func (l *configLoader) watchConfigFileChanges(ctx context.Context, path string) 
 	}
 }
 
-func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretName string) error {
-	namespace, err := os.ReadFile(filepath.Join(l.root, namespacePath))
-	if err != nil {
-		return fmt.Errorf("error reading namespace from %q: %w", namespacePath, err)
-	}
-
-	secrets := l.client.Secrets(string(namespace))
-
+func (l *configLoader) watchConfigSecretChanges(ctx context.Context, secretNamespace, secretName string) error {
+	secrets := l.client.Secrets(secretNamespace)
 	w, err := secrets.Watch(ctx, metav1.ListOptions{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
