@@ -81,3 +81,21 @@ func TestDiscoShared(t *testing.T) {
 		t.Error("k1.Shared(k2) != k2.Shared(k1)")
 	}
 }
+
+func TestSortedPairOfDiscoPublic(t *testing.T) {
+	pubA := DiscoPublic{}
+	pubA.k[0] = 0x01
+	pubB := DiscoPublic{}
+	pubB.k[0] = 0x02
+	sortedInput := NewSortedPairOfDiscoPublic(pubA, pubB)
+	unsortedInput := NewSortedPairOfDiscoPublic(pubB, pubA)
+	if sortedInput.Get() != unsortedInput.Get() {
+		t.Fatal("sortedInput.Get() != unsortedInput.Get()")
+	}
+	if unsortedInput.Get()[0] != pubA {
+		t.Fatal("unsortedInput.Get()[0] != pubA")
+	}
+	if unsortedInput.Get()[1] != pubB {
+		t.Fatal("unsortedInput.Get()[1] != pubB")
+	}
+}

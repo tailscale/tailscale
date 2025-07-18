@@ -879,8 +879,14 @@ func (de *endpoint) setHeartbeatDisabled(v bool) {
 
 // discoverUDPRelayPathsLocked starts UDP relay path discovery.
 func (de *endpoint) discoverUDPRelayPathsLocked(now mono.Time) {
-	// TODO(jwhited): return early if there are no relay servers set, otherwise
-	//  we spin up and down relayManager.runLoop unnecessarily.
+	if !de.c.hasPeerRelayServers.Load() {
+		// Changes in this value between its access and the logic following
+		// are fine, we will eventually do the "right" thing during future path
+		// discovery. The worst case is we suppress path discovery for the
+		// current cycle, or we unnecessarily call into [relayManager] and do
+		// some wasted work.
+		return
+	}
 	de.lastUDPRelayPathDiscovery = now
 	lastBest := de.bestAddr
 	lastBestIsTrusted := mono.Now().Before(de.trustBestAddrUntil)
@@ -2035,8 +2041,15 @@ func (de *endpoint) numStopAndReset() int64 {
 	return atomic.LoadInt64(&de.numStopAndResetAtomic)
 }
 
+// setDERPHome sets the provided regionID as home for de. Calls to setDERPHome
+// must never run concurrent to [Conn.updateRelayServersSet], otherwise
+// [candidatePeerRelay] DERP home changes may be missed from the perspective of
+// [relayManager].
 func (de *endpoint) setDERPHome(regionID uint16) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	de.derpAddr = netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))
+	if de.c.hasPeerRelayServers.Load() {
+		de.c.relayManager.handleDERPHomeChange(de.publicKey, regionID)
+	}
 }

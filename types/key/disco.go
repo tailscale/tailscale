@@ -73,6 +73,44 @@ func (k DiscoPrivate) Shared(p DiscoPublic) DiscoShared {
 	return ret
 }
 
+// SortedPairOfDiscoPublic is a lexicographically sorted container of two
+// [DiscoPublic] keys.
+type SortedPairOfDiscoPublic struct {
+	k [2]DiscoPublic
+}
+
+// Get returns the underlying keys.
+func (s SortedPairOfDiscoPublic) Get() [2]DiscoPublic {
+	return s.k
+}
+
+// NewSortedPairOfDiscoPublic returns a SortedPairOfDiscoPublic from a and b.
+func NewSortedPairOfDiscoPublic(a, b DiscoPublic) SortedPairOfDiscoPublic {
+	s := SortedPairOfDiscoPublic{}
+	if a.Compare(b) < 0 {
+		s.k[0] = a
+		s.k[1] = b
+	} else {
+		s.k[0] = b
+		s.k[1] = a
+	}
+	return s
+}
+
+func (s SortedPairOfDiscoPublic) String() string {
+	return fmt.Sprintf("%s <=> %s", s.k[0].ShortString(), s.k[1].ShortString())
+}
+
+// Equal returns true if s and b are equal, otherwise it returns false.
+func (s SortedPairOfDiscoPublic) Equal(b SortedPairOfDiscoPublic) bool {
+	for i := range s.k {
+		if s.k[i].Compare(b.k[i]) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // DiscoPublic is the public portion of a DiscoPrivate.
 type DiscoPublic struct {
 	k [32]byte
