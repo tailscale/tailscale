@@ -9,6 +9,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/net/udprelay/endpoint"
+	"tailscale.com/tsd"
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
 )
@@ -108,9 +109,18 @@ func Test_extension_profileStateChanged(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			sys := tsd.NewSystem()
+			bus := sys.Bus.Get()
 			e := &extension{
 				port:   tt.fields.port,
 				server: tt.fields.server,
+				bus:    bus,
+			}
+			if e.port != nil {
+				// Entering profileStateChanged with a non-nil port requires
+				// bus init, which is called in profileStateChanged when
+				// transitioning port from nil to non-nil.
+				e.initBusConnection()
 			}
 			e.profileStateChanged(ipn.LoginProfileView{}, tt.args.prefs, tt.args.sameNode)
 			if tt.wantNilServer != (e.server == nil) {

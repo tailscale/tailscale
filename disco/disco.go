@@ -42,13 +42,15 @@ const NonceLen = 24
 type MessageType byte
 
 const (
-	TypePing                          = MessageType(0x01)
-	TypePong                          = MessageType(0x02)
-	TypeCallMeMaybe                   = MessageType(0x03)
-	TypeBindUDPRelayEndpoint          = MessageType(0x04)
-	TypeBindUDPRelayEndpointChallenge = MessageType(0x05)
-	TypeBindUDPRelayEndpointAnswer    = MessageType(0x06)
-	TypeCallMeMaybeVia                = MessageType(0x07)
+	TypePing                             = MessageType(0x01)
+	TypePong                             = MessageType(0x02)
+	TypeCallMeMaybe                      = MessageType(0x03)
+	TypeBindUDPRelayEndpoint             = MessageType(0x04)
+	TypeBindUDPRelayEndpointChallenge    = MessageType(0x05)
+	TypeBindUDPRelayEndpointAnswer       = MessageType(0x06)
+	TypeCallMeMaybeVia                   = MessageType(0x07)
+	TypeAllocateUDPRelayEndpointRequest  = MessageType(0x08)
+	TypeAllocateUDPRelayEndpointResponse = MessageType(0x09)
 )
 
 const v0 = byte(0)
@@ -97,6 +99,10 @@ func Parse(p []byte) (Message, error) {
 		return parseBindUDPRelayEndpointAnswer(ver, p)
 	case TypeCallMeMaybeVia:
 		return parseCallMeMaybeVia(ver, p)
+	case TypeAllocateUDPRelayEndpointRequest:
+		return parseAllocateUDPRelayEndpointRequest(ver, p)
+	case TypeAllocateUDPRelayEndpointResponse:
+		return parseAllocateUDPRelayEndpointResponse(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -381,9 +387,7 @@ func (m *BindUDPRelayEndpointCommon) decode(b []byte) error {
 }
 
 // BindUDPRelayEndpoint is the first messaged transmitted from UDP relay client
-// towards UDP relay server as part of the 3-way bind handshake. This message
-// type is currently considered experimental and is not yet tied to a
-// tailcfg.CapabilityVersion.
+// towards UDP relay server as part of the 3-way bind handshake.
 type BindUDPRelayEndpoint struct {
 	BindUDPRelayEndpointCommon
 }
@@ -405,8 +409,7 @@ func parseBindUDPRelayEndpoint(ver uint8, p []byte) (m *BindUDPRelayEndpoint, er
 
 // BindUDPRelayEndpointChallenge is transmitted from UDP relay server towards
 // UDP relay client in response to a BindUDPRelayEndpoint message as part of the
-// 3-way bind handshake. This message type is currently considered experimental
-// and is not yet tied to a tailcfg.CapabilityVersion.
+// 3-way bind handshake.
 type BindUDPRelayEndpointChallenge struct {
 	BindUDPRelayEndpointCommon
 }
@@ -427,9 +430,7 @@ func parseBindUDPRelayEndpointChallenge(ver uint8, p []byte) (m *BindUDPRelayEnd
 }
 
 // BindUDPRelayEndpointAnswer is transmitted from UDP relay client to UDP relay
-// server in response to a BindUDPRelayEndpointChallenge message. This message
-// type is currently considered experimental and is not yet tied to a
-// tailcfg.CapabilityVersion.
+// server in response to a BindUDPRelayEndpointChallenge message.
 type BindUDPRelayEndpointAnswer struct {
 	BindUDPRelayEndpointCommon
 }
@@ -449,6 +450,168 @@ func parseBindUDPRelayEndpointAnswer(ver uint8, p []byte) (m *BindUDPRelayEndpoi
 	return m, nil
 }
 
+// AllocateUDPRelayEndpointRequest is a message sent only over DERP to request
+// allocation of a relay endpoint on a [tailscale.com/net/udprelay.Server]
+type AllocateUDPRelayEndpointRequest struct {
+	// ClientDisco are the Disco public keys of the clients that should be
+	// permitted to handshake with the endpoint.
+	ClientDisco [2]key.DiscoPublic
+	// Generation represents the allocation request generation. The server must
+	// echo it back in the [AllocateUDPRelayEndpointResponse] to enable request
+	// and response alignment client-side.
+	Generation uint32
+}
+
+// allocateUDPRelayEndpointRequestLen is the length of a marshaled
+// [AllocateUDPRelayEndpointRequest] message without the message header.
+const allocateUDPRelayEndpointRequestLen = key.DiscoPublicRawLen*2 + // ClientDisco
+	4 // Generation
+
+func (m *AllocateUDPRelayEndpointRequest) AppendMarshal(b []byte) []byte {
+	ret, p := appendMsgHeader(b, TypeAllocateUDPRelayEndpointRequest, v0, allocateUDPRelayEndpointRequestLen)
+	for i := 0; i < len(m.ClientDisco); i++ {
+		disco := m.ClientDisco[i].AppendTo(nil)
+		copy(p, disco)
+		p = p[key.DiscoPublicRawLen:]
+	}
+	binary.BigEndian.PutUint32(p, m.Generation)
+	return ret
+}
+
+func parseAllocateUDPRelayEndpointRequest(ver uint8, p []byte) (m *AllocateUDPRelayEndpointRequest, err error) {
+	m = new(AllocateUDPRelayEndpointRequest)
+	if ver != 0 {
+		return
+	}
+	if len(p) < allocateUDPRelayEndpointRequestLen {
+		return m, errShort
+	}
+	for i := 0; i < len(m.ClientDisco); i++ {
+		m.ClientDisco[i] = key.DiscoPublicFromRaw32(mem.B(p[:key.DiscoPublicRawLen]))
+		p = p[key.DiscoPublicRawLen:]
+	}
+	m.Generation = binary.BigEndian.Uint32(p)
+	return m, nil
+}
+
+// AllocateUDPRelayEndpointResponse is a message sent only over DERP in response
+// to a [AllocateUDPRelayEndpointRequest].
+type AllocateUDPRelayEndpointResponse struct {
+	// Generation represents the allocation request generation. The server must
+	// echo back the [AllocateUDPRelayEndpointRequest.Generation] here to enable
+	// request and response alignment client-side.
+	Generation uint32
+	UDPRelayEndpoint
+}
+
+func (m *AllocateUDPRelayEndpointResponse) AppendMarshal(b []byte) []byte {
+	endpointsLen := epLength * len(m.AddrPorts)
+	generationLen := 4
+	ret, d := appendMsgHeader(b, TypeAllocateUDPRelayEndpointResponse, v0, generationLen+udpRelayEndpointLenMinusAddrPorts+endpointsLen)
+	binary.BigEndian.PutUint32(d, m.Generation)
+	m.encode(d[4:])
+	return ret
+}
+
+func parseAllocateUDPRelayEndpointResponse(ver uint8, p []byte) (m *AllocateUDPRelayEndpointResponse, err error) {
+	m = new(AllocateUDPRelayEndpointResponse)
+	if ver != 0 {
+		return m, nil
+	}
+	if len(p) < 4 {
+		return m, errShort
+	}
+	m.Generation = binary.BigEndian.Uint32(p)
+	err = m.decode(p[4:])
+	return m, err
+}
+
+const udpRelayEndpointLenMinusAddrPorts = key.DiscoPublicRawLen + // ServerDisco
+	(key.DiscoPublicRawLen * 2) + // ClientDisco
+	8 + // LamportID
+	4 + // VNI
+	8 + // BindLifetime
+	8 // SteadyStateLifetime
+
+// UDPRelayEndpoint is a mirror of [tailscale.com/net/udprelay/endpoint.ServerEndpoint],
+// refer to it for field documentation. [UDPRelayEndpoint] is carried in both
+// [CallMeMaybeVia] and [AllocateUDPRelayEndpointResponse] messages.
+type UDPRelayEndpoint struct {
+	// ServerDisco is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.ServerDisco]
+	ServerDisco key.DiscoPublic
+	// ClientDisco is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.ClientDisco]
+	ClientDisco [2]key.DiscoPublic
+	// LamportID is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.LamportID]
+	LamportID uint64
+	// VNI is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.VNI]
+	VNI uint32
+	// BindLifetime is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.BindLifetime]
+	BindLifetime time.Duration
+	// SteadyStateLifetime is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.SteadyStateLifetime]
+	SteadyStateLifetime time.Duration
+	// AddrPorts is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.AddrPorts]
+	AddrPorts []netip.AddrPort
+}
+
+// encode encodes m in b. b must be at least [udpRelayEndpointLenMinusAddrPorts]
+// + [epLength] * len(m.AddrPorts) bytes long.
+func (m *UDPRelayEndpoint) encode(b []byte) {
+	disco := m.ServerDisco.AppendTo(nil)
+	copy(b, disco)
+	b = b[key.DiscoPublicRawLen:]
+	for i := 0; i < len(m.ClientDisco); i++ {
+		disco = m.ClientDisco[i].AppendTo(nil)
+		copy(b, disco)
+		b = b[key.DiscoPublicRawLen:]
+	}
+	binary.BigEndian.PutUint64(b[:8], m.LamportID)
+	b = b[8:]
+	binary.BigEndian.PutUint32(b[:4], m.VNI)
+	b = b[4:]
+	binary.BigEndian.PutUint64(b[:8], uint64(m.BindLifetime))
+	b = b[8:]
+	binary.BigEndian.PutUint64(b[:8], uint64(m.SteadyStateLifetime))
+	b = b[8:]
+	for _, ipp := range m.AddrPorts {
+		a := ipp.Addr().As16()
+		copy(b, a[:])
+		binary.BigEndian.PutUint16(b[16:18], ipp.Port())
+		b = b[epLength:]
+	}
+}
+
+// decode decodes m from b.
+func (m *UDPRelayEndpoint) decode(b []byte) error {
+	if len(b) < udpRelayEndpointLenMinusAddrPorts+epLength ||
+		(len(b)-udpRelayEndpointLenMinusAddrPorts)%epLength != 0 {
+		return errShort
+	}
+	m.ServerDisco = key.DiscoPublicFromRaw32(mem.B(b[:key.DiscoPublicRawLen]))
+	b = b[key.DiscoPublicRawLen:]
+	for i := 0; i < len(m.ClientDisco); i++ {
+		m.ClientDisco[i] = key.DiscoPublicFromRaw32(mem.B(b[:key.DiscoPublicRawLen]))
+		b = b[key.DiscoPublicRawLen:]
+	}
+	m.LamportID = binary.BigEndian.Uint64(b[:8])
+	b = b[8:]
+	m.VNI = binary.BigEndian.Uint32(b[:4])
+	b = b[4:]
+	m.BindLifetime = time.Duration(binary.BigEndian.Uint64(b[:8]))
+	b = b[8:]
+	m.SteadyStateLifetime = time.Duration(binary.BigEndian.Uint64(b[:8]))
+	b = b[8:]
+	m.AddrPorts = make([]netip.AddrPort, 0, len(b)-udpRelayEndpointLenMinusAddrPorts/epLength)
+	for len(b) > 0 {
+		var a [16]byte
+		copy(a[:], b)
+		m.AddrPorts = append(m.AddrPorts, netip.AddrPortFrom(
+			netip.AddrFrom16(a).Unmap(),
+			binary.BigEndian.Uint16(b[16:18])))
+		b = b[epLength:]
+	}
+	return nil
+}
+
 // CallMeMaybeVia is a message sent only over DERP to request that the recipient
 // try to open up a magicsock path back to the sender. The 'Via' in
 // CallMeMaybeVia highlights that candidate paths are served through an
@@ -464,78 +627,22 @@ func parseBindUDPRelayEndpointAnswer(ver uint8, p []byte) (m *BindUDPRelayEndpoi
 // The recipient may choose to not open a path back if it's already happy with
 // its path. Direct connections, e.g. [CallMeMaybe]-signaled, take priority over
 // CallMeMaybeVia paths.
-//
-// This message type is currently considered experimental and is not yet tied to
-// a [tailscale.com/tailcfg.CapabilityVersion].
 type CallMeMaybeVia struct {
-	// ServerDisco is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.ServerDisco]
-	ServerDisco key.DiscoPublic
-	// LamportID is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.LamportID]
-	LamportID uint64
-	// VNI is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.VNI]
-	VNI uint32
-	// BindLifetime is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.BindLifetime]
-	BindLifetime time.Duration
-	// SteadyStateLifetime is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.SteadyStateLifetime]
-	SteadyStateLifetime time.Duration
-	// AddrPorts is [tailscale.com/net/udprelay/endpoint.ServerEndpoint.AddrPorts]
-	AddrPorts []netip.AddrPort
+	UDPRelayEndpoint
 }
-
-const cmmvDataLenMinusEndpoints = key.DiscoPublicRawLen + // ServerDisco
-	8 + // LamportID
-	4 + // VNI
-	8 + // BindLifetime
-	8 // SteadyStateLifetime
 
 func (m *CallMeMaybeVia) AppendMarshal(b []byte) []byte {
 	endpointsLen := epLength * len(m.AddrPorts)
-	ret, p := appendMsgHeader(b, TypeCallMeMaybeVia, v0, cmmvDataLenMinusEndpoints+endpointsLen)
-	disco := m.ServerDisco.AppendTo(nil)
-	copy(p, disco)
-	p = p[key.DiscoPublicRawLen:]
-	binary.BigEndian.PutUint64(p[:8], m.LamportID)
-	p = p[8:]
-	binary.BigEndian.PutUint32(p[:4], m.VNI)
-	p = p[4:]
-	binary.BigEndian.PutUint64(p[:8], uint64(m.BindLifetime))
-	p = p[8:]
-	binary.BigEndian.PutUint64(p[:8], uint64(m.SteadyStateLifetime))
-	p = p[8:]
-	for _, ipp := range m.AddrPorts {
-		a := ipp.Addr().As16()
-		copy(p, a[:])
-		binary.BigEndian.PutUint16(p[16:18], ipp.Port())
-		p = p[epLength:]
-	}
+	ret, p := appendMsgHeader(b, TypeCallMeMaybeVia, v0, udpRelayEndpointLenMinusAddrPorts+endpointsLen)
+	m.encode(p)
 	return ret
 }
 
 func parseCallMeMaybeVia(ver uint8, p []byte) (m *CallMeMaybeVia, err error) {
 	m = new(CallMeMaybeVia)
-	if len(p) < cmmvDataLenMinusEndpoints+epLength ||
-		(len(p)-cmmvDataLenMinusEndpoints)%epLength != 0 ||
-		ver != 0 {
+	if ver != 0 {
 		return m, nil
 	}
-	m.ServerDisco = key.DiscoPublicFromRaw32(mem.B(p[:key.DiscoPublicRawLen]))
-	p = p[key.DiscoPublicRawLen:]
-	m.LamportID = binary.BigEndian.Uint64(p[:8])
-	p = p[8:]
-	m.VNI = binary.BigEndian.Uint32(p[:4])
-	p = p[4:]
-	m.BindLifetime = time.Duration(binary.BigEndian.Uint64(p[:8]))
-	p = p[8:]
-	m.SteadyStateLifetime = time.Duration(binary.BigEndian.Uint64(p[:8]))
-	p = p[8:]
-	m.AddrPorts = make([]netip.AddrPort, 0, len(p)-cmmvDataLenMinusEndpoints/epLength)
-	for len(p) > 0 {
-		var a [16]byte
-		copy(a[:], p)
-		m.AddrPorts = append(m.AddrPorts, netip.AddrPortFrom(
-			netip.AddrFrom16(a).Unmap(),
-			binary.BigEndian.Uint16(p[16:18])))
-		p = p[epLength:]
-	}
-	return m, nil
+	err = m.decode(p)
+	return m, err
 }

@@ -19,7 +19,6 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -64,6 +63,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/must"
@@ -3384,258 +3384,6 @@ func Test_virtualNetworkID(t *testing.T) {
 	}
 }
 
-func Test_peerAPIIfCandidateRelayServer(t *testing.T) {
-	hostInfo := &tailcfg.Hostinfo{
-		Services: []tailcfg.Service{
-			{
-				Proto: tailcfg.PeerAPI4,
-				Port:  4,
-			},
-			{
-				Proto: tailcfg.PeerAPI6,
-				Port:  6,
-			},
-		},
-	}
-
-	selfOnlyIPv4 := &tailcfg.Node{
-		ID: 1,
-		// Intentionally set a value < 120 to verify the statically compiled
-		// [tailcfg.CurrentCapabilityVersion] is used when self is
-		// maybeCandidate.
-		Cap: 119,
-		Addresses: []netip.Prefix{
-			netip.MustParsePrefix("1.1.1.1/32"),
-		},
-		Hostinfo: hostInfo.View(),
-	}
-	selfOnlyIPv6 := selfOnlyIPv4.Clone()
-	selfOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::1/128")
-
-	peerOnlyIPv4 := &tailcfg.Node{
-		ID:  2,
-		Cap: 120,
-		Addresses: []netip.Prefix{
-			netip.MustParsePrefix("2.2.2.2/32"),
-		},
-		Hostinfo: hostInfo.View(),
-	}
-
-	peerOnlyIPv4NotCapable := peerOnlyIPv4.Clone()
-	peerOnlyIPv4NotCapable.Cap = 119
-
-	peerOnlyIPv6 := peerOnlyIPv4.Clone()
-	peerOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::2/128")
-
-	peerOnlyIPv4ZeroCapVer := peerOnlyIPv4.Clone()
-	peerOnlyIPv4ZeroCapVer.Cap = 0
-
-	peerOnlyIPv4NilHostinfo := peerOnlyIPv4.Clone()
-	peerOnlyIPv4NilHostinfo.Hostinfo = tailcfg.HostinfoView{}
-
-	tests := []struct {
-		name           string
-		filt           *filter.Filter
-		self           tailcfg.NodeView
-		maybeCandidate tailcfg.NodeView
-		want           netip.AddrPort
-	}{
-		{
-			name: "match v4",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv4.View(),
-			maybeCandidate: peerOnlyIPv4.View(),
-			want:           netip.MustParseAddrPort("2.2.2.2:4"),
-		},
-		{
-			name: "match v4 self",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{selfOnlyIPv4.Addresses[0]},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: selfOnlyIPv4.Addresses[0],
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv4.View(),
-			maybeCandidate: selfOnlyIPv4.View(),
-			want:           netip.AddrPortFrom(selfOnlyIPv4.Addresses[0].Addr(), 4),
-		},
-		{
-			name: "match v6",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("::1/128"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv6.View(),
-			maybeCandidate: peerOnlyIPv6.View(),
-			want:           netip.MustParseAddrPort("[::2]:6"),
-		},
-		{
-			name: "match v6 self",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{selfOnlyIPv6.Addresses[0]},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: selfOnlyIPv6.Addresses[0],
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv6.View(),
-			maybeCandidate: selfOnlyIPv6.View(),
-			want:           netip.AddrPortFrom(selfOnlyIPv6.Addresses[0].Addr(), 6),
-		},
-		{
-			name: "peer incapable",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv4.View(),
-			maybeCandidate: peerOnlyIPv4NotCapable.View(),
-		},
-		{
-			name: "no match dst",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("::3/128"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv6.View(),
-			maybeCandidate: peerOnlyIPv6.View(),
-		},
-		{
-			name: "no match peer cap",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("::1/128"),
-							Cap: tailcfg.PeerCapabilityIngress,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv6.View(),
-			maybeCandidate: peerOnlyIPv6.View(),
-		},
-		{
-			name: "cap ver not relay capable",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           peerOnlyIPv4.View(),
-			maybeCandidate: peerOnlyIPv4ZeroCapVer.View(),
-		},
-		{
-			name:           "nil filt",
-			filt:           nil,
-			self:           selfOnlyIPv4.View(),
-			maybeCandidate: peerOnlyIPv4.View(),
-		},
-		{
-			name: "nil self",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           tailcfg.NodeView{},
-			maybeCandidate: peerOnlyIPv4.View(),
-		},
-		{
-			name: "nil peer",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv4.View(),
-			maybeCandidate: tailcfg.NodeView{},
-		},
-		{
-			name: "nil peer hostinfo",
-			filt: filter.New([]filtertype.Match{
-				{
-					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
-					Caps: []filtertype.CapMatch{
-						{
-							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
-						},
-					},
-				},
-			}, nil, nil, nil, nil, nil),
-			self:           selfOnlyIPv4.View(),
-			maybeCandidate: peerOnlyIPv4NilHostinfo.View(),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := peerAPIIfCandidateRelayServer(tt.filt, tt.self, tt.maybeCandidate); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("peerAPIIfCandidateRelayServer() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func Test_looksLikeInitiationMsg(t *testing.T) {
 	initMsg := make([]byte, device.MessageInitiationSize)
 	binary.BigEndian.PutUint32(initMsg, device.MessageInitiationType)
@@ -3671,6 +3419,271 @@ func Test_looksLikeInitiationMsg(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := looksLikeInitiationMsg(tt.b); got != tt.want {
 				t.Errorf("looksLikeInitiationMsg() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_nodeHasCap(t *testing.T) {
+	nodeAOnlyIPv4 := &tailcfg.Node{
+		ID: 1,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("1.1.1.1/32"),
+		},
+	}
+	nodeBOnlyIPv6 := nodeAOnlyIPv4.Clone()
+	nodeBOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::1/128")
+
+	nodeCOnlyIPv4 := &tailcfg.Node{
+		ID: 2,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("2.2.2.2/32"),
+		},
+	}
+	nodeDOnlyIPv6 := nodeCOnlyIPv4.Clone()
+	nodeDOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::2/128")
+
+	tests := []struct {
+		name string
+		filt *filter.Filter
+		src  tailcfg.NodeView
+		dst  tailcfg.NodeView
+		cap  tailcfg.PeerCapability
+		want bool
+	}{
+		{
+			name: "match v4",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			src:  nodeCOnlyIPv4.View(),
+			dst:  nodeAOnlyIPv4.View(),
+			cap:  tailcfg.PeerCapabilityRelayTarget,
+			want: true,
+		},
+		{
+			name: "match v6",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("::1/128"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			src:  nodeDOnlyIPv6.View(),
+			dst:  nodeBOnlyIPv6.View(),
+			cap:  tailcfg.PeerCapabilityRelayTarget,
+			want: true,
+		},
+		{
+			name: "no match CapMatch Dst",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("::3/128"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			src:  nodeDOnlyIPv6.View(),
+			dst:  nodeBOnlyIPv6.View(),
+			cap:  tailcfg.PeerCapabilityRelayTarget,
+			want: false,
+		},
+		{
+			name: "no match peer cap",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("::2/128")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("::1/128"),
+							Cap: tailcfg.PeerCapabilityIngress,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			src:  nodeDOnlyIPv6.View(),
+			dst:  nodeBOnlyIPv6.View(),
+			cap:  tailcfg.PeerCapabilityRelayTarget,
+			want: false,
+		},
+		{
+			name: "nil src",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			src:  tailcfg.NodeView{},
+			dst:  nodeAOnlyIPv4.View(),
+			cap:  tailcfg.PeerCapabilityRelayTarget,
+			want: false,
+		},
+		{
+			name: "nil dst",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			src:  nodeCOnlyIPv4.View(),
+			dst:  tailcfg.NodeView{},
+			cap:  tailcfg.PeerCapabilityRelayTarget,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nodeHasCap(tt.filt, tt.src, tt.dst, tt.cap); got != tt.want {
+				t.Errorf("nodeHasCap() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConn_updateRelayServersSet(t *testing.T) {
+	peerNodeCandidateRelay := &tailcfg.Node{
+		Cap: 121,
+		ID:  1,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("1.1.1.1/32"),
+		},
+		HomeDERP: 1,
+		Key:      key.NewNode().Public(),
+		DiscoKey: key.NewDisco().Public(),
+	}
+
+	peerNodeNotCandidateRelayCapVer := &tailcfg.Node{
+		Cap: 120, // intentionally lower to fail capVer check
+		ID:  1,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("1.1.1.1/32"),
+		},
+		HomeDERP: 1,
+		Key:      key.NewNode().Public(),
+		DiscoKey: key.NewDisco().Public(),
+	}
+
+	selfNode := &tailcfg.Node{
+		Cap: 120, // intentionally lower than capVerIsRelayCapable to verify self check
+		ID:  2,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("2.2.2.2/32"),
+		},
+		HomeDERP: 2,
+		Key:      key.NewNode().Public(),
+		DiscoKey: key.NewDisco().Public(),
+	}
+
+	tests := []struct {
+		name             string
+		filt             *filter.Filter
+		self             tailcfg.NodeView
+		peers            views.Slice[tailcfg.NodeView]
+		wantRelayServers set.Set[candidatePeerRelay]
+	}{
+		{
+			name: "candidate relay server",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: peerNodeCandidateRelay.Addresses,
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: selfNode.Addresses[0],
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self:  selfNode.View(),
+			peers: views.SliceOf([]tailcfg.NodeView{peerNodeCandidateRelay.View()}),
+			wantRelayServers: set.SetOf([]candidatePeerRelay{
+				{
+					nodeKey:          peerNodeCandidateRelay.Key,
+					discoKey:         peerNodeCandidateRelay.DiscoKey,
+					derpHomeRegionID: 1,
+				},
+			}),
+		},
+		{
+			name: "self candidate relay server",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: selfNode.Addresses,
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: selfNode.Addresses[0],
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self:  selfNode.View(),
+			peers: views.SliceOf([]tailcfg.NodeView{selfNode.View()}),
+			wantRelayServers: set.SetOf([]candidatePeerRelay{
+				{
+					nodeKey:          selfNode.Key,
+					discoKey:         selfNode.DiscoKey,
+					derpHomeRegionID: 2,
+				},
+			}),
+		},
+		{
+			name: "no candidate relay server",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: peerNodeNotCandidateRelayCapVer.Addresses,
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: selfNode.Addresses[0],
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self:             selfNode.View(),
+			peers:            views.SliceOf([]tailcfg.NodeView{peerNodeNotCandidateRelayCapVer.View()}),
+			wantRelayServers: make(set.Set[candidatePeerRelay]),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Conn{}
+			c.updateRelayServersSet(tt.filt, tt.self, tt.peers)
+			got := c.relayManager.getServers()
+			if !got.Equal(tt.wantRelayServers) {
+				t.Fatalf("got: %v != want: %v", got, tt.wantRelayServers)
+			}
+			if len(tt.wantRelayServers) > 0 != c.hasPeerRelayServers.Load() {
+				t.Fatalf("c.hasPeerRelayServers: %v != wantRelayServers: %v", c.hasPeerRelayServers.Load(), tt.wantRelayServers)
 			}
 		})
 	}

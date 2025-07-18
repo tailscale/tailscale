@@ -25,6 +25,19 @@ func TestMarshalAndParse(t *testing.T) {
 		},
 	}
 
+	udpRelayEndpoint := UDPRelayEndpoint{
+		ServerDisco:         key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 30: 30, 31: 31})),
+		ClientDisco:         [2]key.DiscoPublic{key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 3: 3, 30: 30, 31: 31})), key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 4: 4, 30: 30, 31: 31}))},
+		LamportID:           123,
+		VNI:                 456,
+		BindLifetime:        time.Second,
+		SteadyStateLifetime: time.Minute,
+		AddrPorts: []netip.AddrPort{
+			netip.MustParseAddrPort("1.2.3.4:567"),
+			netip.MustParseAddrPort("[2001::3456]:789"),
+		},
+	}
+
 	tests := []struct {
 		name string
 		want string
@@ -117,17 +130,25 @@ func TestMarshalAndParse(t *testing.T) {
 		{
 			name: "call_me_maybe_via",
 			m: &CallMeMaybeVia{
-				ServerDisco:         key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 30: 30, 31: 31})),
-				LamportID:           123,
-				VNI:                 456,
-				BindLifetime:        time.Second,
-				SteadyStateLifetime: time.Minute,
-				AddrPorts: []netip.AddrPort{
-					netip.MustParseAddrPort("1.2.3.4:567"),
-					netip.MustParseAddrPort("[2001::3456]:789"),
-				},
+				UDPRelayEndpoint: udpRelayEndpoint,
 			},
-			want: "07 00 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 00 00 00 00 00 00 7b 00 00 01 c8 00 00 00 00 3b 9a ca 00 00 00 00 0d f8 47 58 00 00 00 00 00 00 00 00 00 00 00 ff ff 01 02 03 04 02 37 20 01 00 00 00 00 00 00 00 00 00 00 00 00 34 56 03 15",
+			want: "07 00 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 00 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 00 00 00 00 00 00 7b 00 00 01 c8 00 00 00 00 3b 9a ca 00 00 00 00 0d f8 47 58 00 00 00 00 00 00 00 00 00 00 00 ff ff 01 02 03 04 02 37 20 01 00 00 00 00 00 00 00 00 00 00 00 00 34 56 03 15",
+		},
+		{
+			name: "allocate_udp_relay_endpoint_request",
+			m: &AllocateUDPRelayEndpointRequest{
+				ClientDisco: [2]key.DiscoPublic{key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 3: 3, 30: 30, 31: 31})), key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 4: 4, 30: 30, 31: 31}))},
+				Generation:  1,
+			},
+			want: "08 00 00 01 02 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 00 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 00 00 01",
+		},
+		{
+			name: "allocate_udp_relay_endpoint_response",
+			m: &AllocateUDPRelayEndpointResponse{
+				Generation:       1,
+				UDPRelayEndpoint: udpRelayEndpoint,
+			},
+			want: "09 00 00 00 00 01 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 00 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 00 00 00 00 00 00 7b 00 00 01 c8 00 00 00 00 3b 9a ca 00 00 00 00 0d f8 47 58 00 00 00 00 00 00 00 00 00 00 00 ff ff 01 02 03 04 02 37 20 01 00 00 00 00 00 00 00 00 00 00 00 00 34 56 03 15",
 		},
 	}
 	for _, tt := range tests {
