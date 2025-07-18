@@ -58,7 +58,10 @@ type ConfigV1Alpha1 struct {
 	AcceptRoutes  *bool          `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
 	// StaticEndpoints are additional, user-defined endpoints that this node
 	// should advertise amongst its wireguard endpoints.
-	StaticEndpoints []netip.AddrPort `json:",omitempty"`
+	StaticEndpoints    []netip.AddrPort `json:",omitempty"`
+	LocalAddrPort      *string          `json:",omitempty"` // The host:port to use for serving HTTP health checks.
+	MetricsEnabled     bool
+	HealthCheckEnabled bool
 }
 
 type KubeAPIServer struct {

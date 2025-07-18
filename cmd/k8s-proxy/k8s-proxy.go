@@ -12,6 +12,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -27,7 +30,9 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
+	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/k8s-proxy/conf"
+	"tailscale.com/kube/metrics"
 	"tailscale.com/kube/state"
 	"tailscale.com/tsnet"
 )
@@ -187,6 +192,41 @@ func run(logger *zap.SugaredLogger) error {
 
 		return nil
 	})
+
+	if cfg.Parsed.HealthCheckEnabled || cfg.Parsed.MetricsEnabled {
+		if _, err := netip.ParseAddrPort(*cfg.Parsed.LocalAddrPort); err != nil {
+			return fmt.Errorf("error parsing configured local endpoint address %q: %w", *cfg.Parsed.LocalAddrPort, err)
+		}
+
+		mux := http.NewServeMux()
+		if cfg.Parsed.HealthCheckEnabled {
+			health := &http.Server{Addr: *cfg.Parsed.LocalAddrPort, Handler: mux}
+			ipV4, _ := ts.TailscaleIPs()
+			hz := healthz.RegisterHealthHandlers(mux, ipV4.String())
+			group.Go(func() error {
+				return health.ListenAndServe()
+			})
+			group.Go(func() error {
+				// NOTE(ChaosInTheCRD): maybe we don't care what the error is here since here and we just
+				// always want graceful shutdown?
+				err := hz.MonitorHealth(groupCtx, lc)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						sCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+						defer cancel()
+						return health.Shutdown(sCtx)
+					}
+					return err
+				}
+				return nil
+			})
+		}
+
+		if cfg.Parsed.MetricsEnabled {
+			log.Printf("Running metrics endpoint at %s/metrics", *cfg.Parsed.LocalAddrPort)
+			metrics.RegisterMetricsHandlers(mux, lc, *cfg.Parsed.LocalAddrPort)
+		}
+	}
 
 	return group.Wait()
 }

@@ -121,7 +121,9 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
+	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/kube/metrics"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -231,13 +233,13 @@ func run() error {
 	}
 	defer killTailscaled()
 
-	var healthCheck *healthz
+	var healthCheck *healthz.Healthz
 	ep := &egressProxy{}
 	if cfg.HealthCheckAddrPort != "" {
 		mux := http.NewServeMux()
 
 		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
-		healthCheck = registerHealthHandlers(mux, cfg.PodIPv4)
+		healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4)
 
 		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
 		defer close()
@@ -248,12 +250,12 @@ func run() error {
 
 		if cfg.localMetricsEnabled() {
 			log.Printf("Running metrics endpoint at %s/metrics", cfg.LocalAddrPort)
-			registerMetricsHandlers(mux, client, cfg.DebugAddrPort)
+			metrics.RegisterMetricsHandlers(mux, client, cfg.DebugAddrPort)
 		}
 
 		if cfg.localHealthEnabled() {
 			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
-			healthCheck = registerHealthHandlers(mux, cfg.PodIPv4)
+			healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4)
 		}
 
 		if cfg.egressSvcsTerminateEPEnabled() {
@@ -643,7 +645,7 @@ runLoop:
 				}
 
 				if healthCheck != nil {
-					healthCheck.update(len(addrs) != 0)
+					healthCheck.Update(len(addrs) != 0)
 				}
 
 				if cfg.ServeConfigPath != "" {
