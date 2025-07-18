@@ -51,7 +51,7 @@ func IsLoginServerSynonym(val any) bool {
 
 // Prefs are the user modifiable settings of the Tailscale node agent.
 // When you add a Pref to this struct, remember to add a corresponding
-// field in MaskedPrefs, and check your field for equality in Prefs.Equals().
+// field in [MaskedPrefs], and check your field for equality in Prefs.Equals().
 type Prefs struct {
 	// ControlURL is the URL of the control server to use.
 	//
@@ -294,6 +294,25 @@ type Prefs struct {
 	//  We can maybe do that once we're sure which module should persist
 	//  it (backend or frontend?)
 	Persist *persist.Persist `json:"Config"`
+
+	// Location fields configure the location overrides for the client node.
+	// These overrides are self-reported hints to the control server, to
+	// help users pick an appropriate node based on its location.
+	//
+	// LocationCoords are the geographical coordinates that give the
+	// approximate location for this node. The coordinates are encoded as
+	// ±latitude±longitude in decimal degrees. These coordinates are never
+	// shared with Tailscale peers.
+	//
+	// LocationCountry and LocationCity are top-level and local-level names
+	// that describe the location for this node. They may be actual country
+	// and city names, in any language or localization; but they can also be
+	// arbitrary groupings. Tailscale clients may use these names to group
+	// nodes by LocationCountry and then LocationCity when presenting a
+	// hierarchical node selector.
+	LocationCity    string `json:",omitempty"`
+	LocationCoords  string `json:",omitempty"`
+	LocationCountry string `json:",omitempty"`
 }
 
 // AutoUpdatePrefs are the auto update settings for the node agent.
@@ -371,6 +390,9 @@ type MaskedPrefs struct {
 	NetfilterKindSet          bool                `json:",omitempty"`
 	DriveSharesSet            bool                `json:",omitempty"`
 	RelayServerPortSet        bool                `json:",omitempty"`
+	LocationCitySet           bool                `json:",omitempty"`
+	LocationCoordsSet         bool                `json:",omitempty"`
+	LocationCountrySet        bool                `json:",omitempty"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set

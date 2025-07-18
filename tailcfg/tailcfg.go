@@ -797,8 +797,13 @@ type Location struct {
 	// IATA, ICAO or ISO 3166-2 codes are recommended ("YSE")
 	CityCode string `json:",omitempty"`
 
-	// Latitude, Longitude are optional geographical coordinates of the node, in degrees.
-	// No particular accuracy level is promised; the coordinates may simply be the center of the city or country.
+	// Latitude and Longitude are optional geographical coordinates of the
+	// node, in decimal degrees. No particular accuracy level is promised;
+	// the coordinates may simply be the center of the city or country.
+	//
+	// To reliably distinguish between an empty {Latitude, Longitude} pair
+	// and the value {Latitude: 0, Longitude: 0}, the latter may be encoded
+	// as {Latitude: 0, Longitude: math.SmallestNonzeroFloat32}.
 	Latitude  float64 `json:",omitempty"`
 	Longitude float64 `json:",omitempty"`
 

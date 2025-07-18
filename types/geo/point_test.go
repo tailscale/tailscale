@@ -56,6 +56,7 @@ func TestPoint(t *testing.T) {
 		wantLat    geo.Degrees
 		wantLng    geo.Degrees
 		wantString string
+		wantLatLng string
 		wantText   string
 	}{
 		{
@@ -65,6 +66,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +0.0,
 			wantString: "+0° +0°",
+			wantLatLng: "+0+0",
 			wantText:   "POINT (0 0)",
 		},
 		{
@@ -74,6 +76,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +90.0,
 			wantLng:    +0.0,
 			wantString: "+90° +0°",
+			wantLatLng: "+90+0",
 			wantText:   "POINT (0 90)",
 		},
 		{
@@ -83,6 +86,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    -90.0,
 			wantLng:    +0.0,
 			wantString: "-90° +0°",
+			wantLatLng: "-90+0",
 			wantText:   "POINT (0 -90)",
 		},
 		{
@@ -92,6 +96,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +90.0,
 			wantLng:    +0.0,
 			wantString: "+90° +0°",
+			wantLatLng: "+90+0",
 			wantText:   "POINT (0 90)",
 		},
 		{
@@ -101,6 +106,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    -90.0,
 			wantLng:    +0.0,
 			wantString: "-90° +0°",
+			wantLatLng: "-90+0",
 			wantText:   "POINT (0 -90)",
 		},
 		{
@@ -110,6 +116,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +89.0,
 			wantLng:    +0.0,
 			wantString: "+89° +0°",
+			wantLatLng: "+89+0",
 			wantText:   "POINT (0 89)",
 		},
 		{
@@ -119,6 +126,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +89.0,
 			wantLng:    +180.0,
 			wantString: "+89° +180°",
+			wantLatLng: "+89+180",
 			wantText:   "POINT (180 89)",
 		},
 		{
@@ -128,6 +136,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    -89.0,
 			wantLng:    +0.0,
 			wantString: "-89° +0°",
+			wantLatLng: "-89+0",
 			wantText:   "POINT (0 -89)",
 		},
 		{
@@ -137,6 +146,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    -89.0,
 			wantLng:    +180.0,
 			wantString: "-89° +180°",
+			wantLatLng: "-89+180",
 			wantText:   "POINT (180 -89)",
 		},
 		{
@@ -146,6 +156,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +180.0,
 			wantString: "+0° +180°",
+			wantLatLng: "+0+180",
 			wantText:   "POINT (180 0)",
 		},
 		{
@@ -155,6 +166,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +180.0,
 			wantString: "+0° +180°",
+			wantLatLng: "+0+180",
 			wantText:   "POINT (180 0)",
 		},
 		{
@@ -164,6 +176,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +1.0,
 			wantLng:    +180.0,
 			wantString: "+1° +180°",
+			wantLatLng: "+1+180",
 			wantText:   "POINT (180 1)",
 		},
 		{
@@ -173,6 +186,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    -1.0,
 			wantLng:    +180.0,
 			wantString: "-1° +180°",
+			wantLatLng: "-1+180",
 			wantText:   "POINT (180 -1)",
 		},
 		{
@@ -182,6 +196,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    -1.0,
 			wantLng:    +180.0,
 			wantString: "-1° +180°",
+			wantLatLng: "-1+180",
 			wantText:   "POINT (180 -1)",
 		},
 		{
@@ -191,6 +206,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +1.0,
 			wantLng:    +180.0,
 			wantString: "+1° +180°",
+			wantLatLng: "+1+180",
 			wantText:   "POINT (180 1)",
 		},
 		{
@@ -200,6 +216,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +1.0,
 			wantString: "+0° +1°",
+			wantLatLng: "+0+1",
 			wantText:   "POINT (1 0)",
 		},
 		{
@@ -209,6 +226,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +1.0,
 			wantString: "+0° +1°",
+			wantLatLng: "+0+1",
 			wantText:   "POINT (1 0)",
 		},
 		{
@@ -218,6 +236,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    -1.0,
 			wantLng:    +1.0,
 			wantString: "-1° +1°",
+			wantLatLng: "-1+1",
 			wantText:   "POINT (1 -1)",
 		},
 		{
@@ -227,6 +246,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +1.0,
 			wantLng:    +1.0,
 			wantString: "+1° +1°",
+			wantLatLng: "+1+1",
 			wantText:   "POINT (1 1)",
 		},
 		{
@@ -236,6 +256,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +1.0,
 			wantLng:    +1.0,
 			wantString: "+1° +1°",
+			wantLatLng: "+1+1",
 			wantText:   "POINT (1 1)",
 		},
 		{
@@ -245,6 +266,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    -1.0,
 			wantLng:    +1.0,
 			wantString: "-1° +1°",
+			wantLatLng: "-1+1",
 			wantText:   "POINT (1 -1)",
 		},
 		{
@@ -254,6 +276,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +180.0,
 			wantString: "+0° +180°",
+			wantLatLng: "+0+180",
 			wantText:   "POINT (180 0)",
 		},
 		{
@@ -263,6 +286,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +180.0,
 			wantString: "+0° +180°",
+			wantLatLng: "+0+180",
 			wantText:   "POINT (180 0)",
 		},
 		{
@@ -272,6 +296,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +179.0,
 			wantString: "+0° +179°",
+			wantLatLng: "+0+179",
 			wantText:   "POINT (179 0)",
 		},
 		{
@@ -281,6 +306,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    -179.0,
 			wantString: "+0° -179°",
+			wantLatLng: "+0-179",
 			wantText:   "POINT (-179 0)",
 		},
 		{
@@ -290,6 +316,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    -179.0,
 			wantString: "+0° -179°",
+			wantLatLng: "+0-179",
 			wantText:   "POINT (-179 0)",
 		},
 		{
@@ -299,6 +326,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +0.0,
 			wantLng:    +179.0,
 			wantString: "+0° +179°",
+			wantLatLng: "+0+179",
 			wantText:   "POINT (179 0)",
 		},
 		{
@@ -308,6 +336,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    +45.508888,
 			wantLng:    -73.561668,
 			wantString: "+45.508888° -73.561668°",
+			wantLatLng: "+45.508888-73.561668",
 			wantText:   "POINT (-73.561668 45.508888)",
 		},
 		{
@@ -317,6 +346,7 @@ func TestPoint(t *testing.T) {
 			wantLat:    57.550480044655636,
 			wantLng:    -98.41680517868062,
 			wantString: "+57.550480044655636° -98.41680517868062°",
+			wantLatLng: "+57.550480044655636-98.41680517868062",
 			wantText:   "POINT (-98.41680517868062 57.550480044655636)",
 		},
 	} {
@@ -338,6 +368,19 @@ func TestPoint(t *testing.T) {
 				t.Errorf("String: got %q, wantString %q", got, tt.wantString)
 			}
 
+			ll := p.FormatLatLng()
+			if ll != tt.wantLatLng {
+				t.Errorf("FormatLatLng: got %q, wantLatLng %q", ll, tt.wantLatLng)
+			}
+
+			q, err := geo.ParseLatLng(ll)
+			if err != nil {
+				t.Fatalf("ParseLatLng: err %q, expected nil", err)
+			}
+			if q != p {
+				t.Errorf("ParseLatLng: got %v, want %v", q, p)
+			}
+
 			txt, err := p.MarshalText()
 			if err != nil {
 				t.Errorf("Text: err %q, expected nil", err)
@@ -350,7 +393,7 @@ func TestPoint(t *testing.T) {
 				t.Fatalf("MarshalBinary: err %q, expected nil", err)
 			}
 
-			var q geo.Point
+			q = geo.Point{}
 			if err := q.UnmarshalBinary(b); err != nil {
 				t.Fatalf("UnmarshalBinary: err %q, expected nil", err)
 			}

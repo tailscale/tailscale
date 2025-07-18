@@ -153,6 +153,124 @@ func (p Point) String() string {
 	return lat.String() + " " + lng.String()
 }
 
+// FormatLatLng returns a compact encoding of p: "±latitude±longitude" where
+// latitude and longitude are in decimal degrees. If p was not initialized, this
+// will return "nowhere".
+func (p Point) FormatLatLng() string {
+	lat, lng, err := p.LatLng()
+	if err != nil {
+		if err == ErrBadPoint {
+			return "nowhere"
+		}
+		panic(err)
+	}
+
+	var b []byte
+	b, err = lat.AppendText(b)
+	if err != nil {
+		panic(err)
+	}
+	b, err = lng.AppendText(b)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// ParseLatLng parses the output of [FormatLatLng] and returns its [Point]. If s
+// is an empty string, or is "nowhere", then this function returns the zero
+// Point.
+func ParseLatLng(s string) (Point, error) {
+	var zero Point
+	if s == "" || s == "nowhere" {
+		return zero, nil
+	}
+
+	type State int
+	const (
+		start State = iota + 1
+		latInt
+		latDec
+		lngInt
+		lngDec
+		done
+	)
+
+	var latI int // index of last character + 1
+	state := start
+	for i, last := 0, len(s)-1; i <= last; i++ {
+		c := s[i]
+		switch state {
+		case start:
+			switch c {
+			case '-', '+': // must start with sign: either + or -
+				state = latInt
+			default:
+				return zero, fmt.Errorf("%w: invalid syntax: %q", ErrBadPoint, s)
+			}
+		case latInt:
+			switch c {
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			case '.':
+				state = latDec
+			case '-', '+':
+				latI = i
+				state = lngInt
+			default:
+				return zero, fmt.Errorf("%w: invalid syntax: %q", ErrBadPoint, s)
+			}
+		case latDec:
+			switch c {
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			case '-', '+':
+				latI = i
+				state = lngInt
+			default:
+				return zero, fmt.Errorf("%w: invalid syntax: %q", ErrBadPoint, s)
+			}
+		case lngInt:
+			switch c {
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			case '.':
+				state = lngDec
+			default:
+				return zero, fmt.Errorf("%w: invalid syntax: %q", ErrBadPoint, s)
+			}
+		case lngDec:
+			switch c {
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			// no-op
+			default:
+				return zero, fmt.Errorf("%w: invalid syntax: %q", ErrBadPoint, s)
+			}
+		default:
+			panic(fmt.Sprintf("invalid state: %d", state))
+		}
+	}
+
+	// Did we see both lat and lng?
+	switch state {
+	case lngInt, lngDec:
+		// no-op
+	default:
+		return zero, fmt.Errorf("%w: invalid syntax: %q", ErrBadPoint, s)
+	}
+
+	// Latitude
+	lat, err := strconv.ParseFloat(string(s[0:latI]), 64)
+	if err != nil {
+		return zero, fmt.Errorf("%w: invalid latitude: %w", ErrBadPoint, err)
+	}
+
+	// Longitude
+	lng, err := strconv.ParseFloat(string(s[latI:]), 64)
+	if err != nil {
+		return zero, fmt.Errorf("%w: invalid longitude: %w", ErrBadPoint, err)
+	}
+
+	return MakePoint(Degrees(lat), Degrees(lng)), nil
+}
+
 // AppendBinary implements [encoding.BinaryAppender]. The output consists of two
 // float32s in big-endian byte order: latitude and longitude offset by 180°.
 // If p is not a valid, the output will be an 8-byte zero value.
