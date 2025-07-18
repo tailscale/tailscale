@@ -1212,6 +1212,54 @@ func TestAddServiceToPrefs(t *testing.T) {
 
 }
 
+func TestRemoveServiceFromPrefs(t *testing.T) {
+	tests := []struct {
+		name          string
+		svcName       tailcfg.ServiceName
+		startServices []string
+		expected      []string
+	}{
+		{
+			name:     "remove service from empty prefs",
+			svcName:  "svc:foo",
+			expected: []string{},
+		},
+		{
+			name:          "remove existing service from prefs",
+			svcName:       "svc:foo",
+			startServices: []string{"svc:foo"},
+			expected:      []string{},
+		},
+		{
+			name:          "remove service not in prefs",
+			svcName:       "svc:bar",
+			startServices: []string{"svc:foo"},
+			expected:      []string{"svc:foo"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lc := &fakeLocalServeClient{}
+			ctx := t.Context()
+			lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+				AdvertiseServicesSet: true,
+				Prefs: ipn.Prefs{
+					AdvertiseServices: tt.startServices,
+				},
+			})
+			e := &serveEnv{lc: lc, bg: bgBoolFlag{true, false}}
+			err := e.removeServiceFromPrefs(ctx, tt.svcName)
+			if err != nil {
+				t.Fatalf("removeServiceFromPrefs(%q) returned unexpected error: %v", tt.svcName, err)
+			}
+			if !slices.Equal(lc.prefs.AdvertiseServices, tt.expected) {
+				t.Errorf("removeServiceFromPrefs(%q) = %v, want %v", tt.svcName, lc.prefs.AdvertiseServices, tt.expected)
+			}
+		})
+	}
+}
+
 func TestMessageForPort(t *testing.T) {
 	svcIPMap := tailcfg.ServiceIPMappings{
 		"svc:foo": []netip.Addr{

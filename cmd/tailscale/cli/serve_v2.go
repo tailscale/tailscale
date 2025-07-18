@@ -203,6 +203,16 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				Exec:       e.runServeReset,
 				FlagSet:    e.newFlags("serve-reset", nil),
 			},
+			{
+				Name:       "drain",
+				ShortUsage: fmt.Sprintf("tailscale %s drain <service>", info.Name),
+				ShortHelp:  "Drain a service from the current node",
+				LongHelp: "Make the current node no longer accept new connections for the specified service.\n" +
+					"Existing connections will continue to work until they are closed, but no new connections will be accepted.\n" +
+					"Use this command to gracefully remove a service from the current node without disrupting existing connections.\n" +
+					"<service> should be a service name (e.g., svc:my-service).",
+				Exec: e.runServeDrain,
+			},
 		},
 	}
 }
@@ -441,6 +451,44 @@ func (e *serveEnv) addServiceToPrefs(ctx context.Context, serviceName string) er
 		},
 	})
 	return err
+}
+
+func (e *serveEnv) removeServiceFromPrefs(ctx context.Context, serviceName tailcfg.ServiceName) error {
+	prefs, err := e.lc.GetPrefs(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting prefs: %w", err)
+	}
+	if len(prefs.AdvertiseServices) == 0 {
+		return nil // nothing to remove
+	}
+	initialLen := len(prefs.AdvertiseServices)
+	prefs.AdvertiseServices = slices.DeleteFunc(prefs.AdvertiseServices, func(s string) bool { return s == serviceName.String() })
+	if initialLen == len(prefs.AdvertiseServices) {
+		return nil // serviceName not advertised
+	}
+	_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		AdvertiseServicesSet: true,
+		Prefs: ipn.Prefs{
+			AdvertiseServices: prefs.AdvertiseServices,
+		},
+	})
+	return err
+}
+
+func (e *serveEnv) runServeDrain(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errHelp
+	}
+	if len(args) != 1 {
+		fmt.Fprintf(Stderr, "error: invalid number of arguments\n\n")
+		return errHelp
+	}
+	svc := args[0]
+	svcName := tailcfg.ServiceName(svc)
+	if err := svcName.Validate(); err != nil {
+		return fmt.Errorf("invalid service name: %s", err)
+	}
+	return e.removeServiceFromPrefs(ctx, svcName)
 }
 
 const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
