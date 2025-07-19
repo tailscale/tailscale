@@ -3597,13 +3597,12 @@ const (
 	// direct UDP path even if we have some direct UDP path that works.
 	upgradeUDPDirectInterval = 1 * time.Minute
 
-	// upgradeUDPRelayInterval is how often we try to discover UDP relay paths
-	// even if we have a UDP relay path that works.
-	upgradeUDPRelayInterval = 1 * time.Minute
-
 	// discoverUDPRelayPathsInterval is the minimum time between UDP relay path
-	// discovery.
-	discoverUDPRelayPathsInterval = 30 * time.Second
+	// discovery. discoverUDPRelayPathsInterval MUST be greater than the sum of
+	// [sessionActiveTimeout] + [peerRelayAllocReqMaxSendDuration] + some jitter
+	// to account for delays in scheduling work. Otherwise, peer relay path
+	// discovery can hold a session active, forever.
+	discoverUDPRelayPathsInterval = 90 * time.Second
 
 	// heartbeatInterval is how often pings to the best UDP address
 	// are sent.

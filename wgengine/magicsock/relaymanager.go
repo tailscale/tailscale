@@ -850,7 +850,18 @@ func (e errNotReady) Error() string {
 	return fmt.Sprintf("server not ready, retry after %v", e.retryAfter)
 }
 
-const reqTimeout = time.Second * 10
+const (
+	// peerRelayAllocReqTimeout is the timeout for a single peer relay binding
+	// allocation request.
+	peerRelayAllocReqTimeout = time.Second * 10
+	// peerRelayAllocReqMaxRetryWait is the maximum time we can spend waiting to
+	// retry a peer relay binding allocation request (we only retry once).
+	peerRelayAllocReqMaxRetryWait = time.Second * 3
+	// peerRelayAllocReqMaxSendDuration is the maximum time we can spend
+	// transmitting for peer relay binding allocation requests associated with
+	// a single path discovery cycle.
+	peerRelayAllocReqMaxSendDuration = peerRelayAllocReqTimeout*2 + peerRelayAllocReqMaxRetryWait
+)
 
 func doAllocate(ctx context.Context, server netip.AddrPort, discoKeys [2]key.DiscoPublic) (udprelay.ServerEndpoint, error) {
 	var reqBody bytes.Buffer
@@ -864,7 +875,7 @@ func doAllocate(ctx context.Context, server netip.AddrPort, discoKeys [2]key.Dis
 	if err != nil {
 		return udprelay.ServerEndpoint{}, err
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, reqTimeout)
+	reqCtx, cancel := context.WithTimeout(ctx, peerRelayAllocReqTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, httpm.POST, "http://"+server.String()+"/v0/relay/endpoint", &reqBody)
 	if err != nil {
@@ -900,8 +911,10 @@ func (r *relayManager) allocateSingleServer(ctx context.Context, wg *sync.WaitGr
 		return
 	}
 	firstTry := true
+	doAllocateCtx, cancel := context.WithTimeout(ctx, peerRelayAllocReqMaxSendDuration)
+	defer cancel()
 	for {
-		se, err := doAllocate(ctx, server, [2]key.DiscoPublic{wlb.ep.c.discoPublic, remoteDisco.key})
+		se, err := doAllocate(doAllocateCtx, server, [2]key.DiscoPublic{wlb.ep.c.discoPublic, remoteDisco.key})
 		if err == nil {
 			relayManagerInputEvent(r, ctx, &r.newServerEndpointCh, newRelayServerEndpointEvent{
 				wlb:    wlb,
@@ -916,7 +929,7 @@ func (r *relayManager) allocateSingleServer(ctx context.Context, wg *sync.WaitGr
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(min(notReady.retryAfter, reqTimeout)):
+			case <-time.After(min(notReady.retryAfter, peerRelayAllocReqMaxRetryWait)):
 				firstTry = false
 				continue
 			}

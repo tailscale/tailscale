@@ -454,3 +454,11 @@ func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 		})
 	}
 }
+
+func TestPeerRelayPathDiscoveryInterval(t *testing.T) {
+	schedulingJitter := time.Second * 3
+	mustBeGreaterThan := sessionActiveTimeout + peerRelayAllocReqMaxSendDuration + schedulingJitter
+	if discoverUDPRelayPathsInterval <= mustBeGreaterThan {
+		t.Fatalf("discoverUDPRelayPathsInterval is too short (%v) want > %v, see http://go/corp/30534", discoverUDPRelayPathsInterval, mustBeGreaterThan)
+	}
+}
