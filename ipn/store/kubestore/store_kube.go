@@ -394,8 +394,8 @@ func (s *Store) canPatchSecret(secret string) bool {
 // certSecretSelector returns a label selector that can be used to list all
 // Secrets that aren't Tailscale state Secrets and contain TLS certificates for
 // HTTPS endpoints that this node serves.
-// Currently (3/2025) this only applies to the Kubernetes Operator's ingress
-// ProxyGroup.
+// Currently (7/2025) this only applies to the Kubernetes Operator's ProxyGroup
+// when spec.Type is "ingress" or "kube-apiserver".
 func (s *Store) certSecretSelector() map[string]string {
 	if s.podName == "" {
 		return map[string]string{}
@@ -406,7 +406,7 @@ func (s *Store) certSecretSelector() map[string]string {
 	}
 	pgName := s.podName[:p]
 	return map[string]string{
-		kubetypes.LabelSecretType:   "certs",
+		kubetypes.LabelSecretType:   kubetypes.LabelSecretTypeCerts,
 		kubetypes.LabelManaged:      "true",
 		"tailscale.com/proxy-group": pgName,
 	}

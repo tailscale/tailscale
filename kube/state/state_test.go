@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
+	klc "tailscale.com/kube/localclient"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -100,24 +101,20 @@ func TestSetInitialStateKeys(t *testing.T) {
 }
 
 func TestKeepStateKeysUpdated(t *testing.T) {
-	store, err := store.New(logger.Discard, "mem:")
-	if err != nil {
-		t.Fatalf("error creating in-memory store: %v", err)
+	store := fakeStore{
+		writeChan: make(chan string),
 	}
 
-	nextWaiting := make(chan struct{})
-	go func() {
-		<-nextWaiting // Acknowledge the initial signal.
-	}()
-	notifyCh := make(chan ipn.Notify)
-	next := func() (ipn.Notify, error) {
-		nextWaiting <- struct{}{} // Send signal to test that state is consistent.
-		return <-notifyCh, nil    // Wait for test input.
+	errs := make(chan error)
+	notifyChan := make(chan ipn.Notify)
+	lc := &klc.FakeLocalClient{
+		FakeIPNBusWatcher: klc.FakeIPNBusWatcher{
+			NotifyChan: notifyChan,
+		},
 	}
 
-	errs := make(chan error, 1)
 	go func() {
-		err := KeepKeysUpdated(store, next)
+		err := KeepKeysUpdated(t.Context(), store, lc)
 		if err != nil {
 			errs <- fmt.Errorf("keepStateKeysUpdated returned with error: %w", err)
 		}
@@ -126,16 +123,12 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		notify   ipn.Notify
-		expected map[ipn.StateKey][]byte
+		expected []string
 	}{
 		{
-			name:   "initial_not_authed",
-			notify: ipn.Notify{},
-			expected: map[ipn.StateKey][]byte{
-				keyDeviceID:   nil,
-				keyDeviceFQDN: nil,
-				keyDeviceIPs:  nil,
-			},
+			name:     "initial_not_authed",
+			notify:   ipn.Notify{},
+			expected: nil,
 		},
 		{
 			name: "authed",
@@ -148,10 +141,10 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 					}).View(),
 				},
 			},
-			expected: map[ipn.StateKey][]byte{
-				keyDeviceID:   []byte("TESTCTRL00000001"),
-				keyDeviceFQDN: []byte("test-node.test.ts.net"),
-				keyDeviceIPs:  []byte(`["100.64.0.1","fd7a:115c:a1e0:ab12:4843:cd96:0:1"]`),
+			expected: []string{
+				fmt.Sprintf("%s=%s", keyDeviceID, "TESTCTRL00000001"),
+				fmt.Sprintf("%s=%s", keyDeviceFQDN, "test-node.test.ts.net"),
+				fmt.Sprintf("%s=%s", keyDeviceIPs, `["100.64.0.1","fd7a:115c:a1e0:ab12:4843:cd96:0:1"]`),
 			},
 		},
 		{
@@ -165,39 +158,39 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 					}).View(),
 				},
 			},
-			expected: map[ipn.StateKey][]byte{
-				keyDeviceID:   []byte("TESTCTRL00000001"),
-				keyDeviceFQDN: []byte("updated.test.ts.net"),
-				keyDeviceIPs:  []byte(`["100.64.0.250"]`),
+			expected: []string{
+				fmt.Sprintf("%s=%s", keyDeviceFQDN, "updated.test.ts.net"),
+				fmt.Sprintf("%s=%s", keyDeviceIPs, `["100.64.0.250"]`),
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Send test input.
-			select {
-			case notifyCh <- tc.notify:
-			case <-errs:
-				t.Fatal("keepStateKeysUpdated returned before test input")
-			case <-time.After(5 * time.Second):
-				t.Fatal("timed out waiting for next() to be called again")
-			}
-
-			// Wait for next() to be called again so we know the goroutine has
-			// processed the event.
-			select {
-			case <-nextWaiting:
-			case <-errs:
-				t.Fatal("keepStateKeysUpdated returned before test input")
-			case <-time.After(5 * time.Second):
-				t.Fatal("timed out waiting for next() to be called again")
-			}
-
-			for key, value := range tc.expected {
-				got, _ := store.ReadState(key)
-				if !bytes.Equal(got, value) {
-					t.Errorf("state key %q mismatch: expected %q, got %q", key, value, got)
+			notifyChan <- tc.notify
+			for _, expected := range tc.expected {
+				select {
+				case got := <-store.writeChan:
+					if got != expected {
+						t.Errorf("expected %q, got %q", expected, got)
+					}
+				case err := <-errs:
+					t.Fatalf("unexpected error: %v", err)
+				case <-time.After(5 * time.Second):
+					t.Fatalf("timed out waiting for expected write %q", expected)
 				}
 			}
 		})
 	}
+}
+
+type fakeStore struct {
+	writeChan chan string
+}
+
+func (f fakeStore) ReadState(key ipn.StateKey) ([]byte, error) {
+	return nil, fmt.Errorf("ReadState not implemented")
+}
+
+func (f fakeStore) WriteState(key ipn.StateKey, value []byte) error {
+	f.writeChan <- fmt.Sprintf("%s=%s", key, value)
+	return nil
 }

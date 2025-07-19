@@ -123,7 +123,7 @@ func main() {
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	if mode != apiServerProxyModeDisabled {
-		ap, err := apiproxy.NewAPIServerProxy(zlog, restConfig, s, mode == apiServerProxyModeEnabled)
+		ap, err := apiproxy.NewAPIServerProxy(zlog, restConfig, s, mode == apiServerProxyModeEnabled, true)
 		if err != nil {
 			zlog.Fatalf("error creating API server proxy: %v", err)
 		}
@@ -631,6 +631,32 @@ func runReconcilers(opts reconcilerOpts) {
 		})
 	if err != nil {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
+	}
+
+	// kube-apiserver's Tailscale Service reconciler.
+	err = builder.
+		ControllerManagedBy(mgr).
+		For(&tsapi.ProxyGroup{}, builder.WithPredicates(
+			predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				pg, ok := obj.(*tsapi.ProxyGroup)
+				return ok && pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer
+			}),
+		)).
+		Named("kube-apiserver-ts-service-reconciler").
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(kubeAPIServerPGsFromSecret(mgr.GetClient(), startlog))).
+		Complete(&KubeAPIServerTSServiceReconciler{
+			Client:      mgr.GetClient(),
+			recorder:    eventRecorder,
+			logger:      opts.log.Named("kube-apiserver-ts-service-reconciler"),
+			tsClient:    opts.tsClient,
+			tsNamespace: opts.tailscaleNamespace,
+			lc:          lc,
+			defaultTags: strings.Split(opts.proxyTags, ","),
+			operatorID:  id,
+			clock:       tstime.DefaultClock{},
+		})
+	if err != nil {
+		startlog.Fatalf("could not create Kubernetes API server Tailscale Service reconciler: %v", err)
 	}
 
 	// ProxyGroup reconciler.
@@ -1214,7 +1240,7 @@ func egressEpsFromPGStateSecrets(cl client.Client, ns string) handler.MapFunc {
 		if parentType := o.GetLabels()[LabelParentType]; parentType != "proxygroup" {
 			return nil
 		}
-		if secretType := o.GetLabels()[kubetypes.LabelSecretType]; secretType != "state" {
+		if secretType := o.GetLabels()[kubetypes.LabelSecretType]; secretType != kubetypes.LabelSecretTypeState {
 			return nil
 		}
 		pg, ok := o.GetLabels()[LabelParentName]
@@ -1304,7 +1330,7 @@ func reconcileRequestsForPG(pg string, cl client.Client, ns string) []reconcile.
 func isTLSSecret(secret *corev1.Secret) bool {
 	return secret.Type == corev1.SecretTypeTLS &&
 		secret.ObjectMeta.Labels[kubetypes.LabelManaged] == "true" &&
-		secret.ObjectMeta.Labels[kubetypes.LabelSecretType] == "certs" &&
+		secret.ObjectMeta.Labels[kubetypes.LabelSecretType] == kubetypes.LabelSecretTypeCerts &&
 		secret.ObjectMeta.Labels[labelDomain] != "" &&
 		secret.ObjectMeta.Labels[labelProxyGroup] != ""
 }
@@ -1312,7 +1338,7 @@ func isTLSSecret(secret *corev1.Secret) bool {
 func isPGStateSecret(secret *corev1.Secret) bool {
 	return secret.ObjectMeta.Labels[kubetypes.LabelManaged] == "true" &&
 		secret.ObjectMeta.Labels[LabelParentType] == "proxygroup" &&
-		secret.ObjectMeta.Labels[kubetypes.LabelSecretType] == "state"
+		secret.ObjectMeta.Labels[kubetypes.LabelSecretType] == kubetypes.LabelSecretTypeState
 }
 
 // HAIngressesFromSecret returns a handler that returns reconcile requests for
@@ -1391,6 +1417,42 @@ func HAServicesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.M
 			})
 		}
 		return reqs
+	}
+}
+
+// kubeAPIServerPGsFromSecret finds ProxyGroups of type "kube-apiserver" that
+// need to be reconciled after a ProxyGroup-owned Secret is updated.
+func kubeAPIServerPGsFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		secret, ok := o.(*corev1.Secret)
+		if !ok {
+			logger.Infof("[unexpected] Secret handler triggered for an object that is not a Secret")
+			return nil
+		}
+		if secret.ObjectMeta.Labels[kubetypes.LabelManaged] != "true" ||
+			secret.ObjectMeta.Labels[LabelParentType] != "proxygroup" {
+			return nil
+		}
+
+		var pg tsapi.ProxyGroup
+		if err := cl.Get(ctx, types.NamespacedName{Name: secret.ObjectMeta.Labels[LabelParentName]}, &pg); err != nil {
+			logger.Infof("error getting ProxyGroup %s: %v", secret.ObjectMeta.Labels[LabelParentName], err)
+			return nil
+		}
+
+		if pg.Spec.Type != tsapi.ProxyGroupTypeKubernetesAPIServer {
+			return nil
+		}
+
+		return []reconcile.Request{
+			{
+				NamespacedName: types.NamespacedName{
+					Namespace: secret.ObjectMeta.Labels[LabelParentNamespace],
+					Name:      secret.ObjectMeta.Labels[LabelParentName],
+				},
+			},
+		}
+
 	}
 }
 

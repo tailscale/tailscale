@@ -1,17 +1,18 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux
-
-package main
+package certs
 
 import (
 	"context"
+	"log"
 	"testing"
 	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/kube/localclient"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/netmap"
 )
 
 // TestEnsureCertLoops tests that the certManager correctly starts and stops
@@ -161,8 +162,28 @@ func TestEnsureCertLoops(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			cm := &certManager{
-				lc:        &fakeLocalClient{},
+			notifyChan := make(chan ipn.Notify)
+			go func() {
+				for {
+					notifyChan <- ipn.Notify{
+						NetMap: &netmap.NetworkMap{
+							DNS: tailcfg.DNSConfig{
+								CertDomains: []string{
+									"my-app.tailnetxyz.ts.net",
+									"my-other-app.tailnetxyz.ts.net",
+								},
+							},
+						},
+					}
+				}
+			}()
+			cm := &CertManager{
+				lc: &localclient.FakeLocalClient{
+					FakeIPNBusWatcher: localclient.FakeIPNBusWatcher{
+						NotifyChan: notifyChan,
+					},
+				},
+				logf:      log.Printf,
 				certLoops: make(map[string]context.CancelFunc),
 			}
 
@@ -179,7 +200,7 @@ func TestEnsureCertLoops(t *testing.T) {
 				}
 			})()
 
-			err := cm.ensureCertLoops(ctx, tt.initialConfig)
+			err := cm.EnsureCertLoops(ctx, tt.initialConfig)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ensureCertLoops() error = %v", err)
 			}
@@ -189,7 +210,7 @@ func TestEnsureCertLoops(t *testing.T) {
 			}
 
 			if tt.updatedConfig != nil {
-				if err := cm.ensureCertLoops(ctx, tt.updatedConfig); err != nil {
+				if err := cm.EnsureCertLoops(ctx, tt.updatedConfig); err != nil {
 					t.Fatalf("ensureCertLoops() error on update = %v", err)
 				}
 

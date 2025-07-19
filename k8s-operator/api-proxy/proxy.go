@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
@@ -46,7 +47,7 @@ var (
 //     caller's Tailscale identity and the rules defined in the tailnet ACLs.
 //   - false: the proxy is started and requests are passed through to the
 //     Kubernetes API without any auth modifications.
-func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsnet.Server, authMode bool) (*APIServerProxy, error) {
+func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsnet.Server, authMode bool, https bool) (*APIServerProxy, error) {
 	if !authMode {
 		restConfig = rest.AnonymousClientConfig(restConfig)
 	}
@@ -85,6 +86,7 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 		log:         zlog,
 		lc:          lc,
 		authMode:    authMode,
+		https:       https,
 		upstreamURL: u,
 		ts:          ts,
 	}
@@ -104,11 +106,6 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 //
 // It return when ctx is cancelled or ServeTLS fails.
 func (ap *APIServerProxy) Run(ctx context.Context) error {
-	ln, err := ap.ts.Listen("tcp", ":443")
-	if err != nil {
-		return fmt.Errorf("could not listen on :443: %v", err)
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ap.serveDefault)
 	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
@@ -117,32 +114,61 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachWS)
 
 	ap.hs = &http.Server{
+		Handler:  mux,
+		ErrorLog: zap.NewStdLog(ap.log.Desugar()),
+	}
+
+	mode := "noauth"
+	if ap.authMode {
+		mode = "auth"
+	}
+	var tsLn net.Listener
+	var serve func(ln net.Listener) error
+	if ap.https {
+		var err error
+		tsLn, err = ap.ts.Listen("tcp", ":443")
+		if err != nil {
+			return fmt.Errorf("could not listen on :443: %w", err)
+		}
+		serve = func(ln net.Listener) error {
+			return ap.hs.ServeTLS(ln, "", "")
+		}
+
 		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
 		// incompatible with HTTP/2; so disable HTTP/2 in the proxy.
-		TLSConfig: &tls.Config{
+		ap.hs.TLSConfig = &tls.Config{
 			GetCertificate: ap.lc.GetCertificate,
 			NextProtos:     []string{"http/1.1"},
-		},
-		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-		Handler:      mux,
+		}
+		ap.hs.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
+	} else {
+		var err error
+		tsLn, err = ap.ts.Listen("tcp", ":80")
+		if err != nil {
+			return fmt.Errorf("could not listen on :80: %w", err)
+		}
+		serve = ap.hs.Serve
 	}
 
 	errs := make(chan error)
 	go func() {
-		ap.log.Infof("API server proxy is listening on %s with auth mode: %v", ln.Addr(), ap.authMode)
-		if err := ap.hs.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
-			errs <- fmt.Errorf("failed to serve: %w", err)
+		ap.log.Infof("API server proxy in %s mode is listening on tailnet addresses %s", mode, tsLn.Addr())
+		if err := serve(tsLn); err != nil && err != http.ErrServerClosed {
+			errs <- fmt.Errorf("error serving: %w", err)
 		}
 	}()
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return ap.hs.Shutdown(shutdownCtx)
 	case err := <-errs:
+		ap.hs.Close()
 		return err
 	}
+
+	// Graceful shutdown with a timeout of 10s.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return ap.hs.Shutdown(shutdownCtx)
 }
 
 // APIServerProxy is an [net/http.Handler] that authenticates requests using the Tailscale
@@ -152,7 +178,8 @@ type APIServerProxy struct {
 	lc  *local.Client
 	rp  *httputil.ReverseProxy
 
-	authMode    bool
+	authMode    bool // Whether to run with impersonation using caller's tailnet identity.
+	https       bool // Whether to serve on https for the device hostname; true for k8s-operator, false for k8s-proxy.
 	ts          *tsnet.Server
 	hs          *http.Server
 	upstreamURL *url.URL
@@ -181,13 +208,13 @@ func (ap *APIServerProxy) serveExecWS(w http.ResponseWriter, r *http.Request) {
 	ap.sessionForProto(w, r, ksr.ExecSessionType, ksr.WSProtocol)
 }
 
-// serveExecSPDY serves '/attach' requests for sessions streamed over SPDY,
+// serveAttachSPDY serves '/attach' requests for sessions streamed over SPDY,
 // optionally configuring the kubectl exec sessions to be recorded.
 func (ap *APIServerProxy) serveAttachSPDY(w http.ResponseWriter, r *http.Request) {
 	ap.sessionForProto(w, r, ksr.AttachSessionType, ksr.SPDYProtocol)
 }
 
-// serveExecWS serves '/attach' requests for sessions streamed over WebSocket,
+// serveAttachWS serves '/attach' requests for sessions streamed over WebSocket,
 // optionally configuring the kubectl exec sessions to be recorded.
 func (ap *APIServerProxy) serveAttachWS(w http.ResponseWriter, r *http.Request) {
 	ap.sessionForProto(w, r, ksr.AttachSessionType, ksr.WSProtocol)

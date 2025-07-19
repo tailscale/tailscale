@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
 )
@@ -200,7 +201,7 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-0", pg),
 			Namespace: "operator-ns",
-			Labels:    pgSecretLabels(pg, "state"),
+			Labels:    pgSecretLabels(pg, kubetypes.LabelSecretTypeState),
 		},
 	}
 	return p, s

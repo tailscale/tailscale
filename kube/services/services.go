@@ -1,25 +1,25 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux
-
-package main
+// Package services manages graceful shutdown of Tailscale Services advertised
+// by Kubernetes clients.
+package services
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/types/logger"
 )
 
-// ensureServicesNotAdvertised is a function that gets called on containerboot
-// termination and ensures that any currently advertised VIPServices get
-// unadvertised to give clients time to switch to another node before this one
-// is shut down.
-func ensureServicesNotAdvertised(ctx context.Context, lc *local.Client) error {
+// EnsureServicesNotAdvertised is a function that gets called on containerboot
+// or k8s-proxy termination and ensures that any currently advertised Services
+// get unadvertised to give clients time to switch to another node before this
+// one is shut down.
+func EnsureServicesNotAdvertised(ctx context.Context, lc *local.Client, logf logger.Logf) error {
 	prefs, err := lc.GetPrefs(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting prefs: %w", err)
@@ -28,7 +28,7 @@ func ensureServicesNotAdvertised(ctx context.Context, lc *local.Client) error {
 		return nil
 	}
 
-	log.Printf("unadvertising services: %v", prefs.AdvertiseServices)
+	logf("unadvertising services: %v", prefs.AdvertiseServices)
 	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
 		Prefs: ipn.Prefs{

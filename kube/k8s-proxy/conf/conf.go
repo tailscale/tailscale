@@ -9,11 +9,12 @@ package conf
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
-	"os"
 
 	"github.com/tailscale/hujson"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 )
 
@@ -21,12 +22,11 @@ const v1Alpha1 = "v1alpha1"
 
 // Config describes a config file.
 type Config struct {
-	Path    string // disk path of HuJSON
-	Raw     []byte // raw bytes from disk, in HuJSON form
+	Raw     []byte // raw bytes, in HuJSON form
 	Std     []byte // standardized JSON form
 	Version string // "v1alpha1"
 
-	// Parsed is the parsed config, converted from its on-disk version to the
+	// Parsed is the parsed config, converted from its raw bytes version to the
 	// latest known format.
 	Parsed ConfigV1Alpha1
 }
@@ -48,47 +48,49 @@ type VersionedConfig struct {
 }
 
 type ConfigV1Alpha1 struct {
-	AuthKey       *string        `json:",omitempty"` // Tailscale auth key to use.
-	Hostname      *string        `json:",omitempty"` // Tailscale device hostname.
-	State         *string        `json:",omitempty"` // Path to the Tailscale state.
-	LogLevel      *string        `json:",omitempty"` // "debug", "info". Defaults to "info".
-	App           *string        `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
-	KubeAPIServer *KubeAPIServer `json:",omitempty"` // Config specific to the API Server proxy.
-	ServerURL     *string        `json:",omitempty"` // URL of the Tailscale coordination server.
-	AcceptRoutes  *bool          `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
+	AuthKey   *string `json:",omitempty"` // Tailscale auth key to use.
+	State     *string `json:",omitempty"` // Path to the Tailscale state.
+	LogLevel  *string `json:",omitempty"` // "debug", "info". Defaults to "info".
+	App       *string `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
+	ServerURL *string `json:",omitempty"` // URL of the Tailscale coordination server.
 	// StaticEndpoints are additional, user-defined endpoints that this node
 	// should advertise amongst its wireguard endpoints.
 	StaticEndpoints []netip.AddrPort `json:",omitempty"`
+
+	// TODO(tomhjp): The remaining fields should all be reloadable during
+	// runtime, but currently missing most of the APIServerProxy fields.
+	Hostname          *string               `json:",omitempty"` // Tailscale device hostname.
+	AcceptRoutes      *bool                 `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
+	AdvertiseServices []string              `json:",omitempty"` // Tailscale Services to advertise.
+	APIServerProxy    *APIServerProxyConfig `json:",omitempty"` // Config specific to the API Server proxy.
 }
 
-type KubeAPIServer struct {
-	AuthMode opt.Bool `json:",omitempty"`
+type APIServerProxyConfig struct {
+	Enabled     opt.Bool             `json:",omitempty"` // Whether to enable the API Server proxy.
+	AuthMode    opt.Bool             `json:",omitempty"` // Run in auth or noauth mode.
+	ServiceName *tailcfg.ServiceName `json:",omitempty"` // Name of the Tailscale Service to advertise.
+	IssueCerts  opt.Bool             `json:",omitempty"` // Whether this replica should issue TLS certs for the Tailscale Service.
 }
 
 // Load reads and parses the config file at the provided path on disk.
-func Load(path string) (c Config, err error) {
-	c.Path = path
-
-	c.Raw, err = os.ReadFile(path)
-	if err != nil {
-		return c, fmt.Errorf("error reading config file %q: %w", path, err)
-	}
+func Load(raw []byte) (c Config, err error) {
+	c.Raw = raw
 	c.Std, err = hujson.Standardize(c.Raw)
 	if err != nil {
-		return c, fmt.Errorf("error parsing config file %q HuJSON/JSON: %w", path, err)
+		return c, fmt.Errorf("error parsing config as HuJSON/JSON: %w", err)
 	}
 	var ver VersionedConfig
 	if err := json.Unmarshal(c.Std, &ver); err != nil {
-		return c, fmt.Errorf("error parsing config file %q: %w", path, err)
+		return c, fmt.Errorf("error parsing config: %w", err)
 	}
 	rootV1Alpha1 := (ver.Version == v1Alpha1)
 	backCompatV1Alpha1 := (ver.V1Alpha1 != nil)
 	switch {
 	case ver.Version == "":
-		return c, fmt.Errorf("error parsing config file %q: no \"version\" field provided", path)
+		return c, errors.New("error parsing config: no \"version\" field provided")
 	case rootV1Alpha1 && backCompatV1Alpha1:
 		// Exactly one of these should be set.
-		return c, fmt.Errorf("error parsing config file %q: both root and v1alpha1 config provided", path)
+		return c, errors.New("error parsing config: both root and v1alpha1 config provided")
 	case rootV1Alpha1 != backCompatV1Alpha1:
 		c.Version = v1Alpha1
 		switch {
@@ -100,7 +102,7 @@ func Load(path string) (c Config, err error) {
 			c.Parsed = ConfigV1Alpha1{}
 		}
 	default:
-		return c, fmt.Errorf("error parsing config file %q: unsupported \"version\" value %q; want \"%s\"", path, ver.Version, v1Alpha1)
+		return c, fmt.Errorf("error parsing config: unsupported \"version\" value %q; want \"%s\"", ver.Version, v1Alpha1)
 	}
 
 	return c, nil

@@ -122,6 +122,7 @@ import (
 	"tailscale.com/ipn"
 	kubeutils "tailscale.com/k8s-operator"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/kube/services"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -210,7 +211,7 @@ func run() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 
-		if err := ensureServicesNotAdvertised(ctx, client); err != nil {
+		if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
 			log.Printf("Error ensuring services are not advertised: %v", err)
 		}
 

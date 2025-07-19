@@ -248,7 +248,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 	// 3. Ensure that TLS Secret and RBAC exists
-	tcd, err := r.tailnetCertDomain(ctx)
+	tcd, err := tailnetCertDomain(ctx, r.lc)
 	if err != nil {
 		return false, fmt.Errorf("error determining DNS name base: %w", err)
 	}
@@ -358,7 +358,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	// 6. Update Ingress status if ProxyGroup Pods are ready.
-	count, err := r.numberPodsAdvertising(ctx, pg.Name, serviceName)
+	count, err := numberPodsAdvertising(ctx, r.Client, r.tsNamespace, pg.Name, serviceName)
 	if err != nil {
 		return false, fmt.Errorf("failed to check if any Pods are configured: %w", err)
 	}
@@ -370,7 +370,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		ing.Status.LoadBalancer.Ingress = nil
 	default:
 		var ports []networkingv1.IngressPortStatus
-		hasCerts, err := r.hasCerts(ctx, serviceName)
+		hasCerts, err := hasCerts(ctx, r.Client, r.lc, r.tsNamespace, serviceName)
 		if err != nil {
 			return false, fmt.Errorf("error checking TLS credentials provisioned for Ingress: %w", err)
 		}
@@ -481,7 +481,7 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 				delete(cfg.Services, tsSvcName)
 				serveConfigChanged = true
 			}
-			if err := r.cleanupCertResources(ctx, proxyGroupName, tsSvcName); err != nil {
+			if err := cleanupCertResources(ctx, r.Client, r.lc, r.tsNamespace, proxyGroupName, tsSvcName); err != nil {
 				return false, fmt.Errorf("failed to clean up cert resources: %w", err)
 			}
 		}
@@ -557,7 +557,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 3. Clean up any cluster resources
-	if err := r.cleanupCertResources(ctx, pg, serviceName); err != nil {
+	if err := cleanupCertResources(ctx, r.Client, r.lc, r.tsNamespace, pg, serviceName); err != nil {
 		return false, fmt.Errorf("failed to clean up cert resources: %w", err)
 	}
 
@@ -634,8 +634,8 @@ type localClient interface {
 }
 
 // tailnetCertDomain returns the base domain (TCD) of the current tailnet.
-func (r *HAIngressReconciler) tailnetCertDomain(ctx context.Context) (string, error) {
-	st, err := r.lc.StatusWithoutPeers(ctx)
+func tailnetCertDomain(ctx context.Context, lc localClient) (string, error) {
+	st, err := lc.StatusWithoutPeers(ctx)
 	if err != nil {
 		return "", fmt.Errorf("error getting tailscale status: %w", err)
 	}
@@ -761,7 +761,7 @@ const (
 func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, pgName string, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, logger *zap.SugaredLogger) (err error) {
 	// Get all config Secrets for this ProxyGroup.
 	secrets := &corev1.SecretList{}
-	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "config"))); err != nil {
+	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig))); err != nil {
 		return fmt.Errorf("failed to list config Secrets: %w", err)
 	}
 
@@ -773,7 +773,7 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	// The only exception is Ingresses with an HTTP endpoint enabled - if an
 	// Ingress has an HTTP endpoint enabled, it will be advertised even if the
 	// TLS cert is not yet provisioned.
-	hasCert, err := a.hasCerts(ctx, serviceName)
+	hasCert, err := hasCerts(ctx, a.Client, a.lc, a.tsNamespace, serviceName)
 	if err != nil {
 		return fmt.Errorf("error checking TLS credentials provisioned for service %q: %w", serviceName, err)
 	}
@@ -822,10 +822,10 @@ func (a *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	return nil
 }
 
-func (a *HAIngressReconciler) numberPodsAdvertising(ctx context.Context, pgName string, serviceName tailcfg.ServiceName) (int, error) {
+func numberPodsAdvertising(ctx context.Context, cl client.Client, tsNamespace, pgName string, serviceName tailcfg.ServiceName) (int, error) {
 	// Get all state Secrets for this ProxyGroup.
 	secrets := &corev1.SecretList{}
-	if err := a.List(ctx, secrets, client.InNamespace(a.tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, "state"))); err != nil {
+	if err := cl.List(ctx, secrets, client.InNamespace(tsNamespace), client.MatchingLabels(pgSecretLabels(pgName, kubetypes.LabelSecretTypeState))); err != nil {
 		return 0, fmt.Errorf("failed to list ProxyGroup %q state Secrets: %w", pgName, err)
 	}
 
@@ -859,7 +859,14 @@ type ownerAnnotationValue struct {
 // Kubernetes operator instance.
 type OwnerRef struct {
 	// OperatorID is the stable ID of the operator's Tailscale device.
-	OperatorID string `json:"operatorID,omitempty"`
+	OperatorID string    `json:"operatorID,omitempty"`
+	Resource   *Resource `json:"resource,omitempty"` // optional, used to identify the ProxyGroup that owns this Tailscale Service.
+}
+
+type Resource struct {
+	Kind string `json:"kind,omitempty"` // "ProxyGroup"
+	Name string `json:"name,omitempty"` // Name of the ProxyGroup that owns this Tailscale Service. Informational only.
+	UID  string `json:"uid,omitempty"`  // UID of the ProxyGroup that owns this Tailscale Service.
 }
 
 // ownerAnnotations returns the updated annotations required to ensure this
@@ -890,6 +897,9 @@ func ownerAnnotations(operatorID string, svc *tailscale.VIPService) (map[string]
 	}
 	if slices.Contains(o.OwnerRefs, ref) { // up to date
 		return svc.Annotations, nil
+	}
+	if o.OwnerRefs[0].Resource != nil {
+		return nil, fmt.Errorf("Tailscale Service %s is owned by another resource: %#v; cannot be reused for an Ingress", svc.Name, o.OwnerRefs[0].Resource)
 	}
 	o.OwnerRefs = append(o.OwnerRefs, ref)
 	json, err := json.Marshal(o)
@@ -949,7 +959,7 @@ func (r *HAIngressReconciler) ensureCertResources(ctx context.Context, pg *tsapi
 	}); err != nil {
 		return fmt.Errorf("failed to create or update Role %s: %w", role.Name, err)
 	}
-	rolebinding := certSecretRoleBinding(pg.Name, r.tsNamespace, domain)
+	rolebinding := certSecretRoleBinding(pg, r.tsNamespace, domain)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, rolebinding, func(rb *rbacv1.RoleBinding) {
 		// Labels and subjects might have changed if the Ingress has been updated to use a
 		// different ProxyGroup.
@@ -963,19 +973,19 @@ func (r *HAIngressReconciler) ensureCertResources(ctx context.Context, pg *tsapi
 
 // cleanupCertResources ensures that the TLS Secret and associated RBAC
 // resources that allow proxies to read/write to the Secret are deleted.
-func (r *HAIngressReconciler) cleanupCertResources(ctx context.Context, pgName string, name tailcfg.ServiceName) error {
-	domainName, err := r.dnsNameForService(ctx, tailcfg.ServiceName(name))
+func cleanupCertResources(ctx context.Context, cl client.Client, lc localClient, tsNamespace, pgName string, serviceName tailcfg.ServiceName) error {
+	domainName, err := dnsNameForService(ctx, lc, serviceName)
 	if err != nil {
-		return fmt.Errorf("error getting DNS name for Tailscale Service %s: %w", name, err)
+		return fmt.Errorf("error getting DNS name for Tailscale Service %s: %w", serviceName, err)
 	}
 	labels := certResourceLabels(pgName, domainName)
-	if err := r.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+	if err := cl.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, client.InNamespace(tsNamespace), client.MatchingLabels(labels)); err != nil {
 		return fmt.Errorf("error deleting RoleBinding for domain name %s: %w", domainName, err)
 	}
-	if err := r.DeleteAllOf(ctx, &rbacv1.Role{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+	if err := cl.DeleteAllOf(ctx, &rbacv1.Role{}, client.InNamespace(tsNamespace), client.MatchingLabels(labels)); err != nil {
 		return fmt.Errorf("error deleting Role for domain name %s: %w", domainName, err)
 	}
-	if err := r.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
+	if err := cl.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(tsNamespace), client.MatchingLabels(labels)); err != nil {
 		return fmt.Errorf("error deleting Secret for domain name %s: %w", domainName, err)
 	}
 	return nil
@@ -1018,17 +1028,17 @@ func certSecretRole(pgName, namespace, domain string) *rbacv1.Role {
 // certSecretRoleBinding creates a RoleBinding for Role that will allow proxies
 // to manage the TLS Secret for the given domain. Domain must be a valid
 // Kubernetes resource name.
-func certSecretRoleBinding(pgName, namespace, domain string) *rbacv1.RoleBinding {
+func certSecretRoleBinding(pg *tsapi.ProxyGroup, namespace, domain string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      domain,
 			Namespace: namespace,
-			Labels:    certResourceLabels(pgName, domain),
+			Labels:    certResourceLabels(pg.Name, domain),
 		},
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      pgName,
+				Name:      pgServiceAccountName(pg),
 				Namespace: namespace,
 			},
 		},
@@ -1041,14 +1051,17 @@ func certSecretRoleBinding(pgName, namespace, domain string) *rbacv1.RoleBinding
 
 // certSecret creates a Secret that will store the TLS certificate and private
 // key for the given domain. Domain must be a valid Kubernetes resource name.
-func certSecret(pgName, namespace, domain string, ing *networkingv1.Ingress) *corev1.Secret {
+func certSecret(pgName, namespace, domain string, parent client.Object) *corev1.Secret {
 	labels := certResourceLabels(pgName, domain)
-	labels[kubetypes.LabelSecretType] = "certs"
+	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeCerts
 	// Labels that let us identify the Ingress resource lets us reconcile
 	// the Ingress when the TLS Secret is updated (for example, when TLS
 	// certs have been provisioned).
-	labels[LabelParentName] = ing.Name
-	labels[LabelParentNamespace] = ing.Namespace
+	labels[LabelParentType] = strings.ToLower(parent.GetObjectKind().GroupVersionKind().Kind)
+	labels[LabelParentName] = parent.GetName()
+	if ns := parent.GetNamespace(); ns != "" {
+		labels[LabelParentNamespace] = ns
+	}
 	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -1076,9 +1089,9 @@ func certResourceLabels(pgName, domain string) map[string]string {
 }
 
 // dnsNameForService returns the DNS name for the given Tailscale Service's name.
-func (r *HAIngressReconciler) dnsNameForService(ctx context.Context, svc tailcfg.ServiceName) (string, error) {
+func dnsNameForService(ctx context.Context, lc localClient, svc tailcfg.ServiceName) (string, error) {
 	s := svc.WithoutPrefix()
-	tcd, err := r.tailnetCertDomain(ctx)
+	tcd, err := tailnetCertDomain(ctx, lc)
 	if err != nil {
 		return "", fmt.Errorf("error determining DNS name base: %w", err)
 	}
@@ -1086,14 +1099,14 @@ func (r *HAIngressReconciler) dnsNameForService(ctx context.Context, svc tailcfg
 }
 
 // hasCerts checks if the TLS Secret for the given service has non-zero cert and key data.
-func (r *HAIngressReconciler) hasCerts(ctx context.Context, svc tailcfg.ServiceName) (bool, error) {
-	domain, err := r.dnsNameForService(ctx, svc)
+func hasCerts(ctx context.Context, cl client.Client, lc localClient, ns string, svc tailcfg.ServiceName) (bool, error) {
+	domain, err := dnsNameForService(ctx, lc, svc)
 	if err != nil {
 		return false, fmt.Errorf("failed to get DNS name for service: %w", err)
 	}
 	secret := &corev1.Secret{}
-	err = r.Get(ctx, client.ObjectKey{
-		Namespace: r.tsNamespace,
+	err = cl.Get(ctx, client.ObjectKey{
+		Namespace: ns,
 		Name:      domain,
 	}, secret)
 	if err != nil {

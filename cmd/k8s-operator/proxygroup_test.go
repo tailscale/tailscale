@@ -31,8 +31,11 @@ import (
 	kube "tailscale.com/k8s-operator"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 )
 
@@ -1256,6 +1259,163 @@ func TestProxyGroupTypes(t *testing.T) {
 	})
 }
 
+func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-k8s-apiserver",
+			UID:        "test-k8s-apiserver-uid",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
+			Replicas: ptr.To[int32](1),
+			KubeAPIServer: &tsapi.KubeAPIServerConfig{
+				Mode: ptr.To(tsapi.APIServerProxyModeNoAuth),
+			},
+		},
+	}
+	stateSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgStateSecretName(pg.Name, 0),
+			Namespace: tsNamespace,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg, stateSecret).
+		WithStatusSubresource(pg).
+		Build()
+	r := &ProxyGroupReconciler{
+		tsNamespace:  tsNamespace,
+		tsProxyImage: testProxyImage,
+		Client:       fc,
+		l:            zap.Must(zap.NewDevelopment()).Sugar(),
+		tsClient:     &fakeTSClient{},
+		clock:        tstest.NewClock(tstest.ClockOpts{}),
+	}
+
+	expectReconciled(t, r, "", pg.Name)
+	pg.ObjectMeta.Finalizers = append(pg.ObjectMeta.Finalizers, FinalizerName)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionFalse, reasonProxyGroupCreating, "", 0, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.l)
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
+
+	// Set kube-apiserver valid.
+	mustUpdateStatus(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
+		tsoperator.SetProxyGroupCondition(p, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.l)
+	})
+	expectReconciled(t, r, "", pg.Name)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.l)
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
+
+	// Set available.
+	addNodeIDToStateSecrets(t, fc, pg)
+	expectReconciled(t, r, "", pg.Name)
+	pg.Status.Devices = []tsapi.TailnetDevice{
+		{
+			Hostname:   "hostname-nodeid-0",
+			TailnetIPs: []string{"1.2.3.4", "::1"},
+		},
+	}
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "", 0, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "", 1, r.clock, r.l)
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
+
+	// Set kube-apiserver configured.
+	mustUpdateStatus(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
+		tsoperator.SetProxyGroupCondition(p, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.l)
+	})
+	expectReconciled(t, r, "", pg.Name)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.l)
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, "", 1, r.clock, r.l)
+	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
+}
+
+func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithStatusSubresource(&tsapi.ProxyGroup{}).
+		Build()
+
+	reconciler := &ProxyGroupReconciler{
+		tsNamespace:  tsNamespace,
+		tsProxyImage: testProxyImage,
+		Client:       fc,
+		l:            zap.Must(zap.NewDevelopment()).Sugar(),
+		tsClient:     &fakeTSClient{},
+		clock:        tstest.NewClock(tstest.ClockOpts{}),
+	}
+
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-k8s-apiserver",
+			UID:  "test-k8s-apiserver-uid",
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
+			Replicas: ptr.To[int32](1),
+			KubeAPIServer: &tsapi.KubeAPIServerConfig{
+				Mode: ptr.To(tsapi.APIServerProxyModeNoAuth), // Avoid needing to pre-create the static ServiceAccount.
+			},
+		},
+	}
+	if err := fc.Create(t.Context(), pg); err != nil {
+		t.Fatal(err)
+	}
+	expectReconciled(t, reconciler, "", pg.Name)
+
+	cfg := conf.VersionedConfig{
+		Version: "v1alpha1",
+		ConfigV1Alpha1: &conf.ConfigV1Alpha1{
+			AuthKey:  ptr.To("secret-authkey"),
+			State:    ptr.To(fmt.Sprintf("kube:%s", pgPodName(pg.Name, 0))),
+			App:      ptr.To(kubetypes.AppProxyGroupKubeAPIServer),
+			LogLevel: ptr.To("debug"),
+
+			Hostname: ptr.To("test-k8s-apiserver-0"),
+			APIServerProxy: &conf.APIServerProxyConfig{
+				Enabled:    opt.NewBool(true),
+				AuthMode:   opt.NewBool(false),
+				IssueCerts: opt.NewBool(true),
+			},
+		},
+	}
+	cfgB, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("failed to marshal config: %v", err)
+	}
+
+	cfgSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pgConfigSecretName(pg.Name, 0),
+			Namespace:       tsNamespace,
+			Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+		Data: map[string][]byte{
+			kubetypes.KubeAPIServerConfigFile: cfgB,
+		},
+	}
+	expectEqual(t, fc, cfgSecret)
+
+	// Now simulate the kube-apiserver services reconciler updating config,
+	// then check the proxygroup reconciler doesn't overwrite it.
+	cfg.APIServerProxy.ServiceName = ptr.To(tailcfg.ServiceName("svc:some-svc-name"))
+	cfg.AdvertiseServices = []string{"svc:should-not-be-overwritten"}
+	cfgB, err = json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("failed to marshal config: %v", err)
+	}
+	mustUpdate(t, fc, tsNamespace, cfgSecret.Name, func(s *corev1.Secret) {
+		s.Data[kubetypes.KubeAPIServerConfigFile] = cfgB
+	})
+	expectReconciled(t, reconciler, "", pg.Name)
+
+	cfgSecret.Data[kubetypes.KubeAPIServerConfigFile] = cfgB
+	expectEqual(t, fc, cfgSecret)
+}
+
 func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -1660,7 +1820,7 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 		if _, err := createOrUpdate(t.Context(), fc, "tailscale", pod, nil); err != nil {
 			t.Fatalf("failed to create or update Pod %s: %v", pod.Name, err)
 		}
-		mustUpdate(t, fc, tsNamespace, fmt.Sprintf("test-%d", i), func(s *corev1.Secret) {
+		mustUpdate(t, fc, tsNamespace, pgStateSecretName(pg.Name, i), func(s *corev1.Secret) {
 			s.Data = map[string][]byte{
 				currentProfileKey:       []byte(key),
 				key:                     bytes,

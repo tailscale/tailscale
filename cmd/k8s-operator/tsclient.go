@@ -56,6 +56,8 @@ type tsClient interface {
 	DeleteDevice(ctx context.Context, nodeStableID string) error
 	// GetVIPService is a method for getting a Tailscale Service. VIPService is the original name for Tailscale Service.
 	GetVIPService(ctx context.Context, name tailcfg.ServiceName) (*tailscale.VIPService, error)
+	// ListVIPServices is a method for listing all Tailscale Services. VIPService is the original name for Tailscale Service.
+	ListVIPServices(ctx context.Context) (*tailscale.VIPServiceList, error)
 	// CreateOrUpdateVIPService is a method for creating or updating a Tailscale Service.
 	CreateOrUpdateVIPService(ctx context.Context, svc *tailscale.VIPService) error
 	// DeleteVIPService is a method for deleting a Tailscale Service.
