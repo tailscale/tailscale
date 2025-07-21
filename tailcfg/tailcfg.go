@@ -165,7 +165,8 @@ type CapabilityVersion int
 //   - 118: 2025-07-01: Client sends Hostinfo.StateEncrypted to report whether the state file is encrypted at rest (#15830)
 //   - 119: 2025-07-10: Client uses Hostinfo.Location.Priority to prioritize one route over another.
 //   - 120: 2025-07-15: Client understands peer relay disco messages, and implements peer client and relay server functions
-const CurrentCapabilityVersion CapabilityVersion = 120
+//   - 121: 2025-07-19: Client understands peer relay endpoint alloc with [disco.AllocateUDPRelayEndpointRequest] & [disco.AllocateUDPRelayEndpointResponse]
+const CurrentCapabilityVersion CapabilityVersion = 121
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.

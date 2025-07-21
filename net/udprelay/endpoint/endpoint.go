@@ -7,10 +7,15 @@ package endpoint
 
 import (
 	"net/netip"
+	"time"
 
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 )
+
+// ServerRetryAfter is the default
+// [tailscale.com/net/udprelay.ErrServerNotReady.RetryAfter] value.
+const ServerRetryAfter = time.Second * 3
 
 // ServerEndpoint contains details for an endpoint served by a
 // [tailscale.com/net/udprelay.Server].
@@ -20,6 +25,10 @@ type ServerEndpoint struct {
 	// ServerDisco value in combination with LamportID value represents a
 	// unique ServerEndpoint allocation.
 	ServerDisco key.DiscoPublic
+
+	// ClientDisco are the Disco public keys of the relay participants permitted
+	// to handshake with this endpoint.
+	ClientDisco [2]key.DiscoPublic
 
 	// LamportID is unique and monotonically non-decreasing across
 	// ServerEndpoint allocations for the lifetime of Server. It enables clients

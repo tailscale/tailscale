@@ -6957,7 +6957,7 @@ func (b *LocalBackend) DebugReSTUN() error {
 	return nil
 }
 
-func (b *LocalBackend) DebugPeerRelayServers() set.Set[netip.AddrPort] {
+func (b *LocalBackend) DebugPeerRelayServers() set.Set[netip.Addr] {
 	return b.MagicConn().PeerRelays()
 }
 
