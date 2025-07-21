@@ -146,6 +146,16 @@ func ProxyGroupAvailable(pg *tsapi.ProxyGroup) bool {
 	return cond != nil && cond.Status == metav1.ConditionTrue
 }
 
+func KubeAPIServerProxyValid(pg *tsapi.ProxyGroup) (valid bool, set bool) {
+	cond := proxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid)
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation, cond != nil
+}
+
+func KubeAPIServerProxyConfigured(pg *tsapi.ProxyGroup) bool {
+	cond := proxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured)
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
+}
+
 func proxyGroupCondition(pg *tsapi.ProxyGroup, condType tsapi.ConditionType) *metav1.Condition {
 	idx := xslices.IndexFunc(pg.Status.Conditions, func(cond metav1.Condition) bool {
 		return cond.Type == string(condType)

@@ -226,4 +226,7 @@ const (
 
 	IngressSvcValid      ConditionType = `TailscaleIngressSvcValid`
 	IngressSvcConfigured ConditionType = `TailscaleIngressSvcConfigured`
+
+	KubeAPIServerProxyValid      ConditionType = `KubeAPIServerProxyValid`      // The kubeAPIServer config for the ProxyGroup is valid.
+	KubeAPIServerProxyConfigured ConditionType = `KubeAPIServerProxyConfigured` // At least one of the ProxyGroup's Pods is advertising the kube-apiserver proxy's hostname.
 )

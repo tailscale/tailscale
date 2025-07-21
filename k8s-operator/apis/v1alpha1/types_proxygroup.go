@@ -13,19 +13,27 @@ import (
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=pg
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ProxyGroupReady")].reason`,description="Status of the deployed ProxyGroup resources."
+// +kubebuilder:printcolumn:name="URL",type="string",JSONPath=`.status.url`,description="URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if any. Only applies to ProxyGroups of type kube-apiserver."
 // +kubebuilder:printcolumn:name="Type",type="string",JSONPath=`.spec.type`,description="ProxyGroup type."
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // ProxyGroup defines a set of Tailscale devices that will act as proxies.
-// Currently only egress ProxyGroups are supported.
+// Depending on spec.Type, it can be a group of egress, ingress, or kube-apiserver
+// proxies. In addition to running a highly available set of proxies, ingress
+// and egress ProxyGroups also allow for serving many annotated Services from a
+// single set of proxies to minimise resource consumption.
 //
-// Use the tailscale.com/proxy-group annotation on a Service to specify that
-// the egress proxy should be implemented by a ProxyGroup instead of a single
-// dedicated proxy. In addition to running a highly available set of proxies,
-// ProxyGroup also allows for serving many annotated Services from a single
-// set of proxies to minimise resource consumption.
+// For ingress and egress, use the tailscale.com/proxy-group annotation on a
+// Service to specify that the proxy should be implemented by a ProxyGroup
+// instead of a single dedicated proxy.
 //
-// More info: https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
+// More info:
+// * https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
+// * https://tailscale.com/kb/1439/kubernetes-operator-cluster-ingress
+//
+// For kube-apiserver, the ProxyGroup is a standalone resource. Use the
+// spec.kubeAPIServer field to configure options specific to the kube-apiserver
+// ProxyGroup type.
 type ProxyGroup struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -93,10 +101,20 @@ type ProxyGroupSpec struct {
 
 type ProxyGroupStatus struct {
 	// List of status conditions to indicate the status of the ProxyGroup
-	// resources. Known condition types are `ProxyGroupReady`, `ProxyGroupAvailable`.
-	// `ProxyGroupReady` indicates all ProxyGroup resources are fully reconciled
-	// and ready. `ProxyGroupAvailable` indicates that at least one proxy is
-	// ready to serve traffic.
+	// resources. Known condition types include `ProxyGroupReady` and
+	// `ProxyGroupAvailable`.
+	//
+	// * `ProxyGroupReady` indicates all ProxyGroup resources are reconciled and
+	//   all expected conditions are true.
+	// * `ProxyGroupAvailable` indicates that at least one proxy is ready to
+	//   serve traffic.
+	//
+	// For ProxyGroups of type kube-apiserver, there are two additional conditions:
+	//
+	// * `KubeAPIServerProxyConfigured` indicates that at least one API server
+	//   proxy is configured and ready to serve traffic.
+	// * `KubeAPIServerProxyValid` indicates that spec.kubeAPIServer config is
+	//   valid.
 	//
 	// +listType=map
 	// +listMapKey=type
@@ -108,6 +126,11 @@ type ProxyGroupStatus struct {
 	// +listMapKey=hostname
 	// +optional
 	Devices []TailnetDevice `json:"devices,omitempty"`
+
+	// URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if
+	// any. Only applies to ProxyGroups of type kube-apiserver.
+	// +optional
+	URL string `json:"url,omitempty"`
 }
 
 type TailnetDevice struct {
@@ -157,4 +180,13 @@ type KubeAPIServerConfig struct {
 	// If not specified, defaults to auth mode.
 	// +optional
 	Mode *APIServerProxyMode `json:"mode,omitempty"`
+
+	// Hostname is the hostname with which to expose the Kubernetes API server
+	// proxies. Must be a valid DNS label no longer than 63 characters. If not
+	// specified, the name of the ProxyGroup is used as the hostname. Must be
+	// unique across the whole tailnet.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
 }

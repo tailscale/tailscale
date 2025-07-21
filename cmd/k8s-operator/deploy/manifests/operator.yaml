@@ -2873,6 +2873,10 @@ spec:
               jsonPath: .status.conditions[?(@.type == "ProxyGroupReady")].reason
               name: Status
               type: string
+            - description: URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if any. Only applies to ProxyGroups of type kube-apiserver.
+              jsonPath: .status.url
+              name: URL
+              type: string
             - description: ProxyGroup type.
               jsonPath: .spec.type
               name: Type
@@ -2885,15 +2889,22 @@ spec:
             openAPIV3Schema:
                 description: |-
                     ProxyGroup defines a set of Tailscale devices that will act as proxies.
-                    Currently only egress ProxyGroups are supported.
+                    Depending on spec.Type, it can be a group of egress, ingress, or kube-apiserver
+                    proxies. In addition to running a highly available set of proxies, ingress
+                    and egress ProxyGroups also allow for serving many annotated Services from a
+                    single set of proxies to minimise resource consumption.
 
-                    Use the tailscale.com/proxy-group annotation on a Service to specify that
-                    the egress proxy should be implemented by a ProxyGroup instead of a single
-                    dedicated proxy. In addition to running a highly available set of proxies,
-                    ProxyGroup also allows for serving many annotated Services from a single
-                    set of proxies to minimise resource consumption.
+                    For ingress and egress, use the tailscale.com/proxy-group annotation on a
+                    Service to specify that the proxy should be implemented by a ProxyGroup
+                    instead of a single dedicated proxy.
 
-                    More info: https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
+                    More info:
+                    * https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
+                    * https://tailscale.com/kb/1439/kubernetes-operator-cluster-ingress
+
+                    For kube-apiserver, the ProxyGroup is a standalone resource. Use the
+                    spec.kubeAPIServer field to configure options specific to the kube-apiserver
+                    ProxyGroup type.
                 properties:
                     apiVersion:
                         description: |-
@@ -2929,6 +2940,14 @@ spec:
                                     KubeAPIServer contains configuration specific to the kube-apiserver
                                     ProxyGroup type. This field is only used when Type is set to "kube-apiserver".
                                 properties:
+                                    hostname:
+                                        description: |-
+                                            Hostname is the hostname with which to expose the Kubernetes API server
+                                            proxies. Must be a valid DNS label no longer than 63 characters. If not
+                                            specified, the name of the ProxyGroup is used as the hostname. Must be
+                                            unique across the whole tailnet.
+                                        pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                                        type: string
                                     mode:
                                         description: |-
                                             Mode to run the API server proxy in. Supported modes are auth and noauth.
@@ -2990,10 +3009,20 @@ spec:
                             conditions:
                                 description: |-
                                     List of status conditions to indicate the status of the ProxyGroup
-                                    resources. Known condition types are `ProxyGroupReady`, `ProxyGroupAvailable`.
-                                    `ProxyGroupReady` indicates all ProxyGroup resources are fully reconciled
-                                    and ready. `ProxyGroupAvailable` indicates that at least one proxy is
-                                    ready to serve traffic.
+                                    resources. Known condition types include `ProxyGroupReady` and
+                                    `ProxyGroupAvailable`.
+
+                                    * `ProxyGroupReady` indicates all ProxyGroup resources are reconciled and
+                                      all expected conditions are true.
+                                    * `ProxyGroupAvailable` indicates that at least one proxy is ready to
+                                      serve traffic.
+
+                                    For ProxyGroups of type kube-apiserver, there are two additional conditions:
+
+                                    * `KubeAPIServerProxyConfigured` indicates that at least one API server
+                                      proxy is configured and ready to serve traffic.
+                                    * `KubeAPIServerProxyValid` indicates that spec.kubeAPIServer config is
+                                      valid.
                                 items:
                                     description: Condition contains details for one aspect of the current state of this API Resource.
                                     properties:
@@ -3080,6 +3109,11 @@ spec:
                                 x-kubernetes-list-map-keys:
                                     - hostname
                                 x-kubernetes-list-type: map
+                            url:
+                                description: |-
+                                    URL of the kube-apiserver proxy advertised by the ProxyGroup devices, if
+                                    any. Only applies to ProxyGroups of type kube-apiserver.
+                                type: string
                         type: object
                 required:
                     - spec

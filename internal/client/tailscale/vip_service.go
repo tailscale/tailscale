@@ -36,6 +36,11 @@ type VIPService struct {
 	Tags []string `json:"tags,omitempty"`
 }
 
+// VIPServiceList represents the JSON response to the list VIP Services API.
+type VIPServiceList struct {
+	VIPServices []VIPService `json:"vipServices"`
+}
+
 // GetVIPService retrieves a VIPService by its name. It returns 404 if the VIPService is not found.
 func (client *Client) GetVIPService(ctx context.Context, name tailcfg.ServiceName) (*VIPService, error) {
 	path := client.BuildTailnetURL("vip-services", name.String())
@@ -57,6 +62,29 @@ func (client *Client) GetVIPService(ctx context.Context, name tailcfg.ServiceNam
 		return nil, err
 	}
 	return svc, nil
+}
+
+// ListVIPServices retrieves all existing Services and returns them as a list.
+func (client *Client) ListVIPServices(ctx context.Context) (*VIPServiceList, error) {
+	path := client.BuildTailnetURL("vip-services")
+	req, err := http.NewRequestWithContext(ctx, httpm.GET, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error creating new HTTP request: %w", err)
+	}
+	b, resp, err := SendRequest(client, req)
+	if err != nil {
+		return nil, fmt.Errorf("error making Tailsale API request: %w", err)
+	}
+	// If status code was not successful, return the error.
+	// TODO: Change the check for the StatusCode to include other 2XX success codes.
+	if resp.StatusCode != http.StatusOK {
+		return nil, HandleErrorResponse(b, resp)
+	}
+	result := &VIPServiceList{}
+	if err := json.Unmarshal(b, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // CreateOrUpdateVIPService creates or updates a VIPService by its name. Caller must ensure that, if the

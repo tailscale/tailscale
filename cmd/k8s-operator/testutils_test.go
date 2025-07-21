@@ -891,13 +891,17 @@ func (c *fakeTSClient) GetVIPService(ctx context.Context, name tailcfg.ServiceNa
 	return svc, nil
 }
 
-func (c *fakeTSClient) ListVIPServices(ctx context.Context) (map[tailcfg.ServiceName]*tailscale.VIPService, error) {
+func (c *fakeTSClient) ListVIPServices(ctx context.Context) (*tailscale.VIPServiceList, error) {
 	c.Lock()
 	defer c.Unlock()
 	if c.vipServices == nil {
 		return nil, &tailscale.ErrResponse{Status: http.StatusNotFound}
 	}
-	return c.vipServices, nil
+	result := &tailscale.VIPServiceList{}
+	for _, svc := range c.vipServices {
+		result.VIPServices = append(result.VIPServices, *svc)
+	}
+	return result, nil
 }
 
 func (c *fakeTSClient) CreateOrUpdateVIPService(ctx context.Context, svc *tailscale.VIPService) error {
