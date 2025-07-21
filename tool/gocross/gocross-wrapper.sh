@@ -15,6 +15,11 @@ if [[ "${CI:-}" == "true" && "${NOBASHDEBUG:-}" != "true" ]]; then
     set -x
 fi
 
+if [[ "${OSTYPE:-}" == "cygwin" || "${OSTYPE:-}" == "msys" ]]; then
+    echo "You're running on Windows: use go.cmd instead." >&2
+    exit 1
+fi
+
 # Locate a bootstrap toolchain and (re)build gocross if necessary. We run all of
 # this in a subshell because posix shell semantics make it very easy to
 # accidentally mutate the input environment that will get passed to gocross at

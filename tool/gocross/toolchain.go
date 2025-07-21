@@ -60,7 +60,12 @@ func getToolchain() (toolchainDir, gorootDir string, err error) {
 		return "", "", err
 	}
 
-	cache := filepath.Join(os.Getenv("HOME"), ".cache")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", err
+	}
+
+	cache := filepath.Join(homeDir, ".cache")
 	toolchainDir = filepath.Join(cache, "tsgo", rev)
 	gorootDir = filepath.Join(cache, "tsgoroot", rev)
 

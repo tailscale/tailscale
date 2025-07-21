@@ -1,2 +1,2 @@
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0go-win.ps1" %*
+pwsh -NoProfile -ExecutionPolicy Bypass "%~dp0..\tool\gocross\gocross-wrapper.ps1" %*

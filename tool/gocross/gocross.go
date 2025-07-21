@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 
 	"tailscale.com/atomicfile"
+	"tailscale.com/version"
 )
 
 func main() {
@@ -28,19 +28,13 @@ func main() {
 		// any time.
 		switch os.Args[1] {
 		case "gocross-version":
-			bi, ok := debug.ReadBuildInfo()
-			if !ok {
-				fmt.Fprintln(os.Stderr, "failed getting build info")
+			commit := version.GetMeta().GitCommit
+			if commit == "" {
+				fmt.Fprintln(os.Stderr, "did not find VCS revision in build info")
 				os.Exit(1)
 			}
-			for _, s := range bi.Settings {
-				if s.Key == "vcs.revision" {
-					fmt.Println(s.Value)
-					os.Exit(0)
-				}
-			}
-			fmt.Fprintln(os.Stderr, "did not find vcs.revision in build info")
-			os.Exit(1)
+			fmt.Println(commit)
+			os.Exit(0)
 		case "is-gocross":
 			// This subcommand exits with an error code when called on a
 			// regular go binary, so it can be used to detect when `go` is
@@ -68,8 +62,13 @@ func main() {
 				fmt.Fprintf(os.Stderr, "usage: gocross write-wrapper-script <path>\n")
 				os.Exit(1)
 			}
-			if err := atomicfile.WriteFile(os.Args[2], wrapperScript, 0755); err != nil {
-				fmt.Fprintf(os.Stderr, "writing wrapper script: %v\n", err)
+			if err := atomicfile.WriteFile(os.Args[2], wrapperScriptBash, 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "writing bash wrapper script: %v\n", err)
+				os.Exit(1)
+			}
+			psFileName := strings.TrimSuffix(os.Args[2], filepath.Ext(os.Args[2])) + ".ps1"
+			if err := atomicfile.WriteFile(psFileName, wrapperScriptPowerShell, 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "writing PowerShell wrapper script: %v\n", err)
 				os.Exit(1)
 			}
 			os.Exit(0)
@@ -112,7 +111,10 @@ func main() {
 }
 
 //go:embed gocross-wrapper.sh
-var wrapperScript []byte
+var wrapperScriptBash []byte
+
+//go:embed gocross-wrapper.ps1
+var wrapperScriptPowerShell []byte
 
 func debugf(format string, args ...any) {
 	debug := os.Getenv("GOCROSS_DEBUG")
