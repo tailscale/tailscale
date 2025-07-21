@@ -1,7 +1,12 @@
 # This is a NixOS module to allow a machine to act as an integration test
 # runner. This is used for the end-to-end VM test suite.
 
-{ lib, config, pkgs, ... }:
+{
+  lib,
+  config,
+  pkgs,
+  ...
+}:
 
 {
   # The GitHub Actions self-hosted runner service.
