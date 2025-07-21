@@ -4,107 +4,91 @@
 package relayserver
 
 import (
-	"errors"
 	"testing"
 
 	"tailscale.com/ipn"
-	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/tsd"
-	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/eventbus"
 )
-
-type fakeRelayServer struct{}
-
-func (f *fakeRelayServer) Close() error { return nil }
-
-func (f *fakeRelayServer) AllocateEndpoint(_, _ key.DiscoPublic) (endpoint.ServerEndpoint, error) {
-	return endpoint.ServerEndpoint{}, errors.New("fake relay server")
-}
 
 func Test_extension_profileStateChanged(t *testing.T) {
 	prefsWithPortOne := ipn.Prefs{RelayServerPort: ptr.To(1)}
 	prefsWithNilPort := ipn.Prefs{RelayServerPort: nil}
 
 	type fields struct {
-		server relayServer
-		port   *int
+		port *int
 	}
 	type args struct {
 		prefs    ipn.PrefsView
 		sameNode bool
 	}
 	tests := []struct {
-		name          string
-		fields        fields
-		args          args
-		wantPort      *int
-		wantNilServer bool
+		name           string
+		fields         fields
+		args           args
+		wantPort       *int
+		wantBusRunning bool
 	}{
 		{
-			name: "no changes non-nil server",
+			name: "no changes non-nil port",
 			fields: fields{
-				server: &fakeRelayServer{},
-				port:   ptr.To(1),
+				port: ptr.To(1),
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: true,
 			},
-			wantPort:      ptr.To(1),
-			wantNilServer: false,
+			wantPort:       ptr.To(1),
+			wantBusRunning: true,
 		},
 		{
 			name: "prefs port nil",
 			fields: fields{
-				server: &fakeRelayServer{},
-				port:   ptr.To(1),
+				port: ptr.To(1),
 			},
 			args: args{
 				prefs:    prefsWithNilPort.View(),
 				sameNode: true,
 			},
-			wantPort:      nil,
-			wantNilServer: true,
+			wantPort:       nil,
+			wantBusRunning: false,
 		},
 		{
 			name: "prefs port changed",
 			fields: fields{
-				server: &fakeRelayServer{},
-				port:   ptr.To(2),
+				port: ptr.To(2),
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: true,
 			},
-			wantPort:      ptr.To(1),
-			wantNilServer: true,
+			wantPort:       ptr.To(1),
+			wantBusRunning: true,
 		},
 		{
 			name: "sameNode false",
 			fields: fields{
-				server: &fakeRelayServer{},
-				port:   ptr.To(1),
+				port: ptr.To(1),
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: false,
 			},
-			wantPort:      ptr.To(1),
-			wantNilServer: true,
+			wantPort:       ptr.To(1),
+			wantBusRunning: true,
 		},
 		{
 			name: "prefs port non-nil extension port nil",
 			fields: fields{
-				server: nil,
-				port:   nil,
+				port: nil,
 			},
 			args: args{
 				prefs:    prefsWithPortOne.View(),
 				sameNode: false,
 			},
-			wantPort:      ptr.To(1),
-			wantNilServer: true,
+			wantPort:       ptr.To(1),
+			wantBusRunning: true,
 		},
 	}
 	for _, tt := range tests {
@@ -112,24 +96,74 @@ func Test_extension_profileStateChanged(t *testing.T) {
 			sys := tsd.NewSystem()
 			bus := sys.Bus.Get()
 			e := &extension{
-				port:   tt.fields.port,
-				server: tt.fields.server,
-				bus:    bus,
+				port: tt.fields.port,
+				bus:  bus,
 			}
-			if e.port != nil {
-				// Entering profileStateChanged with a non-nil port requires
-				// bus init, which is called in profileStateChanged when
-				// transitioning port from nil to non-nil.
-				e.initBusConnection()
-			}
+			defer e.disconnectFromBusLocked()
 			e.profileStateChanged(ipn.LoginProfileView{}, tt.args.prefs, tt.args.sameNode)
-			if tt.wantNilServer != (e.server == nil) {
-				t.Errorf("wantNilServer: %v != (e.server == nil): %v", tt.wantNilServer, e.server == nil)
+			if tt.wantBusRunning != (e.busDoneCh != nil) {
+				t.Errorf("wantBusRunning: %v != (e.busDoneCh != nil): %v", tt.wantBusRunning, e.busDoneCh != nil)
 			}
 			if (tt.wantPort == nil) != (e.port == nil) {
 				t.Errorf("(tt.wantPort == nil): %v != (e.port == nil): %v", tt.wantPort == nil, e.port == nil)
 			} else if tt.wantPort != nil && *tt.wantPort != *e.port {
 				t.Errorf("wantPort: %d != *e.port: %d", *tt.wantPort, *e.port)
+			}
+		})
+	}
+}
+
+func Test_extension_handleBusLifetimeLocked(t *testing.T) {
+	tests := []struct {
+		name                          string
+		shutdown                      bool
+		port                          *int
+		busDoneCh                     chan struct{}
+		hasNodeAttrDisableRelayServer bool
+		wantBusRunning                bool
+	}{
+		{
+			name:                          "want running",
+			shutdown:                      false,
+			port:                          ptr.To(1),
+			hasNodeAttrDisableRelayServer: false,
+			wantBusRunning:                true,
+		},
+		{
+			name:                          "shutdown true",
+			shutdown:                      true,
+			port:                          ptr.To(1),
+			hasNodeAttrDisableRelayServer: false,
+			wantBusRunning:                false,
+		},
+		{
+			name:                          "port nil",
+			shutdown:                      false,
+			port:                          nil,
+			hasNodeAttrDisableRelayServer: false,
+			wantBusRunning:                false,
+		},
+		{
+			name:                          "hasNodeAttrDisableRelayServer true",
+			shutdown:                      false,
+			port:                          nil,
+			hasNodeAttrDisableRelayServer: true,
+			wantBusRunning:                false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &extension{
+				bus:                           eventbus.New(),
+				shutdown:                      tt.shutdown,
+				port:                          tt.port,
+				busDoneCh:                     tt.busDoneCh,
+				hasNodeAttrDisableRelayServer: tt.hasNodeAttrDisableRelayServer,
+			}
+			e.handleBusLifetimeLocked()
+			defer e.disconnectFromBusLocked()
+			if tt.wantBusRunning != (e.busDoneCh != nil) {
+				t.Errorf("wantBusRunning: %v != (e.busDoneCh != nil): %v", tt.wantBusRunning, e.busDoneCh != nil)
 			}
 		})
 	}
