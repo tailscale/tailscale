@@ -547,6 +547,7 @@ func (r *Resolver) queryNameserverProto(
 	// Prepare a message asking for an appropriately-typed record
 	// for the name we're querying.
 	m := new(dns.Msg)
+	m.SetEdns0(1232, false /* no DNSSEC */)
 	m.SetQuestion(name.WithTrailingDot(), uint16(qtype))
 
 	// Allow mocking out the network components with our exchange hook.
