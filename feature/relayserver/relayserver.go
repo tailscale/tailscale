@@ -6,7 +6,6 @@
 package relayserver
 
 import (
-	"errors"
 	"sync"
 
 	"tailscale.com/disco"
@@ -48,16 +47,12 @@ type extension struct {
 	logf logger.Logf
 	bus  *eventbus.Bus
 
-	mu                            sync.Mutex                                       // guards the following fields
-	eventClient                   *eventbus.Client                                 // closed to stop consumeEventbusTopics
-	reqSub                        *eventbus.Subscriber[magicsock.UDPRelayAllocReq] // receives endpoint alloc requests from magicsock
-	respPub                       *eventbus.Publisher[magicsock.UDPRelayAllocResp] // publishes endpoint alloc responses to magicsock
+	mu                            sync.Mutex // guards the following fields
 	shutdown                      bool
 	port                          *int          // ipn.Prefs.RelayServerPort, nil if disabled
-	busDoneCh                     chan struct{} // non-nil if port is non-nil, closed when consumeEventbusTopics returns
+	disconnectFromBusCh           chan struct{} // non-nil if consumeEventbusTopics is running, closed to signal it to return
+	busDoneCh                     chan struct{} // non-nil if consumeEventbusTopics is running, closed when it returns
 	hasNodeAttrDisableRelayServer bool          // tailcfg.NodeAttrDisableRelayServer
-	server                        relayServer   // lazily initialized
-
 }
 
 // relayServer is the interface of [udprelay.Server].
@@ -81,26 +76,27 @@ func (e *extension) Init(host ipnext.Host) error {
 	return nil
 }
 
-// initBusConnection initializes the [*eventbus.Client], [*eventbus.Subscriber],
-// [*eventbus.Publisher], and [chan struct{}] used to publish/receive endpoint
-// allocation messages to/from the [*eventbus.Bus]. It also starts
-// consumeEventbusTopics in a separate goroutine.
-func (e *extension) initBusConnection() {
-	e.eventClient = e.bus.Client("relayserver.extension")
-	e.reqSub = eventbus.Subscribe[magicsock.UDPRelayAllocReq](e.eventClient)
-	e.respPub = eventbus.Publish[magicsock.UDPRelayAllocResp](e.eventClient)
+// handleBusLifetimeLocked handles the lifetime of consumeEventbusTopics.
+func (e *extension) handleBusLifetimeLocked() {
+	busShouldBeRunning := !e.shutdown && e.port != nil && !e.hasNodeAttrDisableRelayServer
+	if !busShouldBeRunning {
+		e.disconnectFromBusLocked()
+		return
+	}
+	if e.busDoneCh != nil {
+		return // already running
+	}
+	port := *e.port
+	e.disconnectFromBusCh = make(chan struct{})
 	e.busDoneCh = make(chan struct{})
-	go e.consumeEventbusTopics()
+	go e.consumeEventbusTopics(port)
 }
 
 func (e *extension) selfNodeViewChanged(nodeView tailcfg.NodeView) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.hasNodeAttrDisableRelayServer = nodeView.HasCap(tailcfg.NodeAttrDisableRelayServer)
-	if e.hasNodeAttrDisableRelayServer && e.server != nil {
-		e.server.Close()
-		e.server = nil
-	}
+	e.handleBusLifetimeLocked()
 }
 
 func (e *extension) profileStateChanged(_ ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
@@ -110,43 +106,52 @@ func (e *extension) profileStateChanged(_ ipn.LoginProfileView, prefs ipn.PrefsV
 	enableOrDisableServer := ok != (e.port != nil)
 	portChanged := ok && e.port != nil && newPort != *e.port
 	if enableOrDisableServer || portChanged || !sameNode {
-		if e.server != nil {
-			e.server.Close()
-			e.server = nil
-		}
-		if e.port != nil {
-			e.eventClient.Close()
-			<-e.busDoneCh
-		}
+		e.disconnectFromBusLocked()
 		e.port = nil
 		if ok {
 			e.port = ptr.To(newPort)
-			e.initBusConnection()
 		}
 	}
+	e.handleBusLifetimeLocked()
 }
 
-func (e *extension) consumeEventbusTopics() {
+func (e *extension) consumeEventbusTopics(port int) {
 	defer close(e.busDoneCh)
 
+	eventClient := e.bus.Client("relayserver.extension")
+	reqSub := eventbus.Subscribe[magicsock.UDPRelayAllocReq](eventClient)
+	respPub := eventbus.Publish[magicsock.UDPRelayAllocResp](eventClient)
+	defer eventClient.Close()
+
+	var rs relayServer // lazily initialized
+	defer func() {
+		if rs != nil {
+			rs.Close()
+		}
+	}()
 	for {
 		select {
-		case <-e.reqSub.Done():
+		case <-e.disconnectFromBusCh:
+			return
+		case <-reqSub.Done():
 			// If reqSub is done, the eventClient has been closed, which is a
 			// signal to return.
 			return
-		case req := <-e.reqSub.Events():
-			rs, err := e.relayServerOrInit()
-			if err != nil {
-				e.logf("error initializing server: %v", err)
-				continue
+		case req := <-reqSub.Events():
+			if rs == nil {
+				var err error
+				rs, err = udprelay.NewServer(e.logf, port, nil)
+				if err != nil {
+					e.logf("error initializing server: %v", err)
+					continue
+				}
 			}
 			se, err := rs.AllocateEndpoint(req.Message.ClientDisco[0], req.Message.ClientDisco[1])
 			if err != nil {
 				e.logf("error allocating endpoint: %v", err)
 				continue
 			}
-			e.respPub.Publish(magicsock.UDPRelayAllocResp{
+			respPub.Publish(magicsock.UDPRelayAllocResp{
 				ReqRxFromNodeKey:  req.RxFromNodeKey,
 				ReqRxFromDiscoKey: req.RxFromDiscoKey,
 				Message: &disco.AllocateUDPRelayEndpointResponse{
@@ -164,44 +169,22 @@ func (e *extension) consumeEventbusTopics() {
 			})
 		}
 	}
+}
 
+func (e *extension) disconnectFromBusLocked() {
+	if e.busDoneCh != nil {
+		close(e.disconnectFromBusCh)
+		<-e.busDoneCh
+		e.busDoneCh = nil
+		e.disconnectFromBusCh = nil
+	}
 }
 
 // Shutdown implements [ipnlocal.Extension].
 func (e *extension) Shutdown() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.disconnectFromBusLocked()
 	e.shutdown = true
-	if e.server != nil {
-		e.server.Close()
-		e.server = nil
-	}
-	if e.port != nil {
-		e.eventClient.Close()
-		<-e.busDoneCh
-	}
 	return nil
-}
-
-func (e *extension) relayServerOrInit() (relayServer, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.shutdown {
-		return nil, errors.New("relay server is shutdown")
-	}
-	if e.server != nil {
-		return e.server, nil
-	}
-	if e.port == nil {
-		return nil, errors.New("relay server is not configured")
-	}
-	if e.hasNodeAttrDisableRelayServer {
-		return nil, errors.New("disable-relay-server node attribute is present")
-	}
-	var err error
-	e.server, err = udprelay.NewServer(e.logf, *e.port, nil)
-	if err != nil {
-		return nil, err
-	}
-	return e.server, nil
 }
