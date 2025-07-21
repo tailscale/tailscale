@@ -15,6 +15,12 @@ if [[ "${CI:-}" == "true" && "${NOBASHDEBUG:-}" != "true" ]]; then
     set -x
 fi
 
+if [[ "${OSTYPE:-}" == "cygwin" || "${OSTYPE:-}" == "msys" ]]; then
+    hash pwsh 2>/dev/null || { echo >&2 "This operation requires PowerShell Core."; exit 1; }
+    pwsh -NoProfile -ExecutionPolicy Bypass "${BASH_SOURCE%/*}/gocross-wrapper.ps1" "$@"
+    exit
+fi
+
 # Locate a bootstrap toolchain and (re)build gocross if necessary. We run all of
 # this in a subshell because posix shell semantics make it very easy to
 # accidentally mutate the input environment that will get passed to gocross at
