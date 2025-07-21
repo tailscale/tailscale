@@ -1167,24 +1167,24 @@ func TestCleanURLPath(t *testing.T) {
 func TestAddServiceToPrefs(t *testing.T) {
 	tests := []struct {
 		name          string
-		dnsName       string
+		svcName       tailcfg.ServiceName
 		startServices []string
 		expected      []string
 	}{
 		{
 			name:     "add service to empty prefs",
-			dnsName:  "svc:foo",
+			svcName:  "svc:foo",
 			expected: []string{"svc:foo"},
 		},
 		{
 			name:          "add service to existing prefs",
-			dnsName:       "svc:bar",
+			svcName:       "svc:bar",
 			startServices: []string{"svc:foo"},
 			expected:      []string{"svc:foo", "svc:bar"},
 		},
 		{
 			name:          "add existing service to prefs",
-			dnsName:       "svc:foo",
+			svcName:       "svc:foo",
 			startServices: []string{"svc:foo"},
 			expected:      []string{"svc:foo"},
 		},
@@ -1200,12 +1200,12 @@ func TestAddServiceToPrefs(t *testing.T) {
 				},
 			})
 			e := &serveEnv{lc: lc, bg: bgBoolFlag{true, false}}
-			err := e.addServiceToPrefs(ctx, tt.dnsName)
+			err := e.addServiceToPrefs(ctx, tt.svcName)
 			if err != nil {
-				t.Fatalf("addServiceToPrefs(%q) returned unexpected error: %v", tt.dnsName, err)
+				t.Fatalf("addServiceToPrefs(%q) returned unexpected error: %v", tt.svcName, err)
 			}
 			if !slices.Equal(lc.prefs.AdvertiseServices, tt.expected) {
-				t.Errorf("addServiceToPrefs(%q) = %v, want %v", tt.dnsName, lc.prefs.AdvertiseServices, tt.expected)
+				t.Errorf("addServiceToPrefs(%q) = %v, want %v", tt.svcName, lc.prefs.AdvertiseServices, tt.expected)
 			}
 		})
 	}
