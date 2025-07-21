@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -17,6 +16,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
@@ -149,55 +150,93 @@ func runStatus(ctx context.Context, args []string) error {
 		os.Exit(1)
 	}
 
-	var buf bytes.Buffer
-	f := func(format string, a ...any) { fmt.Fprintf(&buf, format, a...) }
+	// set up the tabwriter for aligned tabular output
+	w := tabwriter.NewWriter(Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus")
+	fmt.Fprintln(w, "--\t--------\t-----\t--\t------")
+
 	printPS := func(ps *ipnstate.PeerStatus) {
-		f("%-15s %-20s %-12s %-7s ",
+		relay := ps.Relay
+		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
+
+		var lastseen string
+		if !ps.LastSeen.IsZero() {
+			now := time.Now()
+			duration := now.Sub(ps.LastSeen)
+			// an edge case during testing showed "-1m ago"
+			duration = max(duration, 0)
+
+			switch {
+			case duration < time.Hour:
+				minutes := int(duration.Minutes())
+				lastseen = fmt.Sprintf("%dm ago", minutes)
+			case duration < 24*time.Hour:
+				hours := int(duration.Hours())
+				lastseen = fmt.Sprintf("%dh ago", hours)
+			default:
+				days := int(duration.Hours() / 24)
+				lastseen = fmt.Sprintf("%dd ago", days)
+			}
+		}
+
+		// prepare status components to join consistently with "; "
+		var statusParts []string
+
+		if !ps.Active {
+			if ps.ExitNode {
+				statusParts = append(statusParts, "idle")
+				statusParts = append(statusParts, "exit node")
+			} else if ps.ExitNodeOption {
+				statusParts = append(statusParts, "idle")
+				statusParts = append(statusParts, "offers exit node")
+			} else if anyTraffic {
+				statusParts = append(statusParts, "idle")
+				statusParts = append(statusParts, "offline, "+lastseen)
+			} else if !ps.Online {
+				statusParts = append(statusParts, "offline, "+lastseen)
+			} else {
+				// nothing, ultimately displayed as "-"
+			}
+		} else {
+			// always start with "active"
+			statusParts = append(statusParts, "active")
+
+			if ps.ExitNode {
+				statusParts = append(statusParts, "exit node")
+			} else if ps.ExitNodeOption {
+				statusParts = append(statusParts, "offers exit node")
+			}
+			if relay != "" && ps.CurAddr == "" && ps.PeerRelay == "" {
+				statusParts = append(statusParts, fmt.Sprintf(`relay %q`, relay))
+			} else if ps.CurAddr != "" {
+				statusParts = append(statusParts, fmt.Sprintf("direct %s", ps.CurAddr))
+			} else if ps.PeerRelay != "" {
+				statusParts = append(statusParts, fmt.Sprintf("peer-relay %s", ps.PeerRelay))
+			}
+			if !ps.Online {
+				statusParts = append(statusParts, "offline, "+lastseen)
+			}
+		}
+
+		// only print "-" if the statusParts are empty (no status at all)
+		var status string
+		if len(statusParts) == 0 {
+			status = "-"
+		} else {
+			status = strings.Join(statusParts, "; ")
+		}
+
+		if anyTraffic {
+			status += fmt.Sprintf(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			firstIPString(ps.TailscaleIPs),
 			dnsOrQuoteHostname(st, ps),
 			ownerLogin(st, ps),
 			ps.OS,
+			status,
 		)
-		relay := ps.Relay
-		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
-		var offline string
-		if !ps.Online {
-			offline = "; offline"
-		}
-		if !ps.Active {
-			if ps.ExitNode {
-				f("idle; exit node" + offline)
-			} else if ps.ExitNodeOption {
-				f("idle; offers exit node" + offline)
-			} else if anyTraffic {
-				f("idle" + offline)
-			} else if !ps.Online {
-				f("offline")
-			} else {
-				f("-")
-			}
-		} else {
-			f("active; ")
-			if ps.ExitNode {
-				f("exit node; ")
-			} else if ps.ExitNodeOption {
-				f("offers exit node; ")
-			}
-			if relay != "" && ps.CurAddr == "" && ps.PeerRelay == "" {
-				f("relay %q", relay)
-			} else if ps.CurAddr != "" {
-				f("direct %s", ps.CurAddr)
-			} else if ps.PeerRelay != "" {
-				f("peer-relay %s", ps.PeerRelay)
-			}
-			if !ps.Online {
-				f("; offline")
-			}
-		}
-		if anyTraffic {
-			f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
-		}
-		f("\n")
 	}
 
 	if statusArgs.self && st.Self != nil {
@@ -228,7 +267,10 @@ func runStatus(ctx context.Context, args []string) error {
 			printPS(ps)
 		}
 	}
-	Stdout.Write(buf.Bytes())
+
+	// write out tabwriter table
+	w.Flush()
+
 	if locBasedExitNode {
 		outln()
 		printf("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
