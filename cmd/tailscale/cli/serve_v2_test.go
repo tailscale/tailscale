@@ -1299,7 +1299,7 @@ func TestMessageForPort(t *testing.T) {
 					"foo.test.ts.net:443": true,
 				},
 			},
-			status:  &ipnstate.Status{},
+			status:  &ipnstate.Status{CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"}},
 			dnsName: "foo.test.ts.net",
 			srvType: serveTypeHTTPS,
 			srvPort: 443,
@@ -1328,7 +1328,7 @@ func TestMessageForPort(t *testing.T) {
 					},
 				},
 			},
-			status:  &ipnstate.Status{},
+			status:  &ipnstate.Status{CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"}},
 			dnsName: "foo.test.ts.net",
 			srvType: serveTypeHTTP,
 			srvPort: 80,
@@ -1352,7 +1352,7 @@ func TestMessageForPort(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"foo:80": {
+							"foo.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1396,7 +1396,7 @@ func TestMessageForPort(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1440,7 +1440,7 @@ func TestMessageForPort(t *testing.T) {
 							2200: {HTTPS: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"foo:2200": {
+							"foo.test.ts.net:2200": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1670,6 +1670,7 @@ func TestIsLegacyInvocation(t *testing.T) {
 
 func TestSetServe(t *testing.T) {
 	e := &serveEnv{}
+	magicDNSSuffix := "test.ts.net"
 	tests := []struct {
 		name        string
 		desc        string
@@ -1816,7 +1817,7 @@ func TestSetServe(t *testing.T) {
 					"svc:bar": {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1834,7 +1835,7 @@ func TestSetServe(t *testing.T) {
 					"svc:bar": {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1853,7 +1854,7 @@ func TestSetServe(t *testing.T) {
 					"svc:bar": {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3001"},
 								},
@@ -1871,7 +1872,7 @@ func TestSetServe(t *testing.T) {
 					"svc:bar": {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1893,12 +1894,12 @@ func TestSetServe(t *testing.T) {
 							88: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
 							},
-							"bar:88": {
+							"bar.test.ts.net:88": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3001"},
 								},
@@ -1916,7 +1917,7 @@ func TestSetServe(t *testing.T) {
 					"svc:bar": {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -1937,7 +1938,7 @@ func TestSetServe(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/":      {Proxy: "http://localhost:3000"},
 									"/added": {Proxy: "http://localhost:3001"},
@@ -1965,7 +1966,7 @@ func TestSetServe(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel)
+			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix)
 			if err != nil && !tt.expectErr {
 				t.Fatalf("got error: %v; did not expect error.", err)
 			}
@@ -2030,7 +2031,7 @@ func TestUnsetServe(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -2124,7 +2125,7 @@ func TestUnsetServe(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -2199,7 +2200,7 @@ func TestUnsetServe(t *testing.T) {
 							80: {HTTP: true},
 						},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
-							"bar:80": {
+							"bar.test.ts.net:80": {
 								Handlers: map[string]*ipn.HTTPHandler{
 									"/": {Proxy: "http://localhost:3000"},
 								},
@@ -2224,7 +2225,7 @@ func TestUnsetServe(t *testing.T) {
 			if tt.setServeEnv {
 				e = tt.serveEnv
 			}
-			err := e.unsetServe(tt.cfg, tt.st, tt.dnsName, tt.srvType, tt.srvPort, tt.mount)
+			err := e.unsetServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mount, tt.st.CurrentTailnet.MagicDNSSuffix)
 			if err != nil && !tt.expectErr {
 				t.Fatalf("got error: %v; did not expect error.", err)
 			}

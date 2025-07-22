@@ -331,6 +331,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return fmt.Errorf("getting client status: %w", err)
 		}
 		dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
+		magicDNSSuffix := st.CurrentTailnet.MagicDNSSuffix
 
 		// set parent serve config to always be persisted
 		// at the top level, but a nested config might be
@@ -394,7 +395,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		var msg string
 		if turnOff {
 			// only unset serve when trying to unset with type and port flags.
-			err = e.unsetServe(sc, st, dnsName, srvType, srvPort, mount)
+			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount, magicDNSSuffix)
 		} else {
 			if err := e.validateConfig(parentSC, srvPort, srvType, svcName); err != nil {
 				return err
@@ -406,7 +407,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if len(args) > 0 {
 				target = args[0]
 			}
-			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel)
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix)
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -585,12 +586,12 @@ func serveFromPortHandler(tcp *ipn.TCPPortHandler) serveType {
 	}
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
 		useTLS := srvType == serveTypeHTTPS
-		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target)
+		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
@@ -643,11 +644,10 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	var webConfig *ipn.WebServerConfig
 	var tcpHandler *ipn.TCPPortHandler
 	ips := st.TailscaleIPs
+	magicDNSSuffix := st.CurrentTailnet.MagicDNSSuffix
 	host := dnsName
-	displayedHost := dnsName
 	if forService {
-		displayedHost = strings.Join([]string{svcName.WithoutPrefix(), st.CurrentTailnet.MagicDNSSuffix}, ".")
-		host = svcName.WithoutPrefix()
+		host = strings.Join([]string{svcName.WithoutPrefix(), magicDNSSuffix}, ".")
 	}
 	hp := ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(srvPort))))
 
@@ -687,7 +687,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString("\n\n")
 		svc := sc.Services[svcName]
 		if srvType == serveTypeTUN && svc.Tun {
-			output.WriteString(fmt.Sprintf(msgRunningTunService, displayedHost))
+			output.WriteString(fmt.Sprintf(msgRunningTunService, host))
 			output.WriteString("\n")
 			output.WriteString(fmt.Sprintf(msgDisableServiceTun, dnsName))
 			output.WriteString("\n")
@@ -716,7 +716,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		})
 		for _, m := range mounts {
 			t, d := srvTypeAndDesc(webConfig.Handlers[m])
-			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, displayedHost, portPart, m))
+			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, host, portPart, m))
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if tcpHandler != nil {
@@ -726,7 +726,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			tlsStatus = "TLS terminated"
 		}
 
-		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", displayedHost, srvPort, tlsStatus))
+		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", host, srvPort, tlsStatus))
 		for _, a := range ips {
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
@@ -755,7 +755,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	return output.String()
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target string) error {
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target string, mds string) error {
 	h := new(ipn.HTTPHandler)
 	switch {
 	case strings.HasPrefix(target, "text:"):
@@ -797,7 +797,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		return errors.New("cannot serve web; already serving TCP")
 	}
 
-	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS)
+	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS, mds)
 
 	return nil
 }
@@ -850,11 +850,12 @@ func (e *serveEnv) applyFunnel(sc *ipn.ServeConfig, dnsName string, srvPort uint
 }
 
 // unsetServe removes the serve config for the given serve port.
-// dnsName is a FQDN or a serviceName (with `svc:` prefix).
-func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16, mount string) error {
+// dnsName is a FQDN or a serviceName (with `svc:` prefix). mds
+// is the Magic DNS suffix, which is used to recreate serve's host.
+func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, mds string) error {
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
-		err := e.removeWebServe(sc, st, dnsName, srvPort, mount)
+		err := e.removeWebServe(sc, dnsName, srvPort, mount, mds)
 		if err != nil {
 			return fmt.Errorf("failed to remove web serve: %w", err)
 		}
@@ -1010,8 +1011,9 @@ func isLegacyInvocation(subcmd serveMode, args []string) (string, bool) {
 // removeWebServe removes a web handler from the serve config
 // and removes funnel if no remaining mounts exist for the serve port.
 // The srvPort argument is the serving port and the mount argument is
-// the mount point or registered path to remove.
-func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16, mount string) error {
+// the mount point or registered path to remove. mds is the Magic DNS suffix,
+// which is used to recreate serve's host.
+func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, mount string, mds string) error {
 	if sc == nil {
 		return nil
 	}
@@ -1026,7 +1028,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		if svc == nil {
 			return errors.New("service does not exist")
 		}
-		hostName = svcName.WithoutPrefix()
+		hostName = strings.Join([]string{svcName.WithoutPrefix(), mds}, ".")
 		webServeMap = svc.Web
 	}
 
@@ -1063,7 +1065,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	}
 
 	if forService {
-		sc.RemoveServiceWebHandler(st, svcName, srvPort, mounts)
+		sc.RemoveServiceWebHandler(svcName, hostName, srvPort, mounts)
 	} else {
 		sc.RemoveWebHandler(dnsName, srvPort, mounts, true)
 	}
