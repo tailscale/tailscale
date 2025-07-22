@@ -47,8 +47,8 @@ var (
 //     caller's Tailscale identity and the rules defined in the tailnet ACLs.
 //   - false: the proxy is started and requests are passed through to the
 //     Kubernetes API without any auth modifications.
-func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsnet.Server, authMode bool, https bool) (*APIServerProxy, error) {
-	if !authMode {
+func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsnet.Server, mode kubetypes.APIServerProxyMode, https bool) (*APIServerProxy, error) {
+	if mode == kubetypes.APIServerProxyModeNoAuth {
 		restConfig = rest.AnonymousClientConfig(restConfig)
 	}
 
@@ -85,7 +85,7 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 	ap := &APIServerProxy{
 		log:         zlog,
 		lc:          lc,
-		authMode:    authMode,
+		authMode:    mode == kubetypes.APIServerProxyModeAuth,
 		https:       https,
 		upstreamURL: u,
 		ts:          ts,
@@ -278,7 +278,7 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 		Namespace:   r.PathValue(namespaceNameKey),
 		Log:         ap.log,
 	}
-	h := ksr.New(opts)
+	h := ksr.NewHijacker(opts)
 
 	ap.rp.ServeHTTP(h, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }

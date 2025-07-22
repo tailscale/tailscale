@@ -14,6 +14,7 @@ import (
 	"net/netip"
 
 	"github.com/tailscale/hujson"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 )
@@ -66,10 +67,10 @@ type ConfigV1Alpha1 struct {
 }
 
 type APIServerProxyConfig struct {
-	Enabled     opt.Bool             `json:",omitempty"` // Whether to enable the API Server proxy.
-	AuthMode    opt.Bool             `json:",omitempty"` // Run in auth or noauth mode.
-	ServiceName *tailcfg.ServiceName `json:",omitempty"` // Name of the Tailscale Service to advertise.
-	IssueCerts  opt.Bool             `json:",omitempty"` // Whether this replica should issue TLS certs for the Tailscale Service.
+	Enabled     opt.Bool                      `json:",omitempty"` // Whether to enable the API Server proxy.
+	Mode        *kubetypes.APIServerProxyMode `json:",omitempty"` // "auth" or "noauth" mode.
+	ServiceName *tailcfg.ServiceName          `json:",omitempty"` // Name of the Tailscale Service to advertise.
+	IssueCerts  opt.Bool                      `json:",omitempty"` // Whether this replica should issue TLS certs for the Tailscale Service.
 }
 
 // Load reads and parses the config file at the provided path on disk.

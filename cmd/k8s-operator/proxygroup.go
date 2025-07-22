@@ -805,6 +805,10 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 				}
 			}
 
+			mode := kubetypes.APIServerProxyModeAuth
+			if !isAuthAPIServerProxy(pg) {
+				mode = kubetypes.APIServerProxyModeNoAuth
+			}
 			cfg := conf.VersionedConfig{
 				Version: "v1alpha1",
 				ConfigV1Alpha1: &conf.ConfigV1Alpha1{
@@ -816,8 +820,8 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 					// Reloadable fields.
 					Hostname: &hostname,
 					APIServerProxy: &conf.APIServerProxyConfig{
-						Enabled:  opt.NewBool(true),
-						AuthMode: opt.NewBool(isAuthAPIServerProxy(pg)),
+						Enabled: opt.NewBool(true),
+						Mode:    &mode,
 						// The first replica is elected as the cert issuer, same
 						// as containerboot does for ingress-pg-reconciler.
 						IssueCerts: opt.NewBool(i == 0),

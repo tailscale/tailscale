@@ -3,6 +3,8 @@
 
 package kubetypes
 
+import "fmt"
+
 const (
 	// Hostinfo App values for the Tailscale Kubernetes Operator components.
 	AppOperator                = "k8s-operator"
@@ -59,5 +61,24 @@ const (
 	LabelSecretTypeState  = "state"
 	LabelSecretTypeCerts  = "certs"
 
-	KubeAPIServerConfigFile = "config.hujson"
+	KubeAPIServerConfigFile                     = "config.hujson"
+	APIServerProxyModeAuth   APIServerProxyMode = "auth"
+	APIServerProxyModeNoAuth APIServerProxyMode = "noauth"
 )
+
+// APIServerProxyMode specifies whether the API server proxy will add
+// impersonation headers to requests based on the caller's Tailscale identity.
+// May be "auth" or "noauth".
+type APIServerProxyMode string
+
+func (a *APIServerProxyMode) UnmarshalJSON(data []byte) error {
+	switch string(data) {
+	case `"auth"`:
+		*a = APIServerProxyModeAuth
+	case `"noauth"`:
+		*a = APIServerProxyModeNoAuth
+	default:
+		return fmt.Errorf("unknown APIServerProxyMode %q", data)
+	}
+	return nil
+}

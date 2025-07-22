@@ -113,7 +113,7 @@ func main() {
 	// additionally act as api-server proxy
 	// https://tailscale.com/kb/1236/kubernetes-operator/?q=kubernetes#accessing-the-kubernetes-control-plane-using-an-api-server-proxy.
 	mode := parseAPIProxyMode()
-	if mode == apiServerProxyModeDisabled {
+	if mode == nil {
 		hostinfo.SetApp(kubetypes.AppOperator)
 	} else {
 		hostinfo.SetApp(kubetypes.AppInProcessAPIServerProxy)
@@ -122,8 +122,8 @@ func main() {
 	s, tsc := initTSNet(zlog, loginServer)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
-	if mode != apiServerProxyModeDisabled {
-		ap, err := apiproxy.NewAPIServerProxy(zlog, restConfig, s, mode == apiServerProxyModeEnabled, true)
+	if mode != nil {
+		ap, err := apiproxy.NewAPIServerProxy(zlog, restConfig, s, *mode, true)
 		if err != nil {
 			zlog.Fatalf("error creating API server proxy: %v", err)
 		}

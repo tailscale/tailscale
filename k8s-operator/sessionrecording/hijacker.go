@@ -57,7 +57,7 @@ var (
 	counterSessionRecordingsUploaded = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_uploaded")
 )
 
-func New(opts HijackerOpts) *Hijacker {
+func NewHijacker(opts HijackerOpts) *Hijacker {
 	return &Hijacker{
 		ts:                opts.TS,
 		req:               opts.Req,
