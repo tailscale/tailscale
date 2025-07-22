@@ -166,7 +166,8 @@ type CapabilityVersion int
 //   - 119: 2025-07-10: Client uses Hostinfo.Location.Priority to prioritize one route over another.
 //   - 120: 2025-07-15: Client understands peer relay disco messages, and implements peer client and relay server functions
 //   - 121: 2025-07-19: Client understands peer relay endpoint alloc with [disco.AllocateUDPRelayEndpointRequest] & [disco.AllocateUDPRelayEndpointResponse]
-const CurrentCapabilityVersion CapabilityVersion = 121
+//   - 122: 2025-07-21: Client sends Hostinfo.ExitNodeID to report which exit node it has selected, if any.
+const CurrentCapabilityVersion CapabilityVersion = 122
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -875,6 +876,7 @@ type Hostinfo struct {
 	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
 	AppConnector    opt.Bool       `json:",omitempty"` // if the client is running the app-connector service
 	ServicesHash    string         `json:",omitempty"` // opaque hash of the most recent list of tailnet services, change in hash indicates config should be fetched via c2n
+	ExitNodeID      StableNodeID   `json:",omitzero"`  // the client’s selected exit node, empty when unselected.
 
 	// Location represents geographical location data about a
 	// Tailscale host. Location is optional and only set if

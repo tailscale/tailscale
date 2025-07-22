@@ -5612,6 +5612,11 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// WireIngress.
 	hi.WireIngress = b.shouldWireInactiveIngressLocked()
 	hi.AppConnector.Set(prefs.AppConnector().Advertise)
+
+	// The [tailcfg.Hostinfo.ExitNodeID] field tells control which exit node
+	// was selected, if any. Since [LocalBackend.resolveExitNodeIPLocked]
+	// has already run, there is no need to consult [ipn.Prefs.ExitNodeIP].
+	hi.ExitNodeID = prefs.ExitNodeID()
 }
 
 // enterState transitions the backend into newState, updating internal
@@ -6136,6 +6141,10 @@ func (b *LocalBackend) resolveExitNode() (changed bool) {
 	}); err != nil {
 		b.logf("failed to save exit node changes: %v", err)
 	}
+
+	// Send the resolved exit node to Control via Hostinfo.
+	b.hostinfo.ExitNodeID = prefs.ExitNodeID
+
 	b.sendToLocked(ipn.Notify{Prefs: ptr.To(prefs.View())}, allClients)
 	return true
 }
