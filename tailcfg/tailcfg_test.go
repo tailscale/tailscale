@@ -67,6 +67,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"UserspaceRouter",
 		"AppConnector",
 		"ServicesHash",
+		"ExitNodeID",
 		"Location",
 		"TPM",
 		"StateEncrypted",
@@ -271,6 +272,21 @@ func TestHostinfoEqual(t *testing.T) {
 		{
 			&Hostinfo{IngressEnabled: false},
 			&Hostinfo{IngressEnabled: true},
+			false,
+		},
+		{
+			&Hostinfo{ExitNodeID: "stable-exit"},
+			&Hostinfo{ExitNodeID: "stable-exit"},
+			true,
+		},
+		{
+			&Hostinfo{ExitNodeID: ""},
+			&Hostinfo{},
+			true,
+		},
+		{
+			&Hostinfo{ExitNodeID: ""},
+			&Hostinfo{ExitNodeID: "stable-exit"},
 			false,
 		},
 	}
