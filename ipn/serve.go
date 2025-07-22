@@ -343,8 +343,9 @@ func (sc *ServeConfig) FindConfig(port uint16) (*ServeConfig, bool) {
 // SetWebHandler sets the given HTTPHandler at the specified host, port,
 // and mount in the serve config. sc.TCP is also updated to reflect web
 // serving usage of the given port. The st argument is needed when setting
-// a web handler for a service, otherwise it can be nil.
-func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uint16, mount string, useTLS bool) {
+// a web handler for a service, otherwise it can be nil. mds is the Magic DNS
+// suffix, which is used to recreate serve's host.
+func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uint16, mount string, useTLS bool, mds string) {
 	if sc == nil {
 		sc = new(ServeConfig)
 	}
@@ -353,7 +354,7 @@ func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uin
 	webServerMap := &sc.Web
 	hostName := host
 	if svcName := tailcfg.AsServiceName(host); svcName != "" {
-		hostName = svcName.WithoutPrefix()
+		hostName = strings.Join([]string{svcName.WithoutPrefix(), mds}, ".")
 		svc, ok := sc.Services[svcName]
 		if !ok {
 			svc = new(ServiceConfig)
@@ -464,8 +465,7 @@ func (sc *ServeConfig) RemoveWebHandler(host string, port uint16, mounts []strin
 
 // RemoveServiceWebHandler deletes the web handlers at all of the given mount points
 // for the provided host and port in the serve config for the given service.
-func (sc *ServeConfig) RemoveServiceWebHandler(st *ipnstate.Status, svcName tailcfg.ServiceName, port uint16, mounts []string) {
-	hostName := svcName.WithoutPrefix()
+func (sc *ServeConfig) RemoveServiceWebHandler(svcName tailcfg.ServiceName, hostName string, port uint16, mounts []string) {
 	hp := HostPort(net.JoinHostPort(hostName, strconv.Itoa(int(port))))
 
 	svc, ok := sc.Services[svcName]

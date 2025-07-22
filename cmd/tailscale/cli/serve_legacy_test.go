@@ -876,6 +876,7 @@ var fakeStatus = &ipnstate.Status{
 			tailcfg.CapabilityFunnelPorts + "?ports=443,8443": nil,
 		},
 	},
+	CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
 }
 
 func (lc *fakeLocalServeClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
