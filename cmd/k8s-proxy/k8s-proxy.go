@@ -12,9 +12,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,9 +36,11 @@ import (
 	"tailscale.com/ipn/store"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	"tailscale.com/kube/certs"
+	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
+	"tailscale.com/kube/metrics"
 	"tailscale.com/kube/services"
 	"tailscale.com/kube/state"
 	"tailscale.com/tailcfg"
@@ -63,6 +68,7 @@ func run(logger *zap.SugaredLogger) error {
 	var (
 		configPath = os.Getenv("TS_K8S_PROXY_CONFIG")
 		podUID     = os.Getenv("POD_UID")
+		podIP      = os.Getenv("POD_IP")
 	)
 	if configPath == "" {
 		return errors.New("TS_K8S_PROXY_CONFIG unset")
@@ -201,10 +207,57 @@ func run(logger *zap.SugaredLogger) error {
 		})
 	}
 
-	if cfg.Parsed.AcceptRoutes != nil {
+	if cfg.Parsed.HealthCheckEnabled.EqualBool(true) || cfg.Parsed.MetricsEnabled.EqualBool(true) {
+		addr := podIP
+		if addr == "" {
+			addr = cfg.GetLocalAddr()
+		}
+
+		addrPort := getLocalAddrPort(addr, cfg.GetLocalPort())
+		mux := http.NewServeMux()
+		localSrv := &http.Server{Addr: addrPort, Handler: mux}
+
+		if cfg.Parsed.MetricsEnabled.EqualBool(true) {
+			logger.Infof("Running metrics endpoint at %s/metrics", addrPort)
+			metrics.RegisterMetricsHandlers(mux, lc, "")
+		}
+
+		if cfg.Parsed.HealthCheckEnabled.EqualBool(true) {
+			ipV4, _ := ts.TailscaleIPs()
+			hz := healthz.RegisterHealthHandlers(mux, ipV4.String(), logger.Infof)
+			group.Go(func() error {
+				err := hz.MonitorHealth(ctx, lc)
+				if err == nil || errors.Is(err, context.Canceled) {
+					return nil
+				}
+				return err
+			})
+		}
+
+		group.Go(func() error {
+			errChan := make(chan error)
+			go func() {
+				if err := localSrv.ListenAndServe(); err != nil {
+					errChan <- err
+				}
+				close(errChan)
+			}()
+
+			select {
+			case <-ctx.Done():
+				sCtx, scancel := context.WithTimeout(serveCtx, 10*time.Second)
+				defer scancel()
+				return localSrv.Shutdown(sCtx)
+			case err := <-errChan:
+				return err
+			}
+		})
+	}
+
+	if v, ok := cfg.Parsed.AcceptRoutes.Get(); ok {
 		_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 			RouteAllSet: true,
-			Prefs:       ipn.Prefs{RouteAll: *cfg.Parsed.AcceptRoutes},
+			Prefs:       ipn.Prefs{RouteAll: v},
 		})
 		if err != nil {
 			return fmt.Errorf("error editing prefs: %w", err)
@@ -285,10 +338,10 @@ func run(logger *zap.SugaredLogger) error {
 				prefs.HostnameSet = true
 				prefs.Hostname = *cfg.Parsed.Hostname
 			}
-			if cfg.Parsed.AcceptRoutes != nil && *cfg.Parsed.AcceptRoutes != currentPrefs.RouteAll {
-				cfgLogger = cfgLogger.With("AcceptRoutes", fmt.Sprintf("%v -> %v", currentPrefs.RouteAll, *cfg.Parsed.AcceptRoutes))
+			if v, ok := cfg.Parsed.AcceptRoutes.Get(); ok && v != currentPrefs.RouteAll {
+				cfgLogger = cfgLogger.With("AcceptRoutes", fmt.Sprintf("%v -> %v", currentPrefs.RouteAll, v))
 				prefs.RouteAllSet = true
-				prefs.Prefs.RouteAll = *cfg.Parsed.AcceptRoutes
+				prefs.Prefs.RouteAll = v
 			}
 			if !prefs.IsEmpty() {
 				if _, err := lc.EditPrefs(ctx, &prefs); err != nil {
@@ -302,6 +355,10 @@ func run(logger *zap.SugaredLogger) error {
 			cfgLogger.Infof("Config reloaded")
 		}
 	}
+}
+
+func getLocalAddrPort(addr string, port uint16) string {
+	return net.JoinHostPort(addr, strconv.FormatUint(uint64(port), 10))
 }
 
 func getStateStore(path *string, logger *zap.SugaredLogger) (ipn.StateStore, error) {

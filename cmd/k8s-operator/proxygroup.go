@@ -826,6 +826,8 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 						// as containerboot does for ingress-pg-reconciler.
 						IssueCerts: opt.NewBool(i == 0),
 					},
+					LocalPort:          ptr.To(uint16(9002)),
+					HealthCheckEnabled: opt.NewBool(true),
 				},
 			}
 
@@ -849,7 +851,11 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			}
 
 			if proxyClass != nil && proxyClass.Spec.TailscaleConfig != nil {
-				cfg.AcceptRoutes = &proxyClass.Spec.TailscaleConfig.AcceptRoutes
+				cfg.AcceptRoutes = opt.NewBool(proxyClass.Spec.TailscaleConfig.AcceptRoutes)
+			}
+
+			if proxyClass != nil && proxyClass.Spec.Metrics != nil {
+				cfg.MetricsEnabled = opt.NewBool(proxyClass.Spec.Metrics.Enable)
 			}
 
 			if len(endpoints[nodePortSvcName]) > 0 {

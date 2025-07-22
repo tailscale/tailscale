@@ -49,21 +49,23 @@ type VersionedConfig struct {
 }
 
 type ConfigV1Alpha1 struct {
-	AuthKey   *string `json:",omitempty"` // Tailscale auth key to use.
-	State     *string `json:",omitempty"` // Path to the Tailscale state.
-	LogLevel  *string `json:",omitempty"` // "debug", "info". Defaults to "info".
-	App       *string `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
-	ServerURL *string `json:",omitempty"` // URL of the Tailscale coordination server.
-	// StaticEndpoints are additional, user-defined endpoints that this node
-	// should advertise amongst its wireguard endpoints.
-	StaticEndpoints []netip.AddrPort `json:",omitempty"`
+	AuthKey            *string  `json:",omitempty"` // Tailscale auth key to use.
+	State              *string  `json:",omitempty"` // Path to the Tailscale state.
+	LogLevel           *string  `json:",omitempty"` // "debug", "info". Defaults to "info".
+	App                *string  `json:",omitempty"` // e.g. kubetypes.AppProxyGroupKubeAPIServer
+	ServerURL          *string  `json:",omitempty"` // URL of the Tailscale coordination server.
+	LocalAddr          *string  `json:",omitempty"` // The address to use for serving HTTP health checks and metrics (defaults to all interfaces).
+	LocalPort          *uint16  `json:",omitempty"` // The port to use for serving HTTP health checks and metrics (defaults to 9002).
+	MetricsEnabled     opt.Bool `json:",omitempty"` // Serve metrics on <LocalAddr>:<LocalPort>/metrics.
+	HealthCheckEnabled opt.Bool `json:",omitempty"` // Serve health check on <LocalAddr>:<LocalPort>/metrics.
 
 	// TODO(tomhjp): The remaining fields should all be reloadable during
 	// runtime, but currently missing most of the APIServerProxy fields.
 	Hostname          *string               `json:",omitempty"` // Tailscale device hostname.
-	AcceptRoutes      *bool                 `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
+	AcceptRoutes      opt.Bool              `json:",omitempty"` // Accepts routes advertised by other Tailscale nodes.
 	AdvertiseServices []string              `json:",omitempty"` // Tailscale Services to advertise.
 	APIServerProxy    *APIServerProxyConfig `json:",omitempty"` // Config specific to the API Server proxy.
+	StaticEndpoints   []netip.AddrPort      `json:",omitempty"` // StaticEndpoints are additional, user-defined endpoints that this node should advertise amongst its wireguard endpoints.
 }
 
 type APIServerProxyConfig struct {
@@ -107,4 +109,20 @@ func Load(raw []byte) (c Config, err error) {
 	}
 
 	return c, nil
+}
+
+func (c *Config) GetLocalAddr() string {
+	if c.Parsed.LocalAddr == nil {
+		return "[::]"
+	}
+
+	return *c.Parsed.LocalAddr
+}
+
+func (c *Config) GetLocalPort() uint16 {
+	if c.Parsed.LocalPort == nil {
+		return uint16(9002)
+	}
+
+	return *c.Parsed.LocalPort
 }

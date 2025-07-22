@@ -1379,6 +1379,8 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 				Mode:       ptr.To(kubetypes.APIServerProxyModeNoAuth),
 				IssueCerts: opt.NewBool(true),
 			},
+			LocalPort:          ptr.To(uint16(9002)),
+			HealthCheckEnabled: opt.NewBool(true),
 		},
 	}
 	cfgB, err := json.Marshal(cfg)
