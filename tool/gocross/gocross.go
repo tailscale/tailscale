@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/version"
