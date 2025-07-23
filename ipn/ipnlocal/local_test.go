@@ -627,7 +627,7 @@ func TestConfigureExitNode(t *testing.T) {
 		wantChangePrefsErr     error                  // if non-nil, the error we expect from [LocalBackend.EditPrefsAs]
 		wantPrefs              ipn.Prefs
 		wantExitNodeToggleErr  error // if non-nil, the error we expect from [LocalBackend.SetUseExitNodeEnabled]
-		wantHostinfoExitNodeID *tailcfg.StableNodeID
+		wantHostinfoExitNodeID tailcfg.StableNodeID
 	}{
 		{
 			name: "exit-node-id-via-prefs", // set exit node ID via prefs
@@ -644,7 +644,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "exit-node-ip-via-prefs", // set exit node IP via prefs (should be resolved to an ID)
@@ -661,7 +661,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-exit-node-via-prefs/any", // set auto exit node via prefs
@@ -679,7 +679,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode1.StableID(),
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-exit-node-via-prefs/set-exit-node-id-via-prefs", // setting exit node ID explicitly should disable auto exit node
@@ -699,7 +699,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode2.StableID(),
 				AutoExitNode: "", // should be unset
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode2.StableID()),
+			wantHostinfoExitNodeID: exitNode2.StableID(),
 		},
 		{
 			name: "auto-exit-node-via-prefs/any/no-report", // set auto exit node via prefs, but no report means we can't resolve the exit node ID
@@ -716,7 +716,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   unresolvedExitNodeID, // cannot resolve; traffic will be dropped
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(unresolvedExitNodeID),
+			wantHostinfoExitNodeID: "",
 		},
 		{
 			name: "auto-exit-node-via-prefs/any/no-netmap", // similarly, but without a netmap (no exit node should be selected)
@@ -733,7 +733,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   unresolvedExitNodeID, // cannot resolve; traffic will be dropped
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(unresolvedExitNodeID),
+			wantHostinfoExitNodeID: "",
 		},
 		{
 			name: "auto-exit-node-via-prefs/foo", // set auto exit node via prefs with an unknown/unsupported expression
@@ -751,7 +751,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode1.StableID(), // unknown exit node expressions should work as "any"
 				AutoExitNode: "foo",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-exit-node-via-prefs/off", // toggle the exit node off after it was set to "any"
@@ -771,7 +771,7 @@ func TestConfigureExitNode(t *testing.T) {
 				AutoExitNode:          "",
 				InternalExitNodePrior: "auto:any",
 			},
-			wantHostinfoExitNodeID: ptr.To(tailcfg.StableNodeID("")),
+			wantHostinfoExitNodeID: "",
 		},
 		{
 			name: "auto-exit-node-via-prefs/on", // toggle the exit node on
@@ -788,7 +788,7 @@ func TestConfigureExitNode(t *testing.T) {
 				AutoExitNode:          "any",
 				InternalExitNodePrior: "auto:any",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "id-via-policy", // set exit node ID via syspolicy
@@ -801,7 +801,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "id-via-policy/cannot-override-via-prefs/by-id", // syspolicy should take precedence over prefs
@@ -820,7 +820,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 			wantChangePrefsErr:     errManagedByPolicy,
 		},
 		{
@@ -840,7 +840,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 			wantChangePrefsErr:     errManagedByPolicy,
 		},
 		{
@@ -860,7 +860,8 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode1.StableID(),
 			},
-			wantChangePrefsErr: errManagedByPolicy,
+			wantHostinfoExitNodeID: exitNode1.StableID(),
+			wantChangePrefsErr:     errManagedByPolicy,
 		},
 		{
 			name: "ip-via-policy", // set exit node IP via syspolicy (should be resolved to an ID)
@@ -873,7 +874,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ControlURL: controlURL,
 				ExitNodeID: exitNode2.StableID(),
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode2.StableID()),
+			wantHostinfoExitNodeID: exitNode2.StableID(),
 		},
 		{
 			name: "auto-any-via-policy", // set auto exit node via syspolicy (an exit node should be selected)
@@ -888,7 +889,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode1.StableID(),
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-any-via-policy/no-report", // set auto exit node via syspolicy without a netcheck report (no exit node should be selected)
@@ -903,7 +904,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   unresolvedExitNodeID,
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(unresolvedExitNodeID),
+			wantHostinfoExitNodeID: "",
 		},
 		{
 			name: "auto-any-via-policy/no-netmap", // similarly, but without a netmap (no exit node should be selected)
@@ -918,7 +919,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   unresolvedExitNodeID,
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(unresolvedExitNodeID),
+			wantHostinfoExitNodeID: "",
 		},
 		{
 			name: "auto-any-via-policy/no-netmap/with-existing", // set auto exit node via syspolicy without a netmap, but with a previously set exit node ID
@@ -935,7 +936,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode2.StableID(),
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode2.StableID()),
+			wantHostinfoExitNodeID: exitNode2.StableID(),
 		},
 		{
 			name: "auto-any-via-policy/no-netmap/with-allowed-existing", // same, but now with a syspolicy setting that explicitly allows the existing exit node ID
@@ -954,7 +955,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode2.StableID(),
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode2.StableID()),
+			wantHostinfoExitNodeID: exitNode2.StableID(),
 		},
 		{
 			name: "auto-any-via-policy/no-netmap/with-disallowed-existing", // same, but now with a syspolicy setting that does not allow the existing exit node ID
@@ -973,7 +974,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   unresolvedExitNodeID, // we don't have a netmap yet, and the current exit node ID is not allowed; block traffic
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(unresolvedExitNodeID),
+			wantHostinfoExitNodeID: "",
 		},
 		{
 			name: "auto-any-via-policy/with-netmap/with-allowed-existing", // same, but now with a syspolicy setting that does not allow the existing exit node ID
@@ -992,7 +993,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode2.StableID(), // we have a netmap; switch to the best allowed exit node
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode2.StableID()),
+			wantHostinfoExitNodeID: exitNode2.StableID(),
 		},
 		{
 			name: "auto-any-via-policy/with-netmap/switch-to-better", // if all exit nodes are allowed, switch to the best one once we have a netmap
@@ -1008,7 +1009,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode1.StableID(), // switch to the best exit node
 				AutoExitNode: "any",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-foo-via-policy", // set auto exit node via syspolicy with an unknown/unsupported expression
@@ -1023,7 +1024,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode1.StableID(), // unknown exit node expressions should work as "any"
 				AutoExitNode: "foo",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-foo-via-edit-prefs", // set auto exit node via EditPrefs with an unknown/unsupported expression
@@ -1041,7 +1042,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode1.StableID(), // unknown exit node expressions should work as "any"
 				AutoExitNode: "foo",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-any-via-policy/toggle-off", // cannot toggle off the exit node if it was set via syspolicy
@@ -1059,7 +1060,7 @@ func TestConfigureExitNode(t *testing.T) {
 				AutoExitNode:          "any",
 				InternalExitNodePrior: "",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-any-via-policy/allow-override/change", // changing the exit node is allowed by [syspolicy.AllowExitNodeOverride]
@@ -1081,7 +1082,7 @@ func TestConfigureExitNode(t *testing.T) {
 				ExitNodeID:   exitNode2.StableID(), // overridden by user
 				AutoExitNode: "",                   // cleared, as we are setting the exit node ID explicitly
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode2.StableID()),
+			wantHostinfoExitNodeID: exitNode2.StableID(),
 		},
 		{
 			name: "auto-any-via-policy/allow-override/clear", // clearing the exit node ID is not allowed by [syspolicy.AllowExitNodeOverride]
@@ -1105,7 +1106,7 @@ func TestConfigureExitNode(t *testing.T) {
 				AutoExitNode:          "any",
 				InternalExitNodePrior: "",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-any-via-policy/allow-override/toggle-off", // similarly, toggling off the exit node is not allowed even with [syspolicy.AllowExitNodeOverride]
@@ -1124,7 +1125,7 @@ func TestConfigureExitNode(t *testing.T) {
 				AutoExitNode:          "any",
 				InternalExitNodePrior: "",
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
 			name: "auto-any-via-initial-prefs/no-netmap/clear-auto-exit-node",
@@ -1145,7 +1146,7 @@ func TestConfigureExitNode(t *testing.T) {
 				AutoExitNode: "", // cleared
 				ExitNodeID:   "", // has never been resolved, so it should be cleared as well
 			},
-			wantHostinfoExitNodeID: ptr.To(tailcfg.StableNodeID("")),
+			wantHostinfoExitNodeID: "",
 		},
 		{
 			name: "auto-any-via-initial-prefs/with-netmap/clear-auto-exit-node",
@@ -1166,7 +1167,7 @@ func TestConfigureExitNode(t *testing.T) {
 				AutoExitNode: "",                   // cleared
 				ExitNodeID:   exitNode1.StableID(), // a resolved exit node ID should be retained
 			},
-			wantHostinfoExitNodeID: ptr.To(exitNode1.StableID()),
+			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 	}
 	syspolicy.RegisterWellKnownSettingsForTest(t)
@@ -1229,10 +1230,8 @@ func TestConfigureExitNode(t *testing.T) {
 			}
 
 			// And check Hostinfo.
-			if tt.wantHostinfoExitNodeID != nil {
-				if got := lb.hostinfo.ExitNodeID; got != *tt.wantHostinfoExitNodeID {
-					t.Errorf("Hostinfo.ExitNodeID got %v, want %v", got, *tt.wantHostinfoExitNodeID)
-				}
+			if got := lb.hostinfo.ExitNodeID; got != tt.wantHostinfoExitNodeID {
+				t.Errorf("Hostinfo.ExitNodeID got %s, want %s", got, tt.wantHostinfoExitNodeID)
 			}
 		})
 	}

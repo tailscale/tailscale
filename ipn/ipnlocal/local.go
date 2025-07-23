@@ -5614,9 +5614,22 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.AppConnector.Set(prefs.AppConnector().Advertise)
 
 	// The [tailcfg.Hostinfo.ExitNodeID] field tells control which exit node
-	// was selected, if any. Since [LocalBackend.resolveExitNodeIPLocked]
-	// has already run, there is no need to consult [ipn.Prefs.ExitNodeIP].
-	hi.ExitNodeID = prefs.ExitNodeID()
+	// was selected, if any.
+	//
+	// If auto exit node is enabled (via [ipn.Prefs.AutoExitNode] or
+	// [syspolicy.ExitNodeID]), or an exit node is specified by ExitNodeIP
+	// instead of ExitNodeID , and we don't yet have enough info to resolve
+	// it (usually due to missing netmap or net report), then ExitNodeID in
+	// the prefs may be invalid (typically, [unresolvedExitNodeID]) until
+	// the netmap is available.
+	//
+	// In this case, we shouldn't update the Hostinfo with the bogus
+	// ExitNodeID here; [LocalBackend.ResolveExitNode] will be called once
+	// the netmap and/or net report have been received to both pick the exit
+	// node and notify control of the change.
+	if sid := prefs.ExitNodeID(); sid != unresolvedExitNodeID {
+		hi.ExitNodeID = prefs.ExitNodeID()
+	}
 }
 
 // enterState transitions the backend into newState, updating internal
@@ -6117,9 +6130,10 @@ func (b *LocalBackend) RefreshExitNode() {
 	}
 }
 
-// resolveExitNode determines which exit node to use based on the current
-// prefs and netmap. It updates the exit node ID in the prefs if needed,
-// sends a notification to clients, and returns true if the exit node has changed.
+// resolveExitNode determines which exit node to use based on the current prefs
+// and netmap. It updates the exit node ID in the prefs if needed, updates the
+// exit node ID in the hostinfo if needed, sends a notification to clients, and
+// returns true if the exit node has changed.
 //
 // It is the caller's responsibility to reconfigure routes and actually
 // start using the selected exit node, if needed.
@@ -6142,8 +6156,18 @@ func (b *LocalBackend) resolveExitNode() (changed bool) {
 		b.logf("failed to save exit node changes: %v", err)
 	}
 
-	// Send the resolved exit node to Control via Hostinfo.
-	b.hostinfo.ExitNodeID = prefs.ExitNodeID
+	// Send the resolved exit node to control via [tailcfg.Hostinfo].
+	// [LocalBackend.applyPrefsToHostinfoLocked] usually sets the Hostinfo,
+	// but it deferred until this point because there was a bogus ExitNodeID
+	// in the prefs.
+	//
+	// TODO(sfllaw): Mutating b.hostinfo here is undesirable, mutating
+	// in-place doubly so.
+	sid := prefs.ExitNodeID
+	if sid != unresolvedExitNodeID && b.hostinfo.ExitNodeID != sid {
+		b.hostinfo.ExitNodeID = sid
+		b.goTracker.Go(b.doSetHostinfoFilterServices)
+	}
 
 	b.sendToLocked(ipn.Notify{Prefs: ptr.To(prefs.View())}, allClients)
 	return true
