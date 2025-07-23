@@ -67,7 +67,12 @@
             })
           ];
         }));
+
+    # tailscaleRev is the git commit at which this flake was imported,
+    # or the empty string when building from a local checkout of the
+    # tailscale repo.
     tailscaleRev = self.rev or "";
+    lib = nixpkgs.lib;
   in {
     # tailscale takes a nixpkgs package set, and builds Tailscale from
     # the same commit as this flake. IOW, it provides "tailscale built
@@ -90,6 +95,8 @@
       default = pkgs.buildGo125Module {
         name = "tailscale";
         pname = "tailscale";
+        meta.mainProgram = "tailscaled";
+
         src = ./.;
         vendorHash = pkgs.lib.fileContents ./go.mod.sri;
         nativeBuildInputs = [pkgs.makeWrapper pkgs.installShellFiles];
@@ -98,7 +105,6 @@
         subPackages = [
           "cmd/tailscale"
           "cmd/tailscaled"
-          "cmd/tsidp"
         ];
         doCheck = false;
 
@@ -130,6 +136,15 @@
       };
       tailscale = default;
     });
+
+    overlays.default = final: prev: {
+      tailscale = self.packages.${prev.stdenv.hostPlatform.system}.default;
+    };
+
+    nixosModules = {
+      tailscale = import ./nixos/tailscaled-module.nix self;
+      default = self.nixosModules.tailscale;
+    };
 
     devShells = eachSystem (pkgs: {
       devShell = pkgs.mkShell {
