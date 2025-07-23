@@ -8,8 +8,9 @@ PLATFORM ?= "flyio" ## flyio==linux/amd64. Set to "" to build all platforms.
 vet: ## Run go vet
 	./tool/go vet ./...
 
-tidy: ## Run go mod tidy
+tidy: ## Run go mod tidy and update nix flake hashes
 	./tool/go mod tidy
+	./update-flake.sh
 
 lint: ## Run golangci-lint
 	./tool/go run github.com/golangci/golangci-lint/cmd/golangci-lint run
