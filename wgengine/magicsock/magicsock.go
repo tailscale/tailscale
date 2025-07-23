@@ -3907,14 +3907,18 @@ type epAddrEndpointCache struct {
 }
 
 // discoInfo is the info and state for the DiscoKey
-// in the Conn.discoInfo map key.
+// in the [Conn.discoInfo] and [relayManager.discoInfoByServerDisco] map keys.
+//
+// When the disco protocol is used to handshake with a peer relay server, the
+// corresponding discoInfo is held in [relayManager.discoInfoByServerDisco]
+// instead of [Conn.discoInfo].
 //
 // Note that a DiscoKey does not necessarily map to exactly one
 // node. In the case of shared nodes and users switching accounts, two
 // nodes in the NetMap may legitimately have the same DiscoKey.  As
 // such, no fields in here should be considered node-specific.
 type discoInfo struct {
-	// discoKey is the same as the Conn.discoInfo map key,
+	// discoKey is the same as the corresponding map key,
 	// just so you can pass around a *discoInfo alone.
 	// Not modified once initialized.
 	discoKey key.DiscoPublic
@@ -3925,11 +3929,13 @@ type discoInfo struct {
 
 	// sharedKey is the precomputed key for communication with the
 	// peer that has the DiscoKey used to look up this *discoInfo in
-	// Conn.discoInfo.
+	// the corresponding map.
 	// Not modified once initialized.
 	sharedKey key.DiscoShared
 
-	// Mutable fields follow, owned by Conn.mu:
+	// Mutable fields follow, owned by [Conn.mu]. These are irrelevant when
+	// discoInfo is a peer relay server disco key in the
+	// [relayManager.discoInfoByServerDisco] map:
 
 	// lastPingFrom is the src of a ping for discoKey.
 	lastPingFrom epAddr
