@@ -47,6 +47,9 @@ func TestIntSet(t *testing.T) {
 		deleteInt(t, ss, &si, math.MinInt64)
 		deleteInt(t, ss, &si, math.MaxInt64)
 		intValues(t, ss, si)
+		if !si.Equal(IntsOf(ss.Slice()...)) {
+			t.Errorf("{%v}.Equal({%v}) = false, want true", si, ss)
+		}
 	})
 
 	t.Run("Uint64", func(t *testing.T) {
@@ -80,6 +83,9 @@ func TestIntSet(t *testing.T) {
 		intValues(t, ss, si)
 		deleteInt(t, ss, &si, math.MaxInt64)
 		intValues(t, ss, si)
+		if !si.Equal(IntsOf(ss.Slice()...)) {
+			t.Errorf("{%v}.Equal({%v}) = false, want true", si, ss)
+		}
 	})
 }
 
