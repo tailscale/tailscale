@@ -8,7 +8,7 @@ on:
       - main
     paths:
       - go.mod
-      - .github/workflows/update-flakes.yml
+      - .github/workflows/update-flake.yml
   workflow_dispatch:
 
 concurrency:
