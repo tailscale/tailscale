@@ -46,6 +46,16 @@ func isProblematicInterface(nif *net.Interface) bool {
 	return false
 }
 
+// isOpenVPNInterface returns true if we're on MacOS and the interface appears
+// to be an OpenVPN one, which is the combination of the interface name and
+// the two half routes being present.
+func isOpenVPNInterface(nif *net.Interface) bool {
+	if runtime.GOOS == "darwin" {
+		return isOpenVPNInterfaceDarwin(nif)
+	}
+	return false
+}
+
 // LocalAddresses returns the machine's IP addresses, separated by
 // whether they're loopback addresses. If there are no regular addresses
 // it will return any IPv4 linklocal or IPv6 unique local addresses because we
