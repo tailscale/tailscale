@@ -33,6 +33,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/udprelay/status"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -1182,6 +1183,16 @@ func (lc *Client) DebugSetExpireIn(ctx context.Context, d time.Duration) error {
 	v := url.Values{"expiry": {fmt.Sprint(time.Now().Add(d).Unix())}}
 	_, err := lc.send(ctx, "POST", "/localapi/v0/set-expiry-sooner?"+v.Encode(), 200, nil)
 	return err
+}
+
+// DebugPeerRelaySessions returns debug information about the current peer
+// relay sessions running through this node.
+func (lc *Client) DebugPeerRelaySessions(ctx context.Context) (*status.ServerStatus, error) {
+	body, err := lc.send(ctx, "GET", "/localapi/v0/debug-peer-relay-sessions", 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	return decodeJSON[*status.ServerStatus](body)
 }
 
 // StreamDebugCapture streams a pcap-formatted packet capture.
