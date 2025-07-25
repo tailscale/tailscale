@@ -38,6 +38,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
+	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -1526,7 +1527,8 @@ func TestEncryptStateMigration(t *testing.T) {
 
 // TestPeerRelayPing creates three nodes with one acting as a peer relay.
 // The test succeeds when "tailscale ping" flows through the peer
-// relay between all 3 nodes.
+// relay between all 3 nodes, and "tailscale debug peer-relay-sessions" returns
+// expected values.
 func TestPeerRelayPing(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
@@ -1622,6 +1624,47 @@ func TestPeerRelayPing(t *testing.T) {
 		err := <-errCh
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+
+	allControlNodes := env.Control.AllNodes()
+	wantSessionsForDiscoShorts := make(set.Set[[2]string])
+	for i, a := range allControlNodes {
+		if i == len(allControlNodes)-1 {
+			break
+		}
+		for _, z := range allControlNodes[i+1:] {
+			wantSessionsForDiscoShorts.Add([2]string{a.DiscoKey.ShortString(), z.DiscoKey.ShortString()})
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	debugSessions, err := peerRelay.LocalClient().DebugPeerRelaySessions(ctx)
+	cancel()
+	if err != nil {
+		t.Fatalf("debug peer-relay-sessions failed: %v", err)
+	}
+	if len(debugSessions.Sessions) != len(wantSessionsForDiscoShorts) {
+		t.Errorf("got %d peer relay sessions, want %d", len(debugSessions.Sessions), len(wantSessionsForDiscoShorts))
+	}
+	for _, session := range debugSessions.Sessions {
+		if !wantSessionsForDiscoShorts.Contains([2]string{session.Client1.ShortDisco, session.Client2.ShortDisco}) &&
+			!wantSessionsForDiscoShorts.Contains([2]string{session.Client2.ShortDisco, session.Client1.ShortDisco}) {
+			t.Errorf("peer relay session for disco keys %s<->%s not found in debug peer-relay-sessions: %+v", session.Client1.ShortDisco, session.Client2.ShortDisco, debugSessions.Sessions)
+		}
+		for _, client := range []status.ClientInfo{session.Client1, session.Client2} {
+			if client.BytesTx == 0 {
+				t.Errorf("unexpected 0 bytes TX counter in peer relay session: %+v", session)
+			}
+			if client.PacketsTx == 0 {
+				t.Errorf("unexpected 0 packets TX counter in peer relay session: %+v", session)
+			}
+			if !client.Endpoint.IsValid() {
+				t.Errorf("unexpected endpoint zero value in peer relay session: %+v", session)
+			}
+			if len(client.ShortDisco) == 0 {
+				t.Errorf("unexpected zero len short disco in peer relay session: %+v", session)
+			}
 		}
 	}
 }

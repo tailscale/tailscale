@@ -31,6 +31,7 @@ import (
 	"tailscale.com/net/sockopts"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/udprelay/endpoint"
+	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -95,6 +96,8 @@ type serverEndpoint struct {
 	boundAddrPorts      [2]netip.AddrPort // or zero value if a handshake has never completed for that relay leg
 	lastSeen            [2]time.Time      // TODO(jwhited): consider using mono.Time
 	challenge           [2][disco.BindUDPRelayChallengeLen]byte
+	packetsRx           [2]uint64 // num packets received from/sent by each client after they are bound
+	bytesRx             [2]uint64 // num bytes received from/sent by each client after they are bound
 
 	lamportID   uint64
 	vni         uint32
@@ -223,9 +226,13 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 		switch {
 		case from == e.boundAddrPorts[0]:
 			e.lastSeen[0] = time.Now()
+			e.packetsRx[0]++
+			e.bytesRx[0] += uint64(len(b))
 			return b, e.boundAddrPorts[1]
 		case from == e.boundAddrPorts[1]:
 			e.lastSeen[1] = time.Now()
+			e.packetsRx[1]++
+			e.bytesRx[1] += uint64(len(b))
 			return b, e.boundAddrPorts[0]
 		default:
 			// unrecognized source
@@ -781,4 +788,42 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 		BindLifetime:        tstime.GoDuration{Duration: s.bindLifetime},
 		SteadyStateLifetime: tstime.GoDuration{Duration: s.steadyStateLifetime},
 	}, nil
+}
+
+// extractClientInfo constructs a [status.ClientInfo] for one of the two peer
+// relay clients involved in this session.
+func extractClientInfo(idx int, ep *serverEndpoint) status.ClientInfo {
+	if idx != 0 && idx != 1 {
+		panic(fmt.Sprintf("idx passed to extractClientInfo() must be 0 or 1; got %d", idx))
+	}
+
+	return status.ClientInfo{
+		Endpoint:   ep.boundAddrPorts[idx],
+		ShortDisco: ep.discoPubKeys.Get()[idx].ShortString(),
+		PacketsTx:  ep.packetsRx[idx],
+		BytesTx:    ep.bytesRx[idx],
+	}
+}
+
+// GetSessions returns a slice of peer relay session statuses, with each
+// entry containing detailed info about the server and clients involved in
+// each session. This information is intended for debugging/status UX, and
+// should not be relied on for any purpose outside of that.
+func (s *Server) GetSessions() []status.ServerSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	var sessions = make([]status.ServerSession, 0, len(s.byDisco))
+	for _, se := range s.byDisco {
+		c1 := extractClientInfo(0, se)
+		c2 := extractClientInfo(1, se)
+		sessions = append(sessions, status.ServerSession{
+			VNI:     se.vni,
+			Client1: c1,
+			Client2: c2,
+		})
+	}
+	return sessions
 }
