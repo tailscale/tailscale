@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/udprelay/endpoint"
+	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -90,10 +91,15 @@ type serverEndpoint struct {
 	boundAddrPorts      [2]netip.AddrPort // or zero value if a handshake has never completed for that relay leg
 	lastSeen            [2]time.Time      // TODO(jwhited): consider using mono.Time
 	challenge           [2][disco.BindUDPRelayChallengeLen]byte
+	packetsRx           [2]uint64 // num packets received from/sent by each client after active state reached
+	bytesRx             [2]uint64 // num bytes received from/sent by each client after active state reached
 
 	lamportID   uint64
 	vni         uint32
 	allocatedAt time.Time
+
+	// status is the overall state of this server endpoint's peer relay session establishment/operation.
+	status status.SessionStatus
 }
 
 func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, conn *net.UDPConn, serverDisco key.DiscoPublic) {
@@ -150,6 +156,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 		box := e.discoSharedSecrets[senderIndex].Seal(m.AppendMarshal(nil))
 		reply = append(reply, box...)
 		conn.WriteMsgUDPAddrPort(reply, nil, from)
+		e.status = status.Binding
 		return
 	case *disco.BindUDPRelayEndpointAnswer:
 		err := validateVNIAndRemoteKey(discoMsg.BindUDPRelayEndpointCommon)
@@ -167,6 +174,13 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 		}
 		// Handshake complete. Update the binding for this sender.
 		e.boundAddrPorts[senderIndex] = from
+
+		// If both clients have bound into the endpoint, we've moved from the
+		// Binding phase to the Pinging phase of peer relay session
+		// establishment.
+		if e.isBound() {
+			e.status = status.Pinging
+		}
 		e.lastSeen[senderIndex] = time.Now() // record last seen as bound time
 		return
 	default:
@@ -220,12 +234,23 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 		case from == e.boundAddrPorts[0]:
 			e.lastSeen[0] = time.Now()
 			to = e.boundAddrPorts[1]
+			e.packetsRx[0]++
+			e.bytesRx[0] += uint64(len(b))
 		case from == e.boundAddrPorts[1]:
 			e.lastSeen[1] = time.Now()
 			to = e.boundAddrPorts[0]
+			e.packetsRx[1]++
+			e.bytesRx[1] += uint64(len(b))
 		default:
 			// unrecognized source
 			return
+		}
+
+		// If we reach here and packets are flowing bidirectionally, the
+		// Pinging phase of session establishment is complete and the session
+		// is active.
+		if e.status == status.Pinging && e.packetsRx[0] > 1 && e.packetsRx[1] > 1 {
+			e.status = status.Active
 		}
 		// Relay the packet towards the other party via the socket associated
 		// with the destination's address family. If source and destination
@@ -237,6 +262,7 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 		} else if otherAFSocket != nil {
 			otherAFSocket.WriteMsgUDPAddrPort(b, nil, to)
 		}
+
 		return
 	}
 
@@ -644,6 +670,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 		discoPubKeys: pair,
 		lamportID:    s.lamportID,
 		allocatedAt:  time.Now(),
+		status:       status.Allocating,
 	}
 	e.discoSharedSecrets[0] = s.disco.Shared(e.discoPubKeys.Get()[0])
 	e.discoSharedSecrets[1] = s.disco.Shared(e.discoPubKeys.Get()[1])
@@ -662,4 +689,53 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 		BindLifetime:        tstime.GoDuration{Duration: s.bindLifetime},
 		SteadyStateLifetime: tstime.GoDuration{Duration: s.steadyStateLifetime},
 	}, nil
+}
+
+// extractClientInfo constructs a [status.ClientInfo] for one of the two peer
+// relay clients involved in this session.
+func extractClientInfo(idx int, ep *serverEndpoint) status.ClientInfo {
+	if idx != 0 && idx != 1 {
+		panic(fmt.Sprintf("idx passed to extractClientInfo() must be 0 or 1; got %d", idx))
+	}
+
+	// If neither the bound or handshake addrports are valid, just pass on the
+	// invalid zero value; users need to call ClientInfo.Endpoint.IsValid()
+	// before use.
+	var ap netip.AddrPort
+	if ep.boundAddrPorts[idx].IsValid() {
+		ap = ep.boundAddrPorts[idx]
+	} else if ep.handshakeAddrPorts[idx].IsValid() {
+		ap = ep.handshakeAddrPorts[idx]
+	}
+	return status.ClientInfo{
+		Endpoint:   ap,
+		ShortDisco: ep.discoPubKeys.Get()[idx].ShortString(),
+		PacketsTx:  ep.packetsRx[idx],
+		BytesTx:    ep.bytesRx[idx],
+	}
+}
+
+// GetSessions returns an array of peer relay session statuses, with each
+// entry containing detailed info about the server and clients involved in
+// each session. This information is intended for debugging/status UX, and
+// should not be relied on for any purpose outside of that.
+func (s *Server) GetSessions() ([]status.ServerSession, error) {
+	var sessions = make([]status.ServerSession, 0)
+	for _, se := range s.byDisco {
+		c1 := extractClientInfo(0, se)
+		c2 := extractClientInfo(1, se)
+		si := status.ServerInfo{
+			// TODO (dylan): Is this the correct addrPort to be using here?
+			Endpoint:   s.addrPorts[0],
+			ShortDisco: s.discoPublic.ShortString(),
+		}
+		sessions = append(sessions, status.ServerSession{
+			Status:  se.status,
+			VNI:     se.vni,
+			Client1: c1,
+			Client2: c2,
+			Server:  si,
+		})
+	}
+	return sessions, nil
 }
