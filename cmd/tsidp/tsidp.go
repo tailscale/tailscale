@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -818,9 +819,10 @@ func (s *idpServer) oidcSigner() (jose.Signer, error) {
 }
 
 func (s *idpServer) oidcPrivateKey() (*signingKey, error) {
+	keyPath := filepath.Join(*flagDir, "oidc-key.json")
 	return s.lazySigningKey.GetErr(func() (*signingKey, error) {
 		var sk signingKey
-		b, err := os.ReadFile("oidc-key.json")
+		b, err := os.ReadFile(keyPath)
 		if err == nil {
 			if err := sk.UnmarshalJSON(b); err == nil {
 				return &sk, nil
@@ -835,7 +837,7 @@ func (s *idpServer) oidcPrivateKey() (*signingKey, error) {
 		if err != nil {
 			log.Fatalf("Error marshaling key: %v", err)
 		}
-		if err := os.WriteFile("oidc-key.json", b, 0600); err != nil {
+		if err := os.WriteFile(keyPath, b, 0600); err != nil {
 			log.Fatalf("Error writing key: %v", err)
 		}
 		return &sk, nil
