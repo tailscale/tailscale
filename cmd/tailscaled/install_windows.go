@@ -25,6 +25,15 @@ func init() {
 	uninstallSystemDaemon = uninstallSystemDaemonWindows
 }
 
+// serviceDependencies lists all system services that tailscaled depends on.
+// This list must be kept in sync with the TailscaledDependencies preprocessor
+// variable in the installer.
+var serviceDependencies = []string{
+	"iphlpsvc",
+	"netprofm",
+	"WinHttpAutoProxySvc",
+}
+
 func installSystemDaemonWindows(args []string) (err error) {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -48,6 +57,7 @@ func installSystemDaemonWindows(args []string) (err error) {
 		ServiceType:  windows.SERVICE_WIN32_OWN_PROCESS,
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
+		Dependencies: serviceDependencies,
 		DisplayName:  serviceName,
 		Description:  "Connects this computer to others on the Tailscale network.",
 	}
