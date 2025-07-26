@@ -18,6 +18,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	operatorutils "tailscale.com/k8s-operator"
@@ -66,7 +67,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	}
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	// Set the ready condition of the DNSConfig
-	mustUpdateStatus[tsapi.DNSConfig](t, fc, "", "test", func(c *tsapi.DNSConfig) {
+	mustUpdateStatus(t, fc, "", "test", func(c *tsapi.DNSConfig) {
 		operatorutils.SetDNSConfigCondition(c, tsapi.NameserverReady, metav1.ConditionTrue, reasonNameserverCreated, reasonNameserverCreated, 0, cl, zl.Sugar())
 	})
 	dnsRR := &dnsRecordsReconciler{
@@ -156,6 +157,131 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	expectReconciled(t, dnsRR, "tailscale", "ts-ingress")
 	wantHosts["another.ingress.ts.net"] = []string{"1.2.3.4"}
 	expectHostsRecords(t, fc, wantHosts)
+
+	// 8. DNS record is created for ProxyGroup egress using ClusterIP Service IP instead of Pod IPs
+	t.Log("test case 8: ProxyGroup egress")
+
+	// Create the parent ExternalName service with tailnet-fqdn annotation
+	parentEgressSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "external-service",
+			Namespace: "default",
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "external-service.example.ts.net",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: "unused",
+		},
+	}
+	mustCreate(t, fc, parentEgressSvc)
+
+	proxyGroupEgressSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ts-proxygroup-egress-abcd1",
+			Namespace: "tailscale",
+			Labels: map[string]string{
+				kubetypes.LabelManaged: "true",
+				LabelParentName:        "external-service",
+				LabelParentNamespace:   "default",
+				LabelParentType:        "svc",
+				labelProxyGroup:        "test-proxy-group",
+				labelSvcType:           typeEgress,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:      corev1.ServiceTypeClusterIP,
+			ClusterIP: "10.0.100.50", // This IP should be used in DNS, not Pod IPs
+			Ports: []corev1.ServicePort{{
+				Port:       443,
+				TargetPort: intstr.FromInt(10443), // Port mapping
+			}},
+		},
+	}
+
+	// Create EndpointSlice with Pod IPs (these should NOT be used in DNS records)
+	proxyGroupEps := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ts-proxygroup-egress-abcd1-ipv4",
+			Namespace: "tailscale",
+			Labels: map[string]string{
+				discoveryv1.LabelServiceName: "ts-proxygroup-egress-abcd1",
+				kubetypes.LabelManaged:       "true",
+				LabelParentName:              "external-service",
+				LabelParentNamespace:         "default",
+				LabelParentType:              "svc",
+				labelProxyGroup:              "test-proxy-group",
+				labelSvcType:                 typeEgress,
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints: []discoveryv1.Endpoint{{
+			Addresses: []string{"10.1.0.100", "10.1.0.101", "10.1.0.102"}, // Pod IPs that should NOT be used
+			Conditions: discoveryv1.EndpointConditions{
+				Ready:       ptr.To(true),
+				Serving:     ptr.To(true),
+				Terminating: ptr.To(false),
+			},
+		}},
+		Ports: []discoveryv1.EndpointPort{{
+			Port: ptr.To(int32(10443)),
+		}},
+	}
+
+	mustCreate(t, fc, proxyGroupEgressSvc)
+	mustCreate(t, fc, proxyGroupEps)
+	expectReconciled(t, dnsRR, "tailscale", "ts-proxygroup-egress-abcd1")
+
+	// Verify DNS record uses ClusterIP Service IP, not Pod IPs
+	wantHosts["external-service.example.ts.net"] = []string{"10.0.100.50"}
+	expectHostsRecords(t, fc, wantHosts)
+
+	// 9. ProxyGroup egress DNS record updates when ClusterIP changes
+	t.Log("test case 9: ProxyGroup egress ClusterIP change")
+	mustUpdate(t, fc, "tailscale", "ts-proxygroup-egress-abcd1", func(svc *corev1.Service) {
+		svc.Spec.ClusterIP = "10.0.100.51"
+	})
+	expectReconciled(t, dnsRR, "tailscale", "ts-proxygroup-egress-abcd1")
+	wantHosts["external-service.example.ts.net"] = []string{"10.0.100.51"}
+	expectHostsRecords(t, fc, wantHosts)
+
+	// 10. Test ProxyGroup service deletion and DNS cleanup
+	t.Log("test case 10: ProxyGroup egress service deletion")
+	mustDeleteAll(t, fc, proxyGroupEgressSvc)
+	expectReconciled(t, dnsRR, "tailscale", "ts-proxygroup-egress-abcd1")
+	delete(wantHosts, "external-service.example.ts.net")
+	expectHostsRecords(t, fc, wantHosts)
+}
+
+func TestDNSRecordsReconcilerErrorCases(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dnsRR := &dnsRecordsReconciler{
+		logger: zl.Sugar(),
+	}
+
+	testSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
+	}
+
+	// Test invalid IP format
+	testSvc.Spec.ClusterIP = "invalid-ip"
+	_, err = dnsRR.getClusterIPServiceIPs(testSvc, zl.Sugar())
+	if err == nil {
+		t.Error("expected error for invalid IP format")
+	}
+
+	// Test valid IP
+	testSvc.Spec.ClusterIP = "10.0.100.50"
+	_, err = dnsRR.getClusterIPServiceIPs(testSvc, zl.Sugar())
+	if err != nil {
+		t.Errorf("unexpected error for valid IP: %v", err)
+	}
 }
 
 func headlessSvcForParent(o client.Object, typ string) *corev1.Service {
