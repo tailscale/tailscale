@@ -62,6 +62,7 @@ func main() {
 		clusterTag      = fs.String("cluster-tag", "", "optionally run in a consensus cluster with other nodes with this tag")
 		server          = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
 		stateDir        = fs.String("state-dir", "", "path to directory in which to store app state")
+		clusterFollow   = fs.String("follow", "", "Try to follow a leader at the specified location or exit.")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -163,7 +164,11 @@ func main() {
 		if err != nil {
 			log.Fatalf("Creating cluster state dir failed: %v", err)
 		}
-		err = cipp.StartConsensus(ctx, ts, *clusterTag, clusterStateDir)
+		err = cipp.StartConsensus(ctx, ts, ippool.ClusterOpts{
+			Tag:      *clusterTag,
+			StateDir: clusterStateDir,
+			Follow:   *clusterFollow,
+		})
 		if err != nil {
 			log.Fatalf("StartConsensus: %v", err)
 		}
