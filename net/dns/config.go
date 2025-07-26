@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 
 	"tailscale.com/control/controlknobs"
@@ -181,19 +182,7 @@ func sameResolverNames(a, b []*dnstype.Resolver) bool {
 		if a[i].Addr != b[i].Addr {
 			return false
 		}
-		if !sameIPs(a[i].BootstrapResolution, b[i].BootstrapResolution) {
-			return false
-		}
-	}
-	return true
-}
-
-func sameIPs(a, b []netip.Addr) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
+		if !slices.Equal(a[i].BootstrapResolution, b[i].BootstrapResolution) {
 			return false
 		}
 	}
