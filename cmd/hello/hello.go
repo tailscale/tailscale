@@ -51,7 +51,9 @@ func main() {
 		var err error
 		tmpl, err = template.New("home").Parse(embeddedTemplate)
 		if err != nil {
-			log.Printf("ignoring template error in dev mode: %v", err)
+			log.Printf("template parse error in dev mode: %v; using fallback template", err)
+			// Fallback minimal template to avoid nil pointer dereference
+			tmpl = template.Must(template.New("fallback").Parse("<html><body><h1>Template Error</h1><p>{{.}}</p></body></html>"))
 		}
 	} else {
 		if embeddedTemplate == "" {
