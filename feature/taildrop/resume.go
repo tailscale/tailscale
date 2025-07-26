@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 )
@@ -51,19 +50,20 @@ func (cs *checksum) UnmarshalText(b []byte) error {
 
 // PartialFiles returns a list of partial files in [Handler.Dir]
 // that were sent (or is actively being sent) by the provided id.
-func (m *manager) PartialFiles(id clientID) (ret []string, err error) {
+func (m *manager) PartialFiles(id clientID) ([]string, error) {
 	if m == nil || m.opts.Dir == "" {
 		return nil, ErrNoTaildrop
 	}
-
 	suffix := id.partialSuffix()
-	if err := rangeDir(m.opts.Dir, func(de fs.DirEntry) bool {
-		if name := de.Name(); strings.HasSuffix(name, suffix) {
-			ret = append(ret, name)
+	files, err := m.opts.FileOps.ListFiles(m.opts.Dir)
+	if err != nil {
+		return nil, redactError(err)
+	}
+	var ret []string
+	for _, fi := range files {
+		if strings.HasSuffix(fi, suffix) {
+			ret = append(ret, fi)
 		}
-		return true
-	}); err != nil {
-		return ret, redactError(err)
 	}
 	return ret, nil
 }

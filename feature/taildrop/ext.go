@@ -89,30 +89,6 @@ type Extension struct {
 	outgoingFiles map[string]*ipn.OutgoingFile
 }
 
-// safDirectoryPrefix is used to determine if the directory is managed via SAF.
-const SafDirectoryPrefix = "content://"
-
-// PutMode controls how Manager.PutFile writes files to storage.
-//
-//	PutModeDirect    – write files directly to a filesystem path (default).
-//	PutModeAndroidSAF – use Android’s Storage Access Framework (SAF), where
-//	                      the OS manages the underlying directory permissions.
-type PutMode int
-
-const (
-	PutModeDirect PutMode = iota
-	PutModeAndroidSAF
-)
-
-// FileOps defines platform-specific file operations.
-type FileOps interface {
-	OpenFileWriter(filename string) (io.WriteCloser, string, error)
-
-	// RenamePartialFile finalizes a partial file.
-	// It returns the new SAF URI as a string and an error.
-	RenamePartialFile(partialUri, targetDirUri, targetName string) (string, error)
-}
-
 func (e *Extension) Name() string {
 	return "taildrop"
 }
@@ -176,23 +152,29 @@ func (e *Extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 		return
 	}
 
-	// If we have a netmap, create a taildrop manager.
+	/// If we have a netmap, create a taildrop manager.
 	fileRoot, isDirectFileMode := e.fileRoot(uid, activeLogin)
 	if fileRoot == "" {
-		e.logf("no Taildrop directory configured")
+		e.logf("DEBUG-ADDR=⟪taildrop⟫ no Taildrop directory configured")
 	}
-	mode := PutModeDirect
-	if e.directFileRoot != "" && strings.HasPrefix(e.directFileRoot, SafDirectoryPrefix) {
-		mode = PutModeAndroidSAF
+
+	// Pick the FileOps (use default if none provided)
+	fops := e.FileOps
+	if fops == nil {
+		fo, err := newDefaultFileOps(fileRoot)
+		if err != nil {
+			panic(fmt.Sprintf("taildrop: cannot create FileOps: %v", err))
+		}
+		fops = fo
 	}
+
 	e.setMgrLocked(managerOptions{
 		Logf:           e.logf,
 		Clock:          tstime.DefaultClock{Clock: e.sb.Clock()},
 		State:          e.stateStore,
 		Dir:            fileRoot,
 		DirectFileMode: isDirectFileMode,
-		FileOps:        e.FileOps,
-		Mode:           mode,
+		FileOps:        fops,
 		SendFileNotify: e.sendFileNotify,
 	}.New())
 }

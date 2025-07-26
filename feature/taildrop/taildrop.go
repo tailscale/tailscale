@@ -12,8 +12,6 @@ package taildrop
 import (
 	"errors"
 	"hash/adler32"
-	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,7 +19,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
@@ -91,9 +88,10 @@ type managerOptions struct {
 	// copy them out, and then delete them.
 	DirectFileMode bool
 
+	// FileOps abstracts platform-specific file operations needed for file transfers.
+	// Android's implementation uses the Storage Access Framework, and other platforms
+	// use DefaultFileOps.
 	FileOps FileOps
-
-	Mode PutMode
 
 	// SendFileNotify is called periodically while a file is actively
 	// receiving the contents for the file. There is a final call
@@ -110,9 +108,6 @@ type manager struct {
 	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
 	// deleter managers asynchronous deletion of files.
 	deleter fileDeleter
-
-	// renameMu is used to protect os.Rename calls so that they are atomic.
-	renameMu sync.Mutex
 
 	// totalReceived counts the cumulative total of received files.
 	totalReceived atomic.Int64
@@ -198,31 +193,6 @@ func joinDir(dir, baseName string) (fullPath string, err error) {
 		return "", ErrInvalidFileName
 	}
 	return filepath.Join(dir, baseName), nil
-}
-
-// rangeDir iterates over the contents of a directory, calling fn for each entry.
-// It continues iterating while fn returns true.
-// It reports the number of entries seen.
-func rangeDir(dir string, fn func(fs.DirEntry) bool) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	for {
-		des, err := f.ReadDir(10)
-		for _, de := range des {
-			if !fn(de) {
-				return nil
-			}
-		}
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-	}
 }
 
 // IncomingFiles returns a list of active incoming files.

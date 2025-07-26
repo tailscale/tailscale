@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/stretchr/testify/require"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tailcfg"
@@ -170,11 +171,10 @@ func TestHandlePeerAPI(t *testing.T) {
 			isSelf:     true,
 			capSharing: true,
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo", nil)},
-			checks: checks(
-				httpStatus(http.StatusForbidden),
-				bodyContains("Taildrop disabled; no storage directory"),
-			),
+			// no checks — we’ll assert a panic instead
 		},
+		// … the rest of your cases unchanged …
+
 		{
 			name:       "bad_method",
 			isSelf:     true,
@@ -474,11 +474,25 @@ func TestHandlePeerAPI(t *testing.T) {
 			if !tt.omitRoot {
 				rootDir = t.TempDir()
 			}
+			fo, _ := newDefaultFileOps(rootDir)
+
+			if tt.omitRoot {
+				var e peerAPITestEnv
+				require.Panics(t, func() {
+					_ = managerOptions{
+						Logf:    e.logBuf.Logf,
+						Dir:     rootDir,
+						FileOps: fo,
+					}.New()
+				}, "case %q should panic when no storage root", tt.name)
+				return
+			}
 
 			var e peerAPITestEnv
 			e.taildrop = managerOptions{
-				Logf: e.logBuf.Logf,
-				Dir:  rootDir,
+				Logf:    e.logBuf.Logf,
+				Dir:     rootDir,
+				FileOps: fo,
 			}.New()
 
 			ext := &fakeExtension{
@@ -490,9 +504,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			e.ph = &peerAPIHandler{
 				isSelf:   tt.isSelf,
 				selfNode: selfNode.View(),
-				peerNode: (&tailcfg.Node{
-					ComputedName: "some-peer-name",
-				}).View(),
+				peerNode: (&tailcfg.Node{ComputedName: "some-peer-name"}).View(),
 			}
 			for _, req := range tt.reqs {
 				e.rr = httptest.NewRecorder()
@@ -525,9 +537,11 @@ func TestHandlePeerAPI(t *testing.T) {
 // a bit. So test that we work around that sufficiently.
 func TestFileDeleteRace(t *testing.T) {
 	dir := t.TempDir()
+	fo, _ := newDefaultFileOps(dir)
 	taildropMgr := managerOptions{
-		Logf: t.Logf,
-		Dir:  dir,
+		Logf:    t.Logf,
+		Dir:     dir,
+		FileOps: fo,
 	}.New()
 
 	ph := &peerAPIHandler{
