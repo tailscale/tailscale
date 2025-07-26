@@ -28,6 +28,15 @@ type IntSet[T constraints.Integer] struct {
 	extraLen int
 }
 
+// IntsOf constructs an [IntSet] with the provided elements.
+func IntsOf[T constraints.Integer](slice ...T) IntSet[T] {
+	var s IntSet[T]
+	for _, e := range slice {
+		s.Add(e)
+	}
+	return s
+}
+
 // Values returns an iterator over the elements of the set.
 // The iterator will yield the elements in no particular order.
 func (s IntSet[T]) Values() iter.Seq[T] {
@@ -109,6 +118,23 @@ func (s *IntSet[T]) Delete(e T) {
 			s.extraLen--
 		}
 	}
+}
+
+// DeleteSeq deletes the values in seq from the set.
+func (s *IntSet[T]) DeleteSeq(seq iter.Seq[T]) {
+	for e := range seq {
+		s.Delete(e)
+	}
+}
+
+// Equal reports whether s is equal to other.
+func (s IntSet[T]) Equal(other IntSet[T]) bool {
+	for hi, bits := range s.extra {
+		if other.extra[hi] != bits {
+			return false
+		}
+	}
+	return s.extraLen == other.extraLen && s.bits == other.bits
 }
 
 // Clone returns a copy of s that doesn't alias the original.
