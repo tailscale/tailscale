@@ -31,6 +31,7 @@ This command is currently in alpha and may change in the future.`,
 	FlagSet: func() *flag.FlagSet {
 		fs := flag.NewFlagSet("switch", flag.ExitOnError)
 		fs.BoolVar(&switchArgs.list, "list", false, "list available accounts")
+		fs.BoolVar(&switchArgs.delete, "delete", false, "delete a account")
 		return fs
 	}(),
 	Exec: switchProfile,
@@ -65,7 +66,8 @@ func init() {
 }
 
 var switchArgs struct {
-	list bool
+	list   bool
+	delete bool
 }
 
 func listProfiles(ctx context.Context) error {
@@ -137,6 +139,13 @@ func switchProfile(ctx context.Context, args []string) error {
 	}
 	if profID == cp.ID {
 		printf("Already on account %q\n", args[0])
+		os.Exit(0)
+	}
+	if switchArgs.delete {
+		if err := localClient.DeleteProfile(ctx, profID); err != nil {
+			errf("Failed to delete account: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 	if err := localClient.SwitchProfile(ctx, profID); err != nil {
