@@ -1,0 +1,18 @@
+{{- if .Values.grafanaDashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- with .Values.grafanaDashboard.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.grafanaDashboard.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  tailscale.json: |-
+{{ .Files.Get "monitoring/tailscale-dashboard.json" | indent 4 }}
+{{- end }} 
