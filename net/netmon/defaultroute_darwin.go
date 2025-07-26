@@ -27,6 +27,37 @@ func UpdateLastKnownDefaultRouteInterface(ifName string) {
 	}
 }
 
+// findOpenVPNInterface looks for an OpenVPN interface and returns it if
+// found. The two key identifying factors for on Macs are
+//
+// 1) the interface is named utun*; and
+// 2) two pseudo-default half routes are installed, 0/1 and 128.0/1.
+//
+// so we look to see if we detect both those conditions.
+func findOpenVPNInterface() (*Interface, error) {
+	interfaces, err := netInterfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, iface := range interfaces {
+		if !iface.IsUp() {
+			continue
+		}
+
+		if isOpenVPNInterface(iface.Interface) {
+			// Verify it has an address
+			addrs, _ := iface.Addrs()
+			if len(addrs) > 0 {
+				log.Printf("defaultroute_darwin: found OpenVPN interface: %s", iface.Name)
+				return &iface, nil
+			}
+		}
+	}
+
+	return nil, nil // No OpenVPN interface found
+}
+
 func defaultRoute() (d DefaultRouteDetails, err error) {
 	// We cannot rely on the delegated interface data on darwin. The NetworkExtension framework
 	// seems to set the delegate interface only once, upon the *creation* of the VPN tunnel.
@@ -46,6 +77,15 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	if err != nil {
 		log.Printf("defaultroute_darwin: could not get interfaces: %v", err)
 		return d, ErrNoGatewayIndexFound
+	}
+
+	// If we detect an OpenVPN interface, prefer it over other interfaces This
+	// ensures Tailscale routes over the OpenVPN tunnel when present
+	if openVPNIface, err := findOpenVPNInterface(); err == nil && openVPNIface != nil {
+		log.Printf("defaultroute_darwin: preferring OpenVPN interface: %s", openVPNIface.Name)
+		d.InterfaceName = openVPNIface.Name
+		d.InterfaceIndex = openVPNIface.Index
+		return d, nil
 	}
 
 	getInterfaceByName := func(name string) *Interface {
