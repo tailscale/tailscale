@@ -31,6 +31,10 @@ import (
 const (
 	dnsRecordsRecocilerFinalizer = "tailscale.com/dns-records-reconciler"
 	annotationTSMagicDNSName     = "tailscale.com/magic-dnsname"
+
+	// Service types for consistent string usage
+	serviceTypeIngress = "ingress"
+	serviceTypeSvc     = "svc"
 )
 
 // dnsRecordsReconciler knows how to update dnsrecords ConfigMap with DNS
@@ -51,7 +55,7 @@ type dnsRecordsReconciler struct {
 	isDefaultLoadBalancer bool // true if operator is the default ingress controller in this cluster
 }
 
-// Reconcile takes a reconcile.Request for a headless Service fronting a
+// Reconcile takes a reconcile.Request for a Service fronting a
 // tailscale proxy and updates DNS Records in dnsrecords ConfigMap for the
 // in-cluster ts.net nameserver if required.
 func (dnsRR *dnsRecordsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
@@ -59,8 +63,8 @@ func (dnsRR *dnsRecordsReconciler) Reconcile(ctx context.Context, req reconcile.
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
 
-	headlessSvc := new(corev1.Service)
-	err = dnsRR.Client.Get(ctx, req.NamespacedName, headlessSvc)
+	proxySvc := new(corev1.Service)
+	err = dnsRR.Client.Get(ctx, req.NamespacedName, proxySvc)
 	if apierrors.IsNotFound(err) {
 		logger.Debugf("Service not found")
 		return reconcile.Result{}, nil
@@ -68,14 +72,14 @@ func (dnsRR *dnsRecordsReconciler) Reconcile(ctx context.Context, req reconcile.
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get Service: %w", err)
 	}
-	if !(isManagedByType(headlessSvc, "svc") || isManagedByType(headlessSvc, "ingress")) {
-		logger.Debugf("Service is not a headless Service for a tailscale ingress or egress proxy; do nothing")
+	if !(isManagedByType(proxySvc, serviceTypeSvc) || isManagedByType(proxySvc, serviceTypeIngress)) {
+		logger.Debugf("Service is not a proxy Service for a tailscale ingress or egress proxy; do nothing")
 		return reconcile.Result{}, nil
 	}
 
-	if !headlessSvc.DeletionTimestamp.IsZero() {
+	if !proxySvc.DeletionTimestamp.IsZero() {
 		logger.Debug("Service is being deleted, clean up resources")
-		return reconcile.Result{}, dnsRR.maybeCleanup(ctx, headlessSvc, logger)
+		return reconcile.Result{}, dnsRR.maybeCleanup(ctx, proxySvc, logger)
 	}
 
 	// Check that there is a ts.net nameserver deployed to the cluster by
@@ -99,7 +103,7 @@ func (dnsRR *dnsRecordsReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, nil
 	}
 
-	if err := dnsRR.maybeProvision(ctx, headlessSvc, logger); err != nil {
+	if err := dnsRR.maybeProvision(ctx, proxySvc, logger); err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
 		} else {
@@ -111,37 +115,33 @@ func (dnsRR *dnsRecordsReconciler) Reconcile(ctx context.Context, req reconcile.
 }
 
 // maybeProvision ensures that dnsrecords ConfigMap contains a record for the
-// proxy associated with the headless Service.
+// proxy associated with the Service.
 // The record is only provisioned if the proxy is for a tailscale Ingress or
 // egress configured via tailscale.com/tailnet-fqdn annotation.
 //
 // For Ingress, the record is a mapping between the MagicDNSName of the Ingress, retrieved from
 // ingress.status.loadBalancer.ingress.hostname field and the proxy Pod IP addresses
-// retrieved from the EndpoinSlice associated with this headless Service, i.e
+// retrieved from the EndpointSlice associated with this Service, i.e
 // Records{IP4: <MagicDNS name of the Ingress>: <[IPs of the ingress proxy Pods]>}
 //
 // For egress, the record is a mapping between tailscale.com/tailnet-fqdn
 // annotation and the proxy Pod IP addresses, retrieved from the EndpointSlice
-// associated with this headless Service, i.e
+// associated with this Service, i.e
 // Records{IP4: {<tailscale.com/tailnet-fqdn>: <[IPs of the egress proxy Pods]>}
 //
+// For ProxyGroup egress, the record is a mapping between tailscale.com/magic-dnsname
+// annotation and the ClusterIP Service IP (which provides portmapping), i.e
+// Records{IP4: {<tailscale.com/magic-dnsname>: <[ClusterIP Service IP]>}
+//
 // If records need to be created for this proxy, maybeProvision will also:
-// - update the headless Service with a tailscale.com/magic-dnsname annotation
-// - update the headless Service with a finalizer
-func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessSvc *corev1.Service, logger *zap.SugaredLogger) error {
-	if headlessSvc == nil {
-		logger.Info("[unexpected] maybeProvision called with a nil Service")
-		return nil
-	}
-	isEgressFQDNSvc, err := dnsRR.isSvcForFQDNEgressProxy(ctx, headlessSvc)
-	if err != nil {
-		return fmt.Errorf("error checking whether the Service is for an egress proxy: %w", err)
-	}
-	if !(isEgressFQDNSvc || isManagedByType(headlessSvc, "ingress")) {
+// - update the Service with a tailscale.com/magic-dnsname annotation
+// - update the Service with a finalizer
+func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) error {
+	if !dnsRR.isInterestingService(ctx, proxySvc) {
 		logger.Debug("Service is not fronting a proxy that we create DNS records for; do nothing")
 		return nil
 	}
-	fqdn, err := dnsRR.fqdnForDNSRecord(ctx, headlessSvc, logger)
+	fqdn, err := dnsRR.fqdnForDNSRecord(ctx, proxySvc, logger)
 	if err != nil {
 		return fmt.Errorf("error determining DNS name for record: %w", err)
 	}
@@ -150,18 +150,18 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 		return nil // a new reconcile will be triggered once it's added
 	}
 
-	oldHeadlessSvc := headlessSvc.DeepCopy()
-	// Ensure that headless Service is annotated with a finalizer to help
+	oldProxySvc := proxySvc.DeepCopy()
+	// Ensure that proxy Service is annotated with a finalizer to help
 	// with records cleanup when proxy resources are deleted.
-	if !slices.Contains(headlessSvc.Finalizers, dnsRecordsRecocilerFinalizer) {
-		headlessSvc.Finalizers = append(headlessSvc.Finalizers, dnsRecordsRecocilerFinalizer)
+	if !slices.Contains(proxySvc.Finalizers, dnsRecordsRecocilerFinalizer) {
+		proxySvc.Finalizers = append(proxySvc.Finalizers, dnsRecordsRecocilerFinalizer)
 	}
-	// Ensure that headless Service is annotated with the current MagicDNS
+	// Ensure that proxy Service is annotated with the current MagicDNS
 	// name to help with records cleanup when proxy resources are deleted or
 	// MagicDNS name changes.
-	oldFqdn := headlessSvc.Annotations[annotationTSMagicDNSName]
+	oldFqdn := proxySvc.Annotations[annotationTSMagicDNSName]
 	if oldFqdn != "" && oldFqdn != fqdn { // i.e user has changed the value of tailscale.com/tailnet-fqdn annotation
-		logger.Debugf("MagicDNS name has changed, remvoving record for %s", oldFqdn)
+		logger.Debugf("MagicDNS name has changed, removing record for %s", oldFqdn)
 		updateFunc := func(rec *operatorutils.Records) {
 			delete(rec.IP4, oldFqdn)
 		}
@@ -169,57 +169,26 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 			return fmt.Errorf("error removing record for %s: %w", oldFqdn, err)
 		}
 	}
-	mak.Set(&headlessSvc.Annotations, annotationTSMagicDNSName, fqdn)
-	if !apiequality.Semantic.DeepEqual(oldHeadlessSvc, headlessSvc) {
+	mak.Set(&proxySvc.Annotations, annotationTSMagicDNSName, fqdn)
+	if !apiequality.Semantic.DeepEqual(oldProxySvc, proxySvc) {
 		logger.Infof("provisioning DNS record for MagicDNS name: %s", fqdn) // this will be printed exactly once
-		if err := dnsRR.Update(ctx, headlessSvc); err != nil {
-			return fmt.Errorf("error updating proxy headless Service metadata: %w", err)
+		if err := dnsRR.Update(ctx, proxySvc); err != nil {
+			return fmt.Errorf("error updating proxy Service metadata: %w", err)
 		}
 	}
 
-	// Get the Pod IP addresses for the proxy from the EndpointSlices for
-	// the headless Service. The Service can have multiple EndpointSlices
-	// associated with it, for example in dual-stack clusters.
-	labels := map[string]string{discoveryv1.LabelServiceName: headlessSvc.Name} // https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
-	var eps = new(discoveryv1.EndpointSliceList)
-	if err := dnsRR.List(ctx, eps, client.InNamespace(dnsRR.tsNamespace), client.MatchingLabels(labels)); err != nil {
-		return fmt.Errorf("error listing EndpointSlices for the proxy's headless Service: %w", err)
+	// Get the IP addresses for the DNS record
+	ips, err := dnsRR.getTargetIPs(ctx, proxySvc, logger)
+	if err != nil {
+		return fmt.Errorf("error getting target IPs: %w", err)
 	}
-	if len(eps.Items) == 0 {
-		logger.Debugf("proxy's headless Service EndpointSlice does not yet exist. We will reconcile again once it's created")
+	if len(ips) == 0 {
+		logger.Debugf("No target IP addresses available yet. We will reconcile again once they are available.")
 		return nil
 	}
-	// Each EndpointSlice for a Service can have a list of endpoints that each
-	// can have multiple addresses - these are the IP addresses of any Pods
-	// selected by that Service. Pick all the IPv4 addresses.
-	// It is also possible that multiple EndpointSlices have overlapping addresses.
-	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#duplicate-endpoints
-	ips := make(set.Set[string], 0)
-	for _, slice := range eps.Items {
-		if slice.AddressType != discoveryv1.AddressTypeIPv4 {
-			logger.Infof("EndpointSlice is for AddressType %s, currently only IPv4 address type is supported", slice.AddressType)
-			continue
-		}
-		for _, ep := range slice.Endpoints {
-			if !epIsReady(&ep) {
-				logger.Debugf("Endpoint with addresses %v appears not ready to receive traffic %v", ep.Addresses, ep.Conditions.String())
-				continue
-			}
-			for _, ip := range ep.Addresses {
-				if !net.IsIPv4String(ip) {
-					logger.Infof("EndpointSlice contains IP address %q that is not IPv4, ignoring. Currently only IPv4 is supported", ip)
-				} else {
-					ips.Add(ip)
-				}
-			}
-		}
-	}
-	if ips.Len() == 0 {
-		logger.Debugf("EndpointSlice for the Service contains no IPv4 addresses. We will reconcile again once they are created.")
-		return nil
-	}
+
 	updateFunc := func(rec *operatorutils.Records) {
-		mak.Set(&rec.IP4, fqdn, ips.Slice())
+		mak.Set(&rec.IP4, fqdn, ips)
 	}
 	if err = dnsRR.updateDNSConfig(ctx, updateFunc); err != nil {
 		return fmt.Errorf("error updating DNS records: %w", err)
@@ -243,8 +212,8 @@ func epIsReady(ep *discoveryv1.Endpoint) bool {
 // has been removed from the Service. If the record is not found in the
 // ConfigMap, the ConfigMap does not exist, or the Service does not have
 // tailscale.com/magic-dnsname annotation, just remove the finalizer.
-func (h *dnsRecordsReconciler) maybeCleanup(ctx context.Context, headlessSvc *corev1.Service, logger *zap.SugaredLogger) error {
-	ix := slices.Index(headlessSvc.Finalizers, dnsRecordsRecocilerFinalizer)
+func (h *dnsRecordsReconciler) maybeCleanup(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) error {
+	ix := slices.Index(proxySvc.Finalizers, dnsRecordsRecocilerFinalizer)
 	if ix == -1 {
 		logger.Debugf("no finalizer, nothing to do")
 		return nil
@@ -252,24 +221,24 @@ func (h *dnsRecordsReconciler) maybeCleanup(ctx context.Context, headlessSvc *co
 	cm := &corev1.ConfigMap{}
 	err := h.Client.Get(ctx, types.NamespacedName{Name: operatorutils.DNSRecordsCMName, Namespace: h.tsNamespace}, cm)
 	if apierrors.IsNotFound(err) {
-		logger.Debug("'dsnrecords' ConfigMap not found")
-		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
+		logger.Debug("'dnsrecords' ConfigMap not found")
+		return h.removeProxySvcFinalizer(ctx, proxySvc)
 	}
 	if err != nil {
 		return fmt.Errorf("error retrieving 'dnsrecords' ConfigMap: %w", err)
 	}
 	if cm.Data == nil {
 		logger.Debug("'dnsrecords' ConfigMap contains no records")
-		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
+		return h.removeProxySvcFinalizer(ctx, proxySvc)
 	}
 	_, ok := cm.Data[operatorutils.DNSRecordsCMKey]
 	if !ok {
 		logger.Debug("'dnsrecords' ConfigMap contains no records")
-		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
+		return h.removeProxySvcFinalizer(ctx, proxySvc)
 	}
-	fqdn, _ := headlessSvc.GetAnnotations()[annotationTSMagicDNSName]
+	fqdn, _ := proxySvc.GetAnnotations()[annotationTSMagicDNSName]
 	if fqdn == "" {
-		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
+		return h.removeProxySvcFinalizer(ctx, proxySvc)
 	}
 	logger.Infof("removing DNS record for MagicDNS name %s", fqdn)
 	updateFunc := func(rec *operatorutils.Records) {
@@ -278,27 +247,28 @@ func (h *dnsRecordsReconciler) maybeCleanup(ctx context.Context, headlessSvc *co
 	if err = h.updateDNSConfig(ctx, updateFunc); err != nil {
 		return fmt.Errorf("error updating DNS config: %w", err)
 	}
-	return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
+	return h.removeProxySvcFinalizer(ctx, proxySvc)
 }
 
-func (dnsRR *dnsRecordsReconciler) removeHeadlessSvcFinalizer(ctx context.Context, headlessSvc *corev1.Service) error {
-	idx := slices.Index(headlessSvc.Finalizers, dnsRecordsRecocilerFinalizer)
+func (dnsRR *dnsRecordsReconciler) removeProxySvcFinalizer(ctx context.Context, proxySvc *corev1.Service) error {
+	idx := slices.Index(proxySvc.Finalizers, dnsRecordsRecocilerFinalizer)
 	if idx == -1 {
 		return nil
 	}
-	headlessSvc.Finalizers = append(headlessSvc.Finalizers[:idx], headlessSvc.Finalizers[idx+1:]...)
-	return dnsRR.Update(ctx, headlessSvc)
+	proxySvc.Finalizers = slices.Delete(proxySvc.Finalizers, idx, idx+1)
+	return dnsRR.Update(ctx, proxySvc)
 }
 
-// fqdnForDNSRecord returns MagicDNS name associated with a given headless Service.
-// If the headless Service is for a tailscale Ingress proxy, returns ingress.status.loadBalancer.ingress.hostname.
-// If the headless Service is for an tailscale egress proxy configured via tailscale.com/tailnet-fqdn annotation, returns the annotation value.
-// This function is not expected to be called with headless Services for other
+// fqdnForDNSRecord returns MagicDNS name associated with a given proxy Service.
+// If the proxy Service is for a tailscale Ingress proxy, returns ingress.status.loadBalancer.ingress.hostname.
+// If the proxy Service is for an tailscale egress proxy configured via tailscale.com/tailnet-fqdn annotation, returns the annotation value.
+// For ProxyGroup egress Services, returns the tailnet-fqdn annotation from the parent Service.
+// This function is not expected to be called with proxy Services for other
 // proxy types, or any other Services, but it just returns an empty string if
 // that happens.
-func (dnsRR *dnsRecordsReconciler) fqdnForDNSRecord(ctx context.Context, headlessSvc *corev1.Service, logger *zap.SugaredLogger) (string, error) {
-	parentName := parentFromObjectLabels(headlessSvc)
-	if isManagedByType(headlessSvc, "ingress") {
+func (dnsRR *dnsRecordsReconciler) fqdnForDNSRecord(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) (string, error) {
+	parentName := parentFromObjectLabels(proxySvc)
+	if isManagedByType(proxySvc, serviceTypeIngress) {
 		ing := new(networkingv1.Ingress)
 		if err := dnsRR.Get(ctx, parentName, ing); err != nil {
 			return "", err
@@ -308,10 +278,10 @@ func (dnsRR *dnsRecordsReconciler) fqdnForDNSRecord(ctx context.Context, headles
 		}
 		return ing.Status.LoadBalancer.Ingress[0].Hostname, nil
 	}
-	if isManagedByType(headlessSvc, "svc") {
+	if isManagedByType(proxySvc, serviceTypeSvc) {
 		svc := new(corev1.Service)
 		if err := dnsRR.Get(ctx, parentName, svc); apierrors.IsNotFound(err) {
-			logger.Info("[unexpected] parent Service for egress proxy %s not found", headlessSvc.Name)
+			logger.Infof("[unexpected] parent Service for egress proxy %s not found", proxySvc.Name)
 			return "", nil
 		} else if err != nil {
 			return "", err
@@ -328,7 +298,7 @@ func (dnsRR *dnsRecordsReconciler) updateDNSConfig(ctx context.Context, update f
 	cm := &corev1.ConfigMap{}
 	err := dnsRR.Get(ctx, types.NamespacedName{Name: operatorutils.DNSRecordsCMName, Namespace: dnsRR.tsNamespace}, cm)
 	if apierrors.IsNotFound(err) {
-		dnsRR.logger.Info("[unexpected] dnsrecords ConfigMap not found in cluster. Not updating DNS records. Please open an isue and attach operator logs.")
+		dnsRR.logger.Info("[unexpected] dnsrecords ConfigMap not found in cluster. Not updating DNS records. Please open an issue and attach operator logs.")
 		return nil
 	}
 	if err != nil {
@@ -365,4 +335,120 @@ func (dnsRR *dnsRecordsReconciler) isSvcForFQDNEgressProxy(ctx context.Context, 
 	}
 	annots := parentSvc.Annotations
 	return annots != nil && annots[AnnotationTailnetTargetFQDN] != "", nil
+}
+
+// isProxyGroupEgressService reports whether the Service is a ClusterIP Service
+// created for ProxyGroup egress. For ProxyGroup egress, there are no headless
+// services. Instead, the DNS reconciler processes the ClusterIP Service
+// directly, which has portmapping and should use its own IP for DNS records.
+func (dnsRR *dnsRecordsReconciler) isProxyGroupEgressService(svc *corev1.Service) bool {
+	return svc.GetLabels()[labelProxyGroup] != "" &&
+		svc.GetLabels()[labelSvcType] == typeEgress &&
+		svc.Spec.Type == corev1.ServiceTypeClusterIP &&
+		isManagedByType(svc, serviceTypeSvc)
+}
+
+// isInterestingService reports whether the Service is one that we should create
+// DNS records for.
+func (dnsRR *dnsRecordsReconciler) isInterestingService(ctx context.Context, svc *corev1.Service) bool {
+	if isManagedByType(svc, serviceTypeIngress) {
+		return true
+	}
+
+	isEgressFQDNSvc, err := dnsRR.isSvcForFQDNEgressProxy(ctx, svc)
+	if err != nil {
+		return false
+	}
+	if isEgressFQDNSvc {
+		return true
+	}
+
+	if dnsRR.isProxyGroupEgressService(svc) {
+		return dnsRR.parentSvcTargetsFQDN(ctx, svc)
+	}
+
+	return false
+}
+
+// parentSvcTargetsFQDN reports whether the parent Service of a ProxyGroup
+// egress Service has an FQDN target (not an IP target).
+func (dnsRR *dnsRecordsReconciler) parentSvcTargetsFQDN(ctx context.Context, svc *corev1.Service) bool {
+
+	parentName := parentFromObjectLabels(svc)
+	parentSvc := new(corev1.Service)
+	if err := dnsRR.Get(ctx, parentName, parentSvc); err != nil {
+		return false
+	}
+
+	return parentSvc.Annotations[AnnotationTailnetTargetFQDN] != ""
+}
+
+// getTargetIPs returns the IP addresses that should be used for DNS records
+// for the given proxy Service.
+func (dnsRR *dnsRecordsReconciler) getTargetIPs(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
+	if dnsRR.isProxyGroupEgressService(proxySvc) {
+		return dnsRR.getClusterIPServiceIPs(proxySvc, logger)
+	}
+	return dnsRR.getPodIPs(ctx, proxySvc, logger)
+}
+
+// getClusterIPServiceIPs returns the ClusterIP of a ProxyGroup egress Service.
+func (dnsRR *dnsRecordsReconciler) getClusterIPServiceIPs(proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
+	if proxySvc.Spec.ClusterIP == "" || proxySvc.Spec.ClusterIP == "None" {
+		logger.Debugf("ProxyGroup egress ClusterIP Service does not have a ClusterIP yet.")
+		return nil, nil
+	}
+	// Validate that ClusterIP is a valid IPv4 address
+	if !net.IsIPv4String(proxySvc.Spec.ClusterIP) {
+		logger.Debugf("ClusterIP %s is not a valid IPv4 address", proxySvc.Spec.ClusterIP)
+		return nil, fmt.Errorf("ClusterIP %s is not a valid IPv4 address", proxySvc.Spec.ClusterIP)
+	}
+	logger.Debugf("Using ClusterIP Service IP %s for ProxyGroup egress DNS record", proxySvc.Spec.ClusterIP)
+	return []string{proxySvc.Spec.ClusterIP}, nil
+}
+
+// getPodIPs returns Pod IP addresses from EndpointSlices for non-ProxyGroup Services.
+func (dnsRR *dnsRecordsReconciler) getPodIPs(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
+	// Get the Pod IP addresses for the proxy from the EndpointSlices for
+	// the headless Service. The Service can have multiple EndpointSlices
+	// associated with it, for example in dual-stack clusters.
+	labels := map[string]string{discoveryv1.LabelServiceName: proxySvc.Name} // https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
+	var eps = new(discoveryv1.EndpointSliceList)
+	if err := dnsRR.List(ctx, eps, client.InNamespace(dnsRR.tsNamespace), client.MatchingLabels(labels)); err != nil {
+		return nil, fmt.Errorf("error listing EndpointSlices for the proxy's Service: %w", err)
+	}
+	if len(eps.Items) == 0 {
+		logger.Debugf("proxy's Service EndpointSlice does not yet exist.")
+		return nil, nil
+	}
+	// Each EndpointSlice for a Service can have a list of endpoints that each
+	// can have multiple addresses - these are the IP addresses of any Pods
+	// selected by that Service. Pick all the IPv4 addresses.
+	// It is also possible that multiple EndpointSlices have overlapping addresses.
+	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#duplicate-endpoints
+	ips := make(set.Set[string], 0)
+	for _, slice := range eps.Items {
+		if slice.AddressType != discoveryv1.AddressTypeIPv4 {
+			logger.Infof("EndpointSlice is for AddressType %s, currently only IPv4 address type is supported", slice.AddressType)
+			continue
+		}
+		for _, ep := range slice.Endpoints {
+			if !epIsReady(&ep) {
+				logger.Debugf("Endpoint with addresses %v appears not ready to receive traffic %v", ep.Addresses, ep.Conditions.String())
+				continue
+			}
+			for _, ip := range ep.Addresses {
+				if !net.IsIPv4String(ip) {
+					logger.Infof("EndpointSlice contains IP address %q that is not IPv4, ignoring. Currently only IPv4 is supported", ip)
+				} else {
+					ips.Add(ip)
+				}
+			}
+		}
+	}
+	if ips.Len() == 0 {
+		logger.Debugf("EndpointSlice for the Service contains no IPv4 addresses.")
+		return nil, nil
+	}
+	return ips.Slice(), nil
 }
