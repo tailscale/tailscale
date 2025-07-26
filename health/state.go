@@ -4,6 +4,9 @@
 package health
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"tailscale.com/tailcfg"
@@ -35,6 +38,40 @@ type UnhealthyState struct {
 	DependsOn           []WarnableCode        `json:",omitempty"`
 	ImpactsConnectivity bool                  `json:",omitempty"`
 	PrimaryAction       *UnhealthyStateAction `json:",omitempty"`
+
+	// ETag identifies a specific version of an UnhealthyState. If the contents
+	// of the other fields of two UnhealthyStates are the same, the ETags will
+	// be the same. If the contents differ, the ETags will also differ. The
+	// implementation is not defined and the value is opaque: it might be a
+	// hash, it might be a simple counter. Implementations should not rely on
+	// any specific implementation detail or format of the ETag string other
+	// than string (in)equality.
+	ETag string
+}
+
+// hash computes a deep hash of UnhealthyState which will be stable across
+// different runs of the same binary.
+func (u UnhealthyState) hash() ([]byte, error) {
+	hasher := sha256.New()
+	enc := json.NewEncoder(hasher)
+	err := enc.Encode(u)
+	if err != nil {
+		return nil, err
+	}
+	return hasher.Sum(nil), nil
+}
+
+// withETag returns a copy of UnhealthyState with an ETag set. The ETag will be
+// the same for all UnhealthyState instances that are equal. If calculating the
+// ETag errors, it returns a copy of the UnhealthyState with an empty ETag.
+func (u UnhealthyState) withETag() UnhealthyState {
+	u.ETag = ""
+	hash, err := u.hash()
+	if err != nil {
+		return u
+	}
+	u.ETag = fmt.Sprintf("%x", hash)
+	return u
 }
 
 // UnhealthyStateAction represents an action (URL and link) to be presented to
@@ -107,7 +144,8 @@ func (t *Tracker) CurrentState() *State {
 			// that are unhealthy.
 			continue
 		}
-		wm[w.Code] = *w.unhealthyState(ws)
+		state := w.unhealthyState(ws)
+		wm[w.Code] = state.withETag()
 	}
 
 	for id, msg := range t.lastNotifiedControlMessages {
@@ -127,7 +165,7 @@ func (t *Tracker) CurrentState() *State {
 			}
 		}
 
-		wm[state.WarnableCode] = state
+		wm[state.WarnableCode] = state.withETag()
 	}
 
 	return &State{
