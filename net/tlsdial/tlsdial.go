@@ -31,6 +31,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/bakedroots"
+	"tailscale.com/net/currenttime"
 	"tailscale.com/net/tlsdial/blockblame"
 )
 
@@ -156,6 +157,7 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 		opts := x509.VerifyOptions{
 			DNSName:       dialedHost,
 			Intermediates: x509.NewCertPool(),
+			CurrentTime:   currenttime.Now(), // helps if the system clock is wrong
 		}
 		for _, cert := range cs.PeerCertificates[1:] {
 			opts.Intermediates.AddCert(cert)
