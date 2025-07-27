@@ -1,0 +1,16 @@
+apiVersion: tailscale.com/v1alpha1
+kind: IDP
+metadata:
+  name: idp-example
+spec:
+  hostname: idp-example
+  enableFunnel: true
+  tags:
+    - tag:k8s
+  statefulSet:
+    pod:
+      container:
+        image: ghcr.io/rajsinghtech/tailscale/tsidp:57
+        env:
+          - name: TAILSCALE_USE_WIP_CODE
+            value: "1"

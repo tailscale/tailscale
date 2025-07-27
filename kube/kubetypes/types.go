@@ -29,6 +29,7 @@ const (
 	MetricConnectorWithAppConnectorCount = "k8s_connector_appconnector_resources"
 	MetricNameserverCount                = "k8s_nameserver_resources"
 	MetricRecorderCount                  = "k8s_recorder_resources"
+	MetricIDPCount                       = "k8s_idp_resources"
 	MetricEgressServiceCount             = "k8s_egress_service_resources"
 	MetricProxyGroupEgressCount          = "k8s_proxygroup_egress_resources"
 	MetricProxyGroupIngressCount         = "k8s_proxygroup_ingress_resources"

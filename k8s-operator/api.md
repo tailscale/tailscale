@@ -12,6 +12,8 @@
 - [ConnectorList](#connectorlist)
 - [DNSConfig](#dnsconfig)
 - [DNSConfigList](#dnsconfiglist)
+- [IDP](#idp)
+- [IDPList](#idplist)
 - [ProxyClass](#proxyclass)
 - [ProxyClassList](#proxyclasslist)
 - [ProxyGroup](#proxygroup)
@@ -290,6 +292,7 @@ _Appears in:_
 
 _Appears in:_
 - [Container](#container)
+- [IDPContainer](#idpcontainer)
 - [RecorderContainer](#recordercontainer)
 
 | Field | Description | Default | Validation |
@@ -326,6 +329,169 @@ _Validation:_
 _Appears in:_
 - [ProxyGroupSpec](#proxygroupspec)
 
+
+
+#### IDP
+
+
+
+IDP defines a Tailscale OpenID Connect Identity Provider instance.
+IDP is a cluster-scoped resource.
+
+
+
+_Appears in:_
+- [IDPList](#idplist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `IDP` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[IDPSpec](#idpspec)_ | Spec describes the desired IDP instance. |  |  |
+| `status` _[IDPStatus](#idpstatus)_ | IDPStatus describes the status of the IDP. This is set<br />and managed by the Tailscale operator. |  |  |
+
+
+#### IDPContainer
+
+
+
+
+
+
+
+_Appears in:_
+- [IDPPod](#idppod)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `env` _[Env](#env) array_ | List of environment variables to set in the container.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables<br />Note that environment variables provided here will take precedence<br />over Tailscale-specific environment variables set by the operator. |  |  |
+| `image` _string_ | Container image name including tag. Defaults to the tsidp image<br />from the same source as the operator.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  |  |
+| `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#pullpolicy-v1-core)_ | Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  | Enum: [Always Never IfNotPresent] <br /> |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#resourcerequirements-v1-core)_ | Container resource requirements.<br />By default, the operator does not apply any resource requirements.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources |  |  |
+| `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context. By default, the operator does not apply any<br />container security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  |  |
+
+
+#### IDPList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `IDPList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[IDP](#idp) array_ |  |  |  |
+
+
+#### IDPPod
+
+
+
+
+
+
+
+_Appears in:_
+- [IDPStatefulSet](#idpstatefulset)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to IDP Pods. Any labels specified here<br />will be merged with the default labels applied to the Pod by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to IDP Pods. Any annotations<br />specified here will be merged with the default annotations applied to<br />the Pod by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `affinity` _[Affinity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#affinity-v1-core)_ | Affinity rules for IDP Pods. By default, the operator does not<br />apply any affinity rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity |  |  |
+| `container` _[IDPContainer](#idpcontainer)_ | Configuration for the IDP container. |  |  |
+| `securityContext` _[PodSecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#podsecuritycontext-v1-core)_ | Security context for IDP Pods. By default, the operator does not<br />apply any Pod security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2 |  |  |
+| `imagePullSecrets` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#localobjectreference-v1-core) array_ | Image pull Secrets for IDP Pods.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec |  |  |
+| `nodeSelector` _object (keys:string, values:string)_ | Node selector rules for IDP Pods. By default, the operator does<br />not apply any node selector rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+| `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | Tolerations for IDP Pods. By default, the operator does not apply<br />any tolerations.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+| `serviceAccount` _[IDPServiceAccount](#idpserviceaccount)_ | Config for the ServiceAccount to create for the IDP's StatefulSet.<br />By default, the operator will create a ServiceAccount with the same<br />name as the IDP resource.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account |  |  |
+
+
+#### IDPServiceAccount
+
+
+
+
+
+
+
+_Appears in:_
+- [IDPPod](#idppod)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name of the ServiceAccount to create. Defaults to the name of the<br />IDP resource.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account |  | MaxLength: 253 <br />Pattern: `^[a-z0-9]([a-z0-9-.]{0,61}[a-z0-9])?$` <br />Type: string <br /> |
+| `annotations` _object (keys:string, values:string)_ | Annotations to add to the ServiceAccount.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+
+
+#### IDPSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [IDP](#idp)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `statefulSet` _[IDPStatefulSet](#idpstatefulset)_ | Configuration parameters for the IDP's StatefulSet. The operator<br />deploys a StatefulSet for each IDP resource. |  |  |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale device will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once an IDP node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `hostname` _string_ | Hostname for the IDP instance. Defaults to "idp".<br />This will be used as the MagicDNS hostname. |  | Pattern: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$` <br /> |
+| `enableFunnel` _boolean_ | Enable Tailscale Funnel to make IDP available on the public internet.<br />When enabled, the IDP will be accessible via a public HTTPS URL.<br />Requires appropriate ACL configuration in your tailnet.<br />Cannot be used with custom ports.<br />Defaults to false. |  |  |
+| `port` _integer_ | Port to listen on for HTTPS traffic. Defaults to 443.<br />Must be 443 if EnableFunnel is true.<br />Common values: 443 (standard HTTPS), 8443 (alternative HTTPS). |  | Maximum: 65535 <br />Minimum: 1 <br /> |
+| `localPort` _integer_ | LocalPort to listen on for HTTP traffic from localhost.<br />This can be useful for debugging or local client access.<br />The IDP will serve unencrypted HTTP on this port, accessible only from<br />the pod itself (localhost/127.0.0.1).<br />If not set, local access is disabled. |  | Maximum: 65535 <br />Minimum: 1 <br /> |
+
+
+#### IDPStatefulSet
+
+
+
+
+
+
+
+_Appears in:_
+- [IDPSpec](#idpspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for IDP.<br />Any labels specified here will be merged with the default labels applied<br />to the StatefulSet by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for IDP.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `pod` _[IDPPod](#idppod)_ | Configuration for pods created by the IDP's StatefulSet. |  |  |
+
+
+#### IDPStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [IDP](#idp)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of IDP.<br />Known condition types are `IDPReady`. |  |  |
+| `url` _string_ | URL where the OIDC provider is accessible.<br />This will be an HTTPS MagicDNS URL, or a public URL if Funnel is enabled. |  |  |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the IDP device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name. |  |  |
+| `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the IDP device. |  |  |
+| `observedGeneration` _integer_ | ObservedGeneration is the last observed generation of the IDP resource. |  |  |
 
 
 #### KubeAPIServerConfig
@@ -1107,6 +1273,7 @@ _Validation:_
 
 _Appears in:_
 - [ConnectorSpec](#connectorspec)
+- [IDPSpec](#idpspec)
 - [ProxyGroupSpec](#proxygroupspec)
 - [RecorderSpec](#recorderspec)
 

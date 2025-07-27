@@ -211,6 +211,7 @@ const (
 	ProxyGroupAvailable ConditionType = `ProxyGroupAvailable` // At least one proxy Pod running.
 	ProxyReady          ConditionType = `TailscaleProxyReady` // a Tailscale-specific condition type for corev1.Service
 	RecorderReady       ConditionType = `RecorderReady`
+	IDPReady            ConditionType = `IDPReady`
 	// EgressSvcValid gets set on a user configured ExternalName Service that defines a tailnet target to be exposed
 	// on a ProxyGroup.
 	// Set to true if the user provided configuration is valid.

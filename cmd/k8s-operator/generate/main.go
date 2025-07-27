@@ -26,12 +26,14 @@ const (
 	dnsConfigCRDPath              = operatorDeploymentFilesPath + "/crds/tailscale.com_dnsconfigs.yaml"
 	recorderCRDPath               = operatorDeploymentFilesPath + "/crds/tailscale.com_recorders.yaml"
 	proxyGroupCRDPath             = operatorDeploymentFilesPath + "/crds/tailscale.com_proxygroups.yaml"
+	idpCRDPath                    = operatorDeploymentFilesPath + "/crds/tailscale.com_idps.yaml"
 	helmTemplatesPath             = operatorDeploymentFilesPath + "/chart/templates"
 	connectorCRDHelmTemplatePath  = helmTemplatesPath + "/connector.yaml"
 	proxyClassCRDHelmTemplatePath = helmTemplatesPath + "/proxyclass.yaml"
 	dnsConfigCRDHelmTemplatePath  = helmTemplatesPath + "/dnsconfig.yaml"
 	recorderCRDHelmTemplatePath   = helmTemplatesPath + "/recorder.yaml"
 	proxyGroupCRDHelmTemplatePath = helmTemplatesPath + "/proxygroup.yaml"
+	idpCRDHelmTemplatePath        = helmTemplatesPath + "/idp.yaml"
 
 	helmConditionalStart = "{{ if .Values.installCRDs -}}\n"
 	helmConditionalEnd   = "{{- end -}}"
@@ -115,7 +117,7 @@ func main() {
 	}
 }
 
-// generate places tailscale.com CRDs (currently Connector, ProxyClass, DNSConfig, Recorder) into
+// generate places tailscale.com CRDs (currently Connector, ProxyClass, DNSConfig, Recorder, ProxyGroup, TSIDP) into
 // the Helm chart templates behind .Values.installCRDs=true condition (true by
 // default).
 func generate(baseDir string) error {
@@ -149,6 +151,7 @@ func generate(baseDir string) error {
 		{dnsConfigCRDPath, dnsConfigCRDHelmTemplatePath},
 		{recorderCRDPath, recorderCRDHelmTemplatePath},
 		{proxyGroupCRDPath, proxyGroupCRDHelmTemplatePath},
+		{idpCRDPath, idpCRDHelmTemplatePath},
 	} {
 		if err := addCRDToHelm(crd.crdPath, crd.templatePath); err != nil {
 			return fmt.Errorf("error adding %s CRD to Helm templates: %w", crd.crdPath, err)
@@ -165,6 +168,7 @@ func cleanup(baseDir string) error {
 		dnsConfigCRDHelmTemplatePath,
 		recorderCRDHelmTemplatePath,
 		proxyGroupCRDHelmTemplatePath,
+		idpCRDHelmTemplatePath,
 	} {
 		if err := os.Remove(filepath.Join(baseDir, path)); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("error cleaning up %s: %w", path, err)

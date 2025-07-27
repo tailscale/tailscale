@@ -42,12 +42,17 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/store"
+	_ "tailscale.com/ipn/store/kubestore"
+	"tailscale.com/kube/kubeapi"
+	"tailscale.com/kube/kubeclient"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/multierr"
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
@@ -60,14 +65,20 @@ type ctxConn struct{}
 // accessing the IDP over Funnel are persisted.
 const funnelClientsFile = "oidc-funnel-clients.json"
 
+// funnelClientsSecretKey is the key in Kubernetes secrets where funnel clients are stored.
+const funnelClientsSecretKey = "funnel-clients"
+
 var (
-	flagVerbose            = flag.Bool("verbose", false, "be verbose")
-	flagPort               = flag.Int("port", 443, "port to listen on")
-	flagLocalPort          = flag.Int("local-port", -1, "allow requests from localhost")
-	flagUseLocalTailscaled = flag.Bool("use-local-tailscaled", false, "use local tailscaled instead of tsnet")
-	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available on the public internet")
-	flagHostname           = flag.String("hostname", "idp", "tsnet hostname to use instead of idp")
-	flagDir                = flag.String("dir", "", "tsnet state directory; a default one will be created if not provided")
+	flagVerbose            = flag.Bool("verbose", defaultBool("TSIDP_VERBOSE", false), "be verbose. Alternatively can be set via TSIDP_VERBOSE env var.")
+	flagPort               = flag.Int("port", defaultInt("TSIDP_PORT", 443), "port to listen on. Alternatively can be set via TSIDP_PORT env var.")
+	flagLocalPort          = flag.Int("local-port", defaultInt("TSIDP_LOCAL_PORT", -1), "allow requests from localhost. Alternatively can be set via TSIDP_LOCAL_PORT env var.")
+	flagUseLocalTailscaled = flag.Bool("use-local-tailscaled", defaultBool("TSIDP_USE_LOCAL_TAILSCALED", false), "use local tailscaled instead of tsnet. Alternatively can be set via TSIDP_USE_LOCAL_TAILSCALED env var.")
+	flagFunnel             = flag.Bool("funnel", defaultBool("TSIDP_FUNNEL", false), "use Tailscale Funnel to make tsidp available on the public internet. Alternatively can be set via TSIDP_FUNNEL env var.")
+	flagHostname           = flag.String("hostname", defaultEnv("TS_HOSTNAME", "idp"), `tsnet hostname to use instead of idp. Alternatively can be set via TS_HOSTNAME env var.`)
+	flagDir                = flag.String("dir", os.Getenv("TS_STATE_DIR"), `tsnet state directory; a default one will be created if not provided. Alternatively can be set via TS_STATE_DIR env var.`)
+	flagState              = flag.String("state", os.Getenv("TS_STATE"), `path to tailscale state file or 'kube:<secret-name>' to use Kubernetes secret; if unset, 'dir' is used. Alternatively can be set via TS_STATE env var.`)
+	flagFunnelClientsStore = flag.String("funnel-clients-store", os.Getenv("TSIDP_FUNNEL_CLIENTS_STORE"), `storage for funnel clients: 'file' (default) or 'kube:<secret-name>'. Alternatively can be set via TSIDP_FUNNEL_CLIENTS_STORE env var.`)
+	flagLoginServer        = flag.String("login-server", os.Getenv("TSIDP_LOGIN_SERVER"), `optionally specifies the coordination server URL. If unset, the Tailscale default is used. Alternatively can be set via TSIDP_LOGIN_SERVER env var.`)
 )
 
 func main() {
@@ -124,12 +135,32 @@ func main() {
 	} else {
 		hostinfo.SetApp("tsidp")
 		ts := &tsnet.Server{
-			Hostname: *flagHostname,
-			Dir:      *flagDir,
+			Hostname:   *flagHostname,
+			ControlURL: *flagLoginServer,
 		}
 		if *flagVerbose {
 			ts.Logf = log.Printf
 		}
+
+		if *flagDir != "" {
+			ts.Dir = *flagDir
+		}
+
+		if *flagState != "" {
+			if isKubeStatePath(*flagState) {
+				if err := validateKubePermissions(ctx, *flagState); err != nil {
+					log.Fatalf("tsidp: state is set to be stored in a Kubernetes Secret, but kube permissions validation for the Secret failed: %v", err)
+				}
+			}
+			s, err := store.New(ts.Logf, *flagState)
+			if err != nil {
+				log.Fatalf("Failed to create state store: %v", err)
+			}
+			ts.Store = s
+			// If flagDir is not set, tsnet will use its own OS-dependent default directory
+			// for its persistent state (like node keys), which is the desired behavior.
+		}
+
 		st, err = ts.Up(ctx)
 		if err != nil {
 			log.Fatal(err)
@@ -153,10 +184,27 @@ func main() {
 		lns = append(lns, ln)
 	}
 
+	// Initialize funnel clients storage
+	var funnelStore funnelClientsStore
+	if *flagFunnelClientsStore != "" && isKubeStatePath(*flagFunnelClientsStore) {
+		secretName, ok := strings.CutPrefix(*flagFunnelClientsStore, "kube:")
+		if !ok || secretName == "" {
+			log.Fatalf("invalid kube funnel clients store path: %s", *flagFunnelClientsStore)
+		}
+		funnelStore = &kubeFunnelClientsStore{
+			secretName: secretName,
+		}
+	} else {
+		funnelStore = &fileFunnelClientsStore{
+			filename: funnelClientsFile,
+		}
+	}
+
 	srv := &idpServer{
 		lc:          lc,
 		funnel:      *flagFunnel,
 		localTSMode: *flagUseLocalTailscaled,
+		funnelStore: funnelStore,
 	}
 	if *flagPort != 443 {
 		srv.serverURL = fmt.Sprintf("https://%s:%d", strings.TrimSuffix(st.Self.DNSName, "."), *flagPort)
@@ -164,16 +212,12 @@ func main() {
 		srv.serverURL = fmt.Sprintf("https://%s", strings.TrimSuffix(st.Self.DNSName, "."))
 	}
 
-	// Load funnel clients from disk if they exist, regardless of whether funnel is enabled
+	// Load funnel clients from storage if they exist, regardless of whether funnel is enabled
 	// This ensures OIDC clients persist across restarts
-	f, err := os.Open(funnelClientsFile)
-	if err == nil {
-		if err := json.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
-			log.Fatalf("could not parse %s: %v", funnelClientsFile, err)
-		}
-		f.Close()
-	} else if !errors.Is(err, os.ErrNotExist) {
-		log.Fatalf("could not open %s: %v", funnelClientsFile, err)
+	if clients, err := srv.funnelStore.load(); err != nil {
+		log.Fatalf("could not load funnel clients: %v", err)
+	} else {
+		srv.funnelClients = clients
 	}
 
 	log.Printf("Running tsidp at %s ...", srv.serverURL)
@@ -279,6 +323,112 @@ func serveOnLocalTailscaled(ctx context.Context, lc *local.Client, st *ipnstate.
 	return func() { watcher.Close() }, watcherChan, nil
 }
 
+// funnelClientsStore interface for storing funnel client credentials
+type funnelClientsStore interface {
+	load() (map[string]*funnelClient, error)
+	store(clients map[string]*funnelClient) error
+}
+
+// fileFunnelClientsStore stores funnel clients in a local JSON file
+type fileFunnelClientsStore struct {
+	filename string
+}
+
+func (f *fileFunnelClientsStore) load() (map[string]*funnelClient, error) {
+	file, err := os.Open(f.filename)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return make(map[string]*funnelClient), nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	var clients map[string]*funnelClient
+	if err := json.NewDecoder(file).Decode(&clients); err != nil {
+		return nil, err
+	}
+	if clients == nil {
+		clients = make(map[string]*funnelClient)
+	}
+	return clients, nil
+}
+
+func (f *fileFunnelClientsStore) store(clients map[string]*funnelClient) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(clients); err != nil {
+		return err
+	}
+	return os.WriteFile(f.filename, buf.Bytes(), 0600)
+}
+
+// kubeFunnelClientsStore stores funnel clients in a Kubernetes secret
+type kubeFunnelClientsStore struct {
+	secretName string
+}
+
+func (k *kubeFunnelClientsStore) load() (map[string]*funnelClient, error) {
+	kc, err := kubeclient.New("tailscale-tsidp")
+	if err != nil {
+		return nil, fmt.Errorf("error initializing kube client: %w", err)
+	}
+
+	url, err := kubeAPIServerAddress()
+	if err != nil {
+		return nil, fmt.Errorf("error getting kube API server address: %w", err)
+	}
+	kc.SetURL(url)
+
+	ctx := context.Background()
+	secret, err := kc.GetSecret(ctx, k.secretName)
+	if err != nil {
+		if kubeclient.IsNotFoundErr(err) {
+			return make(map[string]*funnelClient), nil
+		}
+		return nil, fmt.Errorf("error getting funnel clients secret: %w", err)
+	}
+
+	data, ok := secret.Data[funnelClientsSecretKey]
+	if !ok {
+		return make(map[string]*funnelClient), nil
+	}
+
+	var clients map[string]*funnelClient
+	if err := json.Unmarshal(data, &clients); err != nil {
+		return nil, fmt.Errorf("error unmarshaling funnel clients: %w", err)
+	}
+	if clients == nil {
+		clients = make(map[string]*funnelClient)
+	}
+	return clients, nil
+}
+
+func (k *kubeFunnelClientsStore) store(clients map[string]*funnelClient) error {
+	data, err := json.Marshal(clients)
+	if err != nil {
+		return fmt.Errorf("error marshaling funnel clients: %w", err)
+	}
+
+	kc, err := kubeclient.New("tailscale-tsidp")
+	if err != nil {
+		return fmt.Errorf("error initializing kube client: %w", err)
+	}
+
+	url, err := kubeAPIServerAddress()
+	if err != nil {
+		return fmt.Errorf("error getting kube API server address: %w", err)
+	}
+	kc.SetURL(url)
+
+	ctx := context.Background()
+	secret := &kubeapi.Secret{
+		Data: map[string][]byte{
+			funnelClientsSecretKey: data,
+		},
+	}
+	return kc.StrategicMergePatchSecret(ctx, k.secretName, secret, "tailscale-tsidp")
+}
+
 type idpServer struct {
 	lc          *local.Client
 	loopbackURL string
@@ -289,6 +439,8 @@ type idpServer struct {
 	lazyMux        lazy.SyncValue[*http.ServeMux]
 	lazySigningKey lazy.SyncValue[*signingKey]
 	lazySigner     lazy.SyncValue[jose.Signer]
+
+	funnelStore funnelClientsStore
 
 	mu            sync.Mutex               // guards the fields below
 	code          map[string]*authRequest  // keyed by random hex
@@ -1123,11 +1275,7 @@ func (s *idpServer) serveDeleteClient(w http.ResponseWriter, r *http.Request, cl
 // pairs for RPs that access the IDP over funnel. s.mu must be held while
 // calling this.
 func (s *idpServer) storeFunnelClientsLocked() error {
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(s.funnelClients); err != nil {
-		return err
-	}
-	return os.WriteFile(funnelClientsFile, buf.Bytes(), 0600)
+	return s.funnelStore.store(s.funnelClients)
 }
 
 const (
@@ -1239,4 +1387,122 @@ func isFunnelRequest(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// isKubeStatePath evaluates whether the provided state path indicates that
+// tailscaled state should be stored in a Kubernetes Secret.
+func isKubeStatePath(statePath string) bool {
+	return strings.HasPrefix(statePath, "kube:")
+}
+
+// validateKubePermissions validates that a tsidp instance has the right
+// permissions to modify its state Secret.
+// It needs to have permissions to get and update the Secret.
+// If the Secret does not already exist, it also needs to have permissions to create it.
+// patch permission is beneficial but not strictly required by kubestore's default operations.
+func validateKubePermissions(ctx context.Context, state string) error {
+	secretName, ok := strings.CutPrefix(state, "kube:")
+	if !ok || secretName == "" {
+		return fmt.Errorf("unable to retrieve valid Kubernetes Secret name from %q", state)
+	}
+
+	kc, err := kubeclient.New("tailscale-tsidp")
+	if err != nil {
+		return fmt.Errorf("error initializing kube client: %w", err)
+	}
+
+	// Our kube client connects to kube API server via the kubernetes
+	// Service in the default namespace, which is not the default client-go
+	// etc behaviour and causes issues to some users. The client defaults
+	// probably cannot be changed for backwards compatibility reasons, but
+	// we can do the right thing here at the same time as adding support for
+	// tsidp to be deployed to kube.
+	url, err := kubeAPIServerAddress()
+	if err != nil {
+		return fmt.Errorf("error initiating kube client: %w", err)
+	}
+	kc.SetURL(url)
+
+	// CheckSecretPermissions returns an error if the permissions to get or update
+	// the Secret are missing. It also returns bools for canPatch and canCreate.
+	// kubestore primarily uses patch.
+	canPatch, canCreate, err := kc.CheckSecretPermissions(ctx, secretName)
+	if err != nil { // This err means get or update failed, or other auth issue
+		return fmt.Errorf("error checking required permissions (get/update) for Kubernetes Secret %q: %w", secretName, err)
+	}
+
+	// Check if secret exists if we don't have create permissions.
+	// If it doesn't exist and we can't create, it's an error.
+	// If it doesn't exist and we *can* create, that's fine, kubestore will create it.
+	// If it exists, we're good (Get permission was implicitly checked by CheckSecretPermissions).
+	secretExistsErr := func() error { _, err := kc.GetSecret(ctx, secretName); return err }()
+	if kubeclient.IsNotFoundErr(secretExistsErr) {
+		if !canCreate {
+			return fmt.Errorf("kube state Kubernetes Secret %q does not exist and tsidp lacks permissions to create it. Ensure RBAC allows 'create' for Secrets", secretName)
+		}
+		// It's okay if it doesn't exist and we can create it.
+	} else if secretExistsErr != nil {
+		// Any other error while trying to GetSecret (besides NotFound) is a problem.
+		return fmt.Errorf("error attempting to get kube state Kubernetes Secret %q: %w", secretName, secretExistsErr)
+	}
+
+	// At this point, we know we can get and update the secret (or create if it didn't exist).
+	// Log if patch is not available, as it's preferred for conflict handling, but not essential.
+	if !canPatch {
+		log.Printf("Warning: patch permission for Kubernetes Secret %q is missing; kubestore will rely on update. This is always fine.", secretName)
+	}
+	return nil
+}
+
+// kubeAPIServerAddress determines the address of the kube API server. It uses
+// the standard environment variables set by kube that are expected to be found
+// on any Pod- this is the same logic as used by client-go.
+// https://github.com/kubernetes/client-go/blob/v0.29.5/rest/config.go#L516-L536
+func kubeAPIServerAddress() (_ string, err error) {
+	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+	if host == "" {
+		err = errors.New("[unexpected] tsidp seems to be running in a Kubernetes environment with KUBERNETES_SERVICE_HOST unset")
+	}
+	if port == "" {
+		err = multierr.New(err, errors.New("[unexpected] tsidp appears to be running in a Kubernetes environment with KUBERNETES_SERVICE_PORT unset"))
+	}
+	if err != nil {
+		return "", err
+	}
+	return "https://" + net.JoinHostPort(host, port), nil
+}
+
+// TODO (rajsingh): defaultEnv, defaultBool, defaultInt were originally defined in
+// https://github.com/tailscale/tailscale/blob/v1.64.2/cmd/containerboot/main.go#L996-L1045
+// Consume them from a single place instead of copying.
+
+// defaultEnv returns the value of the named env var, or
+// defaultVal if unset.
+func defaultEnv(name, defaultVal string) string {
+	if val, ok := os.LookupEnv(name); ok {
+		return val
+	}
+	return defaultVal
+}
+
+// defaultBool returns the boolean value of the named env var, or
+// defaultVal if unset or not a bool.
+func defaultBool(name string, defaultVal bool) bool {
+	v := os.Getenv(name)
+	ret, err := strconv.ParseBool(v)
+	if err != nil {
+		return defaultVal
+	}
+	return ret
+}
+
+// defaultInt returns the integer value of the named env var, or
+// defaultVal if unset or not an int.
+func defaultInt(name string, defaultVal int) int {
+	v := os.Getenv(name)
+	ret, err := strconv.Atoi(v)
+	if err != nil {
+		return defaultVal
+	}
+	return ret
 }
