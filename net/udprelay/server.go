@@ -239,10 +239,8 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 			switch e.status.ClientPingStatus[0] {
 			case endpoint.DiscoPingNotStarted:
 				e.status.ClientPingStatus[0] = endpoint.DiscoPingSeen
-				break
 			case endpoint.DiscoPingSeen:
 				e.status.ClientPingStatus[0] = endpoint.DiscoPongSeen
-				break
 			default:
 				break
 			}
@@ -254,10 +252,8 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 			switch e.status.ClientPingStatus[1] {
 			case endpoint.DiscoPingNotStarted:
 				e.status.ClientPingStatus[1] = endpoint.DiscoPingSeen
-				break
 			case endpoint.DiscoPingSeen:
 				e.status.ClientPingStatus[1] = endpoint.DiscoPongSeen
-				break
 			default:
 				break
 			}
