@@ -4119,8 +4119,11 @@ func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
 		return
 	}
 	le.c.mu.Lock()
-	defer le.c.mu.Unlock()
 	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)
+	// [Conn.mu] must not be held while [Conn.noteRecvActivity] is called, which
+	// [endpoint.noteRecvActivity] can end up calling. See
+	// [Options.NoteRecvActivity] docs.
+	le.c.mu.Unlock()
 	if !ok {
 		return
 	}
