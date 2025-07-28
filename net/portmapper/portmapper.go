@@ -507,6 +507,13 @@ func (c *Client) createMapping() {
 			c.logf("createOrGetMapping: %v", err)
 		}
 		return
+	} else if mapping == nil {
+		return
+
+		// TODO(creachadair): This was already logged in createOrGetMapping.
+		// It really should not happen at all, but we will need to untangle
+		// the control flow to eliminate that possibility. Meanwhile, this
+		// mitigates a panic downstream, cf. #16662.
 	}
 	if c.updates != nil {
 		c.updates.Publish(Mapping{
