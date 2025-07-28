@@ -6807,7 +6807,7 @@ func TestDisplayMessagesURLFilter(t *testing.T) {
 		Severity:     health.SeverityHigh,
 	}
 
-	if diff := cmp.Diff(want, got); diff != "" {
+	if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(health.UnhealthyState{}, "ETag")); diff != "" {
 		t.Errorf("Unexpected message content (-want/+got):\n%s", diff)
 	}
 }
@@ -6879,7 +6879,7 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 					}
 					got, ok := n.Health.Warnings[wantID]
 					if ok {
-						if diff := cmp.Diff(tt.wantWarning, got); diff != "" {
+						if diff := cmp.Diff(tt.wantWarning, got, cmpopts.IgnoreFields(health.UnhealthyState{}, "ETag")); diff != "" {
 							t.Errorf("unexpected warning details (-want/+got):\n%s", diff)
 							return true // we failed the test so tell the watcher we've seen what we need to to stop it waiting
 						}

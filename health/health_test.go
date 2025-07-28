@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
@@ -517,7 +519,7 @@ func TestControlHealth(t *testing.T) {
 				delete(gotWarns, k)
 			}
 		}
-		if diff := cmp.Diff(wantWarns, gotWarns); diff != "" {
+		if diff := cmp.Diff(wantWarns, gotWarns, cmpopts.IgnoreFields(UnhealthyState{}, "ETag")); diff != "" {
 			t.Fatalf(`CurrentState().Warnings["control-health-*"] wrong (-want +got):\n%s`, diff)
 		}
 	})
@@ -663,4 +665,176 @@ func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
 	if gotNotified {
 		t.Error("watcher got called, want it to not be called")
 	}
+}
+
+// TestCurrentStateETagControlHealth tests that the ETag on an [UnhealthyState]
+// created from Control health & returned by [Tracker.CurrentState] is different
+// when the details of the [tailcfg.DisplayMessage] are different.
+func TestCurrentStateETagControlHealth(t *testing.T) {
+	ht := Tracker{}
+	ht.SetIPNState("NeedsLogin", true)
+	ht.GotStreamedMapResponse()
+
+	msg := tailcfg.DisplayMessage{
+		Title:               "Test Warning",
+		Text:                "This is a test warning.",
+		Severity:            tailcfg.SeverityHigh,
+		ImpactsConnectivity: true,
+		PrimaryAction: &tailcfg.DisplayMessageAction{
+			URL:   "https://example.com/",
+			Label: "open",
+		},
+	}
+
+	type test struct {
+		name            string
+		change          func(tailcfg.DisplayMessage) tailcfg.DisplayMessage
+		wantChangedETag bool
+	}
+	tests := []test{
+		{
+			name:            "same_value",
+			change:          func(m tailcfg.DisplayMessage) tailcfg.DisplayMessage { return m },
+			wantChangedETag: false,
+		},
+		{
+			name: "different_severity",
+			change: func(m tailcfg.DisplayMessage) tailcfg.DisplayMessage {
+				m.Severity = tailcfg.SeverityLow
+				return m
+			},
+			wantChangedETag: true,
+		},
+		{
+			name: "different_title",
+			change: func(m tailcfg.DisplayMessage) tailcfg.DisplayMessage {
+				m.Title = "Different Title"
+				return m
+			},
+			wantChangedETag: true,
+		},
+		{
+			name: "different_text",
+			change: func(m tailcfg.DisplayMessage) tailcfg.DisplayMessage {
+				m.Text = "This is a different text."
+				return m
+			},
+			wantChangedETag: true,
+		},
+		{
+			name: "different_impacts_connectivity",
+			change: func(m tailcfg.DisplayMessage) tailcfg.DisplayMessage {
+				m.ImpactsConnectivity = false
+				return m
+			},
+			wantChangedETag: true,
+		},
+		{
+			name: "different_primary_action_label",
+			change: func(m tailcfg.DisplayMessage) tailcfg.DisplayMessage {
+				m.PrimaryAction.Label = "new_label"
+				return m
+			},
+			wantChangedETag: true,
+		},
+		{
+			name: "different_primary_action_url",
+			change: func(m tailcfg.DisplayMessage) tailcfg.DisplayMessage {
+				m.PrimaryAction.URL = "https://new.example.com/"
+				return m
+			},
+			wantChangedETag: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test-message": msg,
+			})
+			state := ht.CurrentState().Warnings["control-health.test-message"]
+
+			newMsg := test.change(msg)
+			ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
+				"test-message": newMsg,
+			})
+			newState := ht.CurrentState().Warnings["control-health.test-message"]
+
+			if (state.ETag != newState.ETag) != test.wantChangedETag {
+				if test.wantChangedETag {
+					t.Errorf("got unchanged ETag, want changed (ETag was %q)", newState.ETag)
+				} else {
+					t.Errorf("got changed ETag, want unchanged")
+				}
+			}
+		})
+	}
+}
+
+// TestCurrentStateETagWarnable tests that the ETag on an [UnhealthyState]
+// created from a Warnable & returned by [Tracker.CurrentState] is different
+// when the details of the Warnable are different.
+func TestCurrentStateETagWarnable(t *testing.T) {
+	newTracker := func(clock tstime.Clock) *Tracker {
+		ht := &Tracker{
+			testClock: clock,
+		}
+		ht.SetIPNState("NeedsLogin", true)
+		ht.GotStreamedMapResponse()
+		return ht
+	}
+
+	t.Run("new_args", func(t *testing.T) {
+		ht := newTracker(nil)
+
+		ht.SetUnhealthy(testWarnable, Args{ArgError: "initial value"})
+		state := ht.CurrentState().Warnings[testWarnable.Code]
+
+		ht.SetUnhealthy(testWarnable, Args{ArgError: "new value"})
+		newState := ht.CurrentState().Warnings[testWarnable.Code]
+
+		if state.ETag == newState.ETag {
+			t.Errorf("got unchanged ETag, want changed (ETag was %q)", newState.ETag)
+		}
+	})
+
+	t.Run("new_broken_since", func(t *testing.T) {
+		clock1 := tstest.NewClock(tstest.ClockOpts{
+			Start: time.Unix(123, 0),
+		})
+		ht1 := newTracker(clock1)
+
+		ht1.SetUnhealthy(testWarnable, Args{})
+		state := ht1.CurrentState().Warnings[testWarnable.Code]
+
+		// Use a second tracker to get a different broken since time
+		clock2 := tstest.NewClock(tstest.ClockOpts{
+			Start: time.Unix(456, 0),
+		})
+		ht2 := newTracker(clock2)
+
+		ht2.SetUnhealthy(testWarnable, Args{})
+		newState := ht2.CurrentState().Warnings[testWarnable.Code]
+
+		if state.ETag == newState.ETag {
+			t.Errorf("got unchanged ETag, want changed (ETag was %q)", newState.ETag)
+		}
+	})
+
+	t.Run("no_change", func(t *testing.T) {
+		clock := tstest.NewClock(tstest.ClockOpts{})
+		ht1 := newTracker(clock)
+
+		ht1.SetUnhealthy(testWarnable, Args{})
+		state := ht1.CurrentState().Warnings[testWarnable.Code]
+
+		// Using a second tracker because SetUnhealthy with no changes is a no-op
+		ht2 := newTracker(clock)
+		ht2.SetUnhealthy(testWarnable, Args{})
+		newState := ht2.CurrentState().Warnings[testWarnable.Code]
+
+		if state.ETag != newState.ETag {
+			t.Errorf("got changed ETag, want unchanged")
+		}
+	})
 }
