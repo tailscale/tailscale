@@ -237,7 +237,6 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		if err := lc.Close(); err != nil {
 			h.log.Infof("error closing recorder connections: %v", err)
 		}
-		return
 	}()
 	return lc, nil
 }

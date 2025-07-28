@@ -114,8 +114,9 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachWS)
 
 	ap.hs = &http.Server{
-		Handler:  mux,
-		ErrorLog: zap.NewStdLog(ap.log.Desugar()),
+		Handler:      mux,
+		ErrorLog:     zap.NewStdLog(ap.log.Desugar()),
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 
 	mode := "noauth"
@@ -140,7 +141,6 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 			GetCertificate: ap.lc.GetCertificate,
 			NextProtos:     []string{"http/1.1"},
 		}
-		ap.hs.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	} else {
 		var err error
 		tsLn, err = ap.ts.Listen("tcp", ":80")
