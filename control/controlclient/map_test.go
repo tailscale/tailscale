@@ -1361,7 +1361,7 @@ func TestNetmapHealthIntegration(t *testing.T) {
 		}
 	}
 
-	if d := cmp.Diff(want, got); d != "" {
+	if d := cmp.Diff(want, got, cmpopts.IgnoreFields(health.UnhealthyState{}, "ETag")); d != "" {
 		t.Fatalf("CurrentStatus().Warnings[\"control-health*\"] different than expected (-want +got)\n%s", d)
 	}
 }
@@ -1414,7 +1414,7 @@ func TestNetmapDisplayMessageIntegration(t *testing.T) {
 		},
 	}
 
-	if diff := cmp.Diff(want, state.Warnings); diff != "" {
+	if diff := cmp.Diff(want, state.Warnings, cmpopts.IgnoreFields(health.UnhealthyState{}, "ETag")); diff != "" {
 		t.Errorf("unexpected message contents (-want +got):\n%s", diff)
 	}
 }
