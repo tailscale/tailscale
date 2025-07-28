@@ -167,7 +167,8 @@ type CapabilityVersion int
 //   - 120: 2025-07-15: Client understands peer relay disco messages, and implements peer client and relay server functions
 //   - 121: 2025-07-19: Client understands peer relay endpoint alloc with [disco.AllocateUDPRelayEndpointRequest] & [disco.AllocateUDPRelayEndpointResponse]
 //   - 122: 2025-07-21: Client sends Hostinfo.ExitNodeID to report which exit node it has selected, if any.
-const CurrentCapabilityVersion CapabilityVersion = 122
+//   - 123: 2025-07-28: fix deadlock regression from cryptokey routing change (issue #16651)
+const CurrentCapabilityVersion CapabilityVersion = 123
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
