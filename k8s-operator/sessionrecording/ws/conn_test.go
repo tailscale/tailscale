@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -284,19 +285,28 @@ func Test_conn_WriteRand(t *testing.T) {
 	sr := &fakes.TestSessionRecorder{}
 	rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 	for i := range 100 {
-		tc := &fakes.TestConn{}
-		c := &conn{
-			Conn: tc,
-			log:  zl.Sugar(),
-			rec:  rec,
-		}
-		bb := fakes.RandomBytes(t)
-		for j, input := range bb {
-			f := func() {
-				c.Write(input)
+		t.Run(fmt.Sprintf("test_%d", i), func(t *testing.T) {
+			tc := &fakes.TestConn{}
+			c := &conn{
+				Conn: tc,
+				log:  zl.Sugar(),
+				rec:  rec,
+
+				ctx:                   context.Background(), // ctx must be non-nil.
+				initialCastHeaderSent: make(chan struct{}),
 			}
-			testPanic(t, f, fmt.Sprintf("[%d %d] Write: panic parsing input of length %d first bytes %b current write message %+#v", i, j, len(input), firstBytes(input), c.currentWriteMsg))
-		}
+			// Never block for random data.
+			c.writeCastHeaderOnce.Do(func() {
+				close(c.initialCastHeaderSent)
+			})
+			bb := fakes.RandomBytes(t)
+			for j, input := range bb {
+				f := func() {
+					c.Write(input)
+				}
+				testPanic(t, f, fmt.Sprintf("[%d %d] Write: panic parsing input of length %d first bytes %b current write message %+#v", i, j, len(input), firstBytes(input), c.currentWriteMsg))
+			}
+		})
 	}
 }
 
@@ -304,7 +314,7 @@ func testPanic(t *testing.T, f func(), msg string) {
 	t.Helper()
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatal(msg, r)
+			t.Fatal(msg, r, string(debug.Stack()))
 		}
 	}()
 	f()
