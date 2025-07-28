@@ -184,9 +184,10 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		SrcNode:   strings.TrimSuffix(h.who.Node.Name, "."),
 		SrcNodeID: h.who.Node.StableID,
 		Kubernetes: &sessionrecording.Kubernetes{
-			PodName:   h.pod,
-			Namespace: h.ns,
-			Container: container,
+			PodName:     h.pod,
+			Namespace:   h.ns,
+			Container:   container,
+			SessionType: string(h.sessionType),
 		},
 	}
 	if !h.who.Node.IsTagged() {
