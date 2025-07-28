@@ -492,6 +492,18 @@ func TestMarshalUnmarshalSnapshot(t *testing.T) {
 			wantJSON: `{"Settings": {"ListPolicy": {"Value": ["Value1", "Value2"]}}}`,
 		},
 		{
+			name:     "Duration/Zero",
+			snapshot: NewSnapshot(map[Key]RawItem{"DurationPolicy": RawItemOf(time.Duration(0))}),
+			wantJSON: `{"Settings": {"DurationPolicy": {"Value": "0s"}}}`,
+			wantBack: NewSnapshot(map[Key]RawItem{"DurationPolicy": RawItemOf("0s")}),
+		},
+		{
+			name:     "Duration/NonZero",
+			snapshot: NewSnapshot(map[Key]RawItem{"DurationPolicy": RawItemOf(2 * time.Hour)}),
+			wantJSON: `{"Settings": {"DurationPolicy": {"Value": "2h0m0s"}}}`,
+			wantBack: NewSnapshot(map[Key]RawItem{"DurationPolicy": RawItemOf("2h0m0s")}),
+		},
+		{
 			name: "Empty/With-Summary",
 			snapshot: NewSnapshot(
 				map[Key]RawItem{},

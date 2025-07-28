@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
@@ -152,6 +153,24 @@ var (
 	_ jsonv2.UnmarshalerFrom = (*Snapshot)(nil)
 )
 
+// As of 2025-07-28, jsonv2 no longer has a default representation for [time.Duration],
+// so we need to provide a custom marshaler.
+//
+// This is temporary until the decision on the default representation is made
+// (see https://github.com/golang/go/issues/71631#issuecomment-2981670799).
+//
+// In the future, we might either use the default representation (if compatible with
+// [time.Duration.String]) or specify something like json.WithFormat[time.Duration]("units")
+// when golang/go#71664 is implemented.
+//
+// TODO(nickkhyl): revisit this when the decision on the default [time.Duration]
+// representation is made in golang/go#71631 and/or golang/go#71664 is implemented.
+var formatDurationAsUnits = jsonv2.JoinOptions(
+	jsonv2.WithMarshalers(jsonv2.MarshalToFunc(func(e *jsontext.Encoder, t time.Duration) error {
+		return e.WriteToken(jsontext.String(t.String()))
+	})),
+)
+
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (s *Snapshot) MarshalJSONTo(out *jsontext.Encoder) error {
 	data := &snapshotJSON{}
@@ -159,7 +178,7 @@ func (s *Snapshot) MarshalJSONTo(out *jsontext.Encoder) error {
 		data.Summary = s.summary
 		data.Settings = s.m
 	}
-	return jsonv2.MarshalEncode(out, data)
+	return jsonv2.MarshalEncode(out, data, formatDurationAsUnits)
 }
 
 // UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
