@@ -7,10 +7,10 @@ package ws
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
 	"golang.org/x/net/websocket"
@@ -139,6 +139,8 @@ func (msg *message) Parse(b []byte, log *zap.SugaredLogger) (bool, error) {
 		return false, errors.New("[unexpected] received a message fragment with no stream ID")
 	}
 
+	// Stream ID will be one of the constants from:
+	// https://github.com/kubernetes/kubernetes/blob/f9ed14bf9b1119a2e091f4b487a3b54930661034/staging/src/k8s.io/apimachinery/pkg/util/remotecommand/constants.go#L57-L64
 	streamID := uint32(msgPayload[0])
 	if !isInitialFragment && msg.streamID.Load() != streamID {
 		return false, fmt.Errorf("[unexpected] received message fragments with mismatched streamIDs %d and %d", msg.streamID.Load(), streamID)
