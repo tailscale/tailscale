@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -58,15 +59,39 @@ func Test_conn_Read(t *testing.T) {
 			wantCastHeaderHeight: 20,
 		},
 		{
-			name:                 "two_reads_resize_message",
-			inputs:               [][]byte{{0x2, 0x9, 0x4, 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22}, {0x80, 0x11, 0x4, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x22, 0x3a, 0x32, 0x30, 0x7d}},
+			name: "resize_data_frame_two_in_one_read",
+			inputs: [][]byte{
+				fmt.Appendf(nil, "%s%s",
+					append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...),
+					append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...),
+				),
+			},
+			wantRecorded:         append(fakes.AsciinemaCastHeaderMsg(t, 10, 20), fakes.AsciinemaCastResizeMsg(t, 10, 20)...),
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
+		},
+		{
+			name: "two_reads_resize_message",
+			inputs: [][]byte{
+				// op, len, stream ID, `{"width`
+				{0x2, 0x9, 0x4, 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22},
+				// op, len, stream ID, `:10,"height":20}`
+				{0x80, 0x11, 0x4, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x22, 0x3a, 0x32, 0x30, 0x7d},
+			},
 			wantCastHeaderWidth:  10,
 			wantCastHeaderHeight: 20,
 			wantRecorded:         fakes.AsciinemaCastHeaderMsg(t, 10, 20),
 		},
 		{
-			name:                 "three_reads_resize_message_with_split_fragment",
-			inputs:               [][]byte{{0x2, 0x9, 0x4, 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22}, {0x80, 0x11, 0x4, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74}, {0x22, 0x3a, 0x32, 0x30, 0x7d}},
+			name: "three_reads_resize_message_with_split_fragment",
+			inputs: [][]byte{
+				// op, len, stream ID, `{"width"`
+				{0x2, 0x9, 0x4, 0x7b, 0x22, 0x77, 0x69, 0x64, 0x74, 0x68, 0x22},
+				// op, len, stream ID, `:10,"height`
+				{0x00, 0x0c, 0x4, 0x3a, 0x31, 0x30, 0x2c, 0x22, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74},
+				// op, len, stream ID, `":20}`
+				{0x80, 0x06, 0x4, 0x22, 0x3a, 0x32, 0x30, 0x7d},
+			},
 			wantCastHeaderWidth:  10,
 			wantCastHeaderHeight: 20,
 			wantRecorded:         fakes.AsciinemaCastHeaderMsg(t, 10, 20),
@@ -260,19 +285,28 @@ func Test_conn_WriteRand(t *testing.T) {
 	sr := &fakes.TestSessionRecorder{}
 	rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 	for i := range 100 {
-		tc := &fakes.TestConn{}
-		c := &conn{
-			Conn: tc,
-			log:  zl.Sugar(),
-			rec:  rec,
-		}
-		bb := fakes.RandomBytes(t)
-		for j, input := range bb {
-			f := func() {
-				c.Write(input)
+		t.Run(fmt.Sprintf("test_%d", i), func(t *testing.T) {
+			tc := &fakes.TestConn{}
+			c := &conn{
+				Conn: tc,
+				log:  zl.Sugar(),
+				rec:  rec,
+
+				ctx:                   context.Background(), // ctx must be non-nil.
+				initialCastHeaderSent: make(chan struct{}),
 			}
-			testPanic(t, f, fmt.Sprintf("[%d %d] Write: panic parsing input of length %d first bytes %b current write message %+#v", i, j, len(input), firstBytes(input), c.currentWriteMsg))
-		}
+			// Never block for random data.
+			c.writeCastHeaderOnce.Do(func() {
+				close(c.initialCastHeaderSent)
+			})
+			bb := fakes.RandomBytes(t)
+			for j, input := range bb {
+				f := func() {
+					c.Write(input)
+				}
+				testPanic(t, f, fmt.Sprintf("[%d %d] Write: panic parsing input of length %d first bytes %b current write message %+#v", i, j, len(input), firstBytes(input), c.currentWriteMsg))
+			}
+		})
 	}
 }
 
@@ -280,7 +314,7 @@ func testPanic(t *testing.T, f func(), msg string) {
 	t.Helper()
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatal(msg, r)
+			t.Fatal(msg, r, string(debug.Stack()))
 		}
 	}()
 	f()
