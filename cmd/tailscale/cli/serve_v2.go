@@ -656,7 +656,7 @@ var (
 	msgDisableProxy           = "To disable the proxy, run: tailscale %s --%s=%d off"
 	msgDisableServiceProxy    = "To disable the proxy, run: tailscale serve --service=%s --%s=%d off"
 	msgDisableServiceTun      = "To disable the service in TUN mode, run: tailscale serve --service=%s --tun off"
-	msgDisableService         = "To remove config for the service, run: tailscale serve clear --service=%s"
+	msgDisableService         = "To remove config for the service, run: tailscale serve clear %s"
 	msgToExit                 = "Press Ctrl+C to exit."
 )
 
