@@ -35,7 +35,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
-	"tailscale.com/net/udprelay/endpoint"
+	"tailscale.com/net/udprelay/status"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -1641,12 +1641,12 @@ func (lc *Client) DebugSetExpireIn(ctx context.Context, d time.Duration) error {
 
 // DebugPeerRelaySessions returns debug information about the current peer
 // relay sessions running through this node.
-func (lc *Client) DebugPeerRelaySessions(ctx context.Context) ([]endpoint.PeerRelayServerSession, error) {
+func (lc *Client) DebugPeerRelaySessions(ctx context.Context) ([]status.ServerSession, error) {
 	body, err := lc.send(ctx, "GET", "/localapi/v0/debug-peer-relay-sessions", 200, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error %w: %s", err, body)
 	}
-	return decodeJSON[[]endpoint.PeerRelayServerSession](body)
+	return decodeJSON[[]status.ServerSession](body)
 }
 
 // StreamDebugCapture streams a pcap-formatted packet capture.

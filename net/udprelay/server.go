@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/udprelay/endpoint"
+	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -95,7 +96,7 @@ type serverEndpoint struct {
 	vni         uint32
 	allocatedAt time.Time
 
-	status endpoint.PeerRelayServerSessionStatus
+	status status.SessionStatus
 }
 
 func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex int, discoMsg disco.Message, conn *net.UDPConn, serverDisco key.DiscoPublic) {
@@ -137,7 +138,7 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 		e.handshakeAddrPorts[senderIndex] = from
 		// TODO (dylan): assert current e.status.AllocStatus is EndpointAllocated
 		// TODO (dylan): assert e.status.ClientBindStatus[senderIndex] is not already EndpointBindRequestReceived or later
-		e.status.ClientBindStatus[senderIndex] = endpoint.EndpointBindRequestReceived
+		e.status.ClientBindStatus[senderIndex] = status.EndpointBindRequestReceived
 		m := new(disco.BindUDPRelayEndpointChallenge)
 		m.VNI = e.vni
 		m.Generation = discoMsg.Generation
@@ -155,8 +156,8 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 		box := e.discoSharedSecrets[senderIndex].Seal(m.AppendMarshal(nil))
 		reply = append(reply, box...)
 		conn.WriteMsgUDPAddrPort(reply, nil, from)
-		e.status.ClientBindStatus[senderIndex] = endpoint.EndpointBindChallengeSent
-		e.status.OverallStatus = endpoint.BindingEndpoint
+		e.status.ClientBindStatus[senderIndex] = status.EndpointBindChallengeSent
+		e.status.OverallStatus = status.Binding
 		return
 	case *disco.BindUDPRelayEndpointAnswer:
 		err := validateVNIAndRemoteKey(discoMsg.BindUDPRelayEndpointCommon)
@@ -176,11 +177,11 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 		e.boundAddrPorts[senderIndex] = from
 
 		// TODO (dylan): assert e.status.AllocStatus is EndpointAllocated
-		// TODO (dylan): assert e.status.ClientBindStatus[senderIndex] is endpoint.EndpointBindChallengeSent
+		// TODO (dylan): assert e.status.ClientBindStatus[senderIndex] is status.EndpointBindChallengeSent
 		// TODO (dylan): assert e.status.ClientBindStatus[senderIndex] is not already EndpointBindAnswerReceived or later
-		e.status.ClientBindStatus[senderIndex] = endpoint.EndpointBindAnswerReceived
+		e.status.ClientBindStatus[senderIndex] = status.EndpointBindAnswerReceived
 		if e.isBound() {
-			e.status.OverallStatus = endpoint.BidirectionalPinging
+			e.status.OverallStatus = status.Pinging
 		}
 		e.lastSeen[senderIndex] = time.Now() // record last seen as bound time
 		return
@@ -237,10 +238,10 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 			to = e.boundAddrPorts[1]
 			e.status.ClientPacketsRx[0]++
 			switch e.status.ClientPingStatus[0] {
-			case endpoint.DiscoPingNotStarted:
-				e.status.ClientPingStatus[0] = endpoint.DiscoPingSeen
-			case endpoint.DiscoPingSeen:
-				e.status.ClientPingStatus[0] = endpoint.DiscoPongSeen
+			case status.DiscoPingNotStarted:
+				e.status.ClientPingStatus[0] = status.DiscoPingSeen
+			case status.DiscoPingSeen:
+				e.status.ClientPingStatus[0] = status.DiscoPongSeen
 			default:
 				break
 			}
@@ -250,10 +251,10 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 			to = e.boundAddrPorts[0]
 			e.status.ClientPacketsRx[1]++
 			switch e.status.ClientPingStatus[1] {
-			case endpoint.DiscoPingNotStarted:
-				e.status.ClientPingStatus[1] = endpoint.DiscoPingSeen
-			case endpoint.DiscoPingSeen:
-				e.status.ClientPingStatus[1] = endpoint.DiscoPongSeen
+			case status.DiscoPingNotStarted:
+				e.status.ClientPingStatus[1] = status.DiscoPingSeen
+			case status.DiscoPingSeen:
+				e.status.ClientPingStatus[1] = status.DiscoPongSeen
 			default:
 				break
 			}
@@ -263,8 +264,8 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 			return
 		}
 
-		if e.status.OverallStatus == endpoint.BidirectionalPinging && e.status.ClientPingStatus[0] == endpoint.DiscoPongSeen && e.status.ClientPingStatus[1] == endpoint.DiscoPongSeen {
-			e.status.OverallStatus = endpoint.ServerSessionEstablished
+		if e.status.OverallStatus == status.Pinging && e.status.ClientPingStatus[0] == status.DiscoPongSeen && e.status.ClientPingStatus[1] == status.DiscoPongSeen {
+			e.status.OverallStatus = status.Established
 		}
 		// Relay the packet towards the other party via the socket associated
 		// with the destination's address family. If source and destination
@@ -680,13 +681,14 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	}
 
 	s.lamportID++
-	status := endpoint.NewPeerRelayServerSessionStatus()
-	status.AllocStatus = endpoint.EndpointAllocRequestReceived
+	st := status.NewSessionStatus()
+	st.AllocStatus = status.EndpointAllocRequestReceived
+	st.OverallStatus = status.Allocating
 	e = &serverEndpoint{
 		discoPubKeys: pair,
 		lamportID:    s.lamportID,
 		allocatedAt:  time.Now(),
-		status:       status,
+		status:       st,
 	}
 	e.discoSharedSecrets[0] = s.disco.Shared(e.discoPubKeys.Get()[0])
 	e.discoSharedSecrets[1] = s.disco.Shared(e.discoPubKeys.Get()[1])
@@ -707,8 +709,9 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	}, nil
 }
 
-func (s *Server) GetSessions() ([]endpoint.PeerRelayServerSession, error) {
-	var sessions = make([]endpoint.PeerRelayServerSession, 0)
+// TODO (dylan): doc comments
+func (s *Server) GetSessions() ([]status.ServerSession, error) {
+	var sessions = make([]status.ServerSession, 0)
 	for k, v := range s.byDisco {
 		var c1Ep, c2Ep netip.AddrPort
 
@@ -725,17 +728,15 @@ func (s *Server) GetSessions() ([]endpoint.PeerRelayServerSession, error) {
 		} else if v.handshakeAddrPorts[1].IsValid() {
 			c2Ep = v.handshakeAddrPorts[1]
 		}
-		sessions = append(sessions, endpoint.PeerRelayServerSession{
+		sessions = append(sessions, status.ServerSession{
 			// TODO (dylan): fix overall status
-			Status: v.status,
-			PeerRelaySessionBaseStatus: endpoint.PeerRelaySessionBaseStatus{
-				VNI:              v.vni,
-				ClientShortDisco: [2]string{c1Disco, c2Disco},
-				ClientEndpoint:   [2]netip.AddrPort{c1Ep, c2Ep},
-				ServerShortDisco: s.discoPublic.ShortString(),
-				// TODO (dylan): disambiguate which addrPort to use here
-				ServerEndpoint: s.addrPorts[0],
-			},
+			Status:           v.status,
+			VNI:              v.vni,
+			ClientShortDisco: [2]string{c1Disco, c2Disco},
+			ClientEndpoint:   [2]netip.AddrPort{c1Ep, c2Ep},
+			ServerShortDisco: s.discoPublic.ShortString(),
+			// TODO (dylan): disambiguate which addrPort to use here
+			ServerEndpoint: s.addrPorts[0],
 		})
 	}
 	return sessions, nil

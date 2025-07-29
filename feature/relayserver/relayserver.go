@@ -19,6 +19,7 @@ import (
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/udprelay"
 	"tailscale.com/net/udprelay/endpoint"
+	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -120,7 +121,7 @@ type extension struct {
 type relayServer interface {
 	AllocateEndpoint(discoA key.DiscoPublic, discoB key.DiscoPublic) (endpoint.ServerEndpoint, error)
 	Close() error
-	GetSessions() ([]endpoint.PeerRelayServerSession, error)
+	GetSessions() ([]status.ServerSession, error)
 }
 
 // TODO (dylan): doc comments
@@ -128,7 +129,7 @@ type PeerRelaySessionsReq struct{}
 
 // TODO (dylan): doc comments
 type PeerRelaySessionsResp struct {
-	Sessions []endpoint.PeerRelayServerSession
+	Sessions []status.ServerSession
 	Error    error
 }
 
