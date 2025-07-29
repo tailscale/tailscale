@@ -333,8 +333,14 @@ func (s *userServer) run() error {
 		args = append(args, s.Name, s.Path)
 	}
 	var cmd *exec.Cmd
-	if su := s.canSU(); su != "" {
-		s.logf("starting taildrive file server as user %q", s.username)
+
+	if s.canSudo() {
+		s.logf("starting taildrive file server with sudo as user %q", s.username)
+		allArgs := []string{"-n", "-u", s.username, s.executable}
+		allArgs = append(allArgs, args...)
+		cmd = exec.Command("sudo", allArgs...)
+	} else if su := s.canSU(); su != "" {
+		s.logf("starting taildrive file server with su as user %q", s.username)
 		// Quote and escape arguments. Use single quotes to prevent shell substitutions.
 		for i, arg := range args {
 			args[i] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
@@ -343,7 +349,7 @@ func (s *userServer) run() error {
 		allArgs := []string{s.username, "-c", cmdString}
 		cmd = exec.Command(su, allArgs...)
 	} else {
-		// If we were root, we should have been able to sudo as a specific
+		// If we were root, we should have been able to sudo or su as a specific
 		// user, but let's check just to make sure, since we never want to
 		// access shared folders as root.
 		err := s.assertNotRoot()
@@ -407,6 +413,18 @@ var writeMethods = map[string]bool{
 	"MOVE":      true,
 	"PROPPATCH": true,
 	"DELETE":    true,
+}
+
+// canSudo checks wether we can sudo -u the configured executable as the
+// configured user by attempting to call the executable with the '-h' flag to
+// print help.
+func (s *userServer) canSudo() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "sudo", "-n", "-u", s.username, s.executable, "-h").Run(); err != nil {
+		return false
+	}
+	return true
 }
 
 // canSU checks whether the current process can run su with the right username.
