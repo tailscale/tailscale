@@ -1641,12 +1641,12 @@ func (lc *Client) DebugSetExpireIn(ctx context.Context, d time.Duration) error {
 
 // DebugPeerRelaySessions returns debug information about the current peer
 // relay sessions running through this node.
-func (lc *Client) DebugPeerRelaySessions(ctx context.Context) ([]status.ServerSession, error) {
+func (lc *Client) DebugPeerRelaySessions(ctx context.Context) (*status.ServerStatus, error) {
 	body, err := lc.send(ctx, "GET", "/localapi/v0/debug-peer-relay-sessions", 200, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error %w: %s", err, body)
 	}
-	return decodeJSON[[]status.ServerSession](body)
+	return decodeJSON[*status.ServerStatus](body)
 }
 
 // StreamDebugCapture streams a pcap-formatted packet capture.

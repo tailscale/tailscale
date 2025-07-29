@@ -7,6 +7,41 @@ package status
 
 import "net/netip"
 
+// Initialized
+// Running
+// Shut down
+
+// ServerState is the current state of the peer relay server extension.
+type ServerState int
+
+const (
+	// Uninitialized is a placeholder initial state of the peer relay server
+	// until we can determine its actual state. It can transition to
+	// [Disabled], [Running], or [ShutDown], but nothing can transition to
+	// [Uninitialized].
+	Uninitialized ServerState = iota
+	// TODO (dylan): doc-comment
+	NotConfigured
+	// Disabled indicates the peer relay server has been disabled by a node
+	// attribute pushed via C2N. It can transition to [Running] or [ShutDown].
+	Disabled
+	// Running indicates the peer relay server has been initialized and can
+	// relay sessions between peers on the configured UDP port. It can
+	// transition to [Disabled] or [ShutDown].
+	Running
+	// ShutDown indicates the peer relay server extension has been told to
+	// shut down, and can no longer relay sessions between peers. It cannot
+	// transition to any other state.
+	ShutDown
+)
+
+// TODO (dylan): doc comments
+type ServerStatus struct {
+	State    ServerState
+	UDPPort  int
+	Sessions []ServerSession
+}
+
 // ServerSession contains status information for a single session between two
 // peer relay clients relayed via a peer relay server. This is the status as
 // seen by the peer relay server; each client node may have a different view of
@@ -46,7 +81,9 @@ type SessionStatus struct {
 	ClientBindStatus [2]BindStatus
 	ClientPingStatus [2]PingStatus
 	ClientPacketsRx  [2]uint64
+	ClientBytesRx    [2]uint64
 	ClientPacketsFwd [2]uint64
+	ClientBytesFwd   [2]uint64
 
 	OverallStatus OverallSessionStatus
 }

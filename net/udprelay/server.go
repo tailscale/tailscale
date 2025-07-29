@@ -237,6 +237,7 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 			e.lastSeen[0] = time.Now()
 			to = e.boundAddrPorts[1]
 			e.status.ClientPacketsRx[0]++
+			e.status.ClientBytesRx[0] += uint64(len(b))
 			switch e.status.ClientPingStatus[0] {
 			case status.DiscoPingNotStarted:
 				e.status.ClientPingStatus[0] = status.DiscoPingSeen
@@ -246,10 +247,12 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 				break
 			}
 			e.status.ClientPacketsFwd[1]++
+			e.status.ClientBytesFwd[1] += uint64(len(b))
 		case from == e.boundAddrPorts[1]:
 			e.lastSeen[1] = time.Now()
 			to = e.boundAddrPorts[0]
 			e.status.ClientPacketsRx[1]++
+			e.status.ClientBytesRx[1] += uint64(len(b))
 			switch e.status.ClientPingStatus[1] {
 			case status.DiscoPingNotStarted:
 				e.status.ClientPingStatus[1] = status.DiscoPingSeen
@@ -259,6 +262,7 @@ func (e *serverEndpoint) handlePacket(from netip.AddrPort, gh packet.GeneveHeade
 				break
 			}
 			e.status.ClientPacketsFwd[0]++
+			e.status.ClientBytesFwd[0] += uint64(len(b))
 		default:
 			// unrecognized source
 			return
@@ -711,23 +715,24 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 
 // TODO (dylan): doc comments
 func (s *Server) GetSessions() ([]status.ServerSession, error) {
+	extractClient := func(idx int, keys key.SortedPairOfDiscoPublic, ep *serverEndpoint) (netip.AddrPort, string) {
+		// TODO (dylan): assert idx == 0 || idx == 1
+		disco := keys.Get()[idx].ShortString()
+		if ep.boundAddrPorts[0].IsValid() {
+			return ep.boundAddrPorts[idx], disco
+		} else if ep.handshakeAddrPorts[idx].IsValid() {
+			return ep.handshakeAddrPorts[idx], disco
+		}
+
+		return netip.AddrPort{}, disco
+	}
+
+	// lc := &local.Client{}
+	// lc.Status()
 	var sessions = make([]status.ServerSession, 0)
 	for k, v := range s.byDisco {
-		var c1Ep, c2Ep netip.AddrPort
-
-		c1Disco := k.Get()[0].ShortString()
-		if v.boundAddrPorts[0].IsValid() {
-			c1Ep = v.boundAddrPorts[0]
-		} else if v.handshakeAddrPorts[0].IsValid() {
-			c1Ep = v.handshakeAddrPorts[0]
-		}
-
-		c2Disco := k.Get()[1].ShortString()
-		if v.boundAddrPorts[1].IsValid() {
-			c2Ep = v.boundAddrPorts[1]
-		} else if v.handshakeAddrPorts[1].IsValid() {
-			c2Ep = v.handshakeAddrPorts[1]
-		}
+		c1Ep, c1Disco := extractClient(0, k, v)
+		c2Ep, c2Disco := extractClient(1, k, v)
 		sessions = append(sessions, status.ServerSession{
 			// TODO (dylan): fix overall status
 			Status:           v.status,

@@ -7,7 +7,6 @@ package relayserver
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -38,6 +37,7 @@ func init() {
 	localapi.Register("debug-peer-relay-sessions", servePeerRelayDebugSessions)
 }
 
+// TODO (dylan): doc comments
 func servePeerRelayDebugSessions(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "GET required", http.StatusMethodNotAllowed)
@@ -46,46 +46,17 @@ func servePeerRelayDebugSessions(h *localapi.Handler, w http.ResponseWriter, r *
 
 	var e *extension
 	if ok := h.LocalBackend().FindMatchingExtension(&e); !ok {
-		http.Error(w, "Peer relay extension unavailable", http.StatusInternalServerError)
+		http.Error(w, "peer relay server extension unavailable", http.StatusInternalServerError)
 		return
 	}
 
-	e.mu.Lock()
-	running := e.busDoneCh != nil
-	shutdown := e.shutdown
-	port := e.port
-	disabled := e.hasNodeAttrDisableRelayServer
-	e.mu.Unlock()
-
-	if !running {
-		http.Error(w, "peer relay server is not running", http.StatusServiceUnavailable)
-		return
-	} else if shutdown {
-		http.Error(w, "peer relay server has been shut down", http.StatusServiceUnavailable)
-		return
-	} else if disabled {
-		http.Error(w, "peer relay server is disabled", http.StatusServiceUnavailable)
-		return
-	} else if port == nil {
-		http.Error(w, "peer relay server port is not configured", http.StatusPreconditionFailed)
+	st, err := e.status()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to retrieve peer relay server status: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// h.Logf("peer relay server is available, running=%v shutdown=%v disabled=%v port=%v", running, shutdown, disabled, *port)
-
-	client := e.bus.Client("relayserver.debug-peer-relay-sessions")
-	defer client.Close()
-	debugReqPub := eventbus.Publish[PeerRelaySessionsReq](client)
-	debugRespSub := eventbus.Subscribe[PeerRelaySessionsResp](client)
-
-	debugReqPub.Publish(PeerRelaySessionsReq{})
-	// TODO (dylan): remove this message
-	// h.Logf("relayserver: waiting for run loop to publish peer relay sessions...")
-	resp := <-debugRespSub.Events()
-
-	// TODO (dylan): check resp.Error (or move it into PeerRelaySessions instead of leaving it in PeerRelaySessionsResp)
-	// TODO (dylan): what status to return if the peer relay server isn't running/configured?
-	j, err := json.Marshal(resp.Sessions)
+	j, err := json.Marshal(st)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to marshal json: %v", err), http.StatusInternalServerError)
 		return
@@ -129,8 +100,8 @@ type PeerRelaySessionsReq struct{}
 
 // TODO (dylan): doc comments
 type PeerRelaySessionsResp struct {
-	Sessions []status.ServerSession
-	Error    error
+	Status status.ServerStatus
+	Error  error
 }
 
 // Name implements [ipnext.Extension].
@@ -212,16 +183,18 @@ func (e *extension) consumeEventbusTopics(port int) {
 			// signal to return.
 			return
 		case <-debugReqSub.Events():
-			// TODO (dylan): This is where we want to send debug session info back to the CLI.
+			st := status.ServerStatus{
+				State:    status.Uninitialized,
+				UDPPort:  port,
+				Sessions: nil,
+			}
 			if rs == nil {
 				// TODO (dylan): should we initialize the server here too
-				// TODO (dylan): what is the pattern for sending error values back over the event bus?
-				// TODO (dylan): this isn't even an error condition, expected when nobody has tried to
-				// allocate an endpoint...rethink, maybe add a "Status string" field to PeerRelaySessionsResp?
-				resp := PeerRelaySessionsResp{Error: errors.New("no peer relay sessions: server has not been contacted yet")}
+				resp := PeerRelaySessionsResp{st, nil}
 				debugRespPub.Publish(resp)
 				continue
 			}
+			st.State = status.Running
 			sessions, err := rs.GetSessions()
 			if err != nil {
 				// TODO (dylan): should this be an errors.Join() instead with err?
@@ -230,7 +203,8 @@ func (e *extension) consumeEventbusTopics(port int) {
 				debugRespPub.Publish(PeerRelaySessionsResp{Error: prs_err})
 				continue
 			}
-			debugRespPub.Publish(PeerRelaySessionsResp{sessions, nil})
+			st.Sessions = sessions
+			debugRespPub.Publish(PeerRelaySessionsResp{st, nil})
 		case req := <-reqSub.Events():
 			if rs == nil {
 				var err error
@@ -281,4 +255,50 @@ func (e *extension) Shutdown() error {
 	e.disconnectFromBusLocked()
 	e.shutdown = true
 	return nil
+}
+
+// TODO (dylan): doc comments.
+func (e *extension) status() (status.ServerStatus, error) {
+	st := status.ServerStatus{
+		State:    status.Uninitialized,
+		UDPPort:  -1,
+		Sessions: nil,
+	}
+
+	e.mu.Lock()
+	running := e.busDoneCh != nil
+	shutdown := e.shutdown
+	port := e.port
+	disabled := e.hasNodeAttrDisableRelayServer
+	e.mu.Unlock()
+
+	if port == nil {
+		st.State = status.NotConfigured
+		return st, nil
+	}
+
+	st.UDPPort = *port
+	if disabled {
+		st.State = status.Disabled
+		return st, nil
+	}
+
+	if shutdown {
+		st.State = status.ShutDown
+		return st, nil
+	}
+
+	if !running {
+		// Leave state as Uninitialized.
+		return st, nil
+	}
+
+	client := e.bus.Client("relayserver.debug-peer-relay-sessions")
+	defer client.Close()
+	debugReqPub := eventbus.Publish[PeerRelaySessionsReq](client)
+	debugRespSub := eventbus.Subscribe[PeerRelaySessionsResp](client)
+
+	debugReqPub.Publish(PeerRelaySessionsReq{})
+	resp := <-debugRespSub.Events()
+	return resp.Status, resp.Error
 }
