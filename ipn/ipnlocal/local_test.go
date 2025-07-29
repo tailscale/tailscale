@@ -463,6 +463,7 @@ func newTestLocalBackendWithSys(t testing.TB, sys *tsd.System) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	if _, ok := sys.StateStore.GetOK(); !ok {
 		sys.Set(new(mem.Store))
+		t.Log("Added memory store for testing")
 	}
 	if _, ok := sys.Engine.GetOK(); !ok {
 		eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
@@ -471,6 +472,11 @@ func newTestLocalBackendWithSys(t testing.TB, sys *tsd.System) *LocalBackend {
 		}
 		t.Cleanup(eng.Close)
 		sys.Set(eng)
+		t.Log("Added fake userspace engine for testing")
+	}
+	if _, ok := sys.Dialer.GetOK(); !ok {
+		sys.Set(tsdial.NewDialer(netmon.NewStatic()))
+		t.Log("Added static dialer for testing")
 	}
 	lb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {

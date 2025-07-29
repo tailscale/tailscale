@@ -85,7 +85,7 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 
 // Client is a port mapping client.
 type Client struct {
-	// The following two fields must either both be nil, or both non-nil.
+	// The following two fields must both be non-nil.
 	// Both are immutable after construction.
 	pubClient *eventbus.Client
 	updates   *eventbus.Publisher[Mapping]
@@ -238,8 +238,11 @@ type Config struct {
 // NewClient constructs a new portmapping [Client] from c. It will panic if any
 // required parameters are omitted.
 func NewClient(c Config) *Client {
-	if c.NetMon == nil {
-		panic("nil netMon")
+	switch {
+	case c.NetMon == nil:
+		panic("nil NetMon")
+	case c.EventBus == nil:
+		panic("nil EventBus")
 	}
 	ret := &Client{
 		logf:         c.Logf,
@@ -248,10 +251,8 @@ func NewClient(c Config) *Client {
 		onChange:     c.OnChange,
 		controlKnobs: c.ControlKnobs,
 	}
-	if c.EventBus != nil {
-		ret.pubClient = c.EventBus.Client("portmapper")
-		ret.updates = eventbus.Publish[Mapping](ret.pubClient)
-	}
+	ret.pubClient = c.EventBus.Client("portmapper")
+	ret.updates = eventbus.Publish[Mapping](ret.pubClient)
 	if ret.logf == nil {
 		ret.logf = logger.Discard
 	}
@@ -286,10 +287,9 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	c.invalidateMappingsLocked(true)
-	if c.updates != nil {
-		c.updates.Close()
-		c.pubClient.Close()
-	}
+	c.updates.Close()
+	c.pubClient.Close()
+
 	// TODO: close some future ever-listening UDP socket(s),
 	// waiting for multicast announcements from router.
 	return nil
@@ -515,14 +515,14 @@ func (c *Client) createMapping() {
 		// the control flow to eliminate that possibility. Meanwhile, this
 		// mitigates a panic downstream, cf. #16662.
 	}
-	if c.updates != nil {
-		c.updates.Publish(Mapping{
-			External:  mapping.External(),
-			Type:      mapping.MappingType(),
-			GoodUntil: mapping.GoodUntil(),
-		})
-	}
-	if c.onChange != nil && c.pubClient == nil {
+	c.updates.Publish(Mapping{
+		External:  mapping.External(),
+		Type:      mapping.MappingType(),
+		GoodUntil: mapping.GoodUntil(),
+	})
+	// TODO(creachadair): Remove this entirely once there are no longer any
+	// places where the callback is set.
+	if c.onChange != nil {
 		go c.onChange()
 	}
 }
