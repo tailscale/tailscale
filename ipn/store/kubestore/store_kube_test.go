@@ -427,6 +427,13 @@ func TestReadTLSCertAndKey(t *testing.T) {
 			wantErr:       ipn.ErrStateNotExist,
 		},
 		{
+			name:          "cert_share_ro_mode_forbidden",
+			certShareMode: "ro",
+			domain:        testDomain,
+			secretGetErr:  &kubeapi.Status{Code: 403},
+			wantErr:       ipn.ErrStateNotExist,
+		},
+		{
 			name:          "cert_share_ro_mode_empty_cert_in_secret",
 			certShareMode: "ro",
 			domain:        testDomain,
