@@ -455,6 +455,7 @@ func (s *idpServer) newMux() *http.ServeMux {
 	mux.HandleFunc("/authorize/", s.authorize)
 	mux.HandleFunc("/userinfo", s.serveUserInfo)
 	mux.HandleFunc("/token", s.serveToken)
+	mux.HandleFunc("/introspect", s.serveIntrospect)
 	mux.HandleFunc("/clients/", s.serveClients)
 	mux.HandleFunc("/", s.handleUI)
 	return mux
@@ -789,6 +790,100 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse the token parameter
+	token := r.FormValue("token")
+	if token == "" {
+		http.Error(w, "tsidp: token is required", http.StatusBadRequest)
+		return
+	}
+
+	// token_type_hint is optional, we can ignore it for now
+	// since we only have one type of token (access tokens)
+
+	// Look up the token
+	s.mu.Lock()
+	ar, tokenExists := s.accessToken[token]
+	s.mu.Unlock()
+
+	// Initialize response with active: false (default for invalid/expired tokens)
+	resp := map[string]any{
+		"active": false,
+	}
+
+	// If token exists and is not expired, we need to authenticate the client
+	if tokenExists && ar.validTill.After(time.Now()) {
+		// For introspection, we need to authenticate the client making the request
+		// This is different from token endpoint where we authenticate using the authRequest
+
+		// Get client credentials from the request
+		clientID, clientSecret, hasBasicAuth := r.BasicAuth()
+		if !hasBasicAuth {
+			clientID = r.FormValue("client_id")
+			clientSecret = r.FormValue("client_secret")
+		}
+
+		// Determine if the client is authorized to introspect this token
+		authorized := false
+
+		if ar.funnelRP != nil {
+			// For funnel clients, verify client credentials match
+			if subtle.ConstantTimeCompare([]byte(clientID), []byte(ar.funnelRP.ID)) == 1 &&
+				subtle.ConstantTimeCompare([]byte(clientSecret), []byte(ar.funnelRP.Secret)) == 1 {
+				authorized = true
+			}
+		} else if ar.localRP {
+			// For local clients, check if request is from loopback
+			ra, err := netip.ParseAddrPort(r.RemoteAddr)
+			if err == nil && ra.Addr().IsLoopback() {
+				authorized = true
+			}
+		} else if ar.rpNodeID != 0 && s.lc != nil {
+			// For node-based clients, verify the requesting node
+			who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+			if err == nil && who.Node.ID == ar.rpNodeID {
+				authorized = true
+			}
+		}
+
+		if !authorized {
+			// Return inactive token for unauthorized clients
+			// This prevents token scanning attacks
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Token is valid and client is authorized, return active with metadata
+		resp["active"] = true
+		resp["client_id"] = ar.clientID
+		resp["exp"] = ar.validTill.Unix()
+		resp["iat"] = ar.validTill.Add(-5 * time.Minute).Unix() // issued 5 min before expiry
+
+		if ar.remoteUser != nil && ar.remoteUser.Node != nil {
+			resp["sub"] = fmt.Sprintf("%d", ar.remoteUser.Node.User)
+			if ar.remoteUser.UserProfile != nil {
+				resp["username"] = ar.remoteUser.UserProfile.LoginName
+			}
+		}
+
+		// Add audience if available
+		if ar.clientID != "" {
+			resp["aud"] = ar.clientID
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 type oidcTokenResponse struct {
 	IDToken      string `json:"id_token"`
 	TokenType    string `json:"token_type"`
@@ -798,8 +893,8 @@ type oidcTokenResponse struct {
 }
 
 const (
-	oidcJWKSPath     = "/.well-known/jwks.json"
-	oidcConfigPath   = "/.well-known/openid-configuration"
+	oidcJWKSPath      = "/.well-known/jwks.json"
+	oidcConfigPath    = "/.well-known/openid-configuration"
 	oauthMetadataPath = "/.well-known/oauth-authorization-server"
 )
 
@@ -881,6 +976,7 @@ type openIDProviderMetadata struct {
 	AuthorizationEndpoint            string              `json:"authorization_endpoint,omitempty"`
 	TokenEndpoint                    string              `json:"token_endpoint,omitempty"`
 	UserInfoEndpoint                 string              `json:"userinfo_endpoint,omitempty"`
+	IntrospectionEndpoint            string              `json:"introspection_endpoint,omitempty"`
 	JWKS_URI                         string              `json:"jwks_uri"`
 	ScopesSupported                  views.Slice[string] `json:"scopes_supported"`
 	ResponseTypesSupported           views.Slice[string] `json:"response_types_supported"`
@@ -895,13 +991,14 @@ type openIDProviderMetadata struct {
 // OAuth 2.0 Authorization Server Metadata as defined in RFC 8414.
 // https://datatracker.ietf.org/doc/html/rfc8414
 type oauthAuthorizationServerMetadata struct {
-	Issuer                           string              `json:"issuer"`
-	AuthorizationEndpoint            string              `json:"authorization_endpoint"`
-	TokenEndpoint                    string              `json:"token_endpoint"`
-	JWKS_URI                         string              `json:"jwks_uri"`
-	ResponseTypesSupported           views.Slice[string] `json:"response_types_supported"`
-	GrantTypesSupported              views.Slice[string] `json:"grant_types_supported"`
-	ScopesSupported                  views.Slice[string] `json:"scopes_supported,omitempty"`
+	Issuer                            string              `json:"issuer"`
+	AuthorizationEndpoint             string              `json:"authorization_endpoint"`
+	TokenEndpoint                     string              `json:"token_endpoint"`
+	IntrospectionEndpoint             string              `json:"introspection_endpoint,omitempty"`
+	JWKS_URI                          string              `json:"jwks_uri"`
+	ResponseTypesSupported            views.Slice[string] `json:"response_types_supported"`
+	GrantTypesSupported               views.Slice[string] `json:"grant_types_supported"`
+	ScopesSupported                   views.Slice[string] `json:"scopes_supported,omitempty"`
 	TokenEndpointAuthMethodsSupported views.Slice[string] `json:"token_endpoint_auth_methods_supported"`
 }
 
@@ -948,7 +1045,7 @@ var (
 	openIDSupportedSigningAlgos = views.SliceOf([]string{string(jose.RS256)})
 
 	// OAuth 2.0 specific metadata constants
-	oauthSupportedGrantTypes = views.SliceOf([]string{"authorization_code"})
+	oauthSupportedGrantTypes               = views.SliceOf([]string{"authorization_code"})
 	oauthSupportedTokenEndpointAuthMethods = views.SliceOf([]string{"client_secret_post", "client_secret_basic"})
 )
 
@@ -1004,6 +1101,7 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 		JWKS_URI:                         rpEndpoint + oidcJWKSPath,
 		UserInfoEndpoint:                 rpEndpoint + "/userinfo",
 		TokenEndpoint:                    rpEndpoint + "/token",
+		IntrospectionEndpoint:            rpEndpoint + "/introspect",
 		ScopesSupported:                  openIDSupportedScopes,
 		ResponseTypesSupported:           openIDSupportedReponseTypes,
 		SubjectTypesSupported:            openIDSupportedSubjectTypes,
@@ -1061,13 +1159,14 @@ func (s *idpServer) serveOAuthMetadata(w http.ResponseWriter, r *http.Request) {
 	je := json.NewEncoder(w)
 	je.SetIndent("", "  ")
 	if err := je.Encode(oauthAuthorizationServerMetadata{
-		Issuer:                           rpEndpoint,
-		AuthorizationEndpoint:            authorizeEndpoint,
-		TokenEndpoint:                    rpEndpoint + "/token",
-		JWKS_URI:                         rpEndpoint + oidcJWKSPath,
-		ResponseTypesSupported:           openIDSupportedReponseTypes,
-		GrantTypesSupported:              oauthSupportedGrantTypes,
-		ScopesSupported:                  openIDSupportedScopes,
+		Issuer:                            rpEndpoint,
+		AuthorizationEndpoint:             authorizeEndpoint,
+		TokenEndpoint:                     rpEndpoint + "/token",
+		IntrospectionEndpoint:             rpEndpoint + "/introspect",
+		JWKS_URI:                          rpEndpoint + oidcJWKSPath,
+		ResponseTypesSupported:            openIDSupportedReponseTypes,
+		GrantTypesSupported:               oauthSupportedGrantTypes,
+		ScopesSupported:                   openIDSupportedScopes,
 		TokenEndpointAuthMethodsSupported: oauthSupportedTokenEndpointAuthMethods,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

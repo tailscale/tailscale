@@ -646,6 +646,278 @@ func TestServeToken(t *testing.T) {
 	}
 }
 
+func TestServeIntrospect(t *testing.T) {
+	now := time.Now()
+	validToken := "valid-access-token"
+	expiredToken := "expired-access-token"
+
+	// Create test user and node
+	profile := &tailcfg.UserProfile{
+		LoginName:     "alice@example.com",
+		DisplayName:   "Alice Example",
+		ProfilePicURL: "https://example.com/alice.jpg",
+	}
+	node := &tailcfg.Node{
+		ID:       123,
+		Name:     "test-node.test.ts.net.",
+		User:     456,
+		Key:      key.NodePublic{},
+		Cap:      1,
+		DiscoKey: key.DiscoPublic{},
+	}
+	remoteUser := &apitype.WhoIsResponse{
+		Node:        node,
+		UserProfile: profile,
+	}
+
+	// Create funnel client for testing
+	funnelClient := &funnelClient{
+		ID:          "funnel-client-id",
+		Secret:      "funnel-client-secret",
+		Name:        "Test Funnel Client",
+		RedirectURI: "https://funnel.example.com/callback",
+	}
+
+	tests := []struct {
+		name           string
+		method         string
+		token          string
+		omitToken      bool
+		clientID       string
+		clientSecret   string
+		useBasicAuth   bool
+		remoteAddr     string
+		authRequest    *authRequest
+		expectStatus   int
+		expectActive   bool
+		expectedFields map[string]any
+	}{
+		{
+			name:         "GET not allowed",
+			method:       "GET",
+			token:        validToken,
+			expectStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:         "missing token parameter",
+			method:       "POST",
+			omitToken:    true,
+			expectStatus: http.StatusBadRequest,
+		},
+		{
+			name:         "invalid token returns inactive",
+			method:       "POST",
+			token:        "invalid-token",
+			expectStatus: http.StatusOK,
+			expectActive: false,
+		},
+		{
+			name:         "expired token returns inactive",
+			method:       "POST",
+			token:        expiredToken,
+			expectStatus: http.StatusOK,
+			expectActive: false,
+		},
+		{
+			name:       "valid token with local RP authentication",
+			method:     "POST",
+			token:      validToken,
+			remoteAddr: "127.0.0.1:12345",
+			authRequest: &authRequest{
+				localRP:    true,
+				clientID:   "local-client",
+				remoteUser: remoteUser,
+				validTill:  now.Add(5 * time.Minute),
+			},
+			expectStatus: http.StatusOK,
+			expectActive: true,
+			expectedFields: map[string]any{
+				"client_id": "local-client",
+				"sub":       "456",
+				"username":  "alice@example.com",
+				"aud":       "local-client",
+			},
+		},
+		{
+			name:         "valid token with funnel RP authentication - correct credentials",
+			method:       "POST",
+			token:        validToken,
+			clientID:     "funnel-client-id",
+			clientSecret: "funnel-client-secret",
+			authRequest: &authRequest{
+				funnelRP:   funnelClient,
+				clientID:   "funnel-client-id",
+				remoteUser: remoteUser,
+				validTill:  now.Add(5 * time.Minute),
+			},
+			expectStatus: http.StatusOK,
+			expectActive: true,
+			expectedFields: map[string]any{
+				"client_id": "funnel-client-id",
+				"sub":       "456",
+				"username":  "alice@example.com",
+				"aud":       "funnel-client-id",
+			},
+		},
+		{
+			name:         "valid token with funnel RP authentication - basic auth",
+			method:       "POST",
+			token:        validToken,
+			clientID:     "funnel-client-id",
+			clientSecret: "funnel-client-secret",
+			useBasicAuth: true,
+			authRequest: &authRequest{
+				funnelRP:   funnelClient,
+				clientID:   "funnel-client-id",
+				remoteUser: remoteUser,
+				validTill:  now.Add(5 * time.Minute),
+			},
+			expectStatus: http.StatusOK,
+			expectActive: true,
+		},
+		{
+			name:         "valid token with funnel RP authentication - wrong credentials",
+			method:       "POST",
+			token:        validToken,
+			clientID:     "wrong-client-id",
+			clientSecret: "wrong-secret",
+			authRequest: &authRequest{
+				funnelRP:   funnelClient,
+				clientID:   "funnel-client-id",
+				remoteUser: remoteUser,
+				validTill:  now.Add(5 * time.Minute),
+			},
+			expectStatus: http.StatusOK,
+			expectActive: false, // Returns inactive for unauthorized clients
+		},
+		{
+			name:       "valid token with node RP authentication - unauthorized node",
+			method:     "POST",
+			token:      validToken,
+			remoteAddr: "100.64.1.2:12345", // Different node
+			authRequest: &authRequest{
+				rpNodeID:   789, // Different node ID
+				clientID:   "node-client",
+				remoteUser: remoteUser,
+				validTill:  now.Add(5 * time.Minute),
+			},
+			expectStatus: http.StatusOK,
+			expectActive: false, // Returns inactive for unauthorized nodes
+		},
+		{
+			name:       "valid token from non-loopback for local RP",
+			method:     "POST",
+			token:      validToken,
+			remoteAddr: "192.168.1.100:12345", // Non-loopback
+			authRequest: &authRequest{
+				localRP:    true,
+				clientID:   "local-client",
+				remoteUser: remoteUser,
+				validTill:  now.Add(5 * time.Minute),
+			},
+			expectStatus: http.StatusOK,
+			expectActive: false, // Returns inactive for unauthorized access
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create server with test tokens
+			s := &idpServer{
+				accessToken: map[string]*authRequest{},
+			}
+
+			// Add valid token if test uses it
+			if tt.authRequest != nil && tt.token == validToken {
+				s.accessToken[validToken] = tt.authRequest
+			}
+
+			// Add expired token
+			s.accessToken[expiredToken] = &authRequest{
+				localRP:    true,
+				clientID:   "expired-client",
+				remoteUser: remoteUser,
+				validTill:  now.Add(-1 * time.Hour), // Expired
+			}
+
+			// Create request
+			form := url.Values{}
+			if !tt.omitToken {
+				form.Set("token", tt.token)
+			}
+			if !tt.useBasicAuth && tt.clientID != "" {
+				form.Set("client_id", tt.clientID)
+				form.Set("client_secret", tt.clientSecret)
+			}
+
+			req := httptest.NewRequest(tt.method, "/introspect", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			if tt.useBasicAuth && tt.clientID != "" {
+				req.SetBasicAuth(tt.clientID, tt.clientSecret)
+			}
+
+			if tt.remoteAddr != "" {
+				req.RemoteAddr = tt.remoteAddr
+			} else {
+				req.RemoteAddr = "127.0.0.1:12345" // Default to loopback
+			}
+
+			rr := httptest.NewRecorder()
+
+			// Call the handler
+			s.serveIntrospect(rr, req)
+
+			// Check status code
+			if rr.Code != tt.expectStatus {
+				t.Fatalf("expected status %d, got %d: %s", tt.expectStatus, rr.Code, rr.Body.String())
+			}
+
+			// If we expect an error status, no need to check response body
+			if tt.expectStatus != http.StatusOK {
+				return
+			}
+
+			// Parse response
+			var resp map[string]any
+			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
+
+			// Check active field
+			active, ok := resp["active"].(bool)
+			if !ok {
+				t.Fatal("response missing 'active' field or wrong type")
+			}
+			if active != tt.expectActive {
+				t.Errorf("expected active=%v, got %v", tt.expectActive, active)
+			}
+
+			// Check expected fields if token is active
+			if tt.expectActive && tt.expectedFields != nil {
+				for field, expected := range tt.expectedFields {
+					got, ok := resp[field]
+					if !ok {
+						t.Errorf("missing expected field %q", field)
+						continue
+					}
+					if got != expected {
+						t.Errorf("field %q: expected %v, got %v", field, expected, got)
+					}
+				}
+
+				// Check standard fields that should always be present for active tokens
+				if _, ok := resp["exp"]; !ok {
+					t.Error("missing 'exp' field for active token")
+				}
+				if _, ok := resp["iat"]; !ok {
+					t.Error("missing 'iat' field for active token")
+				}
+			}
+		})
+	}
+}
+
 func TestExtraUserInfo(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -966,13 +1238,13 @@ func TestFunnelClientsPersistence(t *testing.T) {
 
 func TestServeOpenIDConfig(t *testing.T) {
 	tests := []struct {
-		name           string
-		method         string
-		path           string
-		remoteAddr     string
-		isFunnel       bool
-		expectStatus   int
-		checkResponse  func(t *testing.T, body []byte)
+		name          string
+		method        string
+		path          string
+		remoteAddr    string
+		isFunnel      bool
+		expectStatus  int
+		checkResponse func(t *testing.T, body []byte)
 	}{
 		{
 			name:         "OPTIONS request - CORS preflight",
@@ -1025,6 +1297,12 @@ func TestServeOpenIDConfig(t *testing.T) {
 				issuer, ok := metadata["issuer"].(string)
 				if !ok || !strings.HasPrefix(issuer, "http://localhost") {
 					t.Errorf("expected localhost issuer, got: %v", metadata["issuer"])
+				}
+
+				// Check introspection endpoint
+				introspectionEndpoint, ok := metadata["introspection_endpoint"].(string)
+				if !ok || !strings.HasSuffix(introspectionEndpoint, "/introspect") {
+					t.Errorf("expected introspection endpoint ending with /introspect, got: %v", metadata["introspection_endpoint"])
 				}
 
 				// Check response types
@@ -1118,7 +1396,7 @@ func TestServeOpenIDConfig(t *testing.T) {
 				t.Errorf("expected status %d, got %d", tt.expectStatus, rr.Code)
 			}
 
-			// Check CORS headers  
+			// Check CORS headers
 			if h := rr.Header().Get("Access-Control-Allow-Origin"); h != "*" {
 				t.Errorf("expected CORS origin *, got %s", h)
 			}
@@ -1132,13 +1410,13 @@ func TestServeOpenIDConfig(t *testing.T) {
 
 func TestServeOAuthMetadata(t *testing.T) {
 	tests := []struct {
-		name           string
-		method         string
-		path           string
-		remoteAddr     string
-		isFunnel       bool
-		expectStatus   int
-		checkResponse  func(t *testing.T, body []byte)
+		name          string
+		method        string
+		path          string
+		remoteAddr    string
+		isFunnel      bool
+		expectStatus  int
+		checkResponse func(t *testing.T, body []byte)
 	}{
 		{
 			name:         "OPTIONS request - CORS preflight",
@@ -1169,6 +1447,7 @@ func TestServeOAuthMetadata(t *testing.T) {
 					"issuer",
 					"authorization_endpoint",
 					"token_endpoint",
+					"introspection_endpoint",
 					"response_types_supported",
 					"grant_types_supported",
 					"token_endpoint_auth_methods_supported",
@@ -1288,7 +1567,7 @@ func TestServeOAuthMetadata(t *testing.T) {
 				t.Errorf("expected status %d, got %d", tt.expectStatus, rr.Code)
 			}
 
-			// Check CORS headers  
+			// Check CORS headers
 			if h := rr.Header().Get("Access-Control-Allow-Origin"); h != "*" {
 				t.Errorf("expected CORS origin *, got %s", h)
 			}
