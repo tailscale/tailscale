@@ -25,7 +25,6 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -172,10 +171,16 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 // maybeProvisionConnector ensures that any new resources required for this
 // Connector instance are deployed to the cluster.
 func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) error {
+	// Set up a default hostname of <connector-name>-connector. If we have multiple replicas and a hostname prefix,
+	// we'll set the hostname to the specified prefix. Otherwise, we'll use the specified hostname.
 	hostname := cn.Name + "-connector"
-	if cn.Spec.Hostname != "" {
+	switch {
+	case cn.Spec.Replicas != nil && *cn.Spec.Replicas > 1 && cn.Spec.HostnamePrefix != "":
+		hostname = string(cn.Spec.HostnamePrefix)
+	case cn.Spec.Hostname != "":
 		hostname = string(cn.Spec.Hostname)
 	}
+
 	crl := childResourceLabels(cn.Name, a.tsnamespace, "connector")
 
 	proxyClass := cn.Spec.ProxyClass
@@ -188,7 +193,13 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		}
 	}
 
+	var replicas int32 = 1
+	if cn.Spec.Replicas != nil {
+		replicas = *cn.Spec.Replicas
+	}
+
 	sts := &tailscaleSTSConfig{
+		Replicas:            replicas,
 		ParentResourceName:  cn.Name,
 		ParentResourceUID:   string(cn.UID),
 		Hostname:            hostname,
@@ -219,16 +230,19 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 	} else {
 		a.exitNodes.Remove(cn.UID)
 	}
+
 	if cn.Spec.SubnetRouter != nil {
 		a.subnetRouters.Add(cn.GetUID())
 	} else {
 		a.subnetRouters.Remove(cn.GetUID())
 	}
+
 	if cn.Spec.AppConnector != nil {
 		a.appConnectors.Add(cn.GetUID())
 	} else {
 		a.appConnectors.Remove(cn.GetUID())
 	}
+
 	a.mu.Unlock()
 	gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
 	gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
@@ -244,21 +258,26 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		return err
 	}
 
-	dev, err := a.ssr.DeviceInfo(ctx, crl, logger)
+	devices, err := a.ssr.DeviceInfo(ctx, crl, logger)
 	if err != nil {
 		return err
 	}
 
-	if dev == nil || dev.hostname == "" {
-		logger.Debugf("no Tailscale hostname known yet, waiting for Connector Pod to finish auth")
-		// No hostname yet. Wait for the connector pod to auth.
-		cn.Status.TailnetIPs = nil
-		cn.Status.Hostname = ""
-		return nil
+	hostnames := make([]string, 0)
+	cn.Status.TailnetIPs = make([]string, 0)
+
+	for _, dev := range devices {
+		for _, ip := range dev.ips {
+			cn.Status.TailnetIPs = append(cn.Status.TailnetIPs, ip)
+		}
 	}
 
-	cn.Status.TailnetIPs = dev.ips
-	cn.Status.Hostname = dev.hostname
+	if len(hostnames) > 0 {
+		cn.Status.Hostname = hostnames[0]
+	}
+
+	slices.Sort(hostnames)
+	cn.Status.Hostnames = hostnames
 
 	return nil
 }
@@ -302,6 +321,13 @@ func (a *ConnectorReconciler) validate(cn *tsapi.Connector) error {
 	if (cn.Spec.SubnetRouter != nil || cn.Spec.ExitNode) && cn.Spec.AppConnector != nil {
 		return errors.New("invalid spec: a Connector that is configured as an app connector must not be also configured as a subnet router or exit node")
 	}
+	if cn.Spec.Replicas != nil && *cn.Spec.Replicas > 1 && cn.Spec.Hostname != "" {
+		return errors.New("invalid spec: a Connector that is configured with multiple replicas cannot specify a hostname. Instead, use a hostnamePrefix")
+	}
+	if cn.Spec.HostnamePrefix != "" && cn.Spec.Hostname != "" {
+		return errors.New("invalid spec: a Connect cannot use both a hostname and hostname prefix")
+	}
+
 	if cn.Spec.AppConnector != nil {
 		return validateAppConnector(cn.Spec.AppConnector)
 	}
