@@ -150,6 +150,13 @@ spec:
                                     resources created for this Connector. If unset, the operator will
                                     create resources with the default configuration.
                                 type: string
+                            replicas:
+                                description: |-
+                                    Replicas specifies how many replicas to create the StatefulSet with.
+                                    Defaults to 1.
+                                format: int32
+                                minimum: 0
+                                type: integer
                             subnetRouter:
                                 description: |-
                                     SubnetRouter defines subnet routes that the Connector device should

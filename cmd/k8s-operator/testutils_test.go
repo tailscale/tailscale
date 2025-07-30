@@ -69,9 +69,9 @@ type configOpts struct {
 	shouldRemoveAuthKey                            bool
 	secretExtraData                                map[string][]byte
 	resourceVersion                                string
-
-	enableMetrics        bool
-	serviceMonitorLabels tsapi.Labels
+	replicas                                       *int32
+	enableMetrics                                  bool
+	serviceMonitorLabels                           tsapi.Labels
 }
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
@@ -202,7 +202,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			},
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: opts.replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": "1234-UID"},
 			},

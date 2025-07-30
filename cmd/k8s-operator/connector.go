@@ -25,7 +25,6 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -188,7 +187,13 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		}
 	}
 
+	var replicas int32 = 1
+	if cn.Spec.Replicas != nil {
+		replicas = *cn.Spec.Replicas
+	}
+
 	sts := &tailscaleSTSConfig{
+		Replicas:            replicas,
 		ParentResourceName:  cn.Name,
 		ParentResourceUID:   string(cn.UID),
 		Hostname:            hostname,
@@ -219,16 +224,19 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 	} else {
 		a.exitNodes.Remove(cn.UID)
 	}
+
 	if cn.Spec.SubnetRouter != nil {
 		a.subnetRouters.Add(cn.GetUID())
 	} else {
 		a.subnetRouters.Remove(cn.GetUID())
 	}
+
 	if cn.Spec.AppConnector != nil {
 		a.appConnectors.Add(cn.GetUID())
 	} else {
 		a.appConnectors.Remove(cn.GetUID())
 	}
+
 	a.mu.Unlock()
 	gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
 	gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
@@ -244,6 +252,7 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		return err
 	}
 
+	// TODO(davidsbond): device info needs to handle multiple replicas
 	dev, err := a.ssr.DeviceInfo(ctx, crl, logger)
 	if err != nil {
 		return err
