@@ -633,6 +633,30 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
 	}
 
+	// IDP reconciler.
+	idpFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.IDP{})
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.IDP{}).
+		Named("idp-reconciler").
+		Watches(&appsv1.StatefulSet{}, idpFilter).
+		Watches(&corev1.ServiceAccount{}, idpFilter).
+		Watches(&corev1.Secret{}, idpFilter).
+		Watches(&corev1.Service{}, idpFilter).
+		Watches(&rbacv1.Role{}, idpFilter).
+		Watches(&rbacv1.RoleBinding{}, idpFilter).
+		Complete(&IDPReconciler{
+			recorder:    eventRecorder,
+			tsNamespace: opts.tailscaleNamespace,
+			Client:      mgr.GetClient(),
+			l:           opts.log.Named("idp-reconciler"),
+			clock:       tstime.DefaultClock{},
+			tsClient:    opts.tsClient,
+			loginServer: opts.loginServer,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create IDP reconciler: %v", err)
+	}
+
 	// kube-apiserver's Tailscale Service reconciler.
 	err = builder.
 		ControllerManagedBy(mgr).

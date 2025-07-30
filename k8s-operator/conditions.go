@@ -91,6 +91,14 @@ func SetProxyGroupCondition(pg *tsapi.ProxyGroup, conditionType tsapi.ConditionT
 	pg.Status.Conditions = conds
 }
 
+// SetIDPCondition ensures that IDP status has a condition with the
+// given attributes. LastTransitionTime gets set every time condition's status
+// changes.
+func SetIDPCondition(tsidp *tsapi.IDP, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
+	conds := updateCondition(tsidp.Status.Conditions, conditionType, status, reason, message, gen, clock, logger)
+	tsidp.Status.Conditions = conds
+}
+
 func updateCondition(conds []metav1.Condition, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) []metav1.Condition {
 	newCondition := metav1.Condition{
 		Type:               string(conditionType),

@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,7 +32,6 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -44,8 +42,6 @@ const (
 	reasonRecorderCreating       = "RecorderCreating"
 	reasonRecorderCreated        = "RecorderCreated"
 	reasonRecorderInvalid        = "RecorderInvalid"
-
-	currentProfileKey = "_current-profile"
 )
 
 var gaugeRecorderResources = clientmetric.NewGauge(kubetypes.MetricRecorderCount)
@@ -284,7 +280,7 @@ func (r *RecorderReconciler) maybeCleanupServiceAccounts(ctx context.Context, ts
 func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Recorder) (bool, error) {
 	logger := r.logger(tsr.Name)
 
-	prefs, ok, err := r.getDevicePrefs(ctx, tsr.Name)
+	prefs, ok, err := r.getDevicePrefsFromKubestore(ctx, tsr.Name)
 	if err != nil {
 		return false, err
 	}
@@ -412,7 +408,7 @@ func (r *RecorderReconciler) getStateSecret(ctx context.Context, tsrName string)
 	return secret, nil
 }
 
-func (r *RecorderReconciler) getDevicePrefs(ctx context.Context, tsrName string) (prefs prefs, ok bool, err error) {
+func (r *RecorderReconciler) getDevicePrefsFromKubestore(ctx context.Context, tsrName string) (prefs nodePrefs, ok bool, err error) {
 	secret, err := r.getStateSecret(ctx, tsrName)
 	if err != nil || secret == nil {
 		return prefs, false, err
@@ -421,33 +417,13 @@ func (r *RecorderReconciler) getDevicePrefs(ctx context.Context, tsrName string)
 	return getDevicePrefs(secret)
 }
 
-// getDevicePrefs returns 'ok == true' iff the node ID is found. The dnsName
-// is expected to always be non-empty if the node ID is, but not required.
-func getDevicePrefs(secret *corev1.Secret) (prefs prefs, ok bool, err error) {
-	// TODO(tomhjp): Should maybe use ipn to parse the following info instead.
-	currentProfile, ok := secret.Data[currentProfileKey]
-	if !ok {
-		return prefs, false, nil
-	}
-	profileBytes, ok := secret.Data[string(currentProfile)]
-	if !ok {
-		return prefs, false, nil
-	}
-	if err := json.Unmarshal(profileBytes, &prefs); err != nil {
-		return prefs, false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
-	}
-
-	ok = prefs.Config.NodeID != ""
-	return prefs, ok, nil
-}
-
 func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
 	secret, err := r.getStateSecret(ctx, tsrName)
 	if err != nil || secret == nil {
 		return tsapi.RecorderTailnetDevice{}, false, err
 	}
 
-	prefs, ok, err := getDevicePrefs(secret)
+	prefs, ok, err := getDevicePrefsFromKubestore(secret)
 	if !ok || err != nil {
 		return tsapi.RecorderTailnetDevice{}, false, err
 	}
@@ -471,19 +447,6 @@ func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) 
 	return d, true, nil
 }
 
-// [prefs] is a subset of the ipn.Prefs struct used for extracting information
-// from the state Secret of Tailscale devices.
-type prefs struct {
-	Config struct {
-		NodeID      tailcfg.StableNodeID `json:"NodeID"`
-		UserProfile struct {
-			// LoginName is the MagicDNS name of the device, e.g. foo.tail-scale.ts.net.
-			LoginName string `json:"LoginName"`
-		} `json:"UserProfile"`
-	} `json:"Config"`
-
-	AdvertiseServices []string `json:"AdvertiseServices"`
-}
 
 func markedForDeletion(obj metav1.Object) bool {
 	return !obj.GetDeletionTimestamp().IsZero()
