@@ -451,6 +451,7 @@ func (s *idpServer) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc(oidcJWKSPath, s.serveJWKS)
 	mux.HandleFunc(oidcConfigPath, s.serveOpenIDConfig)
+	mux.HandleFunc(oauthMetadataPath, s.serveOAuthMetadata)
 	mux.HandleFunc("/authorize/", s.authorize)
 	mux.HandleFunc("/userinfo", s.serveUserInfo)
 	mux.HandleFunc("/token", s.serveToken)
@@ -797,8 +798,9 @@ type oidcTokenResponse struct {
 }
 
 const (
-	oidcJWKSPath   = "/.well-known/jwks.json"
-	oidcConfigPath = "/.well-known/openid-configuration"
+	oidcJWKSPath     = "/.well-known/jwks.json"
+	oidcConfigPath   = "/.well-known/openid-configuration"
+	oauthMetadataPath = "/.well-known/oauth-authorization-server"
 )
 
 func (s *idpServer) oidcSigner() (jose.Signer, error) {
@@ -889,6 +891,20 @@ type openIDProviderMetadata struct {
 	// Currently we fill out the REQUIRED fields, scopes_supported and claims_supported.
 }
 
+// oauthAuthorizationServerMetadata is a representation of
+// OAuth 2.0 Authorization Server Metadata as defined in RFC 8414.
+// https://datatracker.ietf.org/doc/html/rfc8414
+type oauthAuthorizationServerMetadata struct {
+	Issuer                           string              `json:"issuer"`
+	AuthorizationEndpoint            string              `json:"authorization_endpoint"`
+	TokenEndpoint                    string              `json:"token_endpoint"`
+	JWKS_URI                         string              `json:"jwks_uri"`
+	ResponseTypesSupported           views.Slice[string] `json:"response_types_supported"`
+	GrantTypesSupported              views.Slice[string] `json:"grant_types_supported"`
+	ScopesSupported                  views.Slice[string] `json:"scopes_supported,omitempty"`
+	TokenEndpointAuthMethodsSupported views.Slice[string] `json:"token_endpoint_auth_methods_supported"`
+}
+
 type tailscaleClaims struct {
 	jwt.Claims `json:",inline"`
 	Nonce      string                    `json:"nonce,omitempty"` // the nonce from the request
@@ -930,6 +946,10 @@ var (
 	// The algo used for signing. The OpenID spec says "The algorithm RS256 MUST be included."
 	// https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata
 	openIDSupportedSigningAlgos = views.SliceOf([]string{string(jose.RS256)})
+
+	// OAuth 2.0 specific metadata constants
+	oauthSupportedGrantTypes = views.SliceOf([]string{"authorization_code"})
+	oauthSupportedTokenEndpointAuthMethods = views.SliceOf([]string{"client_secret_post", "client_secret_basic"})
 )
 
 func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
@@ -952,20 +972,26 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
 		log.Printf("Error parsing remote addr: %v", err)
+		http.Error(w, "tsidp: invalid remote address", http.StatusBadRequest)
 		return
 	}
 	var authorizeEndpoint string
 	rpEndpoint := s.serverURL
 	if isFunnelRequest(r) {
 		authorizeEndpoint = fmt.Sprintf("%s/authorize/funnel", s.serverURL)
-	} else if who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr); err == nil {
-		authorizeEndpoint = fmt.Sprintf("%s/authorize/%d", s.serverURL, who.Node.ID)
 	} else if ap.Addr().IsLoopback() {
 		rpEndpoint = s.loopbackURL
 		authorizeEndpoint = fmt.Sprintf("%s/authorize/localhost", s.serverURL)
+	} else if s.lc != nil {
+		if who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr); err == nil {
+			authorizeEndpoint = fmt.Sprintf("%s/authorize/%d", s.serverURL, who.Node.ID)
+		} else {
+			log.Printf("Error getting WhoIs: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	} else {
-		log.Printf("Error getting WhoIs: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "tsidp: internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -983,6 +1009,66 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 		SubjectTypesSupported:            openIDSupportedSubjectTypes,
 		ClaimsSupported:                  openIDSupportedClaims,
 		IDTokenSigningAlgValuesSupported: openIDSupportedSigningAlgos,
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s *idpServer) serveOAuthMetadata(w http.ResponseWriter, r *http.Request) {
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", "*")
+	h.Set("Access-Control-Allow-Method", "GET, OPTIONS")
+	// allow all to prevent errors from client sending their own bespoke headers
+	// and having the server reject the request.
+	h.Set("Access-Control-Allow-Headers", "*")
+
+	// early return for pre-flight OPTIONS requests.
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.URL.Path != oauthMetadataPath {
+		http.Error(w, "tsidp: not found", http.StatusNotFound)
+		return
+	}
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		log.Printf("Error parsing remote addr: %v", err)
+		http.Error(w, "tsidp: invalid remote address", http.StatusBadRequest)
+		return
+	}
+	var authorizeEndpoint string
+	rpEndpoint := s.serverURL
+	if isFunnelRequest(r) {
+		authorizeEndpoint = fmt.Sprintf("%s/authorize/funnel", s.serverURL)
+	} else if ap.Addr().IsLoopback() {
+		rpEndpoint = s.loopbackURL
+		authorizeEndpoint = fmt.Sprintf("%s/authorize/localhost", s.serverURL)
+	} else if s.lc != nil {
+		if who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr); err == nil {
+			authorizeEndpoint = fmt.Sprintf("%s/authorize/%d", s.serverURL, who.Node.ID)
+		} else {
+			log.Printf("Error getting WhoIs: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		http.Error(w, "tsidp: internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	je := json.NewEncoder(w)
+	je.SetIndent("", "  ")
+	if err := je.Encode(oauthAuthorizationServerMetadata{
+		Issuer:                           rpEndpoint,
+		AuthorizationEndpoint:            authorizeEndpoint,
+		TokenEndpoint:                    rpEndpoint + "/token",
+		JWKS_URI:                         rpEndpoint + oidcJWKSPath,
+		ResponseTypesSupported:           openIDSupportedReponseTypes,
+		GrantTypesSupported:              oauthSupportedGrantTypes,
+		ScopesSupported:                  openIDSupportedScopes,
+		TokenEndpointAuthMethodsSupported: oauthSupportedTokenEndpointAuthMethods,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

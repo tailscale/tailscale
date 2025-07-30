@@ -963,3 +963,339 @@ func TestFunnelClientsPersistence(t *testing.T) {
 		}
 	})
 }
+
+func TestServeOpenIDConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		remoteAddr     string
+		isFunnel       bool
+		expectStatus   int
+		checkResponse  func(t *testing.T, body []byte)
+	}{
+		{
+			name:         "OPTIONS request - CORS preflight",
+			method:       "OPTIONS",
+			path:         "/.well-known/openid-configuration",
+			remoteAddr:   "100.64.1.2:12345",
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				if len(body) != 0 {
+					t.Errorf("expected empty body for OPTIONS request, got: %s", body)
+				}
+			},
+		},
+		{
+			name:         "GET request - localhost",
+			method:       "GET",
+			path:         "/.well-known/openid-configuration",
+			remoteAddr:   "127.0.0.1:12345",
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var metadata map[string]any
+				if err := json.Unmarshal(body, &metadata); err != nil {
+					t.Fatalf("failed to parse response: %v", err)
+				}
+
+				// Check required OpenID fields
+				requiredFields := []string{
+					"issuer",
+					"authorization_endpoint",
+					"token_endpoint",
+					"userinfo_endpoint",
+					"jwks_uri",
+					"response_types_supported",
+					"subject_types_supported",
+					"id_token_signing_alg_values_supported",
+				}
+				for _, field := range requiredFields {
+					if _, ok := metadata[field]; !ok {
+						t.Errorf("missing required field: %s", field)
+					}
+				}
+
+				// Check that authorization endpoint contains localhost
+				authEndpoint, ok := metadata["authorization_endpoint"].(string)
+				if !ok || !strings.Contains(authEndpoint, "/authorize/localhost") {
+					t.Errorf("expected localhost authorization endpoint, got: %v", metadata["authorization_endpoint"])
+				}
+
+				// Check issuer for localhost
+				issuer, ok := metadata["issuer"].(string)
+				if !ok || !strings.HasPrefix(issuer, "http://localhost") {
+					t.Errorf("expected localhost issuer, got: %v", metadata["issuer"])
+				}
+
+				// Check response types
+				responseTypes, ok := metadata["response_types_supported"].([]any)
+				if !ok || len(responseTypes) == 0 {
+					t.Errorf("invalid response_types_supported: %v", metadata["response_types_supported"])
+				}
+
+				// Check subject types
+				subjectTypes, ok := metadata["subject_types_supported"].([]any)
+				if !ok || len(subjectTypes) == 0 {
+					t.Errorf("invalid subject_types_supported: %v", metadata["subject_types_supported"])
+				}
+			},
+		},
+		{
+			name:         "GET request - funnel",
+			method:       "GET",
+			path:         "/.well-known/openid-configuration",
+			remoteAddr:   "100.64.1.2:12345",
+			isFunnel:     true,
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var metadata map[string]any
+				if err := json.Unmarshal(body, &metadata); err != nil {
+					t.Fatalf("failed to parse response: %v", err)
+				}
+
+				// Check that authorization endpoint contains funnel
+				authEndpoint, ok := metadata["authorization_endpoint"].(string)
+				if !ok || !strings.Contains(authEndpoint, "/authorize/funnel") {
+					t.Errorf("expected funnel authorization endpoint, got: %v", metadata["authorization_endpoint"])
+				}
+
+				// Check issuer
+				issuer, ok := metadata["issuer"].(string)
+				if !ok || !strings.HasPrefix(issuer, "https://") {
+					t.Errorf("invalid issuer: %v", metadata["issuer"])
+				}
+			},
+		},
+		{
+			name:         "GET request - wrong path",
+			method:       "GET",
+			path:         "/.well-known/wrong-path",
+			remoteAddr:   "100.64.1.2:12345",
+			expectStatus: http.StatusNotFound,
+			checkResponse: func(t *testing.T, body []byte) {
+				if !strings.Contains(string(body), "not found") {
+					t.Errorf("expected not found error, got: %s", body)
+				}
+			},
+		},
+		{
+			name:         "GET request - invalid remote address",
+			method:       "GET",
+			path:         "/.well-known/openid-configuration",
+			remoteAddr:   "invalid-address",
+			expectStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, body []byte) {
+				if !strings.Contains(string(body), "invalid remote address") {
+					t.Errorf("expected invalid remote address error, got: %s", body)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:   "https://idp.test.ts.net",
+				loopbackURL: "http://localhost:8080",
+			}
+
+			// Only set lc to nil - this will trigger the localhost/error path
+			// when the server can't determine the node ID
+			s.lc = nil
+
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req.RemoteAddr = tt.remoteAddr
+
+			if tt.isFunnel {
+				req.Header.Set("Tailscale-Funnel-Request", "true")
+			}
+
+			rr := httptest.NewRecorder()
+
+			s.serveOpenIDConfig(rr, req)
+
+			if rr.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rr.Code)
+			}
+
+			// Check CORS headers  
+			if h := rr.Header().Get("Access-Control-Allow-Origin"); h != "*" {
+				t.Errorf("expected CORS origin *, got %s", h)
+			}
+
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rr.Body.Bytes())
+			}
+		})
+	}
+}
+
+func TestServeOAuthMetadata(t *testing.T) {
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		remoteAddr     string
+		isFunnel       bool
+		expectStatus   int
+		checkResponse  func(t *testing.T, body []byte)
+	}{
+		{
+			name:         "OPTIONS request - CORS preflight",
+			method:       "OPTIONS",
+			path:         "/.well-known/oauth-authorization-server",
+			remoteAddr:   "100.64.1.2:12345",
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				if len(body) != 0 {
+					t.Errorf("expected empty body for OPTIONS request, got: %s", body)
+				}
+			},
+		},
+		{
+			name:         "GET request - localhost",
+			method:       "GET",
+			path:         "/.well-known/oauth-authorization-server",
+			remoteAddr:   "127.0.0.1:12345",
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var metadata map[string]any
+				if err := json.Unmarshal(body, &metadata); err != nil {
+					t.Fatalf("failed to parse response: %v", err)
+				}
+
+				// Check required fields
+				requiredFields := []string{
+					"issuer",
+					"authorization_endpoint",
+					"token_endpoint",
+					"response_types_supported",
+					"grant_types_supported",
+					"token_endpoint_auth_methods_supported",
+				}
+				for _, field := range requiredFields {
+					if _, ok := metadata[field]; !ok {
+						t.Errorf("missing required field: %s", field)
+					}
+				}
+
+				// Check that authorization endpoint contains localhost
+				authEndpoint, ok := metadata["authorization_endpoint"].(string)
+				if !ok || !strings.Contains(authEndpoint, "/authorize/localhost") {
+					t.Errorf("expected localhost authorization endpoint, got: %v", metadata["authorization_endpoint"])
+				}
+
+				// Check issuer for localhost
+				issuer, ok := metadata["issuer"].(string)
+				if !ok || !strings.HasPrefix(issuer, "http://localhost") {
+					t.Errorf("expected localhost issuer, got: %v", metadata["issuer"])
+				}
+
+				// Check response types
+				responseTypes, ok := metadata["response_types_supported"].([]any)
+				if !ok || len(responseTypes) == 0 {
+					t.Errorf("invalid response_types_supported: %v", metadata["response_types_supported"])
+				}
+
+				// Check grant types
+				grantTypes, ok := metadata["grant_types_supported"].([]any)
+				if !ok || len(grantTypes) != 1 || grantTypes[0] != "authorization_code" {
+					t.Errorf("invalid grant_types_supported: %v", metadata["grant_types_supported"])
+				}
+
+				// Check token endpoint auth methods
+				authMethods, ok := metadata["token_endpoint_auth_methods_supported"].([]any)
+				if !ok || len(authMethods) != 2 {
+					t.Errorf("invalid token_endpoint_auth_methods_supported: %v", metadata["token_endpoint_auth_methods_supported"])
+				}
+			},
+		},
+		{
+			name:         "GET request - funnel",
+			method:       "GET",
+			path:         "/.well-known/oauth-authorization-server",
+			remoteAddr:   "100.64.1.2:12345",
+			isFunnel:     true,
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var metadata map[string]any
+				if err := json.Unmarshal(body, &metadata); err != nil {
+					t.Fatalf("failed to parse response: %v", err)
+				}
+
+				// Check that authorization endpoint contains funnel
+				authEndpoint, ok := metadata["authorization_endpoint"].(string)
+				if !ok || !strings.Contains(authEndpoint, "/authorize/funnel") {
+					t.Errorf("expected funnel authorization endpoint, got: %v", metadata["authorization_endpoint"])
+				}
+
+				// Check issuer
+				issuer, ok := metadata["issuer"].(string)
+				if !ok || !strings.HasPrefix(issuer, "https://") {
+					t.Errorf("invalid issuer: %v", metadata["issuer"])
+				}
+			},
+		},
+		{
+			name:         "GET request - wrong path",
+			method:       "GET",
+			path:         "/.well-known/wrong-path",
+			remoteAddr:   "100.64.1.2:12345",
+			expectStatus: http.StatusNotFound,
+			checkResponse: func(t *testing.T, body []byte) {
+				if !strings.Contains(string(body), "not found") {
+					t.Errorf("expected not found error, got: %s", body)
+				}
+			},
+		},
+		{
+			name:         "GET request - invalid remote address",
+			method:       "GET",
+			path:         "/.well-known/oauth-authorization-server",
+			remoteAddr:   "invalid-address",
+			expectStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, body []byte) {
+				if !strings.Contains(string(body), "invalid remote address") {
+					t.Errorf("expected invalid remote address error, got: %s", body)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:   "https://idp.test.ts.net",
+				loopbackURL: "http://localhost:8080",
+			}
+
+			// Only set lc to nil - this will trigger the localhost/error path
+			// when the server can't determine the node ID
+			s.lc = nil
+
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req.RemoteAddr = tt.remoteAddr
+
+			if tt.isFunnel {
+				req.Header.Set("Tailscale-Funnel-Request", "true")
+			}
+
+			rr := httptest.NewRecorder()
+
+			s.serveOAuthMetadata(rr, req)
+
+			if rr.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rr.Code)
+			}
+
+			// Check CORS headers  
+			if h := rr.Header().Get("Access-Control-Allow-Origin"); h != "*" {
+				t.Errorf("expected CORS origin *, got %s", h)
+			}
+
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rr.Body.Bytes())
+			}
+		})
+	}
+}
