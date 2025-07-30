@@ -136,9 +136,9 @@
     };
 
     nixosModules = {
-      # tailscale = import ./nixos/tailscaled-module.nix;
+      tailscale = import ./nixos/tailscaled-module.nix self;
       tsidp = import ./nixos/tsidp-module.nix self;
-      # default = self.nixosModules.tailscale;
+      default = self.nixosModules.tailscale;
     };
 
     devShells = eachSystem (pkgs: {

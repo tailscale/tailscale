@@ -119,7 +119,7 @@ in {
         RestartSec = cfg.serviceRestartInterval;
         StateDirectory = "tsidp";
         User = "${cfg.user}";
-        ExecStart = "${cfg.pkg}/bin/tsidp --dir ${cfg.dataDir} --hostname ${cfg.hostname}${lib.optionalString cfg.verbose " --verbose"}${lib.optionalString cfg.funnel " --funnel"}${lib.optionalString cfg.useLocalTailscale " --use-local-tailscaled"}${lib.optionalString (cfg.port != null) " --port ${builtins.toString cfg.port}"}${lib.optionalString (cfg.localPort != null) " --local-port ${builtins.toString cfg.localPort}"}";
+        ExecStart = "${cfg.package}/bin/tsidp --dir ${cfg.dataDir} --hostname ${cfg.hostname}${lib.optionalString cfg.verbose " --verbose"}${lib.optionalString cfg.funnel " --funnel"}${lib.optionalString cfg.useLocalTailscale " --use-local-tailscaled"}${lib.optionalString (cfg.port != null) " --port ${builtins.toString cfg.port}"}${lib.optionalString (cfg.localPort != null) " --local-port ${builtins.toString cfg.localPort}"}";
       };
     };
   };
