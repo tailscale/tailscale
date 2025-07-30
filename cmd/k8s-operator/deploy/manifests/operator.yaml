@@ -140,8 +140,18 @@ spec:
                                     Connector node. If unset, hostname defaults to <connector
                                     name>-connector. Hostname can contain lower case letters, numbers and
                                     dashes, it must not start or end with a dash and must be between 2
-                                    and 63 characters long.
+                                    and 63 characters long. This field should only be used when creating a connector
+                                    with an unspecified number of replicas, or a single replica.
                                 pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
+                                type: string
+                            hostnamePrefix:
+                                description: |-
+                                    HostnamePrefix specifies the hostname prefix for each
+                                    replica. Each device will have the integer number
+                                    from its StatefulSet pod appended to this prefix to form the full hostname.
+                                    HostnamePrefix can contain lower case letters, numbers and dashes, it
+                                    must not start with a dash and must be between 1 and 62 characters long.
+                                pattern: ^[a-z0-9][a-z0-9-]{0,61}$
                                 type: string
                             proxyClass:
                                 description: |-
@@ -150,6 +160,14 @@ spec:
                                     resources created for this Connector. If unset, the operator will
                                     create resources with the default configuration.
                                 type: string
+                            replicas:
+                                description: |-
+                                    Replicas specifies how many devices to create. Set this to enable
+                                    high availability for app connectors, subnet routers, or exit nodes.
+                                    https://tailscale.com/kb/1115/high-availability. Defaults to 1.
+                                format: int32
+                                minimum: 0
+                                type: integer
                             subnetRouter:
                                 description: |-
                                     SubnetRouter defines subnet routes that the Connector device should
@@ -194,6 +212,10 @@ spec:
                               rule: has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true) || has(self.appConnector)
                             - message: The appConnector field is mutually exclusive with exitNode and subnetRouter fields.
                               rule: '!((has(self.subnetRouter) || (has(self.exitNode)  && self.exitNode == true)) && has(self.appConnector))'
+                            - message: The hostname field cannot be specified when replicas is greater than 1.
+                              rule: '!(has(self.hostname) && has(self.replicas) && self.replicas > 1)'
+                            - message: The hostname and hostnamePrefix fields are mutually exclusive.
+                              rule: '!(has(self.hostname) && has(self.hostnamePrefix))'
                     status:
                         description: |-
                             ConnectorStatus describes the status of the Connector. This is set
@@ -260,11 +282,32 @@ spec:
                                 x-kubernetes-list-map-keys:
                                     - type
                                 x-kubernetes-list-type: map
+                            devices:
+                                description: Devices contains information on each device managed by the Connector resource.
+                                items:
+                                    properties:
+                                        hostname:
+                                            description: |-
+                                                Hostname is the fully qualified domain name of the Connector replica.
+                                                If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
+                                                node.
+                                            type: string
+                                        tailnetIPs:
+                                            description: |-
+                                                TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
+                                                assigned to the Connector replica.
+                                            items:
+                                                type: string
+                                            type: array
+                                    type: object
+                                type: array
                             hostname:
                                 description: |-
                                     Hostname is the fully qualified domain name of the Connector node.
                                     If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
-                                    node.
+                                    node. When using multiple replicas, this field will be populated with the
+                                    first replica's hostname. Use the Hostnames field for the full list
+                                    of hostnames.
                                 type: string
                             isAppConnector:
                                 description: IsAppConnector is set to true if the Connector acts as an app connector.
