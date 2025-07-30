@@ -110,6 +110,97 @@ func supportsV2(ctx context.Context, hc *http.Client, ap netip.AddrPort) bool {
 	return resp.StatusCode == http.StatusOK && resp.ProtoMajor > 1
 }
 
+// supportsEvent checks whether a recorder instance supports the /v2/event
+// endpoint.
+func supportsEvent(ctx context.Context, hc *http.Client, ap netip.AddrPort) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, http2ProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, httpm.HEAD, fmt.Sprintf("http://%s/v2/event", ap), nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return false, err
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		return true, nil
+	}
+
+	if resp.StatusCode != http.StatusNotFound {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			// Handle the case where reading the body itself fails
+			return false, fmt.Errorf("server returned non-OK status: %s, and failed to read body: %w", resp.Status, err)
+		}
+
+		return false, fmt.Errorf("server returned non-OK status: %d: %s", resp.StatusCode, string(body))
+	}
+
+	return false, nil
+}
+
+const addressNotSupportEventv2 = `recorder at address %q does not support "/v2/event" endpoint`
+
+type EventAPINotSupportedErr struct {
+	ap netip.AddrPort
+}
+
+func (e EventAPINotSupportedErr) Error() string {
+	return fmt.Sprintf(addressNotSupportEventv2, e.ap)
+}
+
+// SendEvent sends an event the tsrecorders /v2/event endpoint.
+func SendEvent(ap netip.AddrPort, event io.Reader, dial netx.DialFunc) (retErr error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		if retErr != nil {
+			cancel()
+		}
+	}()
+
+	client := clientHTTP1(ctx, dial)
+
+	supported, err := supportsEvent(ctx, client, ap)
+	if err != nil {
+		return fmt.Errorf("error checking support for `/v2/event` endpoint: %w", err)
+	}
+
+	if !supported {
+		return EventAPINotSupportedErr{
+			ap: ap,
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s/v2/event", ap.String()), event)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			// Handle the case where reading the body itself fails
+			return fmt.Errorf("server returned non-OK status: %s, and failed to read body: %w", resp.Status, err)
+		}
+
+		return fmt.Errorf("server returned non-OK status: %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // connectV1 connects to the legacy /record endpoint on the recorder. It is
 // used for backwards-compatibility with older tsrecorder instances.
 //
