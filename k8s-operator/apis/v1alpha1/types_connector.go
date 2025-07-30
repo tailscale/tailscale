@@ -113,6 +113,12 @@ type ConnectorSpec struct {
 	// https://tailscale.com/kb/1103/exit-nodes
 	// +optional
 	ExitNode bool `json:"exitNode"`
+
+	// Replicas specifies how many replicas to create the StatefulSet with.
+	// Defaults to 1.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 // SubnetRouter defines subnet routes that should be exposed to tailnet via a

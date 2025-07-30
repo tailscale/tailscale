@@ -20,6 +20,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
 
@@ -36,6 +37,7 @@ func TestConnector(t *testing.T) {
 			APIVersion: "tailscale.com/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
+			Replicas: ptr.To[int32](1),
 			SubnetRouter: &tsapi.SubnetRouter{
 				AdvertiseRoutes: []tsapi.Route{"10.40.0.0/14"},
 			},
@@ -55,7 +57,8 @@ func TestConnector(t *testing.T) {
 
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	cr := &ConnectorReconciler{
-		Client: fc,
+		Client:   fc,
+		recorder: record.NewFakeRecorder(10),
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
 			tsClient:          ft,
@@ -78,6 +81,7 @@ func TestConnector(t *testing.T) {
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
 		app:          kubetypes.AppConnector,
+		replicas:     cn.Spec.Replicas,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
@@ -156,6 +160,7 @@ func TestConnector(t *testing.T) {
 			APIVersion: "tailscale.io/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
+			Replicas: ptr.To[int32](1),
 			SubnetRouter: &tsapi.SubnetRouter{
 				AdvertiseRoutes: []tsapi.Route{"10.40.0.0/14"},
 			},
@@ -174,6 +179,7 @@ func TestConnector(t *testing.T) {
 		subnetRoutes: "10.40.0.0/14",
 		hostname:     "test-connector",
 		app:          kubetypes.AppConnector,
+		replicas:     cn.Spec.Replicas,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
@@ -217,6 +223,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 			APIVersion: "tailscale.io/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
+			Replicas: ptr.To[int32](1),
 			SubnetRouter: &tsapi.SubnetRouter{
 				AdvertiseRoutes: []tsapi.Route{"10.40.0.0/14"},
 			},
@@ -260,6 +267,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
 		app:          kubetypes.AppConnector,
+		replicas:     cn.Spec.Replicas,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
@@ -311,6 +319,7 @@ func TestConnectorWithAppConnector(t *testing.T) {
 			APIVersion: "tailscale.io/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
+			Replicas:     ptr.To[int32](1),
 			AppConnector: &tsapi.AppConnector{},
 		},
 	}
@@ -350,6 +359,7 @@ func TestConnectorWithAppConnector(t *testing.T) {
 		hostname:       "test-connector",
 		app:            kubetypes.AppConnector,
 		isAppConnector: true,
+		replicas:       cn.Spec.Replicas,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
