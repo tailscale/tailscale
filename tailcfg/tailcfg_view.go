@@ -19,7 +19,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,DNSResolver
 
 // View returns a read-only view of User.
 func (p *User) View() UserView {
@@ -538,13 +538,13 @@ func (v *DNSConfigView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v DNSConfigView) Resolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
-	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.Resolvers)
+func (v DNSConfigView) Resolvers() views.SliceView[*DNSResolver, DNSResolverView] {
+	return views.SliceOfViews[*DNSResolver, DNSResolverView](v.ж.Resolvers)
 }
 
-func (v DNSConfigView) Routes() views.MapFn[string, []*dnstype.Resolver, views.SliceView[*dnstype.Resolver, dnstype.ResolverView]] {
-	return views.MapFnOf(v.ж.Routes, func(t []*dnstype.Resolver) views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
-		return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](t)
+func (v DNSConfigView) Routes() views.MapFn[string, []*DNSResolver, views.SliceView[*DNSResolver, DNSResolverView]] {
+	return views.MapFnOf(v.ж.Routes, func(t []*DNSResolver) views.SliceView[*DNSResolver, DNSResolverView] {
+		return views.SliceOfViews[*DNSResolver, DNSResolverView](t)
 	})
 }
 func (v DNSConfigView) FallbackResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
@@ -562,8 +562,8 @@ func (v DNSConfigView) TempCorpIssue13969() string { return v.ж.TempCorpIssue13
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DNSConfigViewNeedsRegeneration = DNSConfig(struct {
-	Resolvers           []*dnstype.Resolver
-	Routes              map[string][]*dnstype.Resolver
+	Resolvers           []*DNSResolver
+	Routes              map[string][]*DNSResolver
 	FallbackResolvers   []*dnstype.Resolver
 	Domains             []string
 	Proxied             bool
@@ -1476,4 +1476,58 @@ var _VIPServiceViewNeedsRegeneration = VIPService(struct {
 	Name   ServiceName
 	Ports  []ProtoPortRange
 	Active bool
+}{})
+
+// View returns a read-only view of DNSResolver.
+func (p *DNSResolver) View() DNSResolverView {
+	return DNSResolverView{ж: p}
+}
+
+// DNSResolverView provides a read-only view over DNSResolver.
+//
+// Its methods should only be called if `Valid()` returns true.
+type DNSResolverView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *DNSResolver
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v DNSResolverView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v DNSResolverView) AsStruct() *DNSResolver {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v DNSResolverView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *DNSResolverView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x DNSResolver
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v DNSResolverView) Resolver() dnstype.ResolverView { return v.ж.Resolver.View() }
+func (v DNSResolverView) UseWithExitNode() bool          { return v.ж.UseWithExitNode }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _DNSResolverViewNeedsRegeneration = DNSResolver(struct {
+	dnstype.Resolver
+	UseWithExitNode bool
 }{})

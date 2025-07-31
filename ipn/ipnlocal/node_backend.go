@@ -578,6 +578,61 @@ func (nb *nodeBackend) doShutdown(cause error) {
 	nb.eventClient.Close()
 }
 
+func useWithExitNodeResolvers(dc tailcfg.DNSConfig) []*dnstype.Resolver {
+	return convertResolvers(dc.Resolvers, true)
+}
+
+func useWithExitNodeRoutes(dc tailcfg.DNSConfig) map[string][]*dnstype.Resolver {
+	return convertRoutes(dc.Routes, true)
+}
+
+func resolvers(dc tailcfg.DNSConfig) []*dnstype.Resolver {
+	return convertResolvers(dc.Resolvers, false)
+}
+
+func routes(dc tailcfg.DNSConfig) map[string][]*dnstype.Resolver {
+	return convertRoutes(dc.Routes, false)
+}
+
+// convertResolvers converts tailcfg dns resolvers, which may contain additional
+// configuration, to dnstype resolvers, for use in the wireguard engine,
+// taking into account exit node contexts.
+func convertResolvers(resolvers []*tailcfg.DNSResolver, usingExitNode bool) []*dnstype.Resolver {
+	converted := make([]*dnstype.Resolver, 0, len(resolvers))
+	for _, res := range resolvers {
+		// If not using an exit node, all resolvers persist.
+		// Otherwise, check if the resolver is marked for use with exit node.
+		if !usingExitNode || res.UseWithExitNode {
+			converted = append(converted, &res.Resolver)
+		}
+	}
+	return converted
+}
+
+// convertRoutes converts tailcfg dns routes containing tailcfg dns resolvers
+// to a map of routes containing dnstype resolvers, for use in the wireguard engine,
+// taking into account exit node contexts.
+func convertRoutes(routes map[string][]*tailcfg.DNSResolver, usingExitNode bool) map[string][]*dnstype.Resolver {
+	converted := make(map[string][]*dnstype.Resolver)
+	for suffix, resolvers := range routes {
+		// Suffixes with no resolvers represent a valid configuration,
+		// and should persist regardless of exit node considerations.
+		if len(resolvers) == 0 {
+			converted[suffix] = make([]*dnstype.Resolver, 0)
+			continue
+		}
+
+		// In exit node contexts, we filter out resolvers not configured for use with
+		// exit nodes. If there are no such configured resolvers, there should not be an entry for that suffix.
+		convertedResolvers := convertResolvers(resolvers, usingExitNode)
+		if len(convertedResolvers) > 0 {
+			converted[suffix] = convertedResolvers
+		}
+	}
+
+	return converted
+}
+
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
 // prefs, client OS version, and cloud hosting environment.
 //
@@ -700,10 +755,42 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
 	}
 
+	addSplitDNSRoutes := func(routes map[string][]*dnstype.Resolver) {
+		for suffix, resolvers := range routes {
+			fqdn, err := dnsname.ToFQDN(suffix)
+			if err != nil {
+				logf("[unexpected] non-FQDN route suffix %q", suffix)
+			}
+
+			// Create map entry even if len(resolvers) == 0; Issue 2706.
+			// This lets the control plane send ExtraRecords for which we
+			// can authoritatively answer "name not exists" for when the
+			// control plane also sends this explicit but empty route
+			// making it as something we handle.
+			//
+			// While we're already populating it, might as well size the
+			// slice appropriately.
+			// Per #9498 the exact requirements of nil vs empty slice remain
+			// unclear, this is a haunted graveyard to be resolved.
+			dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
+			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
+		}
+	}
+
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
-	// to run a DoH DNS proxy, then send all our DNS traffic through it.
+	// to run a DoH DNS proxy, then send all our DNS traffic through it,
+	// unless we find resolvers with OverrideExitNodeDNS set, in which case we use that.
 	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
-		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
+		filtered := convertResolvers(nm.DNS.Resolvers, true)
+		if len(filtered) > 0 {
+			addDefault(filtered)
+		} else {
+			// If no default global resolvers with the override
+			// are configured, configure the exit node's resolver.
+			addDefault([]*dnstype.Resolver{{Addr: dohURL}})
+		}
+
+		addSplitDNSRoutes(convertRoutes(nm.DNS.Routes, true))
 		return dcfg
 	}
 
@@ -711,32 +798,15 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// use those resolvers as the default, otherwise if there are WireGuard exit
 	// node resolvers, use those as the default.
 	if len(nm.DNS.Resolvers) > 0 {
-		addDefault(nm.DNS.Resolvers)
+		addDefault(convertResolvers(nm.DNS.Resolvers, false))
 	} else {
 		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
 			addDefault(resolvers)
 		}
 	}
 
-	for suffix, resolvers := range nm.DNS.Routes {
-		fqdn, err := dnsname.ToFQDN(suffix)
-		if err != nil {
-			logf("[unexpected] non-FQDN route suffix %q", suffix)
-		}
-
-		// Create map entry even if len(resolvers) == 0; Issue 2706.
-		// This lets the control plane send ExtraRecords for which we
-		// can authoritatively answer "name not exists" for when the
-		// control plane also sends this explicit but empty route
-		// making it as something we handle.
-		//
-		// While we're already populating it, might as well size the
-		// slice appropriately.
-		// Per #9498 the exact requirements of nil vs empty slice remain
-		// unclear, this is a haunted graveyard to be resolved.
-		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
-		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
-	}
+	// Add split DNS routes, with no regard to exit node configuration (false).
+	addSplitDNSRoutes(convertRoutes(nm.DNS.Routes, false))
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See
