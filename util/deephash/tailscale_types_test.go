@@ -142,8 +142,8 @@ func getVal() *tailscaleTypes {
 				},
 			},
 			DNSConfig: &tailcfg.DNSConfig{
-				Resolvers: []*dnstype.Resolver{
-					{Addr: "10.0.0.1"},
+				Resolvers: []*tailcfg.DNSResolver{
+					{Resolver: dnstype.Resolver{Addr: "10.0.0.1"}},
 				},
 			},
 			PacketFilter: []tailcfg.FilterRule{

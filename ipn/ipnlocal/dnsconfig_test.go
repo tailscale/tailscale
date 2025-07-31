@@ -266,14 +266,14 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			os:   "android",
 			nm: &netmap.NetworkMap{
 				DNS: tailcfg.DNSConfig{
-					Resolvers: []*dnstype.Resolver{
-						{Addr: "8.8.8.8"},
+					Resolvers: []*tailcfg.DNSResolver{
+						{Resolver: dnstype.Resolver{Addr: "8.8.8.8"}},
 					},
 					FallbackResolvers: []*dnstype.Resolver{
 						{Addr: "8.8.4.4"},
 					},
-					Routes: map[string][]*dnstype.Resolver{
-						"foo.com.": {{Addr: "1.2.3.4"}},
+					Routes: map[string][]*tailcfg.DNSResolver{
+						"foo.com.": {{Resolver: dnstype.Resolver{Addr: "1.2.3.4"}}},
 					},
 				},
 			},

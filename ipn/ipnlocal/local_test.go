@@ -2080,7 +2080,23 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 		wantRoutes           map[dnsname.FQDN][]*dnstype.Resolver
 	}
 
-	defaultResolvers := []*dnstype.Resolver{{Addr: "default.example.com"}}
+	const tsUseWithExitNodeResolverAddr = "usewithexitnode.example.com"
+	defaultResolvers := []*dnstype.Resolver{
+		{Addr: "default.example.com"},
+	}
+	containsFlaggedResolvers := append([]*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}}, defaultResolvers...)
+
+	wrapResolvers := func(resolvers []*dnstype.Resolver) []*tailcfg.DNSResolver {
+		rr := make([]*tailcfg.DNSResolver, 0, len(resolvers))
+		for _, r := range resolvers {
+			wrapped := &tailcfg.DNSResolver{Resolver: *r}
+			if r.Addr == tsUseWithExitNodeResolverAddr {
+				wrapped.UseWithExitNode = true
+			}
+			rr = append(rr, wrapped)
+		}
+		return rr
+	}
 	wgResolvers := []*dnstype.Resolver{{Addr: "wg.example.com"}}
 	peers := []tailcfg.NodeView{
 		(&tailcfg.Node{
@@ -2099,16 +2115,51 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 		}).View(),
 	}
 	exitDOH := peerAPIBase(&netmap.NetworkMap{Peers: peers}, peers[0]) + "/dns-query"
-	routes := map[dnsname.FQDN][]*dnstype.Resolver{
+	baseRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
 		"route.example.com.": {{Addr: "route.example.com"}},
 	}
-	stringifyRoutes := func(routes map[dnsname.FQDN][]*dnstype.Resolver) map[string][]*dnstype.Resolver {
+	containsEmptyRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
+		"empty.example.com.": []*dnstype.Resolver{},
+		"route.example.com.": {{Addr: "route.example.com"}},
+	}
+	_ = containsEmptyRoutes
+	containsFlaggedRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
+		"route.example.com.":    {{Addr: "route.example.com"}},
+		"withexit.example.com.": {{Addr: tsUseWithExitNodeResolverAddr}},
+	}
+	containsFlaggedAndEmptyRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
+		"empty.example.com.":    []*dnstype.Resolver{},
+		"route.example.com.":    {{Addr: "route.example.com"}},
+		"withexit.example.com.": {{Addr: tsUseWithExitNodeResolverAddr}},
+	}
+	_ = containsFlaggedAndEmptyRoutes
+	flaggedRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
+		"withexit.example.com.": {{Addr: tsUseWithExitNodeResolverAddr}},
+	}
+	emptyRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
+		"empty.example.com.": []*dnstype.Resolver{},
+	}
+	flaggedAndEmptyRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
+		"empty.example.com.":    []*dnstype.Resolver{},
+		"withexit.example.com.": {{Addr: tsUseWithExitNodeResolverAddr}},
+	}
+	_ = flaggedAndEmptyRoutes
+
+	stringifyRoutes := func(routes map[dnsname.FQDN][]*dnstype.Resolver) map[string][]*tailcfg.DNSResolver {
 		if routes == nil {
 			return nil
 		}
-		m := make(map[string][]*dnstype.Resolver)
+		m := make(map[string][]*tailcfg.DNSResolver)
 		for k, v := range routes {
-			m[string(k)] = v
+			var rr []*tailcfg.DNSResolver
+			for _, res := range v {
+				wrapped := &tailcfg.DNSResolver{Resolver: *res}
+				if res.Addr == tsUseWithExitNodeResolverAddr {
+					wrapped.UseWithExitNode = true
+				}
+				rr = append(rr, wrapped)
+			}
+			m[string(k)] = rr
 		}
 		return m
 	}
@@ -2134,23 +2185,27 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			name:                 "tsExit/noRoutes/defaultResolver",
 			exitNode:             "ts",
 			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Resolvers: defaultResolvers},
+			dnsConfig:            &tailcfg.DNSConfig{Resolvers: wrapResolvers(defaultResolvers)},
 			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
 			wantRoutes:           nil,
 		},
+		{
+			name:                 "tsExit/noRoutes/flaggedResolverOnly",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Resolvers: wrapResolvers(containsFlaggedResolvers)},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}},
+			wantRoutes:           nil,
+		},
 
-		// The following two cases may need to be revisited. For a shared-in
-		// exit node split-DNS may effectively break, furthermore in the future
-		// if different nodes observe different DNS configurations, even a
-		// tailnet local exit node may present a different DNS configuration,
-		// which may not meet expectations in some use cases.
-		// In the case where a default resolver is set, the default resolver
-		// should also perhaps take precedence also.
+		// When at tailscale exit node is in use,
+		// only routes that reference resolvers with the UseWithExitNode should be installed,
+		// as well as routes with 0-length resolver lists, which should be installed in all cases.
 		{
 			name:                 "tsExit/routes/noResolver",
 			exitNode:             "ts",
 			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes)},
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(baseRoutes)},
 			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
 			wantRoutes:           nil,
 		},
@@ -2158,9 +2213,57 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			name:                 "tsExit/routes/defaultResolver",
 			exitNode:             "ts",
 			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes), Resolvers: defaultResolvers},
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(baseRoutes), Resolvers: wrapResolvers(defaultResolvers)},
 			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
 			wantRoutes:           nil,
+		},
+		{
+			name:                 "tsExit/routes/flaggedResolverOnly",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(baseRoutes), Resolvers: wrapResolvers(containsFlaggedResolvers)},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}},
+			wantRoutes:           nil,
+		},
+		{
+			name:                 "tsExit/flaggedRoutesOnly/defaultResolver",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(containsFlaggedRoutes), Resolvers: wrapResolvers(defaultResolvers)},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
+			wantRoutes:           flaggedRoutes,
+		},
+		{
+			name:                 "tsExit/flaggedRoutesOnly/flaggedResolverOnly",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(containsFlaggedRoutes), Resolvers: wrapResolvers(containsFlaggedResolvers)},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}},
+			wantRoutes:           flaggedRoutes,
+		},
+		{
+			name:                 "tsExit/emptyRoutesOnly/defaultResolver",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(containsEmptyRoutes), Resolvers: wrapResolvers(defaultResolvers)},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
+			wantRoutes:           emptyRoutes,
+		},
+		{
+			name:                 "tsExit/flaggedAndEmptyRoutesOnly/defaultResolver",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(containsFlaggedAndEmptyRoutes), Resolvers: wrapResolvers(defaultResolvers)},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
+			wantRoutes:           flaggedAndEmptyRoutes,
+		},
+		{
+			name:                 "tsExit/flaggedAndEmptyRoutesOnly/flaggedResolverOnly",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(containsFlaggedAndEmptyRoutes), Resolvers: wrapResolvers(containsFlaggedResolvers)},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}},
+			wantRoutes:           flaggedAndEmptyRoutes,
 		},
 
 		// WireGuard exit nodes with DNS capabilities provide a "fallback" type
@@ -2179,7 +2282,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			name:                 "wgExit/noRoutes/defaultResolver",
 			exitNode:             "wg",
 			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Resolvers: defaultResolvers},
+			dnsConfig:            &tailcfg.DNSConfig{Resolvers: wrapResolvers(defaultResolvers)},
 			wantDefaultResolvers: defaultResolvers,
 			wantRoutes:           nil,
 		},
@@ -2187,17 +2290,17 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			name:                 "wgExit/routes/defaultResolver",
 			exitNode:             "wg",
 			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes), Resolvers: defaultResolvers},
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(baseRoutes), Resolvers: wrapResolvers(defaultResolvers)},
 			wantDefaultResolvers: defaultResolvers,
-			wantRoutes:           routes,
+			wantRoutes:           baseRoutes,
 		},
 		{
 			name:                 "wgExit/routes/noResolver",
 			exitNode:             "wg",
 			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes)},
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(baseRoutes)},
 			wantDefaultResolvers: wgResolvers,
-			wantRoutes:           routes,
+			wantRoutes:           baseRoutes,
 		},
 	}
 
