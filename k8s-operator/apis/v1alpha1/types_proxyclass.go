@@ -299,8 +299,7 @@ type Pod struct {
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 	// PriorityClassName for the proxy Pod.
 	// By default Tailscale Kubernetes operator does not apply any priority class.
-	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v
-	// 1/#scheduling
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
 	PriorityClassName string `json:"priorityClassName,omitempty"`
 }
