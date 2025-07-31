@@ -187,6 +187,11 @@ tbody tr:hover {
   color: rgb(var(--color-gray-200));
   word-break: break-all;
 }
+.redirect-uris {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
 
 .status-active {
   color: rgb(var(--color-success));
@@ -277,6 +282,8 @@ tbody tr:hover {
   background-color: rgb(var(--color-gray-900));
   color: rgb(var(--color-gray-200));
   font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
 }
 
 .form-input:focus {

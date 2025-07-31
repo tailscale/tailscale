@@ -83,18 +83,17 @@
           </div>
 
           <div class="form-group">
-            <label for="redirect_uri">Redirect URI <span class="required">*</span></label>
-            <input 
-              type="url" 
-              id="redirect_uri" 
-              name="redirect_uri" 
-              value="{{.RedirectURI}}" 
-              placeholder="https://example.com/auth/callback"
+            <label for="redirect_uris">Redirect URIs <span class="required">*</span></label>
+            <textarea 
+              id="redirect_uris" 
+              name="redirect_uris" 
+              placeholder="https://example.com/auth/callback&#10;https://example.com/oauth/callback"
               class="form-input"
+              rows="4"
               required
-            >
+            >{{joinRedirectURIs .RedirectURIs}}</textarea>
             <div class="form-help">
-              The URL where users will be redirected after authentication.
+              Enter one redirect URI per line. Users will be redirected to one of these URLs after authentication.
             </div>
           </div>
 

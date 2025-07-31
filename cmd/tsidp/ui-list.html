@@ -26,7 +26,7 @@
           <tr>
             <td>Name</td>
             <td>Client ID</td>
-            <td>Redirect URI</td>
+            <td>Redirect URIs</td>
             <td>Status</td>
             <td>Actions</td>
           </tr>
@@ -45,7 +45,17 @@
               <code class="client-id">{{.ID}}</code>
             </td>
             <td>
-              <span class="redirect-uri">{{.RedirectURI}}</span>
+              {{if gt (len .RedirectURIs) 1}}
+                <div class="redirect-uris">
+                  {{range .RedirectURIs}}
+                    <span class="redirect-uri">{{.}}</span>
+                  {{end}}
+                </div>
+              {{else if eq (len .RedirectURIs) 1}}
+                <span class="redirect-uri">{{index .RedirectURIs 0}}</span>
+              {{else}}
+                <span class="text-muted">No redirect URIs</span>
+              {{end}}
             </td>
             <td>
               {{if .HasSecret}}

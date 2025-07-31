@@ -416,7 +416,15 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "tsidp: invalid client ID", http.StatusBadRequest)
 			return
 		}
-		if ar.redirectURI != c.RedirectURI {
+		// Validate redirect_uri against the client's registered redirect URIs
+		validRedirect := false
+		for _, uri := range c.RedirectURIs {
+			if ar.redirectURI == uri {
+				validRedirect = true
+				break
+			}
+		}
+		if !validRedirect {
 			http.Error(w, "tsidp: redirect_uri mismatch", http.StatusBadRequest)
 			return
 		}
@@ -456,6 +464,7 @@ func (s *idpServer) newMux() *http.ServeMux {
 	mux.HandleFunc("/userinfo", s.serveUserInfo)
 	mux.HandleFunc("/token", s.serveToken)
 	mux.HandleFunc("/introspect", s.serveIntrospect)
+	mux.HandleFunc("/register", s.serveDynamicClientRegistration)
 	mux.HandleFunc("/clients/", s.serveClients)
 	mux.HandleFunc("/", s.handleUI)
 	return mux
@@ -977,6 +986,7 @@ type openIDProviderMetadata struct {
 	TokenEndpoint                    string              `json:"token_endpoint,omitempty"`
 	UserInfoEndpoint                 string              `json:"userinfo_endpoint,omitempty"`
 	IntrospectionEndpoint            string              `json:"introspection_endpoint,omitempty"`
+	RegistrationEndpoint             string              `json:"registration_endpoint,omitempty"`
 	JWKS_URI                         string              `json:"jwks_uri"`
 	ScopesSupported                  views.Slice[string] `json:"scopes_supported"`
 	ResponseTypesSupported           views.Slice[string] `json:"response_types_supported"`
@@ -995,6 +1005,7 @@ type oauthAuthorizationServerMetadata struct {
 	AuthorizationEndpoint             string              `json:"authorization_endpoint"`
 	TokenEndpoint                     string              `json:"token_endpoint"`
 	IntrospectionEndpoint             string              `json:"introspection_endpoint,omitempty"`
+	RegistrationEndpoint              string              `json:"registration_endpoint,omitempty"`
 	JWKS_URI                          string              `json:"jwks_uri"`
 	ResponseTypesSupported            views.Slice[string] `json:"response_types_supported"`
 	GrantTypesSupported               views.Slice[string] `json:"grant_types_supported"`
@@ -1095,7 +1106,7 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	je := json.NewEncoder(w)
 	je.SetIndent("", "  ")
-	if err := je.Encode(openIDProviderMetadata{
+	metadata := openIDProviderMetadata{
 		AuthorizationEndpoint:            authorizeEndpoint,
 		Issuer:                           rpEndpoint,
 		JWKS_URI:                         rpEndpoint + oidcJWKSPath,
@@ -1107,7 +1118,14 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 		SubjectTypesSupported:            openIDSupportedSubjectTypes,
 		ClaimsSupported:                  openIDSupportedClaims,
 		IDTokenSigningAlgValuesSupported: openIDSupportedSigningAlgos,
-	}); err != nil {
+	}
+	
+	// Only expose registration endpoint over tailnet, not funnel
+	if !isFunnelRequest(r) {
+		metadata.RegistrationEndpoint = rpEndpoint + "/register"
+	}
+	
+	if err := je.Encode(metadata); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -1158,7 +1176,7 @@ func (s *idpServer) serveOAuthMetadata(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	je := json.NewEncoder(w)
 	je.SetIndent("", "  ")
-	if err := je.Encode(oauthAuthorizationServerMetadata{
+	metadata := oauthAuthorizationServerMetadata{
 		Issuer:                            rpEndpoint,
 		AuthorizationEndpoint:             authorizeEndpoint,
 		TokenEndpoint:                     rpEndpoint + "/token",
@@ -1168,18 +1186,59 @@ func (s *idpServer) serveOAuthMetadata(w http.ResponseWriter, r *http.Request) {
 		GrantTypesSupported:               oauthSupportedGrantTypes,
 		ScopesSupported:                   openIDSupportedScopes,
 		TokenEndpointAuthMethodsSupported: oauthSupportedTokenEndpointAuthMethods,
-	}); err != nil {
+	}
+	
+	// Only expose registration endpoint over tailnet, not funnel
+	if !isFunnelRequest(r) {
+		metadata.RegistrationEndpoint = rpEndpoint + "/register"
+	}
+	
+	if err := je.Encode(metadata); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-// funnelClient represents an OIDC client/relying party that is accessing the
-// IDP over Funnel.
+// funnelClient represents an OAuth 2.0/OIDC client/relying party.
+// It can be created manually via the /clients endpoint or dynamically
+// via the /register endpoint (RFC 7591).
 type funnelClient struct {
-	ID          string `json:"client_id"`
-	Secret      string `json:"client_secret,omitempty"`
-	Name        string `json:"name,omitempty"`
-	RedirectURI string `json:"redirect_uri"`
+	ID                      string    `json:"client_id"`
+	Secret                  string    `json:"client_secret,omitempty"`
+	Name                    string    `json:"client_name,omitempty"`
+	RedirectURIs            []string  `json:"redirect_uris"`
+	TokenEndpointAuthMethod string    `json:"token_endpoint_auth_method,omitempty"`
+	GrantTypes              []string  `json:"grant_types,omitempty"`
+	ResponseTypes           []string  `json:"response_types,omitempty"`
+	Scope                   string    `json:"scope,omitempty"`
+	ClientURI               string    `json:"client_uri,omitempty"`
+	LogoURI                 string    `json:"logo_uri,omitempty"`
+	Contacts                []string  `json:"contacts,omitempty"`
+	ApplicationType         string    `json:"application_type,omitempty"`
+	DynamicallyRegistered   bool      `json:"dynamically_registered,omitempty"`
+	CreatedAt               time.Time `json:"created_at,omitempty"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for backward compatibility.
+// It migrates the old singular redirect_uri field to the new redirect_uris array.
+func (c *funnelClient) UnmarshalJSON(data []byte) error {
+	type Alias funnelClient
+	aux := &struct {
+		RedirectURI string `json:"redirect_uri,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	
+	// Migrate old redirect_uri to redirect_uris
+	if len(c.RedirectURIs) == 0 && aux.RedirectURI != "" {
+		c.RedirectURIs = []string{aux.RedirectURI}
+	}
+	
+	return nil
 }
 
 // /clients is a privileged endpoint that allows the visitor to create new
@@ -1215,10 +1274,10 @@ func (s *idpServer) serveClients(w http.ResponseWriter, r *http.Request) {
 		s.serveDeleteClient(w, r, path)
 	case "GET":
 		json.NewEncoder(w).Encode(&funnelClient{
-			ID:          c.ID,
-			Name:        c.Name,
-			Secret:      "",
-			RedirectURI: c.RedirectURI,
+			ID:           c.ID,
+			Name:         c.Name,
+			Secret:       "",
+			RedirectURIs: c.RedirectURIs,
 		})
 	default:
 		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
@@ -1238,10 +1297,10 @@ func (s *idpServer) serveNewClient(w http.ResponseWriter, r *http.Request) {
 	clientID := rands.HexString(32)
 	clientSecret := rands.HexString(64)
 	newClient := funnelClient{
-		ID:          clientID,
-		Secret:      clientSecret,
-		Name:        r.FormValue("name"),
-		RedirectURI: redirectURI,
+		ID:           clientID,
+		Secret:       clientSecret,
+		Name:         r.FormValue("name"),
+		RedirectURIs: []string{redirectURI},
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1266,14 +1325,106 @@ func (s *idpServer) serveGetClientsList(w http.ResponseWriter, r *http.Request) 
 	redactedClients := make([]funnelClient, 0, len(s.funnelClients))
 	for _, c := range s.funnelClients {
 		redactedClients = append(redactedClients, funnelClient{
-			ID:          c.ID,
-			Name:        c.Name,
-			Secret:      "",
-			RedirectURI: c.RedirectURI,
+			ID:           c.ID,
+			Name:         c.Name,
+			Secret:       "",
+			RedirectURIs: c.RedirectURIs,
 		})
 	}
 	s.mu.Unlock()
 	json.NewEncoder(w).Encode(redactedClients)
+}
+
+// serveDynamicClientRegistration implements RFC 7591 OAuth 2.0 Dynamic Client Registration
+// and OpenID Connect Dynamic Client Registration 1.0.
+func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *http.Request) {
+	// Block funnel requests - dynamic registration is only available over tailnet
+	if isFunnelRequest(r) {
+		http.Error(w, "tsidp: dynamic client registration not available over funnel", http.StatusForbidden)
+		return
+	}
+	
+	if r.Method != "POST" {
+		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Parse registration request
+	var req struct {
+		RedirectURIs            []string `json:"redirect_uris"`
+		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
+		GrantTypes              []string `json:"grant_types,omitempty"`
+		ResponseTypes           []string `json:"response_types,omitempty"`
+		ClientName              string   `json:"client_name,omitempty"`
+		ClientURI               string   `json:"client_uri,omitempty"`
+		LogoURI                 string   `json:"logo_uri,omitempty"`
+		Scope                   string   `json:"scope,omitempty"`
+		Contacts                []string `json:"contacts,omitempty"`
+		ApplicationType         string   `json:"application_type,omitempty"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "tsidp: invalid request body", http.StatusBadRequest)
+		return
+	}
+	
+	// Validate required fields per RFC 7591 and OpenID specs
+	if len(req.RedirectURIs) == 0 {
+		http.Error(w, "tsidp: redirect_uris is required", http.StatusBadRequest)
+		return
+	}
+	
+	// Set defaults per specs
+	if req.TokenEndpointAuthMethod == "" {
+		req.TokenEndpointAuthMethod = "client_secret_basic"
+	}
+	if len(req.GrantTypes) == 0 {
+		req.GrantTypes = []string{"authorization_code"}
+	}
+	if len(req.ResponseTypes) == 0 {
+		req.ResponseTypes = []string{"code"}
+	}
+	if req.ApplicationType == "" {
+		req.ApplicationType = "web"
+	}
+	
+	// Generate client credentials
+	clientID := rands.HexString(32)
+	clientSecret := rands.HexString(64)
+	
+	// Create new client
+	newClient := funnelClient{
+		ID:                      clientID,
+		Secret:                  clientSecret,
+		Name:                    req.ClientName,
+		RedirectURIs:            req.RedirectURIs,
+		TokenEndpointAuthMethod: req.TokenEndpointAuthMethod,
+		GrantTypes:              req.GrantTypes,
+		ResponseTypes:           req.ResponseTypes,
+		Scope:                   req.Scope,
+		ClientURI:               req.ClientURI,
+		LogoURI:                 req.LogoURI,
+		Contacts:                req.Contacts,
+		ApplicationType:         req.ApplicationType,
+		DynamicallyRegistered:   true,
+		CreatedAt:               time.Now(),
+	}
+	
+	// Store the client
+	s.mu.Lock()
+	mak.Set(&s.funnelClients, clientID, &newClient)
+	if err := s.storeFunnelClientsLocked(); err != nil {
+		s.mu.Unlock()
+		log.Printf("tsidp: error storing client: %v", err)
+		http.Error(w, "tsidp: internal error", http.StatusInternalServerError)
+		return
+	}
+	s.mu.Unlock()
+	
+	// Return the client registration response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(newClient)
 }
 
 func (s *idpServer) serveDeleteClient(w http.ResponseWriter, r *http.Request, clientID string) {

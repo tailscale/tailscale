@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -29,11 +30,33 @@ var editHTML string
 //go:embed ui-style.css
 var styleCSS string
 
-var headerTmpl = template.Must(template.New("header").Parse(headerHTML))
+var tmplFuncs = template.FuncMap{
+	"joinRedirectURIs": joinRedirectURIs,
+}
+
+var headerTmpl = template.Must(template.New("header").Funcs(tmplFuncs).Parse(headerHTML))
 var listTmpl = template.Must(headerTmpl.New("list").Parse(listHTML))
 var editTmpl = template.Must(headerTmpl.New("edit").Parse(editHTML))
 
 var processStart = time.Now()
+
+// joinRedirectURIs joins multiple redirect URIs into a newline-separated string
+func joinRedirectURIs(uris []string) string {
+	return strings.Join(uris, "\n")
+}
+
+// splitRedirectURIs splits a newline-separated string into individual URIs
+func splitRedirectURIs(input string) []string {
+	lines := strings.Split(input, "\n")
+	var uris []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			uris = append(uris, trimmed)
+		}
+	}
+	return uris
+}
 
 func (s *idpServer) handleUI(w http.ResponseWriter, r *http.Request) {
 	if isFunnelRequest(r) {
@@ -66,10 +89,10 @@ func (s *idpServer) handleClientsList(w http.ResponseWriter, r *http.Request) {
 	clients := make([]clientDisplayData, 0, len(s.funnelClients))
 	for _, c := range s.funnelClients {
 		clients = append(clients, clientDisplayData{
-			ID:          c.ID,
-			Name:        c.Name,
-			RedirectURI: c.RedirectURI,
-			HasSecret:   c.Secret != "",
+			ID:           c.ID,
+			Name:         c.Name,
+			RedirectURIs: c.RedirectURIs,
+			HasSecret:    c.Secret != "",
 		})
 	}
 	s.mu.Unlock()
@@ -104,26 +127,34 @@ func (s *idpServer) handleNewClient(w http.ResponseWriter, r *http.Request) {
 		}
 
 		name := strings.TrimSpace(r.FormValue("name"))
-		redirectURI := strings.TrimSpace(r.FormValue("redirect_uri"))
+		redirectURIsText := strings.TrimSpace(r.FormValue("redirect_uris"))
+		redirectURIs := splitRedirectURIs(redirectURIsText)
 
 		baseData := clientDisplayData{
-			IsNew:       true,
-			Name:        name,
-			RedirectURI: redirectURI,
+			IsNew:        true,
+			Name:         name,
+			RedirectURIs: redirectURIs,
 		}
 
-		if errMsg := validateRedirectURI(redirectURI); errMsg != "" {
-			s.renderFormError(w, baseData, errMsg)
+		if len(redirectURIs) == 0 {
+			s.renderFormError(w, baseData, "At least one redirect URI is required")
 			return
+		}
+
+		for _, uri := range redirectURIs {
+			if errMsg := validateRedirectURI(uri); errMsg != "" {
+				s.renderFormError(w, baseData, fmt.Sprintf("Invalid redirect URI '%s': %s", uri, errMsg))
+				return
+			}
 		}
 
 		clientID := rands.HexString(32)
 		clientSecret := rands.HexString(64)
 		newClient := funnelClient{
-			ID:          clientID,
-			Secret:      clientSecret,
-			Name:        name,
-			RedirectURI: redirectURI,
+			ID:           clientID,
+			Secret:       clientSecret,
+			Name:         name,
+			RedirectURIs: redirectURIs,
 		}
 
 		s.mu.Lock()
@@ -141,11 +172,11 @@ func (s *idpServer) handleNewClient(w http.ResponseWriter, r *http.Request) {
 		}
 
 		successData := clientDisplayData{
-			ID:          clientID,
-			Name:        name,
-			RedirectURI: redirectURI,
-			Secret:      clientSecret,
-			IsNew:       true,
+			ID:           clientID,
+			Name:         name,
+			RedirectURIs: redirectURIs,
+			Secret:       clientSecret,
+			IsNew:        true,
 		}
 		s.renderFormSuccess(w, successData, "Client created successfully! Save the client secret - it won't be shown again.")
 		return
@@ -171,7 +202,13 @@ func (s *idpServer) handleEditClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "GET" {
-		data := createEditBaseData(client, client.Name, client.RedirectURI)
+		data := clientDisplayData{
+			ID:           client.ID,
+			Name:         client.Name,
+			RedirectURIs: client.RedirectURIs,
+			HasSecret:    client.Secret != "",
+			IsEdit:       true,
+		}
 		if err := s.renderClientForm(w, data); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
@@ -193,7 +230,13 @@ func (s *idpServer) handleEditClient(w http.ResponseWriter, r *http.Request) {
 				s.funnelClients[clientID] = client
 				s.mu.Unlock()
 
-				baseData := createEditBaseData(client, client.Name, client.RedirectURI)
+				baseData := clientDisplayData{
+					ID:           client.ID,
+					Name:         client.Name,
+					RedirectURIs: client.RedirectURIs,
+					HasSecret:    client.Secret != "",
+					IsEdit:       true,
+				}
 				s.renderFormError(w, baseData, "Failed to delete client. Please try again.")
 				return
 			}
@@ -209,8 +252,13 @@ func (s *idpServer) handleEditClient(w http.ResponseWriter, r *http.Request) {
 			err := s.storeFunnelClientsLocked()
 			s.mu.Unlock()
 
-			baseData := createEditBaseData(client, client.Name, client.RedirectURI)
-			baseData.HasSecret = true
+			baseData := clientDisplayData{
+				ID:           client.ID,
+				Name:         client.Name,
+				RedirectURIs: client.RedirectURIs,
+				HasSecret:    true,
+				IsEdit:       true,
+			}
 
 			if err != nil {
 				log.Printf("could not write funnel clients db: %v", err)
@@ -229,17 +277,31 @@ func (s *idpServer) handleEditClient(w http.ResponseWriter, r *http.Request) {
 		}
 
 		name := strings.TrimSpace(r.FormValue("name"))
-		redirectURI := strings.TrimSpace(r.FormValue("redirect_uri"))
-		baseData := createEditBaseData(client, name, redirectURI)
+		redirectURIsText := strings.TrimSpace(r.FormValue("redirect_uris"))
+		redirectURIs := splitRedirectURIs(redirectURIsText)
+		baseData := clientDisplayData{
+			ID:           client.ID,
+			Name:         name,
+			RedirectURIs: redirectURIs,
+			HasSecret:    client.Secret != "",
+			IsEdit:       true,
+		}
 
-		if errMsg := validateRedirectURI(redirectURI); errMsg != "" {
-			s.renderFormError(w, baseData, errMsg)
+		if len(redirectURIs) == 0 {
+			s.renderFormError(w, baseData, "At least one redirect URI is required")
 			return
+		}
+
+		for _, uri := range redirectURIs {
+			if errMsg := validateRedirectURI(uri); errMsg != "" {
+				s.renderFormError(w, baseData, fmt.Sprintf("Invalid redirect URI '%s': %s", uri, errMsg))
+				return
+			}
 		}
 
 		s.mu.Lock()
 		s.funnelClients[clientID].Name = name
-		s.funnelClients[clientID].RedirectURI = redirectURI
+		s.funnelClients[clientID].RedirectURIs = redirectURIs
 		err := s.storeFunnelClientsLocked()
 		s.mu.Unlock()
 
@@ -257,15 +319,15 @@ func (s *idpServer) handleEditClient(w http.ResponseWriter, r *http.Request) {
 }
 
 type clientDisplayData struct {
-	ID          string
-	Name        string
-	RedirectURI string
-	Secret      string
-	HasSecret   bool
-	IsNew       bool
-	IsEdit      bool
-	Success     string
-	Error       string
+	ID           string
+	Name         string
+	RedirectURIs []string
+	Secret       string
+	HasSecret    bool
+	IsNew        bool
+	IsEdit       bool
+	Success      string
+	Error        string
 }
 
 func (s *idpServer) renderClientForm(w http.ResponseWriter, data clientDisplayData) error {
@@ -293,33 +355,14 @@ func (s *idpServer) renderFormSuccess(w http.ResponseWriter, data clientDisplayD
 	}
 }
 
-func createEditBaseData(client *funnelClient, name, redirectURI string) clientDisplayData {
-	return clientDisplayData{
-		ID:          client.ID,
-		Name:        name,
-		RedirectURI: redirectURI,
-		HasSecret:   client.Secret != "",
-		IsEdit:      true,
-	}
-}
 
 func validateRedirectURI(redirectURI string) string {
-	if redirectURI == "" {
-		return "Redirect URI is required"
-	}
-
 	u, err := url.Parse(redirectURI)
-	if err != nil {
-		return "Invalid URL format"
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "must be a valid HTTP or HTTPS URL"
 	}
-
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "Redirect URI must be a valid HTTP or HTTPS URL"
+		return "must use HTTP or HTTPS scheme"
 	}
-
-	if u.Host == "" {
-		return "Redirect URI must include a valid host"
-	}
-
 	return ""
 }
