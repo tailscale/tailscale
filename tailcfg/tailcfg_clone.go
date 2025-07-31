@@ -252,7 +252,7 @@ func (src *DNSConfig) Clone() *DNSConfig {
 	dst := new(DNSConfig)
 	*dst = *src
 	if src.Resolvers != nil {
-		dst.Resolvers = make([]*dnstype.Resolver, len(src.Resolvers))
+		dst.Resolvers = make([]*DNSResolver, len(src.Resolvers))
 		for i := range dst.Resolvers {
 			if src.Resolvers[i] == nil {
 				dst.Resolvers[i] = nil
@@ -262,9 +262,9 @@ func (src *DNSConfig) Clone() *DNSConfig {
 		}
 	}
 	if dst.Routes != nil {
-		dst.Routes = map[string][]*dnstype.Resolver{}
+		dst.Routes = map[string][]*DNSResolver{}
 		for k := range src.Routes {
-			dst.Routes[k] = append([]*dnstype.Resolver{}, src.Routes[k]...)
+			dst.Routes[k] = append([]*DNSResolver{}, src.Routes[k]...)
 		}
 	}
 	if src.FallbackResolvers != nil {
@@ -287,8 +287,8 @@ func (src *DNSConfig) Clone() *DNSConfig {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
-	Resolvers           []*dnstype.Resolver
-	Routes              map[string][]*dnstype.Resolver
+	Resolvers           []*DNSResolver
+	Routes              map[string][]*DNSResolver
 	FallbackResolvers   []*dnstype.Resolver
 	Domains             []string
 	Proxied             bool
@@ -651,9 +651,27 @@ var _VIPServiceCloneNeedsRegeneration = VIPService(struct {
 	Active bool
 }{})
 
+// Clone makes a deep copy of DNSResolver.
+// The result aliases no memory with the original.
+func (src *DNSResolver) Clone() *DNSResolver {
+	if src == nil {
+		return nil
+	}
+	dst := new(DNSResolver)
+	*dst = *src
+	dst.Resolver = *src.Resolver.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _DNSResolverCloneNeedsRegeneration = DNSResolver(struct {
+	dnstype.Resolver
+	UseWithExitNode bool
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,DNSResolver.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -833,6 +851,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **VIPService:
+			*dst = src.Clone()
+			return true
+		}
+	case *DNSResolver:
+		switch dst := dst.(type) {
+		case *DNSResolver:
+			*dst = *src.Clone()
+			return true
+		case **DNSResolver:
 			*dst = src.Clone()
 			return true
 		}
