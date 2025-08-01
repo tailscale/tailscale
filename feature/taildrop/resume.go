@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 )
@@ -51,19 +50,20 @@ func (cs *checksum) UnmarshalText(b []byte) error {
 
 // PartialFiles returns a list of partial files in [Handler.Dir]
 // that were sent (or is actively being sent) by the provided id.
-func (m *manager) PartialFiles(id clientID) (ret []string, err error) {
-	if m == nil || m.opts.Dir == "" {
+func (m *manager) PartialFiles(id clientID) ([]string, error) {
+	if m == nil || m.opts.fileOps == nil {
 		return nil, ErrNoTaildrop
 	}
-
 	suffix := id.partialSuffix()
-	if err := rangeDir(m.opts.Dir, func(de fs.DirEntry) bool {
-		if name := de.Name(); strings.HasSuffix(name, suffix) {
-			ret = append(ret, name)
+	files, err := m.opts.fileOps.ListFiles()
+	if err != nil {
+		return nil, redactError(err)
+	}
+	var ret []string
+	for _, filename := range files {
+		if strings.HasSuffix(filename, suffix) {
+			ret = append(ret, filename)
 		}
-		return true
-	}); err != nil {
-		return ret, redactError(err)
 	}
 	return ret, nil
 }
@@ -73,17 +73,13 @@ func (m *manager) PartialFiles(id clientID) (ret []string, err error) {
 // It returns (BlockChecksum{}, io.EOF) when the stream is complete.
 // It is the caller's responsibility to call close.
 func (m *manager) HashPartialFile(id clientID, baseName string) (next func() (blockChecksum, error), close func() error, err error) {
-	if m == nil || m.opts.Dir == "" {
+	if m == nil || m.opts.fileOps == nil {
 		return nil, nil, ErrNoTaildrop
 	}
 	noopNext := func() (blockChecksum, error) { return blockChecksum{}, io.EOF }
 	noopClose := func() error { return nil }
 
-	dstFile, err := joinDir(m.opts.Dir, baseName)
-	if err != nil {
-		return nil, nil, err
-	}
-	f, err := os.Open(dstFile + id.partialSuffix())
+	f, err := m.opts.fileOps.OpenReader(baseName + id.partialSuffix())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return noopNext, noopClose, nil

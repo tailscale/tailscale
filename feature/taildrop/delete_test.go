@@ -5,7 +5,6 @@ package taildrop
 
 import (
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -20,11 +19,20 @@ import (
 
 func TestDeleter(t *testing.T) {
 	dir := t.TempDir()
-	must.Do(touchFile(filepath.Join(dir, "foo.partial")))
-	must.Do(touchFile(filepath.Join(dir, "bar.partial")))
-	must.Do(touchFile(filepath.Join(dir, "fizz")))
-	must.Do(touchFile(filepath.Join(dir, "fizz.deleted")))
-	must.Do(touchFile(filepath.Join(dir, "buzz.deleted"))) // lacks a matching "buzz" file
+	var m manager
+	var fd fileDeleter
+	m.opts.Logf = t.Logf
+	m.opts.Clock = tstime.DefaultClock{Clock: tstest.NewClock(tstest.ClockOpts{
+		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+	})}
+	m.opts.State = must.Get(mem.New(nil, ""))
+	m.opts.fileOps, _ = newFileOps(dir)
+
+	must.Do(m.touchFile("foo.partial"))
+	must.Do(m.touchFile("bar.partial"))
+	must.Do(m.touchFile("fizz"))
+	must.Do(m.touchFile("fizz.deleted"))
+	must.Do(m.touchFile("buzz.deleted")) // lacks a matching "buzz" file
 
 	checkDirectory := func(want ...string) {
 		t.Helper()
@@ -69,12 +77,10 @@ func TestDeleter(t *testing.T) {
 	}
 	eventHook := func(event string) { eventsChan <- event }
 
-	var m manager
-	var fd fileDeleter
 	m.opts.Logf = t.Logf
 	m.opts.Clock = tstime.DefaultClock{Clock: clock}
-	m.opts.Dir = dir
 	m.opts.State = must.Get(mem.New(nil, ""))
+	m.opts.fileOps, _ = newFileOps(dir)
 	must.Do(m.opts.State.WriteState(ipn.TaildropReceivedKey, []byte{1}))
 	fd.Init(&m, eventHook)
 	defer fd.Shutdown()
@@ -100,17 +106,17 @@ func TestDeleter(t *testing.T) {
 	checkEvents("end waitAndDelete")
 	checkDirectory()
 
-	must.Do(touchFile(filepath.Join(dir, "one.partial")))
+	must.Do(m.touchFile("one.partial"))
 	insert("one.partial")
 	checkEvents("start waitAndDelete")
 	advance(deleteDelay / 4)
-	must.Do(touchFile(filepath.Join(dir, "two.partial")))
+	must.Do(m.touchFile("two.partial"))
 	insert("two.partial")
 	advance(deleteDelay / 4)
-	must.Do(touchFile(filepath.Join(dir, "three.partial")))
+	must.Do(m.touchFile("three.partial"))
 	insert("three.partial")
 	advance(deleteDelay / 4)
-	must.Do(touchFile(filepath.Join(dir, "four.partial")))
+	must.Do(m.touchFile("four.partial"))
 	insert("four.partial")
 
 	advance(deleteDelay / 4)
@@ -145,8 +151,8 @@ func TestDeleterInitWithoutTaildrop(t *testing.T) {
 	var m manager
 	var fd fileDeleter
 	m.opts.Logf = t.Logf
-	m.opts.Dir = t.TempDir()
 	m.opts.State = must.Get(mem.New(nil, ""))
+	m.opts.fileOps, _ = newFileOps(t.TempDir())
 	fd.Init(&m, func(event string) { t.Errorf("unexpected event: %v", event) })
 	fd.Shutdown()
 }
