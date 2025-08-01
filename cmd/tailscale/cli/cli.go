@@ -261,6 +261,7 @@ change in the future.
 			driveCmd,
 			idTokenCmd,
 			configureHostCmd(),
+			systrayCmd,
 		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
