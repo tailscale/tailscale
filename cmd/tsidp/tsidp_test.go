@@ -18,9 +18,10 @@ func TestBackwardCompatibility(t *testing.T) {
 		name         string
 		jsonData     string
 		expectURIs   []string
+		expectName   string
 	}{
 		{
-			name: "old format with redirect_uri",
+			name: "old format with redirect_uri and name",
 			jsonData: `{
 				"client_id": "test-client",
 				"client_secret": "test-secret",
@@ -28,27 +29,53 @@ func TestBackwardCompatibility(t *testing.T) {
 				"redirect_uri": "https://example.com/callback"
 			}`,
 			expectURIs: []string{"https://example.com/callback"},
+			expectName: "Test Client",
 		},
 		{
-			name: "new format with redirect_uris",
+			name: "new format with redirect_uris and client_name",
 			jsonData: `{
 				"client_id": "test-client",
 				"client_secret": "test-secret",
-				"name": "Test Client",
+				"client_name": "Test Client",
 				"redirect_uris": ["https://example.com/callback", "https://example.com/callback2"]
 			}`,
 			expectURIs: []string{"https://example.com/callback", "https://example.com/callback2"},
+			expectName: "Test Client",
 		},
 		{
-			name: "both fields present (redirect_uris takes precedence)",
+			name: "both redirect fields present (redirect_uris takes precedence)",
 			jsonData: `{
 				"client_id": "test-client",
 				"client_secret": "test-secret",
-				"name": "Test Client",
+				"client_name": "Test Client",
 				"redirect_uri": "https://old.example.com/callback",
 				"redirect_uris": ["https://new.example.com/callback"]
 			}`,
 			expectURIs: []string{"https://new.example.com/callback"},
+			expectName: "Test Client",
+		},
+		{
+			name: "both name fields present (client_name takes precedence)",
+			jsonData: `{
+				"client_id": "test-client",
+				"client_secret": "test-secret",
+				"name": "Old Name",
+				"client_name": "New Name",
+				"redirect_uris": ["https://example.com/callback"]
+			}`,
+			expectURIs: []string{"https://example.com/callback"},
+			expectName: "New Name",
+		},
+		{
+			name: "mixed old and new fields",
+			jsonData: `{
+				"client_id": "test-client",
+				"client_secret": "test-secret",
+				"name": "Test Client",
+				"redirect_uris": ["https://example.com/callback"]
+			}`,
+			expectURIs: []string{"https://example.com/callback"},
+			expectName: "Test Client",
 		},
 	}
 
@@ -61,6 +88,10 @@ func TestBackwardCompatibility(t *testing.T) {
 
 			if !reflect.DeepEqual(client.RedirectURIs, tt.expectURIs) {
 				t.Errorf("expected redirect_uris %v, got %v", tt.expectURIs, client.RedirectURIs)
+			}
+			
+			if client.Name != tt.expectName {
+				t.Errorf("expected name %q, got %q", tt.expectName, client.Name)
 			}
 		})
 	}

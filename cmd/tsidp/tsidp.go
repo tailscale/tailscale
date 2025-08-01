@@ -1219,11 +1219,13 @@ type funnelClient struct {
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for backward compatibility.
-// It migrates the old singular redirect_uri field to the new redirect_uris array.
+// It migrates the old singular redirect_uri field to the new redirect_uris array
+// and the old name field to client_name.
 func (c *funnelClient) UnmarshalJSON(data []byte) error {
 	type Alias funnelClient
 	aux := &struct {
 		RedirectURI string `json:"redirect_uri,omitempty"`
+		Name        string `json:"name,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(c),
@@ -1236,6 +1238,11 @@ func (c *funnelClient) UnmarshalJSON(data []byte) error {
 	// Migrate old redirect_uri to redirect_uris
 	if len(c.RedirectURIs) == 0 && aux.RedirectURI != "" {
 		c.RedirectURIs = []string{aux.RedirectURI}
+	}
+	
+	// Migrate old name to client_name
+	if c.Name == "" && aux.Name != "" {
+		c.Name = aux.Name
 	}
 	
 	return nil
