@@ -17,7 +17,7 @@ import (
 )
 
 var funnelCmd = func() *ffcli.Command {
-	se := &serveEnv{lc: &localClient}
+	se := &serveEnv{lc: localClient}
 	// previously used to serve legacy newFunnelCommand unless useWIPCode is true
 	// change is limited to make a revert easier and full cleanup to come after the release.
 	// TODO(tylersmalley): cleanup and removal of newFunnelCommand as of 2023-10-16
