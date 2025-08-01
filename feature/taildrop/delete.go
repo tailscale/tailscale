@@ -6,9 +6,7 @@ package taildrop
 import (
 	"container/list"
 	"context"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +26,6 @@ const deleteDelay = time.Hour
 type fileDeleter struct {
 	logf  logger.Logf
 	clock tstime.DefaultClock
-	dir   string
 	event func(string) // called for certain events; for testing only
 
 	mu     sync.Mutex
@@ -39,6 +36,7 @@ type fileDeleter struct {
 	group       syncs.WaitGroup
 	shutdownCtx context.Context
 	shutdown    context.CancelFunc
+	fs          FileOps // must be used for all filesystem operations
 }
 
 // deleteFile is a specific file to delete after deleteDelay.
@@ -50,15 +48,14 @@ type deleteFile struct {
 func (d *fileDeleter) Init(m *manager, eventHook func(string)) {
 	d.logf = m.opts.Logf
 	d.clock = m.opts.Clock
-	d.dir = m.opts.Dir
 	d.event = eventHook
+	d.fs = m.opts.fileOps
 
 	d.byName = make(map[string]*list.Element)
 	d.emptySignal = make(chan struct{})
 	d.shutdownCtx, d.shutdown = context.WithCancel(context.Background())
 
 	// From a cold-start, load the list of partial and deleted files.
-	//
 	// Only run this if we have ever received at least one file
 	// to avoid ever touching the taildrop directory on systems (e.g., MacOS)
 	// that pop up a security dialog window upon first access.
@@ -71,38 +68,45 @@ func (d *fileDeleter) Init(m *manager, eventHook func(string)) {
 	d.group.Go(func() {
 		d.event("start full-scan")
 		defer d.event("end full-scan")
-		rangeDir(d.dir, func(de fs.DirEntry) bool {
+
+		if d.fs == nil {
+			d.logf("deleter: nil FileOps")
+		}
+
+		files, err := d.fs.ListFiles()
+		if err != nil {
+			d.logf("deleter: ListDir error: %v", err)
+			return
+		}
+		for _, filename := range files {
 			switch {
 			case d.shutdownCtx.Err() != nil:
-				return false // terminate early
-			case !de.Type().IsRegular():
-				return true
-			case strings.HasSuffix(de.Name(), partialSuffix):
+				return // terminate early
+			case strings.HasSuffix(filename, partialSuffix):
 				// Only enqueue the file for deletion if there is no active put.
-				nameID := strings.TrimSuffix(de.Name(), partialSuffix)
+				nameID := strings.TrimSuffix(filename, partialSuffix)
 				if i := strings.LastIndexByte(nameID, '.'); i > 0 {
 					key := incomingFileKey{clientID(nameID[i+len("."):]), nameID[:i]}
 					m.incomingFiles.LoadFunc(key, func(_ *incomingFile, loaded bool) {
 						if !loaded {
-							d.Insert(de.Name())
+							d.Insert(filename)
 						}
 					})
 				} else {
-					d.Insert(de.Name())
+					d.Insert(filename)
 				}
-			case strings.HasSuffix(de.Name(), deletedSuffix):
+			case strings.HasSuffix(filename, deletedSuffix):
 				// Best-effort immediate deletion of deleted files.
-				name := strings.TrimSuffix(de.Name(), deletedSuffix)
-				if os.Remove(filepath.Join(d.dir, name)) == nil {
-					if os.Remove(filepath.Join(d.dir, de.Name())) == nil {
-						break
+				name := strings.TrimSuffix(filename, deletedSuffix)
+				if d.fs.Remove(name) == nil {
+					if d.fs.Remove(filename) == nil {
+						continue
 					}
 				}
-				// Otherwise, enqueue the file for later deletion.
-				d.Insert(de.Name())
+				// Otherwise enqueue for later deletion.
+				d.Insert(filename)
 			}
-			return true
-		})
+		}
 	})
 }
 
@@ -149,13 +153,13 @@ func (d *fileDeleter) waitAndDelete(wait time.Duration) {
 
 			// Delete the expired file.
 			if name, ok := strings.CutSuffix(file.name, deletedSuffix); ok {
-				if err := os.Remove(filepath.Join(d.dir, name)); err != nil && !os.IsNotExist(err) {
+				if err := d.fs.Remove(name); err != nil && !os.IsNotExist(err) {
 					d.logf("could not delete: %v", redactError(err))
 					failed = append(failed, elem)
 					continue
 				}
 			}
-			if err := os.Remove(filepath.Join(d.dir, file.name)); err != nil && !os.IsNotExist(err) {
+			if err := d.fs.Remove(file.name); err != nil && !os.IsNotExist(err) {
 				d.logf("could not delete: %v", redactError(err))
 				failed = append(failed, elem)
 				continue

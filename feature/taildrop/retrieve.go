@@ -9,19 +9,19 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/util/set"
 )
 
 // HasFilesWaiting reports whether any files are buffered in [Handler.Dir].
 // This always returns false when [Handler.DirectFileMode] is false.
-func (m *manager) HasFilesWaiting() (has bool) {
-	if m == nil || m.opts.Dir == "" || m.opts.DirectFileMode {
+func (m *manager) HasFilesWaiting() bool {
+	if m == nil || m.opts.fileOps == nil || m.opts.DirectFileMode {
 		return false
 	}
 
@@ -30,63 +30,66 @@ func (m *manager) HasFilesWaiting() (has bool) {
 	// has-files-or-not values as the macOS/iOS client might
 	// in the future use+delete the files directly. So only
 	// keep this negative cache.
-	totalReceived := m.totalReceived.Load()
-	if totalReceived == m.emptySince.Load() {
+	total := m.totalReceived.Load()
+	if total == m.emptySince.Load() {
 		return false
 	}
 
-	// Check whether there is at least one one waiting file.
-	err := rangeDir(m.opts.Dir, func(de fs.DirEntry) bool {
-		name := de.Name()
-		if isPartialOrDeleted(name) || !de.Type().IsRegular() {
-			return true
-		}
-		_, err := os.Stat(filepath.Join(m.opts.Dir, name+deletedSuffix))
-		if os.IsNotExist(err) {
-			has = true
-			return false
-		}
-		return true
-	})
-
-	// If there are no more waiting files, record totalReceived as emptySince
-	// so that we can short-circuit the expensive directory traversal
-	// if no files have been received after the start of this call.
-	if err == nil && !has {
-		m.emptySince.Store(totalReceived)
+	files, err := m.opts.fileOps.ListFiles()
+	if err != nil {
+		return false
 	}
-	return has
+
+	// Build a set of filenames present in Dir
+	fileSet := set.Of(files...)
+
+	for _, filename := range files {
+		if isPartialOrDeleted(filename) {
+			continue
+		}
+		if fileSet.Contains(filename + deletedSuffix) {
+			continue // already handled
+		}
+		// Found at least one downloadable file
+		return true
+	}
+
+	// No waiting files → update negative‑result cache
+	m.emptySince.Store(total)
+	return false
 }
 
 // WaitingFiles returns the list of files that have been sent by a
 // peer that are waiting in [Handler.Dir].
 // This always returns nil when [Handler.DirectFileMode] is false.
-func (m *manager) WaitingFiles() (ret []apitype.WaitingFile, err error) {
-	if m == nil || m.opts.Dir == "" {
+func (m *manager) WaitingFiles() ([]apitype.WaitingFile, error) {
+	if m == nil || m.opts.fileOps == nil {
 		return nil, ErrNoTaildrop
 	}
 	if m.opts.DirectFileMode {
 		return nil, nil
 	}
-	if err := rangeDir(m.opts.Dir, func(de fs.DirEntry) bool {
-		name := de.Name()
-		if isPartialOrDeleted(name) || !de.Type().IsRegular() {
-			return true
-		}
-		_, err := os.Stat(filepath.Join(m.opts.Dir, name+deletedSuffix))
-		if os.IsNotExist(err) {
-			fi, err := de.Info()
-			if err != nil {
-				return true
-			}
-			ret = append(ret, apitype.WaitingFile{
-				Name: filepath.Base(name),
-				Size: fi.Size(),
-			})
-		}
-		return true
-	}); err != nil {
+	names, err := m.opts.fileOps.ListFiles()
+	if err != nil {
 		return nil, redactError(err)
+	}
+	var ret []apitype.WaitingFile
+	for _, name := range names {
+		if isPartialOrDeleted(name) {
+			continue
+		}
+		// A corresponding .deleted marker means the file was already handled.
+		if _, err := m.opts.fileOps.Stat(name + deletedSuffix); err == nil {
+			continue
+		}
+		fi, err := m.opts.fileOps.Stat(name)
+		if err != nil {
+			continue
+		}
+		ret = append(ret, apitype.WaitingFile{
+			Name: name,
+			Size: fi.Size(),
+		})
 	}
 	sort.Slice(ret, func(i, j int) bool { return ret[i].Name < ret[j].Name })
 	return ret, nil
@@ -95,21 +98,18 @@ func (m *manager) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 // DeleteFile deletes a file of the given baseName from [Handler.Dir].
 // This method is only allowed when [Handler.DirectFileMode] is false.
 func (m *manager) DeleteFile(baseName string) error {
-	if m == nil || m.opts.Dir == "" {
+	if m == nil || m.opts.fileOps == nil {
 		return ErrNoTaildrop
 	}
 	if m.opts.DirectFileMode {
 		return errors.New("deletes not allowed in direct mode")
 	}
-	path, err := joinDir(m.opts.Dir, baseName)
-	if err != nil {
-		return err
-	}
+
 	var bo *backoff.Backoff
 	logf := m.opts.Logf
 	t0 := m.opts.Clock.Now()
 	for {
-		err := os.Remove(path)
+		err := m.opts.fileOps.Remove(baseName)
 		if err != nil && !os.IsNotExist(err) {
 			err = redactError(err)
 			// Put a retry loop around deletes on Windows.
@@ -129,7 +129,7 @@ func (m *manager) DeleteFile(baseName string) error {
 					bo.BackOff(context.Background(), err)
 					continue
 				}
-				if err := touchFile(path + deletedSuffix); err != nil {
+				if err := m.touchFile(baseName + deletedSuffix); err != nil {
 					logf("peerapi: failed to leave deleted marker: %v", err)
 				}
 				m.deleter.Insert(baseName + deletedSuffix)
@@ -141,35 +141,31 @@ func (m *manager) DeleteFile(baseName string) error {
 	}
 }
 
-func touchFile(path string) error {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
+func (m *manager) touchFile(name string) error {
+	wc, _, err := m.opts.fileOps.OpenWriter(name /* offset= */, 0, 0666)
 	if err != nil {
 		return redactError(err)
 	}
-	return f.Close()
+	return wc.Close()
 }
 
 // OpenFile opens a file of the given baseName from [Handler.Dir].
 // This method is only allowed when [Handler.DirectFileMode] is false.
 func (m *manager) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
-	if m == nil || m.opts.Dir == "" {
+	if m == nil || m.opts.fileOps == nil {
 		return nil, 0, ErrNoTaildrop
 	}
 	if m.opts.DirectFileMode {
 		return nil, 0, errors.New("opens not allowed in direct mode")
 	}
-	path, err := joinDir(m.opts.Dir, baseName)
-	if err != nil {
-		return nil, 0, err
+	if _, err := m.opts.fileOps.Stat(baseName + deletedSuffix); err == nil {
+		return nil, 0, redactError(&fs.PathError{Op: "open", Path: baseName, Err: fs.ErrNotExist})
 	}
-	if _, err := os.Stat(path + deletedSuffix); err == nil {
-		return nil, 0, redactError(&fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist})
-	}
-	f, err := os.Open(path)
+	f, err := m.opts.fileOps.OpenReader(baseName)
 	if err != nil {
 		return nil, 0, redactError(err)
 	}
-	fi, err := f.Stat()
+	fi, err := m.opts.fileOps.Stat(baseName)
 	if err != nil {
 		f.Close()
 		return nil, 0, redactError(err)

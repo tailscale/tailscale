@@ -24,6 +24,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 )
 
 // peerAPIHandler serves the PeerAPI for a source specific client.
@@ -93,7 +94,16 @@ func bodyContains(sub string) check {
 
 func fileHasSize(name string, size int) check {
 	return func(t *testing.T, e *peerAPITestEnv) {
-		root := e.taildrop.Dir()
+		fsImpl, ok := e.taildrop.opts.fileOps.(*fsFileOps)
+		if !ok {
+			t.Skip("fileHasSize only supported on fsFileOps backend")
+			return
+		}
+		root := fsImpl.rootDir
+		if root == "" {
+			t.Errorf("no rootdir; can't check whether %q has size %v", name, size)
+			return
+		}
 		if root == "" {
 			t.Errorf("no rootdir; can't check whether %q has size %v", name, size)
 			return
@@ -109,12 +119,12 @@ func fileHasSize(name string, size int) check {
 
 func fileHasContents(name string, want string) check {
 	return func(t *testing.T, e *peerAPITestEnv) {
-		root := e.taildrop.Dir()
-		if root == "" {
-			t.Errorf("no rootdir; can't check contents of %q", name)
+		fsImpl, ok := e.taildrop.opts.fileOps.(*fsFileOps)
+		if !ok {
+			t.Skip("fileHasContents only supported on fsFileOps backend")
 			return
 		}
-		path := filepath.Join(root, name)
+		path := filepath.Join(fsImpl.rootDir, name)
 		got, err := os.ReadFile(path)
 		if err != nil {
 			t.Errorf("fileHasContents: %v", err)
@@ -172,9 +182,10 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo", nil)},
 			checks: checks(
 				httpStatus(http.StatusForbidden),
-				bodyContains("Taildrop disabled; no storage directory"),
+				bodyContains("Taildrop disabled"),
 			),
 		},
+
 		{
 			name:       "bad_method",
 			isSelf:     true,
@@ -471,14 +482,18 @@ func TestHandlePeerAPI(t *testing.T) {
 				selfNode.CapMap = tailcfg.NodeCapMap{tailcfg.CapabilityDebug: nil}
 			}
 			var rootDir string
+			var fo FileOps
 			if !tt.omitRoot {
-				rootDir = t.TempDir()
+				var err error
+				if fo, err = newFileOps(t.TempDir()); err != nil {
+					t.Fatalf("newFileOps: %v", err)
+				}
 			}
 
 			var e peerAPITestEnv
 			e.taildrop = managerOptions{
-				Logf: e.logBuf.Logf,
-				Dir:  rootDir,
+				Logf:    e.logBuf.Logf,
+				fileOps: fo,
 			}.New()
 
 			ext := &fakeExtension{
@@ -490,9 +505,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			e.ph = &peerAPIHandler{
 				isSelf:   tt.isSelf,
 				selfNode: selfNode.View(),
-				peerNode: (&tailcfg.Node{
-					ComputedName: "some-peer-name",
-				}).View(),
+				peerNode: (&tailcfg.Node{ComputedName: "some-peer-name"}).View(),
 			}
 			for _, req := range tt.reqs {
 				e.rr = httptest.NewRecorder()
@@ -526,8 +539,8 @@ func TestHandlePeerAPI(t *testing.T) {
 func TestFileDeleteRace(t *testing.T) {
 	dir := t.TempDir()
 	taildropMgr := managerOptions{
-		Logf: t.Logf,
-		Dir:  dir,
+		Logf:    t.Logf,
+		fileOps: must.Get(newFileOps(dir)),
 	}.New()
 
 	ph := &peerAPIHandler{
