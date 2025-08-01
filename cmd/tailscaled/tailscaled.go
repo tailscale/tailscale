@@ -800,7 +800,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			sys.NetMon.Get().SetTailscaleInterfaceName(devName)
 		}
 
-		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker())
+		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker(), sys.Bus.Get())
 		if err != nil {
 			dev.Close()
 			return false, fmt.Errorf("creating router: %w", err)
