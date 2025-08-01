@@ -710,7 +710,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
 	}
 
-	addSplitDNSRoutes := func(onlyWithOverrideExitNode bool) {
+	addSplitDNSRoutes := func(onlyWithOverrideExitNode bool) bool {
+		var foundOverrideExitNode bool
 		for suffix, resolvers := range nm.DNS.Routes {
 			fqdn, err := dnsname.ToFQDN(suffix)
 			if err != nil {
@@ -720,6 +721,9 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			filtered := resolvers
 			if onlyWithOverrideExitNode {
 				filtered = overrideExitNodeResolvers(resolvers)
+				if len(filtered) > 0 {
+					foundOverrideExitNode = true
+				}
 			}
 
 			// Create map entry even if len(resolvers) == 0; Issue 2706.
@@ -735,19 +739,26 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(filtered))
 			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], filtered...)
 		}
+		return foundOverrideExitNode
 	}
 
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
 	// to run a DoH DNS proxy, then send all our DNS traffic through it,
 	// unless we find resolvers with OverrideExitNodeDNS set, in which case we use that.
 	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
+		var overrideFound bool
 		filtered := overrideExitNodeResolvers(nm.DNS.Resolvers)
-		addDefault(filtered)
-		addSplitDNSRoutes(true)
+		if len(filtered) > 0 {
+			overrideFound = true
+			addDefault(filtered)
+		}
+		if addSplitDNSRoutes(true) {
+			overrideFound = true
+		}
 
-		// If no default resolvers or split DNS routes configured,
-		// configure the exit node's resolver.
-		if len(dcfg.DefaultResolvers) == 0 && len(dcfg.Routes) == 0 {
+		// If no default resolvers or split DNS routes with the override
+		// are configured, configure the exit node's resolver.
+		if !overrideFound {
 			addDefault([]*dnstype.Resolver{{Addr: dohURL}})
 		}
 		return dcfg
@@ -764,7 +775,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 	}
 
-	// Add split DNS routes, with no regard to exit node configuration.
+	// Add split DNS routes, with no regard to exit node configuration (false).
 	addSplitDNSRoutes(false)
 
 	// Set FallbackResolvers as the default resolvers in the
