@@ -1574,6 +1574,12 @@ spec:
                                                     selector.
                                                     https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
                                                 type: object
+                                            priorityClassName:
+                                                description: |-
+                                                    PriorityClassName for the proxy Pod.
+                                                    By default Tailscale Kubernetes operator does not apply any priority class.
+                                                    https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
+                                                type: string
                                             securityContext:
                                                 description: |-
                                                     Proxy Pod's security context.

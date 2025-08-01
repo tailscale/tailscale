@@ -298,6 +298,11 @@ type Pod struct {
 	// https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	// PriorityClassName for the proxy Pod.
+	// By default Tailscale Kubernetes operator does not apply any priority class.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
+	// +optional
+	PriorityClassName string `json:"priorityClassName,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)",message="ServiceMonitor can only be enabled if metrics are enabled"
