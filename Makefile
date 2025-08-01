@@ -133,6 +133,10 @@ sshintegrationtest: ## Run the SSH integration tests in various Docker container
 	echo "Testing on ubuntu:noble" && docker build --build-arg="BASE=ubuntu:noble" -t ssh-ubuntu-noble ssh/tailssh/testcontainers && \
 	echo "Testing on alpine:latest" && docker build --build-arg="BASE=alpine:latest" -t ssh-alpine-latest ssh/tailssh/testcontainers
 
+.PHONY: generate
+generate: ## Generate code
+	./tool/go generate ./...
+
 help: ## Show this help
 	@echo "\nSpecify a command. The choices are:\n"
 	@grep -hE '^[0-9a-zA-Z_-]+:.*?## .*$$' ${MAKEFILE_LIST} | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[0;36m%-20s\033[m %s\n", $$1, $$2}'
