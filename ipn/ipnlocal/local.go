@@ -1741,6 +1741,10 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 		b.send(ipn.Notify{NetMap: st.NetMap})
 
+		// The error here is unimportant as is the result.  This will recalculate the suggested exit node
+		// cache the value and push any changes to the IPN bus.
+		b.SuggestExitNode()
+
 		// Check and update the exit node if needed, now that we have a new netmap.
 		//
 		// This must happen after the netmap change is sent via [ipn.Notify],
@@ -7706,7 +7710,12 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 	if err != nil {
 		return res, err
 	}
+	if prevSuggestion != res.ID {
+		// Notify the clients via the IPN bus if the exit node suggestion has changed.
+		b.sendToLocked(ipn.Notify{SuggestedExitNode: &res.ID}, allClients)
+	}
 	b.lastSuggestedExitNode = res.ID
+
 	return res, err
 }
 

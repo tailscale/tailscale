@@ -155,6 +155,10 @@ type Notify struct {
 	// any changes to the user in the UI.
 	Health *health.State `json:",omitempty"`
 
+	// SuggestedExitNode, if non-nil, is the node that the backend has determined to
+	// be the best exit node for the current network conditions.
+	SuggestedExitNode *tailcfg.StableNodeID `json:",omitempty"`
+
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }
 
@@ -194,6 +198,10 @@ func (n Notify) String() string {
 	if n.Health != nil {
 		sb.WriteString("Health{...} ")
 	}
+	if n.SuggestedExitNode != nil {
+		fmt.Fprintf(&sb, "SuggestedExitNode=%v ", *n.SuggestedExitNode)
+	}
+
 	s := sb.String()
 	return s[0:len(s)-1] + "}"
 }
