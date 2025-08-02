@@ -280,6 +280,14 @@ main() {
 				echo "services.tailscale.enable = true;"
 				exit 1
 				;;
+			bazzite)
+				echo "Bazzite comes with Tailscale installed by default."
+				echo "Please enable Tailscale by running the following commands as root:"
+				echo
+				echo "ujust enable-tailscale"
+				echo "tailscale up"
+				exit 1
+				;;
 			void)
 				OS="$ID"
 				VERSION="" # rolling release
