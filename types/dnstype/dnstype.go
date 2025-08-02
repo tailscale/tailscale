@@ -35,6 +35,12 @@ type Resolver struct {
 	//
 	// As of 2022-09-08, BootstrapResolution is not yet used.
 	BootstrapResolution []netip.Addr `json:",omitempty"`
+
+	// OverrideExitNodeDNS is an option that when set to true
+	// indicates that this resolver takes precedence over
+	// the exit node's DNS resolver, when an exit node
+	// is configured in the tailnet.
+	OverrideExitNodeDNS bool `json:",omitempty"`
 }
 
 // IPPort returns r.Addr as an IP address and port if either

@@ -696,14 +696,71 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 	}
 
+	overrideExitNodeResolvers := func(resolvers []*dnstype.Resolver) []*dnstype.Resolver {
+		filtered := make([]*dnstype.Resolver, 0, len(resolvers))
+		for _, res := range nm.DNS.Resolvers {
+			if res.OverrideExitNodeDNS {
+				filtered = append(filtered, res)
+			}
+		}
+		return filtered
+	}
+
 	addDefault := func(resolvers []*dnstype.Resolver) {
 		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
 	}
 
+	addSplitDNSRoutes := func(onlyWithOverrideExitNode bool) bool {
+		var foundOverrideExitNode bool
+		for suffix, resolvers := range nm.DNS.Routes {
+			fqdn, err := dnsname.ToFQDN(suffix)
+			if err != nil {
+				logf("[unexpected] non-FQDN route suffix %q", suffix)
+			}
+
+			filtered := resolvers
+			if onlyWithOverrideExitNode {
+				filtered = overrideExitNodeResolvers(resolvers)
+				if len(filtered) > 0 {
+					foundOverrideExitNode = true
+				}
+			}
+
+			// Create map entry even if len(resolvers) == 0; Issue 2706.
+			// This lets the control plane send ExtraRecords for which we
+			// can authoritatively answer "name not exists" for when the
+			// control plane also sends this explicit but empty route
+			// making it as something we handle.
+			//
+			// While we're already populating it, might as well size the
+			// slice appropriately.
+			// Per #9498 the exact requirements of nil vs empty slice remain
+			// unclear, this is a haunted graveyard to be resolved.
+			dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(filtered))
+			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], filtered...)
+		}
+		return foundOverrideExitNode
+	}
+
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
-	// to run a DoH DNS proxy, then send all our DNS traffic through it.
+	// to run a DoH DNS proxy, then send all our DNS traffic through it,
+	// unless we find resolvers with OverrideExitNodeDNS set, in which case we use that.
 	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
-		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
+		var overrideFound bool
+		filtered := overrideExitNodeResolvers(nm.DNS.Resolvers)
+		if len(filtered) > 0 {
+			overrideFound = true
+			addDefault(filtered)
+		}
+		if addSplitDNSRoutes(true) {
+			overrideFound = true
+		}
+
+		// If no default resolvers or split DNS routes with the override
+		// are configured, configure the exit node's resolver.
+		if !overrideFound {
+			addDefault([]*dnstype.Resolver{{Addr: dohURL}})
+		}
 		return dcfg
 	}
 
@@ -718,25 +775,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 	}
 
-	for suffix, resolvers := range nm.DNS.Routes {
-		fqdn, err := dnsname.ToFQDN(suffix)
-		if err != nil {
-			logf("[unexpected] non-FQDN route suffix %q", suffix)
-		}
-
-		// Create map entry even if len(resolvers) == 0; Issue 2706.
-		// This lets the control plane send ExtraRecords for which we
-		// can authoritatively answer "name not exists" for when the
-		// control plane also sends this explicit but empty route
-		// making it as something we handle.
-		//
-		// While we're already populating it, might as well size the
-		// slice appropriately.
-		// Per #9498 the exact requirements of nil vs empty slice remain
-		// unclear, this is a haunted graveyard to be resolved.
-		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
-		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
-	}
+	// Add split DNS routes, with no regard to exit node configuration (false).
+	addSplitDNSRoutes(false)
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See
