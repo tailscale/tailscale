@@ -286,7 +286,6 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 	defer func() { retryInterval = origRetryInterval }()
 
 	var wg sync.WaitGroup
-	defer wg.Wait()
 	// Make the watcher server
 	serverPrivateKey1 := key.NewNode()
 	_, s1 := newTestServer(t, serverPrivateKey1)
@@ -298,14 +297,15 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 	defer s2.Close()
 
 	// Make the watcher (but it is not connected yet)
-	watcher1 := newWatcherClient(t, serverPrivateKey1, serverURL2)
-	defer watcher1.Close()
+	watcher := newWatcherClient(t, serverPrivateKey1, serverURL2)
+	defer watcher.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	watcherChan := make(chan int, 1)
+	defer close(watcherChan)
 	errChan := make(chan error, 1)
+	defer close(errChan)
 
 	// Start the watcher thread (which connects to the watched server)
 	wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
@@ -323,7 +323,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 			errChan <- err
 		}
 
-		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, notifyErr)
+		watcher.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, notifyErr)
 	}()
 
 	timer := time.NewTimer(5 * time.Second)
@@ -335,7 +335,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 		select {
 		case peers := <-watcherChan:
 			if peers != 1 {
-				t.Fatal("wrong number of peers added during watcher connection")
+				t.Fatalf("wrong number of peers added during watcher connection: have %d, want 1", peers)
 			}
 		case err := <-errChan:
 			if !strings.Contains(err.Error(), "use of closed network connection") {
@@ -344,12 +344,13 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 		case <-timer.C:
 			t.Fatalf("watcher did not process the peer update")
 		}
-		watcher1.breakConnection(watcher1.client)
-		// re-establish connection by sending a packet
-		watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
-
 		timer.Reset(5 * time.Second)
+		watcher.breakConnection(watcher.client)
+		// re-establish connection by sending a packet
+		watcher.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
 	}
+	cancel() // Cancel the context to stop the watcher loop.
+	wg.Wait()
 }
 
 // Test that a watcher connection successfully reconnects and processes peer
@@ -364,7 +365,6 @@ func TestBreakWatcherConn(t *testing.T) {
 	defer func() { retryInterval = origRetryInterval }()
 
 	var wg sync.WaitGroup
-	defer wg.Wait()
 	// Make the watcher server
 	serverPrivateKey1 := key.NewNode()
 	_, s1 := newTestServer(t, serverPrivateKey1)
@@ -380,7 +380,6 @@ func TestBreakWatcherConn(t *testing.T) {
 	defer watcher1.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	watcherChan := make(chan int, 1)
 	breakerChan := make(chan bool, 1)
@@ -396,8 +395,12 @@ func TestBreakWatcherConn(t *testing.T) {
 			peers++
 			// Signal that the watcher has run
 			watcherChan <- peers
+			select {
+			case <-ctx.Done():
+				return
 			// Wait for breaker to run
-			<-breakerChan
+			case <-breakerChan:
+			}
 		}
 		remove := func(m derp.PeerGoneMessage) { t.Logf("remove: %v", m.Peer.ShortString()); peers-- }
 		notifyError := func(err error) {
@@ -416,7 +419,7 @@ func TestBreakWatcherConn(t *testing.T) {
 		select {
 		case peers := <-watcherChan:
 			if peers != 1 {
-				t.Fatal("wrong number of peers added during watcher connection")
+				t.Fatalf("wrong number of peers added during watcher connection have %d, want 1", peers)
 			}
 		case err := <-errorChan:
 			if !strings.Contains(err.Error(), "use of closed network connection") {
@@ -433,6 +436,9 @@ func TestBreakWatcherConn(t *testing.T) {
 
 		timer.Reset(5 * time.Second)
 	}
+	watcher1.Close()
+	cancel()
+	wg.Wait()
 }
 
 func noopAdd(derp.PeerPresentMessage) {}
