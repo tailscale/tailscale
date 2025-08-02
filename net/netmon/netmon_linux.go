@@ -241,18 +241,15 @@ func (c *nlConn) Receive() (message, error) {
 			// On `ip -4 rule del pref 5210 table main`, logs:
 			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
 		}
-		c.rulesDeleted.Publish(RuleDeleted{
+		rd := RuleDeleted{
 			Table:    rmsg.Table,
 			Priority: rmsg.Attributes.Priority,
-		})
-		rdm := ipRuleDeletedMessage{
-			table:    rmsg.Table,
-			priority: rmsg.Attributes.Priority,
 		}
+		c.rulesDeleted.Publish(rd)
 		if debugNetlinkMessages() {
-			c.logf("%+v", rdm)
+			c.logf("%+v", rd)
 		}
-		return rdm, nil
+		return ignoreMessage{}, nil
 	case unix.RTM_NEWLINK, unix.RTM_DELLINK:
 		// This is an unhandled message, but don't print an error.
 		// See https://github.com/tailscale/tailscale/issues/6806

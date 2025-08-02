@@ -119,7 +119,7 @@ func Subscribe[T any](c *Client) *Subscriber[T] {
 	return s
 }
 
-// Publisher returns a publisher for event type T using the given
+// Publish returns a publisher for event type T using the given
 // client.
 func Publish[T any](c *Client) *Publisher[T] {
 	p := newPublisher[T](c)

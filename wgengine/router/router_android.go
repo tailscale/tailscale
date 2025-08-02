@@ -10,9 +10,10 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
-func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, _ *eventbus.Bus) (Router, error) {
 	// Note, this codepath is _not_ used when building the android app
 	// from github.com/tailscale/tailscale-android. The android app
 	// constructs its own wgengine with a custom router implementation

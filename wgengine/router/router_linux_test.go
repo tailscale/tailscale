@@ -28,6 +28,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/version/distro"
 )
@@ -375,7 +376,7 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 
 	fake := NewFakeOS(t)
 	ht := new(health.Tracker)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht)
+	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht, bus)
 	router.(*linuxRouter).nfr = fake.nfr
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
@@ -414,7 +415,7 @@ type fakeIPTablesRunner struct {
 	t    *testing.T
 	ipt4 map[string][]string
 	ipt6 map[string][]string
-	//we always assume ipv6 and ipv6 nat are enabled when testing
+	// we always assume ipv6 and ipv6 nat are enabled when testing
 }
 
 func newIPTablesRunner(t *testing.T) linuxfw.NetfilterRunner {
@@ -541,6 +542,7 @@ func (n *fakeIPTablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
 func (n *fakeIPTablesRunner) DNATNonTailscaleTraffic(exemptInterface string, dst netip.Addr) error {
 	return errors.New("not implemented")
 }
+
 func (n *fakeIPTablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm linuxfw.PortMap) error {
 	return errors.New("not implemented")
 }
@@ -781,8 +783,8 @@ type fakeOS struct {
 	ips    []string
 	routes []string
 	rules  []string
-	//This test tests on the router level, so we will not bother
-	//with using iptables or nftables, chose the simpler one.
+	// This test tests on the router level, so we will not bother
+	// with using iptables or nftables, chose the simpler one.
 	nfr linuxfw.NetfilterRunner
 }
 
@@ -974,7 +976,7 @@ func (lt *linuxTest) Close() error {
 	return nil
 }
 
-func newLinuxRootTest(t *testing.T) *linuxTest {
+func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
 	if os.Getuid() != 0 {
 		t.Skip("test requires root")
 	}
@@ -984,8 +986,7 @@ func newLinuxRootTest(t *testing.T) *linuxTest {
 
 	logf := lt.logOutput.Logf
 
-	bus := eventbus.New()
-	defer bus.Close()
+	bus := eventbustest.NewBus(t)
 
 	mon, err := netmon.New(bus, logger.Discard)
 	if err != nil {
@@ -995,7 +996,7 @@ func newLinuxRootTest(t *testing.T) *linuxTest {
 	mon.Start()
 	lt.mon = mon
 
-	r, err := newUserspaceRouter(logf, lt.tun, mon, nil)
+	r, err := newUserspaceRouter(logf, lt.tun, mon, nil, bus)
 	if err != nil {
 		lt.Close()
 		t.Fatal(err)
@@ -1006,11 +1007,31 @@ func newLinuxRootTest(t *testing.T) *linuxTest {
 		t.Fatal(err)
 	}
 	lt.r = lr
-	return lt
+	return lt, bus
+}
+
+func TestRuleDeletedEvent(t *testing.T) {
+	fake := NewFakeOS(t)
+	lt, bus := newLinuxRootTest(t)
+	lt.r.nfr = fake.nfr
+	defer lt.Close()
+	event := netmon.RuleDeleted{
+		Table:    52,
+		Priority: 5210,
+	}
+	tw := eventbustest.NewWatcher(t, bus)
+
+	t.Logf("Value before: %t", lt.r.ruleRestorePending.Load())
+	if lt.r.ruleRestorePending.Load() {
+		t.Errorf("rule deletion already ongoing")
+	}
+	injector := eventbustest.NewInjector(t, bus)
+	eventbustest.Inject(injector, event)
+	eventbustest.Expect(tw, eventbustest.Type[AddIPRules]())
 }
 
 func TestDelRouteIdempotent(t *testing.T) {
-	lt := newLinuxRootTest(t)
+	lt, _ := newLinuxRootTest(t)
 	defer lt.Close()
 
 	for _, s := range []string{
@@ -1036,7 +1057,7 @@ func TestDelRouteIdempotent(t *testing.T) {
 }
 
 func TestAddRemoveRules(t *testing.T) {
-	lt := newLinuxRootTest(t)
+	lt, _ := newLinuxRootTest(t)
 	defer lt.Close()
 	r := lt.r
 
@@ -1054,14 +1075,12 @@ func TestAddRemoveRules(t *testing.T) {
 				t.Logf("Rule: %+v", r)
 			}
 		}
-
 	}
 
 	step("init_del_and_add", r.addIPRules)
 	step("dup_add", r.justAddIPRules)
 	step("del", r.delIPRules)
 	step("dup_del", r.delIPRules)
-
 }
 
 func TestDebugListLinks(t *testing.T) {
