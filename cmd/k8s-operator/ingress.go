@@ -212,6 +212,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	hostname := hostnameForIngress(ing)
 
 	sts := &tailscaleSTSConfig{
+		Replicas:            1,
 		Hostname:            hostname,
 		ParentResourceName:  ing.Name,
 		ParentResourceUID:   string(ing.UID),
