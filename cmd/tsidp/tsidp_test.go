@@ -8,9 +8,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 func TestBackwardCompatibility(t *testing.T) {
@@ -409,5 +416,356 @@ func TestMetadataEndpoints(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRefreshTokenFlow(t *testing.T) {
+	tests := []struct {
+		name          string
+		grantType     string
+		refreshToken  string
+		clientID      string
+		clientSecret  string
+		expectStatus  int
+		checkResponse func(t *testing.T, body []byte)
+	}{
+		{
+			name:         "valid refresh token grant",
+			grantType:    "refresh_token",
+			refreshToken: "valid-refresh-token",
+			clientID:     "test-client",
+			clientSecret: "test-secret",
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var resp oidcTokenResponse
+				if err := json.Unmarshal(body, &resp); err != nil {
+					t.Fatalf("failed to unmarshal response: %v", err)
+				}
+				if resp.AccessToken == "" {
+					t.Error("expected access token")
+				}
+				if resp.RefreshToken == "" {
+					t.Error("expected new refresh token")
+				}
+				if resp.IDToken == "" {
+					t.Error("expected ID token")
+				}
+				if resp.TokenType != "Bearer" {
+					t.Errorf("expected token type Bearer, got %s", resp.TokenType)
+				}
+				if resp.ExpiresIn != 300 {
+					t.Errorf("expected expires_in 300, got %d", resp.ExpiresIn)
+				}
+			},
+		},
+		{
+			name:         "missing refresh token",
+			grantType:    "refresh_token",
+			refreshToken: "",
+			expectStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, body []byte) {
+				if !strings.Contains(string(body), "refresh_token is required") {
+					t.Errorf("expected refresh_token required error, got: %s", body)
+				}
+			},
+		},
+		{
+			name:         "invalid refresh token",
+			grantType:    "refresh_token",
+			refreshToken: "invalid-token",
+			expectStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, body []byte) {
+				if !strings.Contains(string(body), "invalid refresh token") {
+					t.Errorf("expected invalid refresh token error, got: %s", body)
+				}
+			},
+		},
+		{
+			name:         "expired refresh token",
+			grantType:    "refresh_token",
+			refreshToken: "expired-token",
+			expectStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, body []byte) {
+				if !strings.Contains(string(body), "invalid refresh token") {
+					t.Errorf("expected invalid refresh token error, got: %s", body)
+				}
+			},
+		},
+		{
+			name:         "wrong client credentials",
+			grantType:    "refresh_token",
+			refreshToken: "valid-refresh-token",
+			clientID:     "wrong-client",
+			clientSecret: "wrong-secret",
+			expectStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:     "https://idp.test.ts.net",
+				refreshToken:  make(map[string]*authRequest),
+				funnelClients: make(map[string]*funnelClient),
+			}
+
+			// Set up test data
+			if tt.refreshToken == "valid-refresh-token" {
+				s.refreshToken[tt.refreshToken] = &authRequest{
+					funnelRP: &funnelClient{
+						ID:     "test-client",
+						Secret: "test-secret",
+					},
+					clientID:  "test-client",
+					validTill: time.Now().Add(time.Hour),
+					remoteUser: &apitype.WhoIsResponse{
+						Node: &tailcfg.Node{
+							ID:        1,
+							Name:      "node1.example.ts.net",
+							User:      tailcfg.UserID(1),
+							Key:       key.NodePublic{},
+							Addresses: []netip.Prefix{},
+						},
+						UserProfile: &tailcfg.UserProfile{
+							LoginName:     "user@example.com",
+							DisplayName:   "Test User",
+							ProfilePicURL: "https://example.com/pic.jpg",
+						},
+					},
+				}
+				s.funnelClients["test-client"] = &funnelClient{
+					ID:     "test-client",
+					Secret: "test-secret",
+				}
+			} else if tt.refreshToken == "expired-token" {
+				s.refreshToken[tt.refreshToken] = &authRequest{
+					funnelRP: &funnelClient{
+						ID:     "test-client",
+						Secret: "test-secret",
+					},
+					clientID:  "test-client",
+					validTill: time.Now().Add(-time.Hour), // expired
+				}
+			}
+
+			// Create request
+			form := url.Values{}
+			form.Set("grant_type", tt.grantType)
+			if tt.refreshToken != "" {
+				form.Set("refresh_token", tt.refreshToken)
+			}
+			if tt.clientID != "" {
+				form.Set("client_id", tt.clientID)
+			}
+			if tt.clientSecret != "" {
+				form.Set("client_secret", tt.clientSecret)
+			}
+
+			req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			rr := httptest.NewRecorder()
+			s.serveToken(rr, req)
+
+			if rr.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rr.Code)
+			}
+
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rr.Body.Bytes())
+			}
+		})
+	}
+}
+
+func TestOAuthMetadataRefreshTokenSupport(t *testing.T) {
+	s := &idpServer{
+		serverURL:   "https://idp.test.ts.net",
+		loopbackURL: "http://localhost:8080",
+	}
+
+	req := httptest.NewRequest("GET", "/.well-known/oauth-authorization-server", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+
+	rr := httptest.NewRecorder()
+	s.serveOAuthMetadata(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rr.Code)
+	}
+
+	var metadata oauthAuthorizationServerMetadata
+	if err := json.Unmarshal(rr.Body.Bytes(), &metadata); err != nil {
+		t.Fatalf("failed to unmarshal metadata: %v", err)
+	}
+
+	// Check that refresh_token is in grant_types_supported
+	found := false
+	for _, gt := range metadata.GrantTypesSupported.AsSlice() {
+		if gt == "refresh_token" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected refresh_token in grant_types_supported")
+	}
+}
+
+func TestTokenExpiration(t *testing.T) {
+	tests := []struct {
+		name         string
+		tokenAge     time.Duration
+		expectStatus int
+		expectError  string
+	}{
+		{
+			name:         "valid access token",
+			tokenAge:     -1 * time.Minute, // 1 minute old (still valid)
+			expectStatus: http.StatusOK,
+		},
+		{
+			name:         "expired access token",
+			tokenAge:     10 * time.Minute, // 10 minutes old (expired)
+			expectStatus: http.StatusBadRequest,
+			expectError:  "token expired",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:    "https://idp.test.ts.net",
+				accessToken:  make(map[string]*authRequest),
+			}
+
+			// Create a test token
+			testToken := "test-access-token"
+			s.accessToken[testToken] = &authRequest{
+				validTill: time.Now().Add(-tt.tokenAge),
+				remoteUser: &apitype.WhoIsResponse{
+					Node: &tailcfg.Node{
+						ID:   1,
+						Name: "node1.example.ts.net",
+						User: tailcfg.UserID(1),
+					},
+					UserProfile: &tailcfg.UserProfile{
+						LoginName:   "user@example.com",
+						DisplayName: "Test User",
+					},
+				},
+			}
+
+			req := httptest.NewRequest("GET", "/userinfo", nil)
+			req.Header.Set("Authorization", "Bearer "+testToken)
+
+			rr := httptest.NewRecorder()
+			s.serveUserInfo(rr, req)
+
+			if rr.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rr.Code)
+			}
+
+			if tt.expectError != "" {
+				if !strings.Contains(rr.Body.String(), tt.expectError) {
+					t.Errorf("expected error containing %q, got %q", tt.expectError, rr.Body.String())
+				}
+				// Verify token was deleted
+				if _, exists := s.accessToken[testToken]; exists {
+					t.Error("expected expired token to be deleted")
+				}
+			}
+		})
+	}
+}
+
+func TestCleanupExpiredTokens(t *testing.T) {
+	s := &idpServer{
+		accessToken:  make(map[string]*authRequest),
+		refreshToken: make(map[string]*authRequest),
+	}
+
+	now := time.Now()
+
+	// Add various tokens with different expiration times
+	s.accessToken["valid-access"] = &authRequest{validTill: now.Add(1 * time.Minute)}
+	s.accessToken["expired-access-1"] = &authRequest{validTill: now.Add(-1 * time.Minute)}
+	s.accessToken["expired-access-2"] = &authRequest{validTill: now.Add(-10 * time.Minute)}
+
+	s.refreshToken["valid-refresh"] = &authRequest{validTill: now.Add(24 * time.Hour)}
+	s.refreshToken["expired-refresh-1"] = &authRequest{validTill: now.Add(-1 * time.Hour)}
+	s.refreshToken["expired-refresh-2"] = &authRequest{validTill: now.Add(-24 * time.Hour)}
+
+	// Run cleanup
+	s.cleanupExpiredTokens()
+
+	// Check that only valid tokens remain
+	if len(s.accessToken) != 1 {
+		t.Errorf("expected 1 valid access token, got %d", len(s.accessToken))
+	}
+	if _, exists := s.accessToken["valid-access"]; !exists {
+		t.Error("valid access token was incorrectly deleted")
+	}
+
+	if len(s.refreshToken) != 1 {
+		t.Errorf("expected 1 valid refresh token, got %d", len(s.refreshToken))
+	}
+	if _, exists := s.refreshToken["valid-refresh"]; !exists {
+		t.Error("valid refresh token was incorrectly deleted")
+	}
+}
+
+func TestIntrospectTokenExpiration(t *testing.T) {
+	s := &idpServer{
+		serverURL:     "https://idp.test.ts.net",
+		accessToken:   make(map[string]*authRequest),
+		funnelClients: make(map[string]*funnelClient),
+	}
+
+	// Create an expired token
+	expiredToken := "expired-token"
+	s.accessToken[expiredToken] = &authRequest{
+		validTill: time.Now().Add(-10 * time.Minute), // expired
+		funnelRP: &funnelClient{
+			ID:     "test-client",
+			Secret: "test-secret",
+		},
+		clientID: "test-client",
+	}
+
+	// Set up the funnel client
+	s.funnelClients["test-client"] = &funnelClient{
+		ID:     "test-client",
+		Secret: "test-secret",
+	}
+
+	form := url.Values{}
+	form.Set("token", expiredToken)
+	form.Set("client_id", "test-client")
+	form.Set("client_secret", "test-secret")
+
+	req := httptest.NewRequest("POST", "/introspect", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rr := httptest.NewRecorder()
+	s.serveIntrospect(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rr.Code)
+	}
+
+	// Check response shows token as inactive
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if active, ok := resp["active"].(bool); !ok || active {
+		t.Error("expected active: false for expired token")
+	}
+
+	// Verify token was deleted
+	if _, exists := s.accessToken[expiredToken]; exists {
+		t.Error("expected expired token to be deleted from introspection")
 	}
 }

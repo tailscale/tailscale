@@ -188,6 +188,27 @@ func main() {
 		lns = append(lns, ln)
 	}
 
+	// Start token cleanup routine
+	cleanupCtx, cleanupCancel := context.WithCancel(ctx)
+	defer cleanupCancel()
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		
+		for {
+			select {
+			case <-ticker.C:
+				srv.cleanupExpiredTokens()
+				if *flagVerbose {
+					log.Printf("Cleaned up expired tokens")
+				}
+			case <-cleanupCtx.Done():
+				return
+			}
+		}
+	}()
+
 	for _, ln := range lns {
 		server := http.Server{
 			Handler: srv,
@@ -293,6 +314,7 @@ type idpServer struct {
 	mu            sync.Mutex               // guards the fields below
 	code          map[string]*authRequest  // keyed by random hex
 	accessToken   map[string]*authRequest  // keyed by random hex
+	refreshToken  map[string]*authRequest  // keyed by random hex
 	funnelClients map[string]*funnelClient // keyed by client ID
 }
 
@@ -499,6 +521,7 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.accessToken, tk)
 		s.mu.Unlock()
+		return
 	}
 
 	ui := userInfo{}
@@ -689,10 +712,19 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if r.FormValue("grant_type") != "authorization_code" {
+	
+	grantType := r.FormValue("grant_type")
+	switch grantType {
+	case "authorization_code":
+		s.handleAuthorizationCodeGrant(w, r)
+	case "refresh_token":
+		s.handleRefreshTokenGrant(w, r)
+	default:
 		http.Error(w, "tsidp: grant_type not supported", http.StatusBadRequest)
-		return
 	}
+}
+
+func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
 	if code == "" {
 		http.Error(w, "tsidp: code is required", http.StatusBadRequest)
@@ -717,6 +749,47 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: redirect_uri mismatch", http.StatusBadRequest)
 		return
 	}
+	
+	s.issueTokens(w, ar)
+}
+
+func (s *idpServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request) {
+	rt := r.FormValue("refresh_token")
+	if rt == "" {
+		http.Error(w, "tsidp: refresh_token is required", http.StatusBadRequest)
+		return
+	}
+	
+	s.mu.Lock()
+	ar, ok := s.refreshToken[rt]
+	if ok && ar.validTill.Before(time.Now()) {
+		// Token expired, remove it
+		delete(s.refreshToken, rt)
+		ok = false
+	}
+	s.mu.Unlock()
+	
+	if !ok {
+		http.Error(w, "tsidp: invalid refresh token", http.StatusBadRequest)
+		return
+	}
+	
+	// Validate client authentication
+	if err := ar.allowRelyingParty(r, s.lc); err != nil {
+		log.Printf("Error allowing relying party: %v", err)
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	
+	// Delete the old refresh token (rotation for security)
+	s.mu.Lock()
+	delete(s.refreshToken, rt)
+	s.mu.Unlock()
+	
+	s.issueTokens(w, ar)
+}
+
+func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	signer, err := s.oidcSigner()
 	if err != nil {
 		log.Printf("Error getting signer: %v", err)
@@ -783,17 +856,23 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	at := rands.HexString(32)
+	rt := rands.HexString(32)
 	s.mu.Lock()
 	ar.validTill = now.Add(5 * time.Minute)
 	mak.Set(&s.accessToken, at, ar)
+	// Create a new authRequest for refresh token with longer validity
+	rtAuth := *ar // copy the authRequest
+	rtAuth.validTill = now.Add(30 * 24 * time.Hour) // 30 days
+	mak.Set(&s.refreshToken, rt, &rtAuth)
 	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(oidcTokenResponse{
-		AccessToken: at,
-		TokenType:   "Bearer",
-		ExpiresIn:   5 * 60,
-		IDToken:     token,
+		AccessToken:  at,
+		TokenType:    "Bearer",
+		ExpiresIn:    5 * 60,
+		IDToken:      token,
+		RefreshToken: rt,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -825,8 +904,20 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 		"active": false,
 	}
 
+	// Check if token exists and handle expiration
+	if tokenExists {
+		now := time.Now()
+		if ar.validTill.Before(now) {
+			// Token expired, clean it up
+			s.mu.Lock()
+			delete(s.accessToken, token)
+			s.mu.Unlock()
+			tokenExists = false
+		}
+	}
+
 	// If token exists and is not expired, we need to authenticate the client
-	if tokenExists && ar.validTill.After(time.Now()) {
+	if tokenExists {
 		// For introspection, we need to authenticate the client making the request
 		// This is different from token endpoint where we authenticate using the authRequest
 
@@ -1056,7 +1147,7 @@ var (
 	openIDSupportedSigningAlgos = views.SliceOf([]string{string(jose.RS256)})
 
 	// OAuth 2.0 specific metadata constants
-	oauthSupportedGrantTypes               = views.SliceOf([]string{"authorization_code"})
+	oauthSupportedGrantTypes               = views.SliceOf([]string{"authorization_code", "refresh_token"})
 	oauthSupportedTokenEndpointAuthMethods = views.SliceOf([]string{"client_secret_post", "client_secret_basic"})
 )
 
@@ -1471,6 +1562,29 @@ func (s *idpServer) storeFunnelClientsLocked() error {
 		return err
 	}
 	return os.WriteFile(funnelClientsFile, buf.Bytes(), 0600)
+}
+
+// cleanupExpiredTokens removes expired access and refresh tokens from memory.
+// This prevents memory leaks from accumulating expired tokens over time.
+func (s *idpServer) cleanupExpiredTokens() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	now := time.Now()
+	
+	// Clean up expired access tokens
+	for token, ar := range s.accessToken {
+		if ar.validTill.Before(now) {
+			delete(s.accessToken, token)
+		}
+	}
+	
+	// Clean up expired refresh tokens  
+	for token, ar := range s.refreshToken {
+		if ar.validTill.Before(now) {
+			delete(s.refreshToken, token)
+		}
+	}
 }
 
 const (
