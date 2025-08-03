@@ -195,7 +195,7 @@ func main() {
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-ticker.C:
@@ -343,6 +343,14 @@ type authRequest struct {
 	// redirectURI is the redirect_uri presented in the request.
 	redirectURI string
 
+	// resources are the resource URIs from RFC 8707 that the client is
+	// requesting access to. These are validated at token issuance time.
+	resources []string
+
+	// scopes are the OAuth 2.0 scopes requested by the client.
+	// These are validated against supported scopes at authorization time.
+	scopes []string
+
 	// remoteUser is the user who is being authenticated.
 	remoteUser *apitype.WhoIsResponse
 
@@ -350,6 +358,84 @@ type authRequest struct {
 	// As of 2023-11-14, it is 5 minutes.
 	// TODO: add routine to delete expired tokens.
 	validTill time.Time
+}
+
+// validateScopes checks if the requested scopes are valid and supported.
+// It returns the validated scopes or an error if any scope is unsupported.
+func (s *idpServer) validateScopes(requestedScopes []string) ([]string, error) {
+	if len(requestedScopes) == 0 {
+		// Default to openid scope if none specified
+		return []string{"openid"}, nil
+	}
+
+	validatedScopes := make([]string, 0, len(requestedScopes))
+	supportedScopes := openIDSupportedScopes.AsSlice()
+	
+	for _, scope := range requestedScopes {
+		supported := false
+		for _, supportedScope := range supportedScopes {
+			if scope == supportedScope {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return nil, fmt.Errorf("unsupported scope: %q", scope)
+		}
+		validatedScopes = append(validatedScopes, scope)
+	}
+
+	return validatedScopes, nil
+}
+
+// validateResourcesForUser checks if the user is allowed to access the requested resources
+// using the same capability rules as STS token exchange.
+func (s *idpServer) validateResourcesForUser(who *apitype.WhoIsResponse, requestedResources []string) ([]string, error) {
+	// Check ACL grant using the same capability as STS token exchange
+	rules, err := tailcfg.UnmarshalCapJSON[stsCapRule](who.CapMap, "test-tailscale.com/idp/sts/openly-allow")
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal capability: %w", err)
+	}
+
+	// Filter resources based on what the user is allowed to access
+	var allowedResources []string
+	for _, resource := range requestedResources {
+		allowed := false
+		for _, rule := range rules {
+			// Check if user matches (support wildcard or specific user)
+			userMatches := false
+			for _, user := range rule.Users {
+				if user == "*" || user == who.UserProfile.LoginName {
+					userMatches = true
+					break
+				}
+			}
+
+			if userMatches {
+				// Check if resource matches
+				for _, allowedResource := range rule.Resources {
+					if allowedResource == resource || allowedResource == "*" {
+						allowed = true
+						break
+					}
+				}
+			}
+
+			if allowed {
+				break
+			}
+		}
+
+		if allowed {
+			allowedResources = append(allowedResources, resource)
+		}
+	}
+
+	if len(allowedResources) == 0 && len(requestedResources) > 0 {
+		return nil, fmt.Errorf("access denied for requested resources")
+	}
+
+	return allowedResources, nil
 }
 
 // allowRelyingParty validates that a relying party identified either by a
@@ -428,7 +514,21 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 		remoteUser:  who,
 		redirectURI: redirectURI,
 		clientID:    uq.Get("client_id"),
+		resources:   uq["resource"], // RFC 8707: multiple resource parameters are allowed
 	}
+
+	// Parse space-delimited scopes
+	if scopeParam := uq.Get("scope"); scopeParam != "" {
+		ar.scopes = strings.Fields(scopeParam)
+	}
+
+	// Validate scopes
+	validatedScopes, err := s.validateScopes(ar.scopes)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("tsidp: invalid scope: %v", err), http.StatusBadRequest)
+		return
+	}
+	ar.scopes = validatedScopes
 
 	if r.URL.Path == "/authorize/funnel" {
 		s.mu.Lock()
@@ -578,6 +678,14 @@ type capRule struct {
 	ExtraClaims       map[string]any `json:"extraClaims,omitempty"` // list of features peer is allowed to edit
 }
 
+// stsCapRule represents a capability rule for STS token exchange and resource indicators.
+// It defines which users are allowed to exchange tokens for which audiences/resources.
+// This is used with the ACL capability key "tailscale.com/idp/sts/openly-allow".
+type stsCapRule struct {
+	Users     []string `json:"users"`     // list of users allowed to access resources (supports "*" wildcard)
+	Resources []string `json:"resources"` // list of audience/resource URIs the user can access
+}
+
 // flattenExtraClaims merges all ExtraClaims from a slice of capRule into a single map.
 // It deduplicates values for each claim and preserves the original input type:
 // scalar values remain scalars, and slices are returned as deduplicated []any slices.
@@ -712,7 +820,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	grantType := r.FormValue("grant_type")
 	switch grantType {
 	case "authorization_code":
@@ -749,7 +857,21 @@ func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.
 		http.Error(w, "tsidp: redirect_uri mismatch", http.StatusBadRequest)
 		return
 	}
-	
+
+	// RFC 8707: Check for resource parameter in token request
+	resources := r.Form["resource"]
+	if len(resources) > 0 {
+		// Validate requested resources using the same capability as STS
+		validatedResources, err := s.validateResourcesForUser(ar.remoteUser, resources)
+		if err != nil {
+			log.Printf("Error validating resources: %v", err)
+			http.Error(w, "tsidp: invalid resource", http.StatusBadRequest)
+			return
+		}
+		ar.resources = validatedResources
+	}
+	// If no resources in token request, use the ones from authorization
+
 	s.issueTokens(w, ar)
 }
 
@@ -759,7 +881,7 @@ func (s *idpServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "tsidp: refresh_token is required", http.StatusBadRequest)
 		return
 	}
-	
+
 	s.mu.Lock()
 	ar, ok := s.refreshToken[rt]
 	if ok && ar.validTill.Before(time.Now()) {
@@ -768,24 +890,58 @@ func (s *idpServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reque
 		ok = false
 	}
 	s.mu.Unlock()
-	
+
 	if !ok {
 		http.Error(w, "tsidp: invalid refresh token", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Validate client authentication
 	if err := ar.allowRelyingParty(r, s.lc); err != nil {
 		log.Printf("Error allowing relying party: %v", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	
+
+	// RFC 8707: Check for resource parameter in refresh token request
+	resources := r.Form["resource"]
+	if len(resources) > 0 {
+		// Validate requested resources are a subset of original grant
+		validatedResources, err := s.validateResourcesForUser(ar.remoteUser, resources)
+		if err != nil {
+			log.Printf("Error validating resources: %v", err)
+			http.Error(w, "tsidp: invalid resource", http.StatusBadRequest)
+			return
+		}
+
+		// Ensure requested resources are subset of original grant
+		if len(ar.resources) > 0 {
+			for _, requested := range validatedResources {
+				found := false
+				for _, allowed := range ar.resources {
+					if requested == allowed {
+						found = true
+						break
+					}
+				}
+				if !found {
+					http.Error(w, "tsidp: requested resource not in original grant", http.StatusBadRequest)
+					return
+				}
+			}
+		}
+
+		// Create a copy of authRequest with downscoped resources
+		arCopy := *ar
+		arCopy.resources = validatedResources
+		ar = &arCopy
+	}
+
 	// Delete the old refresh token (rotation for security)
 	s.mu.Lock()
 	delete(s.refreshToken, rt)
 	s.mu.Unlock()
-	
+
 	s.issueTokens(w, ar)
 }
 
@@ -809,9 +965,17 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 
 	now := time.Now()
 	_, tcd, _ := strings.Cut(n.Name(), ".")
+
+	// RFC 8707: Include resources in the audience claim
+	audience := jwt.Audience{ar.clientID}
+	if len(ar.resources) > 0 {
+		// Add resources to the audience list
+		audience = append(audience, ar.resources...)
+	}
+
 	tsClaims := tailscaleClaims{
 		Claims: jwt.Claims{
-			Audience:  jwt.Audience{ar.clientID},
+			Audience:  audience,
 			Expiry:    jwt.NewNumericDate(now.Add(5 * time.Minute)),
 			ID:        jti,
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -861,7 +1025,7 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	ar.validTill = now.Add(5 * time.Minute)
 	mak.Set(&s.accessToken, at, ar)
 	// Create a new authRequest for refresh token with longer validity
-	rtAuth := *ar // copy the authRequest
+	rtAuth := *ar                                   // copy the authRequest
 	rtAuth.validTill = now.Add(30 * 24 * time.Hour) // 30 days
 	mak.Set(&s.refreshToken, rt, &rtAuth)
 	s.mu.Unlock()
@@ -973,8 +1137,20 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Add audience if available
+		audience := []string{}
 		if ar.clientID != "" {
-			resp["aud"] = ar.clientID
+			audience = append(audience, ar.clientID)
+		}
+		if len(ar.resources) > 0 {
+			audience = append(audience, ar.resources...)
+		}
+		if len(audience) > 0 {
+			resp["aud"] = audience
+		}
+
+		// Add scope if available
+		if len(ar.scopes) > 0 {
+			resp["scope"] = strings.Join(ar.scopes, " ")
 		}
 	}
 
@@ -1092,16 +1268,18 @@ type openIDProviderMetadata struct {
 // OAuth 2.0 Authorization Server Metadata as defined in RFC 8414.
 // https://datatracker.ietf.org/doc/html/rfc8414
 type oauthAuthorizationServerMetadata struct {
-	Issuer                            string              `json:"issuer"`
-	AuthorizationEndpoint             string              `json:"authorization_endpoint"`
-	TokenEndpoint                     string              `json:"token_endpoint"`
-	IntrospectionEndpoint             string              `json:"introspection_endpoint,omitempty"`
-	RegistrationEndpoint              string              `json:"registration_endpoint,omitempty"`
-	JWKS_URI                          string              `json:"jwks_uri"`
-	ResponseTypesSupported            views.Slice[string] `json:"response_types_supported"`
-	GrantTypesSupported               views.Slice[string] `json:"grant_types_supported"`
-	ScopesSupported                   views.Slice[string] `json:"scopes_supported,omitempty"`
-	TokenEndpointAuthMethodsSupported views.Slice[string] `json:"token_endpoint_auth_methods_supported"`
+	Issuer                             string              `json:"issuer"`
+	AuthorizationEndpoint              string              `json:"authorization_endpoint"`
+	TokenEndpoint                      string              `json:"token_endpoint"`
+	IntrospectionEndpoint              string              `json:"introspection_endpoint,omitempty"`
+	RegistrationEndpoint               string              `json:"registration_endpoint,omitempty"`
+	JWKS_URI                           string              `json:"jwks_uri"`
+	ResponseTypesSupported             views.Slice[string] `json:"response_types_supported"`
+	GrantTypesSupported                views.Slice[string] `json:"grant_types_supported"`
+	ScopesSupported                    views.Slice[string] `json:"scopes_supported,omitempty"`
+	TokenEndpointAuthMethodsSupported  views.Slice[string] `json:"token_endpoint_auth_methods_supported"`
+	AuthorizationDetailsTypesSupported views.Slice[string] `json:"authorization_details_types_supported,omitempty"`
+	ResourceIndicatorsSupported        bool                `json:"resource_indicators_supported,omitempty"`
 }
 
 type tailscaleClaims struct {
@@ -1210,12 +1388,12 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 		ClaimsSupported:                  openIDSupportedClaims,
 		IDTokenSigningAlgValuesSupported: openIDSupportedSigningAlgos,
 	}
-	
+
 	// Only expose registration endpoint over tailnet, not funnel
 	if !isFunnelRequest(r) {
 		metadata.RegistrationEndpoint = rpEndpoint + "/register"
 	}
-	
+
 	if err := je.Encode(metadata); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -1268,22 +1446,24 @@ func (s *idpServer) serveOAuthMetadata(w http.ResponseWriter, r *http.Request) {
 	je := json.NewEncoder(w)
 	je.SetIndent("", "  ")
 	metadata := oauthAuthorizationServerMetadata{
-		Issuer:                            rpEndpoint,
-		AuthorizationEndpoint:             authorizeEndpoint,
-		TokenEndpoint:                     rpEndpoint + "/token",
-		IntrospectionEndpoint:             rpEndpoint + "/introspect",
-		JWKS_URI:                          rpEndpoint + oidcJWKSPath,
-		ResponseTypesSupported:            openIDSupportedReponseTypes,
-		GrantTypesSupported:               oauthSupportedGrantTypes,
-		ScopesSupported:                   openIDSupportedScopes,
-		TokenEndpointAuthMethodsSupported: oauthSupportedTokenEndpointAuthMethods,
+		Issuer:                             rpEndpoint,
+		AuthorizationEndpoint:              authorizeEndpoint,
+		TokenEndpoint:                      rpEndpoint + "/token",
+		IntrospectionEndpoint:              rpEndpoint + "/introspect",
+		JWKS_URI:                           rpEndpoint + oidcJWKSPath,
+		ResponseTypesSupported:             openIDSupportedReponseTypes,
+		GrantTypesSupported:                oauthSupportedGrantTypes,
+		ScopesSupported:                    openIDSupportedScopes,
+		TokenEndpointAuthMethodsSupported:  oauthSupportedTokenEndpointAuthMethods,
+		ResourceIndicatorsSupported:        true, // RFC 8707 support
+		AuthorizationDetailsTypesSupported: views.SliceOf([]string{"resource_indicators"}),
 	}
-	
+
 	// Only expose registration endpoint over tailnet, not funnel
 	if !isFunnelRequest(r) {
 		metadata.RegistrationEndpoint = rpEndpoint + "/register"
 	}
-	
+
 	if err := je.Encode(metadata); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -1321,21 +1501,21 @@ func (c *funnelClient) UnmarshalJSON(data []byte) error {
 	}{
 		Alias: (*Alias)(c),
 	}
-	
+
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	
+
 	// Migrate old redirect_uri to redirect_uris
 	if len(c.RedirectURIs) == 0 && aux.RedirectURI != "" {
 		c.RedirectURIs = []string{aux.RedirectURI}
 	}
-	
+
 	// Migrate old name to client_name
 	if c.Name == "" && aux.Name != "" {
 		c.Name = aux.Name
 	}
-	
+
 	return nil
 }
 
@@ -1441,12 +1621,12 @@ func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *htt
 		http.Error(w, "tsidp: dynamic client registration not available over funnel", http.StatusForbidden)
 		return
 	}
-	
+
 	if r.Method != "POST" {
 		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// Parse registration request
 	var req struct {
 		RedirectURIs            []string `json:"redirect_uris"`
@@ -1460,18 +1640,18 @@ func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *htt
 		Contacts                []string `json:"contacts,omitempty"`
 		ApplicationType         string   `json:"application_type,omitempty"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "tsidp: invalid request body", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Validate required fields per RFC 7591 and OpenID specs
 	if len(req.RedirectURIs) == 0 {
 		http.Error(w, "tsidp: redirect_uris is required", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Set defaults per specs
 	if req.TokenEndpointAuthMethod == "" {
 		req.TokenEndpointAuthMethod = "client_secret_basic"
@@ -1485,11 +1665,11 @@ func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *htt
 	if req.ApplicationType == "" {
 		req.ApplicationType = "web"
 	}
-	
+
 	// Generate client credentials
 	clientID := rands.HexString(32)
 	clientSecret := rands.HexString(64)
-	
+
 	// Create new client
 	newClient := funnelClient{
 		ID:                      clientID,
@@ -1507,7 +1687,7 @@ func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *htt
 		DynamicallyRegistered:   true,
 		CreatedAt:               time.Now(),
 	}
-	
+
 	// Store the client
 	s.mu.Lock()
 	mak.Set(&s.funnelClients, clientID, &newClient)
@@ -1518,7 +1698,7 @@ func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *htt
 		return
 	}
 	s.mu.Unlock()
-	
+
 	// Return the client registration response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -1569,17 +1749,17 @@ func (s *idpServer) storeFunnelClientsLocked() error {
 func (s *idpServer) cleanupExpiredTokens() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	// Clean up expired access tokens
 	for token, ar := range s.accessToken {
 		if ar.validTill.Before(now) {
 			delete(s.accessToken, token)
 		}
 	}
-	
-	// Clean up expired refresh tokens  
+
+	// Clean up expired refresh tokens
 	for token, ar := range s.refreshToken {
 		if ar.validTill.Before(now) {
 			delete(s.refreshToken, token)

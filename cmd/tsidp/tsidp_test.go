@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/square/go-jose.v2/jwt"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -517,6 +518,7 @@ func TestRefreshTokenFlow(t *testing.T) {
 						Secret: "test-secret",
 					},
 					clientID:  "test-client",
+					scopes:    []string{"openid", "email"}, // Add scopes to refresh token
 					validTill: time.Now().Add(time.Hour),
 					remoteUser: &apitype.WhoIsResponse{
 						Node: &tailcfg.Node{
@@ -715,6 +717,326 @@ func TestCleanupExpiredTokens(t *testing.T) {
 	}
 }
 
+func TestResourceIndicators(t *testing.T) {
+	tests := []struct {
+		name               string
+		authorizationQuery string
+		tokenFormData      url.Values
+		capMapRules        []stsCapRule
+		expectStatus       int
+		checkResponse      func(t *testing.T, body []byte)
+	}{
+		{
+			name:               "authorization with single resource",
+			authorizationQuery: "client_id=test-client&redirect_uri=https://example.com/callback&resource=https://api.example.com",
+			tokenFormData: url.Values{
+				"grant_type":   {"authorization_code"},
+				"redirect_uri": {"https://example.com/callback"},
+			},
+			capMapRules: []stsCapRule{
+				{
+					Users:     []string{"*"},
+					Resources: []string{"https://api.example.com"},
+				},
+			},
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var resp oidcTokenResponse
+				if err := json.Unmarshal(body, &resp); err != nil {
+					t.Fatalf("failed to unmarshal response: %v", err)
+				}
+				// Decode JWT to check audience
+				token, err := jwt.ParseSigned(resp.IDToken)
+				if err != nil {
+					t.Fatalf("failed to parse JWT: %v", err)
+				}
+				var claims map[string]interface{}
+				if err := token.UnsafeClaimsWithoutVerification(&claims); err != nil {
+					t.Fatalf("failed to get claims: %v", err)
+				}
+				aud, ok := claims["aud"].([]interface{})
+				if !ok {
+					t.Fatalf("expected aud to be an array, got %T", claims["aud"])
+				}
+				if len(aud) != 2 || aud[0] != "test-client" || aud[1] != "https://api.example.com" {
+					t.Errorf("expected audience [test-client, https://api.example.com], got %v", aud)
+				}
+			},
+		},
+		{
+			name:               "authorization with multiple resources",
+			authorizationQuery: "client_id=test-client&redirect_uri=https://example.com/callback&resource=https://api1.example.com&resource=https://api2.example.com",
+			tokenFormData: url.Values{
+				"grant_type":   {"authorization_code"},
+				"redirect_uri": {"https://example.com/callback"},
+			},
+			capMapRules: []stsCapRule{
+				{
+					Users:     []string{"*"},
+					Resources: []string{"*"}, // Allow all resources
+				},
+			},
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var resp oidcTokenResponse
+				if err := json.Unmarshal(body, &resp); err != nil {
+					t.Fatalf("failed to unmarshal response: %v", err)
+				}
+				// Decode JWT to check audience
+				token, err := jwt.ParseSigned(resp.IDToken)
+				if err != nil {
+					t.Fatalf("failed to parse JWT: %v", err)
+				}
+				var claims map[string]interface{}
+				if err := token.UnsafeClaimsWithoutVerification(&claims); err != nil {
+					t.Fatalf("failed to get claims: %v", err)
+				}
+				aud, ok := claims["aud"].([]interface{})
+				if !ok {
+					t.Fatalf("expected aud to be an array, got %T", claims["aud"])
+				}
+				if len(aud) != 3 {
+					t.Errorf("expected 3 audience values, got %d", len(aud))
+				}
+			},
+		},
+		{
+			name:               "token request with resource parameter",
+			authorizationQuery: "client_id=test-client&redirect_uri=https://example.com/callback",
+			tokenFormData: url.Values{
+				"grant_type":   {"authorization_code"},
+				"redirect_uri": {"https://example.com/callback"},
+				"resource":     {"https://api.example.com"},
+			},
+			capMapRules: []stsCapRule{
+				{
+					Users:     []string{"user@example.com"},
+					Resources: []string{"https://api.example.com"},
+				},
+			},
+			expectStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var resp oidcTokenResponse
+				if err := json.Unmarshal(body, &resp); err != nil {
+					t.Fatalf("failed to unmarshal response: %v", err)
+				}
+				if resp.AccessToken == "" {
+					t.Error("expected access token")
+				}
+			},
+		},
+		{
+			name:               "unauthorized resource request",
+			authorizationQuery: "client_id=test-client&redirect_uri=https://example.com/callback",
+			tokenFormData: url.Values{
+				"grant_type":   {"authorization_code"},
+				"redirect_uri": {"https://example.com/callback"},
+				"resource":     {"https://unauthorized.example.com"},
+			},
+			capMapRules: []stsCapRule{
+				{
+					Users:     []string{"user@example.com"},
+					Resources: []string{"https://api.example.com"},
+				},
+			},
+			expectStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:     "https://idp.test.ts.net",
+				code:          make(map[string]*authRequest),
+				accessToken:   make(map[string]*authRequest),
+				refreshToken:  make(map[string]*authRequest),
+				funnelClients: make(map[string]*funnelClient),
+			}
+
+			// Parse authorization query
+			authQuery, _ := url.ParseQuery(tt.authorizationQuery)
+			
+			// Create mock authRequest
+			code := "test-code"
+			ar := &authRequest{
+				funnelRP: &funnelClient{
+					ID:           "test-client",
+					Secret:       "test-secret",
+					RedirectURIs: []string{"https://example.com/callback"},
+				},
+				clientID:    authQuery.Get("client_id"),
+				redirectURI: authQuery.Get("redirect_uri"),
+				resources:   authQuery["resource"],
+				remoteUser: &apitype.WhoIsResponse{
+					Node: &tailcfg.Node{
+						ID:   1,
+						Name: "node1.example.ts.net",
+						User: tailcfg.UserID(1),
+						Key:  key.NodePublic{},
+						Addresses: []netip.Prefix{
+							netip.MustParsePrefix("100.64.0.1/32"),
+						},
+					},
+					UserProfile: &tailcfg.UserProfile{
+						LoginName:   "user@example.com",
+						DisplayName: "Test User",
+					},
+					CapMap: tailcfg.PeerCapMap{
+						"test-tailscale.com/idp/sts/openly-allow": marshalCapRules(tt.capMapRules),
+					},
+				},
+				validTill: time.Now().Add(5 * time.Minute),
+			}
+
+			s.funnelClients["test-client"] = ar.funnelRP
+			s.code[code] = ar
+
+			// Add code to form data
+			tt.tokenFormData.Set("code", code)
+			tt.tokenFormData.Set("client_id", "test-client")
+			tt.tokenFormData.Set("client_secret", "test-secret")
+
+			req := httptest.NewRequest("POST", "/token", strings.NewReader(tt.tokenFormData.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			rr := httptest.NewRecorder()
+			s.serveToken(rr, req)
+
+			if rr.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d: %s", tt.expectStatus, rr.Code, rr.Body.String())
+			}
+
+			if tt.checkResponse != nil && rr.Code == http.StatusOK {
+				tt.checkResponse(t, rr.Body.Bytes())
+			}
+		})
+	}
+}
+
+// marshalCapRules is a helper to convert stsCapRule slice to JSON for testing
+func marshalCapRules(rules []stsCapRule) []tailcfg.RawMessage {
+	// UnmarshalCapJSON expects each rule to be a separate RawMessage
+	var msgs []tailcfg.RawMessage
+	for _, rule := range rules {
+		data, _ := json.Marshal(rule)
+		msgs = append(msgs, tailcfg.RawMessage(data))
+	}
+	return msgs
+}
+
+func TestRefreshTokenWithResources(t *testing.T) {
+	tests := []struct {
+		name              string
+		originalResources []string
+		refreshResources  []string
+		capMapRules       []stsCapRule
+		expectStatus      int
+		expectError       string
+	}{
+		{
+			name:              "refresh with resource downscoping",
+			originalResources: []string{"https://api1.example.com", "https://api2.example.com"},
+			refreshResources:  []string{"https://api1.example.com"},
+			capMapRules: []stsCapRule{
+				{
+					Users:     []string{"*"},
+					Resources: []string{"*"},
+				},
+			},
+			expectStatus: http.StatusOK,
+		},
+		{
+			name:              "refresh with resource not in original grant",
+			originalResources: []string{"https://api1.example.com"},
+			refreshResources:  []string{"https://api2.example.com"},
+			capMapRules: []stsCapRule{
+				{
+					Users:     []string{"*"},
+					Resources: []string{"*"},
+				},
+			},
+			expectStatus: http.StatusBadRequest,
+			expectError:  "requested resource not in original grant",
+		},
+		{
+			name:              "refresh without resource parameter",
+			originalResources: []string{"https://api1.example.com"},
+			refreshResources:  nil,
+			capMapRules: []stsCapRule{
+				{
+					Users:     []string{"*"},
+					Resources: []string{"*"},
+				},
+			},
+			expectStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:     "https://idp.test.ts.net",
+				refreshToken:  make(map[string]*authRequest),
+				funnelClients: make(map[string]*funnelClient),
+			}
+
+			// Create refresh token
+			rt := "test-refresh-token"
+			ar := &authRequest{
+				funnelRP: &funnelClient{
+					ID:     "test-client",
+					Secret: "test-secret",
+				},
+				clientID:  "test-client",
+				resources: tt.originalResources,
+				validTill: time.Now().Add(time.Hour),
+				remoteUser: &apitype.WhoIsResponse{
+					Node: &tailcfg.Node{
+						ID:   1,
+						Name: "node1.example.ts.net",
+						User: tailcfg.UserID(1),
+						Key:  key.NodePublic{},
+					},
+					UserProfile: &tailcfg.UserProfile{
+						LoginName:   "user@example.com",
+						DisplayName: "Test User",
+					},
+					CapMap: tailcfg.PeerCapMap{
+						"test-tailscale.com/idp/sts/openly-allow": marshalCapRules(tt.capMapRules),
+					},
+				},
+			}
+			s.refreshToken[rt] = ar
+			s.funnelClients["test-client"] = ar.funnelRP
+
+			// Create request
+			form := url.Values{
+				"grant_type":    {"refresh_token"},
+				"refresh_token": {rt},
+				"client_id":     {"test-client"},
+				"client_secret": {"test-secret"},
+			}
+			for _, res := range tt.refreshResources {
+				form.Add("resource", res)
+			}
+
+			req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			rr := httptest.NewRecorder()
+			s.serveToken(rr, req)
+
+			if rr.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d: %s", tt.expectStatus, rr.Code, rr.Body.String())
+			}
+
+			if tt.expectError != "" && !strings.Contains(rr.Body.String(), tt.expectError) {
+				t.Errorf("expected error containing %q, got %q", tt.expectError, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestIntrospectTokenExpiration(t *testing.T) {
 	s := &idpServer{
 		serverURL:     "https://idp.test.ts.net",
@@ -767,5 +1089,331 @@ func TestIntrospectTokenExpiration(t *testing.T) {
 	// Verify token was deleted
 	if _, exists := s.accessToken[expiredToken]; exists {
 		t.Error("expected expired token to be deleted from introspection")
+	}
+}
+
+func TestIntrospectWithResources(t *testing.T) {
+	s := &idpServer{
+		serverURL:     "https://idp.test.ts.net",
+		accessToken:   make(map[string]*authRequest),
+		funnelClients: make(map[string]*funnelClient),
+	}
+
+	// Create a token with resources
+	activeToken := "active-token-with-resources"
+	s.accessToken[activeToken] = &authRequest{
+		validTill: time.Now().Add(10 * time.Minute), // not expired
+		funnelRP: &funnelClient{
+			ID:     "test-client",
+			Secret: "test-secret",
+		},
+		clientID:  "test-client",
+		resources: []string{"https://api1.example.com", "https://api2.example.com"},
+		scopes:    []string{"openid", "email"}, // Add scopes for testing
+		remoteUser: &apitype.WhoIsResponse{
+			Node: &tailcfg.Node{
+				User: 12345,
+			},
+			UserProfile: &tailcfg.UserProfile{
+				LoginName: "user@example.com",
+			},
+		},
+	}
+
+	// Set up the funnel client
+	s.funnelClients["test-client"] = &funnelClient{
+		ID:     "test-client",
+		Secret: "test-secret",
+	}
+
+	form := url.Values{}
+	form.Set("token", activeToken)
+	form.Set("client_id", "test-client")
+	form.Set("client_secret", "test-secret")
+
+	req := httptest.NewRequest("POST", "/introspect", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rr := httptest.NewRecorder()
+	s.serveIntrospect(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rr.Code)
+	}
+
+	// Check response shows token as active with resources in audience
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if active, ok := resp["active"].(bool); !ok || !active {
+		t.Error("expected active: true for valid token")
+	}
+
+	// Check audience includes client_id and resources
+	aud, ok := resp["aud"].([]interface{})
+	if !ok {
+		t.Fatalf("expected aud to be an array, got %T", resp["aud"])
+	}
+
+	expectedAud := []string{"test-client", "https://api1.example.com", "https://api2.example.com"}
+	if len(aud) != len(expectedAud) {
+		t.Errorf("expected %d audience values, got %d", len(expectedAud), len(aud))
+	}
+
+	// Convert to string slice for comparison
+	audStrings := make([]string, len(aud))
+	for i, v := range aud {
+		audStrings[i], ok = v.(string)
+		if !ok {
+			t.Fatalf("expected audience value to be string, got %T", v)
+		}
+	}
+
+	// Check all expected values are present
+	for _, expected := range expectedAud {
+		found := false
+		for _, actual := range audStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected audience to contain %q", expected)
+		}
+	}
+
+	// Check scope is present in introspection response
+	if scope, ok := resp["scope"].(string); !ok {
+		t.Error("expected scope in introspection response")
+	} else if scope != "openid email" {
+		t.Errorf("expected scope to be 'openid email', got %q", scope)
+	}
+}
+
+func TestRefreshTokenScopePreservation(t *testing.T) {
+	s := &idpServer{
+		serverURL:     "https://idp.test.ts.net",
+		refreshToken:  make(map[string]*authRequest),
+		funnelClients: make(map[string]*funnelClient),
+	}
+
+	// Create refresh token with specific scopes
+	rt := "test-refresh-token-scopes"
+	originalScopes := []string{"openid", "profile"}
+	s.refreshToken[rt] = &authRequest{
+		funnelRP: &funnelClient{
+			ID:     "test-client",
+			Secret: "test-secret",
+		},
+		clientID:  "test-client",
+		scopes:    originalScopes,
+		validTill: time.Now().Add(time.Hour),
+		remoteUser: &apitype.WhoIsResponse{
+			Node: &tailcfg.Node{
+				ID:   1,
+				Name: "node1.example.ts.net",
+				User: tailcfg.UserID(1),
+			},
+			UserProfile: &tailcfg.UserProfile{
+				LoginName:   "user@example.com",
+				DisplayName: "Test User",
+			},
+		},
+	}
+	s.funnelClients["test-client"] = &funnelClient{
+		ID:     "test-client",
+		Secret: "test-secret",
+	}
+
+	// Issue new tokens using refresh token
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {rt},
+		"client_id":     {"test-client"},
+		"client_secret": {"test-secret"},
+	}
+
+	req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rr := httptest.NewRecorder()
+	s.serveToken(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Parse response to get new access token
+	var tokenResp oidcTokenResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("failed to unmarshal token response: %v", err)
+	}
+
+	// Verify the new access token has the same scopes
+	if newAR, ok := s.accessToken[tokenResp.AccessToken]; ok {
+		if len(newAR.scopes) != len(originalScopes) {
+			t.Errorf("new access token has %d scopes, expected %d", len(newAR.scopes), len(originalScopes))
+		}
+		for i, scope := range newAR.scopes {
+			if i < len(originalScopes) && scope != originalScopes[i] {
+				t.Errorf("scope[%d] = %q, expected %q", i, scope, originalScopes[i])
+			}
+		}
+	} else {
+		t.Error("new access token not found in server state")
+	}
+
+	// Verify the new refresh token also has the same scopes
+	if newRT, ok := s.refreshToken[tokenResp.RefreshToken]; ok {
+		if len(newRT.scopes) != len(originalScopes) {
+			t.Errorf("new refresh token has %d scopes, expected %d", len(newRT.scopes), len(originalScopes))
+		}
+	} else {
+		t.Error("new refresh token not found in server state")
+	}
+}
+
+func TestScopeHandling(t *testing.T) {
+	tests := []struct {
+		name            string
+		authQuery       string
+		expectedScopes  []string
+		expectAuthError bool
+	}{
+		{
+			name:           "single valid scope",
+			authQuery:      "client_id=test-client&redirect_uri=https://example.com/callback&scope=openid",
+			expectedScopes: []string{"openid"},
+		},
+		{
+			name:           "multiple valid scopes",
+			authQuery:      "client_id=test-client&redirect_uri=https://example.com/callback&scope=openid email profile",
+			expectedScopes: []string{"openid", "email", "profile"},
+		},
+		{
+			name:           "no scope defaults to openid",
+			authQuery:      "client_id=test-client&redirect_uri=https://example.com/callback",
+			expectedScopes: []string{"openid"},
+		},
+		{
+			name:            "invalid scope",
+			authQuery:       "client_id=test-client&redirect_uri=https://example.com/callback&scope=openid invalid_scope",
+			expectAuthError: true,
+		},
+		{
+			name:           "extra spaces in scope",
+			authQuery:      "client_id=test-client&redirect_uri=https://example.com/callback&scope=openid    email   profile",
+			expectedScopes: []string{"openid", "email", "profile"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:     "https://idp.test.ts.net",
+				code:          make(map[string]*authRequest),
+				accessToken:   make(map[string]*authRequest),
+				funnelClients: make(map[string]*funnelClient),
+			}
+
+			// Set up funnel client
+			s.funnelClients["test-client"] = &funnelClient{
+				ID:           "test-client",
+				Secret:       "test-secret",
+				RedirectURIs: []string{"https://example.com/callback"},
+			}
+
+			// Parse query
+			authValues, _ := url.ParseQuery(tt.authQuery)
+
+			// Create mock authRequest
+			code := "test-code"
+			ar := &authRequest{
+				funnelRP:    s.funnelClients["test-client"],
+				clientID:    authValues.Get("client_id"),
+				redirectURI: authValues.Get("redirect_uri"),
+				remoteUser: &apitype.WhoIsResponse{
+					Node: &tailcfg.Node{
+						ID:   1,
+						Name: "node1.example.ts.net",
+						User: tailcfg.UserID(1),
+					},
+					UserProfile: &tailcfg.UserProfile{
+						LoginName:   "user@example.com",
+						DisplayName: "Test User",
+					},
+				},
+				validTill: time.Now().Add(5 * time.Minute),
+			}
+
+			// Parse and validate scopes
+			if scopeParam := authValues.Get("scope"); scopeParam != "" {
+				ar.scopes = strings.Fields(scopeParam)
+			}
+			validatedScopes, err := s.validateScopes(ar.scopes)
+
+			if tt.expectAuthError {
+				if err == nil {
+					t.Error("expected scope validation error")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected scope validation error: %v", err)
+				return
+			}
+
+			ar.scopes = validatedScopes
+			s.code[code] = ar
+
+			// Verify scopes match expected
+			if len(ar.scopes) != len(tt.expectedScopes) {
+				t.Errorf("expected %d scopes, got %d", len(tt.expectedScopes), len(ar.scopes))
+			}
+			for i, scope := range ar.scopes {
+				if i < len(tt.expectedScopes) && scope != tt.expectedScopes[i] {
+					t.Errorf("expected scope[%d] = %q, got %q", i, tt.expectedScopes[i], scope)
+				}
+			}
+
+			// Test token endpoint preserves scopes
+			if !tt.expectAuthError {
+				form := url.Values{
+					"grant_type":    {"authorization_code"},
+					"code":          {code},
+					"redirect_uri":  {ar.redirectURI},
+					"client_id":     {"test-client"},
+					"client_secret": {"test-secret"},
+				}
+
+				req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+				rr := httptest.NewRecorder()
+				s.serveToken(rr, req)
+
+				if rr.Code != http.StatusOK {
+					t.Errorf("expected status 200, got %d: %s", rr.Code, rr.Body.String())
+				}
+
+				// Verify the issued access token has the correct scopes
+				var tokenResp oidcTokenResponse
+				if err := json.Unmarshal(rr.Body.Bytes(), &tokenResp); err != nil {
+					t.Fatalf("failed to unmarshal token response: %v", err)
+				}
+
+				if tokenAR, ok := s.accessToken[tokenResp.AccessToken]; ok {
+					if len(tokenAR.scopes) != len(tt.expectedScopes) {
+						t.Errorf("access token has %d scopes, expected %d", len(tokenAR.scopes), len(tt.expectedScopes))
+					}
+				} else {
+					t.Error("access token not found in server state")
+				}
+			}
+		})
 	}
 }
