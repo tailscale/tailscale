@@ -1276,6 +1276,352 @@ func TestRefreshTokenScopePreservation(t *testing.T) {
 	}
 }
 
+func TestPKCE(t *testing.T) {
+	tests := []struct {
+		name             string
+		authQuery        string
+		codeVerifier     string
+		expectAuthError  bool
+		expectTokenError bool
+		checkResponse    func(t *testing.T, body []byte)
+	}{
+		{
+			name:         "valid PKCE with S256 method",
+			authQuery:    "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256",
+			codeVerifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+			// code_challenge = BASE64URL(SHA256("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"))
+			// = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+		},
+		{
+			name:         "valid PKCE with plain method",
+			authQuery:    "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk&code_challenge_method=plain",
+			codeVerifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+		},
+		{
+			name:         "PKCE with default plain method",
+			authQuery:    "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+			codeVerifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+		},
+		{
+			name:             "missing code_verifier",
+			authQuery:        "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256",
+			codeVerifier:     "",
+			expectTokenError: true,
+		},
+		{
+			name:             "invalid code_verifier",
+			authQuery:        "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256",
+			codeVerifier:     "wrong-verifier-that-does-not-match-the-challenge",
+			expectTokenError: true,
+		},
+		{
+			name:            "unsupported code_challenge_method",
+			authQuery:       "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=test&code_challenge_method=invalid",
+			expectAuthError: true,
+		},
+		{
+			name:             "code_verifier too short",
+			authQuery:        "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=short&code_challenge_method=plain",
+			codeVerifier:     "short", // less than 43 characters
+			expectTokenError: true,
+		},
+		{
+			name:             "code_verifier too long", 
+			authQuery:        "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=" + strings.Repeat("a", 129) + "&code_challenge_method=plain",
+			codeVerifier:     strings.Repeat("a", 129), // more than 128 characters
+			expectTokenError: true,
+		},
+		{
+			name:             "code_verifier with invalid characters",
+			authQuery:        "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjX!&code_challenge_method=plain",
+			codeVerifier:     "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjX!", // contains '!' which is invalid
+			expectTokenError: true,
+		},
+		{
+			name:         "no PKCE parameters - backward compatibility",
+			authQuery:    "client_id=test-client&redirect_uri=https://example.com/callback",
+			codeVerifier: "", // no code_verifier sent
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:     "https://idp.test.ts.net",
+				code:          make(map[string]*authRequest),
+				accessToken:   make(map[string]*authRequest),
+				refreshToken:  make(map[string]*authRequest),
+				funnelClients: make(map[string]*funnelClient),
+			}
+
+			// Set up funnel client
+			s.funnelClients["test-client"] = &funnelClient{
+				ID:           "test-client",
+				Secret:       "test-secret",
+				RedirectURIs: []string{"https://example.com/callback"},
+			}
+
+			// Parse authorization query
+			authValues, _ := url.ParseQuery(tt.authQuery)
+
+			// Create mock authRequest based on authorization
+			code := "test-code"
+			ar := &authRequest{
+				funnelRP:    s.funnelClients["test-client"],
+				clientID:    authValues.Get("client_id"),
+				redirectURI: authValues.Get("redirect_uri"),
+				remoteUser: &apitype.WhoIsResponse{
+					Node: &tailcfg.Node{
+						ID:   1,
+						Name: "node1.example.ts.net",
+						User: tailcfg.UserID(1),
+					},
+					UserProfile: &tailcfg.UserProfile{
+						LoginName:   "user@example.com",
+						DisplayName: "Test User",
+					},
+				},
+				validTill: time.Now().Add(5 * time.Minute),
+				scopes:    []string{"openid"},
+			}
+
+			// Handle PKCE parameters from authorization
+			if codeChallenge := authValues.Get("code_challenge"); codeChallenge != "" {
+				ar.codeChallenge = codeChallenge
+				ar.codeChallengeMethod = authValues.Get("code_challenge_method")
+				if ar.codeChallengeMethod == "" {
+					ar.codeChallengeMethod = "plain"
+				}
+			}
+
+			// Check for auth errors first (unsupported method)
+			if tt.expectAuthError {
+				if ar.codeChallengeMethod != "" && ar.codeChallengeMethod != "plain" && ar.codeChallengeMethod != "S256" {
+					// Expected error - unsupported method
+					return
+				}
+			}
+
+			s.code[code] = ar
+
+			// Now test token exchange
+			form := url.Values{
+				"grant_type":    {"authorization_code"},
+				"code":          {code},
+				"redirect_uri":  {ar.redirectURI},
+				"client_id":     {"test-client"},
+				"client_secret": {"test-secret"},
+			}
+			if tt.codeVerifier != "" {
+				form.Set("code_verifier", tt.codeVerifier)
+			}
+
+			req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			rr := httptest.NewRecorder()
+			s.serveToken(rr, req)
+
+			if tt.expectTokenError {
+				if rr.Code == http.StatusOK {
+					t.Errorf("expected token error, got status 200")
+				}
+			} else {
+				if rr.Code != http.StatusOK {
+					t.Errorf("expected status 200, got %d: %s", rr.Code, rr.Body.String())
+				}
+			}
+
+			if tt.checkResponse != nil && rr.Code == http.StatusOK {
+				tt.checkResponse(t, rr.Body.Bytes())
+			}
+		})
+	}
+}
+
+func TestPKCEMetadata(t *testing.T) {
+	s := &idpServer{
+		serverURL:   "https://idp.test.ts.net",
+		loopbackURL: "http://localhost:8080",
+	}
+
+	tests := []struct {
+		name     string
+		endpoint string
+		checkFn  func(t *testing.T, metadata map[string]interface{})
+	}{
+		{
+			name:     "OpenID Connect metadata",
+			endpoint: "/.well-known/openid-configuration",
+			checkFn: func(t *testing.T, metadata map[string]interface{}) {
+				methods, ok := metadata["code_challenge_methods_supported"].([]interface{})
+				if !ok {
+					t.Fatal("code_challenge_methods_supported not found or wrong type")
+				}
+				if len(methods) != 2 {
+					t.Errorf("expected 2 methods, got %d", len(methods))
+				}
+				expectedMethods := map[string]bool{"plain": true, "S256": true}
+				for _, m := range methods {
+					method, ok := m.(string)
+					if !ok {
+						t.Errorf("method is not a string: %T", m)
+						continue
+					}
+					if !expectedMethods[method] {
+						t.Errorf("unexpected method: %s", method)
+					}
+					delete(expectedMethods, method)
+				}
+				if len(expectedMethods) > 0 {
+					t.Errorf("missing methods: %v", expectedMethods)
+				}
+			},
+		},
+		{
+			name:     "OAuth 2.0 metadata",
+			endpoint: "/.well-known/oauth-authorization-server",
+			checkFn: func(t *testing.T, metadata map[string]interface{}) {
+				methods, ok := metadata["code_challenge_methods_supported"].([]interface{})
+				if !ok {
+					t.Fatal("code_challenge_methods_supported not found or wrong type")
+				}
+				if len(methods) != 2 {
+					t.Errorf("expected 2 methods, got %d", len(methods))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.endpoint, nil)
+			req.RemoteAddr = "127.0.0.1:12345"
+
+			rr := httptest.NewRecorder()
+
+			if strings.Contains(tt.endpoint, "openid") {
+				s.serveOpenIDConfig(rr, req)
+			} else {
+				s.serveOAuthMetadata(rr, req)
+			}
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d", rr.Code)
+			}
+
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(rr.Body.Bytes(), &metadata); err != nil {
+				t.Fatalf("failed to unmarshal metadata: %v", err)
+			}
+
+			tt.checkFn(t, metadata)
+		})
+	}
+}
+
+func TestPKCEWithRefreshToken(t *testing.T) {
+	s := &idpServer{
+		serverURL:     "https://idp.test.ts.net",
+		code:          make(map[string]*authRequest),
+		accessToken:   make(map[string]*authRequest),
+		refreshToken:  make(map[string]*authRequest),
+		funnelClients: make(map[string]*funnelClient),
+	}
+
+	// Set up funnel client
+	s.funnelClients["test-client"] = &funnelClient{
+		ID:           "test-client",
+		Secret:       "test-secret",
+		RedirectURIs: []string{"https://example.com/callback"},
+	}
+
+	// Step 1: Initial authorization with PKCE
+	code := "test-code"
+	ar := &authRequest{
+		funnelRP:            s.funnelClients["test-client"],
+		clientID:            "test-client",
+		redirectURI:         "https://example.com/callback",
+		codeChallenge:       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+		codeChallengeMethod: "S256",
+		scopes:              []string{"openid", "offline_access"},
+		remoteUser: &apitype.WhoIsResponse{
+			Node: &tailcfg.Node{
+				ID:        1,
+				Name:      "node1.example.ts.net",
+				User:      tailcfg.UserID(1),
+				Key:       key.NodePublic{},
+				Addresses: []netip.Prefix{},
+			},
+			UserProfile: &tailcfg.UserProfile{
+				LoginName:   "user@example.com",
+				DisplayName: "Test User",
+			},
+		},
+		validTill: time.Now().Add(5 * time.Minute),
+	}
+	s.code[code] = ar
+
+	// Step 2: Exchange code for tokens with code_verifier
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"https://example.com/callback"},
+		"client_id":     {"test-client"},
+		"client_secret": {"test-secret"},
+		"code_verifier": {"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"},
+	}
+
+	req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rr := httptest.NewRecorder()
+	s.serveToken(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("initial token request failed: %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var tokenResp oidcTokenResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("failed to unmarshal token response: %v", err)
+	}
+
+	if tokenResp.RefreshToken == "" {
+		t.Fatal("expected refresh token in response")
+	}
+
+	// Step 3: Use refresh token (should work without code_verifier)
+	refreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {tokenResp.RefreshToken},
+		"client_id":     {"test-client"},
+		"client_secret": {"test-secret"},
+	}
+
+	refreshReq := httptest.NewRequest("POST", "/token", strings.NewReader(refreshForm.Encode()))
+	refreshReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	refreshRR := httptest.NewRecorder()
+	s.serveToken(refreshRR, refreshReq)
+
+	if refreshRR.Code != http.StatusOK {
+		t.Errorf("refresh token request failed: %d: %s", refreshRR.Code, refreshRR.Body.String())
+	}
+
+	var refreshResp oidcTokenResponse
+	if err := json.Unmarshal(refreshRR.Body.Bytes(), &refreshResp); err != nil {
+		t.Fatalf("failed to unmarshal refresh response: %v", err)
+	}
+
+	if refreshResp.AccessToken == "" {
+		t.Error("expected new access token from refresh")
+	}
+	if refreshResp.RefreshToken == "" {
+		t.Error("expected new refresh token from refresh")
+	}
+}
+
 func TestScopeHandling(t *testing.T) {
 	tests := []struct {
 		name            string

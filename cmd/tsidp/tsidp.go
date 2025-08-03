@@ -11,6 +11,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -351,6 +352,16 @@ type authRequest struct {
 	// These are validated against supported scopes at authorization time.
 	scopes []string
 
+	// codeChallenge is the PKCE code challenge from RFC 7636.
+	// It is a derived value from the code_verifier that the client
+	// will send during token exchange.
+	codeChallenge string
+
+	// codeChallengeMethod is the method used to derive codeChallenge
+	// from the code_verifier. Valid values are "plain" and "S256".
+	// If empty, PKCE is not used for this request.
+	codeChallengeMethod string
+
 	// remoteUser is the user who is being authenticated.
 	remoteUser *apitype.WhoIsResponse
 
@@ -436,6 +447,49 @@ func (s *idpServer) validateResourcesForUser(who *apitype.WhoIsResponse, request
 	}
 
 	return allowedResources, nil
+}
+
+// validateCodeVerifier validates that a code_verifier matches the stored code_challenge
+// using the specified method, as defined in RFC 7636.
+func validateCodeVerifier(verifier, challenge, method string) error {
+	// Validate code_verifier format (43-128 characters, unreserved characters only)
+	if len(verifier) < 43 || len(verifier) > 128 {
+		return fmt.Errorf("code_verifier must be 43-128 characters")
+	}
+	
+	// Check that verifier only contains unreserved characters: A-Z a-z 0-9 - . _ ~
+	for _, r := range verifier {
+		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') ||
+			r == '-' || r == '.' || r == '_' || r == '~') {
+			return fmt.Errorf("code_verifier contains invalid characters")
+		}
+	}
+
+	// Generate the challenge from the verifier and compare
+	generatedChallenge, err := generateCodeChallenge(verifier, method)
+	if err != nil {
+		return err
+	}
+
+	if generatedChallenge != challenge {
+		return fmt.Errorf("invalid code_verifier")
+	}
+
+	return nil
+}
+
+// generateCodeChallenge creates a code challenge from a code verifier using the specified method.
+// Supports "plain" and "S256" methods as defined in RFC 7636.
+func generateCodeChallenge(verifier, method string) (string, error) {
+	switch method {
+	case "plain":
+		return verifier, nil
+	case "S256":
+		h := sha256.Sum256([]byte(verifier))
+		return base64.RawURLEncoding.EncodeToString(h[:]), nil
+	default:
+		return "", fmt.Errorf("unsupported code_challenge_method: %s", method)
+	}
 }
 
 // allowRelyingParty validates that a relying party identified either by a
@@ -529,6 +583,23 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ar.scopes = validatedScopes
+
+	// Handle PKCE parameters (RFC 7636)
+	if codeChallenge := uq.Get("code_challenge"); codeChallenge != "" {
+		ar.codeChallenge = codeChallenge
+		
+		// code_challenge_method defaults to "plain" if not specified
+		ar.codeChallengeMethod = uq.Get("code_challenge_method")
+		if ar.codeChallengeMethod == "" {
+			ar.codeChallengeMethod = "plain"
+		}
+		
+		// Validate the code_challenge_method
+		if ar.codeChallengeMethod != "plain" && ar.codeChallengeMethod != "S256" {
+			http.Error(w, "tsidp: unsupported code_challenge_method", http.StatusBadRequest)
+			return
+		}
+	}
 
 	if r.URL.Path == "/authorize/funnel" {
 		s.mu.Lock()
@@ -856,6 +927,20 @@ func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.
 	if ar.redirectURI != r.FormValue("redirect_uri") {
 		http.Error(w, "tsidp: redirect_uri mismatch", http.StatusBadRequest)
 		return
+	}
+
+	// PKCE validation (RFC 7636)
+	if ar.codeChallenge != "" {
+		codeVerifier := r.FormValue("code_verifier")
+		if codeVerifier == "" {
+			http.Error(w, "tsidp: code_verifier is required", http.StatusBadRequest)
+			return
+		}
+		
+		if err := validateCodeVerifier(codeVerifier, ar.codeChallenge, ar.codeChallengeMethod); err != nil {
+			http.Error(w, fmt.Sprintf("tsidp: invalid_grant: %v", err), http.StatusBadRequest)
+			return
+		}
 	}
 
 	// RFC 8707: Check for resource parameter in token request
@@ -1260,6 +1345,7 @@ type openIDProviderMetadata struct {
 	SubjectTypesSupported            views.Slice[string] `json:"subject_types_supported"`
 	ClaimsSupported                  views.Slice[string] `json:"claims_supported"`
 	IDTokenSigningAlgValuesSupported views.Slice[string] `json:"id_token_signing_alg_values_supported"`
+	CodeChallengeMethodsSupported    views.Slice[string] `json:"code_challenge_methods_supported,omitempty"`
 	// TODO(maisem): maybe add other fields?
 	// Currently we fill out the REQUIRED fields, scopes_supported and claims_supported.
 }
@@ -1280,6 +1366,7 @@ type oauthAuthorizationServerMetadata struct {
 	TokenEndpointAuthMethodsSupported  views.Slice[string] `json:"token_endpoint_auth_methods_supported"`
 	AuthorizationDetailsTypesSupported views.Slice[string] `json:"authorization_details_types_supported,omitempty"`
 	ResourceIndicatorsSupported        bool                `json:"resource_indicators_supported,omitempty"`
+	CodeChallengeMethodsSupported      views.Slice[string] `json:"code_challenge_methods_supported,omitempty"`
 }
 
 type tailscaleClaims struct {
@@ -1327,6 +1414,9 @@ var (
 	// OAuth 2.0 specific metadata constants
 	oauthSupportedGrantTypes               = views.SliceOf([]string{"authorization_code", "refresh_token"})
 	oauthSupportedTokenEndpointAuthMethods = views.SliceOf([]string{"client_secret_post", "client_secret_basic"})
+	
+	// PKCE support (RFC 7636)
+	pkceCodeChallengeMethodsSupported = views.SliceOf([]string{"plain", "S256"})
 )
 
 func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
@@ -1387,6 +1477,7 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 		SubjectTypesSupported:            openIDSupportedSubjectTypes,
 		ClaimsSupported:                  openIDSupportedClaims,
 		IDTokenSigningAlgValuesSupported: openIDSupportedSigningAlgos,
+		CodeChallengeMethodsSupported:    pkceCodeChallengeMethodsSupported,
 	}
 
 	// Only expose registration endpoint over tailnet, not funnel
@@ -1457,6 +1548,7 @@ func (s *idpServer) serveOAuthMetadata(w http.ResponseWriter, r *http.Request) {
 		TokenEndpointAuthMethodsSupported:  oauthSupportedTokenEndpointAuthMethods,
 		ResourceIndicatorsSupported:        true, // RFC 8707 support
 		AuthorizationDetailsTypesSupported: views.SliceOf([]string{"resource_indicators"}),
+		CodeChallengeMethodsSupported:      pkceCodeChallengeMethodsSupported,
 	}
 
 	// Only expose registration endpoint over tailnet, not funnel
