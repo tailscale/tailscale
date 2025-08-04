@@ -399,9 +399,8 @@ func (s *idpServer) validateScopes(requestedScopes []string) ([]string, error) {
 }
 
 // validateResourcesForUser checks if the user is allowed to access the requested resources
-// using the same capability rules as STS token exchange.
 func (s *idpServer) validateResourcesForUser(who *apitype.WhoIsResponse, requestedResources []string) ([]string, error) {
-	// Check ACL grant using the same capability as STS token exchange
+	// Check ACL grant using the same capability as we would use for STS token exchange
 	rules, err := tailcfg.UnmarshalCapJSON[stsCapRule](who.CapMap, "test-tailscale.com/idp/sts/openly-allow")
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal capability: %w", err)
@@ -749,7 +748,7 @@ type capRule struct {
 	ExtraClaims       map[string]any `json:"extraClaims,omitempty"` // list of features peer is allowed to edit
 }
 
-// stsCapRule represents a capability rule for STS token exchange and resource indicators.
+// stsCapRule represents a capability rule for future STS token exchange and (current) resource indicators.
 // It defines which users are allowed to exchange tokens for which audiences/resources.
 // This is used with the ACL capability key "tailscale.com/idp/sts/openly-allow".
 type stsCapRule struct {
@@ -946,7 +945,7 @@ func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.
 	// RFC 8707: Check for resource parameter in token request
 	resources := r.Form["resource"]
 	if len(resources) > 0 {
-		// Validate requested resources using the same capability as STS
+		// Validate requested resources using the same capability would be used for STS
 		validatedResources, err := s.validateResourcesForUser(ar.remoteUser, resources)
 		if err != nil {
 			log.Printf("Error validating resources: %v", err)
@@ -1304,7 +1303,7 @@ func redirectAuthError(w http.ResponseWriter, r *http.Request, redirectURI, erro
 		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
 		return
 	}
-	
+
 	q := u.Query()
 	q.Set("error", errorCode)
 	if errorDescription != "" {
@@ -1314,7 +1313,7 @@ func redirectAuthError(w http.ResponseWriter, r *http.Request, redirectURI, erro
 		q.Set("state", state)
 	}
 	u.RawQuery = q.Encode()
-	
+
 	http.Redirect(w, r, u.String(), http.StatusFound)
 }
 
