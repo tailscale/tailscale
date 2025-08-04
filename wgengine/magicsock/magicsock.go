@@ -1765,11 +1765,8 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 // looksLikeInitiationMsg returns true if b looks like a WireGuard initiation
 // message, otherwise it returns false.
 func looksLikeInitiationMsg(b []byte) bool {
-	if len(b) == device.MessageInitiationSize &&
-		binary.BigEndian.Uint32(b) == device.MessageInitiationType {
-		return true
-	}
-	return false
+	return len(b) == device.MessageInitiationSize &&
+		binary.LittleEndian.Uint32(b) == device.MessageInitiationType
 }
 
 // receiveIP is the shared bits of ReceiveIPv4 and ReceiveIPv6.

@@ -9,6 +9,7 @@ import (
 	crand "crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -3390,10 +3391,17 @@ func Test_virtualNetworkID(t *testing.T) {
 }
 
 func Test_looksLikeInitiationMsg(t *testing.T) {
-	initMsg := make([]byte, device.MessageInitiationSize)
-	binary.BigEndian.PutUint32(initMsg, device.MessageInitiationType)
-	initMsgSizeTransportType := make([]byte, device.MessageInitiationSize)
-	binary.BigEndian.PutUint32(initMsgSizeTransportType, device.MessageTransportType)
+	// initMsg was captured as the first packet from a WireGuard "session"
+	initMsg, err := hex.DecodeString("01000000d9205f67915a500e377b409e0c3d97ca91e68654b95952de965e75df491000cce00632678cd9e8c8525556aa8daf24e6cfc44c48812bb560ff3c1c5dee061b3f833dfaa48acf13b64bd1e0027aa4d977a3721b82fd6072338702fc3193651404980ad46dae2869ba6416cc0eb38621a4140b5b918eb6402b697202adb3002a6d00000000000000000000000000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initMsg) != device.MessageInitiationSize {
+		t.Fatalf("initMsg is not %d bytes long", device.MessageInitiationSize)
+	}
+	initMsgSizeTransportType := make([]byte, len(initMsg))
+	copy(initMsgSizeTransportType, initMsg)
+	binary.LittleEndian.PutUint32(initMsgSizeTransportType, device.MessageTransportType)
 	tests := []struct {
 		name string
 		b    []byte
