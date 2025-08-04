@@ -700,13 +700,22 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sub is always included (openid scope is mandatory)
 	ui.Sub = ar.remoteUser.Node.User.String()
-	ui.Name = ar.remoteUser.UserProfile.DisplayName
-	ui.Email = ar.remoteUser.UserProfile.LoginName
-	ui.Picture = ar.remoteUser.UserProfile.ProfilePicURL
-
-	// TODO(maisem): not sure if this is the right thing to do
-	ui.UserName, _, _ = strings.Cut(ar.remoteUser.UserProfile.LoginName, "@")
+	
+	// Check scopes and only include claims that were authorized
+	for _, scope := range ar.scopes {
+		switch scope {
+		case "profile":
+			ui.Name = ar.remoteUser.UserProfile.DisplayName
+			ui.Picture = ar.remoteUser.UserProfile.ProfilePicURL
+			if username, _, ok := strings.Cut(ar.remoteUser.UserProfile.LoginName, "@"); ok {
+				ui.PreferredUsername = username
+			}
+		case "email":
+			ui.Email = ar.remoteUser.UserProfile.LoginName
+		}
+	}
 
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](ar.remoteUser.CapMap, tailcfg.PeerCapabilityTsIDP)
 	if err != nil {
@@ -736,11 +745,11 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 type userInfo struct {
-	Sub      string `json:"sub"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Picture  string `json:"picture"`
-	UserName string `json:"username"`
+	Sub                string `json:"sub"`
+	Name               string `json:"name,omitempty"`
+	Email              string `json:"email,omitempty"`
+	Picture            string `json:"picture,omitempty"`
+	PreferredUsername  string `json:"preferred_username,omitempty"`
 }
 
 type capRule struct {
@@ -1039,8 +1048,6 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	jti := rands.HexString(32)
 	who := ar.remoteUser
 
-	// TODO(maisem): not sure if this is the right thing to do
-	userName, _, _ := strings.Cut(ar.remoteUser.UserProfile.LoginName, "@")
 	n := who.Node.View()
 	if n.IsTagged() {
 		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "tagged nodes not supported")
@@ -1074,8 +1081,19 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 		NodeName:  n.Name(),
 		Tailnet:   tcd,
 		UserID:    n.User(),
-		Email:     who.UserProfile.LoginName,
-		UserName:  userName,
+	}
+	
+	// Only include email and preferred_username if the appropriate scopes were granted
+	for _, scope := range ar.scopes {
+		switch scope {
+		case "email":
+			tsClaims.Email = who.UserProfile.LoginName
+		case "profile":
+			if username, _, ok := strings.Cut(who.UserProfile.LoginName, "@"); ok {
+				tsClaims.PreferredUsername = username
+			}
+			tsClaims.Picture = who.UserProfile.ProfilePicURL
+		}
 	}
 	if ar.localRP {
 		tsClaims.Issuer = s.loopbackURL
@@ -1216,8 +1234,22 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 
 		if ar.remoteUser != nil && ar.remoteUser.Node != nil {
 			resp["sub"] = fmt.Sprintf("%d", ar.remoteUser.Node.User)
-			if ar.remoteUser.UserProfile != nil {
-				resp["username"] = ar.remoteUser.UserProfile.LoginName
+			
+			// Only include claims based on granted scopes
+			for _, scope := range ar.scopes {
+				switch scope {
+				case "profile":
+					if ar.remoteUser.UserProfile != nil {
+						if username, _, ok := strings.Cut(ar.remoteUser.UserProfile.LoginName, "@"); ok {
+							resp["preferred_username"] = username
+						}
+						resp["picture"] = ar.remoteUser.UserProfile.ProfilePicURL
+					}
+				case "email":
+					if ar.remoteUser.UserProfile != nil {
+						resp["email"] = ar.remoteUser.UserProfile.LoginName
+					}
+				}
 			}
 		}
 
@@ -1445,16 +1477,17 @@ type tailscaleClaims struct {
 	Email  string         `json:"email,omitempty"` // user emailish (like "alice@github" or "bob@example.com")
 	UserID tailcfg.UserID `json:"uid,omitempty"`
 
-	// UserName is the local part of Email (without '@' and domain).
-	// It is a temporary (2023-11-15) hack during development.
-	// We should probably let this be configured via grants.
-	UserName string `json:"username,omitempty"`
+	// PreferredUsername is the local part of Email (without '@' and domain).
+	PreferredUsername string `json:"preferred_username,omitempty"`
+	
+	// Picture is the user's profile picture URL.
+	Picture string `json:"picture,omitempty"`
 }
 
 var (
 	openIDSupportedClaims = views.SliceOf([]string{
 		// Standard claims, these correspond to fields in jwt.Claims.
-		"sub", "aud", "exp", "iat", "iss", "jti", "nbf", "username", "email",
+		"sub", "aud", "exp", "iat", "iss", "jti", "nbf", "preferred_username", "email", "picture",
 
 		// Tailscale claims, these correspond to fields in tailscaleClaims.
 		"key", "addresses", "nid", "node", "tailnet", "tags", "user", "uid",
