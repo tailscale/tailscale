@@ -366,8 +366,7 @@ type authRequest struct {
 	remoteUser *apitype.WhoIsResponse
 
 	// validTill is the time until which the token is valid.
-	// As of 2023-11-14, it is 5 minutes.
-	// TODO: add routine to delete expired tokens.
+	// Authorization codes expire after 5 minutes per OAuth 2.0 best practices (RFC 6749 recommends max 10 minutes).
 	validTill time.Time
 }
 
@@ -381,7 +380,7 @@ func (s *idpServer) validateScopes(requestedScopes []string) ([]string, error) {
 
 	validatedScopes := make([]string, 0, len(requestedScopes))
 	supportedScopes := openIDSupportedScopes.AsSlice()
-	
+
 	for _, scope := range requestedScopes {
 		supported := false
 		for _, supportedScope := range supportedScopes {
@@ -456,7 +455,7 @@ func validateCodeVerifier(verifier, challenge, method string) error {
 	if len(verifier) < 43 || len(verifier) > 128 {
 		return fmt.Errorf("code_verifier must be 43-128 characters")
 	}
-	
+
 	// Check that verifier only contains unreserved characters: A-Z a-z 0-9 - . _ ~
 	for _, r := range verifier {
 		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') ||
@@ -539,6 +538,7 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	uq := r.URL.Query()
+	state := uq.Get("state")
 
 	redirectURI := uq.Get("redirect_uri")
 	if redirectURI == "" {
@@ -558,7 +558,7 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 	who, err := s.lc.WhoIs(r.Context(), remoteAddr)
 	if err != nil {
 		log.Printf("Error getting WhoIs: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		redirectAuthError(w, r, redirectURI, "server_error", "internal server error", state)
 		return
 	}
 
@@ -579,7 +579,7 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 	// Validate scopes
 	validatedScopes, err := s.validateScopes(ar.scopes)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("tsidp: invalid scope: %v", err), http.StatusBadRequest)
+		redirectAuthError(w, r, redirectURI, "invalid_scope", fmt.Sprintf("invalid scope: %v", err), state)
 		return
 	}
 	ar.scopes = validatedScopes
@@ -587,16 +587,16 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 	// Handle PKCE parameters (RFC 7636)
 	if codeChallenge := uq.Get("code_challenge"); codeChallenge != "" {
 		ar.codeChallenge = codeChallenge
-		
+
 		// code_challenge_method defaults to "plain" if not specified
 		ar.codeChallengeMethod = uq.Get("code_challenge_method")
 		if ar.codeChallengeMethod == "" {
 			ar.codeChallengeMethod = "plain"
 		}
-		
+
 		// Validate the code_challenge_method
 		if ar.codeChallengeMethod != "plain" && ar.codeChallengeMethod != "S256" {
-			http.Error(w, "tsidp: unsupported code_challenge_method", http.StatusBadRequest)
+			redirectAuthError(w, r, redirectURI, "invalid_request", "unsupported code_challenge_method", state)
 			return
 		}
 	}
@@ -606,7 +606,7 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 		c, ok := s.funnelClients[ar.clientID]
 		s.mu.Unlock()
 		if !ok {
-			http.Error(w, "tsidp: invalid client ID", http.StatusBadRequest)
+			redirectAuthError(w, r, redirectURI, "invalid_request", "invalid client ID", state)
 			return
 		}
 		// Validate redirect_uri against the client's registered redirect URIs
@@ -618,7 +618,7 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !validRedirect {
-			http.Error(w, "tsidp: redirect_uri mismatch", http.StatusBadRequest)
+			redirectAuthError(w, r, redirectURI, "invalid_request", "redirect_uri mismatch", state)
 			return
 		}
 		ar.funnelRP = c
@@ -628,7 +628,7 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 		var ok bool
 		ar.rpNodeID, ok = parseID[tailcfg.NodeID](strings.TrimPrefix(r.URL.Path, "/authorize/"))
 		if !ok {
-			http.Error(w, "tsidp: invalid node ID suffix after /authorize/", http.StatusBadRequest)
+			redirectAuthError(w, r, redirectURI, "invalid_request", "invalid node ID suffix after /authorize/", state)
 			return
 		}
 	}
@@ -675,7 +675,7 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	tk, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok {
-		http.Error(w, "tsidp: invalid Authorization header", http.StatusBadRequest)
+		writeBearerError(w, http.StatusBadRequest, "invalid_request", "invalid Authorization header")
 		return
 	}
 
@@ -683,12 +683,12 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 	ar, ok := s.accessToken[tk]
 	s.mu.Unlock()
 	if !ok {
-		http.Error(w, "tsidp: invalid token", http.StatusBadRequest)
+		writeBearerError(w, http.StatusUnauthorized, "invalid_token", "invalid token")
 		return
 	}
 
 	if ar.validTill.Before(time.Now()) {
-		http.Error(w, "tsidp: token expired", http.StatusBadRequest)
+		writeBearerError(w, http.StatusUnauthorized, "invalid_token", "token expired")
 		s.mu.Lock()
 		delete(s.accessToken, tk)
 		s.mu.Unlock()
@@ -899,14 +899,14 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 	case "refresh_token":
 		s.handleRefreshTokenGrant(w, r)
 	default:
-		http.Error(w, "tsidp: grant_type not supported", http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "unsupported_grant_type", "")
 	}
 }
 
 func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
 	if code == "" {
-		http.Error(w, "tsidp: code is required", http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "code is required")
 		return
 	}
 	s.mu.Lock()
@@ -916,16 +916,16 @@ func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.
 	}
 	s.mu.Unlock()
 	if !ok {
-		http.Error(w, "tsidp: code not found", http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_grant", "code not found")
 		return
 	}
 	if err := ar.allowRelyingParty(r, s.lc); err != nil {
 		log.Printf("Error allowing relying party: %v", err)
-		http.Error(w, err.Error(), http.StatusForbidden)
+		writeTokenEndpointError(w, http.StatusUnauthorized, "invalid_client", err.Error())
 		return
 	}
 	if ar.redirectURI != r.FormValue("redirect_uri") {
-		http.Error(w, "tsidp: redirect_uri mismatch", http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri mismatch")
 		return
 	}
 
@@ -933,12 +933,12 @@ func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.
 	if ar.codeChallenge != "" {
 		codeVerifier := r.FormValue("code_verifier")
 		if codeVerifier == "" {
-			http.Error(w, "tsidp: code_verifier is required", http.StatusBadRequest)
+			writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "code_verifier is required")
 			return
 		}
-		
+
 		if err := validateCodeVerifier(codeVerifier, ar.codeChallenge, ar.codeChallengeMethod); err != nil {
-			http.Error(w, fmt.Sprintf("tsidp: invalid_grant: %v", err), http.StatusBadRequest)
+			writeTokenEndpointError(w, http.StatusBadRequest, "invalid_grant", err.Error())
 			return
 		}
 	}
@@ -950,7 +950,7 @@ func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.
 		validatedResources, err := s.validateResourcesForUser(ar.remoteUser, resources)
 		if err != nil {
 			log.Printf("Error validating resources: %v", err)
-			http.Error(w, "tsidp: invalid resource", http.StatusBadRequest)
+			writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "invalid resource")
 			return
 		}
 		ar.resources = validatedResources
@@ -963,7 +963,7 @@ func (s *idpServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.
 func (s *idpServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request) {
 	rt := r.FormValue("refresh_token")
 	if rt == "" {
-		http.Error(w, "tsidp: refresh_token is required", http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "refresh_token is required")
 		return
 	}
 
@@ -977,14 +977,14 @@ func (s *idpServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reque
 	s.mu.Unlock()
 
 	if !ok {
-		http.Error(w, "tsidp: invalid refresh token", http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_grant", "invalid refresh token")
 		return
 	}
 
 	// Validate client authentication
 	if err := ar.allowRelyingParty(r, s.lc); err != nil {
 		log.Printf("Error allowing relying party: %v", err)
-		http.Error(w, err.Error(), http.StatusForbidden)
+		writeTokenEndpointError(w, http.StatusUnauthorized, "invalid_client", "")
 		return
 	}
 
@@ -995,7 +995,7 @@ func (s *idpServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reque
 		validatedResources, err := s.validateResourcesForUser(ar.remoteUser, resources)
 		if err != nil {
 			log.Printf("Error validating resources: %v", err)
-			http.Error(w, "tsidp: invalid resource", http.StatusBadRequest)
+			writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "invalid resource")
 			return
 		}
 
@@ -1010,7 +1010,7 @@ func (s *idpServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reque
 					}
 				}
 				if !found {
-					http.Error(w, "tsidp: requested resource not in original grant", http.StatusBadRequest)
+					writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "requested resource not in original grant")
 					return
 				}
 			}
@@ -1034,7 +1034,7 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	signer, err := s.oidcSigner()
 	if err != nil {
 		log.Printf("Error getting signer: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeTokenEndpointError(w, http.StatusInternalServerError, "server_error", "internal server error")
 		return
 	}
 	jti := rands.HexString(32)
@@ -1044,7 +1044,7 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	userName, _, _ := strings.Cut(ar.remoteUser.UserProfile.LoginName, "@")
 	n := who.Node.View()
 	if n.IsTagged() {
-		http.Error(w, "tsidp: tagged nodes not supported", http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "tagged nodes not supported")
 		return
 	}
 
@@ -1085,14 +1085,14 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, tailcfg.PeerCapabilityTsIDP)
 	if err != nil {
 		log.Printf("tsidp: failed to unmarshal capability: %v", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "failed to unmarshal capability")
 		return
 	}
 
 	tsClaimsWithExtra, err := withExtraClaims(tsClaims, rules)
 	if err != nil {
 		log.Printf("tsidp: failed to merge extra claims: %v", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "failed to merge extra claims")
 		return
 	}
 
@@ -1100,7 +1100,7 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	token, err := jwt.Signed(signer).Claims(tsClaimsWithExtra).CompactSerialize()
 	if err != nil {
 		log.Printf("Error getting token: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeTokenEndpointError(w, http.StatusInternalServerError, "server_error", "internal server error")
 		return
 	}
 
@@ -1123,7 +1123,7 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 		IDToken:      token,
 		RefreshToken: rt,
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeTokenEndpointError(w, http.StatusInternalServerError, "server_error", "internal server error")
 	}
 }
 
@@ -1136,7 +1136,7 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 	// Parse the token parameter
 	token := r.FormValue("token")
 	if token == "" {
-		http.Error(w, "tsidp: token is required", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", "token is required")
 		return
 	}
 
@@ -1213,6 +1213,7 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 		resp["client_id"] = ar.clientID
 		resp["exp"] = ar.validTill.Unix()
 		resp["iat"] = ar.validTill.Add(-5 * time.Minute).Unix() // issued 5 min before expiry
+		resp["token_type"] = "Bearer"
 
 		if ar.remoteUser != nil && ar.remoteUser.Node != nil {
 			resp["sub"] = fmt.Sprintf("%d", ar.remoteUser.Node.User)
@@ -1251,6 +1252,70 @@ type oidcTokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	ExpiresIn    int    `json:"expires_in"`
+}
+
+// oauthErrorResponse represents an OAuth 2.0 error response per RFC 6749 and RFC 7591
+type oauthErrorResponse struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description,omitempty"`
+}
+
+// writeJSONError writes an OAuth 2.0 compliant JSON error response
+func writeJSONError(w http.ResponseWriter, statusCode int, errorCode, errorDescription string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(oauthErrorResponse{
+		Error:            errorCode,
+		ErrorDescription: errorDescription,
+	})
+}
+
+// writeTokenEndpointError writes an RFC 6749 compliant token endpoint error response
+// with required headers per section 5.2
+func writeTokenEndpointError(w http.ResponseWriter, statusCode int, errorCode, errorDescription string) {
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(oauthErrorResponse{
+		Error:            errorCode,
+		ErrorDescription: errorDescription,
+	})
+}
+
+// writeBearerError writes an RFC 6750 compliant Bearer token error response
+// with WWW-Authenticate header per section 3.1
+func writeBearerError(w http.ResponseWriter, statusCode int, errorCode, errorDescription string) {
+	// Build WWW-Authenticate header value
+	authHeader := fmt.Sprintf(`Bearer error="%s"`, errorCode)
+	if errorDescription != "" {
+		authHeader += fmt.Sprintf(`, error_description="%s"`, errorDescription)
+	}
+	w.Header().Set("WWW-Authenticate", authHeader)
+	w.WriteHeader(statusCode)
+}
+
+// redirectAuthError redirects to the client's redirect_uri with error parameters
+// per RFC 6749 Section 4.1.2.1
+func redirectAuthError(w http.ResponseWriter, r *http.Request, redirectURI, errorCode, errorDescription, state string) {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		// If redirect URI is invalid, return error directly
+		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
+		return
+	}
+	
+	q := u.Query()
+	q.Set("error", errorCode)
+	if errorDescription != "" {
+		q.Set("error_description", errorDescription)
+	}
+	if state != "" {
+		q.Set("state", state)
+	}
+	u.RawQuery = q.Encode()
+	
+	http.Redirect(w, r, u.String(), http.StatusFound)
 }
 
 const (
@@ -1302,13 +1367,13 @@ func (s *idpServer) oidcPrivateKey() (*signingKey, error) {
 
 func (s *idpServer) serveJWKS(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != oidcJWKSPath {
-		http.Error(w, "tsidp: not found", http.StatusNotFound)
+		writeJSONError(w, http.StatusNotFound, "not_found", "endpoint not found")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	sk, err := s.oidcPrivateKey()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "server_error", "internal server error")
 		return
 	}
 	// TODO(maisem): maybe only marshal this once and reuse?
@@ -1325,9 +1390,8 @@ func (s *idpServer) serveJWKS(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "server_error", "internal server error")
 	}
-	return
 }
 
 // openIDProviderMetadata is a partial representation of
@@ -1414,7 +1478,7 @@ var (
 	// OAuth 2.0 specific metadata constants
 	oauthSupportedGrantTypes               = views.SliceOf([]string{"authorization_code", "refresh_token"})
 	oauthSupportedTokenEndpointAuthMethods = views.SliceOf([]string{"client_secret_post", "client_secret_basic"})
-	
+
 	// PKCE support (RFC 7636)
 	pkceCodeChallengeMethodsSupported = views.SliceOf([]string{"plain", "S256"})
 )
@@ -1710,12 +1774,12 @@ func (s *idpServer) serveGetClientsList(w http.ResponseWriter, r *http.Request) 
 func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *http.Request) {
 	// Block funnel requests - dynamic registration is only available over tailnet
 	if isFunnelRequest(r) {
-		http.Error(w, "tsidp: dynamic client registration not available over funnel", http.StatusForbidden)
+		writeJSONError(w, http.StatusForbidden, "access_denied", "dynamic client registration not available over funnel")
 		return
 	}
 
 	if r.Method != "POST" {
-		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
+		writeJSONError(w, http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
 		return
 	}
 
@@ -1734,13 +1798,13 @@ func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *htt
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "tsidp: invalid request body", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
 
 	// Validate required fields per RFC 7591 and OpenID specs
 	if len(req.RedirectURIs) == 0 {
-		http.Error(w, "tsidp: redirect_uris is required", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "invalid_client_metadata", "redirect_uris is required")
 		return
 	}
 
@@ -1786,7 +1850,7 @@ func (s *idpServer) serveDynamicClientRegistration(w http.ResponseWriter, r *htt
 	if err := s.storeFunnelClientsLocked(); err != nil {
 		s.mu.Unlock()
 		log.Printf("tsidp: error storing client: %v", err)
-		http.Error(w, "tsidp: internal error", http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "server_error", "internal error")
 		return
 	}
 	s.mu.Unlock()

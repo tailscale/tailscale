@@ -355,7 +355,6 @@ func (s *idpServer) renderFormSuccess(w http.ResponseWriter, data clientDisplayD
 	}
 }
 
-
 func validateRedirectURI(redirectURI string) string {
 	u, err := url.Parse(redirectURI)
 	if err != nil || u.Scheme == "" || u.Host == "" {

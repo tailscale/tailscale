@@ -23,10 +23,10 @@ import (
 
 func TestBackwardCompatibility(t *testing.T) {
 	tests := []struct {
-		name         string
-		jsonData     string
-		expectURIs   []string
-		expectName   string
+		name       string
+		jsonData   string
+		expectURIs []string
+		expectName string
 	}{
 		{
 			name: "old format with redirect_uri and name",
@@ -97,7 +97,7 @@ func TestBackwardCompatibility(t *testing.T) {
 			if !reflect.DeepEqual(client.RedirectURIs, tt.expectURIs) {
 				t.Errorf("expected redirect_uris %v, got %v", tt.expectURIs, client.RedirectURIs)
 			}
-			
+
 			if client.Name != tt.expectName {
 				t.Errorf("expected name %q, got %q", tt.expectName, client.Name)
 			}
@@ -129,7 +129,7 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 				if err := json.Unmarshal(body, &resp); err != nil {
 					t.Fatalf("failed to unmarshal response: %v", err)
 				}
-				
+
 				if resp.ID == "" {
 					t.Error("expected client_id to be set")
 				}
@@ -162,7 +162,7 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 				if err := json.Unmarshal(body, &resp); err != nil {
 					t.Fatalf("failed to unmarshal response: %v", err)
 				}
-				
+
 				// Check defaults were applied
 				if resp.TokenEndpointAuthMethod != "client_secret_basic" {
 					t.Errorf("expected default token_endpoint_auth_method, got %s", resp.TokenEndpointAuthMethod)
@@ -185,8 +185,15 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 			isFunnel:     true,
 			expectStatus: http.StatusForbidden,
 			checkResponse: func(t *testing.T, body []byte) {
-				if !strings.Contains(string(body), "not available over funnel") {
-					t.Errorf("expected funnel error message, got: %s", body)
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "access_denied" {
+					t.Errorf("expected error code 'access_denied', got: %v", errResp["error"])
+				}
+				if desc, ok := errResp["error_description"].(string); !ok || !strings.Contains(desc, "not available over funnel") {
+					t.Errorf("expected error description about funnel, got: %v", errResp["error_description"])
 				}
 			},
 		},
@@ -196,8 +203,15 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 			body:         `{"client_name": "Test Client"}`,
 			expectStatus: http.StatusBadRequest,
 			checkResponse: func(t *testing.T, body []byte) {
-				if !strings.Contains(string(body), "redirect_uris is required") {
-					t.Errorf("expected redirect_uris required error, got: %s", body)
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "invalid_client_metadata" {
+					t.Errorf("expected error code 'invalid_client_metadata', got: %v", errResp["error"])
+				}
+				if desc, ok := errResp["error_description"].(string); !ok || !strings.Contains(desc, "redirect_uris is required") {
+					t.Errorf("expected error description about redirect_uris, got: %v", errResp["error_description"])
 				}
 			},
 		},
@@ -207,8 +221,15 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 			body:         `{"redirect_uris": []}`,
 			expectStatus: http.StatusBadRequest,
 			checkResponse: func(t *testing.T, body []byte) {
-				if !strings.Contains(string(body), "redirect_uris is required") {
-					t.Errorf("expected redirect_uris required error, got: %s", body)
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "invalid_client_metadata" {
+					t.Errorf("expected error code 'invalid_client_metadata', got: %v", errResp["error"])
+				}
+				if desc, ok := errResp["error_description"].(string); !ok || !strings.Contains(desc, "redirect_uris is required") {
+					t.Errorf("expected error description about redirect_uris, got: %v", errResp["error_description"])
 				}
 			},
 		},
@@ -218,8 +239,15 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 			body:         `{invalid json}`,
 			expectStatus: http.StatusBadRequest,
 			checkResponse: func(t *testing.T, body []byte) {
-				if !strings.Contains(string(body), "invalid request body") {
-					t.Errorf("expected invalid request body error, got: %s", body)
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "invalid_request" {
+					t.Errorf("expected error code 'invalid_request', got: %v", errResp["error"])
+				}
+				if desc, ok := errResp["error_description"].(string); !ok || !strings.Contains(desc, "invalid request body") {
+					t.Errorf("expected error description about invalid request body, got: %v", errResp["error_description"])
 				}
 			},
 		},
@@ -227,6 +255,18 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 			name:         "GET request - method not allowed",
 			method:       "GET",
 			expectStatus: http.StatusMethodNotAllowed,
+			checkResponse: func(t *testing.T, body []byte) {
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "invalid_request" {
+					t.Errorf("expected error code 'invalid_request', got: %v", errResp["error"])
+				}
+				if desc, ok := errResp["error_description"].(string); !ok || !strings.Contains(desc, "method not allowed") {
+					t.Errorf("expected error description about method not allowed, got: %v", errResp["error_description"])
+				}
+			},
 		},
 		{
 			name:   "POST request - multiple redirect URIs",
@@ -241,38 +281,38 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 				if err := json.Unmarshal(body, &resp); err != nil {
 					t.Fatalf("failed to unmarshal response: %v", err)
 				}
-				
+
 				if len(resp.RedirectURIs) != 3 {
 					t.Errorf("expected 3 redirect_uris, got %d", len(resp.RedirectURIs))
 				}
 			},
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &idpServer{
 				serverURL:     "https://idp.test.ts.net",
 				funnelClients: make(map[string]*funnelClient),
 			}
-			
+
 			var body io.Reader
 			if tt.body != "" {
 				body = strings.NewReader(tt.body)
 			}
-			
+
 			req := httptest.NewRequest(tt.method, "/register", body)
 			if tt.isFunnel {
 				req.Header.Set("Tailscale-Funnel-Request", "true")
 			}
-			
+
 			rr := httptest.NewRecorder()
 			s.serveDynamicClientRegistration(rr, req)
-			
+
 			if rr.Code != tt.expectStatus {
 				t.Errorf("expected status %d, got %d", tt.expectStatus, rr.Code)
 			}
-			
+
 			if tt.checkResponse != nil {
 				tt.checkResponse(t, rr.Body.Bytes())
 			}
@@ -283,49 +323,49 @@ func TestServeDynamicClientRegistration(t *testing.T) {
 func TestRedirectURIValidation(t *testing.T) {
 	// Test the redirect URI validation logic directly
 	tests := []struct {
-		name            string
-		clientURIs      []string
-		requestURI      string
-		expectValid     bool
+		name        string
+		clientURIs  []string
+		requestURI  string
+		expectValid bool
 	}{
 		{
-			name:            "valid single URI",
-			clientURIs:      []string{"https://example.com/callback"},
-			requestURI:      "https://example.com/callback",
-			expectValid:     true,
+			name:        "valid single URI",
+			clientURIs:  []string{"https://example.com/callback"},
+			requestURI:  "https://example.com/callback",
+			expectValid: true,
 		},
 		{
-			name:            "valid multiple URIs - first",
-			clientURIs:      []string{"https://example.com/callback1", "https://example.com/callback2"},
-			requestURI:      "https://example.com/callback1",
-			expectValid:     true,
+			name:        "valid multiple URIs - first",
+			clientURIs:  []string{"https://example.com/callback1", "https://example.com/callback2"},
+			requestURI:  "https://example.com/callback1",
+			expectValid: true,
 		},
 		{
-			name:            "valid multiple URIs - second",
-			clientURIs:      []string{"https://example.com/callback1", "https://example.com/callback2"},
-			requestURI:      "https://example.com/callback2",
-			expectValid:     true,
+			name:        "valid multiple URIs - second",
+			clientURIs:  []string{"https://example.com/callback1", "https://example.com/callback2"},
+			requestURI:  "https://example.com/callback2",
+			expectValid: true,
 		},
 		{
-			name:            "invalid URI",
-			clientURIs:      []string{"https://example.com/callback"},
-			requestURI:      "https://evil.com/callback",
-			expectValid:     false,
+			name:        "invalid URI",
+			clientURIs:  []string{"https://example.com/callback"},
+			requestURI:  "https://evil.com/callback",
+			expectValid: false,
 		},
 		{
-			name:            "empty client URIs",
-			clientURIs:      []string{},
-			requestURI:      "https://example.com/callback",
-			expectValid:     false,
+			name:        "empty client URIs",
+			clientURIs:  []string{},
+			requestURI:  "https://example.com/callback",
+			expectValid: false,
 		},
 		{
-			name:            "case sensitive mismatch",
-			clientURIs:      []string{"https://example.com/callback"},
-			requestURI:      "https://example.com/CALLBACK",
-			expectValid:     false,
+			name:        "case sensitive mismatch",
+			clientURIs:  []string{"https://example.com/callback"},
+			requestURI:  "https://example.com/CALLBACK",
+			expectValid: false,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Test the validation logic directly
@@ -336,7 +376,7 @@ func TestRedirectURIValidation(t *testing.T) {
 					break
 				}
 			}
-			
+
 			if validRedirect != tt.expectValid {
 				t.Errorf("expected valid=%v, got %v", tt.expectValid, validRedirect)
 			}
@@ -376,37 +416,37 @@ func TestMetadataEndpoints(t *testing.T) {
 			expectRegURL: false,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &idpServer{
 				serverURL:   "https://idp.test.ts.net",
 				loopbackURL: "http://localhost:8080",
 			}
-			
+
 			req := httptest.NewRequest("GET", tt.endpoint, nil)
 			req.RemoteAddr = "127.0.0.1:12345"
 			if tt.isFunnel {
 				req.Header.Set("Tailscale-Funnel-Request", "true")
 			}
-			
+
 			rr := httptest.NewRecorder()
-			
+
 			if strings.Contains(tt.endpoint, "openid") {
 				s.serveOpenIDConfig(rr, req)
 			} else {
 				s.serveOAuthMetadata(rr, req)
 			}
-			
+
 			if rr.Code != http.StatusOK {
 				t.Errorf("expected status 200, got %d", rr.Code)
 			}
-			
+
 			var metadata map[string]interface{}
 			if err := json.Unmarshal(rr.Body.Bytes(), &metadata); err != nil {
 				t.Fatalf("failed to unmarshal metadata: %v", err)
 			}
-			
+
 			if tt.expectRegURL {
 				if _, ok := metadata["registration_endpoint"]; !ok {
 					t.Error("expected registration_endpoint in metadata")
@@ -465,8 +505,15 @@ func TestRefreshTokenFlow(t *testing.T) {
 			refreshToken: "",
 			expectStatus: http.StatusBadRequest,
 			checkResponse: func(t *testing.T, body []byte) {
-				if !strings.Contains(string(body), "refresh_token is required") {
-					t.Errorf("expected refresh_token required error, got: %s", body)
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "invalid_request" {
+					t.Errorf("expected error code 'invalid_request', got: %v", errResp["error"])
+				}
+				if desc, ok := errResp["error_description"].(string); !ok || !strings.Contains(desc, "refresh_token is required") {
+					t.Errorf("expected error description about refresh_token, got: %v", errResp["error_description"])
 				}
 			},
 		},
@@ -476,8 +523,15 @@ func TestRefreshTokenFlow(t *testing.T) {
 			refreshToken: "invalid-token",
 			expectStatus: http.StatusBadRequest,
 			checkResponse: func(t *testing.T, body []byte) {
-				if !strings.Contains(string(body), "invalid refresh token") {
-					t.Errorf("expected invalid refresh token error, got: %s", body)
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "invalid_grant" {
+					t.Errorf("expected error code 'invalid_grant', got: %v", errResp["error"])
+				}
+				if desc, ok := errResp["error_description"].(string); !ok || !strings.Contains(desc, "invalid refresh token") {
+					t.Errorf("expected error description about invalid refresh token, got: %v", errResp["error_description"])
 				}
 			},
 		},
@@ -487,8 +541,15 @@ func TestRefreshTokenFlow(t *testing.T) {
 			refreshToken: "expired-token",
 			expectStatus: http.StatusBadRequest,
 			checkResponse: func(t *testing.T, body []byte) {
-				if !strings.Contains(string(body), "invalid refresh token") {
-					t.Errorf("expected invalid refresh token error, got: %s", body)
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "invalid_grant" {
+					t.Errorf("expected error code 'invalid_grant', got: %v", errResp["error"])
+				}
+				if desc, ok := errResp["error_description"].(string); !ok || !strings.Contains(desc, "invalid refresh token") {
+					t.Errorf("expected error description about invalid refresh token, got: %v", errResp["error_description"])
 				}
 			},
 		},
@@ -498,7 +559,16 @@ func TestRefreshTokenFlow(t *testing.T) {
 			refreshToken: "valid-refresh-token",
 			clientID:     "wrong-client",
 			clientSecret: "wrong-secret",
-			expectStatus: http.StatusForbidden,
+			expectStatus: http.StatusUnauthorized,
+			checkResponse: func(t *testing.T, body []byte) {
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(body, &errResp); err != nil {
+					t.Fatalf("expected JSON error response, got: %s", body)
+				}
+				if errResp["error"] != "invalid_client" {
+					t.Errorf("expected error code 'invalid_client', got: %v", errResp["error"])
+				}
+			},
 		},
 	}
 
@@ -580,6 +650,77 @@ func TestRefreshTokenFlow(t *testing.T) {
 	}
 }
 
+func TestTokenEndpointUnsupportedGrantType(t *testing.T) {
+	tests := []struct {
+		name         string
+		grantType    string
+		expectStatus int
+	}{
+		{
+			name:         "password grant type",
+			grantType:    "password",
+			expectStatus: http.StatusBadRequest,
+		},
+		{
+			name:         "client_credentials grant type",
+			grantType:    "client_credentials",
+			expectStatus: http.StatusBadRequest,
+		},
+		{
+			name:         "implicit grant type",
+			grantType:    "implicit",
+			expectStatus: http.StatusBadRequest,
+		},
+		{
+			name:         "unknown grant type",
+			grantType:    "unknown_grant",
+			expectStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL: "https://idp.test.ts.net",
+			}
+
+			form := url.Values{
+				"grant_type": {tt.grantType},
+			}
+
+			req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			rr := httptest.NewRecorder()
+			s.serveToken(rr, req)
+
+			if rr.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rr.Code)
+			}
+
+			// Check JSON error response per RFC 6749
+			var errResp map[string]interface{}
+			if err := json.Unmarshal(rr.Body.Bytes(), &errResp); err != nil {
+				t.Fatalf("expected JSON error response, got: %s", rr.Body.String())
+			}
+			if errResp["error"] != "unsupported_grant_type" {
+				t.Errorf("expected error code 'unsupported_grant_type', got: %v", errResp["error"])
+			}
+
+			// Check required headers per RFC 6749 Section 5.2
+			if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+				t.Errorf("expected Content-Type application/json, got: %s", ct)
+			}
+			if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
+				t.Errorf("expected Cache-Control no-store, got: %s", cc)
+			}
+			if pragma := rr.Header().Get("Pragma"); pragma != "no-cache" {
+				t.Errorf("expected Pragma no-cache, got: %s", pragma)
+			}
+		})
+	}
+}
+
 func TestOAuthMetadataRefreshTokenSupport(t *testing.T) {
 	s := &idpServer{
 		serverURL:   "https://idp.test.ts.net",
@@ -629,7 +770,7 @@ func TestTokenExpiration(t *testing.T) {
 		{
 			name:         "expired access token",
 			tokenAge:     10 * time.Minute, // 10 minutes old (expired)
-			expectStatus: http.StatusBadRequest,
+			expectStatus: http.StatusUnauthorized, // 401 per RFC 6750
 			expectError:  "token expired",
 		},
 	}
@@ -637,8 +778,8 @@ func TestTokenExpiration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &idpServer{
-				serverURL:    "https://idp.test.ts.net",
-				accessToken:  make(map[string]*authRequest),
+				serverURL:   "https://idp.test.ts.net",
+				accessToken: make(map[string]*authRequest),
 			}
 
 			// Create a test token
@@ -669,8 +810,16 @@ func TestTokenExpiration(t *testing.T) {
 			}
 
 			if tt.expectError != "" {
-				if !strings.Contains(rr.Body.String(), tt.expectError) {
-					t.Errorf("expected error containing %q, got %q", tt.expectError, rr.Body.String())
+				// Check for WWW-Authenticate header as per RFC 6750
+				authHeader := rr.Header().Get("WWW-Authenticate")
+				if authHeader == "" {
+					t.Error("expected WWW-Authenticate header for Bearer token error")
+				}
+				if !strings.Contains(authHeader, `error="invalid_token"`) {
+					t.Errorf("expected WWW-Authenticate header with invalid_token error, got: %s", authHeader)
+				}
+				if !strings.Contains(authHeader, tt.expectError) {
+					t.Errorf("expected error description containing %q in WWW-Authenticate header, got: %s", tt.expectError, authHeader)
 				}
 				// Verify token was deleted
 				if _, exists := s.accessToken[testToken]; exists {
@@ -855,7 +1004,7 @@ func TestResourceIndicators(t *testing.T) {
 
 			// Parse authorization query
 			authQuery, _ := url.ParseQuery(tt.authorizationQuery)
-			
+
 			// Create mock authRequest
 			code := "test-code"
 			ar := &authRequest{
@@ -1151,6 +1300,11 @@ func TestIntrospectWithResources(t *testing.T) {
 		t.Error("expected active: true for valid token")
 	}
 
+	// Check token_type is present and set to Bearer
+	if tokenType, ok := resp["token_type"].(string); !ok || tokenType != "Bearer" {
+		t.Errorf("expected token_type to be 'Bearer', got: %v", resp["token_type"])
+	}
+
 	// Check audience includes client_id and resources
 	aud, ok := resp["aud"].([]interface{})
 	if !ok {
@@ -1326,7 +1480,7 @@ func TestPKCE(t *testing.T) {
 			expectTokenError: true,
 		},
 		{
-			name:             "code_verifier too long", 
+			name:             "code_verifier too long",
 			authQuery:        "client_id=test-client&redirect_uri=https://example.com/callback&code_challenge=" + strings.Repeat("a", 129) + "&code_challenge_method=plain",
 			codeVerifier:     strings.Repeat("a", 129), // more than 128 characters
 			expectTokenError: true,
@@ -1763,3 +1917,4 @@ func TestScopeHandling(t *testing.T) {
 		})
 	}
 }
+
