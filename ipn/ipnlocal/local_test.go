@@ -5054,7 +5054,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantName: "peer1",
 		},
 		{
-			name: "suggest-exit-node-stable-pick",
+			name: "exit-node-stable-pick",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
@@ -5199,7 +5199,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantPri:  2,
 		},
 		{
-			name: "suggested-exit-node-with-city",
+			name: "exit-node-with-city",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
@@ -5214,7 +5214,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantLoc:  city,
 		},
 		{
-			name: "suggested-exit-node-with-city-and-priority",
+			name: "exit-node-with-city-and-priority",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
@@ -5231,7 +5231,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantPri:  1,
 		},
 		{
-			name: "suggested-exit-node-without-latlng",
+			name: "exit-node-without-latlng",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
@@ -5246,7 +5246,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantLoc:  noLatLng,
 		},
 		{
-			name: "suggested-exit-node-without-latlng-with-priority",
+			name: "exit-node-without-latlng-with-priority",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
