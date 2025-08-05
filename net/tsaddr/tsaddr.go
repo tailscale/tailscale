@@ -299,7 +299,7 @@ func IsViaPrefix(p netip.Prefix) bool {
 func UnmapVia(ip netip.Addr) netip.Addr {
 	if TailscaleViaRange().Contains(ip) {
 		a := ip.As16()
-		return netip.AddrFrom4(*(*[4]byte)(a[12:16]))
+		return netip.AddrFrom4([4]byte(a[12:16]))
 	}
 	return ip
 }
