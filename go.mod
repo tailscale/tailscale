@@ -21,6 +21,8 @@ require (
 	github.com/coder/websocket v1.8.12
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
+	github.com/creachadair/command v0.1.24
+	github.com/creachadair/flax v0.0.5
 	github.com/creachadair/taskgroup v0.13.2
 	github.com/creack/pty v1.1.23
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
@@ -42,7 +44,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/golang/snappy v0.0.4
 	github.com/golangci/golangci-lint v1.57.1
-	github.com/google/go-cmp v0.6.0
+	github.com/google/go-cmp v0.7.0
 	github.com/google/go-containerregistry v0.20.2
 	github.com/google/go-tpm v0.9.4
 	github.com/google/gopacket v1.1.19
@@ -123,6 +125,7 @@ require (
 	sigs.k8s.io/controller-tools v0.17.0
 	sigs.k8s.io/yaml v1.4.0
 	software.sslmate.com/src/go-pkcs12 v0.4.0
+	tailscale.com/client/tailscale/v2 v2.0.0-20250729171440-3f3f51970e08
 )
 
 require (
