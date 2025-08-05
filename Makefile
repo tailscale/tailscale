@@ -137,6 +137,10 @@ sshintegrationtest: ## Run the SSH integration tests in various Docker container
 generate: ## Generate code
 	./tool/go generate ./...
 
+.PHONY: pin-github-actions
+pin-github-actions:
+	./tool/go tool github.com/stacklok/frizbee actions .github/workflows
+
 help: ## Show this help
 	@echo ""
 	@echo "Specify a command. The choices are:"

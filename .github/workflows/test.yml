@@ -57,7 +57,7 @@ jobs:
       # See if the cache entry already exists to avoid downloading it
       # and doing the cache write again.
       - id: check-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4
         with:
           path: gomodcache # relative to workspace; see env note at top of file
           key: ${{ steps.hash.outputs.key }}
