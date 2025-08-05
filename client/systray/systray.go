@@ -48,7 +48,12 @@ var (
 )
 
 // Run starts the systray menu and blocks until the menu exits.
-func (menu *Menu) Run() {
+// If client is nil, a default local.Client is used.
+func (menu *Menu) Run(client *local.Client) {
+	if client == nil {
+		client = &local.Client{}
+	}
+	menu.lc = client
 	menu.updateState()
 
 	// exit cleanly on SIGINT and SIGTERM
@@ -71,7 +76,7 @@ func (menu *Menu) Run() {
 type Menu struct {
 	mu sync.Mutex // protects the entire Menu
 
-	lc          local.Client
+	lc          *local.Client
 	status      *ipnstate.Status
 	curProfile  ipn.LoginProfile
 	allProfiles []ipn.LoginProfile

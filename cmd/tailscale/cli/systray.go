@@ -17,8 +17,7 @@ var systrayCmd = &ffcli.Command{
 	ShortUsage: "tailscale systray",
 	ShortHelp:  "Run a systray application to manage Tailscale",
 	Exec: func(_ context.Context, _ []string) error {
-		// TODO(will): pass localClient to menu to use the global --socket flag
-		new(systray.Menu).Run()
+		new(systray.Menu).Run(&localClient)
 		return nil
 	},
 }
