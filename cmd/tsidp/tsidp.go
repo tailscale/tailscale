@@ -368,6 +368,10 @@ type authRequest struct {
 	// validTill is the time until which the token is valid.
 	// Authorization codes expire after 5 minutes per OAuth 2.0 best practices (RFC 6749 recommends max 10 minutes).
 	validTill time.Time
+
+	// jti is the unique identifier for the JWT token (JWT ID).
+	// This is used for token introspection to return the jti claim.
+	jti string
 }
 
 // validateScopes checks if the requested scopes are valid and supported.
@@ -702,7 +706,7 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Sub is always included (openid scope is mandatory)
 	ui.Sub = ar.remoteUser.Node.User.String()
-	
+
 	// Check scopes and only include claims that were authorized
 	for _, scope := range ar.scopes {
 		switch scope {
@@ -745,11 +749,11 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 type userInfo struct {
-	Sub                string `json:"sub"`
-	Name               string `json:"name,omitempty"`
-	Email              string `json:"email,omitempty"`
-	Picture            string `json:"picture,omitempty"`
-	PreferredUsername  string `json:"preferred_username,omitempty"`
+	Sub               string `json:"sub"`
+	Name              string `json:"name,omitempty"`
+	Email             string `json:"email,omitempty"`
+	Picture           string `json:"picture,omitempty"`
+	PreferredUsername string `json:"preferred_username,omitempty"`
 }
 
 type capRule struct {
@@ -1082,7 +1086,7 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 		Tailnet:   tcd,
 		UserID:    n.User(),
 	}
-	
+
 	// Only include email and preferred_username if the appropriate scopes were granted
 	for _, scope := range ar.scopes {
 		switch scope {
@@ -1097,6 +1101,12 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	}
 	if ar.localRP {
 		tsClaims.Issuer = s.loopbackURL
+	}
+
+	// Set azp (authorized party) claim when there are multiple audiences
+	// Per OIDC spec, azp is REQUIRED when the ID Token has multiple audiences
+	if len(audience) > 1 {
+		tsClaims.AuthorizedParty = ar.clientID
 	}
 
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, tailcfg.PeerCapabilityTsIDP)
@@ -1125,6 +1135,7 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	rt := rands.HexString(32)
 	s.mu.Lock()
 	ar.validTill = now.Add(5 * time.Minute)
+	ar.jti = jti // Store the JWT ID for introspection
 	mak.Set(&s.accessToken, at, ar)
 	// Create a new authRequest for refresh token with longer validity
 	rtAuth := *ar                                   // copy the authRequest
@@ -1230,11 +1241,29 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 		resp["client_id"] = ar.clientID
 		resp["exp"] = ar.validTill.Unix()
 		resp["iat"] = ar.validTill.Add(-5 * time.Minute).Unix() // issued 5 min before expiry
+		resp["nbf"] = ar.validTill.Add(-5 * time.Minute).Unix() // not before time (same as iat)
 		resp["token_type"] = "Bearer"
+
+		// Add issuer claim
+		if ar.localRP {
+			resp["iss"] = s.loopbackURL
+		} else {
+			resp["iss"] = s.serverURL
+		}
+
+		// Add jti if available
+		if ar.jti != "" {
+			resp["jti"] = ar.jti
+		}
 
 		if ar.remoteUser != nil && ar.remoteUser.Node != nil {
 			resp["sub"] = fmt.Sprintf("%d", ar.remoteUser.Node.User)
-			
+
+			// Add username claim (RFC 7662 recommendation)
+			if ar.remoteUser.UserProfile != nil && ar.remoteUser.UserProfile.LoginName != "" {
+				resp["username"] = ar.remoteUser.UserProfile.LoginName
+			}
+
 			// Only include claims based on granted scopes
 			for _, scope := range ar.scopes {
 				switch scope {
@@ -1479,15 +1508,19 @@ type tailscaleClaims struct {
 
 	// PreferredUsername is the local part of Email (without '@' and domain).
 	PreferredUsername string `json:"preferred_username,omitempty"`
-	
+
 	// Picture is the user's profile picture URL.
 	Picture string `json:"picture,omitempty"`
+
+	// AuthorizedParty (azp) is required when the ID token has multiple audiences.
+	// It indicates the party to which the ID token was issued.
+	AuthorizedParty string `json:"azp,omitempty"`
 }
 
 var (
 	openIDSupportedClaims = views.SliceOf([]string{
 		// Standard claims, these correspond to fields in jwt.Claims.
-		"sub", "aud", "exp", "iat", "iss", "jti", "nbf", "preferred_username", "email", "picture",
+		"sub", "aud", "exp", "iat", "iss", "jti", "nbf", "preferred_username", "email", "picture", "azp",
 
 		// Tailscale claims, these correspond to fields in tailscaleClaims.
 		"key", "addresses", "nid", "node", "tailnet", "tags", "user", "uid",

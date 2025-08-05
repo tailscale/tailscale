@@ -769,7 +769,7 @@ func TestTokenExpiration(t *testing.T) {
 		},
 		{
 			name:         "expired access token",
-			tokenAge:     10 * time.Minute, // 10 minutes old (expired)
+			tokenAge:     10 * time.Minute,        // 10 minutes old (expired)
 			expectStatus: http.StatusUnauthorized, // 401 per RFC 6750
 			expectError:  "token expired",
 		},
@@ -1259,6 +1259,7 @@ func TestIntrospectWithResources(t *testing.T) {
 		clientID:  "test-client",
 		resources: []string{"https://api1.example.com", "https://api2.example.com"},
 		scopes:    []string{"openid", "email"}, // Add scopes for testing
+		jti:       "test-jti-12345",            // Add JTI for testing new claim
 		remoteUser: &apitype.WhoIsResponse{
 			Node: &tailcfg.Node{
 				User: 12345,
@@ -1347,6 +1348,115 @@ func TestIntrospectWithResources(t *testing.T) {
 	}
 }
 
+func TestIntrospectionRFC7662Compliance(t *testing.T) {
+	s := &idpServer{
+		serverURL:     "https://idp.test.ts.net",
+		loopbackURL:   "http://localhost:8080",
+		accessToken:   make(map[string]*authRequest),
+		funnelClients: make(map[string]*funnelClient),
+	}
+
+	// Create a token with all fields populated
+	activeToken := "test-token-rfc-compliance"
+	now := time.Now()
+	s.accessToken[activeToken] = &authRequest{
+		validTill: now.Add(10 * time.Minute),
+		funnelRP: &funnelClient{
+			ID:     "test-client",
+			Secret: "test-secret",
+		},
+		clientID:  "test-client",
+		resources: []string{"https://api.example.com"},
+		scopes:    []string{"openid", "profile", "email"},
+		jti:       "unique-jwt-id-12345",
+		remoteUser: &apitype.WhoIsResponse{
+			Node: &tailcfg.Node{
+				User: 12345,
+			},
+			UserProfile: &tailcfg.UserProfile{
+				LoginName:     "user@example.com",
+				DisplayName:   "Test User",
+				ProfilePicURL: "https://example.com/pic.jpg",
+			},
+		},
+	}
+
+	// Set up the funnel client
+	s.funnelClients["test-client"] = &funnelClient{
+		ID:     "test-client",
+		Secret: "test-secret",
+	}
+
+	form := url.Values{}
+	form.Set("token", activeToken)
+	form.Set("client_id", "test-client")
+	form.Set("client_secret", "test-secret")
+
+	req := httptest.NewRequest("POST", "/introspect", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rr := httptest.NewRecorder()
+	s.serveIntrospect(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rr.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	// Check all RFC 7662 required and recommended claims
+	requiredClaims := map[string]bool{
+		"active":             true,
+		"client_id":          true,
+		"exp":                true,
+		"iat":                true,
+		"nbf":                true, // NEW
+		"sub":                true,
+		"aud":                true,
+		"iss":                true, // NEW
+		"jti":                true, // NEW
+		"username":           true, // NEW
+		"token_type":         true,
+		"scope":              true,
+		"email":              true, // from scope
+		"preferred_username": true, // from scope
+		"picture":            true, // from scope
+	}
+
+	for claim, required := range requiredClaims {
+		if _, ok := resp[claim]; !ok && required {
+			t.Errorf("missing required claim: %s", claim)
+		}
+	}
+
+	// Verify specific claim values
+	if username, ok := resp["username"].(string); !ok || username != "user@example.com" {
+		t.Errorf("expected username to be 'user@example.com', got: %v", resp["username"])
+	}
+
+	if iss, ok := resp["iss"].(string); !ok || iss != s.serverURL {
+		t.Errorf("expected iss to be '%s', got: %v", s.serverURL, resp["iss"])
+	}
+
+	if jti, ok := resp["jti"].(string); !ok || jti != "unique-jwt-id-12345" {
+		t.Errorf("expected jti to be 'unique-jwt-id-12345', got: %v", resp["jti"])
+	}
+
+	// Check that nbf is set and equals iat
+	if nbf, ok := resp["nbf"].(float64); ok {
+		if iat, ok := resp["iat"].(float64); ok {
+			if nbf != iat {
+				t.Errorf("expected nbf to equal iat, got nbf=%v, iat=%v", nbf, iat)
+			}
+		}
+	} else {
+		t.Error("nbf claim missing or wrong type")
+	}
+}
+
 func TestRefreshTokenScopePreservation(t *testing.T) {
 	s := &idpServer{
 		serverURL:     "https://idp.test.ts.net",
@@ -1427,6 +1537,144 @@ func TestRefreshTokenScopePreservation(t *testing.T) {
 		}
 	} else {
 		t.Error("new refresh token not found in server state")
+	}
+}
+
+func TestAZPClaimWithMultipleAudiences(t *testing.T) {
+	tests := []struct {
+		name              string
+		resources         []string
+		expectAZP         bool
+		expectedAudiences int
+	}{
+		{
+			name:              "single audience - no azp",
+			resources:         []string{},
+			expectAZP:         false,
+			expectedAudiences: 1, // just client_id
+		},
+		{
+			name:              "multiple audiences - azp required",
+			resources:         []string{"https://api1.example.com", "https://api2.example.com"},
+			expectAZP:         true,
+			expectedAudiences: 3, // client_id + 2 resources
+		},
+		{
+			name:              "single resource - azp required",
+			resources:         []string{"https://api.example.com"},
+			expectAZP:         true,
+			expectedAudiences: 2, // client_id + 1 resource
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &idpServer{
+				serverURL:     "https://idp.test.ts.net",
+				code:          make(map[string]*authRequest),
+				accessToken:   make(map[string]*authRequest),
+				refreshToken:  make(map[string]*authRequest),
+				funnelClients: make(map[string]*funnelClient),
+			}
+
+			// Set up funnel client
+			s.funnelClients["test-client"] = &funnelClient{
+				ID:           "test-client",
+				Secret:       "test-secret",
+				RedirectURIs: []string{"https://example.com/callback"},
+			}
+
+			// Create auth request
+			code := "test-code"
+			ar := &authRequest{
+				funnelRP:    s.funnelClients["test-client"],
+				clientID:    "test-client",
+				redirectURI: "https://example.com/callback",
+				resources:   tt.resources,
+				scopes:      []string{"openid"},
+				remoteUser: &apitype.WhoIsResponse{
+					Node: &tailcfg.Node{
+						ID:   1,
+						Name: "node1.example.ts.net",
+						User: tailcfg.UserID(1),
+					},
+					UserProfile: &tailcfg.UserProfile{
+						LoginName: "user@example.com",
+					},
+				},
+				validTill: time.Now().Add(5 * time.Minute),
+			}
+			s.code[code] = ar
+
+			// Exchange code for token
+			form := url.Values{
+				"grant_type":    {"authorization_code"},
+				"code":          {code},
+				"redirect_uri":  {"https://example.com/callback"},
+				"client_id":     {"test-client"},
+				"client_secret": {"test-secret"},
+			}
+
+			req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			rr := httptest.NewRecorder()
+			s.serveToken(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d: %s", rr.Code, rr.Body.String())
+			}
+
+			var tokenResp oidcTokenResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &tokenResp); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
+
+			// Parse the ID token
+			token, err := jwt.ParseSigned(tokenResp.IDToken)
+			if err != nil {
+				t.Fatalf("failed to parse JWT: %v", err)
+			}
+
+			var claims map[string]interface{}
+			if err := token.UnsafeClaimsWithoutVerification(&claims); err != nil {
+				t.Fatalf("failed to get claims: %v", err)
+			}
+
+			// Check audience
+			aud, ok := claims["aud"]
+			if !ok {
+				t.Fatal("aud claim not found")
+			}
+
+			// The JWT library always serializes audience as an array
+			audArray, isArray := aud.([]interface{})
+			if !isArray {
+				t.Errorf("expected audience to be array, got %T", aud)
+			}
+
+			if len(audArray) != tt.expectedAudiences {
+				t.Errorf("expected %d audiences, got %d", tt.expectedAudiences, len(audArray))
+			}
+
+			// Check azp claim
+			azp, hasAZP := claims["azp"]
+			if tt.expectAZP && !hasAZP {
+				t.Error("expected azp claim for multiple audiences, but not found")
+			}
+			if !tt.expectAZP && hasAZP {
+				t.Error("unexpected azp claim for single audience")
+			}
+			if hasAZP {
+				azpStr, ok := azp.(string)
+				if !ok {
+					t.Errorf("azp claim should be string, got %T", azp)
+				}
+				if azpStr != "test-client" {
+					t.Errorf("expected azp to be 'test-client', got %s", azpStr)
+				}
+			}
+		})
 	}
 }
 
@@ -1917,4 +2165,3 @@ func TestScopeHandling(t *testing.T) {
 		})
 	}
 }
-
