@@ -7,9 +7,17 @@
 package main
 
 import (
+	"flag"
+
+	"tailscale.com/client/local"
 	"tailscale.com/client/systray"
+	"tailscale.com/paths"
 )
 
+var socket = flag.String("socket", paths.DefaultTailscaledSocket(), "path to tailscaled socket")
+
 func main() {
-	new(systray.Menu).Run()
+	flag.Parse()
+	lc := &local.Client{Socket: *socket}
+	new(systray.Menu).Run(lc)
 }
