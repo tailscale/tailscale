@@ -274,11 +274,9 @@ type Conn struct {
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
 	// hasPeerRelayServers is whether [relayManager] is configured with at least
-	// one peer relay server via [relayManager.handleRelayServersSet]. It is
-	// only accessed by [Conn.updateRelayServersSet], [endpoint.setDERPHome],
-	// and [endpoint.discoverUDPRelayPathsLocked]. It exists to suppress
-	// calls into [relayManager] leading to wasted work involving channel
-	// operations and goroutine creation.
+	// one peer relay server via [relayManager.handleRelayServersSet]. It exists
+	// to suppress calls into [relayManager] leading to wasted work involving
+	// channel operations and goroutine creation.
 	hasPeerRelayServers atomic.Bool
 
 	// discoPrivate is the private naclbox key used for active
@@ -2998,6 +2996,7 @@ func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
 	if peersChanged || relayClientChanged {
 		if !relayClientEnabled {
 			c.relayManager.handleRelayServersSet(nil)
+			c.hasPeerRelayServers.Store(false)
 		} else {
 			c.updateRelayServersSet(filt, self, peers)
 		}
