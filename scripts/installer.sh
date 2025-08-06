@@ -408,7 +408,8 @@ main() {
 		freebsd)
 			if [ "$VERSION" != "12" ] && \
 			   [ "$VERSION" != "13" ] && \
-			   [ "$VERSION" != "14" ]
+			   [ "$VERSION" != "14" ] && \
+			   [ "$VERSION" != "15" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
