@@ -12,6 +12,8 @@ package taildrop
 import (
 	"errors"
 	"hash/adler32"
+	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
@@ -69,6 +72,11 @@ type managerOptions struct {
 	Clock tstime.DefaultClock // may be nil
 	State ipn.StateStore      // may be nil
 
+	// Dir is the directory to store received files.
+	// This main either be the final location for the files
+	// or just a temporary staging directory (see DirectFileMode).
+	Dir string
+
 	// DirectFileMode reports whether we are writing files
 	// directly to a download directory, rather than writing them to
 	// a temporary staging directory.
@@ -83,10 +91,9 @@ type managerOptions struct {
 	// copy them out, and then delete them.
 	DirectFileMode bool
 
-	// FileOps abstracts platform-specific file operations needed for file transfers.
-	// Android's implementation uses the Storage Access Framework, and other platforms
-	// use fsFileOps.
-	fileOps FileOps
+	FileOps FileOps
+
+	Mode PutMode
 
 	// SendFileNotify is called periodically while a file is actively
 	// receiving the contents for the file. There is a final call
@@ -103,6 +110,9 @@ type manager struct {
 	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
 	// deleter managers asynchronous deletion of files.
 	deleter fileDeleter
+
+	// renameMu is used to protect os.Rename calls so that they are atomic.
+	renameMu sync.Mutex
 
 	// totalReceived counts the cumulative total of received files.
 	totalReceived atomic.Int64
@@ -125,6 +135,11 @@ func (opts managerOptions) New() *manager {
 	m.deleter.Init(m, func(string) {})
 	m.emptySince.Store(-1) // invalidate this cache
 	return m
+}
+
+// Dir returns the directory.
+func (m *manager) Dir() string {
+	return m.opts.Dir
 }
 
 // Shutdown shuts down the Manager.
@@ -157,29 +172,57 @@ func isPartialOrDeleted(s string) bool {
 	return strings.HasSuffix(s, deletedSuffix) || strings.HasSuffix(s, partialSuffix)
 }
 
-func validateBaseName(name string) error {
-	if !utf8.ValidString(name) ||
-		strings.TrimSpace(name) != name ||
-		len(name) > 255 {
-		return ErrInvalidFileName
+func joinDir(dir, baseName string) (fullPath string, err error) {
+	if !utf8.ValidString(baseName) {
+		return "", ErrInvalidFileName
+	}
+	if strings.TrimSpace(baseName) != baseName {
+		return "", ErrInvalidFileName
+	}
+	if len(baseName) > 255 {
+		return "", ErrInvalidFileName
 	}
 	// TODO: validate unicode normalization form too? Varies by platform.
-	clean := path.Clean(name)
-	if clean != name || clean == "." || clean == ".." {
-		return ErrInvalidFileName
+	clean := path.Clean(baseName)
+	if clean != baseName ||
+		clean == "." || clean == ".." ||
+		isPartialOrDeleted(clean) {
+		return "", ErrInvalidFileName
 	}
-	if isPartialOrDeleted(name) {
-		return ErrInvalidFileName
-	}
-	for _, r := range name {
+	for _, r := range baseName {
 		if !validFilenameRune(r) {
-			return ErrInvalidFileName
+			return "", ErrInvalidFileName
 		}
 	}
-	if !filepath.IsLocal(name) {
-		return ErrInvalidFileName
+	if !filepath.IsLocal(baseName) {
+		return "", ErrInvalidFileName
 	}
-	return nil
+	return filepath.Join(dir, baseName), nil
+}
+
+// rangeDir iterates over the contents of a directory, calling fn for each entry.
+// It continues iterating while fn returns true.
+// It reports the number of entries seen.
+func rangeDir(dir string, fn func(fs.DirEntry) bool) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for {
+		des, err := f.ReadDir(10)
+		for _, de := range des {
+			if !fn(de) {
+				return nil
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
 }
 
 // IncomingFiles returns a list of active incoming files.

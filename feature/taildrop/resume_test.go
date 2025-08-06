@@ -8,7 +8,6 @@ import (
 	"io"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"testing"
 	"testing/iotest"
 
@@ -20,9 +19,7 @@ func TestResume(t *testing.T) {
 	defer func() { blockSize = oldBlockSize }()
 	blockSize = 256
 
-	dir := t.TempDir()
-
-	m := managerOptions{Logf: t.Logf, fileOps: must.Get(newFileOps(dir))}.New()
+	m := managerOptions{Logf: t.Logf, Dir: t.TempDir()}.New()
 	defer m.Shutdown()
 
 	rn := rand.New(rand.NewSource(0))
@@ -40,7 +37,7 @@ func TestResume(t *testing.T) {
 		must.Do(close()) // Windows wants the file handle to be closed to rename it.
 
 		must.Get(m.PutFile("", "foo", r, offset, -1))
-		got := must.Get(os.ReadFile(filepath.Join(dir, "foo")))
+		got := must.Get(os.ReadFile(must.Get(joinDir(m.opts.Dir, "foo"))))
 		if !bytes.Equal(got, want) {
 			t.Errorf("content mismatches")
 		}
@@ -69,7 +66,7 @@ func TestResume(t *testing.T) {
 				t.Fatalf("too many iterations to complete the test")
 			}
 		}
-		got := must.Get(os.ReadFile(filepath.Join(dir, "bar")))
+		got := must.Get(os.ReadFile(must.Get(joinDir(m.opts.Dir, "bar"))))
 		if !bytes.Equal(got, want) {
 			t.Errorf("content mismatches")
 		}
