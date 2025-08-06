@@ -4096,3 +4096,75 @@ func Test_lazyEndpoint_InitiationMessagePublicKey(t *testing.T) {
 		})
 	}
 }
+
+func Test_lazyEndpoint_FromPeer(t *testing.T) {
+	tests := []struct {
+		name                string
+		callWithPeerMapKey  bool
+		maybeEPMatchingKey  bool
+		wantEpAddrInPeerMap bool
+	}{
+		{
+			name:                "epAddr in peerMap",
+			callWithPeerMapKey:  true,
+			maybeEPMatchingKey:  false,
+			wantEpAddrInPeerMap: true,
+		},
+		{
+			name:                "maybeEP early return",
+			callWithPeerMapKey:  true,
+			maybeEPMatchingKey:  true,
+			wantEpAddrInPeerMap: false,
+		},
+		{
+			name:                "not in peerMap early return",
+			callWithPeerMapKey:  false,
+			maybeEPMatchingKey:  false,
+			wantEpAddrInPeerMap: false,
+		},
+		{
+			name:                "not in peerMap maybeEP early return",
+			callWithPeerMapKey:  false,
+			maybeEPMatchingKey:  true,
+			wantEpAddrInPeerMap: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := &endpoint{
+				nodeID:    1,
+				publicKey: key.NewNode().Public(),
+			}
+			ep.disco.Store(&endpointDisco{
+				key: key.NewDisco().Public(),
+			})
+			conn := newConn(t.Logf)
+			ep.c = conn
+
+			var pubKey [32]byte
+			if tt.callWithPeerMapKey {
+				copy(pubKey[:], ep.publicKey.AppendTo(nil))
+			}
+			conn.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+
+			le := &lazyEndpoint{
+				c:   conn,
+				src: epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777")},
+			}
+			if tt.maybeEPMatchingKey {
+				le.maybeEP = ep
+			}
+			le.FromPeer(pubKey)
+			if tt.wantEpAddrInPeerMap {
+				gotEP, ok := conn.peerMap.endpointForEpAddr(le.src)
+				if !ok {
+					t.Errorf("lazyEndpoint epAddr not found in peerMap")
+				} else if gotEP != ep {
+					t.Errorf("gotEP: %p != ep: %p", gotEP, ep)
+				}
+			} else if len(conn.peerMap.byEpAddr) != 0 {
+				t.Errorf("unexpected epAddr in peerMap")
+			}
+		})
+	}
+}
