@@ -2982,6 +2982,10 @@ func (c *Conn) onNodeViewsUpdate(update NodeViewsUpdate) {
 	peersChanged := c.updateNodes(update)
 
 	relayClientEnabled := update.SelfNode.Valid() &&
+		// Peer Relay depends on CryptoRouting in [Conn.receiveIP]. If
+		// CryptoRouting is disabled, then Peer Relay MUST also be disabled to
+		// avoid traffic blackholes. See http://go/corp/31083.
+		!update.SelfNode.HasCap(tailcfg.NodeAttrDisableMagicSockCryptoRouting) &&
 		!update.SelfNode.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
 		!update.SelfNode.HasCap(tailcfg.NodeAttrOnlyTCP443)
 

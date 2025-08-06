@@ -3625,6 +3625,10 @@ func TestConn_onNodeViewsUpdate_updateRelayServersSet(t *testing.T) {
 	selfNodeNodeAttrOnlyTCP443.CapMap = make(tailcfg.NodeCapMap)
 	selfNodeNodeAttrOnlyTCP443.CapMap[tailcfg.NodeAttrOnlyTCP443] = nil
 
+	selfNodeNodeAttrDisableMagicSockCryptoRouting := selfNode.Clone()
+	selfNodeNodeAttrDisableMagicSockCryptoRouting.CapMap = make(tailcfg.NodeCapMap)
+	selfNodeNodeAttrDisableMagicSockCryptoRouting.CapMap[tailcfg.NodeAttrDisableMagicSockCryptoRouting] = nil
+
 	tests := []struct {
 		name                   string
 		filt                   *filter.Filter
@@ -3689,6 +3693,24 @@ func TestConn_onNodeViewsUpdate_updateRelayServersSet(t *testing.T) {
 				},
 			}, nil, nil, nil, nil, nil),
 			self:                   selfNodeNodeAttrOnlyTCP443.View(),
+			peers:                  []tailcfg.NodeView{peerNodeCandidateRelay.View()},
+			wantRelayServers:       make(set.Set[candidatePeerRelay]),
+			wantRelayClientEnabled: false,
+		},
+		{
+			name: "no candidate relay server because self has tailcfg.NodeAttrDisableMagicSockCryptoRouting",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: peerNodeCandidateRelay.Addresses,
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: selfNodeNodeAttrDisableMagicSockCryptoRouting.Addresses[0],
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			self:                   selfNodeNodeAttrDisableMagicSockCryptoRouting.View(),
 			peers:                  []tailcfg.NodeView{peerNodeCandidateRelay.View()},
 			wantRelayServers:       make(set.Set[candidatePeerRelay]),
 			wantRelayClientEnabled: false,
