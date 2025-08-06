@@ -157,13 +157,18 @@ func (sl StreamLayer) Accept() (net.Conn, error) {
 	}
 }
 
+type BootstrapOpts struct {
+	Tag        string
+	FollowOnly bool
+}
+
 // Start returns a pointer to a running Consensus instance.
 // Calling it with a *tsnet.Server will cause that server to join or start a consensus cluster
 // with other nodes on the tailnet tagged with the clusterTag. The *tsnet.Server will run the state
 // machine defined by the raft.FSM also provided, and keep it in sync with the other cluster members'
 // state machines using Raft.
-func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag string, cfg Config) (*Consensus, error) {
-	if clusterTag == "" {
+func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, bootstrapOpts BootstrapOpts, cfg Config) (*Consensus, error) {
+	if bootstrapOpts.Tag == "" {
 		return nil, errors.New("cluster tag must be provided")
 	}
 
@@ -185,7 +190,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 		shutdownCtxCancel: shutdownCtxCancel,
 	}
 
-	auth := newAuthorization(ts, clusterTag)
+	auth := newAuthorization(ts, bootstrapOpts.Tag)
 	err := auth.Refresh(shutdownCtx)
 	if err != nil {
 		return nil, fmt.Errorf("auth refresh: %w", err)
@@ -211,7 +216,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 
 	// we may already be in a consensus (see comment above before startRaft) but we're going to
 	// try to bootstrap anyway in case this is a fresh start.
-	err = c.bootstrap(auth.AllowedPeers())
+	err = c.bootstrap(shutdownCtx, auth, bootstrapOpts)
 	if err != nil {
 		if errors.Is(err, raft.ErrCantBootstrap) {
 			// Raft cluster state can be persisted, if we try to call raft.BootstrapCluster when
@@ -303,14 +308,59 @@ type Consensus struct {
 	shutdownCtxCancel context.CancelFunc
 }
 
+func (c *Consensus) bootstrapTryToJoinAnyTarget(targets views.Slice[*ipnstate.PeerStatus]) bool {
+	log.Printf("Bootstrap: Trying to find cluster: num targets to try: %d", targets.Len())
+	for _, p := range targets.All() {
+		if !p.Online {
+			log.Printf("Bootstrap: Trying to find cluster: tailscale reports not online: %s", p.TailscaleIPs[0])
+			continue
+		}
+		log.Printf("Bootstrap: Trying to find cluster: trying %s", p.TailscaleIPs[0])
+		err := c.commandClient.join(p.TailscaleIPs[0].String(), joinRequest{
+			RemoteHost: c.self.hostAddr.String(),
+			RemoteID:   c.self.id,
+		})
+		if err != nil {
+			log.Printf("Bootstrap: Trying to find cluster: could not join %s: %v", p.TailscaleIPs[0], err)
+			continue
+		}
+		log.Printf("Bootstrap: Trying to find cluster: joined %s", p.TailscaleIPs[0])
+		return true
+	}
+	return false
+}
+
+func (c *Consensus) retryFollow(ctx context.Context, auth *authorization) bool {
+	waitFor := 500 * time.Millisecond
+	nRetries := 10
+	attemptCount := 1
+	for true {
+		log.Printf("Bootstrap: trying to follow any cluster member: attempt %v", attemptCount)
+		joined := c.bootstrapTryToJoinAnyTarget(auth.AllowedPeers())
+		if joined || attemptCount == nRetries {
+			return joined
+		}
+		log.Printf("Bootstrap: Failed to follow. Retrying in %v", waitFor)
+		time.Sleep(waitFor)
+		waitFor *= 2
+		attemptCount++
+		auth.Refresh(ctx)
+	}
+	return false
+}
+
 // bootstrap tries to join a raft cluster, or start one.
 //
 // We need to do the very first raft cluster configuration, but after that raft manages it.
 // bootstrap is called at start up, and we may not currently be aware of what the cluster config might be,
 // our node may already be in it. Try to join the raft cluster of all the other nodes we know about, and
-// if unsuccessful, assume we are the first and try to start our own.
+// if unsuccessful, assume we are the first and try to start our own. If the FollowOnly option is set, only try
+// to join, never start our own.
 //
-// It's possible for bootstrap to return an error, or start a errant breakaway cluster.
+// It's possible for bootstrap to start an errant breakaway cluster if for example all nodes are having a fresh
+// start, they're racing bootstrap and multiple nodes were unable to join a peer and so start their own new cluster.
+// To avoid this operators should either ensure bootstrap is called for a single node first and allow it to become
+// leader before starting the other nodes. Or start all but one node with the FollowOnly option.
 //
 // We have a list of expected cluster members already from control (the members of the tailnet with the tag)
 // so we could do the initial configuration with all servers specified.
@@ -318,27 +368,20 @@ type Consensus struct {
 //   - We want to handle machines joining after start anyway.
 //   - Not all tagged nodes tailscale believes are active are necessarily actually responsive right now,
 //     so let each node opt in when able.
-func (c *Consensus) bootstrap(targets views.Slice[*ipnstate.PeerStatus]) error {
-	log.Printf("Trying to find cluster: num targets to try: %d", targets.Len())
-	for _, p := range targets.All() {
-		if !p.Online {
-			log.Printf("Trying to find cluster: tailscale reports not online: %s", p.TailscaleIPs[0])
-			continue
+func (c *Consensus) bootstrap(ctx context.Context, auth *authorization, opts BootstrapOpts) error {
+	if opts.FollowOnly {
+		joined := c.retryFollow(ctx, auth)
+		if !joined {
+			return errors.New("unable to join cluster")
 		}
-		log.Printf("Trying to find cluster: trying %s", p.TailscaleIPs[0])
-		err := c.commandClient.join(p.TailscaleIPs[0].String(), joinRequest{
-			RemoteHost: c.self.hostAddr.String(),
-			RemoteID:   c.self.id,
-		})
-		if err != nil {
-			log.Printf("Trying to find cluster: could not join %s: %v", p.TailscaleIPs[0], err)
-			continue
-		}
-		log.Printf("Trying to find cluster: joined %s", p.TailscaleIPs[0])
 		return nil
 	}
 
-	log.Printf("Trying to find cluster: unsuccessful, starting as leader: %s", c.self.hostAddr.String())
+	joined := c.bootstrapTryToJoinAnyTarget(auth.AllowedPeers())
+	if joined {
+		return nil
+	}
+	log.Printf("Bootstrap: Trying to find cluster: unsuccessful, starting as leader: %s", c.self.hostAddr.String())
 	f := c.raft.BootstrapCluster(
 		raft.Configuration{
 			Servers: []raft.Server{
