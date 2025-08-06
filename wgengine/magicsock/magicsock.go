@@ -1823,6 +1823,9 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		return nil, 0, false, false
 	}
 
+	// geneveInclusivePacketLen holds the packet length prior to any potential
+	// Geneve header stripping.
+	geneveInclusivePacketLen := len(b)
 	if src.vni.isSet() {
 		// Strip away the Geneve header before returning the packet to
 		// wireguard-go.
@@ -1831,6 +1834,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		//  to support returning start offset in order to get rid of this memmove perf
 		//  penalty.
 		size = copy(b, b[packet.GeneveFixedHeaderLength:])
+		b = b[:size]
 	}
 
 	if cache.epAddr == src && cache.de != nil && cache.gen == cache.de.numStopAndReset() {
@@ -1859,7 +1863,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	connNoted := ep.noteRecvActivity(src, now)
 	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, len(b))
+		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, geneveInclusivePacketLen)
 	}
 	if src.vni.isSet() && (connNoted || looksLikeInitiationMsg(b)) {
 		// connNoted is periodic, but we also want to verify if the peer is who
