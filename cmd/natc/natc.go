@@ -50,18 +50,19 @@ func main() {
 	// Parse flags
 	fs := flag.NewFlagSet("natc", flag.ExitOnError)
 	var (
-		debugPort       = fs.Int("debug-port", 8893, "Listening port for debug/metrics endpoint")
-		hostname        = fs.String("hostname", "", "Hostname to register the service under")
-		siteID          = fs.Uint("site-id", 1, "an integer site ID to use for the ULA prefix which allows for multiple proxies to act in a HA configuration")
-		v4PfxStr        = fs.String("v4-pfx", "100.64.1.0/24", "comma-separated list of IPv4 prefixes to advertise")
-		dnsServers      = fs.String("dns-servers", "", "comma separated list of upstream DNS to use, including host and port (use system if empty)")
-		verboseTSNet    = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
-		printULA        = fs.Bool("print-ula", false, "print the ULA prefix and exit")
-		ignoreDstPfxStr = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
-		wgPort          = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
-		clusterTag      = fs.String("cluster-tag", "", "optionally run in a consensus cluster with other nodes with this tag")
-		server          = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
-		stateDir        = fs.String("state-dir", "", "path to directory in which to store app state")
+		debugPort         = fs.Int("debug-port", 8893, "Listening port for debug/metrics endpoint")
+		hostname          = fs.String("hostname", "", "Hostname to register the service under")
+		siteID            = fs.Uint("site-id", 1, "an integer site ID to use for the ULA prefix which allows for multiple proxies to act in a HA configuration")
+		v4PfxStr          = fs.String("v4-pfx", "100.64.1.0/24", "comma-separated list of IPv4 prefixes to advertise")
+		dnsServers        = fs.String("dns-servers", "", "comma separated list of upstream DNS to use, including host and port (use system if empty)")
+		verboseTSNet      = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
+		printULA          = fs.Bool("print-ula", false, "print the ULA prefix and exit")
+		ignoreDstPfxStr   = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
+		wgPort            = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
+		clusterTag        = fs.String("cluster-tag", "", "optionally run in a consensus cluster with other nodes with this tag")
+		server            = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
+		stateDir          = fs.String("state-dir", "", "path to directory in which to store app state")
+		clusterFollowOnly = fs.Bool("follow-only", false, "Try to find a leader with the cluster tag or exit.")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -163,7 +164,11 @@ func main() {
 		if err != nil {
 			log.Fatalf("Creating cluster state dir failed: %v", err)
 		}
-		err = cipp.StartConsensus(ctx, ts, *clusterTag, clusterStateDir)
+		err = cipp.StartConsensus(ctx, ts, ippool.ClusterOpts{
+			Tag:        *clusterTag,
+			StateDir:   clusterStateDir,
+			FollowOnly: *clusterFollowOnly,
+		})
 		if err != nil {
 			log.Fatalf("StartConsensus: %v", err)
 		}
