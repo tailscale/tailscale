@@ -69,6 +69,7 @@ var (
 	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available on the public internet")
 	flagHostname           = flag.String("hostname", "idp", "tsnet hostname to use instead of idp")
 	flagDir                = flag.String("dir", "", "tsnet state directory; a default one will be created if not provided")
+	flagEnableSTS          = flag.Bool("enable-sts", false, "enable OIDC STS token exchange support")
 )
 
 func main() {
@@ -158,6 +159,7 @@ func main() {
 		lc:          lc,
 		funnel:      *flagFunnel,
 		localTSMode: *flagUseLocalTailscaled,
+		enableSTS:   *flagEnableSTS,
 	}
 	if *flagPort != 443 {
 		srv.serverURL = fmt.Sprintf("https://%s:%d", strings.TrimSuffix(st.Self.DNSName, "."), *flagPort)
@@ -307,6 +309,7 @@ type idpServer struct {
 	serverURL   string // "https://foo.bar.ts.net"
 	funnel      bool
 	localTSMode bool
+	enableSTS   bool
 
 	lazyMux        lazy.SyncValue[*http.ServeMux]
 	lazySigningKey lazy.SyncValue[*signingKey]
@@ -372,6 +375,23 @@ type authRequest struct {
 	// jti is the unique identifier for the JWT token (JWT ID).
 	// This is used for token introspection to return the jti claim.
 	jti string
+
+	// Token exchange specific fields (RFC 8693)
+	isExchangedToken bool     // Indicates if this token was created via exchange
+	originalClientID string   // The client that originally authenticated the user
+	exchangedBy      string   // The client that performed the exchange
+	audiences        []string // All intended audiences for the token
+
+	// Delegation support (RFC 8693 act claim)
+	actorInfo *actorClaim // For delegation scenarios
+}
+
+// actorClaim represents the 'act' claim structure defined in RFC 8693 Section 4.1
+// for delegation scenarios in token exchange.
+type actorClaim struct {
+	Subject  string      `json:"sub"`
+	ClientID string      `json:"client_id,omitempty"`
+	Actor    *actorClaim `json:"act,omitempty"` // Nested for delegation chains
 }
 
 // validateScopes checks if the requested scopes are valid and supported.
@@ -910,8 +930,282 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		s.handleAuthorizationCodeGrant(w, r)
 	case "refresh_token":
 		s.handleRefreshTokenGrant(w, r)
+	case "urn:ietf:params:oauth:grant-type:token-exchange":
+		if !s.enableSTS {
+			writeTokenEndpointError(w, http.StatusBadRequest, "unsupported_grant_type", "token exchange not enabled")
+			return
+		}
+		s.serveTokenExchange(w, r)
 	default:
 		writeTokenEndpointError(w, http.StatusBadRequest, "unsupported_grant_type", "")
+	}
+}
+
+// identifyClient identifies the client making the request.
+// It returns a unique identifier for the client or empty string if unauthorized.
+func (s *idpServer) identifyClient(r *http.Request) string {
+	// Check funnel client with Basic Auth
+	if clientID, clientSecret, ok := r.BasicAuth(); ok {
+		s.mu.Lock()
+		client, ok := s.funnelClients[clientID]
+		s.mu.Unlock()
+		if ok {
+			if subtle.ConstantTimeCompare([]byte(client.Secret), []byte(clientSecret)) == 1 {
+				return clientID
+			}
+		}
+	}
+
+	// Check funnel client with form parameters
+	clientID := r.FormValue("client_id")
+	clientSecret := r.FormValue("client_secret")
+	if clientID != "" && clientSecret != "" {
+		s.mu.Lock()
+		client, ok := s.funnelClients[clientID]
+		s.mu.Unlock()
+		if ok {
+			if subtle.ConstantTimeCompare([]byte(client.Secret), []byte(clientSecret)) == 1 {
+				return clientID
+			}
+		}
+	}
+
+	// Check local client
+	ra, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err == nil && ra.Addr().IsLoopback() {
+		return "local:" + ra.Addr().String()
+	}
+
+	// Check node client
+	if s.lc != nil {
+		who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+		if err == nil {
+			return fmt.Sprintf("node:%d", who.Node.ID)
+		}
+	}
+
+	return ""
+}
+
+// serveTokenExchange implements the OIDC STS token exchange flow per RFC 8693.
+// It validates the subject token and checks ACL grants to determine if the user
+// is allowed to exchange tokens for the requested audience.
+//
+// ACL grants are checked using the capability key "test-tailscale.com/idp/sts/openly-allow"
+// with the following format:
+//
+//	{
+//	  "src": ["tag:mcp"],
+//	  "dst": ["tag:idp"],
+//	  "app": {
+//	    "test-tailscale.com/idp/sts/openly-allow": [
+//	      {
+//	        "users": ["*"],
+//	        "resources": ["https://userz.corp.ts.net/"],
+//	      },
+//	    ],
+//	  }
+//	}
+//
+// The "users" field supports wildcards ("*") or specific user login names.
+// The "resources" field specifies the audience/resource URIs that tokens can be exchanged for.
+func (s *idpServer) serveTokenExchange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse form data
+	if err := r.ParseForm(); err != nil {
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "failed to parse form")
+		return
+	}
+
+	// Validate required parameters
+	subjectToken := r.FormValue("subject_token")
+	if subjectToken == "" {
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "subject_token is required")
+		return
+	}
+
+	subjectTokenType := r.FormValue("subject_token_type")
+	if subjectTokenType != "urn:ietf:params:oauth:token-type:access_token" {
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "unsupported subject_token_type")
+		return
+	}
+
+	requestedTokenType := r.FormValue("requested_token_type")
+	if requestedTokenType != "" && requestedTokenType != "urn:ietf:params:oauth:token-type:access_token" {
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "unsupported requested_token_type")
+		return
+	}
+
+	// Parse multiple audience parameters (RFC 8693 allows multiple)
+	audiences := r.Form["audience"]
+	if len(audiences) == 0 {
+		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "audience is required")
+		return
+	}
+
+	// Identify the client performing the exchange
+	exchangingClientID := s.identifyClient(r)
+	if exchangingClientID == "" {
+		writeTokenEndpointError(w, http.StatusUnauthorized, "invalid_client", "invalid client credentials")
+		return
+	}
+
+	// Get the funnel client if this is a funnel client
+	var exchangingFunnelClient *funnelClient
+	s.mu.Lock()
+	if client, ok := s.funnelClients[exchangingClientID]; ok {
+		exchangingFunnelClient = client
+	}
+	s.mu.Unlock()
+
+	// Validate subject token
+	s.mu.Lock()
+	ar, ok := s.accessToken[subjectToken]
+	s.mu.Unlock()
+	if !ok {
+		writeTokenEndpointError(w, http.StatusUnauthorized, "invalid_grant", "invalid subject token")
+		return
+	}
+
+	if ar.validTill.Before(time.Now()) {
+		writeTokenEndpointError(w, http.StatusUnauthorized, "invalid_grant", "subject token expired")
+		return
+	}
+
+	// Check ACL grant for STS token exchange
+	who := ar.remoteUser
+	rules, err := tailcfg.UnmarshalCapJSON[stsCapRule](who.CapMap, "test-tailscale.com/idp/sts/openly-allow")
+	if err != nil {
+		log.Printf("tsidp: failed to unmarshal STS capability: %v", err)
+		writeTokenEndpointError(w, http.StatusForbidden, "access_denied", "access denied")
+		return
+	}
+
+	// Check if user is allowed to exchange tokens for the requested audiences
+	allowedAudiences := []string{}
+	for _, audience := range audiences {
+		allowed := false
+		for _, rule := range rules {
+			// Check if user matches (support wildcard or specific user)
+			userMatches := false
+			for _, user := range rule.Users {
+				if user == "*" || user == who.UserProfile.LoginName {
+					userMatches = true
+					break
+				}
+			}
+
+			if userMatches {
+				// Check if audience/resource matches
+				for _, resource := range rule.Resources {
+					if resource == audience || resource == "*" {
+						allowed = true
+						break
+					}
+				}
+			}
+
+			if allowed {
+				break
+			}
+		}
+		if allowed {
+			allowedAudiences = append(allowedAudiences, audience)
+		}
+	}
+
+	if len(allowedAudiences) == 0 {
+		writeTokenEndpointError(w, http.StatusForbidden, "access_denied", "access denied for requested audience")
+		return
+	}
+
+	// Handle actor token for delegation (RFC 8693 Section 4.1)
+	var actorInfo *actorClaim
+	if actorTokenParam := r.FormValue("actor_token"); actorTokenParam != "" {
+		actorTokenType := r.FormValue("actor_token_type")
+		if actorTokenType != "" && actorTokenType != "urn:ietf:params:oauth:token-type:access_token" {
+			writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "unsupported actor_token_type")
+			return
+		}
+
+		// Validate and add actor information
+		s.mu.Lock()
+		actorAR, ok := s.accessToken[actorTokenParam]
+		s.mu.Unlock()
+		if !ok || actorAR.validTill.Before(time.Now()) {
+			writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "invalid or expired actor_token")
+			return
+		}
+
+		actorInfo = &actorClaim{
+			Subject:  actorAR.remoteUser.Node.User.String(),
+			ClientID: actorAR.clientID,
+			// Check if actor token itself has an actor (delegation chain)
+			Actor: actorAR.actorInfo,
+		}
+	}
+
+	// Generate new access token
+	newAccessToken := rands.HexString(32)
+
+	// Create new auth request with proper metadata for exchanged token
+	newAR := &authRequest{
+		clientID:         exchangingClientID,
+		isExchangedToken: true,
+		originalClientID: ar.clientID,
+		exchangedBy:      exchangingClientID,
+		audiences:        allowedAudiences,
+		validTill:        time.Now().Add(5 * time.Minute),
+		remoteUser:       who,
+		resources:        allowedAudiences, // RFC 8707 resource indicators
+		scopes:           ar.scopes,        // Preserve original scopes
+		actorInfo:        actorInfo,
+
+		// Preserve original RP context
+		localRP:  ar.localRP,
+		rpNodeID: ar.rpNodeID,
+		funnelRP: ar.funnelRP, // Keep original funnel client if it exists
+	}
+
+	// If the exchanger is a funnel client, also track it
+	if exchangingFunnelClient != nil && ar.funnelRP == nil {
+		newAR.funnelRP = exchangingFunnelClient
+	}
+
+	// Set redirect URI if available
+	if exchangingFunnelClient != nil && len(exchangingFunnelClient.RedirectURIs) > 0 {
+		newAR.redirectURI = exchangingFunnelClient.RedirectURIs[0]
+	} else if ar.redirectURI != "" {
+		newAR.redirectURI = ar.redirectURI
+	}
+
+	s.mu.Lock()
+	mak.Set(&s.accessToken, newAccessToken, newAR)
+	s.mu.Unlock()
+
+	// Return RFC 8693 compliant response
+	w.Header().Set("Content-Type", "application/json")
+	response := map[string]interface{}{
+		"access_token":      newAccessToken,
+		"issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+		"token_type":        "Bearer",
+		"expires_in":        300, // 5 minutes
+	}
+
+	// Only include scope if different from requested (RFC 8693)
+	if requestedScope := r.FormValue("scope"); requestedScope != "" {
+		actualScope := strings.Join(newAR.scopes, " ")
+		if actualScope != requestedScope {
+			response["scope"] = actualScope
+		}
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		writeTokenEndpointError(w, http.StatusInternalServerError, "server_error", "internal server error")
 	}
 }
 
@@ -1061,11 +1355,29 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 	now := time.Now()
 	_, tcd, _ := strings.Cut(n.Name(), ".")
 
-	// RFC 8707: Include resources in the audience claim
-	audience := jwt.Audience{ar.clientID}
-	if len(ar.resources) > 0 {
-		// Add resources to the audience list
-		audience = append(audience, ar.resources...)
+	// Build audience claim - for exchanged tokens use audiences, otherwise use clientID + resources
+	var audience jwt.Audience
+	if ar.isExchangedToken && len(ar.audiences) > 0 {
+		// For exchanged tokens, use the audiences directly
+		audience = jwt.Audience(ar.audiences)
+		// Also include the original client if not already in audiences
+		hasOriginal := false
+		for _, aud := range ar.audiences {
+			if aud == ar.originalClientID {
+				hasOriginal = true
+				break
+			}
+		}
+		if !hasOriginal && ar.originalClientID != "" {
+			audience = append(audience, ar.originalClientID)
+		}
+	} else {
+		// Original behavior for non-exchanged tokens
+		audience = jwt.Audience{ar.clientID}
+		if len(ar.resources) > 0 {
+			// Add resources to the audience list (RFC 8707)
+			audience = append(audience, ar.resources...)
+		}
 	}
 
 	tsClaims := tailscaleClaims{
@@ -1121,6 +1433,11 @@ func (s *idpServer) issueTokens(w http.ResponseWriter, ar *authRequest) {
 		log.Printf("tsidp: failed to merge extra claims: %v", err)
 		writeTokenEndpointError(w, http.StatusBadRequest, "invalid_request", "failed to merge extra claims")
 		return
+	}
+
+	// Include act claim if present (RFC 8693 Section 4.1)
+	if ar.actorInfo != nil {
+		tsClaimsWithExtra["act"] = ar.actorInfo
 	}
 
 	// Create an OIDC token using this issuer's signer.
@@ -1195,40 +1512,9 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 
 	// If token exists and is not expired, we need to authenticate the client
 	if tokenExists {
-		// For introspection, we need to authenticate the client making the request
-		// This is different from token endpoint where we authenticate using the authRequest
-
-		// Get client credentials from the request
-		clientID, clientSecret, hasBasicAuth := r.BasicAuth()
-		if !hasBasicAuth {
-			clientID = r.FormValue("client_id")
-			clientSecret = r.FormValue("client_secret")
-		}
-
-		// Determine if the client is authorized to introspect this token
-		authorized := false
-
-		if ar.funnelRP != nil {
-			// For funnel clients, verify client credentials match
-			if subtle.ConstantTimeCompare([]byte(clientID), []byte(ar.funnelRP.ID)) == 1 &&
-				subtle.ConstantTimeCompare([]byte(clientSecret), []byte(ar.funnelRP.Secret)) == 1 {
-				authorized = true
-			}
-		} else if ar.localRP {
-			// For local clients, check if request is from loopback
-			ra, err := netip.ParseAddrPort(r.RemoteAddr)
-			if err == nil && ra.Addr().IsLoopback() {
-				authorized = true
-			}
-		} else if ar.rpNodeID != 0 && s.lc != nil {
-			// For node-based clients, verify the requesting node
-			who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
-			if err == nil && who.Node.ID == ar.rpNodeID {
-				authorized = true
-			}
-		}
-
-		if !authorized {
+		// Check if the client is properly authenticated
+		// Any authenticated client can introspect any token
+		if s.identifyClient(r) == "" {
 			// Return inactive token for unauthorized clients
 			// This prevents token scanning attacks
 			w.Header().Set("Content-Type", "application/json")
@@ -1282,13 +1568,17 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Add audience if available
-		audience := []string{}
-		if ar.clientID != "" {
-			audience = append(audience, ar.clientID)
-		}
-		if len(ar.resources) > 0 {
-			audience = append(audience, ar.resources...)
+		// Add audience - for exchanged tokens use the audiences field, otherwise build from clientID and resources
+		var audience []string
+		if ar.isExchangedToken && len(ar.audiences) > 0 {
+			audience = ar.audiences
+		} else {
+			if ar.clientID != "" {
+				audience = append(audience, ar.clientID)
+			}
+			if len(ar.resources) > 0 {
+				audience = append(audience, ar.resources...)
+			}
 		}
 		if len(audience) > 0 {
 			resp["aud"] = audience
@@ -1297,6 +1587,11 @@ func (s *idpServer) serveIntrospect(w http.ResponseWriter, r *http.Request) {
 		// Add scope if available
 		if len(ar.scopes) > 0 {
 			resp["scope"] = strings.Join(ar.scopes, " ")
+		}
+
+		// Include act claim if present (RFC 8693)
+		if ar.actorInfo != nil {
+			resp["act"] = ar.actorInfo
 		}
 	}
 
@@ -1469,6 +1764,7 @@ type openIDProviderMetadata struct {
 	SubjectTypesSupported            views.Slice[string] `json:"subject_types_supported"`
 	ClaimsSupported                  views.Slice[string] `json:"claims_supported"`
 	IDTokenSigningAlgValuesSupported views.Slice[string] `json:"id_token_signing_alg_values_supported"`
+	GrantTypesSupported              views.Slice[string] `json:"grant_types_supported,omitempty"`
 	CodeChallengeMethodsSupported    views.Slice[string] `json:"code_challenge_methods_supported,omitempty"`
 	// TODO(maisem): maybe add other fields?
 	// Currently we fill out the REQUIRED fields, scopes_supported and claims_supported.
@@ -1609,6 +1905,13 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 		CodeChallengeMethodsSupported:    pkceCodeChallengeMethodsSupported,
 	}
 
+	// Add grant types supported
+	grantTypes := []string{"authorization_code", "refresh_token"}
+	if s.enableSTS {
+		grantTypes = append(grantTypes, "urn:ietf:params:oauth:grant-type:token-exchange")
+	}
+	metadata.GrantTypesSupported = views.SliceOf(grantTypes)
+
 	// Only expose registration endpoint over tailnet, not funnel
 	if !isFunnelRequest(r) {
 		metadata.RegistrationEndpoint = rpEndpoint + "/register"
@@ -1665,6 +1968,13 @@ func (s *idpServer) serveOAuthMetadata(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	je := json.NewEncoder(w)
 	je.SetIndent("", "  ")
+	
+	// Build grant types list
+	grantTypes := []string{"authorization_code", "refresh_token"}
+	if s.enableSTS {
+		grantTypes = append(grantTypes, "urn:ietf:params:oauth:grant-type:token-exchange")
+	}
+	
 	metadata := oauthAuthorizationServerMetadata{
 		Issuer:                             rpEndpoint,
 		AuthorizationEndpoint:              authorizeEndpoint,
@@ -1672,7 +1982,7 @@ func (s *idpServer) serveOAuthMetadata(w http.ResponseWriter, r *http.Request) {
 		IntrospectionEndpoint:              rpEndpoint + "/introspect",
 		JWKS_URI:                           rpEndpoint + oidcJWKSPath,
 		ResponseTypesSupported:             openIDSupportedReponseTypes,
-		GrantTypesSupported:                oauthSupportedGrantTypes,
+		GrantTypesSupported:                views.SliceOf(grantTypes),
 		ScopesSupported:                    openIDSupportedScopes,
 		TokenEndpointAuthMethodsSupported:  oauthSupportedTokenEndpointAuthMethods,
 		ResourceIndicatorsSupported:        true, // RFC 8707 support
