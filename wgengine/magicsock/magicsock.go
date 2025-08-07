@@ -1767,6 +1767,12 @@ func looksLikeInitiationMsg(b []byte) bool {
 		binary.LittleEndian.Uint32(b) == device.MessageInitiationType
 }
 
+// disableCryptoRouting returns true if controlKnobs are non-nil with
+// DisableCryptorouting set, otherwise it returns false.
+func (c *Conn) disableCryptoRouting() bool {
+	return c.controlKnobs != nil && c.controlKnobs.DisableCryptorouting.Load()
+}
+
 // receiveIP is the shared bits of ReceiveIPv4 and ReceiveIPv6.
 //
 // size is the length of 'b' to report up to wireguard-go (only relevant if
@@ -1842,7 +1848,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		de, ok := c.peerMap.endpointForEpAddr(src)
 		c.mu.Unlock()
 		if !ok {
-			if c.controlKnobs != nil && c.controlKnobs.DisableCryptorouting.Load() {
+			if c.disableCryptoRouting() {
 				// Note: UDP relay is dependent on cryptorouting enablement. We
 				// only update Geneve-encapsulated [epAddr]s in the [peerMap]
 				// via [lazyEndpoint].
@@ -1863,7 +1869,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	if stats := c.stats.Load(); stats != nil {
 		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, geneveInclusivePacketLen)
 	}
-	if src.vni.isSet() && (connNoted || looksLikeInitiationMsg(b)) {
+	if src.vni.isSet() && (connNoted || looksLikeInitiationMsg(b)) && !c.disableCryptoRouting() {
 		// connNoted is periodic, but we also want to verify if the peer is who
 		// we believe for all initiation messages, otherwise we could get
 		// unlucky and fail to JIT configure the "correct" peer.

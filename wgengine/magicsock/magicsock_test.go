@@ -3818,6 +3818,12 @@ func TestConn_receiveIP(t *testing.T) {
 		return ep
 	}
 
+	disableCryptoRoutingKnobs := func() *controlknobs.Knobs {
+		knobs := &controlknobs.Knobs{}
+		knobs.DisableCryptorouting.Store(true)
+		return knobs
+	}
+
 	tests := []struct {
 		name string
 		// A copy of b is used as input, tests may re-use the same value.
@@ -3832,6 +3838,8 @@ func TestConn_receiveIP(t *testing.T) {
 		// If insertWantEndpointTypeInPeerMap is true, use this [epAddr] for it
 		// in the [peerMap.setNodeKeyForEpAddr] call.
 		peerMapEpAddr epAddr
+		// controlKnobs may be nil
+		controlKnobs *controlknobs.Knobs
 		// If [*endpoint] then we expect 'got' to be the same [*endpoint]. If
 		// [*lazyEndpoint] and [*lazyEndpoint.maybeEP] is non-nil, we expect
 		// got.maybeEP to also be non-nil. Must not be reused across tests.
@@ -3891,6 +3899,19 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled: false,
 		},
 		{
+			name:                       "naked WireGuard init cryptorouting disabled empty peerMap",
+			b:                          looksLikeNakedWireGuardInit,
+			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:                      &epAddrEndpointCache{},
+			controlKnobs:               disableCryptoRoutingKnobs(),
+			wantEndpointType:           nil,
+			wantSize:                   0,
+			wantIsGeneveEncap:          false,
+			wantOk:                     false,
+			wantMetricInc:              nil,
+			wantNoteRecvActivityCalled: false,
+		},
+		{
 			name:                            "naked WireGuard init endpoint matching peerMap entry",
 			b:                               looksLikeNakedWireGuardInit,
 			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
@@ -3917,6 +3938,19 @@ func TestConn_receiveIP(t *testing.T) {
 			wantNoteRecvActivityCalled: false,
 		},
 		{
+			name:                       "geneve WireGuard init cryptorouting disabled empty peerMap",
+			b:                          looksLikeGeneveWireGuardInit,
+			ipp:                        netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:                      &epAddrEndpointCache{},
+			controlKnobs:               disableCryptoRoutingKnobs(),
+			wantEndpointType:           nil,
+			wantSize:                   0,
+			wantIsGeneveEncap:          false,
+			wantOk:                     false,
+			wantMetricInc:              nil,
+			wantNoteRecvActivityCalled: false,
+		},
+		{
 			name:                            "geneve WireGuard init lazyEndpoint matching peerMap activity noted",
 			b:                               looksLikeGeneveWireGuardInit,
 			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
@@ -3931,6 +3965,21 @@ func TestConn_receiveIP(t *testing.T) {
 			wantOk:                     true,
 			wantMetricInc:              nil,
 			wantNoteRecvActivityCalled: true,
+		},
+		{
+			name:                            "geneve WireGuard init cryptorouting disabled matching peerMap activity noted",
+			b:                               looksLikeGeneveWireGuardInit,
+			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:                           &epAddrEndpointCache{},
+			insertWantEndpointTypeInPeerMap: true,
+			peerMapEpAddr:                   epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777"), vni: vni},
+			controlKnobs:                    disableCryptoRoutingKnobs(),
+			wantEndpointType:                newPeerMapInsertableEndpoint(0),
+			wantSize:                        len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
+			wantIsGeneveEncap:               true,
+			wantOk:                          true,
+			wantMetricInc:                   nil,
+			wantNoteRecvActivityCalled:      true,
 		},
 		{
 			name:                            "geneve WireGuard init lazyEndpoint matching peerMap no activity noted",
@@ -3948,6 +3997,21 @@ func TestConn_receiveIP(t *testing.T) {
 			wantMetricInc:              nil,
 			wantNoteRecvActivityCalled: false,
 		},
+		{
+			name:                            "geneve WireGuard init cryptorouting disabled matching peerMap no activity noted",
+			b:                               looksLikeGeneveWireGuardInit,
+			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
+			cache:                           &epAddrEndpointCache{},
+			insertWantEndpointTypeInPeerMap: true,
+			peerMapEpAddr:                   epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777"), vni: vni},
+			controlKnobs:                    disableCryptoRoutingKnobs(),
+			wantEndpointType:                newPeerMapInsertableEndpoint(mono.Now().Add(time.Hour * 24)),
+			wantSize:                        len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
+			wantIsGeneveEncap:               true,
+			wantOk:                          true,
+			wantMetricInc:                   nil,
+			wantNoteRecvActivityCalled:      false,
+		},
 		// TODO(jwhited): verify cache.de is used when conditions permit
 	}
 	for _, tt := range tests {
@@ -3959,15 +4023,14 @@ func TestConn_receiveIP(t *testing.T) {
 			}
 
 			// Init Conn.
-			c := &Conn{
-				privateKey: key.NewNode(),
-				netChecker: &netcheck.Client{},
-				peerMap:    newPeerMap(),
-			}
+			c := newConn(t.Logf)
+			c.privateKey = key.NewNode()
 			c.havePrivateKey.Store(true)
+			c.netChecker = &netcheck.Client{}
 			c.noteRecvActivity = func(public key.NodePublic) {
 				noteRecvActivityCalled = true
 			}
+			c.controlKnobs = tt.controlKnobs
 			c.SetStatistics(connstats.NewStatistics(0, 0, nil))
 
 			if tt.insertWantEndpointTypeInPeerMap {
@@ -4223,6 +4286,43 @@ func Test_lazyEndpoint_FromPeer(t *testing.T) {
 				}
 			} else if len(conn.peerMap.byEpAddr) != 0 {
 				t.Errorf("unexpected epAddr in peerMap")
+			}
+		})
+	}
+}
+
+func TestConn_disableCryptoRouting(t *testing.T) {
+	disableCryptoroutingSet := &controlknobs.Knobs{}
+	disableCryptoroutingSet.DisableCryptorouting.Store(true)
+
+	tests := []struct {
+		name  string
+		knobs *controlknobs.Knobs
+		want  bool
+	}{
+		{
+			name:  "nil",
+			knobs: nil,
+			want:  false,
+		},
+		{
+			name:  "DisableCryptorouting set",
+			knobs: disableCryptoroutingSet,
+			want:  true,
+		},
+		{
+			name:  "DisableCryptorouting unset",
+			knobs: &controlknobs.Knobs{},
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Conn{
+				controlKnobs: tt.knobs,
+			}
+			if got := c.disableCryptoRouting(); got != tt.want {
+				t.Errorf("disableCryptoRouting() = %v, want %v", got, tt.want)
 			}
 		})
 	}
