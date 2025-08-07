@@ -1699,11 +1699,16 @@ var FilterAllowAll = []FilterRule{
 	},
 }
 
-// DNSResolver embeds dnstype.Resolver and stores
-// additional configuration.
+// DNSResolver describes a single DNS resolver and any special handling needed when
+// using that resolver.
 type DNSResolver struct {
 	dnstype.Resolver `json:",omitempty"`
-	UseWithExitNode  bool `json:",omitempty"`
+
+	// UseWithExitNode designates that this resolver should continue to be used when an
+	// exit node is in use. Normally, DNS resolution is delegated to the exit node but
+	// there are situations where it is preferable to still use a Split DNS server and/or
+	// global DNS server instead of the exit node.
+	UseWithExitNode bool `json:",omitempty"`
 }
 
 // DNSConfig is the DNS configuration.
