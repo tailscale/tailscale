@@ -2122,7 +2122,6 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 		"empty.example.com.": []*dnstype.Resolver{},
 		"route.example.com.": {{Addr: "route.example.com"}},
 	}
-	_ = containsEmptyRoutes
 	containsFlaggedRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
 		"route.example.com.":    {{Addr: "route.example.com"}},
 		"withexit.example.com.": {{Addr: tsUseWithExitNodeResolverAddr}},
@@ -2132,7 +2131,6 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 		"route.example.com.":    {{Addr: "route.example.com"}},
 		"withexit.example.com.": {{Addr: tsUseWithExitNodeResolverAddr}},
 	}
-	_ = containsFlaggedAndEmptyRoutes
 	flaggedRoutes := map[dnsname.FQDN][]*dnstype.Resolver{
 		"withexit.example.com.": {{Addr: tsUseWithExitNodeResolverAddr}},
 	}
@@ -2143,7 +2141,6 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 		"empty.example.com.":    []*dnstype.Resolver{},
 		"withexit.example.com.": {{Addr: tsUseWithExitNodeResolverAddr}},
 	}
-	_ = flaggedAndEmptyRoutes
 
 	stringifyRoutes := func(routes map[dnsname.FQDN][]*dnstype.Resolver) map[string][]*tailcfg.DNSResolver {
 		if routes == nil {
