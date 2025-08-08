@@ -98,10 +98,6 @@ type Knobs struct {
 	// allows us to disable the new behavior remotely if needed.
 	DisableLocalDNSOverrideViaNRPT atomic.Bool
 
-	// DisableCryptorouting indicates that the node should not use the
-	// magicsock crypto routing feature.
-	DisableCryptorouting atomic.Bool
-
 	// DisableCaptivePortalDetection is whether the node should not perform captive portal detection
 	// automatically when the network state changes.
 	DisableCaptivePortalDetection atomic.Bool
@@ -137,7 +133,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		userDialUseRoutes                    = has(tailcfg.NodeAttrUserDialUseRoutes)
 		disableSplitDNSWhenNoCustomResolvers = has(tailcfg.NodeAttrDisableSplitDNSWhenNoCustomResolvers)
 		disableLocalDNSOverrideViaNRPT       = has(tailcfg.NodeAttrDisableLocalDNSOverrideViaNRPT)
-		disableCryptorouting                 = has(tailcfg.NodeAttrDisableMagicSockCryptoRouting)
 		disableCaptivePortalDetection        = has(tailcfg.NodeAttrDisableCaptivePortalDetection)
 		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
 	)
@@ -165,7 +160,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.UserDialUseRoutes.Store(userDialUseRoutes)
 	k.DisableSplitDNSWhenNoCustomResolvers.Store(disableSplitDNSWhenNoCustomResolvers)
 	k.DisableLocalDNSOverrideViaNRPT.Store(disableLocalDNSOverrideViaNRPT)
-	k.DisableCryptorouting.Store(disableCryptorouting)
 	k.DisableCaptivePortalDetection.Store(disableCaptivePortalDetection)
 	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
 }
