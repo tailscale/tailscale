@@ -1741,6 +1741,10 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 		b.send(ipn.Notify{NetMap: st.NetMap})
 
+		// The error here is unimportant as is the result.  This will recalculate the suggested exit node
+		// cache the value and push any changes to the IPN bus.
+		b.SuggestExitNode()
+
 		// Check and update the exit node if needed, now that we have a new netmap.
 		//
 		// This must happen after the netmap change is sent via [ipn.Notify],
@@ -2038,6 +2042,9 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	}
 
 	if cn.NetMap() != nil && mutationsAreWorthyOfTellingIPNBus(muts) {
+		// Recompute the suggested exit node
+		b.suggestExitNodeLocked()
+
 		nm := cn.netMapWithPeers()
 		notify = &ipn.Notify{NetMap: nm}
 	} else if testenv.InTest() {
@@ -3068,7 +3075,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 
 	b.mu.Lock()
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialDriveShares
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode
 	if mask&initialBits != 0 {
 		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
@@ -3090,6 +3097,11 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		}
 		if mask&ipn.NotifyInitialHealthState != 0 {
 			ini.Health = b.HealthTracker().CurrentState()
+		}
+		if mask&ipn.NotifyInitialSuggestedExitNode != 0 {
+			if en, err := b.SuggestExitNode(); err != nil {
+				ini.SuggestedExitNode = &en.ID
+			}
 		}
 	}
 
@@ -7706,7 +7718,12 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 	if err != nil {
 		return res, err
 	}
+	if prevSuggestion != res.ID {
+		// Notify the clients via the IPN bus if the exit node suggestion has changed.
+		b.sendToLocked(ipn.Notify{SuggestedExitNode: &res.ID}, allClients)
+	}
 	b.lastSuggestedExitNode = res.ID
+
 	return res, err
 }
 
