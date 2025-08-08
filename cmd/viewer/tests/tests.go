@@ -30,6 +30,7 @@ type Map struct {
 	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
 	StructWithoutPtrKey map[StructWithoutPtrs]int `json:"-"`
 	StructWithPtr       map[string]StructWithPtrs
+	StructWithView      map[string]StructWithPtrsView
 
 	// Unsupported views.
 	SliceIntPtr      map[string][]*int
@@ -63,10 +64,11 @@ type StructWithSlices struct {
 	Slice    []string
 	Prefixes []netip.Prefix
 	Data     []byte
+	Structs  []StructWithPtrs
+	Views    []StructWithPtrsView
 
 	// Unsupported views.
-	Structs []StructWithPtrs
-	Ints    []*int
+	Ints []*int
 }
 
 type OnlyGetClone struct {

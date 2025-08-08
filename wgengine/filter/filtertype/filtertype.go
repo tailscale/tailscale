@@ -14,7 +14,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner --type=Match,CapMatch
+//go:generate go run tailscale.com/cmd/viewer --type=Match,CapMatch
 
 // PortRange is a range of TCP and UDP ports.
 type PortRange struct {
@@ -78,7 +78,7 @@ type Match struct {
 	Srcs []netip.Prefix
 	// SrcsContains is an optimized function that reports whether Addr is in
 	// Srcs, using the best search method for the size and shape of Srcs.
-	SrcsContains func(netip.Addr) bool `json:"-"` // report whether Addr is in Srcs
+	SrcsContains func(netip.Addr) bool `json:"-" codegen:"noclone"` // report whether Addr is in Srcs
 
 	// SrcCaps is an alternative way to match packets. If the peer's source IP
 	// has one of these capabilities, it's also permitted. The peers are only
