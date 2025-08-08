@@ -49,7 +49,8 @@ import (
 )
 
 var (
-	debugCaptureCmd func() *ffcli.Command // or nil
+	debugCaptureCmd   func() *ffcli.Command // or nil
+	debugPeerRelayCmd func() *ffcli.Command // or nil
 )
 
 func debugCmd() *ffcli.Command {
@@ -374,6 +375,7 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Print the current set of candidate peer relay servers",
 				Exec:       runPeerRelayServers,
 			},
+			ccall(debugPeerRelayCmd),
 		}...),
 	}
 }
