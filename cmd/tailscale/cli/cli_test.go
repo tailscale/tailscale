@@ -18,6 +18,7 @@ import (
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
@@ -1670,5 +1671,14 @@ func TestDepsNoCapture(t *testing.T) {
 			"tailscale.com/feature/capture/dissector": "don't like the Lua",
 		},
 	}.Check(t)
+}
 
+func TestTSSocketEnvVar(t *testing.T) {
+	customSocket := "/custom/socket/path"
+	tstest.Replace(t, &localClient, tailscale.LocalClient{Socket: customSocket})
+	t.Setenv("TS_SOCKET", customSocket)
+
+	if localClient.Socket != customSocket {
+		t.Errorf("localClient.Socket = %q; want %q", localClient.Socket, customSocket)
+	}
 }
