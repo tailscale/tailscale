@@ -127,7 +127,7 @@ func TestSNIProxyWithNetmapConfig(t *testing.T) {
 
 	// Start sniproxy
 	sni, nodeKey, ip := startNode(t, ctx, controlURL, "snitest")
-	go run(ctx, sni, 0, sni.Hostname, false, 0, "", "")
+	go run(ctx, sni, 0, sni.Hostname, false, 0, "", "", "")
 
 	// Configure the mock coordination server to send down app connector config.
 	config := &appctype.AppConnectorConfig{
@@ -206,7 +206,7 @@ func TestSNIProxyWithFlagConfig(t *testing.T) {
 
 	// Start sniproxy
 	sni, _, ip := startNode(t, ctx, controlURL, "snitest")
-	go run(ctx, sni, 0, sni.Hostname, false, 0, "", fmt.Sprintf("tcp/%d/localhost", ln.Addr().(*net.TCPAddr).Port))
+	go run(ctx, sni, 0, sni.Hostname, false, 0, "", fmt.Sprintf("tcp/%d/localhost", ln.Addr().(*net.TCPAddr).Port), "")
 
 	// Lets spin up a second node (to represent the client).
 	client, _, _ := startNode(t, ctx, controlURL, "client")
