@@ -32,6 +32,7 @@ services on the host to use Tailscale in more ways.
 			ccall(maybeSysExtCmd),
 			ccall(maybeVPNConfigCmd),
 			ccall(maybeJetKVMConfigureCmd),
+			ccall(maybeSystrayCmd),
 		),
 	}
 }
