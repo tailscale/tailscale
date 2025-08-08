@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
   Copies the global $args variable into an array, which is easier to work with
   when preparing to start child processes.
 #>
-function Copy-Args {
+function Copy-GlobalArgs {
     $list = [System.Collections.Generic.List[string]]::new($Global:args.Count)
     foreach ($arg in $Global:args) {
         $list.Add($arg)
@@ -88,9 +88,8 @@ $bootstrapScriptBlock = {
             $tsgo = Join-Path $Env:USERPROFILE '.cache' 'tsgo'
             $toolchain = Join-Path $tsgo $rev
             if (-not (Test-Path -LiteralPath "$toolchain.extracted" -PathType Leaf -ErrorAction SilentlyContinue)) {
-                New-Item -Force -Path $tsgo -ItemType Directory
-                Remove-Item -Force -Recurse -LiteralPath $toolchain -ErrorAction Continue
-                Remove-Item -Force -LiteralPath "$toolchain.extracted" -ErrorAction Continue
+                New-Item -Force -Path $tsgo -ItemType Directory | Out-Null
+                Remove-Item -Force -Recurse -LiteralPath $toolchain -ErrorAction SilentlyContinue
                 Write-Log "Downloading Go toolchain $rev"
 
                 # Values from https://web.archive.org/web/20250227081443/https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.architecture?view=net-9.0
@@ -190,7 +189,7 @@ $repoRoot = Get-RepoRoot
 $execEnv = Copy-Environment
 $execEnv.Remove('GOROOT')
 
-$argList = Copy-Args
+$argList = Copy-GlobalArgs
 
 if ($Env:TS_USE_GOCROSS -ne '1') {
     $revFile = Join-Path $repoRoot 'go.toolchain.rev' -Resolve
