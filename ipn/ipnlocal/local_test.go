@@ -2174,7 +2174,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			exitNode:             "ts",
 			peers:                peers,
 			dnsConfig:            &tailcfg.DNSConfig{Resolvers: containsFlaggedResolvers},
-			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr, UseWithExitNode: true}},
 			wantRoutes:           nil,
 		},
 
@@ -2202,7 +2202,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			exitNode:             "ts",
 			peers:                peers,
 			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(baseRoutes), Resolvers: containsFlaggedResolvers},
-			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr, UseWithExitNode: true}},
 			wantRoutes:           nil,
 		},
 		{
@@ -2218,7 +2218,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			exitNode:             "ts",
 			peers:                peers,
 			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(containsFlaggedRoutes), Resolvers: containsFlaggedResolvers},
-			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr, UseWithExitNode: true}},
 			wantRoutes:           flaggedRoutes,
 		},
 		{
@@ -2242,7 +2242,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			exitNode:             "ts",
 			peers:                peers,
 			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(containsFlaggedAndEmptyRoutes), Resolvers: containsFlaggedResolvers},
-			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr}},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: tsUseWithExitNodeResolverAddr, UseWithExitNode: true}},
 			wantRoutes:           flaggedAndEmptyRoutes,
 		},
 
