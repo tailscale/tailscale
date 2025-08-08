@@ -653,6 +653,16 @@ func (e *userspaceEngine) noteRecvActivity(nk key.NodePublic) {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 
+	// Reconfiguring wireguard while closing can cause deadlocks, since this
+	// function could be called from receive functions that need to shut down
+	// in order to close the wireguard device.
+	e.mu.Lock()
+	if e.closing {
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Unlock()
+
 	if _, ok := e.recvActivityAt[nk]; !ok {
 		// Not a trimmable peer we care about tracking. (See isTrimmablePeer)
 		if e.trimmedNodes[nk] {
@@ -1208,13 +1218,19 @@ func (e *userspaceEngine) RequestStatus() {
 }
 
 func (e *userspaceEngine) Close() {
+	// It's important here to hold wgLock as well, so that noteRecvActivity exits early once we start
+	// closing the wgdev.  Reprogramming wireguard from a recv function causes a deadlock while closing
+	// since the wireguard device waits for the recv function.
+	e.wgLock.Lock()
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
+		e.wgLock.Unlock()
 		return
 	}
 	e.closing = true
 	e.mu.Unlock()
+	e.wgLock.Unlock()
 
 	r := bufio.NewReader(strings.NewReader(""))
 	e.wgdev.IpcSetOperation(r)
