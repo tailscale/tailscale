@@ -601,7 +601,7 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 }
 
 func makeExitNode(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
-	return makePeer(id, append([]peerOptFunc{withCap(26), withSuggest(), withExitRoutes()}, opts...)...)
+	return makePeer(id, append([]peerOptFunc{withCap(26), withSuggest(nil), withExitRoutes()}, opts...)...)
 }
 
 func TestConfigureExitNode(t *testing.T) {
@@ -2854,8 +2854,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 }
 
 func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
-	peer1 := makePeer(1, withCap(26), withSuggest(), withOnline(true), withExitRoutes())
-	peer2 := makePeer(2, withCap(26), withSuggest(), withOnline(true), withExitRoutes())
+	peer1 := makePeer(1, withCap(26), withSuggest(nil), withOnline(true), withExitRoutes())
+	peer2 := makePeer(2, withCap(26), withSuggest(nil), withOnline(true), withExitRoutes())
 	derpMap := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
 			1: {
@@ -3034,8 +3034,8 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 		syspolicy.ExitNodeID, "auto:any",
 	))
 	syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
-	peer1 := makePeer(1, withCap(26), withDERP(3), withSuggest(), withExitRoutes())
-	peer2 := makePeer(2, withCap(26), withDERP(2), withSuggest(), withExitRoutes())
+	peer1 := makePeer(1, withCap(26), withDERP(3), withSuggest(nil), withExitRoutes())
+	peer2 := makePeer(2, withCap(26), withDERP(2), withSuggest(nil), withExitRoutes())
 	selfNode := tailcfg.Node{
 		Addresses: []netip.Prefix{
 			netip.MustParsePrefix("100.64.1.1/32"),
@@ -3100,8 +3100,8 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 }
 
 func TestSetControlClientStatusAutoExitNode(t *testing.T) {
-	peer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes(), withOnline(true), withNodeKey())
-	peer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withOnline(true), withNodeKey())
+	peer1 := makePeer(1, withCap(26), withSuggest(nil), withExitRoutes(), withOnline(true), withNodeKey())
+	peer2 := makePeer(2, withCap(26), withSuggest(nil), withExitRoutes(), withOnline(true), withNodeKey())
 	derpMap := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
 			1: {
@@ -3149,7 +3149,7 @@ func TestSetControlClientStatusAutoExitNode(t *testing.T) {
 	b.lastSuggestedExitNode = peer2.StableID()
 	b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, report)
 	b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
-	offlinePeer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withOnline(false), withNodeKey())
+	offlinePeer2 := makePeer(2, withCap(26), withSuggest(nil), withExitRoutes(), withOnline(false), withNodeKey())
 	updatedNetmap := &netmap.NetworkMap{
 		Peers: []tailcfg.NodeView{
 			peer1,
@@ -4294,9 +4294,9 @@ func withExitRoutes() peerOptFunc {
 	}
 }
 
-func withSuggest() peerOptFunc {
+func withSuggest(v []tailcfg.RawMessage) peerOptFunc {
 	return func(n *tailcfg.Node) {
-		mak.Set(&n.CapMap, tailcfg.NodeAttrSuggestExitNode, []tailcfg.RawMessage{})
+		mak.Set(&n.CapMap, tailcfg.NodeAttrSuggestExitNode, v)
 	}
 }
 
@@ -4435,41 +4435,41 @@ func TestSuggestExitNode(t *testing.T) {
 
 	peer1 := makePeer(1,
 		withExitRoutes(),
-		withSuggest())
+		withSuggest(nil))
 	peer2DERP1 := makePeer(2,
 		withDERP(1),
 		withExitRoutes(),
-		withSuggest())
+		withSuggest(nil))
 	peer3 := makePeer(3,
 		withExitRoutes(),
-		withSuggest())
+		withSuggest(nil))
 	peer4DERP3 := makePeer(4,
 		withDERP(3),
 		withExitRoutes(),
-		withSuggest())
+		withSuggest(nil))
 	dallasPeer5 := makePeer(5,
 		withName("Dallas"),
 		withoutDERP(),
 		withExitRoutes(),
-		withSuggest(),
+		withSuggest(nil),
 		withLocation(dallas.View()))
 	sanJosePeer6 := makePeer(6,
 		withName("San Jose"),
 		withoutDERP(),
 		withExitRoutes(),
-		withSuggest(),
+		withSuggest(nil),
 		withLocation(sanJose.View()))
 	fortWorthPeer7 := makePeer(7,
 		withName("Fort Worth"),
 		withoutDERP(),
 		withExitRoutes(),
-		withSuggest(),
+		withSuggest(nil),
 		withLocation(fortWorth.View()))
 	fortWorthPeer8LowPriority := makePeer(8,
 		withName("Fort Worth Low"),
 		withoutDERP(),
 		withExitRoutes(),
-		withSuggest(),
+		withSuggest(nil),
 		withLocation(fortWorthLowPriority.View()))
 
 	selfNode := tailcfg.Node{
@@ -5035,7 +5035,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
-						withSuggest()),
+						withSuggest(nil)),
 				},
 			},
 			wantID: "",
@@ -5047,29 +5047,99 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
 				},
 			},
 			wantID:   "stable1",
 			wantName: "peer1",
 		},
 		{
-			name: "suggest-exit-node-stable-pick",
+			name: "exit-node-stable-pick",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
 					makePeer(2,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
 					makePeer(3,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
 					makePeer(4,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
+				},
+			},
+			// Change this, if the hashing function changes.
+			wantID:   "stable3",
+			wantName: "peer3",
+		},
+		{
+			name: "exit-node-empty-suggestions",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(nil)),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest([]tailcfg.RawMessage{})),
+					makePeer(3,
+						withExitRoutes(),
+						withSuggest([]tailcfg.RawMessage{
+							`{}`,
+						})),
+					makePeer(4,
+						withExitRoutes(),
+						withSuggest([]tailcfg.RawMessage{
+							`{"Priority": 0}`,
+						})),
+				},
+			},
+			// Change this, if the hashing function changes.
+			wantID:   "stable3",
+			wantName: "peer3",
+		},
+		{
+			name: "exit-node-with-suggestion-and-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest([]tailcfg.RawMessage{
+							`{"Priority": 3}`,
+						}),
+						withLocationPriority(1)), // overridden
+					makePeer(2,
+						withExitRoutes(),
+						withLocationPriority(2)),
+				},
+			},
+			wantID:   "stable1",
+			wantName: "peer1",
+			wantPri:  1, // Location.Priority
+		},
+		{
+			name: "exit-node-with-priority",
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				Peers: []tailcfg.NodeView{
+					makePeer(1,
+						withExitRoutes(),
+						withSuggest(nil)),
+					makePeer(2,
+						withExitRoutes(),
+						withSuggest(nil)),
+					makePeer(3,
+						withExitRoutes(),
+						withSuggest(nil)),
+					makePeer(4,
+						withExitRoutes(),
+						withSuggest(nil)),
 				},
 			},
 			// Change this, if the hashing function changes.
@@ -5083,11 +5153,11 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(1)),
 					makePeer(2,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
 				},
 			},
 			wantID:   "stable1",
@@ -5101,10 +5171,10 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
 					makePeer(2,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(1)),
 				},
 			},
@@ -5119,19 +5189,19 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(-1)),
 					makePeer(2,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(-2)),
 					makePeer(3,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(-3)),
 					makePeer(4,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(-4)),
 				},
 			},
@@ -5146,15 +5216,15 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(-1)),
 					makePeer(2,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(-2)),
 					makePeer(3,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
 				},
 			},
 			wantID:   "stable3",
@@ -5167,30 +5237,30 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(1)),
 					makePeer(2,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(2)), // top
 					makePeer(3,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(1)),
 					makePeer(4,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(2)), // top
 					makePeer(5,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(2)), // top
 					makePeer(6,
 						withExitRoutes(),
-						withSuggest()),
+						withSuggest(nil)),
 					makePeer(7,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocationPriority(2)), // top
 				},
 			},
@@ -5199,13 +5269,13 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantPri:  2,
 		},
 		{
-			name: "suggested-exit-node-with-city",
+			name: "exit-node-with-city",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocation(city.View())),
 				},
 			},
@@ -5214,13 +5284,13 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantLoc:  city,
 		},
 		{
-			name: "suggested-exit-node-with-city-and-priority",
+			name: "exit-node-with-city-and-priority",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocation(city.View()),
 						withLocationPriority(1)),
 				},
@@ -5231,13 +5301,13 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantPri:  1,
 		},
 		{
-			name: "suggested-exit-node-without-latlng",
+			name: "exit-node-without-latlng",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocation(noLatLng.View())),
 				},
 			},
@@ -5246,13 +5316,13 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			wantLoc:  noLatLng,
 		},
 		{
-			name: "suggested-exit-node-without-latlng-with-priority",
+			name: "exit-node-without-latlng-with-priority",
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				Peers: []tailcfg.NodeView{
 					makePeer(1,
 						withExitRoutes(),
-						withSuggest(),
+						withSuggest(nil),
 						withLocation(noLatLng.View()),
 						withLocationPriority(1)),
 				},
