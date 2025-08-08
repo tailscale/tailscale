@@ -16,4 +16,5 @@ type DNSConfig struct {
 type DNSResolver struct {
 	Addr                string   `json:"addr"`
 	BootstrapResolution []string `json:"bootstrapResolution,omitempty"`
+	UseWithExitNode     bool     `json:"useWithExitNode"`
 }
