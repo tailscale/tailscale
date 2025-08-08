@@ -262,7 +262,7 @@ func TestStart(t *testing.T) {
 	waitForNodesToBeTaggedInStatus(t, ctx, one, []key.NodePublic{k}, clusterTag)
 
 	sm := &fsm{}
-	r, err := Start(ctx, one, sm, clusterTag, warnLogConfig())
+	r, err := Start(ctx, one, sm, BootstrapOpts{Tag: clusterTag}, warnLogConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func createConsensusCluster(t testing.TB, ctx context.Context, clusterTag string
 	t.Helper()
 	participants[0].sm = &fsm{}
 	myCfg := addIDedLogger("0", cfg)
-	first, err := Start(ctx, participants[0].ts, participants[0].sm, clusterTag, myCfg)
+	first, err := Start(ctx, participants[0].ts, participants[0].sm, BootstrapOpts{Tag: clusterTag}, myCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func createConsensusCluster(t testing.TB, ctx context.Context, clusterTag string
 	for i := 1; i < len(participants); i++ {
 		participants[i].sm = &fsm{}
 		myCfg := addIDedLogger(fmt.Sprintf("%d", i), cfg)
-		c, err := Start(ctx, participants[i].ts, participants[i].sm, clusterTag, myCfg)
+		c, err := Start(ctx, participants[i].ts, participants[i].sm, BootstrapOpts{Tag: clusterTag}, myCfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -530,7 +530,7 @@ func TestFollowerFailover(t *testing.T) {
 	// follower comes back
 	smThreeAgain := &fsm{}
 	cfg = addIDedLogger("2 after restarting", warnLogConfig())
-	rThreeAgain, err := Start(ctx, ps[2].ts, smThreeAgain, clusterTag, cfg)
+	rThreeAgain, err := Start(ctx, ps[2].ts, smThreeAgain, BootstrapOpts{Tag: clusterTag}, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +565,7 @@ func TestRejoin(t *testing.T) {
 	tagNodes(t, control, []key.NodePublic{keyJoiner}, clusterTag)
 	waitForNodesToBeTaggedInStatus(t, ctx, ps[0].ts, []key.NodePublic{keyJoiner}, clusterTag)
 	smJoiner := &fsm{}
-	cJoiner, err := Start(ctx, tsJoiner, smJoiner, clusterTag, cfg)
+	cJoiner, err := Start(ctx, tsJoiner, smJoiner, BootstrapOpts{Tag: clusterTag}, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,5 +742,51 @@ func TestOnlyTaggedPeersCanJoin(t *testing.T) {
 	expected := "peer not allowed"
 	if sBody != expected {
 		t.Fatalf("join req when not tagged, expected body: %s, got: %s", expected, sBody)
+	}
+}
+
+func TestFollowAddr(t *testing.T) {
+	testConfig(t)
+	ctx := context.Background()
+	clusterTag := "tag:whatever"
+	ps, _, _ := startNodesAndWaitForPeerStatus(t, ctx, clusterTag, 3)
+	cfg := warnLogConfig()
+
+	// get the address for the node that's going to be the leader
+	lc, err := ps[0].ts.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := lc.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstV4 := status.TailscaleIPs[0]
+
+	// start the second and third participants of the cluster with FollowAddr, Start won't
+	// return until they have joined the leader.
+	secondDone := make(chan error, 1)
+	thirdDone := make(chan error, 1)
+	startParticipantConsensus := func(p *participant, done chan error) {
+		_, err := Start(ctx, p.ts, p.sm, BootstrapOpts{Tag: clusterTag, FollowAddr: firstV4.String()}, cfg)
+		done <- err
+	}
+	go startParticipantConsensus(ps[1], secondDone)
+	go startParticipantConsensus(ps[2], thirdDone)
+
+	// start the leader
+	_, err = Start(ctx, ps[0].ts, ps[0].sm, BootstrapOpts{Tag: clusterTag}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify second and third start without error
+	err = <-secondDone
+	if err != nil {
+		t.Fatal("error starting second", err)
+	}
+	err = <-thirdDone
+	if err != nil {
+		t.Fatal("error starting third", err)
 	}
 }
