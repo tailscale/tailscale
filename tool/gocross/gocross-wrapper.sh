@@ -16,8 +16,9 @@ if [[ "${CI:-}" == "true" && "${NOBASHDEBUG:-}" != "true" ]]; then
 fi
 
 if [[ "${OSTYPE:-}" == "cygwin" || "${OSTYPE:-}" == "msys" ]]; then
-    echo "You're running on Windows: use go.cmd instead." >&2
-    exit 1
+    hash pwsh 2>/dev/null || { echo >&2 "This operation requires PowerShell Core."; exit 1; }
+    pwsh -NoProfile -ExecutionPolicy Bypass "${BASH_SOURCE%/*}/gocross-wrapper.ps1" "$@"
+    exit
 fi
 
 # Locate a bootstrap toolchain and (re)build gocross if necessary. We run all of
