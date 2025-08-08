@@ -62,10 +62,7 @@ func newHarness(t *testing.T) *Harness {
 			// TODO: this is wrong.
 			// It is also only one of many configurations.
 			// Figure out how to scale it up.
-			Resolvers: []*tailcfg.DNSResolver{
-				{Resolver: dnstype.Resolver{Addr: "100.100.100.100"}},
-				{Resolver: dnstype.Resolver{Addr: "8.8.8.8"}},
-			},
+			Resolvers:    []*dnstype.Resolver{{Addr: "100.100.100.100"}, {Addr: "8.8.8.8"}},
 			Domains:      []string{"record"},
 			Proxied:      true,
 			ExtraRecords: []tailcfg.DNSRecord{{Name: "extratest.record", Type: "A", Value: "1.2.3.4"}},

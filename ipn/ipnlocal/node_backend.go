@@ -578,59 +578,40 @@ func (nb *nodeBackend) doShutdown(cause error) {
 	nb.eventClient.Close()
 }
 
-func useWithExitNodeResolvers(dc tailcfg.DNSConfig) []*dnstype.Resolver {
-	return convertResolvers(dc.Resolvers, true)
-}
-
-func useWithExitNodeRoutes(dc tailcfg.DNSConfig) map[string][]*dnstype.Resolver {
-	return convertRoutes(dc.Routes, true)
-}
-
-func resolvers(dc tailcfg.DNSConfig) []*dnstype.Resolver {
-	return convertResolvers(dc.Resolvers, false)
-}
-
-func routes(dc tailcfg.DNSConfig) map[string][]*dnstype.Resolver {
-	return convertRoutes(dc.Routes, false)
-}
-
-// convertResolvers converts tailcfg dns resolvers, which may contain additional
-// configuration, to dnstype resolvers, for use in the wireguard engine,
-// taking into account exit node contexts.
-func convertResolvers(resolvers []*tailcfg.DNSResolver, usingExitNode bool) []*dnstype.Resolver {
-	converted := make([]*dnstype.Resolver, 0, len(resolvers))
+// useWithExitNodeResolvers filters out resolvers so the ones that remain
+// are all the ones marked for use with exit nodes.
+func useWithExitNodeResolvers(resolvers []*dnstype.Resolver) []*dnstype.Resolver {
+	filtered := make([]*dnstype.Resolver, 0, len(resolvers))
 	for _, res := range resolvers {
-		// If not using an exit node, all resolvers persist.
-		// Otherwise, check if the resolver is marked for use with exit node.
-		if !usingExitNode || res.UseWithExitNode {
-			converted = append(converted, &res.Resolver)
+		if res.UseWithExitNode {
+			filtered = append(filtered, res)
 		}
 	}
-	return converted
+	return filtered
 }
 
-// convertRoutes converts tailcfg dns routes containing tailcfg dns resolvers
-// to a map of routes containing dnstype resolvers, for use in the wireguard engine,
-// taking into account exit node contexts.
-func convertRoutes(routes map[string][]*tailcfg.DNSResolver, usingExitNode bool) map[string][]*dnstype.Resolver {
-	converted := make(map[string][]*dnstype.Resolver)
+// useWithExitNodeRoutes filters out routes so the ones that remain
+// are either zero-length resolver lists, or lists containing only
+// resolvers marked for use with exit nodes.
+func useWithExitNodeRoutes(routes map[string][]*dnstype.Resolver) map[string][]*dnstype.Resolver {
+	filtered := make(map[string][]*dnstype.Resolver)
 	for suffix, resolvers := range routes {
 		// Suffixes with no resolvers represent a valid configuration,
 		// and should persist regardless of exit node considerations.
 		if len(resolvers) == 0 {
-			converted[suffix] = make([]*dnstype.Resolver, 0)
+			filtered[suffix] = make([]*dnstype.Resolver, 0)
 			continue
 		}
 
 		// In exit node contexts, we filter out resolvers not configured for use with
 		// exit nodes. If there are no such configured resolvers, there should not be an entry for that suffix.
-		convertedResolvers := convertResolvers(resolvers, usingExitNode)
-		if len(convertedResolvers) > 0 {
-			converted[suffix] = convertedResolvers
+		filteredResolvers := useWithExitNodeResolvers(resolvers)
+		if len(filteredResolvers) > 0 {
+			filtered[suffix] = filteredResolvers
 		}
 	}
 
-	return converted
+	return filtered
 }
 
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
@@ -781,7 +762,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// to run a DoH DNS proxy, then send all our DNS traffic through it,
 	// unless we find resolvers with UseWithExitNode set, in which case we use that.
 	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
-		filtered := useWithExitNodeResolvers(nm.DNS)
+		filtered := useWithExitNodeResolvers(nm.DNS.Resolvers)
 		if len(filtered) > 0 {
 			addDefault(filtered)
 		} else {
@@ -790,7 +771,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			addDefault([]*dnstype.Resolver{{Addr: dohURL}})
 		}
 
-		addSplitDNSRoutes(useWithExitNodeRoutes(nm.DNS))
+		addSplitDNSRoutes(useWithExitNodeRoutes(nm.DNS.Routes))
 		return dcfg
 	}
 
@@ -798,7 +779,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// use those resolvers as the default, otherwise if there are WireGuard exit
 	// node resolvers, use those as the default.
 	if len(nm.DNS.Resolvers) > 0 {
-		addDefault(resolvers(nm.DNS))
+		addDefault(nm.DNS.Resolvers)
 	} else {
 		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
 			addDefault(resolvers)
@@ -806,7 +787,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	// Add split DNS routes, with no regard to exit node configuration.
-	addSplitDNSRoutes(routes(nm.DNS))
+	addSplitDNSRoutes(nm.DNS.Routes)
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See
