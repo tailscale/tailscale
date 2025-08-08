@@ -32,8 +32,6 @@ Examples of unacceptable behavior include without limitation:
 * Distributing or promoting malware;
 * Other conduct which could reasonably be considered inappropriate in a
   professional setting.
-* Please also see the Tailscale Acceptable Use Policy, available at
-  [tailscale.com/tailscale-aup](https://tailscale.com/tailscale-aup). 
 
 Please also see the Tailscale Acceptable Use Policy, available at
 [tailscale.com/tailscale-aup](https://tailscale.com/tailscale-aup).
