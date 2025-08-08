@@ -579,31 +579,31 @@ func (nb *nodeBackend) doShutdown(cause error) {
 }
 
 func useWithExitNodeResolvers(dc tailcfg.DNSConfig) []*dnstype.Resolver {
-	return convertResolvers(dc.Resolvers, true)
+	return filterResolvers(dc.Resolvers, true)
 }
 
 func useWithExitNodeRoutes(dc tailcfg.DNSConfig) map[string][]*dnstype.Resolver {
-	return convertRoutes(dc.Routes, true)
+	return filterRoutes(dc.Routes, true)
 }
 
 func resolvers(dc tailcfg.DNSConfig) []*dnstype.Resolver {
-	return convertResolvers(dc.Resolvers, false)
+	return filterResolvers(dc.Resolvers, false)
 }
 
 func routes(dc tailcfg.DNSConfig) map[string][]*dnstype.Resolver {
-	return convertRoutes(dc.Routes, false)
+	return filterRoutes(dc.Routes, false)
 }
 
 // convertResolvers converts tailcfg dns resolvers, which may contain additional
 // configuration, to dnstype resolvers, for use in the wireguard engine,
 // taking into account exit node contexts.
-func convertResolvers(resolvers []*tailcfg.DNSResolver, usingExitNode bool) []*dnstype.Resolver {
+func filterResolvers(resolvers []*dnstype.Resolver, usingExitNode bool) []*dnstype.Resolver {
 	converted := make([]*dnstype.Resolver, 0, len(resolvers))
 	for _, res := range resolvers {
 		// If not using an exit node, all resolvers persist.
 		// Otherwise, check if the resolver is marked for use with exit node.
 		if !usingExitNode || res.UseWithExitNode {
-			converted = append(converted, &res.Resolver)
+			converted = append(converted, res)
 		}
 	}
 	return converted
@@ -612,7 +612,7 @@ func convertResolvers(resolvers []*tailcfg.DNSResolver, usingExitNode bool) []*d
 // convertRoutes converts tailcfg dns routes containing tailcfg dns resolvers
 // to a map of routes containing dnstype resolvers, for use in the wireguard engine,
 // taking into account exit node contexts.
-func convertRoutes(routes map[string][]*tailcfg.DNSResolver, usingExitNode bool) map[string][]*dnstype.Resolver {
+func filterRoutes(routes map[string][]*dnstype.Resolver, usingExitNode bool) map[string][]*dnstype.Resolver {
 	converted := make(map[string][]*dnstype.Resolver)
 	for suffix, resolvers := range routes {
 		// Suffixes with no resolvers represent a valid configuration,
@@ -624,7 +624,7 @@ func convertRoutes(routes map[string][]*tailcfg.DNSResolver, usingExitNode bool)
 
 		// In exit node contexts, we filter out resolvers not configured for use with
 		// exit nodes. If there are no such configured resolvers, there should not be an entry for that suffix.
-		convertedResolvers := convertResolvers(resolvers, usingExitNode)
+		convertedResolvers := filterResolvers(resolvers, usingExitNode)
 		if len(convertedResolvers) > 0 {
 			converted[suffix] = convertedResolvers
 		}

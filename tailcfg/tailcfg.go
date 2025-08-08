@@ -5,7 +5,7 @@
 // the node and the coordination server.
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,DNSResolver --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService --clonefunc
 
 import (
 	"bytes"
@@ -168,8 +168,7 @@ type CapabilityVersion int
 //   - 121: 2025-07-19: Client understands peer relay endpoint alloc with [disco.AllocateUDPRelayEndpointRequest] & [disco.AllocateUDPRelayEndpointResponse]
 //   - 122: 2025-07-21: Client sends Hostinfo.ExitNodeID to report which exit node it has selected, if any.
 //   - 123: 2025-07-28: fix deadlock regression from cryptokey routing change (issue #16651)
-//   - 124: 2025-08-07: DNSConfig.{Resolvers,Routes} are re-typed to collections of DNSResolver instead of dnstype.Resolver.
-const CurrentCapabilityVersion CapabilityVersion = 124
+const CurrentCapabilityVersion CapabilityVersion = 123
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -1699,22 +1698,10 @@ var FilterAllowAll = []FilterRule{
 	},
 }
 
-// DNSResolver describes a single DNS resolver and any special handling needed when
-// using that resolver.
-type DNSResolver struct {
-	dnstype.Resolver `json:",omitempty"`
-
-	// UseWithExitNode designates that this resolver should continue to be used when an
-	// exit node is in use. Normally, DNS resolution is delegated to the exit node but
-	// there are situations where it is preferable to still use a Split DNS server and/or
-	// global DNS server instead of the exit node.
-	UseWithExitNode bool `json:",omitempty"`
-}
-
 // DNSConfig is the DNS configuration.
 type DNSConfig struct {
 	// Resolvers are the DNS resolvers to use, in order of preference.
-	Resolvers []*DNSResolver `json:",omitempty"`
+	Resolvers []*dnstype.Resolver `json:",omitempty"`
 
 	// Routes maps DNS name suffixes to a set of DNS resolvers to
 	// use. It is used to implement "split DNS" and other advanced DNS
@@ -1726,7 +1713,7 @@ type DNSConfig struct {
 	// If the value is an empty slice, that means the suffix should still
 	// be handled by Tailscale's built-in resolver (100.100.100.100), such
 	// as for the purpose of handling ExtraRecords.
-	Routes map[string][]*DNSResolver `json:",omitempty"`
+	Routes map[string][]*dnstype.Resolver `json:",omitempty"`
 
 	// FallbackResolvers is like Resolvers, but is only used if a
 	// split DNS configuration is requested in a configuration that
