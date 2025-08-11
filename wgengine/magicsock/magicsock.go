@@ -2273,6 +2273,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			return
 		}
 		c.relayManager.handleRxDiscoMsg(c, challenge, key.NodePublic{}, di.discoKey, src)
+		metricRecvDiscoBindUDPRelayEndpointChallenge.Add(1)
 		return
 	}
 
@@ -4008,6 +4009,7 @@ var (
 	metricRecvDiscoCallMeMaybeViaBadNode                 = clientmetric.NewCounter("magicsock_disco_recv_callmemaybevia_bad_node")
 	metricRecvDiscoCallMeMaybeBadDisco                   = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_disco")
 	metricRecvDiscoCallMeMaybeViaBadDisco                = clientmetric.NewCounter("magicsock_disco_recv_callmemaybevia_bad_disco")
+	metricRecvDiscoBindUDPRelayEndpointChallenge         = clientmetric.NewCounter("magicsock_disco_recv_bind_udp_relay_endpoint_challenge")
 	metricRecvDiscoAllocUDPRelayEndpointRequest          = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_request")
 	metricRecvDiscoAllocUDPRelayEndpointRequestBadDisco  = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_request_bad_disco")
 	metricRecvDiscoAllocUDPRelayEndpointResponseBadDisco = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_response_bad_disco")
