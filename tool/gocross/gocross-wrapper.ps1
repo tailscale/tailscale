@@ -4,12 +4,12 @@ $ErrorActionPreference = 'Stop'
 
 <#
   .DESCRIPTION
-  Copies the global $args variable into an array, which is easier to work with
+  Copies the script's $args variable into an array, which is easier to work with
   when preparing to start child processes.
 #>
-function Copy-GlobalArgs {
-    $list = [System.Collections.Generic.List[string]]::new($Global:args.Count)
-    foreach ($arg in $Global:args) {
+function Copy-ScriptArgs {
+    $list = [System.Collections.Generic.List[string]]::new($Script:args.Count)
+    foreach ($arg in $Script:args) {
         $list.Add($arg)
     }
     return $list.ToArray()
@@ -189,7 +189,7 @@ $repoRoot = Get-RepoRoot
 $execEnv = Copy-Environment
 $execEnv.Remove('GOROOT')
 
-$argList = Copy-GlobalArgs
+$argList = Copy-ScriptArgs
 
 if ($Env:TS_USE_GOCROSS -ne '1') {
     $revFile = Join-Path $repoRoot 'go.toolchain.rev' -Resolve
