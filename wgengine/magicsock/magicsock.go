@@ -1842,12 +1842,6 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		de, ok := c.peerMap.endpointForEpAddr(src)
 		c.mu.Unlock()
 		if !ok {
-			if c.controlKnobs != nil && c.controlKnobs.DisableCryptorouting.Load() {
-				// Note: UDP relay is dependent on cryptorouting enablement. We
-				// only update Geneve-encapsulated [epAddr]s in the [peerMap]
-				// via [lazyEndpoint].
-				return nil, 0, false, false
-			}
 			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
 			//  for the same batch & [epAddr] src.
 			return &lazyEndpoint{c: c, src: src}, size, isGeneveEncap, true

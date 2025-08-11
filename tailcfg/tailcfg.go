@@ -168,7 +168,8 @@ type CapabilityVersion int
 //   - 121: 2025-07-19: Client understands peer relay endpoint alloc with [disco.AllocateUDPRelayEndpointRequest] & [disco.AllocateUDPRelayEndpointResponse]
 //   - 122: 2025-07-21: Client sends Hostinfo.ExitNodeID to report which exit node it has selected, if any.
 //   - 123: 2025-07-28: fix deadlock regression from cryptokey routing change (issue #16651)
-const CurrentCapabilityVersion CapabilityVersion = 123
+//   - 124: 2025-08-08: removed NodeAttrDisableMagicSockCryptoRouting support, crypto routing is now mandatory
+const CurrentCapabilityVersion CapabilityVersion = 124
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2590,6 +2591,9 @@ const (
 
 	// NodeAttrDisableMagicSockCryptoRouting disables the use of the
 	// magicsock cryptorouting hook. See tailscale/corp#20732.
+	//
+	// Deprecated: NodeAttrDisableMagicSockCryptoRouting is deprecated as of
+	// CapabilityVersion 124, CryptoRouting is now mandatory. See tailscale/corp#31083.
 	NodeAttrDisableMagicSockCryptoRouting NodeCapability = "disable-magicsock-crypto-routing"
 
 	// NodeAttrDisableCaptivePortalDetection instructs the client to not perform captive portal detection
