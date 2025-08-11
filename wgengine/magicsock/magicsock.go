@@ -681,6 +681,7 @@ func (c *Conn) onUDPRelayAllocResp(allocResp UDPRelayAllocResp) {
 		if selfNodeKey.Compare(allocResp.ReqRxFromNodeKey) == 0 &&
 			allocResp.ReqRxFromDiscoKey.Compare(c.discoPublic) == 0 {
 			c.relayManager.handleRxDiscoMsg(c, allocResp.Message, selfNodeKey, allocResp.ReqRxFromDiscoKey, epAddr{})
+			metricLocalDiscoAllocUDPRelayEndpointResponse.Add(1)
 		}
 		return
 	}
@@ -1926,6 +1927,7 @@ func (c *Conn) sendDiscoAllocateUDPRelayEndpointRequest(dst epAddr, dstKey key.N
 			RxFromDiscoKey: c.discoPublic,
 			Message:        allocReq,
 		})
+		metricLocalDiscoAllocUDPRelayEndpointRequest.Add(1)
 		return true, nil
 	}
 	return c.sendDiscoMessage(dst, dstKey, dstDisco, allocReq, logLevel)
@@ -3990,6 +3992,7 @@ var (
 	metricSentDiscoBindUDPRelayEndpoint          = clientmetric.NewCounter("magicsock_disco_sent_bind_udp_relay_endpoint")
 	metricSentDiscoBindUDPRelayEndpointAnswer    = clientmetric.NewCounter("magicsock_disco_sent_bind_udp_relay_endpoint_answer")
 	metricSentDiscoAllocUDPRelayEndpointRequest  = clientmetric.NewCounter("magicsock_disco_sent_alloc_udp_relay_endpoint_request")
+	metricLocalDiscoAllocUDPRelayEndpointRequest = clientmetric.NewCounter("magicsock_disco_local_alloc_udp_relay_endpoint_request")
 	metricSentDiscoAllocUDPRelayEndpointResponse = clientmetric.NewCounter("magicsock_disco_sent_alloc_udp_relay_endpoint_response")
 	metricRecvDiscoBadPeer                       = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
 	metricRecvDiscoBadKey                        = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
@@ -4009,6 +4012,7 @@ var (
 	metricRecvDiscoAllocUDPRelayEndpointRequestBadDisco  = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_request_bad_disco")
 	metricRecvDiscoAllocUDPRelayEndpointResponseBadDisco = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_response_bad_disco")
 	metricRecvDiscoAllocUDPRelayEndpointResponse         = clientmetric.NewCounter("magicsock_disco_recv_alloc_udp_relay_endpoint_response")
+	metricLocalDiscoAllocUDPRelayEndpointResponse        = clientmetric.NewCounter("magicsock_disco_local_alloc_udp_relay_endpoint_response")
 	metricRecvDiscoDERPPeerNotHere                       = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_not_here")
 	metricRecvDiscoDERPPeerGoneUnknown                   = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_gone_unknown")
 	// metricDERPHomeChange is how many times our DERP home region DI has
