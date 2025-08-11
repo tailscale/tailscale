@@ -169,7 +169,8 @@ type CapabilityVersion int
 //   - 122: 2025-07-21: Client sends Hostinfo.ExitNodeID to report which exit node it has selected, if any.
 //   - 123: 2025-07-28: fix deadlock regression from cryptokey routing change (issue #16651)
 //   - 124: 2025-08-08: removed NodeAttrDisableMagicSockCryptoRouting support, crypto routing is now mandatory
-const CurrentCapabilityVersion CapabilityVersion = 124
+//   - 125: 2025-08-11: dnstype.Resolver adds UseWithExitNode field.
+const CurrentCapabilityVersion CapabilityVersion = 125
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -1730,10 +1731,9 @@ type DNSConfig struct {
 	// proxying to be enabled.
 	Proxied bool `json:",omitempty"`
 
-	// The following fields are only set and used by
-	// MapRequest.Version >=9 and <14.
-
-	// Nameservers are the IP addresses of the nameservers to use.
+	// Nameservers are the IP addresses of the global nameservers to use.
+	//
+	// Deprecated: this is only set and used by MapRequest.Version >=9 and <14. Use Resolvers instead.
 	Nameservers []netip.Addr `json:",omitempty"`
 
 	// CertDomains are the set of DNS names for which the control

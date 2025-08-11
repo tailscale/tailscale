@@ -17,7 +17,7 @@ func TestResolverEqual(t *testing.T) {
 		fieldNames = append(fieldNames, field.Name)
 	}
 	sort.Strings(fieldNames)
-	if !slices.Equal(fieldNames, []string{"Addr", "BootstrapResolution"}) {
+	if !slices.Equal(fieldNames, []string{"Addr", "BootstrapResolution", "UseWithExitNode"}) {
 		t.Errorf("Resolver fields changed; update test")
 	}
 
@@ -66,6 +66,18 @@ func TestResolverEqual(t *testing.T) {
 				Addr:                "dns.example.com",
 				BootstrapResolution: []netip.Addr{netip.MustParseAddr("8.8.4.4")},
 			},
+			want: false,
+		},
+		{
+			name: "equal UseWithExitNode",
+			a:    &Resolver{Addr: "dns.example.com", UseWithExitNode: true},
+			b:    &Resolver{Addr: "dns.example.com", UseWithExitNode: true},
+			want: true,
+		},
+		{
+			name: "not equal UseWithExitNode",
+			a:    &Resolver{Addr: "dns.example.com", UseWithExitNode: true},
+			b:    &Resolver{Addr: "dns.example.com", UseWithExitNode: false},
 			want: false,
 		},
 	}
