@@ -578,6 +578,42 @@ func (nb *nodeBackend) doShutdown(cause error) {
 	nb.eventClient.Close()
 }
 
+// useWithExitNodeResolvers filters out resolvers so the ones that remain
+// are all the ones marked for use with exit nodes.
+func useWithExitNodeResolvers(resolvers []*dnstype.Resolver) []*dnstype.Resolver {
+	var filtered []*dnstype.Resolver
+	for _, res := range resolvers {
+		if res.UseWithExitNode {
+			filtered = append(filtered, res)
+		}
+	}
+	return filtered
+}
+
+// useWithExitNodeRoutes filters out routes so the ones that remain
+// are either zero-length resolver lists, or lists containing only
+// resolvers marked for use with exit nodes.
+func useWithExitNodeRoutes(routes map[string][]*dnstype.Resolver) map[string][]*dnstype.Resolver {
+	var filtered map[string][]*dnstype.Resolver
+	for suffix, resolvers := range routes {
+		// Suffixes with no resolvers represent a valid configuration,
+		// and should persist regardless of exit node considerations.
+		if len(resolvers) == 0 {
+			mak.Set(&filtered, suffix, make([]*dnstype.Resolver, 0))
+			continue
+		}
+
+		// In exit node contexts, we filter out resolvers not configured for use with
+		// exit nodes. If there are no such configured resolvers, there should not be an entry for that suffix.
+		filteredResolvers := useWithExitNodeResolvers(resolvers)
+		if len(filteredResolvers) > 0 {
+			mak.Set(&filtered, suffix, filteredResolvers)
+		}
+	}
+
+	return filtered
+}
+
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
 // prefs, client OS version, and cloud hosting environment.
 //
@@ -700,10 +736,36 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
 	}
 
+	addSplitDNSRoutes := func(routes map[string][]*dnstype.Resolver) {
+		for suffix, resolvers := range routes {
+			fqdn, err := dnsname.ToFQDN(suffix)
+			if err != nil {
+				logf("[unexpected] non-FQDN route suffix %q", suffix)
+			}
+
+			// Create map entry even if len(resolvers) == 0; Issue 2706.
+			// This lets the control plane send ExtraRecords for which we
+			// can authoritatively answer "name not exists" for when the
+			// control plane also sends this explicit but empty route
+			// making it as something we handle.
+			dcfg.Routes[fqdn] = slices.Clone(resolvers)
+		}
+	}
+
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
-	// to run a DoH DNS proxy, then send all our DNS traffic through it.
+	// to run a DoH DNS proxy, then send all our DNS traffic through it,
+	// unless we find resolvers with UseWithExitNode set, in which case we use that.
 	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
-		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
+		filtered := useWithExitNodeResolvers(nm.DNS.Resolvers)
+		if len(filtered) > 0 {
+			addDefault(filtered)
+		} else {
+			// If no default global resolvers with the override
+			// are configured, configure the exit node's resolver.
+			addDefault([]*dnstype.Resolver{{Addr: dohURL}})
+		}
+
+		addSplitDNSRoutes(useWithExitNodeRoutes(nm.DNS.Routes))
 		return dcfg
 	}
 
@@ -718,25 +780,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 	}
 
-	for suffix, resolvers := range nm.DNS.Routes {
-		fqdn, err := dnsname.ToFQDN(suffix)
-		if err != nil {
-			logf("[unexpected] non-FQDN route suffix %q", suffix)
-		}
-
-		// Create map entry even if len(resolvers) == 0; Issue 2706.
-		// This lets the control plane send ExtraRecords for which we
-		// can authoritatively answer "name not exists" for when the
-		// control plane also sends this explicit but empty route
-		// making it as something we handle.
-		//
-		// While we're already populating it, might as well size the
-		// slice appropriately.
-		// Per #9498 the exact requirements of nil vs empty slice remain
-		// unclear, this is a haunted graveyard to be resolved.
-		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
-		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
-	}
+	// Add split DNS routes, with no regard to exit node configuration.
+	addSplitDNSRoutes(nm.DNS.Routes)
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See

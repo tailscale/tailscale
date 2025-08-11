@@ -88,10 +88,12 @@ func (v ResolverView) Addr() string { return v.ж.Addr }
 func (v ResolverView) BootstrapResolution() views.Slice[netip.Addr] {
 	return views.SliceOf(v.ж.BootstrapResolution)
 }
+func (v ResolverView) UseWithExitNode() bool      { return v.ж.UseWithExitNode }
 func (v ResolverView) Equal(v2 ResolverView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ResolverViewNeedsRegeneration = Resolver(struct {
 	Addr                string
 	BootstrapResolution []netip.Addr
+	UseWithExitNode     bool
 }{})
