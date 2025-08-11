@@ -2025,6 +2025,16 @@ func (c *Conn) sendDiscoMessage(dst epAddr, dstKey key.NodePublic, dstDisco key.
 			metricSentDiscoPong.Add(1)
 		case *disco.CallMeMaybe:
 			metricSentDiscoCallMeMaybe.Add(1)
+		case *disco.CallMeMaybeVia:
+			metricSentDiscoCallMeMaybeVia.Add(1)
+		case *disco.BindUDPRelayEndpoint:
+			metricSentDiscoBindUDPRelayEndpoint.Add(1)
+		case *disco.BindUDPRelayEndpointAnswer:
+			metricSentDiscoBindUDPRelayEndpointAnswer.Add(1)
+		case *disco.AllocateUDPRelayEndpointRequest:
+			metricSentDiscoAllocUDPRelayEndpointRequest.Add(1)
+		case *disco.AllocateUDPRelayEndpointResponse:
+			metricSentDiscoAllocUDPRelayEndpointResponse.Add(1)
 		}
 	} else if err == nil {
 		// Can't send. (e.g. no IPv6 locally)
@@ -3967,18 +3977,23 @@ var (
 	metricRecvDataPacketsPeerRelayIPv6 = clientmetric.NewAggregateCounter("magicsock_recv_data_peer_relay_ipv6")
 
 	// Disco packets
-	metricSendDiscoUDP               = clientmetric.NewCounter("magicsock_disco_send_udp")
-	metricSendDiscoDERP              = clientmetric.NewCounter("magicsock_disco_send_derp")
-	metricSentDiscoUDP               = clientmetric.NewCounter("magicsock_disco_sent_udp")
-	metricSentDiscoDERP              = clientmetric.NewCounter("magicsock_disco_sent_derp")
-	metricSentDiscoPing              = clientmetric.NewCounter("magicsock_disco_sent_ping")
-	metricSentDiscoPong              = clientmetric.NewCounter("magicsock_disco_sent_pong")
-	metricSentDiscoPeerMTUProbes     = clientmetric.NewCounter("magicsock_disco_sent_peer_mtu_probes")
-	metricSentDiscoPeerMTUProbeBytes = clientmetric.NewCounter("magicsock_disco_sent_peer_mtu_probe_bytes")
-	metricSentDiscoCallMeMaybe       = clientmetric.NewCounter("magicsock_disco_sent_callmemaybe")
-	metricRecvDiscoBadPeer           = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
-	metricRecvDiscoBadKey            = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
-	metricRecvDiscoBadParse          = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
+	metricSendDiscoUDP                           = clientmetric.NewCounter("magicsock_disco_send_udp")
+	metricSendDiscoDERP                          = clientmetric.NewCounter("magicsock_disco_send_derp")
+	metricSentDiscoUDP                           = clientmetric.NewCounter("magicsock_disco_sent_udp")
+	metricSentDiscoDERP                          = clientmetric.NewCounter("magicsock_disco_sent_derp")
+	metricSentDiscoPing                          = clientmetric.NewCounter("magicsock_disco_sent_ping")
+	metricSentDiscoPong                          = clientmetric.NewCounter("magicsock_disco_sent_pong")
+	metricSentDiscoPeerMTUProbes                 = clientmetric.NewCounter("magicsock_disco_sent_peer_mtu_probes")
+	metricSentDiscoPeerMTUProbeBytes             = clientmetric.NewCounter("magicsock_disco_sent_peer_mtu_probe_bytes")
+	metricSentDiscoCallMeMaybe                   = clientmetric.NewCounter("magicsock_disco_sent_callmemaybe")
+	metricSentDiscoCallMeMaybeVia                = clientmetric.NewCounter("magicsock_disco_sent_callmemaybevia")
+	metricSentDiscoBindUDPRelayEndpoint          = clientmetric.NewCounter("magicsock_disco_sent_bind_udp_relay_endpoint")
+	metricSentDiscoBindUDPRelayEndpointAnswer    = clientmetric.NewCounter("magicsock_disco_sent_bind_udp_relay_endpoint_answer")
+	metricSentDiscoAllocUDPRelayEndpointRequest  = clientmetric.NewCounter("magicsock_disco_sent_alloc_udp_relay_endpoint_request")
+	metricSentDiscoAllocUDPRelayEndpointResponse = clientmetric.NewCounter("magicsock_disco_sent_alloc_udp_relay_endpoint_response")
+	metricRecvDiscoBadPeer                       = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
+	metricRecvDiscoBadKey                        = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
+	metricRecvDiscoBadParse                      = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
 
 	metricRecvDiscoUDP                                   = clientmetric.NewCounter("magicsock_disco_recv_udp")
 	metricRecvDiscoDERP                                  = clientmetric.NewCounter("magicsock_disco_recv_derp")
