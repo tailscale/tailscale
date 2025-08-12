@@ -81,8 +81,9 @@ type call[V any] struct {
 // Group represents a class of work and forms a namespace in
 // which units of work can be executed with duplicate suppression.
 type Group[K comparable, V any] struct {
-	mu sync.Mutex     // protects m
-	m  map[K]*call[V] // lazily initialized
+	mu     sync.Mutex     // protects m
+	m      map[K]*call[V] // lazily initialized
+	maxLen int            // maximum len(m) when doCall completes, used for cleanup
 }
 
 // Result holds the results of Do, so they can be passed
@@ -254,7 +255,7 @@ func (g *Group[K, V]) doCall(c *call[V], key K, fn func() (V, error)) {
 		defer g.mu.Unlock()
 		c.wg.Done()
 		if g.m[key] == c {
-			delete(g.m, key)
+			g.deleteLocked(key)
 		}
 
 		if e, ok := c.err.(*panicError); ok {
@@ -301,11 +302,29 @@ func (g *Group[K, V]) doCall(c *call[V], key K, fn func() (V, error)) {
 	}
 }
 
+func (g *Group[K, B]) deleteLocked(key K) {
+	delete(g.m, key)
+	n := len(g.m)
+
+	if n > g.maxLen {
+		g.maxLen = n + 1
+		return
+	}
+
+	if n > 0 || g.maxLen < 32 {
+		return
+	}
+
+	// Release g.m for its memory to be reclaimed.
+	g.maxLen = 0
+	g.m = nil
+}
+
 // Forget tells the singleflight to forget about a key.  Future calls
 // to Do for this key will call the function rather than waiting for
 // an earlier call to complete.
 func (g *Group[K, V]) Forget(key K) {
 	g.mu.Lock()
-	delete(g.m, key)
+	g.deleteLocked(key)
 	g.mu.Unlock()
 }

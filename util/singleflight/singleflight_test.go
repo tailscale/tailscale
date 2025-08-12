@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func TestDo(t *testing.T) {
@@ -472,5 +474,54 @@ func assertOKResult[V comparable](t testing.TB, res Result[V], want V) {
 	}
 	if res.Val != want {
 		t.Fatalf("unexpected value; got %v, want %v", res.Val, want)
+	}
+}
+
+func TestRelease(t *testing.T) {
+	var sg Group[int, int]
+
+	var wg errgroup.Group
+	var startup sync.WaitGroup
+	release := make(chan struct{})
+
+	// Start 50 singleflight goroutines.
+	for key := range 50 {
+		startup.Add(1)
+		wg.Go(func() error {
+			keyRet, err, shared := sg.Do(key, func() (int, error) {
+				startup.Done()
+				<-release
+				return key, nil
+			})
+			if err != nil {
+				return fmt.Errorf("Do(%d) return error: %s", key, err)
+			}
+			if shared {
+				return fmt.Errorf("Do(%d) returned shared result, expected unshared", key)
+			}
+			if key != keyRet {
+				return fmt.Errorf("Do(%d) = %d, want %d", key, keyRet, key)
+			}
+			return nil
+		})
+	}
+
+	// Wait for all sg.Do goroutines to be executing their function.
+	// sg.m will point to all of them.
+	startup.Wait()
+	if got, want := len(sg.m), 50; got != want {
+		t.Fatalf("len(sg.m) = %d, want %d", got, want)
+	}
+
+	// Let the sg.Do goroutines return from their function.
+	close(release)
+	err := wg.Wait()
+	if err != nil {
+		t.Fatalf("error from worker: %s", err)
+	}
+
+	// Test for cleanup.
+	if sg.m != nil {
+		t.Fatal("sg.m != nil, want nil - cleanup didn't happen")
 	}
 }
