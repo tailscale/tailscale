@@ -59,8 +59,9 @@ func runNetcheck(ctx context.Context, args []string) error {
 	// Ensure that we close the portmapper after running a netcheck; this
 	// will release any port mappings created.
 	pm := portmapper.NewClient(portmapper.Config{
-		Logf:   logf,
-		NetMon: netMon,
+		Logf:     logf,
+		NetMon:   netMon,
+		EventBus: bus,
 	})
 	defer pm.Close()
 
