@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -1787,7 +1786,7 @@ func TestBetterAddr(t *testing.T) {
 	}
 	avl := func(ipps string, vni uint32, d time.Duration) addrQuality {
 		q := al(ipps, d)
-		q.vni.set(vni)
+		q.vni.Set(vni)
 		return q
 	}
 	zero := addrQuality{}
@@ -3178,9 +3177,9 @@ func Test_packetLooksLike(t *testing.T) {
 	gh := packet.GeneveHeader{
 		Version:  0,
 		Protocol: packet.GeneveProtocolDisco,
-		VNI:      1,
 		Control:  true,
 	}
+	gh.VNI.Set(1)
 	err := gh.Encode(geneveEncapDisco)
 	if err != nil {
 		t.Fatal(err)
@@ -3200,9 +3199,9 @@ func Test_packetLooksLike(t *testing.T) {
 	gh = packet.GeneveHeader{
 		Version:  0,
 		Protocol: packet.GeneveProtocolWireGuard,
-		VNI:      1,
 		Control:  true,
 	}
+	gh.VNI.Set(1)
 	err = gh.Encode(geneveEncapWireGuard)
 	if err != nil {
 		t.Fatal(err)
@@ -3213,9 +3212,9 @@ func Test_packetLooksLike(t *testing.T) {
 	gh = packet.GeneveHeader{
 		Version:  1,
 		Protocol: packet.GeneveProtocolDisco,
-		VNI:      1,
 		Control:  true,
 	}
+	gh.VNI.Set(1)
 	err = gh.Encode(geneveEncapDiscoNonZeroGeneveVersion)
 	if err != nil {
 		t.Fatal(err)
@@ -3226,9 +3225,9 @@ func Test_packetLooksLike(t *testing.T) {
 	gh = packet.GeneveHeader{
 		Version:  0,
 		Protocol: packet.GeneveProtocolDisco,
-		VNI:      1,
 		Control:  true,
 	}
+	gh.VNI.Set(1)
 	err = gh.Encode(geneveEncapDiscoNonZeroGeneveReservedBits)
 	if err != nil {
 		t.Fatal(err)
@@ -3240,9 +3239,9 @@ func Test_packetLooksLike(t *testing.T) {
 	gh = packet.GeneveHeader{
 		Version:  0,
 		Protocol: packet.GeneveProtocolDisco,
-		VNI:      1,
 		Control:  true,
 	}
+	gh.VNI.Set(1)
 	err = gh.Encode(geneveEncapDiscoNonZeroGeneveVNILSB)
 	if err != nil {
 		t.Fatal(err)
@@ -3337,55 +3336,6 @@ func Test_packetLooksLike(t *testing.T) {
 			}
 			if gotIsGeneveEncap != tt.wantIsGeneveEncap {
 				t.Errorf("packetLooksLike() gotIsGeneveEncap = %v, want %v", gotIsGeneveEncap, tt.wantIsGeneveEncap)
-			}
-		})
-	}
-}
-
-func Test_virtualNetworkID(t *testing.T) {
-	tests := []struct {
-		name string
-		set  *uint32
-		want uint32
-	}{
-		{
-			"don't set",
-			nil,
-			0,
-		},
-		{
-			"set 0",
-			ptr.To(uint32(0)),
-			0,
-		},
-		{
-			"set 1",
-			ptr.To(uint32(1)),
-			1,
-		},
-		{
-			"set math.MaxUint32",
-			ptr.To(uint32(math.MaxUint32)),
-			1<<24 - 1,
-		},
-		{
-			"set max 3-byte value",
-			ptr.To(uint32(1<<24 - 1)),
-			1<<24 - 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			v := virtualNetworkID{}
-			if tt.set != nil {
-				v.set(*tt.set)
-			}
-			if v.isSet() != (tt.set != nil) {
-				t.Fatalf("isSet: %v != wantIsSet: %v", v.isSet(), tt.set != nil)
-			}
-			if v.get() != tt.want {
-				t.Fatalf("get(): %v != want: %v", v.get(), tt.want)
 			}
 		})
 	}
@@ -3772,6 +3722,7 @@ func TestConn_receiveIP(t *testing.T) {
 	gh := packet.GeneveHeader{
 		Protocol: packet.GeneveProtocolDisco,
 	}
+	gh.VNI.Set(1)
 	err := gh.Encode(looksLikeGeneveDisco)
 	if err != nil {
 		t.Fatal(err)
@@ -3796,10 +3747,8 @@ func TestConn_receiveIP(t *testing.T) {
 	looksLikeGeneveWireGuardInit := make([]byte, packet.GeneveFixedHeaderLength+device.MessageInitiationSize)
 	gh = packet.GeneveHeader{
 		Protocol: packet.GeneveProtocolWireGuard,
-		VNI:      1,
 	}
-	vni := virtualNetworkID{}
-	vni.set(gh.VNI)
+	gh.VNI.Set(1)
 	err = gh.Encode(looksLikeGeneveWireGuardInit)
 	if err != nil {
 		t.Fatal(err)
@@ -3922,7 +3871,7 @@ func TestConn_receiveIP(t *testing.T) {
 			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                           &epAddrEndpointCache{},
 			insertWantEndpointTypeInPeerMap: true,
-			peerMapEpAddr:                   epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777"), vni: vni},
+			peerMapEpAddr:                   epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777"), vni: gh.VNI},
 			wantEndpointType: &lazyEndpoint{
 				maybeEP: newPeerMapInsertableEndpoint(0),
 			},
@@ -3938,7 +3887,7 @@ func TestConn_receiveIP(t *testing.T) {
 			ipp:                             netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:                           &epAddrEndpointCache{},
 			insertWantEndpointTypeInPeerMap: true,
-			peerMapEpAddr:                   epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777"), vni: vni},
+			peerMapEpAddr:                   epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777"), vni: gh.VNI},
 			wantEndpointType: &lazyEndpoint{
 				maybeEP: newPeerMapInsertableEndpoint(mono.Now().Add(time.Hour * 24)),
 			},

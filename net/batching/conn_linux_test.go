@@ -1,13 +1,14 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package magicsock
+package batching
 
 import (
 	"encoding/binary"
 	"net"
 	"testing"
 
+	"github.com/tailscale/wireguard-go/conn"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/net/packet"
 )
@@ -159,13 +160,15 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 		return make([]byte, len+packet.GeneveFixedHeaderLength, cap+packet.GeneveFixedHeaderLength)
 	}
 
-	vni1 := virtualNetworkID{}
-	vni1.set(1)
+	geneve := packet.GeneveHeader{
+		Protocol: packet.GeneveProtocolWireGuard,
+	}
+	geneve.VNI.Set(1)
 
 	cases := []struct {
 		name     string
 		buffs    [][]byte
-		vni      virtualNetworkID
+		geneve   packet.GeneveHeader
 		wantLens []int
 		wantGSO  []int
 	}{
@@ -182,7 +185,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			buffs: [][]byte{
 				withGeneveSpace(1, 1),
 			},
-			vni:      vni1,
+			geneve:   geneve,
 			wantLens: []int{1 + packet.GeneveFixedHeaderLength},
 			wantGSO:  []int{0},
 		},
@@ -201,7 +204,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(1, 2+packet.GeneveFixedHeaderLength),
 				withGeneveSpace(1, 1),
 			},
-			vni:      vni1,
+			geneve:   geneve,
 			wantLens: []int{2 + (2 * packet.GeneveFixedHeaderLength)},
 			wantGSO:  []int{1 + packet.GeneveFixedHeaderLength},
 		},
@@ -220,7 +223,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(2, 3+packet.GeneveFixedHeaderLength),
 				withGeneveSpace(1, 1),
 			},
-			vni:      vni1,
+			geneve:   geneve,
 			wantLens: []int{3 + (2 * packet.GeneveFixedHeaderLength)},
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength},
 		},
@@ -241,7 +244,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(1, 1),
 				withGeneveSpace(2, 2),
 			},
-			vni:      vni1,
+			geneve:   geneve,
 			wantLens: []int{3 + (2 * packet.GeneveFixedHeaderLength), 2 + packet.GeneveFixedHeaderLength},
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
 		},
@@ -262,7 +265,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				withGeneveSpace(2, 2),
 				withGeneveSpace(2, 2),
 			},
-			vni:      vni1,
+			geneve:   geneve,
 			wantLens: []int{4 + (2 * packet.GeneveFixedHeaderLength), 2 + packet.GeneveFixedHeaderLength},
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
 		},
@@ -279,7 +282,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				msgs[i].Buffers = make([][]byte, 1)
 				msgs[i].OOB = make([]byte, 0, 2)
 			}
-			got := c.coalesceMessages(addr, tt.vni, tt.buffs, msgs, packet.GeneveFixedHeaderLength)
+			got := c.coalesceMessages(addr, tt.geneve, tt.buffs, msgs, packet.GeneveFixedHeaderLength)
 			if got != len(tt.wantLens) {
 				t.Fatalf("got len %d want: %d", got, len(tt.wantLens))
 			}
@@ -300,5 +303,14 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMinReadBatchMsgsLen(t *testing.T) {
+	// So long as magicsock uses [Conn], and [wireguard-go/conn.Bind] API is
+	// shaped for wireguard-go to control packet memory, these values should be
+	// aligned.
+	if MinReadBatchMsgsLen() != conn.IdealBatchSize {
+		t.Fatalf("MinReadBatchMsgsLen():%d != conn.IdealBatchSize(): %d", MinReadBatchMsgsLen(), conn.IdealBatchSize)
 	}
 }

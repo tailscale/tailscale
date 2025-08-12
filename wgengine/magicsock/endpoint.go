@@ -108,7 +108,7 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 	defer de.mu.Unlock()
 	now := mono.Now()
 	curBestAddrTrusted := now.Before(de.trustBestAddrUntil)
-	sameRelayServer := de.bestAddr.vni.isSet() && maybeBest.relayServerDisco.Compare(de.bestAddr.relayServerDisco) == 0
+	sameRelayServer := de.bestAddr.vni.IsSet() && maybeBest.relayServerDisco.Compare(de.bestAddr.relayServerDisco) == 0
 
 	if !curBestAddrTrusted ||
 		sameRelayServer ||
@@ -1070,7 +1070,7 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 
 		switch {
 		case udpAddr.ap.Addr().Is4():
-			if udpAddr.vni.isSet() {
+			if udpAddr.vni.IsSet() {
 				de.c.metrics.outboundPacketsPeerRelayIPv4Total.Add(int64(len(buffs)))
 				de.c.metrics.outboundBytesPeerRelayIPv4Total.Add(int64(txBytes))
 			} else {
@@ -1078,7 +1078,7 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 				de.c.metrics.outboundBytesIPv4Total.Add(int64(txBytes))
 			}
 		case udpAddr.ap.Addr().Is6():
-			if udpAddr.vni.isSet() {
+			if udpAddr.vni.IsSet() {
 				de.c.metrics.outboundPacketsPeerRelayIPv6Total.Add(int64(len(buffs)))
 				de.c.metrics.outboundBytesPeerRelayIPv6Total.Add(int64(txBytes))
 			} else {
@@ -1160,7 +1160,7 @@ func (de *endpoint) discoPingTimeout(txid stun.TxID) {
 		return
 	}
 	bestUntrusted := mono.Now().After(de.trustBestAddrUntil)
-	if sp.to == de.bestAddr.epAddr && sp.to.vni.isSet() && bestUntrusted {
+	if sp.to == de.bestAddr.epAddr && sp.to.vni.IsSet() && bestUntrusted {
 		// TODO(jwhited): consider applying this to direct UDP paths as well
 		de.clearBestAddrLocked()
 	}
@@ -1274,7 +1274,7 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 		return
 	}
 	if purpose != pingCLI &&
-		!ep.vni.isSet() { // de.endpointState is only relevant for direct/non-vni epAddr's
+		!ep.vni.IsSet() { // de.endpointState is only relevant for direct/non-vni epAddr's
 		st, ok := de.endpointState[ep.ap]
 		if !ok {
 			// Shouldn't happen. But don't ping an endpoint that's
@@ -1610,7 +1610,7 @@ func (de *endpoint) noteBadEndpoint(udpAddr epAddr) {
 
 	de.clearBestAddrLocked()
 
-	if !udpAddr.vni.isSet() {
+	if !udpAddr.vni.IsSet() {
 		if st, ok := de.endpointState[udpAddr.ap]; ok {
 			st.clear()
 		}
@@ -1644,7 +1644,7 @@ func pingSizeToPktLen(size int, udpAddr epAddr) tstun.WireMTU {
 		headerLen = ipv6.HeaderLen
 	}
 	headerLen += 8 // UDP header length
-	if udpAddr.vni.isSet() {
+	if udpAddr.vni.IsSet() {
 		headerLen += packet.GeneveFixedHeaderLength
 	}
 	return tstun.WireMTU(size + headerLen)
@@ -1699,7 +1699,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	now := mono.Now()
 	latency := now.Sub(sp.at)
 
-	if !isDerp && !src.vni.isSet() {
+	if !isDerp && !src.vni.IsSet() {
 		// Note: we check vni.isSet() as relay [epAddr]'s are not stored in
 		// endpointState, they are either de.bestAddr or not.
 		st, ok := de.endpointState[sp.to.ap]
@@ -1748,7 +1748,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 		//  we don't clear direct UDP paths on disco ping timeout (see
 		//  discoPingTimeout).
 		if betterAddr(thisPong, de.bestAddr) {
-			if src.vni.isSet() {
+			if src.vni.IsSet() {
 				// This would be unexpected. Switching to a Geneve-encapsulated
 				// path should only happen in de.relayEndpointReady().
 				de.c.logf("[unexpected] switching to Geneve-encapsulated path %v from %v", thisPong, de.bestAddr)
@@ -1778,23 +1778,23 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 }
 
 // epAddr is a [netip.AddrPort] with an optional Geneve header (RFC8926)
-// [virtualNetworkID].
+// [packet.VirtualNetworkID].
 type epAddr struct {
-	ap  netip.AddrPort   // if ap == tailcfg.DerpMagicIPAddr then vni is never set
-	vni virtualNetworkID // vni.isSet() indicates if this [epAddr] involves a Geneve header
+	ap  netip.AddrPort          // if ap == tailcfg.DerpMagicIPAddr then vni is never set
+	vni packet.VirtualNetworkID // vni.IsSet() indicates if this [epAddr] involves a Geneve header
 }
 
 // isDirect returns true if e.ap is valid and not tailcfg.DerpMagicIPAddr,
 // and a VNI is not set.
 func (e epAddr) isDirect() bool {
-	return e.ap.IsValid() && e.ap.Addr() != tailcfg.DerpMagicIPAddr && !e.vni.isSet()
+	return e.ap.IsValid() && e.ap.Addr() != tailcfg.DerpMagicIPAddr && !e.vni.IsSet()
 }
 
 func (e epAddr) String() string {
-	if !e.vni.isSet() {
+	if !e.vni.IsSet() {
 		return e.ap.String()
 	}
-	return fmt.Sprintf("%v:vni:%d", e.ap.String(), e.vni.get())
+	return fmt.Sprintf("%v:vni:%d", e.ap.String(), e.vni.Get())
 }
 
 // addrQuality is an [epAddr], an optional [key.DiscoPublic] if a relay server
@@ -1833,10 +1833,10 @@ func betterAddr(a, b addrQuality) bool {
 
 	// Geneve-encapsulated paths (UDP relay servers) are lower preference in
 	// relation to non.
-	if !a.vni.isSet() && b.vni.isSet() {
+	if !a.vni.IsSet() && b.vni.IsSet() {
 		return true
 	}
-	if a.vni.isSet() && !b.vni.isSet() {
+	if a.vni.IsSet() && !b.vni.IsSet() {
 		return false
 	}
 
@@ -1982,7 +1982,7 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	ps.Active = now.Sub(de.lastSendExt) < sessionActiveTimeout
 
 	if udpAddr, derpAddr, _ := de.addrForSendLocked(now); udpAddr.ap.IsValid() && !derpAddr.IsValid() {
-		if udpAddr.vni.isSet() {
+		if udpAddr.vni.IsSet() {
 			ps.PeerRelay = udpAddr.String()
 		} else {
 			ps.CurAddr = udpAddr.String()

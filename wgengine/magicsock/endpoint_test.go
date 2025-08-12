@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
@@ -327,24 +328,24 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 }
 
 func Test_epAddr_isDirectUDP(t *testing.T) {
-	vni := virtualNetworkID{}
-	vni.set(7)
+	vni := packet.VirtualNetworkID{}
+	vni.Set(7)
 	tests := []struct {
 		name string
 		ap   netip.AddrPort
-		vni  virtualNetworkID
+		vni  packet.VirtualNetworkID
 		want bool
 	}{
 		{
 			name: "true",
 			ap:   netip.MustParseAddrPort("192.0.2.1:7"),
-			vni:  virtualNetworkID{},
+			vni:  packet.VirtualNetworkID{},
 			want: true,
 		},
 		{
 			name: "false derp magic addr",
 			ap:   netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 0),
-			vni:  virtualNetworkID{},
+			vni:  packet.VirtualNetworkID{},
 			want: false,
 		},
 		{
@@ -370,7 +371,7 @@ func Test_epAddr_isDirectUDP(t *testing.T) {
 func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 	directAddrQuality := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:7")}}
 	peerRelayAddrQuality := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.2:77")}, latency: time.Second}
-	peerRelayAddrQuality.vni.set(1)
+	peerRelayAddrQuality.vni.Set(1)
 	peerRelayAddrQualityHigherLatencySameServer := addrQuality{
 		epAddr:  epAddr{ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni},
 		latency: peerRelayAddrQuality.latency * 10,

@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package magicsock
+package batching
 
 import (
 	"encoding/binary"
@@ -43,10 +43,15 @@ type xnetBatchWriter interface {
 	WriteBatch([]ipv6.Message, int) (int, error)
 }
 
+var (
+	// [linuxBatchingConn] implements [Conn].
+	_ Conn = &linuxBatchingConn{}
+)
+
 // linuxBatchingConn is a UDP socket that provides batched i/o. It implements
-// batchingConn.
+// [Conn].
 type linuxBatchingConn struct {
-	pc                    nettype.PacketConn
+	pc                    *net.UDPConn
 	xpc                   xnetBatchReaderWriter
 	rxOffload             bool                                  // supports UDP GRO or similar
 	txOffload             atomic.Bool                           // supports UDP GSO or similar
@@ -98,9 +103,8 @@ const (
 //
 // All msgs have their Addr field set to addr.
 //
-// All msgs[i].Buffers[0] are preceded by a Geneve header with vni.get() if
-// vni.isSet().
-func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, vni virtualNetworkID, buffs [][]byte, msgs []ipv6.Message, offset int) int {
+// All msgs[i].Buffers[0] are preceded by a Geneve header (geneve) if geneve.VNI.IsSet().
+func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int) int {
 	var (
 		base     = -1 // index of msg we are currently coalescing into
 		gsoSize  int  // segmentation size of msgs[base]
@@ -111,15 +115,10 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, vni virtualNetwo
 	if addr.IP.To4() == nil {
 		maxPayloadLen = maxIPv6PayloadLen
 	}
-	vniIsSet := vni.isSet()
-	var gh packet.GeneveHeader
-	if vniIsSet {
-		gh.Protocol = packet.GeneveProtocolWireGuard
-		gh.VNI = vni.get()
-	}
+	vniIsSet := geneve.VNI.IsSet()
 	for i, buff := range buffs {
 		if vniIsSet {
-			gh.Encode(buffs[i])
+			geneve.Encode(buff)
 		} else {
 			buff = buff[offset:]
 		}
@@ -179,37 +178,34 @@ func (c *linuxBatchingConn) putSendBatch(batch *sendBatch) {
 	c.sendBatchPool.Put(batch)
 }
 
-func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr epAddr, offset int) error {
+func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, geneve packet.GeneveHeader, offset int) error {
 	batch := c.getSendBatch()
 	defer c.putSendBatch(batch)
-	if addr.ap.Addr().Is6() {
-		as16 := addr.ap.Addr().As16()
+	if addr.Addr().Is6() {
+		as16 := addr.Addr().As16()
 		copy(batch.ua.IP, as16[:])
 		batch.ua.IP = batch.ua.IP[:16]
 	} else {
-		as4 := addr.ap.Addr().As4()
+		as4 := addr.Addr().As4()
 		copy(batch.ua.IP, as4[:])
 		batch.ua.IP = batch.ua.IP[:4]
 	}
-	batch.ua.Port = int(addr.ap.Port())
+	batch.ua.Port = int(addr.Port())
 	var (
 		n       int
 		retried bool
 	)
 retry:
 	if c.txOffload.Load() {
-		n = c.coalesceMessages(batch.ua, addr.vni, buffs, batch.msgs, offset)
+		n = c.coalesceMessages(batch.ua, geneve, buffs, batch.msgs, offset)
 	} else {
-		vniIsSet := addr.vni.isSet()
-		var gh packet.GeneveHeader
+		vniIsSet := geneve.VNI.IsSet()
 		if vniIsSet {
-			gh.Protocol = packet.GeneveProtocolWireGuard
-			gh.VNI = addr.vni.get()
 			offset -= packet.GeneveFixedHeaderLength
 		}
 		for i := range buffs {
 			if vniIsSet {
-				gh.Encode(buffs[i])
+				geneve.Encode(buffs[i])
 			}
 			batch.msgs[i].Buffers[0] = buffs[i][offset:]
 			batch.msgs[i].Addr = batch.ua
@@ -231,11 +227,7 @@ retry:
 }
 
 func (c *linuxBatchingConn) SyscallConn() (syscall.RawConn, error) {
-	sc, ok := c.pc.(syscall.Conn)
-	if !ok {
-		return nil, errUnsupportedConnType
-	}
-	return sc.SyscallConn()
+	return c.pc.SyscallConn()
 }
 
 func (c *linuxBatchingConn) writeBatch(msgs []ipv6.Message) error {
@@ -391,9 +383,10 @@ func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 	*control = (*control)[:unix.CmsgSpace(2)]
 }
 
-// tryUpgradeToBatchingConn probes the capabilities of the OS and pconn, and
-// upgrades pconn to a *linuxBatchingConn if appropriate.
-func tryUpgradeToBatchingConn(pconn nettype.PacketConn, network string, batchSize int) nettype.PacketConn {
+// TryUpgradeToConn probes the capabilities of the OS and pconn, and upgrades
+// pconn to a [Conn] if appropriate. A batch size of MinReadBatchMsgsLen() is
+// suggested for the best performance.
+func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
 		// Exclude Android.
 		return pconn
@@ -415,7 +408,7 @@ func tryUpgradeToBatchingConn(pconn nettype.PacketConn, network string, batchSiz
 		return pconn
 	}
 	b := &linuxBatchingConn{
-		pc:                    pconn,
+		pc:                    uc,
 		getGSOSizeFromControl: getGSOSizeFromControl,
 		setGSOSizeInControl:   setGSOSizeInControl,
 		sendBatchPool: sync.Pool{
@@ -448,4 +441,22 @@ func tryUpgradeToBatchingConn(pconn nettype.PacketConn, network string, batchSiz
 	txOffload, b.rxOffload = tryEnableUDPOffload(uc)
 	b.txOffload.Store(txOffload)
 	return b
+}
+
+var controlMessageSize = -1 // bomb if used for allocation before init
+
+func init() {
+	// controlMessageSize is set to hold a UDP_GRO or UDP_SEGMENT control
+	// message. These contain a single uint16 of data.
+	controlMessageSize = unix.CmsgSpace(2)
+}
+
+// MinControlMessageSize returns the minimum control message size required to
+// support read batching via [Conn.ReadBatch].
+func MinControlMessageSize() int {
+	return controlMessageSize
+}
+
+func MinReadBatchMsgsLen() int {
+	return 128
 }

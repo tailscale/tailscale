@@ -140,7 +140,8 @@ func (e *serverEndpoint) handleDiscoControlMsg(from netip.AddrPort, senderIndex 
 		rand.Read(e.challenge[senderIndex][:])
 		copy(m.Challenge[:], e.challenge[senderIndex][:])
 		reply := make([]byte, packet.GeneveFixedHeaderLength, 512)
-		gh := packet.GeneveHeader{Control: true, VNI: e.vni, Protocol: packet.GeneveProtocolDisco}
+		gh := packet.GeneveHeader{Control: true, Protocol: packet.GeneveProtocolDisco}
+		gh.VNI.Set(e.vni)
 		err = gh.Encode(reply)
 		if err != nil {
 			return
@@ -543,7 +544,7 @@ func (s *Server) handlePacket(from netip.AddrPort, b []byte, rxSocket, otherAFSo
 	// it simple (and slow) for now.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e, ok := s.byVNI[gh.VNI]
+	e, ok := s.byVNI[gh.VNI.Get()]
 	if !ok {
 		// unknown VNI
 		return
