@@ -142,8 +142,6 @@ func main() {
 			Hostname: *flagHostname,
 			Dir:      *flagDir,
 		}
-		rootPath = ts.GetRootPath()
-		log.Printf("tsidp root path: %s", rootPath)
 		if *flagVerbose {
 			ts.Logf = log.Printf
 		}
@@ -168,6 +166,9 @@ func main() {
 			log.Fatal(err)
 		}
 		lns = append(lns, ln)
+
+		rootPath = ts.GetRootPath()
+		log.Printf("tsidp root path: %s", rootPath)
 	}
 
 	srv := &idpServer{
@@ -185,14 +186,15 @@ func main() {
 
 	// Load funnel clients from disk if they exist, regardless of whether funnel is enabled
 	// This ensures OIDC clients persist across restarts
-	f, err := os.Open(funnelClientsFile)
+	funnelClientsFilePath := filepath.Join(rootPath, funnelClientsFile)
+	f, err := os.Open(funnelClientsFilePath)
 	if err == nil {
 		if err := json.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
-			log.Fatalf("could not parse %s: %v", funnelClientsFile, err)
+			log.Fatalf("could not parse %s: %v", funnelClientsFilePath, err)
 		}
 		f.Close()
 	} else if !errors.Is(err, os.ErrNotExist) {
-		log.Fatalf("could not open %s: %v", funnelClientsFile, err)
+		log.Fatalf("could not open %s: %v", funnelClientsFilePath, err)
 	}
 
 	log.Printf("Running tsidp at %s ...", srv.serverURL)
@@ -1147,7 +1149,8 @@ func (s *idpServer) storeFunnelClientsLocked() error {
 	if err := json.NewEncoder(&buf).Encode(s.funnelClients); err != nil {
 		return err
 	}
-	return os.WriteFile(funnelClientsFile, buf.Bytes(), 0600)
+	funnelClientsFilePath := filepath.Join(s.rootPath, funnelClientsFile)
+	return os.WriteFile(funnelClientsFilePath, buf.Bytes(), 0600)
 }
 
 const (
