@@ -1135,18 +1135,25 @@ func (s *Server) canGenerateAutomaticMapResponseFor(nk key.NodePublic) bool {
 func (s *Server) hasPendingRawMapMessage(nk key.NodePublic) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.msgToSend[nk].(*tailcfg.MapResponse)
+	_, ok := s.msgToSend[nk]
 	return ok
 }
 
 func (s *Server) takeRawMapMessage(nk key.NodePublic) (mapResJSON []byte, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	mr, ok := s.msgToSend[nk].(*tailcfg.MapResponse)
+	mr, ok := s.msgToSend[nk]
 	if !ok {
 		return nil, false
 	}
 	delete(s.msgToSend, nk)
+
+	// If it's a bare PingRequest, wrap it in a MapResponse.
+	switch pr := mr.(type) {
+	case *tailcfg.PingRequest:
+		mr = &tailcfg.MapResponse{PingRequest: pr}
+	}
+
 	var err error
 	mapResJSON, err = json.Marshal(mr)
 	if err != nil {

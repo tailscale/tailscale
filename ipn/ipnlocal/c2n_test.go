@@ -18,8 +18,14 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/util/must"
+
+	gocmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestHandleC2NTLSCertStatus(t *testing.T) {
@@ -131,4 +137,55 @@ func TestHandleC2NTLSCertStatus(t *testing.T) {
 		})
 	}
 
+}
+
+func TestHandleC2NDebugNetmap(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:       100,
+			Name:     "myhost",
+			StableID: "deadbeef",
+			Key:      key.NewNode().Public(),
+			Hostinfo: (&tailcfg.Hostinfo{Hostname: "myhost"}).View(),
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:       101,
+				Name:     "peer1",
+				StableID: "deadbeef",
+				Key:      key.NewNode().Public(),
+				Hostinfo: (&tailcfg.Hostinfo{Hostname: "peer1"}).View(),
+			}).View(),
+		},
+		PrivateKey: key.NewNode(),
+	}
+	b.currentNode().SetNetMap(nm)
+
+	rec := httptest.NewRecorder()
+	handleC2NDebugNetMap(b, rec, httptest.NewRequest("GET", "/debug/netmap", nil))
+	res := rec.Result()
+	wantStatus := 200
+	if res.StatusCode != wantStatus {
+		t.Fatalf("status code = %v; want %v. Body: %s", res.Status, wantStatus, rec.Body.Bytes())
+	}
+	var resp tailcfg.C2NDebugNetmapResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	got := &netmap.NetworkMap{}
+	if err := json.Unmarshal(resp.Current, got); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+
+	// Zero out private key before comparing; it should be redacted in the response.
+	nm.PrivateKey = key.NodePrivate{}
+
+	if diff := gocmp.Diff(nm, got,
+		gocmp.AllowUnexported(netmap.NetworkMap{}, key.NodePublic{}, views.Slice[tailcfg.FilterRule]{}),
+		cmpopts.EquateComparable(key.MachinePublic{}),
+	); diff != "" {
+		t.Errorf("netmap mismatch (-want +got):\n%s", diff)
+	}
 }
