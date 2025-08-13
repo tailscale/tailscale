@@ -1223,6 +1223,13 @@ func (b *LocalBackend) sanitizedPrefsLocked() ipn.PrefsView {
 	return stripKeysFromPrefs(b.pm.CurrentPrefs())
 }
 
+// unsanitizedPersist returns the current PersistView, including any private keys.
+func (b *LocalBackend) unsanitizedPersist() persist.PersistView {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pm.CurrentPrefs().Persist()
+}
+
 // Status returns the latest status of the backend and its
 // sub-components.
 func (b *LocalBackend) Status() *ipnstate.Status {
@@ -3257,19 +3264,32 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 // listener.
 func filterPrivateKeys(fn func(roNotify *ipn.Notify) (keepGoing bool)) func(*ipn.Notify) bool {
 	return func(n *ipn.Notify) bool {
-		if n.NetMap == nil || n.NetMap.PrivateKey.IsZero() {
+		redacted, changed := redactNetmapPrivateKeys(n.NetMap)
+		if !changed {
 			return fn(n)
 		}
 
 		// The netmap in n is shared across all watchers, so to mutate it for a
 		// single watcher we have to clone the notify and the netmap. We can
 		// make shallow clones, at least.
-		nm2 := *n.NetMap
 		n2 := *n
-		n2.NetMap = &nm2
-		n2.NetMap.PrivateKey = key.NodePrivate{}
+		n2.NetMap = redacted
 		return fn(&n2)
 	}
+}
+
+// redactNetmapPrivateKeys returns a copy of nm with private keys zeroed out.
+// If no change was needed, it returns nm unmodified.
+func redactNetmapPrivateKeys(nm *netmap.NetworkMap) (redacted *netmap.NetworkMap, changed bool) {
+	if nm == nil || nm.PrivateKey.IsZero() {
+		return nm, false
+	}
+
+	// The netmap might be shared across watchers, so make at least a shallow
+	// clone before mutating it.
+	nm2 := *nm
+	nm2.PrivateKey = key.NodePrivate{}
+	return &nm2, true
 }
 
 // appendHealthActions returns an IPN listener func that wraps the supplied IPN

@@ -171,7 +171,8 @@ type CapabilityVersion int
 //   - 124: 2025-08-08: removed NodeAttrDisableMagicSockCryptoRouting support, crypto routing is now mandatory
 //   - 125: 2025-08-11: dnstype.Resolver adds UseWithExitNode field.
 //   - 126: 2025-09-17: Client uses seamless key renewal unless disabled by control (tailscale/corp#31479)
-const CurrentCapabilityVersion CapabilityVersion = 126
+//   - 127: 2025-09-19: can handle C2N /debug/netmap.
+const CurrentCapabilityVersion CapabilityVersion = 127
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.

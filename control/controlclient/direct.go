@@ -1160,6 +1160,27 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	return nil
 }
 
+// NetmapFromMapResponseForDebug returns a NetworkMap from the given MapResponse.
+// It is intended for debugging only.
+func NetmapFromMapResponseForDebug(ctx context.Context, pr persist.PersistView, resp *tailcfg.MapResponse) (*netmap.NetworkMap, error) {
+	if resp == nil {
+		return nil, errors.New("nil MapResponse")
+	}
+	if resp.Node == nil {
+		return nil, errors.New("MapResponse lacks Node")
+	}
+
+	nu := &rememberLastNetmapUpdater{}
+	sess := newMapSession(pr.PrivateNodeKey(), nu, nil)
+	defer sess.Close()
+
+	if err := sess.HandleNonKeepAliveMapResponse(ctx, resp); err != nil {
+		return nil, fmt.Errorf("HandleNonKeepAliveMapResponse: %w", err)
+	}
+
+	return sess.netmap(), nil
+}
+
 func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug) error {
 	if code := debug.Exit; code != nil {
 		c.logf("exiting process with status %v per controlplane", *code)
