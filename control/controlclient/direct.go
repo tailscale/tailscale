@@ -856,6 +856,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
 	connectionHandleForTest := c.connectionHandleForTest
+	tkaHead := c.tkaHead
 	var epStrs []string
 	var eps []netip.AddrPort
 	var epTypes []tailcfg.EndpointType
@@ -906,7 +907,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		Hostinfo:                hi,
 		DebugFlags:              c.debugFlags,
 		OmitPeers:               nu == nil,
-		TKAHead:                 c.tkaHead,
+		TKAHead:                 tkaHead,
 		ConnectionHandleForTest: connectionHandleForTest,
 	}
 	var extraDebugFlags []string
