@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path"
@@ -20,12 +21,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/clientupdate"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ipproto"
+	"tailscale.com/types/key"
+	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/set"
@@ -46,6 +54,7 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 	req("/debug/metrics"):           handleC2NDebugMetrics,
 	req("/debug/component-logging"): handleC2NDebugComponentLogging,
 	req("/debug/logheap"):           handleC2NDebugLogHeap,
+	req("POST /debug/netmap"):       handleC2NDebugNetMap,
 
 	// PPROF - We only expose a subset of typical pprof endpoints for security.
 	req("/debug/pprof/heap"):   handleC2NPprof,
@@ -148,6 +157,43 @@ func handleC2NLogtailFlush(b *LocalBackend, w http.ResponseWriter, r *http.Reque
 	} else {
 		http.Error(w, "no log flusher wired up", http.StatusInternalServerError)
 	}
+}
+
+func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	b.logf("c2n: POST /debug/netmap received")
+	var body struct {
+		// If set, this MapResponse is used to generate a candidate netmap
+		// to compare against the current one.
+		Candidate *tailcfg.MapResponse `json:"candidate,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp := struct {
+		// Current netmap, based on the existing map poll + all the deltas.
+		Current *netmap.NetworkMap `json:"current"`
+
+		// A fresh netmap generated based on the MapResponse from the request.
+		Candidate *netmap.NetworkMap `json:"candidate,omitempty"` // optional
+		Diff      string
+	}{
+		Current: b.NetMapWithPeers(),
+	}
+	if body.Candidate != nil {
+		cand, err := controlclient.NetmapFromMapResponse(ctx, b.pm.CurrentPrefs(), body.Candidate)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to convert candidate MapResponse: %v", err), http.StatusBadRequest)
+			return
+		}
+		resp.Candidate = cand
+		resp.Diff = cmp.Diff(resp.Candidate, resp.Current,
+			cmp.AllowUnexported(netmap.NetworkMap{}),
+			cmpopts.IgnoreUnexported(views.Slice[ipproto.Proto]{}, views.Slice[tailcfg.FilterRule]{}),
+			cmpopts.EquateComparable(key.NodePublic{}, key.MachinePublic{}, ipproto.Proto(0), netip.Prefix{}))
+	}
+	writeJSON(w, resp)
 }
 
 func handleC2NDebugGoroutines(_ *LocalBackend, w http.ResponseWriter, r *http.Request) {

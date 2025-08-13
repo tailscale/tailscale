@@ -31,6 +31,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dnscache"
@@ -1136,6 +1137,25 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return ctx.Err()
 	}
 	return nil
+}
+
+func NetmapFromMapResponse(ctx context.Context, prefs ipn.PrefsView, resp *tailcfg.MapResponse) (*netmap.NetworkMap, error) {
+	if resp == nil {
+		return nil, errors.New("nil MapResponse")
+	}
+	if resp.Node == nil {
+		return nil, errors.New("MapResponse lacks Node")
+	}
+
+	nu := &rememberLastNetmapUpdater{}
+	sess := newMapSession(prefs.Persist().PrivateNodeKey(), nu, nil)
+	defer sess.Close()
+
+	if err := sess.HandleNonKeepAliveMapResponse(ctx, resp); err != nil {
+		return nil, fmt.Errorf("HandleNonKeepAliveMapResponse: %w", err)
+	}
+
+	return sess.netmap(), nil
 }
 
 func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug) error {
