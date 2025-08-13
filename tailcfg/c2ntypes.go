@@ -5,7 +5,10 @@
 
 package tailcfg
 
-import "net/netip"
+import (
+	"encoding/json"
+	"net/netip"
+)
 
 // C2NSSHUsernamesRequest is the request for the /ssh/usernames.
 // A GET request without a request body is equivalent to the zero value of this type.
@@ -116,4 +119,30 @@ type C2NVIPServicesResponse struct {
 	// ServicesHash is the hash of VIPServices to allow the control server to detect
 	// changes. This value matches what is reported in latest [Hostinfo.ServicesHash].
 	ServicesHash string
+}
+
+// C2NDebugNetmapRequest is the request (from control to node) for the
+// /debug/netmap handler.
+type C2NDebugNetmapRequest struct {
+	// Candidate is an optional full MapResponse to be used for generating a candidate
+	// network map. If unset, only the current network map is returned.
+	Candidate *MapResponse `json:"candidate,omitzero"`
+
+	// OmitFields is an optional list of netmap fields to omit from the response.
+	// If unset, no fields are omitted.
+	OmitFields []string `json:"omitFields,omitzero"`
+}
+
+// C2NDebugNetmapResponse is the response (from node to control) from the
+// /debug/netmap handler. It contains the current network map and, if a
+// candidate full MapResponse was provided in the request, a candidate network
+// map generated from it.
+// To avoid import cycles, and reflect the non-stable nature of
+// netmap.NetworkMap values, they are returned as json.RawMessage.
+type C2NDebugNetmapResponse struct {
+	// Current is the current network map (netmap.NetworkMap).
+	Current json.RawMessage `json:"current"`
+
+	// Candidate is a network map produced based on the candidate MapResponse.
+	Candidate json.RawMessage `json:"candidate,omitzero"`
 }

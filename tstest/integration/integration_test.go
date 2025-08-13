@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/miekg/dns"
 	"go4.org/mem"
 	"tailscale.com/client/local"
@@ -41,6 +42,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
@@ -1621,5 +1623,148 @@ func TestPeerRelayPing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestC2NDebugNetmap(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+
+	var testNodes []*TestNode
+	var nodes []*tailcfg.Node
+	for i := range 2 {
+		n := NewTestNode(t, env)
+		d := n.StartDaemon()
+		defer d.MustCleanShutdown(t)
+
+		n.AwaitResponding()
+		n.MustUp()
+		n.AwaitRunning()
+		testNodes = append(testNodes, n)
+
+		controlNodes := env.Control.AllNodes()
+		if len(controlNodes) != i+1 {
+			t.Fatalf("expected %d nodes, got %d nodes", i+1, len(controlNodes))
+		}
+		for _, cn := range controlNodes {
+			if n.MustStatus().Self.PublicKey == cn.Key {
+				nodes = append(nodes, cn)
+				break
+			}
+		}
+	}
+
+	// getC2NNetmap fetches the current netmap. If a candidate map response is provided,
+	// a candidate netmap is also fetched and compared to the current netmap.
+	getC2NNetmap := func(node key.NodePublic, cand *tailcfg.MapResponse) *netmap.NetworkMap {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
+		var req *http.Request
+		if cand != nil {
+			body := must.Get(json.Marshal(&tailcfg.C2NDebugNetmapRequest{Candidate: cand}))
+			req = must.Get(http.NewRequestWithContext(ctx, "POST", "/debug/netmap", bytes.NewReader(body)))
+		} else {
+			req = must.Get(http.NewRequestWithContext(ctx, "GET", "/debug/netmap", nil))
+		}
+		httpResp := must.Get(env.Control.NodeRoundTripper(node).RoundTrip(req))
+		defer httpResp.Body.Close()
+
+		if httpResp.StatusCode != 200 {
+			t.Errorf("unexpected status code: %d", httpResp.StatusCode)
+			return nil
+		}
+
+		respBody := must.Get(io.ReadAll(httpResp.Body))
+		var resp tailcfg.C2NDebugNetmapResponse
+		must.Do(json.Unmarshal(respBody, &resp))
+
+		var current netmap.NetworkMap
+		must.Do(json.Unmarshal(resp.Current, &current))
+
+		if !current.PrivateKey.IsZero() {
+			t.Errorf("current netmap has non-zero private key: %v", current.PrivateKey)
+		}
+		// Check candidate netmap if we sent a map response.
+		if cand != nil {
+			var candidate netmap.NetworkMap
+			must.Do(json.Unmarshal(resp.Candidate, &candidate))
+			if !candidate.PrivateKey.IsZero() {
+				t.Errorf("candidate netmap has non-zero private key: %v", candidate.PrivateKey)
+			}
+			if diff := cmp.Diff(current.SelfNode, candidate.SelfNode); diff != "" {
+				t.Errorf("SelfNode differs (-current +candidate):\n%s", diff)
+			}
+			if diff := cmp.Diff(current.Peers, candidate.Peers); diff != "" {
+				t.Errorf("Peers differ (-current +candidate):\n%s", diff)
+			}
+		}
+		return &current
+	}
+
+	for _, n := range nodes {
+		mr := must.Get(env.Control.MapResponse(&tailcfg.MapRequest{NodeKey: n.Key}))
+		nm := getC2NNetmap(n.Key, mr)
+
+		// Make sure peers do not have "testcap" initially (we'll change this later).
+		if len(nm.Peers) != 1 || nm.Peers[0].CapMap().Contains("testcap") {
+			t.Fatalf("expected 1 peer without testcap, got: %v", nm.Peers)
+		}
+
+		// Make sure nodes think each other are offline initially.
+		if nm.Peers[0].Online().Get() {
+			t.Fatalf("expected 1 peer to be offline, got: %v", nm.Peers)
+		}
+	}
+
+	// Send a delta update to n0, setting "testcap" on node 1.
+	env.Control.AddRawMapResponse(nodes[0].Key, &tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{{
+			NodeID: nodes[1].ID, CapMap: tailcfg.NodeCapMap{"testcap": []tailcfg.RawMessage{}},
+		}},
+	})
+
+	// node 0 should see node 1 with "testcap".
+	must.Do(tstest.WaitFor(5*time.Second, func() error {
+		st := testNodes[0].MustStatus()
+		p, ok := st.Peer[nodes[1].Key]
+		if !ok {
+			return fmt.Errorf("node 0 (%s) doesn't see node 1 (%s) as peer\n%v", nodes[0].Key, nodes[1].Key, st)
+		}
+		if _, ok := p.CapMap["testcap"]; !ok {
+			return fmt.Errorf("node 0 (%s) sees node 1 (%s) as peer but without testcap\n%v", nodes[0].Key, nodes[1].Key, p)
+		}
+		return nil
+	}))
+
+	// Check that node 0's current netmap has "testcap" for node 1.
+	nm := getC2NNetmap(nodes[0].Key, nil)
+	if len(nm.Peers) != 1 || !nm.Peers[0].CapMap().Contains("testcap") {
+		t.Errorf("current netmap missing testcap: %v", nm.Peers[0].CapMap())
+	}
+
+	// Send a delta update to n1, marking node 0 as online.
+	env.Control.AddRawMapResponse(nodes[1].Key, &tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{{
+			NodeID: nodes[0].ID, Online: ptr.To(true),
+		}},
+	})
+
+	// node 1 should see node 0 as online.
+	must.Do(tstest.WaitFor(5*time.Second, func() error {
+		st := testNodes[1].MustStatus()
+		p, ok := st.Peer[nodes[0].Key]
+		if !ok || !p.Online {
+			return fmt.Errorf("node 0 (%s) doesn't see node 1 (%s) as an online peer\n%v", nodes[0].Key, nodes[1].Key, st)
+		}
+		return nil
+	}))
+
+	// The netmap from node 1 should show node 0 as online.
+	nm = getC2NNetmap(nodes[1].Key, nil)
+	if len(nm.Peers) != 1 || !nm.Peers[0].Online().Get() {
+		t.Errorf("expected peer to be online; got %+v", nm.Peers[0].AsStruct())
 	}
 }

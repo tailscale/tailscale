@@ -13,19 +13,23 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"tailscale.com/clientupdate"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/ptype"
@@ -44,6 +48,7 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 	req("/debug/metrics"):           handleC2NDebugMetrics,
 	req("/debug/component-logging"): handleC2NDebugComponentLogging,
 	req("/debug/logheap"):           handleC2NDebugLogHeap,
+	req("/debug/netmap"):            handleC2NDebugNetMap,
 
 	// PPROF - We only expose a subset of typical pprof endpoints for security.
 	req("/debug/pprof/heap"):   handleC2NPprof,
@@ -140,6 +145,66 @@ func handleC2NLogtailFlush(b *LocalBackend, w http.ResponseWriter, r *http.Reque
 	} else {
 		http.Error(w, "no log flusher wired up", http.StatusInternalServerError)
 	}
+}
+
+func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if r.Method != httpm.POST && r.Method != httpm.GET {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	b.logf("c2n: %s /debug/netmap received", r.Method)
+
+	// redactAndMarshal redacts private keys from the given netmap, clears fields
+	// that should be omitted, and marshals it to JSON.
+	redactAndMarshal := func(nm *netmap.NetworkMap, omitFields []string) (json.RawMessage, error) {
+		for _, f := range omitFields {
+			field := reflect.ValueOf(nm).Elem().FieldByName(f)
+			if !field.IsValid() {
+				b.logf("c2n: /debug/netmap: unknown field %q in omitFields", f)
+				continue
+			}
+			field.SetZero()
+		}
+		nm, _ = redactNetmapPrivateKeys(nm)
+		return json.Marshal(nm)
+	}
+
+	var omitFields []string
+	resp := &tailcfg.C2NDebugNetmapResponse{}
+
+	if r.Method == httpm.POST {
+		var req tailcfg.C2NDebugNetmapRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("failed to decode request body: %v", err), http.StatusBadRequest)
+			return
+		}
+		omitFields = req.OmitFields
+
+		if req.Candidate != nil {
+			cand, err := controlclient.NetmapFromMapResponseForDebug(ctx, b.unsanitizedPersist(), req.Candidate)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("failed to convert candidate MapResponse: %v", err), http.StatusBadRequest)
+				return
+			}
+			candJSON, err := redactAndMarshal(cand, omitFields)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("failed to marshal candidate netmap: %v", err), http.StatusInternalServerError)
+				return
+			}
+			resp.Candidate = candJSON
+		}
+	}
+
+	var err error
+	resp.Current, err = redactAndMarshal(b.currentNode().netMapWithPeers(), omitFields)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to marshal current netmap: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, resp)
 }
 
 func handleC2NDebugGoroutines(_ *LocalBackend, w http.ResponseWriter, r *http.Request) {
