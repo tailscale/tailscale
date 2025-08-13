@@ -36,6 +36,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/batching"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
@@ -626,7 +627,7 @@ func newConn(logf logger.Logf) *Conn {
 		msgs := make([]ipv6.Message, c.bind.BatchSize())
 		for i := range msgs {
 			msgs[i].Buffers = make([][]byte, 1)
-			msgs[i].OOB = make([]byte, controlMessageSize)
+			msgs[i].OOB = make([]byte, batching.MinControlMessageSize())
 		}
 		batch := &receiveBatch{
 			msgs: msgs,
@@ -1206,7 +1207,7 @@ func (c *Conn) Ping(peer tailcfg.NodeView, res *ipnstate.PingResult, size int, c
 func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep epAddr) {
 	res.LatencySeconds = latency.Seconds()
 	if ep.ap.Addr() != tailcfg.DerpMagicIPAddr {
-		if ep.vni.isSet() {
+		if ep.vni.IsSet() {
 			res.PeerRelay = ep.String()
 		} else {
 			res.Endpoint = ep.String()
@@ -1473,9 +1474,9 @@ func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
 		// deemed "under handshake load" and ends up transmitting a cookie reply
 		// using the received [conn.Endpoint] in [device.SendHandshakeCookie].
 		if ep.src.ap.Addr().Is6() {
-			return c.pconn6.WriteBatchTo(buffs, ep.src, offset)
+			return c.pconn6.WriteWireGuardBatchTo(buffs, ep.src, offset)
 		}
-		return c.pconn4.WriteBatchTo(buffs, ep.src, offset)
+		return c.pconn4.WriteWireGuardBatchTo(buffs, ep.src, offset)
 	}
 	return nil
 }
@@ -1498,9 +1499,9 @@ func (c *Conn) sendUDPBatch(addr epAddr, buffs [][]byte, offset int) (sent bool,
 		panic("bogus sendUDPBatch addr type")
 	}
 	if isIPv6 {
-		err = c.pconn6.WriteBatchTo(buffs, addr, offset)
+		err = c.pconn6.WriteWireGuardBatchTo(buffs, addr, offset)
 	} else {
-		err = c.pconn4.WriteBatchTo(buffs, addr, offset)
+		err = c.pconn4.WriteWireGuardBatchTo(buffs, addr, offset)
 	}
 	if err != nil {
 		var errGSO neterror.ErrUDPGSODisabled
@@ -1793,7 +1794,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 			c.logf("[unexpected] geneve header decoding error: %v", err)
 			return nil, 0, false, false
 		}
-		src.vni.set(geneve.VNI)
+		src.vni = geneve.VNI
 	}
 	switch pt {
 	case packetLooksLikeDisco:
@@ -1825,7 +1826,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	// geneveInclusivePacketLen holds the packet length prior to any potential
 	// Geneve header stripping.
 	geneveInclusivePacketLen := len(b)
-	if src.vni.isSet() {
+	if src.vni.IsSet() {
 		// Strip away the Geneve header before returning the packet to
 		// wireguard-go.
 		//
@@ -1858,7 +1859,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	if stats := c.stats.Load(); stats != nil {
 		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, geneveInclusivePacketLen)
 	}
-	if src.vni.isSet() && (connNoted || looksLikeInitiationMsg(b)) {
+	if src.vni.IsSet() && (connNoted || looksLikeInitiationMsg(b)) {
 		// connNoted is periodic, but we also want to verify if the peer is who
 		// we believe for all initiation messages, otherwise we could get
 		// unlucky and fail to JIT configure the "correct" peer.
@@ -1886,33 +1887,6 @@ const (
 // peers towards using IPv6 when both IPv4 and IPv6 are available at similar
 // speeds.
 var debugIPv4DiscoPingPenalty = envknob.RegisterDuration("TS_DISCO_PONG_IPV4_DELAY")
-
-// virtualNetworkID is a Geneve header (RFC8926) 3-byte virtual network
-// identifier. Its field must only ever be accessed via its methods.
-type virtualNetworkID struct {
-	_vni uint32
-}
-
-const (
-	vniSetMask uint32 = 0xFF000000
-	vniGetMask uint32 = ^vniSetMask
-)
-
-// isSet returns true if set() had been called previously, otherwise false.
-func (v *virtualNetworkID) isSet() bool {
-	return v._vni&vniSetMask != 0
-}
-
-// set sets the provided VNI. If VNI exceeds the 3-byte storage it will be
-// clamped.
-func (v *virtualNetworkID) set(vni uint32) {
-	v._vni = vni | vniSetMask
-}
-
-// get returns the VNI value.
-func (v *virtualNetworkID) get() uint32 {
-	return v._vni & vniGetMask
-}
 
 // sendDiscoAllocateUDPRelayEndpointRequest is primarily an alias for
 // sendDiscoMessage, but it will alternatively send m over the eventbus if dst
@@ -1981,11 +1955,11 @@ func (c *Conn) sendDiscoMessage(dst epAddr, dstKey key.NodePublic, dstDisco key.
 	c.mu.Unlock()
 
 	pkt := make([]byte, 0, 512) // TODO: size it correctly? pool? if it matters.
-	if dst.vni.isSet() {
+	if dst.vni.IsSet() {
 		gh := packet.GeneveHeader{
 			Version:  0,
 			Protocol: packet.GeneveProtocolDisco,
-			VNI:      dst.vni.get(),
+			VNI:      dst.vni,
 			Control:  isRelayHandshakeMsg,
 		}
 		pkt = append(pkt, make([]byte, packet.GeneveFixedHeaderLength)...)
@@ -2006,7 +1980,7 @@ func (c *Conn) sendDiscoMessage(dst epAddr, dstKey key.NodePublic, dstDisco key.
 	box := di.sharedKey.Seal(m.AppendMarshal(nil))
 	pkt = append(pkt, box...)
 	const isDisco = true
-	sent, err = c.sendAddr(dst.ap, dstKey, pkt, isDisco, dst.vni.isSet())
+	sent, err = c.sendAddr(dst.ap, dstKey, pkt, isDisco, dst.vni.IsSet())
 	if sent {
 		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco()) {
 			node := "?"
@@ -2294,7 +2268,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			}
 			return true
 		})
-		if !knownTxID && src.vni.isSet() {
+		if !knownTxID && src.vni.IsSet() {
 			// If it's an unknown TxID, and it's Geneve-encapsulated, then
 			// make [relayManager] aware. It might be in the middle of probing
 			// src.
@@ -2512,7 +2486,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 	di.lastPingTime = time.Now()
 	isDerp := src.ap.Addr() == tailcfg.DerpMagicIPAddr
 
-	if src.vni.isSet() {
+	if src.vni.IsSet() {
 		if isDerp {
 			c.logf("[unexpected] got Geneve-encapsulated disco ping from %v/%v over DERP", src, derpNodeSrc)
 			return

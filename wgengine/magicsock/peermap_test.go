@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"tailscale.com/net/packet"
 	"tailscale.com/types/key"
 )
 
@@ -20,8 +21,8 @@ func Test_peerMap_oneRelayEpAddrPerNK(t *testing.T) {
 	ed := &endpointDisco{key: key.NewDisco().Public()}
 	ep.disco.Store(ed)
 	pm.upsertEndpoint(ep, key.DiscoPublic{})
-	vni := virtualNetworkID{}
-	vni.set(1)
+	vni := packet.VirtualNetworkID{}
+	vni.Set(1)
 	relayEpAddrA := epAddr{ap: netip.MustParseAddrPort("127.0.0.1:1"), vni: vni}
 	relayEpAddrB := epAddr{ap: netip.MustParseAddrPort("127.0.0.1:2"), vni: vni}
 	pm.setNodeKeyForEpAddr(relayEpAddrA, nk)

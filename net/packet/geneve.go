@@ -24,6 +24,33 @@ const (
 	GeneveProtocolWireGuard uint16 = 0x7A12
 )
 
+// VirtualNetworkID is a Geneve header (RFC8926) 3-byte virtual network
+// identifier. Its methods are NOT thread-safe.
+type VirtualNetworkID struct {
+	_vni uint32
+}
+
+const (
+	vniSetMask uint32 = 0xFF000000
+	vniGetMask uint32 = ^vniSetMask
+)
+
+// IsSet returns true if Set() had been called previously, otherwise false.
+func (v *VirtualNetworkID) IsSet() bool {
+	return v._vni&vniSetMask != 0
+}
+
+// Set sets the provided VNI. If VNI exceeds the 3-byte storage it will be
+// clamped.
+func (v *VirtualNetworkID) Set(vni uint32) {
+	v._vni = vni | vniSetMask
+}
+
+// Get returns the VNI value.
+func (v *VirtualNetworkID) Get() uint32 {
+	return v._vni & vniGetMask
+}
+
 // GeneveHeader represents the fixed size Geneve header from RFC8926.
 // TLVs/options are not implemented/supported.
 //
@@ -51,7 +78,7 @@ type GeneveHeader struct {
 	// decisions or MAY be used as a mechanism to distinguish between
 	// overlapping address spaces contained in the encapsulated packet when load
 	// balancing across CPUs.
-	VNI uint32
+	VNI VirtualNetworkID
 
 	// O (1 bit): Control packet. This packet contains a control message.
 	// Control messages are sent between tunnel endpoints. Tunnel endpoints MUST
@@ -65,11 +92,17 @@ type GeneveHeader struct {
 	Control bool
 }
 
-// Encode encodes GeneveHeader into b. If len(b) < GeneveFixedHeaderLength an
-// io.ErrShortBuffer error is returned.
+var ErrGeneveVNIUnset = errors.New("VNI is unset")
+
+// Encode encodes GeneveHeader into b. If len(b) < [GeneveFixedHeaderLength] an
+// [io.ErrShortBuffer] error is returned. If !h.VNI.IsSet() then an
+// [ErrGeneveVNIUnset] error is returned.
 func (h *GeneveHeader) Encode(b []byte) error {
 	if len(b) < GeneveFixedHeaderLength {
 		return io.ErrShortBuffer
+	}
+	if !h.VNI.IsSet() {
+		return ErrGeneveVNIUnset
 	}
 	if h.Version > 3 {
 		return errors.New("version must be <= 3")
@@ -81,15 +114,12 @@ func (h *GeneveHeader) Encode(b []byte) error {
 		b[1] |= 0x80
 	}
 	binary.BigEndian.PutUint16(b[2:], h.Protocol)
-	if h.VNI > 1<<24-1 {
-		return errors.New("VNI must be <= 2^24-1")
-	}
-	binary.BigEndian.PutUint32(b[4:], h.VNI<<8)
+	binary.BigEndian.PutUint32(b[4:], h.VNI.Get()<<8)
 	return nil
 }
 
-// Decode decodes GeneveHeader from b. If len(b) < GeneveFixedHeaderLength an
-// io.ErrShortBuffer error is returned.
+// Decode decodes GeneveHeader from b. If len(b) < [GeneveFixedHeaderLength] an
+// [io.ErrShortBuffer] error is returned.
 func (h *GeneveHeader) Decode(b []byte) error {
 	if len(b) < GeneveFixedHeaderLength {
 		return io.ErrShortBuffer
@@ -99,6 +129,6 @@ func (h *GeneveHeader) Decode(b []byte) error {
 		h.Control = true
 	}
 	h.Protocol = binary.BigEndian.Uint16(b[2:])
-	h.VNI = binary.BigEndian.Uint32(b[4:]) >> 8
+	h.VNI.Set(binary.BigEndian.Uint32(b[4:]) >> 8)
 	return nil
 }

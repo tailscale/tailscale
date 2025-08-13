@@ -184,12 +184,12 @@ func (m *peerMap) setNodeKeyForEpAddr(addr epAddr, nk key.NodePublic) {
 	if pi := m.byEpAddr[addr]; pi != nil {
 		delete(pi.epAddrs, addr)
 		delete(m.byEpAddr, addr)
-		if addr.vni.isSet() {
+		if addr.vni.IsSet() {
 			delete(m.relayEpAddrByNodeKey, pi.ep.publicKey)
 		}
 	}
 	if pi, ok := m.byNodeKey[nk]; ok {
-		if addr.vni.isSet() {
+		if addr.vni.IsSet() {
 			relay, ok := m.relayEpAddrByNodeKey[nk]
 			if ok {
 				delete(pi.epAddrs, relay)

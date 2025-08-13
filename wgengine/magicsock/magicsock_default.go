@@ -21,7 +21,3 @@ func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
 func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 	portableTrySetSocketBuffer(pconn, logf)
 }
-
-const (
-	controlMessageSize = 0
-)

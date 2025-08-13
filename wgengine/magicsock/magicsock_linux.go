@@ -516,11 +516,3 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 		}
 	}
 }
-
-var controlMessageSize = -1 // bomb if used for allocation before init
-
-func init() {
-	// controlMessageSize is set to hold a UDP_GRO or UDP_SEGMENT control
-	// message. These contain a single uint16 of data.
-	controlMessageSize = unix.CmsgSpace(2)
-}

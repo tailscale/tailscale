@@ -62,7 +62,8 @@ func (c *testClient) read(t *testing.T) []byte {
 
 func (c *testClient) writeDataPkt(t *testing.T, b []byte) {
 	pkt := make([]byte, packet.GeneveFixedHeaderLength, packet.GeneveFixedHeaderLength+len(b))
-	gh := packet.GeneveHeader{Control: false, VNI: c.vni, Protocol: packet.GeneveProtocolWireGuard}
+	gh := packet.GeneveHeader{Control: false, Protocol: packet.GeneveProtocolWireGuard}
+	gh.VNI.Set(c.vni)
 	err := gh.Encode(pkt)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +85,7 @@ func (c *testClient) readDataPkt(t *testing.T) []byte {
 	if gh.Control {
 		t.Fatal("unexpected control")
 	}
-	if gh.VNI != c.vni {
+	if gh.VNI.Get() != c.vni {
 		t.Fatal("unexpected vni")
 	}
 	return b[packet.GeneveFixedHeaderLength:]
@@ -92,7 +93,8 @@ func (c *testClient) readDataPkt(t *testing.T) []byte {
 
 func (c *testClient) writeControlDiscoMsg(t *testing.T, msg disco.Message) {
 	pkt := make([]byte, packet.GeneveFixedHeaderLength, 512)
-	gh := packet.GeneveHeader{Control: true, VNI: c.vni, Protocol: packet.GeneveProtocolDisco}
+	gh := packet.GeneveHeader{Control: true, Protocol: packet.GeneveProtocolDisco}
+	gh.VNI.Set(c.vni)
 	err := gh.Encode(pkt)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +119,7 @@ func (c *testClient) readControlDiscoMsg(t *testing.T) disco.Message {
 	if !gh.Control {
 		t.Fatal("unexpected non-control")
 	}
-	if gh.VNI != c.vni {
+	if gh.VNI.Get() != c.vni {
 		t.Fatal("unexpected vni")
 	}
 	b = b[packet.GeneveFixedHeaderLength:]

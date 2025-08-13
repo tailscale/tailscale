@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"tailscale.com/disco"
+	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
 	udprelay "tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/tailcfg"
@@ -384,7 +385,7 @@ func (r *relayManager) handleRxDiscoMsg(conn *Conn, dm disco.Message, relayServe
 		relayServerNodeKey: relayServerNodeKey,
 		disco:              discoKey,
 		from:               src.ap,
-		vni:                src.vni.get(),
+		vni:                src.vni.Get(),
 		at:                 time.Now(),
 	})
 }
@@ -535,8 +536,8 @@ func (r *relayManager) handleRxDiscoMsgRunLoop(event relayDiscoMsgEvent) {
 		// socket on Linux. We make no such efforts here as the raw socket BPF
 		// program does not support Geneve-encapsulated disco, and is also
 		// disabled by default.
-		vni := virtualNetworkID{}
-		vni.set(event.vni)
+		vni := packet.VirtualNetworkID{}
+		vni.Set(event.vni)
 		go event.conn.sendDiscoMessage(epAddr{ap: event.from, vni: vni}, key.NodePublic{}, event.disco, &disco.Pong{
 			TxID: msg.TxID,
 			Src:  event.from,
@@ -622,8 +623,8 @@ func (r *relayManager) handleHandshakeWorkDoneRunLoop(done relayEndpointHandshak
 		return
 	}
 	// This relay endpoint is functional.
-	vni := virtualNetworkID{}
-	vni.set(done.work.se.VNI)
+	vni := packet.VirtualNetworkID{}
+	vni.Set(done.work.se.VNI)
 	addr := epAddr{ap: done.pongReceivedFrom, vni: vni}
 	// ep.udpRelayEndpointReady() must be called in a new goroutine to prevent
 	// deadlocks as it acquires [endpoint] & [Conn] mutexes. See [relayManager]
@@ -784,8 +785,8 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, generat
 	bind := &disco.BindUDPRelayEndpoint{
 		BindUDPRelayEndpointCommon: common,
 	}
-	vni := virtualNetworkID{}
-	vni.set(work.se.VNI)
+	vni := packet.VirtualNetworkID{}
+	vni.Set(work.se.VNI)
 	for _, addrPort := range work.se.AddrPorts {
 		if addrPort.IsValid() {
 			sentBindAny = true
