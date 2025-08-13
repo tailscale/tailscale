@@ -136,13 +136,13 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 					writef("if src.%s[i] == nil { dst.%s[i] = nil } else {", fname, fname)
 					if codegen.ContainsPointers(ptr.Elem()) {
 						if _, isIface := ptr.Elem().Underlying().(*types.Interface); isIface {
-							it.Import("tailscale.com/types/ptr")
+							it.Import("", "tailscale.com/types/ptr")
 							writef("\tdst.%s[i] = ptr.To((*src.%s[i]).Clone())", fname, fname)
 						} else {
 							writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
 						}
 					} else {
-						it.Import("tailscale.com/types/ptr")
+						it.Import("", "tailscale.com/types/ptr")
 						writef("\tdst.%s[i] = ptr.To(*src.%s[i])", fname, fname)
 					}
 					writef("}")
@@ -165,7 +165,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				writef("dst.%s = src.%s.Clone()", fname, fname)
 				continue
 			}
-			it.Import("tailscale.com/types/ptr")
+			it.Import("", "tailscale.com/types/ptr")
 			writef("if dst.%s != nil {", fname)
 			if _, isIface := base.Underlying().(*types.Interface); isIface && hasPtrs {
 				writef("\tdst.%s = ptr.To((*src.%s).Clone())", fname, fname)
@@ -197,13 +197,13 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 					writef("\t\tif v == nil { dst.%s[k] = nil } else {", fname)
 					if base := elem.Elem().Underlying(); codegen.ContainsPointers(base) {
 						if _, isIface := base.(*types.Interface); isIface {
-							it.Import("tailscale.com/types/ptr")
+							it.Import("", "tailscale.com/types/ptr")
 							writef("\t\t\tdst.%s[k] = ptr.To((*v).Clone())", fname)
 						} else {
 							writef("\t\t\tdst.%s[k] = v.Clone()", fname)
 						}
 					} else {
-						it.Import("tailscale.com/types/ptr")
+						it.Import("", "tailscale.com/types/ptr")
 						writef("\t\t\tdst.%s[k] = ptr.To(*v)", fname)
 					}
 					writef("}")
@@ -224,7 +224,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				writef("\t}")
 				writef("}")
 			} else {
-				it.Import("maps")
+				it.Import("", "maps")
 				writef("\tdst.%s = maps.Clone(src.%s)", fname, fname)
 			}
 		case *types.Interface:

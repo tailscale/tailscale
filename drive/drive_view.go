@@ -6,9 +6,11 @@
 package drive
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/views"
 )
 
@@ -42,8 +44,17 @@ func (v ShareView) AsStruct() *Share {
 	return v.ж.Clone()
 }
 
-func (v ShareView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v ShareView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v ShareView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *ShareView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -52,7 +63,20 @@ func (v *ShareView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x Share
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *ShareView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Share
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x

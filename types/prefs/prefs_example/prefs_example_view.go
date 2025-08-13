@@ -6,10 +6,12 @@
 package prefs_example
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
@@ -48,8 +50,17 @@ func (v PrefsView) AsStruct() *Prefs {
 	return v.ж.Clone()
 }
 
-func (v PrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v PrefsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v PrefsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *PrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -58,7 +69,20 @@ func (v *PrefsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x Prefs
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *PrefsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Prefs
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -160,8 +184,17 @@ func (v AutoUpdatePrefsView) AsStruct() *AutoUpdatePrefs {
 	return v.ж.Clone()
 }
 
-func (v AutoUpdatePrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v AutoUpdatePrefsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v AutoUpdatePrefsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *AutoUpdatePrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -170,7 +203,20 @@ func (v *AutoUpdatePrefsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x AutoUpdatePrefs
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *AutoUpdatePrefsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x AutoUpdatePrefs
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -214,8 +260,17 @@ func (v AppConnectorPrefsView) AsStruct() *AppConnectorPrefs {
 	return v.ж.Clone()
 }
 
-func (v AppConnectorPrefsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v AppConnectorPrefsView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v AppConnectorPrefsView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *AppConnectorPrefsView) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -224,7 +279,20 @@ func (v *AppConnectorPrefsView) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x AppConnectorPrefs
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *AppConnectorPrefsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x AppConnectorPrefs
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
 		return err
 	}
 	v.ж = &x

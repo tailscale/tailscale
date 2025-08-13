@@ -49,8 +49,17 @@ func (v {{.ViewName}}{{.TypeParamNames}}) AsStruct() *{{.StructName}}{{.TypePara
 	return v.ж.Clone()
 }
 
-func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
 
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v {{.ViewName}}{{.TypeParamNames}}) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
 		return errors.New("already initialized")
@@ -59,10 +68,23 @@ func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var x {{.StructName}}{{.TypeParamNames}}
-	if err := json.Unmarshal(b, &x); err != nil {
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
 		return err
 	}
-	v.ж=&x
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *{{.ViewName}}{{.TypeParamNames}}) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x {{.StructName}}{{.TypeParamNames}}
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
 	return nil
 }
 
@@ -125,8 +147,10 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 	if !ok || codegen.IsViewType(t) {
 		return
 	}
-	it.Import("encoding/json")
-	it.Import("errors")
+	it.Import("jsonv1", "encoding/json")
+	it.Import("jsonv2", "github.com/go-json-experiment/json")
+	it.Import("", "github.com/go-json-experiment/json/jsontext")
+	it.Import("", "errors")
 
 	args := struct {
 		StructName     string
@@ -182,11 +206,11 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 			switch elem.String() {
 			case "byte":
 				args.FieldType = it.QualifiedName(fieldType)
-				it.Import("tailscale.com/types/views")
+				it.Import("", "tailscale.com/types/views")
 				writeTemplate("byteSliceField")
 			default:
 				args.FieldType = it.QualifiedName(elem)
-				it.Import("tailscale.com/types/views")
+				it.Import("", "tailscale.com/types/views")
 				shallow, deep, base := requiresCloning(elem)
 				if deep {
 					switch elem.Underlying().(type) {
@@ -252,7 +276,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, _ *
 				writeTemplate("unsupportedField")
 				continue
 			}
-			it.Import("tailscale.com/types/views")
+			it.Import("", "tailscale.com/types/views")
 			args.MapKeyType = it.QualifiedName(key)
 			mElem := m.Elem()
 			var template string

@@ -20,19 +20,19 @@ func TestViewerImports(t *testing.T) {
 		name        string
 		content     string
 		typeNames   []string
-		wantImports []string
+		wantImports [][2]string
 	}{
 		{
 			name:        "Map",
 			content:     `type Test struct { Map map[string]int }`,
 			typeNames:   []string{"Test"},
-			wantImports: []string{"tailscale.com/types/views"},
+			wantImports: [][2]string{{"", "tailscale.com/types/views"}},
 		},
 		{
 			name:        "Slice",
 			content:     `type Test struct { Slice []int }`,
 			typeNames:   []string{"Test"},
-			wantImports: []string{"tailscale.com/types/views"},
+			wantImports: [][2]string{{"", "tailscale.com/types/views"}},
 		},
 	}
 	for _, tt := range tests {
@@ -68,9 +68,9 @@ func TestViewerImports(t *testing.T) {
 				genView(&output, tracker, namedType, pkg)
 			}
 
-			for _, pkgName := range tt.wantImports {
-				if !tracker.Has(pkgName) {
-					t.Errorf("missing import %q", pkgName)
+			for _, pkg := range tt.wantImports {
+				if !tracker.Has(pkg[0], pkg[1]) {
+					t.Errorf("missing import %q", pkg)
 				}
 			}
 		})
