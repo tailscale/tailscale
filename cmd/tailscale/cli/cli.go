@@ -7,6 +7,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -217,8 +218,10 @@ func newRootCmd() *ffcli.Command {
 		return nil
 	})
 	rootfs.Lookup("socket").DefValue = localClient.Socket
+	jsonDocs := rootfs.Bool("json-docs", false, hidden+"print JSON-encoded docs for all subcommands and flags")
 
-	rootCmd := &ffcli.Command{
+	var rootCmd *ffcli.Command
+	rootCmd = &ffcli.Command{
 		Name:       "tailscale",
 		ShortUsage: "tailscale [flags] <subcommand> [command flags]",
 		ShortHelp:  "The easiest, most secure way to use WireGuard.",
@@ -265,6 +268,9 @@ change in the future.
 		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
+			if *jsonDocs {
+				return printJSONDocs(rootCmd)
+			}
 			if len(args) > 0 {
 				return fmt.Errorf("tailscale: unknown subcommand: %s", args[0])
 			}
@@ -471,4 +477,55 @@ func colorableOutput() (w io.Writer, ok bool) {
 		return Stdout, false
 	}
 	return colorable.NewColorableStdout(), true
+}
+
+type commandDoc struct {
+	Name        string
+	Desc        string
+	Subcommands []commandDoc `json:",omitempty"`
+	Flags       []flagDoc    `json:",omitempty"`
+}
+
+type flagDoc struct {
+	Name string
+	Desc string
+}
+
+func printJSONDocs(root *ffcli.Command) error {
+	docs := jsonDocsWalk(root)
+	return json.NewEncoder(os.Stdout).Encode(docs)
+}
+
+func jsonDocsWalk(cmd *ffcli.Command) *commandDoc {
+	res := &commandDoc{
+		Name: cmd.Name,
+	}
+	if cmd.LongHelp != "" {
+		res.Desc = cmd.LongHelp
+	} else if cmd.ShortHelp != "" {
+		res.Desc = cmd.ShortHelp
+	} else {
+		res.Desc = cmd.ShortUsage
+	}
+	if strings.HasPrefix(res.Desc, hidden) {
+		return nil
+	}
+	if cmd.FlagSet != nil {
+		cmd.FlagSet.VisitAll(func(f *flag.Flag) {
+			if strings.HasPrefix(f.Usage, hidden) {
+				return
+			}
+			res.Flags = append(res.Flags, flagDoc{
+				Name: f.Name,
+				Desc: f.Usage,
+			})
+		})
+	}
+	for _, sub := range cmd.Subcommands {
+		subj := jsonDocsWalk(sub)
+		if subj != nil {
+			res.Subcommands = append(res.Subcommands, *subj)
+		}
+	}
+	return res
 }
