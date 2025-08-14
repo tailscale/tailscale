@@ -58,6 +58,50 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 		t.Errorf("could not read new key: %v", err)
 	}
 }
+func TestAuthorityBuilderMaxKey(t *testing.T) {
+	pub, priv := testingKey25519(t, 1)
+	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+
+	storage := &Mem{}
+	a, _, err := Create(storage, State{
+		Keys:               []Key{key},
+		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+	}, signer25519(priv))
+	if err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	for i := 0; i <= maxKeys; i++ {
+		pub2, _ := testingKey25519(t, int64(2+i))
+		key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
+
+		b := a.NewUpdater(signer25519(priv))
+		err := b.AddKey(key2)
+		if i < maxKeys-1 {
+			if err != nil {
+				t.Fatalf("AddKey(%v) failed: %v", key2, err)
+			}
+		} else {
+			// Too many keys.
+			if err == nil {
+				t.Fatalf("AddKey(%v) succeeded unexpectedly", key2)
+			}
+			continue
+		}
+
+		updates, err := b.Finalize(storage)
+		if err != nil {
+			t.Fatalf("Finalize() failed: %v", err)
+		}
+
+		if err := a.Inform(storage, updates); err != nil {
+			t.Fatalf("could not apply generated updates: %v", err)
+		}
+		if _, err := a.state.GetKey(key2.MustID()); err != nil {
+			t.Errorf("could not read new key: %v", err)
+		}
+	}
+}
 
 func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
