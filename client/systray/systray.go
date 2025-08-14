@@ -160,6 +160,17 @@ func (menu *Menu) onReady() {
 	log.Printf("starting")
 	setAppIcon(disconnected)
 	menu.rebuild()
+
+	menu.mu.Lock()
+	if menu.readonly {
+		fmt.Fprintln(os.Stderr, `
+No permission to manage Tailscale. Set operator by running:
+
+sudo tailscale set --operator=$USER
+
+See https://tailscale.com/s/cli-operator for more information.`)
+	}
+	menu.mu.Unlock()
 }
 
 // updateState updates the Menu state from the Tailscale local client.
