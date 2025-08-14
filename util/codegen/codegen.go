@@ -85,28 +85,35 @@ func NewImportTracker(thisPkg *types.Package) *ImportTracker {
 	}
 }
 
+type namePkgPath struct {
+	name    string // optional import name
+	pkgPath string
+}
+
 // ImportTracker provides a mechanism to track and build import paths.
 type ImportTracker struct {
 	thisPkg  *types.Package
-	packages map[string]bool
+	packages map[namePkgPath]bool
 }
 
-func (it *ImportTracker) Import(pkg string) {
-	if pkg != "" && !it.packages[pkg] {
-		mak.Set(&it.packages, pkg, true)
+// Import imports pkgPath under an optional import name.
+func (it *ImportTracker) Import(name, pkgPath string) {
+	if pkgPath != "" && !it.packages[namePkgPath{name, pkgPath}] {
+		mak.Set(&it.packages, namePkgPath{name, pkgPath}, true)
 	}
 }
 
-// Has reports whether the specified package has been imported.
-func (it *ImportTracker) Has(pkg string) bool {
-	return it.packages[pkg]
+// Has reports whether the specified package path has been imported
+// under the particular import name.
+func (it *ImportTracker) Has(name, pkgPath string) bool {
+	return it.packages[namePkgPath{name, pkgPath}]
 }
 
 func (it *ImportTracker) qualifier(pkg *types.Package) string {
 	if it.thisPkg == pkg {
 		return ""
 	}
-	it.Import(pkg.Path())
+	it.Import("", pkg.Path())
 	// TODO(maisem): handle conflicts?
 	return pkg.Name()
 }
@@ -128,7 +135,11 @@ func (it *ImportTracker) PackagePrefix(pkg *types.Package) string {
 func (it *ImportTracker) Write(w io.Writer) {
 	fmt.Fprintf(w, "import (\n")
 	for s := range it.packages {
-		fmt.Fprintf(w, "\t%q\n", s)
+		if s.name == "" {
+			fmt.Fprintf(w, "\t%q\n", s.pkgPath)
+		} else {
+			fmt.Fprintf(w, "\t%s	%q\n", s.name, s.pkgPath)
+		}
 	}
 	fmt.Fprintf(w, ")\n\n")
 }

@@ -4,8 +4,7 @@
 package views
 
 import (
-	"bytes"
-	"encoding/json"
+	jsonv1 "encoding/json"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -15,8 +14,26 @@ import (
 	"unsafe"
 
 	qt "github.com/frankban/quicktest"
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/types/structs"
 )
+
+// Statically verify that each type implements the following interfaces.
+var _ = []interface {
+	jsonv1.Marshaler
+	jsonv1.Unmarshaler
+	jsonv2.MarshalerTo
+	jsonv2.UnmarshalerFrom
+}{
+	(*ByteSlice[[]byte])(nil),
+	(*SliceView[*testStruct, testStructView])(nil),
+	(*Slice[testStruct])(nil),
+	(*MapSlice[*testStruct, testStructView])(nil),
+	(*Map[*testStruct, testStructView])(nil),
+	(*ValuePointer[testStruct])(nil),
+}
 
 type viewStruct struct {
 	Int        int
@@ -83,14 +100,16 @@ func TestViewsJSON(t *testing.T) {
 	ipp := SliceOf(mustCIDR("192.168.0.0/24"))
 	ss := SliceOf([]string{"bar"})
 	tests := []struct {
-		name     string
-		in       viewStruct
-		wantJSON string
+		name       string
+		in         viewStruct
+		wantJSONv1 string
+		wantJSONv2 string
 	}{
 		{
-			name:     "empty",
-			in:       viewStruct{},
-			wantJSON: `{"Int":0,"Addrs":null,"Strings":null}`,
+			name:       "empty",
+			in:         viewStruct{},
+			wantJSONv1: `{"Int":0,"Addrs":null,"Strings":null}`,
+			wantJSONv2: `{"Int":0,"Addrs":[],"Strings":[]}`,
 		},
 		{
 			name: "everything",
@@ -101,30 +120,49 @@ func TestViewsJSON(t *testing.T) {
 				StringsPtr: &ss,
 				Strings:    ss,
 			},
-			wantJSON: `{"Int":1234,"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
+			wantJSONv1: `{"Int":1234,"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
+			wantJSONv2: `{"Int":1234,"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
 		},
 	}
 
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	encoder.SetIndent("", "")
 	for _, tc := range tests {
-		buf.Reset()
-		if err := encoder.Encode(&tc.in); err != nil {
-			t.Fatal(err)
+		cmpOpts := cmp.Options{
+			cmp.AllowUnexported(Slice[string]{}),
+			cmp.AllowUnexported(Slice[netip.Prefix]{}),
+			cmpopts.EquateComparable(netip.Prefix{}),
 		}
-		b := buf.Bytes()
-		gotJSON := strings.TrimSpace(string(b))
-		if tc.wantJSON != gotJSON {
-			t.Fatalf("JSON: %v; want: %v", gotJSON, tc.wantJSON)
-		}
-		var got viewStruct
-		if err := json.Unmarshal(b, &got); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, tc.in) {
-			t.Fatalf("unmarshal resulted in different output: %+v; want %+v", got, tc.in)
-		}
+		t.Run("JSONv1", func(t *testing.T) {
+			gotJSON, err := jsonv1.Marshal(tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotJSON) != tc.wantJSONv1 {
+				t.Fatalf("JSON: %s; want: %s", gotJSON, tc.wantJSONv1)
+			}
+			var got viewStruct
+			if err := jsonv1.Unmarshal(gotJSON, &got); err != nil {
+				t.Fatal(err)
+			}
+			if d := cmp.Diff(got, tc.in, cmpOpts); d != "" {
+				t.Fatalf("unmarshal mismatch (-got +want):\n%s", d)
+			}
+		})
+		t.Run("JSONv2", func(t *testing.T) {
+			gotJSON, err := jsonv2.Marshal(tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotJSON) != tc.wantJSONv2 {
+				t.Fatalf("JSON: %s; want: %s", gotJSON, tc.wantJSONv2)
+			}
+			var got viewStruct
+			if err := jsonv2.Unmarshal(gotJSON, &got); err != nil {
+				t.Fatal(err)
+			}
+			if d := cmp.Diff(got, tc.in, cmpOpts, cmpopts.EquateEmpty()); d != "" {
+				t.Fatalf("unmarshal mismatch (-got +want):\n%s", d)
+			}
+		})
 	}
 }
 
