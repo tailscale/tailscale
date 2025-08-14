@@ -310,7 +310,7 @@ func TestMinReadBatchMsgsLen(t *testing.T) {
 	// So long as magicsock uses [Conn], and [wireguard-go/conn.Bind] API is
 	// shaped for wireguard-go to control packet memory, these values should be
 	// aligned.
-	if MinReadBatchMsgsLen() != conn.IdealBatchSize {
-		t.Fatalf("MinReadBatchMsgsLen():%d != conn.IdealBatchSize(): %d", MinReadBatchMsgsLen(), conn.IdealBatchSize)
+	if IdealBatchSize != conn.IdealBatchSize {
+		t.Fatalf("IdealBatchSize: %d != conn.IdealBatchSize(): %d", IdealBatchSize, conn.IdealBatchSize)
 	}
 }
