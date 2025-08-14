@@ -45,7 +45,7 @@ type xnetBatchWriter interface {
 
 var (
 	// [linuxBatchingConn] implements [Conn].
-	_ Conn = &linuxBatchingConn{}
+	_ Conn = (*linuxBatchingConn)(nil)
 )
 
 // linuxBatchingConn is a UDP socket that provides batched i/o. It implements
