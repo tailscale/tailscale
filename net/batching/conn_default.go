@@ -19,3 +19,5 @@ var controlMessageSize = 0
 func MinControlMessageSize() int {
 	return controlMessageSize
 }
+
+const IdealBatchSize = 1
