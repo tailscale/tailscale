@@ -149,12 +149,21 @@ func (ipp *ConsensusIPPool) domainLookup(from tailcfg.NodeID, addr netip.Addr) (
 	return ww, true
 }
 
+type ClusterOpts struct {
+	Tag        string
+	StateDir   string
+	FollowOnly bool
+}
+
 // StartConsensus is part of the IPPool interface. It starts the raft background routines that handle consensus.
-func (ipp *ConsensusIPPool) StartConsensus(ctx context.Context, ts *tsnet.Server, clusterTag string, clusterStateDir string) error {
+func (ipp *ConsensusIPPool) StartConsensus(ctx context.Context, ts *tsnet.Server, opts ClusterOpts) error {
 	cfg := tsconsensus.DefaultConfig()
 	cfg.ServeDebugMonitor = true
-	cfg.StateDirPath = clusterStateDir
-	cns, err := tsconsensus.Start(ctx, ts, ipp, clusterTag, cfg)
+	cfg.StateDirPath = opts.StateDir
+	cns, err := tsconsensus.Start(ctx, ts, ipp, tsconsensus.BootstrapOpts{
+		Tag:        opts.Tag,
+		FollowOnly: opts.FollowOnly,
+	}, cfg)
 	if err != nil {
 		return err
 	}
