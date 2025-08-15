@@ -113,7 +113,7 @@ func mustGeneratePrivateKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	privateKeyMu.Lock()
 	defer privateKeyMu.Unlock()
-	
+
 	if privateKey != nil {
 		return privateKey
 	}
@@ -593,7 +593,7 @@ func TestServeToken(t *testing.T) {
 
 			// Use setupTestServer helper
 			s := setupTestServer(t, tt.strictMode)
-			
+
 			// Fake user/node
 			profile := &tailcfg.UserProfile{
 				LoginName:     "alice@example.com",
@@ -1017,7 +1017,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 
 	t.Run("strict_mode_file_handling", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		
+
 		// Test strict mode uses oauth-clients.json
 		srv1 := setupTestServer(t, true)
 		srv1.rootPath = tmpDir
@@ -1032,7 +1032,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 		srv1.mu.Lock()
 		err := srv1.storeFunnelClientsLocked()
 		srv1.mu.Unlock()
-		
+
 		if err != nil {
 			t.Fatalf("failed to store clients in strict mode: %v", err)
 		}
@@ -1052,7 +1052,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 
 	t.Run("non_strict_mode_file_handling", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		
+
 		// Test non-strict mode uses oidc-funnel-clients.json
 		srv1 := setupTestServer(t, false)
 		srv1.rootPath = tmpDir
@@ -1067,7 +1067,7 @@ func TestFunnelClientsPersistence(t *testing.T) {
 		srv1.mu.Lock()
 		err := srv1.storeFunnelClientsLocked()
 		srv1.mu.Unlock()
-		
+
 		if err != nil {
 			t.Fatalf("failed to store clients in non-strict mode: %v", err)
 		}
@@ -1140,7 +1140,7 @@ func setupTestServerWithClient(t *testing.T, strictMode bool, lc *local.Client) 
 		rootPath:      t.TempDir(),
 		lc:            lc,
 	}
-	
+
 	// Add a test client for funnel/strict mode testing
 	srv.funnelClients["test-client"] = &funnelClient{
 		ID:          "test-client",
@@ -1148,10 +1148,10 @@ func setupTestServerWithClient(t *testing.T, strictMode bool, lc *local.Client) 
 		Name:        "Test Client",
 		RedirectURI: "https://rp.example.com/callback",
 	}
-	
+
 	// Inject a working signer for token tests
 	srv.lazySigner.Set(oidcTestingSigner(t))
-	
+
 	return srv
 }
 
@@ -1246,7 +1246,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 			setupNewFile: true,
 			newFileContent: map[string]*funnelClient{
 				"existing-client": {
-					ID:          "existing-client", 
+					ID:          "existing-client",
 					Secret:      "existing-secret",
 					Name:        "Existing Client",
 					RedirectURI: "https://existing.example.com/callback",
@@ -1267,7 +1267,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 			oldFileContent: map[string]*funnelClient{
 				"old-client": {
 					ID:          "old-client",
-					Secret:      "old-secret", 
+					Secret:      "old-secret",
 					Name:        "Old Client",
 					RedirectURI: "https://old.example.com/callback",
 				},
@@ -1276,7 +1276,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 				"new-client": {
 					ID:          "new-client",
 					Secret:      "new-secret",
-					Name:        "New Client", 
+					Name:        "New Client",
 					RedirectURI: "https://new.example.com/callback",
 				},
 			},
@@ -1288,7 +1288,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rootPath := t.TempDir()
-			
+
 			// Setup old file if needed
 			if tt.setupOldFile {
 				oldData, err := json.Marshal(tt.oldFileContent)
@@ -1300,7 +1300,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 					t.Fatalf("failed to create old file: %v", err)
 				}
 			}
-			
+
 			// Setup new file if needed
 			if tt.setupNewFile {
 				newData, err := json.Marshal(tt.newFileContent)
@@ -1315,7 +1315,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 
 			// Call migrateOAuthClients
 			resultPath, err := migrateOAuthClients(rootPath)
-			
+
 			if tt.expectError && err == nil {
 				t.Fatalf("expected error but got none")
 			}
@@ -1337,18 +1337,18 @@ func TestMigrateOAuthClients(t *testing.T) {
 				if _, err := os.Stat(resultPath); err != nil {
 					t.Errorf("expected new file to exist at %s: %v", resultPath, err)
 				}
-				
+
 				// Verify content
 				data, err := os.ReadFile(resultPath)
 				if err != nil {
 					t.Fatalf("failed to read new file: %v", err)
 				}
-				
+
 				var clients map[string]*funnelClient
 				if err := json.Unmarshal(data, &clients); err != nil {
 					t.Fatalf("failed to unmarshal new file: %v", err)
 				}
-				
+
 				// Determine expected content
 				var expectedContent map[string]*funnelClient
 				if tt.setupNewFile {
@@ -1358,11 +1358,11 @@ func TestMigrateOAuthClients(t *testing.T) {
 				} else {
 					expectedContent = make(map[string]*funnelClient)
 				}
-				
+
 				if len(clients) != len(expectedContent) {
 					t.Errorf("expected %d clients, got %d", len(expectedContent), len(clients))
 				}
-				
+
 				for id, expectedClient := range expectedContent {
 					actualClient, ok := clients[id]
 					if !ok {
@@ -1384,7 +1384,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 				if _, err := os.Stat(deprecatedPath); err != nil {
 					t.Errorf("expected old file to be renamed to %s: %v", deprecatedPath, err)
 				}
-				
+
 				// Verify original old file is gone
 				oldPath := rootPath + "/" + funnelClientsFile
 				if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
@@ -1401,12 +1401,12 @@ func TestMigrateOAuthClients(t *testing.T) {
 // tsidp deployments that have config files in unexpected locations.
 func TestGetConfigFilePath(t *testing.T) {
 	tests := []struct {
-		name            string
-		fileName        string
-		createInCwd     bool
-		createInRoot    bool
-		expectInCwd     bool
-		expectError     bool
+		name         string
+		fileName     string
+		createInCwd  bool
+		createInRoot bool
+		expectInCwd  bool
+		expectError  bool
 	}{
 		{
 			name:        "file exists in current directory - use current directory",
@@ -1415,10 +1415,10 @@ func TestGetConfigFilePath(t *testing.T) {
 			expectInCwd: true,
 		},
 		{
-			name:         "file does not exist - use root path",
-			fileName:     "test-config.json",
-			createInCwd:  false,
-			expectInCwd:  false,
+			name:        "file does not exist - use root path",
+			fileName:    "test-config.json",
+			createInCwd: false,
+			expectInCwd: false,
 		},
 		{
 			name:         "file exists in both - prefer current directory",
@@ -1437,7 +1437,7 @@ func TestGetConfigFilePath(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to get working directory: %v", err)
 			}
-			
+
 			// Create a temporary working directory
 			tmpWd := t.TempDir()
 			if err := os.Chdir(tmpWd); err != nil {
@@ -1462,7 +1462,7 @@ func TestGetConfigFilePath(t *testing.T) {
 
 			// Call getConfigFilePath
 			resultPath, err := getConfigFilePath(rootPath, tt.fileName)
-			
+
 			if tt.expectError && err == nil {
 				t.Fatalf("expected error but got none")
 			}
@@ -1561,7 +1561,7 @@ func TestAuthorizeStrictMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := setupTestServer(t, tt.strictMode)
-			
+
 			// Setup client if needed
 			if tt.setupClient {
 				srv.funnelClients["test-client"] = &funnelClient{
@@ -1582,7 +1582,7 @@ func TestAuthorizeStrictMode(t *testing.T) {
 				// In non-strict mode, use the node-specific endpoint
 				reqURL = "/authorize/123"
 			}
-			
+
 			query := url.Values{}
 			if tt.clientID != "" {
 				query.Set("client_id", tt.clientID)
@@ -1596,11 +1596,11 @@ func TestAuthorizeStrictMode(t *testing.T) {
 			if tt.nonce != "" {
 				query.Set("nonce", tt.nonce)
 			}
-			
+
 			reqURL += "?" + query.Encode()
 			req := httptest.NewRequest("GET", reqURL, nil)
 			req.RemoteAddr = "127.0.0.1:12345"
-			
+
 			// For strict mode tests, simulate funnel requests to avoid WhoIs calls.
 			// This is because the test doesn't have a proper mock LocalClient setup,
 			// and testing non-funnel strict mode would require complex mocking.
@@ -1620,7 +1620,7 @@ func TestAuthorizeStrictMode(t *testing.T) {
 				if rr.Code != http.StatusFound {
 					t.Errorf("expected redirect (302), got %d: %s", rr.Code, rr.Body.String())
 				}
-				
+
 				location := rr.Header().Get("Location")
 				if location == "" {
 					t.Error("expected Location header in redirect response")
@@ -1634,7 +1634,7 @@ func TestAuthorizeStrictMode(t *testing.T) {
 						if code == "" {
 							t.Error("expected 'code' parameter in redirect URL")
 						}
-						
+
 						// Verify state is preserved if provided
 						if tt.state != "" {
 							returnedState := redirectURL.Query().Get("state")
@@ -1642,12 +1642,12 @@ func TestAuthorizeStrictMode(t *testing.T) {
 								t.Errorf("expected state '%s', got '%s'", tt.state, returnedState)
 							}
 						}
-						
+
 						// Verify the auth request was stored
 						srv.mu.Lock()
 						ar, ok := srv.code[code]
 						srv.mu.Unlock()
-						
+
 						if !ok {
 							t.Error("expected authorization request to be stored")
 						} else {
@@ -1678,21 +1678,21 @@ func TestAuthorizeStrictMode(t *testing.T) {
 // - Support both form-based and HTTP Basic authentication for client credentials
 func TestServeTokenWithClientValidation(t *testing.T) {
 	tests := []struct {
-		name               string
-		strictMode         bool
-		method             string
-		grantType          string
-		code               string
-		clientID           string
-		clientSecret       string
-		redirectURI        string
-		useBasicAuth       bool
-		setupAuthRequest   bool
-		authRequestClient  string
+		name                string
+		strictMode          bool
+		method              string
+		grantType           string
+		code                string
+		clientID            string
+		clientSecret        string
+		redirectURI         string
+		useBasicAuth        bool
+		setupAuthRequest    bool
+		authRequestClient   string
 		authRequestRedirect string
-		expectError        bool
-		expectCode         int
-		expectIDToken      bool
+		expectError         bool
+		expectCode          int
+		expectIDToken       bool
 	}{
 		{
 			name:                "strict mode - valid token exchange with form credentials",
@@ -1796,7 +1796,7 @@ func TestServeTokenWithClientValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := setupTestServer(t, tt.strictMode)
-			
+
 			// Setup authorization request if needed
 			if tt.setupAuthRequest {
 				now := time.Now()
@@ -1846,7 +1846,7 @@ func TestServeTokenWithClientValidation(t *testing.T) {
 			form.Set("grant_type", tt.grantType)
 			form.Set("code", tt.code)
 			form.Set("redirect_uri", tt.redirectURI)
-			
+
 			if !tt.useBasicAuth {
 				if tt.clientID != "" {
 					form.Set("client_id", tt.clientID)
@@ -1859,7 +1859,7 @@ func TestServeTokenWithClientValidation(t *testing.T) {
 			req := httptest.NewRequest(tt.method, "/token", strings.NewReader(form.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			req.RemoteAddr = "127.0.0.1:12345"
-			
+
 			if tt.useBasicAuth && tt.clientID != "" && tt.clientSecret != "" {
 				req.SetBasicAuth(tt.clientID, tt.clientSecret)
 			}
@@ -1882,7 +1882,7 @@ func TestServeTokenWithClientValidation(t *testing.T) {
 					TokenType   string `json:"token_type"`
 					ExpiresIn   int    `json:"expires_in"`
 				}
-				
+
 				if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 					t.Fatalf("failed to unmarshal response: %v", err)
 				}
@@ -1904,7 +1904,7 @@ func TestServeTokenWithClientValidation(t *testing.T) {
 				srv.mu.Lock()
 				_, ok := srv.accessToken[resp.AccessToken]
 				srv.mu.Unlock()
-				
+
 				if !ok {
 					t.Error("expected access token to be stored")
 				}
@@ -1913,7 +1913,7 @@ func TestServeTokenWithClientValidation(t *testing.T) {
 				srv.mu.Lock()
 				_, ok = srv.code[tt.code]
 				srv.mu.Unlock()
-				
+
 				if ok {
 					t.Error("expected authorization code to be consumed")
 				}
@@ -1930,16 +1930,16 @@ func TestServeTokenWithClientValidation(t *testing.T) {
 // - Return appropriate user claims based on client capabilities
 func TestServeUserInfoWithClientValidation(t *testing.T) {
 	tests := []struct {
-		name            string
-		strictMode      bool
-		setupToken      bool
-		setupClient     bool
-		clientID        string
-		token           string
-		tokenValidTill  time.Time
-		expectError     bool
-		expectCode      int
-		expectUserInfo  bool
+		name           string
+		strictMode     bool
+		setupToken     bool
+		setupClient    bool
+		clientID       string
+		token          string
+		tokenValidTill time.Time
+		expectError    bool
+		expectCode     int
+		expectUserInfo bool
 	}{
 		{
 			name:           "strict mode - valid token with existing client",
@@ -2007,7 +2007,7 @@ func TestServeUserInfoWithClientValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := setupTestServer(t, tt.strictMode)
-			
+
 			// Setup client if needed
 			if tt.setupClient {
 				srv.funnelClients[tt.clientID] = &funnelClient{

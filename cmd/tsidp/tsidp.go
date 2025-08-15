@@ -71,17 +71,16 @@ const deprecatedFunnelClientsFile = "deprecated-oidc-funnel-clients.json"
 const oidcKeyFile = "oidc-key.json"
 
 var (
-	flagVerbose            = flag.Bool("verbose", false, "be verbose")
-	flagPort               = flag.Int("port", 443, "port to listen on")
-	flagLocalPort          = flag.Int("local-port", -1, "allow requests from localhost")
-	flagUseLocalTailscaled = flag.Bool("use-local-tailscaled", false, "use local tailscaled instead of tsnet")
-	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available on the public internet")
-	flagHostname           = flag.String("hostname", "idp", "tsnet hostname to use instead of idp")
-	flagDir                = flag.String("dir", "", "tsnet state directory; a default one will be created if not provided")
+	flagVerbose                           = flag.Bool("verbose", false, "be verbose")
+	flagPort                              = flag.Int("port", 443, "port to listen on")
+	flagLocalPort                         = flag.Int("local-port", -1, "allow requests from localhost")
+	flagUseLocalTailscaled                = flag.Bool("use-local-tailscaled", false, "use local tailscaled instead of tsnet")
+	flagFunnel                            = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available on the public internet")
+	flagHostname                          = flag.String("hostname", "idp", "tsnet hostname to use instead of idp")
+	flagDir                               = flag.String("dir", "", "tsnet state directory; a default one will be created if not provided")
 	flagAllowInsecureNoClientRegistration *bool
-	flagAllowInsecureWasSet bool // cached whether flag was explicitly set by user
+	flagAllowInsecureWasSet               bool // cached whether flag was explicitly set by user
 )
-
 
 // isStrictOAuthMode determines if strict OAuth mode should be enabled based on
 // the allow-insecure-no-client-registration flag. The logic is inverted:
@@ -99,7 +98,7 @@ func isStrictOAuthMode() bool {
 func main() {
 	flagAllowInsecureNoClientRegistration = flag.Bool("allow-insecure-no-client-registration", false, "allow insecure OAuth mode without client registration; false=require client credentials, true/unset=allow without credentials")
 	flag.Parse()
-	
+
 	// Cache whether the flag was explicitly set by the user
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "allow-insecure-no-client-registration" {
@@ -344,13 +343,13 @@ func serveOnLocalTailscaled(ctx context.Context, lc *local.Client, st *ipnstate.
 }
 
 type idpServer struct {
-	lc           *local.Client
-	loopbackURL  string
-	serverURL    string // "https://foo.bar.ts.net"
-	funnel       bool
-	localTSMode  bool
-	rootPath     string // root path, used for storing state files
-	strictOAuth  bool   // enable strict OAuth mode
+	lc          *local.Client
+	loopbackURL string
+	serverURL   string // "https://foo.bar.ts.net"
+	funnel      bool
+	localTSMode bool
+	rootPath    string // root path, used for storing state files
+	strictOAuth bool   // enable strict OAuth mode
 
 	lazyMux        lazy.SyncValue[*http.ServeMux]
 	lazySigningKey lazy.SyncValue[*signingKey]
@@ -451,7 +450,7 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 	if s.strictOAuth {
 		// In strict mode, validate client_id exists but defer client_secret validation to token endpoint
 		// This follows RFC 6749 which specifies client authentication should occur at token endpoint, not authorization endpoint
-		
+
 		s.mu.Lock()
 		c, ok := s.funnelClients[clientID]
 		s.mu.Unlock()
@@ -883,7 +882,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		// In strict mode, always validate client credentials regardless of request source
 		clientID := r.FormValue("client_id")
 		clientSecret := r.FormValue("client_secret")
-		
+
 		// Try basic auth if form values are empty
 		if clientID == "" || clientSecret == "" {
 			if basicClientID, basicClientSecret, ok := r.BasicAuth(); ok {
