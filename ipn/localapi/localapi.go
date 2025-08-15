@@ -172,9 +172,26 @@ var (
 	metrics   = map[string]*clientmetric.Metric{}
 )
 
-// NewHandler creates a new LocalAPI HTTP handler. All parameters are required.
-func NewHandler(actor ipnauth.Actor, b *ipnlocal.LocalBackend, logf logger.Logf, logID logid.PublicID) *Handler {
-	return &Handler{Actor: actor, b: b, logf: logf, backendLogID: logID, clock: tstime.StdClock{}}
+// NewHandler creates a new LocalAPI HTTP handler from the given config.
+func NewHandler(cfg HandlerConfig) *Handler {
+	return &Handler{
+		Actor:        cfg.Actor,
+		b:            cfg.Backend,
+		logf:         cfg.Logf,
+		backendLogID: cfg.LogID,
+		clock:        tstime.StdClock{},
+		eventBus:     cfg.EventBus,
+	}
+}
+
+// HandlerConfig carries the settings for a local API handler.
+// All fields are required.
+type HandlerConfig struct {
+	Actor    ipnauth.Actor
+	Backend  *ipnlocal.LocalBackend
+	Logf     logger.Logf
+	LogID    logid.PublicID
+	EventBus *eventbus.Bus
 }
 
 type Handler struct {
@@ -203,6 +220,7 @@ type Handler struct {
 	logf         logger.Logf
 	backendLogID logid.PublicID
 	clock        tstime.Clock
+	eventBus     *eventbus.Bus // read-only after initialization
 }
 
 func (h *Handler) Logf(format string, args ...any) {
@@ -850,6 +868,7 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 		NetMon:       h.b.NetMon(),
 		DebugKnobs:   debugKnobs,
 		ControlKnobs: h.b.ControlKnobs(),
+		EventBus:     h.eventBus,
 		OnChange: func() {
 			logf("portmapping changed.")
 			logf("have mapping: %v", c.HaveMapping())
