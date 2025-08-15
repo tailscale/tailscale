@@ -69,9 +69,9 @@ type configOpts struct {
 	shouldRemoveAuthKey                            bool
 	secretExtraData                                map[string][]byte
 	resourceVersion                                string
-
-	enableMetrics        bool
-	serviceMonitorLabels tsapi.Labels
+	replicas                                       *int32
+	enableMetrics                                  bool
+	serviceMonitorLabels                           tsapi.Labels
 }
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
@@ -88,8 +88,8 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.name"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.uid"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
-			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
-			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
+			{Name: "TS_KUBE_SECRET", Value: "$(POD_NAME)"},
+			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig/$(POD_NAME)"},
 		},
 		SecurityContext: &corev1.SecurityContext{
 			Privileged: ptr.To(true),
@@ -106,7 +106,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 	var volumes []corev1.Volume
 	volumes = []corev1.Volume{
 		{
-			Name: "tailscaledconfig",
+			Name: "tailscaledconfig-0",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName: opts.secretName,
@@ -115,9 +115,9 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		},
 	}
 	tsContainer.VolumeMounts = []corev1.VolumeMount{{
-		Name:      "tailscaledconfig",
+		Name:      "tailscaledconfig-0",
 		ReadOnly:  true,
-		MountPath: "/etc/tsconfig",
+		MountPath: "/etc/tsconfig/" + opts.secretName,
 	}}
 	if opts.firewallMode != "" {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
@@ -154,10 +154,21 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 	if opts.serveConfig != nil {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 			Name:  "TS_SERVE_CONFIG",
-			Value: "/etc/tailscaled/serve-config",
+			Value: "/etc/tailscaled/$(POD_NAME)/serve-config",
 		})
-		volumes = append(volumes, corev1.Volume{Name: "serve-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}}})
-		tsContainer.VolumeMounts = append(tsContainer.VolumeMounts, corev1.VolumeMount{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"})
+		volumes = append(volumes, corev1.Volume{
+			Name: "serve-config-0",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: opts.secretName,
+					Items: []corev1.KeyToPath{{
+						Key:  "serve-config",
+						Path: "serve-config",
+					}},
+				},
+			},
+		})
+		tsContainer.VolumeMounts = append(tsContainer.VolumeMounts, corev1.VolumeMount{Name: "serve-config-0", ReadOnly: true, MountPath: "/etc/tailscaled/$(POD_NAME)"})
 	}
 	tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 		Name:  "TS_INTERNAL_APP",
@@ -202,7 +213,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			},
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: ptr.To[int32](1),
+			Replicas: opts.replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": "1234-UID"},
 			},
@@ -266,15 +277,15 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.name"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "metadata.uid"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
-			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
-			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
-			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/serve-config"},
+			{Name: "TS_KUBE_SECRET", Value: "$(POD_NAME)"},
+			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig/$(POD_NAME)"},
+			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/$(POD_NAME)/serve-config"},
 			{Name: "TS_INTERNAL_APP", Value: opts.app},
 		},
 		ImagePullPolicy: "Always",
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "tailscaledconfig", ReadOnly: true, MountPath: "/etc/tsconfig"},
-			{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"},
+			{Name: "tailscaledconfig-0", ReadOnly: true, MountPath: "/etc/tsconfig/" + opts.secretName},
+			{Name: "serve-config-0", ReadOnly: true, MountPath: "/etc/tailscaled/$(POD_NAME)"},
 		},
 	}
 	if opts.enableMetrics {
@@ -302,16 +313,22 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 	}
 	volumes := []corev1.Volume{
 		{
-			Name: "tailscaledconfig",
+			Name: "tailscaledconfig-0",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName: opts.secretName,
 				},
 			},
 		},
-		{Name: "serve-config",
+		{
+			Name: "serve-config-0",
 			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}}},
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: opts.secretName,
+					Items:      []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}},
+				},
+			},
+		},
 	}
 	ss := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
