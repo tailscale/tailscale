@@ -24,7 +24,9 @@ MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEtfLbXkHUVc9oUPTNyaEK3hIwmuGRoTtd
 -----END PUBLIC KEY-----" > pkcs11-release-signing-key.pem
 openssl dgst -sha384 -verify pkcs11-release-signing-key.pem -signature "$PKCS11_MODULE_PATH.sig" "$PKCS11_MODULE_PATH"
 
-echo "$QNAP_SIGNING_CERT_BASE64" | base64 --decode > cert.crt
+echo "$QNAP_SIGNING_CERT_BASE64" | base64 --decode > signer.pem
+
+echo "$QNAP_SIGNING_CERT_INTERMEDIARIES_BASE64" | base64 --decode > certs.pem
 
 openssl cms \
 	-sign \
@@ -35,6 +37,7 @@ openssl cms \
 	-inkey "pkcs11:object=$QNAP_SIGNING_KEY_NAME" \
 	-keyopt rsa_padding_mode:pss \
 	-keyopt rsa_pss_saltlen:digest \
-	-signer cert.crt \
+	-signer signer.pem \
+	-certfile certs.pem \
 	-in "$1" \
 	-out -

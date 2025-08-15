@@ -18,15 +18,16 @@ import (
 // gcloudKeyring is the full path to the Google Cloud keyring containing the signing key.
 // keyName is the name of the key.
 // certificateBase64 is the PEM certificate to use in the signature, base64 encoded.
-func Targets(gcloudCredentialsBase64, gcloudProject, gcloudKeyring, keyName, certificateBase64 string) []dist.Target {
+func Targets(gcloudCredentialsBase64, gcloudProject, gcloudKeyring, keyName, certificateBase64, certificateIntermediariesBase64 string) []dist.Target {
 	var signerInfo *signer
-	if !slices.Contains([]string{gcloudCredentialsBase64, gcloudProject, gcloudKeyring, keyName, certificateBase64}, "") {
+	if !slices.Contains([]string{gcloudCredentialsBase64, gcloudProject, gcloudKeyring, keyName, certificateBase64, certificateIntermediariesBase64}, "") {
 		signerInfo = &signer{
-			gcloudCredentialsBase64: gcloudCredentialsBase64,
-			gcloudProject:           gcloudProject,
-			gcloudKeyring:           gcloudKeyring,
-			keyName:                 keyName,
-			certificateBase64:       certificateBase64,
+			gcloudCredentialsBase64:         gcloudCredentialsBase64,
+			gcloudProject:                   gcloudProject,
+			gcloudKeyring:                   gcloudKeyring,
+			keyName:                         keyName,
+			certificateBase64:               certificateBase64,
+			certificateIntermediariesBase64: certificateIntermediariesBase64,
 		}
 	}
 	return []dist.Target{

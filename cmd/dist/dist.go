@@ -21,12 +21,13 @@ import (
 )
 
 var (
-	synologyPackageCenter   bool
-	gcloudCredentialsBase64 string
-	gcloudProject           string
-	gcloudKeyring           string
-	qnapKeyName             string
-	qnapCertificateBase64   string
+	synologyPackageCenter               bool
+	gcloudCredentialsBase64             string
+	gcloudProject                       string
+	gcloudKeyring                       string
+	qnapKeyName                         string
+	qnapCertificateBase64               string
+	qnapCertificateIntermediariesBase64 string
 )
 
 func getTargets() ([]dist.Target, error) {
@@ -47,11 +48,11 @@ func getTargets() ([]dist.Target, error) {
 	// To build for package center, run
 	// ./tool/go run ./cmd/dist build --synology-package-center synology
 	ret = append(ret, synology.Targets(synologyPackageCenter, nil)...)
-	qnapSigningArgs := []string{gcloudCredentialsBase64, gcloudProject, gcloudKeyring, qnapKeyName, qnapCertificateBase64}
+	qnapSigningArgs := []string{gcloudCredentialsBase64, gcloudProject, gcloudKeyring, qnapKeyName, qnapCertificateBase64, qnapCertificateIntermediariesBase64}
 	if cmp.Or(qnapSigningArgs...) != "" && slices.Contains(qnapSigningArgs, "") {
-		return nil, errors.New("all of --gcloud-credentials, --gcloud-project, --gcloud-keyring, --qnap-key-name and --qnap-certificate must be set")
+		return nil, errors.New("all of --gcloud-credentials, --gcloud-project, --gcloud-keyring, --qnap-key-name, --qnap-certificate and --qnap-certificate-intermediaries must be set")
 	}
-	ret = append(ret, qnap.Targets(gcloudCredentialsBase64, gcloudProject, gcloudKeyring, qnapKeyName, qnapCertificateBase64)...)
+	ret = append(ret, qnap.Targets(gcloudCredentialsBase64, gcloudProject, gcloudKeyring, qnapKeyName, qnapCertificateBase64, qnapCertificateIntermediariesBase64)...)
 	return ret, nil
 }
 
@@ -65,6 +66,7 @@ func main() {
 			subcmd.FlagSet.StringVar(&gcloudKeyring, "gcloud-keyring", "", "path to keyring in GCP KMS (used when signing QNAP builds)")
 			subcmd.FlagSet.StringVar(&qnapKeyName, "qnap-key-name", "", "name of GCP key to use when signing QNAP builds")
 			subcmd.FlagSet.StringVar(&qnapCertificateBase64, "qnap-certificate", "", "base64 encoded certificate to use when signing QNAP builds")
+			subcmd.FlagSet.StringVar(&qnapCertificateIntermediariesBase64, "qnap-certificate-intermediaries", "", "base64 encoded intermediary certificate to use when signing QNAP builds")
 		}
 	}
 

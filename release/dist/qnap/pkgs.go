@@ -27,11 +27,12 @@ type target struct {
 }
 
 type signer struct {
-	gcloudCredentialsBase64 string
-	gcloudProject           string
-	gcloudKeyring           string
-	keyName                 string
-	certificateBase64       string
+	gcloudCredentialsBase64         string
+	gcloudProject                   string
+	gcloudKeyring                   string
+	keyName                         string
+	certificateBase64               string
+	certificateIntermediariesBase64 string
 }
 
 func (t *target) String() string {
@@ -90,6 +91,7 @@ func (t *target) buildQPKG(b *dist.Build, qnapBuilds *qnapBuilds, inner *innerPk
 			"-e", fmt.Sprintf("GCLOUD_KEYRING=%s", t.signer.gcloudKeyring),
 			"-e", fmt.Sprintf("QNAP_SIGNING_KEY_NAME=%s", t.signer.keyName),
 			"-e", fmt.Sprintf("QNAP_SIGNING_CERT_BASE64=%s", t.signer.certificateBase64),
+			"-e", fmt.Sprintf("QNAP_SIGNING_CERT_INTERMEDIARIES_BASE64=%s", t.signer.certificateIntermediariesBase64),
 			"-e", fmt.Sprintf("QNAP_SIGNING_SCRIPT=%s", "/sign-qpkg.sh"),
 			"-v", fmt.Sprintf("%s:/sign-qpkg.sh", filepath.Join(qnapBuilds.tmpDir, "files/scripts/sign-qpkg.sh")),
 		)
