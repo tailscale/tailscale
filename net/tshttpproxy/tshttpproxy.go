@@ -7,6 +7,7 @@ package tshttpproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -48,7 +49,7 @@ func SetProxyFunc(fn func(*url.URL) (*url.URL, error)) error {
 
 	// Allow override only if config is not set
 	if config != nil {
-		return fmt.Errorf("tshttpproxy: SetProxyFunc can only be called when config is not set")
+		return errors.New("tshttpproxy: SetProxyFunc can only be called when config is not set")
 	}
 
 	proxyFunc = fn
