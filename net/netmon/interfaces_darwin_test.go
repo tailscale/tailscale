@@ -112,3 +112,25 @@ func TestFetchRoutingTable(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateLastKnownDefaultRouteInterface(t *testing.T) {
+	// Pick some interface on the machine
+	interfaces, err := netInterfaces()
+	if err != nil || len(interfaces) == 0 {
+		t.Fatalf("netInterfaces() error: %v", err)
+	}
+
+	// Set it as our last known default route interface
+	ifName := interfaces[0].Name
+	UpdateLastKnownDefaultRouteInterface(ifName)
+
+	// And make sure we can get it back
+	route, err := OSDefaultRoute()
+	if err != nil {
+		t.Fatalf("OSDefaultRoute() error: %v", err)
+	}
+	want, got := ifName, route.InterfaceName
+	if want != got {
+		t.Errorf("OSDefaultRoute() = %q, want %q", got, want)
+	}
+}

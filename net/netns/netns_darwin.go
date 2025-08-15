@@ -78,10 +78,38 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 			return -1, errInterfaceStateInvalid
 		}
 
-		if iface, ok := state.Interface[state.DefaultRouteInterface]; ok {
-			return iface.Index, nil
+		// Netmon's cached view of the default inteface
+		cachedIdx, ok := state.Interface[state.DefaultRouteInterface]
+		// OSes view (if available) of the default interface
+		osIf, osIferr := netmon.OSDefaultRoute()
+
+		idx := -1
+		errOut := errInterfaceStateInvalid
+		// Preferentially choose the OS's view of the default if index.  Due to the way darwin sets the delegated
+		// interface on tunnel creation only, it is possible for netmon to have a stale view of the default and
+		// netmon's view is often temporarily wrong during network transitions, or for us to not have the
+		// the the oses view of the defaultIf yet.
+		if osIferr == nil {
+			idx = osIf.InterfaceIndex
+			errOut = nil
+		} else if ok {
+			idx = cachedIdx.Index
+			errOut = nil
 		}
-		return -1, errInterfaceStateInvalid
+
+		if osIferr == nil && ok && (osIf.InterfaceIndex != cachedIdx.Index) {
+			logf("netns: [unexpected] os default if %q (%d) != netmon cached if %q (%d)", osIf.InterfaceName, osIf.InterfaceIndex, cachedIdx.Name, cachedIdx.Index)
+		}
+
+		// Sanity check to make sure we didn't pick the tailscale interface
+		if tsif, err2 := tailscaleInterface(); tsif != nil && err2 == nil && errOut == nil {
+			if tsif.Index == idx {
+				idx = -1
+				errOut = errInterfaceStateInvalid
+			}
+		}
+
+		return idx, errOut
 	}
 
 	useRoute := bindToInterfaceByRoute.Load() || bindToInterfaceByRouteEnv()
@@ -100,7 +128,7 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 
 	idx, err := interfaceIndexFor(addr, true /* canRecurse */)
 	if err != nil {
-		logf("netns: error in interfaceIndexFor: %v", err)
+		logf("netns: error getting interface index for %q: %v", address, err)
 		return defaultIdx()
 	}
 
@@ -108,9 +136,12 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 	// if so, we fall back to binding from the default.
 	tsif, err2 := tailscaleInterface()
 	if err2 == nil && tsif != nil && tsif.Index == idx {
-		logf("[unexpected] netns: interfaceIndexFor returned Tailscale interface")
+		// note: with an exit node enabled, this is almost always true.  defaultIdx() is the
+		// right thing to do here.
 		return defaultIdx()
 	}
+
+	logf("netns: completed success interfaceIndexFor(%s) = %d", address, idx)
 
 	return idx, err
 }
