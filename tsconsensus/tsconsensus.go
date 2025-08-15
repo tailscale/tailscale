@@ -209,7 +209,21 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	}
 	c.raft = r
 
-	c.bootstrap(auth.AllowedPeers())
+	// we may already be in a consensus (see comment above before startRaft) but we're going to
+	// try to bootstrap anyway in case this is a fresh start.
+	err = c.bootstrap(auth.AllowedPeers())
+	if err != nil {
+		if errors.Is(err, raft.ErrCantBootstrap) {
+			// Raft cluster state can be persisted, if we try to call raft.BootstrapCluster when
+			// we already have cluster state it will return raft.ErrCantBootstrap. It's safe to
+			// ignore (according to the comment in the raft code), and we can expect that the other
+			// nodes of the cluster will become available at some point and we can get back into the
+			// consensus.
+			log.Print("Bootstrap: raft has cluster state, waiting for peers")
+		} else {
+			return nil, err
+		}
+	}
 
 	if cfg.ServeDebugMonitor {
 		srv, err = serveMonitor(&c, ts, netip.AddrPortFrom(c.self.hostAddr, cfg.MonitorPort).String())
@@ -292,9 +306,9 @@ type Consensus struct {
 // bootstrap tries to join a raft cluster, or start one.
 //
 // We need to do the very first raft cluster configuration, but after that raft manages it.
-// bootstrap is called at start up, and we are not currently aware of what the cluster config might be,
+// bootstrap is called at start up, and we may not currently be aware of what the cluster config might be,
 // our node may already be in it. Try to join the raft cluster of all the other nodes we know about, and
-// if unsuccessful, assume we are the first and start our own.
+// if unsuccessful, assume we are the first and try to start our own.
 //
 // It's possible for bootstrap to return an error, or start a errant breakaway cluster.
 //
