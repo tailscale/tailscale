@@ -13,7 +13,7 @@ log_directory: "/tmp/kmsp11"
 chmod 0600 pkcs11-config.yaml
 
 export KMS_PKCS11_CONFIG=`readlink -f pkcs11-config.yaml`
-export PKCS11_MODULE_PATH=/libkmsp11-1.6-linux-amd64/libkmsp11.so
+export PKCS11_MODULE_PATH=/libkmsp11-1.7-linux-amd64/libkmsp11.so
 
 # Verify signature of pkcs11 module
 # See https://github.com/GoogleCloudPlatform/kms-integrations/blob/master/kmsp11/docs/user_guide.md#downloading-and-verifying-the-library
