@@ -7,6 +7,7 @@
 package prober
 
 import (
+	"bytes"
 	"cmp"
 	"container/ring"
 	"context"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/errgroup"
 	"tailscale.com/syncs"
 	"tailscale.com/tsweb"
 )
@@ -574,7 +576,67 @@ func (p *Prober) RunHandler(w http.ResponseWriter, r *http.Request) error {
 		return tsweb.Error(respStatus, fmt.Sprintf("Probe failed: %s\n%s", err.Error(), stats), err)
 	}
 	w.WriteHeader(respStatus)
-	w.Write([]byte(fmt.Sprintf("Probe succeeded in %v\n%s", info.Latency, stats)))
+	fmt.Fprintf(w, "Probe succeeded in %v\n%s", info.Latency, stats)
+	return nil
+}
+
+type RunHandlerAllResponse struct {
+	Results map[string]RunHandlerResponse
+}
+
+func (p *Prober) RunAllHandler(w http.ResponseWriter, r *http.Request) error {
+	probes := make(map[string]*Probe)
+	p.mu.Lock()
+	for _, probe := range p.probes {
+		if !probe.IsContinuous() && probe.name != "derpmap-probe" {
+			probes[probe.name] = probe
+		}
+	}
+	p.mu.Unlock()
+
+	// Do not abort running probes just because one of them has failed.
+	g := new(errgroup.Group)
+
+	var resultsMu sync.Mutex
+	results := make(map[string]RunHandlerResponse)
+
+	for name, probe := range probes {
+		g.Go(func() error {
+			probe.mu.Lock()
+			prevInfo := probe.probeInfoLocked()
+			probe.mu.Unlock()
+
+			info, err := probe.run()
+
+			resultsMu.Lock()
+			results[name] = RunHandlerResponse{
+				ProbeInfo:             info,
+				PreviousSuccessRatio:  prevInfo.RecentSuccessRatio(),
+				PreviousMedianLatency: prevInfo.RecentMedianLatency(),
+			}
+			resultsMu.Unlock()
+			return err
+		})
+	}
+
+	respStatus := http.StatusOK
+	if err := g.Wait(); err != nil {
+		respStatus = http.StatusFailedDependency
+	}
+
+	// Return serialized JSON response if the client requested JSON
+	resp := &RunHandlerAllResponse{
+		Results: results,
+	}
+	var b bytes.Buffer
+	if err := json.NewEncoder(&b).Encode(resp); err != nil {
+		return tsweb.Error(http.StatusInternalServerError, "error encoding JSON response", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(respStatus)
+	w.Write(b.Bytes())
+
 	return nil
 }
 

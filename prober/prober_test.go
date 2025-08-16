@@ -639,6 +639,124 @@ func TestProberRunHandler(t *testing.T) {
 
 }
 
+func TestRunAllHandler(t *testing.T) {
+	clk := newFakeTime()
+
+	tests := []struct {
+		name                  string
+		probeFunc             []func(context.Context) error
+		wantResponseCode      int
+		wantJSONResponse      RunHandlerAllResponse
+		wantPlaintextResponse string
+	}{
+		{
+			name:             "successProbe",
+			probeFunc:        []func(context.Context) error{func(context.Context) error { return nil }, func(context.Context) error { return nil }},
+			wantResponseCode: http.StatusOK,
+			wantJSONResponse: RunHandlerAllResponse{
+				Results: map[string]RunHandlerResponse{
+					"successProbe-0": {
+						ProbeInfo: ProbeInfo{
+							Name:          "successProbe-0",
+							Interval:      probeInterval,
+							Status:        ProbeStatusSucceeded,
+							RecentResults: []bool{true, true},
+						},
+						PreviousSuccessRatio: 1,
+					},
+					"successProbe-1": {
+						ProbeInfo: ProbeInfo{
+							Name:          "successProbe-1",
+							Interval:      probeInterval,
+							Status:        ProbeStatusSucceeded,
+							RecentResults: []bool{true, true},
+						},
+						PreviousSuccessRatio: 1,
+					},
+				},
+			},
+			wantPlaintextResponse: "Probe successProbe-0: succeeded\n\tLast run: 0s\n\tPrevious success rate: 100.0%\n\tPrevious median latency: 0s\nProbe successProbe-1: succeeded\n\tLast run: 0s\n\tPrevious success rate: 100.0%\n\tPrevious median latency: 0s\n\n",
+		},
+		{
+			name:             "successAndFailureProbes",
+			probeFunc:        []func(context.Context) error{func(context.Context) error { return nil }, func(context.Context) error { return fmt.Errorf("error2") }},
+			wantResponseCode: http.StatusFailedDependency,
+			wantJSONResponse: RunHandlerAllResponse{
+				Results: map[string]RunHandlerResponse{
+					"successAndFailureProbes-0": {
+						ProbeInfo: ProbeInfo{
+							Name:          "successAndFailureProbes-0",
+							Interval:      probeInterval,
+							Status:        ProbeStatusSucceeded,
+							RecentResults: []bool{true, true},
+						},
+						PreviousSuccessRatio: 1,
+					},
+					"successAndFailureProbes-1": {
+						ProbeInfo: ProbeInfo{
+							Name:          "successAndFailureProbes-1",
+							Interval:      probeInterval,
+							Status:        ProbeStatusFailed,
+							Error:         "error2",
+							RecentResults: []bool{false, false},
+						},
+					},
+				},
+			},
+			wantPlaintextResponse: "Probe successAndFailureProbes-0: succeeded\n\tLast run: 0s\n\tPrevious success rate: 100.0%\n\tPrevious median latency: 0s\nProbe successAndFailureProbes-1: failed\n\tLast run: 0s\n\tPrevious success rate: 0.0%\n\tPrevious median latency: 0s\n\n\tLast error: error2\n\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
+			for i, pfunc := range tc.probeFunc {
+				probe := p.Run(fmt.Sprintf("%s-%d", tc.name, i), probeInterval, nil, FuncProbe(pfunc))
+				defer probe.Close()
+				<-probe.stopped // wait for the first run.
+			}
+
+			mux := http.NewServeMux()
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			mux.Handle("/prober/runall/", tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunAllHandler), tsweb.HandlerOptions{}))
+
+			req, err := http.NewRequest("GET", server.URL+"/prober/runall/", nil)
+			if err != nil {
+				t.Fatalf("failed to create request: %v", err)
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("failed to make request: %v", err)
+			}
+
+			if resp.StatusCode != tc.wantResponseCode {
+				t.Errorf("unexpected response code: got %d, want %d", resp.StatusCode, tc.wantResponseCode)
+			}
+
+			if resp.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("unexpected content type: got %q, want application/json", resp.Header.Get("Content-Type"))
+			}
+			var gotJSON RunHandlerAllResponse
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("failed to read response body: %v", err)
+			}
+
+			if err := json.Unmarshal(body, &gotJSON); err != nil {
+				t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, body)
+			}
+			if diff := cmp.Diff(tc.wantJSONResponse, gotJSON, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Labels", "RecentLatencies")); diff != "" {
+				t.Errorf("unexpected JSON response (-want +got):\n%s", diff)
+			}
+
+		})
+	}
+
+}
+
 type fakeTicker struct {
 	ch       chan time.Time
 	interval time.Duration

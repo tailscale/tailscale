@@ -107,6 +107,7 @@ func main() {
 	mux := http.NewServeMux()
 	d := tsweb.Debugger(mux)
 	d.Handle("probe-run", "Run a probe", tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunHandler), tsweb.HandlerOptions{Logf: log.Printf}))
+	d.Handle("probe-all", "Run all configured probes", tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunAllHandler), tsweb.HandlerOptions{Logf: log.Printf}))
 	mux.Handle("/", tsweb.StdHandler(p.StatusHandler(
 		prober.WithTitle("DERP Prober"),
 		prober.WithPageLink("Prober metrics", "/debug/varz"),
