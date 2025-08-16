@@ -177,7 +177,7 @@ jobs:
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
       working-directory: src
-      run: NOBASHDEBUG=true PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
+      run: NOBASHDEBUG=true NOPWSHDEBUG=true PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
         TS_TEST_SHARD: ${{ matrix.shard }}

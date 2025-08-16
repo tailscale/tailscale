@@ -21,7 +21,7 @@ func TestGocrossWrapper(t *testing.T) {
 			t.Fatalf("gocross-wrapper.sh failed: %v\n%s", err, out)
 		}
 		if i > 0 && !strings.Contains(string(out), "gocross_ok=1\n") {
-			t.Errorf("expected to find 'gocross-ok=1'; got output:\n%s", out)
+			t.Errorf("expected to find 'gocross_ok=1'; got output:\n%s", out)
 		}
 	}
 }
