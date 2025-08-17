@@ -306,11 +306,14 @@ func (menu *Menu) rebuild() {
 		menu.rebuildExitNodeMenu(ctx)
 	}
 
-	if menu.status != nil {
-		menu.more = systray.AddMenuItem("More settings", "")
+	menu.more = systray.AddMenuItem("More settings", "")
+	if menu.status != nil && menu.status.BackendState == "Running" {
+		// web client is only available if backend is running
 		onClick(ctx, menu.more, func(_ context.Context) {
 			webbrowser.Open("http://100.100.100.100/")
 		})
+	} else {
+		menu.more.Disable()
 	}
 
 	// TODO(#15528): this menu item shouldn't be necessary at all,
