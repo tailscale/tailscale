@@ -2405,6 +2405,9 @@ const (
 	CapabilityDebug              NodeCapability = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
 	CapabilityHTTPS              NodeCapability = "https"
 
+	// CapabilityMacUIV2 makes the macOS GUI enable its v2 mode.
+	CapabilityMacUIV2 NodeCapability = "https://tailscale.com/cap/mac-ui-v2"
+
 	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
 	// sockets (in the net/netns package). See that package for more
 	// details on the behaviour of this capability.
