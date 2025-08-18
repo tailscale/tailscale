@@ -209,11 +209,8 @@ func (m *pmpMapping) Release(ctx context.Context) {
 
 // Config carries the settings for a [Client].
 type Config struct {
-	// EventBus, if non-nil, is used for event publication and subscription by
-	// portmapper clients created from this config.
-	//
-	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
-	// become required non-nil.
+	// EventBus, which must be non-nil, is used for event publication and
+	// subscription by portmapper clients created from this config.
 	EventBus *eventbus.Bus
 
 	// Logf is called to generate text logs for the client. If nil, logger.Discard is used.
