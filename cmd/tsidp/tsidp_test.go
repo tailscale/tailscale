@@ -17,7 +17,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -1088,40 +1087,6 @@ func TestFunnelClientsPersistence(t *testing.T) {
 	})
 }
 
-// mockLocalClient provides a test implementation that embeds local.Client
-// and overrides only the WhoIs method for testing. This allows testing
-// strict OAuth mode with tailnet requests without requiring a real Tailscale connection.
-type mockLocalClient struct {
-	*local.Client
-	whoIsResponses map[string]*apitype.WhoIsResponse
-	whoIsError     error
-}
-
-func (m *mockLocalClient) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
-	if m.whoIsError != nil {
-		return nil, m.whoIsError
-	}
-	if m.whoIsResponses != nil {
-		if resp, ok := m.whoIsResponses[remoteAddr]; ok {
-			return resp, nil
-		}
-	}
-	// Default response for any unmapped address
-	return &apitype.WhoIsResponse{
-		Node: &tailcfg.Node{
-			ID:   123,
-			Name: "test-node.test.ts.net.",
-			User: 456,
-			Key:  key.NodePublic{},
-		},
-		UserProfile: &tailcfg.UserProfile{
-			LoginName:     "test@example.com",
-			DisplayName:   "Test User",
-			ProfilePicURL: "https://example.com/test.jpg",
-		},
-		CapMap: tailcfg.PeerCapMap{},
-	}, nil
-}
 
 // Test helper functions for strict OAuth mode testing
 func setupTestServer(t *testing.T, strictMode bool) *idpServer {
