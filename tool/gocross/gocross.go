@@ -74,7 +74,7 @@ func main() {
 				os.Exit(1)
 			}
 			psFileName := strings.TrimSuffix(os.Args[2], filepath.Ext(os.Args[2])) + ".ps1"
-			if err := atomicfile.WriteFile(psFileName, wrapperScriptPowerShell, 0755); err != nil {
+			if err := atomicfile.WriteFile(psFileName, wrapperScriptPowerShell, 0644); err != nil {
 				fmt.Fprintf(os.Stderr, "writing PowerShell wrapper script: %v\n", err)
 				os.Exit(1)
 			}
