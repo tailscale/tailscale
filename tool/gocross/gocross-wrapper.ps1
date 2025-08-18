@@ -176,10 +176,13 @@ $bootstrapScriptBlock = {
     if (-not $gocrossOk) {
         $goBuildEnv = Copy-Environment
         $goBuildEnv['CGO_ENABLED'] = '0'
-        $goBuildEnv.Remove('GOOS')
-        $goBuildEnv.Remove('GOARCH')
-        $goBuildEnv.Remove('GO111MODULE')
-        $goBuildEnv.Remove('GOROOT')
+        # Start-Process's -Environment arg applies diffs, so instead of removing
+        # these variables from $goBuildEnv, we must set them to $null to indicate
+        # that they should be cleared.
+        $goBuildEnv['GOOS'] = $null
+        $goBuildEnv['GOARCH'] = $null
+        $goBuildEnv['GO111MODULE'] = $null
+        $goBuildEnv['GOROOT'] = $null
 
         $procExe = Join-Path $toolchain 'bin' 'go.exe' -Resolve
         $proc = Start-Process -FilePath $procExe -WorkingDirectory $repoRoot -Environment $goBuildEnv -ArgumentList 'build', '-o', $gocrossPath, "-ldflags=-X=tailscale.com/version.gitCommitStamp=$wantVer", 'tailscale.com/tool/gocross' -NoNewWindow -Wait -PassThru
@@ -195,7 +198,10 @@ Start-ChildScope -ScriptBlock $bootstrapScriptBlock
 $repoRoot = Get-RepoRoot
 
 $execEnv = Copy-Environment
-$execEnv.Remove('GOROOT')
+# Start-Process's -Environment arg applies diffs, so instead of removing
+# these variables from $execEnv, we must set them to $null to indicate
+# that they should be cleared.
+$execEnv['GOROOT'] = $null
 
 $argList = Copy-ScriptArgs
 
