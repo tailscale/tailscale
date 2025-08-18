@@ -29,6 +29,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -1087,7 +1088,6 @@ func TestFunnelClientsPersistence(t *testing.T) {
 	})
 }
 
-
 // Test helper functions for strict OAuth mode testing
 func setupTestServer(t *testing.T, strictMode bool) *idpServer {
 	return setupTestServerWithClient(t, strictMode, nil)
@@ -1290,7 +1290,7 @@ func TestMigrateOAuthClients(t *testing.T) {
 			}
 
 			// Verify result path points to oauth-clients.json
-			expectedPath := rootPath + "/" + oauthClientsFile
+			expectedPath := filepath.Join(rootPath, oauthClientsFile)
 			if resultPath != expectedPath {
 				t.Errorf("expected result path %s, got %s", expectedPath, resultPath)
 			}
@@ -1417,7 +1417,7 @@ func TestGetConfigFilePath(t *testing.T) {
 				}
 			}
 			if tt.createInRoot {
-				rootFilePath := rootPath + "/" + tt.fileName
+				rootFilePath := filepath.Join(rootPath, tt.fileName)
 				if err := os.WriteFile(rootFilePath, []byte("{}"), 0600); err != nil {
 					t.Fatalf("failed to create file in root: %v", err)
 				}
@@ -1442,7 +1442,7 @@ func TestGetConfigFilePath(t *testing.T) {
 					t.Errorf("expected path %s, got %s", tt.fileName, resultPath)
 				}
 			} else {
-				expectedPath := rootPath + "/" + tt.fileName
+				expectedPath := filepath.Join(rootPath, tt.fileName)
 				if resultPath != expectedPath {
 					t.Errorf("expected path %s, got %s", expectedPath, resultPath)
 				}
