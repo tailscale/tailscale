@@ -18,6 +18,7 @@ import (
 	"maps"
 	"math/rand"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -585,10 +586,12 @@ type RunHandlerAllResponse struct {
 }
 
 func (p *Prober) RunAllHandler(w http.ResponseWriter, r *http.Request) error {
+	excluded := r.URL.Query()["exclude"]
+
 	probes := make(map[string]*Probe)
 	p.mu.Lock()
 	for _, probe := range p.probes {
-		if !probe.IsContinuous() && probe.name != "derpmap-probe" {
+		if !probe.IsContinuous() && !slices.Contains(excluded, probe.name) {
 			probes[probe.name] = probe
 		}
 	}
