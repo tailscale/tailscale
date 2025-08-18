@@ -43,6 +43,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
 )
 
@@ -831,6 +832,7 @@ func TestExtraUserInfo(t *testing.T) {
 
 			// Insert a valid token into the idpServer
 			s := &idpServer{
+				allowInsecureRegistration: true, // Default to allowing insecure registration for backward compatibility
 				accessToken: map[string]*authRequest{
 					token: {
 						validTill:  tt.tokenValidTill,
@@ -1132,13 +1134,13 @@ func setupTestServer(t *testing.T, strictMode bool) *idpServer {
 func setupTestServerWithClient(t *testing.T, strictMode bool, lc *local.Client) *idpServer {
 	t.Helper()
 	srv := &idpServer{
-		strictOAuth:   strictMode,
-		code:          make(map[string]*authRequest),
-		accessToken:   make(map[string]*authRequest),
-		funnelClients: make(map[string]*funnelClient),
-		serverURL:     "https://test.ts.net",
-		rootPath:      t.TempDir(),
-		lc:            lc,
+		allowInsecureRegistration: !strictMode,
+		code:                      make(map[string]*authRequest),
+		accessToken:               make(map[string]*authRequest),
+		funnelClients:             make(map[string]*funnelClient),
+		serverURL:                 "https://test.ts.net",
+		rootPath:                  t.TempDir(),
+		lc:                        lc,
 	}
 
 	// Add a test client for funnel/strict mode testing
@@ -1155,56 +1157,52 @@ func setupTestServerWithClient(t *testing.T, strictMode bool, lc *local.Client) 
 	return srv
 }
 
-func TestIsStrictOAuthMode(t *testing.T) {
+func TestGetAllowInsecureRegistration(t *testing.T) {
 	tests := []struct {
-		name             string
-		flagSet          bool
-		flagValue        bool
-		expectStrictMode bool
+		name                            string
+		flagSet                         bool
+		flagValue                       bool
+		expectAllowInsecureRegistration bool
 	}{
 		{
-			name:             "flag explicitly set to false - strict mode enabled",
-			flagSet:          true,
-			flagValue:        false,
-			expectStrictMode: true,
+			name:                            "flag explicitly set to false - insecure registration disabled (strict mode)",
+			flagSet:                         true,
+			flagValue:                       false,
+			expectAllowInsecureRegistration: false,
 		},
 		{
-			name:             "flag explicitly set to true - strict mode disabled",
-			flagSet:          true,
-			flagValue:        true,
-			expectStrictMode: false,
+			name:                            "flag explicitly set to true - insecure registration enabled",
+			flagSet:                         true,
+			flagValue:                       true,
+			expectAllowInsecureRegistration: true,
 		},
 		{
-			name:             "flag unset - strict mode disabled (default)",
-			flagSet:          false,
-			flagValue:        false, // default value
-			expectStrictMode: false,
+			name:                            "flag unset - insecure registration enabled (default for backward compatibility)",
+			flagSet:                         false,
+			flagValue:                       false, // not used when unset
+			expectAllowInsecureRegistration: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Save original state
-			originalFlag := flagAllowInsecureNoClientRegistration
-			originalFlagWasSet := flagAllowInsecureWasSet
+			originalFlag := flagAllowInsecureRegistration
 			defer func() {
-				flagAllowInsecureNoClientRegistration = originalFlag
-				flagAllowInsecureWasSet = originalFlagWasSet
+				flagAllowInsecureRegistration = originalFlag
 			}()
 
-			// Set up test state
-			flagAllowInsecureWasSet = tt.flagSet
+			// Set up test state by creating a new BoolFlag and setting values
+			var b opt.Bool
+			flagAllowInsecureRegistration = opt.BoolFlag{Bool: &b}
 			if tt.flagSet {
-				flagAllowInsecureNoClientRegistration = &tt.flagValue
-			} else {
-				// When unset, the flag variable points to its default value
-				defaultValue := false
-				flagAllowInsecureNoClientRegistration = &defaultValue
+				flagAllowInsecureRegistration.Bool.Set(tt.flagValue)
 			}
+			// Note: when tt.flagSet is false, the Bool remains unset (which is what we want)
 
-			got := isStrictOAuthMode()
-			if got != tt.expectStrictMode {
-				t.Errorf("isStrictOAuthMode() = %v, want %v", got, tt.expectStrictMode)
+			got := getAllowInsecureRegistration()
+			if got != tt.expectAllowInsecureRegistration {
+				t.Errorf("getAllowInsecureRegistration() = %v, want %v", got, tt.expectAllowInsecureRegistration)
 			}
 		})
 	}
