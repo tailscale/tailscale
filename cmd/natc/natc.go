@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"expvar"
 	"flag"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
+	"github.com/hashicorp/raft"
 	"github.com/inetaf/tcpproxy"
 	"github.com/peterbourgon/ff/v3"
 	"go4.org/netipx"
@@ -63,6 +65,7 @@ func main() {
 		server            = fs.String("login-server", ipn.DefaultControlURL, "the base URL of control server")
 		stateDir          = fs.String("state-dir", "", "path to directory in which to store app state")
 		clusterFollowOnly = fs.Bool("follow-only", false, "Try to find a leader with the cluster tag or exit.")
+		clusterAdminPort  = fs.Int("cluster-admin-port", 8081, "Port on localhost for the cluster admin HTTP API")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -179,6 +182,12 @@ func main() {
 			}
 		}()
 		ipp = cipp
+
+		go func() {
+			// This listens on localhost only, so that only those with access to the host machine
+			// can remove servers from the cluster config.
+			log.Print(http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", *clusterAdminPort), httpClusterAdmin(cipp)))
+		}()
 	} else {
 		ipp = &ippool.SingleMachineIPPool{IPSet: addrPool}
 	}
@@ -632,4 +641,33 @@ func getClusterStatePath(stateDirFlag string) (string, error) {
 	}
 
 	return dirPath, nil
+}
+
+func httpClusterAdmin(ipp *ippool.ConsensusIPPool) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		c, err := ipp.GetClusterConfiguration()
+		if err != nil {
+			log.Printf("cluster admin http: error getClusterConfig: %v", err)
+			http.Error(w, "", http.StatusInternalServerError)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(c); err != nil {
+			log.Printf("cluster admin http: error encoding raft configuration: %v", err)
+		}
+	})
+	mux.HandleFunc("DELETE /{id}", func(w http.ResponseWriter, r *http.Request) {
+		idString := r.PathValue("id")
+		id := raft.ServerID(idString)
+		idx, err := ipp.DeleteClusterServer(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(idx); err != nil {
+			log.Printf("cluster admin http: error encoding delete index: %v", err)
+			return
+		}
+	})
+	return mux
 }
