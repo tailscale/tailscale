@@ -32,7 +32,6 @@ type Conn interface {
 	// message may fall on either side of a nonzero.
 	//
 	// Each [ipv6.Message.OOB] must be sized to at least MinControlMessageSize().
-	// len(msgs) must be at least MinReadBatchMsgsLen().
 	ReadBatch(msgs []ipv6.Message, flags int) (n int, err error)
 	// WriteBatchTo writes buffs to addr.
 	//

@@ -384,7 +384,7 @@ func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 }
 
 // TryUpgradeToConn probes the capabilities of the OS and pconn, and upgrades
-// pconn to a [Conn] if appropriate. A batch size of MinReadBatchMsgsLen() is
+// pconn to a [Conn] if appropriate. A batch size of [IdealBatchSize] is
 // suggested for the best performance.
 func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
@@ -457,6 +457,4 @@ func MinControlMessageSize() int {
 	return controlMessageSize
 }
 
-func MinReadBatchMsgsLen() int {
-	return 128
-}
+const IdealBatchSize = 128
