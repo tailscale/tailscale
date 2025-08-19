@@ -30,6 +30,7 @@ type ConsensusIPPool struct {
 	IPSet                 *netipx.IPSet
 	perPeerMap            *syncs.Map[tailcfg.NodeID, *consensusPerPeerState]
 	consensus             commandExecutor
+	clusterController     clusterController
 	unusedAddressLifetime time.Duration
 }
 
@@ -168,6 +169,7 @@ func (ipp *ConsensusIPPool) StartConsensus(ctx context.Context, ts *tsnet.Server
 		return err
 	}
 	ipp.consensus = cns
+	ipp.clusterController = cns
 	return nil
 }
 
@@ -441,4 +443,19 @@ func (ipp *ConsensusIPPool) Apply(l *raft.Log) any {
 // used to allow a fake in the tests
 type commandExecutor interface {
 	ExecuteCommand(tsconsensus.Command) (tsconsensus.CommandResult, error)
+}
+
+type clusterController interface {
+	GetClusterConfiguration() (raft.Configuration, error)
+	DeleteClusterServer(id raft.ServerID) (uint64, error)
+}
+
+// GetClusterConfiguration gets the consensus implementation's cluster configuration
+func (ipp *ConsensusIPPool) GetClusterConfiguration() (raft.Configuration, error) {
+	return ipp.clusterController.GetClusterConfiguration()
+}
+
+// DeleteClusterServer removes a server from the consensus implementation's cluster configuration
+func (ipp *ConsensusIPPool) DeleteClusterServer(id raft.ServerID) (uint64, error) {
+	return ipp.clusterController.DeleteClusterServer(id)
 }

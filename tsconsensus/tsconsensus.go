@@ -525,3 +525,23 @@ func (c *Consensus) raftAddr(host netip.Addr) string {
 func (c *Consensus) commandAddr(host netip.Addr) string {
 	return netip.AddrPortFrom(host, c.config.CommandPort).String()
 }
+
+// GetClusterConfiguration returns the result of the underlying raft instance's GetConfiguration
+func (c *Consensus) GetClusterConfiguration() (raft.Configuration, error) {
+	fut := c.raft.GetConfiguration()
+	err := fut.Error()
+	if err != nil {
+		return raft.Configuration{}, err
+	}
+	return fut.Configuration(), nil
+}
+
+// DeleteClusterServer returns the result of the underlying raft instance's RemoveServer
+func (c *Consensus) DeleteClusterServer(id raft.ServerID) (uint64, error) {
+	fut := c.raft.RemoveServer(id, 0, 1*time.Second)
+	err := fut.Error()
+	if err != nil {
+		return 0, err
+	}
+	return fut.Index(), nil
+}
