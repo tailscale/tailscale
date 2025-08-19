@@ -150,6 +150,8 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 					writef("\tdst.%s[i] = append(src.%s[i][:0:0], src.%s[i]...)", fname, fname, fname)
 				} else if _, isIface := ft.Elem().Underlying().(*types.Interface); isIface {
 					writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
+				} else if codegen.IsViewType(ft.Elem()) {
+					writef("\tdst.%s[i] = src.%s[i]", fname, fname)
 				} else {
 					writef("\tdst.%s[i] = *src.%s[i].Clone()", fname, fname)
 				}
@@ -187,7 +189,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
 				writef("\t}")
 				writef("}")
-			} else if codegen.ContainsPointers(elem) {
+			} else if codegen.ContainsPointers(elem) && !codegen.IsViewType(elem) {
 				writef("if dst.%s != nil {", fname)
 				writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(elem))
 				writef("\tfor k, v := range src.%s {", fname)

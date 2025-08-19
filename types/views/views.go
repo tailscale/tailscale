@@ -947,6 +947,78 @@ func (p *ValuePointer[T]) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return jsonv2.UnmarshalDecode(dec, &p.ж)
 }
 
+// ViewClonerPointer is a constraint that permits pointer types
+// implementing the [ViewCloner] interface.
+type ViewClonerPointer[T any, V StructView[*T]] interface {
+	ViewCloner[*T, V]
+	*T
+}
+
+// SliceOfValueViews returns a [ValueSliceView] for x.
+// It is like [SliceOfViews], but x is a slice of values whose pointers
+// implement the [ViewCloner] interface rather than a slice of pointers.
+func SliceOfValueViews[T any, P ViewClonerPointer[T, V], V StructView[*T]](x []T) ValueSliceView[T, P, V] {
+	return ValueSliceView[T, P, V]{x}
+}
+
+// ValueSliceView is like [SliceView], but wraps a slice of values
+// (whose pointers implement the [ViewCloner] interface) instead of a slice of pointers.
+// In other words, the [ViewCloner] interface must be implemented by *T rather than T.
+type ValueSliceView[
+	T any,
+	P ViewClonerPointer[T, V],
+	V StructView[*T],
+] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж []T
+}
+
+// All returns an iterator over v.
+func (v ValueSliceView[T, P, V]) All() iter.Seq2[int, V] {
+	return func(yield func(int, V) bool) {
+		for i := range v.ж {
+			if !yield(i, P(&v.ж[i]).View()) {
+				return
+			}
+		}
+	}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (v ValueSliceView[T, P, V]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (v *ValueSliceView[T, P, V]) UnmarshalJSON(b []byte) error {
+	return unmarshalSliceFromJSON(b, &v.ж)
+}
+
+// IsNil reports whether the underlying slice is nil.
+func (v ValueSliceView[T, P, V]) IsNil() bool { return v.ж == nil }
+
+// Len returns the length of the slice.
+func (v ValueSliceView[T, P, V]) Len() int { return len(v.ж) }
+
+// At returns a View of the element at index `i` of the slice.
+func (v ValueSliceView[T, P, V]) At(i int) V { return P(&v.ж[i]).View() }
+
+// SliceFrom returns v[i:].
+func (v ValueSliceView[T, P, V]) SliceFrom(i int) ValueSliceView[T, P, V] {
+	return ValueSliceView[T, P, V]{v.ж[i:]}
+}
+
+// SliceTo returns v[:i].
+func (v ValueSliceView[T, P, V]) SliceTo(i int) ValueSliceView[T, P, V] {
+	return ValueSliceView[T, P, V]{v.ж[:i]}
+}
+
+// Slice returns v[i:j].
+func (v ValueSliceView[T, P, V]) Slice(i, j int) ValueSliceView[T, P, V] {
+	return ValueSliceView[T, P, V]{v.ж[i:j]}
+}
+
 // ContainsPointers reports whether T contains any pointers,
 // either explicitly or implicitly.
 // It has special handling for some types that contain pointers

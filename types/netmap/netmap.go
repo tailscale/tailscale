@@ -21,6 +21,8 @@ import (
 	"tailscale.com/wgengine/filter/filtertype"
 )
 
+//go:generate go run tailscale.com/cmd/viewer -type=NetworkMap
+
 // NetworkMap is the current state of the world.
 //
 // The fields should all be considered read-only. They might
