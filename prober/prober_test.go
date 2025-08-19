@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -722,7 +723,7 @@ func TestRunAllHandler(t *testing.T) {
 
 			mux.Handle("/prober/runall/", tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunAllHandler), tsweb.HandlerOptions{}))
 
-			req, err := http.NewRequest("GET", server.URL+"/prober/runall/", nil)
+			req, err := http.NewRequest("GET", server.URL+"/prober/runall", nil)
 			if err != nil {
 				t.Fatalf("failed to create request: %v", err)
 			}
@@ -755,6 +756,72 @@ func TestRunAllHandler(t *testing.T) {
 		})
 	}
 
+}
+
+func TestExcludeInRunAll(t *testing.T) {
+	clk := newFakeTime()
+	p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
+
+	wantJSONResponse := RunHandlerAllResponse{
+		Results: map[string]RunHandlerResponse{
+			"includedProbe": {
+				ProbeInfo: ProbeInfo{
+					Name:          "includedProbe",
+					Interval:      probeInterval,
+					Status:        ProbeStatusSucceeded,
+					RecentResults: []bool{true, true},
+				},
+				PreviousSuccessRatio: 1,
+			},
+		},
+	}
+
+	p.Run("includedProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+	p.Run("excludedProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+	p.Run("excludedOtherProbe", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	mux.Handle("/prober/runall", tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunAllHandler), tsweb.HandlerOptions{}))
+
+	req, err := http.NewRequest("GET", server.URL+"/prober/runall", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+
+	// Exclude probes with "excluded" in their name
+	req.URL.RawQuery = url.Values{
+		"exclude": []string{"excludedProbe", "excludedOtherProbe"},
+	}.Encode()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to make request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("unexpected response code: got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var gotJSON RunHandlerAllResponse
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read response body: %v", err)
+	}
+
+	if err := json.Unmarshal(body, &gotJSON); err != nil {
+		t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, body)
+	}
+
+	if resp.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("unexpected content type: got %q, want application/json", resp.Header.Get("Content-Type"))
+	}
+
+	if diff := cmp.Diff(wantJSONResponse, gotJSON, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Labels", "RecentLatencies")); diff != "" {
+		t.Errorf("unexpected JSON response (-want +got):\n%s", diff)
+	}
 }
 
 type fakeTicker struct {
