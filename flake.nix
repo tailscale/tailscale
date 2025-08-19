@@ -32,7 +32,7 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    systems.url = "github:nix-systems/default";
     # Used by shell.nix as a compat shim.
     flake-compat = {
       url = "github:edolstra/flake-compat";
@@ -43,13 +43,29 @@
   outputs = {
     self,
     nixpkgs,
-    flake-utils,
+    systems,
     flake-compat,
   }: let
-    # tailscaleRev is the git commit at which this flake was imported,
-    # or the empty string when building from a local checkout of the
-    # tailscale repo.
+    go124Version = "1.24.6";
+    goHash = "sha256-4ctVgqq1iGaLwEwH3hhogHD2uMmyqvNh+CHhm9R8/b0=";
+    eachSystem = f:
+      nixpkgs.lib.genAttrs (import systems) (system:
+        f (import nixpkgs {
+          system = system;
+          overlays = [
+            (final: prev: {
+              go_1_24 = prev.go_1_24.overrideAttrs {
+                version = go124Version;
+                src = prev.fetchurl {
+                  url = "https://go.dev/dl/go${go124Version}.src.tar.gz";
+                  hash = goHash;
+                };
+              };
+            })
+          ];
+        }));
     tailscaleRev = self.rev or "";
+  in {
     # tailscale takes a nixpkgs package set, and builds Tailscale from
     # the same commit as this flake. IOW, it provides "tailscale built
     # from HEAD", where HEAD is "whatever commit you imported the
@@ -67,16 +83,20 @@
     # So really, this flake is for tailscale devs to dogfood with, if
     # you're an end user you should be prepared for this flake to not
     # build periodically.
-    tailscale = pkgs:
-      pkgs.buildGo124Module rec {
+    packages = eachSystem (pkgs: rec {
+      default = pkgs.buildGo124Module {
         name = "tailscale";
-
+        pname = "tailscale";
         src = ./.;
         vendorHash = pkgs.lib.fileContents ./go.mod.sri;
-        nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [pkgs.makeWrapper];
+        nativeBuildInputs = [pkgs.makeWrapper pkgs.installShellFiles];
         ldflags = ["-X tailscale.com/version.gitCommitStamp=${tailscaleRev}"];
         env.CGO_ENABLED = 0;
-        subPackages = ["cmd/tailscale" "cmd/tailscaled"];
+        subPackages = [
+          "cmd/tailscale"
+          "cmd/tailscaled"
+          "cmd/tsidp"
+        ];
         doCheck = false;
 
         # NOTE: We strip the ${PORT} and $FLAGS because they are unset in the
@@ -84,32 +104,31 @@
         # point, there should be a NixOS module that allows configuration of these
         # things, but for now, we hardcode the default of port 41641 (taken from
         # ./cmd/tailscaled/tailscaled.defaults).
-        postInstall = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
-          wrapProgram $out/bin/tailscaled --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.iproute2 pkgs.iptables pkgs.getent pkgs.shadow]}
-          wrapProgram $out/bin/tailscale --suffix PATH : ${pkgs.lib.makeBinPath [pkgs.procps]}
+        postInstall =
+          pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+            wrapProgram $out/bin/tailscaled --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.iproute2 pkgs.iptables pkgs.getent pkgs.shadow]}
+            wrapProgram $out/bin/tailscale --suffix PATH : ${pkgs.lib.makeBinPath [pkgs.procps]}
 
-          sed -i \
-            -e "s#/usr/sbin#$out/bin#" \
-            -e "/^EnvironmentFile/d" \
-            -e 's/''${PORT}/41641/' \
-            -e 's/$FLAGS//' \
-            ./cmd/tailscaled/tailscaled.service
+            sed -i \
+              -e "s#/usr/sbin#$out/bin#" \
+              -e "/^EnvironmentFile/d" \
+              -e 's/''${PORT}/41641/' \
+              -e 's/$FLAGS//' \
+              ./cmd/tailscaled/tailscaled.service
 
-          install -D -m0444 -t $out/lib/systemd/system ./cmd/tailscaled/tailscaled.service
-        '';
+            install -D -m0444 -t $out/lib/systemd/system ./cmd/tailscaled/tailscaled.service
+          ''
+          + pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+            installShellCompletion --cmd tailscale \
+              --bash <($out/bin/tailscale completion bash) \
+              --fish <($out/bin/tailscale completion fish) \
+              --zsh <($out/bin/tailscale completion zsh)
+          '';
       };
+      tailscale = default;
+    });
 
-    # This whole blob makes the tailscale package available for all
-    # OS/CPU combos that nix supports, as well as a dev shell so that
-    # "nix develop" and "nix-shell" give you a dev env.
-    flakeForSystem = nixpkgs: system: let
-      pkgs = nixpkgs.legacyPackages.${system};
-      ts = tailscale pkgs;
-    in {
-      packages = {
-        default = ts;
-        tailscale = ts;
-      };
+    devShells = eachSystem (pkgs: {
       devShell = pkgs.mkShell {
         packages = with pkgs; [
           curl
@@ -126,9 +145,8 @@
           e2fsprogs
         ];
       };
-    };
-  in
-    flake-utils.lib.eachDefaultSystem (system: flakeForSystem nixpkgs system);
+    });
+  };
 }
-# nix-direnv cache busting line: sha256-4QTSspHLYJfzlontQ7msXyOB5gzq7ZwSvWmKuYY5klA=
+# nix-direnv cache busting line: sha256-Ue1rD4m+rg/J84XhpNZAa3ni/r5FVQZTh6wZcbp7GsE=
 

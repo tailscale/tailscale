@@ -720,10 +720,10 @@ jobs:
     - name: check that 'go mod tidy' is clean
       working-directory: src
       run: |
-        ./tool/go mod tidy
+        make tidy
         echo
         echo
-        git diff --name-only --exit-code || (echo "Please run 'go mod tidy'."; exit 1)
+        git diff --name-only --exit-code || (echo "Please run 'make tidy'"; exit 1)
 
   licenses:
     runs-on: ubuntu-24.04
