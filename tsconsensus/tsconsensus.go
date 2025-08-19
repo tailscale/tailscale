@@ -157,13 +157,18 @@ func (sl StreamLayer) Accept() (net.Conn, error) {
 	}
 }
 
+type BootstrapOpts struct {
+	Tag        string
+	FollowAddr string
+}
+
 // Start returns a pointer to a running Consensus instance.
 // Calling it with a *tsnet.Server will cause that server to join or start a consensus cluster
 // with other nodes on the tailnet tagged with the clusterTag. The *tsnet.Server will run the state
 // machine defined by the raft.FSM also provided, and keep it in sync with the other cluster members'
 // state machines using Raft.
-func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag string, cfg Config) (*Consensus, error) {
-	if clusterTag == "" {
+func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, bootstrapOpts BootstrapOpts, cfg Config) (*Consensus, error) {
+	if bootstrapOpts.Tag == "" {
 		return nil, errors.New("cluster tag must be provided")
 	}
 
@@ -185,7 +190,7 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 		shutdownCtxCancel: shutdownCtxCancel,
 	}
 
-	auth := newAuthorization(ts, clusterTag)
+	auth := newAuthorization(ts, bootstrapOpts.Tag)
 	err := auth.Refresh(shutdownCtx)
 	if err != nil {
 		return nil, fmt.Errorf("auth refresh: %w", err)
@@ -209,7 +214,10 @@ func Start(ctx context.Context, ts *tsnet.Server, fsm raft.FSM, clusterTag strin
 	}
 	c.raft = r
 
-	c.bootstrap(auth.AllowedPeers())
+	err = c.bootstrap(auth.AllowedPeers(), bootstrapOpts)
+	if err != nil {
+		return nil, err
+	}
 
 	if cfg.ServeDebugMonitor {
 		srv, err = serveMonitor(&c, ts, netip.AddrPortFrom(c.self.hostAddr, cfg.MonitorPort).String())
@@ -304,11 +312,31 @@ type Consensus struct {
 //   - We want to handle machines joining after start anyway.
 //   - Not all tagged nodes tailscale believes are active are necessarily actually responsive right now,
 //     so let each node opt in when able.
-func (c *Consensus) bootstrap(targets views.Slice[*ipnstate.PeerStatus]) error {
+func (c *Consensus) bootstrap(targets views.Slice[*ipnstate.PeerStatus], opts BootstrapOpts) error {
+	if opts.FollowAddr != "" {
+		log.Printf("Bootstrap: Trying to join provided addr: %s", opts.FollowAddr)
+		retryWaitTime := 500 * time.Millisecond
+		attemptCount := 0
+		var err error
+		for true {
+			err = c.commandClient.join(opts.FollowAddr, joinRequest{
+				RemoteHost: c.self.hostAddr.String(),
+				RemoteID:   c.self.id,
+			})
+			if err == nil || attemptCount >= 10 {
+				break
+			}
+			log.Printf("Bootstrap: Failed to follow. Retrying in %v", retryWaitTime)
+			time.Sleep(retryWaitTime)
+			retryWaitTime *= 2
+			attemptCount++
+		}
+		return err
+	}
 	log.Printf("Trying to find cluster: num targets to try: %d", targets.Len())
 	for _, p := range targets.All() {
 		if !p.Online {
-			log.Printf("Trying to find cluster: tailscale reports not online: %s", p.TailscaleIPs[0])
+			log.Printf("Bootstrap: Trying to find cluster: tailscale reports not online: %s", p.TailscaleIPs[0])
 			continue
 		}
 		log.Printf("Trying to find cluster: trying %s", p.TailscaleIPs[0])
@@ -317,10 +345,10 @@ func (c *Consensus) bootstrap(targets views.Slice[*ipnstate.PeerStatus]) error {
 			RemoteID:   c.self.id,
 		})
 		if err != nil {
-			log.Printf("Trying to find cluster: could not join %s: %v", p.TailscaleIPs[0], err)
+			log.Printf("Bootstrap: Trying to find cluster: could not join %s: %v", p.TailscaleIPs[0], err)
 			continue
 		}
-		log.Printf("Trying to find cluster: joined %s", p.TailscaleIPs[0])
+		log.Printf("Bootstrap: Trying to find cluster: joined %s", p.TailscaleIPs[0])
 		return nil
 	}
 
