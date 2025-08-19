@@ -56,7 +56,7 @@ func TestSafeFuncHappyPath(t *testing.T) {
 	f := NewSafeFunc(expvar.Func(func() any {
 		count++
 		return count
-	}), time.Millisecond, nil)
+	}), time.Second, nil)
 
 	if got, want := f.Value(), 1; got != want {
 		t.Errorf("got %v, want %v", got, want)
