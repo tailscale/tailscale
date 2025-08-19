@@ -7,6 +7,7 @@ package views
 
 import (
 	"bytes"
+	"cmp"
 	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
@@ -363,6 +364,20 @@ func (v Slice[T]) ContainsFunc(f func(T) bool) bool {
 	return slices.ContainsFunc(v.ж, f)
 }
 
+// MaxFunc returns the maximal value in v, using cmp to compare elements. It
+// panics if v is empty. If there is more than one maximal element according to
+// the cmp function, MaxFunc returns the first one. See also [slices.MaxFunc].
+func (v Slice[T]) MaxFunc(cmp func(a, b T) int) T {
+	return slices.MaxFunc(v.ж, cmp)
+}
+
+// MinFunc returns the minimal value in v, using cmp to compare elements. It
+// panics if v is empty. If there is more than one minimal element according to
+// the cmp function, MinFunc returns the first one. See also [slices.MinFunc].
+func (v Slice[T]) MinFunc(cmp func(a, b T) int) T {
+	return slices.MinFunc(v.ж, cmp)
+}
+
 // AppendStrings appends the string representation of each element in v to dst.
 func AppendStrings[T fmt.Stringer](dst []string, v Slice[T]) []string {
 	for _, x := range v.ж {
@@ -381,6 +396,20 @@ func SliceContains[T comparable](v Slice[T], e T) bool {
 // SliceEqual is like the standard library's slices.Equal, but for two views.
 func SliceEqual[T comparable](a, b Slice[T]) bool {
 	return slices.Equal(a.ж, b.ж)
+}
+
+// SliceMax returns the maximal value in v. It panics if v is empty. For
+// floating point T, SliceMax propagates NaNs (any NaN value in v forces the
+// output to be NaN). See also [slices.Max].
+func SliceMax[T cmp.Ordered](v Slice[T]) T {
+	return slices.Max(v.ж)
+}
+
+// SliceMin returns the minimal value in v. It panics if v is empty. For
+// floating point T, SliceMin propagates NaNs (any NaN value in v forces the
+// output to be NaN). See also [slices.Min].
+func SliceMin[T cmp.Ordered](v Slice[T]) T {
+	return slices.Min(v.ж)
 }
 
 // shortOOOLen (short Out-of-Order length) is the slice length at or
