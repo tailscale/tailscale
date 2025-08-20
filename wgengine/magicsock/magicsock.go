@@ -45,6 +45,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
 	"tailscale.com/net/portmapper"
+	"tailscale.com/net/sockopts"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/tstun"
@@ -3857,20 +3858,19 @@ func (c *Conn) DebugForcePreferDERP(n int) {
 	c.netChecker.SetForcePreferredDERP(n)
 }
 
-// portableTrySetSocketBuffer sets SO_SNDBUF and SO_RECVBUF on pconn to socketBufferSize,
-// logging an error if it occurs.
-func portableTrySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
-	if runtime.GOOS == "plan9" {
-		// Not supported. Don't try. Avoid logspam.
-		return
-	}
-	if c, ok := pconn.(*net.UDPConn); ok {
-		// Attempt to increase the buffer size, and allow failures.
-		if err := c.SetReadBuffer(socketBufferSize); err != nil {
-			logf("magicsock: failed to set UDP read buffer size to %d: %v", socketBufferSize, err)
+// trySetSocketBuffer attempts to set SO_SNDBUFFORCE and SO_RECVBUFFORCE which
+// can overcome the limit of net.core.{r,w}mem_max, but require CAP_NET_ADMIN.
+// It falls back to the portable implementation if that fails, which may be
+// silently capped to net.core.{r,w}mem_max.
+func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
+	directions := []sockopts.BufferDirection{sockopts.ReadDirection, sockopts.WriteDirection}
+	for _, direction := range directions {
+		forceErr, portableErr := sockopts.SetBufferSize(pconn, direction, socketBufferSize)
+		if forceErr != nil {
+			logf("magicsock: [warning] failed to force-set UDP %v buffer size to %d: %v; using kernel default values (impacts throughput only)", direction, socketBufferSize, forceErr)
 		}
-		if err := c.SetWriteBuffer(socketBufferSize); err != nil {
-			logf("magicsock: failed to set UDP write buffer size to %d: %v", socketBufferSize, err)
+		if portableErr != nil {
+			logf("magicsock: failed to set UDP %v buffer size to %d: %v", direction, socketBufferSize, portableErr)
 		}
 	}
 }

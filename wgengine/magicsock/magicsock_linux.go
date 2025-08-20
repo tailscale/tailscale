@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mdlayher/socket"
@@ -28,7 +27,6 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/nettype"
 )
 
 const (
@@ -487,32 +485,5 @@ func printSockaddr(sa unix.Sockaddr) string {
 		return buf.String()
 	default:
 		return fmt.Sprintf("unknown(%T)", sa)
-	}
-}
-
-// trySetSocketBuffer attempts to set SO_SNDBUFFORCE and SO_RECVBUFFORCE which
-// can overcome the limit of net.core.{r,w}mem_max, but require CAP_NET_ADMIN.
-// It falls back to the portable implementation if that fails, which may be
-// silently capped to net.core.{r,w}mem_max.
-func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
-	if c, ok := pconn.(*net.UDPConn); ok {
-		var errRcv, errSnd error
-		rc, err := c.SyscallConn()
-		if err == nil {
-			rc.Control(func(fd uintptr) {
-				errRcv = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUFFORCE, socketBufferSize)
-				if errRcv != nil {
-					logf("magicsock: [warning] failed to force-set UDP read buffer size to %d: %v; using kernel default values (impacts throughput only)", socketBufferSize, errRcv)
-				}
-				errSnd = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUFFORCE, socketBufferSize)
-				if errSnd != nil {
-					logf("magicsock: [warning] failed to force-set UDP write buffer size to %d: %v; using kernel default values (impacts throughput only)", socketBufferSize, errSnd)
-				}
-			})
-		}
-
-		if err != nil || errRcv != nil || errSnd != nil {
-			portableTrySetSocketBuffer(pconn, logf)
-		}
 	}
 }

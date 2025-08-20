@@ -3,7 +3,7 @@
 
 //go:build unix
 
-package magicsock
+package sockopts
 
 import (
 	"net"
@@ -13,7 +13,7 @@ import (
 	"tailscale.com/types/nettype"
 )
 
-func TestTrySetSocketBuffer(t *testing.T) {
+func TestSetBufferSize(t *testing.T) {
 	c, err := net.ListenPacket("udp", ":0")
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,8 @@ func TestTrySetSocketBuffer(t *testing.T) {
 
 	curRcv, curSnd := getBufs()
 
-	trySetSocketBuffer(c.(nettype.PacketConn), t.Logf)
+	SetBufferSize(c.(nettype.PacketConn), ReadDirection, 7<<20)
+	SetBufferSize(c.(nettype.PacketConn), WriteDirection, 7<<20)
 
 	newRcv, newSnd := getBufs()
 

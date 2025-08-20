@@ -9,15 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"tailscale.com/types/logger"
-	"tailscale.com/types/nettype"
 )
 
 func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
 	return nil, fmt.Errorf("raw disco listening not supported on this OS: %w", errors.ErrUnsupported)
-}
-
-func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
-	portableTrySetSocketBuffer(pconn, logf)
 }
