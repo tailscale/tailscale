@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tailscale-subnet-router.fullname" . }}
+  labels:
+    {{- include "tailscale-subnet-router.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tailscale-subnet-router.serviceAccountName" . }}
+roleRef:
+  kind: Role
+  name: {{ include "tailscale-subnet-router.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
