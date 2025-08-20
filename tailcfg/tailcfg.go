@@ -170,7 +170,8 @@ type CapabilityVersion int
 //   - 123: 2025-07-28: fix deadlock regression from cryptokey routing change (issue #16651)
 //   - 124: 2025-08-08: removed NodeAttrDisableMagicSockCryptoRouting support, crypto routing is now mandatory
 //   - 125: 2025-08-11: dnstype.Resolver adds UseWithExitNode field.
-const CurrentCapabilityVersion CapabilityVersion = 125
+//   - 126: 2025-08-21: add tailnet display name field to MapResponse
+const CurrentCapabilityVersion CapabilityVersion = 126
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2006,6 +2007,12 @@ type MapResponse struct {
 	// forms are coming later.
 	// If empty, the value is unchanged.
 	Domain string `json:",omitempty"`
+
+	// DisplayName is the tailnet display name
+	// set by the user. If this is populated, then this
+	// field should be shown instead of the tailnet name.
+	// If empty, then the UI should display the Tailnet domain.
+	DisplayName string `json:",omitempty"`
 
 	// CollectServices reports whether this node's Tailnet has
 	// requested that info about services be included in HostInfo.
