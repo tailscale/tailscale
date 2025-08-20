@@ -56,11 +56,20 @@ func TestSafeFuncHappyPath(t *testing.T) {
 	f := NewSafeFunc(expvar.Func(func() any {
 		count++
 		return count
-	}), time.Millisecond, nil)
+	}), 10*time.Millisecond, nil)
 
 	if got, want := f.Value(), 1; got != want {
 		t.Errorf("got %v, want %v", got, want)
 	}
+
+	// If you call `f.Value()` in quick succession, it's possible for it
+	// to return a cached value rather than call the wrapped function again.
+	// This caused this test to be flaky.
+	//
+	// Introducing a small sleep ensures that the wrapped function will
+	// always be called twice.
+	time.Sleep(1 * time.Millisecond)
+
 	if got, want := f.Value(), 2; got != want {
 		t.Errorf("got %v, want %v", got, want)
 	}
