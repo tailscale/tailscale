@@ -74,8 +74,9 @@ func CurrentProfileKey(userID string) StateKey {
 // StateStore persists state, and produces it back on request.
 // Implementations of StateStore are expected to be safe for concurrent use.
 type StateStore interface {
-	// ReadState returns the bytes associated with ID. Returns (nil,
-	// ErrStateNotExist) if the ID doesn't have associated state.
+	// ReadState returns the bytes associated with ID.
+	// It returns (nil, ErrStateNotExist) if the ID doesn't have associated state.
+	// The returned value must not be mutated.
 	ReadState(id StateKey) ([]byte, error)
 	// WriteState saves bs as the state associated with ID.
 	//
