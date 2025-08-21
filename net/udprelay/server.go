@@ -458,7 +458,7 @@ func (c *singlePacketConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, gen
 // reducing packet loss around crypto/syscall-induced delay.
 const socketBufferSize = 7 << 20
 
-func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
+func trySetUDPSocketOptions(pconn nettype.PacketConn, logf logger.Logf) {
 	directions := []sockopts.BufferDirection{sockopts.ReadDirection, sockopts.WriteDirection}
 	for _, direction := range directions {
 		errForce, errPortable := sockopts.SetBufferSize(pconn, direction, socketBufferSize)
@@ -468,6 +468,11 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 		if errPortable != nil {
 			logf("failed to set UDP %v buffer size to %d: %v", direction, socketBufferSize, errPortable)
 		}
+	}
+
+	err := sockopts.SetICMPErrImmunity(pconn)
+	if err != nil {
+		logf("failed to set ICMP error immunity: %v", err)
 	}
 }
 
@@ -494,7 +499,7 @@ func (s *Server) listenOn(port int) error {
 				break
 			}
 		}
-		trySetSocketBuffer(uc, s.logf)
+		trySetUDPSocketOptions(uc, s.logf)
 		// TODO: set IP_PKTINFO sockopt
 		_, boundPortStr, err := net.SplitHostPort(uc.LocalAddr().String())
 		if err != nil {
