@@ -142,8 +142,6 @@ func main() {
 			Hostname: *flagHostname,
 			Dir:      *flagDir,
 		}
-		rootPath = ts.GetRootPath()
-		log.Printf("tsidp root path: %s", rootPath)
 		if *flagVerbose {
 			ts.Logf = log.Printf
 		}
@@ -168,6 +166,9 @@ func main() {
 			log.Fatal(err)
 		}
 		lns = append(lns, ln)
+
+		rootPath = ts.GetRootPath()
+		log.Printf("tsidp root path: %s", rootPath)
 	}
 
 	srv := &idpServer{
@@ -185,14 +186,18 @@ func main() {
 
 	// Load funnel clients from disk if they exist, regardless of whether funnel is enabled
 	// This ensures OIDC clients persist across restarts
-	f, err := os.Open(funnelClientsFile)
+	funnelClientsFilePath, err := getConfigFilePath(rootPath, funnelClientsFile)
+	if err != nil {
+		log.Fatalf("could not get funnel clients file path: %v", err)
+	}
+	f, err := os.Open(funnelClientsFilePath)
 	if err == nil {
 		if err := json.NewDecoder(f).Decode(&srv.funnelClients); err != nil {
-			log.Fatalf("could not parse %s: %v", funnelClientsFile, err)
+			log.Fatalf("could not parse %s: %v", funnelClientsFilePath, err)
 		}
 		f.Close()
 	} else if !errors.Is(err, os.ErrNotExist) {
-		log.Fatalf("could not open %s: %v", funnelClientsFile, err)
+		log.Fatalf("could not open %s: %v", funnelClientsFilePath, err)
 	}
 
 	log.Printf("Running tsidp at %s ...", srv.serverURL)
@@ -839,7 +844,10 @@ func (s *idpServer) oidcSigner() (jose.Signer, error) {
 
 func (s *idpServer) oidcPrivateKey() (*signingKey, error) {
 	return s.lazySigningKey.GetErr(func() (*signingKey, error) {
-		keyPath := filepath.Join(s.rootPath, oidcKeyFile)
+		keyPath, err := getConfigFilePath(s.rootPath, oidcKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("could not get OIDC key file path: %w", err)
+		}
 		var sk signingKey
 		b, err := os.ReadFile(keyPath)
 		if err == nil {
@@ -1147,7 +1155,13 @@ func (s *idpServer) storeFunnelClientsLocked() error {
 	if err := json.NewEncoder(&buf).Encode(s.funnelClients); err != nil {
 		return err
 	}
-	return os.WriteFile(funnelClientsFile, buf.Bytes(), 0600)
+
+	funnelClientsFilePath, err := getConfigFilePath(s.rootPath, funnelClientsFile)
+	if err != nil {
+		return fmt.Errorf("storeFunnelClientsLocked: %v", err)
+	}
+
+	return os.WriteFile(funnelClientsFilePath, buf.Bytes(), 0600)
 }
 
 const (
@@ -1259,4 +1273,19 @@ func isFunnelRequest(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// getConfigFilePath returns the path to the config file for the given file name.
+// The oidc-key.json and funnel-clients.json files were originally opened and written
+// to without paths, and ended up in /root dir or home directory of the user running
+// the process. To maintain backward compatibility, we return the naked file name if that
+// file exists already, otherwise we return the full path in the rootPath.
+func getConfigFilePath(rootPath string, fileName string) (string, error) {
+	if _, err := os.Stat(fileName); err == nil {
+		return fileName, nil
+	} else if errors.Is(err, os.ErrNotExist) {
+		return filepath.Join(rootPath, fileName), nil
+	} else {
+		return "", err
+	}
 }
