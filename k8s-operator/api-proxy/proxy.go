@@ -123,11 +123,11 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 	if ap.authMode {
 		mode = "auth"
 	}
-	var tsLn net.Listener
+	var proxyLn net.Listener
 	var serve func(ln net.Listener) error
 	if ap.https {
 		var err error
-		tsLn, err = ap.ts.Listen("tcp", ":443")
+		proxyLn, err = ap.ts.Listen("tcp", ":443")
 		if err != nil {
 			return fmt.Errorf("could not listen on :443: %w", err)
 		}
@@ -143,7 +143,7 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 		}
 	} else {
 		var err error
-		tsLn, err = ap.ts.Listen("tcp", ":80")
+		proxyLn, err = net.Listen("tcp", "localhost:80")
 		if err != nil {
 			return fmt.Errorf("could not listen on :80: %w", err)
 		}
@@ -152,8 +152,8 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 
 	errs := make(chan error)
 	go func() {
-		ap.log.Infof("API server proxy in %s mode is listening on tailnet addresses %s", mode, tsLn.Addr())
-		if err := serve(tsLn); err != nil && err != http.ErrServerClosed {
+		ap.log.Infof("API server proxy in %s mode is listening on %s", mode, proxyLn.Addr())
+		if err := serve(proxyLn); err != nil && err != http.ErrServerClosed {
 			errs <- fmt.Errorf("error serving: %w", err)
 		}
 	}()
@@ -179,7 +179,7 @@ type APIServerProxy struct {
 	rp  *httputil.ReverseProxy
 
 	authMode    bool // Whether to run with impersonation using caller's tailnet identity.
-	https       bool // Whether to serve on https for the device hostname; true for k8s-operator, false for k8s-proxy.
+	https       bool // Whether to serve on https for the device hostname; true for k8s-operator, false (and localhost) for k8s-proxy.
 	ts          *tsnet.Server
 	hs          *http.Server
 	upstreamURL *url.URL
@@ -317,7 +317,23 @@ func (ap *APIServerProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 }
 
 func (ap *APIServerProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error) {
-	return ap.lc.WhoIs(r.Context(), r.RemoteAddr)
+	who, remoteErr := ap.lc.WhoIs(r.Context(), r.RemoteAddr)
+	if remoteErr == nil {
+		ap.log.Debugf("WhoIs from remote addr: %s", r.RemoteAddr)
+		return who, nil
+	}
+
+	var fwdErr error
+	fwdFor := r.Header.Get("X-Forwarded-For")
+	if fwdFor != "" && !ap.https {
+		who, fwdErr = ap.lc.WhoIs(r.Context(), fwdFor)
+		if fwdErr == nil {
+			ap.log.Debugf("WhoIs from X-Forwarded-For header: %s", fwdFor)
+			return who, nil
+		}
+	}
+
+	return nil, errors.Join(remoteErr, fwdErr)
 }
 
 func (ap *APIServerProxy) authError(w http.ResponseWriter, err error) {
