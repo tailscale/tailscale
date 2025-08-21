@@ -3537,7 +3537,6 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 				}
 			}
 		}
-		trySetSocketBuffer(pconn, c.logf)
 		trySetUDPSocketOptions(pconn, c.logf)
 
 		// Success.
@@ -3858,11 +3857,7 @@ func (c *Conn) DebugForcePreferDERP(n int) {
 	c.netChecker.SetForcePreferredDERP(n)
 }
 
-// trySetSocketBuffer attempts to set SO_SNDBUFFORCE and SO_RECVBUFFORCE which
-// can overcome the limit of net.core.{r,w}mem_max, but require CAP_NET_ADMIN.
-// It falls back to the portable implementation if that fails, which may be
-// silently capped to net.core.{r,w}mem_max.
-func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
+func trySetUDPSocketOptions(pconn nettype.PacketConn, logf logger.Logf) {
 	directions := []sockopts.BufferDirection{sockopts.ReadDirection, sockopts.WriteDirection}
 	for _, direction := range directions {
 		forceErr, portableErr := sockopts.SetBufferSize(pconn, direction, socketBufferSize)
@@ -3872,6 +3867,11 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 		if portableErr != nil {
 			logf("magicsock: failed to set UDP %v buffer size to %d: %v", direction, socketBufferSize, portableErr)
 		}
+	}
+
+	err := sockopts.SetICMPErrImmunity(pconn)
+	if err != nil {
+		logf("magicsock: %v", err)
 	}
 }
 

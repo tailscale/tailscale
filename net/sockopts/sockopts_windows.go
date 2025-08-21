@@ -3,28 +3,31 @@
 
 //go:build windows
 
-package magicsock
+package sockopts
 
 import (
+	"fmt"
 	"net"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
-	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 )
 
-func trySetUDPSocketOptions(pconn nettype.PacketConn, logf logger.Logf) {
+// SetICMPErrImmunity sets socket options on pconn to prevent ICMP reception,
+// e.g. ICMP Port Unreachable, from surfacing as a syscall error.
+//
+// If pconn is not a [*net.UDPConn], then SetICMPErrImmunity is no-op.
+func SetICMPErrImmunity(pconn nettype.PacketConn) error {
 	c, ok := pconn.(*net.UDPConn)
 	if !ok {
 		// not a UDP connection; nothing to do
-		return
+		return nil
 	}
 
 	sysConn, err := c.SyscallConn()
 	if err != nil {
-		logf("trySetUDPSocketOptions: getting SyscallConn failed: %v", err)
-		return
+		return fmt.Errorf("SetICMPErrImmunity: getting SyscallConn failed: %v", err)
 	}
 
 	// Similar to https://github.com/golang/go/issues/5834 (which involved
@@ -50,9 +53,10 @@ func trySetUDPSocketOptions(pconn nettype.PacketConn, logf logger.Logf) {
 		)
 	})
 	if ioctlErr != nil {
-		logf("trySetUDPSocketOptions: could not set SIO_UDP_NETRESET: %v", ioctlErr)
+		return fmt.Errorf("SetICMPErrImmunity: could not set SIO_UDP_NETRESET: %v", ioctlErr)
 	}
 	if err != nil {
-		logf("trySetUDPSocketOptions: SyscallConn.Control failed: %v", err)
+		return fmt.Errorf("SetICMPErrImmunity: SyscallConn.Control failed: %v", err)
 	}
+	return nil
 }

@@ -3,11 +3,13 @@
 
 //go:build !windows
 
-package magicsock
+package sockopts
 
 import (
-	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 )
 
-func trySetUDPSocketOptions(pconn nettype.PacketConn, logf logger.Logf) {}
+// SetICMPErrImmunity is no-op on non-Windows.
+func SetICMPErrImmunity(pconn nettype.PacketConn) error {
+	return nil
+}
