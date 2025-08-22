@@ -5833,14 +5833,16 @@ func (b *LocalBackend) stateMachineLocked() {
 // lockAndGetUnlock locks b.mu and returns a function that will unlock it at
 // most once.
 //
-// This is all very unfortunate but exists as a guardrail against the
-// unfortunate "lockedOnEntry" methods in this package (primarily
-// enterStateLockedOnEntry) that require b.mu held to be locked on entry to the
-// function but unlock the mutex on their way out. As a stepping stone to
-// cleaning things up (as of 2024-04-06), we at least pass the unlock func
-// around now and defer unlock in the caller to avoid missing unlocks and double
-// unlocks. TODO(bradfitz,maisem): make the locking in this package more
-// traditional (simple). See https://github.com/tailscale/tailscale/issues/11649
+// TODO(creachadair): This was added as a guardrail against the unfortunate
+// "LockedOnEntry" methods that were originally used in this package (primarily
+// enterStateLockedOnEntry) that required b.mu held to be locked on entry to
+// the function but unlocked the mutex on their way out.
+//
+// Now that these have all been updated, we could remove this type and acquire
+// and release locks directly. For now, however, I've left it alone to reduce
+// the scope of lock-related changes.
+//
+// See: https://github.com/tailscale/tailscale/issues/11649
 func (b *LocalBackend) lockAndGetUnlock() (unlock unlockOnce) {
 	b.mu.Lock()
 	var unlocked atomic.Bool
