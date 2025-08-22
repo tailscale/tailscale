@@ -110,6 +110,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		ControlKnobs:  sys.ControlKnobs(),
 		HealthTracker: sys.HealthTracker(),
 		Metrics:       sys.UserMetricsRegistry(),
+		EventBus:      sys.Bus.Get(),
 	})
 	if err != nil {
 		log.Fatal(err)
