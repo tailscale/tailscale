@@ -806,7 +806,7 @@ func (b *LocalBackend) ReloadConfig() (ok bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if err := b.setConfigLockedOnEntry(conf, unlock); err != nil {
+	if err := b.setConfigLocked(conf); err != nil {
 		return false, fmt.Errorf("error setting config: %w", err)
 	}
 
@@ -863,10 +863,9 @@ func (b *LocalBackend) setStateLocked(state ipn.State) {
 	}
 }
 
-// setConfigLockedOnEntry uses the provided config to update the backend's prefs
+// setConfigLocked uses the provided config to update the backend's prefs
 // and other state.
-func (b *LocalBackend) setConfigLockedOnEntry(conf *conffile.Config, unlock unlockOnce) error {
-	defer unlock()
+func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
 	p := b.pm.CurrentPrefs().AsStruct()
 	mp, err := conf.Parsed.ToPrefs()
 	if err != nil {
