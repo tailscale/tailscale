@@ -494,10 +494,9 @@ func (pm *profileManager) setProfilePrefsNoPermCheck(profile ipn.LoginProfileVie
 		oldPrefs := pm.prefs
 		pm.prefs = clonedPrefs
 
-		// Sadly, profile prefs can be changed in multiple ways.
-		// It's pretty chaotic, and in many cases callers use
-		// unexported methods of the profile manager instead of
-		// going through [LocalBackend.setPrefsLockedOnEntry]
+		// Sadly, profile prefs can be changed in multiple ways.  It's pretty
+		// chaotic, and in many cases callers use unexported methods of the
+		// profile manager instead of going through [LocalBackend.setPrefsLocked]
 		// or at least using [profileManager.SetPrefs].
 		//
 		// While we should definitely clean this up to improve

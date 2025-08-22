@@ -874,8 +874,7 @@ func (b *LocalBackend) setConfigLockedOnEntry(conf *conffile.Config, unlock unlo
 	}
 	p.ApplyEdits(&mp)
 	b.setStaticEndpointsFromConfigLocked(conf)
-	b.setPrefsLockedOnEntry(p, unlock)
-
+	b.setPrefsLocked(p)
 	b.conf = conf
 	return nil
 }
@@ -1959,12 +1958,12 @@ func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
 // b.mu must not be held.
 func (b *LocalBackend) reconcilePrefs() (_ ipn.PrefsView, anyChange bool) {
 	unlock := b.lockAndGetUnlock()
+	defer unlock()
 	prefs := b.pm.CurrentPrefs().AsStruct()
 	if !b.reconcilePrefsLocked(prefs) {
-		unlock.UnlockEarly()
 		return prefs.View(), false
 	}
-	return b.setPrefsLockedOnEntry(prefs, unlock), true
+	return b.setPrefsLocked(prefs), true
 }
 
 // sysPolicyChanged is a callback triggered by syspolicy when it detects
@@ -4609,12 +4608,10 @@ func (b *LocalBackend) editPrefsLockedOnEntry(actor ipnauth.Actor, mp *ipn.Maske
 	// before the modified prefs are actually set for the current profile.
 	b.onEditPrefsLocked(actor, mp, p0, p1.View())
 
-	newPrefs := b.setPrefsLockedOnEntry(p1, unlock)
+	newPrefs := b.setPrefsLocked(p1)
 
-	// Note: don't perform any actions for the new prefs here. Not
-	// every prefs change goes through EditPrefs. Put your actions
-	// in setPrefsLocksOnEntry instead.
-
+	// Note: don't perform any actions for the new prefs here. Not every prefs
+	// change goes through EditPrefs. Put your actions in setPrefsLocked instead.
 	// This should return the public prefs, not the private ones.
 	return stripKeysFromPrefs(newPrefs), nil
 }
@@ -4662,12 +4659,9 @@ func (b *LocalBackend) shouldWireInactiveIngressLocked() bool {
 	return b.serveConfig.Valid() && !b.hasIngressEnabledLocked() && b.wantIngressLocked()
 }
 
-// setPrefsLockedOnEntry requires b.mu be held to call it, but it
-// unlocks b.mu when done. newp ownership passes to this function.
-// It returns a read-only copy of the new prefs.
-func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce) ipn.PrefsView {
-	defer unlock()
-
+// setPrefsLocked requires b.mu be held to call it.  It returns a read-only
+// copy of the new prefs.
+func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 	cn := b.currentNode()
 	netMap := cn.NetMap()
 	b.setAtomicValuesFromPrefsLocked(newp.View())
@@ -4736,28 +4730,33 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 		b.stopOfflineAutoUpdate()
 	}
 
-	unlock.UnlockEarly()
+	// Update status that needs to happen outside the lock, but reacquire it
+	// before returning (including in case of panics).
+	func() {
+		b.mu.Unlock()
+		defer b.mu.Lock()
 
-	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
-		b.doSetHostinfoFilterServices()
-	}
+		if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
+			b.doSetHostinfoFilterServices()
+		}
 
-	if netMap != nil {
-		b.MagicConn().SetDERPMap(netMap.DERPMap)
-	}
+		if netMap != nil {
+			b.MagicConn().SetDERPMap(netMap.DERPMap)
+		}
 
-	if !oldp.WantRunning() && newp.WantRunning && cc != nil {
-		b.logf("transitioning to running; doing Login...")
-		cc.Login(controlclient.LoginDefault)
-	}
+		if !oldp.WantRunning() && newp.WantRunning && cc != nil {
+			b.logf("transitioning to running; doing Login...")
+			cc.Login(controlclient.LoginDefault)
+		}
 
-	if oldp.WantRunning() != newp.WantRunning {
-		b.stateMachine()
-	} else {
-		b.authReconfig()
-	}
+		if oldp.WantRunning() != newp.WantRunning {
+			b.stateMachine()
+		} else {
+			b.authReconfig()
+		}
 
-	b.send(ipn.Notify{Prefs: &prefs})
+		b.send(ipn.Notify{Prefs: &prefs})
+	}()
 	return prefs
 }
 
