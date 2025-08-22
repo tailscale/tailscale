@@ -3509,14 +3509,14 @@ func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
 		b.logf("using tailnet default auto-update setting: %v", au)
 		prefsClone := prefs.AsStruct()
 		prefsClone.AutoUpdate.Apply = opt.NewBool(au)
-		_, err := b.editPrefsLockedOnEntry(
+		_, err := b.editPrefsLocked(
 			ipnauth.Self,
 			&ipn.MaskedPrefs{
 				Prefs: *prefsClone,
 				AutoUpdateSet: ipn.AutoUpdatePrefsMask{
 					ApplySet: true,
 				},
-			}, unlock)
+			})
 		if err != nil {
 			b.logf("failed to apply tailnet-wide default for auto-updates (%v): %v", au, err)
 			return
@@ -4301,7 +4301,7 @@ func (b *LocalBackend) SetUseExitNodeEnabled(actor ipnauth.Actor, v bool) (ipn.P
 			mp.InternalExitNodePrior = p0.ExitNodeID()
 		}
 	}
-	return b.editPrefsLockedOnEntry(actor, mp, unlock)
+	return b.editPrefsLocked(actor, mp)
 }
 
 // MaybeClearAppConnector clears the routes from any AppConnector if
@@ -4330,7 +4330,9 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 		return ipn.PrefsView{}, errors.New("can't set Internal fields")
 	}
 
-	return b.editPrefsLockedOnEntry(actor, mp, b.lockAndGetUnlock())
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+	return b.editPrefsLocked(actor, mp)
 }
 
 // checkEditPrefsAccessLocked checks whether the current user has access
@@ -4537,7 +4539,7 @@ func (b *LocalBackend) startReconnectTimerLocked(d time.Duration) {
 		}
 
 		mp := &ipn.MaskedPrefs{WantRunningSet: true, Prefs: ipn.Prefs{WantRunning: true}}
-		if _, err := b.editPrefsLockedOnEntry(ipnauth.Self, mp, unlock); err != nil {
+		if _, err := b.editPrefsLocked(ipnauth.Self, mp); err != nil {
 			b.logf("failed to automatically reconnect as %q after %v: %v", cp.Name(), d, err)
 		} else {
 			b.logf("automatically reconnected as %q after %v", cp.Name(), d)
@@ -4566,11 +4568,8 @@ func (b *LocalBackend) stopReconnectTimerLocked() {
 	}
 }
 
-// Warning: b.mu must be held on entry, but it unlocks it on the way out.
-// TODO(bradfitz): redo the locking on all these weird methods like this.
-func (b *LocalBackend) editPrefsLockedOnEntry(actor ipnauth.Actor, mp *ipn.MaskedPrefs, unlock unlockOnce) (ipn.PrefsView, error) {
-	defer unlock() // for error paths
-
+// Warning: b.mu must be held on entry.
+func (b *LocalBackend) editPrefsLocked(actor ipnauth.Actor, mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	p0 := b.pm.CurrentPrefs()
 
 	// Check if the changes in mp are allowed.
@@ -6008,30 +6007,36 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 // Logout logs out the current profile, if any, and waits for the logout to
 // complete.
 func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
+	// These values are initialized inside the lock on success.
+	var cc controlclient.Client
+	var profile ipn.LoginProfileView
 
-	if !b.hasNodeKeyLocked() {
-		// Already logged out.
-		return nil
-	}
-	cc := b.cc
+	if err := func() error {
+		unlock := b.lockAndGetUnlock()
+		defer unlock()
 
-	// Grab the current profile before we unlock the mutex, so that we can
-	// delete it later.
-	profile := b.pm.CurrentProfile()
+		if !b.hasNodeKeyLocked() {
+			// Already logged out.
+			return nil
+		}
+		cc = b.cc
 
-	_, err := b.editPrefsLockedOnEntry(
-		actor,
-		&ipn.MaskedPrefs{
-			WantRunningSet: true,
-			LoggedOutSet:   true,
-			Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
-		}, unlock)
-	if err != nil {
+		// Grab the current profile before we unlock the mutex, so that we can
+		// delete it later.
+		profile = b.pm.CurrentProfile()
+
+		_, err := b.editPrefsLocked(
+			actor,
+			&ipn.MaskedPrefs{
+				WantRunningSet: true,
+				LoggedOutSet:   true,
+				Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
+			})
+		return err
+	}(); err != nil {
 		return err
 	}
-	// b.mu is now unlocked, after editPrefsLockedOnEntry.
+	// b.mu is now unlocked
 
 	// Clear any previous dial plan(s), if set.
 	b.resetDialPlan()
@@ -6051,7 +6056,7 @@ func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 		return err
 	}
 
-	unlock = b.lockAndGetUnlock()
+	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
 	if err := b.pm.DeleteProfile(profile.ID()); err != nil {
