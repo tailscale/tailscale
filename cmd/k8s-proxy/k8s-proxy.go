@@ -453,7 +453,7 @@ func setServeConfig(ctx context.Context, lc *local.Client, cm *certs.CertManager
 					serviceHostPort: {
 						Handlers: map[string]*ipn.HTTPHandler{
 							"/": {
-								Proxy: fmt.Sprintf("http://%s:80", strings.TrimSuffix(status.Self.DNSName, ".")),
+								Proxy: "http://localhost:80",
 							},
 						},
 					},
