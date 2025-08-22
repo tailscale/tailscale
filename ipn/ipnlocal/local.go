@@ -4023,7 +4023,7 @@ func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock un
 	if newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(); oldControlURL != newControlURL {
 		b.resetDialPlan()
 	}
-	if err := b.resetForProfileChangeLockedOnEntry(unlock); err != nil {
+	if err := b.resetForProfileChangeLocked(); err != nil {
 		// TODO(nickkhyl): The actual reset cannot fail. However,
 		// the TKA initialization or [LocalBackend.Start] can fail.
 		// These errors are not critical as far as we're concerned.
@@ -6063,7 +6063,7 @@ func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 		b.logf("error deleting profile: %v", err)
 		return err
 	}
-	return b.resetForProfileChangeLockedOnEntry(unlock)
+	return b.resetForProfileChangeLocked()
 }
 
 // setNetInfo sets b.hostinfo.NetInfo to ni, and passes ni along to the
@@ -7252,7 +7252,7 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 		b.resetDialPlan()
 	}
 
-	return b.resetForProfileChangeLockedOnEntry(unlock)
+	return b.resetForProfileChangeLocked()
 }
 
 func (b *LocalBackend) initTKALocked() error {
@@ -7332,12 +7332,10 @@ func (b *LocalBackend) getHardwareAddrs() ([]string, error) {
 	return addrs, nil
 }
 
-// resetForProfileChangeLockedOnEntry resets the backend for a profile change.
+// resetForProfileChangeLocked resets the backend for a profile change.
 //
 // b.mu must held on entry. It is released on exit.
-func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) error {
-	defer unlock()
-
+func (b *LocalBackend) resetForProfileChangeLocked() error {
 	if b.shutdownCalled {
 		// Prevent a call back to Start during Shutdown, which calls Logout for
 		// ephemeral nodes, which can then call back here. But we're shutting
@@ -7369,12 +7367,18 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	b.extHost.NotifyProfileChange(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
 	b.enterStateLocked(ipn.NoState)
-	unlock.UnlockEarly()
-	b.health.SetLocalLogConfigHealth(nil)
-	if tkaErr != nil {
-		return tkaErr
-	}
-	return b.Start(ipn.Options{})
+
+	// Update health status and start outside the lock.
+	return func() error {
+		b.mu.Unlock()
+		defer b.mu.Lock()
+
+		b.health.SetLocalLogConfigHealth(nil)
+		if tkaErr != nil {
+			return tkaErr
+		}
+		return b.Start(ipn.Options{})
+	}()
 }
 
 // DeleteProfile deletes a profile with the given ID.
@@ -7393,7 +7397,7 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 	if !needToRestart {
 		return nil
 	}
-	return b.resetForProfileChangeLockedOnEntry(unlock)
+	return b.resetForProfileChangeLocked()
 }
 
 // CurrentProfile returns the current LoginProfile.
@@ -7415,7 +7419,7 @@ func (b *LocalBackend) NewProfile() error {
 	// set. Conservatively reset the dialPlan.
 	b.resetDialPlan()
 
-	return b.resetForProfileChangeLockedOnEntry(unlock)
+	return b.resetForProfileChangeLocked()
 }
 
 // ListProfiles returns a list of all LoginProfiles.
@@ -7444,7 +7448,7 @@ func (b *LocalBackend) ResetAuth() error {
 		return err
 	}
 	b.resetDialPlan() // always reset if we're removing everything
-	return b.resetForProfileChangeLockedOnEntry(unlock)
+	return b.resetForProfileChangeLocked()
 }
 
 func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr) ([]magicsock.EndpointChange, error) {
