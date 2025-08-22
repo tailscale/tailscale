@@ -2492,8 +2492,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// regress tsnet.Server restarts.
 		cc.Login(controlclient.LoginDefault)
 	}
-	b.stateMachineLockedOnEntry(unlock)
-
+	b.stateMachineLocked()
 	return nil
 }
 
@@ -5620,12 +5619,12 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 // happen".
 func (b *LocalBackend) enterState(newState ipn.State) {
 	unlock := b.lockAndGetUnlock()
-	b.enterStateLockedOnEntry(newState, unlock)
+	defer unlock()
+	b.enterStateLocked(newState)
 }
 
-// enterStateLockedOnEntry is like enterState but requires b.mu be held to call
-// it, but it unlocks b.mu when done (via unlock, a once func).
-func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlockOnce) {
+// enterStateLocked is like enterState but requires the caller to hold b.mu.
+func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 	cn := b.currentNode()
 	oldState := b.state
 	b.setStateLocked(newState)
@@ -5674,51 +5673,56 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		b.maybeStartOfflineAutoUpdate(prefs)
 	}
 
-	unlock.UnlockEarly()
+	// Resolve the state transition outside the lock, but reacquire it before
+	// returning (including in case of panics).
+	func() {
+		b.mu.Unlock()
+		defer b.mu.Lock()
 
-	// prefs may change irrespective of state; WantRunning should be explicitly
-	// set before potential early return even if the state is unchanged.
-	b.health.SetIPNState(newState.String(), prefs.Valid() && prefs.WantRunning())
-	if oldState == newState {
-		return
-	}
-	b.logf("Switching ipn state %v -> %v (WantRunning=%v, nm=%v)",
-		oldState, newState, prefs.WantRunning(), netMap != nil)
-	b.send(ipn.Notify{State: &newState})
+		// prefs may change irrespective of state; WantRunning should be explicitly
+		// set before potential early return even if the state is unchanged.
+		b.health.SetIPNState(newState.String(), prefs.Valid() && prefs.WantRunning())
+		if oldState == newState {
+			return
+		}
+		b.logf("Switching ipn state %v -> %v (WantRunning=%v, nm=%v)",
+			oldState, newState, prefs.WantRunning(), netMap != nil)
+		b.send(ipn.Notify{State: &newState})
 
-	switch newState {
-	case ipn.NeedsLogin:
-		systemd.Status("Needs login: %s", authURL)
-		if b.seamlessRenewalEnabled() {
-			break
-		}
-		b.blockEngineUpdates(true)
-		fallthrough
-	case ipn.Stopped, ipn.NoState:
-		// Unconfigure the engine if it has stopped (WantRunning is set to false)
-		// or if we've switched to a different profile and the state is unknown.
-		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
-		if err != nil {
-			b.logf("Reconfig(down): %v", err)
-		}
+		switch newState {
+		case ipn.NeedsLogin:
+			systemd.Status("Needs login: %s", authURL)
+			if b.seamlessRenewalEnabled() {
+				break
+			}
+			b.blockEngineUpdates(true)
+			fallthrough
+		case ipn.Stopped, ipn.NoState:
+			// Unconfigure the engine if it has stopped (WantRunning is set to false)
+			// or if we've switched to a different profile and the state is unknown.
+			err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
+			if err != nil {
+				b.logf("Reconfig(down): %v", err)
+			}
 
-		if newState == ipn.Stopped && authURL == "" {
-			systemd.Status("Stopped; run 'tailscale up' to log in")
+			if newState == ipn.Stopped && authURL == "" {
+				systemd.Status("Stopped; run 'tailscale up' to log in")
+			}
+		case ipn.Starting, ipn.NeedsMachineAuth:
+			b.authReconfig()
+			// Needed so that UpdateEndpoints can run
+			b.e.RequestStatus()
+		case ipn.Running:
+			var addrStrs []string
+			addrs := netMap.GetAddresses()
+			for _, p := range addrs.All() {
+				addrStrs = append(addrStrs, p.Addr().String())
+			}
+			systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
+		default:
+			b.logf("[unexpected] unknown newState %#v", newState)
 		}
-	case ipn.Starting, ipn.NeedsMachineAuth:
-		b.authReconfig()
-		// Needed so that UpdateEndpoints can run
-		b.e.RequestStatus()
-	case ipn.Running:
-		var addrStrs []string
-		addrs := netMap.GetAddresses()
-		for _, p := range addrs.All() {
-			addrStrs = append(addrStrs, p.Addr().String())
-		}
-		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
-	default:
-		b.logf("[unexpected] unknown newState %#v", newState)
-	}
+	}()
 }
 
 func (b *LocalBackend) hasNodeKeyLocked() bool {
@@ -5819,17 +5823,17 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 // Or maybe just call the state machine from fewer places.
 func (b *LocalBackend) stateMachine() {
 	unlock := b.lockAndGetUnlock()
-	b.stateMachineLockedOnEntry(unlock)
+	defer unlock()
+	b.stateMachineLocked()
 }
 
-// stateMachineLockedOnEntry is like stateMachine but requires b.mu be held to
-// call it, but it unlocks b.mu when done (via unlock, a once func).
-func (b *LocalBackend) stateMachineLockedOnEntry(unlock unlockOnce) {
-	b.enterStateLockedOnEntry(b.nextStateLocked(), unlock)
+// stateMachineLocked is like stateMachine but requires b.mu be held.
+func (b *LocalBackend) stateMachineLocked() {
+	b.enterStateLocked(b.nextStateLocked())
 }
 
-// lockAndGetUnlock locks b.mu and returns a sync.OnceFunc function that will
-// unlock it at most once.
+// lockAndGetUnlock locks b.mu and returns a function that will unlock it at
+// most once.
 //
 // This is all very unfortunate but exists as a guardrail against the
 // unfortunate "lockedOnEntry" methods in this package (primarily
@@ -7361,7 +7365,8 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	b.resetAlwaysOnOverrideLocked()
 	b.extHost.NotifyProfileChange(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
-	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
+	b.enterStateLocked(ipn.NoState)
+	unlock.UnlockEarly()
 	b.health.SetLocalLogConfigHealth(nil)
 	if tkaErr != nil {
 		return tkaErr
