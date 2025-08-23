@@ -158,11 +158,10 @@ type Prefs struct {
 	// connections. This overrides tailcfg.Hostinfo's ShieldsUp.
 	ShieldsUp bool
 
-	// AdvertiseTags specifies groups that this node wants to join, for
-	// purposes of ACL enforcement. These can be referenced from the ACL
-	// security policy. Note that advertising a tag doesn't guarantee that
-	// the control server will allow you to take on the rights for that
-	// tag.
+	// AdvertiseTags specifies tags that should be applied to this node, for
+	// purposes of ACL enforcement. These can be referenced from the ACL policy
+	// document. Note that advertising a tag on the client doesn't guarantee
+	// that the control server will allow the node to adopt that tag.
 	AdvertiseTags []string
 
 	// Hostname is the hostname to use for identifying the node. If
