@@ -79,6 +79,17 @@ type ConnectorSpec struct {
 	// and 63 characters long.
 	// +optional
 	Hostname Hostname `json:"hostname,omitempty"`
+
+	// HostnamePrefix specifies the hostname prefix for each Connector node
+	// replica. Each device will have the integer number. Each device will have the integer number
+	// from its StatefulSet pod appended to this prefix to form the full hostname.
+	// HostnamePrefix can contain lower case letters, numbers and dashes, it
+	// must not start with a dash and must be between 1 and 62 characters long.
+	// This field should only be used when creating connectors with multiple replicas. For
+	// single replica connectors, use the "hostname" field.
+	// +optional
+	HostnamePrefix HostnamePrefix `json:"hostnamePrefix,omitempty"`
+
 	// ProxyClass is the name of the ProxyClass custom resource that
 	// contains configuration options that should be applied to the
 	// resources created for this Connector. If unset, the operator will
@@ -108,11 +119,19 @@ type ConnectorSpec struct {
 	// https://tailscale.com/kb/1281/app-connectors
 	// +optional
 	AppConnector *AppConnector `json:"appConnector,omitempty"`
+
 	// ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.
 	// This field is mutually exclusive with the appConnector field.
 	// https://tailscale.com/kb/1103/exit-nodes
 	// +optional
 	ExitNode bool `json:"exitNode"`
+
+	// Replicas specifies how many devices to create. Set this to enable
+	// high availability for app connectors, subnet routers, or exit nodes.
+	// https://tailscale.com/kb/1115/high-availability. Defaults to 1.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 // SubnetRouter defines subnet routes that should be exposed to tailnet via a
@@ -197,9 +216,16 @@ type ConnectorStatus struct {
 	TailnetIPs []string `json:"tailnetIPs,omitempty"`
 	// Hostname is the fully qualified domain name of the Connector node.
 	// If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
-	// node.
+	// node. When using multiple replicas, this field will be populated with the
+	// first replica's hostname. Use the Hostnames field for the full list
+	// of hostnames.
 	// +optional
 	Hostname string `json:"hostname,omitempty"`
+	// Hostnames contains the fully qualified domain names of all replicas of the
+	// Connector node. If MagicDNS is enabled in your tailnet, it is the MagicDNS names of the
+	// individual nodes.
+	// +optional
+	Hostnames []string `json:"hostnames,omitempty"`
 }
 
 type ConditionType string
