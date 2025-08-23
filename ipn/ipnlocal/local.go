@@ -1501,8 +1501,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		return
 	}
 	if st.Err != nil {
-		// The following do not depend on any data for which we need b locked.
-		unlock.UnlockEarly()
 		if errors.Is(st.Err, io.EOF) {
 			b.logf("[v1] Received error: EOF")
 			return
@@ -1511,7 +1509,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		var uerr controlclient.UserVisibleError
 		if errors.As(st.Err, &uerr) {
 			s := uerr.UserVisibleError()
-			b.send(ipn.Notify{ErrMessage: &s})
+			b.sendToLocked(ipn.Notify{ErrMessage: &s}, allClients)
 		}
 		return
 	}
