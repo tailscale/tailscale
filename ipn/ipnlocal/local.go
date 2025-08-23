@@ -6039,7 +6039,6 @@ func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 	}(); err != nil {
 		return err
 	}
-	// b.mu is now unlocked
 
 	// Clear any previous dial plan(s), if set.
 	b.resetDialPlan()
