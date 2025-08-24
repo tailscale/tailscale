@@ -12,6 +12,10 @@
 
 ## Installation using Docker
 
+### Pre-built image
+
+A pre-built tsidp image exists at `tailscale/tsidp:unstable`.
+
 ### Building from Source
 
 ```bash
