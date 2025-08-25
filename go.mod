@@ -4,6 +4,7 @@ go 1.24.6
 
 require (
 	filippo.io/mkcert v1.4.4
+	fyne.io/systray v1.11.1-0.20250812065214-4856ac3adc3c
 	github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
@@ -87,7 +88,6 @@ require (
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	github.com/tailscale/setec v0.0.0-20250205144240-8898a29c3fbb
-	github.com/tailscale/systray v0.0.0-20250807194015-d0cacc864c78
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20250716170648-1d0488a3d7da

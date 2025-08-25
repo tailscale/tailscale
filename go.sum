@@ -43,6 +43,8 @@ filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
 filippo.io/edwards25519 v1.1.0/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
 filippo.io/mkcert v1.4.4 h1:8eVbbwfVlaqUM7OwuftKc2nuYOoTDQWqsoXmzoXZdbc=
 filippo.io/mkcert v1.4.4/go.mod h1:VyvOchVuAye3BoUsPUOOofKygVwLV2KQMVFJNRq+1dA=
+fyne.io/systray v1.11.1-0.20250812065214-4856ac3adc3c h1:km4PIleGtbbF1oxmFQuO93CyNCldwuRTPB8WlzNWNZs=
+fyne.io/systray v1.11.1-0.20250812065214-4856ac3adc3c/go.mod h1:RVwqP9nYMo7h5zViCBHri2FgjXF7H2cub7MAq4NSoLs=
 github.com/4meepo/tagalign v1.3.3 h1:ZsOxcwGD/jP4U/aw7qeWu58i7dwYemfy5Y+IF1ACoNw=
 github.com/4meepo/tagalign v1.3.3/go.mod h1:Q9c1rYMZJc9dPRkbQPpcBNCLEmY2njbAsXhQOZFE2dE=
 github.com/Abirdcfly/dupword v0.0.14 h1:3U4ulkc8EUo+CaT105/GJ1BQwtgyj6+VaBVbAX11Ba8=
@@ -990,8 +992,6 @@ github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc h1:24heQPtnFR+y
 github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc/go.mod h1:f93CXfllFsO9ZQVq+Zocb1Gp4G5Fz0b0rXHLOzt/Djc=
 github.com/tailscale/setec v0.0.0-20250205144240-8898a29c3fbb h1:Rtklwm6HUlCtf/MR2MB9iY4FoA16acWWlC5pLrTVa90=
 github.com/tailscale/setec v0.0.0-20250205144240-8898a29c3fbb/go.mod h1:R8iCVJnbOB05pGexHK/bKHneIRHpZ3jLl7wMQ0OM/jw=
-github.com/tailscale/systray v0.0.0-20250807194015-d0cacc864c78 h1:H7/LOg6wgQ116wFRVa8tz9KTB8pc6jeNtqS9tyKgeVw=
-github.com/tailscale/systray v0.0.0-20250807194015-d0cacc864c78/go.mod h1:1NbyArqaFj+AzkSWl0odw7flO9DsHIYWC4lMkwCKVAo=
 github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 h1:UBPHPtv8+nEAy2PD8RyAhOYvau1ek0HDJqLS/Pysi14=
 github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976/go.mod h1:agQPE6y6ldqCOui2gkIh7ZMztTkIQKH049tv8siLuNQ=
 github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6 h1:l10Gi6w9jxvinoiq15g8OToDdASBni4CyJOdHY1Hr8M=

@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"fyne.io/systray"
 	ico "github.com/Kodeworks/golang-image-ico"
 	"github.com/fogleman/gg"
-	"github.com/tailscale/systray"
 )
 
 // tsLogo represents the Tailscale logo displayed as the systray icon.
