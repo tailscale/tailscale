@@ -46,18 +46,18 @@
     systems,
     flake-compat,
   }: let
-    go124Version = "1.24.6";
-    goHash = "sha256-4ctVgqq1iGaLwEwH3hhogHD2uMmyqvNh+CHhm9R8/b0=";
+    go125Version = "1.25.0";
+    goHash = "sha256-S9AekSlyB7+kUOpA1NWpOxtTGl5DhHOyoG4Y4HciciU=";
     eachSystem = f:
       nixpkgs.lib.genAttrs (import systems) (system:
         f (import nixpkgs {
           system = system;
           overlays = [
             (final: prev: {
-              go_1_24 = prev.go_1_24.overrideAttrs {
-                version = go124Version;
+              go_1_25 = prev.go_1_25.overrideAttrs {
+                version = go125Version;
                 src = prev.fetchurl {
-                  url = "https://go.dev/dl/go${go124Version}.src.tar.gz";
+                  url = "https://go.dev/dl/go${go125Version}.src.tar.gz";
                   hash = goHash;
                 };
               };
@@ -84,7 +84,7 @@
     # you're an end user you should be prepared for this flake to not
     # build periodically.
     packages = eachSystem (pkgs: rec {
-      default = pkgs.buildGo124Module {
+      default = pkgs.buildGo125Module {
         name = "tailscale";
         pname = "tailscale";
         src = ./.;
@@ -137,7 +137,7 @@
           gotools
           graphviz
           perl
-          go_1_24
+          go_1_25
           yarn
 
           # qemu and e2fsprogs are needed for natlab

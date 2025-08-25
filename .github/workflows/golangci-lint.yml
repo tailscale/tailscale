@@ -33,7 +33,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@1481404843c368bc19ca9406f87d6e0fc97bdcfd # v7.0.0
         with:
-          version: v2.0.2
+          version: v2.4.0
 
           # Show only new issues if it's a pull request.
           only-new-issues: true
