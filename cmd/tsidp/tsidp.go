@@ -72,6 +72,7 @@ var (
 	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available on the public internet")
 	flagHostname           = flag.String("hostname", "idp", "tsnet hostname to use instead of idp")
 	flagDir                = flag.String("dir", "", "tsnet state directory; a default one will be created if not provided")
+	flagControlURL         = flag.String("login-server", "", "optional alternate control server base URL. If empty, the default Tailscale control plane is used.")
 )
 
 func main() {
@@ -93,6 +94,9 @@ func main() {
 	)
 
 	if *flagUseLocalTailscaled {
+		if *flagControlURL != "" {
+			log.Fatalf("--login-server is not compatible with --use-local-tailscaled")
+		}
 		lc = &local.Client{}
 		st, err = lc.StatusWithoutPeers(ctx)
 		if err != nil {
@@ -139,8 +143,9 @@ func main() {
 	} else {
 		hostinfo.SetApp("tsidp")
 		ts := &tsnet.Server{
-			Hostname: *flagHostname,
-			Dir:      *flagDir,
+			Hostname:   *flagHostname,
+			Dir:        *flagDir,
+			ControlURL: *flagControlURL,
 		}
 		if *flagVerbose {
 			ts.Logf = log.Printf
