@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime"
@@ -40,6 +41,7 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
+	"golang.org/x/net/proxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/httprec"
 	"tailscale.com/tka"
@@ -214,6 +216,25 @@ type NetmapDeltaUpdater interface {
 	UpdateNetmapDelta([]netmap.NodeMutation) (ok bool)
 }
 
+// chooseControlProxyURL determines which proxy URL (if any) should be used for
+// control-plane HTTP traffic. It returns the proxy URL string (empty if none).
+func chooseControlProxyURL(serverURL, envOverride string) string {
+	if s := strings.TrimSpace(envOverride); s != "" {
+		return s
+	}
+	if serverURL == "" {
+		return ""
+	}
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return ""
+	}
+	if strings.HasSuffix(u.Hostname(), ".onion") {
+		return "socks5h://127.0.0.1:9050"
+	}
+	return ""
+}
+
 // NewDirect returns a new Direct client.
 func NewDirect(opts Options) (*Direct, error) {
 	if opts.ServerURL == "" {
@@ -266,14 +287,42 @@ func NewDirect(opts Options) (*Direct, error) {
 	var interceptedDial *atomic.Bool
 	if httpc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.Proxy = tshttpproxy.ProxyFromEnvironment
-		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
+		
+		// Build an HTTP transport for control-plane calls that can optionally
+		// route through a SOCKS/HTTP CONNECT proxy (e.g., Tor).
+		proxyURL := chooseControlProxyURL(opts.ServerURL, os.Getenv("TS_CONTROL_PROXY"))
+		if proxyURL != "" {
+			pu, err := url.Parse(proxyURL)
+			if err != nil {
+				return nil, fmt.Errorf("invalid TS_CONTROL_PROXY %q: %w", proxyURL, err)
+			}
+			dialer, err := proxy.FromURL(pu, &net.Dialer{Timeout: 30 * time.Second})
+			if err != nil {
+				return nil, fmt.Errorf("proxy dialer: %w", err)
+			}
+			tr.Proxy = nil
+			tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				return dialer.Dial(network, address)
+			}
+			// HTTP/2 over certain SOCKS/Tor paths can be flaky; stick to HTTP/1.1.
+			tr.ForceAttemptHTTP2 = false
+		} else {
+			// Default behavior: honor OS/system proxy configuration.
+			tr.Proxy = tshttpproxy.ProxyFromEnvironment
+			tshttpproxy.SetTransportGetProxyConnectHeader(tr)
+		}
 		tr.TLSClientConfig = tlsdial.Config(opts.HealthTracker, tr.TLSClientConfig)
 		var dialFunc netx.DialFunc
 		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
-		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
+		// Only override DialContext with DNS cache if we are not using a custom proxy dialer
+		if proxyURL == "" {
+			tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
+		}
 		tr.DialTLSContext = dnscache.TLSDialer(dialFunc, dnsCache, tr.TLSClientConfig)
-		tr.ForceAttemptHTTP2 = true
+		// Set ForceAttemptHTTP2 only if we are not using a proxy (proxy path sets it to false)
+		if proxyURL == "" {
+			tr.ForceAttemptHTTP2 = true
+		}
 		// Disable implicit gzip compression; the various
 		// handlers (register, map, set-dns, etc) do their own
 		// zstd compression per naclbox.
