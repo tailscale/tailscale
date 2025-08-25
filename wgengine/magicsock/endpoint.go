@@ -1964,7 +1964,25 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	for _, st := range de.endpointState {
 		st.lastPing = 0
 	}
-	de.sendDiscoPingsLocked(mono.Now(), false)
+	monoNow := mono.Now()
+	de.sendDiscoPingsLocked(monoNow, false)
+
+	// This hook is required to trigger peer relay path discovery around
+	// disco "tailscale ping" initiated by de. We may be configured with peer
+	// relay servers that differ from de.
+	//
+	// The only other peer relay path discovery hook is in [endpoint.heartbeat],
+	// which is kicked off around outbound WireGuard packet flow, or if you are
+	// the "tailscale ping" initiator. Disco "tailscale ping" does not propagate
+	// into wireguard-go.
+	//
+	// We choose not to hook this around disco ping reception since peer relay
+	// path discovery can also trigger disco ping transmission, which *could*
+	// lead to an infinite loop of peer relay path discovery between two peers,
+	// absent intended triggers.
+	if de.wantUDPRelayPathDiscoveryLocked(monoNow) {
+		de.discoverUDPRelayPathsLocked(monoNow)
+	}
 }
 
 func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
