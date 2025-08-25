@@ -24,10 +24,10 @@ import (
 	"syscall"
 	"time"
 
+	"fyne.io/systray"
 	ico "github.com/Kodeworks/golang-image-ico"
 	"github.com/atotto/clipboard"
 	dbus "github.com/godbus/dbus/v5"
-	"github.com/tailscale/systray"
 	"github.com/toqueteos/webbrowser"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
