@@ -178,20 +178,33 @@ export TS_CONTROL_PROXY="socks5h://custom-proxy:1080"
 - `tailscale-tor-test.sh` - Integration validation script
 - `apply_socks_patch.sh` - Automated patch application script
 
-## 🆚 Alternative Approach: Near-Stock Tailscale
+## ⭐ **RECOMMENDED: Stock Tailscale + Tor HTTPTunnelPort**
 
-While this fork provides comprehensive .onion support, a simpler approach exists using stock Tailscale with environment variables:
+**This fork works perfectly, but the optimal production approach uses stock Tailscale:**
 
+See **[STOCK-TAILSCALE-TOR-APPROACH.md](STOCK-TAILSCALE-TOR-APPROACH.md)** for the recommended solution using:
+- Tor's built-in HTTPTunnelPort (HTTP CONNECT proxy)
+- Standard Tailscale proxy environment variables
+- Zero maintenance, automatic updates, official support
+
+**Quick Start:**
 ```bash
-# Method 1: HTTP proxy through socat bridge
-socat TCP-LISTEN:8080,fork SOCKS4A:127.0.0.1:headscale.onion:8080,socksport=9050 &
-HTTP_PROXY=http://127.0.0.1:8080 tailscale up --login-server=http://127.0.0.1:8080
-
-# Method 2: Transparent proxy with iptables (advanced)
-# See full documentation in the repository for complete setup
+# One-shot setup and test
+export HEADSCALE_ONION_URL="http://your-headscale.onion:8080"
+export TS_AUTHKEY="tskey-your-preauth-key"
+sudo ./stock-tailscale-tor-harness.sh
 ```
 
-**Note**: The user indicated they will use the simpler near-stock approach rather than this fork for production deployment.
+**Why Stock Approach is Better:**
+- ✅ Official binaries with automatic security updates
+- ✅ Full vendor support (can file bugs with Tailscale Inc.)
+- ✅ Zero maintenance (no custom builds or patches)
+- ✅ Production battle-tested (uses standard Tor + HTTP proxy)
+
+**This SOCKS5 fork remains valuable for:**
+- Technical reference and learning
+- Environments where HTTPTunnelPort isn't available
+- Understanding Tailscale's internal control client architecture
 
 ## 🧑‍💻 Author & Testing
 
