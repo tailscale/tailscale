@@ -29,6 +29,7 @@ func init() {
 // This list must be kept in sync with the TailscaledDependencies preprocessor
 // variable in the installer.
 var serviceDependencies = []string{
+	"Dnscache",
 	"iphlpsvc",
 	"netprofm",
 	"WinHttpAutoProxySvc",
