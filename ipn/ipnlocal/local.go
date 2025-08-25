@@ -4896,36 +4896,34 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 // TODO(danderson): we shouldn't be mangling hostinfo here after
 // painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices() {
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
+	// Check the control client, hostinfo, and services under the mutex.
+	// On return, either both the client and hostinfo are nil, or both are non-nil.
+	// When non-nil, the Hostinfo is a clone of the value carried by b, safe to modify.
+	cc, hi, peerAPIServices := func() (controlclient.Client, *tailcfg.Hostinfo, []tailcfg.Service) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
 
-	cc := b.cc
-	if cc == nil {
-		// Control client isn't up yet.
+		if b.cc == nil {
+			return nil, nil, nil // control client isn't up yet
+		} else if b.hostinfo == nil {
+			b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
+			return nil, nil, nil
+		}
+		svc := b.peerAPIServicesLocked()
+		if b.egg {
+			svc = append(svc, tailcfg.Service{Proto: "egg", Port: 1})
+		}
+		// Make a clone of hostinfo so we can mutate the service field, below.
+		return b.cc, b.hostinfo.Clone(), svc
+	}()
+	if cc == nil || hi == nil {
 		return
 	}
-	if b.hostinfo == nil {
-		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
-		return
-	}
-	peerAPIServices := b.peerAPIServicesLocked()
-	if b.egg {
-		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg", Port: 1})
-	}
 
-	// TODO(maisem,bradfitz): store hostinfo as a view, not as a mutable struct.
-	hi := *b.hostinfo // shallow copy
-	unlock.UnlockEarly()
-
-	// Make a shallow copy of hostinfo so we can mutate
-	// at the Service field.
 	if !b.shouldUploadServices() {
 		hi.Services = []tailcfg.Service{}
 	}
-	// Don't mutate hi.Service's underlying array. Append to
-	// the slice with no free capacity.
-	c := len(hi.Services)
-	hi.Services = append(hi.Services[:c:c], peerAPIServices...)
+	hi.Services = append(hi.Services, peerAPIServices...)
 	hi.PushDeviceToken = b.pushDeviceToken.Load()
 
 	// Compare the expected ports from peerAPIServices to the actual ports in hi.Services.
@@ -4935,7 +4933,7 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 		b.logf("Hostinfo peerAPI ports changed: expected %v, got %v", expectedPorts, actualPorts)
 	}
 
-	cc.SetHostinfo(&hi)
+	cc.SetHostinfo(hi)
 }
 
 type portPair struct {
