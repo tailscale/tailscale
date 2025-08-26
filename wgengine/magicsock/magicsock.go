@@ -971,10 +971,26 @@ func (c *Conn) updateEndpoints(why string) {
 		return
 	}
 
+	if s, ok := c.getEnvEndpointAddress(); ok {
+		endpoints = append(endpoints, s)
+	}
+
 	if c.setEndpoints(endpoints) {
 		c.logEndpointChange(endpoints)
 		c.epFunc(endpoints)
 	}
+}
+
+// getEnvEndpointAddress reads the ENPOINT_ADDRESS enviroment variable
+// and adds it as a local endpoint.
+func (c *Conn) getEnvEndpointAddress() (tailcfg.Endpoint, bool) {
+	if e := envknob.String("ENDPOINT_ADDRESS"); e != "" {
+		if a, err := netip.ParseAddrPort(e); err == nil {
+  		return tailcfg.Endpoint{Addr: a, Type: 1}, true
+		}
+		c.logf("magicsock: ENDPOINT_ADDRESS '%s' is not a valid", e)
+	}
+	return tailcfg.Endpoint{}, false
 }
 
 // setEndpoints records the new endpoints, reporting whether they're changed.
