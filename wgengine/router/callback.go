@@ -30,6 +30,10 @@ type CallbackRouter struct {
 	// ignored thereafter.
 	InitialMTU uint32
 
+	// SetDebugLoggingEnabledFunc optionally specifies a function to call
+	// when the SetDebugLoggingEnabled method is called.
+	SetDebugLoggingEnabledFunc func(enabled bool)
+
 	mu        sync.Mutex    // protects all the following
 	didSetMTU bool          // if we set the MTU already
 	rcfg      *Config       // last applied router config
@@ -61,6 +65,13 @@ func (r *CallbackRouter) Set(rcfg *Config) error {
 // to know what the magicsock UDP port is.
 func (r *CallbackRouter) UpdateMagicsockPort(_ uint16, _ string) error {
 	return nil
+}
+
+// SetDebugLoggingEnabled implements the Router interface.
+func (r *CallbackRouter) SetDebugLoggingEnabled(enabled bool) {
+	if r.SetDebugLoggingEnabledFunc != nil {
+		r.SetDebugLoggingEnabledFunc(enabled)
+	}
 }
 
 // SetDNS implements dns.OSConfigurator.
