@@ -59,6 +59,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
@@ -455,7 +456,8 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func newTestLocalBackend(t testing.TB) *LocalBackend {
-	return newTestLocalBackendWithSys(t, tsd.NewSystem())
+	bus := eventbustest.NewBus(t)
+	return newTestLocalBackendWithSys(t, tsd.NewSystemWithBus(bus))
 }
 
 // newTestLocalBackendWithSys creates a new LocalBackend with the given tsd.System.
@@ -533,7 +535,6 @@ func TestZeroExitNodeViaLocalAPI(t *testing.T) {
 			ExitNodeID: "",
 		},
 	}, user)
-
 	if err != nil {
 		t.Fatalf("enabling first exit node: %v", err)
 	}
@@ -543,7 +544,6 @@ func TestZeroExitNodeViaLocalAPI(t *testing.T) {
 	if got, want := pv.InternalExitNodePrior(), tailcfg.StableNodeID(""); got != want {
 		t.Fatalf("unexpected InternalExitNodePrior %q, want: %q", got, want)
 	}
-
 }
 
 func TestSetUseExitNodeEnabled(t *testing.T) {
@@ -3619,7 +3619,8 @@ func TestPreferencePolicyInfo(t *testing.T) {
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
 
-					sys := tsd.NewSystem()
+					bus := eventbustest.NewBus(t)
+					sys := tsd.NewSystemWithBus(bus)
 					sys.PolicyClient.Set(polc)
 
 					lb := newTestLocalBackendWithSys(t, sys)
@@ -5786,7 +5787,8 @@ func TestNotificationTargetMatch(t *testing.T) {
 type newTestControlFn func(tb testing.TB, opts controlclient.Options) controlclient.Client
 
 func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl newTestControlFn) *LocalBackend {
-	return newLocalBackendWithSysAndTestControl(t, enableLogging, tsd.NewSystem(), newControl)
+	bus := eventbustest.NewBus(t)
+	return newLocalBackendWithSysAndTestControl(t, enableLogging, tsd.NewSystemWithBus(bus), newControl)
 }
 
 func newLocalBackendWithSysAndTestControl(t *testing.T, enableLogging bool, sys *tsd.System, newControl newTestControlFn) *LocalBackend {
@@ -5945,7 +5947,6 @@ func (w *notificationWatcher) watch(mask ipn.NotifyWatchOpt, wanted []wantedNoti
 
 			return true
 		})
-
 	}()
 	<-watchAddedCh
 }

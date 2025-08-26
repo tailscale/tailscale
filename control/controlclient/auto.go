@@ -126,9 +126,10 @@ type Auto struct {
 
 	mu sync.Mutex // mutex guards the following fields
 
-	wantLoggedIn bool   // whether the user wants to be logged in per last method call
-	urlToVisit   string // the last url we were told to visit
-	expiry       time.Time
+	wantLoggedIn    bool   // whether the user wants to be logged in per last method call
+	urlToVisit      string // the last url we were told to visit
+	expiry          time.Time
+	controlClientID int64 // Random ID used to differentiate clients for consumers of messages.
 
 	// lastUpdateGen is the gen of last update we had an update worth sending to
 	// the server.
@@ -205,7 +206,6 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		}
 	})
 	return c, nil
-
 }
 
 // SetPaused controls whether HTTP activity should be paused.
@@ -422,6 +422,11 @@ func (c *Auto) unpausedChanLocked() <-chan bool {
 	unpaused := make(chan bool, 1)
 	c.unpauseWaiters = append(c.unpauseWaiters, unpaused)
 	return unpaused
+}
+
+// ClientID returns the ClientID of the controlClient
+func (c *Auto) ClientID() int64 {
+	return c.controlClientID
 }
 
 // mapRoutineState is the state of Auto.mapRoutine while it's running.

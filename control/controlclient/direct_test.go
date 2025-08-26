@@ -17,12 +17,14 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 func TestNewDirect(t *testing.T) {
 	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
+	bus := eventbustest.NewBus(t)
 
 	k := key.NewMachine()
 	opts := Options{
@@ -32,6 +34,7 @@ func TestNewDirect(t *testing.T) {
 			return k, nil
 		},
 		Dialer: tsdial.NewDialer(netmon.NewStatic()),
+		Bus:    bus,
 	}
 	c, err := NewDirect(opts)
 	if err != nil {
@@ -99,6 +102,7 @@ func TestTsmpPing(t *testing.T) {
 	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
+	bus := eventbustest.NewBus(t)
 
 	k := key.NewMachine()
 	opts := Options{
@@ -108,6 +112,7 @@ func TestTsmpPing(t *testing.T) {
 			return k, nil
 		},
 		Dialer: tsdial.NewDialer(netmon.NewStatic()),
+		Bus:    bus,
 	}
 
 	c, err := NewDirect(opts)
