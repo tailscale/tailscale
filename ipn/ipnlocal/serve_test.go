@@ -33,6 +33,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/syspolicy/policyclient"
@@ -240,11 +241,15 @@ func TestServeConfigForeground(t *testing.T) {
 
 	err := b.SetServeConfig(&ipn.ServeConfig{
 		Foreground: map[string]*ipn.ServeConfig{
-			session1: {TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {TCPForward: "http://localhost:3000"}},
+			session1: {
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {TCPForward: "http://localhost:3000"},
+				},
 			},
-			session2: {TCP: map[uint16]*ipn.TCPPortHandler{
-				999: {TCPForward: "http://localhost:4000"}},
+			session2: {
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					999: {TCPForward: "http://localhost:4000"},
+				},
 			},
 		},
 	}, "")
@@ -267,8 +272,10 @@ func TestServeConfigForeground(t *testing.T) {
 			5000: {TCPForward: "http://localhost:5000"},
 		},
 		Foreground: map[string]*ipn.ServeConfig{
-			session2: {TCP: map[uint16]*ipn.TCPPortHandler{
-				999: {TCPForward: "http://localhost:4000"}},
+			session2: {
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					999: {TCPForward: "http://localhost:4000"},
+				},
 			},
 		},
 	}, "")
@@ -491,7 +498,6 @@ func TestServeConfigServices(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestServeConfigETag(t *testing.T) {
@@ -659,6 +665,7 @@ func TestServeHTTPProxyPath(t *testing.T) {
 		})
 	}
 }
+
 func TestServeHTTPProxyHeaders(t *testing.T) {
 	b := newTestBackend(t)
 
@@ -859,7 +866,6 @@ func Test_reverseProxyConfiguration(t *testing.T) {
 			wantsURL:      mustCreateURL(t, "https://example3.com"),
 		},
 	})
-
 }
 
 func mustCreateURL(t *testing.T, u string) url.URL {
@@ -878,7 +884,8 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 		logf = logger.WithPrefix(tstest.WhileTestRunningLogger(t), "... ")
 	}
 
-	sys := tsd.NewSystem()
+	bus := eventbustest.NewBus(t)
+	sys := tsd.NewSystemWithBus(bus)
 
 	for _, o := range opts {
 		switch v := o.(type) {
@@ -952,13 +959,13 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 func TestServeFileOrDirectory(t *testing.T) {
 	td := t.TempDir()
 	writeFile := func(suffix, contents string) {
-		if err := os.WriteFile(filepath.Join(td, suffix), []byte(contents), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(td, suffix), []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	writeFile("foo", "this is foo")
 	writeFile("bar", "this is bar")
-	os.MkdirAll(filepath.Join(td, "subdir"), 0700)
+	os.MkdirAll(filepath.Join(td, "subdir"), 0o700)
 	writeFile("subdir/file-a", "this is A")
 	writeFile("subdir/file-b", "this is B")
 	writeFile("subdir/file-c", "this is C")
