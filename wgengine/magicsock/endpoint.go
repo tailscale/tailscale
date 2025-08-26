@@ -994,13 +994,30 @@ func (de *endpoint) discoPing(res *ipnstate.PingResult, size int, cb func(*ipnst
 	if derpAddr.IsValid() {
 		de.startDiscoPingLocked(epAddr{ap: derpAddr}, now, pingCLI, size, resCB)
 	}
-	if udpAddr.ap.IsValid() && now.Before(de.trustBestAddrUntil) {
-		// Already have an active session, so just ping the address we're using.
-		// Otherwise "tailscale ping" results to a node on the local network
-		// can look like they're bouncing between, say 10.0.0.0/9 and the peer's
-		// IPv6 address, both 1ms away, and it's random who replies first.
+
+	switch {
+	case udpAddr.ap.IsValid() && now.Before(de.trustBestAddrUntil):
+		// We have a "trusted" direct OR peer relay address, ping it.
 		de.startDiscoPingLocked(udpAddr, now, pingCLI, size, resCB)
-	} else {
+		if !udpAddr.vni.IsSet() {
+			// If the path is direct we do not want to fallthrough to pinging
+			// all candidate direct paths, otherwise "tailscale ping" results to
+			// a node on the local network can look like they're bouncing
+			// between, say 10.0.0.0/8 and the peer's IPv6 address, both 1ms
+			// away, and it's random who replies first. cb() is called with the
+			// first reply, vs background path discovery that is subject to
+			// betterAddr() comparison and hysteresis
+			break
+		}
+		// If the trusted path is via a peer relay we want to fallthrough in
+		// order to also try all candidate direct paths.
+		fallthrough
+	default:
+		// Ping all candidate direct paths. This work overlaps with what
+		// [de.heartbeat] will periodically fire when it calls
+		// [de.sendDiscoPingsLocked], but a user-initiated [pingCLI] is a
+		// "do it now" operation that should not be subject to
+		// [heartbeatInterval] tick or [discoPingInterval] rate-limiting.
 		for ep := range de.endpointState {
 			de.startDiscoPingLocked(epAddr{ap: ep}, now, pingCLI, size, resCB)
 		}
