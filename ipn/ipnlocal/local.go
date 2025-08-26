@@ -7281,6 +7281,10 @@ func (b *LocalBackend) initTKALocked() error {
 		if err != nil {
 			return fmt.Errorf("opening tailchonk: %v", err)
 		}
+		// Actually delete data which has been purged for 7 days:
+		if err := storage.CollectGarbage(7 * 24 * time.Hour); err != nil {
+			b.logf("tka garbage collection failed: %v", err)
+		}
 		authority, err := tka.Open(storage)
 		if err != nil {
 			return fmt.Errorf("initializing tka: %v", err)

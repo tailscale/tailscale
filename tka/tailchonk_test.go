@@ -639,6 +639,7 @@ func TestCompact(t *testing.T) {
 	// OLD is deleted because it does not match retention criteria, and
 	// though it is a descendant of the new lastActiveAncestor (C), it is not a
 	// descendant of a retained AUM.
+	// O is deleted because it is orphaned.
 	// G, & H are retained as recent (MinChain=2) ancestors of HEAD.
 	// E & F are retained because they are between retained AUMs (G+) and
 	// their newest checkpoint ancestor.
@@ -657,6 +658,9 @@ func TestCompact(t *testing.T) {
                        |  -> F1 -> F2       | -> G2
                        |  -> OLD
 
+        // Orphaned AUM
+        O
+
         // make {A,B,C,D} compaction candidates
         A.template = checkpoint
         B.template = checkpoint
@@ -667,12 +671,13 @@ func TestCompact(t *testing.T) {
         F1.hashSeed = 1
         OLD.hashSeed = 2
         G2.hashSeed = 3
+        O.hashSeed = 4
     `, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState}))
 
 	storage := &compactingChonkFake{
 		aumAge:     map[AUMHash]time.Time{(c.AUMHashes["F1"]): time.Now()},
 		t:          t,
-		wantDelete: []AUMHash{c.AUMHashes["A"], c.AUMHashes["B"], c.AUMHashes["OLD"]},
+		wantDelete: []AUMHash{c.AUMHashes["A"], c.AUMHashes["B"], c.AUMHashes["O"], c.AUMHashes["OLD"]},
 	}
 
 	cloneMem(c.Chonk().(*Mem), &storage.Mem)
@@ -689,5 +694,89 @@ func TestCompact(t *testing.T) {
 		for name, hash := range c.AUMHashes {
 			t.Logf("AUM[%q] = %v", name, hash)
 		}
+	}
+}
+
+func TestCollectGarbage(t *testing.T) {
+	fakeState := &State{
+		Keys:               []Key{{Kind: Key25519, Votes: 1}},
+		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
+	}
+
+	c := newTestchain(t, `
+        A -> B -> C -> C2 -> D -> E -> F -> G -> H
+                       |  -> OLD            | -> G2
+
+        // make {A,B,C,D} compaction candidates
+        A.template = checkpoint
+        B.template = checkpoint
+        C.template = checkpoint
+        D.template = checkpoint
+
+        // tweak seeds of forks so hashes arent identical
+        OLD.hashSeed = 2
+        G2.hashSeed = 3
+    `, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState}))
+
+	// Populate a *FS chonk.
+	storage, err := ChonkDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, update := range c.AUMs {
+		if err := storage.CommitVerifiedAUMs([]AUM{update}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := storage.SetLastActiveAncestor(c.AUMHashes["A"]); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run compaction.
+	lastActiveAncestor, err := Compact(storage, c.AUMHashes["H"], CompactionOptions{MinChain: 2, MinAge: 1})
+	if err != nil {
+		t.Errorf("Compact() failed: %v", err)
+	}
+	if lastActiveAncestor != c.AUMHashes["D"] {
+		t.Errorf("last active ancestor = %v, want %v", lastActiveAncestor, c.AUMHashes["C"])
+	}
+
+	deletedAUMs := []AUMHash{c.AUMHashes["A"], c.AUMHashes["B"], c.AUMHashes["C"], c.AUMHashes["C2"], c.AUMHashes["OLD"]}
+
+	// Make sure deleted AUMs are unreadable.
+	for _, h := range deletedAUMs {
+		if _, err := storage.AUM(h); err != os.ErrNotExist {
+			t.Errorf("storage.AUM(%v).err = %v, want ErrNotExist", h, err)
+		}
+	}
+
+	if err := storage.CollectGarbage(0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make sure files for deleted AUMs are gone.
+	for _, h := range deletedAUMs {
+		dir, base := storage.aumDir(h)
+		path := filepath.Join(dir, base)
+		// C2 is excluded, because its child D exists and the file
+		// stores the parent->child relationship.
+		if _, err := os.Stat(path); err == nil && h != c.AUMHashes["C2"] {
+			t.Errorf("file for deleted AUM %v exists", h)
+		}
+	}
+
+	if t.Failed() {
+		for name, hash := range c.AUMHashes {
+			t.Logf("AUM[%q] = %v", name, hash)
+		}
+	}
+
+	// Lastly, lets make sure an authority can start from the garbage-collected state.
+	a, err := Open(storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Head() != c.AUMHashes["H"] {
+		t.Errorf("head = %v, want %v", a.Head(), c.AUMHashes["H"])
 	}
 }
