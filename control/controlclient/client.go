@@ -81,6 +81,9 @@ type Client interface {
 	// in a separate http request. It has nothing to do with the rest of
 	// the state machine.
 	UpdateEndpoints(endpoints []tailcfg.Endpoint)
+	// ClientID returns the ClientID of a client. This ID is meant to
+	// distinguish one client from another.
+	ClientID() int64
 }
 
 // UserVisibleError is an error that should be shown to users.

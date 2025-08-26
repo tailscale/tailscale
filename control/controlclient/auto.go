@@ -205,7 +205,6 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		}
 	})
 	return c, nil
-
 }
 
 // SetPaused controls whether HTTP activity should be paused.
@@ -422,6 +421,11 @@ func (c *Auto) unpausedChanLocked() <-chan bool {
 	unpaused := make(chan bool, 1)
 	c.unpauseWaiters = append(c.unpauseWaiters, unpaused)
 	return unpaused
+}
+
+// ClientID returns the ClientID of the direct controlClient
+func (c *Auto) ClientID() int64 {
+	return c.direct.ClientID()
 }
 
 // mapRoutineState is the state of Auto.mapRoutine while it's running.
