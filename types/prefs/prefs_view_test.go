@@ -95,6 +95,9 @@ func (v TestPrefsView) AddrItem() Item[netip.Addr]               { return v.ж.A
 func (v TestPrefsView) StringStringMap() MapView[string, string] { return v.ж.StringStringMap.View() }
 func (v TestPrefsView) IntStringMap() MapView[int, string]       { return v.ж.IntStringMap.View() }
 func (v TestPrefsView) AddrIntMap() MapView[netip.Addr, int]     { return v.ж.AddrIntMap.View() }
+
+// Bundles are complex preferences that usually consist of
+// multiple parameters that must be configured atomically.
 func (v TestPrefsView) Bundle1() ItemView[*TestBundle, TestBundleView] {
 	return ItemViewOf(&v.ж.Bundle1)
 }
@@ -116,6 +119,10 @@ func (v TestPrefsView) IntBundleMap() StructMapView[int, *TestBundle, TestBundle
 func (v TestPrefsView) AddrBundleMap() StructMapView[netip.Addr, *TestBundle, TestBundleView] {
 	return StructMapViewOf(&v.ж.AddrBundleMap)
 }
+
+// Group is a nested struct that contains one or more preferences.
+// Each preference in a group can be configured individually.
+// Preference groups should be included directly rather than by pointers.
 func (v TestPrefsView) Group() TestPrefsGroup { return v.ж.Group }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.

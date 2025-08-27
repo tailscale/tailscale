@@ -86,11 +86,18 @@ func (v *PersistView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v PersistView) PrivateNodeKey() key.NodePrivate    { return v.ж.PrivateNodeKey }
+func (v PersistView) PrivateNodeKey() key.NodePrivate { return v.ж.PrivateNodeKey }
+
+// needed to request key rotation
 func (v PersistView) OldPrivateNodeKey() key.NodePrivate { return v.ж.OldPrivateNodeKey }
 func (v PersistView) UserProfile() tailcfg.UserProfile   { return v.ж.UserProfile }
 func (v PersistView) NetworkLockKey() key.NLPrivate      { return v.ж.NetworkLockKey }
 func (v PersistView) NodeID() tailcfg.StableNodeID       { return v.ж.NodeID }
+
+// DisallowedTKAStateIDs stores the tka.State.StateID values which
+// this node will not operate network lock on. This is used to
+// prevent bootstrapping TKA onto a key authority which was forcibly
+// disabled.
 func (v PersistView) DisallowedTKAStateIDs() views.Slice[string] {
 	return views.SliceOf(v.ж.DisallowedTKAStateIDs)
 }

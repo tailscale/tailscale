@@ -89,14 +89,47 @@ func (v *LoginProfileView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v LoginProfileView) ID() ProfileID                    { return v.ж.ID }
-func (v LoginProfileView) Name() string                     { return v.ж.Name }
-func (v LoginProfileView) NetworkProfile() NetworkProfile   { return v.ж.NetworkProfile }
-func (v LoginProfileView) Key() StateKey                    { return v.ж.Key }
+// ID is a unique identifier for this profile.
+// It is assigned on creation and never changes.
+// It may seem redundant to have both ID and UserProfile.ID
+// but they are different things. UserProfile.ID may change
+// over time (e.g. if a device is tagged).
+func (v LoginProfileView) ID() ProfileID { return v.ж.ID }
+
+// Name is the user-visible name of this profile.
+// It is filled in from the UserProfile.LoginName field.
+func (v LoginProfileView) Name() string { return v.ж.Name }
+
+// NetworkProfile is a subset of netmap.NetworkMap that we
+// store to remember information about the tailnet that this
+// profile was logged in with.
+//
+// This field was added on 2023-11-17.
+func (v LoginProfileView) NetworkProfile() NetworkProfile { return v.ж.NetworkProfile }
+
+// Key is the StateKey under which the profile is stored.
+// It is assigned once at profile creation time and never changes.
+func (v LoginProfileView) Key() StateKey { return v.ж.Key }
+
+// UserProfile is the server provided UserProfile for this profile.
+// This is updated whenever the server provides a new UserProfile.
 func (v LoginProfileView) UserProfile() tailcfg.UserProfile { return v.ж.UserProfile }
-func (v LoginProfileView) NodeID() tailcfg.StableNodeID     { return v.ж.NodeID }
-func (v LoginProfileView) LocalUserID() WindowsUserID       { return v.ж.LocalUserID }
-func (v LoginProfileView) ControlURL() string               { return v.ж.ControlURL }
+
+// NodeID is the NodeID of the node that this profile is logged into.
+// This should be stable across tagging and untagging nodes.
+// It may seem redundant to check against both the UserProfile.UserID
+// and the NodeID. However the NodeID can change if the node is deleted
+// from the admin panel.
+func (v LoginProfileView) NodeID() tailcfg.StableNodeID { return v.ж.NodeID }
+
+// LocalUserID is the user ID of the user who created this profile.
+// It is only relevant on Windows where we have a multi-user system.
+// It is assigned once at profile creation time and never changes.
+func (v LoginProfileView) LocalUserID() WindowsUserID { return v.ж.LocalUserID }
+
+// ControlURL is the URL of the control server that this profile is logged
+// into.
+func (v LoginProfileView) ControlURL() string { return v.ж.ControlURL }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _LoginProfileViewNeedsRegeneration = LoginProfile(struct {
@@ -177,48 +210,253 @@ func (v *PrefsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v PrefsView) ControlURL() string                          { return v.ж.ControlURL }
-func (v PrefsView) RouteAll() bool                              { return v.ж.RouteAll }
-func (v PrefsView) ExitNodeID() tailcfg.StableNodeID            { return v.ж.ExitNodeID }
-func (v PrefsView) ExitNodeIP() netip.Addr                      { return v.ж.ExitNodeIP }
-func (v PrefsView) AutoExitNode() ExitNodeExpression            { return v.ж.AutoExitNode }
+// ControlURL is the URL of the control server to use.
+//
+// If empty, the default for new installs, DefaultControlURL
+// is used. It's set non-empty once the daemon has been started
+// for the first time.
+//
+// TODO(apenwarr): Make it safe to update this with EditPrefs().
+// Right now, you have to pass it in the initial prefs in Start(),
+// which is the only code that actually uses the ControlURL value.
+// It would be more consistent to restart controlclient
+// automatically whenever this variable changes.
+//
+// Meanwhile, you have to provide this as part of
+// Options.LegacyMigrationPrefs or Options.UpdatePrefs when
+// calling Backend.Start().
+func (v PrefsView) ControlURL() string { return v.ж.ControlURL }
+
+// RouteAll specifies whether to accept subnets advertised by
+// other nodes on the Tailscale network. Note that this does not
+// include default routes (0.0.0.0/0 and ::/0), those are
+// controlled by ExitNodeID/IP below.
+func (v PrefsView) RouteAll() bool { return v.ж.RouteAll }
+
+// ExitNodeID and ExitNodeIP specify the node that should be used
+// as an exit node for internet traffic. At most one of these
+// should be non-zero.
+//
+// The preferred way to express the chosen node is ExitNodeID, but
+// in some cases it's not possible to use that ID (e.g. in the
+// linux CLI, before tailscaled has a netmap). For those
+// situations, we allow specifying the exit node by IP, and
+// ipnlocal.LocalBackend will translate the IP into an ID when the
+// node is found in the netmap.
+//
+// If the selected exit node doesn't exist (e.g. it's not part of
+// the current tailnet), or it doesn't offer exit node services, a
+// blackhole route will be installed on the local system to
+// prevent any traffic escaping to the local network.
+func (v PrefsView) ExitNodeID() tailcfg.StableNodeID { return v.ж.ExitNodeID }
+func (v PrefsView) ExitNodeIP() netip.Addr           { return v.ж.ExitNodeIP }
+
+// AutoExitNode is an optional expression that specifies whether and how
+// tailscaled should pick an exit node automatically.
+//
+// If specified, tailscaled will use an exit node based on the expression,
+// and will re-evaluate the selection periodically as network conditions,
+// available exit nodes, or policy settings change. A blackhole route will
+// be installed to prevent traffic from escaping to the local network until
+// an exit node is selected. It takes precedence over ExitNodeID and ExitNodeIP.
+//
+// If empty, tailscaled will not automatically select an exit node.
+//
+// If the specified expression is invalid or unsupported by the client,
+// it falls back to the behavior of [AnyExitNode].
+//
+// As of 2025-07-02, the only supported value is [AnyExitNode].
+// It's a string rather than a boolean to allow future extensibility
+// (e.g., AutoExitNode = "mullvad" or AutoExitNode = "geo:us").
+func (v PrefsView) AutoExitNode() ExitNodeExpression { return v.ж.AutoExitNode }
+
+// InternalExitNodePrior is the most recently used ExitNodeID in string form. It is set by
+// the backend on transition from exit node on to off and used by the
+// backend.
+//
+// As an Internal field, it can't be set by LocalAPI clients, rather it is set indirectly
+// when the ExitNodeID value is zero'd and via the set-use-exit-node-enabled endpoint.
 func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.InternalExitNodePrior }
-func (v PrefsView) ExitNodeAllowLANAccess() bool                { return v.ж.ExitNodeAllowLANAccess }
-func (v PrefsView) CorpDNS() bool                               { return v.ж.CorpDNS }
-func (v PrefsView) RunSSH() bool                                { return v.ж.RunSSH }
-func (v PrefsView) RunWebClient() bool                          { return v.ж.RunWebClient }
-func (v PrefsView) WantRunning() bool                           { return v.ж.WantRunning }
-func (v PrefsView) LoggedOut() bool                             { return v.ж.LoggedOut }
-func (v PrefsView) ShieldsUp() bool                             { return v.ж.ShieldsUp }
-func (v PrefsView) AdvertiseTags() views.Slice[string]          { return views.SliceOf(v.ж.AdvertiseTags) }
-func (v PrefsView) Hostname() string                            { return v.ж.Hostname }
-func (v PrefsView) NotepadURLs() bool                           { return v.ж.NotepadURLs }
-func (v PrefsView) ForceDaemon() bool                           { return v.ж.ForceDaemon }
-func (v PrefsView) Egg() bool                                   { return v.ж.Egg }
+
+// ExitNodeAllowLANAccess indicates whether locally accessible subnets should be
+// routed directly or via the exit node.
+func (v PrefsView) ExitNodeAllowLANAccess() bool { return v.ж.ExitNodeAllowLANAccess }
+
+// CorpDNS specifies whether to install the Tailscale network's
+// DNS configuration, if it exists.
+func (v PrefsView) CorpDNS() bool { return v.ж.CorpDNS }
+
+// RunSSH bool is whether this node should run an SSH
+// server, permitting access to peers according to the
+// policies as configured by the Tailnet's admin(s).
+func (v PrefsView) RunSSH() bool { return v.ж.RunSSH }
+
+// RunWebClient bool is whether this node should expose
+// its web client over Tailscale at port 5252,
+// permitting access to peers according to the
+// policies as configured by the Tailnet's admin(s).
+func (v PrefsView) RunWebClient() bool { return v.ж.RunWebClient }
+
+// WantRunning indicates whether networking should be active on
+// this node.
+func (v PrefsView) WantRunning() bool { return v.ж.WantRunning }
+
+// LoggedOut indicates whether the user intends to be logged out.
+// There are other reasons we may be logged out, including no valid
+// keys.
+// We need to remember this state so that, on next startup, we can
+// generate the "Login" vs "Connect" buttons correctly, without having
+// to contact the server to confirm our nodekey status first.
+func (v PrefsView) LoggedOut() bool { return v.ж.LoggedOut }
+
+// ShieldsUp indicates whether to block all incoming connections,
+// regardless of the control-provided packet filter. If false, we
+// use the packet filter as provided. If true, we block incoming
+// connections. This overrides tailcfg.Hostinfo's ShieldsUp.
+func (v PrefsView) ShieldsUp() bool { return v.ж.ShieldsUp }
+
+// AdvertiseTags specifies tags that should be applied to this node, for
+// purposes of ACL enforcement. These can be referenced from the ACL policy
+// document. Note that advertising a tag on the client doesn't guarantee
+// that the control server will allow the node to adopt that tag.
+func (v PrefsView) AdvertiseTags() views.Slice[string] { return views.SliceOf(v.ж.AdvertiseTags) }
+
+// Hostname is the hostname to use for identifying the node. If
+// not set, os.Hostname is used.
+func (v PrefsView) Hostname() string { return v.ж.Hostname }
+
+// NotepadURLs is a debugging setting that opens OAuth URLs in
+// notepad.exe on Windows, rather than loading them in a browser.
+//
+// apenwarr 2020-04-29: Unfortunately this is still needed sometimes.
+// Windows' default browser setting is sometimes screwy and this helps
+// users narrow it down a bit.
+func (v PrefsView) NotepadURLs() bool { return v.ж.NotepadURLs }
+
+// ForceDaemon specifies whether a platform that normally
+// operates in "client mode" (that is, requires an active user
+// logged in with the GUI app running) should keep running after the
+// GUI ends and/or the user logs out.
+//
+// The only current applicable platform is Windows. This
+// forced Windows to go into "server mode" where Tailscale is
+// running even with no users logged in. This might also be
+// used for macOS in the future. This setting has no effect
+// for Linux/etc, which always operate in daemon mode.
+func (v PrefsView) ForceDaemon() bool { return v.ж.ForceDaemon }
+
+// Egg is a optional debug flag.
+func (v PrefsView) Egg() bool { return v.ж.Egg }
+
+// AdvertiseRoutes specifies CIDR prefixes to advertise into the
+// Tailscale network as reachable through the current
+// node.
 func (v PrefsView) AdvertiseRoutes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.AdvertiseRoutes)
 }
+
+// AdvertiseServices specifies the list of services that this
+// node can serve as a destination for. Note that an advertised
+// service must still go through the approval process from the
+// control server.
 func (v PrefsView) AdvertiseServices() views.Slice[string] {
 	return views.SliceOf(v.ж.AdvertiseServices)
 }
-func (v PrefsView) NoSNAT() bool                          { return v.ж.NoSNAT }
-func (v PrefsView) NoStatefulFiltering() opt.Bool         { return v.ж.NoStatefulFiltering }
+
+// NoSNAT specifies whether to source NAT traffic going to
+// destinations in AdvertiseRoutes. The default is to apply source
+// NAT, which makes the traffic appear to come from the router
+// machine rather than the peer's Tailscale IP.
+//
+// Disabling SNAT requires additional manual configuration in your
+// network to route Tailscale traffic back to the subnet relay
+// machine.
+//
+// Linux-only.
+func (v PrefsView) NoSNAT() bool { return v.ж.NoSNAT }
+
+// NoStatefulFiltering specifies whether to apply stateful filtering when
+// advertising routes in AdvertiseRoutes. The default is to not apply
+// stateful filtering.
+//
+// To allow inbound connections from advertised routes, both NoSNAT and
+// NoStatefulFiltering must be true.
+//
+// This is an opt.Bool because it was first added after NoSNAT, with a
+// backfill based on the value of that parameter. The backfill has been
+// removed since then, but the field remains an opt.Bool.
+//
+// Linux-only.
+func (v PrefsView) NoStatefulFiltering() opt.Bool { return v.ж.NoStatefulFiltering }
+
+// NetfilterMode specifies how much to manage netfilter rules for
+// Tailscale, if at all.
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }
-func (v PrefsView) OperatorUser() string                  { return v.ж.OperatorUser }
-func (v PrefsView) ProfileName() string                   { return v.ж.ProfileName }
-func (v PrefsView) AutoUpdate() AutoUpdatePrefs           { return v.ж.AutoUpdate }
-func (v PrefsView) AppConnector() AppConnectorPrefs       { return v.ж.AppConnector }
-func (v PrefsView) PostureChecking() bool                 { return v.ж.PostureChecking }
-func (v PrefsView) NetfilterKind() string                 { return v.ж.NetfilterKind }
+
+// OperatorUser is the local machine user name who is allowed to
+// operate tailscaled without being root or using sudo.
+func (v PrefsView) OperatorUser() string { return v.ж.OperatorUser }
+
+// ProfileName is the desired name of the profile. If empty, then the user's
+// LoginName is used. It is only used for display purposes in the client UI
+// and CLI.
+func (v PrefsView) ProfileName() string { return v.ж.ProfileName }
+
+// AutoUpdate sets the auto-update preferences for the node agent. See
+// AutoUpdatePrefs docs for more details.
+func (v PrefsView) AutoUpdate() AutoUpdatePrefs { return v.ж.AutoUpdate }
+
+// AppConnector sets the app connector preferences for the node agent. See
+// AppConnectorPrefs docs for more details.
+func (v PrefsView) AppConnector() AppConnectorPrefs { return v.ж.AppConnector }
+
+// PostureChecking enables the collection of information used for device
+// posture checks.
+//
+// Note: this should be named ReportPosture, but it was shipped as
+// PostureChecking in some early releases and this JSON field is written to
+// disk, so we just keep its old name. (akin to CorpDNS which is an internal
+// pref name that doesn't match the public interface)
+func (v PrefsView) PostureChecking() bool { return v.ж.PostureChecking }
+
+// NetfilterKind specifies what netfilter implementation to use.
+//
+// Linux-only.
+func (v PrefsView) NetfilterKind() string { return v.ж.NetfilterKind }
+
+// DriveShares are the configured DriveShares, stored in increasing order
+// by name.
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
 	return views.SliceOfViews[*drive.Share, drive.ShareView](v.ж.DriveShares)
 }
+
+// RelayServerPort is the UDP port number for the relay server to bind to,
+// on all interfaces. A non-nil zero value signifies a random unused port
+// should be used. A nil value signifies relay server functionality
+// should be disabled. This field is currently experimental, and therefore
+// no guarantees are made about its current naming and functionality when
+// non-nil/enabled.
 func (v PrefsView) RelayServerPort() views.ValuePointer[int] {
 	return views.ValuePointerOf(v.ж.RelayServerPort)
 }
 
+// AllowSingleHosts was a legacy field that was always true
+// for the past 4.5 years. It controlled whether Tailscale
+// peers got /32 or /127 routes for each other.
+// As of 2024-05-17 we're starting to ignore it, but to let
+// people still downgrade Tailscale versions and not break
+// all peer-to-peer networking we still write it to disk (as JSON)
+// so it can be loaded back by old versions.
+// TODO(bradfitz): delete this in 2025 sometime. See #12058.
 func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
-func (v PrefsView) Persist() persist.PersistView          { return v.ж.Persist.View() }
+
+// The Persist field is named 'Config' in the file for backward
+// compatibility with earlier versions.
+// TODO(apenwarr): We should move this out of here, it's not a pref.
+//
+//	We can maybe do that once we're sure which module should persist
+//	it (backend or frontend?)
+func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
@@ -324,33 +562,52 @@ func (v *ServeConfigView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// TCP are the list of TCP port numbers that tailscaled should handle for
+// the Tailscale IP addresses. (not subnet routers, etc)
 func (v ServeConfigView) TCP() views.MapFn[uint16, *TCPPortHandler, TCPPortHandlerView] {
 	return views.MapFnOf(v.ж.TCP, func(t *TCPPortHandler) TCPPortHandlerView {
 		return t.View()
 	})
 }
 
+// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
+// keyed by mount point ("/", "/foo", etc)
 func (v ServeConfigView) Web() views.MapFn[HostPort, *WebServerConfig, WebServerConfigView] {
 	return views.MapFnOf(v.ж.Web, func(t *WebServerConfig) WebServerConfigView {
 		return t.View()
 	})
 }
 
+// Services maps from service name (in the form "svc:dns-label") to a ServiceConfig.
+// Which describes the L3, L4, and L7 forwarding information for the service.
 func (v ServeConfigView) Services() views.MapFn[tailcfg.ServiceName, *ServiceConfig, ServiceConfigView] {
 	return views.MapFnOf(v.ж.Services, func(t *ServiceConfig) ServiceConfigView {
 		return t.View()
 	})
 }
 
+// AllowFunnel is the set of SNI:port values for which funnel
+// traffic is allowed, from trusted ingress peers.
 func (v ServeConfigView) AllowFunnel() views.Map[HostPort, bool] {
 	return views.MapOf(v.ж.AllowFunnel)
 }
 
+// Foreground is a map of an IPN Bus session ID to an alternate foreground serve config that's valid for the
+// life of that WatchIPNBus session ID. This allows the config to specify ephemeral configs that are used
+// in the CLI's foreground mode to ensure ungraceful shutdowns of either the client or the LocalBackend does not
+// expose ports that users are not aware of. In practice this contains any serve config set via 'tailscale
+// serve' command run without the '--bg' flag. ServeConfig contained by Foreground is not expected itself to contain
+// another Foreground block.
 func (v ServeConfigView) Foreground() views.MapFn[string, *ServeConfig, ServeConfigView] {
 	return views.MapFnOf(v.ж.Foreground, func(t *ServeConfig) ServeConfigView {
 		return t.View()
 	})
 }
+
+// ETag is the checksum of the serve config that's populated
+// by the LocalClient through the HTTP ETag header during a
+// GetServeConfig request and is translated to an If-Match header
+// during a SetServeConfig request.
 func (v ServeConfigView) ETag() string { return v.ж.ETag }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -430,17 +687,23 @@ func (v *ServiceConfigView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// TCP are the list of TCP port numbers that tailscaled should handle for
+// the Tailscale IP addresses. (not subnet routers, etc)
 func (v ServiceConfigView) TCP() views.MapFn[uint16, *TCPPortHandler, TCPPortHandlerView] {
 	return views.MapFnOf(v.ж.TCP, func(t *TCPPortHandler) TCPPortHandlerView {
 		return t.View()
 	})
 }
 
+// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
+// keyed by mount point ("/", "/foo", etc)
 func (v ServiceConfigView) Web() views.MapFn[HostPort, *WebServerConfig, WebServerConfigView] {
 	return views.MapFnOf(v.ж.Web, func(t *WebServerConfig) WebServerConfigView {
 		return t.View()
 	})
 }
+
+// Tun determines if the service should be using L3 forwarding (Tun mode).
 func (v ServiceConfigView) Tun() bool { return v.ж.Tun }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -517,9 +780,29 @@ func (v *TCPPortHandlerView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v TCPPortHandlerView) HTTPS() bool          { return v.ж.HTTPS }
-func (v TCPPortHandlerView) HTTP() bool           { return v.ж.HTTP }
-func (v TCPPortHandlerView) TCPForward() string   { return v.ж.TCPForward }
+// HTTPS, if true, means that tailscaled should handle this connection as an
+// HTTPS request as configured by ServeConfig.Web.
+//
+// It is mutually exclusive with TCPForward.
+func (v TCPPortHandlerView) HTTPS() bool { return v.ж.HTTPS }
+
+// HTTP, if true, means that tailscaled should handle this connection as an
+// HTTP request as configured by ServeConfig.Web.
+//
+// It is mutually exclusive with TCPForward.
+func (v TCPPortHandlerView) HTTP() bool { return v.ж.HTTP }
+
+// TCPForward is the IP:port to forward TCP connections to.
+// Whether or not TLS is terminated by tailscaled depends on
+// TerminateTLS.
+//
+// It is mutually exclusive with HTTPS.
+func (v TCPPortHandlerView) TCPForward() string { return v.ж.TCPForward }
+
+// TerminateTLS, if non-empty, means that tailscaled should terminate the
+// TLS connections before forwarding them to TCPForward, permitting only the
+// SNI name with this value. It is only used if TCPForward is non-empty.
+// (the HTTPS mode uses ServeConfig.Web)
 func (v TCPPortHandlerView) TerminateTLS() string { return v.ж.TerminateTLS }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -597,9 +880,14 @@ func (v *HTTPHandlerView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v HTTPHandlerView) Path() string  { return v.ж.Path }
+// absolute path to directory or file to serve
+func (v HTTPHandlerView) Path() string { return v.ж.Path }
+
+// http://localhost:3000/, localhost:3030, 3030
 func (v HTTPHandlerView) Proxy() string { return v.ж.Proxy }
-func (v HTTPHandlerView) Text() string  { return v.ж.Text }
+
+// plaintext to serve (primarily for testing)
+func (v HTTPHandlerView) Text() string { return v.ж.Text }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
@@ -675,6 +963,7 @@ func (v *WebServerConfigView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// mountPoint => handler
 func (v WebServerConfigView) Handlers() views.MapFn[string, *HTTPHandler, HTTPHandlerView] {
 	return views.MapFnOf(v.ж.Handlers, func(t *HTTPHandler) HTTPHandlerView {
 		return t.View()

@@ -84,10 +84,35 @@ func (v *ResolverView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// Addr is the address of the DNS resolver, one of:
+//   - A plain IP address for a "classic" UDP+TCP DNS resolver.
+//     This is the common format as sent by the control plane.
+//   - An IP:port, for tests.
+//   - "https://resolver.com/path" for DNS over HTTPS; currently
+//     as of 2022-09-08 only used for certain well-known resolvers
+//     (see the publicdns package) for which the IP addresses to dial DoH are
+//     known ahead of time, so bootstrap DNS resolution is not required.
+//   - "http://node-address:port/path" for DNS over HTTP over WireGuard. This
+//     is implemented in the PeerAPI for exit nodes and app connectors.
+//   - [TODO] "tls://resolver.com" for DNS over TCP+TLS
 func (v ResolverView) Addr() string { return v.ж.Addr }
+
+// BootstrapResolution is an optional suggested resolution for the
+// DoT/DoH resolver, if the resolver URL does not reference an IP
+// address directly.
+// BootstrapResolution may be empty, in which case clients should
+// look up the DoT/DoH server using their local "classic" DNS
+// resolver.
+//
+// As of 2022-09-08, BootstrapResolution is not yet used.
 func (v ResolverView) BootstrapResolution() views.Slice[netip.Addr] {
 	return views.SliceOf(v.ж.BootstrapResolution)
 }
+
+// UseWithExitNode designates that this resolver should continue to be used when an
+// exit node is in use. Normally, DNS resolution is delegated to the exit node but
+// there are situations where it is preferable to still use a Split DNS server and/or
+// global DNS server instead of the exit node.
 func (v ResolverView) UseWithExitNode() bool      { return v.ж.UseWithExitNode }
 func (v ResolverView) Equal(v2 ResolverView) bool { return v.ж.Equal(v2.ж) }
 

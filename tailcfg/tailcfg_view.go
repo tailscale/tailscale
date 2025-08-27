@@ -90,8 +90,12 @@ func (v *UserView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v UserView) ID() UserID            { return v.ж.ID }
-func (v UserView) DisplayName() string   { return v.ж.DisplayName }
+func (v UserView) ID() UserID { return v.ж.ID }
+
+// if non-empty overrides Login field
+func (v UserView) DisplayName() string { return v.ж.DisplayName }
+
+// if non-empty overrides Login field
 func (v UserView) ProfilePicURL() string { return v.ж.ProfilePicURL }
 func (v UserView) Created() time.Time    { return v.ж.Created }
 
@@ -172,53 +176,202 @@ func (v *NodeView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 func (v NodeView) ID() NodeID             { return v.ж.ID }
 func (v NodeView) StableID() StableNodeID { return v.ж.StableID }
-func (v NodeView) Name() string           { return v.ж.Name }
-func (v NodeView) User() UserID           { return v.ж.User }
-func (v NodeView) Sharer() UserID         { return v.ж.Sharer }
-func (v NodeView) Key() key.NodePublic    { return v.ж.Key }
-func (v NodeView) KeyExpiry() time.Time   { return v.ж.KeyExpiry }
+
+// Name is the FQDN of the node.
+// It is also the MagicDNS name for the node.
+// It has a trailing dot.
+// e.g. "host.tail-scale.ts.net."
+func (v NodeView) Name() string { return v.ж.Name }
+
+// User is the user who created the node. If ACL tags are in use for the
+// node then it doesn't reflect the ACL identity that the node is running
+// as.
+func (v NodeView) User() UserID { return v.ж.User }
+
+// Sharer, if non-zero, is the user who shared this node, if different than User.
+func (v NodeView) Sharer() UserID      { return v.ж.Sharer }
+func (v NodeView) Key() key.NodePublic { return v.ж.Key }
+
+// the zero value if this node does not expire
+func (v NodeView) KeyExpiry() time.Time { return v.ж.KeyExpiry }
 func (v NodeView) KeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
 	return views.ByteSliceOf(v.ж.KeySignature)
 }
-func (v NodeView) Machine() key.MachinePublic               { return v.ж.Machine }
-func (v NodeView) DiscoKey() key.DiscoPublic                { return v.ж.DiscoKey }
-func (v NodeView) Addresses() views.Slice[netip.Prefix]     { return views.SliceOf(v.ж.Addresses) }
-func (v NodeView) AllowedIPs() views.Slice[netip.Prefix]    { return views.SliceOf(v.ж.AllowedIPs) }
-func (v NodeView) Endpoints() views.Slice[netip.AddrPort]   { return views.SliceOf(v.ж.Endpoints) }
-func (v NodeView) LegacyDERPString() string                 { return v.ж.LegacyDERPString }
-func (v NodeView) HomeDERP() int                            { return v.ж.HomeDERP }
-func (v NodeView) Hostinfo() HostinfoView                   { return v.ж.Hostinfo }
-func (v NodeView) Created() time.Time                       { return v.ж.Created }
-func (v NodeView) Cap() CapabilityVersion                   { return v.ж.Cap }
-func (v NodeView) Tags() views.Slice[string]                { return views.SliceOf(v.ж.Tags) }
+func (v NodeView) Machine() key.MachinePublic { return v.ж.Machine }
+func (v NodeView) DiscoKey() key.DiscoPublic  { return v.ж.DiscoKey }
+
+// Addresses are the IP addresses of this Node directly.
+func (v NodeView) Addresses() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.Addresses) }
+
+// AllowedIPs are the IP ranges to route to this node.
+//
+// As of CapabilityVersion 112, this may be nil (null or undefined) on the wire
+// to mean the same as Addresses. Internally, it is always filled in with
+// its possibly-implicit value.
+func (v NodeView) AllowedIPs() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.AllowedIPs) }
+
+// IP+port (public via STUN, and local LANs)
+func (v NodeView) Endpoints() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Endpoints) }
+
+// LegacyDERPString is this node's home LegacyDERPString region ID integer, but shoved into an
+// IP:port string for legacy reasons. The IP address is always "127.3.3.40"
+// (a loopback address (127) followed by the digits over the letters DERP on
+// a QWERTY keyboard (3.3.40)). The "port number" is the home LegacyDERPString region ID
+// integer.
+//
+// Deprecated: HomeDERP has replaced this, but old servers might still send
+// this field. See tailscale/tailscale#14636. Do not use this field in code
+// other than in the upgradeNode func, which canonicalizes it to HomeDERP
+// if it arrives as a LegacyDERPString string on the wire.
+func (v NodeView) LegacyDERPString() string { return v.ж.LegacyDERPString }
+
+// HomeDERP is the modern version of the DERP string field, with just an
+// integer. The client advertises support for this as of capver 111.
+//
+// HomeDERP may be zero if not (yet) known, but ideally always be non-zero
+// for magicsock connectivity to function normally.
+func (v NodeView) HomeDERP() int          { return v.ж.HomeDERP }
+func (v NodeView) Hostinfo() HostinfoView { return v.ж.Hostinfo }
+func (v NodeView) Created() time.Time     { return v.ж.Created }
+
+// if non-zero, the node's capability version; old servers might not send
+func (v NodeView) Cap() CapabilityVersion { return v.ж.Cap }
+
+// Tags are the list of ACL tags applied to this node.
+// Tags take the form of `tag:<value>` where value starts
+// with a letter and only contains alphanumerics and dashes `-`.
+// Some valid tag examples:
+//
+//	`tag:prod`
+//	`tag:database`
+//	`tag:lab-1`
+func (v NodeView) Tags() views.Slice[string] { return views.SliceOf(v.ж.Tags) }
+
+// PrimaryRoutes are the routes from AllowedIPs that this node
+// is currently the primary subnet router for, as determined
+// by the control plane. It does not include the self address
+// values from Addresses that are in AllowedIPs.
 func (v NodeView) PrimaryRoutes() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.PrimaryRoutes) }
+
+// LastSeen is when the node was last online. It is not
+// updated when Online is true. It is nil if the current
+// node doesn't have permission to know, or the node
+// has never been online.
 func (v NodeView) LastSeen() views.ValuePointer[time.Time] {
 	return views.ValuePointerOf(v.ж.LastSeen)
 }
 
+// Online is whether the node is currently connected to the
+// coordination server.  A value of nil means unknown, or the
+// current node doesn't have permission to know.
 func (v NodeView) Online() views.ValuePointer[bool] { return views.ValuePointerOf(v.ж.Online) }
 
-func (v NodeView) MachineAuthorized() bool                   { return v.ж.MachineAuthorized }
+// TODO(crawshaw): replace with MachineStatus
+func (v NodeView) MachineAuthorized() bool { return v.ж.MachineAuthorized }
+
+// Capabilities are capabilities that the node has.
+// They're free-form strings, but should be in the form of URLs/URIs
+// such as:
+//
+//	"https://tailscale.com/cap/is-admin"
+//	"https://tailscale.com/cap/file-sharing"
+//
+// Deprecated: use CapMap instead. See https://github.com/tailscale/tailscale/issues/11508
 func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.SliceOf(v.ж.Capabilities) }
 
+// CapMap is a map of capabilities to their optional argument/data values.
+//
+// It is valid for a capability to not have any argument/data values; such
+// capabilities can be tested for using the HasCap method. These type of
+// capabilities are used to indicate that a node has a capability, but there
+// is no additional data associated with it. These were previously
+// represented by the Capabilities field, but can now be represented by
+// CapMap with an empty value.
+//
+// See NodeCapability for more information on keys.
+//
+// Metadata about nodes can be transmitted in 3 ways:
+//  1. MapResponse.Node.CapMap describes attributes that affect behavior for
+//     this node, such as which features have been enabled through the admin
+//     panel and any associated configuration details.
+//  2. MapResponse.PacketFilter(s) describes access (both IP and application
+//     based) that should be granted to peers.
+//  3. MapResponse.Peers[].CapMap describes attributes regarding a peer node,
+//     such as which features the peer supports or if that peer is preferred
+//     for a particular task vs other peers that could also be chosen.
 func (v NodeView) CapMap() views.MapSlice[NodeCapability, RawMessage] {
 	return views.MapSliceOf(v.ж.CapMap)
 }
-func (v NodeView) UnsignedPeerAPIOnly() bool    { return v.ж.UnsignedPeerAPIOnly }
-func (v NodeView) ComputedName() string         { return v.ж.ComputedName }
+
+// UnsignedPeerAPIOnly means that this node is not signed nor subject to TKA
+// restrictions. However, in exchange for that privilege, it does not get
+// network access. It can only access this node's peerapi, which may not let
+// it do anything. It is the tailscaled client's job to double-check the
+// MapResponse's PacketFilter to verify that its AllowedIPs will not be
+// accepted by the packet filter.
+func (v NodeView) UnsignedPeerAPIOnly() bool { return v.ж.UnsignedPeerAPIOnly }
+
+// MagicDNS base name (for normal non-shared-in nodes), FQDN (without trailing dot, for shared-in nodes), or Hostname (if no MagicDNS)
+func (v NodeView) ComputedName() string { return v.ж.ComputedName }
+
+// either "ComputedName" or "ComputedName (computedHostIfDifferent)", if computedHostIfDifferent is set
 func (v NodeView) ComputedNameWithHost() string { return v.ж.ComputedNameWithHost }
-func (v NodeView) DataPlaneAuditLogID() string  { return v.ж.DataPlaneAuditLogID }
-func (v NodeView) Expired() bool                { return v.ж.Expired }
+
+// DataPlaneAuditLogID is the per-node logtail ID used for data plane audit logging.
+func (v NodeView) DataPlaneAuditLogID() string { return v.ж.DataPlaneAuditLogID }
+
+// Expired is whether this node's key has expired. Control may send
+// this; clients are only allowed to set this from false to true. On
+// the client, this is calculated client-side based on a timestamp sent
+// from control, to avoid clock skew issues.
+func (v NodeView) Expired() bool { return v.ж.Expired }
+
+// SelfNodeV4MasqAddrForThisPeer is the IPv4 that this peer knows the current node as.
+// It may be empty if the peer knows the current node by its native
+// IPv4 address.
+// This field is only populated in a MapResponse for peers and not
+// for the current node.
+//
+// If set, it should be used to masquerade traffic originating from the
+// current node to this peer. The masquerade address is only relevant
+// for this peer and not for other peers.
+//
+// This only applies to traffic originating from the current node to the
+// peer or any of its subnets. Traffic originating from subnet routes will
+// not be masqueraded (e.g. in case of --snat-subnet-routes).
 func (v NodeView) SelfNodeV4MasqAddrForThisPeer() views.ValuePointer[netip.Addr] {
 	return views.ValuePointerOf(v.ж.SelfNodeV4MasqAddrForThisPeer)
 }
 
+// SelfNodeV6MasqAddrForThisPeer is the IPv6 that this peer knows the current node as.
+// It may be empty if the peer knows the current node by its native
+// IPv6 address.
+// This field is only populated in a MapResponse for peers and not
+// for the current node.
+//
+// If set, it should be used to masquerade traffic originating from the
+// current node to this peer. The masquerade address is only relevant
+// for this peer and not for other peers.
+//
+// This only applies to traffic originating from the current node to the
+// peer or any of its subnets. Traffic originating from subnet routes will
+// not be masqueraded (e.g. in case of --snat-subnet-routes).
 func (v NodeView) SelfNodeV6MasqAddrForThisPeer() views.ValuePointer[netip.Addr] {
 	return views.ValuePointerOf(v.ж.SelfNodeV6MasqAddrForThisPeer)
 }
 
+// IsWireGuardOnly indicates that this is a non-Tailscale WireGuard peer, it
+// is not expected to speak Disco or DERP, and it must have Endpoints in
+// order to be reachable.
 func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
-func (v NodeView) IsJailed() bool        { return v.ж.IsJailed }
+
+// IsJailed indicates that this node is jailed and should not be allowed
+// initiate connections, however outbound connections to it should still be
+// allowed.
+func (v NodeView) IsJailed() bool { return v.ж.IsJailed }
+
+// ExitNodeDNSResolvers is the list of DNS servers that should be used when this
+// node is marked IsWireGuardOnly and being used as an exit node.
 func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
 }
@@ -331,47 +484,144 @@ func (v *HostinfoView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v HostinfoView) IPNVersion() string                     { return v.ж.IPNVersion }
-func (v HostinfoView) FrontendLogID() string                  { return v.ж.FrontendLogID }
-func (v HostinfoView) BackendLogID() string                   { return v.ж.BackendLogID }
-func (v HostinfoView) OS() string                             { return v.ж.OS }
-func (v HostinfoView) OSVersion() string                      { return v.ж.OSVersion }
-func (v HostinfoView) Container() opt.Bool                    { return v.ж.Container }
-func (v HostinfoView) Env() string                            { return v.ж.Env }
-func (v HostinfoView) Distro() string                         { return v.ж.Distro }
-func (v HostinfoView) DistroVersion() string                  { return v.ж.DistroVersion }
-func (v HostinfoView) DistroCodeName() string                 { return v.ж.DistroCodeName }
-func (v HostinfoView) App() string                            { return v.ж.App }
-func (v HostinfoView) Desktop() opt.Bool                      { return v.ж.Desktop }
-func (v HostinfoView) Package() string                        { return v.ж.Package }
-func (v HostinfoView) DeviceModel() string                    { return v.ж.DeviceModel }
-func (v HostinfoView) PushDeviceToken() string                { return v.ж.PushDeviceToken }
-func (v HostinfoView) Hostname() string                       { return v.ж.Hostname }
-func (v HostinfoView) ShieldsUp() bool                        { return v.ж.ShieldsUp }
-func (v HostinfoView) ShareeNode() bool                       { return v.ж.ShareeNode }
-func (v HostinfoView) NoLogsNoSupport() bool                  { return v.ж.NoLogsNoSupport }
-func (v HostinfoView) WireIngress() bool                      { return v.ж.WireIngress }
-func (v HostinfoView) IngressEnabled() bool                   { return v.ж.IngressEnabled }
-func (v HostinfoView) AllowsUpdate() bool                     { return v.ж.AllowsUpdate }
-func (v HostinfoView) Machine() string                        { return v.ж.Machine }
-func (v HostinfoView) GoArch() string                         { return v.ж.GoArch }
-func (v HostinfoView) GoArchVar() string                      { return v.ж.GoArchVar }
-func (v HostinfoView) GoVersion() string                      { return v.ж.GoVersion }
-func (v HostinfoView) RoutableIPs() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.RoutableIPs) }
-func (v HostinfoView) RequestTags() views.Slice[string]       { return views.SliceOf(v.ж.RequestTags) }
-func (v HostinfoView) WoLMACs() views.Slice[string]           { return views.SliceOf(v.ж.WoLMACs) }
-func (v HostinfoView) Services() views.Slice[Service]         { return views.SliceOf(v.ж.Services) }
-func (v HostinfoView) NetInfo() NetInfoView                   { return v.ж.NetInfo.View() }
-func (v HostinfoView) SSH_HostKeys() views.Slice[string]      { return views.SliceOf(v.ж.SSH_HostKeys) }
-func (v HostinfoView) Cloud() string                          { return v.ж.Cloud }
-func (v HostinfoView) Userspace() opt.Bool                    { return v.ж.Userspace }
-func (v HostinfoView) UserspaceRouter() opt.Bool              { return v.ж.UserspaceRouter }
-func (v HostinfoView) AppConnector() opt.Bool                 { return v.ж.AppConnector }
-func (v HostinfoView) ServicesHash() string                   { return v.ж.ServicesHash }
-func (v HostinfoView) ExitNodeID() StableNodeID               { return v.ж.ExitNodeID }
-func (v HostinfoView) Location() LocationView                 { return v.ж.Location.View() }
-func (v HostinfoView) TPM() views.ValuePointer[TPMInfo]       { return views.ValuePointerOf(v.ж.TPM) }
+// version of this code (in version.Long format)
+func (v HostinfoView) IPNVersion() string { return v.ж.IPNVersion }
 
+// logtail ID of frontend instance
+func (v HostinfoView) FrontendLogID() string { return v.ж.FrontendLogID }
+
+// logtail ID of backend instance
+func (v HostinfoView) BackendLogID() string { return v.ж.BackendLogID }
+
+// operating system the client runs on (a version.OS value)
+func (v HostinfoView) OS() string { return v.ж.OS }
+
+// OSVersion is the version of the OS, if available.
+//
+// For Android, it's like "10", "11", "12", etc. For iOS and macOS it's like
+// "15.6.1" or "12.4.0". For Windows it's like "10.0.19044.1889". For
+// FreeBSD it's like "12.3-STABLE".
+//
+// For Linux, prior to Tailscale 1.32, we jammed a bunch of fields into this
+// string on Linux, like "Debian 10.4; kernel=xxx; container; env=kn" and so
+// on. As of Tailscale 1.32, this is simply the kernel version on Linux, like
+// "5.10.0-17-amd64".
+func (v HostinfoView) OSVersion() string { return v.ж.OSVersion }
+
+// best-effort whether the client is running in a container
+func (v HostinfoView) Container() opt.Bool { return v.ж.Container }
+
+// a hostinfo.EnvType in string form
+func (v HostinfoView) Env() string { return v.ж.Env }
+
+// "debian", "ubuntu", "nixos", ...
+func (v HostinfoView) Distro() string { return v.ж.Distro }
+
+// "20.04", ...
+func (v HostinfoView) DistroVersion() string { return v.ж.DistroVersion }
+
+// "jammy", "bullseye", ...
+func (v HostinfoView) DistroCodeName() string { return v.ж.DistroCodeName }
+
+// App is used to disambiguate Tailscale clients that run using tsnet.
+func (v HostinfoView) App() string { return v.ж.App }
+
+// if a desktop was detected on Linux
+func (v HostinfoView) Desktop() opt.Bool { return v.ж.Desktop }
+
+// Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
+func (v HostinfoView) Package() string { return v.ж.Package }
+
+// mobile phone model ("Pixel 3a", "iPhone12,3")
+func (v HostinfoView) DeviceModel() string { return v.ж.DeviceModel }
+
+// macOS/iOS APNs device token for notifications (and Android in the future)
+func (v HostinfoView) PushDeviceToken() string { return v.ж.PushDeviceToken }
+
+// name of the host the client runs on
+func (v HostinfoView) Hostname() string { return v.ж.Hostname }
+
+// indicates whether the host is blocking incoming connections
+func (v HostinfoView) ShieldsUp() bool { return v.ж.ShieldsUp }
+
+// indicates this node exists in netmap because it's owned by a shared-to user
+func (v HostinfoView) ShareeNode() bool { return v.ж.ShareeNode }
+
+// indicates that the user has opted out of sending logs and support
+func (v HostinfoView) NoLogsNoSupport() bool { return v.ж.NoLogsNoSupport }
+
+// WireIngress indicates that the node would like to be wired up server-side
+// (DNS, etc) to be able to use Tailscale Funnel, even if it's not currently
+// enabled. For example, the user might only use it for intermittent
+// foreground CLI serve sessions, for which they'd like it to work right
+// away, even if it's disabled most of the time. As an optimization, this is
+// only sent if IngressEnabled is false, as IngressEnabled implies that this
+// option is true.
+func (v HostinfoView) WireIngress() bool { return v.ж.WireIngress }
+
+// if the node has any funnel endpoint enabled
+func (v HostinfoView) IngressEnabled() bool { return v.ж.IngressEnabled }
+
+// indicates that the node has opted-in to admin-console-drive remote updates
+func (v HostinfoView) AllowsUpdate() bool { return v.ж.AllowsUpdate }
+
+// the current host's machine type (uname -m)
+func (v HostinfoView) Machine() string { return v.ж.Machine }
+
+// GOARCH value (of the built binary)
+func (v HostinfoView) GoArch() string { return v.ж.GoArch }
+
+// GOARM, GOAMD64, etc (of the built binary)
+func (v HostinfoView) GoArchVar() string { return v.ж.GoArchVar }
+
+// Go version binary was built with
+func (v HostinfoView) GoVersion() string { return v.ж.GoVersion }
+
+// set of IP ranges this client can route
+func (v HostinfoView) RoutableIPs() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.RoutableIPs) }
+
+// set of ACL tags this node wants to claim
+func (v HostinfoView) RequestTags() views.Slice[string] { return views.SliceOf(v.ж.RequestTags) }
+
+// MAC address(es) to send Wake-on-LAN packets to wake this node (lowercase hex w/ colons)
+func (v HostinfoView) WoLMACs() views.Slice[string] { return views.SliceOf(v.ж.WoLMACs) }
+
+// services advertised by this machine
+func (v HostinfoView) Services() views.Slice[Service] { return views.SliceOf(v.ж.Services) }
+func (v HostinfoView) NetInfo() NetInfoView           { return v.ж.NetInfo.View() }
+
+// if advertised
+func (v HostinfoView) SSH_HostKeys() views.Slice[string] { return views.SliceOf(v.ж.SSH_HostKeys) }
+func (v HostinfoView) Cloud() string                     { return v.ж.Cloud }
+
+// if the client is running in userspace (netstack) mode
+func (v HostinfoView) Userspace() opt.Bool { return v.ж.Userspace }
+
+// if the client's subnet router is running in userspace (netstack) mode
+func (v HostinfoView) UserspaceRouter() opt.Bool { return v.ж.UserspaceRouter }
+
+// if the client is running the app-connector service
+func (v HostinfoView) AppConnector() opt.Bool { return v.ж.AppConnector }
+
+// opaque hash of the most recent list of tailnet services, change in hash indicates config should be fetched via c2n
+func (v HostinfoView) ServicesHash() string { return v.ж.ServicesHash }
+
+// the client’s selected exit node, empty when unselected.
+func (v HostinfoView) ExitNodeID() StableNodeID { return v.ж.ExitNodeID }
+
+// Location represents geographical location data about a
+// Tailscale host. Location is optional and only set if
+// explicitly declared by a node.
+func (v HostinfoView) Location() LocationView { return v.ж.Location.View() }
+
+// TPM device metadata, if available
+func (v HostinfoView) TPM() views.ValuePointer[TPMInfo] { return views.ValuePointerOf(v.ж.TPM) }
+
+// StateEncrypted reports whether the node state is stored encrypted on
+// disk. The actual mechanism is platform-specific:
+//   - Apple nodes use the Keychain
+//   - Linux and Windows nodes use the TPM
+//   - Android apps use EncryptedSharedPreferences
 func (v HostinfoView) StateEncrypted() opt.Bool   { return v.ж.StateEncrypted }
 func (v HostinfoView) Equal(v2 HostinfoView) bool { return v.ж.Equal(v2.ж) }
 
@@ -487,22 +737,74 @@ func (v *NetInfoView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// MappingVariesByDestIP says whether the host's NAT mappings
+// vary based on the destination IP.
 func (v NetInfoView) MappingVariesByDestIP() opt.Bool { return v.ж.MappingVariesByDestIP }
-func (v NetInfoView) HairPinning() opt.Bool           { return v.ж.HairPinning }
-func (v NetInfoView) WorkingIPv6() opt.Bool           { return v.ж.WorkingIPv6 }
-func (v NetInfoView) OSHasIPv6() opt.Bool             { return v.ж.OSHasIPv6 }
-func (v NetInfoView) WorkingUDP() opt.Bool            { return v.ж.WorkingUDP }
-func (v NetInfoView) WorkingICMPv4() opt.Bool         { return v.ж.WorkingICMPv4 }
-func (v NetInfoView) HavePortMap() bool               { return v.ж.HavePortMap }
-func (v NetInfoView) UPnP() opt.Bool                  { return v.ж.UPnP }
-func (v NetInfoView) PMP() opt.Bool                   { return v.ж.PMP }
-func (v NetInfoView) PCP() opt.Bool                   { return v.ж.PCP }
-func (v NetInfoView) PreferredDERP() int              { return v.ж.PreferredDERP }
-func (v NetInfoView) LinkType() string                { return v.ж.LinkType }
 
+// HairPinning is their router does hairpinning.
+// It reports true even if there's no NAT involved.
+func (v NetInfoView) HairPinning() opt.Bool { return v.ж.HairPinning }
+
+// WorkingIPv6 is whether the host has IPv6 internet connectivity.
+func (v NetInfoView) WorkingIPv6() opt.Bool { return v.ж.WorkingIPv6 }
+
+// OSHasIPv6 is whether the OS supports IPv6 at all, regardless of
+// whether IPv6 internet connectivity is available.
+func (v NetInfoView) OSHasIPv6() opt.Bool { return v.ж.OSHasIPv6 }
+
+// WorkingUDP is whether the host has UDP internet connectivity.
+func (v NetInfoView) WorkingUDP() opt.Bool { return v.ж.WorkingUDP }
+
+// WorkingICMPv4 is whether ICMPv4 works.
+// Empty means not checked.
+func (v NetInfoView) WorkingICMPv4() opt.Bool { return v.ж.WorkingICMPv4 }
+
+// HavePortMap is whether we have an existing portmap open
+// (UPnP, PMP, or PCP).
+func (v NetInfoView) HavePortMap() bool { return v.ж.HavePortMap }
+
+// UPnP is whether UPnP appears present on the LAN.
+// Empty means not checked.
+func (v NetInfoView) UPnP() opt.Bool { return v.ж.UPnP }
+
+// PMP is whether NAT-PMP appears present on the LAN.
+// Empty means not checked.
+func (v NetInfoView) PMP() opt.Bool { return v.ж.PMP }
+
+// PCP is whether PCP appears present on the LAN.
+// Empty means not checked.
+func (v NetInfoView) PCP() opt.Bool { return v.ж.PCP }
+
+// PreferredDERP is this node's preferred (home) DERP region ID.
+// This is where the node expects to be contacted to begin a
+// peer-to-peer connection. The node might be be temporarily
+// connected to multiple DERP servers (to speak to other nodes
+// that are located elsewhere) but PreferredDERP is the region ID
+// that the node subscribes to traffic at.
+// Zero means disconnected or unknown.
+func (v NetInfoView) PreferredDERP() int { return v.ж.PreferredDERP }
+
+// LinkType is the current link type, if known.
+func (v NetInfoView) LinkType() string { return v.ж.LinkType }
+
+// DERPLatency is the fastest recent time to reach various
+// DERP STUN servers, in seconds. The map key is the
+// "regionID-v4" or "-v6"; it was previously the DERP server's
+// STUN host:port.
+//
+// This should only be updated rarely, or when there's a
+// material change, as any change here also gets uploaded to
+// the control plane.
 func (v NetInfoView) DERPLatency() views.Map[string, float64] { return views.MapOf(v.ж.DERPLatency) }
-func (v NetInfoView) FirewallMode() string                    { return v.ж.FirewallMode }
-func (v NetInfoView) String() string                          { return v.ж.String() }
+
+// FirewallMode encodes both which firewall mode was selected and why.
+// It is Linux-specific (at least as of 2023-08-19) and is meant to help
+// debug iptables-vs-nftables issues. The string is of the form
+// "{nft,ift}-REASON", like "nft-forced" or "ipt-default". Empty means
+// either not Linux or a configuration in which the host firewall rules
+// are not managed by tailscaled.
+func (v NetInfoView) FirewallMode() string { return v.ж.FirewallMode }
+func (v NetInfoView) String() string       { return v.ж.String() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NetInfoViewNeedsRegeneration = NetInfo(struct {
@@ -589,10 +891,19 @@ func (v *LoginView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v LoginView) ID() LoginID           { return v.ж.ID }
-func (v LoginView) Provider() string      { return v.ж.Provider }
-func (v LoginView) LoginName() string     { return v.ж.LoginName }
-func (v LoginView) DisplayName() string   { return v.ж.DisplayName }
+// unused in the Tailscale client
+func (v LoginView) ID() LoginID { return v.ж.ID }
+
+// "google", "github", "okta_foo", etc.
+func (v LoginView) Provider() string { return v.ж.Provider }
+
+// an email address or "email-ish" string (like alice@github)
+func (v LoginView) LoginName() string { return v.ж.LoginName }
+
+// from the IdP
+func (v LoginView) DisplayName() string { return v.ж.DisplayName }
+
+// from the IdP
 func (v LoginView) ProfilePicURL() string { return v.ж.ProfilePicURL }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -672,26 +983,82 @@ func (v *DNSConfigView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// Resolvers are the DNS resolvers to use, in order of preference.
 func (v DNSConfigView) Resolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.Resolvers)
 }
 
+// Routes maps DNS name suffixes to a set of DNS resolvers to
+// use. It is used to implement "split DNS" and other advanced DNS
+// routing overlays.
+//
+// Map keys are fully-qualified DNS name suffixes; they may
+// optionally contain a trailing dot but no leading dot.
+//
+// If the value is an empty slice, that means the suffix should still
+// be handled by Tailscale's built-in resolver (100.100.100.100), such
+// as for the purpose of handling ExtraRecords.
 func (v DNSConfigView) Routes() views.MapFn[string, []*dnstype.Resolver, views.SliceView[*dnstype.Resolver, dnstype.ResolverView]] {
 	return views.MapFnOf(v.ж.Routes, func(t []*dnstype.Resolver) views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 		return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](t)
 	})
 }
+
+// FallbackResolvers is like Resolvers, but is only used if a
+// split DNS configuration is requested in a configuration that
+// doesn't work yet without explicit default resolvers.
+// https://github.com/tailscale/tailscale/issues/1743
 func (v DNSConfigView) FallbackResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.FallbackResolvers)
 }
-func (v DNSConfigView) Domains() views.Slice[string]         { return views.SliceOf(v.ж.Domains) }
-func (v DNSConfigView) Proxied() bool                        { return v.ж.Proxied }
+
+// Domains are the search domains to use.
+// Search domains must be FQDNs, but *without* the trailing dot.
+func (v DNSConfigView) Domains() views.Slice[string] { return views.SliceOf(v.ж.Domains) }
+
+// Proxied turns on automatic resolution of hostnames for devices
+// in the network map, aka MagicDNS.
+// Despite the (legacy) name, does not necessarily cause request
+// proxying to be enabled.
+func (v DNSConfigView) Proxied() bool { return v.ж.Proxied }
+
+// Nameservers are the IP addresses of the global nameservers to use.
+//
+// Deprecated: this is only set and used by MapRequest.Version >=9 and <14. Use Resolvers instead.
 func (v DNSConfigView) Nameservers() views.Slice[netip.Addr] { return views.SliceOf(v.ж.Nameservers) }
-func (v DNSConfigView) CertDomains() views.Slice[string]     { return views.SliceOf(v.ж.CertDomains) }
+
+// CertDomains are the set of DNS names for which the control
+// plane server will assist with provisioning TLS
+// certificates. See SetDNSRequest, which can be used to
+// answer dns-01 ACME challenges for e.g. LetsEncrypt.
+// These names are FQDNs without trailing periods, and without
+// any "_acme-challenge." prefix.
+func (v DNSConfigView) CertDomains() views.Slice[string] { return views.SliceOf(v.ж.CertDomains) }
+
+// ExtraRecords contains extra DNS records to add to the
+// MagicDNS config.
 func (v DNSConfigView) ExtraRecords() views.Slice[DNSRecord] { return views.SliceOf(v.ж.ExtraRecords) }
+
+// ExitNodeFilteredSuffixes are the DNS suffixes that the
+// node, when being an exit node DNS proxy, should not answer.
+//
+// The entries do not contain trailing periods and are always
+// all lowercase.
+//
+// If an entry starts with a period, it's a suffix match (but
+// suffix ".a.b" doesn't match "a.b"; a prefix is required).
+//
+// If an entry does not start with a period, it's an exact
+// match.
+//
+// Matches are case insensitive.
 func (v DNSConfigView) ExitNodeFilteredSet() views.Slice[string] {
 	return views.SliceOf(v.ж.ExitNodeFilteredSet)
 }
+
+// TempCorpIssue13969 is a temporary (2023-08-16) field for an internal hack day prototype.
+// It contains a user inputed URL that should have a list of domains to be blocked.
+// See https://github.com/tailscale/corp/issues/13969.
 func (v DNSConfigView) TempCorpIssue13969() string { return v.ж.TempCorpIssue13969 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -775,14 +1142,26 @@ func (v *RegisterResponseView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v RegisterResponseView) User() User              { return v.ж.User }
-func (v RegisterResponseView) Login() Login            { return v.ж.Login }
-func (v RegisterResponseView) NodeKeyExpired() bool    { return v.ж.NodeKeyExpired }
+func (v RegisterResponseView) User() User   { return v.ж.User }
+func (v RegisterResponseView) Login() Login { return v.ж.Login }
+
+// if true, the NodeKey needs to be replaced
+func (v RegisterResponseView) NodeKeyExpired() bool { return v.ж.NodeKeyExpired }
+
+// TODO(crawshaw): move to using MachineStatus
 func (v RegisterResponseView) MachineAuthorized() bool { return v.ж.MachineAuthorized }
-func (v RegisterResponseView) AuthURL() string         { return v.ж.AuthURL }
+
+// if set, authorization pending
+func (v RegisterResponseView) AuthURL() string { return v.ж.AuthURL }
+
+// If set, this is the current node-key signature that needs to be
+// re-signed for the node's new node-key.
 func (v RegisterResponseView) NodeKeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
 	return views.ByteSliceOf(v.ж.NodeKeySignature)
 }
+
+// Error indicates that authorization failed. If this is non-empty,
+// other status fields should be ignored.
 func (v RegisterResponseView) Error() string { return v.ж.Error }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -863,6 +1242,7 @@ func (v *RegisterResponseAuthView) UnmarshalJSONFrom(dec *jsontext.Decoder) erro
 	return nil
 }
 
+// used by pre-1.66 Android only
 func (v RegisterResponseAuthView) Oauth2Token() views.ValuePointer[Oauth2Token] {
 	return views.ValuePointerOf(v.ж.Oauth2Token)
 }
@@ -943,29 +1323,69 @@ func (v *RegisterRequestView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// Version is the client's capabilities when using the Noise
+// transport.
+//
+// When using the original nacl crypto_box transport, the
+// value must be 1.
 func (v RegisterRequestView) Version() CapabilityVersion     { return v.ж.Version }
 func (v RegisterRequestView) NodeKey() key.NodePublic        { return v.ж.NodeKey }
 func (v RegisterRequestView) OldNodeKey() key.NodePublic     { return v.ж.OldNodeKey }
 func (v RegisterRequestView) NLKey() key.NLPublic            { return v.ж.NLKey }
 func (v RegisterRequestView) Auth() RegisterResponseAuthView { return v.ж.Auth.View() }
-func (v RegisterRequestView) Expiry() time.Time              { return v.ж.Expiry }
-func (v RegisterRequestView) Followup() string               { return v.ж.Followup }
-func (v RegisterRequestView) Hostinfo() HostinfoView         { return v.ж.Hostinfo.View() }
-func (v RegisterRequestView) Ephemeral() bool                { return v.ж.Ephemeral }
+
+// Expiry optionally specifies the requested key expiry.
+// The server policy may override.
+// As a special case, if Expiry is in the past and NodeKey is
+// the node's current key, the key is expired.
+func (v RegisterRequestView) Expiry() time.Time { return v.ж.Expiry }
+
+// response waits until AuthURL is visited
+func (v RegisterRequestView) Followup() string       { return v.ж.Followup }
+func (v RegisterRequestView) Hostinfo() HostinfoView { return v.ж.Hostinfo.View() }
+
+// Ephemeral is whether the client is requesting that this
+// node be considered ephemeral and be automatically deleted
+// when it stops being active.
+func (v RegisterRequestView) Ephemeral() bool { return v.ж.Ephemeral }
+
+// NodeKeySignature is the node's own node-key signature, re-signed
+// for its new node key using its network-lock key.
+//
+// This field is set when the client retries registration after learning
+// its NodeKeySignature (which is in need of rotation).
 func (v RegisterRequestView) NodeKeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
 	return views.ByteSliceOf(v.ж.NodeKeySignature)
 }
+
+// The following fields are not used for SignatureNone and are required for
+// SignatureV1:
 func (v RegisterRequestView) SignatureType() SignatureType { return v.ж.SignatureType }
+
+// creation time of request to prevent replay
 func (v RegisterRequestView) Timestamp() views.ValuePointer[time.Time] {
 	return views.ValuePointerOf(v.ж.Timestamp)
 }
 
+// X.509 certificate for client device
 func (v RegisterRequestView) DeviceCert() views.ByteSlice[[]byte] {
 	return views.ByteSliceOf(v.ж.DeviceCert)
 }
+
+// as described by SignatureType
 func (v RegisterRequestView) Signature() views.ByteSlice[[]byte] {
 	return views.ByteSliceOf(v.ж.Signature)
 }
+
+// Tailnet is an optional identifier specifying the name of the recommended or required
+// network that the node should join. Its exact form should not be depended on; new
+// forms are coming later. The identifier is generally a domain name (for an organization)
+// or e-mail address (for a personal account on a shared e-mail provider). It is the same name
+// used by the API, as described in /api.md#tailnet.
+// If Tailnet begins with the prefix "required:" then the server should prevent logging in to a different
+// network than the one specified. Otherwise, the server should recommend the specified network
+// but still permit logging in to other networks.
+// If empty, no recommendation is offered to the server and the login page should show all options.
 func (v RegisterRequestView) Tailnet() string { return v.ж.Tailnet }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -1055,6 +1475,19 @@ func (v *DERPHomeParamsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// RegionScore scales latencies of DERP regions by a given scaling
+// factor when determining which region to use as the home
+// ("preferred") DERP. Scores in the range (0, 1) will cause this
+// region to be proportionally more preferred, and scores in the range
+// (1, ∞) will penalize a region.
+//
+// If a region is not present in this map, it is treated as having a
+// score of 1.0.
+//
+// Scores should not be 0 or negative; such scores will be ignored.
+//
+// A nil map means no change from the previous value (if any); an empty
+// non-nil map can be sent to reset all scores back to 1.0.
 func (v DERPHomeParamsView) RegionScore() views.Map[int, float64] {
 	return views.MapOf(v.ж.RegionScore)
 }
@@ -1131,13 +1564,71 @@ func (v *DERPRegionView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v DERPRegionView) RegionID() int         { return v.ж.RegionID }
-func (v DERPRegionView) RegionCode() string    { return v.ж.RegionCode }
-func (v DERPRegionView) RegionName() string    { return v.ж.RegionName }
-func (v DERPRegionView) Latitude() float64     { return v.ж.Latitude }
-func (v DERPRegionView) Longitude() float64    { return v.ж.Longitude }
-func (v DERPRegionView) Avoid() bool           { return v.ж.Avoid }
+// RegionID is a unique integer for a geographic region.
+//
+// It corresponds to the legacy derpN.tailscale.com hostnames
+// used by older clients. (Older clients will continue to resolve
+// derpN.tailscale.com when contacting peers, rather than use
+// the server-provided DERPMap)
+//
+// RegionIDs must be non-zero, positive, and guaranteed to fit
+// in a JavaScript number.
+//
+// RegionIDs in range 900-999 are reserved for end users to run their
+// own DERP nodes.
+func (v DERPRegionView) RegionID() int { return v.ж.RegionID }
+
+// RegionCode is a short name for the region. It's usually a popular
+// city or airport code in the region: "nyc", "sf", "sin",
+// "fra", etc.
+func (v DERPRegionView) RegionCode() string { return v.ж.RegionCode }
+
+// RegionName is a long English name for the region: "New York City",
+// "San Francisco", "Singapore", "Frankfurt", etc.
+func (v DERPRegionView) RegionName() string { return v.ж.RegionName }
+
+// Latitude, Longitude are optional geographical coordinates of the DERP region's city, in degrees.
+func (v DERPRegionView) Latitude() float64  { return v.ж.Latitude }
+func (v DERPRegionView) Longitude() float64 { return v.ж.Longitude }
+
+// Avoid is whether the client should avoid picking this as its home region.
+// The region should only be used if a peer is there. Clients already using
+// this region as their home should migrate away to a new region without
+// Avoid set.
+//
+// Deprecated: because of bugs in past implementations combined with unclear
+// docs that caused people to think the bugs were intentional, this field is
+// deprecated. It was never supposed to cause STUN/DERP measurement probes,
+// but due to bugs, it sometimes did. And then some parts of the code began
+// to rely on that property. But then we were unable to use this field for
+// its original purpose, nor its later imagined purpose, because various
+// parts of the codebase thought it meant one thing and others thought it
+// meant another. But it did something in the middle instead. So we're retiring
+// it. Use NoMeasureNoHome instead.
+func (v DERPRegionView) Avoid() bool { return v.ж.Avoid }
+
+// NoMeasureNoHome says that this regions should not be measured for its
+// latency distance (STUN, HTTPS, etc) or availability (e.g. captive portal
+// checks) and should never be selected as the node's home region. However,
+// if a peer declares this region as its home, then this client is allowed
+// to connect to it for the purpose of communicating with that peer.
+//
+// This is what the now deprecated Avoid bool was supposed to mean
+// originally but had implementation bugs and documentation omissions.
 func (v DERPRegionView) NoMeasureNoHome() bool { return v.ж.NoMeasureNoHome }
+
+// Nodes are the DERP nodes running in this region, in
+// priority order for the current client. Client TLS
+// connections should ideally only go to the first entry
+// (falling back to the second if necessary). STUN packets
+// should go to the first 1 or 2.
+//
+// If nodes within a region route packets amongst themselves,
+// but not to other regions. That said, each user/domain
+// should get a the same preferred node order, so if all nodes
+// for a user/network pick the first one (as they should, when
+// things are healthy), the inter-cluster routing is minimal
+// to zero.
 func (v DERPRegionView) Nodes() views.SliceView[*DERPNode, DERPNodeView] {
 	return views.SliceOfViews[*DERPNode, DERPNodeView](v.ж.Nodes)
 }
@@ -1221,13 +1712,26 @@ func (v *DERPMapView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// HomeParams, if non-nil, is a change in home parameters.
+//
+// The rest of the DEPRMap fields, if zero, means unchanged.
 func (v DERPMapView) HomeParams() DERPHomeParamsView { return v.ж.HomeParams.View() }
 
+// Regions is the set of geographic regions running DERP node(s).
+//
+// It's keyed by the DERPRegion.RegionID.
+//
+// The numbers are not necessarily contiguous.
 func (v DERPMapView) Regions() views.MapFn[int, *DERPRegion, DERPRegionView] {
 	return views.MapFnOf(v.ж.Regions, func(t *DERPRegion) DERPRegionView {
 		return t.View()
 	})
 }
+
+// OmitDefaultRegions specifies to not use Tailscale's DERP servers, and only use those
+// specified in this DERPMap. If there are none set outside of the defaults, this is a noop.
+//
+// This field is only meaningful if the Regions map is non-nil (indicating a change).
 func (v DERPMapView) OmitDefaultRegions() bool { return v.ж.OmitDefaultRegions }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -1304,18 +1808,74 @@ func (v *DERPNodeView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v DERPNodeView) Name() string           { return v.ж.Name }
-func (v DERPNodeView) RegionID() int          { return v.ж.RegionID }
-func (v DERPNodeView) HostName() string       { return v.ж.HostName }
-func (v DERPNodeView) CertName() string       { return v.ж.CertName }
-func (v DERPNodeView) IPv4() string           { return v.ж.IPv4 }
-func (v DERPNodeView) IPv6() string           { return v.ж.IPv6 }
-func (v DERPNodeView) STUNPort() int          { return v.ж.STUNPort }
-func (v DERPNodeView) STUNOnly() bool         { return v.ж.STUNOnly }
-func (v DERPNodeView) DERPPort() int          { return v.ж.DERPPort }
+// Name is a unique node name (across all regions).
+// It is not a host name.
+// It's typically of the form "1b", "2a", "3b", etc. (region
+// ID + suffix within that region)
+func (v DERPNodeView) Name() string { return v.ж.Name }
+
+// RegionID is the RegionID of the DERPRegion that this node
+// is running in.
+func (v DERPNodeView) RegionID() int { return v.ж.RegionID }
+
+// HostName is the DERP node's hostname.
+//
+// It is required but need not be unique; multiple nodes may
+// have the same HostName but vary in configuration otherwise.
+func (v DERPNodeView) HostName() string { return v.ж.HostName }
+
+// CertName optionally specifies the expected TLS cert common
+// name. If empty, HostName is used. If CertName is non-empty,
+// HostName is only used for the TCP dial (if IPv4/IPv6 are
+// not present) + TLS ClientHello.
+//
+// As a special case, if CertName starts with "sha256-raw:",
+// then the rest of the string is a hex-encoded SHA256 of the
+// cert to expect. This is used for self-signed certs.
+// In this case, the HostName field will typically be an IP
+// address literal.
+func (v DERPNodeView) CertName() string { return v.ж.CertName }
+
+// IPv4 optionally forces an IPv4 address to use, instead of using DNS.
+// If empty, A record(s) from DNS lookups of HostName are used.
+// If the string is not an IPv4 address, IPv4 is not used; the
+// conventional string to disable IPv4 (and not use DNS) is
+// "none".
+func (v DERPNodeView) IPv4() string { return v.ж.IPv4 }
+
+// IPv6 optionally forces an IPv6 address to use, instead of using DNS.
+// If empty, AAAA record(s) from DNS lookups of HostName are used.
+// If the string is not an IPv6 address, IPv6 is not used; the
+// conventional string to disable IPv6 (and not use DNS) is
+// "none".
+func (v DERPNodeView) IPv6() string { return v.ж.IPv6 }
+
+// Port optionally specifies a STUN port to use.
+// Zero means 3478.
+// To disable STUN on this node, use -1.
+func (v DERPNodeView) STUNPort() int { return v.ж.STUNPort }
+
+// STUNOnly marks a node as only a STUN server and not a DERP
+// server.
+func (v DERPNodeView) STUNOnly() bool { return v.ж.STUNOnly }
+
+// DERPPort optionally provides an alternate TLS port number
+// for the DERP HTTPS server.
+//
+// If zero, 443 is used.
+func (v DERPNodeView) DERPPort() int { return v.ж.DERPPort }
+
+// InsecureForTests is used by unit tests to disable TLS verification.
+// It should not be set by users.
 func (v DERPNodeView) InsecureForTests() bool { return v.ж.InsecureForTests }
-func (v DERPNodeView) STUNTestIP() string     { return v.ж.STUNTestIP }
-func (v DERPNodeView) CanPort80() bool        { return v.ж.CanPort80 }
+
+// STUNTestIP is used in tests to override the STUN server's IP.
+// If empty, it's assumed to be the same as the DERP server.
+func (v DERPNodeView) STUNTestIP() string { return v.ж.STUNTestIP }
+
+// CanPort80 specifies whether this DERP node is accessible over HTTP
+// on port 80 specifically. This is used for captive portal checks.
+func (v DERPNodeView) CanPort80() bool { return v.ж.CanPort80 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPNodeViewNeedsRegeneration = DERPNode(struct {
@@ -1400,17 +1960,49 @@ func (v *SSHRuleView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// RuleExpires, if non-nil, is when this rule expires.
+//
+// For example, a (principal,sshuser) tuple might be granted
+// prompt-free SSH access for N minutes, so this rule would be
+// before a expiration-free rule for the same principal that
+// required an auth prompt.  This permits the control plane to
+// be out of the path for already-authorized SSH pairs.
+//
+// Once a rule matches, the lifetime of any accepting connection
+// is subject to the SSHAction.SessionExpires time, if any.
 func (v SSHRuleView) RuleExpires() views.ValuePointer[time.Time] {
 	return views.ValuePointerOf(v.ж.RuleExpires)
 }
 
+// Principals matches an incoming connection. If the connection
+// matches anything in this list and also matches SSHUsers,
+// then Action is applied.
 func (v SSHRuleView) Principals() views.SliceView[*SSHPrincipal, SSHPrincipalView] {
 	return views.SliceOfViews[*SSHPrincipal, SSHPrincipalView](v.ж.Principals)
 }
 
+// SSHUsers are the SSH users that this rule matches. It is a
+// map from either ssh-user|"*" => local-user.  The map must
+// contain a key for either ssh-user or, as a fallback, "*" to
+// match anything. If it does, the map entry's value is the
+// actual user that's logged in.
+// If the map value is the empty string (for either the
+// requested SSH user or "*"), the rule doesn't match.
+// If the map value is "=", it means the ssh-user should map
+// directly to the local-user.
+// It may be nil if the Action is reject.
 func (v SSHRuleView) SSHUsers() views.Map[string, string] { return views.MapOf(v.ж.SSHUsers) }
-func (v SSHRuleView) Action() SSHActionView               { return v.ж.Action.View() }
-func (v SSHRuleView) AcceptEnv() views.Slice[string]      { return views.SliceOf(v.ж.AcceptEnv) }
+
+// Action is the outcome to task.
+// A nil or invalid action means to deny.
+func (v SSHRuleView) Action() SSHActionView { return v.ж.Action.View() }
+
+// AcceptEnv is a slice of environment variable names that are allowlisted
+// for the SSH rule in the policy file.
+//
+// AcceptEnv values may contain * and ? wildcard characters which match against
+// an arbitrary number of characters or a single character respectively.
+func (v SSHRuleView) AcceptEnv() views.Slice[string] { return views.SliceOf(v.ж.AcceptEnv) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHRuleViewNeedsRegeneration = SSHRule(struct {
@@ -1488,15 +2080,61 @@ func (v *SSHActionView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v SSHActionView) Message() string                        { return v.ж.Message }
-func (v SSHActionView) Reject() bool                           { return v.ж.Reject }
-func (v SSHActionView) Accept() bool                           { return v.ж.Accept }
-func (v SSHActionView) SessionDuration() time.Duration         { return v.ж.SessionDuration }
-func (v SSHActionView) AllowAgentForwarding() bool             { return v.ж.AllowAgentForwarding }
-func (v SSHActionView) HoldAndDelegate() string                { return v.ж.HoldAndDelegate }
-func (v SSHActionView) AllowLocalPortForwarding() bool         { return v.ж.AllowLocalPortForwarding }
-func (v SSHActionView) AllowRemotePortForwarding() bool        { return v.ж.AllowRemotePortForwarding }
+// Message, if non-empty, is shown to the user before the
+// action occurs.
+func (v SSHActionView) Message() string { return v.ж.Message }
+
+// Reject, if true, terminates the connection. This action
+// has higher priority that Accept, if given.
+// The reason this is exists is primarily so a response
+// from HoldAndDelegate has a way to stop the poll.
+func (v SSHActionView) Reject() bool { return v.ж.Reject }
+
+// Accept, if true, accepts the connection immediately
+// without further prompts.
+func (v SSHActionView) Accept() bool { return v.ж.Accept }
+
+// SessionDuration, if non-zero, is how long the session can stay open
+// before being forcefully terminated.
+func (v SSHActionView) SessionDuration() time.Duration { return v.ж.SessionDuration }
+
+// AllowAgentForwarding, if true, allows accepted connections to forward
+// the ssh agent if requested.
+func (v SSHActionView) AllowAgentForwarding() bool { return v.ж.AllowAgentForwarding }
+
+// HoldAndDelegate, if non-empty, is a URL that serves an
+// outcome verdict.  The connection will be accepted and will
+// block until the provided long-polling URL serves a new
+// SSHAction JSON value. The URL must be fetched using the
+// Noise transport (in package control/control{base,http}).
+// If the long poll breaks before returning a complete HTTP
+// response, it should be re-fetched as long as the SSH
+// session is open.
+//
+// The following variables in the URL are expanded by tailscaled:
+//
+//   - $SRC_NODE_IP (URL escaped)
+//   - $SRC_NODE_ID (Node.ID as int64 string)
+//   - $DST_NODE_IP (URL escaped)
+//   - $DST_NODE_ID (Node.ID as int64 string)
+//   - $SSH_USER (URL escaped, ssh user requested)
+//   - $LOCAL_USER (URL escaped, local user mapped)
+func (v SSHActionView) HoldAndDelegate() string { return v.ж.HoldAndDelegate }
+
+// AllowLocalPortForwarding, if true, allows accepted connections
+// to use local port forwarding if requested.
+func (v SSHActionView) AllowLocalPortForwarding() bool { return v.ж.AllowLocalPortForwarding }
+
+// AllowRemotePortForwarding, if true, allows accepted connections
+// to use remote port forwarding if requested.
+func (v SSHActionView) AllowRemotePortForwarding() bool { return v.ж.AllowRemotePortForwarding }
+
+// Recorders defines the destinations of the SSH session recorders.
+// The recording will be uploaded to http://addr:port/record.
 func (v SSHActionView) Recorders() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Recorders) }
+
+// OnRecorderFailure is the action to take if recording fails.
+// If nil, the default action is to fail open.
 func (v SSHActionView) OnRecordingFailure() views.ValuePointer[SSHRecorderFailureAction] {
 	return views.ValuePointerOf(v.ж.OnRecordingFailure)
 }
@@ -1584,8 +2222,19 @@ func (v *SSHPrincipalView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 func (v SSHPrincipalView) Node() StableNodeID { return v.ж.Node }
 func (v SSHPrincipalView) NodeIP() string     { return v.ж.NodeIP }
-func (v SSHPrincipalView) UserLogin() string  { return v.ж.UserLogin }
-func (v SSHPrincipalView) Any() bool          { return v.ж.Any }
+
+// email-ish: foo@example.com, bar@github
+func (v SSHPrincipalView) UserLogin() string { return v.ж.UserLogin }
+
+// if true, match any connection
+func (v SSHPrincipalView) Any() bool { return v.ж.Any }
+
+// UnusedPubKeys was public key support. It never became an official product
+// feature and so as of 2024-12-12 is being removed.
+// This stub exists to remind us not to re-use the JSON field name "pubKeys"
+// in the future if we bring it back with different semantics.
+//
+// Deprecated: do not use. It does nothing.
 func (v SSHPrincipalView) UnusedPubKeys() views.Slice[string] {
 	return views.SliceOf(v.ж.UnusedPubKeys)
 }
@@ -1666,6 +2315,7 @@ func (v *ControlDialPlanView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// An empty list means the default: use DNS (unspecified which DNS).
 func (v ControlDialPlanView) Candidates() views.Slice[ControlIPCandidate] {
 	return views.SliceOf(v.ж.Candidates)
 }
@@ -1742,13 +2392,35 @@ func (v *LocationView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v LocationView) Country() string     { return v.ж.Country }
+// User friendly country name, with proper capitalization ("Canada")
+func (v LocationView) Country() string { return v.ж.Country }
+
+// ISO 3166-1 alpha-2 in upper case ("CA")
 func (v LocationView) CountryCode() string { return v.ж.CountryCode }
-func (v LocationView) City() string        { return v.ж.City }
-func (v LocationView) CityCode() string    { return v.ж.CityCode }
-func (v LocationView) Latitude() float64   { return v.ж.Latitude }
-func (v LocationView) Longitude() float64  { return v.ж.Longitude }
-func (v LocationView) Priority() int       { return v.ж.Priority }
+
+// User friendly city name, with proper capitalization ("Squamish")
+func (v LocationView) City() string { return v.ж.City }
+
+// CityCode is a short code representing the city in upper case.
+// CityCode is used to disambiguate a city from another location
+// with the same city name. It uniquely identifies a particular
+// geographical location, within the tailnet.
+// IATA, ICAO or ISO 3166-2 codes are recommended ("YSE")
+func (v LocationView) CityCode() string { return v.ж.CityCode }
+
+// Latitude, Longitude are optional geographical coordinates of the node, in degrees.
+// No particular accuracy level is promised; the coordinates may simply be the center of the city or country.
+func (v LocationView) Latitude() float64  { return v.ж.Latitude }
+func (v LocationView) Longitude() float64 { return v.ж.Longitude }
+
+// Priority determines the order of use of an exit node when a
+// location based preference matches more than one exit node,
+// the node with the highest priority wins. Nodes of equal
+// probability may be selected arbitrarily.
+//
+// A value of 0 means the exit node does not have a priority
+// preference. A negative int is not allowed.
+func (v LocationView) Priority() int { return v.ж.Priority }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _LocationViewNeedsRegeneration = Location(struct {
@@ -1828,8 +2500,12 @@ func (v *UserProfileView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v UserProfileView) ID() UserID                    { return v.ж.ID }
-func (v UserProfileView) LoginName() string             { return v.ж.LoginName }
+func (v UserProfileView) ID() UserID { return v.ж.ID }
+
+// "alice@smith.com"; for display purposes only (provider is not listed)
+func (v UserProfileView) LoginName() string { return v.ж.LoginName }
+
+// "Alice Smith"
 func (v UserProfileView) DisplayName() string           { return v.ж.DisplayName }
 func (v UserProfileView) ProfilePicURL() string         { return v.ж.ProfilePicURL }
 func (v UserProfileView) Equal(v2 UserProfileView) bool { return v.ж.Equal(v2.ж) }
@@ -1909,9 +2585,18 @@ func (v *VIPServiceView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v VIPServiceView) Name() ServiceName                  { return v.ж.Name }
+// Name is the name of the service. The Name uniquely identifies a service
+// on a particular tailnet, and so also corresponds uniquely to the pair of
+// IP addresses belonging to the VIP service.
+func (v VIPServiceView) Name() ServiceName { return v.ж.Name }
+
+// Ports specify which ProtoPorts are made available by this node
+// on the service's IPs.
 func (v VIPServiceView) Ports() views.Slice[ProtoPortRange] { return views.SliceOf(v.ж.Ports) }
-func (v VIPServiceView) Active() bool                       { return v.ж.Active }
+
+// Active specifies whether new requests for the service should be
+// sent to this node by control.
+func (v VIPServiceView) Active() bool { return v.ж.Active }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _VIPServiceViewNeedsRegeneration = VIPService(struct {

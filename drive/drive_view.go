@@ -83,9 +83,24 @@ func (v *ShareView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// Name is how this share appears on remote nodes.
 func (v ShareView) Name() string { return v.ж.Name }
+
+// Path is the path to the directory on this machine that's being shared.
 func (v ShareView) Path() string { return v.ж.Path }
-func (v ShareView) As() string   { return v.ж.As }
+
+// As is the UNIX or Windows username of the local account used for this
+// share. File read/write permissions are enforced based on this username.
+// Can be left blank to use the default value of "whoever is running the
+// Tailscale GUI".
+func (v ShareView) As() string { return v.ж.As }
+
+// BookmarkData contains security-scoped bookmark data for the Sandboxed
+// Mac application. The Sandboxed Mac application gains permission to
+// access the Share's folder as a result of a user selecting it in a file
+// picker. In order to retain access to it across restarts, it needs to
+// hold on to a security-scoped bookmark. That bookmark is stored here. See
+// https://developer.apple.com/documentation/security/app_sandbox/accessing_files_from_the_macos_app_sandbox#4144043
 func (v ShareView) BookmarkData() views.ByteSlice[[]byte] {
 	return views.ByteSliceOf(v.ж.BookmarkData)
 }
