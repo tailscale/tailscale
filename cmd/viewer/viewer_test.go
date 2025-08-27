@@ -53,6 +53,7 @@ func TestViewerImports(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			var fieldComments map[fieldNameKey]string // don't need it for this test.
 
 			var output bytes.Buffer
 			tracker := codegen.NewImportTracker(pkg)
@@ -65,7 +66,7 @@ func TestViewerImports(t *testing.T) {
 				if !ok {
 					t.Fatalf("%q is not a named type", tt.typeNames[i])
 				}
-				genView(&output, tracker, namedType, pkg)
+				genView(&output, tracker, namedType, fieldComments)
 			}
 
 			for _, pkg := range tt.wantImports {

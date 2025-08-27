@@ -247,47 +247,41 @@ func (v *MapView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v MapView) Int() views.Map[string, int] { return views.MapOf(v.ж.Int) }
-
+func (v MapView) Int() views.Map[string, int]           { return views.MapOf(v.ж.Int) }
 func (v MapView) SliceInt() views.MapSlice[string, int] { return views.MapSliceOf(v.ж.SliceInt) }
-
 func (v MapView) StructPtrWithPtr() views.MapFn[string, *StructWithPtrs, StructWithPtrsView] {
 	return views.MapFnOf(v.ж.StructPtrWithPtr, func(t *StructWithPtrs) StructWithPtrsView {
 		return t.View()
 	})
 }
-
 func (v MapView) StructPtrWithoutPtr() views.MapFn[string, *StructWithoutPtrs, StructWithoutPtrsView] {
 	return views.MapFnOf(v.ж.StructPtrWithoutPtr, func(t *StructWithoutPtrs) StructWithoutPtrsView {
 		return t.View()
 	})
 }
-
 func (v MapView) StructWithoutPtr() views.Map[string, StructWithoutPtrs] {
 	return views.MapOf(v.ж.StructWithoutPtr)
 }
-
 func (v MapView) SlicesWithPtrs() views.MapFn[string, []*StructWithPtrs, views.SliceView[*StructWithPtrs, StructWithPtrsView]] {
 	return views.MapFnOf(v.ж.SlicesWithPtrs, func(t []*StructWithPtrs) views.SliceView[*StructWithPtrs, StructWithPtrsView] {
 		return views.SliceOfViews[*StructWithPtrs, StructWithPtrsView](t)
 	})
 }
-
 func (v MapView) SlicesWithoutPtrs() views.MapFn[string, []*StructWithoutPtrs, views.SliceView[*StructWithoutPtrs, StructWithoutPtrsView]] {
 	return views.MapFnOf(v.ж.SlicesWithoutPtrs, func(t []*StructWithoutPtrs) views.SliceView[*StructWithoutPtrs, StructWithoutPtrsView] {
 		return views.SliceOfViews[*StructWithoutPtrs, StructWithoutPtrsView](t)
 	})
 }
-
 func (v MapView) StructWithoutPtrKey() views.Map[StructWithoutPtrs, int] {
 	return views.MapOf(v.ж.StructWithoutPtrKey)
 }
-
 func (v MapView) StructWithPtr() views.MapFn[string, StructWithPtrs, StructWithPtrsView] {
 	return views.MapFnOf(v.ж.StructWithPtr, func(t StructWithPtrs) StructWithPtrsView {
 		return t.View()
 	})
 }
+
+// Unsupported views.
 func (v MapView) SliceIntPtr() map[string][]*int           { panic("unsupported") }
 func (v MapView) PointerKey() map[*string]int              { panic("unsupported") }
 func (v MapView) StructWithPtrKey() map[StructWithPtrs]int { panic("unsupported") }
@@ -389,8 +383,10 @@ func (v StructWithSlicesView) Prefixes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.Prefixes)
 }
 func (v StructWithSlicesView) Data() views.ByteSlice[[]byte] { return views.ByteSliceOf(v.ж.Data) }
-func (v StructWithSlicesView) Structs() StructWithPtrs       { panic("unsupported") }
-func (v StructWithSlicesView) Ints() *int                    { panic("unsupported") }
+
+// Unsupported views.
+func (v StructWithSlicesView) Structs() StructWithPtrs { panic("unsupported") }
+func (v StructWithSlicesView) Ints() *int              { panic("unsupported") }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
@@ -554,9 +550,10 @@ func (v GenericIntStructView[T]) Pointer() views.ValuePointer[T] {
 	return views.ValuePointerOf(v.ж.Pointer)
 }
 
-func (v GenericIntStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
+func (v GenericIntStructView[T]) Slice() views.Slice[T]     { return views.SliceOf(v.ж.Slice) }
+func (v GenericIntStructView[T]) Map() views.Map[string, T] { return views.MapOf(v.ж.Map) }
 
-func (v GenericIntStructView[T]) Map() views.Map[string, T]  { return views.MapOf(v.ж.Map) }
+// Unsupported views.
 func (v GenericIntStructView[T]) PtrSlice() *T               { panic("unsupported") }
 func (v GenericIntStructView[T]) PtrKeyMap() map[*T]string   { panic("unsupported") }
 func (v GenericIntStructView[T]) PtrValueMap() map[string]*T { panic("unsupported") }
@@ -648,9 +645,10 @@ func (v GenericNoPtrsStructView[T]) Pointer() views.ValuePointer[T] {
 	return views.ValuePointerOf(v.ж.Pointer)
 }
 
-func (v GenericNoPtrsStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
+func (v GenericNoPtrsStructView[T]) Slice() views.Slice[T]     { return views.SliceOf(v.ж.Slice) }
+func (v GenericNoPtrsStructView[T]) Map() views.Map[string, T] { return views.MapOf(v.ж.Map) }
 
-func (v GenericNoPtrsStructView[T]) Map() views.Map[string, T]  { return views.MapOf(v.ж.Map) }
+// Unsupported views.
 func (v GenericNoPtrsStructView[T]) PtrSlice() *T               { panic("unsupported") }
 func (v GenericNoPtrsStructView[T]) PtrKeyMap() map[*T]string   { panic("unsupported") }
 func (v GenericNoPtrsStructView[T]) PtrValueMap() map[string]*T { panic("unsupported") }
@@ -741,12 +739,13 @@ func (v GenericCloneableStructView[T, V]) Value() V { return v.ж.Value.View() }
 func (v GenericCloneableStructView[T, V]) Slice() views.SliceView[T, V] {
 	return views.SliceOfViews[T, V](v.ж.Slice)
 }
-
 func (v GenericCloneableStructView[T, V]) Map() views.MapFn[string, T, V] {
 	return views.MapFnOf(v.ж.Map, func(t T) V {
 		return t.View()
 	})
 }
+
+// Unsupported views.
 func (v GenericCloneableStructView[T, V]) Pointer() map[string]T      { panic("unsupported") }
 func (v GenericCloneableStructView[T, V]) PtrSlice() *T               { panic("unsupported") }
 func (v GenericCloneableStructView[T, V]) PtrKeyMap() map[*T]string   { panic("unsupported") }
@@ -942,25 +941,21 @@ func (v StructWithTypeAliasFieldsView) SliceWithPtrs() views.SliceView[*StructWi
 func (v StructWithTypeAliasFieldsView) SliceWithoutPtrs() views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
 	return views.SliceOfViews[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView](v.ж.SliceWithoutPtrs)
 }
-
 func (v StructWithTypeAliasFieldsView) MapWithPtrs() views.MapFn[string, *StructWithPtrsAlias, StructWithPtrsAliasView] {
 	return views.MapFnOf(v.ж.MapWithPtrs, func(t *StructWithPtrsAlias) StructWithPtrsAliasView {
 		return t.View()
 	})
 }
-
 func (v StructWithTypeAliasFieldsView) MapWithoutPtrs() views.MapFn[string, *StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
 	return views.MapFnOf(v.ж.MapWithoutPtrs, func(t *StructWithoutPtrsAlias) StructWithoutPtrsAliasView {
 		return t.View()
 	})
 }
-
 func (v StructWithTypeAliasFieldsView) MapOfSlicesWithPtrs() views.MapFn[string, []*StructWithPtrsAlias, views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView]] {
 	return views.MapFnOf(v.ж.MapOfSlicesWithPtrs, func(t []*StructWithPtrsAlias) views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
 		return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](t)
 	})
 }
-
 func (v StructWithTypeAliasFieldsView) MapOfSlicesWithoutPtrs() views.MapFn[string, []*StructWithoutPtrsAlias, views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView]] {
 	return views.MapFnOf(v.ж.MapOfSlicesWithoutPtrs, func(t []*StructWithoutPtrsAlias) views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
 		return views.SliceOfViews[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView](t)

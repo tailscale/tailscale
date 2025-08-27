@@ -89,38 +89,68 @@ func (v *PrefsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v PrefsView) ControlURL() prefs.Item[string]                    { return v.ж.ControlURL }
-func (v PrefsView) RouteAll() prefs.Item[bool]                        { return v.ж.RouteAll }
-func (v PrefsView) ExitNodeID() prefs.Item[tailcfg.StableNodeID]      { return v.ж.ExitNodeID }
-func (v PrefsView) ExitNodeIP() prefs.Item[netip.Addr]                { return v.ж.ExitNodeIP }
-func (v PrefsView) ExitNodePrior() tailcfg.StableNodeID               { return v.ж.ExitNodePrior }
-func (v PrefsView) ExitNodeAllowLANAccess() prefs.Item[bool]          { return v.ж.ExitNodeAllowLANAccess }
-func (v PrefsView) CorpDNS() prefs.Item[bool]                         { return v.ж.CorpDNS }
-func (v PrefsView) RunSSH() prefs.Item[bool]                          { return v.ж.RunSSH }
-func (v PrefsView) RunWebClient() prefs.Item[bool]                    { return v.ж.RunWebClient }
-func (v PrefsView) WantRunning() prefs.Item[bool]                     { return v.ж.WantRunning }
-func (v PrefsView) LoggedOut() prefs.Item[bool]                       { return v.ж.LoggedOut }
-func (v PrefsView) ShieldsUp() prefs.Item[bool]                       { return v.ж.ShieldsUp }
-func (v PrefsView) AdvertiseTags() prefs.ListView[string]             { return v.ж.AdvertiseTags.View() }
-func (v PrefsView) Hostname() prefs.Item[string]                      { return v.ж.Hostname }
-func (v PrefsView) NotepadURLs() prefs.Item[bool]                     { return v.ж.NotepadURLs }
-func (v PrefsView) ForceDaemon() prefs.Item[bool]                     { return v.ж.ForceDaemon }
-func (v PrefsView) Egg() prefs.Item[bool]                             { return v.ж.Egg }
+func (v PrefsView) ControlURL() prefs.Item[string]               { return v.ж.ControlURL }
+func (v PrefsView) RouteAll() prefs.Item[bool]                   { return v.ж.RouteAll }
+func (v PrefsView) ExitNodeID() prefs.Item[tailcfg.StableNodeID] { return v.ж.ExitNodeID }
+func (v PrefsView) ExitNodeIP() prefs.Item[netip.Addr]           { return v.ж.ExitNodeIP }
+
+// ExitNodePrior is an internal state rather than a preference.
+// It can be kept in the Prefs structure but should not be wrapped
+// and is ignored by the [prefs] package.
+func (v PrefsView) ExitNodePrior() tailcfg.StableNodeID      { return v.ж.ExitNodePrior }
+func (v PrefsView) ExitNodeAllowLANAccess() prefs.Item[bool] { return v.ж.ExitNodeAllowLANAccess }
+func (v PrefsView) CorpDNS() prefs.Item[bool]                { return v.ж.CorpDNS }
+func (v PrefsView) RunSSH() prefs.Item[bool]                 { return v.ж.RunSSH }
+func (v PrefsView) RunWebClient() prefs.Item[bool]           { return v.ж.RunWebClient }
+func (v PrefsView) WantRunning() prefs.Item[bool]            { return v.ж.WantRunning }
+func (v PrefsView) LoggedOut() prefs.Item[bool]              { return v.ж.LoggedOut }
+func (v PrefsView) ShieldsUp() prefs.Item[bool]              { return v.ж.ShieldsUp }
+
+// AdvertiseTags is a preference whose value is a slice of strings.
+// The value is atomic, and individual items in the slice should
+// not be modified after the preference is set.
+// Since the item type (string) is immutable, we can use [prefs.List].
+func (v PrefsView) AdvertiseTags() prefs.ListView[string] { return v.ж.AdvertiseTags.View() }
+func (v PrefsView) Hostname() prefs.Item[string]          { return v.ж.Hostname }
+func (v PrefsView) NotepadURLs() prefs.Item[bool]         { return v.ж.NotepadURLs }
+func (v PrefsView) ForceDaemon() prefs.Item[bool]         { return v.ж.ForceDaemon }
+func (v PrefsView) Egg() prefs.Item[bool]                 { return v.ж.Egg }
+
+// AdvertiseRoutes is a preference whose value is a slice of netip.Prefix.
+// The value is atomic, and individual items in the slice should
+// not be modified after the preference is set.
+// Since the item type (netip.Prefix) is immutable, we can use [prefs.List].
 func (v PrefsView) AdvertiseRoutes() prefs.ListView[netip.Prefix]     { return v.ж.AdvertiseRoutes.View() }
 func (v PrefsView) NoSNAT() prefs.Item[bool]                          { return v.ж.NoSNAT }
 func (v PrefsView) NoStatefulFiltering() prefs.Item[opt.Bool]         { return v.ж.NoStatefulFiltering }
 func (v PrefsView) NetfilterMode() prefs.Item[preftype.NetfilterMode] { return v.ж.NetfilterMode }
 func (v PrefsView) OperatorUser() prefs.Item[string]                  { return v.ж.OperatorUser }
 func (v PrefsView) ProfileName() prefs.Item[string]                   { return v.ж.ProfileName }
-func (v PrefsView) AutoUpdate() AutoUpdatePrefs                       { return v.ж.AutoUpdate }
-func (v PrefsView) AppConnector() AppConnectorPrefs                   { return v.ж.AppConnector }
-func (v PrefsView) PostureChecking() prefs.Item[bool]                 { return v.ж.PostureChecking }
-func (v PrefsView) NetfilterKind() prefs.Item[string]                 { return v.ж.NetfilterKind }
+
+// AutoUpdate contains auto-update preferences.
+// Each preference in the group can be configured and managed individually.
+func (v PrefsView) AutoUpdate() AutoUpdatePrefs { return v.ж.AutoUpdate }
+
+// AppConnector contains app connector-related preferences.
+// Each preference in the group can be configured and managed individually.
+func (v PrefsView) AppConnector() AppConnectorPrefs   { return v.ж.AppConnector }
+func (v PrefsView) PostureChecking() prefs.Item[bool] { return v.ж.PostureChecking }
+func (v PrefsView) NetfilterKind() prefs.Item[string] { return v.ж.NetfilterKind }
+
+// DriveShares is a preference whose value is a slice of *[drive.Share].
+// The value is atomic, and individual items in the slice should
+// not be modified after the preference is set.
+// Since the item type (*drive.Share) is mutable and implements [views.ViewCloner],
+// we need to use [prefs.StructList] instead of [prefs.List].
 func (v PrefsView) DriveShares() prefs.StructListView[*drive.Share, drive.ShareView] {
 	return prefs.StructListViewOf(&v.ж.DriveShares)
 }
 func (v PrefsView) AllowSingleHosts() prefs.Item[marshalAsTrueInJSON] { return v.ж.AllowSingleHosts }
-func (v PrefsView) Persist() persist.PersistView                      { return v.ж.Persist.View() }
+
+// Persist is an internal state rather than a preference.
+// It can be kept in the Prefs structure but should not be wrapped
+// and is ignored by the [prefs] package.
+func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
