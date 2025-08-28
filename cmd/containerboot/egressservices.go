@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -26,7 +27,6 @@ import (
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/linuxfw"
@@ -666,8 +666,7 @@ func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs *egresss
 		return
 	}
 	log.Printf("Ensuring that cluster traffic for egress targets is no longer routed via this Pod...")
-	wg := syncs.WaitGroup{}
-
+	var wg sync.WaitGroup
 	for s, cfg := range *cfgs {
 		hep := cfg.HealthCheckEndpoint
 		if hep == "" {

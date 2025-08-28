@@ -20,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -32,7 +33,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	tsrate "tailscale.com/tstime/rate"
 	"tailscale.com/util/quarantine"
@@ -176,7 +176,7 @@ func runCp(ctx context.Context, args []string) error {
 			log.Printf("sending %q to %v/%v/%v ...", name, target, ip, stableID)
 		}
 
-		var group syncs.WaitGroup
+		var group sync.WaitGroup
 		ctxProgress, cancelProgress := context.WithCancel(ctx)
 		defer cancelProgress()
 		if isatty.IsTerminal(os.Stderr.Fd()) {
