@@ -33,7 +33,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/ringbuffer"
+	"tailscale.com/util/ringlog"
 	"tailscale.com/util/slicesx"
 )
 
@@ -60,7 +60,7 @@ type endpoint struct {
 	lastRecvWG            mono.Time // last time there were incoming packets from this peer destined for wireguard-go (e.g. not disco)
 	lastRecvUDPAny        mono.Time // last time there were incoming UDP packets from this peer of any kind
 	numStopAndResetAtomic int64
-	debugUpdates          *ringbuffer.RingBuffer[EndpointChange]
+	debugUpdates          *ringlog.RingLog[EndpointChange]
 
 	// These fields are initialized once and never modified.
 	c            *Conn
