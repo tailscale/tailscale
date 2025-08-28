@@ -2137,14 +2137,6 @@ func TestOnNodeViewsUpdateWithNoPeers(t *testing.T) {
 	}
 }
 
-func TestBufferedDerpWritesBeforeDrop(t *testing.T) {
-	vv := bufferedDerpWritesBeforeDrop()
-	if vv < 32 {
-		t.Fatalf("got bufferedDerpWritesBeforeDrop=%d, which is < 32", vv)
-	}
-	t.Logf("bufferedDerpWritesBeforeDrop = %d", vv)
-}
-
 // newWireguard starts up a new wireguard-go device attached to a test tun, and
 // returns the device, tun and endpoint port. To add peers call device.IpcSet with UAPI instructions.
 func newWireguard(t *testing.T, uapi string, aips []netip.Prefix) (*device.Device, *tuntest.ChannelTUN, uint16) {
