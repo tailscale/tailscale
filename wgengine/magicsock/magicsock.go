@@ -62,7 +62,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/ringbuffer"
+	"tailscale.com/util/ringlog"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
@@ -3112,7 +3112,7 @@ func (c *Conn) updateNodes(update NodeViewsUpdate) (peersChanged bool) {
 			// ~1MB on mobile but we never used the data so the memory was just
 			// wasted.
 		default:
-			ep.debugUpdates = ringbuffer.New[EndpointChange](entriesPerBuffer)
+			ep.debugUpdates = ringlog.New[EndpointChange](entriesPerBuffer)
 		}
 		if n.Addresses().Len() > 0 {
 			ep.nodeAddr = n.Addresses().At(0).Addr()

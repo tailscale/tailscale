@@ -1,32 +1,31 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package ringbuffer contains a fixed-size concurrency-safe generic ring
-// buffer.
-package ringbuffer
+// Package ringlog contains a limited-size concurrency-safe generic ring log.
+package ringlog
 
 import "sync"
 
-// New creates a new RingBuffer containing at most max items.
-func New[T any](max int) *RingBuffer[T] {
-	return &RingBuffer[T]{
+// New creates a new [RingLog] containing at most max items.
+func New[T any](max int) *RingLog[T] {
+	return &RingLog[T]{
 		max: max,
 	}
 }
 
-// RingBuffer is a concurrency-safe ring buffer.
-type RingBuffer[T any] struct {
+// RingLog is a concurrency-safe fixed size log window containing entries of [T].
+type RingLog[T any] struct {
 	mu  sync.Mutex
 	pos int
 	buf []T
 	max int
 }
 
-// Add appends a new item to the RingBuffer, possibly overwriting the oldest
-// item in the buffer if it is already full.
+// Add appends a new item to the [RingLog], possibly overwriting the oldest
+// item in the log if it is already full.
 //
 // It does nothing if rb is nil.
-func (rb *RingBuffer[T]) Add(t T) {
+func (rb *RingLog[T]) Add(t T) {
 	if rb == nil {
 		return
 	}
@@ -40,11 +39,11 @@ func (rb *RingBuffer[T]) Add(t T) {
 	}
 }
 
-// GetAll returns a copy of all the entries in the ring buffer in the order they
+// GetAll returns a copy of all the entries in the ring log in the order they
 // were added.
 //
 // It returns nil if rb is nil.
-func (rb *RingBuffer[T]) GetAll() []T {
+func (rb *RingLog[T]) GetAll() []T {
 	if rb == nil {
 		return nil
 	}
@@ -58,10 +57,10 @@ func (rb *RingBuffer[T]) GetAll() []T {
 	return out
 }
 
-// Len returns the number of elements in the ring buffer. Note that this value
+// Len returns the number of elements in the ring log. Note that this value
 // could change immediately after being returned if a concurrent caller
-// modifies the buffer.
-func (rb *RingBuffer[T]) Len() int {
+// modifies the log.
+func (rb *RingLog[T]) Len() int {
 	if rb == nil {
 		return 0
 	}
@@ -70,8 +69,8 @@ func (rb *RingBuffer[T]) Len() int {
 	return len(rb.buf)
 }
 
-// Clear will empty the ring buffer.
-func (rb *RingBuffer[T]) Clear() {
+// Clear will empty the ring log.
+func (rb *RingLog[T]) Clear() {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	rb.pos = 0

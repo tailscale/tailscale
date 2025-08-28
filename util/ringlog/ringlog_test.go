@@ -1,14 +1,14 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package ringbuffer
+package ringlog
 
 import (
 	"reflect"
 	"testing"
 )
 
-func TestRingBuffer(t *testing.T) {
+func TestRingLog(t *testing.T) {
 	const numItems = 10
 	rb := New[int](numItems)
 
