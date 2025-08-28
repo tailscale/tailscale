@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ func TestMutexValue(t *testing.T) {
 		t.Errorf("Load = %v, want %v", v.Load(), now)
 	}
 
-	var group WaitGroup
+	var group sync.WaitGroup
 	var v2 MutexValue[int]
 	var sum int
 	for i := range 10 {
@@ -237,7 +238,7 @@ func TestMap(t *testing.T) {
 
 	t.Run("LoadOrStore", func(t *testing.T) {
 		var m Map[string, string]
-		var wg WaitGroup
+		var wg sync.WaitGroup
 		var ok1, ok2 bool
 		wg.Go(func() { _, ok1 = m.LoadOrStore("", "") })
 		wg.Go(func() { _, ok2 = m.LoadOrStore("", "") })

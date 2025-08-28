@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"tailscale.com/ipn"
-	"tailscale.com/syncs"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )
@@ -33,7 +32,7 @@ type fileDeleter struct {
 	byName map[string]*list.Element
 
 	emptySignal chan struct{} // signal that the queue is empty
-	group       syncs.WaitGroup
+	group       sync.WaitGroup
 	shutdownCtx context.Context
 	shutdown    context.CancelFunc
 	fs          FileOps // must be used for all filesystem operations
