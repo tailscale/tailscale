@@ -20,6 +20,7 @@ import (
 	"github.com/tailscale/wireguard-go/conn"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnscache"
@@ -285,11 +286,17 @@ func (c *Conn) goDerpConnect(regionID int) {
 var (
 	bufferedDerpWrites     int
 	bufferedDerpWritesOnce sync.Once
+	derpBufferSize         = envknob.RegisterInt("TS_DERP_BUFFER_SIZE")
 )
 
 // bufferedDerpWritesBeforeDrop returns how many packets writes can be queued
 // up the DERP client to write on the wire before we start dropping.
 func bufferedDerpWritesBeforeDrop() int {
+	// Check if buffer size is configured via environment variable first.
+	if bufSize := derpBufferSize(); bufSize > 0 {
+		return bufSize
+	}
+
 	// For mobile devices, always return the previous minimum value of 32;
 	// we can do this outside the sync.Once to avoid that overhead.
 	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
