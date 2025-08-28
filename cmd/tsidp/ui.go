@@ -81,8 +81,19 @@ func (s *idpServer) handleClientsList(w http.ResponseWriter, r *http.Request) {
 		return clients[i].ID < clients[j].ID
 	})
 
+	endpointDisplayData := endpointDisplayData{
+		AuthorizeEndpoint: s.endpoints.authorizeEndpoint,
+		TokenEndpoint:     s.endpoints.tokenEndpoint,
+		UserinfoEndpoint:  s.endpoints.userinfoEndpoint,
+	}
+
+	displayData := displayData{
+		Clients:   clients,
+		Endpoints: endpointDisplayData,
+	}
+
 	var buf bytes.Buffer
-	if err := listTmpl.Execute(&buf, clients); err != nil {
+	if err := listTmpl.Execute(&buf, displayData); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -266,6 +277,17 @@ type clientDisplayData struct {
 	IsEdit      bool
 	Success     string
 	Error       string
+}
+
+type endpointDisplayData struct {
+	AuthorizeEndpoint string
+	TokenEndpoint     string
+	UserinfoEndpoint  string
+}
+
+type displayData struct {
+	Clients   []clientDisplayData
+	Endpoints endpointDisplayData
 }
 
 func (s *idpServer) renderClientForm(w http.ResponseWriter, data clientDisplayData) error {
