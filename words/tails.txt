@@ -759,7 +759,6 @@ chub
 dorado
 shad
 lionfish
-discus
 crayfish
 sailfish
 billfish
