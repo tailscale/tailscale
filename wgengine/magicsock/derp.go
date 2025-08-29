@@ -91,7 +91,7 @@ func (c *Conn) fallbackDERPRegionForPeer(peer key.NodePublic) (regionID int) {
 type activeDerp struct {
 	c       *derphttp.Client
 	cancel  context.CancelFunc
-	writeCh chan<- derpWriteRequest
+	writeCh chan derpWriteRequest
 	// lastWrite is the time of the last request for its write
 	// channel (currently even if there was no write).
 	// It is always non-nil and initialized to a non-zero Time.
@@ -302,7 +302,7 @@ const derpWriteQueueDepth = 32
 //
 // It returns nil if the network is down, the Conn is closed, or the regionID is
 // not known.
-func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan<- derpWriteRequest {
+func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan derpWriteRequest {
 	if c.networkDown() {
 		return nil
 	}
