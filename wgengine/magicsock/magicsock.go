@@ -1642,18 +1642,27 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 	// internal locks.
 	pkt := bytes.Clone(b)
 
-	select {
-	case <-c.donec:
-		metricSendDERPErrorClosed.Add(1)
-		return false, errConnClosed
-	case ch <- derpWriteRequest{addr, pubKey, pkt, isDisco}:
-		metricSendDERPQueued.Add(1)
-		return true, nil
-	default:
-		metricSendDERPErrorQueue.Add(1)
-		// Too many writes queued. Drop packet.
-		return false, errDropDerpPacket
+	wr := derpWriteRequest{addr, pubKey, pkt, isDisco}
+	for range 3 {
+		select {
+		case <-c.donec:
+			metricSendDERPErrorClosed.Add(1)
+			return false, errConnClosed
+		case ch <- wr:
+			metricSendDERPQueued.Add(1)
+			return true, nil
+		default:
+			select {
+			case <-ch:
+				metricSendDERPDropped.Add(1)
+			default:
+			}
+		}
 	}
+	// gave up after 3 write attempts
+	metricSendDERPErrorQueue.Add(1)
+	// Too many writes queued. Drop packet.
+	return false, errDropDerpPacket
 }
 
 type receiveBatch struct {
@@ -3937,6 +3946,7 @@ var (
 	metricSendDERPErrorChan   = clientmetric.NewCounter("magicsock_send_derp_error_chan")
 	metricSendDERPErrorClosed = clientmetric.NewCounter("magicsock_send_derp_error_closed")
 	metricSendDERPErrorQueue  = clientmetric.NewCounter("magicsock_send_derp_error_queue")
+	metricSendDERPDropped     = clientmetric.NewCounter("magicsock_send_derp_dropped")
 	metricSendUDP             = clientmetric.NewAggregateCounter("magicsock_send_udp")
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
 	metricSendPeerRelay       = clientmetric.NewAggregateCounter("magicsock_send_peer_relay")
