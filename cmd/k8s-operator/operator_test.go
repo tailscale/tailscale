@@ -122,6 +122,7 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	opts := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -260,6 +261,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
+		replicas:          ptr.To[int32](1),
 		stsName:           shortName,
 		secretName:        fullName,
 		namespace:         "default",
@@ -372,6 +374,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -623,6 +626,7 @@ func TestAnnotations(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -729,6 +733,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -859,6 +864,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -999,6 +1005,7 @@ func TestCustomHostname(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -1111,6 +1118,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
+		replicas:          ptr.To[int32](1),
 		stsName:           shortName,
 		secretName:        fullName,
 		namespace:         "default",
@@ -1359,6 +1367,7 @@ func TestProxyClassForService(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	opts := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -1454,6 +1463,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	o := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -1509,6 +1519,7 @@ func TestProxyFirewallMode(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := configOpts{
+		replicas:        ptr.To[int32](1),
 		stsName:         shortName,
 		secretName:      fullName,
 		namespace:       "default",
@@ -1800,6 +1811,7 @@ func Test_authKeyRemoval(t *testing.T) {
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
 		app:             kubetypes.AppIngressProxy,
+		replicas:        ptr.To[int32](1),
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
@@ -1867,6 +1879,7 @@ func Test_externalNameService(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	opts := configOpts{
+		replicas:         ptr.To[int32](1),
 		stsName:          shortName,
 		secretName:       fullName,
 		namespace:        "default",

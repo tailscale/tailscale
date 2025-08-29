@@ -212,6 +212,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	hostname := hostnameForIngress(ing)
 
 	sts := &tailscaleSTSConfig{
+		Replicas:            1,
 		Hostname:            hostname,
 		ParentResourceName:  ing.Name,
 		ParentResourceUID:   string(ing.UID),
@@ -227,27 +228,23 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		sts.ForwardClusterTrafficViaL7IngressProxy = true
 	}
 
-	if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
+	if _, err = a.ssr.Provision(ctx, logger, sts); err != nil {
 		return fmt.Errorf("failed to provision: %w", err)
 	}
 
-	dev, err := a.ssr.DeviceInfo(ctx, crl, logger)
+	devices, err := a.ssr.DeviceInfo(ctx, crl, logger)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve Ingress HTTPS endpoint status: %w", err)
 	}
-	if dev == nil || dev.ingressDNSName == "" {
-		logger.Debugf("no Ingress DNS name known yet, waiting for proxy Pod initialize and start serving Ingress")
-		// No hostname yet. Wait for the proxy pod to auth.
-		ing.Status.LoadBalancer.Ingress = nil
-		if err := a.Status().Update(ctx, ing); err != nil {
-			return fmt.Errorf("failed to update ingress status: %w", err)
-		}
-		return nil
-	}
 
-	logger.Debugf("setting Ingress hostname to %q", dev.ingressDNSName)
-	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
-		{
+	ing.Status.LoadBalancer.Ingress = nil
+	for _, dev := range devices {
+		if dev.ingressDNSName == "" {
+			continue
+		}
+
+		logger.Debugf("setting Ingress hostname to %q", dev.ingressDNSName)
+		ing.Status.LoadBalancer.Ingress = append(ing.Status.LoadBalancer.Ingress, networkingv1.IngressLoadBalancerIngress{
 			Hostname: dev.ingressDNSName,
 			Ports: []networkingv1.IngressPortStatus{
 				{
@@ -255,11 +252,13 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 					Port:     443,
 				},
 			},
-		},
+		})
 	}
-	if err := a.Status().Update(ctx, ing); err != nil {
+
+	if err = a.Status().Update(ctx, ing); err != nil {
 		return fmt.Errorf("failed to update ingress status: %w", err)
 	}
+
 	return nil
 }
 

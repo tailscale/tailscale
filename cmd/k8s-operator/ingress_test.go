@@ -57,6 +57,7 @@ func TestTailscaleIngress(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 	opts := configOpts{
+		replicas:   ptr.To[int32](1),
 		stsName:    shortName,
 		secretName: fullName,
 		namespace:  "default",
@@ -766,7 +767,7 @@ func ingress() *networkingv1.Ingress {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
-			UID:       types.UID("1234-UID"),
+			UID:       "1234-UID",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: ptr.To("tailscale"),
