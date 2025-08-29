@@ -99,6 +99,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -202,6 +203,9 @@ type LocalBackend struct {
 	keyLogf                  logger.Logf             // for printing list of peers on change
 	statsLogf                logger.Logf             // for printing peers stats on change
 	sys                      *tsd.System
+	eventClient              *eventbus.Client
+	clientVersionSub         *eventbus.Subscriber[tailcfg.ClientVersion]
+	autoUpdateSub            *eventbus.Subscriber[controlclient.AutoUpdate]
 	health                   *health.Tracker // always non-nil
 	metrics                  metrics
 	e                        wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
@@ -523,7 +527,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		backendLogID:          logID,
 		state:                 ipn.NoState,
 		portpoll:              new(portlist.Poller),
-		em:                    newExpiryManager(logf),
+		em:                    newExpiryManager(logf, sys.Bus.Get()),
 		loginFlags:            loginFlags,
 		clock:                 clock,
 		selfUpdateProgress:    make([]ipnstate.UpdateProgress, 0),
@@ -532,6 +536,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
+	b.eventClient = b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
+	b.clientVersionSub = eventbus.Subscribe[tailcfg.ClientVersion](b.eventClient)
+	b.autoUpdateSub = eventbus.Subscribe[controlclient.AutoUpdate](b.eventClient)
 	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
@@ -603,6 +610,26 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		}
 	}
 	return b, nil
+}
+
+// consumeEventbusTopics consumes events from all relevant
+// [eventbus.Subscriber]'s and passes them to their related handler. Events are
+// always handled in the order they are received, i.e. the next event is not
+// read until the previous event's handler has returned. It returns when the
+// [tailcfg.ClientVersion] subscriber is closed, which is interpreted to be the
+// same as the [eventbus.Client] closing ([eventbus.Subscribers] are either
+// all open or all closed).
+func (b *LocalBackend) consumeEventbusTopics() {
+	for {
+		select {
+		case <-b.clientVersionSub.Done():
+			return
+		case clientVersion := <-b.clientVersionSub.Events():
+			b.onClientVersion(&clientVersion)
+		case au := <-b.autoUpdateSub.Events():
+			b.onTailnetDefaultAutoUpdate(au.Value)
+		}
+	}
 }
 
 func (b *LocalBackend) Clock() tstime.Clock { return b.clock }
@@ -2303,6 +2330,7 @@ func (b *LocalBackend) getNewControlClientFuncLocked() clientGen {
 
 // initOnce is called on the first call to [LocalBackend.Start].
 func (b *LocalBackend) initOnce() {
+	go b.consumeEventbusTopics()
 	b.extHost.Init()
 }
 
@@ -2457,27 +2485,25 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	// new controlclient. EditPrefs allows you to overwrite ServerURL,
 	// but it won't take effect until the next Start.
 	cc, err := b.getNewControlClientFuncLocked()(controlclient.Options{
-		GetMachinePrivateKey:       b.createGetMachinePrivateKeyFunc(),
-		Logf:                       logger.WithPrefix(b.logf, "control: "),
-		Persist:                    *persistv,
-		ServerURL:                  serverURL,
-		AuthKey:                    opts.AuthKey,
-		Hostinfo:                   hostinfo,
-		HTTPTestClient:             httpTestClient,
-		DiscoPublicKey:             discoPublic,
-		DebugFlags:                 debugFlags,
-		HealthTracker:              b.health,
-		Pinger:                     b,
-		PopBrowserURL:              b.tellClientToBrowseToURL,
-		OnClientVersion:            b.onClientVersion,
-		OnTailnetDefaultAutoUpdate: b.onTailnetDefaultAutoUpdate,
-		OnControlTime:              b.em.onControlTime,
-		Dialer:                     b.Dialer(),
-		Observer:                   b,
-		C2NHandler:                 http.HandlerFunc(b.handleC2N),
-		DialPlan:                   &b.dialPlan, // pointer because it can't be copied
-		ControlKnobs:               b.sys.ControlKnobs(),
-		Shutdown:                   ccShutdown,
+		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
+		Logf:                 logger.WithPrefix(b.logf, "control: "),
+		Persist:              *persistv,
+		ServerURL:            serverURL,
+		AuthKey:              opts.AuthKey,
+		Hostinfo:             hostinfo,
+		HTTPTestClient:       httpTestClient,
+		DiscoPublicKey:       discoPublic,
+		DebugFlags:           debugFlags,
+		HealthTracker:        b.health,
+		Pinger:               b,
+		PopBrowserURL:        b.tellClientToBrowseToURL,
+		Dialer:               b.Dialer(),
+		Observer:             b,
+		C2NHandler:           http.HandlerFunc(b.handleC2N),
+		DialPlan:             &b.dialPlan, // pointer because it can't be copied
+		ControlKnobs:         b.sys.ControlKnobs(),
+		Shutdown:             ccShutdown,
+		Bus:                  b.sys.Bus.Get(),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.

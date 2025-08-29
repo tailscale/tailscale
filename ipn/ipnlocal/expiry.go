@@ -6,12 +6,14 @@ package ipnlocal
 import (
 	"time"
 
+	"tailscale.com/control/controlclient"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus"
 )
 
 // For extra defense-in-depth, when we're testing expired nodes we check
@@ -40,13 +42,41 @@ type expiryManager struct {
 
 	logf  logger.Logf
 	clock tstime.Clock
+
+	eventClient    *eventbus.Client
+	controlTimeSub *eventbus.Subscriber[controlclient.ControlTime]
 }
 
-func newExpiryManager(logf logger.Logf) *expiryManager {
-	return &expiryManager{
+func newExpiryManager(logf logger.Logf, bus *eventbus.Bus) *expiryManager {
+	em := &expiryManager{
 		previouslyExpired: map[tailcfg.StableNodeID]bool{},
 		logf:              logf,
 		clock:             tstime.StdClock{},
+	}
+
+	em.eventClient = bus.Client("ipnlocal.expiryManager")
+	em.controlTimeSub = eventbus.Subscribe[controlclient.ControlTime](em.eventClient)
+
+	go em.consumeEventbusTopics()
+
+	return em
+}
+
+// consumeEventbusTopics consumes events from all relevant
+// [eventbus.Subscriber]'s and passes them to their related handler. Events are
+// always handled in the order they are received, i.e. the next event is not
+// read until the previous event's handler has returned. It returns when the
+// [controlclient.ControlTime] subscriber is closed, which is interpreted to be the
+// same as the [eventbus.Client] closing ([eventbus.Subscribers] are either
+// all open or all closed).
+func (em *expiryManager) consumeEventbusTopics() {
+	for {
+		select {
+		case <-em.controlTimeSub.Done():
+			return
+		case time := <-em.controlTimeSub.Events():
+			em.onControlTime(time.Value)
+		}
 	}
 }
 
