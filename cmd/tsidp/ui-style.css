@@ -143,6 +143,10 @@ main {
 }
 
 /* Tables */
+.table-container {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
   border-spacing: 0;
@@ -318,6 +322,12 @@ tbody tr:hover {
   color: rgb(var(--color-success));
 }
 
+.alert-info {
+  background-color: rgb(var(--color-primary) / 0.1);
+  border: 1px solid rgb(var(--color-primary) / 0.3);
+  color: rgb(var(--color-primary) / 0.8);
+}
+
 .alert-error {
   background-color: rgb(var(--color-danger) / 0.1);
   border: 1px solid rgb(var(--color-danger) / 0.3);
@@ -410,6 +420,47 @@ tbody tr:hover {
   color: rgb(var(--color-gray-200));
 }
 
+/* OIDC Endpoints */
+.oidc-endpoints-header {
+  margin: 2rem 0 2rem 0;
+}
+
+.oidc-endpoints-header h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem 0;
+}
+
+.oidc-endpoints {
+  padding: 12px 16px;
+  border: 1px solid rgb(var(--color-gray-700));
+  border-radius: 8px;
+  background-color: rgb(var(--color-gray-800) / 0.5);
+}
+
+.oidc-endpoint h3 {
+  margin: 12px 0 0 6px;
+}
+
+.oidc-endpoint p {
+  margin: 6px 0 0 6px;
+  font-size: 14px;
+}
+
+.oidc-endpoint .alert {
+  margin: 12px 0 0 0;
+}
+
+.oidc-endpoint code {
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, "DejaVu Sans Mono",
+    Menlo, Consolas, monospace;
+  font-size: 12px;
+  background-color: rgb(var(--color-gray-800));
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: rgb(var(--color-gray-200));
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
   .header-actions {
@@ -435,7 +486,7 @@ tbody tr:hover {
   table {
     font-size: 14px;
   }
-  
+
   td {
     padding: 8px 12px;
   }
@@ -443,4 +494,4 @@ tbody tr:hover {
   .client-id {
     font-size: 10px;
   }
-} 
+}

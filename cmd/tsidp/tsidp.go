@@ -184,6 +184,13 @@ func main() {
 		srv.serverURL = fmt.Sprintf("https://%s", strings.TrimSuffix(st.Self.DNSName, "."))
 	}
 
+	// Since we now have the serverURL, we can populate the endpoints
+	srv.endpoints = endpoints{
+		authorizeEndpoint: srv.serverURL + "/authorize",
+		tokenEndpoint:     srv.serverURL + "/token",
+		userinfoEndpoint:  srv.serverURL + "/userinfo",
+	}
+
 	// Load funnel clients from disk if they exist, regardless of whether funnel is enabled
 	// This ensures OIDC clients persist across restarts
 	funnelClientsFilePath, err := getConfigFilePath(rootPath, funnelClientsFile)
@@ -319,6 +326,7 @@ type idpServer struct {
 	code          map[string]*authRequest  // keyed by random hex
 	accessToken   map[string]*authRequest  // keyed by random hex
 	funnelClients map[string]*funnelClient // keyed by client ID
+	endpoints     endpoints
 }
 
 type authRequest struct {
@@ -353,6 +361,12 @@ type authRequest struct {
 	// As of 2023-11-14, it is 5 minutes.
 	// TODO: add routine to delete expired tokens.
 	validTill time.Time
+}
+
+type endpoints struct {
+	authorizeEndpoint string
+	tokenEndpoint     string
+	userinfoEndpoint  string
 }
 
 // allowRelyingParty validates that a relying party identified either by a
