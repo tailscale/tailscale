@@ -34,6 +34,10 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.operatorConfig.podHostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         - name: oauth
           {{- with .Values.oauthSecretVolume }}
