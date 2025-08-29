@@ -6,10 +6,13 @@
 package apiproxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -19,17 +22,20 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/transport"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/k8s-operator/sessionrecording"
 	ksr "tailscale.com/k8s-operator/sessionrecording"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/ctxkey"
+	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
 )
 
@@ -192,7 +198,15 @@ func (ap *APIServerProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 		ap.authError(w, err)
 		return
 	}
+
+	err = ap.recordRequestAsEvent(r, who)
+	if err != nil {
+		ap.log.Errorf("error recording Kubernetes API request: %v", err)
+		return
+	}
+
 	counterNumRequestsProxied.Add(1)
+
 	ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
@@ -220,7 +234,7 @@ func (ap *APIServerProxy) serveAttachWS(w http.ResponseWriter, r *http.Request) 
 	ap.sessionForProto(w, r, ksr.AttachSessionType, ksr.WSProtocol)
 }
 
-func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request, sessionType sessionrecording.SessionType, proto ksr.Protocol) {
+func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request, sessionType ksr.SessionType, proto ksr.Protocol) {
 	const (
 		podNameKey       = "pod"
 		namespaceNameKey = "namespace"
@@ -232,6 +246,13 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 		ap.authError(w, err)
 		return
 	}
+
+	err = ap.recordRequestAsEvent(r, who)
+	if err != nil {
+		ap.log.Errorf("error recording Kubernetes API request: %v", err)
+		return
+	}
+
 	counterNumRequestsProxied.Add(1)
 	failOpen, addrs, err := determineRecorderConfig(who)
 	if err != nil {
@@ -281,6 +302,79 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 	h := ksr.NewHijacker(opts)
 
 	ap.rp.ServeHTTP(h, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+}
+
+func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.WhoIsResponse) error {
+	failOpen, addrs, err := determineRecorderConfig(who)
+	if err != nil {
+		ap.log.Errorf("error trying to determine whether the kubernetes api request needs to be recorded: %v", err)
+		return err
+	}
+	if failOpen && len(addrs) == 0 { // will not send event
+		return err
+	}
+
+	if !failOpen && len(addrs) == 0 {
+		ap.log.Errorf("forbidden: kubernetes api request must be recorded, but no recorders are available.")
+		return err
+	}
+
+	factory := &request.RequestInfoFactory{
+		APIPrefixes:          sets.NewString("api", "apis"),
+		GrouplessAPIPrefixes: sets.NewString("api"),
+	}
+
+	reqInfo, err := factory.NewRequestInfo(req)
+	if err != nil {
+		ap.log.Errorf("Error parsing request %s %s: %v", req.Method, req.URL.Path, err)
+		return err
+	}
+
+	event := &sessionrecording.Event{
+		Timestamp:  time.Now(),
+		Kubernetes: *reqInfo,
+		Request: sessionrecording.Request{
+			Method: req.Method,
+			Path:   reqInfo.Path,
+		},
+		User: sessionrecording.User{
+			Email: who.UserProfile.LoginName,
+		},
+	}
+
+	if ct := req.Header.Get("Content-Type"); strings.Contains(ct, "application/json") {
+		bodyBytes, err := io.ReadAll(req.Body)
+		if err != nil {
+			ap.log.Errorf("Failed to read body: %v", err)
+			return err
+		}
+
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+		event.Request.Body = bodyBytes
+	}
+
+	var errs []error
+	for _, ad := range addrs {
+		eventJSON, err := json.Marshal(event)
+		if err != nil {
+			ap.log.Errorf("Error marshaling request event: %v", err)
+			return err
+		}
+
+		data := bytes.NewBuffer(eventJSON)
+
+		ap.log.Infof("event json looks like %q", string(eventJSON))
+
+		if err := sessionrecording.SendEvent(req.Context(), ad, data, ap.ts.Dial); err != nil {
+			ap.log.Errorf("Error sending event to recorder with address %q: %v", ad.String(), err)
+			errs = append(errs, err)
+		} else {
+			return nil
+		}
+	}
+
+	return multierr.New(errs...)
 }
 
 func (ap *APIServerProxy) addImpersonationHeadersAsRequired(r *http.Request) {
