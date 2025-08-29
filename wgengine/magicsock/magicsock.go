@@ -14,6 +14,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
 	"reflect"
@@ -181,11 +182,11 @@ type Conn struct {
 	filterSub             *eventbus.Subscriber[FilterUpdate]
 	nodeViewsSub          *eventbus.Subscriber[NodeViewsUpdate]
 	nodeMutsSub           *eventbus.Subscriber[NodeMutationsUpdate]
-	syncSub               *eventbus.Subscriber[syncPoint]
-	syncPub               *eventbus.Publisher[syncPoint]
 	allocRelayEndpointPub *eventbus.Publisher[UDPRelayAllocReq]
 	allocRelayEndpointSub *eventbus.Subscriber[UDPRelayAllocResp]
+	configChangedPub      *eventbus.Publisher[ConfigurationChanged]
 	subsDoneCh            chan struct{} // closed when consumeEventbusTopics returns
+	netInfoPub            *eventbus.Publisher[tailcfg.NetInfo]
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
 	// send/receive packets for wireguard and other magicsock
@@ -423,6 +424,8 @@ type Conn struct {
 
 	// metrics contains the metrics for the magicsock instance.
 	metrics *metrics
+
+	hasReconfigured chan any
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -562,20 +565,7 @@ type FilterUpdate struct {
 	*filter.Filter
 }
 
-// syncPoint is an event published over an [eventbus.Bus] by [Conn.Synchronize].
-// It serves as a synchronization point, allowing to wait until magicsock
-// has processed all pending events.
-type syncPoint chan struct{}
-
-// Wait blocks until [syncPoint.Signal] is called.
-func (s syncPoint) Wait() {
-	<-s
-}
-
-// Signal signals the sync point, unblocking the [syncPoint.Wait] call.
-func (s syncPoint) Signal() {
-	close(s)
-}
+type ConfigurationChanged struct{}
 
 // UDPRelayAllocReq represents a [*disco.AllocateUDPRelayEndpointRequest]
 // reception event. This is signaled over an [eventbus.Bus] from
@@ -612,15 +602,16 @@ type UDPRelayAllocResp struct {
 func newConn(logf logger.Logf) *Conn {
 	discoPrivate := key.NewDisco()
 	c := &Conn{
-		logf:         logf,
-		derpRecvCh:   make(chan derpReadResult, 1), // must be buffered, see issue 3736
-		derpStarted:  make(chan struct{}),
-		peerLastDerp: make(map[key.NodePublic]int),
-		peerMap:      newPeerMap(),
-		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
-		discoPrivate: discoPrivate,
-		discoPublic:  discoPrivate.Public(),
-		cloudInfo:    newCloudInfo(logf),
+		logf:            logf,
+		derpRecvCh:      make(chan derpReadResult, 1), // must be buffered, see issue 3736
+		derpStarted:     make(chan struct{}),
+		peerLastDerp:    make(map[key.NodePublic]int),
+		peerMap:         newPeerMap(),
+		discoInfo:       make(map[key.DiscoPublic]*discoInfo),
+		discoPrivate:    discoPrivate,
+		discoPublic:     discoPrivate.Public(),
+		cloudInfo:       newCloudInfo(logf),
+		hasReconfigured: make(chan any, 25),
 	}
 	c.discoShort = c.discoPublic.ShortString()
 	c.bind = &connBind{Conn: c, closed: true}
@@ -658,15 +649,22 @@ func (c *Conn) consumeEventbusTopics() {
 			c.onPortMapChanged()
 		case filterUpdate := <-c.filterSub.Events():
 			c.onFilterUpdate(filterUpdate)
+			c.hasReconfigured <- new(any)
 		case nodeViews := <-c.nodeViewsSub.Events():
 			c.onNodeViewsUpdate(nodeViews)
+			c.hasReconfigured <- new(any)
 		case nodeMuts := <-c.nodeMutsSub.Events():
 			c.onNodeMutationsUpdate(nodeMuts)
-		case syncPoint := <-c.syncSub.Events():
-			c.dlogf("magicsock: received sync point after reconfig")
-			syncPoint.Signal()
 		case allocResp := <-c.allocRelayEndpointSub.Events():
 			c.onUDPRelayAllocResp(allocResp)
+			c.hasReconfigured <- new(any)
+		case <-c.hasReconfigured:
+			c.dlogf("magicsock: configuration has changed")
+			// Drain channel as we only want to reconfigure once
+			for len(c.hasReconfigured) > 0 {
+				<-c.hasReconfigured
+			}
+			c.configChangedPub.Publish(ConfigurationChanged{})
 		}
 	}
 }
@@ -700,18 +698,6 @@ func (c *Conn) onUDPRelayAllocResp(allocResp UDPRelayAllocResp) {
 	go c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, disco.key, allocResp.Message, discoVerboseLog)
 }
 
-// Synchronize waits for all [eventbus] events published
-// prior to this call to be processed by the receiver.
-func (c *Conn) Synchronize() {
-	if c.syncPub == nil {
-		// Eventbus is not used; no need to synchronize (in certain tests).
-		return
-	}
-	sp := syncPoint(make(chan struct{}))
-	c.syncPub.Publish(sp)
-	sp.Wait()
-}
-
 // NewConn creates a magic Conn listening on opts.Port.
 // As the set of possible endpoints for a Conn changes, the
 // callback opts.EndpointsFunc is called.
@@ -741,10 +727,10 @@ func NewConn(opts Options) (*Conn, error) {
 	c.filterSub = eventbus.Subscribe[FilterUpdate](c.eventClient)
 	c.nodeViewsSub = eventbus.Subscribe[NodeViewsUpdate](c.eventClient)
 	c.nodeMutsSub = eventbus.Subscribe[NodeMutationsUpdate](c.eventClient)
-	c.syncSub = eventbus.Subscribe[syncPoint](c.eventClient)
-	c.syncPub = eventbus.Publish[syncPoint](c.eventClient)
 	c.allocRelayEndpointPub = eventbus.Publish[UDPRelayAllocReq](c.eventClient)
 	c.allocRelayEndpointSub = eventbus.Subscribe[UDPRelayAllocResp](c.eventClient)
+	c.netInfoPub = eventbus.Publish[tailcfg.NetInfo](c.eventClient)
+	c.configChangedPub = eventbus.Publish[ConfigurationChanged](c.eventClient)
 	c.subsDoneCh = make(chan struct{})
 	go c.consumeEventbusTopics()
 
@@ -1123,9 +1109,18 @@ func (c *Conn) callNetInfoCallback(ni *tailcfg.NetInfo) {
 
 func (c *Conn) callNetInfoCallbackLocked(ni *tailcfg.NetInfo) {
 	c.netInfoLast = ni
+	c.publishNetInfo(ni)
 	if c.netInfoFunc != nil {
 		c.dlogf("[v1] magicsock: netInfo update: %+v", ni)
 		go c.netInfoFunc(ni)
+	}
+}
+
+func (c *Conn) publishNetInfo(ni *tailcfg.NetInfo) {
+	if c.netInfoPub != nil {
+		newNetInfo := *ni
+		newNetInfo.DERPLatency = maps.Clone(ni.DERPLatency)
+		c.netInfoPub.Publish(newNetInfo)
 	}
 }
 
@@ -4085,9 +4080,11 @@ type lazyEndpoint struct {
 	src     epAddr
 }
 
-var _ conn.InitiationAwareEndpoint = (*lazyEndpoint)(nil)
-var _ conn.PeerAwareEndpoint = (*lazyEndpoint)(nil)
-var _ conn.Endpoint = (*lazyEndpoint)(nil)
+var (
+	_ conn.InitiationAwareEndpoint = (*lazyEndpoint)(nil)
+	_ conn.PeerAwareEndpoint       = (*lazyEndpoint)(nil)
+	_ conn.Endpoint                = (*lazyEndpoint)(nil)
+)
 
 // InitiationMessagePublicKey implements [conn.InitiationAwareEndpoint].
 // wireguard-go calls us here if we passed it a [*lazyEndpoint] for an

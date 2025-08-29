@@ -99,6 +99,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -202,6 +203,8 @@ type LocalBackend struct {
 	keyLogf                  logger.Logf             // for printing list of peers on change
 	statsLogf                logger.Logf             // for printing peers stats on change
 	sys                      *tsd.System
+	eventbus                 *eventbus.Bus
+	eventClient              *eventbus.Client
 	health                   *health.Tracker // always non-nil
 	metrics                  metrics
 	e                        wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
@@ -427,6 +430,8 @@ type LocalBackend struct {
 	//
 	// See tailscale/corp#29969.
 	overrideExitNodePolicy bool
+
+	magicSockConfChangeSub *eventbus.Subscriber[magicsock.ConfigurationChanged]
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -532,7 +537,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
-	nb := newNodeBackend(ctx, b.sys.Bus.Get())
+	b.eventbus = sys.Bus.Get()
+	b.eventClient = b.eventbus.Client("ipnlocal.LocalBackend")
+	b.magicSockConfChangeSub = eventbus.Subscribe[magicsock.ConfigurationChanged](b.eventClient)
+
+	nb := newNodeBackend(ctx, b.eventbus)
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
@@ -603,6 +612,21 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		}
 	}
 	return b, nil
+}
+
+func (b *LocalBackend) consumeEventbusTopics() {
+	for {
+		select {
+		case <-b.ctx.Done():
+			b.magicSockConfChangeSub.Close()
+			return
+		case <-b.magicSockConfChangeSub.Events():
+			if b.ctx.Err() != nil {
+				return
+			}
+			go b.authReconfig()
+		}
+	}
 }
 
 func (b *LocalBackend) Clock() tstime.Clock { return b.clock }
@@ -1756,9 +1780,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.setAuthURL(st.URL)
 	}
 	b.stateMachine()
-	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
-	// This is where netmap information gets propagated to router and magicsock.
-	b.authReconfig()
 }
 
 type preferencePolicyInfo struct {
@@ -2303,6 +2324,7 @@ func (b *LocalBackend) getNewControlClientFuncLocked() clientGen {
 
 // initOnce is called on the first call to [LocalBackend.Start].
 func (b *LocalBackend) initOnce() {
+	go b.consumeEventbusTopics()
 	b.extHost.Init()
 }
 
@@ -4470,7 +4492,6 @@ func (b *LocalBackend) changeDisablesExitNodeLocked(prefs ipn.PrefsView, change 
 	// but wasn't empty before, then the change disables
 	// exit node usage.
 	return tmpPrefs.ExitNodeID == ""
-
 }
 
 // adjustEditPrefsLocked applies additional changes to mp if necessary,
@@ -5130,11 +5151,6 @@ func (b *LocalBackend) readvertiseAppConnectorRoutes() {
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
 func (b *LocalBackend) authReconfig() {
-	// Wait for magicsock to process pending [eventbus] events,
-	// such as netmap updates. This should be completed before
-	// wireguard-go is reconfigured. See tailscale/tailscale#16369.
-	b.MagicConn().Synchronize()
-
 	b.mu.Lock()
 	blocked := b.blocked
 	prefs := b.pm.CurrentPrefs()
@@ -7390,7 +7406,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 		// down, so no need to do any work.
 		return nil
 	}
-	newNode := newNodeBackend(b.ctx, b.sys.Bus.Get())
+	newNode := newNodeBackend(b.ctx, b.eventbus)
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
 		oldNode.shutdown(errNodeContextChanged)
 	}
@@ -7736,10 +7752,8 @@ var (
 // allowedAutoRoute determines if the route being added via AdvertiseRoute (the app connector featuge) should be allowed.
 func allowedAutoRoute(ipp netip.Prefix) bool {
 	// Note: blocking the addrs for globals, not solely the prefixes.
-	for _, addr := range disallowedAddrs {
-		if ipp.Addr() == addr {
-			return false
-		}
+	if slices.Contains(disallowedAddrs, ipp.Addr()) {
+		return false
 	}
 	for _, pfx := range disallowedRanges {
 		if pfx.Overlaps(ipp) {
@@ -8178,7 +8192,6 @@ func isAllowedAutoExitNodeID(exitNodeID tailcfg.StableNodeID) bool {
 	}
 	if nodes, _ := syspolicy.GetStringArray(syspolicy.AllowedSuggestedExitNodes, nil); nodes != nil {
 		return slices.Contains(nodes, string(exitNodeID))
-
 	}
 	return true // no policy configured; allow all exit nodes
 }
@@ -8322,9 +8335,7 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 	return servicesList
 }
 
-var (
-	metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
-)
+var metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {
 	switch runtime.GOOS {
