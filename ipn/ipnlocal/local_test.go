@@ -4300,7 +4300,7 @@ func (b *LocalBackend) SetPrefsForTest(newp *ipn.Prefs) {
 	}
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
-	b.setPrefsLocked(newp)
+	b.setPrefsLockedOnEntry(newp, unlock)
 }
 
 type peerOptFunc func(*tailcfg.Node)
