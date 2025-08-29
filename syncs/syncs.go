@@ -201,6 +201,13 @@ func NewSemaphore(n int) Semaphore {
 	return Semaphore{c: make(chan struct{}, n)}
 }
 
+// Len reports the number of in-flight acquisitions.
+// It is incremented whenever the semaphore is acquired.
+// It is decremented whenever the semaphore is released.
+func (s Semaphore) Len() int {
+	return len(s.c)
+}
+
 // Acquire blocks until a resource is acquired.
 func (s Semaphore) Acquire() {
 	s.c <- struct{}{}
