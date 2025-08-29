@@ -231,7 +231,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 			// If ft is an interface with a "Clone() ft" method, it can be used to clone the field.
 			// This includes scenarios where ft is a constrained type parameter.
 			if cloneResultType := methodResultType(ft, "Clone"); cloneResultType.Underlying() == ft {
-				writef("dst.%s = src.%s.Clone()", fname, fname)
+				writef("if src.%s != nil { dst.%s = src.%s.Clone() }", fname, fname, fname)
 				continue
 			}
 			writef(`panic("%s (%v) does not have a compatible Clone method")`, fname, ft)
@@ -248,7 +248,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 // hasBasicUnderlying reports true when typ.Underlying() is a slice or a map.
 func hasBasicUnderlying(typ types.Type) bool {
 	switch typ.Underlying().(type) {
-	case *types.Slice, *types.Map:
+	case *types.Slice, *types.Map, *types.Pointer, *types.Interface:
 		return true
 	default:
 		return false

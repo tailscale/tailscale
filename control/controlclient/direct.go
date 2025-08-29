@@ -592,6 +592,17 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if persist.NetworkLockKey.IsZero() {
 		persist.NetworkLockKey = key.NewNLPrivate()
 	}
+
+	// attempt to generate a new hardware attestion key if none exists
+	if persist.AttestationKey == nil {
+		if ak, err := key.NewHardwareAttestationKey(); err != nil {
+			c.logf("failed to create hardware attestation key: %v", err)
+		} else if ak != nil {
+			persist.AttestationKey = ak
+			c.logf("using new hardware attestation key: %v", ak.Public())
+		}
+	}
+
 	nlPub := persist.NetworkLockKey.Public()
 
 	if tryingNewKey.IsZero() {
@@ -915,6 +926,25 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		TKAHead:                 tkaHead,
 		ConnectionHandleForTest: connectionHandleForTest,
 	}
+
+	// If we have a hardware attestation key, sing the node key with it and send
+	// the key & sig in the map request.
+	if persist.AsStruct().AttestationKey != nil {
+		k := persist.AsStruct().AttestationKey
+		hwPub := key.HardwareAttestationPublicFromPlatformKey(k)
+		request.HardwareAttestationKey = hwPub
+
+		// nb: there is no need to compute a SHA256 digest of the nodeKey as
+		// one will be performed within the client hardware key implementation.
+		nkBytes, _ := json.Marshal(nodeKey)
+		sig, err := k.Sign(nil, nkBytes, nil)
+		if err != nil {
+			c.logf("failed to sign node key with hardware attestation key: %v", err)
+		} else {
+			request.HardwareAttestationKeySignature = sig
+		}
+	}
+
 	var extraDebugFlags []string
 	if hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&
 		ipForwardingBroken(hi.RoutableIPs, c.netMon.InterfaceState()) {

@@ -170,7 +170,8 @@ type CapabilityVersion int
 //   - 123: 2025-07-28: fix deadlock regression from cryptokey routing change (issue #16651)
 //   - 124: 2025-08-08: removed NodeAttrDisableMagicSockCryptoRouting support, crypto routing is now mandatory
 //   - 125: 2025-08-11: dnstype.Resolver adds UseWithExitNode field.
-const CurrentCapabilityVersion CapabilityVersion = 125
+//   - 126: 2025-08-22: Client supports key.HardwareAttestationKey in Persist and sends a copy in RegisterRequest.
+const CurrentCapabilityVersion CapabilityVersion = 126
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -1359,6 +1360,13 @@ type MapRequest struct {
 	KeepAlive bool   // whether server should send keep-alives back to us
 	NodeKey   key.NodePublic
 	DiscoKey  key.DiscoPublic
+
+	// HardwareAttestationKey is the public key of the node's hardware-backed
+	// identity attestation key, if any.
+	HardwareAttestationKey key.HardwareAttestationPublic `json:",omitempty"`
+	// HardwareAttestationKeySignature is the signature of the node's node-key
+	// using its hardware attestation key, if any.
+	HardwareAttestationKeySignature []byte `json:",omitempty"`
 
 	// Stream is whether the client wants to receive multiple MapResponses over
 	// the same HTTP connection.
