@@ -11,6 +11,7 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/syspolicy/pkey"
 )
 
 // RawItem contains a raw policy setting value as read from a policy store, or an
@@ -169,4 +170,4 @@ func (v *RawValue) UnmarshalJSON(b []byte) error {
 }
 
 // RawValues is a map of keyed setting values that can be read from a JSON.
-type RawValues map[Key]RawValue
+type RawValues map[pkey.Key]RawValue

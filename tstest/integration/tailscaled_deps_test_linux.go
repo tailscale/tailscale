@@ -52,6 +52,7 @@ import (
 	_ "tailscale.com/util/multierr"
 	_ "tailscale.com/util/osshare"
 	_ "tailscale.com/util/syspolicy"
+	_ "tailscale.com/util/syspolicy/pkey"
 	_ "tailscale.com/version"
 	_ "tailscale.com/version/distro"
 	_ "tailscale.com/wgengine"

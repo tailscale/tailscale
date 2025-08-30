@@ -11,6 +11,7 @@ import (
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"tailscale.com/util/syspolicy/internal"
+	"tailscale.com/util/syspolicy/pkey"
 )
 
 func TestMergeSnapshots(t *testing.T) {
@@ -23,23 +24,23 @@ func TestMergeSnapshots(t *testing.T) {
 			name: "both-nil",
 			s1:   nil,
 			s2:   nil,
-			want: NewSnapshot(map[Key]RawItem{}),
+			want: NewSnapshot(map[pkey.Key]RawItem{}),
 		},
 		{
 			name: "both-empty",
-			s1:   NewSnapshot(map[Key]RawItem{}),
-			s2:   NewSnapshot(map[Key]RawItem{}),
-			want: NewSnapshot(map[Key]RawItem{}),
+			s1:   NewSnapshot(map[pkey.Key]RawItem{}),
+			s2:   NewSnapshot(map[pkey.Key]RawItem{}),
+			want: NewSnapshot(map[pkey.Key]RawItem{}),
 		},
 		{
 			name: "first-nil",
 			s1:   nil,
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
 			}),
-			want: NewSnapshot(map[Key]RawItem{
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
@@ -47,13 +48,13 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "first-empty",
-			s1:   NewSnapshot(map[Key]RawItem{}),
-			s2: NewSnapshot(map[Key]RawItem{
+			s1:   NewSnapshot(map[pkey.Key]RawItem{}),
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}),
-			want: NewSnapshot(map[Key]RawItem{
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -61,13 +62,13 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "second-nil",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
 			}),
 			s2: nil,
-			want: NewSnapshot(map[Key]RawItem{
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
@@ -75,13 +76,13 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "second-empty",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}),
-			s2: NewSnapshot(map[Key]RawItem{}),
-			want: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{}),
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -89,17 +90,17 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "no-conflicts",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting4": RawItemOf(2 * time.Hour),
 				"Setting5": RawItemOf(VisibleByPolicy),
 				"Setting6": RawItemOf(ShowChoiceByPolicy),
 			}),
-			want: NewSnapshot(map[Key]RawItem{
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -110,17 +111,17 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "with-conflicts",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
 			}),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(456),
 				"Setting3": RawItemOf(false),
 				"Setting4": RawItemOf(2 * time.Hour),
 			}),
-			want: NewSnapshot(map[Key]RawItem{
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(456),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -129,17 +130,17 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "with-scope-first-wins",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
 			}, DeviceScope),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(456),
 				"Setting3": RawItemOf(false),
 				"Setting4": RawItemOf(2 * time.Hour),
 			}, CurrentUserScope),
-			want: NewSnapshot(map[Key]RawItem{
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
@@ -148,17 +149,17 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "with-scope-second-wins",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
 			}, CurrentUserScope),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(456),
 				"Setting3": RawItemOf(false),
 				"Setting4": RawItemOf(2 * time.Hour),
 			}, DeviceScope),
-			want: NewSnapshot(map[Key]RawItem{
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(456),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -167,18 +168,18 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "with-scope-both-empty",
-			s1:   NewSnapshot(map[Key]RawItem{}, CurrentUserScope),
-			s2:   NewSnapshot(map[Key]RawItem{}, DeviceScope),
-			want: NewSnapshot(map[Key]RawItem{}, CurrentUserScope),
+			s1:   NewSnapshot(map[pkey.Key]RawItem{}, CurrentUserScope),
+			s2:   NewSnapshot(map[pkey.Key]RawItem{}, DeviceScope),
+			want: NewSnapshot(map[pkey.Key]RawItem{}, CurrentUserScope),
 		},
 		{
 			name: "with-scope-first-empty",
-			s1:   NewSnapshot(map[Key]RawItem{}, CurrentUserScope),
-			s2: NewSnapshot(map[Key]RawItem{
+			s1:   NewSnapshot(map[pkey.Key]RawItem{}, CurrentUserScope),
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true)}, DeviceScope, NewNamedOrigin("TestPolicy", DeviceScope)),
-			want: NewSnapshot(map[Key]RawItem{
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
@@ -186,13 +187,13 @@ func TestMergeSnapshots(t *testing.T) {
 		},
 		{
 			name: "with-scope-second-empty",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
 			}, CurrentUserScope),
-			s2: NewSnapshot(map[Key]RawItem{}),
-			want: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{}),
+			want: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
@@ -226,28 +227,28 @@ func TestSnapshotEqual(t *testing.T) {
 		{
 			name:           "nil-empty",
 			s1:             nil,
-			s2:             NewSnapshot(map[Key]RawItem{}),
+			s2:             NewSnapshot(map[pkey.Key]RawItem{}),
 			wantEqual:      true,
 			wantEqualItems: true,
 		},
 		{
 			name:           "empty-nil",
-			s1:             NewSnapshot(map[Key]RawItem{}),
+			s1:             NewSnapshot(map[pkey.Key]RawItem{}),
 			s2:             nil,
 			wantEqual:      true,
 			wantEqualItems: true,
 		},
 		{
 			name:           "empty-empty",
-			s1:             NewSnapshot(map[Key]RawItem{}),
-			s2:             NewSnapshot(map[Key]RawItem{}),
+			s1:             NewSnapshot(map[pkey.Key]RawItem{}),
+			s2:             NewSnapshot(map[pkey.Key]RawItem{}),
 			wantEqual:      true,
 			wantEqualItems: true,
 		},
 		{
 			name: "first-nil",
 			s1:   nil,
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -257,8 +258,8 @@ func TestSnapshotEqual(t *testing.T) {
 		},
 		{
 			name: "first-empty",
-			s1:   NewSnapshot(map[Key]RawItem{}),
-			s2: NewSnapshot(map[Key]RawItem{
+			s1:   NewSnapshot(map[pkey.Key]RawItem{}),
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -268,7 +269,7 @@ func TestSnapshotEqual(t *testing.T) {
 		},
 		{
 			name: "second-nil",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(true),
@@ -279,23 +280,23 @@ func TestSnapshotEqual(t *testing.T) {
 		},
 		{
 			name: "second-empty",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}),
-			s2:             NewSnapshot(map[Key]RawItem{}),
+			s2:             NewSnapshot(map[pkey.Key]RawItem{}),
 			wantEqual:      false,
 			wantEqualItems: false,
 		},
 		{
 			name: "same-items-same-order-no-scope",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -305,12 +306,12 @@ func TestSnapshotEqual(t *testing.T) {
 		},
 		{
 			name: "same-items-same-order-same-scope",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}, DeviceScope),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -320,12 +321,12 @@ func TestSnapshotEqual(t *testing.T) {
 		},
 		{
 			name: "same-items-different-order-same-scope",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}, DeviceScope),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting3": RawItemOf(false),
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
@@ -335,12 +336,12 @@ func TestSnapshotEqual(t *testing.T) {
 		},
 		{
 			name: "same-items-same-order-different-scope",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}, DeviceScope),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
@@ -350,12 +351,12 @@ func TestSnapshotEqual(t *testing.T) {
 		},
 		{
 			name: "different-items-same-scope",
-			s1: NewSnapshot(map[Key]RawItem{
+			s1: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(123),
 				"Setting2": RawItemOf("String"),
 				"Setting3": RawItemOf(false),
 			}, DeviceScope),
-			s2: NewSnapshot(map[Key]RawItem{
+			s2: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting4": RawItemOf(2 * time.Hour),
 				"Setting5": RawItemOf(VisibleByPolicy),
 				"Setting6": RawItemOf(ShowChoiceByPolicy),
@@ -404,7 +405,7 @@ func TestSnapshotString(t *testing.T) {
 		},
 		{
 			name: "non-empty",
-			snapshot: NewSnapshot(map[Key]RawItem{
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemOf(2 * time.Hour),
 				"Setting2": RawItemOf(VisibleByPolicy),
 				"Setting3": RawItemOf(ShowChoiceByPolicy),
@@ -416,14 +417,14 @@ Setting3 = user-decides`,
 		},
 		{
 			name: "non-empty-with-item-origin",
-			snapshot: NewSnapshot(map[Key]RawItem{
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemWith(42, nil, NewNamedOrigin("Test Policy", DeviceScope)),
 			}),
 			wantString: `Setting1 = 42 - {Test Policy (Device)}`,
 		},
 		{
 			name: "non-empty-with-item-error",
-			snapshot: NewSnapshot(map[Key]RawItem{
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{
 				"Setting1": RawItemWith(nil, NewErrorText("bang!"), nil),
 			}),
 			wantString: `Setting1 = Error{"bang!"}`,
@@ -458,55 +459,55 @@ func TestMarshalUnmarshalSnapshot(t *testing.T) {
 		},
 		{
 			name:     "Bool/True",
-			snapshot: NewSnapshot(map[Key]RawItem{"BoolPolicy": RawItemOf(true)}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"BoolPolicy": RawItemOf(true)}),
 			wantJSON: `{"Settings": {"BoolPolicy": {"Value": true}}}`,
 		},
 		{
 			name:     "Bool/False",
-			snapshot: NewSnapshot(map[Key]RawItem{"BoolPolicy": RawItemOf(false)}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"BoolPolicy": RawItemOf(false)}),
 			wantJSON: `{"Settings": {"BoolPolicy": {"Value": false}}}`,
 		},
 		{
 			name:     "String/Non-Empty",
-			snapshot: NewSnapshot(map[Key]RawItem{"StringPolicy": RawItemOf("StringValue")}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"StringPolicy": RawItemOf("StringValue")}),
 			wantJSON: `{"Settings": {"StringPolicy": {"Value": "StringValue"}}}`,
 		},
 		{
 			name:     "String/Empty",
-			snapshot: NewSnapshot(map[Key]RawItem{"StringPolicy": RawItemOf("")}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"StringPolicy": RawItemOf("")}),
 			wantJSON: `{"Settings": {"StringPolicy": {"Value": ""}}}`,
 		},
 		{
 			name:     "Integer/NonZero",
-			snapshot: NewSnapshot(map[Key]RawItem{"IntPolicy": RawItemOf(uint64(42))}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"IntPolicy": RawItemOf(uint64(42))}),
 			wantJSON: `{"Settings": {"IntPolicy": {"Value": 42}}}`,
 		},
 		{
 			name:     "Integer/Zero",
-			snapshot: NewSnapshot(map[Key]RawItem{"IntPolicy": RawItemOf(uint64(0))}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"IntPolicy": RawItemOf(uint64(0))}),
 			wantJSON: `{"Settings": {"IntPolicy": {"Value": 0}}}`,
 		},
 		{
 			name:     "String-List",
-			snapshot: NewSnapshot(map[Key]RawItem{"ListPolicy": RawItemOf([]string{"Value1", "Value2"})}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"ListPolicy": RawItemOf([]string{"Value1", "Value2"})}),
 			wantJSON: `{"Settings": {"ListPolicy": {"Value": ["Value1", "Value2"]}}}`,
 		},
 		{
 			name:     "Duration/Zero",
-			snapshot: NewSnapshot(map[Key]RawItem{"DurationPolicy": RawItemOf(time.Duration(0))}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"DurationPolicy": RawItemOf(time.Duration(0))}),
 			wantJSON: `{"Settings": {"DurationPolicy": {"Value": "0s"}}}`,
-			wantBack: NewSnapshot(map[Key]RawItem{"DurationPolicy": RawItemOf("0s")}),
+			wantBack: NewSnapshot(map[pkey.Key]RawItem{"DurationPolicy": RawItemOf("0s")}),
 		},
 		{
 			name:     "Duration/NonZero",
-			snapshot: NewSnapshot(map[Key]RawItem{"DurationPolicy": RawItemOf(2 * time.Hour)}),
+			snapshot: NewSnapshot(map[pkey.Key]RawItem{"DurationPolicy": RawItemOf(2 * time.Hour)}),
 			wantJSON: `{"Settings": {"DurationPolicy": {"Value": "2h0m0s"}}}`,
-			wantBack: NewSnapshot(map[Key]RawItem{"DurationPolicy": RawItemOf("2h0m0s")}),
+			wantBack: NewSnapshot(map[pkey.Key]RawItem{"DurationPolicy": RawItemOf("2h0m0s")}),
 		},
 		{
 			name: "Empty/With-Summary",
 			snapshot: NewSnapshot(
-				map[Key]RawItem{},
+				map[pkey.Key]RawItem{},
 				SummaryWith(CurrentUserScope, NewNamedOrigin("TestSource", DeviceScope)),
 			),
 			wantJSON: `{"Summary": {"Origin": {"Name": "TestSource", "Scope": "Device"}, "Scope": "User"}}`,
@@ -514,7 +515,7 @@ func TestMarshalUnmarshalSnapshot(t *testing.T) {
 		{
 			name: "Setting/With-Summary",
 			snapshot: NewSnapshot(
-				map[Key]RawItem{"PolicySetting": RawItemOf(uint64(42))},
+				map[pkey.Key]RawItem{"PolicySetting": RawItemOf(uint64(42))},
 				SummaryWith(CurrentUserScope, NewNamedOrigin("TestSource", DeviceScope)),
 			),
 			wantJSON: `{
@@ -525,7 +526,7 @@ func TestMarshalUnmarshalSnapshot(t *testing.T) {
 		{
 			name: "Settings/With-Origins",
 			snapshot: NewSnapshot(
-				map[Key]RawItem{
+				map[pkey.Key]RawItem{
 					"SettingA": RawItemWith(uint64(42), nil, NewNamedOrigin("SourceA", DeviceScope)),
 					"SettingB": RawItemWith("B", nil, NewNamedOrigin("SourceB", CurrentProfileScope)),
 					"SettingC": RawItemWith(true, nil, NewNamedOrigin("SourceC", CurrentUserScope)),
