@@ -56,6 +56,7 @@ import (
 	"tailscale.com/types/logid"
 	"tailscale.com/util/osdiag"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/gp"
 	"tailscale.com/version"
@@ -155,7 +156,7 @@ func runWindowsService(pol *logpolicy.Policy) error {
 
 	if syslog, err := eventlog.Open(serviceName); err == nil {
 		syslogf = func(format string, args ...any) {
-			if logSCMInteractions, _ := syspolicy.GetBoolean(syspolicy.LogSCMInteractions, false); logSCMInteractions {
+			if logSCMInteractions, _ := syspolicy.GetBoolean(pkey.LogSCMInteractions, false); logSCMInteractions {
 				syslog.Info(0, fmt.Sprintf(format, args...))
 			}
 		}
@@ -389,8 +390,7 @@ func handleSessionChange(chgRequest svc.ChangeRequest) {
 	if chgRequest.Cmd != svc.SessionChange || chgRequest.EventType != windows.WTS_SESSION_UNLOCK {
 		return
 	}
-
-	if flushDNSOnSessionUnlock, _ := syspolicy.GetBoolean(syspolicy.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
+	if flushDNSOnSessionUnlock, _ := syspolicy.GetBoolean(pkey.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
 		log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
 		go func() {
 			err := dns.Flush()

@@ -14,13 +14,18 @@ import (
 	"strconv"
 	"testing"
 
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 )
 
 func TestKnownKeysRegistered(t *testing.T) {
-	keyConsts, err := listStringConsts[Key]("policy_keys.go")
+	const file = "pkey/pkey.go"
+	keyConsts, err := listStringConsts[pkey.Key](file)
 	if err != nil {
 		t.Fatalf("listStringConsts failed: %v", err)
+	}
+	if len(keyConsts) == 0 {
+		t.Fatalf("no key constants found in %s", file)
 	}
 
 	m, err := setting.DefinitionMapOf(implicitDefinitions)

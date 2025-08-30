@@ -11,6 +11,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
 )
 
 type actorWithPolicyChecks struct{ Actor }
@@ -50,10 +51,10 @@ func (a actorWithPolicyChecks) CheckProfileAccess(profile ipn.LoginProfileView, 
 // TODO(nickkhyl): unexport it when we move [ipn.Actor] implementations from [ipnserver]
 // and corp to this package.
 func CheckDisconnectPolicy(actor Actor, profile ipn.LoginProfileView, reason string, auditFn AuditLogFunc) error {
-	if alwaysOn, _ := syspolicy.GetBoolean(syspolicy.AlwaysOn, false); !alwaysOn {
+	if alwaysOn, _ := syspolicy.GetBoolean(pkey.AlwaysOn, false); !alwaysOn {
 		return nil
 	}
-	if allowWithReason, _ := syspolicy.GetBoolean(syspolicy.AlwaysOnOverrideWithReason, false); !allowWithReason {
+	if allowWithReason, _ := syspolicy.GetBoolean(pkey.AlwaysOnOverrideWithReason, false); !allowWithReason {
 		return errors.New("disconnect not allowed: always-on mode is enabled")
 	}
 	if reason == "" {

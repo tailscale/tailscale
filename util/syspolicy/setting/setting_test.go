@@ -11,6 +11,7 @@ import (
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/syspolicy/internal"
+	"tailscale.com/util/syspolicy/pkey"
 )
 
 func TestSettingDefinition(t *testing.T) {
@@ -18,7 +19,7 @@ func TestSettingDefinition(t *testing.T) {
 		name                   string
 		setting                *Definition
 		osOverride             string
-		wantKey                Key
+		wantKey                pkey.Key
 		wantScope              Scope
 		wantType               Type
 		wantIsSupported        bool
@@ -163,10 +164,10 @@ func TestSettingDefinition(t *testing.T) {
 }
 
 func TestRegisterSettingDefinition(t *testing.T) {
-	const testPolicySettingKey Key = "TestPolicySetting"
+	const testPolicySettingKey pkey.Key = "TestPolicySetting"
 	tests := []struct {
 		name    string
-		key     Key
+		key     pkey.Key
 		wantEq  *Definition
 		wantErr error
 	}{
