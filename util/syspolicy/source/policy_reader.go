@@ -16,6 +16,7 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/internal/metrics"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -138,9 +139,9 @@ func (r *Reader) reload(force bool) (*setting.Snapshot, error) {
 
 	metrics.Reset(r.origin)
 
-	var m map[setting.Key]setting.RawItem
+	var m map[pkey.Key]setting.RawItem
 	if lastPolicyCount := r.lastPolicy.Len(); lastPolicyCount > 0 {
-		m = make(map[setting.Key]setting.RawItem, lastPolicyCount)
+		m = make(map[pkey.Key]setting.RawItem, lastPolicyCount)
 	}
 	for _, s := range r.settings {
 		if !r.origin.Scope().IsConfigurableSetting(s) {

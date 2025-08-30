@@ -19,6 +19,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
 )
 
 // getMachineCertificateSubject returns the exact name of a Subject that needs
@@ -31,7 +32,7 @@ import (
 //
 // Example: "CN=Tailscale Inc Test Root CA,OU=Tailscale Inc Test Certificate Authority,O=Tailscale Inc,ST=ON,C=CA"
 func getMachineCertificateSubject() string {
-	machineCertSubject, _ := syspolicy.GetString(syspolicy.MachineCertificateSubject, "")
+	machineCertSubject, _ := syspolicy.GetString(pkey.MachineCertificateSubject, "")
 	return machineCertSubject
 }
 

@@ -54,6 +54,7 @@ import (
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/zstdframe"
@@ -616,7 +617,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, nil, err
 	}
 
-	tailnet, err := syspolicy.GetString(syspolicy.Tailnet, "")
+	tailnet, err := syspolicy.GetString(pkey.Tailnet, "")
 	if err != nil {
 		c.logf("unable to provide Tailnet field in register request. err: %v", err)
 	}

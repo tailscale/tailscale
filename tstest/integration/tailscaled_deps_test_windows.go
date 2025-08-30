@@ -63,6 +63,7 @@ import (
 	_ "tailscale.com/util/osdiag"
 	_ "tailscale.com/util/osshare"
 	_ "tailscale.com/util/syspolicy"
+	_ "tailscale.com/util/syspolicy/pkey"
 	_ "tailscale.com/util/winutil"
 	_ "tailscale.com/util/winutil/gp"
 	_ "tailscale.com/version"

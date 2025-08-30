@@ -4,6 +4,7 @@
 package syspolicy
 
 import (
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
@@ -85,22 +86,22 @@ func (s handlerStore) RegisterChangeCallback(callback func()) (unregister func()
 }
 
 // ReadString implements [source.Store].
-func (s handlerStore) ReadString(key setting.Key) (string, error) {
+func (s handlerStore) ReadString(key pkey.Key) (string, error) {
 	return s.h.ReadString(string(key))
 }
 
 // ReadUInt64 implements [source.Store].
-func (s handlerStore) ReadUInt64(key setting.Key) (uint64, error) {
+func (s handlerStore) ReadUInt64(key pkey.Key) (uint64, error) {
 	return s.h.ReadUInt64(string(key))
 }
 
 // ReadBoolean implements [source.Store].
-func (s handlerStore) ReadBoolean(key setting.Key) (bool, error) {
+func (s handlerStore) ReadBoolean(key pkey.Key) (bool, error) {
 	return s.h.ReadBoolean(string(key))
 }
 
 // ReadStringArray implements [source.Store].
-func (s handlerStore) ReadStringArray(key setting.Key) ([]string, error) {
+func (s handlerStore) ReadStringArray(key pkey.Key) ([]string, error) {
 	return s.h.ReadStringArray(string(key))
 }
 
