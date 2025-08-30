@@ -11,13 +11,14 @@ import (
 	"strconv"
 	"testing"
 
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 )
 
 func TestKeyToEnvVarName(t *testing.T) {
 	tests := []struct {
 		name    string
-		key     setting.Key
+		key     pkey.Key
 		want    string // suffix after "TS_DEBUGSYSPOLICY_"
 		wantErr error
 	}{
@@ -166,7 +167,7 @@ func TestEnvPolicyStore(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
-		key     setting.Key
+		key     pkey.Key
 		lookup  func(string) (string, bool)
 		want    any
 		wantErr error

@@ -17,6 +17,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/internal/loggerx"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/testenv"
 )
@@ -209,7 +210,7 @@ func scopeMetrics(origin *setting.Origin) *policyScopeMetrics {
 
 var (
 	settingMetricsMu  sync.RWMutex
-	settingMetricsMap map[setting.Key]*settingMetrics
+	settingMetricsMap map[pkey.Key]*settingMetrics
 )
 
 func settingMetricsFor(setting *setting.Definition) *settingMetrics {
@@ -283,8 +284,8 @@ func SetHooksForTest(tb testenv.TB, addMetric, setMetric metricFn) {
 	lazyUserMetrics.SetForTest(tb, newScopeMetrics(setting.UserSetting), nil)
 }
 
-func newSettingMetric(key setting.Key, scope setting.Scope, suffix string, typ clientmetric.Type) metric {
-	name := strings.ReplaceAll(string(key), string(setting.KeyPathSeparator), "_")
+func newSettingMetric(key pkey.Key, scope setting.Scope, suffix string, typ clientmetric.Type) metric {
+	name := strings.ReplaceAll(string(key), string(pkey.KeyPathSeparator), "_")
 	name = strings.ReplaceAll(name, ".", "_") // dots are not allowed in metric names
 	return newMetric([]string{name, metricScopeName(scope), suffix}, typ)
 }

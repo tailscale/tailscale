@@ -14,11 +14,12 @@ import (
 	"strconv"
 	"testing"
 
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
 )
 
 func TestKnownKeysRegistered(t *testing.T) {
-	keyConsts, err := listStringConsts[Key]("policy_keys.go")
+	keyConsts, err := listStringConsts[pkey.Key]("policy_keys.go")
 	if err != nil {
 		t.Fatalf("listStringConsts failed: %v", err)
 	}

@@ -30,6 +30,7 @@ import (
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -342,7 +343,7 @@ func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http
 	// this will first check syspolicy, MDM settings like Registry
 	// on Windows or defaults on macOS. If they are not set, it falls
 	// back to the cli-flag, `--posture-checking`.
-	choice, err := syspolicy.GetPreferenceOption(syspolicy.PostureChecking)
+	choice, err := syspolicy.GetPreferenceOption(pkey.PostureChecking)
 	if err != nil {
 		b.logf(
 			"c2n: failed to read PostureChecking from syspolicy, returning default from CLI: %s; got error: %s",

@@ -65,6 +65,7 @@ import (
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -1011,6 +1012,6 @@ func defaultEncryptState() bool {
 		// (plan9/FreeBSD/etc).
 		return false
 	}
-	v, _ := syspolicy.GetBoolean(syspolicy.EncryptState, false)
+	v, _ := syspolicy.GetBoolean(pkey.EncryptState, false)
 	return v
 }

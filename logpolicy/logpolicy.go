@@ -52,6 +52,7 @@ import (
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -65,7 +66,7 @@ var getLogTargetOnce struct {
 func getLogTarget() string {
 	getLogTargetOnce.Do(func() {
 		envTarget, _ := os.LookupEnv("TS_LOG_TARGET")
-		getLogTargetOnce.v, _ = syspolicy.GetString(syspolicy.LogTarget, envTarget)
+		getLogTargetOnce.v, _ = syspolicy.GetString(pkey.LogTarget, envTarget)
 	})
 
 	return getLogTargetOnce.v
