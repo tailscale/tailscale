@@ -8,6 +8,8 @@ on:
       - ".github/workflows/request-dataplane-review.yml"
       - "**/*derp*"
       - "**/derp*/**"
+    paths-ignore:
+      - "**/depaware.txt"
 
 jobs:
   request-dataplane-review:
