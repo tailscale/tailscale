@@ -10,6 +10,7 @@ import (
 
 	"tailscale.com/util/must"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -139,8 +140,8 @@ func TestReaderLifecycle(t *testing.T) {
 			},
 			initWant: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"DurationValue":         setting.RawItemWith(must.Get(time.ParseDuration("2h30m")), nil, setting.NewNamedOrigin("Test", setting.DeviceScope)),
-				"PreferenceOptionValue": setting.RawItemWith(setting.AlwaysByPolicy, nil, setting.NewNamedOrigin("Test", setting.DeviceScope)),
-				"VisibilityValue":       setting.RawItemWith(setting.VisibleByPolicy, nil, setting.NewNamedOrigin("Test", setting.DeviceScope)),
+				"PreferenceOptionValue": setting.RawItemWith(ptype.AlwaysByPolicy, nil, setting.NewNamedOrigin("Test", setting.DeviceScope)),
+				"VisibilityValue":       setting.RawItemWith(ptype.VisibleByPolicy, nil, setting.NewNamedOrigin("Test", setting.DeviceScope)),
 			}, setting.NewNamedOrigin("Test", setting.DeviceScope)),
 		},
 		{
@@ -169,8 +170,8 @@ func TestReaderLifecycle(t *testing.T) {
 			initWant: setting.NewSnapshot(map[pkey.Key]setting.RawItem{
 				"DurationValue1":        setting.RawItemWith(nil, setting.NewErrorText("time: invalid duration \"soon\""), setting.NewNamedOrigin("Test", setting.CurrentUserScope)),
 				"DurationValue2":        setting.RawItemWith(nil, setting.NewErrorText("bang!"), setting.NewNamedOrigin("Test", setting.CurrentUserScope)),
-				"PreferenceOptionValue": setting.RawItemWith(setting.ShowChoiceByPolicy, nil, setting.NewNamedOrigin("Test", setting.CurrentUserScope)),
-				"VisibilityValue":       setting.RawItemWith(setting.VisibleByPolicy, setting.NewErrorText("type mismatch in ReadString: got uint64"), setting.NewNamedOrigin("Test", setting.CurrentUserScope)),
+				"PreferenceOptionValue": setting.RawItemWith(ptype.ShowChoiceByPolicy, nil, setting.NewNamedOrigin("Test", setting.CurrentUserScope)),
+				"VisibilityValue":       setting.RawItemWith(ptype.VisibleByPolicy, setting.NewErrorText("type mismatch in ReadString: got uint64"), setting.NewNamedOrigin("Test", setting.CurrentUserScope)),
 			}, setting.NewNamedOrigin("Test", setting.CurrentUserScope)),
 		},
 	}

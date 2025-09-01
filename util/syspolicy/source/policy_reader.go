@@ -17,6 +17,7 @@ import (
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/internal/metrics"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -365,21 +366,21 @@ func readPolicySettingValue(store Store, s *setting.Definition) (value any, err 
 	case setting.PreferenceOptionValue:
 		s, err := store.ReadString(key)
 		if err == nil {
-			var value setting.PreferenceOption
+			var value ptype.PreferenceOption
 			if err = value.UnmarshalText([]byte(s)); err == nil {
 				return value, nil
 			}
 		}
-		return setting.ShowChoiceByPolicy, err
+		return ptype.ShowChoiceByPolicy, err
 	case setting.VisibilityValue:
 		s, err := store.ReadString(key)
 		if err == nil {
-			var value setting.Visibility
+			var value ptype.Visibility
 			if err = value.UnmarshalText([]byte(s)); err == nil {
 				return value, nil
 			}
 		}
-		return setting.VisibleByPolicy, err
+		return ptype.VisibleByPolicy, err
 	case setting.DurationValue:
 		s, err := store.ReadString(key)
 		if err == nil {

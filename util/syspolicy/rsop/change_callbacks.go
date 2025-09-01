@@ -13,6 +13,7 @@ import (
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -50,7 +51,7 @@ func (c PolicyChange) HasChanged(key pkey.Key) bool {
 		return true
 	}
 	switch newVal := new.(type) {
-	case bool, uint64, string, setting.Visibility, setting.PreferenceOption, time.Duration:
+	case bool, uint64, string, ptype.Visibility, ptype.PreferenceOption, time.Duration:
 		return newVal != old
 	case []string:
 		oldVal, ok := old.([]string)
