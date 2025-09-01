@@ -106,6 +106,12 @@ func defaultTunName() string {
 // The PORT environment variable is chosen to match what the Linux systemd
 // unit uses, to make documentation more consistent.
 func defaultPort() uint16 {
+
+	// Return ENDPOINT_ADDRESS port if set
+	if s, ok := getEndpointAddressPort(); ok {
+		return s
+	}
+
 	if s := envknob.String("PORT"); s != "" {
 		if p, err := strconv.ParseUint(s, 10, 16); err == nil {
 			return uint16(p)
@@ -115,6 +121,32 @@ func defaultPort() uint16 {
 		return 41641
 	}
 	return 0
+}
+
+// Checks if the environment variable ENDPOINT_ADDRESS is set
+// and returns the port if valid
+func getEndpointAddressPort() (uint16, bool) {
+
+	a := envknob.String("ENDPOINT_ADDRESS")
+	if a == "" {
+		return 0, false
+	}
+
+	_, s, err := net.SplitHostPort(a)
+	if err != nil {
+		return 0, false
+	}
+
+	p, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return 0, false
+	}
+
+	if p < 1024 || p > 65535 {
+		return 0, false
+	}
+
+	return uint16(p), true
 }
 
 var args struct {
@@ -629,16 +661,16 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			}
 			return tcpConn, nil
 		}
-		dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			// Note: don't just return ns.DialContextUDP or we'll return
-			// *gonet.UDPConn(nil) instead of a nil interface which trips up
-			// callers.
-			udpConn, err := ns.DialContextUDP(ctx, dst)
-			if err != nil {
-				return nil, err
-			}
-			return udpConn, nil
+	}
+	dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		// Note: don't just return ns.DialContextUDP or we'll return
+		// *gonet.UDPConn(nil) instead of a nil interface which trips up
+		// callers.
+		udpConn, err := ns.DialContextUDP(ctx, dst)
+		if err != nil {
+			return nil, err
 		}
+		return udpConn, nil
 	}
 	if socksListener != nil || httpProxyListener != nil {
 		var addrs []string
