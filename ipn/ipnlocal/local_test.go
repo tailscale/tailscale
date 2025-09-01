@@ -47,6 +47,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/deptest"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
@@ -63,6 +64,7 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/wgengine"
@@ -5541,6 +5543,28 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	}
 }
 
+// staticPolicy maps policy keys to their corresponding values,
+// which must be of the correct type (string, []string, bool, etc).
+//
+// It is used for testing purposes to simulate policy client behavior.
+// It panics if the values are the wrong type.
+type staticPolicy map[pkey.Key]any
+
+type testPolicy struct {
+	staticPolicy
+	policyclient.Client
+}
+
+func (sp testPolicy) GetStringArray(key pkey.Key, defaultVal []string) ([]string, error) {
+	if val, ok := sp.staticPolicy[key]; ok {
+		if arr, ok := val.([]string); ok {
+			return arr, nil
+		}
+		return nil, fmt.Errorf("key %s is not a []string", key)
+	}
+	return defaultVal, nil
+}
+
 func TestFillAllowedSuggestions(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -5571,15 +5595,16 @@ func TestFillAllowedSuggestions(t *testing.T) {
 			want:        []tailcfg.StableNodeID{"ABC", "def", "gHiJ"},
 		},
 	}
-	syspolicy.RegisterWellKnownSettingsForTest(t)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
-				pkey.AllowedSuggestedExitNodes, tt.allowPolicy,
-			))
-			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
+			polc := testPolicy{
+				staticPolicy: staticPolicy{
+					pkey.AllowedSuggestedExitNodes: tt.allowPolicy,
+				},
+			}
 
-			got := fillAllowedSuggestions()
+			got := fillAllowedSuggestions(polc)
 			if got == nil {
 				if tt.want == nil {
 					return
@@ -7006,6 +7031,19 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 			ipnWatcher.check()
 		})
 	}
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		OnImport: func(pkg string) {
+			switch pkg {
+			case "tailscale.com/util/syspolicy",
+				"tailscale.com/util/syspolicy/setting",
+				"tailscale.com/util/syspolicy/rsop":
+				t.Errorf("ipn/ipnlocal: importing syspolicy package %q is not allowed; only policyclient and its deps should be used by ipn/ipnlocal", pkg)
+			}
+		},
+	}.Check(t)
 }
 
 func checkError(tb testing.TB, got, want error, fatal bool) {
