@@ -1,11 +1,11 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package setting
-
-import (
-	"encoding"
-)
+// Package ptype contains types used by syspolicy.
+//
+// It's a leaf package for dependency reasons and should not contain much if any
+// code, and should not import much (or anything).
+package ptype
 
 // PreferenceOption is a policy that governs whether a boolean variable
 // is forcibly assigned an administrator-defined value, or allowed to receive
@@ -18,9 +18,10 @@ const (
 	AlwaysByPolicy
 )
 
-// Show returns if the UI option that controls the choice administered by this
-// policy should be shown. Currently this is true if and only if the policy is
-// [ShowChoiceByPolicy].
+// Show reports whether the UI option that controls the choice administered by
+// this policy should be shown (that is, available for users to change).
+//
+// Currently this is true if and only if the policy is [ShowChoiceByPolicy].
 func (p PreferenceOption) Show() bool {
 	return p == ShowChoiceByPolicy
 }
@@ -90,11 +91,6 @@ func (p *PreferenceOption) UnmarshalText(text []byte) error {
 // Visibility is a policy that controls whether or not a particular
 // component of a user interface is to be shown.
 type Visibility byte
-
-var (
-	_ encoding.TextMarshaler   = (*Visibility)(nil)
-	_ encoding.TextUnmarshaler = (*Visibility)(nil)
-)
 
 const (
 	VisibleByPolicy Visibility = 'v'

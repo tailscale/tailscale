@@ -32,7 +32,7 @@ import (
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
-	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/winutil"
 )
 
@@ -521,7 +521,7 @@ func (m *windowsManager) reconfigureDNSRegistration() {
 	// Disable DNS registration by default (if the policy setting is not configured).
 	// This is primarily for historical reasons and to avoid breaking existing
 	// setups that rely on this behavior.
-	enableDNSRegistration, err := syspolicy.GetPreferenceOptionOrDefault(pkey.EnableDNSRegistration, setting.NeverByPolicy)
+	enableDNSRegistration, err := syspolicy.GetPreferenceOptionOrDefault(pkey.EnableDNSRegistration, ptype.NeverByPolicy)
 	if err != nil {
 		m.logf("error getting DNSRegistration policy setting: %v", err) // non-fatal; we'll use the default
 	}

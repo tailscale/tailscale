@@ -13,6 +13,7 @@ import (
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/internal/metrics"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/util/testenv"
@@ -249,7 +250,7 @@ func TestGetPreferenceOption(t *testing.T) {
 		key          pkey.Key
 		handlerValue string
 		handlerError error
-		wantValue    setting.PreferenceOption
+		wantValue    ptype.PreferenceOption
 		wantError    error
 		wantMetrics  []metrics.TestState
 	}{
@@ -257,7 +258,7 @@ func TestGetPreferenceOption(t *testing.T) {
 			name:         "always by policy",
 			key:          pkey.EnableIncomingConnections,
 			handlerValue: "always",
-			wantValue:    setting.AlwaysByPolicy,
+			wantValue:    ptype.AlwaysByPolicy,
 			wantMetrics: []metrics.TestState{
 				{Name: "$os_syspolicy_any", Value: 1},
 				{Name: "$os_syspolicy_AllowIncomingConnections", Value: 1},
@@ -267,7 +268,7 @@ func TestGetPreferenceOption(t *testing.T) {
 			name:         "never by policy",
 			key:          pkey.EnableIncomingConnections,
 			handlerValue: "never",
-			wantValue:    setting.NeverByPolicy,
+			wantValue:    ptype.NeverByPolicy,
 			wantMetrics: []metrics.TestState{
 				{Name: "$os_syspolicy_any", Value: 1},
 				{Name: "$os_syspolicy_AllowIncomingConnections", Value: 1},
@@ -277,7 +278,7 @@ func TestGetPreferenceOption(t *testing.T) {
 			name:         "use default",
 			key:          pkey.EnableIncomingConnections,
 			handlerValue: "",
-			wantValue:    setting.ShowChoiceByPolicy,
+			wantValue:    ptype.ShowChoiceByPolicy,
 			wantMetrics: []metrics.TestState{
 				{Name: "$os_syspolicy_any", Value: 1},
 				{Name: "$os_syspolicy_AllowIncomingConnections", Value: 1},
@@ -287,13 +288,13 @@ func TestGetPreferenceOption(t *testing.T) {
 			name:         "read non-existing value",
 			key:          pkey.EnableIncomingConnections,
 			handlerError: ErrNotConfigured,
-			wantValue:    setting.ShowChoiceByPolicy,
+			wantValue:    ptype.ShowChoiceByPolicy,
 		},
 		{
 			name:         "other error is returned",
 			key:          pkey.EnableIncomingConnections,
 			handlerError: someOtherError,
-			wantValue:    setting.ShowChoiceByPolicy,
+			wantValue:    ptype.ShowChoiceByPolicy,
 			wantError:    someOtherError,
 			wantMetrics: []metrics.TestState{
 				{Name: "$os_syspolicy_errors", Value: 1},
@@ -342,7 +343,7 @@ func TestGetVisibility(t *testing.T) {
 		key          pkey.Key
 		handlerValue string
 		handlerError error
-		wantValue    setting.Visibility
+		wantValue    ptype.Visibility
 		wantError    error
 		wantMetrics  []metrics.TestState
 	}{
@@ -350,7 +351,7 @@ func TestGetVisibility(t *testing.T) {
 			name:         "hidden by policy",
 			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "hide",
-			wantValue:    setting.HiddenByPolicy,
+			wantValue:    ptype.HiddenByPolicy,
 			wantMetrics: []metrics.TestState{
 				{Name: "$os_syspolicy_any", Value: 1},
 				{Name: "$os_syspolicy_AdminConsole", Value: 1},
@@ -360,7 +361,7 @@ func TestGetVisibility(t *testing.T) {
 			name:         "visibility default",
 			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "show",
-			wantValue:    setting.VisibleByPolicy,
+			wantValue:    ptype.VisibleByPolicy,
 			wantMetrics: []metrics.TestState{
 				{Name: "$os_syspolicy_any", Value: 1},
 				{Name: "$os_syspolicy_AdminConsole", Value: 1},
@@ -371,14 +372,14 @@ func TestGetVisibility(t *testing.T) {
 			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "show",
 			handlerError: ErrNotConfigured,
-			wantValue:    setting.VisibleByPolicy,
+			wantValue:    ptype.VisibleByPolicy,
 		},
 		{
 			name:         "other error is returned",
 			key:          pkey.AdminConsoleVisibility,
 			handlerValue: "show",
 			handlerError: someOtherError,
-			wantValue:    setting.VisibleByPolicy,
+			wantValue:    ptype.VisibleByPolicy,
 			wantError:    someOtherError,
 			wantMetrics: []metrics.TestState{
 				{Name: "$os_syspolicy_errors", Value: 1},

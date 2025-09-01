@@ -18,6 +18,7 @@ import (
 
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
@@ -111,14 +112,14 @@ func GetStringArray(key pkey.Key, defaultValue []string) ([]string, error) {
 // the authority to set. It describes user-decides/always/never options, where
 // "always" and "never" remove the user's ability to make a selection. If not
 // present or set to a different value, "user-decides" is the default.
-func GetPreferenceOption(name pkey.Key) (setting.PreferenceOption, error) {
-	return getCurrentPolicySettingValue(name, setting.ShowChoiceByPolicy)
+func GetPreferenceOption(name pkey.Key) (ptype.PreferenceOption, error) {
+	return getCurrentPolicySettingValue(name, ptype.ShowChoiceByPolicy)
 }
 
 // GetPreferenceOptionOrDefault is like [GetPreferenceOption], but allows
 // specifying a default value to return if the policy setting is not configured.
 // It can be used in situations where "user-decides" is not the default.
-func GetPreferenceOptionOrDefault(name pkey.Key, defaultValue setting.PreferenceOption) (setting.PreferenceOption, error) {
+func GetPreferenceOptionOrDefault(name pkey.Key, defaultValue ptype.PreferenceOption) (ptype.PreferenceOption, error) {
 	return getCurrentPolicySettingValue(name, defaultValue)
 }
 
@@ -127,8 +128,8 @@ func GetPreferenceOptionOrDefault(name pkey.Key, defaultValue setting.Preference
 // for UI elements. The registry value should be a string set to "show" (return
 // true) or "hide" (return true). If not present or set to a different value,
 // "show" (return false) is the default.
-func GetVisibility(name pkey.Key) (setting.Visibility, error) {
-	return getCurrentPolicySettingValue(name, setting.VisibleByPolicy)
+func GetVisibility(name pkey.Key) (ptype.Visibility, error) {
+	return getCurrentPolicySettingValue(name, ptype.VisibleByPolicy)
 }
 
 // GetDuration loads a policy from the registry that can be managed

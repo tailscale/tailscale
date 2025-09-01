@@ -17,6 +17,7 @@ import (
 	"tailscale.com/types/lazy"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/testenv"
 )
 
@@ -130,7 +131,7 @@ func (t Type) String() string {
 
 // ValueType is a constraint that allows Go types corresponding to [Type].
 type ValueType interface {
-	bool | uint64 | string | []string | Visibility | PreferenceOption | time.Duration
+	bool | uint64 | string | []string | ptype.Visibility | ptype.PreferenceOption | time.Duration
 }
 
 // Definition defines policy key, scope and value type.
