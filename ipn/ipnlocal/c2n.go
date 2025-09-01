@@ -353,7 +353,7 @@ func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http
 	}
 
 	if choice.ShouldEnable(b.Prefs().PostureChecking()) {
-		res.SerialNumbers, err = posture.GetSerialNumbers(b.logf)
+		res.SerialNumbers, err = posture.GetSerialNumbers(b.polc, b.logf)
 		if err != nil {
 			b.logf("c2n: GetSerialNumbers returned error: %v", err)
 		}

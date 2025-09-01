@@ -109,7 +109,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
-	"tailscale.com/util/syspolicy/rsop"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
@@ -203,7 +203,8 @@ type LocalBackend struct {
 	keyLogf                  logger.Logf             // for printing list of peers on change
 	statsLogf                logger.Logf             // for printing peers stats on change
 	sys                      *tsd.System
-	health                   *health.Tracker // always non-nil
+	health                   *health.Tracker     // always non-nil
+	polc                     policyclient.Client // always non-nil
 	metrics                  metrics
 	e                        wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
 	store                    ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
@@ -515,6 +516,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		keyLogf:               logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:                   sys,
+		polc:                  sys.PolicyClientOrDefault(),
 		health:                sys.HealthTracker(),
 		metrics:               m,
 		e:                     e,
@@ -1970,7 +1972,7 @@ func (b *LocalBackend) reconcilePrefs() (_ ipn.PrefsView, anyChange bool) {
 
 // sysPolicyChanged is a callback triggered by syspolicy when it detects
 // a change in one or more syspolicy settings.
-func (b *LocalBackend) sysPolicyChanged(policy *rsop.PolicyChange) {
+func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
 	if policy.HasChangedAnyOf(pkey.AlwaysOn, pkey.AlwaysOnOverrideWithReason) {
 		// If the AlwaysOn or the AlwaysOnOverrideWithReason policy has changed,
 		// we should reset the overrideAlwaysOn flag, as the override might
@@ -2468,6 +2470,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		DiscoPublicKey:             discoPublic,
 		DebugFlags:                 debugFlags,
 		HealthTracker:              b.health,
+		PolicyClient:               b.sys.PolicyClientOrDefault(),
 		Pinger:                     b,
 		PopBrowserURL:              b.tellClientToBrowseToURL,
 		OnClientVersion:            b.onClientVersion,

@@ -31,7 +31,7 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
-	"tailscale.com/util/syspolicy/rsop"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/winutil"
 )
@@ -508,7 +508,7 @@ func (m *windowsManager) Close() error {
 
 // sysPolicyChanged is a callback triggered by [syspolicy] when it detects
 // a change in one or more syspolicy settings.
-func (m *windowsManager) sysPolicyChanged(policy *rsop.PolicyChange) {
+func (m *windowsManager) sysPolicyChanged(policy policyclient.PolicyChange) {
 	if policy.HasChanged(pkey.EnableDNSRegistration) {
 		m.reconfigureDNSRegistration()
 	}

@@ -12,6 +12,7 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -21,7 +22,7 @@ type Change[T any] struct {
 }
 
 // PolicyChangeCallback is a function called whenever a policy changes.
-type PolicyChangeCallback func(*PolicyChange)
+type PolicyChangeCallback func(policyclient.PolicyChange)
 
 // PolicyChange describes a policy change.
 type PolicyChange struct {
