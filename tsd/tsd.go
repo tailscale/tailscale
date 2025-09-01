@@ -33,6 +33,7 @@ import (
 	"tailscale.com/proxymap"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
@@ -163,6 +164,12 @@ func (s *System) HealthTracker() *health.Tracker {
 // UserMetricsRegistry returns the system usermetrics.
 func (s *System) UserMetricsRegistry() *usermetric.Registry {
 	return &s.userMetricsRegistry
+}
+
+// PolicyClientOrDefault returns the policy client if set or a no-op default
+// otherwise. It always returns a non-nil value.
+func (s *System) PolicyClientOrDefault() policyclient.Client {
+	return getPolicyClient()
 }
 
 // SubSystem represents some subsystem of the Tailscale node daemon.

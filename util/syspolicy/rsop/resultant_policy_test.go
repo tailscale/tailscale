@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/tstest"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/setting"
 
 	"tailscale.com/util/syspolicy/source"
@@ -602,8 +603,8 @@ func TestChangePolicySetting(t *testing.T) {
 	}
 
 	// Subscribe to the policy change callback...
-	policyChanged := make(chan *PolicyChange)
-	unregister := policy.RegisterChangeCallback(func(pc *PolicyChange) { policyChanged <- pc })
+	policyChanged := make(chan policyclient.PolicyChange)
+	unregister := policy.RegisterChangeCallback(func(pc policyclient.PolicyChange) { policyChanged <- pc })
 	t.Cleanup(unregister)
 
 	// ...make the change, and measure the time between initiating the change
@@ -611,7 +612,7 @@ func TestChangePolicySetting(t *testing.T) {
 	start := time.Now()
 	const wantValueA = "TestValueA"
 	store.SetStrings(source.TestSettingOf(settingA.Key(), wantValueA))
-	change := <-policyChanged
+	change := (<-policyChanged).(*PolicyChange)
 	gotDelay := time.Since(start)
 
 	// Ensure there is at least a [policyReloadMinDelay] delay between
@@ -653,7 +654,7 @@ func TestChangePolicySetting(t *testing.T) {
 
 	// The callback should be invoked only once, even though the policy setting
 	// has changed N times.
-	change = <-policyChanged
+	change = (<-policyChanged).(*PolicyChange)
 	gotDelay = time.Since(start)
 	gotCallbacks := 1
 drain:
@@ -853,8 +854,8 @@ func TestReplacePolicySource(t *testing.T) {
 	}
 
 	// Subscribe to the policy change callback.
-	policyChanged := make(chan *PolicyChange, 1)
-	unregister := policy.RegisterChangeCallback(func(pc *PolicyChange) { policyChanged <- pc })
+	policyChanged := make(chan policyclient.PolicyChange, 1)
+	unregister := policy.RegisterChangeCallback(func(pc policyclient.PolicyChange) { policyChanged <- pc })
 	t.Cleanup(unregister)
 
 	// Now, let's replace the initial store with the new store.
