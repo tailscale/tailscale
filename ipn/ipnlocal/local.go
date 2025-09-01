@@ -107,7 +107,6 @@ import (
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
-	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/systemd"
@@ -382,7 +381,7 @@ type LocalBackend struct {
 	lastSuggestedExitNode tailcfg.StableNodeID
 
 	// allowedSuggestedExitNodes is a set of exit nodes permitted by the most recent
-	// [syspolicy.AllowedSuggestedExitNodes] value. The allowedSuggestedExitNodesMu
+	// [pkey.AllowedSuggestedExitNodes] value. The allowedSuggestedExitNodesMu
 	// mutex guards access to this set.
 	allowedSuggestedExitNodesMu sync.Mutex
 	allowedSuggestedExitNodes   set.Set[tailcfg.StableNodeID]
@@ -405,10 +404,10 @@ type LocalBackend struct {
 	// (sending false).
 	needsCaptiveDetection chan bool
 
-	// overrideAlwaysOn is whether [syspolicy.AlwaysOn] is overridden by the user
+	// overrideAlwaysOn is whether [pkey.AlwaysOn] is overridden by the user
 	// and should have no impact on the WantRunning state until the policy changes,
 	// or the user re-connects manually, switches to a different profile, etc.
-	// Notably, this is true when [syspolicy.AlwaysOnOverrideWithReason] is enabled,
+	// Notably, this is true when [pkey.AlwaysOnOverrideWithReason] is enabled,
 	// and the user has disconnected with a reason.
 	// See tailscale/corp#26146.
 	overrideAlwaysOn bool
@@ -418,9 +417,9 @@ type LocalBackend struct {
 	reconnectTimer tstime.TimerController
 
 	// overrideExitNodePolicy is whether the user has overridden the exit node policy
-	// by manually selecting an exit node, as allowed by [syspolicy.AllowExitNodeOverride].
+	// by manually selecting an exit node, as allowed by [pkey.AllowExitNodeOverride].
 	//
-	// If true, the [syspolicy.ExitNodeID] and [syspolicy.ExitNodeIP] policy settings are ignored,
+	// If true, the [pkey.ExitNodeID] and [pkey.ExitNodeIP] policy settings are ignored,
 	// and the suggested exit node is not applied automatically.
 	//
 	// It is cleared when the user switches back to the state required by policy (typically, auto:any),
@@ -679,7 +678,7 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 			}
 		}
 	case "syspolicy":
-		setEnabled = syspolicy.SetDebugLoggingEnabled
+		setEnabled = b.polc.SetDebugLoggingEnabled
 	}
 	if setEnabled == nil || !slices.Contains(ipn.DebuggableComponents, component) {
 		return fmt.Errorf("unknown component %q", component)
@@ -1820,13 +1819,13 @@ var preferencePolicies = []preferencePolicyInfo{
 //
 // b.mu must be held.
 func (b *LocalBackend) applySysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
-	if controlURL, err := syspolicy.GetString(pkey.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
+	if controlURL, err := b.polc.GetString(pkey.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
 		prefs.ControlURL = controlURL
 		anyChange = true
 	}
 
 	const sentinel = "HostnameDefaultValue"
-	hostnameFromPolicy, _ := syspolicy.GetString(pkey.Hostname, sentinel)
+	hostnameFromPolicy, _ := b.polc.GetString(pkey.Hostname, sentinel)
 	switch hostnameFromPolicy {
 	case sentinel:
 		// An empty string for this policy value means that the admin wants to delete
@@ -1861,13 +1860,13 @@ func (b *LocalBackend) applySysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
 		anyChange = true
 	}
 
-	if alwaysOn, _ := syspolicy.GetBoolean(pkey.AlwaysOn, false); alwaysOn && !b.overrideAlwaysOn && !prefs.WantRunning {
+	if alwaysOn, _ := b.polc.GetBoolean(pkey.AlwaysOn, false); alwaysOn && !b.overrideAlwaysOn && !prefs.WantRunning {
 		prefs.WantRunning = true
 		anyChange = true
 	}
 
 	for _, opt := range preferencePolicies {
-		if po, err := syspolicy.GetPreferenceOption(opt.key); err == nil {
+		if po, err := b.polc.GetPreferenceOption(opt.key); err == nil {
 			curVal := opt.get(prefs.View())
 			newVal := po.ShouldEnable(curVal)
 			if curVal != newVal {
@@ -1885,7 +1884,7 @@ func (b *LocalBackend) applySysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
 //
 // b.mu must be held.
 func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
-	if exitNodeIDStr, _ := syspolicy.GetString(pkey.ExitNodeID, ""); exitNodeIDStr != "" {
+	if exitNodeIDStr, _ := b.polc.GetString(pkey.ExitNodeID, ""); exitNodeIDStr != "" {
 		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
 
 		// Try to parse the policy setting value as an "auto:"-prefixed [ipn.ExitNodeExpression],
@@ -1914,7 +1913,7 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 		// or requires an auto exit node ID and the current one isn't allowed,
 		// then update the exit node ID.
 		if prefs.ExitNodeID != exitNodeID {
-			if !useAutoExitNode || !isAllowedAutoExitNodeID(prefs.ExitNodeID) {
+			if !useAutoExitNode || !isAllowedAutoExitNodeID(b.polc, prefs.ExitNodeID) {
 				prefs.ExitNodeID = exitNodeID
 				anyChange = true
 			}
@@ -1926,7 +1925,7 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 			prefs.ExitNodeIP = netip.Addr{}
 			anyChange = true
 		}
-	} else if exitNodeIPStr, _ := syspolicy.GetString(pkey.ExitNodeIP, ""); exitNodeIPStr != "" {
+	} else if exitNodeIPStr, _ := b.polc.GetString(pkey.ExitNodeIP, ""); exitNodeIPStr != "" {
 		if prefs.AutoExitNode != "" {
 			prefs.AutoExitNode = "" // mutually exclusive with ExitNodeIP
 			anyChange = true
@@ -1946,7 +1945,7 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 // registerSysPolicyWatch subscribes to syspolicy change notifications
 // and immediately applies the effective syspolicy settings to the current profile.
 func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
-	if unregister, err = syspolicy.RegisterChangeCallback(b.sysPolicyChanged); err != nil {
+	if unregister, err = b.polc.RegisterChangeCallback(b.sysPolicyChanged); err != nil {
 		return nil, fmt.Errorf("syspolicy: LocalBacked failed to register policy change callback: %v", err)
 	}
 	if prefs, anyChange := b.reconcilePrefs(); anyChange {
@@ -1996,7 +1995,7 @@ func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
 		if _, err := b.SuggestExitNode(); err != nil && !errors.Is(err, ErrNoPreferredDERP) {
 			b.logf("failed to select auto exit node: %v", err)
 		}
-		// If [syspolicy.ExitNodeID] is set to `auto:any`, the suggested exit node ID
+		// If [pkey.ExitNodeID] is set to `auto:any`, the suggested exit node ID
 		// will be used when [applySysPolicy] updates the current profile's prefs.
 	}
 
@@ -2132,7 +2131,7 @@ func (b *LocalBackend) resolveAutoExitNodeLocked(prefs *ipn.Prefs) (prefsChanged
 	if !b.lastSuggestedExitNode.IsZero() {
 		// If we have a suggested exit node, use it.
 		newExitNodeID = b.lastSuggestedExitNode
-	} else if isAllowedAutoExitNodeID(prefs.ExitNodeID) {
+	} else if isAllowedAutoExitNodeID(b.polc, prefs.ExitNodeID) {
 		// If we don't have a suggested exit node, but the prefs already
 		// specify an allowed auto exit node ID, retain it.
 		newExitNodeID = prefs.ExitNodeID
@@ -2351,7 +2350,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	if b.state != ipn.Running && b.conf == nil && opts.AuthKey == "" {
-		sysak, _ := syspolicy.GetString(pkey.AuthKey, "")
+		sysak, _ := b.polc.GetString(pkey.AuthKey, "")
 		if sysak != "" {
 			b.logf("Start: setting opts.AuthKey by syspolicy, len=%v", len(sysak))
 			opts.AuthKey = strings.TrimSpace(sysak)
@@ -4111,7 +4110,7 @@ func (b *LocalBackend) resolveBestProfileLocked() (_ ipn.LoginProfileView, isBac
 	if b.currentUser != nil {
 		profile := b.pm.CurrentProfile()
 		// TODO(nickkhyl): check if the current profile is allowed on the device,
-		// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
+		// such as when [pkey.Tailnet] policy setting requires a specific Tailnet.
 		// See tailscale/corp#26249.
 		if uid := b.currentUser.UserID(); profile.LocalUserID() != uid {
 			profile = b.pm.DefaultUserProfile(uid)
@@ -4138,7 +4137,7 @@ func (b *LocalBackend) resolveBestProfileLocked() (_ ipn.LoginProfileView, isBac
 	// using the current profile.
 	//
 	// TODO(nickkhyl): check if the current profile is allowed on the device,
-	// such as when [syspolicy.Tailnet] policy setting requires a specific Tailnet.
+	// such as when [pkey.Tailnet] policy setting requires a specific Tailnet.
 	// See tailscale/corp#26249.
 	return b.pm.CurrentProfile(), false
 }
@@ -4411,15 +4410,15 @@ func (b *LocalBackend) checkEditPrefsAccessLocked(actor ipnauth.Actor, prefs ipn
 	// Prevent users from changing exit node preferences
 	// when exit node usage is managed by policy.
 	if mp.ExitNodeIDSet || mp.ExitNodeIPSet || mp.AutoExitNodeSet {
-		isManaged, err := syspolicy.HasAnyOf(pkey.ExitNodeID, pkey.ExitNodeIP)
+		isManaged, err := b.polc.HasAnyOf(pkey.ExitNodeID, pkey.ExitNodeIP)
 		if err != nil {
 			err = fmt.Errorf("policy check failed: %w", err)
 		} else if isManaged {
 			// Allow users to override ExitNode policy settings and select an exit node manually
-			// if permitted by [syspolicy.AllowExitNodeOverride].
+			// if permitted by [pkey.AllowExitNodeOverride].
 			//
 			// Disabling exit node usage entirely is not allowed.
-			allowExitNodeOverride, _ := syspolicy.GetBoolean(pkey.AllowExitNodeOverride, false)
+			allowExitNodeOverride, _ := b.polc.GetBoolean(pkey.AllowExitNodeOverride, false)
 			if !allowExitNodeOverride || b.changeDisablesExitNodeLocked(prefs, mp) {
 				err = errManagedByPolicy
 			}
@@ -4517,13 +4516,13 @@ func (b *LocalBackend) adjustEditPrefsLocked(prefs ipn.PrefsView, mp *ipn.Masked
 // b.mu must be held; mp must not be mutated by this method.
 func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, oldPrefs, newPrefs ipn.PrefsView) {
 	if mp.WantRunningSet && !mp.WantRunning && oldPrefs.WantRunning() {
-		// If a user has enough rights to disconnect, such as when [syspolicy.AlwaysOn]
-		// is disabled, or [syspolicy.AlwaysOnOverrideWithReason] is also set and the user
+		// If a user has enough rights to disconnect, such as when [pkey.AlwaysOn]
+		// is disabled, or [pkey.AlwaysOnOverrideWithReason] is also set and the user
 		// provides a reason for disconnecting, then we should not force the "always on"
 		// mode on them until the policy changes, they switch to a different profile, etc.
 		b.overrideAlwaysOn = true
 
-		if reconnectAfter, _ := syspolicy.GetDuration(pkey.ReconnectAfter, 0); reconnectAfter > 0 {
+		if reconnectAfter, _ := b.polc.GetDuration(pkey.ReconnectAfter, 0); reconnectAfter > 0 {
 			b.startReconnectTimerLocked(reconnectAfter)
 		}
 	}
@@ -4534,7 +4533,7 @@ func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, o
 		b.overrideExitNodePolicy = false
 	}
 	if mp.AutoExitNodeSet || mp.ExitNodeIDSet || mp.ExitNodeIPSet {
-		if allowExitNodeOverride, _ := syspolicy.GetBoolean(pkey.AllowExitNodeOverride, false); allowExitNodeOverride {
+		if allowExitNodeOverride, _ := b.polc.GetBoolean(pkey.AllowExitNodeOverride, false); allowExitNodeOverride {
 			// If applying exit node policy settings to the new prefs results in no change,
 			// the user is not overriding the policy. Otherwise, it is an override.
 			b.overrideExitNodePolicy = b.applyExitNodeSysPolicyLocked(newPrefs.AsStruct())
@@ -5643,7 +5642,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// was selected, if any.
 	//
 	// If auto exit node is enabled (via [ipn.Prefs.AutoExitNode] or
-	// [syspolicy.ExitNodeID]), or an exit node is specified by ExitNodeIP
+	// [pkey.ExitNodeID]), or an exit node is specified by ExitNodeIP
 	// instead of ExitNodeID , and we don't yet have enough info to resolve
 	// it (usually due to missing netmap or net report), then ExitNodeID in
 	// the prefs may be invalid (typically, [unresolvedExitNodeID]) until
@@ -7786,7 +7785,7 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 }
 
 // getAllowedSuggestions returns a set of exit nodes permitted by the most recent
-// [syspolicy.AllowedSuggestedExitNodes] value. Callers must not mutate the returned set.
+// [pkey.AllowedSuggestedExitNodes] value. Callers must not mutate the returned set.
 func (b *LocalBackend) getAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
 	b.allowedSuggestedExitNodesMu.Lock()
 	defer b.allowedSuggestedExitNodesMu.Unlock()
@@ -7794,11 +7793,11 @@ func (b *LocalBackend) getAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
 }
 
 // refreshAllowedSuggestions rebuilds the set of permitted exit nodes
-// from the current [syspolicy.AllowedSuggestedExitNodes] value.
+// from the current [pkey.AllowedSuggestedExitNodes] value.
 func (b *LocalBackend) refreshAllowedSuggestions() {
 	b.allowedSuggestedExitNodesMu.Lock()
 	defer b.allowedSuggestedExitNodesMu.Unlock()
-	b.allowedSuggestedExitNodes = fillAllowedSuggestions()
+	b.allowedSuggestedExitNodes = fillAllowedSuggestions(b.polc)
 }
 
 // selectRegionFunc returns a DERP region from the slice of candidate regions.
@@ -7810,8 +7809,8 @@ type selectRegionFunc func(views.Slice[int]) int
 // choice.
 type selectNodeFunc func(nodes views.Slice[tailcfg.NodeView], last tailcfg.StableNodeID) tailcfg.NodeView
 
-func fillAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
-	nodes, err := syspolicy.GetStringArray(pkey.AllowedSuggestedExitNodes, nil)
+func fillAllowedSuggestions(polc policyclient.Client) set.Set[tailcfg.StableNodeID] {
+	nodes, err := polc.GetStringArray(pkey.AllowedSuggestedExitNodes, nil)
 	if err != nil {
 		log.Printf("fillAllowedSuggestions: unable to look up %q policy: %v", pkey.AllowedSuggestedExitNodes, err)
 		return nil
@@ -8176,11 +8175,11 @@ const (
 	unresolvedExitNodeID tailcfg.StableNodeID = "auto:any"
 )
 
-func isAllowedAutoExitNodeID(exitNodeID tailcfg.StableNodeID) bool {
+func isAllowedAutoExitNodeID(polc policyclient.Client, exitNodeID tailcfg.StableNodeID) bool {
 	if exitNodeID == "" {
 		return false // an exit node is required
 	}
-	if nodes, _ := syspolicy.GetStringArray(pkey.AllowedSuggestedExitNodes, nil); nodes != nil {
+	if nodes, _ := polc.GetStringArray(pkey.AllowedSuggestedExitNodes, nil); nodes != nil {
 		return slices.Contains(nodes, string(exitNodeID))
 
 	}
@@ -8343,7 +8342,7 @@ func (b *LocalBackend) stateEncrypted() opt.Bool {
 			// the Keychain. A future release will clean up the on-disk state
 			// files.
 			// TODO(#15830): always return true here once MacSys is fully migrated.
-			sp, _ := syspolicy.GetBoolean(pkey.EncryptState, false)
+			sp, _ := b.polc.GetBoolean(pkey.EncryptState, false)
 			return opt.NewBool(sp)
 		default:
 			// Probably self-compiled tailscaled, we don't use the Keychain

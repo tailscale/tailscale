@@ -6,7 +6,12 @@
 // of syspolicy is omitted from the build.
 package policyclient
 
-import "tailscale.com/util/syspolicy/pkey"
+import (
+	"time"
+
+	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/ptype"
+)
 
 // Client is the interface between code making questions about the system policy
 // and the actual implementation.
@@ -23,8 +28,37 @@ type Client interface {
 	// or defaultValue (and a nil error) if it does not exist.
 	GetBoolean(key pkey.Key, defaultValue bool) (bool, error)
 
+	// GetUint64 returns a numeric policy setting with the specified key,
+	// or defaultValue (and a nil error) if it does not exist.
+	GetUint64(key pkey.Key, defaultValue uint64) (uint64, error)
+
+	// GetDuration loads a policy from the registry that can be managed by an
+	// enterprise policy management system and describes a duration for some
+	// action. The registry value should be a string that time.ParseDuration
+	// understands. If the registry value is "" or can not be processed,
+	// defaultValue (and a nil error) is returned instead.
+	GetDuration(key pkey.Key, defaultValue time.Duration) (time.Duration, error)
+
+	// GetPreferenceOption loads a policy from the registry that can be
+	// managed by an enterprise policy management system and allows administrative
+	// overrides of users' choices in a way that we do not want tailcontrol to have
+	// the authority to set. It describes user-decides/always/never options, where
+	// "always" and "never" remove the user's ability to make a selection. If not
+	// present or set to a different value, "user-decides" is the default.
+	GetPreferenceOption(key pkey.Key) (ptype.PreferenceOption, error)
+
+	// GetVisibility returns whether a UI element should be visible based on
+	// the system's configuration.
+	// If unconfigured, implementations should return [ptype.VisibleByPolicy]
+	// and a nil error.
+	GetVisibility(key pkey.Key) (ptype.Visibility, error)
+
 	// SetDebugLoggingEnabled enables or disables debug logging for the policy client.
 	SetDebugLoggingEnabled(enabled bool)
+
+	// HasAnyOf returns whether at least one of the specified policy settings is
+	// configured, or an error if no keys are provided or the check fails.
+	HasAnyOf(keys ...pkey.Key) (bool, error)
 
 	// RegisterChangeCallback registers a callback function that will be called
 	// whenever a policy change is detected. It returns a function to unregister
@@ -57,6 +91,26 @@ func (NoPolicyClient) GetString(key pkey.Key, defaultValue string) (string, erro
 
 func (NoPolicyClient) GetStringArray(key pkey.Key, defaultValue []string) ([]string, error) {
 	return defaultValue, nil
+}
+
+func (NoPolicyClient) GetUint64(key pkey.Key, defaultValue uint64) (uint64, error) {
+	return defaultValue, nil
+}
+
+func (NoPolicyClient) GetDuration(name pkey.Key, defaultValue time.Duration) (time.Duration, error) {
+	return defaultValue, nil
+}
+
+func (NoPolicyClient) GetPreferenceOption(name pkey.Key) (ptype.PreferenceOption, error) {
+	return ptype.ShowChoiceByPolicy, nil
+}
+
+func (NoPolicyClient) GetVisibility(name pkey.Key) (ptype.Visibility, error) {
+	return ptype.VisibleByPolicy, nil
+}
+
+func (NoPolicyClient) HasAnyOf(keys ...pkey.Key) (bool, error) {
+	return false, nil
 }
 
 func (NoPolicyClient) SetDebugLoggingEnabled(enabled bool) {}

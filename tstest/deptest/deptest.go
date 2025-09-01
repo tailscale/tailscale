@@ -24,7 +24,8 @@ import (
 type DepChecker struct {
 	GOOS     string            // optional
 	GOARCH   string            // optional
-	OnDep    func(string)      // if non-nil, called per import
+	OnDep    func(string)      // if non-nil, called per dependency
+	OnImport func(string)      // if non-nil, called per import
 	BadDeps  map[string]string // package => why
 	WantDeps set.Set[string]   // packages expected
 	Tags     string            // comma-separated
@@ -52,7 +53,8 @@ func (c DepChecker) Check(t *testing.T) {
 		t.Fatal(err)
 	}
 	var res struct {
-		Deps []string
+		Imports []string
+		Deps    []string
 	}
 	if err := json.Unmarshal(out, &res); err != nil {
 		t.Fatal(err)
@@ -65,6 +67,12 @@ func (c DepChecker) Check(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	})
+
+	if c.OnImport != nil {
+		for _, imp := range res.Imports {
+			c.OnImport(imp)
+		}
+	}
 
 	for _, dep := range res.Deps {
 		if c.OnDep != nil {
