@@ -632,7 +632,7 @@ func TestConfigureExitNode(t *testing.T) {
 		exitNodeIDPolicy       *tailcfg.StableNodeID
 		exitNodeIPPolicy       *netip.Addr
 		exitNodeAllowedIDs     []tailcfg.StableNodeID // nil if all IDs are allowed for auto exit nodes
-		exitNodeAllowOverride  bool                   // whether [syspolicy.AllowExitNodeOverride] should be set to true
+		exitNodeAllowOverride  bool                   // whether [pkey.AllowExitNodeOverride] should be set to true
 		wantChangePrefsErr     error                  // if non-nil, the error we expect from [LocalBackend.EditPrefsAs]
 		wantPrefs              ipn.Prefs
 		wantExitNodeToggleErr  error // if non-nil, the error we expect from [LocalBackend.SetUseExitNodeEnabled]
@@ -970,7 +970,7 @@ func TestConfigureExitNode(t *testing.T) {
 			name: "auto-any-via-policy/no-netmap/with-disallowed-existing", // same, but now with a syspolicy setting that does not allow the existing exit node ID
 			prefs: ipn.Prefs{
 				ControlURL: controlURL,
-				ExitNodeID: exitNode2.StableID(), // not allowed by [syspolicy.AllowedSuggestedExitNodes]
+				ExitNodeID: exitNode2.StableID(), // not allowed by [pkey.AllowedSuggestedExitNodes]
 			},
 			netMap:           nil,
 			report:           report,
@@ -989,7 +989,7 @@ func TestConfigureExitNode(t *testing.T) {
 			name: "auto-any-via-policy/with-netmap/with-allowed-existing", // same, but now with a syspolicy setting that does not allow the existing exit node ID
 			prefs: ipn.Prefs{
 				ControlURL: controlURL,
-				ExitNodeID: exitNode1.StableID(), // not allowed by [syspolicy.AllowedSuggestedExitNodes]
+				ExitNodeID: exitNode1.StableID(), // not allowed by [pkey.AllowedSuggestedExitNodes]
 			},
 			netMap:           clientNetmap,
 			report:           report,
@@ -1072,7 +1072,7 @@ func TestConfigureExitNode(t *testing.T) {
 			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
-			name: "auto-any-via-policy/allow-override/change", // changing the exit node is allowed by [syspolicy.AllowExitNodeOverride]
+			name: "auto-any-via-policy/allow-override/change", // changing the exit node is allowed by [pkey.AllowExitNodeOverride]
 			prefs: ipn.Prefs{
 				ControlURL: controlURL,
 			},
@@ -1094,7 +1094,7 @@ func TestConfigureExitNode(t *testing.T) {
 			wantHostinfoExitNodeID: exitNode2.StableID(),
 		},
 		{
-			name: "auto-any-via-policy/allow-override/clear", // clearing the exit node ID is not allowed by [syspolicy.AllowExitNodeOverride]
+			name: "auto-any-via-policy/allow-override/clear", // clearing the exit node ID is not allowed by [pkey.AllowExitNodeOverride]
 			prefs: ipn.Prefs{
 				ControlURL: controlURL,
 			},
@@ -1118,7 +1118,7 @@ func TestConfigureExitNode(t *testing.T) {
 			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 		{
-			name: "auto-any-via-policy/allow-override/toggle-off", // similarly, toggling off the exit node is not allowed even with [syspolicy.AllowExitNodeOverride]
+			name: "auto-any-via-policy/allow-override/toggle-off", // similarly, toggling off the exit node is not allowed even with [pkey.AllowExitNodeOverride]
 			prefs: ipn.Prefs{
 				ControlURL: controlURL,
 			},
@@ -1179,36 +1179,32 @@ func TestConfigureExitNode(t *testing.T) {
 			wantHostinfoExitNodeID: exitNode1.StableID(),
 		},
 	}
-	syspolicy.RegisterWellKnownSettingsForTest(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var pol testPolicy
 			// Configure policy settings, if any.
-			store := source.NewTestStore(t)
 			if tt.exitNodeIDPolicy != nil {
-				store.SetStrings(source.TestSettingOf(pkey.ExitNodeID, string(*tt.exitNodeIDPolicy)))
+				pol.Set(pkey.ExitNodeID, string(*tt.exitNodeIDPolicy))
 			}
 			if tt.exitNodeIPPolicy != nil {
-				store.SetStrings(source.TestSettingOf(pkey.ExitNodeIP, tt.exitNodeIPPolicy.String()))
+				pol.Set(pkey.ExitNodeIP, tt.exitNodeIPPolicy.String())
 			}
 			if tt.exitNodeAllowedIDs != nil {
-				store.SetStringLists(source.TestSettingOf(pkey.AllowedSuggestedExitNodes, toStrings(tt.exitNodeAllowedIDs)))
+				pol.Set(pkey.AllowedSuggestedExitNodes, toStrings(tt.exitNodeAllowedIDs))
 			}
 			if tt.exitNodeAllowOverride {
-				store.SetBooleans(source.TestSettingOf(pkey.AllowExitNodeOverride, true))
-			}
-			if store.IsEmpty() {
-				// No syspolicy settings, so don't register a store.
-				// This allows the test to run in parallel with other tests.
-				t.Parallel()
-			} else {
-				// Register the store for syspolicy settings to make them available to the LocalBackend.
-				syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, store)
+				pol.Set(pkey.AllowExitNodeOverride, true)
 			}
 
 			// Create a new LocalBackend with the given prefs.
 			// Any syspolicy settings will be applied to the initial prefs.
-			lb := newTestLocalBackend(t)
+			sys := tsd.NewSystem()
+			sys.PolicyClient.Set(pol)
+			lb := newTestLocalBackendWithSys(t, sys)
 			lb.SetPrefsForTest(tt.prefs.Clone())
+
 			// Then set the netcheck report and netmap, if any.
 			if tt.report != nil {
 				lb.MagicConn().SetLastNetcheckReportForTest(t.Context(), tt.report)
@@ -5543,26 +5539,60 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	}
 }
 
-// staticPolicy maps policy keys to their corresponding values,
-// which must be of the correct type (string, []string, bool, etc).
+// testPolicy is a [policyclient.Client] with a static mapping of values.
+// The map value must be of the correct type (string, []string, bool, etc).
 //
 // It is used for testing purposes to simulate policy client behavior.
 // It panics if the values are the wrong type.
-type staticPolicy map[pkey.Key]any
-
 type testPolicy struct {
-	staticPolicy
-	policyclient.Client
+	v map[pkey.Key]any
+	policyclient.NoPolicyClient
+}
+
+func (sp *testPolicy) Set(key pkey.Key, value any) {
+	if sp.v == nil {
+		sp.v = make(map[pkey.Key]any)
+	}
+	sp.v[key] = value
 }
 
 func (sp testPolicy) GetStringArray(key pkey.Key, defaultVal []string) ([]string, error) {
-	if val, ok := sp.staticPolicy[key]; ok {
+	if val, ok := sp.v[key]; ok {
 		if arr, ok := val.([]string); ok {
 			return arr, nil
 		}
-		return nil, fmt.Errorf("key %s is not a []string", key)
+		panic(fmt.Sprintf("key %s is not a []string", key))
 	}
 	return defaultVal, nil
+}
+
+func (sp testPolicy) GetString(key pkey.Key, defaultVal string) (string, error) {
+	if val, ok := sp.v[key]; ok {
+		if str, ok := val.(string); ok {
+			return str, nil
+		}
+		panic(fmt.Sprintf("key %s is not a string", key))
+	}
+	return defaultVal, nil
+}
+
+func (sp testPolicy) GetBoolean(key pkey.Key, defaultVal bool) (bool, error) {
+	if val, ok := sp.v[key]; ok {
+		if b, ok := val.(bool); ok {
+			return b, nil
+		}
+		panic(fmt.Sprintf("key %s is not a bool", key))
+	}
+	return defaultVal, nil
+}
+
+func (sp testPolicy) HasAnyOf(keys ...pkey.Key) (bool, error) {
+	for _, key := range keys {
+		if _, ok := sp.v[key]; ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func TestFillAllowedSuggestions(t *testing.T) {
@@ -5598,13 +5628,10 @@ func TestFillAllowedSuggestions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			polc := testPolicy{
-				staticPolicy: staticPolicy{
-					pkey.AllowedSuggestedExitNodes: tt.allowPolicy,
-				},
-			}
+			var pol testPolicy
+			pol.Set(pkey.AllowedSuggestedExitNodes, tt.allowPolicy)
 
-			got := fillAllowedSuggestions(polc)
+			got := fillAllowedSuggestions(pol)
 			if got == nil {
 				if tt.want == nil {
 					return
