@@ -81,6 +81,23 @@ _Appears in:_
 | `status` _[ConnectorStatus](#connectorstatus)_ | ConnectorStatus describes the status of the Connector. This is set<br />and managed by the Tailscale operator. |  |  |
 
 
+#### ConnectorDevice
+
+
+
+
+
+
+
+_Appears in:_
+- [ConnectorStatus](#connectorstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the Connector replica.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
+| `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the Connector replica. |  |  |
+
+
 #### ConnectorList
 
 
@@ -115,11 +132,13 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `tags` _[Tags](#tags)_ | Tags that the Tailscale node will be tagged with.<br />Defaults to [tag:k8s].<br />To autoapprove the subnet routes or exit node defined by a Connector,<br />you can configure Tailscale ACLs to give these tags the necessary<br />permissions.<br />See https://tailscale.com/kb/1337/acl-syntax#autoapprovers.<br />If you specify custom tags here, you must also make the operator an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a Connector node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
-| `hostname` _[Hostname](#hostname)_ | Hostname is the tailnet hostname that should be assigned to the<br />Connector node. If unset, hostname defaults to <connector<br />name>-connector. Hostname can contain lower case letters, numbers and<br />dashes, it must not start or end with a dash and must be between 2<br />and 63 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$` <br />Type: string <br /> |
+| `hostname` _[Hostname](#hostname)_ | Hostname is the tailnet hostname that should be assigned to the<br />Connector node. If unset, hostname defaults to <connector<br />name>-connector. Hostname can contain lower case letters, numbers and<br />dashes, it must not start or end with a dash and must be between 2<br />and 63 characters long. This field should only be used when creating a connector<br />with an unspecified number of replicas, or a single replica. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$` <br />Type: string <br /> |
+| `hostnamePrefix` _[HostnamePrefix](#hostnameprefix)_ | HostnamePrefix specifies the hostname prefix for each<br />replica. Each device will have the integer number<br />from its StatefulSet pod appended to this prefix to form the full hostname.<br />HostnamePrefix can contain lower case letters, numbers and dashes, it<br />must not start with a dash and must be between 1 and 62 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}$` <br />Type: string <br /> |
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that<br />contains configuration options that should be applied to the<br />resources created for this Connector. If unset, the operator will<br />create resources with the default configuration. |  |  |
 | `subnetRouter` _[SubnetRouter](#subnetrouter)_ | SubnetRouter defines subnet routes that the Connector device should<br />expose to tailnet as a Tailscale subnet router.<br />https://tailscale.com/kb/1019/subnets/<br />If this field is unset, the device does not get configured as a Tailscale subnet router.<br />This field is mutually exclusive with the appConnector field. |  |  |
 | `appConnector` _[AppConnector](#appconnector)_ | AppConnector defines whether the Connector device should act as a Tailscale app connector. A Connector that is<br />configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the<br />Connector does not act as an app connector.<br />Note that you will need to manually configure the permissions and the domains for the app connector via the<br />Admin panel.<br />Note also that the main tested and supported use case of this config option is to deploy an app connector on<br />Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose<br />cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have<br />tested or optimised for.<br />If you are using the app connector to access SaaS applications because you need a predictable egress IP that<br />can be whitelisted, it is also your responsibility to ensure that cluster traffic from the connector flows<br />via that predictable IP, for example by enforcing that cluster egress traffic is routed via an egress NAT<br />device with a static IP address.<br />https://tailscale.com/kb/1281/app-connectors |  |  |
 | `exitNode` _boolean_ | ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.<br />This field is mutually exclusive with the appConnector field.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
+| `replicas` _integer_ | Replicas specifies how many devices to create. Set this to enable<br />high availability for app connectors, subnet routers, or exit nodes.<br />https://tailscale.com/kb/1115/high-availability. Defaults to 1. |  | Minimum: 0 <br /> |
 
 
 #### ConnectorStatus
@@ -140,7 +159,8 @@ _Appears in:_
 | `isExitNode` _boolean_ | IsExitNode is set to true if the Connector acts as an exit node. |  |  |
 | `isAppConnector` _boolean_ | IsAppConnector is set to true if the Connector acts as an app connector. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the Connector node. |  |  |
-| `hostname` _string_ | Hostname is the fully qualified domain name of the Connector node.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the Connector node.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. When using multiple replicas, this field will be populated with the<br />first replica's hostname. Use the Hostnames field for the full list<br />of hostnames. |  |  |
+| `devices` _[ConnectorDevice](#connectordevice) array_ | Devices contains information on each device managed by the Connector resource. |  |  |
 
 
 #### Container
@@ -324,6 +344,7 @@ _Validation:_
 - Type: string
 
 _Appears in:_
+- [ConnectorSpec](#connectorspec)
 - [ProxyGroupSpec](#proxygroupspec)
 
 

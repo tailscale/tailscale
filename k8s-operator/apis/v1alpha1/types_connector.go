@@ -59,6 +59,8 @@ type ConnectorList struct {
 // ConnectorSpec describes a Tailscale node to be deployed in the cluster.
 // +kubebuilder:validation:XValidation:rule="has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true) || has(self.appConnector)",message="A Connector needs to have at least one of exit node, subnet router or app connector configured."
 // +kubebuilder:validation:XValidation:rule="!((has(self.subnetRouter) || (has(self.exitNode)  && self.exitNode == true)) && has(self.appConnector))",message="The appConnector field is mutually exclusive with exitNode and subnetRouter fields."
+// +kubebuilder:validation:XValidation:rule="!(has(self.hostname) && has(self.replicas) && self.replicas > 1)",message="The hostname field cannot be specified when replicas is greater than 1."
+// +kubebuilder:validation:XValidation:rule="!(has(self.hostname) && has(self.hostnamePrefix))",message="The hostname and hostnamePrefix fields are mutually exclusive."
 type ConnectorSpec struct {
 	// Tags that the Tailscale node will be tagged with.
 	// Defaults to [tag:k8s].
@@ -76,9 +78,19 @@ type ConnectorSpec struct {
 	// Connector node. If unset, hostname defaults to <connector
 	// name>-connector. Hostname can contain lower case letters, numbers and
 	// dashes, it must not start or end with a dash and must be between 2
-	// and 63 characters long.
+	// and 63 characters long. This field should only be used when creating a connector
+	// with an unspecified number of replicas, or a single replica.
 	// +optional
 	Hostname Hostname `json:"hostname,omitempty"`
+
+	// HostnamePrefix specifies the hostname prefix for each
+	// replica. Each device will have the integer number
+	// from its StatefulSet pod appended to this prefix to form the full hostname.
+	// HostnamePrefix can contain lower case letters, numbers and dashes, it
+	// must not start with a dash and must be between 1 and 62 characters long.
+	// +optional
+	HostnamePrefix HostnamePrefix `json:"hostnamePrefix,omitempty"`
+
 	// ProxyClass is the name of the ProxyClass custom resource that
 	// contains configuration options that should be applied to the
 	// resources created for this Connector. If unset, the operator will
@@ -108,11 +120,19 @@ type ConnectorSpec struct {
 	// https://tailscale.com/kb/1281/app-connectors
 	// +optional
 	AppConnector *AppConnector `json:"appConnector,omitempty"`
+
 	// ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.
 	// This field is mutually exclusive with the appConnector field.
 	// https://tailscale.com/kb/1103/exit-nodes
 	// +optional
 	ExitNode bool `json:"exitNode"`
+
+	// Replicas specifies how many devices to create. Set this to enable
+	// high availability for app connectors, subnet routers, or exit nodes.
+	// https://tailscale.com/kb/1115/high-availability. Defaults to 1.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 // SubnetRouter defines subnet routes that should be exposed to tailnet via a
@@ -197,9 +217,26 @@ type ConnectorStatus struct {
 	TailnetIPs []string `json:"tailnetIPs,omitempty"`
 	// Hostname is the fully qualified domain name of the Connector node.
 	// If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
-	// node.
+	// node. When using multiple replicas, this field will be populated with the
+	// first replica's hostname. Use the Hostnames field for the full list
+	// of hostnames.
 	// +optional
 	Hostname string `json:"hostname,omitempty"`
+	// Devices contains information on each device managed by the Connector resource.
+	// +optional
+	Devices []ConnectorDevice `json:"devices"`
+}
+
+type ConnectorDevice struct {
+	// Hostname is the fully qualified domain name of the Connector replica.
+	// If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
+	// node.
+	// +optional
+	Hostname string `json:"hostname"`
+	// TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
+	// assigned to the Connector replica.
+	// +optional
+	TailnetIPs []string `json:"tailnetIPs,omitempty"`
 }
 
 type ConditionType string
