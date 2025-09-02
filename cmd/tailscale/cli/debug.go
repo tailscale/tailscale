@@ -374,6 +374,17 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Print the current set of candidate peer relay servers",
 				Exec:       runPeerRelayServers,
 			},
+			{
+				Name:       "test-risk",
+				ShortUsage: "tailscale debug test-risk",
+				ShortHelp:  "Do a fake risky action",
+				Exec:       runTestRisk,
+				FlagSet: (func() *flag.FlagSet {
+					fs := newFlagSet("test-risk")
+					fs.StringVar(&testRiskArgs.acceptedRisk, "accept-risk", "", "comma-separated list of accepted risks")
+					return fs
+				})(),
+			},
 		}...),
 	}
 }
@@ -1401,5 +1412,20 @@ func runPeerRelayServers(ctx context.Context, args []string) error {
 	e := json.NewEncoder(os.Stdout)
 	e.SetIndent("", "  ")
 	e.Encode(v)
+	return nil
+}
+
+var testRiskArgs struct {
+	acceptedRisk string
+}
+
+func runTestRisk(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("unexpected arguments")
+	}
+	if err := presentRiskToUser("test-risk", "This is a test risky action.", testRiskArgs.acceptedRisk); err != nil {
+		return err
+	}
+	fmt.Println("did-test-risky-action")
 	return nil
 }
