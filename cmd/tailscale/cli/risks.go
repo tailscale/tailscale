@@ -7,15 +7,11 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
-	"os"
-	"os/signal"
 	"runtime"
 	"strings"
-	"syscall"
-	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/util/prompt"
 	"tailscale.com/util/testenv"
 )
 
@@ -57,11 +53,6 @@ func isRiskAccepted(riskType, acceptedRisks string) bool {
 
 var errAborted = errors.New("aborted, no changes made")
 
-// riskAbortTimeSeconds is the number of seconds to wait after displaying the
-// risk message before continuing with the operation.
-// It is used by the presentRiskToUser function below.
-const riskAbortTimeSeconds = 5
-
 // presentRiskToUser displays the risk message and waits for the user to cancel.
 // It returns errorAborted if the user aborts. In tests it returns errAborted
 // immediately unless the risk has been explicitly accepted.
@@ -75,22 +66,10 @@ func presentRiskToUser(riskType, riskMessage, acceptedRisks string) error {
 	outln(riskMessage)
 	printf("To skip this warning, use --accept-risk=%s\n", riskType)
 
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, syscall.SIGINT)
-	var msgLen int
-	for left := riskAbortTimeSeconds; left > 0; left-- {
-		msg := fmt.Sprintf("\rContinuing in %d seconds...", left)
-		msgLen = len(msg)
-		printf("%s", msg)
-		select {
-		case <-interrupt:
-			printf("\r%s\r", strings.Repeat("x", msgLen+1))
-			return errAborted
-		case <-time.After(time.Second):
-			continue
-		}
+	if prompt.YesNo("Continue?") {
+		return nil
 	}
-	printf("\r%s\r", strings.Repeat(" ", msgLen))
+
 	return errAborted
 }
 
