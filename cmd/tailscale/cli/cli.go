@@ -209,6 +209,7 @@ func noDupFlagify(c *ffcli.Command) {
 }
 
 var fileCmd func() *ffcli.Command
+var sysPolicyCmd func() *ffcli.Command
 
 func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
@@ -239,7 +240,7 @@ change in the future.
 			logoutCmd,
 			switchCmd,
 			configureCmd(),
-			syspolicyCmd,
+			nilOrCall(sysPolicyCmd),
 			netcheckCmd,
 			ipCmd,
 			dnsCmd,

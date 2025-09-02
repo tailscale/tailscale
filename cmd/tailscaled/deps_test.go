@@ -27,3 +27,17 @@ func TestOmitSSH(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitSyspolicy(t *testing.T) {
+	const msg = "unexpected syspolicy usage with ts_omit_syspolicy"
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_syspolicy,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/util/syspolicy":         msg,
+			"tailscale.com/util/syspolicy/setting": msg,
+			"tailscale.com/util/syspolicy/rsop":    msg,
+		},
+	}.Check(t)
+}
