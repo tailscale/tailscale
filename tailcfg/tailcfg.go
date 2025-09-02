@@ -2656,6 +2656,14 @@ const (
 	// NodeAttrTrafficSteering configures the node to use the traffic
 	// steering subsystem for via routes. See tailscale/corp#29966.
 	NodeAttrTrafficSteering NodeCapability = "traffic-steering"
+
+	// NodeAttrTailnetDisplayName is an optional alternate name for the tailnet
+	// to be displayed to the user.
+	// If empty or absent, a default is used.
+	// If this value is present and set by a user this will only include letters,
+	// numbers, apostrophe, spaces, and hyphens. This may not be true for the default.
+	// Values can look like "foo.com" or "Foo's Test Tailnet - Staging".
+	NodeAttrTailnetDisplayName NodeCapability = "tailnet-display-name"
 )
 
 // SetDNSRequest is a request to add a DNS record.
