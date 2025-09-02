@@ -28,8 +28,8 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/version"
 )
 
@@ -718,16 +718,16 @@ func NewPrefs() *Prefs {
 //
 // If not configured, or if the configured value is a legacy name equivalent to
 // the default, then DefaultControlURL is returned instead.
-func (p PrefsView) ControlURLOrDefault() string {
-	return p.ж.ControlURLOrDefault()
+func (p PrefsView) ControlURLOrDefault(polc policyclient.Client) string {
+	return p.ж.ControlURLOrDefault(polc)
 }
 
 // ControlURLOrDefault returns the coordination server's URL base.
 //
 // If not configured, or if the configured value is a legacy name equivalent to
 // the default, then DefaultControlURL is returned instead.
-func (p *Prefs) ControlURLOrDefault() string {
-	controlURL, err := syspolicy.GetString(pkey.ControlURL, p.ControlURL)
+func (p *Prefs) ControlURLOrDefault(polc policyclient.Client) string {
+	controlURL, err := polc.GetString(pkey.ControlURL, p.ControlURL)
 	if err != nil {
 		controlURL = p.ControlURL
 	}
@@ -756,11 +756,11 @@ func (p *Prefs) DefaultRouteAll(goos string) bool {
 }
 
 // AdminPageURL returns the admin web site URL for the current ControlURL.
-func (p PrefsView) AdminPageURL() string { return p.ж.AdminPageURL() }
+func (p PrefsView) AdminPageURL(polc policyclient.Client) string { return p.ж.AdminPageURL(polc) }
 
 // AdminPageURL returns the admin web site URL for the current ControlURL.
-func (p *Prefs) AdminPageURL() string {
-	url := p.ControlURLOrDefault()
+func (p *Prefs) AdminPageURL(polc policyclient.Client) string {
+	url := p.ControlURLOrDefault(polc)
 	if IsLoginServerSynonym(url) {
 		// TODO(crawshaw): In future release, make this https://console.tailscale.com
 		url = "https://login.tailscale.com"

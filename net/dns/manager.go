@@ -30,6 +30,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/syspolicy/policyclient"
 )
 
 var (
@@ -576,7 +577,7 @@ func (m *Manager) FlushCaches() error {
 //
 // health must not be nil
 func CleanUp(logf logger.Logf, netMon *netmon.Monitor, health *health.Tracker, interfaceName string) {
-	oscfg, err := NewOSConfigurator(logf, nil, nil, interfaceName)
+	oscfg, err := NewOSConfigurator(logf, health, policyclient.Get(), nil, interfaceName)
 	if err != nil {
 		logf("creating dns cleanup: %v", err)
 		return

@@ -109,6 +109,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
@@ -1610,7 +1611,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		// future "tailscale up" to start checking for
 		// implicit setting reverts, which it doesn't do when
 		// ControlURL is blank.
-		prefs.ControlURL = prefs.ControlURLOrDefault()
+		prefs.ControlURL = prefs.ControlURLOrDefault(b.polc)
 		prefsChanged = true
 	}
 	if st.Persist.Valid() {
@@ -1870,7 +1871,7 @@ func (b *LocalBackend) applySysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
 	}
 
 	for _, opt := range preferencePolicies {
-		if po, err := b.polc.GetPreferenceOption(opt.key); err == nil {
+		if po, err := b.polc.GetPreferenceOption(opt.key, ptype.ShowChoiceByPolicy); err == nil {
 			curVal := opt.get(prefs.View())
 			newVal := po.ShouldEnable(curVal)
 			if curVal != newVal {
@@ -2425,7 +2426,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	loggedOut := prefs.LoggedOut()
 
-	serverURL := prefs.ControlURLOrDefault()
+	serverURL := prefs.ControlURLOrDefault(b.polc)
 	if inServerMode := prefs.ForceDaemon(); inServerMode || runtime.GOOS == "windows" {
 		b.logf("Start: serverMode=%v", inServerMode)
 	}
@@ -3498,7 +3499,7 @@ func (b *LocalBackend) validPopBrowserURLLocked(urlStr string) bool {
 	if err != nil {
 		return false
 	}
-	serverURL := b.sanitizedPrefsLocked().ControlURLOrDefault()
+	serverURL := b.sanitizedPrefsLocked().ControlURLOrDefault(b.polc)
 	if ipn.IsLoginServerSynonym(serverURL) {
 		// When connected to the official Tailscale control plane, only allow
 		// URLs from tailscale.com or its subdomains.
@@ -4049,7 +4050,7 @@ func (b *LocalBackend) SwitchToBestProfile(reason string) {
 // but b.mu must held on entry. It is released on exit.
 func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock unlockOnce) {
 	defer unlock()
-	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
+	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(b.polc)
 	profile, background := b.resolveBestProfileLocked()
 	cp, switched, err := b.pm.SwitchToProfile(profile)
 	switch {
@@ -4076,7 +4077,7 @@ func (b *LocalBackend) switchToBestProfileLockedOnEntry(reason string, unlock un
 		return
 	}
 	// As an optimization, only reset the dialPlan if the control URL changed.
-	if newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(); oldControlURL != newControlURL {
+	if newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(b.polc); oldControlURL != newControlURL {
 		b.resetDialPlan()
 	}
 	if err := b.resetForProfileChangeLockedOnEntry(unlock); err != nil {
@@ -4250,7 +4251,7 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 	if !prefs.Valid() {
 		return true // assume true until set otherwise
 	}
-	return prefs.ControlURLOrDefault() == ipn.DefaultControlURL
+	return prefs.ControlURLOrDefault(b.polc) == ipn.DefaultControlURL
 }
 
 var exitNodeMisconfigurationWarnable = health.Register(&health.Warnable{
@@ -5687,7 +5688,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	// Some temporary (2024-05-05) debugging code to help us catch
 	// https://github.com/tailscale/tailscale/issues/11962 in the act.
 	if prefs.WantRunning() &&
-		prefs.ControlURLOrDefault() == ipn.DefaultControlURL &&
+		prefs.ControlURLOrDefault(b.polc) == ipn.DefaultControlURL &&
 		envknob.Bool("TS_PANIC_IF_HIT_MAIN_CONTROL") {
 		panic("[unexpected] use of main control server in integration test")
 	}
@@ -7288,13 +7289,13 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
-	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
+	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(b.polc)
 	if _, changed, err := b.pm.SwitchToProfileByID(profile); !changed || err != nil {
 		return err // nil if we're already on the target profile
 	}
 
 	// As an optimization, only reset the dialPlan if the control URL changed.
-	if newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(); oldControlURL != newControlURL {
+	if newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault(b.polc); oldControlURL != newControlURL {
 		b.resetDialPlan()
 	}
 

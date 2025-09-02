@@ -22,6 +22,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpver"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/version/distro"
 )
 
@@ -38,7 +39,7 @@ var publishOnce sync.Once
 // NewOSConfigurator created a new OS configurator.
 //
 // The health tracker may be nil; the knobs may be nil and are ignored on this platform.
-func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ *controlknobs.Knobs, interfaceName string) (ret OSConfigurator, err error) {
+func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ policyclient.Client, _ *controlknobs.Knobs, interfaceName string) (ret OSConfigurator, err error) {
 	if distro.Get() == distro.JetKVM {
 		return NewNoopManager()
 	}

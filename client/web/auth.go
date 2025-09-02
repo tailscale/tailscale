@@ -192,7 +192,7 @@ func (s *Server) controlSupportsCheckMode(ctx context.Context) bool {
 	if err != nil {
 		return true
 	}
-	controlURL, err := url.Parse(prefs.ControlURLOrDefault())
+	controlURL, err := url.Parse(prefs.ControlURLOrDefault(s.polc))
 	if err != nil {
 		return true
 	}

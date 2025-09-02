@@ -1,13 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package syspolicy facilitates retrieval of the current policy settings
-// applied to the device or user and receiving notifications when the policy
-// changes.
-//
-// It provides functions that return specific policy settings by their unique
-// [setting.Key]s, such as [GetBoolean], [GetUint64], [GetString],
-// [GetStringArray], [GetPreferenceOption], [GetVisibility] and [GetDuration].
+// Package syspolicy contains the implementation of system policy management.
+// Calling code should use the client interface in
+// tailscale.com/util/syspolicy/policyclient.
 package syspolicy
 
 import (
@@ -18,6 +14,7 @@ import (
 
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
@@ -58,9 +55,9 @@ func MustRegisterStoreForTest(tb testenv.TB, name string, scope setting.PolicySc
 	return reg
 }
 
-// HasAnyOf returns whether at least one of the specified policy settings is configured,
+// hasAnyOf returns whether at least one of the specified policy settings is configured,
 // or an error if no keys are provided or the check fails.
-func HasAnyOf(keys ...pkey.Key) (bool, error) {
+func hasAnyOf(keys ...pkey.Key) (bool, error) {
 	if len(keys) == 0 {
 		return false, errors.New("at least one key must be specified")
 	}
@@ -82,62 +79,55 @@ func HasAnyOf(keys ...pkey.Key) (bool, error) {
 	return false, nil
 }
 
-// GetString returns a string policy setting with the specified key,
+// getString returns a string policy setting with the specified key,
 // or defaultValue if it does not exist.
-func GetString(key pkey.Key, defaultValue string) (string, error) {
+func getString(key pkey.Key, defaultValue string) (string, error) {
 	return getCurrentPolicySettingValue(key, defaultValue)
 }
 
-// GetUint64 returns a numeric policy setting with the specified key,
+// getUint64 returns a numeric policy setting with the specified key,
 // or defaultValue if it does not exist.
-func GetUint64(key pkey.Key, defaultValue uint64) (uint64, error) {
+func getUint64(key pkey.Key, defaultValue uint64) (uint64, error) {
 	return getCurrentPolicySettingValue(key, defaultValue)
 }
 
-// GetBoolean returns a boolean policy setting with the specified key,
+// getBoolean returns a boolean policy setting with the specified key,
 // or defaultValue if it does not exist.
-func GetBoolean(key pkey.Key, defaultValue bool) (bool, error) {
+func getBoolean(key pkey.Key, defaultValue bool) (bool, error) {
 	return getCurrentPolicySettingValue(key, defaultValue)
 }
 
-// GetStringArray returns a multi-string policy setting with the specified key,
+// getStringArray returns a multi-string policy setting with the specified key,
 // or defaultValue if it does not exist.
-func GetStringArray(key pkey.Key, defaultValue []string) ([]string, error) {
+func getStringArray(key pkey.Key, defaultValue []string) ([]string, error) {
 	return getCurrentPolicySettingValue(key, defaultValue)
 }
 
-// GetPreferenceOption loads a policy from the registry that can be
+// getPreferenceOption loads a policy from the registry that can be
 // managed by an enterprise policy management system and allows administrative
 // overrides of users' choices in a way that we do not want tailcontrol to have
 // the authority to set. It describes user-decides/always/never options, where
 // "always" and "never" remove the user's ability to make a selection. If not
-// present or set to a different value, "user-decides" is the default.
-func GetPreferenceOption(name pkey.Key) (ptype.PreferenceOption, error) {
-	return getCurrentPolicySettingValue(name, ptype.ShowChoiceByPolicy)
-}
-
-// GetPreferenceOptionOrDefault is like [GetPreferenceOption], but allows
-// specifying a default value to return if the policy setting is not configured.
-// It can be used in situations where "user-decides" is not the default.
-func GetPreferenceOptionOrDefault(name pkey.Key, defaultValue ptype.PreferenceOption) (ptype.PreferenceOption, error) {
+// present or set to a different value, defaultValue (and a nil error) is returned.
+func getPreferenceOption(name pkey.Key, defaultValue ptype.PreferenceOption) (ptype.PreferenceOption, error) {
 	return getCurrentPolicySettingValue(name, defaultValue)
 }
 
-// GetVisibility loads a policy from the registry that can be managed
+// getVisibility loads a policy from the registry that can be managed
 // by an enterprise policy management system and describes show/hide decisions
 // for UI elements. The registry value should be a string set to "show" (return
 // true) or "hide" (return true). If not present or set to a different value,
 // "show" (return false) is the default.
-func GetVisibility(name pkey.Key) (ptype.Visibility, error) {
+func getVisibility(name pkey.Key) (ptype.Visibility, error) {
 	return getCurrentPolicySettingValue(name, ptype.VisibleByPolicy)
 }
 
-// GetDuration loads a policy from the registry that can be managed
+// getDuration loads a policy from the registry that can be managed
 // by an enterprise policy management system and describes a duration for some
 // action. The registry value should be a string that time.ParseDuration
 // understands. If the registry value is "" or can not be processed,
 // defaultValue is returned instead.
-func GetDuration(name pkey.Key, defaultValue time.Duration) (time.Duration, error) {
+func getDuration(name pkey.Key, defaultValue time.Duration) (time.Duration, error) {
 	d, err := getCurrentPolicySettingValue(name, defaultValue)
 	if err != nil {
 		return d, err
@@ -148,9 +138,9 @@ func GetDuration(name pkey.Key, defaultValue time.Duration) (time.Duration, erro
 	return d, nil
 }
 
-// RegisterChangeCallback adds a function that will be called whenever the effective policy
+// registerChangeCallback adds a function that will be called whenever the effective policy
 // for the default scope changes. The returned function can be used to unregister the callback.
-func RegisterChangeCallback(cb rsop.PolicyChangeCallback) (unregister func(), err error) {
+func registerChangeCallback(cb rsop.PolicyChangeCallback) (unregister func(), err error) {
 	effective, err := rsop.PolicyFor(setting.DefaultScope())
 	if err != nil {
 		return nil, err
@@ -233,7 +223,53 @@ func SelectControlURL(reg, disk string) string {
 	return def
 }
 
-// SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
-func SetDebugLoggingEnabled(v bool) {
-	loggerx.SetDebugLoggingEnabled(v)
+func init() {
+	policyclient.RegisterClientImpl(globalSyspolicy{})
+}
+
+// globalSyspolicy implements [policyclient.Client] using the syspolicy global
+// functions and global registrations.
+//
+// TODO: de-global-ify. This implementation using the old global functions
+// is an intermediate stage while changing policyclient to be modular.
+type globalSyspolicy struct{}
+
+func (globalSyspolicy) GetBoolean(key pkey.Key, defaultValue bool) (bool, error) {
+	return getBoolean(key, defaultValue)
+}
+
+func (globalSyspolicy) GetString(key pkey.Key, defaultValue string) (string, error) {
+	return getString(key, defaultValue)
+}
+
+func (globalSyspolicy) GetStringArray(key pkey.Key, defaultValue []string) ([]string, error) {
+	return getStringArray(key, defaultValue)
+}
+
+func (globalSyspolicy) SetDebugLoggingEnabled(enabled bool) {
+	loggerx.SetDebugLoggingEnabled(enabled)
+}
+
+func (globalSyspolicy) GetUint64(key pkey.Key, defaultValue uint64) (uint64, error) {
+	return getUint64(key, defaultValue)
+}
+
+func (globalSyspolicy) GetDuration(name pkey.Key, defaultValue time.Duration) (time.Duration, error) {
+	return getDuration(name, defaultValue)
+}
+
+func (globalSyspolicy) GetPreferenceOption(name pkey.Key, defaultValue ptype.PreferenceOption) (ptype.PreferenceOption, error) {
+	return getPreferenceOption(name, defaultValue)
+}
+
+func (globalSyspolicy) GetVisibility(name pkey.Key) (ptype.Visibility, error) {
+	return getVisibility(name)
+}
+
+func (globalSyspolicy) HasAnyOf(keys ...pkey.Key) (bool, error) {
+	return hasAnyOf(keys...)
+}
+
+func (globalSyspolicy) RegisterChangeCallback(cb func(policyclient.PolicyChange)) (unregister func(), err error) {
+	return registerChangeCallback(cb)
 }

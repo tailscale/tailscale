@@ -175,7 +175,7 @@ func (s *System) PolicyClientOrDefault() policyclient.Client {
 	if client, ok := s.PolicyClient.GetOK(); ok {
 		return client
 	}
-	return getPolicyClient()
+	return policyclient.Get()
 }
 
 // SubSystem represents some subsystem of the Tailscale node daemon.

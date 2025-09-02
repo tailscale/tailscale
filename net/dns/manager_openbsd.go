@@ -11,6 +11,7 @@ import (
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/syspolicy/policyclient"
 )
 
 type kv struct {
@@ -24,7 +25,7 @@ func (kv kv) String() string {
 // NewOSConfigurator created a new OS configurator.
 //
 // The health tracker may be nil; the knobs may be nil and are ignored on this platform.
-func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ *controlknobs.Knobs, interfaceName string) (OSConfigurator, error) {
+func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ policyclient.Client, _ *controlknobs.Knobs, interfaceName string) (OSConfigurator, error) {
 	return newOSConfigurator(logf, health, interfaceName,
 		newOSConfigEnv{
 			rcIsResolvd: rcIsResolvd,

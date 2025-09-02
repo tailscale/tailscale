@@ -82,7 +82,7 @@ func TestGetString(t *testing.T) {
 			}
 			registerSingleSettingStoreForTest(t, s)
 
-			value, err := GetString(tt.key, tt.defaultValue)
+			value, err := getString(tt.key, tt.defaultValue)
 			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
@@ -157,7 +157,7 @@ func TestGetUint64(t *testing.T) {
 			}
 			registerSingleSettingStoreForTest(t, s)
 
-			value, err := GetUint64(tt.key, tt.defaultValue)
+			value, err := getUint64(tt.key, tt.defaultValue)
 			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
@@ -224,7 +224,7 @@ func TestGetBoolean(t *testing.T) {
 			}
 			registerSingleSettingStoreForTest(t, s)
 
-			value, err := GetBoolean(tt.key, tt.defaultValue)
+			value, err := getBoolean(tt.key, tt.defaultValue)
 			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
@@ -317,7 +317,7 @@ func TestGetPreferenceOption(t *testing.T) {
 			}
 			registerSingleSettingStoreForTest(t, s)
 
-			option, err := GetPreferenceOption(tt.key)
+			option, err := getPreferenceOption(tt.key, ptype.ShowChoiceByPolicy)
 			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
@@ -402,7 +402,7 @@ func TestGetVisibility(t *testing.T) {
 			}
 			registerSingleSettingStoreForTest(t, s)
 
-			visibility, err := GetVisibility(tt.key)
+			visibility, err := getVisibility(tt.key)
 			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
@@ -498,7 +498,7 @@ func TestGetDuration(t *testing.T) {
 			}
 			registerSingleSettingStoreForTest(t, s)
 
-			duration, err := GetDuration(tt.key, tt.defaultValue)
+			duration, err := getDuration(tt.key, tt.defaultValue)
 			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
@@ -579,7 +579,7 @@ func TestGetStringArray(t *testing.T) {
 			}
 			registerSingleSettingStoreForTest(t, s)
 
-			value, err := GetStringArray(tt.key, tt.defaultValue)
+			value, err := getStringArray(tt.key, tt.defaultValue)
 			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
@@ -613,7 +613,7 @@ func BenchmarkGetString(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		gotControlURL, _ := GetString(pkey.ControlURL, "https://controlplane.tailscale.com")
+		gotControlURL, _ := getString(pkey.ControlURL, "https://controlplane.tailscale.com")
 		if gotControlURL != wantControlURL {
 			b.Fatalf("got %v; want %v", gotControlURL, wantControlURL)
 		}
