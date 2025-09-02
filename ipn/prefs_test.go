@@ -924,16 +924,26 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			want: mustIP("1.2.3.4"),
 		},
 		{
-			name:    "no_match",
-			arg:     "unknown",
-			st:      &ipnstate.Status{MagicDNSSuffix: ".foo"},
+			name: "no_match",
+			arg:  "unknown",
+			st: &ipnstate.Status{
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					Name:            "foo",
+					MagicDNSSuffix:  ".foo",
+					MagicDNSEnabled: true,
+				},
+			},
 			wantErr: `invalid value "unknown" for --exit-node; must be IP or unique node name`,
 		},
 		{
 			name: "name",
 			arg:  "skippy",
 			st: &ipnstate.Status{
-				MagicDNSSuffix: ".foo",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					Name:            "foo",
+					MagicDNSSuffix:  ".foo",
+					MagicDNSEnabled: true,
+				},
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
 						DNSName:        "skippy.foo.",
@@ -948,7 +958,11 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			name: "name_fqdn",
 			arg:  "skippy.foo.",
 			st: &ipnstate.Status{
-				MagicDNSSuffix: ".foo",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					Name:            "foo",
+					MagicDNSSuffix:  ".foo",
+					MagicDNSEnabled: true,
+				},
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
 						DNSName:        "skippy.foo.",
@@ -963,7 +977,11 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			name: "name_not_exit",
 			arg:  "skippy",
 			st: &ipnstate.Status{
-				MagicDNSSuffix: ".foo",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					Name:            "foo",
+					MagicDNSSuffix:  ".foo",
+					MagicDNSEnabled: true,
+				},
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
 						DNSName:      "skippy.foo.",
@@ -977,7 +995,11 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			name: "name_wrong_fqdn",
 			arg:  "skippy.bar.",
 			st: &ipnstate.Status{
-				MagicDNSSuffix: ".foo",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					Name:            "foo",
+					MagicDNSSuffix:  ".foo",
+					MagicDNSEnabled: true,
+				},
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
 						DNSName:      "skippy.foo.",
@@ -991,7 +1013,11 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			name: "ambiguous",
 			arg:  "skippy",
 			st: &ipnstate.Status{
-				MagicDNSSuffix: ".foo",
+				CurrentTailnet: &ipnstate.TailnetStatus{
+					Name:            "foo",
+					MagicDNSSuffix:  ".foo",
+					MagicDNSEnabled: true,
+				},
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
 						DNSName:        "skippy.foo.",
