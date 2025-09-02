@@ -16,12 +16,12 @@ import (
 	"tailscale.com/tstest"
 )
 
-var parentPath = "/parent"
+var parentPath = "/parent with spaces"
 
-var childPath = "/parent/child.txt"
+var childPath = "/parent with spaces/child.txt"
 
 var parentResponse = `<D:response>
-<D:href>/parent/</D:href>
+<D:href>/parent%20with%20spaces/</D:href>
 <D:propstat>
 <D:prop>
 <D:getlastmodified>Mon, 29 Apr 2024 19:52:23 GMT</D:getlastmodified>
@@ -36,7 +36,7 @@ var parentResponse = `<D:response>
 
 var childResponse = `
 <D:response>
-<D:href>/parent/child.txt</D:href>
+<D:href>/parent%20with%20spaces/child.txt</D:href>
 <D:propstat>
 <D:prop>
 <D:getlastmodified>Mon, 29 Apr 2024 19:52:23 GMT</D:getlastmodified>
