@@ -18,8 +18,8 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 )
 
 // featureName is the name of the feature implemented by this package.
@@ -136,7 +136,7 @@ func (e *desktopSessionsExt) getBackgroundProfile(profiles ipnext.ProfileStore) 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if alwaysOn, _ := syspolicy.GetBoolean(pkey.AlwaysOn, false); !alwaysOn {
+	if alwaysOn, _ := policyclient.Get().GetBoolean(pkey.AlwaysOn, false); !alwaysOn {
 		// If the Always-On mode is disabled, there's no background profile
 		// as far as the desktop session extension is concerned.
 		return ipn.LoginProfileView{}

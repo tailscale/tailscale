@@ -28,6 +28,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/views"
 	"tailscale.com/util/httpm"
+	"tailscale.com/util/syspolicy/policyclient"
 )
 
 func TestQnapAuthnURL(t *testing.T) {
@@ -576,6 +577,7 @@ func TestServeAuth(t *testing.T) {
 		timeNow:     func() time.Time { return timeNow },
 		newAuthURL:  mockNewAuthURL,
 		waitAuthURL: mockWaitAuthURL,
+		polc:        policyclient.NoPolicyClient{},
 	}
 
 	successCookie := "ts-cookie-success"

@@ -44,8 +44,8 @@ type Client interface {
 	// overrides of users' choices in a way that we do not want tailcontrol to have
 	// the authority to set. It describes user-decides/always/never options, where
 	// "always" and "never" remove the user's ability to make a selection. If not
-	// present or set to a different value, "user-decides" is the default.
-	GetPreferenceOption(key pkey.Key) (ptype.PreferenceOption, error)
+	// present or set to a different value, defaultValue (and a nil error) is returned.
+	GetPreferenceOption(key pkey.Key, defaultValue ptype.PreferenceOption) (ptype.PreferenceOption, error)
 
 	// GetVisibility returns whether a UI element should be visible based on
 	// the system's configuration.
@@ -66,6 +66,21 @@ type Client interface {
 	RegisterChangeCallback(cb func(PolicyChange)) (unregister func(), err error)
 }
 
+// Get returns a non-nil [Client] implementation as a function of the
+// build tags. It returns a no-op implementation if the full syspolicy
+// package is omitted from the build.
+func Get() Client {
+	return client
+}
+
+// RegisterClientImpl registers a [Client] implementation to be returned by
+// [Get].
+func RegisterClientImpl(c Client) {
+	client = c
+}
+
+var client Client = NoPolicyClient{}
+
 // PolicyChange is the interface representing a change in policy settings.
 type PolicyChange interface {
 	// HasChanged reports whether the policy setting identified by the given key
@@ -80,6 +95,8 @@ type PolicyChange interface {
 // NoPolicyClient is a no-op implementation of [Client] that only
 // returns default values.
 type NoPolicyClient struct{}
+
+var _ Client = NoPolicyClient{}
 
 func (NoPolicyClient) GetBoolean(key pkey.Key, defaultValue bool) (bool, error) {
 	return defaultValue, nil
@@ -101,8 +118,8 @@ func (NoPolicyClient) GetDuration(name pkey.Key, defaultValue time.Duration) (ti
 	return defaultValue, nil
 }
 
-func (NoPolicyClient) GetPreferenceOption(name pkey.Key) (ptype.PreferenceOption, error) {
-	return ptype.ShowChoiceByPolicy, nil
+func (NoPolicyClient) GetPreferenceOption(name pkey.Key, defaultValue ptype.PreferenceOption) (ptype.PreferenceOption, error) {
+	return defaultValue, nil
 }
 
 func (NoPolicyClient) GetVisibility(name pkey.Key) (ptype.Visibility, error) {

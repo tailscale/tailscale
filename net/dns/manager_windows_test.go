@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/gp"
 )
@@ -133,7 +134,7 @@ func TestManagerWindowsGPCopy(t *testing.T) {
 	}
 	defer delIfKey()
 
-	cfg, err := NewOSConfigurator(logf, nil, nil, fakeInterface.String())
+	cfg, err := NewOSConfigurator(logf, nil, policyclient.NoPolicyClient{}, nil, fakeInterface.String())
 	if err != nil {
 		t.Fatalf("NewOSConfigurator: %v\n", err)
 	}
@@ -262,7 +263,7 @@ func runTest(t *testing.T, isLocal bool) {
 	}
 	defer delIfKey()
 
-	cfg, err := NewOSConfigurator(logf, nil, nil, fakeInterface.String())
+	cfg, err := NewOSConfigurator(logf, nil, policyclient.NoPolicyClient{}, nil, fakeInterface.String())
 	if err != nil {
 		t.Fatalf("NewOSConfigurator: %v\n", err)
 	}

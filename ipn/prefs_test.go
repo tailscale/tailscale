@@ -23,6 +23,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/syspolicy/policyclient"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -1032,15 +1033,16 @@ func TestExitNodeIPOfArg(t *testing.T) {
 
 func TestControlURLOrDefault(t *testing.T) {
 	var p Prefs
-	if got, want := p.ControlURLOrDefault(), DefaultControlURL; got != want {
+	polc := policyclient.NoPolicyClient{}
+	if got, want := p.ControlURLOrDefault(polc), DefaultControlURL; got != want {
 		t.Errorf("got %q; want %q", got, want)
 	}
 	p.ControlURL = "http://foo.bar"
-	if got, want := p.ControlURLOrDefault(), "http://foo.bar"; got != want {
+	if got, want := p.ControlURLOrDefault(polc), "http://foo.bar"; got != want {
 		t.Errorf("got %q; want %q", got, want)
 	}
 	p.ControlURL = "https://login.tailscale.com"
-	if got, want := p.ControlURLOrDefault(), DefaultControlURL; got != want {
+	if got, want := p.ControlURLOrDefault(polc), DefaultControlURL; got != want {
 		t.Errorf("got %q; want %q", got, want)
 	}
 }

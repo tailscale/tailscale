@@ -39,6 +39,7 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/version/distro"
 )
 
@@ -609,7 +610,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 					if env.upArgs.json {
 						printUpDoneJSON(ipn.NeedsMachineAuth, "")
 					} else {
-						fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
+						fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL(policyclient.Get()))
 					}
 				case ipn.Running:
 					// Done full authentication process

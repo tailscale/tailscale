@@ -5,6 +5,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/httpm"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -49,6 +51,7 @@ type Server struct {
 	mode ServerMode
 
 	logf    logger.Logf
+	polc    policyclient.Client // must be non-nil
 	lc      *local.Client
 	timeNow func() time.Time
 
@@ -139,8 +142,12 @@ type ServerOpts struct {
 	TimeNow func() time.Time
 
 	// Logf optionally provides a logger function.
-	// log.Printf is used as default.
+	// If nil, log.Printf is used as default.
 	Logf logger.Logf
+
+	// PolicyClient, if non-nil, will be used to fetch policy settings.
+	// If nil, the default policy client will be used.
+	PolicyClient policyclient.Client
 
 	// The following two fields are required and used exclusively
 	// in ManageServerMode to facilitate the control server login
@@ -178,6 +185,7 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	}
 	s = &Server{
 		mode:           opts.Mode,
+		polc:           cmp.Or(opts.PolicyClient, policyclient.Get()),
 		logf:           opts.Logf,
 		devMode:        envknob.Bool("TS_DEBUG_WEB_CLIENT_DEV"),
 		lc:             opts.LocalClient,
@@ -950,7 +958,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		UnraidToken:      os.Getenv("UNRAID_CSRF_TOKEN"),
 		RunningSSHServer: prefs.RunSSH,
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
-		ControlAdminURL:  prefs.AdminPageURL(),
+		ControlAdminURL:  prefs.AdminPageURL(s.polc),
 		LicensesURL:      licenses.LicensesURL(),
 		Features:         availableFeatures(),
 
