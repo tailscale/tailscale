@@ -64,7 +64,7 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
-	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/util/syspolicy/policytest"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/wgengine"
@@ -1183,7 +1183,7 @@ func TestConfigureExitNode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var pol testPolicy
+			var pol policytest.Config
 			// Configure policy settings, if any.
 			if tt.exitNodeIDPolicy != nil {
 				pol.Set(pkey.ExitNodeID, string(*tt.exitNodeIDPolicy))
@@ -5539,62 +5539,6 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	}
 }
 
-// testPolicy is a [policyclient.Client] with a static mapping of values.
-// The map value must be of the correct type (string, []string, bool, etc).
-//
-// It is used for testing purposes to simulate policy client behavior.
-// It panics if the values are the wrong type.
-type testPolicy struct {
-	v map[pkey.Key]any
-	policyclient.NoPolicyClient
-}
-
-func (sp *testPolicy) Set(key pkey.Key, value any) {
-	if sp.v == nil {
-		sp.v = make(map[pkey.Key]any)
-	}
-	sp.v[key] = value
-}
-
-func (sp testPolicy) GetStringArray(key pkey.Key, defaultVal []string) ([]string, error) {
-	if val, ok := sp.v[key]; ok {
-		if arr, ok := val.([]string); ok {
-			return arr, nil
-		}
-		panic(fmt.Sprintf("key %s is not a []string", key))
-	}
-	return defaultVal, nil
-}
-
-func (sp testPolicy) GetString(key pkey.Key, defaultVal string) (string, error) {
-	if val, ok := sp.v[key]; ok {
-		if str, ok := val.(string); ok {
-			return str, nil
-		}
-		panic(fmt.Sprintf("key %s is not a string", key))
-	}
-	return defaultVal, nil
-}
-
-func (sp testPolicy) GetBoolean(key pkey.Key, defaultVal bool) (bool, error) {
-	if val, ok := sp.v[key]; ok {
-		if b, ok := val.(bool); ok {
-			return b, nil
-		}
-		panic(fmt.Sprintf("key %s is not a bool", key))
-	}
-	return defaultVal, nil
-}
-
-func (sp testPolicy) HasAnyOf(keys ...pkey.Key) (bool, error) {
-	for _, key := range keys {
-		if _, ok := sp.v[key]; ok {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func TestFillAllowedSuggestions(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -5628,7 +5572,7 @@ func TestFillAllowedSuggestions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var pol testPolicy
+			var pol policytest.Config
 			pol.Set(pkey.AllowedSuggestedExitNodes, tt.allowPolicy)
 
 			got := fillAllowedSuggestions(pol)
