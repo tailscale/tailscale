@@ -93,26 +93,28 @@ const networkLoggerUploadTimeout = 5 * time.Second
 type userspaceEngine struct {
 	// eventBus will eventually become required, but for now may be nil.
 	// TODO(creachadair): Enforce that this is non-nil at construction.
-	eventBus *eventbus.Bus
+	eventBus       *eventbus.Bus
+	eventClient    *eventbus.Client
+	changeDeltaSub *eventbus.Subscriber[netmon.ChangeDelta]
+	subsDoneCh     chan struct{} // closed when consumeEventbusTopics returns
 
-	logf             logger.Logf
-	wgLogger         *wglog.Logger // a wireguard-go logging wrapper
-	reqCh            chan struct{}
-	waitCh           chan struct{} // chan is closed when first Close call completes; contrast with closing bool
-	timeNow          func() mono.Time
-	tundev           *tstun.Wrapper
-	wgdev            *device.Device
-	router           router.Router
-	dialer           *tsdial.Dialer
-	confListenPort   uint16 // original conf.ListenPort
-	dns              *dns.Manager
-	magicConn        *magicsock.Conn
-	netMon           *netmon.Monitor
-	health           *health.Tracker
-	netMonOwned      bool                // whether we created netMon (and thus need to close it)
-	netMonUnregister func()              // unsubscribes from changes; used regardless of netMonOwned
-	birdClient       BIRDClient          // or nil
-	controlKnobs     *controlknobs.Knobs // or nil
+	logf           logger.Logf
+	wgLogger       *wglog.Logger // a wireguard-go logging wrapper
+	reqCh          chan struct{}
+	waitCh         chan struct{} // chan is closed when first Close call completes; contrast with closing bool
+	timeNow        func() mono.Time
+	tundev         *tstun.Wrapper
+	wgdev          *device.Device
+	router         router.Router
+	dialer         *tsdial.Dialer
+	confListenPort uint16 // original conf.ListenPort
+	dns            *dns.Manager
+	magicConn      *magicsock.Conn
+	netMon         *netmon.Monitor
+	health         *health.Tracker
+	netMonOwned    bool                // whether we created netMon (and thus need to close it)
+	birdClient     BIRDClient          // or nil
+	controlKnobs   *controlknobs.Knobs // or nil
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
@@ -352,7 +354,11 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		controlKnobs:   conf.ControlKnobs,
 		reconfigureVPN: conf.ReconfigureVPN,
 		health:         conf.HealthTracker,
+		subsDoneCh:     make(chan struct{}),
 	}
+	e.eventClient = e.eventBus.Client("userspaceEngine")
+	e.changeDeltaSub = eventbus.Subscribe[netmon.ChangeDelta](e.eventClient)
+	closePool.addFunc(e.eventClient.Close)
 
 	if e.birdClient != nil {
 		// Disable the protocol at start time.
@@ -384,13 +390,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	sockstats.SetNetMon(e.netMon)
 
 	logf("link state: %+v", e.netMon.InterfaceState())
-
-	unregisterMonWatch := e.netMon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
-		tshttpproxy.InvalidateCache()
-		e.linkChange(delta)
-	})
-	closePool.addFunc(unregisterMonWatch)
-	e.netMonUnregister = unregisterMonWatch
 
 	endpointsFn := func(endpoints []tailcfg.Endpoint) {
 		e.mu.Lock()
@@ -546,8 +545,29 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 	}
 
+	go e.consumeEventbusTopics()
+
 	e.logf("Engine created.")
 	return e, nil
+}
+
+// consumeEventbusTopics consumes events from all relevant
+// [eventbus.Subscriber]'s and passes them to their related handler. Events are
+// always handled in the order they are received, i.e. the next event is not
+// read until the previous event's handler has returned. It returns when the
+// [eventbus.Client] is closed.
+func (e *userspaceEngine) consumeEventbusTopics() {
+	defer close(e.subsDoneCh)
+
+	for {
+		select {
+		case <-e.eventClient.Done():
+			return
+		case changeDelta := <-e.changeDeltaSub.Events():
+			tshttpproxy.InvalidateCache()
+			e.linkChange(&changeDelta)
+		}
+	}
 }
 
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
@@ -1208,6 +1228,9 @@ func (e *userspaceEngine) RequestStatus() {
 }
 
 func (e *userspaceEngine) Close() {
+	e.eventClient.Close()
+	<-e.subsDoneCh
+
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
@@ -1219,7 +1242,6 @@ func (e *userspaceEngine) Close() {
 	r := bufio.NewReader(strings.NewReader(""))
 	e.wgdev.IpcSetOperation(r)
 	e.magicConn.Close()
-	e.netMonUnregister()
 	if e.netMonOwned {
 		e.netMon.Close()
 	}
