@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/ptype"
+	"tailscale.com/util/testenv"
 )
 
 // Client is the interface between code making questions about the system policy
@@ -68,8 +69,15 @@ type Client interface {
 
 // Get returns a non-nil [Client] implementation as a function of the
 // build tags. It returns a no-op implementation if the full syspolicy
-// package is omitted from the build.
+// package is omitted from the build, or in tests.
 func Get() Client {
+	if testenv.InTest() {
+		// This is a little redundant (the Windows implementation at least
+		// already does this) but it's here for redundancy and clarity, that we
+		// don't want to accidentally use the real system policy when running
+		// tests.
+		return NoPolicyClient{}
+	}
 	return client
 }
 
