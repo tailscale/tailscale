@@ -35,6 +35,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/wgengine"
 )
 
@@ -870,7 +871,7 @@ func mustCreateURL(t *testing.T, u string) url.URL {
 	return *uParsed
 }
 
-func newTestBackend(t *testing.T) *LocalBackend {
+func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	const debug = true
 	if debug {
@@ -878,6 +879,16 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	}
 
 	sys := tsd.NewSystem()
+
+	for _, o := range opts {
+		switch v := o.(type) {
+		case policyclient.Client:
+			sys.PolicyClient.Set(v)
+		default:
+			panic(fmt.Sprintf("unsupported option type %T", v))
+		}
+	}
+
 	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),

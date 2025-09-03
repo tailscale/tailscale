@@ -2881,20 +2881,16 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 		},
 	}
 
-	syspolicy.RegisterWellKnownSettingsForTest(t)
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			b := newTestBackend(t)
-
-			policyStore := source.NewTestStore(t)
+			var polc policytest.Config
 			if test.exitNodeIDKey {
-				policyStore.SetStrings(source.TestSettingOf(pkey.ExitNodeID, test.exitNodeID))
+				polc.Set(pkey.ExitNodeID, test.exitNodeID)
 			}
 			if test.exitNodeIPKey {
-				policyStore.SetStrings(source.TestSettingOf(pkey.ExitNodeIP, test.exitNodeIP))
+				polc.Set(pkey.ExitNodeIP, test.exitNodeIP)
 			}
-			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
+			b := newTestBackend(t, polc)
 
 			if test.nm == nil {
 				test.nm = new(netmap.NetworkMap)
@@ -3026,15 +3022,13 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 		},
 	}
 
-	syspolicy.RegisterWellKnownSettingsForTest(t)
-	policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
-		pkey.ExitNodeID, "auto:any",
-	))
-	syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := newTestLocalBackend(t)
+			sys := tsd.NewSystem()
+			sys.PolicyClient.Set(policytest.Config{
+				pkey.ExitNodeID: "auto:any",
+			})
+			b := newTestLocalBackendWithSys(t, sys)
 			b.currentNode().SetNetMap(tt.netmap)
 			b.lastSuggestedExitNode = tt.lastSuggestedExitNode
 			b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, tt.report)
@@ -3094,7 +3088,13 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 }
 
 func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
-	b := newTestLocalBackend(t)
+	polc := policytest.Config{
+		pkey.ExitNodeID: "auto:any",
+	}
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(polc)
+
+	b := newTestLocalBackendWithSys(t, sys)
 	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
@@ -3106,16 +3106,12 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
 			return k, nil
 		},
-		Dialer: tsdial.NewDialer(netmon.NewStatic()),
-		Logf:   b.logf,
+		Dialer:       tsdial.NewDialer(netmon.NewStatic()),
+		Logf:         b.logf,
+		PolicyClient: polc,
 	}
 	cc = newClient(t, opts)
 	b.cc = cc
-	syspolicy.RegisterWellKnownSettingsForTest(t)
-	policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
-		pkey.ExitNodeID, "auto:any",
-	))
-	syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 	peer1 := makePeer(1, withCap(26), withDERP(3), withSuggest(), withExitRoutes())
 	peer2 := makePeer(2, withCap(26), withDERP(2), withSuggest(), withExitRoutes())
 	selfNode := tailcfg.Node{
@@ -3219,12 +3215,14 @@ func TestSetControlClientStatusAutoExitNode(t *testing.T) {
 		},
 		DERPMap: derpMap,
 	}
-	b := newTestLocalBackend(t)
-	syspolicy.RegisterWellKnownSettingsForTest(t)
-	policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
-		pkey.ExitNodeID, "auto:any",
-	))
-	syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
+
+	polc := policytest.Config{
+		pkey.ExitNodeID: "auto:any",
+	}
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(polc)
+
+	b := newTestLocalBackendWithSys(t, sys)
 	b.currentNode().SetNetMap(nm)
 	// Peer 2 should be the initial exit node, as it's better than peer 1
 	// in terms of latency and DERP region.
@@ -3461,21 +3459,20 @@ func TestApplySysPolicy(t *testing.T) {
 		},
 	}
 
-	syspolicy.RegisterWellKnownSettingsForTest(t)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			settings := make([]source.TestSetting[string], 0, len(tt.stringPolicies))
-			for p, v := range tt.stringPolicies {
-				settings = append(settings, source.TestSettingOf(p, v))
+			var polc policytest.Config
+			for k, v := range tt.stringPolicies {
+				polc.Set(k, v)
 			}
-			policyStore := source.NewTestStoreOf(t, settings...)
-			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 
 			t.Run("unit", func(t *testing.T) {
 				prefs := tt.prefs.Clone()
 
-				lb := newTestLocalBackend(t)
+				sys := tsd.NewSystem()
+				sys.PolicyClient.Set(polc)
+
+				lb := newTestLocalBackendWithSys(t, sys)
 				gotAnyChange := lb.applySysPolicyLocked(prefs)
 
 				if gotAnyChange && prefs.Equals(&tt.prefs) {
@@ -3508,7 +3505,7 @@ func TestApplySysPolicy(t *testing.T) {
 				pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 				pm.prefs = usePrefs.View()
 
-				b := newTestBackend(t)
+				b := newTestBackend(t, polc)
 				b.mu.Lock()
 				b.pm = pm
 				b.mu.Unlock()
@@ -3607,24 +3604,26 @@ func TestPreferencePolicyInfo(t *testing.T) {
 		},
 	}
 
-	syspolicy.RegisterWellKnownSettingsForTest(t)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, pp := range preferencePolicies {
 				t.Run(string(pp.key), func(t *testing.T) {
-					s := source.TestSetting[string]{
-						Key:   pp.key,
-						Error: tt.policyError,
-						Value: tt.policyValue,
+					t.Parallel()
+
+					var polc policytest.Config
+					if tt.policyError != nil {
+						polc.Set(pp.key, tt.policyError)
+					} else {
+						polc.Set(pp.key, tt.policyValue)
 					}
-					policyStore := source.NewTestStoreOf(t, s)
-					syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
 
-					lb := newTestLocalBackend(t)
+					sys := tsd.NewSystem()
+					sys.PolicyClient.Set(polc)
+
+					lb := newTestLocalBackendWithSys(t, sys)
 					gotAnyChange := lb.applySysPolicyLocked(prefs)
 
 					if gotAnyChange != tt.wantChange {
@@ -6534,7 +6533,8 @@ func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
 			store := source.NewTestStoreOf[string](t)
 			syspolicy.MustRegisterStoreForTest(t, "TestSource", setting.DeviceScope, store)
 
-			lb := newLocalBackendWithTestControl(t, enableLogging, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+			sys := tsd.NewSystem()
+			lb := newLocalBackendWithSysAndTestControl(t, enableLogging, sys, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
 				return newClient(tb, opts)
 			})
 			if tt.initialPrefs != nil {
