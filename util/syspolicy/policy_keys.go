@@ -76,13 +76,3 @@ func init() {
 		return nil
 	})
 }
-
-// RegisterWellKnownSettingsForTest registers all implicit setting definitions
-// for the duration of the test.
-func RegisterWellKnownSettingsForTest(tb testenv.TB) {
-	tb.Helper()
-	err := setting.SetDefinitionsForTest(tb, implicitDefinitions...)
-	if err != nil {
-		tb.Fatalf("Failed to register well-known settings: %v", err)
-	}
-}

@@ -14,12 +14,23 @@ import (
 	"tailscale.com/util/syspolicy/internal/metrics"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/ptype"
+	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/util/testenv"
 )
 
 var someOtherError = errors.New("error other than not found")
+
+// registerWellKnownSettingsForTest registers all implicit setting definitions
+// for the duration of the test.
+func registerWellKnownSettingsForTest(tb testenv.TB) {
+	tb.Helper()
+	err := setting.SetDefinitionsForTest(tb, implicitDefinitions...)
+	if err != nil {
+		tb.Fatalf("Failed to register well-known settings: %v", err)
+	}
+}
 
 func TestGetString(t *testing.T) {
 	tests := []struct {
@@ -68,7 +79,7 @@ func TestGetString(t *testing.T) {
 		},
 	}
 
-	RegisterWellKnownSettingsForTest(t)
+	registerWellKnownSettingsForTest(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -210,7 +221,7 @@ func TestGetBoolean(t *testing.T) {
 		},
 	}
 
-	RegisterWellKnownSettingsForTest(t)
+	registerWellKnownSettingsForTest(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -303,7 +314,7 @@ func TestGetPreferenceOption(t *testing.T) {
 		},
 	}
 
-	RegisterWellKnownSettingsForTest(t)
+	registerWellKnownSettingsForTest(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -388,7 +399,7 @@ func TestGetVisibility(t *testing.T) {
 		},
 	}
 
-	RegisterWellKnownSettingsForTest(t)
+	registerWellKnownSettingsForTest(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -484,7 +495,7 @@ func TestGetDuration(t *testing.T) {
 		},
 	}
 
-	RegisterWellKnownSettingsForTest(t)
+	registerWellKnownSettingsForTest(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -565,7 +576,7 @@ func TestGetStringArray(t *testing.T) {
 		},
 	}
 
-	RegisterWellKnownSettingsForTest(t)
+	registerWellKnownSettingsForTest(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -599,14 +610,24 @@ func TestGetStringArray(t *testing.T) {
 	}
 }
 
+// mustRegisterStoreForTest is like [rsop.RegisterStoreForTest], but it fails the test if the store could not be registered.
+func mustRegisterStoreForTest(tb testenv.TB, name string, scope setting.PolicyScope, store source.Store) *rsop.StoreRegistration {
+	tb.Helper()
+	reg, err := rsop.RegisterStoreForTest(tb, name, scope, store)
+	if err != nil {
+		tb.Fatalf("Failed to register policy store %q as a %v policy source: %v", name, scope, err)
+	}
+	return reg
+}
+
 func registerSingleSettingStoreForTest[T source.TestValueType](tb testenv.TB, s source.TestSetting[T]) {
 	policyStore := source.NewTestStoreOf(tb, s)
-	MustRegisterStoreForTest(tb, "TestStore", setting.DeviceScope, policyStore)
+	mustRegisterStoreForTest(tb, "TestStore", setting.DeviceScope, policyStore)
 }
 
 func BenchmarkGetString(b *testing.B) {
 	loggerx.SetForTest(b, logger.Discard, logger.Discard)
-	RegisterWellKnownSettingsForTest(b)
+	registerWellKnownSettingsForTest(b)
 
 	wantControlURL := "https://login.tailscale.com"
 	registerSingleSettingStoreForTest(b, source.TestSettingOf(pkey.ControlURL, wantControlURL))
