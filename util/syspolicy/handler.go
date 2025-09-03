@@ -8,7 +8,6 @@ import (
 	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
-	"tailscale.com/util/testenv"
 )
 
 // TODO(nickkhyl): delete this file once other repos are updated.
@@ -36,30 +35,16 @@ type Handler interface {
 //
 // Deprecated: using [RegisterStore] should be preferred.
 func RegisterHandler(h Handler) {
-	rsop.RegisterStore("DeviceHandler", setting.DeviceScope, WrapHandler(h))
+	rsop.RegisterStore("DeviceHandler", setting.DeviceScope, handlerStore{h})
 }
 
-// SetHandlerForTest wraps and sets the specified handler as the device's policy
-// [source.Store] for the duration of tb.
-//
-// Deprecated: using [MustRegisterStoreForTest] should be preferred.
-func SetHandlerForTest(tb testenv.TB, h Handler) {
-	RegisterWellKnownSettingsForTest(tb)
-	MustRegisterStoreForTest(tb, "DeviceHandler-TestOnly", setting.DefaultScope(), WrapHandler(h))
-}
-
-var _ source.Store = (*handlerStore)(nil)
+var _ source.Store = handlerStore{}
 
 // handlerStore is a [source.Store] that calls the underlying [Handler].
 //
 // TODO(nickkhyl): remove it when the corp and android repos are updated.
 type handlerStore struct {
 	h Handler
-}
-
-// WrapHandler returns a [source.Store] that wraps the specified [Handler].
-func WrapHandler(h Handler) source.Store {
-	return handlerStore{h}
 }
 
 // Lock implements [source.Lockable].
