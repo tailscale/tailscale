@@ -8011,12 +8011,32 @@ func suggestExitNodeUsingTrafficSteering(nb *nodeBackend, allowed set.Set[tailcf
 		id := n.ID()
 		s, ok := scores[id]
 		if !ok {
-			s = 0 // score of zero means incomparable
+			// score of zero means incomparable
+			s = 0
+
+			// Prefer the priority in the suggest-exit-node peer cap.
+			if caps, ok := n.CapMap().GetOk(tailcfg.NodeAttrSuggestExitNode); ok {
+				for _, cap := range caps.All() {
+					var c tailcfg.SuggestExitNode
+					if err := json.Unmarshal([]byte(cap), &c); err != nil {
+						break
+					}
+					if c.Priority == 0 {
+						break
+					}
+					s = c.Priority
+					goto SetScore
+				}
+			}
+
+			// Fallback on the peer’s location priority.
 			if hi := n.Hostinfo(); hi.Valid() {
 				if loc := hi.Location(); loc.Valid() {
 					s = loc.Priority()
 				}
 			}
+
+		SetScore:
 			scores[id] = s
 		}
 		return s
