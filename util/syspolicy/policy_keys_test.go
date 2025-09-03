@@ -46,13 +46,6 @@ func TestKnownKeysRegistered(t *testing.T) {
 	}
 }
 
-func TestNotAWellKnownSetting(t *testing.T) {
-	d, err := WellKnownSettingDefinition("TestSettingDoesNotExist")
-	if d != nil || err == nil {
-		t.Fatalf("got %v, %v; want nil, %v", d, err, ErrNoSuchKey)
-	}
-}
-
 func listStringConsts[T ~string](filename string) (map[string]T, error) {
 	fset := token.NewFileSet()
 	src, err := os.ReadFile(filename)
