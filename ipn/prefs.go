@@ -847,6 +847,9 @@ func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 	}
 	ip, err = netip.ParseAddr(s)
 	if err == nil {
+		if !isRemoteIP(st, ip) {
+			return ip, ExitNodeLocalIPError{s}
+		}
 		// If we're online already and have a netmap, double check that the IP
 		// address specified is valid.
 		if st.BackendState == "Running" {
@@ -857,9 +860,6 @@ func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 			if !ps.ExitNodeOption {
 				return ip, fmt.Errorf("node %v is not advertising an exit node", ip)
 			}
-		}
-		if !isRemoteIP(st, ip) {
-			return ip, ExitNodeLocalIPError{s}
 		}
 		return ip, nil
 	}
