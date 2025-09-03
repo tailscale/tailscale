@@ -65,7 +65,6 @@ import (
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policytest"
-	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -6529,12 +6528,13 @@ func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			syspolicy.RegisterWellKnownSettingsForTest(t)
-			store := source.NewTestStoreOf[string](t)
-			syspolicy.MustRegisterStoreForTest(t, "TestSource", setting.DeviceScope, store)
+			var polc policytest.Config
+			polc.EnableRegisterChangeCallback()
 
 			sys := tsd.NewSystem()
+			sys.PolicyClient.Set(polc)
 			lb := newLocalBackendWithSysAndTestControl(t, enableLogging, sys, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+				opts.PolicyClient = polc
 				return newClient(tb, opts)
 			})
 			if tt.initialPrefs != nil {
@@ -6551,7 +6551,11 @@ func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
 				nw.watch(0, nil, unexpectedPrefsChange)
 			}
 
-			store.SetStrings(tt.stringSettings...)
+			var batch policytest.Config
+			for _, ss := range tt.stringSettings {
+				batch.Set(ss.Key, ss.Value)
+			}
+			polc.SetMultiple(batch)
 
 			nw.check()
 		})
