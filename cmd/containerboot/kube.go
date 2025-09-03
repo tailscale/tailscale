@@ -124,10 +124,13 @@ func (kc *kubeClient) deleteAuthKey(ctx context.Context) error {
 // ensure the operator doesn't use stale state when a Pod is first recreated.
 func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string) error {
 	existingSecret, err := kc.GetSecret(ctx, kc.stateSecret)
-	if err != nil {
+	switch {
+	case kubeclient.IsNotFoundErr(err):
+		// In the case that the Secret doesn't exist, we don't have any state to reset and can return early.
+		return nil
+	case err != nil:
 		return fmt.Errorf("failed to read state Secret %q to reset state: %w", kc.stateSecret, err)
 	}
-
 	s := &kubeapi.Secret{
 		Data: map[string][]byte{
 			kubetypes.KeyCapVer: fmt.Appendf(nil, "%d", tailcfg.CurrentCapabilityVersion),
