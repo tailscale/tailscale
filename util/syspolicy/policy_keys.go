@@ -4,7 +4,6 @@
 package syspolicy
 
 import (
-	"tailscale.com/types/lazy"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/setting"
@@ -76,24 +75,6 @@ func init() {
 		}
 		return nil
 	})
-}
-
-var implicitDefinitionMap lazy.SyncValue[setting.DefinitionMap]
-
-// WellKnownSettingDefinition returns a well-known, implicit setting definition by its key,
-// or an [ErrNoSuchKey] if a policy setting with the specified key does not exist
-// among implicit policy definitions.
-func WellKnownSettingDefinition(k pkey.Key) (*setting.Definition, error) {
-	m, err := implicitDefinitionMap.GetErr(func() (setting.DefinitionMap, error) {
-		return setting.DefinitionMapOf(implicitDefinitions)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if d, ok := m[k]; ok {
-		return d, nil
-	}
-	return nil, ErrNoSuchKey
 }
 
 // RegisterWellKnownSettingsForTest registers all implicit setting definitions
