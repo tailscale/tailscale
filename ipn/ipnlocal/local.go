@@ -3141,7 +3141,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			ini.Health = b.HealthTracker().CurrentState()
 		}
 		if mask&ipn.NotifyInitialSuggestedExitNode != 0 {
-			if en, err := b.SuggestExitNode(); err != nil {
+			if en, err := b.suggestExitNodeLocked(); err == nil {
 				ini.SuggestedExitNode = &en.ID
 			}
 		}
