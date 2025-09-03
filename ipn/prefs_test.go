@@ -898,6 +898,23 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			wantErr: `no node found in netmap with IP 1.2.3.4`,
 		},
 		{
+			name: "ip_is_self",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				TailscaleIPs: []netip.Addr{mustIP("1.2.3.4")},
+			},
+			wantErr: "cannot use 1.2.3.4 as an exit node as it is a local IP address to this machine",
+		},
+		{
+			name: "ip_is_self_when_backend_running",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Running",
+				TailscaleIPs: []netip.Addr{mustIP("1.2.3.4")},
+			},
+			wantErr: "cannot use 1.2.3.4 as an exit node as it is a local IP address to this machine",
+		},
+		{
 			name: "ip_not_exit",
 			arg:  "1.2.3.4",
 			st: &ipnstate.Status{
