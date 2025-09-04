@@ -5,7 +5,10 @@
 
 package tailcfg
 
-import "net/netip"
+import (
+	"encoding/json"
+	"net/netip"
+)
 
 // C2NSSHUsernamesRequest is the request for the /ssh/usernames.
 // A GET request without a request body is equivalent to the zero value of this type.
@@ -116,4 +119,16 @@ type C2NVIPServicesResponse struct {
 	// ServicesHash is the hash of VIPServices to allow the control server to detect
 	// changes. This value matches what is reported in latest [Hostinfo.ServicesHash].
 	ServicesHash string
+}
+
+type C2NDebugNetmapRequest struct {
+	Candidate *MapResponse `json:"candidate,omitempty"`
+}
+
+type C2NDebugNetmapResponse struct {
+	// Current is the current network map (netmap.NetworkMap).
+	Current json.RawMessage `json:"current"`
+
+	// Candidate is a network map produced based on the candidate MapResponse.
+	Candidate json.RawMessage `json:"candidate,omitempty"`
 }
