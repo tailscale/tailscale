@@ -75,18 +75,18 @@ func TestSetFunnelClients(t *testing.T) {
 
 	clients := map[string]*FunnelClient{
 		"client1": {
-			ID:          "client1",
-			Secret:      "secret1",
-			Name:        "Test Client 1",
-			RedirectURI: "https://example.com/callback",
-			CreatedAt:   time.Now(),
+			ID:           "client1",
+			Secret:       "secret1",
+			Name:         "Test Client 1",
+			RedirectURIs: []string{"https://example.com/callback"},
+			CreatedAt:    time.Now(),
 		},
 		"client2": {
-			ID:          "client2",
-			Secret:      "secret2",
-			Name:        "Test Client 2",
-			RedirectURI: "https://example.org/callback",
-			CreatedAt:   time.Now(),
+			ID:           "client2",
+			Secret:       "secret2",
+			Name:         "Test Client 2",
+			RedirectURIs: []string{"https://example.org/callback"},
+			CreatedAt:    time.Now(),
 		},
 	}
 

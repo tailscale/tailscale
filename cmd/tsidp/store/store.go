@@ -132,12 +132,12 @@ func NewTokenStore() *TokenStore {
 // FunnelClientJSON is used for JSON marshaling/unmarshaling with custom time handling
 // Migrated from logic in legacy/tsidp.go:2026-2053
 type FunnelClientJSON struct {
-	ID          string `json:"id"`
-	Secret      string `json:"secret"`
-	Name        string `json:"name"`
-	RedirectURI string `json:"redirect_uri"`
-	CreatedAt   string `json:"created_at"`
-	LastUsed    string `json:"last_used,omitempty"`
+	ID           string   `json:"id"`
+	Secret       string   `json:"secret"`
+	Name         string   `json:"name"`
+	RedirectURIs []string `json:"redirect_uris"`
+	CreatedAt    string   `json:"created_at"`
+	LastUsed     string   `json:"last_used,omitempty"`
 }
 
 // ToFunnelClient converts FunnelClientJSON to server.FunnelClient
@@ -148,11 +148,11 @@ func (c *FunnelClientJSON) ToFunnelClient() (*server.FunnelClient, error) {
 	}
 
 	client := &server.FunnelClient{
-		ID:          c.ID,
-		Secret:      c.Secret,
-		Name:        c.Name,
-		RedirectURI: c.RedirectURI,
-		CreatedAt:   createdAt,
+		ID:           c.ID,
+		Secret:       c.Secret,
+		Name:         c.Name,
+		RedirectURIs: c.RedirectURIs,
+		CreatedAt:    createdAt,
 	}
 
 	if c.LastUsed != "" {
@@ -169,11 +169,11 @@ func (c *FunnelClientJSON) ToFunnelClient() (*server.FunnelClient, error) {
 // FromFunnelClient converts server.FunnelClient to FunnelClientJSON
 func FromFunnelClient(client *server.FunnelClient) *FunnelClientJSON {
 	json := &FunnelClientJSON{
-		ID:          client.ID,
-		Secret:      client.Secret,
-		Name:        client.Name,
-		RedirectURI: client.RedirectURI,
-		CreatedAt:   client.CreatedAt.Format(time.RFC3339),
+		ID:           client.ID,
+		Secret:       client.Secret,
+		Name:         client.Name,
+		RedirectURIs: client.RedirectURIs,
+		CreatedAt:    client.CreatedAt.Format(time.RFC3339),
 	}
 
 	if !client.LastUsed.IsZero() {

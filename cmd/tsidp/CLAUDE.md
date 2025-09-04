@@ -18,3 +18,8 @@ store/ - data persistence logic
 - tests should be migrated with functionality into appropriate packages
 - leave files in legacy/ alone
 - add comments in new source files to location in legacy/ code it was migrated from
+
+## Testing
+
+- run tests after changes
+- to run tests: go test -v ./...

@@ -63,12 +63,12 @@ func TestFunnelClientConversion(t *testing.T) {
 	lastUsed := createdAt.Add(time.Hour)
 
 	original := &server.FunnelClient{
-		ID:          "test-client",
-		Secret:      "test-secret",
-		Name:        "Test Client",
-		RedirectURI: "https://example.com/callback",
-		CreatedAt:   createdAt,
-		LastUsed:    lastUsed,
+		ID:           "test-client",
+		Secret:       "test-secret",
+		Name:         "Test Client",
+		RedirectURIs: []string{"https://example.com/callback"},
+		CreatedAt:    createdAt,
+		LastUsed:     lastUsed,
 	}
 
 	// Convert to JSON format
@@ -90,8 +90,9 @@ func TestFunnelClientConversion(t *testing.T) {
 	if converted.Name != original.Name {
 		t.Errorf("Name mismatch: got %s, want %s", converted.Name, original.Name)
 	}
-	if converted.RedirectURI != original.RedirectURI {
-		t.Errorf("RedirectURI mismatch: got %s, want %s", converted.RedirectURI, original.RedirectURI)
+	if len(converted.RedirectURIs) != len(original.RedirectURIs) ||
+		(len(converted.RedirectURIs) > 0 && converted.RedirectURIs[0] != original.RedirectURIs[0]) {
+		t.Errorf("RedirectURIs mismatch: got %v, want %v", converted.RedirectURIs, original.RedirectURIs)
 	}
 	if !converted.CreatedAt.Equal(original.CreatedAt) {
 		t.Errorf("CreatedAt mismatch: got %v, want %v", converted.CreatedAt, original.CreatedAt)
@@ -134,18 +135,18 @@ func TestSaveFunnelClients(t *testing.T) {
 	// Create test clients
 	clients := map[string]*server.FunnelClient{
 		"client1": {
-			ID:          "client1",
-			Secret:      "secret1",
-			Name:        "Client 1",
-			RedirectURI: "https://example.com/callback1",
-			CreatedAt:   time.Now(),
+			ID:           "client1",
+			Secret:       "secret1",
+			Name:         "Client 1",
+			RedirectURIs: []string{"https://example.com/callback1"},
+			CreatedAt:    time.Now(),
 		},
 		"client2": {
-			ID:          "client2",
-			Secret:      "secret2",
-			Name:        "Client 2",
-			RedirectURI: "https://example.com/callback2",
-			CreatedAt:   time.Now(),
+			ID:           "client2",
+			Secret:       "secret2",
+			Name:         "Client 2",
+			RedirectURIs: []string{"https://example.com/callback2"},
+			CreatedAt:    time.Now(),
 		},
 	}
 
@@ -180,8 +181,9 @@ func TestSaveFunnelClients(t *testing.T) {
 		if loaded.Name != original.Name {
 			t.Errorf("Client %s: Name mismatch", id)
 		}
-		if loaded.RedirectURI != original.RedirectURI {
-			t.Errorf("Client %s: RedirectURI mismatch", id)
+		if len(loaded.RedirectURIs) != len(original.RedirectURIs) ||
+			(len(loaded.RedirectURIs) > 0 && len(original.RedirectURIs) > 0 && loaded.RedirectURIs[0] != original.RedirectURIs[0]) {
+			t.Errorf("Client %s: RedirectURIs mismatch", id)
 		}
 	}
 }

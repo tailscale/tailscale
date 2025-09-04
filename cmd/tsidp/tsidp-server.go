@@ -9,7 +9,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,11 +30,6 @@ import (
 	"tailscale.com/tsnet"
 	"tailscale.com/version"
 )
-
-// funnelClientsFile is the file where client IDs and secrets for OIDC clients
-// accessing the IDP over Funnel are persisted.
-// Migrated from legacy/tsidp.go:62
-const funnelClientsFile = "oidc-funnel-clients.json"
 
 // Command line flags
 // Migrated from legacy/tsidp.go:64-73
@@ -152,20 +145,8 @@ func main() {
 
 	// Load funnel clients from disk if they exist, regardless of whether funnel is enabled
 	// This ensures OIDC clients persist across restarts
-	clientsPath := funnelClientsFile
-	if *flagDir != "" {
-		clientsPath = filepath.Join(*flagDir, funnelClientsFile)
-	}
-	f, err := os.Open(clientsPath)
-	if err == nil {
-		var funnelClients map[string]*server.FunnelClient
-		if err := json.NewDecoder(f).Decode(&funnelClients); err != nil {
-			log.Fatalf("could not parse %s: %v", clientsPath, err)
-		}
-		f.Close()
-		srv.SetFunnelClients(funnelClients)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		log.Fatalf("could not open %s: %v", clientsPath, err)
+	if err := srv.LoadFunnelClients(); err != nil {
+		log.Fatalf("could not load funnel clients: %v", err)
 	}
 
 	log.Printf("Running tsidp at %s ...", srv.ServerURL())
