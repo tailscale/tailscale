@@ -255,9 +255,9 @@ func main() {
 		log.Fatalf("--bird-socket is not supported on %s", runtime.GOOS)
 	}
 
-	// Only apply a default statepath when neither have been provided, so that a
-	// user may specify only --statedir if they wish.
 	if args.statepath == "" && args.statedir == "" {
+		// Only apply a default statepath when neither have been provided, so that a
+		// user may specify only --statedir if they wish.
 		if paths.MakeAutomaticStateDir() {
 			d := paths.DefaultTailscaledStateDir()
 			if d != "" {
@@ -269,6 +269,9 @@ func main() {
 		} else {
 			args.statepath = paths.DefaultTailscaledStateFile()
 		}
+	} else if args.statedir == "" && args.statepath != "" {
+		// When only a statepath is specified, derive statedir from statepath.
+		args.statedir = filepath.Dir(args.statepath)
 	}
 
 	if args.encryptState {
