@@ -10,7 +10,7 @@ import (
 
 // TestNew tests creation of a new IDPServer
 func TestNew(t *testing.T) {
-	srv := New(nil, true, false, true)
+	srv := New(nil, "", true, false, true)
 
 	if srv == nil {
 		t.Fatal("New() returned nil")
@@ -47,7 +47,7 @@ func TestNew(t *testing.T) {
 
 // TestSetServerURL tests setting and getting server URL
 func TestSetServerURL(t *testing.T) {
-	srv := New(nil, false, false, false)
+	srv := New(nil, "", false, false, false)
 
 	testURL := "https://test.example.com"
 	srv.SetServerURL(testURL)
@@ -59,7 +59,7 @@ func TestSetServerURL(t *testing.T) {
 
 // TestSetLoopbackURL tests setting loopback URL
 func TestSetLoopbackURL(t *testing.T) {
-	srv := New(nil, false, false, false)
+	srv := New(nil, "", false, false, false)
 
 	testURL := "http://localhost:8080"
 	srv.SetLoopbackURL(testURL)
@@ -71,7 +71,7 @@ func TestSetLoopbackURL(t *testing.T) {
 
 // TestSetFunnelClients tests setting funnel clients
 func TestSetFunnelClients(t *testing.T) {
-	srv := New(nil, false, false, false)
+	srv := New(nil, "", false, false, false)
 
 	clients := map[string]*FunnelClient{
 		"client1": {
@@ -113,7 +113,7 @@ func TestSetFunnelClients(t *testing.T) {
 // TestCleanupExpiredTokens tests token cleanup
 // Migrated from legacy/tsidp_test.go:833-867
 func TestCleanupExpiredTokens(t *testing.T) {
-	srv := New(nil, false, false, false)
+	srv := New(nil, "", false, false, false)
 
 	now := time.Now()
 
