@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -137,6 +138,7 @@ func main() {
 
 	srv := server.New(
 		lc,
+		*flagDir,
 		*flagFunnel,
 		*flagUseLocalTailscaled,
 		*flagEnableSTS,
@@ -150,16 +152,20 @@ func main() {
 
 	// Load funnel clients from disk if they exist, regardless of whether funnel is enabled
 	// This ensures OIDC clients persist across restarts
-	f, err := os.Open(funnelClientsFile)
+	clientsPath := funnelClientsFile
+	if *flagDir != "" {
+		clientsPath = filepath.Join(*flagDir, funnelClientsFile)
+	}
+	f, err := os.Open(clientsPath)
 	if err == nil {
 		var funnelClients map[string]*server.FunnelClient
 		if err := json.NewDecoder(f).Decode(&funnelClients); err != nil {
-			log.Fatalf("could not parse %s: %v", funnelClientsFile, err)
+			log.Fatalf("could not parse %s: %v", clientsPath, err)
 		}
 		f.Close()
 		srv.SetFunnelClients(funnelClients)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		log.Fatalf("could not open %s: %v", funnelClientsFile, err)
+		log.Fatalf("could not open %s: %v", clientsPath, err)
 	}
 
 	log.Printf("Running tsidp at %s ...", srv.ServerURL())

@@ -6,7 +6,18 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/binary"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -28,6 +39,7 @@ type IDPServer struct {
 	lc          *local.Client
 	loopbackURL string
 	serverURL   string // "https://foo.bar.ts.net"
+	stateDir    string // directory for persisted state (keys, etc)
 	funnel      bool
 	localTSMode bool
 	enableSTS   bool
@@ -132,14 +144,15 @@ type FunnelClient struct {
 // signingKey represents a JWT signing key
 // Migrated from legacy/tsidp.go:2336-2339
 type signingKey struct {
-	Kid uint64
-	Key interface{} // *rsa.PrivateKey
+	Kid uint64        `json:"kid"`
+	Key *rsa.PrivateKey `json:"-"`
 }
 
 // New creates a new IDPServer instance
-func New(lc *local.Client, funnel, localTSMode, enableSTS bool) *IDPServer {
+func New(lc *local.Client, stateDir string, funnel, localTSMode, enableSTS bool) *IDPServer {
 	return &IDPServer{
 		lc:            lc,
+		stateDir:      stateDir,
 		funnel:        funnel,
 		localTSMode:   localTSMode,
 		enableSTS:     enableSTS,
@@ -209,22 +222,140 @@ func (s *IDPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // newMux creates the HTTP request multiplexer
-// This will be expanded with actual handlers
 // Migrated from legacy/tsidp.go:674-687
 func (s *IDPServer) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	// TODO: Register actual handlers here
-	// These will be implemented as we extract more functionality
+	// Register .well-known handlers
+	mux.HandleFunc("/.well-known/jwks.json", s.serveJWKS)
+	mux.HandleFunc("/.well-known/openid-configuration", s.serveOpenIDConfig)
+	mux.HandleFunc("/.well-known/oauth-authorization-server", s.serveOAuthMetadata)
+	
+	// TODO: Register remaining handlers
 	// mux.HandleFunc("/authorize", s.authorize)
-	// mux.HandleFunc("/.well-known/openid-configuration", s.serveOpenIDConfig)
-	// mux.HandleFunc("/.well-known/oauth-authorization-server", s.serveOAuthMetadata)
 	// mux.HandleFunc("/token", s.serveToken)
 	// mux.HandleFunc("/introspect", s.serveIntrospect)
-	// mux.HandleFunc("/jwks", s.serveJWKS)
 	// mux.HandleFunc("/userinfo", s.serveUserInfo)
 	// mux.HandleFunc("/clients/", s.serveClients)
 	// mux.HandleFunc("/register", s.serveDynamicClientRegistration)
 	return mux
+}
+
+// oidcSigner returns a JOSE signer for signing JWT tokens
+// Migrated from legacy/tsidp.go:1682-1696
+func (s *IDPServer) oidcSigner() (jose.Signer, error) {
+	return s.lazySigner.GetErr(func() (jose.Signer, error) {
+		sk, err := s.oidcPrivateKey()
+		if err != nil {
+			return nil, err
+		}
+		return jose.NewSigner(jose.SigningKey{
+			Algorithm: jose.RS256,
+			Key:       sk.Key,
+		}, &jose.SignerOptions{EmbedJWK: false, ExtraHeaders: map[jose.HeaderKey]any{
+			jose.HeaderType: "JWT",
+			"kid":           fmt.Sprint(sk.Kid),
+		}})
+	})
+}
+
+// oidcPrivateKey returns the private key used for signing JWT tokens
+// Migrated from legacy/tsidp.go:1698-1721
+func (s *IDPServer) oidcPrivateKey() (*signingKey, error) {
+	return s.lazySigningKey.GetErr(func() (*signingKey, error) {
+		var sk signingKey
+		keyPath := "oidc-key.json"
+		if s.stateDir != "" {
+			keyPath = filepath.Join(s.stateDir, "oidc-key.json")
+		}
+		b, err := os.ReadFile(keyPath)
+		if err == nil {
+			if err := json.Unmarshal(b, &sk); err == nil {
+				return &sk, nil
+			} else {
+				log.Printf("Error unmarshaling key: %v", err)
+			}
+		}
+		id, k := mustGenRSAKey(2048)
+		sk.Key = k
+		sk.Kid = id
+		b, err = json.Marshal(&sk)
+		if err != nil {
+			log.Fatalf("Error marshaling key: %v", err)
+		}
+		if err := os.WriteFile(keyPath, b, 0600); err != nil {
+			log.Fatalf("Error writing key: %v", err)
+		}
+		return &sk, nil
+	})
+}
+
+// mustGenRSAKey generates an RSA key of the specified size
+// Migrated from legacy/tsidp.go:2307-2329
+func mustGenRSAKey(bits int) (kid uint64, k *rsa.PrivateKey) {
+	var err error
+	k, err = rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		panic(err)
+	}
+	kid, err = readUint64(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+// readUint64 reads a uint64 from the given reader
+// Migrated from legacy/tsidp.go:2317-2329
+func readUint64(r io.Reader) (uint64, error) {
+	b := make([]byte, 8)
+	if _, err := r.Read(b); err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint64(b), nil
+}
+
+// rsaPrivateKeyJSONWrapper wraps an RSA private key for JSON serialization
+type rsaPrivateKeyJSONWrapper struct {
+	Kid uint64 `json:"kid"`
+	Key string `json:"key"` // PEM-encoded RSA private key
+}
+
+// MarshalJSON serializes the signing key to JSON
+// Migrated from legacy/tsidp.go:2341-2351
+func (sk *signingKey) MarshalJSON() ([]byte, error) {
+	if sk.Key == nil {
+		return nil, fmt.Errorf("signing key is nil")
+	}
+	keyBytes := x509.MarshalPKCS1PrivateKey(sk.Key)
+	pemBlock := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: keyBytes,
+	}
+	wrapper := rsaPrivateKeyJSONWrapper{
+		Kid: sk.Kid,
+		Key: string(pem.EncodeToMemory(pemBlock)),
+	}
+	return json.Marshal(wrapper)
+}
+
+// UnmarshalJSON deserializes the signing key from JSON
+// Migrated from legacy/tsidp.go:2353-2375
+func (sk *signingKey) UnmarshalJSON(b []byte) error {
+	var wrapper rsaPrivateKeyJSONWrapper
+	if err := json.Unmarshal(b, &wrapper); err != nil {
+		return err
+	}
+	block, _ := pem.Decode([]byte(wrapper.Key))
+	if block == nil {
+		return fmt.Errorf("failed to decode PEM block")
+	}
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return err
+	}
+	sk.Kid = wrapper.Kid
+	sk.Key = key
+	return nil
 }
 
 // ServeOnLocalTailscaled starts a serve session using an already-running tailscaled
