@@ -87,9 +87,9 @@ var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgsGlobal, "up")
 
 // newUpFlagSet returns a new flag set for the "up" and "login" commands.
 func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
-	if cmd != "up" && cmd != "login" {
-		panic("cmd must be up or login")
-	}
+	// if cmd != "up" && cmd != "login" {
+	// 	panic("cmd must be up or login")
+	// }
 	upf := newFlagSet(cmd)
 
 	// When adding new flags, prefer to put them under "tailscale set" instead
@@ -129,7 +129,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		upf.StringVar(&upArgs.profileName, "nickname", "", "short name for the account")
 	}
 
-	if cmd == "up" {
+	if cmd == "up" || cmd == "node-key-expiry" {
 		// Some flags are only for "up", not "login".
 		upf.BoolVar(&upArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
 		upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")

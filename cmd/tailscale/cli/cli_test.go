@@ -149,7 +149,7 @@ var geese = []string{"linux", "darwin", "windows", "freebsd"}
 // Also, issue 1880: advertise-exit-node was being ignored. Verify that all flags cause an edit.
 func TestUpdateMaskedPrefsFromUpFlag(t *testing.T) {
 	for _, goos := range geese {
-		var upArgs upArgsT
+		var upArgs nkeArgsT
 		fs := newUpFlagSet(goos, &upArgs, "up")
 		fs.VisitAll(func(f *flag.Flag) {
 			mp := new(ipn.MaskedPrefs)
@@ -624,7 +624,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			if tt.goos != "" {
 				goos = tt.goos
 			}
-			var upArgs upArgsT
+			var upArgs nkeArgsT
 			flagSet := newUpFlagSet(goos, &upArgs, "up")
 			flags := CleanUpArgs(tt.flags)
 			flagSet.Parse(flags)
@@ -651,7 +651,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 	}
 }
 
-func upArgsFromOSArgs(goos string, flagArgs ...string) (args upArgsT) {
+func upArgsFromOSArgs(goos string, flagArgs ...string) (args nkeArgsT) {
 	fs := newUpFlagSet(goos, &args, "up")
 	fs.Parse(flagArgs) // populates args
 	return
@@ -660,7 +660,7 @@ func upArgsFromOSArgs(goos string, flagArgs ...string) (args upArgsT) {
 func TestPrefsFromUpArgs(t *testing.T) {
 	tests := []struct {
 		name     string
-		args     upArgsT
+		args     nkeArgsT
 		goos     string           // runtime.GOOS; empty means linux
 		st       *ipnstate.Status // or nil
 		want     *ipn.Prefs
@@ -720,70 +720,70 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		},
 		{
 			name: "error_advertise_route_invalid_ip",
-			args: upArgsT{
+			args: nkeArgsT{
 				advertiseRoutes: "foo",
 			},
 			wantErr: `"foo" is not a valid IP address or CIDR prefix`,
 		},
 		{
 			name: "error_advertise_route_unmasked_bits",
-			args: upArgsT{
+			args: nkeArgsT{
 				advertiseRoutes: "1.2.3.4/16",
 			},
 			wantErr: `1.2.3.4/16 has non-address bits set; expected 1.2.0.0/16`,
 		},
 		{
 			name: "error_exit_node_bad_ip",
-			args: upArgsT{
+			args: nkeArgsT{
 				exitNodeIP: "foo",
 			},
 			wantErr: `invalid value "foo" for --exit-node; must be IP or unique node name`,
 		},
 		{
 			name: "error_exit_node_allow_lan_without_exit_node",
-			args: upArgsT{
+			args: nkeArgsT{
 				exitNodeAllowLANAccess: true,
 			},
 			wantErr: `--exit-node-allow-lan-access can only be used with --exit-node`,
 		},
 		{
 			name: "error_tag_prefix",
-			args: upArgsT{
+			args: nkeArgsT{
 				advertiseTags: "foo",
 			},
 			wantErr: `tag: "foo": tags must start with 'tag:'`,
 		},
 		{
 			name: "error_long_hostname",
-			args: upArgsT{
+			args: nkeArgsT{
 				hostname: strings.Repeat(strings.Repeat("a", 63)+".", 4),
 			},
 			wantErr: `"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is too long to be a DNS name`,
 		},
 		{
 			name: "error_long_label",
-			args: upArgsT{
+			args: nkeArgsT{
 				hostname: strings.Repeat("a", 64) + ".example.com",
 			},
 			wantErr: `"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is not a valid DNS label`,
 		},
 		{
 			name: "error_linux_netfilter_empty",
-			args: upArgsT{
+			args: nkeArgsT{
 				netfilterMode: "",
 			},
 			wantErr: `invalid value --netfilter-mode=""`,
 		},
 		{
 			name: "error_linux_netfilter_bogus",
-			args: upArgsT{
+			args: nkeArgsT{
 				netfilterMode: "bogus",
 			},
 			wantErr: `invalid value --netfilter-mode="bogus"`,
 		},
 		{
 			name: "error_exit_node_ip_is_self_ip",
-			args: upArgsT{
+			args: nkeArgsT{
 				exitNodeIP: "100.105.106.107",
 			},
 			st: &ipnstate.Status{
@@ -794,7 +794,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "warn_linux_netfilter_nodivert",
 			goos: "linux",
-			args: upArgsT{
+			args: nkeArgsT{
 				netfilterMode: "nodivert",
 			},
 			wantWarn: "netfilter=nodivert; add iptables calls to ts-* chains manually.",
@@ -811,7 +811,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "warn_linux_netfilter_off",
 			goos: "linux",
-			args: upArgsT{
+			args: nkeArgsT{
 				netfilterMode: "off",
 			},
 			wantWarn: "netfilter=off; configure iptables yourself.",
@@ -828,7 +828,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "via_route_good",
 			goos: "linux",
-			args: upArgsT{
+			args: nkeArgsT{
 				advertiseRoutes: "fd7a:115c:a1e0:b1a::bb:10.0.0.0/112",
 				netfilterMode:   "off",
 			},
@@ -847,7 +847,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "via_route_good_16_bit",
 			goos: "linux",
-			args: upArgsT{
+			args: nkeArgsT{
 				advertiseRoutes: "fd7a:115c:a1e0:b1a::aabb:10.0.0.0/112",
 				netfilterMode:   "off",
 			},
@@ -866,7 +866,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "via_route_short_prefix",
 			goos: "linux",
-			args: upArgsT{
+			args: nkeArgsT{
 				advertiseRoutes: "fd7a:115c:a1e0:b1a::/64",
 				netfilterMode:   "off",
 			},
@@ -875,7 +875,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "via_route_short_reserved_siteid",
 			goos: "linux",
-			args: upArgsT{
+			args: nkeArgsT{
 				advertiseRoutes: "fd7a:115c:a1e0:b1a:1234:5678::/112",
 				netfilterMode:   "off",
 			},
@@ -981,7 +981,7 @@ func TestPrefFlagMapping(t *testing.T) {
 
 func TestFlagAppliesToOS(t *testing.T) {
 	for _, goos := range geese {
-		var upArgs upArgsT
+		var upArgs nkeArgsT
 		fs := newUpFlagSet(goos, &upArgs, "up")
 		fs.VisitAll(func(f *flag.Flag) {
 			if !flagAppliesToOS(f.Name, goos) {
@@ -1172,7 +1172,7 @@ func TestUpdatePrefs(t *testing.T) {
 					t.Errorf("RunSSH not set to false")
 				}
 			},
-			env: upCheckEnv{backendState: "Running", upArgs: upArgsT{
+			env: upCheckEnv{backendState: "Running", upArgs: nkeArgsT{
 				runSSH: true,
 			}},
 		},
