@@ -233,6 +233,7 @@ This CLI is still under active development. Commands and flags will
 change in the future.
 `),
 		Subcommands: nonNilCmds(
+			nodeKeyExpiryCmd,
 			upCmd,
 			downCmd,
 			setCmd,
