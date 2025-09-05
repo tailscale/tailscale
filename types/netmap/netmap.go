@@ -252,6 +252,22 @@ func (nm *NetworkMap) DomainName() string {
 	return nm.Domain
 }
 
+// TailnetDisplayName returns the admin-editable name contained in
+// NodeAttrTailnetDisplayName. If the capability is not present it
+// returns an empty string.
+func (nm *NetworkMap) TailnetDisplayName() string {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return ""
+	}
+
+	tailnetDisplayNames, err := tailcfg.UnmarshalNodeCapViewJSON[string](nm.SelfNode.CapMap(), tailcfg.NodeAttrTailnetDisplayName)
+	if err != nil || len(tailnetDisplayNames) == 0 {
+		return ""
+	}
+
+	return tailnetDisplayNames[0]
+}
+
 // HasSelfCapability reports whether nm.SelfNode contains capability c.
 //
 // It exists to satisify an unused (as of 2025-01-04) interface in the logknob package.
