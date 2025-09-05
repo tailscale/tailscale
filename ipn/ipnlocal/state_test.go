@@ -1349,6 +1349,21 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Hosts:  hostsFor(node3),
 			},
 		},
+		{
+			name: "Start/Connect/Login/Expire",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node3)
+				cc().send(nil, "", false, &netmap.NetworkMap{
+					Expiry: time.Now().Add(-time.Minute),
+				})
+			},
+			wantState:     ipn.NeedsLogin,
+			wantCfg:       &wgcfg.Config{},
+			wantRouterCfg: &router.Config{},
+			wantDNSCfg:    &dns.Config{},
+		},
 	}
 
 	for _, tt := range tests {
