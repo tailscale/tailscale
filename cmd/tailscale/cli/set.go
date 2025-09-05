@@ -264,7 +264,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	}
 
 	if setArgs.runWebClient && len(st.TailscaleIPs) > 0 {
-		printf("\nWeb interface now running at %s:%d", st.TailscaleIPs[0], web.ListenPort)
+		printf("\nWeb interface now running at %s:%d\n", st.TailscaleIPs[0], web.ListenPort)
 	}
 
 	return nil
