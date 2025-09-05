@@ -185,7 +185,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 
-	warnOnAdvertiseRouts(ctx, &maskedPrefs.Prefs)
+	warnOnAdvertiseRoutes(ctx, &maskedPrefs.Prefs)
 	if err := checkExitNodeRisk(ctx, &maskedPrefs.Prefs, setArgs.acceptedRisks); err != nil {
 		return err
 	}
