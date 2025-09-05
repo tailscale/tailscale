@@ -76,8 +76,9 @@ type serverDiscoVNI struct {
 // relayHandshakeWork serves to track in-progress relay handshake work for a
 // [udprelay.ServerEndpoint]. This structure is immutable once initialized.
 type relayHandshakeWork struct {
-	wlb endpointWithLastBest
-	se  udprelay.ServerEndpoint
+	wlb    endpointWithLastBest
+	se     udprelay.ServerEndpoint
+	server candidatePeerRelay
 
 	// handshakeServerEndpoint() always writes to doneCh (len 1) when it
 	// returns. It may end up writing the same event afterward to
@@ -712,6 +713,7 @@ func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelay
 	work := &relayHandshakeWork{
 		wlb:          newServerEndpoint.wlb,
 		se:           newServerEndpoint.se,
+		server:       newServerEndpoint.server,
 		rxDiscoMsgCh: make(chan relayDiscoMsgEvent),
 		doneCh:       make(chan relayEndpointHandshakeWorkDoneEvent, 1),
 		ctx:          ctx,
@@ -781,7 +783,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, generat
 		RemoteKey:  epDisco.key,
 	}
 
-	sentBindAny := false
+	sentBinds := 0
 	bind := &disco.BindUDPRelayEndpoint{
 		BindUDPRelayEndpointCommon: common,
 	}
@@ -789,13 +791,19 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, generat
 	vni.Set(work.se.VNI)
 	for _, addrPort := range work.se.AddrPorts {
 		if addrPort.IsValid() {
-			sentBindAny = true
+			sentBinds++
 			go ep.c.sendDiscoMessage(epAddr{ap: addrPort, vni: vni}, key.NodePublic{}, work.se.ServerDisco, bind, discoVerboseLog)
 		}
 	}
-	if !sentBindAny {
+	if sentBinds == 0 {
 		return
 	}
+	work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: sent %d bind handshake msgs for node %v via relay %v to %v",
+		sentBinds,
+		work.wlb.ep.publicKey.ShortString(),
+		work.server.nodeKey.ShortString(),
+		work.se.AddrPorts,
+	)
 
 	// Limit goroutine lifetime to a reasonable duration. This is intentionally
 	// detached and independent of 'BindLifetime' to prevent relay server
@@ -848,6 +856,10 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, generat
 	for {
 		select {
 		case <-work.ctx.Done():
+			work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: handshake for node %v via relay %v canceled",
+				work.wlb.ep.publicKey.ShortString(),
+				work.server.nodeKey.ShortString(),
+			)
 			return
 		case msgEvent := <-work.rxDiscoMsgCh:
 			switch msg := msgEvent.msg.(type) {
@@ -859,12 +871,22 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, generat
 				if handshakeState >= disco.BindUDPRelayHandshakeStateAnswerSent {
 					continue
 				}
+				work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: received handshake challenge for node %v via relay %v from %v; sending ping & answer",
+					work.wlb.ep.publicKey.ShortString(),
+					work.server.nodeKey.ShortString(),
+					msgEvent.from,
+				)
 				txPing(msgEvent.from, &msg.Challenge)
 				handshakeState = disco.BindUDPRelayHandshakeStateAnswerSent
 			case *disco.Ping:
 				if handshakeState < disco.BindUDPRelayHandshakeStateAnswerSent {
 					continue
 				}
+				work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: received handshake ping for node %v via relay %v from %v; sending ping",
+					work.wlb.ep.publicKey.ShortString(),
+					work.server.nodeKey.ShortString(),
+					msgEvent.from,
+				)
 				// An inbound ping from the remote peer indicates we completed a
 				// handshake with the relay server (our answer msg was
 				// received). Chances are our ping was dropped before the remote
@@ -885,6 +907,12 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, generat
 				// round-trip latency and return.
 				done.pongReceivedFrom = msgEvent.from
 				done.latency = time.Since(at)
+				work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: received handshake pong for node %v via relay %v from %v with latency %v",
+					work.wlb.ep.publicKey.ShortString(),
+					work.server.nodeKey.ShortString(),
+					msgEvent.from,
+					done.latency.Round(time.Millisecond),
+				)
 				return
 			default:
 				// unexpected message type, silently discard
@@ -892,6 +920,10 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork, generat
 			}
 		case <-timer.C:
 			// The handshake timed out.
+			work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: handshake for node %v via relay %v timed out",
+				work.wlb.ep.publicKey.ShortString(),
+				work.server.nodeKey.ShortString(),
+			)
 			return
 		}
 	}
@@ -914,6 +946,10 @@ func (r *relayManager) allocateServerEndpoint(work *relayEndpointAllocWork, gene
 	}
 
 	sendAllocReq := func() {
+		work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: sending alloc request for node %v via relay %v",
+			work.wlb.ep.publicKey.ShortString(),
+			work.candidatePeerRelay.nodeKey.ShortString(),
+		)
 		work.wlb.ep.c.sendDiscoAllocateUDPRelayEndpointRequest(
 			epAddr{
 				ap: netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, work.candidatePeerRelay.derpHomeRegionID),
@@ -938,8 +974,16 @@ func (r *relayManager) allocateServerEndpoint(work *relayEndpointAllocWork, gene
 	for {
 		select {
 		case <-work.ctx.Done():
+			work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: alloc request for node %v via relay %v canceled",
+				work.wlb.ep.publicKey.ShortString(),
+				work.candidatePeerRelay.nodeKey.ShortString(),
+			)
 			return
 		case <-returnAfterTimer.C:
+			work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: alloc request for node %v via relay %v timed out",
+				work.wlb.ep.publicKey.ShortString(),
+				work.candidatePeerRelay.nodeKey.ShortString(),
+			)
 			return
 		case <-retryAfterTimer.C:
 			go sendAllocReq()
@@ -948,6 +992,11 @@ func (r *relayManager) allocateServerEndpoint(work *relayEndpointAllocWork, gene
 				!work.discoKeys.Equal(key.NewSortedPairOfDiscoPublic(resp.ClientDisco[0], resp.ClientDisco[1])) {
 				continue
 			}
+			work.wlb.ep.c.dlogf("[v1] magicsock: relayManager: received alloc response for node %v via relay %v addrPorts=%v",
+				work.wlb.ep.publicKey.ShortString(),
+				work.candidatePeerRelay.nodeKey.ShortString(),
+				resp.AddrPorts,
+			)
 			done.allocated = udprelay.ServerEndpoint{
 				ServerDisco:         resp.ServerDisco,
 				ClientDisco:         resp.ClientDisco,
