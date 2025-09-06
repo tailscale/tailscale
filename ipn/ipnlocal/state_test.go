@@ -39,6 +39,7 @@ import (
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine"
@@ -113,10 +114,11 @@ func (nt *notifyThrottler) drain(count int) []ipn.Notify {
 // in the controlclient.Client, so by controlling it, we can check that
 // the state machine works as expected.
 type mockControl struct {
-	tb     testing.TB
-	logf   logger.Logf
-	opts   controlclient.Options
-	paused atomic.Bool
+	tb              testing.TB
+	logf            logger.Logf
+	opts            controlclient.Options
+	paused          atomic.Bool
+	controlClientID int64
 
 	mu          sync.Mutex
 	persist     *persist.Persist
@@ -285,6 +287,10 @@ func (cc *mockControl) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 	// validate endpoint information here?
 	cc.logf("UpdateEndpoints:  ep=%v", endpoints)
 	cc.called("UpdateEndpoints")
+}
+
+func (cc *mockControl) ClientID() int64 {
+	return cc.controlClientID
 }
 
 func (b *LocalBackend) nonInteractiveLoginForStateTest() {
@@ -1507,7 +1513,8 @@ func newLocalBackendWithMockEngineAndControl(t *testing.T, enableLogging bool) (
 	dialer := &tsdial.Dialer{Logf: logf}
 	dialer.SetNetMon(netmon.NewStatic())
 
-	sys := tsd.NewSystem()
+	bus := eventbustest.NewBus(t)
+	sys := tsd.NewSystemWithBus(bus)
 	sys.Set(dialer)
 	sys.Set(dialer.NetMon())
 

@@ -80,9 +80,16 @@ type System struct {
 
 // NewSystem constructs a new otherwise-empty [System] with a
 // freshly-constructed event bus populated.
-func NewSystem() *System {
+func NewSystem() *System { return NewSystemWithBus(eventbus.New()) }
+
+// NewSystemWithBus constructs a new otherwise-empty [System] with an
+// eventbus set via args. This is mostly useful for testing.
+func NewSystemWithBus(bus *eventbus.Bus) *System {
+	if bus == nil {
+		panic("nil eventbus")
+	}
 	sys := new(System)
-	sys.Set(eventbus.New())
+	sys.Set(bus)
 	return sys
 }
 

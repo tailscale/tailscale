@@ -33,6 +33,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 )
@@ -47,6 +48,7 @@ func fakeControlClient(t *testing.T, c *http.Client) *controlclient.Auto {
 	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
+	bus := eventbustest.NewBus(t)
 
 	k := key.NewMachine()
 	opts := controlclient.Options{
@@ -59,6 +61,7 @@ func fakeControlClient(t *testing.T, c *http.Client) *controlclient.Auto {
 		NoiseTestClient: c,
 		Observer:        observerFunc(func(controlclient.Status) {}),
 		Dialer:          tsdial.NewDialer(netmon.NewStatic()),
+		Bus:             bus,
 	}
 
 	cc, err := controlclient.NewNoStart(opts)

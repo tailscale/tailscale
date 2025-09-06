@@ -15,7 +15,7 @@ import (
 
 // NewBus constructs an [eventbus.Bus] that will be shut automatically when
 // its controlling test ends.
-func NewBus(t *testing.T) *eventbus.Bus {
+func NewBus(t testing.TB) *eventbus.Bus {
 	bus := eventbus.New()
 	t.Cleanup(bus.Close)
 	return bus
