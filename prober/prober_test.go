@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -546,7 +547,7 @@ func TestProberRunHandler(t *testing.T) {
 		probeFunc             func(context.Context) error
 		wantResponseCode      int
 		wantJSONResponse      RunHandlerResponse
-		wantPlaintextResponse string
+		wantPlaintextResponse *regexp.Regexp
 	}{
 		{
 			name:             "success",
@@ -561,7 +562,7 @@ func TestProberRunHandler(t *testing.T) {
 				},
 				PreviousSuccessRatio: 1,
 			},
-			wantPlaintextResponse: "Probe succeeded",
+			wantPlaintextResponse: regexp.MustCompile("(?s)Probe succeeded .*Last 2 probes.*success rate 100%"),
 		},
 		{
 			name:             "failure",
@@ -576,7 +577,7 @@ func TestProberRunHandler(t *testing.T) {
 					RecentResults: []bool{false, false},
 				},
 			},
-			wantPlaintextResponse: "Probe failed",
+			wantPlaintextResponse: regexp.MustCompile("(?s)Probe failed: .*Last 2 probes.*success rate 0%"),
 		},
 	}
 
@@ -607,6 +608,7 @@ func TestProberRunHandler(t *testing.T) {
 				if err != nil {
 					t.Fatalf("failed to make request: %v", err)
 				}
+				defer resp.Body.Close()
 
 				if resp.StatusCode != tt.wantResponseCode {
 					t.Errorf("unexpected response code: got %d, want %d", resp.StatusCode, tt.wantResponseCode)
@@ -630,8 +632,8 @@ func TestProberRunHandler(t *testing.T) {
 					}
 				} else {
 					body, _ := io.ReadAll(resp.Body)
-					if !strings.Contains(string(body), tt.wantPlaintextResponse) {
-						t.Errorf("unexpected response body: got %q, want to contain %q", body, tt.wantPlaintextResponse)
+					if !tt.wantPlaintextResponse.MatchString(string(body)) {
+						t.Errorf("unexpected response body: got %q, want to match %q", body, tt.wantPlaintextResponse)
 					}
 				}
 			})
