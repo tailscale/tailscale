@@ -168,6 +168,7 @@ func (nb *nodeBackend) NetworkProfile() ipn.NetworkProfile {
 		// These are ok to call with nil netMap.
 		MagicDNSName: nb.netMap.MagicDNSSuffix(),
 		DomainName:   nb.netMap.DomainName(),
+		DisplayName:  nb.netMap.TailnetDisplayName(),
 	}
 }
 
