@@ -61,3 +61,19 @@ func TestOmitReflectThings(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitDrive(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_drive,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "driveimpl") {
+				t.Errorf("unexpected dep with ts_omit_drive: %q", dep)
+			}
+			if strings.Contains(dep, "webdav") {
+				t.Errorf("unexpected dep with ts_omit_drive: %q", dep)
+			}
+		},
+	}.Check(t)
+}

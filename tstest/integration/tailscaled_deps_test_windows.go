@@ -25,6 +25,7 @@ import (
 	_ "tailscale.com/derp/derphttp"
 	_ "tailscale.com/drive/driveimpl"
 	_ "tailscale.com/envknob"
+	_ "tailscale.com/feature"
 	_ "tailscale.com/feature/condregister"
 	_ "tailscale.com/health"
 	_ "tailscale.com/hostinfo"

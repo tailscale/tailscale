@@ -52,6 +52,7 @@ import (
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/envknob/featureknob"
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
@@ -100,7 +101,6 @@ import (
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/goroutines"
-	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osuser"
@@ -6326,143 +6326,12 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.metrics.approvedRoutes.Set(approved)
 	}
 
-	b.updateDrivePeersLocked(nm)
-	b.driveNotifyCurrentSharesLocked()
-}
-
-// responseBodyWrapper wraps an io.ReadCloser and stores
-// the number of bytesRead.
-type responseBodyWrapper struct {
-	io.ReadCloser
-	logVerbose    bool
-	bytesRx       int64
-	bytesTx       int64
-	log           logger.Logf
-	method        string
-	statusCode    int
-	contentType   string
-	fileExtension string
-	shareNodeKey  string
-	selfNodeKey   string
-	contentLength int64
-}
-
-// logAccess logs the taildrive: access: log line. If the logger is nil,
-// the log will not be written.
-func (rbw *responseBodyWrapper) logAccess(err string) {
-	if rbw.log == nil {
-		return
-	}
-
-	// Some operating systems create and copy lots of 0 length hidden files for
-	// tracking various states. Omit these to keep logs from being too verbose.
-	if rbw.logVerbose || rbw.contentLength > 0 {
-		levelPrefix := ""
-		if rbw.logVerbose {
-			levelPrefix = "[v1] "
-		}
-		rbw.log(
-			"%staildrive: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q",
-			levelPrefix,
-			rbw.method,
-			rbw.selfNodeKey,
-			rbw.shareNodeKey,
-			rbw.statusCode,
-			rbw.fileExtension,
-			rbw.contentType,
-			roundTraffic(rbw.contentLength),
-			roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
+	if f, ok := hookSetNetMapLockedDrive.GetOk(); ok {
+		f(b, nm)
 	}
 }
 
-// Read implements the io.Reader interface.
-func (rbw *responseBodyWrapper) Read(b []byte) (int, error) {
-	n, err := rbw.ReadCloser.Read(b)
-	rbw.bytesRx += int64(n)
-	if err != nil && !errors.Is(err, io.EOF) {
-		rbw.logAccess(err.Error())
-	}
-
-	return n, err
-}
-
-// Close implements the io.Close interface.
-func (rbw *responseBodyWrapper) Close() error {
-	err := rbw.ReadCloser.Close()
-	var errStr string
-	if err != nil {
-		errStr = err.Error()
-	}
-	rbw.logAccess(errStr)
-
-	return err
-}
-
-// driveTransport is an http.RoundTripper that wraps
-// b.Dialer().PeerAPITransport() with metrics tracking.
-type driveTransport struct {
-	b  *LocalBackend
-	tr *http.Transport
-}
-
-func (b *LocalBackend) newDriveTransport() *driveTransport {
-	return &driveTransport{
-		b:  b,
-		tr: b.Dialer().PeerAPITransport(),
-	}
-}
-
-func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-	// Some WebDAV clients include origin and refer headers, which peerapi does
-	// not like. Remove them.
-	req.Header.Del("origin")
-	req.Header.Del("referer")
-
-	bw := &requestBodyWrapper{}
-	if req.Body != nil {
-		bw.ReadCloser = req.Body
-		req.Body = bw
-	}
-
-	defer func() {
-		contentType := "unknown"
-		if ct := req.Header.Get("Content-Type"); ct != "" {
-			contentType = ct
-		}
-
-		dt.b.mu.Lock()
-		selfNodeKey := dt.b.currentNode().Self().Key().ShortString()
-		dt.b.mu.Unlock()
-		n, _, ok := dt.b.WhoIs("tcp", netip.MustParseAddrPort(req.URL.Host))
-		shareNodeKey := "unknown"
-		if ok {
-			shareNodeKey = string(n.Key().ShortString())
-		}
-
-		rbw := responseBodyWrapper{
-			log:           dt.b.logf,
-			logVerbose:    req.Method != httpm.GET && req.Method != httpm.PUT, // other requests like PROPFIND are quite chatty, so we log those at verbose level
-			method:        req.Method,
-			bytesTx:       int64(bw.bytesRead),
-			selfNodeKey:   selfNodeKey,
-			shareNodeKey:  shareNodeKey,
-			contentType:   contentType,
-			contentLength: resp.ContentLength,
-			fileExtension: parseDriveFileExtensionForLog(req.URL.Path),
-			statusCode:    resp.StatusCode,
-			ReadCloser:    resp.Body,
-		}
-
-		if resp.StatusCode >= 400 {
-			// in case of error response, just log immediately
-			rbw.logAccess("")
-		} else {
-			resp.Body = &rbw
-		}
-	}()
-
-	return dt.tr.RoundTrip(req)
-}
+var hookSetNetMapLockedDrive feature.Hook[func(*LocalBackend, *netmap.NetworkMap)]
 
 // roundTraffic rounds bytes. This is used to preserve user privacy within logs.
 func roundTraffic(bytes int64) float64 {
