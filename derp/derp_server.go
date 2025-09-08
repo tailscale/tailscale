@@ -38,7 +38,6 @@ import (
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
@@ -1384,7 +1383,7 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 	// tailscaled-based verification:
 	if s.verifyClientsLocalTailscaled {
 		_, err := s.localClient.WhoIsNodeKey(ctx, clientKey)
-		if err == tailscale.ErrPeerNotFound {
+		if err == local.ErrPeerNotFound {
 			return fmt.Errorf("peer %v not authorized (not found in local tailscaled)", clientKey)
 		}
 		if err != nil {

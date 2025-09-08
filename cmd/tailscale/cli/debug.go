@@ -30,7 +30,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/net/http/httpproxy"
 	"golang.org/x/net/http2"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/hostinfo"
@@ -1219,7 +1219,7 @@ var debugPortmapArgs struct {
 }
 
 func debugPortmap(ctx context.Context, args []string) error {
-	opts := &tailscale.DebugPortmapOpts{
+	opts := &local.DebugPortmapOpts{
 		Duration: debugPortmapArgs.duration,
 		Type:     debugPortmapArgs.ty,
 		LogHTTP:  debugPortmapArgs.logHTTP,
