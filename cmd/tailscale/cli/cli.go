@@ -209,6 +209,7 @@ func noDupFlagify(c *ffcli.Command) {
 
 var fileCmd func() *ffcli.Command
 var sysPolicyCmd func() *ffcli.Command
+var maybeWebCmd func() *ffcli.Command
 
 func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
@@ -251,7 +252,7 @@ change in the future.
 			funnelCmd(),
 			serveCmd(),
 			versionCmd,
-			webCmd,
+			nilOrCall(maybeWebCmd),
 			nilOrCall(fileCmd),
 			bugReportCmd,
 			certCmd,

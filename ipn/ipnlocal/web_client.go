@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !ios && !android
+//go:build !ios && !android && !ts_omit_webclient
 
 package ipnlocal
 
@@ -22,11 +22,12 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
 
-const webClientPort = web.ListenPort
+const webClientPort = tsconst.WebListenPort
 
 // webClient holds state for the web interface for managing this
 // tailscale instance. The web interface is not used by default,

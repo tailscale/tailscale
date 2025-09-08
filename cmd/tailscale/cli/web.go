@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_webclient
+
 package cli
 
 import (
@@ -22,14 +24,20 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/web"
 	"tailscale.com/ipn"
+	"tailscale.com/tsconst"
 )
 
-var webCmd = &ffcli.Command{
-	Name:       "web",
-	ShortUsage: "tailscale web [flags]",
-	ShortHelp:  "Run a web server for controlling Tailscale",
+func init() {
+	maybeWebCmd = webCmd
+}
 
-	LongHelp: strings.TrimSpace(`
+func webCmd() *ffcli.Command {
+	return &ffcli.Command{
+		Name:       "web",
+		ShortUsage: "tailscale web [flags]",
+		ShortHelp:  "Run a web server for controlling Tailscale",
+
+		LongHelp: strings.TrimSpace(`
 "tailscale web" runs a webserver for controlling the Tailscale daemon.
 
 It's primarily intended for use on Synology, QNAP, and other
@@ -37,16 +45,17 @@ NAS devices where a web interface is the natural place to control
 Tailscale, as opposed to a CLI or a native app.
 `),
 
-	FlagSet: (func() *flag.FlagSet {
-		webf := newFlagSet("web")
-		webf.StringVar(&webArgs.listen, "listen", "localhost:8088", "listen address; use port 0 for automatic")
-		webf.BoolVar(&webArgs.cgi, "cgi", false, "run as CGI script")
-		webf.StringVar(&webArgs.prefix, "prefix", "", "URL prefix added to requests (for cgi or reverse proxies)")
-		webf.BoolVar(&webArgs.readonly, "readonly", false, "run web UI in read-only mode")
-		webf.StringVar(&webArgs.origin, "origin", "", "origin at which the web UI is served (if behind a reverse proxy or used with cgi)")
-		return webf
-	})(),
-	Exec: runWeb,
+		FlagSet: (func() *flag.FlagSet {
+			webf := newFlagSet("web")
+			webf.StringVar(&webArgs.listen, "listen", "localhost:8088", "listen address; use port 0 for automatic")
+			webf.BoolVar(&webArgs.cgi, "cgi", false, "run as CGI script")
+			webf.StringVar(&webArgs.prefix, "prefix", "", "URL prefix added to requests (for cgi or reverse proxies)")
+			webf.BoolVar(&webArgs.readonly, "readonly", false, "run web UI in read-only mode")
+			webf.StringVar(&webArgs.origin, "origin", "", "origin at which the web UI is served (if behind a reverse proxy or used with cgi)")
+			return webf
+		})(),
+		Exec: runWeb,
+	}
 }
 
 var webArgs struct {
@@ -101,7 +110,7 @@ func runWeb(ctx context.Context, args []string) error {
 	var startedManagementClient bool // we started the management client
 	if !existingWebClient && !webArgs.readonly {
 		// Also start full client in tailscaled.
-		log.Printf("starting tailscaled web client at http://%s\n", netip.AddrPortFrom(selfIP, web.ListenPort))
+		log.Printf("starting tailscaled web client at http://%s\n", netip.AddrPortFrom(selfIP, tsconst.WebListenPort))
 		if err := setRunWebClient(ctx, true); err != nil {
 			return fmt.Errorf("starting web client in tailscaled: %w", err)
 		}
