@@ -23,7 +23,6 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/local"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/envknob"
 	"tailscale.com/paths"
@@ -113,7 +112,7 @@ func Run(args []string) (err error) {
 	}
 
 	var warnOnce sync.Once
-	tailscale.SetVersionMismatchHandler(func(clientVer, serverVer string) {
+	local.SetVersionMismatchHandler(func(clientVer, serverVer string) {
 		warnOnce.Do(func() {
 			fmt.Fprintf(Stderr, "Warning: client version %q != tailscaled server version %q\n", clientVer, serverVer)
 		})
@@ -164,7 +163,7 @@ func Run(args []string) (err error) {
 	}
 
 	err = rootCmd.Run(context.Background())
-	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
+	if local.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
 		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s'.\nTo not require root, use 'sudo tailscale set --operator=$USER' once.", err, strings.Join(args, " "))
 	}
 	if errors.Is(err, flag.ErrHelp) {

@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -925,7 +925,7 @@ func (lc *fakeLocalServeClient) QueryFeature(ctx context.Context, feature string
 	return &tailcfg.QueryFeatureResponse{Complete: true}, nil // fallback to already enabled
 }
 
-func (lc *fakeLocalServeClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error) {
+func (lc *fakeLocalServeClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*local.IPNBusWatcher, error) {
 	return nil, nil // unused in tests
 }
 

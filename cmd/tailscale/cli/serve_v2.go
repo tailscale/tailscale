@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -365,7 +365,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
-		var watcher *tailscale.IPNBusWatcher
+		var watcher *local.IPNBusWatcher
 		svcName := noService
 
 		if forService {
@@ -426,7 +426,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
-			if tailscale.IsPreconditionsFailedError(err) {
+			if local.IsPreconditionsFailedError(err) {
 				fmt.Fprintln(e.stderr(), "Another client is changing the serve config; please try again.")
 			}
 			return err
