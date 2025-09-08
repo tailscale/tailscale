@@ -398,7 +398,7 @@ func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) bool {
 	return true
 }
 
-// SetNetInfo stores a new TKA head value for next update.
+// SetTKAHead stores a new TKA head value for next update.
 // It reports whether the TKA head changed.
 func (c *Direct) SetTKAHead(tkaHead string) bool {
 	c.mu.Lock()
