@@ -1075,6 +1075,21 @@ func (lc *Client) CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) 
 	return &derpMap, nil
 }
 
+// CurrentDNSMode returns the DNS manager mode that tailscaled is using.
+// If the daemon or platform doesn't support DNS mode detection, an empty
+// string is returned.
+func (lc *Client) CurrentDNSMode(ctx context.Context) (string, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/dns-mode")
+	if err != nil {
+		return "", err
+	}
+	var res struct{ Mode string }
+	if err := json.Unmarshal(body, &res); err != nil {
+		return "", err
+	}
+	return res.Mode, nil
+}
+
 // CertPair returns a cert and private key for the provided DNS domain.
 //
 // It returns a cached certificate from disk if it's still valid.

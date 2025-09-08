@@ -40,6 +40,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/portmapper"
@@ -102,6 +103,7 @@ var handler = map[string]LocalAPIHandler{
 	"dev-set-state-store":          (*Handler).serveDevSetStateStore,
 	"dial":                         (*Handler).serveDial,
 	"disconnect-control":           (*Handler).disconnectControl,
+	"dns-mode":                     (*Handler).serveDNSMode,
 	"dns-osconfig":                 (*Handler).serveDNSOSConfig,
 	"dns-query":                    (*Handler).serveDNSQuery,
 	"drive/fileserver-address":     (*Handler).serveDriveServerAddr,
@@ -2659,6 +2661,35 @@ func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
 		Bytes:     res,
 		Resolvers: rrs,
 	})
+}
+
+// serveDNSMode reports the DNS manager mode tailscaled is using.
+// - Only GET is allowed.
+// - Requires PermitRead.
+// Responds with JSON: { "mode": "<current mode>" }.
+func (h *Handler) serveDNSMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.GET {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !h.PermitRead {
+		http.Error(w, "dns-mode access denied", http.StatusForbidden)
+		return
+	}
+
+	payload := struct {
+		Mode string `json:"mode"`
+	}{
+		Mode: dns.CurrentDNSMode(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	encoder := json.NewEncoder(w)
+	if err := encoder.Encode(payload); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 // serveDriveServerAddr handles updates of the Taildrive file server address.
