@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"tailscale.com/cmd/testwrapper/flakytest"
 )
 
 func ExampleNewSafeFunc() {
@@ -52,6 +54,7 @@ func ExampleNewSafeFunc() {
 }
 
 func TestSafeFuncHappyPath(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15348")
 	var count int
 	f := NewSafeFunc(expvar.Func(func() any {
 		count++
