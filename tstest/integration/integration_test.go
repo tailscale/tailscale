@@ -170,6 +170,7 @@ func TestControlKnobs(t *testing.T) {
 }
 
 func TestCollectPanic(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/15865")
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
