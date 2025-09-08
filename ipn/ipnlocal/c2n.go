@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -162,7 +163,8 @@ func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Reques
 
 	b.logf("c2n: %s /debug/netmap received", r.Method)
 
-	cur, err := json.Marshal(b.NetMapWithPeers())
+	curNetmap := b.NetMapWithPeers()
+	cur, err := json.Marshal(curNetmap)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to marshal current netmap: %v", err), http.StatusInternalServerError)
 		return
@@ -190,6 +192,13 @@ func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Reques
 				return
 			}
 			resp.Candidate = candJSON
+
+			n1 := curNetmap.SelfNode.AsStruct()
+			n2 := curNetmap.SelfNode.AsStruct()
+			n2.Cap = 15
+			if diff := cmp.Diff(n1, n2); diff != "" {
+				b.logf("c2n: candidate netmap differs from current netmap:\n%s", diff)
+			}
 		}
 	}
 	writeJSON(w, resp)
