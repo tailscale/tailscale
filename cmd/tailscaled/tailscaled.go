@@ -33,8 +33,8 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
-	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	_ "tailscale.com/feature/condregister"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -153,7 +153,6 @@ var subCommands = map[string]*func([]string) error{
 	"uninstall-system-daemon": &uninstallSystemDaemon,
 	"debug":                   &debugModeFunc,
 	"be-child":                &beChildFunc,
-	"serve-taildrive":         &serveDriveFunc,
 }
 
 var beCLI func() // non-nil if CLI is linked in with the "ts_include_cli" build tag
@@ -480,7 +479,9 @@ func run() (err error) {
 		debugMux = newDebugMux()
 	}
 
-	sys.Set(driveimpl.NewFileSystemForRemote(logf))
+	if f, ok := hookSetSysDrive.GetOk(); ok {
+		f(sys, logf)
+	}
 
 	if app := envknob.App(); app != "" {
 		hostinfo.SetApp(app)
@@ -488,6 +489,11 @@ func run() (err error) {
 
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }
+
+var (
+	hookSetSysDrive           feature.Hook[func(*tsd.System, logger.Logf)]
+	hookSetWgEnginConfigDrive feature.Hook[func(*wgengine.Config, logger.Logf)]
+)
 
 var sigPipe os.Signal // set by sigpipe.go
 
@@ -749,7 +755,9 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
 		EventBus:      sys.Bus.Get(),
-		DriveForLocal: driveimpl.NewFileSystemForLocal(logf),
+	}
+	if f, ok := hookSetWgEnginConfigDrive.GetOk(); ok {
+		f(&conf, logf)
 	}
 
 	sys.HealthTracker().SetMetricsRegistry(sys.UserMetricsRegistry())
@@ -941,35 +949,6 @@ func beChild(args []string) error {
 		return fmt.Errorf("unknown be-child mode %q", typ)
 	}
 	return f(args[1:])
-}
-
-var serveDriveFunc = serveDrive
-
-// serveDrive serves one or more Taildrives on localhost using the WebDAV
-// protocol. On UNIX and MacOS tailscaled environment, Taildrive spawns child
-// tailscaled processes in serve-taildrive mode in order to access the fliesystem
-// as specific (usually unprivileged) users.
-//
-// serveDrive prints the address on which it's listening to stdout so that the
-// parent process knows where to connect to.
-func serveDrive(args []string) error {
-	if len(args) == 0 {
-		return errors.New("missing shares")
-	}
-	if len(args)%2 != 0 {
-		return errors.New("need <sharename> <path> pairs")
-	}
-	s, err := driveimpl.NewFileServer()
-	if err != nil {
-		return fmt.Errorf("unable to start Taildrive file server: %v", err)
-	}
-	shares := make(map[string]string)
-	for i := 0; i < len(args); i += 2 {
-		shares[args[i]] = args[i+1]
-	}
-	s.SetShares(shares)
-	fmt.Printf("%v\n", s.Addr())
-	return s.Serve()
 }
 
 // dieOnPipeReadErrorOfFD reads from the pipe named by fd and exit the process
