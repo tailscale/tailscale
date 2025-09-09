@@ -531,6 +531,7 @@ func TestStateMachine(t *testing.T) {
 		// it's visible in the logs)
 		cc.assertCalls()
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
+		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[2].State, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName, qt.Equals, "user1")
@@ -728,6 +729,7 @@ func TestStateMachine(t *testing.T) {
 	{
 		nn := notifies.drain(3)
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
+		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.Persist(), qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
@@ -873,6 +875,7 @@ func TestStateMachine(t *testing.T) {
 		//  reason to pause().
 		cc.assertCalls("unpause")
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
+		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[2].State, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
