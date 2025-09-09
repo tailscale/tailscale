@@ -24,7 +24,7 @@ var switchCmd = &ffcli.Command{
 	LongHelp: `"tailscale switch" switches between logged in accounts. You can
 use the ID that's returned from 'tailnet switch -list'
 to pick which profile you want to switch to. Alternatively, you
-can use the Tailnet or the account names to switch as well.
+can use the Tailnet, account names, or display names to switch as well.
 
 This command is currently in alpha and may change in the future.`,
 
@@ -46,7 +46,7 @@ func init() {
 		seen := make(map[string]bool, 3*len(all))
 		wordfns := []func(prof ipn.LoginProfile) string{
 			func(prof ipn.LoginProfile) string { return string(prof.ID) },
-			func(prof ipn.LoginProfile) string { return prof.NetworkProfile.DomainName },
+			func(prof ipn.LoginProfile) string { return prof.NetworkProfile.DisplayNameOrDefault() },
 			func(prof ipn.LoginProfile) string { return prof.Name },
 		}
 
@@ -57,7 +57,7 @@ func init() {
 					continue
 				}
 				seen[word] = true
-				words = append(words, fmt.Sprintf("%s\tid: %s, tailnet: %s, account: %s", word, prof.ID, prof.NetworkProfile.DomainName, prof.Name))
+				words = append(words, fmt.Sprintf("%s\tid: %s, tailnet: %s, account: %s", word, prof.ID, prof.NetworkProfile.DisplayNameOrDefault(), prof.Name))
 			}
 		}
 		return words, ffcomplete.ShellCompDirectiveNoFileComp, nil
@@ -86,7 +86,7 @@ func listProfiles(ctx context.Context) error {
 		}
 		printRow(
 			string(prof.ID),
-			prof.NetworkProfile.DomainName,
+			prof.NetworkProfile.DisplayNameOrDefault(),
 			name,
 		)
 	}
@@ -107,7 +107,7 @@ func switchProfile(ctx context.Context, args []string) error {
 		os.Exit(1)
 	}
 	var profID ipn.ProfileID
-	// Allow matching by ID, Tailnet, or Account
+	// Allow matching by ID, Tailnet, Account, or Display Name
 	// in that order.
 	for _, p := range all {
 		if p.ID == ipn.ProfileID(args[0]) {
@@ -126,6 +126,14 @@ func switchProfile(ctx context.Context, args []string) error {
 	if profID == "" {
 		for _, p := range all {
 			if p.Name == args[0] {
+				profID = p.ID
+				break
+			}
+		}
+	}
+	if profID == "" {
+		for _, p := range all {
+			if p.NetworkProfile.DisplayName == args[0] {
 				profID = p.ID
 				break
 			}
