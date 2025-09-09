@@ -236,7 +236,7 @@ func TestDirectProxyManual(t *testing.T) {
 		},
 		DiscoPublicKey: key.NewDisco().Public(),
 		Logf:           t.Logf,
-		HealthTracker:  &health.Tracker{},
+		HealthTracker:  health.NewTracker(bus),
 		PopBrowserURL: func(url string) {
 			t.Logf("PopBrowserURL: %q", url)
 		},
@@ -328,7 +328,7 @@ func testHTTPS(t *testing.T, withProxy bool) {
 		},
 		DiscoPublicKey: key.NewDisco().Public(),
 		Logf:           t.Logf,
-		HealthTracker:  &health.Tracker{},
+		HealthTracker:  health.NewTracker(bus),
 		PopBrowserURL: func(url string) {
 			t.Logf("PopBrowserURL: %q", url)
 		},

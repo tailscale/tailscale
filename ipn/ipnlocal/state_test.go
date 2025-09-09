@@ -336,7 +336,7 @@ func TestStateMachine(t *testing.T) {
 	sys := tsd.NewSystem()
 	store := new(testStateStorage)
 	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
@@ -974,7 +974,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 	logf := tstest.WhileTestRunningLogger(t)
 	sys := tsd.NewSystem()
 	sys.Set(new(mem.Store))
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
@@ -1525,7 +1525,7 @@ func newLocalBackendWithMockEngineAndControl(t *testing.T, enableLogging bool) (
 		EventBus:          sys.Bus.Get(),
 		NetMon:            dialer.NetMon(),
 		Metrics:           sys.UserMetricsRegistry(),
-		HealthTracker:     sys.HealthTracker(),
+		HealthTracker:     sys.HealthTracker.Get(),
 		DisablePortMapper: true,
 	})
 	if err != nil {

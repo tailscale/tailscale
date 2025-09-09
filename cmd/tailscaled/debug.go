@@ -161,7 +161,9 @@ func getURL(ctx context.Context, urlStr string) error {
 }
 
 func checkDerp(ctx context.Context, derpRegion string) (err error) {
-	ht := new(health.Tracker)
+	bus := eventbus.New()
+	defer bus.Close()
+	ht := health.NewTracker(bus)
 	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
 	if err != nil {
 		return fmt.Errorf("create derp map request: %w", err)
