@@ -35,6 +35,7 @@ var validUpFlags = set.Of(
 	"operator",
 	"report-posture",
 	"qr",
+	"qr-format",
 	"reset",
 	"shields-up",
 	"snat-subnet-routes",

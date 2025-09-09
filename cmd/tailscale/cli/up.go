@@ -95,6 +95,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	// When adding new flags, prefer to put them under "tailscale set" instead
 	// of here. Setting preferences via "tailscale up" is deprecated.
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
+	upf.StringVar(&upArgs.qrFormat, "qr-format", "small", "QR code formatting (small or large)")
 	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
@@ -164,6 +165,7 @@ func defaultNetfilterMode() string {
 // added to it. Add new arguments to setArgsT instead.
 type upArgsT struct {
 	qr                     bool
+	qrFormat               string
 	reset                  bool
 	server                 string
 	acceptRoutes           bool
@@ -658,7 +660,14 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						if err != nil {
 							log.Printf("QR code error: %v", err)
 						} else {
-							fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+							switch upArgs.qrFormat {
+							case "large":
+								fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+							case "small":
+								fmt.Fprintf(Stderr, "%s\n", q.ToSmallString(false))
+							default:
+								log.Printf("unknown QR code format: %q", upArgs.qrFormat)
+							}
 						}
 					}
 				}
@@ -805,7 +814,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "json", "timeout", "accept-risk", "host-routes":
+	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes":
 		return true
 	}
 	return false
