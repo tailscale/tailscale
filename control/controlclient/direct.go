@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -93,6 +94,7 @@ type Direct struct {
 	mu              sync.Mutex        // mutex guards the following fields
 	serverLegacyKey key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
 	serverNoiseKey  key.MachinePublic
+	lastLiteHash    [sha256.Size]byte // last hash of lite map request we sent to control for which we got a 200 OK
 
 	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
 	noiseClient *NoiseClient
@@ -939,6 +941,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return err
 	}
 
+	bodyHash := sha256.Sum256(bodyData)
+	if !isStreaming && nu == nil && c.lastLiteHashEquals(bodyHash) {
+		vlogf("netmap: skipping lite update; previous was identical and succeeded")
+		return nil
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -1000,6 +1008,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	watchdogTimer.Reset(watchdogTimeout)
 
 	if nu == nil {
+		c.mu.Lock()
+		c.lastLiteHash = bodyHash
+		c.mu.Unlock()
+
 		io.Copy(io.Discard, res.Body)
 		return nil
 	}
@@ -1136,6 +1148,14 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return ctx.Err()
 	}
 	return nil
+}
+
+// lastLiteHashEquals reports whether the last sent lite map request hash
+// is equal to the given hash.
+func (c *Direct) lastLiteHashEquals(hash [sha256.Size]byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastLiteHash == hash
 }
 
 func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug) error {
