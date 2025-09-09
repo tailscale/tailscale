@@ -287,12 +287,18 @@ func MessageSummary(m Message) string {
 		return fmt.Sprintf("pong tx=%x", m.TxID[:6])
 	case *CallMeMaybe:
 		return "call-me-maybe"
+	case *CallMeMaybeVia:
+		return "call-me-maybe-via"
 	case *BindUDPRelayEndpoint:
 		return "bind-udp-relay-endpoint"
 	case *BindUDPRelayEndpointChallenge:
 		return "bind-udp-relay-endpoint-challenge"
 	case *BindUDPRelayEndpointAnswer:
 		return "bind-udp-relay-endpoint-answer"
+	case *AllocateUDPRelayEndpointRequest:
+		return "allocate-udp-relay-endpoint-request"
+	case *AllocateUDPRelayEndpointResponse:
+		return "allocate-udp-relay-endpoint-response"
 	default:
 		return fmt.Sprintf("%#v", m)
 	}
