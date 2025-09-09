@@ -596,22 +596,6 @@ func TestC2NPingRequest(t *testing.T) {
 
 	env := NewTestEnv(t)
 
-	gotPing := make(chan bool, 1)
-	env.Control.HandleC2N = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			t.Errorf("unexpected ping method %q", r.Method)
-		}
-		got, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("ping body read error: %v", err)
-		}
-		const want = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nabc"
-		if string(got) != want {
-			t.Errorf("body error\n got: %q\nwant: %q", got, want)
-		}
-		gotPing <- true
-	})
-
 	n1 := NewTestNode(t, env)
 	n1.StartDaemon()
 
@@ -635,27 +619,33 @@ func TestC2NPingRequest(t *testing.T) {
 		}
 		cancel()
 
-		pr := &tailcfg.PingRequest{
-			URL:     fmt.Sprintf("https://unused/some-c2n-path/ping-%d", try),
-			Log:     true,
-			Types:   "c2n",
-			Payload: []byte("POST /echo HTTP/1.0\r\nContent-Length: 3\r\n\r\nabc"),
-		}
-		if !env.Control.AddPingRequest(nodeKey, pr) {
-			t.Logf("failed to AddPingRequest")
+		ctx, cancel = context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, "POST", "/echo", bytes.NewReader([]byte("abc")))
+		if err != nil {
+			t.Errorf("failed to create request: %v", err)
 			continue
 		}
-
-		// Wait for PingRequest to come back
-		pingTimeout := time.NewTimer(2 * time.Second)
-		defer pingTimeout.Stop()
-		select {
-		case <-gotPing:
-			t.Logf("got ping; success")
-			return
-		case <-pingTimeout.C:
-			// Try again.
+		r, err := env.Control.NodeRoundTripper(nodeKey).RoundTrip(req)
+		if err != nil {
+			t.Errorf("RoundTrip failed: %v", err)
+			continue
 		}
+		if r.StatusCode != 200 {
+			t.Errorf("unexpected status code: %d", r.StatusCode)
+			continue
+		}
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("error reading body: %v", err)
+			continue
+		}
+		if string(b) != "abc" {
+			t.Errorf("body = %q; want %q", b, "abc")
+			continue
+		}
+		return
 	}
 	t.Error("all ping attempts failed")
 }
