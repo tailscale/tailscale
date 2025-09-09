@@ -658,7 +658,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						if err != nil {
 							log.Printf("QR code error: %v", err)
 						} else {
-							fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+							fmt.Fprintf(Stderr, "%s\n", q.ToSmallString(false))
 						}
 					}
 				}
