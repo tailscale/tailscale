@@ -406,6 +406,7 @@ func run() (err error) {
 	// Install an event bus as early as possible, so that it's
 	// available universally when setting up everything else.
 	sys := tsd.NewSystem()
+	defer sys.Bus.Get().Close()
 
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config

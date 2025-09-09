@@ -207,6 +207,7 @@ type LocalBackend struct {
 	eventClient              *eventbus.Client
 	clientVersionSub         *eventbus.Subscriber[tailcfg.ClientVersion]
 	autoUpdateSub            *eventbus.Subscriber[controlclient.AutoUpdate]
+	healthChangeSub          *eventbus.Subscriber[health.Change]
 	subsDoneCh               chan struct{}       // closed when consumeEventbusTopics returns
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
@@ -217,7 +218,6 @@ type LocalBackend struct {
 	pushDeviceToken          syncs.AtomicValue[string]
 	backendLogID             logid.PublicID
 	unregisterNetMon         func()
-	unregisterHealthWatch    func()
 	unregisterSysPolicyWatch func()
 	portpoll                 *portlist.Poller // may be nil
 	portpollOnce             sync.Once        // guards starting readPoller
@@ -544,6 +544,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.eventClient = b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
 	b.clientVersionSub = eventbus.Subscribe[tailcfg.ClientVersion](b.eventClient)
 	b.autoUpdateSub = eventbus.Subscribe[controlclient.AutoUpdate](b.eventClient)
+	b.healthChangeSub = eventbus.Subscribe[health.Change](b.eventClient)
 	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
@@ -597,8 +598,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.linkChange(&netmon.ChangeDelta{New: netMon.InterfaceState()})
 	b.unregisterNetMon = netMon.RegisterChangeCallback(b.linkChange)
 
-	b.unregisterHealthWatch = b.health.RegisterWatcher(b.onHealthChange)
-
 	if tunWrap, ok := b.sys.Tun.GetOK(); ok {
 		tunWrap.PeerAPIPort = b.GetPeerAPIPort
 	} else {
@@ -636,6 +635,8 @@ func (b *LocalBackend) consumeEventbusTopics() {
 			b.onClientVersion(&clientVersion)
 		case au := <-b.autoUpdateSub.Events():
 			b.onTailnetDefaultAutoUpdate(au.Value)
+		case change := <-b.healthChangeSub.Events():
+			b.onHealthChange(change)
 		}
 	}
 }
@@ -1164,7 +1165,6 @@ func (b *LocalBackend) Shutdown() {
 	b.stopOfflineAutoUpdate()
 
 	b.unregisterNetMon()
-	b.unregisterHealthWatch()
 	b.unregisterSysPolicyWatch()
 	if cc != nil {
 		cc.Shutdown()

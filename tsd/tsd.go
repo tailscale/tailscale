@@ -91,6 +91,9 @@ func NewSystemWithBus(bus *eventbus.Bus) *System {
 	}
 	sys := new(System)
 	sys.Set(bus)
+
+	sys.healthTracker.InitOnce(bus)
+
 	return sys
 }
 
