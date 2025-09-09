@@ -988,6 +988,7 @@ type WindowsUserID string
 type NetworkProfile struct {
 	MagicDNSName string
 	DomainName   string
+	DisplayName  string
 }
 
 // RequiresBackfill returns whether this object does not have all the data

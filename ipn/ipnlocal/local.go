@@ -1650,12 +1650,18 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		prefsChanged = true
 	}
 
+	// If the tailnet's display name has changed, update prefs.
+	if st.NetMap != nil && st.NetMap.TailnetDisplayName() != b.pm.CurrentProfile().NetworkProfile().DisplayName {
+		prefsChanged = true
+	}
+
 	// Perform all mutations of prefs based on the netmap here.
 	if prefsChanged {
 		// Prefs will be written out if stale; this is not safe unless locked or cloned.
 		if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
 			MagicDNSName: curNetMap.MagicDNSSuffix(),
 			DomainName:   curNetMap.DomainName(),
+			DisplayName:  curNetMap.TailnetDisplayName(),
 		}); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
@@ -1716,6 +1722,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			if err := b.pm.SetPrefs(p, ipn.NetworkProfile{
 				MagicDNSName: st.NetMap.MagicDNSSuffix(),
 				DomainName:   st.NetMap.DomainName(),
+				DisplayName:  st.NetMap.TailnetDisplayName(),
 			}); err != nil {
 				b.logf("Failed to save new controlclient state: %v", err)
 			}
@@ -6185,6 +6192,7 @@ func (b *LocalBackend) resolveExitNode() (changed bool) {
 	if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
 		MagicDNSName: nm.MagicDNSSuffix(),
 		DomainName:   nm.DomainName(),
+		DisplayName:  nm.TailnetDisplayName(),
 	}); err != nil {
 		b.logf("failed to save exit node changes: %v", err)
 	}
