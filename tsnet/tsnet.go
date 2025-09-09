@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -908,25 +907,6 @@ func (s *Server) getUDPHandlerForFlow(src, dst netip.AddrPort) (handler func(net
 		return nil, true // don't handle, don't forward to localhost
 	}
 	return func(c nettype.ConnPacketConn) { ln.handle(c) }, true
-}
-
-// APIClient returns a tailscale.Client that can be used to make authenticated
-// requests to the Tailscale control server.
-// It requires the user to set tailscale.I_Acknowledge_This_API_Is_Unstable.
-//
-// Deprecated: use AuthenticatedAPITransport with tailscale.com/client/tailscale/v2 instead.
-func (s *Server) APIClient() (*tailscale.Client, error) {
-	if !tailscale.I_Acknowledge_This_API_Is_Unstable {
-		return nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
-	}
-	if err := s.Start(); err != nil {
-		return nil, err
-	}
-
-	c := tailscale.NewClient("-", nil)
-	c.UserAgent = "tailscale-tsnet"
-	c.HTTPClient = &http.Client{Transport: s.lb.KeyProvingNoiseRoundTripper()}
-	return c, nil
 }
 
 // I_Acknowledge_This_API_Is_Experimental must be set true to use AuthenticatedAPITransport()
