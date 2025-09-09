@@ -5,6 +5,7 @@ package ipn
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -999,6 +1000,13 @@ type NetworkProfile struct {
 // do more explicit checks to return whether it's apt for a backfill or not.
 func (n NetworkProfile) RequiresBackfill() bool {
 	return n == NetworkProfile{}
+}
+
+// DisplayNameOrDefault will always return a non-empty string.
+// If there is a defined display name, it will return that.
+// If they did not it will default to their domain name.
+func (n NetworkProfile) DisplayNameOrDefault() string {
+	return cmp.Or(n.DisplayName, n.DomainName)
 }
 
 // LoginProfile represents a single login profile as managed
