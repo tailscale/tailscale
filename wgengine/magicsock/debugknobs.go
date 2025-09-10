@@ -62,6 +62,9 @@ var (
 	//
 	//lint:ignore U1000 used on Linux/Darwin only
 	debugPMTUD = envknob.RegisterBool("TS_DEBUG_PMTUD")
+	// debugNeverDirectUDP disables the use of direct UDP connections, forcing
+	// all peer communication over DERP or peer relay.
+	debugNeverDirectUDP = envknob.RegisterBool("TS_DEBUG_NEVER_DIRECT_UDP")
 	// Hey you! Adding a new debugknob? Make sure to stub it out in the
 	// debugknobs_stubs.go file too.
 )
