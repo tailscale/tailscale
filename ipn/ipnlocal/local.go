@@ -5735,9 +5735,9 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	switch newState {
 	case ipn.NeedsLogin:
 		systemd.Status("Needs login: %s", authURL)
-		if b.seamlessRenewalEnabled() {
-			break
-		}
+		// always block updates on NeedsLogin even if seamless renewal is enabled,
+		// to prevent calls to authReconfig from reconfiguring the engine when our
+		// key has expired and we're waiting to authenticate to use the new key.
 		b.blockEngineUpdates(true)
 		fallthrough
 	case ipn.Stopped, ipn.NoState:

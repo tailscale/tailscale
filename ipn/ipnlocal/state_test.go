@@ -204,6 +204,16 @@ func (cc *mockControl) authenticated(nm *netmap.NetworkMap) {
 	cc.send(nil, "", true, nm)
 }
 
+func (cc *mockControl) sendAuthURL(nm *netmap.NetworkMap) {
+	s := controlclient.Status{
+		URL:     "https://example.com/a/foo",
+		NetMap:  nm,
+		Persist: cc.persist.View(),
+	}
+	s.SetStateForTest(controlclient.StateURLVisitRequired)
+	cc.opts.Observer.SetControlClientStatus(cc, s)
+}
+
 // called records that a particular function name was called.
 func (cc *mockControl) called(s string) {
 	cc.mu.Lock()
@@ -1362,11 +1372,141 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
 				mustDo(t)(lb.Start(ipn.Options{}))
 				mustDo2(t)(lb.EditPrefs(connect))
-				cc().authenticated(node3)
+				cc().authenticated(node1)
 				cc().send(nil, "", false, &netmap.NetworkMap{
 					Expiry: time.Now().Add(-time.Minute),
 				})
 			},
+			wantState:     ipn.NeedsLogin,
+			wantCfg:       &wgcfg.Config{},
+			wantRouterCfg: &router.Config{},
+			wantDNSCfg:    &dns.Config{},
+		},
+		{
+			name: "Start/Connect/Login/InitReauth",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+
+				// Start the re-auth process:
+				lb.StartLoginInteractive(context.Background())
+				cc().sendAuthURL(node1)
+			},
+			// Without seamless renewal, even starting a reauth tears down everything:
+			wantState:     ipn.Starting,
+			wantCfg:       &wgcfg.Config{},
+			wantRouterCfg: &router.Config{},
+			wantDNSCfg:    &dns.Config{},
+		},
+		{
+			name: "Start/Connect/Login/InitReauth/Login",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+
+				// Start the re-auth process:
+				lb.StartLoginInteractive(context.Background())
+				cc().sendAuthURL(node1)
+
+				// Complete the re-auth process:
+				cc().authenticated(node1)
+			},
+			wantState: ipn.Starting,
+			wantCfg: &wgcfg.Config{
+				Name:      "tailscale",
+				NodeID:    node1.SelfNode.StableID(),
+				Peers:     []wgcfg.Peer{},
+				Addresses: node1.SelfNode.Addresses().AsSlice(),
+			},
+			wantRouterCfg: &router.Config{
+				SNATSubnetRoutes: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
+				Routes:           routesWithQuad100(),
+			},
+			wantDNSCfg: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:  hostsFor(node1),
+			},
+		},
+		{
+			name: "Seamless/Start/Connect/Login/InitReauth",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				lb.ControlKnobs().SeamlessKeyRenewal.Store(true)
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+
+				// Start the re-auth process:
+				lb.StartLoginInteractive(context.Background())
+				cc().sendAuthURL(node1)
+			},
+			// With seamless renewal, starting a reauth should leave everything up:
+			wantState: ipn.Starting,
+			wantCfg: &wgcfg.Config{
+				Name:      "tailscale",
+				NodeID:    node1.SelfNode.StableID(),
+				Peers:     []wgcfg.Peer{},
+				Addresses: node1.SelfNode.Addresses().AsSlice(),
+			},
+			wantRouterCfg: &router.Config{
+				SNATSubnetRoutes: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
+				Routes:           routesWithQuad100(),
+			},
+			wantDNSCfg: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:  hostsFor(node1),
+			},
+		},
+		{
+			name: "Seamless/Start/Connect/Login/InitReauth/Login",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				lb.ControlKnobs().SeamlessKeyRenewal.Store(true)
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+
+				// Start the re-auth process:
+				lb.StartLoginInteractive(context.Background())
+				cc().sendAuthURL(node1)
+
+				// Complete the re-auth process:
+				cc().authenticated(node1)
+			},
+			wantState: ipn.Starting,
+			wantCfg: &wgcfg.Config{
+				Name:      "tailscale",
+				NodeID:    node1.SelfNode.StableID(),
+				Peers:     []wgcfg.Peer{},
+				Addresses: node1.SelfNode.Addresses().AsSlice(),
+			},
+			wantRouterCfg: &router.Config{
+				SNATSubnetRoutes: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
+				Routes:           routesWithQuad100(),
+			},
+			wantDNSCfg: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:  hostsFor(node1),
+			},
+		},
+		{
+			name: "Seamless/Start/Connect/Login/Expire",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				lb.ControlKnobs().SeamlessKeyRenewal.Store(true)
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+				cc().send(nil, "", false, &netmap.NetworkMap{
+					Expiry: time.Now().Add(-time.Minute),
+				})
+			},
+			// Even with seamless, if the key we are using expires, we want to disconnect:
 			wantState:     ipn.NeedsLogin,
 			wantCfg:       &wgcfg.Config{},
 			wantRouterCfg: &router.Config{},
