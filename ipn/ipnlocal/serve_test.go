@@ -898,7 +898,7 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 
 	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		SetSubsystem:  sys.Set,
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
 		Metrics:       sys.UserMetricsRegistry(),
 		EventBus:      sys.Bus.Get(),
 	})
@@ -916,7 +916,7 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	dir := t.TempDir()
 	b.SetVarRoot(dir)
 
-	pm := must.Get(newProfileManager(new(mem.Store), logf, new(health.Tracker)))
+	pm := must.Get(newProfileManager(new(mem.Store), logf, health.NewTracker(bus)))
 	pm.currentProfile = (&ipn.LoginProfile{ID: "id0"}).View()
 	b.pm = pm
 

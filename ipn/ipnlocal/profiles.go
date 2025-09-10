@@ -21,6 +21,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 )
 
 var debug = envknob.RegisterBool("TS_DEBUG_PROFILES")
@@ -838,7 +839,9 @@ func (pm *profileManager) CurrentPrefs() ipn.PrefsView {
 
 // ReadStartupPrefsForTest reads the startup prefs from disk. It is only used for testing.
 func ReadStartupPrefsForTest(logf logger.Logf, store ipn.StateStore) (ipn.PrefsView, error) {
-	ht := new(health.Tracker) // in tests, don't care about the health status
+	bus := eventbus.New()
+	defer bus.Close()
+	ht := health.NewTracker(bus) // in tests, don't care about the health status
 	pm, err := newProfileManager(store, logf, ht)
 	if err != nil {
 		return ipn.PrefsView{}, err

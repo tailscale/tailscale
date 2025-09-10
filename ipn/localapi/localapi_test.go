@@ -339,7 +339,7 @@ func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 	store := new(mem.Store)
 	sys.Set(store)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}

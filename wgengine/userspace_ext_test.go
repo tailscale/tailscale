@@ -21,7 +21,7 @@ func TestIsNetstack(t *testing.T) {
 		tstest.WhileTestRunningLogger(t),
 		wgengine.Config{
 			SetSubsystem:  sys.Set,
-			HealthTracker: sys.HealthTracker(),
+			HealthTracker: sys.HealthTracker.Get(),
 			Metrics:       sys.UserMetricsRegistry(),
 			EventBus:      sys.Bus.Get(),
 		},
@@ -73,7 +73,7 @@ func TestIsNetstackRouter(t *testing.T) {
 			}
 			conf := tt.conf
 			conf.SetSubsystem = sys.Set
-			conf.HealthTracker = sys.HealthTracker()
+			conf.HealthTracker = sys.HealthTracker.Get()
 			conf.Metrics = sys.UserMetricsRegistry()
 			conf.EventBus = sys.Bus.Get()
 			e, err := wgengine.NewUserspaceEngine(logger.Discard, conf)

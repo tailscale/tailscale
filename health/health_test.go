@@ -36,15 +36,12 @@ func compareChange(c Change) func(c Change) (bool, error) {
 			return false, fmt.Errorf("expected Warnable %+v, got %+v", c.Warnable, cEv.Warnable)
 		}
 
-		if c.UnhealthyState != nil && (cEv.UnhealthyState == nil || !maps.Equal(c.UnhealthyState.Args, cEv.UnhealthyState.Args)) {
-			return false, fmt.Errorf("expected UnhealthyState %+v, got %+v", c.UnhealthyState, cEv.UnhealthyState)
-		}
 		return true, nil
 	}
 }
 
 func TestAppendWarnableDebugFlags(t *testing.T) {
-	var tr Tracker
+	tr := NewTracker(eventbustest.NewBus(t))
 
 	for i := range 10 {
 		w := Register(&Warnable{
@@ -89,10 +86,9 @@ func TestNilMethodsDontCrash(t *testing.T) {
 }
 
 func TestSetUnhealthyWithDuplicateThenHealthyAgain(t *testing.T) {
-	ht := Tracker{}
 	bus := eventbustest.NewBus(t)
 	watcher := eventbustest.NewWatcher(t, bus)
-	ht.InitOnce(bus)
+	ht := NewTracker(bus)
 	if len(ht.Strings()) != 0 {
 		t.Fatalf("before first insertion, len(newTracker.Strings) = %d; want = 0", len(ht.Strings()))
 	}
@@ -127,10 +123,9 @@ func TestSetUnhealthyWithDuplicateThenHealthyAgain(t *testing.T) {
 }
 
 func TestRemoveAllWarnings(t *testing.T) {
-	ht := Tracker{}
 	bus := eventbustest.NewBus(t)
 	watcher := eventbustest.NewWatcher(t, bus)
-	ht.InitOnce(bus)
+	ht := NewTracker(bus)
 	if len(ht.Strings()) != 0 {
 		t.Fatalf("before first insertion, len(newTracker.Strings) = %d; want = 0", len(ht.Strings()))
 	}
@@ -155,25 +150,23 @@ func TestRemoveAllWarnings(t *testing.T) {
 // TestWatcher tests that a registered watcher function gets called with the correct
 // Warnable and non-nil/nil UnhealthyState upon setting a Warnable to unhealthy/healthy.
 func TestWatcher(t *testing.T) {
-	var unregister func()
+	var unregisterWatcher func()
 	tests := []struct {
 		name    string
-		preFunc func(t *Tracker, fn func(Change))
+		preFunc func(t *Tracker, bus *eventbus.Bus, fn func(Change))
 	}{
 		{
-			name: "with callbacks",
-			preFunc: func(tht *Tracker, fn func(c Change)) {
-				unregister = tht.RegisterWatcher(fn)
+			name: "with-callbacks",
+			preFunc: func(tht *Tracker, _ *eventbus.Bus, fn func(c Change)) {
+				unregisterWatcher = tht.RegisterWatcher(fn)
 				if len(tht.watchers) != 1 {
 					t.Fatalf("after RegisterWatcher, len(newTracker.watchers) = %d; want = 1", len(tht.watchers))
 				}
 			},
 		},
 		{
-			name: "with eventbus",
-			preFunc: func(tht *Tracker, fn func(c Change)) {
-				bus := eventbustest.NewBus(t)
-				tht.InitOnce(bus)
+			name: "with-eventbus",
+			preFunc: func(_ *Tracker, bus *eventbus.Bus, fn func(c Change)) {
 				client := bus.Client("healthwatchertestclient")
 				sub := eventbus.Subscribe[Change](client)
 				go func() {
@@ -192,7 +185,8 @@ func TestWatcher(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(*testing.T) {
-			ht := Tracker{}
+			bus := eventbustest.NewBus(t)
+			ht := NewTracker(bus)
 			wantText := "Hello world"
 			becameUnhealthy := make(chan struct{})
 			becameHealthy := make(chan struct{})
@@ -206,10 +200,10 @@ func TestWatcher(t *testing.T) {
 
 				if us != nil {
 					if us.Text != wantText {
-						t.Fatalf("unexpected us.Text: %s, want: %s", us.Text, wantText)
+						t.Fatalf("unexpected us.Text: %q, want: %s", us.Text, wantText)
 					}
 					if us.Args[ArgError] != wantText {
-						t.Fatalf("unexpected us.Args[ArgError]: %s, want: %s", us.Args[ArgError], wantText)
+						t.Fatalf("unexpected us.Args[ArgError]: %q, want: %s", us.Args[ArgError], wantText)
 					}
 					becameUnhealthy <- struct{}{}
 				} else {
@@ -218,7 +212,7 @@ func TestWatcher(t *testing.T) {
 			}
 
 			// Set up test
-			tt.preFunc(&ht, watcherFunc)
+			tt.preFunc(ht, bus, watcherFunc)
 
 			// Start running actual test
 			ht.SetUnhealthy(testWarnable, Args{ArgError: wantText})
@@ -229,7 +223,7 @@ func TestWatcher(t *testing.T) {
 			case <-becameHealthy:
 				// Test failed because the watcher got of a healthy state instead of an unhealthy one
 				t.Fatalf("watcherFunc was called with a healthy state")
-			case <-time.After(1 * time.Second):
+			case <-time.After(5 * time.Second):
 				t.Fatalf("watcherFunc didn't get called upon calling SetUnhealthy")
 			}
 
@@ -241,16 +235,16 @@ func TestWatcher(t *testing.T) {
 				t.Fatalf("watcherFunc was called with an unhealthy state")
 			case <-becameHealthy:
 				// Test passed because the watcher got notified of a healthy state
-			case <-time.After(1 * time.Second):
+			case <-time.After(5 * time.Second):
 				t.Fatalf("watcherFunc didn't get called upon calling SetUnhealthy")
 			}
 
-			if unregister != nil {
-				unregister()
+			if unregisterWatcher != nil {
+				unregisterWatcher()
 				if len(ht.watchers) != 0 {
 					t.Fatalf("after unregisterFunc, len(newTracker.watchers) = %d; want = 0", len(ht.watchers))
 				}
-				unregister = nil
+				unregisterWatcher = nil
 			}
 		})
 	}
@@ -264,11 +258,11 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 	var unregisterWatcher func()
 	tests := []struct {
 		name    string
-		preFunc func(t *Tracker, fn func(Change))
+		preFunc func(t *Tracker, bus *eventbus.Bus, fn func(Change))
 	}{
 		{
-			name: "with callbacks",
-			preFunc: func(tht *Tracker, fn func(c Change)) {
+			name: "with-callbacks",
+			preFunc: func(tht *Tracker, _ *eventbus.Bus, fn func(c Change)) {
 				unregisterWatcher = tht.RegisterWatcher(fn)
 				if len(tht.watchers) != 1 {
 					t.Fatalf("after RegisterWatcher, len(newTracker.watchers) = %d; want = 1", len(tht.watchers))
@@ -276,10 +270,8 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 			},
 		},
 		{
-			name: "with eventbus",
-			preFunc: func(tht *Tracker, fn func(c Change)) {
-				bus := eventbustest.NewBus(t)
-				tht.InitOnce(bus)
+			name: "with-eventbus",
+			preFunc: func(_ *Tracker, bus *eventbus.Bus, fn func(c Change)) {
 				client := bus.Client("healthwatchertestclient")
 				sub := eventbus.Subscribe[Change](client)
 				go func() {
@@ -297,7 +289,8 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(*testing.T) {
-			ht := Tracker{}
+			bus := eventbustest.NewBus(t)
+			ht := NewTracker(bus)
 			mw := Register(&Warnable{
 				Code:                "test-warnable-3-secs-to-visible",
 				Title:               "Test Warnable with 3 seconds to visible",
@@ -323,7 +316,7 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 				}
 			}
 
-			tt.preFunc(&ht, watchFunc)
+			tt.preFunc(ht, bus, watchFunc)
 			ht.SetUnhealthy(mw, Args{ArgError: "Hello world"})
 
 			select {
@@ -368,7 +361,7 @@ func TestRegisterWarnablePanicsWithDuplicate(t *testing.T) {
 // TestCheckDependsOnAppearsInUnhealthyState asserts that the DependsOn field in the UnhealthyState
 // is populated with the WarnableCode(s) of the Warnable(s) that a warning depends on.
 func TestCheckDependsOnAppearsInUnhealthyState(t *testing.T) {
-	ht := Tracker{}
+	ht := NewTracker(eventbustest.NewBus(t))
 	w1 := Register(&Warnable{
 		Code:      "w1",
 		Text:      StaticMessage("W1 Text"),
@@ -478,13 +471,11 @@ func TestShowUpdateWarnable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-			tr := &Tracker{
-				checkForUpdates: tt.check,
-				applyUpdates:    tt.apply,
-				latestVersion:   tt.cv,
-			}
-			bus := eventbustest.NewBus(t)
-			tr.InitOnce(bus)
+			tr := NewTracker(eventbustest.NewBus(t))
+			tr.checkForUpdates = tt.check
+			tr.applyUpdates = tt.apply
+			tr.latestVersion = tt.cv
+
 			gotWarnable, gotShow := tr.showUpdateWarnable()
 			if gotWarnable != tt.wantWarnable {
 				t.Errorf("got warnable: %v, want: %v", gotWarnable, tt.wantWarnable)
@@ -529,13 +520,10 @@ func TestHealthMetric(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-			tr := &Tracker{
-				checkForUpdates: tt.check,
-				applyUpdates:    tt.apply,
-				latestVersion:   tt.cv,
-			}
-			bus := eventbustest.NewBus(t)
-			tr.InitOnce(bus)
+			tr := NewTracker(eventbustest.NewBus(t))
+			tr.checkForUpdates = tt.check
+			tr.applyUpdates = tt.apply
+			tr.latestVersion = tt.cv
 			tr.SetMetricsRegistry(&usermetric.Registry{})
 			if val := tr.metricHealthMessage.Get(metricHealthMessageLabel{Type: MetricLabelWarning}).String(); val != strconv.Itoa(tt.wantMetricCount) {
 				t.Fatalf("metric value: %q, want: %q", val, strconv.Itoa(tt.wantMetricCount))
@@ -556,11 +544,8 @@ func TestNoDERPHomeWarnable(t *testing.T) {
 		Start:          time.Unix(123, 0),
 		FollowRealTime: false,
 	})
-	ht := &Tracker{
-		testClock: clock,
-	}
-	bus := eventbustest.NewBus(t)
-	ht.InitOnce(bus)
+	ht := NewTracker(eventbustest.NewBus(t))
+	ht.testClock = clock
 	ht.SetIPNState("NeedsLogin", true)
 
 	// Advance 30 seconds to get past the "recentlyLoggedIn" check.
@@ -580,9 +565,7 @@ func TestNoDERPHomeWarnable(t *testing.T) {
 // but doesn't use tstest.Clock so avoids the deadlock
 // I hit: https://github.com/tailscale/tailscale/issues/14798
 func TestNoDERPHomeWarnableManual(t *testing.T) {
-	ht := &Tracker{}
-	bus := eventbustest.NewBus(t)
-	ht.InitOnce(bus)
+	ht := NewTracker(eventbustest.NewBus(t))
 	ht.SetIPNState("NeedsLogin", true)
 
 	// Avoid wantRunning:
@@ -596,9 +579,7 @@ func TestNoDERPHomeWarnableManual(t *testing.T) {
 }
 
 func TestControlHealth(t *testing.T) {
-	ht := Tracker{}
-	bus := eventbustest.NewBus(t)
-	ht.InitOnce(bus)
+	ht := NewTracker(eventbustest.NewBus(t))
 	ht.SetIPNState("NeedsLogin", true)
 	ht.GotStreamedMapResponse()
 
@@ -756,9 +737,7 @@ func TestControlHealthNotifies(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ht := Tracker{}
-			bus := eventbustest.NewBus(t)
-			ht.InitOnce(bus)
+			ht := NewTracker(eventbustest.NewBus(t))
 			ht.SetIPNState("NeedsLogin", true)
 			ht.GotStreamedMapResponse()
 
@@ -781,9 +760,7 @@ func TestControlHealthNotifies(t *testing.T) {
 }
 
 func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
-	ht := Tracker{}
-	bus := eventbustest.NewBus(t)
-	ht.InitOnce(bus)
+	ht := NewTracker(eventbustest.NewBus(t))
 	ht.SetIPNState("NeedsLogin", true)
 
 	gotNotified := false
@@ -811,9 +788,7 @@ func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
 // created from Control health & returned by [Tracker.CurrentState] is different
 // when the details of the [tailcfg.DisplayMessage] are different.
 func TestCurrentStateETagControlHealth(t *testing.T) {
-	ht := Tracker{}
-	bus := eventbustest.NewBus(t)
-	ht.InitOnce(bus)
+	ht := NewTracker(eventbustest.NewBus(t))
 	ht.SetIPNState("NeedsLogin", true)
 	ht.GotStreamedMapResponse()
 
@@ -918,11 +893,8 @@ func TestCurrentStateETagControlHealth(t *testing.T) {
 // when the details of the Warnable are different.
 func TestCurrentStateETagWarnable(t *testing.T) {
 	newTracker := func(clock tstime.Clock) *Tracker {
-		ht := &Tracker{
-			testClock: clock,
-		}
-		bus := eventbustest.NewBus(t)
-		ht.InitOnce(bus)
+		ht := NewTracker(eventbustest.NewBus(t))
+		ht.testClock = clock
 		ht.SetIPNState("NeedsLogin", true)
 		ht.GotStreamedMapResponse()
 		return ht

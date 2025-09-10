@@ -50,7 +50,7 @@ func TestInjectInboundLeak(t *testing.T) {
 		Tun:           tunDev,
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
 		Metrics:       sys.UserMetricsRegistry(),
 		EventBus:      sys.Bus.Get(),
 	})
@@ -110,7 +110,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 		Tun:           tunDev,
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
 		Metrics:       sys.UserMetricsRegistry(),
 		EventBus:      sys.Bus.Get(),
 	})

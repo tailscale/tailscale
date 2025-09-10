@@ -489,7 +489,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if loginFlags&controlclient.LocalBackendStartKeyOSNeutral != 0 {
 		goos = ""
 	}
-	pm, err := newProfileManagerWithGOOS(store, logf, sys.HealthTracker(), goos)
+	pm, err := newProfileManagerWithGOOS(store, logf, sys.HealthTracker.Get(), goos)
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +522,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:                   sys,
 		polc:                  sys.PolicyClientOrDefault(),
-		health:                sys.HealthTracker(),
+		health:                sys.HealthTracker.Get(),
 		metrics:               m,
 		e:                     e,
 		dialer:                dialer,
@@ -572,7 +572,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}()
 
 	netMon := sys.NetMon.Get()
-	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker())
+	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker.Get())
 	if err != nil {
 		log.Printf("error setting up sockstat logger: %v", err)
 	}

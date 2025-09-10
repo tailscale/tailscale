@@ -123,6 +123,19 @@ type Tracker struct {
 	changePub   *eventbus.Publisher[Change]
 }
 
+// NewTracker contructs a new [Tracker] and attaches the given eventbus.
+// NewTracker will panic is no eventbus is given.
+func NewTracker(bus *eventbus.Bus) *Tracker {
+	if bus == nil {
+		panic("no eventbus set")
+	}
+	t := new(Tracker)
+
+	t.eventClient = bus.Client("health.Tracker")
+	t.changePub = eventbus.Publish[Change](t.eventClient)
+	return t
+}
+
 func (t *Tracker) now() time.Time {
 	if t.testClock != nil {
 		return t.testClock.Now()
@@ -135,23 +148,6 @@ func (t *Tracker) clock() tstime.Clock {
 		return t.testClock
 	}
 	return tstime.StdClock{}
-}
-
-// InitOnce exists to set up the eventClient and the publisher.
-// The method can be called on nil.
-// The method should not be called multiple times, and will panic if that happens.
-func (t *Tracker) InitOnce(bus *eventbus.Bus) {
-	if bus == nil {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.eventClient != nil {
-		panic("eventClient already set")
-	}
-
-	t.eventClient = bus.Client("health.Tracker")
-	t.changePub = eventbus.Publish[Change](t.eventClient)
 }
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -440,23 +436,21 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 			UnhealthyState:  w.unhealthyState(ws),
 		}
 		// Eventbus publisher
-		if t.changePub != nil {
-			if w.IsVisible(ws, t.now) {
-				t.changePub.Publish(change)
-			} else {
-				visibleIn := w.TimeToVisible - t.now().Sub(brokenSince)
-				tc := t.clock().AfterFunc(visibleIn, func() {
-					t.mu.Lock()
-					defer t.mu.Unlock()
-					// Check if the Warnable is still unhealthy, as it could have become healthy between the time
-					// the timer was set for and the time it was executed.
-					if t.warnableVal[w] != nil {
-						t.changePub.Publish(change)
-						delete(t.pendingVisibleTimers, w)
-					}
-				})
-				mak.Set(&t.pendingVisibleTimers, w, tc)
-			}
+		if w.IsVisible(ws, t.now) {
+			t.changePub.Publish(change)
+		} else {
+			visibleIn := w.TimeToVisible - t.now().Sub(brokenSince)
+			tc := t.clock().AfterFunc(visibleIn, func() {
+				t.mu.Lock()
+				defer t.mu.Unlock()
+				// Check if the Warnable is still unhealthy, as it could have become healthy between the time
+				// the timer was set for and the time it was executed.
+				if t.warnableVal[w] != nil {
+					t.changePub.Publish(change)
+					delete(t.pendingVisibleTimers, w)
+				}
+			})
+			mak.Set(&t.pendingVisibleTimers, w, tc)
 		}
 
 		// Direct callbacks
@@ -516,9 +510,7 @@ func (t *Tracker) setHealthyLocked(w *Warnable) {
 		WarnableChanged: true,
 		Warnable:        w,
 	}
-	if t.changePub != nil {
-		t.changePub.Publish(change)
-	}
+	t.changePub.Publish(change)
 	for _, cb := range t.watchers {
 		// TODO(cmol): Remove once all watchers have been moved to events
 		cb(change)

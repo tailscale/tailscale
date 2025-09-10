@@ -406,7 +406,6 @@ func run() (err error) {
 	// Install an event bus as early as possible, so that it's
 	// available universally when setting up everything else.
 	sys := tsd.NewSystem()
-	defer sys.Bus.Get().Close()
 
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
@@ -428,7 +427,7 @@ func run() (err error) {
 		sys.Set(netMon)
 	}
 
-	pol := logpolicy.New(logtail.CollectionNode, netMon, sys.HealthTracker(), nil /* use log.Printf */)
+	pol := logpolicy.New(logtail.CollectionNode, netMon, sys.HealthTracker.Get(), nil /* use log.Printf */)
 	pol.SetVerbosityLevel(args.verbose)
 	logPol = pol
 	defer func() {
@@ -463,7 +462,7 @@ func run() (err error) {
 	// Always clean up, even if we're going to run the server. This covers cases
 	// such as when a system was rebooted without shutting down, or tailscaled
 	// crashed, and would for example restore system DNS configuration.
-	dns.CleanUp(logf, netMon, sys.HealthTracker(), args.tunname)
+	dns.CleanUp(logf, netMon, sys.HealthTracker.Get(), args.tunname)
 	router.CleanUp(logf, netMon, args.tunname)
 	// If the cleanUp flag was passed, then exit.
 	if args.cleanUp {
@@ -744,7 +743,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 	conf := wgengine.Config{
 		ListenPort:    args.port,
 		NetMon:        sys.NetMon.Get(),
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
 		Metrics:       sys.UserMetricsRegistry(),
 		Dialer:        sys.Dialer.Get(),
 		SetSubsystem:  sys.Set,
@@ -753,7 +752,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		DriveForLocal: driveimpl.NewFileSystemForLocal(logf),
 	}
 
-	sys.HealthTracker().SetMetricsRegistry(sys.UserMetricsRegistry())
+	sys.HealthTracker.Get().SetMetricsRegistry(sys.UserMetricsRegistry())
 
 	onlyNetstack = name == "userspace-networking"
 	netstackSubnetRouter := onlyNetstack // but mutated later on some platforms
@@ -774,7 +773,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			// configuration being unavailable (from the noop
 			// manager). More in Issue 4017.
 			// TODO(bradfitz): add a Synology-specific DNS manager.
-			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), "") // empty interface name
+			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), "") // empty interface name
 			if err != nil {
 				return false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
 			}
@@ -802,13 +801,13 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			sys.NetMon.Get().SetTailscaleInterfaceName(devName)
 		}
 
-		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker(), sys.Bus.Get())
+		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker.Get(), sys.Bus.Get())
 		if err != nil {
 			dev.Close()
 			return false, fmt.Errorf("creating router: %w", err)
 		}
 
-		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), devName)
+		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker.Get(), sys.PolicyClientOrDefault(), sys.ControlKnobs(), devName)
 		if err != nil {
 			dev.Close()
 			r.Close()

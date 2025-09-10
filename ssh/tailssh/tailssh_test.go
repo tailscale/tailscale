@@ -1062,7 +1062,7 @@ func TestSSHAuthFlow(t *testing.T) {
 func TestSSH(t *testing.T) {
 	logf := tstest.WhileTestRunningLogger(t)
 	sys := tsd.NewSystem()
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
 	if err != nil {
 		t.Fatal(err)
 	}

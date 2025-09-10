@@ -375,7 +375,7 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 	defer mon.Close()
 
 	fake := NewFakeOS(t)
-	ht := new(health.Tracker)
+	ht := health.NewTracker(bus)
 	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht, bus)
 	router.(*linuxRouter).nfr = fake.nfr
 	if err != nil {
