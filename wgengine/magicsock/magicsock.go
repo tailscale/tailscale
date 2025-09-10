@@ -2411,7 +2411,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 				msgType, sender.ShortString(), derpNodeSrc.ShortString())
 			return
 		} else {
-			c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v) got %s for %v<->%v",
+			c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v) got %s disco[0]=%v disco[1]=%v",
 				c.discoShort, epDisco.short,
 				ep.publicKey.ShortString(), derpStr(src.String()),
 				msgType,
