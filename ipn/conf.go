@@ -50,6 +50,8 @@ type ConfigVAlpha struct {
 	// should advertise amongst its wireguard endpoints.
 	StaticEndpoints []netip.AddrPort `json:",omitempty"`
 
+	RelayServerPort *int `json:",omitempty"` // if set, the port to listen on for peer relay connections
+
 	// TODO(bradfitz,maisem): future something like:
 	// Profile map[string]*Config // keyed by alice@gmail.com, corp.com (TailnetSID)
 }
@@ -155,5 +157,7 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	if c.AdvertiseServices != nil {
 		mp.AdvertiseServices = c.AdvertiseServices
 	}
+	mp.RelayServerPortSet = true
+	mp.RelayServerPort = c.RelayServerPort
 	return mp, nil
 }

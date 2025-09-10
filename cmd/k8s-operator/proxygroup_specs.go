@@ -119,16 +119,18 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 			})
 		}
 
-		volumes = append(volumes, corev1.Volume{
-			Name: proxyConfigVolName,
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: proxyConfigVolName,
+		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress || pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+			volumes = append(volumes, corev1.Volume{
+				Name: proxyConfigVolName,
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: proxyConfigVolName,
+						},
 					},
 				},
-			},
-		})
+			})
+		}
 
 		return volumes
 	}()
@@ -150,11 +152,13 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 			})
 		}
 
-		mounts = append(mounts, corev1.VolumeMount{
-			Name:      proxyConfigVolName,
-			MountPath: "/etc/proxies",
-			ReadOnly:  true,
-		})
+		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress || pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+			mounts = append(mounts, corev1.VolumeMount{
+				Name:      proxyConfigVolName,
+				MountPath: "/etc/proxies",
+				ReadOnly:  true,
+			})
+		}
 
 		return mounts
 	}()
@@ -198,7 +202,8 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 			})
 		}
 
-		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
+		switch pg.Spec.Type {
+		case tsapi.ProxyGroupTypeEgress:
 			envs = append(envs,
 				// TODO(irbekrm): in 1.80 we deprecated TS_EGRESS_SERVICES_CONFIG_PATH in favour of
 				// TS_EGRESS_PROXIES_CONFIG_PATH. Remove it in 1.84.
@@ -218,7 +223,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 					Name:  "TS_ENABLE_HEALTH_CHECK",
 					Value: "true",
 				})
-		} else { // ingress
+		case tsapi.ProxyGroupTypeIngress:
 			envs = append(envs, corev1.EnvVar{
 				Name:  "TS_INTERNAL_APP",
 				Value: kubetypes.AppProxyGroupIngress,

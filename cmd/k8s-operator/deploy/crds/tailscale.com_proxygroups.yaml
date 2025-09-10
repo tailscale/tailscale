@@ -148,6 +148,7 @@ spec:
                     - egress
                     - ingress
                     - kube-apiserver
+                    - peer-relay
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: ProxyGroup type is immutable

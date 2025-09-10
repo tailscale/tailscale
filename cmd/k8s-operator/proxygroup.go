@@ -98,6 +98,7 @@ type ProxyGroupReconciler struct {
 	egressProxyGroups    set.Slice[types.UID] // for egress proxygroups gauge
 	ingressProxyGroups   set.Slice[types.UID] // for ingress proxygroups gauge
 	apiServerProxyGroups set.Slice[types.UID] // for kube-apiserver proxygroups gauge
+	peerRelayProxyGroups set.Slice[types.UID] // for proxygroups configured as a peer relay
 }
 
 func (r *ProxyGroupReconciler) logger(name string) *zap.SugaredLogger {
@@ -1010,10 +1011,13 @@ func (r *ProxyGroupReconciler) ensureAddedToGaugeForProxyGroup(pg *tsapi.ProxyGr
 		r.ingressProxyGroups.Add(pg.UID)
 	case tsapi.ProxyGroupTypeKubernetesAPIServer:
 		r.apiServerProxyGroups.Add(pg.UID)
+	case tsapi.ProxyGroupTypePeerRelay:
+		r.peerRelayProxyGroups.Add(pg.UID)
 	}
 	gaugeEgressProxyGroupResources.Set(int64(r.egressProxyGroups.Len()))
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
+	// gaugePeerRelayProxyGroupResources.Set(int64(r.peerRelayProxyGroups.Len()))
 }
 
 // ensureRemovedFromGaugeForProxyGroup ensures the gauge metric for the ProxyGroup resource type is updated when the
@@ -1026,10 +1030,13 @@ func (r *ProxyGroupReconciler) ensureRemovedFromGaugeForProxyGroup(pg *tsapi.Pro
 		r.ingressProxyGroups.Remove(pg.UID)
 	case tsapi.ProxyGroupTypeKubernetesAPIServer:
 		r.apiServerProxyGroups.Remove(pg.UID)
+	case tsapi.ProxyGroupTypePeerRelay:
+		r.peerRelayProxyGroups.Remove(pg.UID)
 	}
 	gaugeEgressProxyGroupResources.Set(int64(r.egressProxyGroups.Len()))
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
+	// gaugePeerRelayProxyGroupResources.Set(int64(r.peerRelayProxyGroups.Len()))
 }
 
 func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, authKey *string, staticEndpoints []netip.AddrPort, oldAdvertiseServices []string, loginServer string) (tailscaledConfigs, error) {
@@ -1053,6 +1060,10 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass, idx int32, a
 
 	if len(staticEndpoints) > 0 {
 		conf.StaticEndpoints = staticEndpoints
+	}
+
+	if pg.Spec.Type == tsapi.ProxyGroupTypePeerRelay {
+		conf.RelayServerPort = ptr.To(7777)
 	}
 
 	return map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha{

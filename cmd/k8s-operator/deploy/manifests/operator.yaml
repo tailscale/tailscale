@@ -3050,6 +3050,7 @@ spec:
                                     - egress
                                     - ingress
                                     - kube-apiserver
+                                    - peer-relay
                                 type: string
                                 x-kubernetes-validations:
                                     - message: ProxyGroup type is immutable
