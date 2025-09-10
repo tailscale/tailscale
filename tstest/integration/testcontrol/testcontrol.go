@@ -674,6 +674,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 			AllowedIPs:        allowedIPs,
 			Hostinfo:          req.Hostinfo.View(),
 			Name:              req.Hostinfo.Hostname,
+			Cap:               req.Version,
 			Capabilities: []tailcfg.NodeCapability{
 				tailcfg.CapabilityHTTPS,
 				tailcfg.NodeAttrFunnel,
@@ -811,6 +812,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
 		node.Endpoints = endpoints
 		node.DiscoKey = req.DiscoKey
+		node.Cap = req.Version
 		if req.Hostinfo != nil {
 			node.Hostinfo = req.Hostinfo.View()
 			if ni := node.Hostinfo.NetInfo(); ni.Valid() {
