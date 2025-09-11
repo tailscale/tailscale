@@ -213,7 +213,6 @@ NB: if you want cluster workloads to be able to refer to Tailscale Ingress
 using its MagicDNS name, you must also annotate the Ingress resource with
 tailscale.com/experimental-forward-cluster-traffic-via-ingress annotation to
 ensure that the proxy created for the Ingress listens on its Pod IP address.
-NB: Clusters where Pods get assigned IPv6 addresses only are currently not supported.
 
 
 
