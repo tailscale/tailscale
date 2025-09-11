@@ -26,7 +26,7 @@ eval "$(./build_dist.sh shellvars)"
 
 DEFAULT_TARGET="client"
 DEFAULT_TAGS="v${VERSION_SHORT},v${VERSION_MINOR}"
-DEFAULT_BASE="tailscale/alpine-base:3.19"
+DEFAULT_BASE="tailscale/alpine-base:3.22"
 # Set a few pre-defined OCI annotations. The source annotation is used by tools such as Renovate that scan the linked
 # Github repo to find release notes for any new image tags. Note that for official Tailscale images the default
 # annotations defined here will be overriden by release scripts that call this script.
