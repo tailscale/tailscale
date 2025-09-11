@@ -28,9 +28,14 @@ func TestUpdateDomains(t *testing.T) {
 		ctx := context.Background()
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, &appctest.RouteCollector{}, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: &appctest.RouteCollector{},
+				RouteInfo:       &RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, &appctest.RouteCollector{}, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: &appctest.RouteCollector{}})
 		}
 		a.UpdateDomains([]string{"example.com"})
 
@@ -63,9 +68,13 @@ func TestUpdateRoutes(t *testing.T) {
 		rc := &appctest.RouteCollector{}
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: rc})
 		}
 		a.updateDomains([]string{"*.example.com"})
 
@@ -112,9 +121,14 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 		rc := &appctest.RouteCollector{}
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: rc})
 		}
 		mak.Set(&a.domains, "example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")})
 		rc.SetRoutes([]netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")})
@@ -133,9 +147,14 @@ func TestDomainRoutes(t *testing.T) {
 		rc := &appctest.RouteCollector{}
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: rc})
 		}
 		a.updateDomains([]string{"example.com"})
 		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
@@ -159,9 +178,14 @@ func TestObserveDNSResponse(t *testing.T) {
 		rc := &appctest.RouteCollector{}
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: rc})
 		}
 
 		// a has no domains configured, so it should not advertise any routes
@@ -248,9 +272,14 @@ func TestWildcardDomains(t *testing.T) {
 		rc := &appctest.RouteCollector{}
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: rc})
 		}
 
 		a.updateDomains([]string{"*.example.com"})
@@ -408,9 +437,14 @@ func TestUpdateRouteRouteRemoval(t *testing.T) {
 
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: rc})
 		}
 		// nothing has yet been advertised
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
@@ -453,9 +487,14 @@ func TestUpdateDomainRouteRemoval(t *testing.T) {
 
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: rc})
 		}
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
 
@@ -508,9 +547,14 @@ func TestUpdateWildcardRouteRemoval(t *testing.T) {
 
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
+			a = NewAppConnector(Config{Logf: t.Logf, RouteAdvertiser: rc})
 		}
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
 
@@ -649,7 +693,12 @@ func TestMetricBucketsAreSorted(t *testing.T) {
 func TestUpdateRoutesDeadlock(t *testing.T) {
 	ctx := context.Background()
 	rc := &appctest.RouteCollector{}
-	a := NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+	a := NewAppConnector(Config{
+		Logf:            t.Logf,
+		RouteAdvertiser: rc,
+		RouteInfo:       &RouteInfo{},
+		StoreRoutesFunc: fakeStoreRoutes,
+	})
 
 	advertiseCalled := new(atomic.Bool)
 	unadvertiseCalled := new(atomic.Bool)

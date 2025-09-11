@@ -2309,9 +2309,11 @@ func TestOfferingAppConnector(t *testing.T) {
 			t.Fatal("unexpected offering app connector")
 		}
 		if shouldStore {
-			b.appConnector = appc.NewAppConnector(t.Logf, nil, &appc.RouteInfo{}, fakeStoreRoutes)
+			b.appConnector = appc.NewAppConnector(appc.Config{
+				Logf: t.Logf, RouteInfo: &appc.RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			b.appConnector = appc.NewAppConnector(t.Logf, nil, nil, nil)
+			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf})
 		}
 		if !b.OfferingAppConnector() {
 			t.Fatal("unexpected not offering app connector")
@@ -2370,9 +2372,14 @@ func TestObserveDNSResponse(t *testing.T) {
 
 		rc := &appctest.RouteCollector{}
 		if shouldStore {
-			b.appConnector = appc.NewAppConnector(t.Logf, rc, &appc.RouteInfo{}, fakeStoreRoutes)
+			b.appConnector = appc.NewAppConnector(appc.Config{
+				Logf:            t.Logf,
+				RouteAdvertiser: rc,
+				RouteInfo:       &appc.RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
+			})
 		} else {
-			b.appConnector = appc.NewAppConnector(t.Logf, rc, nil, nil)
+			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf})
 		}
 		b.appConnector.UpdateDomains([]string{"example.com"})
 		b.appConnector.Wait(context.Background())
