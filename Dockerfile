@@ -71,10 +71,10 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.gitCommitStamp=$VERSION_GIT_HASH" \
       -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
-FROM alpine:3.19
+FROM alpine:3.22
 RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
-RUN rm /sbin/iptables && ln -s /sbin/iptables-legacy /sbin/iptables
-RUN rm /sbin/ip6tables && ln -s /sbin/ip6tables-legacy /sbin/ip6tables
+RUN ln -s /sbin/iptables-legacy /sbin/iptables
+RUN ln -s /sbin/ip6tables-legacy /sbin/ip6tables
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
 # For compat with the previous run.sh, although ideally you should be
