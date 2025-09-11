@@ -6,9 +6,13 @@
 package relayserver
 
 import (
+	"log"
+	"net/netip"
+	"strings"
 	"sync"
 
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
@@ -115,6 +119,26 @@ func (e *extension) profileStateChanged(_ ipn.LoginProfileView, prefs ipn.PrefsV
 	e.handleBusLifetimeLocked()
 }
 
+// overrideAddrs returns TS_DEBUG_RELAY_SERVER_ADDRS as []netip.Addr, if set. It
+// can be between 0 and 3 comma-separated Addrs. TS_DEBUG_RELAY_SERVER_ADDRS is
+// not a stable interface, and is subject to change.
+var overrideAddrs = sync.OnceValue(func() (ret []netip.Addr) {
+	all := envknob.String("TS_DEBUG_RELAY_SERVER_ADDRS")
+	const max = 3
+	remain := all
+	for remain != "" && len(ret) < max {
+		var s string
+		s, remain, _ = strings.Cut(remain, ",")
+		addr, err := netip.ParseAddr(s)
+		if err != nil {
+			log.Printf("ignoring invalid Addr %q in TS_DEBUG_RELAY_SERVER_ADDRS %q: %v", s, all, err)
+			continue
+		}
+		ret = append(ret, addr)
+	}
+	return
+})
+
 func (e *extension) consumeEventbusTopics(port int) {
 	defer close(e.busDoneCh)
 
@@ -140,7 +164,7 @@ func (e *extension) consumeEventbusTopics(port int) {
 		case req := <-reqSub.Events():
 			if rs == nil {
 				var err error
-				rs, err = udprelay.NewServer(e.logf, port, nil)
+				rs, err = udprelay.NewServer(e.logf, port, overrideAddrs())
 				if err != nil {
 					e.logf("error initializing server: %v", err)
 					continue

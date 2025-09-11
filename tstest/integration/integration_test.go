@@ -44,6 +44,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
+	"tailscale.com/util/set"
 )
 
 func TestMain(m *testing.M) {
@@ -1529,4 +1530,106 @@ func TestEncryptStateMigration(t *testing.T) {
 		n.encryptState = false
 		runNode(t, wantPlaintextStateKeys)
 	})
+}
+
+// TestPeerRelayPing creates three nodes with one acting as a peer relay.
+// The test succeeds when "tailscale ping" flows through the peer
+// relay between all 3 nodes.
+func TestPeerRelayPing(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+
+	env := NewTestEnv(t, ConfigureControl(func(server *testcontrol.Server) {
+		server.PeerRelayGrants = true
+	}))
+	env.neverDirectUDP = true
+	env.relayServerUseLoopback = true
+
+	n1 := NewTestNode(t, env)
+	n2 := NewTestNode(t, env)
+	peerRelay := NewTestNode(t, env)
+
+	allNodes := []*TestNode{n1, n2, peerRelay}
+	wantPeerRelayServers := make(set.Set[string])
+	for _, n := range allNodes {
+		n.StartDaemon()
+		n.AwaitResponding()
+		n.MustUp()
+		wantPeerRelayServers.Add(n.AwaitIP4().String())
+		n.AwaitRunning()
+	}
+
+	if err := peerRelay.Tailscale("set", "--relay-server-port=0").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	errCh := make(chan error)
+	for _, a := range allNodes {
+		go func() {
+			err := tstest.WaitFor(time.Second*5, func() error {
+				out, err := a.Tailscale("debug", "peer-relay-servers").CombinedOutput()
+				if err != nil {
+					return fmt.Errorf("debug peer-relay-servers failed: %v", err)
+				}
+				servers := make([]string, 0)
+				err = json.Unmarshal(out, &servers)
+				if err != nil {
+					return fmt.Errorf("failed to unmarshal debug peer-relay-servers: %v", err)
+				}
+				gotPeerRelayServers := make(set.Set[string])
+				for _, server := range servers {
+					gotPeerRelayServers.Add(server)
+				}
+				if !gotPeerRelayServers.Equal(wantPeerRelayServers) {
+					return fmt.Errorf("got peer relay servers: %v want: %v", gotPeerRelayServers, wantPeerRelayServers)
+				}
+				return nil
+			})
+			errCh <- err
+		}()
+	}
+	for range allNodes {
+		err := <-errCh
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pingPairs := make([][2]*TestNode, 0)
+	for _, a := range allNodes {
+		for _, z := range allNodes {
+			if a == z {
+				continue
+			}
+			pingPairs = append(pingPairs, [2]*TestNode{a, z})
+		}
+	}
+	for _, pair := range pingPairs {
+		go func() {
+			a := pair[0]
+			z := pair[1]
+			err := tstest.WaitFor(time.Second*10, func() error {
+				remoteKey := z.MustStatus().Self.PublicKey
+				if err := a.Tailscale("ping", "--until-direct=false", "--c=1", "--timeout=1s", z.AwaitIP4().String()).Run(); err != nil {
+					return err
+				}
+				remotePeer, ok := a.MustStatus().Peer[remoteKey]
+				if !ok {
+					return fmt.Errorf("%v->%v remote peer not found", a.MustStatus().Self.ID, z.MustStatus().Self.ID)
+				}
+				if len(remotePeer.PeerRelay) == 0 {
+					return fmt.Errorf("%v->%v not using peer relay, curAddr=%v relay=%v", a.MustStatus().Self.ID, z.MustStatus().Self.ID, remotePeer.CurAddr, remotePeer.Relay)
+				}
+				t.Logf("%v->%v using peer relay addr: %v", a.MustStatus().Self.ID, z.MustStatus().Self.ID, remotePeer.PeerRelay)
+				return nil
+			})
+			errCh <- err
+		}()
+	}
+	for range pingPairs {
+		err := <-errCh
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 }
