@@ -62,8 +62,7 @@ type Knobs struct {
 	// netfiltering, unless overridden by the user.
 	LinuxForceNfTables atomic.Bool
 
-	// SeamlessKeyRenewal is whether to enable the alpha functionality of
-	// renewing node keys without breaking connections.
+	// SeamlessKeyRenewal is whether to renew node keys without breaking connections.
 	// http://go/seamless-key-renewal
 	SeamlessKeyRenewal atomic.Bool
 
@@ -128,6 +127,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		forceIPTables                        = has(tailcfg.NodeAttrLinuxMustUseIPTables)
 		forceNfTables                        = has(tailcfg.NodeAttrLinuxMustUseNfTables)
 		seamlessKeyRenewal                   = has(tailcfg.NodeAttrSeamlessKeyRenewal)
+		disableSeamlessKeyRenewal            = has(tailcfg.NodeAttrDisableSeamlessKeyRenewal)
 		probeUDPLifetime                     = has(tailcfg.NodeAttrProbeUDPLifetime)
 		appCStoreRoutes                      = has(tailcfg.NodeAttrStoreAppCRoutes)
 		userDialUseRoutes                    = has(tailcfg.NodeAttrUserDialUseRoutes)
@@ -154,7 +154,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.SilentDisco.Store(silentDisco)
 	k.LinuxForceIPTables.Store(forceIPTables)
 	k.LinuxForceNfTables.Store(forceNfTables)
-	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal)
+	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal || !disableSeamlessKeyRenewal)
 	k.ProbeUDPLifetime.Store(probeUDPLifetime)
 	k.AppCStoreRoutes.Store(appCStoreRoutes)
 	k.UserDialUseRoutes.Store(userDialUseRoutes)
