@@ -13,6 +13,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 )
 
@@ -50,7 +51,7 @@ type fakeSSHServer struct {
 }
 
 func TestGetSSHUsernames(t *testing.T) {
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	b := &LocalBackend{pm: pm, store: pm.Store()}
 	b.sshServer = fakeSSHServer{}
 	res, err := b.getSSHUsernames(new(tailcfg.C2NSSHUsernamesRequest))

@@ -32,6 +32,7 @@ import (
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 )
 
@@ -847,7 +848,7 @@ func TestBackgroundProfileResolver(t *testing.T) {
 
 			// Create a new profile manager and add the profiles to it.
 			// We expose the profile manager to the extensions via the read-only [ipnext.ProfileStore] interface.
-			pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+			pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 			for i, p := range tt.profiles {
 				// Generate a unique ID and key for each profile,
 				// unless the profile already has them set

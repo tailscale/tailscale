@@ -35,6 +35,7 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 type httpTestParam struct {
@@ -228,7 +229,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		omitCertErrorLogging: true,
 		testFallbackDelay:    fallbackDelay,
 		Clock:                clock,
-		HealthTracker:        new(health.Tracker),
+		HealthTracker:        health.NewTracker(eventbustest.NewBus(t)),
 	}
 
 	if param.httpInDial {
@@ -730,7 +731,7 @@ func TestDialPlan(t *testing.T) {
 				omitCertErrorLogging: true,
 				testFallbackDelay:    50 * time.Millisecond,
 				Clock:                clock,
-				HealthTracker:        new(health.Tracker),
+				HealthTracker:        health.NewTracker(eventbustest.NewBus(t)),
 			}
 
 			conn, err := a.dial(ctx)

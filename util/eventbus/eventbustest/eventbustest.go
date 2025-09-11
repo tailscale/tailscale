@@ -100,7 +100,7 @@ func Expect(tw *Watcher, filters ...any) error {
 		case <-time.After(tw.TimeOut):
 			return fmt.Errorf(
 				"timed out waiting for event, saw %d events, %d was expected",
-				eventCount, head)
+				eventCount, len(filters))
 		case <-tw.chDone:
 			return errors.New("watcher closed while waiting for events")
 		}
@@ -138,7 +138,7 @@ func ExpectExactly(tw *Watcher, filters ...any) error {
 		case <-time.After(tw.TimeOut):
 			return fmt.Errorf(
 				"timed out waiting for event, saw %d events, %d was expected",
-				eventCount, pos)
+				eventCount, len(filters))
 		case <-tw.chDone:
 			return errors.New("watcher closed while waiting for events")
 		}
