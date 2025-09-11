@@ -62,8 +62,9 @@ type Knobs struct {
 	// netfiltering, unless overridden by the user.
 	LinuxForceNfTables atomic.Bool
 
-	// SeamlessKeyRenewal is whether to enable the alpha functionality of
-	// renewing node keys without breaking connections.
+	// SeamlessKeyRenewal is whether to renew node keys without breaking connections.
+	// This is enabled by default in 1.90 and later, but we but we can remotely disable
+	// it from the control plane if there's a problem.
 	// http://go/seamless-key-renewal
 	SeamlessKeyRenewal atomic.Bool
 
@@ -128,6 +129,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		forceIPTables                        = has(tailcfg.NodeAttrLinuxMustUseIPTables)
 		forceNfTables                        = has(tailcfg.NodeAttrLinuxMustUseNfTables)
 		seamlessKeyRenewal                   = has(tailcfg.NodeAttrSeamlessKeyRenewal)
+		disableSeamlessKeyRenewal            = has(tailcfg.NodeAttrDisableSeamlessKeyRenewal)
 		probeUDPLifetime                     = has(tailcfg.NodeAttrProbeUDPLifetime)
 		appCStoreRoutes                      = has(tailcfg.NodeAttrStoreAppCRoutes)
 		userDialUseRoutes                    = has(tailcfg.NodeAttrUserDialUseRoutes)
@@ -154,7 +156,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.SilentDisco.Store(silentDisco)
 	k.LinuxForceIPTables.Store(forceIPTables)
 	k.LinuxForceNfTables.Store(forceNfTables)
-	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal)
 	k.ProbeUDPLifetime.Store(probeUDPLifetime)
 	k.AppCStoreRoutes.Store(appCStoreRoutes)
 	k.UserDialUseRoutes.Store(userDialUseRoutes)
@@ -162,6 +163,21 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableLocalDNSOverrideViaNRPT.Store(disableLocalDNSOverrideViaNRPT)
 	k.DisableCaptivePortalDetection.Store(disableCaptivePortalDetection)
 	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
+
+	// If both attributes are present, then "enable" should win.  This reflects
+	// the history of seamless key renewal.
+	//
+	// Before 1.90, seamless was a private alpha, opt-in feature.  Devices would
+	// only seamless do if customers opted in using the seamless renewal attr.
+	//
+	// In 1.90 and later, seamless is the default behaviour, and devices will use
+	// seamless unless explicitly told not to by control (e.g. if we discover
+	// a bug and want clients to use the prior behaviour).
+	//
+	// If a customer has opted in to the pre-1.90 seamless implementation, we
+	// don't want to switch it off for them -- we only want to switch it off for
+	// devices that haven't opted in.
+	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal || !disableSeamlessKeyRenewal)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal

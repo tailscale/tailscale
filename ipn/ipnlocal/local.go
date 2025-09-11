@@ -7420,10 +7420,10 @@ func (b *LocalBackend) readRouteInfoLocked() (*appc.RouteInfo, error) {
 	return ri, nil
 }
 
-// seamlessRenewalEnabled reports whether seamless key renewals are enabled
-// (i.e. we saw our self node with the SeamlessKeyRenewal attr in a netmap).
-// This enables beta functionality of renewing node keys without breaking
-// connections.
+// seamlessRenewalEnabled reports whether seamless key renewals are enabled.
+//
+// As of 2025-09-11, this is the default behaviour unless nodes receive
+// [tailcfg.NodeAttrDisableSeamlessKeyRenewal] in their netmap.
 func (b *LocalBackend) seamlessRenewalEnabled() bool {
 	return b.ControlKnobs().SeamlessKeyRenewal.Load()
 }
