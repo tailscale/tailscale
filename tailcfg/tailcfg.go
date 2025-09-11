@@ -170,7 +170,8 @@ type CapabilityVersion int
 //   - 123: 2025-07-28: fix deadlock regression from cryptokey routing change (issue #16651)
 //   - 124: 2025-08-08: removed NodeAttrDisableMagicSockCryptoRouting support, crypto routing is now mandatory
 //   - 125: 2025-08-11: dnstype.Resolver adds UseWithExitNode field.
-const CurrentCapabilityVersion CapabilityVersion = 125
+//   - 126: 2025-09-17: Client uses seamless key renewal unless disabled by control (tailscale/corp#31479)
+const CurrentCapabilityVersion CapabilityVersion = 126
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2530,8 +2531,19 @@ const (
 	// This cannot be set simultaneously with NodeAttrLinuxMustUseIPTables.
 	NodeAttrLinuxMustUseNfTables NodeCapability = "linux-netfilter?v=nftables"
 
-	// NodeAttrSeamlessKeyRenewal makes clients enable beta functionality
-	// of renewing node keys without breaking connections.
+	// NodeAttrDisableSeamlessKeyRenewal disables seamless key renewal, which is
+	// enabled by default in clients as of 2025-09-17 (1.90 and later).
+	//
+	// We will use this attribute to manage the rollout, and disable seamless in
+	// clients with known bugs.
+	// http://go/seamless-key-renewal
+	NodeAttrDisableSeamlessKeyRenewal NodeCapability = "disable-seamless-key-renewal"
+
+	// NodeAttrSeamlessKeyRenewal was used to opt-in to seamless key renewal
+	// during its private alpha.
+	//
+	// Deprecated: NodeAttrSeamlessKeyRenewal is deprecated as of CapabilityVersion 126,
+	// because seamless key renewal is now enabled by default.
 	NodeAttrSeamlessKeyRenewal NodeCapability = "seamless-key-renewal"
 
 	// NodeAttrProbeUDPLifetime makes the client probe UDP path lifetime at the
