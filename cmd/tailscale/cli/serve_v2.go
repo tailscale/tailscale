@@ -1086,7 +1086,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 
 	if len(mounts) > 1 {
 		msg := fmt.Sprintf("Are you sure you want to delete %d handlers under port %s?", len(mounts), portStr)
-		if !e.yes && !prompt.YesNo(msg) {
+		if !e.yes && !prompt.YesNo(msg, true) {
 			return nil
 		}
 	}

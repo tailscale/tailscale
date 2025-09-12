@@ -66,7 +66,7 @@ func presentRiskToUser(riskType, riskMessage, acceptedRisks string) error {
 	outln(riskMessage)
 	printf("To skip this warning, use --accept-risk=%s\n", riskType)
 
-	if prompt.YesNo("Continue?") {
+	if prompt.YesNo("Continue?", false) {
 		return nil
 	}
 
