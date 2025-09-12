@@ -77,3 +77,16 @@ func TestOmitDrive(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitTailnetLock(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_tailnetlock,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "cbor") {
+				t.Errorf("unexpected dep with ts_omit_tailnetlock: %q", dep)
+			}
+		},
+	}.Check(t)
+}

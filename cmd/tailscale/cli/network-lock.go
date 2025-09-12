@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_tailnetlock
+
 package cli
 
 import (
@@ -26,6 +28,10 @@ import (
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/prompt"
 )
+
+func init() {
+	maybeNetlockCmd = func() *ffcli.Command { return netlockCmd }
+}
 
 var netlockCmd = &ffcli.Command{
 	Name:       "lock",

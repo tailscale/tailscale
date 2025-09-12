@@ -207,10 +207,14 @@ func noDupFlagify(c *ffcli.Command) {
 	}
 }
 
-var fileCmd func() *ffcli.Command
-var sysPolicyCmd func() *ffcli.Command
-var maybeWebCmd func() *ffcli.Command
-var maybeDriveCmd func() *ffcli.Command
+var (
+	fileCmd,
+	sysPolicyCmd,
+	maybeWebCmd,
+	maybeDriveCmd,
+	maybeNetlockCmd,
+	_ func() *ffcli.Command
+)
 
 func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
@@ -257,7 +261,7 @@ change in the future.
 			nilOrCall(fileCmd),
 			bugReportCmd,
 			certCmd,
-			netlockCmd,
+			nilOrCall(maybeNetlockCmd),
 			licensesCmd,
 			exitNodeCmd(),
 			updateCmd,

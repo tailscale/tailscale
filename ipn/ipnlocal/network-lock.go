@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_tailnetlock
+
 package ipnlocal
 
 import (
@@ -54,6 +56,53 @@ type tkaState struct {
 	authority *tka.Authority
 	storage   *tka.FS
 	filtered  []ipnstate.TKAPeer
+}
+
+func (b *LocalBackend) initTKALocked() error {
+	cp := b.pm.CurrentProfile()
+	if cp.ID() == "" {
+		b.tka = nil
+		return nil
+	}
+	if b.tka != nil {
+		if b.tka.profile == cp.ID() {
+			// Already initialized.
+			return nil
+		}
+		// As we're switching profiles, we need to reset the TKA to nil.
+		b.tka = nil
+	}
+	root := b.TailscaleVarRoot()
+	if root == "" {
+		b.tka = nil
+		b.logf("network-lock unavailable; no state directory")
+		return nil
+	}
+
+	chonkDir := b.chonkPathLocked()
+	if _, err := os.Stat(chonkDir); err == nil {
+		// The directory exists, which means network-lock has been initialized.
+		storage, err := tka.ChonkDir(chonkDir)
+		if err != nil {
+			return fmt.Errorf("opening tailchonk: %v", err)
+		}
+		authority, err := tka.Open(storage)
+		if err != nil {
+			return fmt.Errorf("initializing tka: %v", err)
+		}
+		if err := authority.Compact(storage, tkaCompactionDefaults); err != nil {
+			b.logf("tka compaction failed: %v", err)
+		}
+
+		b.tka = &tkaState{
+			profile:   cp.ID(),
+			authority: authority,
+			storage:   storage,
+		}
+		b.logf("tka initialized at head %x", authority.Head())
+	}
+
+	return nil
 }
 
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
