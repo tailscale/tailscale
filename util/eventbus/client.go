@@ -21,9 +21,10 @@ type Client struct {
 	bus          *Bus
 	publishDebug hook[PublishedEvent]
 
-	mu  sync.Mutex
-	pub set.Set[publisher]
-	sub *subscribeState // Lazily created on first subscribe
+	mu   sync.Mutex
+	pub  set.Set[publisher]
+	sub  *subscribeState // Lazily created on first subscribe
+	stop stopFlag        // signaled on Close
 }
 
 func (c *Client) Name() string { return c.name }
@@ -47,7 +48,13 @@ func (c *Client) Close() {
 	for p := range pub {
 		p.Close()
 	}
+	c.stop.Stop()
 }
+
+// Done returns a channel that is closed when [Client.Close] is called.
+// The channel is closed after all the publishers and subscribers governed by
+// the client have been closed.
+func (c *Client) Done() <-chan struct{} { return c.stop.Done() }
 
 func (c *Client) snapshotSubscribeQueue() []DeliveredEvent {
 	return c.peekSubscribeState().snapshotQueue()
