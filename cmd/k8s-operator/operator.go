@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/envknob"
 
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
@@ -133,6 +134,14 @@ func main() {
 			}
 		}()
 	}
+
+	// Operator log uploads can be opted-out using the "TS_NO_LOGS_NO_SUPPORT" environment variable.
+	if !envknob.NoLogsNoSupport() {
+		zlog = zlog.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
+			return wrapZapCore(core, s.LogtailWriter())
+		}))
+	}
+
 	rOpts := reconcilerOpts{
 		log:                           zlog,
 		tsServer:                      s,
