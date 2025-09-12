@@ -348,6 +348,10 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 	dev := devices[0]
 	logger.Debugf("setting Service LoadBalancer status to %q, %s", dev.hostname, strings.Join(dev.ips, ", "))
+
+	// Reset the ingress slice within the status field. This is required otherwise we'll constantly append to this.
+	svc.Status.LoadBalancer.Ingress = nil
+
 	svc.Status.LoadBalancer.Ingress = append(svc.Status.LoadBalancer.Ingress, corev1.LoadBalancerIngress{
 		Hostname: dev.hostname,
 	})
