@@ -1587,7 +1587,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.blockEngineUpdates(false)
 		}
 		b.authReconfig()
-		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
+		b.send(ipn.Notify{LoginFinished: &empty.Message{}, State: &b.state})
 	}
 
 	// Lock b again and do only the things that require locking.

@@ -540,7 +540,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}()
 
-	running := make(chan bool, 1) // gets value once in state ipn.Running
+	upComplete := make(chan bool, 1) // gets value once we complete the auth process
 	watchErr := make(chan error, 1)
 
 	// Special case: bare "tailscale up" means to just start
@@ -593,6 +593,10 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		var printed bool // whether we've yet printed anything to stdout or stderr
 		var lastURLPrinted string
 
+		// If the user runs `tailscale up --force-reauth`, then ipn may already be
+		// in a running state.  Wait until IPN reports a completed login.
+		waitingForLogin := upArgs.forceReauth
+
 		for {
 			n, err := watcher.Next()
 			if err != nil {
@@ -602,6 +606,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			if n.ErrMessage != nil {
 				msg := *n.ErrMessage
 				fatalf("backend error: %v\n", msg)
+			}
+			if n.LoginFinished != nil {
+				waitingForLogin = false
 			}
 			if s := n.State; s != nil {
 				switch *s {
@@ -613,6 +620,10 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL(policyclient.Get()))
 					}
 				case ipn.Running:
+					if waitingForLogin {
+						break
+					}
+
 					// Done full authentication process
 					if env.upArgs.json {
 						printUpDoneJSON(ipn.Running, "")
@@ -621,10 +632,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						fmt.Fprintf(Stderr, "Success.\n")
 					}
 					select {
-					case running <- true:
+					case upComplete <- true:
 					default:
 					}
 					cancelWatch()
+					return
 				}
 			}
 			if url := n.BrowseToURL; url != nil {
@@ -680,18 +692,18 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		timeoutCh = timeoutTimer.C
 	}
 	select {
-	case <-running:
+	case <-upComplete:
 		return nil
 	case <-watchCtx.Done():
 		select {
-		case <-running:
+		case <-upComplete:
 			return nil
 		default:
 		}
 		return watchCtx.Err()
 	case err := <-watchErr:
 		select {
-		case <-running:
+		case <-upComplete:
 			return nil
 		default:
 		}
