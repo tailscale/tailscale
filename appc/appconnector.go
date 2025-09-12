@@ -12,6 +12,7 @@ package appc
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -129,6 +130,13 @@ type RouteInfo struct {
 	Wildcards []string `json:",omitempty"`
 }
 
+// RouteUpdate records a set of routes that should be advertised and a set of
+// routes that should be unadvertised in event bus updates.
+type RouteUpdate struct {
+	Advertise   []netip.Prefix
+	Unadvertise []netip.Prefix
+}
+
 // AppConnector is an implementation of an AppConnector that performs
 // its function as a subsystem inside of a tailscale node. At the control plane
 // side App Connector routing is configured in terms of domains rather than IP
@@ -143,6 +151,9 @@ type AppConnector struct {
 	logf            logger.Logf
 	eventBus        *eventbus.Bus
 	routeAdvertiser RouteAdvertiser
+	pubClient       *eventbus.Client
+	updatePub       *eventbus.Publisher[RouteUpdate]
+	storePub        *eventbus.Publisher[RouteInfo]
 
 	// storeRoutesFunc will be called to persist routes if it is not nil.
 	storeRoutesFunc func(*RouteInfo) error
@@ -200,10 +211,14 @@ func NewAppConnector(c Config) *AppConnector {
 	case c.RouteAdvertiser == nil:
 		panic("missing route advertiser")
 	}
+	ec := c.EventBus.Client("appc.AppConnector")
 
 	ac := &AppConnector{
 		logf:            logger.WithPrefix(c.Logf, "appc: "),
 		eventBus:        c.EventBus,
+		pubClient:       ec,
+		updatePub:       eventbus.Publish[RouteUpdate](ec),
+		storePub:        eventbus.Publish[RouteInfo](ec),
 		routeAdvertiser: c.RouteAdvertiser,
 		storeRoutesFunc: c.StoreRoutesFunc,
 	}
@@ -230,6 +245,14 @@ func (e *AppConnector) ShouldStoreRoutes() bool {
 
 // storeRoutesLocked takes the current state of the AppConnector and persists it
 func (e *AppConnector) storeRoutesLocked() error {
+	if e.storePub.ShouldPublish() {
+		e.storePub.Publish(RouteInfo{
+			// Clone here, as the subscriber will handle these outside our lock.
+			Control:   slices.Clone(e.controlRoutes),
+			Domains:   maps.Clone(e.domains),
+			Wildcards: slices.Clone(e.wildcards),
+		})
+	}
 	if !e.ShouldStoreRoutes() {
 		return nil
 	}
@@ -242,6 +265,7 @@ func (e *AppConnector) storeRoutesLocked() error {
 	e.writeRateMinute.update(numRoutes)
 	e.writeRateDay.update(numRoutes)
 
+	// TODO(creachdair): Remove this once it's delivered over the event bus.
 	return e.storeRoutesFunc(&RouteInfo{
 		Control:   e.controlRoutes,
 		Domains:   e.domains,
@@ -285,6 +309,18 @@ func (e *AppConnector) Wait(ctx context.Context) {
 	e.queue.Wait(ctx)
 }
 
+// Close closes the connector and cleans up resources associated with it.
+// It is safe (and a noop) to call Close on nil.
+func (e *AppConnector) Close() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.queue.Shutdown() // TODO(creachadair): Should we wait for it too?
+	e.pubClient.Close()
+}
+
 func (e *AppConnector) updateDomains(domains []string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -325,11 +361,15 @@ func (e *AppConnector) updateDomains(domains []string) {
 				toRemove = append(toRemove, netip.PrefixFrom(a, a.BitLen()))
 			}
 		}
-		e.queue.Add(func() {
-			if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-				e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
-			}
-		})
+
+		if len(toRemove) != 0 {
+			e.queue.Add(func() {
+				if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+					e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
+				}
+			})
+			e.updatePub.Publish(RouteUpdate{Unadvertise: toRemove})
+		}
 	}
 
 	e.logf("handling domains: %v and wildcards: %v", slicesx.MapKeys(e.domains), e.wildcards)
@@ -378,6 +418,10 @@ nextRoute:
 		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
 			e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
 		}
+	})
+	e.updatePub.Publish(RouteUpdate{
+		Advertise:   routes,
+		Unadvertise: toRemove,
 	})
 
 	e.controlRoutes = routes
@@ -584,6 +628,7 @@ func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Pref
 			e.logf("failed to advertise routes for %s: %v: %v", domain, routes, err)
 			return
 		}
+		e.updatePub.Publish(RouteUpdate{Advertise: routes})
 		e.mu.Lock()
 		defer e.mu.Unlock()
 
