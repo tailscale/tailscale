@@ -81,7 +81,7 @@ func TestMonitorInjectEventOnBus(t *testing.T) {
 
 	mon.Start()
 	mon.InjectEvent()
-	if err := eventbustest.Expect(tw, eventbustest.Type[*ChangeDelta]()); err != nil {
+	if err := eventbustest.Expect(tw, eventbustest.Type[ChangeDelta]()); err != nil {
 		t.Error(err)
 	}
 }
