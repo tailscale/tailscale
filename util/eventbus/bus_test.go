@@ -27,7 +27,16 @@ func TestBus(t *testing.T) {
 	defer b.Close()
 
 	c := b.Client("TestSub")
-	defer c.Close()
+	cdone := c.Done()
+	defer func() {
+		c.Close()
+		select {
+		case <-cdone:
+			t.Log("Client close signal received (OK)")
+		case <-time.After(time.Second):
+			t.Error("timed out waiting for client close signal")
+		}
+	}()
 	s := eventbus.Subscribe[EventA](c)
 
 	go func() {
