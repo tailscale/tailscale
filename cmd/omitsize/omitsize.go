@@ -13,17 +13,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
-	"tailscale.com/util/must"
+	"tailscale.com/feature/featuretags"
 )
 
 var (
 	cacheDir = flag.String("cachedir", "", "if non-empty, use this directory to store cached size results to speed up subsequent runs. The tool does not consider the git status when deciding whether to use the cache. It's on you to nuke it between runs if the tree changed.")
-	features = flag.String("features", "", "comma-separated list of features to consider, with or without the ts_omit_ prefix (default: all detected in build_dist.sh)")
+	features = flag.String("features", "", "comma-separated list of features to consider, with or without the ts_omit_ prefix")
 )
 
 func main() {
@@ -31,9 +30,9 @@ func main() {
 
 	var all []string
 	if *features == "" {
-		sh := must.Get(os.ReadFile("build_dist.sh"))
-		omitRx := regexp.MustCompile(`\b(ts_omit_\w+)\b`)
-		all = omitRx.FindAllString(string(sh), -1)
+		for k := range featuretags.Features {
+			all = append(all, "ts_omit_"+k)
+		}
 	} else {
 		for v := range strings.SplitSeq(*features, ",") {
 			if !strings.HasPrefix(v, "ts_omit_") {
