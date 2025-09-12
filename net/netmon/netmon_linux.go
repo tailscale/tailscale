@@ -17,6 +17,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/version/distro"
 )
 
 var debugNetlinkMessages = envknob.RegisterBool("TS_DEBUG_NETLINK")
@@ -57,6 +58,10 @@ type nlConn struct {
 }
 
 func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
+	if distro.Get() == distro.ISH {
+		println("XXX hi from ish")
+		return newPollingMon(logf, m)
+	}
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
 		// Routes get us most of the events of interest, but we need
 		// address as well to cover things like DHCP deciding to give

@@ -9,6 +9,7 @@ package netmon
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"runtime"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
+	"tailscale.com/version/distro"
 )
 
 // pollWallTimeInterval is how often we check the time to check
@@ -118,6 +120,9 @@ type ChangeDelta struct {
 // The returned monitor is inactive until it's started by the Start method.
 // Use RegisterChangeCallback to get notified of network changes.
 func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
+	if distro.Get() == distro.ISH {
+		return NewStatic(), nil // netlink doesn't work in iSH
+	}
 	logf = logger.WithPrefix(logf, "monitor: ")
 	m := &Monitor{
 		logf:     logf,
@@ -129,7 +134,7 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 	m.changed = eventbus.Publish[*ChangeDelta](m.b)
 	st, err := m.interfaceStateUncached()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("interface state: %w", err)
 	}
 	m.ifState = st
 

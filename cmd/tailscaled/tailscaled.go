@@ -75,6 +75,9 @@ import (
 
 // defaultTunName returns the default tun device name for the platform.
 func defaultTunName() string {
+	if runtime.GOOS == "linux" && distro.Get() == distro.ISH {
+		return "userspace-networking"
+	}
 	switch runtime.GOOS {
 	case "openbsd":
 		return "tun"
@@ -206,6 +209,8 @@ func main() {
 	if runtime.GOOS == "plan9" && os.Getenv("_NETSHELL_CHILD_") != "" {
 		os.Args = []string{"tailscaled", "be-child", "plan9-netshell"}
 	}
+
+	println("XX distro:", distro.Get())
 
 	if len(os.Args) > 1 {
 		sub := os.Args[1]

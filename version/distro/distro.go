@@ -33,6 +33,7 @@ const (
 	Alpine    = Distro("alpine")
 	UBNT      = Distro("ubnt") // Ubiquiti Networks
 	JetKVM    = Distro("jetkvm")
+	ISH       = Distro("ish") // iOS iSH app
 )
 
 var distro lazy.SyncValue[Distro]
@@ -102,6 +103,11 @@ func linuxDistro() Distro {
 		return WDMyCloud
 	case have("/etc/unraid-version"):
 		return Unraid
+	case runtime.GOARCH == "386":
+		v, _ := os.ReadFile("/proc/cpuinfo")
+		if bytes.Contains(v, []byte(": iSH")) {
+			return ISH
+		}
 	case have("/etc/alpine-release"):
 		return Alpine
 	case runtime.GOARCH == "arm" && isDeviceModel("JetKVM"):
