@@ -23,6 +23,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
@@ -138,7 +139,9 @@ type RouteInfo struct {
 // routes not yet served by the AppConnector the local node configuration is
 // updated to advertise the new route.
 type AppConnector struct {
+	// These fields are immutable after initialization.
 	logf            logger.Logf
+	eventBus        *eventbus.Bus
 	routeAdvertiser RouteAdvertiser
 
 	// storeRoutesFunc will be called to persist routes if it is not nil.
@@ -170,6 +173,10 @@ type Config struct {
 	// It must be non-nil.
 	Logf logger.Logf
 
+	// EventBus receives events when the collection of routes maintained by the
+	// connector is updated. It must be non-nil.
+	EventBus *eventbus.Bus
+
 	// RouteAdvertiser allows the connector to update the set of advertised routes.
 	// It must be non-nil.
 	RouteAdvertiser RouteAdvertiser
@@ -185,8 +192,18 @@ type Config struct {
 
 // NewAppConnector creates a new AppConnector.
 func NewAppConnector(c Config) *AppConnector {
+	switch {
+	case c.Logf == nil:
+		panic("missing logger")
+	case c.EventBus == nil:
+		panic("missing event bus")
+	case c.RouteAdvertiser == nil:
+		panic("missing route advertiser")
+	}
+
 	ac := &AppConnector{
 		logf:            logger.WithPrefix(c.Logf, "appc: "),
+		eventBus:        c.EventBus,
 		routeAdvertiser: c.RouteAdvertiser,
 		storeRoutesFunc: c.StoreRoutesFunc,
 	}
