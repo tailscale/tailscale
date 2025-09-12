@@ -197,18 +197,21 @@ var (
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx                      context.Context         // canceled by [LocalBackend.Shutdown]
-	ctxCancel                context.CancelCauseFunc // cancels ctx
-	logf                     logger.Logf             // general logging
-	keyLogf                  logger.Logf             // for printing list of peers on change
-	statsLogf                logger.Logf             // for printing peers stats on change
-	sys                      *tsd.System
-	eventClient              *eventbus.Client
-	clientVersionSub         *eventbus.Subscriber[tailcfg.ClientVersion]
-	autoUpdateSub            *eventbus.Subscriber[controlclient.AutoUpdate]
-	healthChangeSub          *eventbus.Subscriber[health.Change]
-	changeDeltaSub           *eventbus.Subscriber[netmon.ChangeDelta]
-	subsDoneCh               chan struct{}       // closed when consumeEventbusTopics returns
+	ctx              context.Context         // canceled by [LocalBackend.Shutdown]
+	ctxCancel        context.CancelCauseFunc // cancels ctx
+	logf             logger.Logf             // general logging
+	keyLogf          logger.Logf             // for printing list of peers on change
+	statsLogf        logger.Logf             // for printing peers stats on change
+	sys              *tsd.System
+	eventClient      *eventbus.Client
+	clientVersionSub *eventbus.Subscriber[tailcfg.ClientVersion]
+	autoUpdateSub    *eventbus.Subscriber[controlclient.AutoUpdate]
+	healthChangeSub  *eventbus.Subscriber[health.Change]
+	changeDeltaSub   *eventbus.Subscriber[netmon.ChangeDelta]
+	routeUpdateSub   *eventbus.Subscriber[appc.RouteUpdate]
+	storeRoutesSub   *eventbus.Subscriber[appc.RouteInfo]
+	subsDoneCh       chan struct{} // closed when consumeEventbusTopics returns
+
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
 	metrics                  metrics
@@ -545,6 +548,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.autoUpdateSub = eventbus.Subscribe[controlclient.AutoUpdate](b.eventClient)
 	b.healthChangeSub = eventbus.Subscribe[health.Change](b.eventClient)
 	b.changeDeltaSub = eventbus.Subscribe[netmon.ChangeDelta](b.eventClient)
+	b.routeUpdateSub = eventbus.Subscribe[appc.RouteUpdate](b.eventClient)
+	b.storeRoutesSub = eventbus.Subscribe[appc.RouteInfo](b.eventClient)
 	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
@@ -635,6 +640,10 @@ func (b *LocalBackend) consumeEventbusTopics() {
 			b.onHealthChange(change)
 		case changeDelta := <-b.changeDeltaSub.Events():
 			b.linkChange(&changeDelta)
+		case ru := <-b.routeUpdateSub.Events():
+			b.logf("TODO: received route update: %+v", ru)
+		case ri := <-b.storeRoutesSub.Events():
+			b.logf("TODO: received store routes: %+v", ri)
 		}
 	}
 }
