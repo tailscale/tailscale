@@ -91,6 +91,9 @@ var (
 	tcpUserTimeout = flag.Duration("tcp-user-timeout", 15*time.Second, "TCP user timeout")
 	// tcpWriteTimeout is the timeout for writing to client TCP connections. It does not apply to mesh connections.
 	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derp.DefaultTCPWiteTimeout, "TCP write timeout; 0 results in no timeout being set on writes")
+
+	// ACE
+	flagACEEnabled = flag.Bool("ace", false, "whether to enable embedded ACE server [experimental + in-development as of 2025-09-12; not yet documented]")
 )
 
 var (
@@ -373,6 +376,11 @@ func main() {
 				tlsRequestVersion.Add(label, 1)
 				tlsActiveVersion.Add(label, 1)
 				defer tlsActiveVersion.Add(label, -1)
+
+				if r.Method == "CONNECT" {
+					serveConnect(s, w, r)
+					return
+				}
 			}
 
 			mux.ServeHTTP(w, r)
