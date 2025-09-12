@@ -14,6 +14,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc/appctest"
 	"tailscale.com/tstest"
+	"tailscale.com/types/appctype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
@@ -21,7 +22,7 @@ import (
 	"tailscale.com/util/slicesx"
 )
 
-func fakeStoreRoutes(*RouteInfo) error { return nil }
+func fakeStoreRoutes(*appctype.RouteInfo) error { return nil }
 
 func TestUpdateDomains(t *testing.T) {
 	ctx := t.Context()
@@ -33,14 +34,15 @@ func TestUpdateDomains(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: &appctest.RouteCollector{},
-				RouteInfo:       &RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: &appctest.RouteCollector{}})
 		}
-		a.UpdateDomains([]string{"example.com"})
+		t.Cleanup(a.Close)
 
+		a.UpdateDomains([]string{"example.com"})
 		a.Wait(ctx)
 		if got, want := a.Domains().AsSlice(), []string{"example.com"}; !slices.Equal(got, want) {
 			t.Errorf("got %v; want %v", got, want)
@@ -75,11 +77,14 @@ func TestUpdateRoutes(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
+				RouteInfo:       &appctype.RouteInfo{},
+				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
+		t.Cleanup(a.Close)
+
 		a.updateDomains([]string{"*.example.com"})
 
 		// This route should be collapsed into the range
@@ -130,12 +135,14 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
+		t.Cleanup(a.Close)
+
 		mak.Set(&a.domains, "example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")})
 		rc.SetRoutes([]netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")})
 		routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
@@ -158,12 +165,13 @@ func TestDomainRoutes(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
+		t.Cleanup(a.Close)
 		a.updateDomains([]string{"example.com"})
 		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
 			t.Errorf("ObserveDNSResponse: %v", err)
@@ -191,12 +199,13 @@ func TestObserveDNSResponse(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
+		t.Cleanup(a.Close)
 
 		// a has no domains configured, so it should not advertise any routes
 		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
@@ -287,12 +296,13 @@ func TestWildcardDomains(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
+		t.Cleanup(a.Close)
 
 		a.updateDomains([]string{"*.example.com"})
 		if err := a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8")); err != nil {
@@ -454,12 +464,14 @@ func TestUpdateRouteRouteRemoval(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
+		t.Cleanup(a.Close)
+
 		// nothing has yet been advertised
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
 
@@ -506,12 +518,14 @@ func TestUpdateDomainRouteRemoval(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
+		t.Cleanup(a.Close)
+
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
 
 		a.UpdateDomainsAndRoutes([]string{"a.example.com", "b.example.com"}, []netip.Prefix{})
@@ -568,12 +582,14 @@ func TestUpdateWildcardRouteRemoval(t *testing.T) {
 				Logf:            t.Logf,
 				EventBus:        bus,
 				RouteAdvertiser: rc,
-				RouteInfo:       &RouteInfo{},
+				RouteInfo:       &appctype.RouteInfo{},
 				StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
 			a = NewAppConnector(Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
 		}
+		t.Cleanup(a.Close)
+
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
 
 		a.UpdateDomainsAndRoutes([]string{"a.example.com", "*.b.example.com"}, []netip.Prefix{})
@@ -716,9 +732,10 @@ func TestUpdateRoutesDeadlock(t *testing.T) {
 		Logf:            t.Logf,
 		EventBus:        bus,
 		RouteAdvertiser: rc,
-		RouteInfo:       &RouteInfo{},
+		RouteInfo:       &appctype.RouteInfo{},
 		StoreRoutesFunc: fakeStoreRoutes,
 	})
+	t.Cleanup(a.Close)
 
 	advertiseCalled := new(atomic.Bool)
 	unadvertiseCalled := new(atomic.Bool)

@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/appc"
+	"tailscale.com/types/appctype"
 )
 
 var appcRoutesArgs struct {
@@ -51,7 +51,7 @@ https://tailscale.com/kb/1281/app-connectors
 `),
 }
 
-func getAllOutput(ri *appc.RouteInfo) (string, error) {
+func getAllOutput(ri *appctype.RouteInfo) (string, error) {
 	domains, err := json.MarshalIndent(ri.Domains, " ", "  ")
 	if err != nil {
 		return "", err
@@ -76,7 +76,7 @@ type domainCount struct {
 	count  int
 }
 
-func getSummarizeLearnedOutput(ri *appc.RouteInfo) string {
+func getSummarizeLearnedOutput(ri *appctype.RouteInfo) string {
 	x := make([]domainCount, len(ri.Domains))
 	i := 0
 	maxDomainWidth := 0

@@ -1108,6 +1108,7 @@ func (b *LocalBackend) Shutdown() {
 	if b.notifyCancel != nil {
 		b.notifyCancel()
 	}
+	b.appConnector.Close()
 	b.mu.Unlock()
 	b.webClientShutdown()
 
@@ -4783,25 +4784,28 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	}()
 
 	if !prefs.AppConnector().Advertise {
+		b.appConnector.Close() // clean up a previous connector (safe on nil)
 		b.appConnector = nil
 		return
 	}
 
 	shouldAppCStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
 	if b.appConnector == nil || b.appConnector.ShouldStoreRoutes() != shouldAppCStoreRoutes {
-		var ri *appc.RouteInfo
-		var storeFunc func(*appc.RouteInfo) error
+		var ri *appctype.RouteInfo
+		var storeFunc func(*appctype.RouteInfo) error
 		if shouldAppCStoreRoutes {
 			var err error
 			ri, err = b.readRouteInfoLocked()
 			if err != nil {
-				ri = &appc.RouteInfo{}
+				ri = &appctype.RouteInfo{}
 				if err != ipn.ErrStateNotExist {
 					b.logf("Unsuccessful Read RouteInfo: ", err)
 				}
 			}
 			storeFunc = b.storeRouteInfo
 		}
+
+		b.appConnector.Close() // clean up a previous connector (safe on nil)
 		b.appConnector = appc.NewAppConnector(appc.Config{
 			Logf:            b.logf,
 			EventBus:        b.sys.Bus.Get(),
@@ -6988,7 +6992,7 @@ func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.Sta
 
 const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
 
-func (b *LocalBackend) storeRouteInfo(ri *appc.RouteInfo) error {
+func (b *LocalBackend) storeRouteInfo(ri *appctype.RouteInfo) error {
 	if !buildfeatures.HasAppConnectors {
 		return feature.ErrUnavailable
 	}
@@ -7005,16 +7009,16 @@ func (b *LocalBackend) storeRouteInfo(ri *appc.RouteInfo) error {
 	return b.pm.WriteState(key, bs)
 }
 
-func (b *LocalBackend) readRouteInfoLocked() (*appc.RouteInfo, error) {
+func (b *LocalBackend) readRouteInfoLocked() (*appctype.RouteInfo, error) {
 	if !buildfeatures.HasAppConnectors {
 		return nil, feature.ErrUnavailable
 	}
 	if b.pm.CurrentProfile().ID() == "" {
-		return &appc.RouteInfo{}, nil
+		return &appctype.RouteInfo{}, nil
 	}
 	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
 	bs, err := b.pm.Store().ReadState(key)
-	ri := &appc.RouteInfo{}
+	ri := &appctype.RouteInfo{}
 	if err != nil {
 		return nil, err
 	}
@@ -7027,7 +7031,7 @@ func (b *LocalBackend) readRouteInfoLocked() (*appc.RouteInfo, error) {
 // ReadRouteInfo returns the app connector route information that is
 // stored in prefs to be consistent across restarts. It should be up
 // to date with the RouteInfo in memory being used by appc.
-func (b *LocalBackend) ReadRouteInfo() (*appc.RouteInfo, error) {
+func (b *LocalBackend) ReadRouteInfo() (*appctype.RouteInfo, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.readRouteInfoLocked()

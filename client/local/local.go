@@ -27,7 +27,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
@@ -40,6 +39,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/util/eventbus"
@@ -1387,10 +1387,10 @@ func (lc *Client) ShutdownTailscaled(ctx context.Context) error {
 	return err
 }
 
-func (lc *Client) GetAppConnectorRouteInfo(ctx context.Context) (appc.RouteInfo, error) {
+func (lc *Client) GetAppConnectorRouteInfo(ctx context.Context) (appctype.RouteInfo, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/appc-route-info")
 	if err != nil {
-		return appc.RouteInfo{}, err
+		return appctype.RouteInfo{}, err
 	}
-	return decodeJSON[appc.RouteInfo](body)
+	return decodeJSON[appctype.RouteInfo](body)
 }
