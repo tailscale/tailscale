@@ -19,6 +19,7 @@ var Features = map[string]string{
 	"syspolicy":        "System policy configuration (MDM) support",
 	"systray":          "Linux system tray",
 	"taildrop":         "Taildrop (file sending) support",
+	"tailnetlock":      "Tailnet Lock support",
 	"tap":              "Experimental Layer 2 (ethernet) support",
 	"tka":              "Tailnet Lock (TKA) support",
 	"tpm":              "TPM support",
