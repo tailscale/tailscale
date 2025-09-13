@@ -1360,6 +1360,13 @@ type MapRequest struct {
 	NodeKey   key.NodePublic
 	DiscoKey  key.DiscoPublic
 
+	// HardwareAttestationKey is the public key of the node's hardware-backed
+	// identity attestation key, if any.
+	HardwareAttestationKey key.HardwareAttestationPublic `json:",omitzero"`
+	// HardwareAttestationKeySignature is the signature of the NodeKey
+	// serialized using MarshalText using its hardware attestation key, if any.
+	HardwareAttestationKeySignature []byte `json:",omitempty"`
+
 	// Stream is whether the client wants to receive multiple MapResponses over
 	// the same HTTP connection.
 	//

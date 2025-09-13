@@ -5,11 +5,18 @@ package key
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"encoding/json"
 	"fmt"
+	"io"
+
+	"go4.org/mem"
 )
 
 var ErrUnsupported = fmt.Errorf("key type not supported on this platform")
+
+const hardwareAttestPublicHexPrefix = "hwattestpub:"
 
 // HardwareAttestationKey describes a hardware-backed key that is used to
 // identify a node. Implementation details will
@@ -20,10 +27,96 @@ type HardwareAttestationKey interface {
 	crypto.Signer
 	json.Marshaler
 	json.Unmarshaler
+	io.Closer
+	Clone() HardwareAttestationKey
+}
+
+// HardwareAttestationPublicFromPlatformKey creates a HardwareAttestationPublic
+// for communicating the public component of the hardware attestation key
+// with control and other nodes.
+func HardwareAttestationPublicFromPlatformKey(k HardwareAttestationKey) HardwareAttestationPublic {
+	if k == nil {
+		return HardwareAttestationPublic{}
+	}
+	pub := k.Public()
+	ecdsaPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		panic("hardware attestation key is not ECDSA")
+	}
+	return HardwareAttestationPublic{k: ecdsaPub}
+}
+
+// HardwareAttestationPublic is the public key counterpart to
+// HardwareAttestationKey.
+type HardwareAttestationPublic struct {
+	k *ecdsa.PublicKey
+}
+
+func (k HardwareAttestationPublic) Equal(o HardwareAttestationPublic) bool {
+	if k.k == nil || o.k == nil {
+		return k.k == o.k
+	}
+	return k.k.X.Cmp(o.k.X) == 0 && k.k.Y.Cmp(o.k.Y) == 0 && k.k.Curve == o.k.Curve
+}
+
+// IsZero reports whether k is the zero value.
+func (k HardwareAttestationPublic) IsZero() bool {
+	return k.k == nil
+}
+
+// String returns the hex-encoded public key with a type prefix.
+func (k HardwareAttestationPublic) String() string {
+	bs, err := k.MarshalText()
+	if err != nil {
+		panic(err)
+	}
+	return string(bs)
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (k HardwareAttestationPublic) MarshalText() ([]byte, error) {
+	if k.k == nil {
+		return nil, nil
+	}
+	return k.AppendText(nil)
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler. It expects a typed prefix
+// followed by a hex encoded representation of k.
+func (k *HardwareAttestationPublic) UnmarshalText(b []byte) error {
+	if len(b) == 0 {
+		*k = HardwareAttestationPublic{}
+		return nil
+	}
+
+	kb := make([]byte, 65)
+	if err := parseHex(kb, mem.B(b), mem.S(hardwareAttestPublicHexPrefix)); err != nil {
+		return err
+	}
+
+	pk, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), kb)
+	if err != nil {
+		return err
+	}
+	k.k = pk
+	return nil
+}
+
+func (k HardwareAttestationPublic) AppendText(dst []byte) ([]byte, error) {
+	b, err := k.k.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	return appendHexKey(dst, hardwareAttestPublicHexPrefix, b), nil
+}
+
+// Verifier returns the ECDSA public key for verifying signatures made by k.
+func (k HardwareAttestationPublic) Verifier() *ecdsa.PublicKey {
+	return k.k
 }
 
 // emptyHardwareAttestationKey is a function that returns an empty
-// HardwareAttestationKey suitable for use with JSON unmarshalling.
+// HardwareAttestationKey suitable for use with JSON unmarshaling.
 var emptyHardwareAttestationKey func() HardwareAttestationKey
 
 // createHardwareAttestationKey is a function that creates a new
@@ -50,7 +143,7 @@ func RegisterHardwareAttestationKeyFns(emptyFn func() HardwareAttestationKey, cr
 }
 
 // NewEmptyHardwareAttestationKey returns an empty HardwareAttestationKey
-// suitable for JSON unmarshalling.
+// suitable for JSON unmarshaling.
 func NewEmptyHardwareAttestationKey() (HardwareAttestationKey, error) {
 	if emptyHardwareAttestationKey == nil {
 		return nil, ErrUnsupported
