@@ -170,7 +170,8 @@ type CapabilityVersion int
 //   - 123: 2025-07-28: fix deadlock regression from cryptokey routing change (issue #16651)
 //   - 124: 2025-08-08: removed NodeAttrDisableMagicSockCryptoRouting support, crypto routing is now mandatory
 //   - 125: 2025-08-11: dnstype.Resolver adds UseWithExitNode field.
-const CurrentCapabilityVersion CapabilityVersion = 125
+//   - 126: 2025-09-09: can handle C2N /debug/netmap.
+const CurrentCapabilityVersion CapabilityVersion = 126
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
