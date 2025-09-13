@@ -1225,7 +1225,6 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		}
 		if nm != nil {
 			s.CertDomains = append([]string(nil), nm.DNS.CertDomains...)
-			s.MagicDNSSuffix = nm.MagicDNSSuffix()
 			if s.CurrentTailnet == nil {
 				s.CurrentTailnet = &ipnstate.TailnetStatus{}
 			}

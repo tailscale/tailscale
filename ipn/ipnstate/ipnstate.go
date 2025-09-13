@@ -58,11 +58,6 @@ type Status struct {
 	// problems are detected)
 	Health []string
 
-	// This field is the legacy name of CurrentTailnet.MagicDNSSuffix.
-	//
-	// Deprecated: use CurrentTailnet.MagicDNSSuffix instead.
-	MagicDNSSuffix string
-
 	// CurrentTailnet is information about the tailnet that the node
 	// is currently connected to. When not connected, this field is nil.
 	CurrentTailnet *TailnetStatus
@@ -620,7 +615,7 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 		}
 
 		hostName := dnsname.SanitizeHostname(ps.HostName)
-		dnsName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
+		dnsName := dnsname.TrimSuffix(ps.DNSName, st.CurrentTailnet.MagicDNSSuffix)
 		if strings.EqualFold(dnsName, hostName) || ps.UserID != st.Self.UserID {
 			hostName = ""
 		}
