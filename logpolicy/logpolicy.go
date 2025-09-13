@@ -868,7 +868,7 @@ type TransportOptions struct {
 // New returns an HTTP Transport particularly suited to uploading logs
 // to the given host name. See [DialContext] for details on how it works.
 func (opts TransportOptions) New() http.RoundTripper {
-	if testenv.InTest() {
+	if testenv.InTest() || envknob.NoLogsNoSupport() {
 		return noopPretendSuccessTransport{}
 	}
 	if opts.NetMon == nil {
