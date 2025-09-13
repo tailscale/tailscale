@@ -21,7 +21,6 @@ var Features = map[string]string{
 	"taildrop":         "Taildrop (file sending) support",
 	"tailnetlock":      "Tailnet Lock support",
 	"tap":              "Experimental Layer 2 (ethernet) support",
-	"tka":              "Tailnet Lock (TKA) support",
 	"tpm":              "TPM support",
 	"wakeonlan":        "Wake-on-LAN support",
 	"webclient":        "Web client support",
