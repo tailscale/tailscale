@@ -35,16 +35,14 @@ func main() {
 		return
 	}
 
-	var keep = map[string]bool{}
+	var keep = map[featuretags.FeatureTag]bool{}
 	for t := range strings.SplitSeq(*add, ",") {
 		if t != "" {
-			keep[t] = true
+			keep[featuretags.FeatureTag(t)] = true
 		}
 	}
 	var tags []string
-	if keep["cli"] {
-		// The "cli" --add value is special in that it's a build tag
-		// that adds something, rather than removes something.
+	if keep[featuretags.CLI] {
 		tags = append(tags, "ts_include_cli")
 	}
 	if *min {
@@ -52,22 +50,24 @@ func main() {
 			if f == "" {
 				continue
 			}
-			if !keep[f] {
-				tags = append(tags, "ts_omit_"+f)
+			if !keep[f] && f.IsOmittable() {
+				tags = append(tags, f.OmitTag())
 			}
 		}
 	}
-	for f := range strings.SplitSeq(*remove, ",") {
-		if f == "" {
+	for v := range strings.SplitSeq(*remove, ",") {
+		if v == "" {
 			continue
 		}
+		f := featuretags.FeatureTag(v)
 		if _, ok := features[f]; !ok {
 			log.Fatalf("unknown feature %q in --remove", f)
 		}
-		tags = append(tags, "ts_omit_"+f)
+		tags = append(tags, f.OmitTag())
 	}
+	slices.Sort(tags)
+	tags = slices.Compact(tags)
 	if len(tags) != 0 {
 		fmt.Println(strings.Join(tags, ","))
 	}
-
 }

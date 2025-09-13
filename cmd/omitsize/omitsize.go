@@ -23,6 +23,8 @@ import (
 var (
 	cacheDir = flag.String("cachedir", "", "if non-empty, use this directory to store cached size results to speed up subsequent runs. The tool does not consider the git status when deciding whether to use the cache. It's on you to nuke it between runs if the tree changed.")
 	features = flag.String("features", "", "comma-separated list of features to consider, with or without the ts_omit_ prefix")
+
+	showRemovals = flag.Bool("show-removals", false, "if true, show a table of sizes removing one feature at a time from the full set")
 )
 
 func main() {
@@ -31,7 +33,9 @@ func main() {
 	var all []string
 	if *features == "" {
 		for k := range featuretags.Features {
-			all = append(all, "ts_omit_"+k)
+			if k.IsOmittable() {
+				all = append(all, k.OmitTag())
+			}
 		}
 	} else {
 		for v := range strings.SplitSeq(*features, ",") {
@@ -49,27 +53,30 @@ func main() {
 	baseC := measure("tailscale")
 	baseBoth := measure("tailscaled", "ts_include_cli")
 
-	fmt.Printf("(a) starting with everything and removing a feature...\n\n")
-
-	fmt.Printf("%9s %9s %9s\n", "tailscaled", "tailscale", "combined (linux/amd64)")
-	fmt.Printf("%9d %9d %9d\n", baseD, baseC, baseBoth)
-
 	minD := measure("tailscaled", all...)
 	minC := measure("tailscale", all...)
 	minBoth := measure("tailscaled", append(slices.Clone(all), "ts_include_cli")...)
-	fmt.Printf("-%8d -%8d -%8d omit-all\n", baseD-minD, baseC-minC, baseBoth-minBoth)
 
-	for _, t := range all {
-		sizeD := measure("tailscaled", t)
-		sizeC := measure("tailscale", t)
-		sizeBoth := measure("tailscaled", append([]string{t}, "ts_include_cli")...)
-		saveD := max(baseD-sizeD, 0)
-		saveC := max(baseC-sizeC, 0)
-		saveBoth := max(baseBoth-sizeBoth, 0)
-		fmt.Printf("-%8d -%8d -%8d %s\n", saveD, saveC, saveBoth, t)
+	if *showRemovals {
+		fmt.Printf("Starting with everything and removing a feature...\n\n")
+
+		fmt.Printf("%9s %9s %9s\n", "tailscaled", "tailscale", "combined (linux/amd64)")
+		fmt.Printf("%9d %9d %9d\n", baseD, baseC, baseBoth)
+
+		fmt.Printf("-%8d -%8d -%8d omit-all\n", baseD-minD, baseC-minC, baseBoth-minBoth)
+
+		for _, t := range all {
+			sizeD := measure("tailscaled", t)
+			sizeC := measure("tailscale", t)
+			sizeBoth := measure("tailscaled", append([]string{t}, "ts_include_cli")...)
+			saveD := max(baseD-sizeD, 0)
+			saveC := max(baseC-sizeC, 0)
+			saveBoth := max(baseBoth-sizeBoth, 0)
+			fmt.Printf("-%8d -%8d -%8d %s\n", saveD, saveC, saveBoth, t)
+		}
 	}
 
-	fmt.Printf("\n(b) or, starting at minimal and adding one feature back...\n")
+	fmt.Printf("\nStarting at a minimal binary and adding one feature back...\n")
 	fmt.Printf("%9s %9s %9s\n", "tailscaled", "tailscale", "combined (linux/amd64)")
 	fmt.Printf("%9d %9d %9d omitting everything\n", minD, minC, minBoth)
 	for _, t := range all {
