@@ -30,7 +30,7 @@ func main() {
 
 	if *list {
 		for _, f := range slices.Sorted(maps.Keys(features)) {
-			fmt.Printf("%20s: %s\n", f, features[f])
+			fmt.Printf("%20s: %s\n", f, features[f].Desc)
 		}
 		return
 	}

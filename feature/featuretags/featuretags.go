@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:generate go run gen-featuretags.go
+
 // The featuretags package is a registry of all the ts_omit-able build tags.
 package featuretags
 
@@ -32,26 +34,34 @@ func (ft FeatureTag) OmitTag() string {
 	return "ts_omit_" + string(ft)
 }
 
+// FeatureMeta describes a modular feature that can be conditionally linked into
+// the binary.
+type FeatureMeta struct {
+	Sym  string // exported Go symbol for boolean const
+	Desc string // human-readable description
+}
+
 // Features are the known Tailscale features that can be selectively included or
 // excluded via build tags, and a description of each.
-var Features = map[FeatureTag]string{
-	"aws":              "AWS integration",
-	"bird":             "Bird BGP integration",
-	"capture":          "Packet capture",
-	"cli":              "embed the CLI into the tailscaled binary",
-	"completion":       "CLI shell completion",
-	"debugeventbus":    "eventbus debug support",
-	"desktop_sessions": "Desktop sessions support",
-	"drive":            "Tailscale Drive (file server) support",
-	"kube":             "Kubernetes integration",
-	"relayserver":      "Relay server",
-	"ssh":              "Tailscale SSH support",
-	"syspolicy":        "System policy configuration (MDM) support",
-	"systray":          "Linux system tray",
-	"taildrop":         "Taildrop (file sending) support",
-	"tailnetlock":      "Tailnet Lock support",
-	"tap":              "Experimental Layer 2 (ethernet) support",
-	"tpm":              "TPM support",
-	"wakeonlan":        "Wake-on-LAN support",
-	"webclient":        "Web client support",
+var Features = map[FeatureTag]FeatureMeta{
+	"aws":              {"AWS", "AWS integration"},
+	"bird":             {"Bird", "Bird BGP integration"},
+	"capture":          {"Capture", "Packet capture"},
+	"cli":              {"CLI", "embed the CLI into the tailscaled binary"},
+	"completion":       {"Completion", "CLI shell completion"},
+	"debugeventbus":    {"DebugEventBus", "eventbus debug support"},
+	"desktop_sessions": {"DesktopSessions", "Desktop sessions support"},
+	"drive":            {"Drive", "Tailscale Drive (file server) support"},
+	"kube":             {"Kube", "Kubernetes integration"},
+	"relayserver":      {"RelayServer", "Relay server"},
+	"serve":            {"Serve", "Serve and Funnel support"},
+	"ssh":              {"SSH", "Tailscale SSH support"},
+	"syspolicy":        {"SystemPolicy", "System policy configuration (MDM) support"},
+	"systray":          {"SysTray", "Linux system tray"},
+	"taildrop":         {"Taildrop", "Taildrop (file sending) support"},
+	"tailnetlock":      {"TailnetLock", "Tailnet Lock support"},
+	"tap":              {"Tap", "Experimental Layer 2 (ethernet) support"},
+	"tpm":              {"TPM", "TPM support"},
+	"wakeonlan":        {"WakeOnLAN", "Wake-on-LAN support"},
+	"webclient":        {"WebClient", "Web client support"},
 }
