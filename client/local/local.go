@@ -1217,20 +1217,6 @@ func (lc *Client) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg.Ping
 	return lc.PingWithOpts(ctx, ip, pingtype, PingOpts{})
 }
 
-// SetServeConfig sets or replaces the serving settings.
-// If config is nil, settings are cleared and serving is disabled.
-func (lc *Client) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
-	h := make(http.Header)
-	if config != nil {
-		h.Set("If-Match", config.ETag)
-	}
-	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/serve-config", 200, jsonBody(config), h)
-	if err != nil {
-		return fmt.Errorf("sending serve config: %w", err)
-	}
-	return nil
-}
-
 // DisconnectControl shuts down all connections to control, thus making control consider this node inactive. This can be
 // run on HA subnet router or app connector replicas before shutting them down to ensure peers get told to switch over
 // to another replica whilst there is still some grace period for the existing connections to terminate.
@@ -1240,32 +1226,6 @@ func (lc *Client) DisconnectControl(ctx context.Context) error {
 		return fmt.Errorf("error disconnecting control: %w", err)
 	}
 	return nil
-}
-
-// GetServeConfig return the current serve config.
-//
-// If the serve config is empty, it returns (nil, nil).
-func (lc *Client) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
-	body, h, err := lc.sendWithHeaders(ctx, "GET", "/localapi/v0/serve-config", 200, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("getting serve config: %w", err)
-	}
-	sc, err := getServeConfigFromJSON(body)
-	if err != nil {
-		return nil, err
-	}
-	if sc == nil {
-		sc = new(ipn.ServeConfig)
-	}
-	sc.ETag = h.Get("Etag")
-	return sc, nil
-}
-
-func getServeConfigFromJSON(body []byte) (sc *ipn.ServeConfig, err error) {
-	if err := json.Unmarshal(body, &sc); err != nil {
-		return nil, err
-	}
-	return sc, nil
 }
 
 // tailscaledConnectHint gives a little thing about why tailscaled (or

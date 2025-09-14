@@ -28,7 +28,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
-	"tailscale.com/ipn"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
@@ -387,10 +386,6 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/sockstats":
 		h.handleServeSockStats(w, r)
 		return
-	case "/v0/ingress":
-		metricIngressCalls.Add(1)
-		h.handleServeIngress(w, r)
-		return
 	}
 	if ph, ok := peerAPIHandlers[r.URL.Path]; ok {
 		ph(h, w, r)
@@ -411,67 +406,6 @@ This is my Tailscale device. Your device is %v.
 	if h.isSelf {
 		fmt.Fprintf(w, "<p>You are the owner of this node.\n")
 	}
-}
-
-func (h *peerAPIHandler) handleServeIngress(w http.ResponseWriter, r *http.Request) {
-	// http.Errors only useful if hitting endpoint manually
-	// otherwise rely on log lines when debugging ingress connections
-	// as connection is hijacked for bidi and is encrypted tls
-	if !h.canIngress() {
-		h.logf("ingress: denied; no ingress cap from %v", h.remoteAddr)
-		http.Error(w, "denied; no ingress cap", http.StatusForbidden)
-		return
-	}
-	logAndError := func(code int, publicMsg string) {
-		h.logf("ingress: bad request from %v: %s", h.remoteAddr, publicMsg)
-		http.Error(w, publicMsg, code)
-	}
-	bad := func(publicMsg string) {
-		logAndError(http.StatusBadRequest, publicMsg)
-	}
-	if r.Method != "POST" {
-		logAndError(http.StatusMethodNotAllowed, "only POST allowed")
-		return
-	}
-	srcAddrStr := r.Header.Get("Tailscale-Ingress-Src")
-	if srcAddrStr == "" {
-		bad("Tailscale-Ingress-Src header not set")
-		return
-	}
-	srcAddr, err := netip.ParseAddrPort(srcAddrStr)
-	if err != nil {
-		bad("Tailscale-Ingress-Src header invalid; want ip:port")
-		return
-	}
-	target := ipn.HostPort(r.Header.Get("Tailscale-Ingress-Target"))
-	if target == "" {
-		bad("Tailscale-Ingress-Target header not set")
-		return
-	}
-	if _, _, err := net.SplitHostPort(string(target)); err != nil {
-		bad("Tailscale-Ingress-Target header invalid; want host:port")
-		return
-	}
-
-	getConnOrReset := func() (net.Conn, bool) {
-		conn, _, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			h.logf("ingress: failed hijacking conn")
-			http.Error(w, "failed hijacking conn", http.StatusInternalServerError)
-			return nil, false
-		}
-		io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\n\r\n")
-		return &ipn.FunnelConn{
-			Conn:   conn,
-			Src:    srcAddr,
-			Target: target,
-		}, true
-	}
-	sendRST := func() {
-		http.Error(w, "denied", http.StatusForbidden)
-	}
-
-	h.ps.b.HandleIngressTCPConn(h.peerNode, target, srcAddr, getConnOrReset, sendRST)
 }
 
 func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Request) {
@@ -1099,6 +1033,5 @@ var (
 	metricInvalidRequests = clientmetric.NewCounter("peerapi_invalid_requests")
 
 	// Non-debug PeerAPI endpoints.
-	metricDNSCalls     = clientmetric.NewCounter("peerapi_dns")
-	metricIngressCalls = clientmetric.NewCounter("peerapi_ingress")
+	metricDNSCalls = clientmetric.NewCounter("peerapi_dns")
 )
