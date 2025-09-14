@@ -213,6 +213,8 @@ var (
 	maybeWebCmd,
 	maybeDriveCmd,
 	maybeNetlockCmd,
+	maybeFunnelCmd,
+	maybeServeCmd,
 	_ func() *ffcli.Command
 )
 
@@ -254,8 +256,8 @@ change in the future.
 			pingCmd,
 			ncCmd,
 			sshCmd,
-			funnelCmd(),
-			serveCmd(),
+			nilOrCall(maybeFunnelCmd),
+			nilOrCall(maybeServeCmd),
 			versionCmd,
 			nilOrCall(maybeWebCmd),
 			nilOrCall(fileCmd),

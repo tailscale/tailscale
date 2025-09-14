@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_serve
+
 package cli
 
 import (
@@ -15,6 +17,10 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 )
+
+func init() {
+	maybeFunnelCmd = funnelCmd
+}
 
 var funnelCmd = func() *ffcli.Command {
 	se := &serveEnv{lc: &localClient}
@@ -173,4 +179,43 @@ func printFunnelWarning(sc *ipn.ServeConfig) {
 	if warn {
 		fmt.Fprintf(Stderr, "         run: `tailscale serve --help` to see how to configure handlers\n")
 	}
+}
+
+func init() {
+	hookPrintFunnelStatus.Set(printFunnelStatus)
+}
+
+// printFunnelStatus prints the status of the funnel, if it's running.
+// It prints nothing if the funnel is not running.
+func printFunnelStatus(ctx context.Context) {
+	sc, err := localClient.GetServeConfig(ctx)
+	if err != nil {
+		outln()
+		printf("# Funnel:\n")
+		printf("#     - Unable to get Funnel status: %v\n", err)
+		return
+	}
+	if !sc.IsFunnelOn() {
+		return
+	}
+	outln()
+	printf("# Funnel on:\n")
+	for hp, on := range sc.AllowFunnel {
+		if !on { // if present, should be on
+			continue
+		}
+		sni, portStr, _ := net.SplitHostPort(string(hp))
+		p, _ := strconv.ParseUint(portStr, 10, 16)
+		isTCP := sc.IsTCPForwardingOnPort(uint16(p), noService)
+		url := "https://"
+		if isTCP {
+			url = "tcp://"
+		}
+		url += sni
+		if isTCP || p != 443 {
+			url += ":" + portStr
+		}
+		printf("#     - %s\n", url)
+	}
+	outln()
 }
