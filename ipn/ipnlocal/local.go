@@ -99,6 +99,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
@@ -202,6 +203,10 @@ type LocalBackend struct {
 	keyLogf                  logger.Logf             // for printing list of peers on change
 	statsLogf                logger.Logf             // for printing peers stats on change
 	sys                      *tsd.System
+	eventClient              *eventbus.Client
+	clientVersionSub         *eventbus.Subscriber[tailcfg.ClientVersion]
+	autoUpdateSub            *eventbus.Subscriber[controlclient.AutoUpdate]
+	subsDoneCh               chan struct{}       // closed when consumeEventbusTopics returns
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
 	metrics                  metrics
@@ -525,7 +530,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		backendLogID:          logID,
 		state:                 ipn.NoState,
 		portpoll:              new(portlist.Poller),
-		em:                    newExpiryManager(logf),
+		em:                    newExpiryManager(logf, sys.Bus.Get()),
 		loginFlags:            loginFlags,
 		clock:                 clock,
 		selfUpdateProgress:    make([]ipnstate.UpdateProgress, 0),
@@ -533,7 +538,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCtx:            captiveCtx,
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
+		subsDoneCh:            make(chan struct{}),
 	}
+	b.eventClient = b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
+	b.clientVersionSub = eventbus.Subscribe[tailcfg.ClientVersion](b.eventClient)
+	b.autoUpdateSub = eventbus.Subscribe[controlclient.AutoUpdate](b.eventClient)
 	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
@@ -604,7 +613,30 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			}
 		}
 	}
+	go b.consumeEventbusTopics()
 	return b, nil
+}
+
+// consumeEventbusTopics consumes events from all relevant
+// [eventbus.Subscriber]'s and passes them to their related handler. Events are
+// always handled in the order they are received, i.e. the next event is not
+// read until the previous event's handler has returned. It returns when the
+// [tailcfg.ClientVersion] subscriber is closed, which is interpreted to be the
+// same as the [eventbus.Client] closing ([eventbus.Subscribers] are either
+// all open or all closed).
+func (b *LocalBackend) consumeEventbusTopics() {
+	defer close(b.subsDoneCh)
+
+	for {
+		select {
+		case <-b.clientVersionSub.Done():
+			return
+		case clientVersion := <-b.clientVersionSub.Events():
+			b.onClientVersion(&clientVersion)
+		case au := <-b.autoUpdateSub.Events():
+			b.onTailnetDefaultAutoUpdate(au.Value)
+		}
+	}
 }
 
 func (b *LocalBackend) Clock() tstime.Clock { return b.clock }
@@ -1065,6 +1097,17 @@ func (b *LocalBackend) ClearCaptureSink() {
 // Shutdown halts the backend and all its sub-components. The backend
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
+	// Close the [eventbus.Client] and wait for LocalBackend.consumeEventbusTopics
+	// to return. Do this before acquiring b.mu:
+	//  1. LocalBackend.consumeEventbusTopics event handlers also acquire b.mu,
+	//     they can deadlock with c.Shutdown().
+	//  2. LocalBackend.consumeEventbusTopics event handlers may not guard against
+	//     undesirable post/in-progress LocalBackend.Shutdown() behaviors.
+	b.eventClient.Close()
+	<-b.subsDoneCh
+
+	b.em.close()
+
 	b.mu.Lock()
 	if b.shutdownCalled {
 		b.mu.Unlock()
@@ -2465,33 +2508,32 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			cb()
 		}
 	}
+
 	// TODO(apenwarr): The only way to change the ServerURL is to
 	// re-run b.Start, because this is the only place we create a
 	// new controlclient. EditPrefs allows you to overwrite ServerURL,
 	// but it won't take effect until the next Start.
 	cc, err := b.getNewControlClientFuncLocked()(controlclient.Options{
-		GetMachinePrivateKey:       b.createGetMachinePrivateKeyFunc(),
-		Logf:                       logger.WithPrefix(b.logf, "control: "),
-		Persist:                    *persistv,
-		ServerURL:                  serverURL,
-		AuthKey:                    opts.AuthKey,
-		Hostinfo:                   hostinfo,
-		HTTPTestClient:             httpTestClient,
-		DiscoPublicKey:             discoPublic,
-		DebugFlags:                 debugFlags,
-		HealthTracker:              b.health,
-		PolicyClient:               b.sys.PolicyClientOrDefault(),
-		Pinger:                     b,
-		PopBrowserURL:              b.tellClientToBrowseToURL,
-		OnClientVersion:            b.onClientVersion,
-		OnTailnetDefaultAutoUpdate: b.onTailnetDefaultAutoUpdate,
-		OnControlTime:              b.em.onControlTime,
-		Dialer:                     b.Dialer(),
-		Observer:                   b,
-		C2NHandler:                 http.HandlerFunc(b.handleC2N),
-		DialPlan:                   &b.dialPlan, // pointer because it can't be copied
-		ControlKnobs:               b.sys.ControlKnobs(),
-		Shutdown:                   ccShutdown,
+		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
+		Logf:                 logger.WithPrefix(b.logf, "control: "),
+		Persist:              *persistv,
+		ServerURL:            serverURL,
+		AuthKey:              opts.AuthKey,
+		Hostinfo:             hostinfo,
+		HTTPTestClient:       httpTestClient,
+		DiscoPublicKey:       discoPublic,
+		DebugFlags:           debugFlags,
+		HealthTracker:        b.health,
+		PolicyClient:         b.sys.PolicyClientOrDefault(),
+		Pinger:               b,
+		PopBrowserURL:        b.tellClientToBrowseToURL,
+		Dialer:               b.Dialer(),
+		Observer:             b,
+		C2NHandler:           http.HandlerFunc(b.handleC2N),
+		DialPlan:             &b.dialPlan, // pointer because it can't be copied
+		ControlKnobs:         b.sys.ControlKnobs(),
+		Shutdown:             ccShutdown,
+		Bus:                  b.sys.Bus.Get(),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -4482,7 +4524,6 @@ func (b *LocalBackend) changeDisablesExitNodeLocked(prefs ipn.PrefsView, change 
 	// but wasn't empty before, then the change disables
 	// exit node usage.
 	return tmpPrefs.ExitNodeID == ""
-
 }
 
 // adjustEditPrefsLocked applies additional changes to mp if necessary,
@@ -8001,7 +8042,6 @@ func isAllowedAutoExitNodeID(polc policyclient.Client, exitNodeID tailcfg.Stable
 	}
 	if nodes, _ := polc.GetStringArray(pkey.AllowedSuggestedExitNodes, nil); nodes != nil {
 		return slices.Contains(nodes, string(exitNodeID))
-
 	}
 	return true // no policy configured; allow all exit nodes
 }
@@ -8145,9 +8185,7 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 	return servicesList
 }
 
-var (
-	metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
-)
+var metricCurrentWatchIPNBus = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {
 	switch runtime.GOOS {

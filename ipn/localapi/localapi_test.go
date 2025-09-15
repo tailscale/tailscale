@@ -35,6 +35,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine"
 )
@@ -158,7 +159,6 @@ func TestWhoIsArgTypes(t *testing.T) {
 						t.Fatalf("backend called with %v; want %v", k, keyStr)
 					}
 					return match()
-
 				},
 				peerCaps: map[netip.Addr]tailcfg.PeerCapMap{
 					netip.MustParseAddr("100.101.102.103"): map[tailcfg.PeerCapability][]tailcfg.RawMessage{
@@ -336,7 +336,7 @@ func TestServeWatchIPNBus(t *testing.T) {
 
 func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 	var logf logger.Logf = logger.Discard
-	sys := tsd.NewSystem()
+	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 	store := new(mem.Store)
 	sys.Set(store)
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry(), sys.Bus.Get())
