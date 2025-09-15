@@ -840,6 +840,7 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
 		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
 		"TS_DEBUG_LOG_RATE=all",
+		"TEST=1",
 	)
 	if n.allowUpdates {
 		cmd.Env = append(cmd.Env, "TS_TEST_ALLOW_AUTO_UPDATE=1")

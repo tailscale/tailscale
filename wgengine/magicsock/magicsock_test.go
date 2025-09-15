@@ -3244,6 +3244,8 @@ func TestNetworkSendErrors(t *testing.T) {
 		conn, reg, close := newTestConnAndRegistry(t)
 		defer close()
 
+		tstest.Replace(t, &checkNetworkDownDuringTests, true)
+
 		buffs := [][]byte{{00, 00, 00, 00, 00, 00, 00, 00}}
 		ep := &lazyEndpoint{
 			src: epAddr{ap: netip.MustParseAddrPort("127.0.0.1:9999")},
