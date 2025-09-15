@@ -31,12 +31,16 @@ func main() {
 	flag.Parse()
 
 	var all []string
-	if *features == "" {
-		for k := range featuretags.Features {
-			if k.IsOmittable() {
-				all = append(all, k.OmitTag())
-			}
+	var allOmittable []string
+
+	for k := range featuretags.Features {
+		if k.IsOmittable() {
+			allOmittable = append(allOmittable, k.OmitTag())
 		}
+	}
+
+	if *features == "" {
+		all = slices.Clone(allOmittable)
 	} else {
 		for v := range strings.SplitSeq(*features, ",") {
 			if !strings.HasPrefix(v, "ts_omit_") {
@@ -49,15 +53,15 @@ func main() {
 	slices.Sort(all)
 	all = slices.Compact(all)
 
-	baseD := measure("tailscaled")
-	baseC := measure("tailscale")
-	baseBoth := measure("tailscaled", "ts_include_cli")
-
-	minD := measure("tailscaled", all...)
-	minC := measure("tailscale", all...)
-	minBoth := measure("tailscaled", append(slices.Clone(all), "ts_include_cli")...)
+	minD := measure("tailscaled", allOmittable...)
+	minC := measure("tailscale", allOmittable...)
+	minBoth := measure("tailscaled", append(slices.Clone(allOmittable), "ts_include_cli")...)
 
 	if *showRemovals {
+		baseD := measure("tailscaled")
+		baseC := measure("tailscale")
+		baseBoth := measure("tailscaled", "ts_include_cli")
+
 		fmt.Printf("Starting with everything and removing a feature...\n\n")
 
 		fmt.Printf("%9s %9s %9s\n", "tailscaled", "tailscale", "combined (linux/amd64)")
@@ -80,7 +84,7 @@ func main() {
 	fmt.Printf("%9s %9s %9s\n", "tailscaled", "tailscale", "combined (linux/amd64)")
 	fmt.Printf("%9d %9d %9d omitting everything\n", minD, minC, minBoth)
 	for _, t := range all {
-		tags := allExcept(all, t)
+		tags := allExcept(allOmittable, t)
 		sizeD := measure("tailscaled", tags...)
 		sizeC := measure("tailscale", tags...)
 		sizeBoth := measure("tailscaled", append(tags, "ts_include_cli")...)
