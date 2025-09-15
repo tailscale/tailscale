@@ -59,6 +59,9 @@ type Server struct {
 	// belong to the same user.
 	AllNodesSameUser bool
 
+	// DefaultNodeCapabilities overrides the capability map sent to each client.
+	DefaultNodeCapabilities *tailcfg.NodeCapMap
+
 	// ExplicitBaseURL or HTTPTestServer must be set.
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
 	HTTPTestServer  *httptest.Server // if non-nil, used to get BaseURL
@@ -680,6 +683,19 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 			v4Prefix,
 			v6Prefix,
 		}
+
+		var capMap tailcfg.NodeCapMap
+		if s.DefaultNodeCapabilities != nil {
+			capMap = *s.DefaultNodeCapabilities
+		} else {
+			capMap = tailcfg.NodeCapMap{
+				tailcfg.CapabilityHTTPS:                           []tailcfg.RawMessage{""},
+				tailcfg.NodeAttrFunnel:                            []tailcfg.RawMessage{""},
+				tailcfg.CapabilityFileSharing:                     []tailcfg.RawMessage{""},
+				tailcfg.CapabilityFunnelPorts + "?ports=8080,443": []tailcfg.RawMessage{""},
+			}
+		}
+
 		node := &tailcfg.Node{
 			ID:                tailcfg.NodeID(nodeID),
 			StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", int(nodeID))),
@@ -692,12 +708,8 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 			Hostinfo:          req.Hostinfo.View(),
 			Name:              req.Hostinfo.Hostname,
 			Cap:               req.Version,
-			Capabilities: []tailcfg.NodeCapability{
-				tailcfg.CapabilityHTTPS,
-				tailcfg.NodeAttrFunnel,
-				tailcfg.CapabilityFileSharing,
-				tailcfg.CapabilityFunnelPorts + "?ports=8080,443",
-			},
+			CapMap:            capMap,
+			Capabilities:      slices.Collect(maps.Keys(capMap)),
 		}
 		s.nodes[nk] = node
 	}
