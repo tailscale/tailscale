@@ -160,6 +160,8 @@ type HTTPHandler struct {
 
 	Text string `json:",omitempty"` // plaintext to serve (primarily for testing)
 
+	ForwardGrantHeaders string `json:",omitempty"` // name app capability to forward in grant headers
+
 	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
 	// temporary ones? Error codes? Redirects?
 }

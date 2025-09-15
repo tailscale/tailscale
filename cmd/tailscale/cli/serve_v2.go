@@ -178,6 +178,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
 			if subcmd == serve {
 				fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
+				fs.StringVar(&e.forwardGrantHeaders, "forward-grant-headers", "", "Forward headers containing the values of the specified grants")
 			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
@@ -417,7 +418,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if len(args) > 0 {
 				target = args[0]
 			}
-			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix)
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.forwardGrantHeaders)
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -611,12 +612,12 @@ func serveFromPortHandler(tcp *ipn.TCPPortHandler) serveType {
 	}
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, grantHeaders string) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
 		useTLS := srvType == serveTypeHTTPS
-		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds)
+		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, grantHeaders)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
@@ -780,7 +781,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	return output.String()
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target string, mds string) error {
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds, grantHeaders string) error {
 	h := new(ipn.HTTPHandler)
 	switch {
 	case strings.HasPrefix(target, "text:"):
@@ -814,6 +815,9 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 			return err
 		}
 		h.Proxy = t
+		if grantHeaders != "" {
+			h.ForwardGrantHeaders = grantHeaders
+		}
 	}
 
 	// TODO: validation needs to check nested foreground configs

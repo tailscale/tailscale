@@ -156,16 +156,17 @@ type serveEnv struct {
 	json bool // output JSON (status only for now)
 
 	// v2 specific flags
-	bg               bgBoolFlag          // background mode
-	setPath          string              // serve path
-	https            uint                // HTTP port
-	http             uint                // HTTP port
-	tcp              uint                // TCP port
-	tlsTerminatedTCP uint                // a TLS terminated TCP port
-	subcmd           serveMode           // subcommand
-	yes              bool                // update without prompt
-	service          tailcfg.ServiceName // service name
-	tun              bool                // redirect traffic to OS for service
+	bg                  bgBoolFlag          // background mode
+	setPath             string              // serve path
+	https               uint                // HTTP port
+	http                uint                // HTTP port
+	tcp                 uint                // TCP port
+	tlsTerminatedTCP    uint                // a TLS terminated TCP port
+	subcmd              serveMode           // subcommand
+	yes                 bool                // update without prompt
+	service             tailcfg.ServiceName // service name
+	tun                 bool                // redirect traffic to OS for service
+	forwardGrantHeaders string              // forward grants in headers
 
 	lc localServeClient // localClient interface, specific to serve
 

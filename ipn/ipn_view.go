@@ -889,11 +889,15 @@ func (v HTTPHandlerView) Proxy() string { return v.ж.Proxy }
 // plaintext to serve (primarily for testing)
 func (v HTTPHandlerView) Text() string { return v.ж.Text }
 
+// name app capability to forward in grant headers
+func (v HTTPHandlerView) ForwardGrantHeaders() string { return v.ж.ForwardGrantHeaders }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
-	Path  string
-	Proxy string
-	Text  string
+	Path                string
+	Proxy               string
+	Text                string
+	ForwardGrantHeaders string
 }{})
 
 // View returns a read-only view of WebServerConfig.

@@ -60,6 +60,8 @@ type serveHTTPContext struct {
 
 	// provides funnel-specific context, nil if not funneled
 	Funnel *funnelFlow
+
+	ForwardGrantHeaders string
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -749,6 +751,7 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
+		rp.lb.addCustomGrantHeaders(r)
 	}}
 
 	// There is no way to autodetect h2c as per RFC 9113
@@ -855,6 +858,27 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
 }
 
+func (b *LocalBackend) addCustomGrantHeaders(r *httputil.ProxyRequest) {
+	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
+	if !ok {
+		return
+	}
+
+	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
+	capToForward := tailcfg.PeerCapability(c.ForwardGrantHeaders)
+	cap, err := tailcfg.UnmarshalCapJSON[map[string]string](peerCaps, capToForward)
+	if err != nil {
+		b.logf("couldn't parse capability %s: %v", capToForward, err)
+		return
+	}
+	// take the first entry in the list for now
+	if len(cap) > 0 {
+		for k, v := range cap[0] {
+			r.Out.Header.Set(fmt.Sprintf("Tailscale-User-Capability-%s", k), encTailscaleHeaderValue(v))
+		}
+	}
+}
+
 // encTailscaleHeaderValue cleans or encodes as necessary v, to be suitable in
 // an HTTP header value. See
 // https://github.com/tailscale/tailscale/issues/11603.
@@ -893,6 +917,17 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
 		}
+		c, ok := serveHTTPContextKey.ValueOk(r.Context())
+		if !ok {
+			return
+		}
+		r = r.WithContext(serveHTTPContextKey.WithValue(r.Context(), &serveHTTPContext{
+			SrcAddr:             c.SrcAddr,
+			ForVIPService:       c.ForVIPService,
+			DestPort:            c.DestPort,
+			Funnel:              c.Funnel,
+			ForwardGrantHeaders: h.ForwardGrantHeaders(),
+		}))
 		h := p.(http.Handler)
 		// Trim the mount point from the URL path before proxying. (#6571)
 		if r.URL.Path != "/" {
