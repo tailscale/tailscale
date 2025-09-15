@@ -173,6 +173,10 @@ func TestLoadBalancerClass(t *testing.T) {
 			},
 		},
 	}
+
+	// Perform an additional reconciliation loop here to ensure resources don't change through side effects. Mainly
+	// to prevent infinite reconciliation
+	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, want)
 
 	// Turn the service back into a ClusterIP service, which should make the
