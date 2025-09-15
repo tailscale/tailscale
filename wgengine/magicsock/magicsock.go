@@ -2539,10 +2539,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 	// Remember this route if not present.
 	var dup bool
 	if isDerp {
-		if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
-			if ep.addCandidateEndpoint(src.ap, dm.TxID) {
-				return
-			}
+		if _, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
 			numNodes = 1
 		}
 	} else {
