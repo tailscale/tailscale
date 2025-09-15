@@ -4,6 +4,7 @@
 package netmon
 
 import (
+	"context"
 	"sync"
 
 	"tailscale.com/types/logger"
@@ -12,16 +13,17 @@ import (
 // LinkChangeLogLimiter returns a new [logger.Logf] that logs each unique
 // format string to the underlying logger only once per major LinkChange event.
 //
-// The returned function should be called when the logger is no longer needed,
-// to release resources from the Monitor.
-func LinkChangeLogLimiter(logf logger.Logf, nm *Monitor) (_ logger.Logf, unregister func()) {
+// The logger stops tracking seen format strings when the provided context is
+// done.
+func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) logger.Logf {
 	var formatSeen sync.Map // map[string]bool
-	unregister = nm.RegisterChangeCallback(func(cd *ChangeDelta) {
+	unregister := nm.RegisterChangeCallback(func(cd *ChangeDelta) {
 		// If we're in a major change or a time jump, clear the seen map.
 		if cd.Major || cd.TimeJumped {
 			formatSeen.Clear()
 		}
 	})
+	context.AfterFunc(ctx, unregister)
 
 	return func(format string, args ...any) {
 		// We only store 'true' in the map, so if it's present then it
@@ -38,5 +40,5 @@ func LinkChangeLogLimiter(logf logger.Logf, nm *Monitor) (_ logger.Logf, unregis
 		}
 
 		logf(format, args...)
-	}, unregister
+	}
 }

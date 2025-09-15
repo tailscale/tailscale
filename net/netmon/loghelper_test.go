@@ -5,13 +5,17 @@ package netmon
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
+	"testing/synctest"
 
 	"tailscale.com/util/eventbus"
 )
 
-func TestLinkChangeLogLimiter(t *testing.T) {
+func TestLinkChangeLogLimiter(t *testing.T) { synctest.Test(t, syncTestLinkChangeLogLimiter) }
+
+func syncTestLinkChangeLogLimiter(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Close()
 	mon, err := New(bus, t.Logf)
@@ -30,8 +34,10 @@ func TestLinkChangeLogLimiter(t *testing.T) {
 		fmt.Fprintf(&logBuffer, format, args...)
 	}
 
-	logf, unregister := LinkChangeLogLimiter(logf, mon)
-	defer unregister()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	logf = LinkChangeLogLimiter(ctx, logf, mon)
 
 	// Log once, which should write to our log buffer.
 	logf("hello %s", "world")
@@ -72,8 +78,11 @@ func TestLinkChangeLogLimiter(t *testing.T) {
 		t.Errorf("unexpected log buffer contents: %q", got)
 	}
 
-	// Unregistering the callback should clear our 'cbs' set.
-	unregister()
+	// Canceling the context we passed to LinkChangeLogLimiter should
+	// unregister the callback from the netmon.
+	cancel()
+	synctest.Wait()
+
 	mon.mu.Lock()
 	if len(mon.cbs) != 0 {
 		t.Errorf("expected no callbacks, got %v", mon.cbs)
