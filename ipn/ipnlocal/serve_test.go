@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"tailscale.com/types/views"
 	"testing"
 	"time"
 
@@ -699,6 +700,9 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 		want   string
 	}
 
+	peercaps := b.PeerCaps(netip.MustParsePrefix("100.150.151.152/32").Addr())
+	_ = peercaps
+
 	tests := []struct {
 		name        string
 		srcIP       string
@@ -714,6 +718,7 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 				{"Tailscale-User-Name", "Some One"},
 				{"Tailscale-User-Profile-Pic", "https://example.com/photo.jpg"},
 				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
+				{"Tailscale-User-Role", "Admin"},
 			},
 		},
 		{
@@ -925,6 +930,9 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	b.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.150.151.151/32"),
+			},
 		}).View(),
 		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
 			tailcfg.UserID(1): (&tailcfg.UserProfile{
@@ -933,6 +941,19 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 				ProfilePicURL: "https://example.com/photo.jpg",
 			}).View(),
 		},
+		PacketFilterRules: views.SliceOf([]tailcfg.FilterRule{{
+			SrcIPs: []string{"100.150.151.152"}, // first peer in the list below, the one without tags
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{
+					netip.MustParsePrefix("100.150.151.151/32"), // TODO: try anywhere instead?
+				},
+				CapMap: tailcfg.PeerCapMap{
+					"neinkeinkaffee.com/cap/grafana": []tailcfg.RawMessage{
+						"{\"role\":[\"Admin\"]}",
+					},
+				},
+			}},
+		}}),
 		Peers: []tailcfg.NodeView{
 			(&tailcfg.Node{
 				ID:           152,
@@ -941,6 +962,9 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 				Key:          makeNodeKeyFromID(152),
 				Addresses: []netip.Prefix{
 					netip.MustParsePrefix("100.150.151.152/32"),
+				},
+				CapMap: map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+					"neinkeinkaffee.com/cap/grafana": {"{\"role\":[\"Admin\"]}"},
 				},
 			}).View(),
 			(&tailcfg.Node{

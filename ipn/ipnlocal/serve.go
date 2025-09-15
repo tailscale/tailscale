@@ -806,6 +806,7 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
+		rp.lb.addCustomGrantHeaders(r)
 	}}
 
 	// There is no way to autodetect h2c as per RFC 9113
@@ -910,6 +911,31 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Set("Tailscale-User-Name", encTailscaleHeaderValue(user.DisplayName))
 	r.Out.Header.Set("Tailscale-User-Profile-Pic", user.ProfilePicURL)
 	r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
+}
+
+func (b *LocalBackend) addCustomGrantHeaders(r *httputil.ProxyRequest) {
+	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
+	if !ok {
+		return
+	}
+	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
+
+	// TODO: make configurable
+	capType := tailcfg.PeerCapability("neinkeinkaffee.com/cap/grafana")
+	type capStruct struct {
+		Role string `json:"role,omitempty"`
+	}
+
+	unmarshalled, err := tailcfg.UnmarshalCapJSON[capStruct](peerCaps, capType)
+	if err != nil {
+		b.logf("couldn't parse capability %s: %v", capType, err)
+		return
+	}
+	if len(unmarshalled) > 0 {
+		// TODO: make configurable
+		value := unmarshalled[0].Role
+		r.Out.Header.Set("Tailscale-User-Role", encTailscaleHeaderValue(value))
+	}
 }
 
 // encTailscaleHeaderValue cleans or encodes as necessary v, to be suitable in
