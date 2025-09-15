@@ -168,7 +168,6 @@ type Config struct {
 	EventBus *eventbus.Bus
 
 	// RouteAdvertiser allows the connector to update the set of advertised routes.
-	// It must be non-nil.
 	RouteAdvertiser RouteAdvertiser
 
 	// RouteInfo, if non-nil, use used as the initial set of routes for the
@@ -187,8 +186,6 @@ func NewAppConnector(c Config) *AppConnector {
 		panic("missing logger")
 	case c.EventBus == nil:
 		panic("missing event bus")
-	case c.RouteAdvertiser == nil:
-		panic("missing route advertiser")
 	}
 	ec := c.EventBus.Client("appc.AppConnector")
 
@@ -485,9 +482,11 @@ func (e *AppConnector) isAddrKnownLocked(domain string, addr netip.Addr) bool {
 // associated with the given domain.
 func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Prefix) {
 	e.queue.Add(func() {
-		if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
-			e.logf("failed to advertise routes for %s: %v: %v", domain, routes, err)
-			return
+		if e.routeAdvertiser != nil {
+			if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
+				e.logf("failed to advertise routes for %s: %v: %v", domain, routes, err)
+				return
+			}
 		}
 		e.updatePub.Publish(appctype.RouteUpdate{Advertise: routes})
 		e.mu.Lock()

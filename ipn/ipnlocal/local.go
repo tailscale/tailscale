@@ -614,7 +614,12 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 					b.setPortlistServices(pl)
 				}
 			case ru := <-routeUpdateSub.Events():
-				b.logf("TODO: received route update: %+v", ru)
+				if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
+					b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
+				}
+				if err := b.UnadvertiseRoute(ru.Unadvertise...); err != nil {
+					b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
+				}
 			case ri := <-storeRoutesSub.Events():
 				b.logf("TODO: received store routes: %+v", ri)
 			}
@@ -4816,7 +4821,6 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		b.appConnector = appc.NewAppConnector(appc.Config{
 			Logf:            b.logf,
 			EventBus:        b.sys.Bus.Get(),
-			RouteAdvertiser: b,
 			RouteInfo:       ri,
 			StoreRoutesFunc: storeFunc,
 		})
