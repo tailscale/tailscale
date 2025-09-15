@@ -689,10 +689,10 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 			capMap = *s.DefaultNodeCapabilities
 		} else {
 			capMap = tailcfg.NodeCapMap{
-				tailcfg.CapabilityHTTPS:                           []tailcfg.RawMessage{""},
-				tailcfg.NodeAttrFunnel:                            []tailcfg.RawMessage{""},
-				tailcfg.CapabilityFileSharing:                     []tailcfg.RawMessage{""},
-				tailcfg.CapabilityFunnelPorts + "?ports=8080,443": []tailcfg.RawMessage{""},
+				tailcfg.CapabilityHTTPS:                           []tailcfg.RawMessage{},
+				tailcfg.NodeAttrFunnel:                            []tailcfg.RawMessage{},
+				tailcfg.CapabilityFileSharing:                     []tailcfg.RawMessage{},
+				tailcfg.CapabilityFunnelPorts + "?ports=8080,443": []tailcfg.RawMessage{},
 			}
 		}
 
