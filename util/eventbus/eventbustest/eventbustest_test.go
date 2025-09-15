@@ -55,6 +55,27 @@ func TestExpectFilter(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:   "filter-with-nil-error",
+			events: []int{1, 2, 3},
+			expectFunc: func(event EventFoo) error {
+				if event.Value > 10 {
+					return fmt.Errorf("value > 10: %d", event.Value)
+				}
+				return nil
+			},
+		},
+		{
+			name:   "filter-with-non-nil-error",
+			events: []int{100, 200, 300},
+			expectFunc: func(event EventFoo) error {
+				if event.Value > 10 {
+					return fmt.Errorf("value > 10: %d", event.Value)
+				}
+				return nil
+			},
+			wantErr: true,
+		},
+		{
 			name:   "first event has to be func",
 			events: []int{24, 42},
 			expectFunc: func(event EventFoo) (bool, error) {
