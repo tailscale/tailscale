@@ -3131,32 +3131,87 @@ func TestMaybeRebindOnError(t *testing.T) {
 	})
 }
 
-func TestNetworkDownSendErrors(t *testing.T) {
+func newTestConnAndRegistry(t *testing.T) (*Conn, *usermetric.Registry, func()) {
+	t.Helper()
 	bus := eventbus.New()
-	defer bus.Close()
-
 	netMon := must.Get(netmon.New(bus, t.Logf))
-	defer netMon.Close()
 
 	reg := new(usermetric.Registry)
+
 	conn := must.Get(NewConn(Options{
 		DisablePortMapper: true,
 		Logf:              t.Logf,
 		NetMon:            netMon,
-		Metrics:           reg,
 		EventBus:          bus,
+		Metrics:           reg,
 	}))
-	defer conn.Close()
 
-	conn.SetNetworkUp(false)
-	if err := conn.Send([][]byte{{00}}, &lazyEndpoint{}, 0); err == nil {
-		t.Error("expected error, got nil")
+	return conn, reg, func() {
+		bus.Close()
+		netMon.Close()
+		conn.Close()
 	}
-	resp := httptest.NewRecorder()
-	reg.Handler(resp, new(http.Request))
-	if !strings.Contains(resp.Body.String(), `tailscaled_outbound_dropped_packets_total{reason="error"} 1`) {
-		t.Errorf("expected NetworkDown to increment packet dropped metric; got %q", resp.Body.String())
-	}
+}
+
+func TestNetworkSendErrors(t *testing.T) {
+	t.Run("network-down", func(t *testing.T) {
+		// TODO(alexc): This test case fails on Windows because it never
+		// successfully sends the first packet:
+		//
+		// 	   expected successful Send, got err: "write udp4 0.0.0.0:57516->127.0.0.1:9999:
+		// 	   wsasendto: The requested address is not valid in its context."
+		//
+		// It would be nice to run this test on Windows, but I was already
+		// on a side quest and it was unclear if this test has ever worked
+		// correctly on Windows.
+		if runtime.GOOS == "windows" {
+			t.Skipf("skipping on %s", runtime.GOOS)
+		}
+
+		conn, reg, close := newTestConnAndRegistry(t)
+		defer close()
+
+		buffs := [][]byte{{00, 00, 00, 00, 00, 00, 00, 00}}
+		ep := &lazyEndpoint{
+			src: epAddr{ap: netip.MustParseAddrPort("127.0.0.1:9999")},
+		}
+		offset := 8
+
+		// Check this is a valid payload to send when the network is up
+		conn.SetNetworkUp(true)
+		if err := conn.Send(buffs, ep, offset); err != nil {
+			t.Errorf("expected successful Send, got err: %q", err)
+		}
+
+		// Now we know the payload would be sent if the network is up,
+		// send it again when the network is down
+		conn.SetNetworkUp(false)
+		err := conn.Send(buffs, ep, offset)
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
+		resp := httptest.NewRecorder()
+		reg.Handler(resp, new(http.Request))
+		if !strings.Contains(resp.Body.String(), `tailscaled_outbound_dropped_packets_total{reason="error"} 1`) {
+			t.Errorf("expected NetworkDown to increment packet dropped metric; got %q", resp.Body.String())
+		}
+	})
+
+	t.Run("invalid-payload", func(t *testing.T) {
+		conn, reg, close := newTestConnAndRegistry(t)
+		defer close()
+
+		conn.SetNetworkUp(false)
+		err := conn.Send([][]byte{{00}}, &lazyEndpoint{}, 0)
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
+		resp := httptest.NewRecorder()
+		reg.Handler(resp, new(http.Request))
+		if !strings.Contains(resp.Body.String(), `tailscaled_outbound_dropped_packets_total{reason="error"} 1`) {
+			t.Errorf("expected invalid payload to increment packet dropped metric; got %q", resp.Body.String())
+		}
+	})
 }
 
 func Test_packetLooksLike(t *testing.T) {
