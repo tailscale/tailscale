@@ -46,8 +46,8 @@
     systems,
     flake-compat,
   }: let
-    go125Version = "1.25.0";
-    goHash = "sha256-S9AekSlyB7+kUOpA1NWpOxtTGl5DhHOyoG4Y4HciciU=";
+    go125Version = "1.25.1";
+    goHash = "sha256-0BDBCc7pTYDv5oHqtGvepJGskGv0ZYPDLp8NuwvRpZQ=";
     eachSystem = f:
       nixpkgs.lib.genAttrs (import systems) (system:
         f (import nixpkgs {
