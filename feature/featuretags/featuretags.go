@@ -1,8 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:generate go run gen-featuretags.go
-
 // The featuretags package is a registry of all the ts_omit-able build tags.
 package featuretags
 
