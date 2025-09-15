@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -267,52 +268,168 @@ func TestStateSavedOnStart(t *testing.T) {
 }
 
 func TestOneNodeUpAuth(t *testing.T) {
-	tstest.Shard(t)
-	tstest.Parallel(t)
-	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
-		control.RequireAuth = true
-	}))
+	for _, tt := range []struct {
+		name string
+		args []string
+		//
+		// What auth key should we use for control?
+		authKey string
+		//
+		// Is tailscaled already logged in before we run this `up` command?
+		alreadyLoggedIn bool
+		//
+		// Do we need to log in again with a new /auth/ URL?
+		needsNewAuthURL bool
+	}{
+		{
+			name:            "up",
+			args:            []string{"up"},
+			needsNewAuthURL: true,
+		},
+		{
+			name:            "up-with-force-reauth",
+			args:            []string{"up", "--force-reauth"},
+			needsNewAuthURL: true,
+		},
+		{
+			name:            "up-with-auth-key",
+			args:            []string{"up", "--auth-key=opensesame"},
+			authKey:         "opensesame",
+			needsNewAuthURL: false,
+		},
+		{
+			name:            "up-with-force-reauth-and-auth-key",
+			args:            []string{"up", "--force-reauth", "--auth-key=opensesame"},
+			authKey:         "opensesame",
+			needsNewAuthURL: false,
+		},
+		{
+			name:            "up-after-login",
+			args:            []string{"up"},
+			alreadyLoggedIn: true,
+			needsNewAuthURL: false,
+		},
+		// TODO(alexc): This test is failing because of a bug in `tailscale up` where
+		// it waits for ipn to enter the "Running" state.  If we're already logged in
+		// and running, this completes immediately, before we've had a chance to show
+		// the user the auth URL.
+		// {
+		// 	name:              "up-with-force-reauth-after-login",
+		// 	args:              []string{"up", "--force-reauth"},
+		// 	alreadyLoggedIn:   true,
+		// 	needsNewAuthURL:   true,
+		// },
+		{
+			name:            "up-with-auth-key-after-login",
+			args:            []string{"up", "--auth-key=opensesame"},
+			authKey:         "opensesame",
+			alreadyLoggedIn: true,
+			needsNewAuthURL: false,
+		},
+		{
+			name:            "up-with-force-reauth-and-auth-key-after-login",
+			args:            []string{"up", "--force-reauth", "--auth-key=opensesame"},
+			authKey:         "opensesame",
+			alreadyLoggedIn: true,
+			needsNewAuthURL: false,
+		},
+	} {
+		tstest.Shard(t)
 
-	n1 := NewTestNode(t, env)
-	d1 := n1.StartDaemon()
+		for _, useSeamlessKeyRenewal := range []bool{true, false} {
+			tt := tt // subtests are run in parallel, rebind tt
+			t.Run(fmt.Sprintf("%s-seamless-%t", tt.name, useSeamlessKeyRenewal), func(t *testing.T) {
+				tstest.Parallel(t)
 
-	n1.AwaitListening()
+				env := NewTestEnv(t, ConfigureControl(
+					func(control *testcontrol.Server) {
+						if tt.authKey != "" {
+							control.RequireAuthKey = tt.authKey
+						} else {
+							control.RequireAuth = true
+						}
 
-	st := n1.MustStatus()
-	t.Logf("Status: %s", st.BackendState)
+						control.AllNodesSameUser = true
 
-	t.Logf("Running up --login-server=%s ...", env.ControlURL())
+						if useSeamlessKeyRenewal {
+							control.DefaultNodeCapabilities = &tailcfg.NodeCapMap{
+								tailcfg.NodeAttrSeamlessKeyRenewal: []tailcfg.RawMessage{},
+							}
+						}
+					},
+				))
 
-	cmd := n1.Tailscale("up", "--login-server="+env.ControlURL())
-	var authCountAtomic atomic.Int32
-	cmd.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
-		t.Logf("saw auth URL %q", urlStr)
-		if env.Control.CompleteAuth(urlStr) {
-			if authCountAtomic.Add(1) > 1 {
-				err := errors.New("completed multple auth URLs")
-				t.Error(err)
-				return err
-			}
-			t.Logf("completed auth path %s", urlStr)
-			return nil
+				n1 := NewTestNode(t, env)
+				d1 := n1.StartDaemon()
+				defer d1.MustCleanShutdown(t)
+
+				cmdArgs := append(tt.args, "--login-server="+env.ControlURL())
+
+				// This handler looks for /auth/ URLs in the stdout from "tailscale up",
+				// and if it sees them, completes the auth process.
+				//
+				// It counts how many auth URLs it's seen.
+				var authCountAtomic atomic.Int32
+				authURLHandler := &authURLParserWriter{fn: func(urlStr string) error {
+					t.Logf("saw auth URL %q", urlStr)
+					if env.Control.CompleteAuth(urlStr) {
+						if authCountAtomic.Add(1) > 1 {
+							err := errors.New("completed multiple auth URLs")
+							t.Error(err)
+							return err
+						}
+						t.Logf("completed login to %s", urlStr)
+						return nil
+					} else {
+						err := fmt.Errorf("Failed to complete initial login to %q", urlStr)
+						t.Fatal(err)
+						return err
+					}
+				}}
+
+				// If we should be logged in at the start of the test case, go ahead
+				// and run the login command.
+				//
+				// Otherwise, just wait for tailscaled to be listening.
+				if tt.alreadyLoggedIn {
+					t.Logf("Running initial login: %s", strings.Join(cmdArgs, " "))
+					cmd := n1.Tailscale(cmdArgs...)
+					cmd.Stdout = authURLHandler
+					cmd.Stderr = cmd.Stdout
+					if err := cmd.Run(); err != nil {
+						t.Fatalf("up: %v", err)
+					}
+					authCountAtomic.Store(0)
+					n1.AwaitRunning()
+				} else {
+					n1.AwaitListening()
+				}
+
+				st := n1.MustStatus()
+				t.Logf("Status: %s", st.BackendState)
+
+				t.Logf("Running command: %s", strings.Join(cmdArgs, " "))
+				cmd := n1.Tailscale(cmdArgs...)
+				cmd.Stdout = authURLHandler
+				cmd.Stderr = cmd.Stdout
+
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("up: %v", err)
+				}
+				t.Logf("Got IP: %v", n1.AwaitIP4())
+
+				n1.AwaitRunning()
+
+				var expectedAuthUrls int32
+				if tt.needsNewAuthURL {
+					expectedAuthUrls = 1
+				}
+				if n := authCountAtomic.Load(); n != expectedAuthUrls {
+					t.Errorf("Auth URLs completed = %d; want %d", n, expectedAuthUrls)
+				}
+			})
 		}
-		err := fmt.Errorf("Failed to complete auth path to %q", urlStr)
-		t.Error(err)
-		return err
-	}}
-	cmd.Stderr = cmd.Stdout
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("up: %v", err)
 	}
-	t.Logf("Got IP: %v", n1.AwaitIP4())
-
-	n1.AwaitRunning()
-
-	if n := authCountAtomic.Load(); n != 1 {
-		t.Errorf("Auth URLs completed = %d; want 1", n)
-	}
-
-	d1.MustCleanShutdown(t)
 }
 
 func TestConfigFileAuthKey(t *testing.T) {
