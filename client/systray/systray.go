@@ -540,9 +540,9 @@ func (menu *Menu) copyTailscaleIP(device *ipnstate.PeerStatus) {
 	err := clipboard.WriteAll(ip)
 	if err != nil {
 		log.Printf("clipboard error: %v", err)
+	} else {
+		menu.sendNotification(fmt.Sprintf("Copied Address for %v", name), ip)
 	}
-
-	menu.sendNotification(fmt.Sprintf("Copied Address for %v", name), ip)
 }
 
 // sendNotification sends a desktop notification with the given title and content.
