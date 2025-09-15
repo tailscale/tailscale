@@ -348,9 +348,10 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 	dev := devices[0]
 	logger.Debugf("setting Service LoadBalancer status to %q, %s", dev.hostname, strings.Join(dev.ips, ", "))
-	svc.Status.LoadBalancer.Ingress = append(svc.Status.LoadBalancer.Ingress, corev1.LoadBalancerIngress{
-		Hostname: dev.hostname,
-	})
+
+	ingress := []corev1.LoadBalancerIngress{
+		{Hostname: dev.hostname},
+	}
 
 	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
 	if err != nil {
@@ -365,10 +366,11 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			continue
 		}
 		if addr.Is4() == clusterIPAddr.Is4() { // only add addresses of the same family
-			svc.Status.LoadBalancer.Ingress = append(svc.Status.LoadBalancer.Ingress, corev1.LoadBalancerIngress{IP: ip})
+			ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
 		}
 	}
 
+	svc.Status.LoadBalancer.Ingress = ingress
 	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 	return nil
 }
