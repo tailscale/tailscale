@@ -114,7 +114,11 @@ func main() {
 
 	}
 
-	doExec(filepath.Join(toolchain, "bin/go"), args, os.Environ())
+	// Note that doExec only returns if the exec call failed.
+	if err := doExec(filepath.Join(toolchain, "bin", "go"), args, os.Environ()); err != nil {
+		fmt.Fprintf(os.Stderr, "executing process: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 //go:embed gocross-wrapper.sh
