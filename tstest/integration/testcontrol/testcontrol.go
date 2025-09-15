@@ -644,6 +644,23 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		// some follow-ups? For now all are successes.
 	}
 
+	// The in-memory list of nodes, users, and logins is keyed by
+	// the node key.  If the node key changes, update all the data stores
+	// to use the new node key.
+	// if _, oldNodeKeyOk := s.nodes[req.OldNodeKey]; oldNodeKeyOk {
+	// 	if _, newNodeKeyOk := s.nodes[req.NodeKey]; !newNodeKeyOk {
+	// 		s.nodes[req.OldNodeKey].Key = req.NodeKey
+	// 		s.nodes[req.NodeKey] = s.nodes[req.OldNodeKey]
+
+	// 		s.users[req.NodeKey] = s.users[req.OldNodeKey]
+	// 		s.logins[req.NodeKey] = s.logins[req.OldNodeKey]
+
+	// 		delete(s.nodes, req.OldNodeKey)
+	// 		delete(s.users, req.OldNodeKey)
+	// 		delete(s.logins, req.OldNodeKey)
+	// 	}
+	// }
+
 	nk := req.NodeKey
 
 	user, login := s.getUser(nk)
