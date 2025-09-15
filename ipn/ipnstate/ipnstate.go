@@ -45,6 +45,10 @@ type Status struct {
 	// HaveNodeKey is whether the current profile has a node key configured.
 	HaveNodeKey bool `json:",omitempty"`
 
+	// PublicNodeKey contains a string representation of the public node key,
+	// if configured
+	PublicNodeKey string `json:",omitempty"`
+
 	AuthURL      string       // current URL provided by control to authorize client
 	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus

@@ -1217,6 +1217,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		}
 		s.Health = b.health.Strings()
 		s.HaveNodeKey = b.hasNodeKeyLocked()
+		s.PublicNodeKey = b.NodeKey().String()
 
 		// TODO(bradfitz): move this health check into a health.Warnable
 		// and remove from here.
@@ -5789,8 +5790,6 @@ func (b *LocalBackend) hasNodeKeyLocked() bool {
 
 // NodeKey returns the public node key.
 func (b *LocalBackend) NodeKey() key.NodePublic {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	if !b.hasNodeKeyLocked() {
 		return key.NodePublic{}
 	}

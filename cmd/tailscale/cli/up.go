@@ -446,6 +446,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		return fixTailscaledConnectError(err)
 	}
 	origAuthURL := st.AuthURL
+	origPublicNodeKey := st.PublicNodeKey
 
 	// printAuthURL reports whether we should print out the
 	// provided auth URL from an IPN notify.
@@ -540,8 +541,16 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}()
 
-	running := make(chan bool, 1) // gets value once in state ipn.Running
+	upComplete := make(chan bool, 1)
 	watchErr := make(chan error, 1)
+
+	// Start watching the IPN bus before we call Start() or StartLoginInteractive(),
+	// or we could miss IPN status messages.
+	watcher, err := localClient.WatchIPNBus(watchCtx, ipn.NotifyInitialState)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
 
 	// Special case: bare "tailscale up" means to just start
 	// running, if there's ever been a login.
@@ -583,12 +592,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}
 
-	watcher, err := localClient.WatchIPNBus(watchCtx, ipn.NotifyInitialState)
-	if err != nil {
-		return err
-	}
-	defer watcher.Close()
-
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
 		var lastURLPrinted string
@@ -613,6 +616,18 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL(policyclient.Get()))
 					}
 				case ipn.Running:
+					// If we've entered the running state and we're doing a force reauth,
+					// check if the node key has changed -- this tells us the user has
+					// completed a new auth process.
+					//
+					// TODO(alexc): it would be nice if we could get the public key
+					// in the ipn.Notify message rather than fetching the status
+					// again, but the key change happens very deep inside ipn and
+					// it wasn't obvious how we could emit the "key change" event.
+					if upArgs.forceReauth && !hasNodeKeyChanged(ctx, origPublicNodeKey) {
+						continue
+					}
+
 					// Done full authentication process
 					if env.upArgs.json {
 						printUpDoneJSON(ipn.Running, "")
@@ -621,7 +636,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						fmt.Fprintf(Stderr, "Success.\n")
 					}
 					select {
-					case running <- true:
+					case upComplete <- true:
 					default:
 					}
 					cancelWatch()
@@ -680,18 +695,18 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		timeoutCh = timeoutTimer.C
 	}
 	select {
-	case <-running:
+	case <-upComplete:
 		return nil
 	case <-watchCtx.Done():
 		select {
-		case <-running:
+		case <-upComplete:
 			return nil
 		default:
 		}
 		return watchCtx.Err()
 	case err := <-watchErr:
 		select {
-		case <-running:
+		case <-upComplete:
 			return nil
 		default:
 		}
@@ -699,6 +714,17 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	case <-timeoutCh:
 		return errors.New(`timeout waiting for Tailscale service to enter a Running state; check health with "tailscale status"`)
 	}
+}
+
+// hasNodeKeyChanged reports if the node key has changed since the initial state.
+// we got from ipn.
+func hasNodeKeyChanged(ctx context.Context, origPublicNodeKey string) bool {
+	st, err := localClient.Status(ctx)
+	if err != nil {
+		return false
+	}
+
+	return st.PublicNodeKey != origPublicNodeKey
 }
 
 // upWorthWarning reports whether the health check message s is worth warning
