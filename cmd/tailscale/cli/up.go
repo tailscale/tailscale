@@ -540,8 +540,18 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}()
 
-	running := make(chan bool, 1) // gets value once in state ipn.Running
-	watchErr := make(chan error, 1)
+	// Start watching the IPN bus before we call Start() or StartLoginInteractive(),
+	// or we could miss IPN notifications.
+	//
+	// In particular, if we're doing a force-reauth, we could miss the
+	// notification with the auth URL we should print for the user.  The
+	// initial state could contain the auth URL, but only if IPN is in the
+	// NeedsLogin state -- sometimes it's in Starting, and we don't get the URL.
+	watcher, err := localClient.WatchIPNBus(watchCtx, ipn.NotifyInitialState)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
 
 	// Special case: bare "tailscale up" means to just start
 	// running, if there's ever been a login.
@@ -587,11 +597,8 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}
 
-	watcher, err := localClient.WatchIPNBus(watchCtx, ipn.NotifyInitialState)
-	if err != nil {
-		return err
-	}
-	defer watcher.Close()
+	running := make(chan bool, 1)
+	watchErr := make(chan error, 1)
 
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
