@@ -3164,6 +3164,8 @@ func TestNetworkSendErrors(t *testing.T) {
 			t.Skipf("skipping on %s", runtime.GOOS)
 		}
 
+		tstest.Replace(t, &checkNetworkDownDuringTests, true)
+
 		reg := new(usermetric.Registry)
 		conn.metrics = registerMetrics(reg)
 
