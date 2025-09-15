@@ -55,6 +55,10 @@ type Server struct {
 	MagicDNSDomain string
 	HandleC2N      http.Handler // if non-nil, used for /some-c2n-path/ in tests
 
+	// PeerRelayGrants, if true, inserts relay capabilities into the wildcard
+	// grants rules.
+	PeerRelayGrants bool
+
 	// AllNodesSameUser, if true, makes all created nodes
 	// belong to the same user.
 	AllNodesSameUser bool
@@ -931,14 +935,21 @@ var keepAliveMsg = &struct {
 	KeepAlive: true,
 }
 
-func packetFilterWithIngressCaps() []tailcfg.FilterRule {
+func packetFilterWithIngress(addRelayCaps bool) []tailcfg.FilterRule {
 	out := slices.Clone(tailcfg.FilterAllowAll)
+	caps := []tailcfg.PeerCapability{
+		tailcfg.PeerCapabilityIngress,
+	}
+	if addRelayCaps {
+		caps = append(caps, tailcfg.PeerCapabilityRelay)
+		caps = append(caps, tailcfg.PeerCapabilityRelayTarget)
+	}
 	out = append(out, tailcfg.FilterRule{
 		SrcIPs: []string{"*"},
 		CapGrant: []tailcfg.CapGrant{
 			{
 				Dsts: []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
-				Caps: []tailcfg.PeerCapability{tailcfg.PeerCapabilityIngress},
+				Caps: caps,
 			},
 		},
 	})
@@ -977,7 +988,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		DERPMap:         s.DERPMap,
 		Domain:          domain,
 		CollectServices: "true",
-		PacketFilter:    packetFilterWithIngressCaps(),
+		PacketFilter:    packetFilterWithIngress(s.PeerRelayGrants),
 		DNSConfig:       dns,
 		ControlTime:     &t,
 	}
