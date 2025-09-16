@@ -464,18 +464,6 @@ func New(collection string, netMon *netmon.Monitor, health *health.Tracker, logf
 	}.New()
 }
 
-// Deprecated: Use [Options.New] instead.
-func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, health *health.Tracker, logf logger.Logf) *Policy {
-	return Options{
-		Collection: collection,
-		Dir:        dir,
-		CmdName:    cmdName,
-		NetMon:     netMon,
-		Health:     health,
-		Logf:       logf,
-	}.New()
-}
-
 // Options is used to construct a [Policy].
 type Options struct {
 	// Collection is a required collection to upload logs under.
