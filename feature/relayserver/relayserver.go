@@ -157,9 +157,7 @@ func (e *extension) consumeEventbusTopics(port int) {
 		select {
 		case <-e.disconnectFromBusCh:
 			return
-		case <-reqSub.Done():
-			// If reqSub is done, the eventClient has been closed, which is a
-			// signal to return.
+		case <-eventClient.Done():
 			return
 		case req := <-reqSub.Events():
 			if rs == nil {

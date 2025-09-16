@@ -158,13 +158,11 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 // [eventbus.Subscriber]'s and passes them to their related handler. Events are
 // always handled in the order they are received, i.e. the next event is not
 // read until the previous event's handler has returned. It returns when the
-// [portmapper.Mapping] subscriber is closed, which is interpreted to be the
-// same as the [eventbus.Client] closing ([eventbus.Subscribers] are either
-// all open or all closed).
+// [eventbus.Client] is closed.
 func (r *linuxRouter) consumeEventbusTopics() {
 	for {
 		select {
-		case <-r.ruleDeletedSub.Done():
+		case <-r.eventClient.Done():
 			return
 		case rulesDeleted := <-r.ruleDeletedSub.Events():
 			r.onIPRuleDeleted(rulesDeleted.Table, rulesDeleted.Priority)

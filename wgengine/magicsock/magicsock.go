@@ -640,15 +640,13 @@ func newConn(logf logger.Logf) *Conn {
 // [eventbus.Subscriber]'s and passes them to their related handler. Events are
 // always handled in the order they are received, i.e. the next event is not
 // read until the previous event's handler has returned. It returns when the
-// [portmapper.Mapping] subscriber is closed, which is interpreted to be the
-// same as the [eventbus.Client] closing ([eventbus.Subscribers] are either
-// all open or all closed).
+// [eventbus.Client] is closed.
 func (c *Conn) consumeEventbusTopics() {
 	defer close(c.subsDoneCh)
 
 	for {
 		select {
-		case <-c.pmSub.Done():
+		case <-c.eventClient.Done():
 			return
 		case <-c.pmSub.Events():
 			c.onPortMapChanged()
