@@ -595,12 +595,23 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}
 
-	running := make(chan bool, 1)
+	upComplete := make(chan bool, 1)
 	watchErr := make(chan error, 1)
 
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
 		var lastURLPrinted string
+
+		// If we're doing a force-reauth, we need to get two notifications:
+		//
+		//	 1. IPN is running
+		//	 2. The node key has changed
+		//
+		// These two notifications arrive separately, and trying to combine them
+		// has caused unexpected issues elsewhere in `tailscale up`.  For now, we
+		// track them separately.
+		var currentState ipn.State
+		waitingForKeyChange := upArgs.forceReauth
 
 		for {
 			n, err := watcher.Next()
@@ -612,29 +623,34 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				msg := *n.ErrMessage
 				fatalf("backend error: %v\n", msg)
 			}
+			if n.NodeKeyChanged != nil {
+				waitingForKeyChange = false
+			}
 			if s := n.State; s != nil {
-				switch *s {
-				case ipn.NeedsMachineAuth:
-					printed = true
-					if env.upArgs.json {
-						printUpDoneJSON(ipn.NeedsMachineAuth, "")
-					} else {
-						fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL(policyclient.Get()))
-					}
-				case ipn.Running:
-					// Done full authentication process
-					if env.upArgs.json {
-						printUpDoneJSON(ipn.Running, "")
-					} else if printed {
-						// Only need to print an update if we printed the "please click" message earlier.
-						fmt.Fprintf(Stderr, "Success.\n")
-					}
-					select {
-					case running <- true:
-					default:
-					}
-					cancelWatch()
+				currentState = *s
+			}
+			if currentState == ipn.NeedsMachineAuth && !printed {
+				printed = true
+				if env.upArgs.json {
+					printUpDoneJSON(ipn.NeedsMachineAuth, "")
+				} else {
+					fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL(policyclient.Get()))
 				}
+			}
+			if currentState == ipn.Running && !waitingForKeyChange {
+				// Done full authentication process
+				if env.upArgs.json {
+					printUpDoneJSON(ipn.Running, "")
+				} else if printed {
+					// Only need to print an update if we printed the "please click" message earlier.
+					fmt.Fprintf(Stderr, "Success.\n")
+				}
+				select {
+				case upComplete <- true:
+				default:
+				}
+				cancelWatch()
+				return
 			}
 			if url := n.BrowseToURL; url != nil {
 				authURL := *url
@@ -696,18 +712,18 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		timeoutCh = timeoutTimer.C
 	}
 	select {
-	case <-running:
+	case <-upComplete:
 		return nil
 	case <-watchCtx.Done():
 		select {
-		case <-running:
+		case <-upComplete:
 			return nil
 		default:
 		}
 		return watchCtx.Err()
 	case err := <-watchErr:
 		select {
-		case <-running:
+		case <-upComplete:
 			return nil
 		default:
 		}

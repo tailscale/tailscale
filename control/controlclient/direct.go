@@ -85,6 +85,7 @@ type Direct struct {
 	skipIPForwardingCheck bool
 	pinger                Pinger
 	popBrowser            func(url string)    // or nil
+	notifyKeyChange       func()              // or nil
 	polc                  policyclient.Client // always non-nil
 	c2nHandler            http.Handler        // or nil
 	panicOnUse            bool                // if true, panic if client is used (for testing)
@@ -139,6 +140,7 @@ type Options struct {
 	DebugFlags           []string     // debug settings to send to control
 	HealthTracker        *health.Tracker
 	PopBrowserURL        func(url string)    // optional func to open browser
+	NotifyKeyChange      func()              // optional func to notify on a key change
 	Dialer               *tsdial.Dialer      // non-nil
 	C2NHandler           http.Handler        // or nil
 	ControlKnobs         *controlknobs.Knobs // or nil to ignore
@@ -307,6 +309,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		pinger:                opts.Pinger,
 		polc:                  cmp.Or(opts.PolicyClient, policyclient.Client(policyclient.NoPolicyClient{})),
 		popBrowser:            opts.PopBrowserURL,
+		notifyKeyChange:       opts.NotifyKeyChange,
 		c2nHandler:            opts.C2NHandler,
 		dialer:                opts.Dialer,
 		dnsCache:              dnsCache,
@@ -761,7 +764,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.mu.Lock()
 	if resp.AuthURL == "" {
 		// key rotation is complete
+		isKeyChanged := !persist.PrivateNodeKey.Equal(tryingNewKey)
 		persist.PrivateNodeKey = tryingNewKey
+
+		if isKeyChanged && c.notifyKeyChange != nil {
+			c.notifyKeyChange()
+		}
 	} else {
 		// save it for the retry-with-URL
 		c.tryingNewKey = tryingNewKey

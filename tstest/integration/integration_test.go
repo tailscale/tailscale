@@ -306,16 +306,12 @@ func TestOneNodeUpAuth(t *testing.T) {
 			alreadyLoggedIn: true,
 			needsNewLogin:   false,
 		},
-		// TODO(alexc): This test is failing because of a bug in `tailscale up` where
-		// it waits for ipn to enter the "Running" state.  If we're already logged in
-		// and running, this completes immediately, before we've had a chance to show
-		// the user the auth URL.
-		// {
-		// 	name:            "up-with-force-reauth-after-login",
-		// 	args:            []string{"up", "--force-reauth"},
-		// 	alreadyLoggedIn: true,
-		// 	needsNewLogin:   true,
-		// },
+		{
+			name:            "up-with-force-reauth-after-login",
+			args:            []string{"up", "--force-reauth"},
+			alreadyLoggedIn: true,
+			needsNewLogin:   true,
+		},
 		{
 			name:            "up-with-auth-key-after-login",
 			args:            []string{"up", "--auth-key=opensesame"},
@@ -336,6 +332,21 @@ func TestOneNodeUpAuth(t *testing.T) {
 			t.Run(fmt.Sprintf("%s-seamless-%t", tt.name, useSeamlessKeyRenewal), func(t *testing.T) {
 				tstest.Shard(t)
 				tstest.Parallel(t)
+
+				// TODO(alexc): Get this test case working reliably.
+				//
+				// This test case works correctly when you run it in a real CLI, but is
+				// quite flaky in this test suite -- the test times out waiting for the
+				// `tailscale up` command to complete, because IPN notifications seem
+				// to get lost. I suspect it's a bug somewhere in the testcontrol server,
+				// possibly a deadlock? But I spent a day investigating and was unable
+				// to fix it.
+				//
+				// These tests still represent a big increase in coverage for `tailscale up`,
+				// so I'm going to leave this as an exercise for a future reader.
+				if t.Name() == "TestOneNodeUpAuth/up-with-force-reauth-after-login-seamless-false" {
+					t.Skip()
+				}
 
 				env := NewTestEnv(t, ConfigureControl(
 					func(control *testcontrol.Server) {
