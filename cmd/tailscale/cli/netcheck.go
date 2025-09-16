@@ -17,14 +17,23 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/portmapper"
+	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
+
+	// The "netcheck" command also wants the portmapper linked.
+	//
+	// TODO: make that subcommand either hit LocalAPI for that info, or use a
+	// tailscaled subcommand, to avoid making the CLI also link in the portmapper.
+	// For now (2025-09-15), keep doing what we've done for the past five years and
+	// keep linking it here.
+	_ "tailscale.com/feature/condregister/portmapper"
 )
 
 var netcheckCmd = &ffcli.Command{
@@ -56,14 +65,13 @@ func runNetcheck(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// Ensure that we close the portmapper after running a netcheck; this
-	// will release any port mappings created.
-	pm := portmapper.NewClient(portmapper.Config{
-		Logf:     logf,
-		NetMon:   netMon,
-		EventBus: bus,
-	})
-	defer pm.Close()
+	var pm portmappertype.Client
+	if buildfeatures.HasPortMapper {
+		// Ensure that we close the portmapper after running a netcheck; this
+		// will release any port mappings created.
+		pm = portmappertype.HookNewPortMapper.Get()(logf, bus, netMon, nil, nil)
+		defer pm.Close()
+	}
 
 	c := &netcheck.Client{
 		NetMon:      netMon,
@@ -210,6 +218,9 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 }
 
 func portMapping(r *netcheck.Report) string {
+	if !buildfeatures.HasPortMapper {
+		return "binary built without portmapper support"
+	}
 	if !r.AnyPortMappingChecked() {
 		return "not checked"
 	}

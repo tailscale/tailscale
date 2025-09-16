@@ -33,7 +33,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/ping"
-	"tailscale.com/net/portmapper"
+	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
@@ -215,7 +215,7 @@ type Client struct {
 
 	// PortMapper, if non-nil, is used for portmap queries.
 	// If nil, portmap discovery is not done.
-	PortMapper *portmapper.Client // lazily initialized on first use
+	PortMapper portmappertype.Client
 
 	// UseDNSCache controls whether this client should use a
 	// *dnscache.Resolver to resolve DERP hostnames, when no IP address is
@@ -730,7 +730,7 @@ func (rs *reportState) probePortMapServices() {
 
 	res, err := rs.c.PortMapper.Probe(context.Background())
 	if err != nil {
-		if !errors.Is(err, portmapper.ErrGatewayRange) {
+		if !errors.Is(err, portmappertype.ErrGatewayRange) {
 			// "skipping portmap; gateway range likely lacks support"
 			// is not very useful, and too spammy on cloud systems.
 			// If there are other errors, we want to log those.

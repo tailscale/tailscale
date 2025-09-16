@@ -29,6 +29,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	_ "tailscale.com/feature/condregister/portmapper"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"

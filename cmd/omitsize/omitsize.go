@@ -22,9 +22,9 @@ import (
 
 var (
 	cacheDir = flag.String("cachedir", "", "if non-empty, use this directory to store cached size results to speed up subsequent runs. The tool does not consider the git status when deciding whether to use the cache. It's on you to nuke it between runs if the tree changed.")
-	features = flag.String("features", "", "comma-separated list of features to consider, with or without the ts_omit_ prefix")
+	features = flag.String("features", "", "comma-separated list of features to list in the table, with or without the ts_omit_ prefix. It may also contain a '+' sign(s) for ANDing features together. If empty, all omittable features are considered one at a time.")
 
-	showRemovals = flag.Bool("show-removals", false, "if true, show a table of sizes removing one feature at a time from the full set")
+	showRemovals = flag.Bool("show-removals", false, "if true, show a table of sizes removing one feature at a time from the full set.")
 )
 
 func main() {
@@ -43,10 +43,14 @@ func main() {
 		all = slices.Clone(allOmittable)
 	} else {
 		for v := range strings.SplitSeq(*features, ",") {
-			if !strings.HasPrefix(v, "ts_omit_") {
-				v = "ts_omit_" + v
+			var withOmit []string
+			for v := range strings.SplitSeq(v, "+") {
+				if !strings.HasPrefix(v, "ts_omit_") {
+					v = "ts_omit_" + v
+				}
+				withOmit = append(withOmit, v)
 			}
-			all = append(all, v)
+			all = append(all, strings.Join(withOmit, "+"))
 		}
 	}
 
@@ -70,6 +74,9 @@ func main() {
 		fmt.Printf("-%8d -%8d -%8d omit-all\n", baseD-minD, baseC-minC, baseBoth-minBoth)
 
 		for _, t := range all {
+			if strings.Contains(t, "+") {
+				log.Fatalf("TODO: make --show-removals support ANDed features like %q", t)
+			}
 			sizeD := measure("tailscaled", t)
 			sizeC := measure("tailscale", t)
 			sizeBoth := measure("tailscaled", append([]string{t}, "ts_include_cli")...)
@@ -84,17 +91,17 @@ func main() {
 	fmt.Printf("%9s %9s %9s\n", "tailscaled", "tailscale", "combined (linux/amd64)")
 	fmt.Printf("%9d %9d %9d omitting everything\n", minD, minC, minBoth)
 	for _, t := range all {
-		tags := allExcept(allOmittable, t)
+		tags := allExcept(allOmittable, strings.Split(t, "+"))
 		sizeD := measure("tailscaled", tags...)
 		sizeC := measure("tailscale", tags...)
 		sizeBoth := measure("tailscaled", append(tags, "ts_include_cli")...)
-		fmt.Printf("+%8d +%8d +%8d .. add %s\n", max(sizeD-minD, 0), max(sizeC-minC, 0), max(sizeBoth-minBoth, 0), strings.TrimPrefix(t, "ts_omit_"))
+		fmt.Printf("+%8d +%8d +%8d .. add %s\n", max(sizeD-minD, 0), max(sizeC-minC, 0), max(sizeBoth-minBoth, 0), strings.ReplaceAll(t, "ts_omit_", ""))
 	}
 
 }
 
-func allExcept(all []string, omit string) []string {
-	return slices.DeleteFunc(slices.Clone(all), func(s string) bool { return s == omit })
+func allExcept(all, omit []string) []string {
+	return slices.DeleteFunc(slices.Clone(all), func(s string) bool { return slices.Contains(omit, s) })
 }
 
 func measure(bin string, tags ...string) int64 {

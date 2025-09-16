@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/tstest"
 )
 
@@ -1039,7 +1040,7 @@ func (u *upnpServer) handleControl(w http.ResponseWriter, r *http.Request, handl
 	}
 }
 
-func mustProbeUPnP(tb testing.TB, ctx context.Context, c *Client) ProbeResult {
+func mustProbeUPnP(tb testing.TB, ctx context.Context, c *Client) portmappertype.ProbeResult {
 	tb.Helper()
 	res, err := c.Probe(ctx)
 	if err != nil {

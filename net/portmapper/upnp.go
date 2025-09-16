@@ -209,7 +209,7 @@ func addAnyPortMapping(
 // The meta is the most recently parsed UDP discovery packet response
 // from the Internet Gateway Device.
 func getUPnPRootDevice(ctx context.Context, logf logger.Logf, debug DebugKnobs, gw netip.Addr, meta uPnPDiscoResponse) (rootDev *goupnp.RootDevice, loc *url.URL, err error) {
-	if debug.DisableUPnP {
+	if debug.DisableUPnP() {
 		return nil, nil, nil
 	}
 
@@ -434,7 +434,7 @@ func (c *Client) getUPnPPortMapping(
 	internal netip.AddrPort,
 	prevPort uint16,
 ) (external netip.AddrPort, ok bool) {
-	if disableUPnpEnv() || c.debug.DisableUPnP || (c.controlKnobs != nil && c.controlKnobs.DisableUPnP.Load()) {
+	if disableUPnpEnv() || c.debug.DisableUPnP() {
 		return netip.AddrPort{}, false
 	}
 

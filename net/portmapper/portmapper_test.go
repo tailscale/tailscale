@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/control/controlknobs"
+	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/util/eventbus/eventbustest"
 )
 
@@ -19,7 +19,7 @@ func TestCreateOrGetMapping(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
+	c := NewClient(Config{Logf: t.Logf})
 	defer c.Close()
 	c.SetLocalPort(1234)
 	for i := range 2 {
@@ -35,7 +35,7 @@ func TestClientProbe(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
+	c := NewClient(Config{Logf: t.Logf})
 	defer c.Close()
 	for i := range 3 {
 		if i > 0 {
@@ -50,7 +50,7 @@ func TestClientProbeThenMap(t *testing.T) {
 	if v, _ := strconv.ParseBool(os.Getenv("HIT_NETWORK")); !v {
 		t.Skip("skipping test without HIT_NETWORK=1")
 	}
-	c := NewClient(Config{Logf: t.Logf, ControlKnobs: new(controlknobs.Knobs)})
+	c := NewClient(Config{Logf: t.Logf})
 	defer c.Close()
 	c.debug.VerboseLogs = true
 	c.SetLocalPort(1234)
@@ -150,7 +150,7 @@ func TestUpdateEvent(t *testing.T) {
 		t.Fatalf("Probe failed: %v", err)
 	}
 	c.GetCachedMappingOrStartCreatingOne()
-	if err := eventbustest.Expect(tw, eventbustest.Type[Mapping]()); err != nil {
+	if err := eventbustest.Expect(tw, eventbustest.Type[portmappertype.Mapping]()); err != nil {
 		t.Error(err.Error())
 	}
 }

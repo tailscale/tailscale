@@ -90,3 +90,21 @@ func TestOmitTailnetLock(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitPortmapper(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_portmapper,ts_include_cli,ts_omit_debugportmapper",
+		OnDep: func(dep string) {
+			if dep == "tailscale.com/net/portmapper" {
+				t.Errorf("unexpected dep with ts_omit_portmapper: %q", dep)
+				return
+			}
+			if strings.Contains(dep, "goupnp") || strings.Contains(dep, "/soap") ||
+				strings.Contains(dep, "internetgateway2") {
+				t.Errorf("unexpected dep with ts_omit_portmapper: %q", dep)
+			}
+		},
+	}.Check(t)
+}

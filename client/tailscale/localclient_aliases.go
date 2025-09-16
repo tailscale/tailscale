@@ -32,11 +32,6 @@ type IPNBusWatcher = local.IPNBusWatcher
 // Deprecated: import [tailscale.com/client/local] instead.
 type BugReportOpts = local.BugReportOpts
 
-// DebugPortmapOpts is an alias for [tailscale.com/client/local.DebugPortmapOpts].
-//
-// Deprecated: import [tailscale.com/client/local] instead.
-type DebugPortmapOpts = local.DebugPortmapOpts
-
 // PingOpts is an alias for [tailscale.com/client/local.PingOpts].
 //
 // Deprecated: import [tailscale.com/client/local] instead.

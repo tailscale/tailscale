@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
@@ -273,10 +272,9 @@ func newTestClient(t *testing.T, igd *TestIGD, bus *eventbus.Bus) *Client {
 	}
 	var c *Client
 	c = NewClient(Config{
-		Logf:         tstest.WhileTestRunningLogger(t),
-		NetMon:       netmon.NewStatic(),
-		ControlKnobs: new(controlknobs.Knobs),
-		EventBus:     bus,
+		Logf:     tstest.WhileTestRunningLogger(t),
+		NetMon:   netmon.NewStatic(),
+		EventBus: bus,
 		OnChange: func() { // TODO(creachadair): Remove.
 			t.Logf("port map changed")
 			t.Logf("have mapping: %v", c.HaveMapping())
