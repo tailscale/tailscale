@@ -337,14 +337,6 @@ func TestOneNodeUpAuth(t *testing.T) {
 			t.Run(fmt.Sprintf("%s-seamless-%t", tt.name, useSeamlessKeyRenewal), func(t *testing.T) {
 				tstest.Parallel(t)
 
-				// TODO(alexc): This test is failing because of a bug in `tailscale up` where
-				// it waits for ipn to enter the "Running" state.  If we're already logged in
-				// and running, this completes immediately, before we've had a chance to show
-				// the user the auth URL.
-				if tt.name == "up-with-force-reauth-after-login" {
-					t.Skip()
-				}
-
 				env := NewTestEnv(t, ConfigureControl(
 					func(control *testcontrol.Server) {
 						if tt.authKey != "" {
