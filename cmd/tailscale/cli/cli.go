@@ -215,6 +215,7 @@ var (
 	maybeNetlockCmd,
 	maybeFunnelCmd,
 	maybeServeCmd,
+	maybeCertCmd,
 	_ func() *ffcli.Command
 )
 
@@ -262,7 +263,7 @@ change in the future.
 			nilOrCall(maybeWebCmd),
 			nilOrCall(fileCmd),
 			bugReportCmd,
-			certCmd,
+			nilOrCall(maybeCertCmd),
 			nilOrCall(maybeNetlockCmd),
 			licensesCmd,
 			exitNodeCmd(),

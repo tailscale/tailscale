@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !js && !ts_omit_acme
+
 package cli
 
 import (
@@ -25,19 +27,23 @@ import (
 	"tailscale.com/version"
 )
 
-var certCmd = &ffcli.Command{
-	Name:       "cert",
-	Exec:       runCert,
-	ShortHelp:  "Get TLS certs",
-	ShortUsage: "tailscale cert [flags] <domain>",
-	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("cert")
-		fs.StringVar(&certArgs.certFile, "cert-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.crt if --cert-file and --key-file are both unset")
-		fs.StringVar(&certArgs.keyFile, "key-file", "", "output key file or \"-\" for stdout; defaults to DOMAIN.key if --cert-file and --key-file are both unset")
-		fs.BoolVar(&certArgs.serve, "serve-demo", false, "if true, serve on port :443 using the cert as a demo, instead of writing out the files to disk")
-		fs.DurationVar(&certArgs.minValidity, "min-validity", 0, "ensure the certificate is valid for at least this duration; the output certificate is never expired if this flag is unset or 0, but the lifetime may vary; the maximum allowed min-validity depends on the CA")
-		return fs
-	})(),
+func init() {
+	maybeCertCmd = func() *ffcli.Command {
+		return &ffcli.Command{
+			Name:       "cert",
+			Exec:       runCert,
+			ShortHelp:  "Get TLS certs",
+			ShortUsage: "tailscale cert [flags] <domain>",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("cert")
+				fs.StringVar(&certArgs.certFile, "cert-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.crt if --cert-file and --key-file are both unset")
+				fs.StringVar(&certArgs.keyFile, "key-file", "", "output key file or \"-\" for stdout; defaults to DOMAIN.key if --cert-file and --key-file are both unset")
+				fs.BoolVar(&certArgs.serve, "serve-demo", false, "if true, serve on port :443 using the cert as a demo, instead of writing out the files to disk")
+				fs.DurationVar(&certArgs.minValidity, "min-validity", 0, "ensure the certificate is valid for at least this duration; the output certificate is never expired if this flag is unset or 0, but the lifetime may vary; the maximum allowed min-validity depends on the CA")
+				return fs
+			})(),
+		}
+	}
 }
 
 var certArgs struct {

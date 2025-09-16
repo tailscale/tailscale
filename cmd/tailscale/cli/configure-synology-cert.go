@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build linux && !ts_omit_acme
+
 package cli
 
 import (
@@ -21,6 +23,10 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/version/distro"
 )
+
+func init() {
+	maybeConfigSynologyCertCmd = synologyConfigureCertCmd
+}
 
 func synologyConfigureCertCmd() *ffcli.Command {
 	if runtime.GOOS != "linux" || distro.Get() != distro.Synology {

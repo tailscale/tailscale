@@ -41,7 +41,7 @@ while [ "$#" -gt 1 ]; do
 		fi
 		shift
 		ldflags="$ldflags -w -s"
-		tags="${tags:+$tags,},$($go run ./cmd/featuretags --min)"
+		tags="${tags:+$tags,},$(GOOS= GOARCH= $go run ./cmd/featuretags --min)"
 		;;
 	--box)
 		if [ ! -z "${TAGS:-}" ]; then

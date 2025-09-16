@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !ios && !android && !js
+//go:build !ios && !android && !js && !ts_omit_acme
 
 package localapi
 
@@ -13,6 +13,10 @@ import (
 
 	"tailscale.com/ipn/ipnlocal"
 )
+
+func init() {
+	Register("cert/", (*Handler).serveCert)
+}
 
 func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite && !h.PermitCert {

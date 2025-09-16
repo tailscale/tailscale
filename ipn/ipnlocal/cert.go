@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !js
+//go:build !js && !ts_omit_acme
 
 package ipnlocal
 
@@ -24,6 +24,7 @@ import (
 	"log"
 	randv2 "math/rand/v2"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,12 +41,17 @@ import (
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/bakedroots"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/acme"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
+
+func init() {
+	RegisterC2N("GET /tls-cert-status", handleC2NTLSCertStatus)
+}
 
 // Process-wide cache. (A new *Handler is created per connection,
 // effectively per request)
@@ -835,4 +841,55 @@ func checkCertDomain(st *ipnstate.Status, domain string) error {
 		return errors.New("your Tailscale account does not support getting TLS certs")
 	}
 	return fmt.Errorf("invalid domain %q; must be one of %q", domain, st.CertDomains)
+}
+
+// handleC2NTLSCertStatus returns info about the last TLS certificate issued for the
+// provided domain. This can be called by the controlplane to clean up DNS TXT
+// records when they're no longer needed by LetsEncrypt.
+//
+// It does not kick off a cert fetch or async refresh. It only reports anything
+// that's already sitting on disk, and only reports metadata about the public
+// cert (stuff that'd be the in CT logs anyway).
+func handleC2NTLSCertStatus(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	cs, err := b.getCertStore()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	domain := r.FormValue("domain")
+	if domain == "" {
+		http.Error(w, "no 'domain'", http.StatusBadRequest)
+		return
+	}
+
+	ret := &tailcfg.C2NTLSCertInfo{}
+	pair, err := getCertPEMCached(cs, domain, b.clock.Now())
+	ret.Valid = err == nil
+	if err != nil {
+		ret.Error = err.Error()
+		if errors.Is(err, errCertExpired) {
+			ret.Expired = true
+		} else if errors.Is(err, ipn.ErrStateNotExist) {
+			ret.Missing = true
+			ret.Error = "no certificate"
+		}
+	} else {
+		block, _ := pem.Decode(pair.CertPEM)
+		if block == nil {
+			ret.Error = "invalid PEM"
+			ret.Valid = false
+		} else {
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				ret.Error = fmt.Sprintf("invalid certificate: %v", err)
+				ret.Valid = false
+			} else {
+				ret.NotBefore = cert.NotBefore.UTC().Format(time.RFC3339)
+				ret.NotAfter = cert.NotAfter.UTC().Format(time.RFC3339)
+			}
+		}
+	}
+
+	writeJSON(w, ret)
 }
