@@ -68,15 +68,13 @@ func newExpiryManager(logf logger.Logf, bus *eventbus.Bus) *expiryManager {
 // [eventbus.Subscriber]'s and passes them to their related handler. Events are
 // always handled in the order they are received, i.e. the next event is not
 // read until the previous event's handler has returned. It returns when the
-// [controlclient.ControlTime] subscriber is closed, which is interpreted to be the
-// same as the [eventbus.Client] closing ([eventbus.Subscribers] are either
-// all open or all closed).
+// [eventbus.Client] is closed.
 func (em *expiryManager) consumeEventbusTopics() {
 	defer close(em.subsDoneCh)
 
 	for {
 		select {
-		case <-em.controlTimeSub.Done():
+		case <-em.eventClient.Done():
 			return
 		case time := <-em.controlTimeSub.Events():
 			em.onControlTime(time.Value)
