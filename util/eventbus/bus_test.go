@@ -27,7 +27,16 @@ func TestBus(t *testing.T) {
 	defer b.Close()
 
 	c := b.Client("TestSub")
-	defer c.Close()
+	cdone := c.Done()
+	defer func() {
+		c.Close()
+		select {
+		case <-cdone:
+			t.Log("Client close signal received (OK)")
+		case <-time.After(time.Second):
+			t.Error("timed out waiting for client close signal")
+		}
+	}()
 	s := eventbus.Subscribe[EventA](c)
 
 	go func() {
@@ -176,6 +185,40 @@ func TestSpam(t *testing.T) {
 
 	// TODO: check that the published sequences are proper
 	// subsequences of the received slices.
+}
+
+func TestClient_Done(t *testing.T) {
+	b := eventbus.New()
+	defer b.Close()
+
+	c := b.Client(t.Name())
+	s := eventbus.Subscribe[string](c)
+
+	// The client is not Done until closed.
+	select {
+	case <-c.Done():
+		t.Fatal("Client done before being closed")
+	default:
+		// OK
+	}
+
+	go c.Close()
+
+	// Once closed, the client becomes Done.
+	select {
+	case <-c.Done():
+		// OK
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for Client to be done")
+	}
+
+	// Thereafter, the subscriber should also be closed.
+	select {
+	case <-s.Done():
+		// OK
+	case <-time.After(time.Second):
+		t.Fatal("timoeout waiting for Subscriber to be done")
+	}
 }
 
 type queueChecker struct {
