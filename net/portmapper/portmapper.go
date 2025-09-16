@@ -8,7 +8,6 @@ package portmapper
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,18 +19,25 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
+)
+
+var (
+	ErrNoPortMappingServices = portmappertype.ErrNoPortMappingServices
+	ErrGatewayRange          = portmappertype.ErrGatewayRange
+	ErrGatewayIPv6           = portmappertype.ErrGatewayIPv6
+	ErrPortMappingDisabled   = portmappertype.ErrPortMappingDisabled
 )
 
 var disablePortMapperEnv = envknob.RegisterBool("TS_DISABLE_PORTMAPPER")
@@ -49,13 +55,31 @@ type DebugKnobs struct {
 	LogHTTP bool
 
 	// Disable* disables a specific service from mapping.
-	DisableUPnP bool
-	DisablePMP  bool
-	DisablePCP  bool
+	// If the funcs are nil or return false, the service is not disabled.
+	// Use the corresponding accessor methods without the "Func" suffix
+	// to check whether a service is disabled.
+	DisableUPnPFunc func() bool
+	DisablePMPFunc  func() bool
+	DisablePCPFunc  func() bool
 
 	// DisableAll, if non-nil, is a func that reports whether all port
 	// mapping attempts should be disabled.
 	DisableAll func() bool
+}
+
+// DisableUPnP reports whether UPnP is disabled.
+func (k *DebugKnobs) DisableUPnP() bool {
+	return k != nil && k.DisableUPnPFunc != nil && k.DisableUPnPFunc()
+}
+
+// DisablePMP reports whether NAT-PMP is disabled.
+func (k *DebugKnobs) DisablePMP() bool {
+	return k != nil && k.DisablePMPFunc != nil && k.DisablePMPFunc()
+}
+
+// DisablePCP reports whether PCP is disabled.
+func (k *DebugKnobs) DisablePCP() bool {
+	return k != nil && k.DisablePCPFunc != nil && k.DisablePCPFunc()
 }
 
 func (k *DebugKnobs) disableAll() bool {
@@ -88,11 +112,10 @@ type Client struct {
 	// The following two fields must both be non-nil.
 	// Both are immutable after construction.
 	pubClient *eventbus.Client
-	updates   *eventbus.Publisher[Mapping]
+	updates   *eventbus.Publisher[portmappertype.Mapping]
 
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
-	controlKnobs *controlknobs.Knobs
 	ipAndGateway func() (gw, ip netip.Addr, ok bool)
 	onChange     func() // or nil
 	debug        DebugKnobs
@@ -130,6 +153,8 @@ type Client struct {
 	mapping mapping // non-nil if we have a mapping
 }
 
+var _ portmappertype.Client = (*Client)(nil)
+
 func (c *Client) vlogf(format string, args ...any) {
 	if c.debug.VerboseLogs {
 		c.logf(format, args...)
@@ -159,7 +184,6 @@ type mapping interface {
 	MappingDebug() string
 }
 
-// HaveMapping reports whether we have a current valid mapping.
 func (c *Client) HaveMapping() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -223,10 +247,6 @@ type Config struct {
 	// debugging.  If nil, a sensible set of defaults will be used.
 	DebugKnobs *DebugKnobs
 
-	// ControlKnobs, if non-nil, specifies knobs from the control plane that
-	// might disable port mapping.
-	ControlKnobs *controlknobs.Knobs
-
 	// OnChange is called to run in a new goroutine whenever the port mapping
 	// status has changed. If nil, no callback is issued.
 	OnChange func()
@@ -246,10 +266,9 @@ func NewClient(c Config) *Client {
 		netMon:       c.NetMon,
 		ipAndGateway: netmon.LikelyHomeRouterIP, // TODO(bradfitz): move this to method on netMon
 		onChange:     c.OnChange,
-		controlKnobs: c.ControlKnobs,
 	}
 	ret.pubClient = c.EventBus.Client("portmapper")
-	ret.updates = eventbus.Publish[Mapping](ret.pubClient)
+	ret.updates = eventbus.Publish[portmappertype.Mapping](ret.pubClient)
 	if ret.logf == nil {
 		ret.logf = logger.Discard
 	}
@@ -448,13 +467,6 @@ func IsNoMappingError(err error) bool {
 	return ok
 }
 
-var (
-	ErrNoPortMappingServices = errors.New("no port mapping services were found")
-	ErrGatewayRange          = errors.New("skipping portmap; gateway range likely lacks support")
-	ErrGatewayIPv6           = errors.New("skipping portmap; no IPv6 support for portmapping")
-	ErrPortMappingDisabled   = errors.New("port mapping is disabled")
-)
-
 // GetCachedMappingOrStartCreatingOne quickly returns with our current cached portmapping, if any.
 // If there's not one, it starts up a background goroutine to create one.
 // If the background goroutine ends up creating one, the onChange hook registered with the
@@ -512,7 +524,7 @@ func (c *Client) createMapping() {
 		// the control flow to eliminate that possibility. Meanwhile, this
 		// mitigates a panic downstream, cf. #16662.
 	}
-	c.updates.Publish(Mapping{
+	c.updates.Publish(portmappertype.Mapping{
 		External:  mapping.External(),
 		Type:      mapping.MappingType(),
 		GoodUntil: mapping.GoodUntil(),
@@ -522,15 +534,6 @@ func (c *Client) createMapping() {
 	if c.onChange != nil {
 		go c.onChange()
 	}
-}
-
-// Mapping is an event recording the allocation of a port mapping.
-type Mapping struct {
-	External  netip.AddrPort
-	Type      string
-	GoodUntil time.Time
-
-	// TODO(creachadair): Record whether we reused an existing mapping?
 }
 
 // wildcardIP is used when the previous external IP is not known for PCP port mapping.
@@ -545,7 +548,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 	if c.debug.disableAll() {
 		return nil, netip.AddrPort{}, NoMappingError{ErrPortMappingDisabled}
 	}
-	if c.debug.DisableUPnP && c.debug.DisablePCP && c.debug.DisablePMP {
+	if c.debug.DisableUPnP() && c.debug.DisablePCP() && c.debug.DisablePMP() {
 		return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 	gw, myIP, ok := c.gatewayAndSelfIP()
@@ -624,7 +627,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 		prevPort = m.External().Port()
 	}
 
-	if c.debug.DisablePCP && c.debug.DisablePMP {
+	if c.debug.DisablePCP() && c.debug.DisablePMP() {
 		c.mu.Unlock()
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 			return nil, external, nil
@@ -675,7 +678,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 
 	pxpAddr := netip.AddrPortFrom(gw, c.pxpPort())
 
-	preferPCP := !c.debug.DisablePCP && (c.debug.DisablePMP || (!haveRecentPMP && haveRecentPCP))
+	preferPCP := !c.debug.DisablePCP() && (c.debug.DisablePMP() || (!haveRecentPMP && haveRecentPCP))
 
 	// Create a mapping, defaulting to PMP unless only PCP was seen recently.
 	if preferPCP {
@@ -860,19 +863,13 @@ func parsePMPResponse(pkt []byte) (res pmpResponse, ok bool) {
 	return res, true
 }
 
-type ProbeResult struct {
-	PCP  bool
-	PMP  bool
-	UPnP bool
-}
-
 // Probe returns a summary of which port mapping services are
 // available on the network.
 //
 // If a probe has run recently and there haven't been any network changes since,
 // the returned result might be server from the Client's cache, without
 // sending any network traffic.
-func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
+func (c *Client) Probe(ctx context.Context) (res portmappertype.ProbeResult, err error) {
 	if c.debug.disableAll() {
 		return res, ErrPortMappingDisabled
 	}
@@ -907,19 +904,19 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	// https://github.com/tailscale/tailscale/issues/1001
 	if c.sawPMPRecently() {
 		res.PMP = true
-	} else if !c.debug.DisablePMP {
+	} else if !c.debug.DisablePMP() {
 		metricPMPSent.Add(1)
 		uc.WriteToUDPAddrPort(pmpReqExternalAddrPacket, pxpAddr)
 	}
 	if c.sawPCPRecently() {
 		res.PCP = true
-	} else if !c.debug.DisablePCP {
+	} else if !c.debug.DisablePCP() {
 		metricPCPSent.Add(1)
 		uc.WriteToUDPAddrPort(pcpAnnounceRequest(myIP), pxpAddr)
 	}
 	if c.sawUPnPRecently() {
 		res.UPnP = true
-	} else if !c.debug.DisableUPnP {
+	} else if !c.debug.DisableUPnP() {
 		// Strictly speaking, you discover UPnP services by sending an
 		// SSDP query (which uPnPPacket is) to udp/1900 on the SSDP
 		// multicast address, and then get a flood of responses back

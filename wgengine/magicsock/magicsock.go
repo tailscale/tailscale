@@ -33,6 +33,7 @@ import (
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
@@ -44,7 +45,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
-	"tailscale.com/net/portmapper"
+	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/net/sockopts"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
@@ -177,7 +178,7 @@ type Conn struct {
 
 	// These [eventbus.Subscriber] fields are solely accessed by
 	// consumeEventbusTopics once initialized.
-	pmSub                 *eventbus.Subscriber[portmapper.Mapping]
+	pmSub                 *eventbus.Subscriber[portmappertype.Mapping]
 	filterSub             *eventbus.Subscriber[FilterUpdate]
 	nodeViewsSub          *eventbus.Subscriber[NodeViewsUpdate]
 	nodeMutsSub           *eventbus.Subscriber[NodeMutationsUpdate]
@@ -207,7 +208,8 @@ type Conn struct {
 
 	// portMapper is the NAT-PMP/PCP/UPnP prober/client, for requesting
 	// port mappings from NAT devices.
-	portMapper *portmapper.Client
+	// If nil, the portmapper is disabled.
+	portMapper portmappertype.Client
 
 	// derpRecvCh is used by receiveDERP to read DERP messages.
 	// It must have buffer size > 0; see issue 3736.
@@ -731,7 +733,7 @@ func NewConn(opts Options) (*Conn, error) {
 
 	// Subscribe calls must return before NewConn otherwise published
 	// events can be missed.
-	c.pmSub = eventbus.Subscribe[portmapper.Mapping](c.eventClient)
+	c.pmSub = eventbus.Subscribe[portmappertype.Mapping](c.eventClient)
 	c.filterSub = eventbus.Subscribe[FilterUpdate](c.eventClient)
 	c.nodeViewsSub = eventbus.Subscribe[NodeViewsUpdate](c.eventClient)
 	c.nodeMutsSub = eventbus.Subscribe[NodeMutationsUpdate](c.eventClient)
@@ -747,19 +749,21 @@ func NewConn(opts Options) (*Conn, error) {
 
 	// Don't log the same log messages possibly every few seconds in our
 	// portmapper.
-	portmapperLogf := logger.WithPrefix(c.logf, "portmapper: ")
-	portmapperLogf = netmon.LinkChangeLogLimiter(c.connCtx, portmapperLogf, opts.NetMon)
-	portMapOpts := &portmapper.DebugKnobs{
-		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
+	if buildfeatures.HasPortMapper && !opts.DisablePortMapper {
+		portmapperLogf := logger.WithPrefix(c.logf, "portmapper: ")
+		portmapperLogf = netmon.LinkChangeLogLimiter(c.connCtx, portmapperLogf, opts.NetMon)
+		var disableUPnP func() bool
+		if c.controlKnobs != nil {
+			disableUPnP = c.controlKnobs.DisableUPnP.Load
+		}
+		newPortMapper, ok := portmappertype.HookNewPortMapper.GetOk()
+		if ok {
+			c.portMapper = newPortMapper(portmapperLogf, opts.EventBus, opts.NetMon, disableUPnP, c.onlyTCP443.Load)
+		} else if !testenv.InTest() {
+			panic("unexpected: HookNewPortMapper not set")
+		}
 	}
-	c.portMapper = portmapper.NewClient(portmapper.Config{
-		EventBus:     c.eventBus,
-		Logf:         portmapperLogf,
-		NetMon:       opts.NetMon,
-		DebugKnobs:   portMapOpts,
-		ControlKnobs: opts.ControlKnobs,
-	})
-	c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
+
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
 	c.onPortUpdate = opts.OnPortUpdate
@@ -1081,7 +1085,9 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		UPnP:                  report.UPnP,
 		PMP:                   report.PMP,
 		PCP:                   report.PCP,
-		HavePortMap:           c.portMapper.HaveMapping(),
+	}
+	if c.portMapper != nil {
+		ni.HavePortMap = c.portMapper.HaveMapping()
 	}
 	for rid, d := range report.RegionV4Latency {
 		ni.DERPLatency[fmt.Sprintf("%d-v4", rid)] = d.Seconds()
@@ -1248,7 +1254,7 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, error) {
 	var havePortmap bool
 	var portmapExt netip.AddrPort
-	if runtime.GOOS != "js" {
+	if runtime.GOOS != "js" && c.portMapper != nil {
 		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
 	}
 
@@ -1288,7 +1294,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	}
 
 	// If we didn't have a portmap earlier, maybe it's done by now.
-	if !havePortmap {
+	if !havePortmap && c.portMapper != nil {
 		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
 	}
 	if havePortmap {
@@ -2662,7 +2668,9 @@ func (c *Conn) SetNetworkUp(up bool) {
 	if up {
 		c.startDerpHomeConnectLocked()
 	} else {
-		c.portMapper.NoteNetworkDown()
+		if c.portMapper != nil {
+			c.portMapper.NoteNetworkDown()
+		}
 		c.closeAllDerpLocked("network-down")
 	}
 }
@@ -3324,7 +3332,9 @@ func (c *Conn) Close() error {
 		c.derpCleanupTimer.Stop()
 	}
 	c.stopPeriodicReSTUNTimerLocked()
-	c.portMapper.Close()
+	if c.portMapper != nil {
+		c.portMapper.Close()
+	}
 
 	c.peerMap.forEachEndpoint(func(ep *endpoint) {
 		ep.stopAndReset()
@@ -3577,7 +3587,9 @@ func (c *Conn) rebind(curPortFate currentPortFate) error {
 	if err := c.bindSocket(&c.pconn4, "udp4", curPortFate); err != nil {
 		return fmt.Errorf("magicsock: Rebind IPv4 failed: %w", err)
 	}
-	c.portMapper.SetLocalPort(c.LocalPort())
+	if c.portMapper != nil {
+		c.portMapper.SetLocalPort(c.LocalPort())
+	}
 	c.UpdatePMTUD()
 	return nil
 }
