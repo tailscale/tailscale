@@ -108,3 +108,16 @@ func TestOmitPortmapper(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitACME(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_acme,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "/acme") {
+				t.Errorf("unexpected dep with ts_omit_acme: %q", dep)
+			}
+		},
+	}.Check(t)
+}

@@ -10,7 +10,11 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 )
 
-var maybeJetKVMConfigureCmd func() *ffcli.Command // non-nil only on Linux/arm for JetKVM
+var (
+	maybeJetKVMConfigureCmd,
+	maybeConfigSynologyCertCmd,
+	_ func() *ffcli.Command // non-nil only on Linux/arm for JetKVM
+)
 
 func configureCmd() *ffcli.Command {
 	return &ffcli.Command{
@@ -28,7 +32,7 @@ services on the host to use Tailscale in more ways.
 		Subcommands: nonNilCmds(
 			configureKubeconfigCmd(),
 			synologyConfigureCmd(),
-			synologyConfigureCertCmd(),
+			ccall(maybeConfigSynologyCertCmd),
 			ccall(maybeSysExtCmd),
 			ccall(maybeVPNConfigCmd),
 			ccall(maybeJetKVMConfigureCmd),

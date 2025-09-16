@@ -42,6 +42,7 @@ type FeatureMeta struct {
 // Features are the known Tailscale features that can be selectively included or
 // excluded via build tags, and a description of each.
 var Features = map[FeatureTag]FeatureMeta{
+	"acme":             {"ACME", "ACME TLS certificate management"},
 	"aws":              {"AWS", "AWS integration"},
 	"bird":             {"Bird", "Bird BGP integration"},
 	"capture":          {"Capture", "Packet capture"},
