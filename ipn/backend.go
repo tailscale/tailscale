@@ -205,7 +205,11 @@ func (n Notify) String() string {
 	}
 
 	s := sb.String()
-	return s[0:len(s)-1] + "}"
+	if s == "Notify{" {
+		return "Notify{}"
+	} else {
+		return s[0:len(s)-1] + "}"
+	}
 }
 
 // PartialFile represents an in-progress incoming file transfer.
