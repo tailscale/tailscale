@@ -306,16 +306,12 @@ func TestOneNodeUpAuth(t *testing.T) {
 			alreadyLoggedIn: true,
 			needsNewLogin:   false,
 		},
-		// TODO(alexc): This test is failing because of a bug in `tailscale up` where
-		// it waits for ipn to enter the "Running" state.  If we're already logged in
-		// and running, this completes immediately, before we've had a chance to show
-		// the user the auth URL.
-		// {
-		// 	name:            "up-with-force-reauth-after-login",
-		// 	args:            []string{"up", "--force-reauth"},
-		// 	alreadyLoggedIn: true,
-		// 	needsNewLogin:   true,
-		// },
+		{
+			name:            "up-with-force-reauth-after-login",
+			args:            []string{"up", "--force-reauth"},
+			alreadyLoggedIn: true,
+			needsNewLogin:   true,
+		},
 		{
 			name:            "up-with-auth-key-after-login",
 			args:            []string{"up", "--auth-key=opensesame"},
@@ -397,6 +393,7 @@ func TestOneNodeUpAuth(t *testing.T) {
 					}
 					authCountAtomic.Store(0)
 					n1.AwaitRunning()
+					n1.MustUp()
 				} else {
 					n1.AwaitListening()
 				}

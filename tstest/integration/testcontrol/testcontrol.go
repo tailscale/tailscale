@@ -73,7 +73,7 @@ type Server struct {
 	initMuxOnce sync.Once
 	mux         *http.ServeMux
 
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	inServeMap int
 	cond       *sync.Cond // lazily initialized by condLocked
 	pubKey     key.MachinePublic
@@ -131,8 +131,8 @@ func (s *Server) BaseURL() string {
 // This is useful when connecting a bunch of virtual machines to a testcontrol
 // server to see how many of them connected successfully.
 func (s *Server) NumNodes() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	return len(s.nodes)
 }
@@ -319,8 +319,8 @@ func (s *Server) serveNoiseUpgrade(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) publicKeys() (noiseKey, pubKey key.MachinePublic) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	s.ensureKeyPairLocked()
 	return s.noisePubKey, s.pubKey
 }
@@ -448,8 +448,8 @@ func (s *Server) nodeIDsLocked(except tailcfg.NodeID) []tailcfg.NodeID {
 
 // Node returns the node for nodeKey. It's always nil or cloned memory.
 func (s *Server) Node(nodeKey key.NodePublic) *tailcfg.Node {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.nodeLocked(nodeKey)
 }
 
@@ -489,8 +489,8 @@ func (s *Server) AddFakeNode() {
 }
 
 func (s *Server) allUserProfiles() (res []tailcfg.UserProfile) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for k, u := range s.users {
 		up := tailcfg.UserProfile{
 			ID:          u.ID,
@@ -996,9 +996,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		return nil, nil
 	}
 
-	s.mu.Lock()
+	s.mu.RLock()
 	nodeCapMap := maps.Clone(s.nodeCapMaps[nk])
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	node.CapMap = nodeCapMap
 	node.Capabilities = append(node.Capabilities, tailcfg.NodeAttrDisableUPnP)
@@ -1022,10 +1022,10 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		ControlTime:     &t,
 	}
 
-	s.mu.Lock()
+	s.mu.RLock()
 	nodeMasqs := s.masquerades[node.Key]
 	jailed := maps.Clone(s.peerIsJailed[node.Key])
-	s.mu.Unlock()
+	s.mu.RUnlock()
 	for _, p := range s.AllNodes() {
 		if p.StableID == node.StableID {
 			continue
@@ -1039,11 +1039,11 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		}
 		p.IsJailed = jailed[p.Key]
 
-		s.mu.Lock()
+		s.mu.RLock()
 		peerAddress := s.masquerades[p.Key][node.Key]
 		routes := s.nodeSubnetRoutes[p.Key]
 		peerCapMap := maps.Clone(s.nodeCapMaps[p.Key])
-		s.mu.Unlock()
+		s.mu.RUnlock()
 		if peerCapMap != nil {
 			p.CapMap = peerCapMap
 		}
@@ -1091,14 +1091,14 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 }
 
 func (s *Server) canGenerateAutomaticMapResponseFor(nk key.NodePublic) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return !s.suppressAutoMapResponses.Contains(nk)
 }
 
 func (s *Server) hasPendingRawMapMessage(nk key.NodePublic) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	_, ok := s.msgToSend[nk].(*tailcfg.MapResponse)
 	return ok
 }

@@ -152,6 +152,7 @@ func isNotableNotify(n *ipn.Notify) bool {
 		n.Prefs != nil ||
 		n.ErrMessage != nil ||
 		n.LoginFinished != nil ||
+		n.NodeKeyChanged != nil ||
 		!n.DriveShares.IsNil() ||
 		n.Health != nil ||
 		len(n.IncomingFiles) > 0 ||

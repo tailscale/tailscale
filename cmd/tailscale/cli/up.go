@@ -593,12 +593,13 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}
 
-	running := make(chan bool, 1)
+	upComplete := make(chan bool, 1)
 	watchErr := make(chan error, 1)
 
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
 		var lastURLPrinted string
+		waitingForNewLogin := upArgs.forceReauth
 
 		for {
 			n, err := watcher.Next()
@@ -610,6 +611,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				msg := *n.ErrMessage
 				fatalf("backend error: %v\n", msg)
 			}
+			if (printed || !printed && upArgs.authKeyOrFile != "") && (n.LoginFinished != nil || n.NodeKeyChanged != nil) {
+				waitingForNewLogin = false
+			}
 			if s := n.State; s != nil {
 				switch *s {
 				case ipn.NeedsMachineAuth:
@@ -620,6 +624,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL(policyclient.Get()))
 					}
 				case ipn.Running:
+					if waitingForNewLogin {
+						continue
+					}
 					// Done full authentication process
 					if env.upArgs.json {
 						printUpDoneJSON(ipn.Running, "")
@@ -628,10 +635,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						fmt.Fprintf(Stderr, "Success.\n")
 					}
 					select {
-					case running <- true:
+					case upComplete <- true:
 					default:
 					}
 					cancelWatch()
+					return
 				}
 			}
 			if url := n.BrowseToURL; url != nil {
@@ -687,18 +695,18 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		timeoutCh = timeoutTimer.C
 	}
 	select {
-	case <-running:
+	case <-upComplete:
 		return nil
 	case <-watchCtx.Done():
 		select {
-		case <-running:
+		case <-upComplete:
 			return nil
 		default:
 		}
 		return watchCtx.Err()
 	case err := <-watchErr:
 		select {
-		case <-running:
+		case <-upComplete:
 			return nil
 		default:
 		}
