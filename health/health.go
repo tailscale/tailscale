@@ -25,6 +25,7 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/cibuild"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
@@ -76,6 +77,9 @@ type Tracker struct {
 
 	testClock tstime.Clock // nil means use time.Now / tstime.StdClock{}
 
+	eventClient *eventbus.Client
+	changePub   *eventbus.Publisher[Change]
+
 	// mu guards everything that follows.
 	mu sync.Mutex
 
@@ -117,6 +121,20 @@ type Tracker struct {
 	localLogConfigErr           error
 	tlsConnectionErrors         map[string]error // map[ServerName]error
 	metricHealthMessage         *metrics.MultiLabelMap[metricHealthMessageLabel]
+}
+
+// NewTracker contructs a new [Tracker] and attaches the given eventbus.
+// NewTracker will panic is no eventbus is given.
+func NewTracker(bus *eventbus.Bus) *Tracker {
+	if bus == nil {
+		panic("no eventbus set")
+	}
+
+	cli := bus.Client("health.Tracker")
+	return &Tracker{
+		eventClient: cli,
+		changePub:   eventbus.Publish[Change](cli),
+	}
 }
 
 func (t *Tracker) now() time.Time {
@@ -418,6 +436,28 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 			Warnable:        w,
 			UnhealthyState:  w.unhealthyState(ws),
 		}
+		// Publish the change to the event bus. If the change is already visible
+		// now, publish it immediately; otherwise queue a timer to publish it at
+		// a future time when it becomes visible.
+		if w.IsVisible(ws, t.now) {
+			t.changePub.Publish(change)
+		} else {
+			visibleIn := w.TimeToVisible - t.now().Sub(brokenSince)
+			tc := t.clock().AfterFunc(visibleIn, func() {
+				t.mu.Lock()
+				defer t.mu.Unlock()
+				// Check if the Warnable is still unhealthy, as it could have become healthy between the time
+				// the timer was set for and the time it was executed.
+				if t.warnableVal[w] != nil {
+					t.changePub.Publish(change)
+					delete(t.pendingVisibleTimers, w)
+				}
+			})
+			mak.Set(&t.pendingVisibleTimers, w, tc)
+		}
+
+		// Direct callbacks
+		// TODO(cmol): Remove once all watchers have been moved to events
 		for _, cb := range t.watchers {
 			// If the Warnable has been unhealthy for more than its TimeToVisible, the callback should be
 			// executed immediately. Otherwise, the callback should be enqueued to run once the Warnable
@@ -473,7 +513,9 @@ func (t *Tracker) setHealthyLocked(w *Warnable) {
 		WarnableChanged: true,
 		Warnable:        w,
 	}
+	t.changePub.Publish(change)
 	for _, cb := range t.watchers {
+		// TODO(cmol): Remove once all watchers have been moved to events
 		cb(change)
 	}
 }
@@ -484,7 +526,11 @@ func (t *Tracker) notifyWatchersControlChangedLocked() {
 	change := Change{
 		ControlHealthChanged: true,
 	}
+	if t.changePub != nil {
+		t.changePub.Publish(change)
+	}
 	for _, cb := range t.watchers {
+		// TODO(cmol): Remove once all watchers have been moved to events
 		cb(change)
 	}
 }

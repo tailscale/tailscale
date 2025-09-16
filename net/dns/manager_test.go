@@ -19,6 +19,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 type fakeOSConfigurator struct {
@@ -932,7 +933,7 @@ func TestManager(t *testing.T) {
 				goos = "linux"
 			}
 			knobs := &controlknobs.Knobs{}
-			m := NewManager(t.Logf, &f, new(health.Tracker), tsdial.NewDialer(netmon.NewStatic()), nil, knobs, goos)
+			m := NewManager(t.Logf, &f, health.NewTracker(eventbustest.NewBus(t)), tsdial.NewDialer(netmon.NewStatic()), nil, knobs, goos)
 			m.resolver.TestOnlySetHook(f.SetResolver)
 
 			if err := m.Set(test.in); err != nil {
@@ -1038,7 +1039,7 @@ func TestConfigRecompilation(t *testing.T) {
 		SearchDomains: fqdns("foo.ts.net"),
 	}
 
-	m := NewManager(t.Logf, f, new(health.Tracker), tsdial.NewDialer(netmon.NewStatic()), nil, nil, "darwin")
+	m := NewManager(t.Logf, f, health.NewTracker(eventbustest.NewBus(t)), tsdial.NewDialer(netmon.NewStatic()), nil, nil, "darwin")
 
 	var managerConfig *resolver.Config
 	m.resolver.TestOnlySetHook(func(cfg resolver.Config) {

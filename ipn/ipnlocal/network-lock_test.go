@@ -35,6 +35,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
@@ -46,7 +47,7 @@ func (f observerFunc) SetControlClientStatus(_ controlclient.Client, s controlcl
 	f(s)
 }
 
-func fakeControlClient(t *testing.T, c *http.Client) *controlclient.Auto {
+func fakeControlClient(t *testing.T, c *http.Client) (*controlclient.Auto, *eventbus.Bus) {
 	hi := hostinfo.New()
 	ni := tailcfg.NetInfo{LinkType: "wired"}
 	hi.NetInfo = &ni
@@ -70,7 +71,7 @@ func fakeControlClient(t *testing.T, c *http.Client) *controlclient.Auto {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return cc
+	return cc, bus
 }
 
 func fakeNoiseServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *http.Client) {
@@ -158,8 +159,8 @@ func TestTKAEnablementFlow(t *testing.T) {
 	defer ts.Close()
 	temp := t.TempDir()
 
-	cc := fakeControlClient(t, client)
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+	cc, bus := fakeControlClient(t, client)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(bus)))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -199,7 +200,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -267,7 +268,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cc := fakeControlClient(t, client)
+	cc, _ := fakeControlClient(t, client)
 	b := LocalBackend{
 		varRoot: temp,
 		cc:      cc,
@@ -391,7 +392,7 @@ func TestTKASync(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			nodePriv := key.NewNode()
 			nlPriv := key.NewNLPrivate()
-			pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+			pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 			must.Do(pm.SetPrefs((&ipn.Prefs{
 				Persist: &persist.Persist{
 					PrivateNodeKey: nodePriv,
@@ -518,7 +519,7 @@ func TestTKASync(t *testing.T) {
 			defer ts.Close()
 
 			// Setup the client.
-			cc := fakeControlClient(t, client)
+			cc, _ := fakeControlClient(t, client)
 			b := LocalBackend{
 				varRoot: temp,
 				cc:      cc,
@@ -707,7 +708,7 @@ func TestTKADisable(t *testing.T) {
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	nlPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -769,7 +770,7 @@ func TestTKADisable(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cc := fakeControlClient(t, client)
+	cc, _ := fakeControlClient(t, client)
 	b := LocalBackend{
 		varRoot: temp,
 		cc:      cc,
@@ -798,7 +799,7 @@ func TestTKASign(t *testing.T) {
 	toSign := key.NewNode()
 	nlPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -860,7 +861,7 @@ func TestTKASign(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	cc := fakeControlClient(t, client)
+	cc, _ := fakeControlClient(t, client)
 	b := LocalBackend{
 		varRoot: temp,
 		cc:      cc,
@@ -887,7 +888,7 @@ func TestTKAForceDisable(t *testing.T) {
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -940,7 +941,7 @@ func TestTKAForceDisable(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cc := fakeControlClient(t, client)
+	cc, _ := fakeControlClient(t, client)
 	sys := tsd.NewSystem()
 	sys.Set(pm.Store())
 
@@ -985,7 +986,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 	// toSign := key.NewNode()
 	nlPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -1076,7 +1077,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 				}
 			}))
 			defer ts.Close()
-			cc := fakeControlClient(t, client)
+			cc, _ := fakeControlClient(t, client)
 			b := LocalBackend{
 				varRoot: temp,
 				cc:      cc,
@@ -1118,7 +1119,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 	cosignPriv := key.NewNLPrivate()
 	compromisedPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -1188,7 +1189,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	cc := fakeControlClient(t, client)
+	cc, _ := fakeControlClient(t, client)
 	b := LocalBackend{
 		varRoot: temp,
 		cc:      cc,
@@ -1209,7 +1210,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 
 	// Cosign using the cosigning key.
 	{
-		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
+		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 		must.Do(pm.SetPrefs((&ipn.Prefs{
 			Persist: &persist.Persist{
 				PrivateNodeKey: nodePriv,

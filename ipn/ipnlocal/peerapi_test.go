@@ -25,6 +25,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
@@ -194,10 +195,9 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.isSelf = false
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-	sys := tsd.NewSystem()
-	t.Cleanup(sys.Bus.Get().Close)
+	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 
-	ht := new(health.Tracker)
+	ht := health.NewTracker(sys.Bus.Get())
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 	reg := new(usermetric.Registry)
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
@@ -249,10 +249,9 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-		sys := tsd.NewSystem()
-		t.Cleanup(sys.Bus.Get().Close)
+		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 
-		ht := new(health.Tracker)
+		ht := health.NewTracker(sys.Bus.Get())
 		reg := new(usermetric.Registry)
 		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
@@ -323,11 +322,10 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-		sys := tsd.NewSystem()
-		t.Cleanup(sys.Bus.Get().Close)
+		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 
 		rc := &appctest.RouteCollector{}
-		ht := new(health.Tracker)
+		ht := health.NewTracker(sys.Bus.Get())
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 
 		reg := new(usermetric.Registry)
@@ -392,10 +390,9 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		var h peerAPIHandler
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-		sys := tsd.NewSystem()
-		t.Cleanup(sys.Bus.Get().Close)
+		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 
-		ht := new(health.Tracker)
+		ht := health.NewTracker(sys.Bus.Get())
 		reg := new(usermetric.Registry)
 		rc := &appctest.RouteCollector{}
 		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)

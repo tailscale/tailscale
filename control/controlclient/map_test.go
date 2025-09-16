@@ -28,6 +28,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 )
@@ -1326,7 +1327,7 @@ func TestNetmapDisplayMessage(t *testing.T) {
 // [netmap.NetworkMap] to a [health.Tracker].
 func TestNetmapHealthIntegration(t *testing.T) {
 	ms := newTestMapSession(t, nil)
-	ht := health.Tracker{}
+	ht := health.NewTracker(eventbustest.NewBus(t))
 
 	ht.SetIPNState("NeedsLogin", true)
 	ht.GotStreamedMapResponse()
@@ -1371,7 +1372,7 @@ func TestNetmapHealthIntegration(t *testing.T) {
 // passing the [netmap.NetworkMap] to a [health.Tracker].
 func TestNetmapDisplayMessageIntegration(t *testing.T) {
 	ms := newTestMapSession(t, nil)
-	ht := health.Tracker{}
+	ht := health.NewTracker(eventbustest.NewBus(t))
 
 	ht.SetIPNState("NeedsLogin", true)
 	ht.GotStreamedMapResponse()

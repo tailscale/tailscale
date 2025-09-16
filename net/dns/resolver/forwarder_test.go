@@ -29,7 +29,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 func (rr resolverAndDelay) String() string {
@@ -455,8 +455,7 @@ func makeLargeResponse(tb testing.TB, domain string) (request, response []byte) 
 
 func runTestQuery(tb testing.TB, request []byte, modify func(*forwarder), ports ...uint16) ([]byte, error) {
 	logf := tstest.WhileTestRunningLogger(tb)
-	bus := eventbus.New()
-	defer bus.Close()
+	bus := eventbustest.NewBus(tb)
 	netMon, err := netmon.New(bus, logf)
 	if err != nil {
 		tb.Fatal(err)
@@ -465,7 +464,7 @@ func runTestQuery(tb testing.TB, request []byte, modify func(*forwarder), ports 
 	var dialer tsdial.Dialer
 	dialer.SetNetMon(netMon)
 
-	fwd := newForwarder(logf, netMon, nil, &dialer, new(health.Tracker), nil)
+	fwd := newForwarder(logf, netMon, nil, &dialer, health.NewTracker(bus), nil)
 	if modify != nil {
 		modify(fwd)
 	}

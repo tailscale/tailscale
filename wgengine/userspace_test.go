@@ -25,7 +25,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
-	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
@@ -101,10 +101,9 @@ func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 }
 
 func TestUserspaceEngineReconfig(t *testing.T) {
-	bus := eventbus.New()
-	defer bus.Close()
+	bus := eventbustest.NewBus(t)
 
-	ht := new(health.Tracker)
+	ht := health.NewTracker(bus)
 	reg := new(usermetric.Registry)
 	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
 	if err != nil {
@@ -170,12 +169,11 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 
 	var knobs controlknobs.Knobs
 
-	bus := eventbus.New()
-	defer bus.Close()
+	bus := eventbustest.NewBus(t)
 
 	// Keep making a wgengine until we find an unused port
 	var ue *userspaceEngine
-	ht := new(health.Tracker)
+	ht := health.NewTracker(bus)
 	reg := new(usermetric.Registry)
 	for i := range 100 {
 		attempt := uint16(defaultPort + i)
@@ -258,9 +256,8 @@ func TestUserspaceEnginePeerMTUReconfig(t *testing.T) {
 
 	var knobs controlknobs.Knobs
 
-	bus := eventbus.New()
-	defer bus.Close()
-	ht := new(health.Tracker)
+	bus := eventbustest.NewBus(t)
+	ht := health.NewTracker(bus)
 	reg := new(usermetric.Registry)
 	e, err := NewFakeUserspaceEngine(t.Logf, 0, &knobs, ht, reg, bus)
 	if err != nil {

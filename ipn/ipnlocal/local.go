@@ -206,6 +206,7 @@ type LocalBackend struct {
 	eventClient              *eventbus.Client
 	clientVersionSub         *eventbus.Subscriber[tailcfg.ClientVersion]
 	autoUpdateSub            *eventbus.Subscriber[controlclient.AutoUpdate]
+	healthChangeSub          *eventbus.Subscriber[health.Change]
 	subsDoneCh               chan struct{}       // closed when consumeEventbusTopics returns
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
@@ -216,7 +217,6 @@ type LocalBackend struct {
 	pushDeviceToken          syncs.AtomicValue[string]
 	backendLogID             logid.PublicID
 	unregisterNetMon         func()
-	unregisterHealthWatch    func()
 	unregisterSysPolicyWatch func()
 	portpoll                 *portlist.Poller // may be nil
 	portpollOnce             sync.Once        // guards starting readPoller
@@ -488,7 +488,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if loginFlags&controlclient.LocalBackendStartKeyOSNeutral != 0 {
 		goos = ""
 	}
-	pm, err := newProfileManagerWithGOOS(store, logf, sys.HealthTracker(), goos)
+	pm, err := newProfileManagerWithGOOS(store, logf, sys.HealthTracker.Get(), goos)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +521,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:                   sys,
 		polc:                  sys.PolicyClientOrDefault(),
-		health:                sys.HealthTracker(),
+		health:                sys.HealthTracker.Get(),
 		metrics:               m,
 		e:                     e,
 		dialer:                dialer,
@@ -543,6 +543,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.eventClient = b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
 	b.clientVersionSub = eventbus.Subscribe[tailcfg.ClientVersion](b.eventClient)
 	b.autoUpdateSub = eventbus.Subscribe[controlclient.AutoUpdate](b.eventClient)
+	b.healthChangeSub = eventbus.Subscribe[health.Change](b.eventClient)
 	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
@@ -570,7 +571,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}()
 
 	netMon := sys.NetMon.Get()
-	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker())
+	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker.Get())
 	if err != nil {
 		log.Printf("error setting up sockstat logger: %v", err)
 	}
@@ -594,8 +595,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	// then also whenever it changes:
 	b.linkChange(&netmon.ChangeDelta{New: netMon.InterfaceState()})
 	b.unregisterNetMon = netMon.RegisterChangeCallback(b.linkChange)
-
-	b.unregisterHealthWatch = b.health.RegisterWatcher(b.onHealthChange)
 
 	if tunWrap, ok := b.sys.Tun.GetOK(); ok {
 		tunWrap.PeerAPIPort = b.GetPeerAPIPort
@@ -628,12 +627,17 @@ func (b *LocalBackend) consumeEventbusTopics() {
 
 	for {
 		select {
+		// TODO(cmol): Move to using b.eventClient.Done() once implemented.
+		// In the meantime, we rely on the subs not going away until the client is
+		// closed, closing all its subscribers.
 		case <-b.clientVersionSub.Done():
 			return
 		case clientVersion := <-b.clientVersionSub.Events():
 			b.onClientVersion(&clientVersion)
 		case au := <-b.autoUpdateSub.Events():
 			b.onTailnetDefaultAutoUpdate(au.Value)
+		case change := <-b.healthChangeSub.Events():
+			b.onHealthChange(change)
 		}
 	}
 }
@@ -1162,7 +1166,6 @@ func (b *LocalBackend) Shutdown() {
 	b.stopOfflineAutoUpdate()
 
 	b.unregisterNetMon()
-	b.unregisterHealthWatch()
 	b.unregisterSysPolicyWatch()
 	if cc != nil {
 		cc.Shutdown()

@@ -67,6 +67,7 @@ import (
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/set"
@@ -179,14 +180,13 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate) *magicStack {
 	t.Helper()
 
-	bus := eventbus.New()
-	t.Cleanup(bus.Close)
+	bus := eventbustest.NewBus(t)
 
 	netMon, err := netmon.New(bus, logf)
 	if err != nil {
 		t.Fatalf("netmon.New: %v", err)
 	}
-	ht := new(health.Tracker)
+	ht := health.NewTracker(bus)
 
 	var reg usermetric.Registry
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
@@ -1352,8 +1352,7 @@ func newTestConn(t testing.TB) *Conn {
 	t.Helper()
 	port := pickPort(t)
 
-	bus := eventbus.New()
-	t.Cleanup(bus.Close)
+	bus := eventbustest.NewBus(t)
 
 	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
 	if err != nil {
@@ -1364,7 +1363,7 @@ func newTestConn(t testing.TB) *Conn {
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
 		EventBus:               bus,
-		HealthTracker:          new(health.Tracker),
+		HealthTracker:          health.NewTracker(bus),
 		Metrics:                new(usermetric.Registry),
 		DisablePortMapper:      true,
 		Logf:                   t.Logf,
@@ -3038,7 +3037,7 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 	}
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			ht := new(health.Tracker)
+			ht := health.NewTracker(eventbustest.NewBus(t))
 			c := newConn(t.Logf)
 			c.myDerp = tt.old
 			c.derpMap = derpMap
