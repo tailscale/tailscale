@@ -647,6 +647,8 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		}
 	}
 	if socksListener != nil || httpProxyListener != nil {
+		dialer.UserDialCustomResolverDial = dns.Quad100ResolverDial(sys.DNSManager.Get())
+
 		var addrs []string
 		if httpProxyListener != nil {
 			hs := &http.Server{Handler: httpProxyHandler(dialer.UserDial)}
