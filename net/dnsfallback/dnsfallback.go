@@ -22,34 +22,19 @@ import (
 	"net/url"
 	"os"
 	"reflect"
-	"slices"
 	"sync/atomic"
 	"time"
 
 	"tailscale.com/atomicfile"
-	"tailscale.com/envknob"
 	"tailscale.com/health"
-	"tailscale.com/net/dns/recursive"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/singleflight"
 	"tailscale.com/util/slicesx"
 )
-
-var (
-	optRecursiveResolver     = envknob.RegisterOptBool("TS_DNSFALLBACK_RECURSIVE_RESOLVER")
-	disableRecursiveResolver = envknob.RegisterBool("TS_DNSFALLBACK_DISABLE_RECURSIVE_RESOLVER") // legacy pre-1.52 env knob name
-)
-
-type resolveResult struct {
-	addrs  []netip.Addr
-	minTTL time.Duration
-}
 
 // MakeLookupFunc creates a function that can be used to resolve hostnames
 // (e.g. as a LookupIPFallback from dnscache.Resolver).
@@ -68,145 +53,13 @@ type fallbackResolver struct {
 	logf          logger.Logf
 	netMon        *netmon.Monitor // or nil
 	healthTracker *health.Tracker // or nil
-	sf            singleflight.Group[string, resolveResult]
 
 	// for tests
 	waitForCompare bool
 }
 
 func (fr *fallbackResolver) Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
-	// If they've explicitly disabled the recursive resolver with the legacy
-	// TS_DNSFALLBACK_DISABLE_RECURSIVE_RESOLVER envknob or not set the
-	// newer TS_DNSFALLBACK_RECURSIVE_RESOLVER to true, then don't use the
-	// recursive resolver. (tailscale/corp#15261) In the future, we might
-	// change the default (the opt.Bool being unset) to mean enabled.
-	if disableRecursiveResolver() || !optRecursiveResolver().EqualBool(true) {
-		return lookup(ctx, host, fr.logf, fr.healthTracker, fr.netMon)
-	}
-
-	addrsCh := make(chan []netip.Addr, 1)
-
-	// Run the recursive resolver in the background so we can
-	// compare the results. For tests, we also allow waiting for the
-	// comparison to complete; normally, we do this entirely asynchronously
-	// so as not to block the caller.
-	var done chan struct{}
-	if fr.waitForCompare {
-		done = make(chan struct{})
-		go func() {
-			defer close(done)
-			fr.compareWithRecursive(ctx, addrsCh, host)
-		}()
-	} else {
-		go fr.compareWithRecursive(ctx, addrsCh, host)
-	}
-
-	addrs, err := lookup(ctx, host, fr.logf, fr.healthTracker, fr.netMon)
-	if err != nil {
-		addrsCh <- nil
-		return nil, err
-	}
-
-	addrsCh <- slices.Clone(addrs)
-	if fr.waitForCompare {
-		select {
-		case <-done:
-		case <-ctx.Done():
-		}
-	}
-	return addrs, nil
-}
-
-// compareWithRecursive is responsible for comparing the DNS resolution
-// performed via the "normal" path (bootstrap DNS requests to the DERP servers)
-// with DNS resolution performed with our in-process recursive DNS resolver.
-//
-// It will select on addrsCh to read exactly one set of addrs (returned by the
-// "normal" path) and compare against the results returned by the recursive
-// resolver. If ctx is canceled, then it will abort.
-func (fr *fallbackResolver) compareWithRecursive(
-	ctx context.Context,
-	addrsCh <-chan []netip.Addr,
-	host string,
-) {
-	logf := logger.WithPrefix(fr.logf, "recursive: ")
-
-	// Ensure that we catch panics while we're testing this
-	// code path; this should never panic, but we don't
-	// want to take down the process by having the panic
-	// propagate to the top of the goroutine's stack and
-	// then terminate.
-	defer func() {
-		if r := recover(); r != nil {
-			logf("bootstrap DNS: recovered panic: %v", r)
-			metricRecursiveErrors.Add(1)
-		}
-	}()
-
-	// Don't resolve the same host multiple times
-	// concurrently; if we end up in a tight loop, this can
-	// take up a lot of CPU.
-	var didRun bool
-	result, err, _ := fr.sf.Do(host, func() (resolveResult, error) {
-		didRun = true
-		resolver := &recursive.Resolver{
-			Dialer: netns.NewDialer(logf, fr.netMon),
-			Logf:   logf,
-		}
-		addrs, minTTL, err := resolver.Resolve(ctx, host)
-		if err != nil {
-			logf("error using recursive resolver: %v", err)
-			metricRecursiveErrors.Add(1)
-			return resolveResult{}, err
-		}
-		return resolveResult{addrs, minTTL}, nil
-	})
-
-	// The singleflight function handled errors; return if
-	// there was one. Additionally, don't bother doing the
-	// comparison if we waited on another singleflight
-	// caller; the results are likely to be the same, so
-	// rather than spam the logs we can just exit and let
-	// the singleflight call that did execute do the
-	// comparison.
-	//
-	// Returning here is safe because the addrsCh channel
-	// is buffered, so the main function won't block even
-	// if we never read from it.
-	if err != nil || !didRun {
-		return
-	}
-
-	addrs, minTTL := result.addrs, result.minTTL
-	compareAddr := func(a, b netip.Addr) int { return a.Compare(b) }
-	slices.SortFunc(addrs, compareAddr)
-
-	// Wait for a response from the main function; try this once before we
-	// check whether the context is canceled since selects are
-	// nondeterministic.
-	var oldAddrs []netip.Addr
-	select {
-	case oldAddrs = <-addrsCh:
-		// All good; continue
-	default:
-		// Now block.
-		select {
-		case oldAddrs = <-addrsCh:
-		case <-ctx.Done():
-			return
-		}
-	}
-	slices.SortFunc(oldAddrs, compareAddr)
-
-	matches := slices.Equal(addrs, oldAddrs)
-
-	logf("bootstrap DNS comparison: matches=%v oldAddrs=%v addrs=%v minTTL=%v", matches, oldAddrs, addrs, minTTL)
-
-	if matches {
-		metricRecursiveMatches.Add(1)
-	} else {
-		metricRecursiveMismatches.Add(1)
-	}
+	return lookup(ctx, host, fr.logf, fr.healthTracker, fr.netMon)
 }
 
 func lookup(ctx context.Context, host string, logf logger.Logf, ht *health.Tracker, netMon *netmon.Monitor) ([]netip.Addr, error) {
@@ -428,9 +281,3 @@ func SetCachePath(path string, logf logger.Logf) {
 	cachedDERPMap.Store(dm)
 	logf("[v2] dnsfallback: SetCachePath loaded cached DERP map")
 }
-
-var (
-	metricRecursiveMatches    = clientmetric.NewCounter("dnsfallback_recursive_matches")
-	metricRecursiveMismatches = clientmetric.NewCounter("dnsfallback_recursive_mismatches")
-	metricRecursiveErrors     = clientmetric.NewCounter("dnsfallback_recursive_errors")
-)
