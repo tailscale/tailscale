@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"tailscale.com/feature/featuretags"
+	"tailscale.com/util/set"
 )
 
 var (
@@ -38,7 +39,9 @@ func main() {
 	var keep = map[featuretags.FeatureTag]bool{}
 	for t := range strings.SplitSeq(*add, ",") {
 		if t != "" {
-			keep[featuretags.FeatureTag(t)] = true
+			for ft := range featuretags.Requires(featuretags.FeatureTag(t)) {
+				keep[ft] = true
+			}
 		}
 	}
 	var tags []string
@@ -55,6 +58,7 @@ func main() {
 			}
 		}
 	}
+	removeSet := set.Set[featuretags.FeatureTag]{}
 	for v := range strings.SplitSeq(*remove, ",") {
 		if v == "" {
 			continue
@@ -63,7 +67,16 @@ func main() {
 		if _, ok := features[f]; !ok {
 			log.Fatalf("unknown feature %q in --remove", f)
 		}
-		tags = append(tags, f.OmitTag())
+		removeSet.Add(f)
+	}
+	for ft := range removeSet {
+		set := featuretags.RequiredBy(ft)
+		for dependent := range set {
+			if !removeSet.Contains(dependent) {
+				log.Fatalf("cannot remove %q without also removing %q, which depends on it", ft, dependent)
+			}
+		}
+		tags = append(tags, ft.OmitTag())
 	}
 	slices.Sort(tags)
 	tags = slices.Compact(tags)
