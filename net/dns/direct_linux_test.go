@@ -25,8 +25,13 @@ func TestWatchFile(t *testing.T) {
 	var callbackCalled atomic.Bool
 	callbackDone := make(chan bool)
 	callback := func() {
-		callbackDone <- true
-		callbackCalled.Store(true)
+		// We only send to the channel once to avoid blocking if the
+		// callback is called multiple times -- this happens occasionally
+		// if inotify sends multiple events before we cancel the context.
+		if !callbackCalled.Load() {
+			callbackDone <- true
+			callbackCalled.Store(true)
+		}
 	}
 
 	var eg errgroup.Group
