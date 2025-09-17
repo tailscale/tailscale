@@ -5610,7 +5610,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
 
 	var sshHostKeys []string
-	if prefs.RunSSH() && envknob.CanSSHD() {
+	if buildfeatures.HasSSH && prefs.RunSSH() && envknob.CanSSHD() {
 		// TODO(bradfitz): this is called with b.mu held. Not ideal.
 		// If the filesystem gets wedged or something we could block for
 		// a long time. But probably fine.
