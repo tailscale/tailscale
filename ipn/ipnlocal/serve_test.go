@@ -23,9 +23,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"tailscale.com/types/views"
 	"testing"
 	"time"
+
+	"tailscale.com/control/controlclient"
+	"tailscale.com/types/views"
+	"tailscale.com/wgengine/filter"
 
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -927,7 +930,7 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	pm.currentProfile = (&ipn.LoginProfile{ID: "id0"}).View()
 	b.pm = pm
 
-	b.currentNode().SetNetMap(&netmap.NetworkMap{
+	nm := &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
 			Addresses: []netip.Prefix{
@@ -978,7 +981,13 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 				},
 			}).View(),
 		},
-	})
+	}
+	nm.PacketFilter, err = filter.MatchesFromFilterRules(nm.PacketFilterRules.AsSlice())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetControlClientStatus(nil, controlclient.Status{NetMap: nm})
+
 	return b
 }
 
