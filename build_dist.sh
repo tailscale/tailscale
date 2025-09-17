@@ -57,4 +57,4 @@ while [ "$#" -gt 1 ]; do
 	esac
 done
 
-exec $go build ${tags:+-tags=$tags} -ldflags "$ldflags" "$@"
+exec $go build ${tags:+-tags=$tags} -trimpath -ldflags "$ldflags" "$@"
