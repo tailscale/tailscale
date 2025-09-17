@@ -442,3 +442,12 @@ salary
 fujita
 caiman
 cichlid
+logarithm
+exponential
+geological
+cosmological
+barometric
+ph
+pain
+temperature
+wyrm
