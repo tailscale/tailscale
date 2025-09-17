@@ -621,7 +621,15 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 					b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
 				}
 			case ri := <-storeRoutesSub.Events():
-				b.logf("TODO: received store routes: %+v", ri)
+				// Whether or not routes should be stored can change over time.
+				shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
+				if shouldStoreRoutes {
+					// TODO(creachdadair, 2025-09-13): This is a pointer for historical
+					// reasons, which should go away along with the callback.
+					if err := b.storeRouteInfo(&ri); err != nil {
+						b.logf("appc: failed to store route info: %v", err)
+					}
+				}
 			}
 		}
 	}
@@ -4795,34 +4803,27 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		}
 	}()
 
+	// App connectors have been disabled.
 	if !prefs.AppConnector().Advertise {
 		b.appConnector.Close() // clean up a previous connector (safe on nil)
 		b.appConnector = nil
 		return
 	}
 
-	shouldAppCStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
-	if b.appConnector == nil || b.appConnector.ShouldStoreRoutes() != shouldAppCStoreRoutes {
-		var ri *appctype.RouteInfo
-		var storeFunc func(*appctype.RouteInfo) error
-		if shouldAppCStoreRoutes {
-			var err error
-			ri, err = b.readRouteInfoLocked()
-			if err != nil {
-				ri = &appctype.RouteInfo{}
-				if err != ipn.ErrStateNotExist {
-					b.logf("Unsuccessful Read RouteInfo: ", err)
-				}
-			}
-			storeFunc = b.storeRouteInfo
+	// We don't (yet) have an app connector configured, or the configured
+	// connector has a different route persistence setting.
+	shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
+	if b.appConnector == nil || (shouldStoreRoutes != b.appConnector.ShouldStoreRoutes()) {
+		ri, err := b.readRouteInfoLocked()
+		if err != nil && err != ipn.ErrStateNotExist {
+			b.logf("Unsuccessful Read RouteInfo: %v", err)
 		}
-
 		b.appConnector.Close() // clean up a previous connector (safe on nil)
 		b.appConnector = appc.NewAppConnector(appc.Config{
 			Logf:            b.logf,
 			EventBus:        b.sys.Bus.Get(),
 			RouteInfo:       ri,
-			StoreRoutesFunc: storeFunc,
+			HasStoredRoutes: shouldStoreRoutes,
 		})
 	}
 	if nm == nil {

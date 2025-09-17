@@ -75,8 +75,6 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-func fakeStoreRoutes(*appctype.RouteInfo) error { return nil }
-
 func inRemove(ip netip.Addr) bool {
 	for _, pfx := range removeFromDefaultRoute {
 		if pfx.Contains(ip) {
@@ -2312,13 +2310,9 @@ func TestOfferingAppConnector(t *testing.T) {
 		if b.OfferingAppConnector() {
 			t.Fatal("unexpected offering app connector")
 		}
-		if shouldStore {
-			b.appConnector = appc.NewAppConnector(appc.Config{
-				Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc, RouteInfo: &appctype.RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
-			})
-		} else {
-			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: bus})
-		}
+		b.appConnector = appc.NewAppConnector(appc.Config{
+			Logf: t.Logf, EventBus: bus, HasStoredRoutes: shouldStore,
+		})
 		if !b.OfferingAppConnector() {
 			t.Fatal("unexpected not offering app connector")
 		}
@@ -2376,17 +2370,12 @@ func TestObserveDNSResponse(t *testing.T) {
 		}
 
 		rc := &appctest.RouteCollector{}
-		if shouldStore {
-			b.appConnector = appc.NewAppConnector(appc.Config{
-				Logf:            t.Logf,
-				EventBus:        bus,
-				RouteAdvertiser: rc,
-				RouteInfo:       &appctype.RouteInfo{},
-				StoreRoutesFunc: fakeStoreRoutes,
-			})
-		} else {
-			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
-		}
+		b.appConnector = appc.NewAppConnector(appc.Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
 		b.appConnector.UpdateDomains([]string{"example.com"})
 		b.appConnector.Wait(context.Background())
 
