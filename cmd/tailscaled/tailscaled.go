@@ -48,10 +48,7 @@ import (
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
-	"tailscale.com/net/proxymux"
-	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -176,6 +173,17 @@ func shouldRunCLI() bool {
 	return false
 }
 
+// Outbound Proxy hooks
+var (
+	hookRegisterOutboundProxyFlags feature.Hook[func()]
+	hookOutboundProxyListen        feature.Hook[func() proxyStartFunc]
+)
+
+// proxyStartFunc is the type of the function returned by
+// outboundProxyListen, to start the servers on the Listeners
+// started by hookOutboundProxyListen.
+type proxyStartFunc = func(logf logger.Logf, dialer *tsdial.Dialer)
+
 func main() {
 	envknob.PanicIfAnyEnvCheckedInInit()
 	if shouldRunCLI() {
@@ -190,8 +198,6 @@ func main() {
 	flag.IntVar(&args.verbose, "verbose", defaultVerbosity(), "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanUp, "cleanup", false, "clean up system state and exit")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
-	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
-	flag.StringVar(&args.httpProxyAddr, "outbound-http-proxy-listen", "", `optional [ip]:port to run an outbound HTTP proxy (e.g. "localhost:8080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, defaultPort()), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", "", "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM; use 'mem:' to not store state and register as an ephemeral node. If empty and --statedir is provided, the default is <statedir>/tailscaled.state. Default: "+paths.DefaultTailscaledStateFile())
@@ -202,6 +208,9 @@ func main() {
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
+	if f, ok := hookRegisterOutboundProxyFlags.GetOk(); ok {
+		f()
+	}
 
 	if runtime.GOOS == "plan9" && os.Getenv("_NETSHELL_CHILD_") != "" {
 		os.Args = []string{"tailscaled", "be-child", "plan9-netshell"}
@@ -595,7 +604,10 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		logPol.Logtail.SetNetMon(sys.NetMon.Get())
 	}
 
-	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
+	var startProxy proxyStartFunc
+	if listen, ok := hookOutboundProxyListen.GetOk(); ok {
+		startProxy = listen()
+	}
 
 	dialer := &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	sys.Set(dialer)
@@ -646,26 +658,8 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			return udpConn, nil
 		}
 	}
-	if socksListener != nil || httpProxyListener != nil {
-		var addrs []string
-		if httpProxyListener != nil {
-			hs := &http.Server{Handler: httpProxyHandler(dialer.UserDial)}
-			go func() {
-				log.Fatalf("HTTP proxy exited: %v", hs.Serve(httpProxyListener))
-			}()
-			addrs = append(addrs, httpProxyListener.Addr().String())
-		}
-		if socksListener != nil {
-			ss := &socks5.Server{
-				Logf:   logger.WithPrefix(logf, "socks5: "),
-				Dialer: dialer.UserDial,
-			}
-			go func() {
-				log.Fatalf("SOCKS5 server exited: %v", ss.Serve(socksListener))
-			}()
-			addrs = append(addrs, socksListener.Addr().String())
-		}
-		tshttpproxy.SetSelfProxy(addrs...)
+	if startProxy != nil {
+		go startProxy(logf, dialer)
 	}
 
 	opts := ipnServerOpts()
@@ -891,50 +885,6 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 		expvar.Publish("netstack", ret.ExpVar())
 	}
 	return ret, nil
-}
-
-// mustStartProxyListeners creates listeners for local SOCKS and HTTP
-// proxies, if the respective addresses are not empty. socksAddr and
-// httpAddr can be the same, in which case socksListener will receive
-// connections that look like they're speaking SOCKS and httpListener
-// will receive everything else.
-//
-// socksListener and httpListener can be nil, if their respective
-// addrs are empty.
-func mustStartProxyListeners(socksAddr, httpAddr string) (socksListener, httpListener net.Listener) {
-	if socksAddr == httpAddr && socksAddr != "" && !strings.HasSuffix(socksAddr, ":0") {
-		ln, err := net.Listen("tcp", socksAddr)
-		if err != nil {
-			log.Fatalf("proxy listener: %v", err)
-		}
-		return proxymux.SplitSOCKSAndHTTP(ln)
-	}
-
-	var err error
-	if socksAddr != "" {
-		socksListener, err = net.Listen("tcp", socksAddr)
-		if err != nil {
-			log.Fatalf("SOCKS5 listener: %v", err)
-		}
-		if strings.HasSuffix(socksAddr, ":0") {
-			// Log kernel-selected port number so integration tests
-			// can find it portably.
-			log.Printf("SOCKS5 listening on %v", socksListener.Addr())
-		}
-	}
-	if httpAddr != "" {
-		httpListener, err = net.Listen("tcp", httpAddr)
-		if err != nil {
-			log.Fatalf("HTTP proxy listener: %v", err)
-		}
-		if strings.HasSuffix(httpAddr, ":0") {
-			// Log kernel-selected port number so integration tests
-			// can find it portably.
-			log.Printf("HTTP proxy listening on %v", httpListener.Addr())
-		}
-	}
-
-	return socksListener, httpListener
 }
 
 var beChildFunc = beChild
