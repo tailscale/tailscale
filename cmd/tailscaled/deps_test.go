@@ -135,3 +135,16 @@ func TestOmitOAuthKey(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitOutboundProxy(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_outboundproxy,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "socks5") || strings.Contains(dep, "proxymux") {
+				t.Errorf("unexpected dep with ts_omit_outboundproxy: %q", dep)
+			}
+		},
+	}.Check(t)
+}

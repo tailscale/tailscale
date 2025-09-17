@@ -11,7 +11,7 @@ import (
 	"tailscale.com/util/set"
 )
 
-func TestRequires(t *testing.T) {
+func TestKnownDeps(t *testing.T) {
 	for tag, meta := range Features {
 		for _, dep := range meta.Deps {
 			if _, ok := Features[dep]; !ok {
@@ -26,7 +26,7 @@ func TestRequires(t *testing.T) {
 	}
 }
 
-func TestDepSet(t *testing.T) {
+func TestRequires(t *testing.T) {
 	var setOf = set.Of[FeatureTag]
 	tests := []struct {
 		in   FeatureTag
@@ -38,11 +38,11 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			in:   "serve",
-			want: setOf("serve"),
+			want: setOf("serve", "netstack"),
 		},
 		{
 			in:   "webclient",
-			want: setOf("webclient", "serve"),
+			want: setOf("webclient", "serve", "netstack"),
 		},
 	}
 	for _, tt := range tests {
