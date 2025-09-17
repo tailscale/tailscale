@@ -764,3 +764,12 @@ sailfish
 billfish
 taimen
 sargo
+story
+tale
+gecko
+wyrm
+meteor
+ribbon
+echo
+lemming
+worm
