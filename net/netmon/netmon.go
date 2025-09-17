@@ -53,7 +53,7 @@ type osMon interface {
 type Monitor struct {
 	logf    logger.Logf
 	b       *eventbus.Client
-	changed *eventbus.Publisher[*ChangeDelta]
+	changed *eventbus.Publisher[ChangeDelta]
 
 	om     osMon         // nil means not supported on this platform
 	change chan bool     // send false to wake poller, true to also force ChangeDeltas be sent
@@ -84,9 +84,6 @@ type ChangeFunc func(*ChangeDelta)
 
 // ChangeDelta describes the difference between two network states.
 type ChangeDelta struct {
-	// Monitor is the network monitor that sent this delta.
-	Monitor *Monitor
-
 	// Old is the old interface state, if known.
 	// It's nil if the old state is unknown.
 	// Do not mutate it.
@@ -126,7 +123,7 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 		stop:     make(chan struct{}),
 		lastWall: wallTime(),
 	}
-	m.changed = eventbus.Publish[*ChangeDelta](m.b)
+	m.changed = eventbus.Publish[ChangeDelta](m.b)
 	st, err := m.interfaceStateUncached()
 	if err != nil {
 		return nil, err
@@ -401,8 +398,7 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 		return
 	}
 
-	delta := &ChangeDelta{
-		Monitor:    m,
+	delta := ChangeDelta{
 		Old:        oldState,
 		New:        newState,
 		TimeJumped: timeJumped,
@@ -437,7 +433,7 @@ func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 	}
 	m.changed.Publish(delta)
 	for _, cb := range m.cbs {
-		go cb(delta)
+		go cb(&delta)
 	}
 }
 

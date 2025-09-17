@@ -207,6 +207,7 @@ type LocalBackend struct {
 	clientVersionSub         *eventbus.Subscriber[tailcfg.ClientVersion]
 	autoUpdateSub            *eventbus.Subscriber[controlclient.AutoUpdate]
 	healthChangeSub          *eventbus.Subscriber[health.Change]
+	changeDeltaSub           *eventbus.Subscriber[netmon.ChangeDelta]
 	subsDoneCh               chan struct{}       // closed when consumeEventbusTopics returns
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
@@ -216,7 +217,6 @@ type LocalBackend struct {
 	dialer                   *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
 	pushDeviceToken          syncs.AtomicValue[string]
 	backendLogID             logid.PublicID
-	unregisterNetMon         func()
 	unregisterSysPolicyWatch func()
 	portpoll                 *portlist.Poller // may be nil
 	portpollOnce             sync.Once        // guards starting readPoller
@@ -544,6 +544,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.clientVersionSub = eventbus.Subscribe[tailcfg.ClientVersion](b.eventClient)
 	b.autoUpdateSub = eventbus.Subscribe[controlclient.AutoUpdate](b.eventClient)
 	b.healthChangeSub = eventbus.Subscribe[health.Change](b.eventClient)
+	b.changeDeltaSub = eventbus.Subscribe[netmon.ChangeDelta](b.eventClient)
 	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
@@ -591,10 +592,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.e.SetStatusCallback(b.setWgengineStatus)
 
 	b.prevIfState = netMon.InterfaceState()
-	// Call our linkChange code once with the current state, and
-	// then also whenever it changes:
+	// Call our linkChange code once with the current state.
+	// Following changes are triggered via the eventbus.
 	b.linkChange(&netmon.ChangeDelta{New: netMon.InterfaceState()})
-	b.unregisterNetMon = netMon.RegisterChangeCallback(b.linkChange)
 
 	if tunWrap, ok := b.sys.Tun.GetOK(); ok {
 		tunWrap.PeerAPIPort = b.GetPeerAPIPort
@@ -633,6 +633,8 @@ func (b *LocalBackend) consumeEventbusTopics() {
 			b.onTailnetDefaultAutoUpdate(au.Value)
 		case change := <-b.healthChangeSub.Events():
 			b.onHealthChange(change)
+		case changeDelta := <-b.changeDeltaSub.Events():
+			b.linkChange(&changeDelta)
 		}
 	}
 }
@@ -1160,7 +1162,6 @@ func (b *LocalBackend) Shutdown() {
 	}
 	b.stopOfflineAutoUpdate()
 
-	b.unregisterNetMon()
 	b.unregisterSysPolicyWatch()
 	if cc != nil {
 		cc.Shutdown()
