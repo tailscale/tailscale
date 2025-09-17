@@ -5,6 +5,7 @@ package eventbustest_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,19 +30,17 @@ func TestExpectFilter(t *testing.T) {
 		name       string
 		events     []int
 		expectFunc any
-		wantErr    bool
+		wantErr    string // if non-empty, an error is expected containing this text
 	}{
 		{
 			name:       "single event",
 			events:     []int{42},
 			expectFunc: eventbustest.Type[EventFoo](),
-			wantErr:    false,
 		},
 		{
 			name:       "multiple events, single expectation",
 			events:     []int{42, 1, 2, 3, 4, 5},
 			expectFunc: eventbustest.Type[EventFoo](),
-			wantErr:    false,
 		},
 		{
 			name:   "filter on event with function",
@@ -52,7 +51,6 @@ func TestExpectFilter(t *testing.T) {
 				}
 				return false, nil
 			},
-			wantErr: false,
 		},
 		{
 			name:   "filter-with-nil-error",
@@ -73,7 +71,7 @@ func TestExpectFilter(t *testing.T) {
 				}
 				return nil
 			},
-			wantErr: true,
+			wantErr: "value > 10",
 		},
 		{
 			name:   "first event has to be func",
@@ -84,7 +82,18 @@ func TestExpectFilter(t *testing.T) {
 				}
 				return false, nil
 			},
-			wantErr: true,
+			wantErr: "expected 42, got 24",
+		},
+		{
+			name:       "equal-values",
+			events:     []int{23},
+			expectFunc: eventbustest.EqualTo(EventFoo{Value: 23}),
+		},
+		{
+			name:       "unequal-values",
+			events:     []int{37},
+			expectFunc: eventbustest.EqualTo(EventFoo{Value: 23}),
+			wantErr:    "wrong result (-got, +want)",
 		},
 		{
 			name:   "no events",
@@ -92,7 +101,7 @@ func TestExpectFilter(t *testing.T) {
 			expectFunc: func(event EventFoo) (bool, error) {
 				return true, nil
 			},
-			wantErr: true,
+			wantErr: "timed out waiting",
 		},
 	}
 
@@ -113,8 +122,16 @@ func TestExpectFilter(t *testing.T) {
 				updater.Publish(EventFoo{i})
 			}
 
-			if err := eventbustest.Expect(tw, tt.expectFunc); (err != nil) != tt.wantErr {
-				t.Errorf("ExpectFilter[EventFoo]: error = %v, wantErr %v", err, tt.wantErr)
+			if err := eventbustest.Expect(tw, tt.expectFunc); err != nil {
+				if tt.wantErr == "" {
+					t.Errorf("Expect[EventFoo]: unexpected error: %v", err)
+				} else if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("Expect[EventFoo]: err = %v, want %q", err, tt.wantErr)
+				} else {
+					t.Logf("Got expected error: %v (OK)", err)
+				}
+			} else if tt.wantErr != "" {
+				t.Errorf("Expect[EventFoo]: unexpectedly succeeded, want error %q", tt.wantErr)
 			}
 		})
 	}
