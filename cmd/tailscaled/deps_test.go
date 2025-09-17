@@ -15,8 +15,9 @@ func TestOmitSSH(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
-		Tags:   "ts_omit_ssh",
+		Tags:   "ts_omit_ssh,ts_include_cli",
 		BadDeps: map[string]string{
+			"golang.org/x/crypto/ssh":              msg,
 			"tailscale.com/ssh/tailssh":            msg,
 			"tailscale.com/sessionrecording":       msg,
 			"github.com/anmitsu/go-shlex":          msg,
