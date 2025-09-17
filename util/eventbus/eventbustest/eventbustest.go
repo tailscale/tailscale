@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"tailscale.com/util/eventbus"
 )
 
@@ -248,4 +249,17 @@ func Inject[T any](inj *Injector, event T) {
 		inj.publishers[eventType] = pub
 	}
 	pub.(*eventbus.Publisher[T]).Publish(event)
+}
+
+// EqualTo returns an event-matching function for use with [Expect] and
+// [ExpectExactly] that matches on an event of the given type that is equal to
+// want by comparison with [cmp.Diff]. The expectation fails with an error
+// message including the diff, if present.
+func EqualTo[T any](want T) func(T) error {
+	return func(got T) error {
+		if diff := cmp.Diff(got, want); diff != "" {
+			return fmt.Errorf("wrong result (-got, +want):\n%s", diff)
+		}
+		return nil
+	}
 }
