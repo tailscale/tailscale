@@ -4,6 +4,8 @@
 // The featuretags package is a registry of all the ts_omit-able build tags.
 package featuretags
 
+import "tailscale.com/util/set"
+
 // CLI is a special feature in the [Features] map that works opposite
 // from the others: it is opt-in, rather than opt-out, having a different
 // build tag format.
@@ -32,37 +34,90 @@ func (ft FeatureTag) OmitTag() string {
 	return "ts_omit_" + string(ft)
 }
 
+// Requires returns the set of features that must be included to
+// use the given feature, including the provided feature itself.
+func Requires(ft FeatureTag) set.Set[FeatureTag] {
+	s := set.Set[FeatureTag]{}
+	var add func(FeatureTag)
+	add = func(ft FeatureTag) {
+		if !ft.IsOmittable() {
+			return
+		}
+		s.Add(ft)
+		for _, dep := range Features[ft].Deps {
+			add(dep)
+		}
+	}
+	add(ft)
+	return s
+}
+
+// RequiredBy is the inverse of Requires: it returns the set of features that
+// depend on the given feature (directly or indirectly), including the feature
+// itself.
+func RequiredBy(ft FeatureTag) set.Set[FeatureTag] {
+	s := set.Set[FeatureTag]{}
+	for f := range Features {
+		if featureDependsOn(f, ft) {
+			s.Add(f)
+		}
+	}
+	return s
+}
+
+// featureDependsOn reports whether feature a (directly or indirectly) depends on b.
+// It returns true if a == b.
+func featureDependsOn(a, b FeatureTag) bool {
+	if a == b {
+		return true
+	}
+	for _, dep := range Features[a].Deps {
+		if featureDependsOn(dep, b) {
+			return true
+		}
+	}
+	return false
+}
+
 // FeatureMeta describes a modular feature that can be conditionally linked into
 // the binary.
 type FeatureMeta struct {
-	Sym  string // exported Go symbol for boolean const
-	Desc string // human-readable description
+	Sym  string       // exported Go symbol for boolean const
+	Desc string       // human-readable description
+	Deps []FeatureTag // other features this feature requires
 }
 
 // Features are the known Tailscale features that can be selectively included or
 // excluded via build tags, and a description of each.
 var Features = map[FeatureTag]FeatureMeta{
-	"acme":             {"ACME", "ACME TLS certificate management"},
-	"aws":              {"AWS", "AWS integration"},
-	"bird":             {"Bird", "Bird BGP integration"},
-	"capture":          {"Capture", "Packet capture"},
-	"cli":              {"CLI", "embed the CLI into the tailscaled binary"},
-	"completion":       {"Completion", "CLI shell completion"},
-	"debugeventbus":    {"DebugEventBus", "eventbus debug support"},
-	"debugportmapper":  {"DebugPortMapper", "portmapper debug support"},
-	"desktop_sessions": {"DesktopSessions", "Desktop sessions support"},
-	"drive":            {"Drive", "Tailscale Drive (file server) support"},
-	"kube":             {"Kube", "Kubernetes integration"},
-	"portmapper":       {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support"},
-	"relayserver":      {"RelayServer", "Relay server"},
-	"serve":            {"Serve", "Serve and Funnel support"},
-	"ssh":              {"SSH", "Tailscale SSH support"},
-	"syspolicy":        {"SystemPolicy", "System policy configuration (MDM) support"},
-	"systray":          {"SysTray", "Linux system tray"},
-	"taildrop":         {"Taildrop", "Taildrop (file sending) support"},
-	"tailnetlock":      {"TailnetLock", "Tailnet Lock support"},
-	"tap":              {"Tap", "Experimental Layer 2 (ethernet) support"},
-	"tpm":              {"TPM", "TPM support"},
-	"wakeonlan":        {"WakeOnLAN", "Wake-on-LAN support"},
-	"webclient":        {"WebClient", "Web client support"},
+	"acme":          {"ACME", "ACME TLS certificate management", nil},
+	"aws":           {"AWS", "AWS integration", nil},
+	"bird":          {"Bird", "Bird BGP integration", nil},
+	"capture":       {"Capture", "Packet capture", nil},
+	"cli":           {"CLI", "embed the CLI into the tailscaled binary", nil},
+	"completion":    {"Completion", "CLI shell completion", nil},
+	"debugeventbus": {"DebugEventBus", "eventbus debug support", nil},
+	"debugportmapper": {
+		Sym:  "DebugPortMapper",
+		Desc: "portmapper debug support",
+		Deps: []FeatureTag{"portmapper"},
+	},
+	"desktop_sessions": {"DesktopSessions", "Desktop sessions support", nil},
+	"drive":            {"Drive", "Tailscale Drive (file server) support", nil},
+	"kube":             {"Kube", "Kubernetes integration", nil},
+	"portmapper":       {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support", nil},
+	"relayserver":      {"RelayServer", "Relay server", nil},
+	"serve":            {"Serve", "Serve and Funnel support", nil},
+	"ssh":              {"SSH", "Tailscale SSH support", nil},
+	"syspolicy":        {"SystemPolicy", "System policy configuration (MDM) support", nil},
+	"systray":          {"SysTray", "Linux system tray", nil},
+	"taildrop":         {"Taildrop", "Taildrop (file sending) support", nil},
+	"tailnetlock":      {"TailnetLock", "Tailnet Lock support", nil},
+	"tap":              {"Tap", "Experimental Layer 2 (ethernet) support", nil},
+	"tpm":              {"TPM", "TPM support", nil},
+	"wakeonlan":        {"WakeOnLAN", "Wake-on-LAN support", nil},
+	"webclient": {
+		Sym: "WebClient", Desc: "Web client support",
+		Deps: []FeatureTag{"serve"},
+	},
 }
