@@ -35,6 +35,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/internal/noiseconn"
 	"tailscale.com/ipn"
+	"tailscale.com/net/ace"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
@@ -287,6 +288,7 @@ func debugCmd() *ffcli.Command {
 					fs.StringVar(&ts2021Args.host, "host", "controlplane.tailscale.com", "hostname of control plane")
 					fs.IntVar(&ts2021Args.version, "version", int(tailcfg.CurrentCapabilityVersion), "protocol version")
 					fs.BoolVar(&ts2021Args.verbose, "verbose", false, "be extra verbose")
+					fs.StringVar(&ts2021Args.aceHost, "ace", "", "if non-empty, use this ACE server IP/hostname as a candidate path")
 					return fs
 				})(),
 			},
@@ -964,6 +966,7 @@ var ts2021Args struct {
 	host    string // "controlplane.tailscale.com"
 	version int    // 27 or whatever
 	verbose bool
+	aceHost string // if non-empty, FQDN of https ACE server to use ("ace.example.com")
 }
 
 func runTS2021(ctx context.Context, args []string) error {
@@ -971,6 +974,13 @@ func runTS2021(ctx context.Context, args []string) error {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
 	keysURL := "https://" + ts2021Args.host + "/key?v=" + strconv.Itoa(ts2021Args.version)
+
+	keyTransport := http.DefaultTransport.(*http.Transport).Clone()
+	if ts2021Args.aceHost != "" {
+		log.Printf("using ACE server %q", ts2021Args.aceHost)
+		keyTransport.Proxy = nil
+		keyTransport.DialContext = (&ace.Dialer{ACEHost: ts2021Args.aceHost}).Dial
+	}
 
 	if ts2021Args.verbose {
 		u, err := url.Parse(keysURL)
@@ -997,7 +1007,7 @@ func runTS2021(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := keyTransport.RoundTrip(req)
 	if err != nil {
 		log.Printf("Do: %v", err)
 		return err
@@ -1051,6 +1061,16 @@ func runTS2021(ctx context.Context, args []string) error {
 		Dialer:          dialFunc,
 		Logf:            logf,
 		NetMon:          netMon,
+	}
+	if ts2021Args.aceHost != "" {
+		noiseDialer.DialPlan = &tailcfg.ControlDialPlan{
+			Candidates: []tailcfg.ControlIPCandidate{
+				{
+					ACEHost:        ts2021Args.aceHost,
+					DialTimeoutSec: 10,
+				},
+			},
+		}
 	}
 	const tries = 2
 	for i := range tries {

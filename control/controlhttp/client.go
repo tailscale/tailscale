@@ -20,6 +20,7 @@
 package controlhttp
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -41,6 +42,7 @@ import (
 	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/net/ace"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netutil"
@@ -104,7 +106,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 	// host we know about.
 	useDialPlan := envknob.BoolDefaultTrue("TS_USE_CONTROL_DIAL_PLAN")
 	if !useDialPlan || a.DialPlan == nil || len(a.DialPlan.Candidates) == 0 {
-		return a.dialHost(ctx, netip.Addr{})
+		return a.dialHost(ctx)
 	}
 	candidates := a.DialPlan.Candidates
 
@@ -125,10 +127,9 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 
 	// Now, for each candidate, kick off a dial in parallel.
 	type dialResult struct {
-		conn     *ClientConn
-		err      error
-		addr     netip.Addr
-		priority int
+		conn *ClientConn
+		err  error
+		cand tailcfg.ControlIPCandidate
 	}
 	resultsCh := make(chan dialResult, len(candidates))
 
@@ -143,7 +144,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 
 			// Always send results back to our channel.
 			defer func() {
-				resultsCh <- dialResult{conn, err, c.IP, c.Priority}
+				resultsCh <- dialResult{conn, err, c}
 				if pending.Add(-1) == 0 {
 					close(resultsCh)
 				}
@@ -168,9 +169,13 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 			ctx, cancel := context.WithTimeout(ctx, time.Duration(c.DialTimeoutSec*float64(time.Second)))
 			defer cancel()
 
+			if c.IP.IsValid() {
+				a.logf("[v2] controlhttp: trying to dial %q @ %v", a.Hostname, c.IP)
+			} else if c.ACEHost != "" {
+				a.logf("[v2] controlhttp: trying to dial %q via ACE %q", a.Hostname, c.ACEHost)
+			}
 			// This will dial, and the defer above sends it back to our parent.
-			a.logf("[v2] controlhttp: trying to dial %q @ %v", a.Hostname, c.IP)
-			conn, err = a.dialHost(ctx, c.IP)
+			conn, err = a.dialHostOpt(ctx, c.IP, c.ACEHost)
 		}(ctx, c)
 	}
 
@@ -183,8 +188,8 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 		// TODO(andrew): we could make this better by keeping track of
 		// the highest remaining priority dynamically, instead of just
 		// checking for the highest total
-		if res.priority == highestPriority && res.conn != nil {
-			a.logf("[v1] controlhttp: high-priority success dialing %q @ %v from dial plan", a.Hostname, res.addr)
+		if res.cand.Priority == highestPriority && res.conn != nil {
+			a.logf("[v1] controlhttp: high-priority success dialing %q @ %v from dial plan", a.Hostname, cmp.Or(res.cand.ACEHost, res.cand.IP.String()))
 
 			// Drain the channel and any existing connections in
 			// the background.
@@ -232,7 +237,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 	sort.Slice(results, func(i, j int) bool {
 		// NOTE: intentionally inverted so that the highest priority
 		// item comes first
-		return results[i].priority > results[j].priority
+		return results[i].cand.Priority > results[j].cand.Priority
 	})
 
 	var (
@@ -245,7 +250,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 			continue
 		}
 
-		a.logf("[v1] controlhttp: succeeded dialing %q @ %v from dial plan", a.Hostname, result.addr)
+		a.logf("[v1] controlhttp: succeeded dialing %q @ %v from dial plan", a.Hostname, cmp.Or(result.cand.ACEHost, result.cand.IP.String()))
 		conn = result.conn
 		results[i].conn = nil // so we don't close it in the defer
 		return conn, nil
@@ -259,7 +264,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 
 	// If we get here, then we didn't get anywhere with our dial plan; fall back to just using DNS.
 	a.logf("controlhttp: failed dialing using DialPlan, falling back to DNS; errs=%s", merr.Error())
-	return a.dialHost(ctx, netip.Addr{})
+	return a.dialHost(ctx)
 }
 
 // The TS_FORCE_NOISE_443 envknob forces the controlclient noise dialer to
@@ -316,10 +321,19 @@ var debugNoiseDial = envknob.RegisterBool("TS_DEBUG_NOISE_DIAL")
 
 // dialHost connects to the configured Dialer.Hostname and upgrades the
 // connection into a controlbase.Conn.
+func (a *Dialer) dialHost(ctx context.Context) (*ClientConn, error) {
+	return a.dialHostOpt(ctx,
+		netip.Addr{}, // no pre-resolved IP
+		"",           // don't use ACE
+	)
+}
+
+// dialHostOpt connects to the configured Dialer.Hostname and upgrades the
+// connection into a controlbase.Conn.
 //
 // If optAddr is valid, then no DNS is used and the connection will be made to the
 // provided address.
-func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn, error) {
+func (a *Dialer) dialHostOpt(ctx context.Context, optAddr netip.Addr, optACEHost string) (*ClientConn, error) {
 	// Create one shared context used by both port 80 and port 443 dials.
 	// If port 80 is still in flight when 443 returns, this deferred cancel
 	// will stop the port 80 dial.
@@ -341,7 +355,7 @@ func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn,
 		Host:   net.JoinHostPort(a.Hostname, strDef(a.HTTPSPort, "443")),
 		Path:   serverUpgradePath,
 	}
-	if a.HTTPSPort == NoPort {
+	if a.HTTPSPort == NoPort || optACEHost != "" {
 		u443 = nil
 	}
 
@@ -353,11 +367,11 @@ func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn,
 	ch := make(chan tryURLRes) // must be unbuffered
 	try := func(u *url.URL) {
 		if debugNoiseDial() {
-			a.logf("trying noise dial (%v, %v) ...", u, optAddr)
+			a.logf("trying noise dial (%v, %v) ...", u, cmp.Or(optACEHost, optAddr.String()))
 		}
-		cbConn, err := a.dialURL(ctx, u, optAddr)
+		cbConn, err := a.dialURL(ctx, u, optAddr, optACEHost)
 		if debugNoiseDial() {
-			a.logf("noise dial (%v, %v) = (%v, %v)", u, optAddr, cbConn, err)
+			a.logf("noise dial (%v, %v) = (%v, %v)", u, cmp.Or(optACEHost, optAddr.String()), cbConn, err)
 		}
 		select {
 		case ch <- tryURLRes{u, cbConn, err}:
@@ -423,12 +437,12 @@ func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn,
 //
 // If optAddr is valid, then no DNS is used and the connection will be made to the
 // provided address.
-func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr) (*ClientConn, error) {
+func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr, optACEHost string) (*ClientConn, error) {
 	init, cont, err := controlbase.ClientDeferred(a.MachineKey, a.ControlKey, a.ProtocolVersion)
 	if err != nil {
 		return nil, err
 	}
-	netConn, err := a.tryURLUpgrade(ctx, u, optAddr, init)
+	netConn, err := a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +494,7 @@ var macOSScreenTime = health.Register(&health.Warnable{
 // the provided address.
 //
 // Only the provided ctx is used, not a.ctx.
-func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Addr, init []byte) (_ net.Conn, retErr error) {
+func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Addr, optACEHost string, init []byte) (_ net.Conn, retErr error) {
 	var dns *dnscache.Resolver
 
 	// If we were provided an address to dial, then create a resolver that just
@@ -500,6 +514,14 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 		dialer = a.Dialer
 	} else {
 		dialer = stdDialer.DialContext
+	}
+
+	if optACEHost != "" {
+		dialer = (&ace.Dialer{
+			ACEHost:   optACEHost,
+			ACEHostIP: optAddr, // may be zero
+			NetDialer: dialer,
+		}).Dial
 	}
 
 	// On macOS, see if Screen Time is blocking things.
@@ -528,9 +550,17 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	defer tr.CloseIdleConnections()
-	tr.Proxy = a.getProxyFunc()
-	tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-	tr.DialContext = dnscache.Dialer(dialer, dns)
+	if optACEHost != "" {
+		// If using ACE, we don't want to use any HTTP proxy.
+		// ACE is already a tunnel+proxy.
+		// TODO(tailscale/corp#32483): use system proxy too?
+		tr.Proxy = nil
+		tr.DialContext = dialer
+	} else {
+		tr.Proxy = a.getProxyFunc()
+		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
+		tr.DialContext = dnscache.Dialer(dialer, dns)
+	}
 	// Disable HTTP2, since h2 can't do protocol switching.
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
