@@ -2312,13 +2312,12 @@ func TestOfferingAppConnector(t *testing.T) {
 		if b.OfferingAppConnector() {
 			t.Fatal("unexpected offering app connector")
 		}
-		rc := &appctest.RouteCollector{}
 		if shouldStore {
 			b.appConnector = appc.NewAppConnector(appc.Config{
 				Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc, RouteInfo: &appctype.RouteInfo{}, StoreRoutesFunc: fakeStoreRoutes,
 			})
 		} else {
-			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: bus, RouteAdvertiser: rc})
+			b.appConnector = appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: bus})
 		}
 		if !b.OfferingAppConnector() {
 			t.Fatal("unexpected not offering app connector")

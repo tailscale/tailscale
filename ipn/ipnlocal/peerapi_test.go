@@ -267,9 +267,8 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 			})
 		} else {
 			a = appc.NewAppConnector(appc.Config{
-				Logf:            t.Logf,
-				EventBus:        sys.Bus.Get(),
-				RouteAdvertiser: &appctest.RouteCollector{},
+				Logf:     t.Logf,
+				EventBus: sys.Bus.Get(),
 			})
 		}
 		sys.Set(pm.Store())
