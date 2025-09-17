@@ -2537,7 +2537,7 @@ func TestBackfillAppConnectorRoutes(t *testing.T) {
 
 	// Store the test IP in profile data, but not in Prefs.AdvertiseRoutes.
 	b.ControlKnobs().AppCStoreRoutes.Store(true)
-	if err := b.storeRouteInfo(&appctype.RouteInfo{
+	if err := b.storeRouteInfo(appctype.RouteInfo{
 		Domains: map[string][]netip.Addr{
 			"example.com": {ip},
 		},
@@ -5490,10 +5490,10 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	b.pm.currentProfile = prof1.View()
 
 	// set up routeInfo
-	ri1 := &appctype.RouteInfo{}
+	ri1 := appctype.RouteInfo{}
 	ri1.Wildcards = []string{"1"}
 
-	ri2 := &appctype.RouteInfo{}
+	ri2 := appctype.RouteInfo{}
 	ri2.Wildcards = []string{"2"}
 
 	// read before write
