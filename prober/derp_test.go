@@ -74,7 +74,7 @@ func TestDerpProber(t *testing.T) {
 		p:              p,
 		derpMapURL:     srv.URL,
 		tlsInterval:    time.Second,
-		tlsProbeFn:     func(_ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
+		tlsProbeFn:     func(_ string, _ *tls.Config) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
 		udpInterval:    time.Second,
 		udpProbeFn:     func(_ string, _ int) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
 		meshInterval:   time.Second,

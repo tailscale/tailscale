@@ -5,6 +5,7 @@ package prober_test
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -40,7 +41,7 @@ func ExampleForEachAddr() {
 
 	// This function is called every time we discover a new IP address to check.
 	makeTLSProbe := func(addr netip.Addr) []*prober.Probe {
-		pf := prober.TLSWithIP(*hostname, netip.AddrPortFrom(addr, 443))
+		pf := prober.TLSWithIP(netip.AddrPortFrom(addr, 443), &tls.Config{ServerName: *hostname})
 		if *verbose {
 			logger := logger.WithPrefix(log.Printf, fmt.Sprintf("[tls %s]: ", addr))
 			pf = probeLogWrapper(logger, pf)

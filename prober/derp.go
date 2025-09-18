@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	crand "crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -68,7 +69,7 @@ type derpProber struct {
 	ProbeMap ProbeClass
 
 	// Probe classes for probing individual derpers.
-	tlsProbeFn  func(string) ProbeClass
+	tlsProbeFn  func(string, *tls.Config) ProbeClass
 	udpProbeFn  func(string, int) ProbeClass
 	meshProbeFn func(string, string) ProbeClass
 	bwProbeFn   func(string, string, int64) ProbeClass
@@ -206,7 +207,7 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 				if d.probes[n] == nil {
 					log.Printf("adding DERP TLS probe for %s (%s) every %v", server.Name, region.RegionName, d.tlsInterval)
 					derpPort := cmp.Or(server.DERPPort, 443)
-					d.probes[n] = d.p.Run(n, d.tlsInterval, labels, d.tlsProbeFn(fmt.Sprintf("%s:%d", server.HostName, derpPort)))
+					d.probes[n] = d.p.Run(n, d.tlsInterval, labels, d.tlsProbeFn(fmt.Sprintf("%s:%d", server.HostName, derpPort), nil))
 				}
 			}
 
