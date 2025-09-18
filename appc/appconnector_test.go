@@ -870,3 +870,32 @@ func eqUpdate(want appctype.RouteUpdate) func(appctype.RouteUpdate) error {
 		return nil
 	}
 }
+
+type textUpdate struct {
+	Advertise   []string
+	Unadvertise []string
+}
+
+func routeUpdateToText(u RouteUpdate) textUpdate {
+	var out textUpdate
+	for _, p := range u.Advertise {
+		out.Advertise = append(out.Advertise, p.String())
+	}
+	for _, p := range u.Unadvertise {
+		out.Unadvertise = append(out.Unadvertise, p.String())
+	}
+	return out
+}
+
+// eqUpdate generates an eventbus test filter that matches a RouteUpdate
+// message equal to want, or reports an error giving a human-readable diff.
+func eqUpdate(want RouteUpdate) func(RouteUpdate) error {
+	return func(got RouteUpdate) error {
+		if diff := cmp.Diff(routeUpdateToText(got), routeUpdateToText(want),
+			cmpopts.SortSlices(stdcmp.Less[string]),
+		); diff != "" {
+			return fmt.Errorf("wrong update (-got, +want):\n%s", diff)
+		}
+		return nil
+	}
+}
