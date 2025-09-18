@@ -83,7 +83,7 @@ func TestTLSConnection(t *testing.T) {
 	srv.StartTLS()
 	defer srv.Close()
 
-	err = probeTLS(context.Background(), "fail.example.com", srv.Listener.Addr().String())
+	err = probeTLS(context.Background(), &tls.Config{ServerName: "fail.example.com"}, srv.Listener.Addr().String())
 	// The specific error message here is platform-specific ("certificate is not trusted"
 	// on macOS and "certificate signed by unknown authority" on Linux), so only check
 	// that it contains the word 'certificate'.
@@ -269,40 +269,54 @@ func TestCRL(t *testing.T) {
 		name     string
 		cert     *x509.Certificate
 		crlBytes []byte
+		issuer   pkix.Name
 		wantErr  string
 	}{
 		{
 			"ValidCert",
 			leafCertParsed,
 			emptyRlBytes,
+			caCert.Issuer,
 			"",
 		},
 		{
 			"RevokedCert",
 			leafCertParsed,
 			rlBytes,
+			caCert.Issuer,
 			"has been revoked on",
 		},
 		{
 			"EmptyCRL",
 			leafCertParsed,
 			emptyRlBytes,
+			caCert.Issuer,
 			"",
 		},
 		{
-			"NoCRL",
+			"NoCRLLetsEncrypt",
 			leafCertParsed,
 			nil,
+			pkix.Name{CommonName: "tlsprobe.test", Organization: []string{"Let's Encrypt"}},
 			"no CRL server presented in leaf cert for",
+		},
+		{
+			"NoCRLOtherCA",
+			leafCertParsed,
+			nil,
+			caCert.Issuer,
+			"",
 		},
 		{
 			"NotBeforeCRLStaplingDate",
 			noCRLStapledParsed,
 			nil,
+			caCert.Issuer,
 			"",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.cert.Issuer = tt.issuer
 			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{tt.cert, caCert}}
 			if tt.crlBytes != nil {
 				crlServer.crlBytes = tt.crlBytes
