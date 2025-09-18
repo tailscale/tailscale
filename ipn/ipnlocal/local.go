@@ -2525,6 +2525,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		PolicyClient:         b.sys.PolicyClientOrDefault(),
 		Pinger:               b,
 		PopBrowserURL:        b.tellClientToBrowseToURL,
+		NotifyKeyChange:      b.notifyKeyChange,
 		Dialer:               b.Dialer(),
 		Observer:             b,
 		C2NHandler:           http.HandlerFunc(b.handleC2N),
@@ -3569,6 +3570,10 @@ func (b *LocalBackend) validPopBrowserURLLocked(urlStr string) bool {
 
 func (b *LocalBackend) tellClientToBrowseToURL(url string) {
 	b.tellRecipientToBrowseToURL(url, allClients)
+}
+
+func (b *LocalBackend) notifyKeyChange() {
+	b.sendTo(ipn.Notify{NodeKeyChanged: &empty.Message{}}, allClients)
 }
 
 // tellRecipientToBrowseToURL is like tellClientToBrowseToURL but allows specifying a recipient.
