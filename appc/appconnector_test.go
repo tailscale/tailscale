@@ -164,6 +164,7 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 func TestDomainRoutes(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 		a := NewAppConnector(Config{
 			Logf:            t.Logf,
@@ -184,6 +185,13 @@ func TestDomainRoutes(t *testing.T) {
 
 		if got := a.DomainRoutes(); !reflect.DeepEqual(got, want) {
 			t.Fatalf("DomainRoutes: got %v, want %v", got, want)
+		}
+
+		if err := eventbustest.ExpectExactly(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.8/32")}),
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
