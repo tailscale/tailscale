@@ -200,6 +200,7 @@ func TestObserveDNSResponse(t *testing.T) {
 	ctx := t.Context()
 	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 		a := NewAppConnector(Config{
 			Logf:            t.Logf,
@@ -283,6 +284,22 @@ func TestObserveDNSResponse(t *testing.T) {
 		}
 		if !slices.Contains(a.domains["example.com"], netip.MustParseAddr("192.0.2.1")) {
 			t.Errorf("missing %v from %v", "192.0.2.1", a.domains["exmaple.com"])
+		}
+
+		if err := eventbustest.ExpectExactly(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.8/32")}), // from initial DNS response, via example.com
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.9/32")}), // from CNAME response
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.10/32")}), // from CNAME response, mid-chain
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("2001:db8::1/128")}), // v6 DNS response
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.2.0/24")}), // additional prefix
+			eventbustest.Type[RouteInfo](),
+			// N.B. no update for 192.0.2.1 as it is already covered
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
