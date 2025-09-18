@@ -2367,19 +2367,20 @@ func TestObserveDNSResponse(t *testing.T) {
 		}
 
 		rc := &appctest.RouteCollector{}
-		b.appConnector = appc.NewAppConnector(appc.Config{
+		a := appc.NewAppConnector(appc.Config{
 			Logf:            t.Logf,
 			EventBus:        bus,
 			RouteAdvertiser: rc,
 			HasStoredRoutes: shouldStore,
 		})
-		b.appConnector.UpdateDomains([]string{"example.com"})
-		b.appConnector.Wait(context.Background())
+		a.UpdateDomains([]string{"example.com"})
+		a.Wait(t.Context())
+		b.appConnector = a
 
 		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
 			t.Errorf("ObserveDNSResponse: %v", err)
 		}
-		b.appConnector.Wait(context.Background())
+		a.Wait(t.Context())
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {
 			t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
