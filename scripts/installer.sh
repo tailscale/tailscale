@@ -110,6 +110,17 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
+			industrial-os)
+				OS="debian"
+				PACKAGETYPE="apt"
+				if [ "$(printf %.1s "$VERSION_ID")" -lt 5 ]; then
+					VERSION="buster"
+					APT_KEY_TYPE="legacy"
+				else
+					VERSION="bullseye"
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
 			parrot|mendel)
 				OS="debian"
 				PACKAGETYPE="apt"
