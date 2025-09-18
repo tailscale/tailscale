@@ -141,7 +141,7 @@ func SendEvent(ctx context.Context, ap netip.AddrPort, event io.Reader, dial net
 
 	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s/v2/event", ap.String()), event)
 	if err != nil {
-		return fmt.Errorf("error creating request: %v", err)
+		return fmt.Errorf("error creating request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
