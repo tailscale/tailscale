@@ -32,6 +32,7 @@ import (
 	_ "tailscale.com/feature/condregister/portmapper"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
+	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
@@ -679,7 +680,10 @@ func (s *Server) start() (reterr error) {
 	prefs.ControlURL = s.ControlURL
 	prefs.RunWebClient = s.RunWebClient
 	prefs.AdvertiseTags = s.AdvertiseTags
-	authKey := s.getAuthKey()
+	authKey, err := tailscale.ResolveAuthKey(s.shutdownCtx, s.getAuthKey(), prefs.AdvertiseTags)
+	if err != nil {
+		return fmt.Errorf("resolving auth key: %w", err)
+	}
 	err = lb.Start(ipn.Options{
 		UpdatePrefs: prefs,
 		AuthKey:     authKey,
