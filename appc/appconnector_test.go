@@ -4,6 +4,7 @@
 package appc
 
 import (
+	"fmt"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc/appctest"
 	"tailscale.com/tstest"
@@ -60,6 +62,7 @@ func TestUpdateRoutes(t *testing.T) {
 	ctx := t.Context()
 	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 		a := NewAppConnector(Config{
 			Logf:            t.Logf,
@@ -105,6 +108,20 @@ func TestUpdateRoutes(t *testing.T) {
 		if !slices.EqualFunc(rc.RemovedRoutes(), wantRemoved, prefixEqual) {
 			t.Fatalf("unexpected removed routes: %v", rc.RemovedRoutes())
 		}
+
+		if err := eventbustest.Expect(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.2.1/32")}),
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.1/32")}),
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{
+				Advertise:   prefixes("192.0.0.1/32", "192.0.2.0/24"),
+				Unadvertise: prefixes("192.0.2.1/32"),
+			}),
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
@@ -112,6 +129,7 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 	ctx := t.Context()
 	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 		a := NewAppConnector(Config{
 			Logf:            t.Logf,
@@ -129,6 +147,16 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 
 		if !slices.EqualFunc(routes, rc.Routes(), prefixEqual) {
 			t.Fatalf("got %v, want %v", rc.Routes(), routes)
+		}
+
+		if err := eventbustest.ExpectExactly(w,
+			eqUpdate(RouteUpdate{
+				Advertise:   prefixes("192.0.2.0/24"),
+				Unadvertise: prefixes("192.0.2.1/32"),
+			}),
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
@@ -719,5 +747,32 @@ func TestUpdateRoutesDeadlock(t *testing.T) {
 
 	if want := []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}; !slices.Equal(slices.Compact(rc.Routes()), want) {
 		t.Fatalf("got %v, want %v", rc.Routes(), want)
+	}
+}
+
+type textUpdate struct {
+	Advertise   []string
+	Unadvertise []string
+}
+
+func routeUpdateToText(u RouteUpdate) textUpdate {
+	var out textUpdate
+	for _, p := range u.Advertise {
+		out.Advertise = append(out.Advertise, p.String())
+	}
+	for _, p := range u.Unadvertise {
+		out.Unadvertise = append(out.Unadvertise, p.String())
+	}
+	return out
+}
+
+// eqUpdate generates an eventbus test filter that matches a RouteUpdate
+// message equal to want, or reports an error giving a human-readable diff.
+func eqUpdate(want RouteUpdate) func(RouteUpdate) error {
+	return func(got RouteUpdate) error {
+		if diff := cmp.Diff(routeUpdateToText(got), routeUpdateToText(want)); diff != "" {
+			return fmt.Errorf("wrong update (-got, +want):\n%s", diff)
+		}
+		return nil
 	}
 }
