@@ -4,6 +4,7 @@
 package eventbustest_test
 
 import (
+	"flag"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
 )
+
+var doDebug = flag.Bool("debug", false, "Enable debug logging")
 
 type EventFoo struct {
 	Value int
@@ -109,7 +112,11 @@ func TestExpectFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if *doDebug {
+				eventbustest.LogAllEvents(t, bus)
+			}
 			tw := eventbustest.NewWatcher(t, bus)
+
 			// TODO(cmol): When synctest is out of experimental, use that instead:
 			// https://go.dev/blog/synctest
 			tw.TimeOut = 10 * time.Millisecond

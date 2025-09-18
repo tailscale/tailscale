@@ -263,3 +263,25 @@ func EqualTo[T any](want T) func(T) error {
 		return nil
 	}
 }
+
+// LogAllEvents logs summaries of all the events routed via the specified bus
+// during the execution of the test governed by t. This is intended to support
+// development and debugging of tests.
+func LogAllEvents(t testing.TB, bus *eventbus.Bus) {
+	dw := bus.Debugger().WatchBus()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var i int
+		for {
+			select {
+			case <-dw.Done():
+				return
+			case re := <-dw.Events():
+				i++
+				t.Logf("[eventbus] #%[1]d: %[2]T | %+[2]v", i, re.Event)
+			}
+		}
+	}()
+	t.Cleanup(func() { dw.Close(); <-done })
+}
