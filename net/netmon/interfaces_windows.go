@@ -4,7 +4,9 @@
 package netmon
 
 import (
+	"cmp"
 	"log"
+	"net"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/tsconst"
+	"tailscale.com/util/winutil/winnet"
 )
 
 const (
@@ -22,10 +25,116 @@ const (
 )
 
 func init() {
+	altNetInterfaces = altNetInterfacesWindows
 	likelyHomeRouterIP = likelyHomeRouterIPWindows
 	if buildfeatures.HasUseProxy {
 		getPAC = getPACWindows
 	}
+}
+
+func altNetInterfacesWindows() ([]Interface, error) {
+	adapterAddrs, err := getInterfaces(windows.AF_UNSPEC, winipcfg.GAAFlagIncludePrefix|winipcfg.GAAFlagIncludeGateways, notTailscaleInterface)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]Interface, 0, len(adapterAddrs))
+
+	for _, aa := range adapterAddrs {
+		curIface := net.Interface{
+			Index: int(cmp.Or(aa.IfIndex, aa.IPv6IfIndex)),
+			Name:  aa.FriendlyName(),
+		}
+
+		if aa.OperStatus == windows.IfOperStatusUp {
+			curIface.Flags |= net.FlagUp
+			curIface.Flags |= net.FlagRunning
+		}
+
+		platFlags := connectivityFlags(aa.NetworkGUID)
+
+		entry, err := ifEntry(aa.LUID)
+		if err != nil {
+			return nil, err
+		}
+
+		eat := entry.AccessType
+		if eat&winipcfg.NetIfAccessLoopback != 0 {
+			curIface.Flags |= net.FlagLoopback
+		}
+		if eat&winipcfg.NetIfAccessBroadcast != 0 {
+			curIface.Flags |= net.FlagBroadcast
+		}
+		if eat&winipcfg.NetIfAccessPointToPoint != 0 {
+			curIface.Flags |= net.FlagPointToPoint
+		}
+		if eat&winipcfg.NetIfAccessPointToMultiPoint != 0 {
+			curIface.Flags |= net.FlagMulticast
+		}
+
+		if aa.MTU == 0xffffffff {
+			curIface.MTU = -1
+		} else {
+			curIface.MTU = int(aa.MTU)
+		}
+
+		if physAddr := aa.PhysicalAddress(); len(physAddr) > 0 {
+			curIface.HardwareAddr = make([]byte, len(physAddr))
+			copy(curIface.HardwareAddr, physAddr)
+		}
+
+		result = append(result, Interface{
+			Interface: &curIface,
+			Desc:      aa.Description(),
+			PlatFlags: platFlags,
+		})
+	}
+
+	return result, nil
+}
+
+func connectivityFlags(ifGUID windows.GUID) (flags PlatFlags) {
+	nlm, err := winnet.GetNetworkListManager()
+	if err != nil {
+		return 0
+	}
+
+	network, err := nlm.GetNetwork(ifGUID)
+	if err != nil {
+		return 0
+	}
+	defer network.Release()
+
+	connectivity, err := network.GetConnectivity()
+	if err != nil {
+		return 0
+	}
+
+	if connectivity&winnet.NLM_CONNECTIVITY_IPV4_INTERNET == 0 {
+		flags |= PlatFlagNoIPv4InternetConnectivity
+	}
+
+	if connectivity&winnet.NLM_CONNECTIVITY_IPV6_INTERNET == 0 {
+		flags |= PlatFlagNoIPv6InternetConnectivity
+	}
+
+	return flags
+}
+
+func ifEntry(ifLUID winipcfg.LUID) (*winipcfg.MibIfRow2, error) {
+	row := &winipcfg.MibIfRow2{
+		InterfaceLUID: ifLUID,
+	}
+	if procGetIfEntry2Ex.Find() == nil {
+		if err := getIfEntry2Ex(_MibIfEntryNormalWithoutStatistics, row); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := getIfEntry2(row); err != nil {
+			return nil, err
+		}
+	}
+	return row, nil
 }
 
 func likelyHomeRouterIPWindows() (ret netip.Addr, _ netip.Addr, ok bool) {
