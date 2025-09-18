@@ -308,6 +308,7 @@ func TestWildcardDomains(t *testing.T) {
 	ctx := t.Context()
 	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 		a := NewAppConnector(Config{
 			Logf:            t.Logf,
@@ -341,6 +342,13 @@ func TestWildcardDomains(t *testing.T) {
 		a.updateDomains([]string{"*.example.com", "example.com"})
 		if len(a.wildcards) != 1 {
 			t.Errorf("expected only one wildcard domain, got %v", a.wildcards)
+		}
+
+		if err := eventbustest.ExpectExactly(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.8/32")}),
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
