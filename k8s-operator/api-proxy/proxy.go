@@ -204,8 +204,7 @@ func (ap *APIServerProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = ap.recordRequestAsEvent(r, who)
-	if err != nil {
+	if err = ap.recordRequestAsEvent(r, who); err != nil {
 		ap.log.Errorf("error recording Kubernetes API request: %v", err)
 		return
 	}
