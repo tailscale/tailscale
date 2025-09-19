@@ -108,10 +108,11 @@ func TestExpectFilter(t *testing.T) {
 		},
 	}
 
-	bus := eventbustest.NewBus(t)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			bus := eventbustest.NewBus(t)
+			t.Cleanup(bus.Close)
+
 			if *doDebug {
 				eventbustest.LogAllEvents(t, bus)
 			}
@@ -241,10 +242,11 @@ func TestExpectEvents(t *testing.T) {
 		},
 	}
 
-	bus := eventbustest.NewBus(t)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			bus := eventbustest.NewBus(t)
+			t.Cleanup(bus.Close)
+
 			tw := eventbustest.NewWatcher(t, bus)
 			// TODO(cmol): When synctest is out of experimental, use that instead:
 			// https://go.dev/blog/synctest
@@ -374,10 +376,11 @@ func TestExpectExactlyEventsFilter(t *testing.T) {
 		},
 	}
 
-	bus := eventbustest.NewBus(t)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			bus := eventbustest.NewBus(t)
+			t.Cleanup(bus.Close)
+
 			tw := eventbustest.NewWatcher(t, bus)
 			// TODO(cmol): When synctest is out of experimental, use that instead:
 			// https://go.dev/blog/synctest
