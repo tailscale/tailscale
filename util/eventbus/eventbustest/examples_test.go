@@ -157,7 +157,7 @@ func TestExample_Expect_WithMultipleFunctions(t *testing.T) {
 	// OK
 }
 
-func TestExample_ExpectExactly_WithMultipleFuncions(t *testing.T) {
+func TestExample_ExpectExactly_WithMultipleFunctions(t *testing.T) {
 	type eventOfInterest struct {
 		value int
 	}
