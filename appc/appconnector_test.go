@@ -596,8 +596,8 @@ func TestUpdateDomainRouteRemoval(t *testing.T) {
 func TestUpdateWildcardRouteRemoval(t *testing.T) {
 	ctx := t.Context()
 	bus := eventbustest.NewBus(t)
-	eventbustest.LogAllEvents(t, bus)
 	for _, shouldStore := range []bool{false, true} {
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 
 		assertRoutes := func(prefix string, routes, removedRoutes []netip.Prefix) {
@@ -649,6 +649,20 @@ func TestUpdateWildcardRouteRemoval(t *testing.T) {
 			wantRemovedRoutes = prefixes("1.2.3.3/32", "1.2.3.4/32")
 		}
 		assertRoutes("removal", wantRoutes, wantRemovedRoutes)
+
+		wantEvents := []any{
+			// Each DNS record observed triggers an update.
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.1/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.2/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.3/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.4/32")}),
+		}
+		if shouldStore {
+			wantEvents = append(wantEvents, eqUpdate(RouteUpdate{Unadvertise: prefixes("1.2.3.3/32", "1.2.3.4/32")}))
+		}
+		if err := eventbustest.Expect(w, wantEvents...); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
