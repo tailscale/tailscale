@@ -398,6 +398,7 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
+		bw := eventbustest.NewWatcher(t, sys.Bus.Get())
 
 		ht := health.NewTracker(sys.Bus.Get())
 		reg := new(usermetric.Registry)
@@ -466,6 +467,12 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {
 			t.Errorf("got %v; want %v", rc.Routes(), wantRoutes)
+		}
+
+		if err := eventbustest.Expect(bw,
+			eqUpdate(appc.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
