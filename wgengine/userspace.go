@@ -93,10 +93,8 @@ const networkLoggerUploadTimeout = 5 * time.Second
 type userspaceEngine struct {
 	// eventBus will eventually become required, but for now may be nil.
 	// TODO(creachadair): Enforce that this is non-nil at construction.
-	eventBus       *eventbus.Bus
-	eventClient    *eventbus.Client
-	changeDeltaSub *eventbus.Subscriber[netmon.ChangeDelta]
-	subsDoneCh     chan struct{} // closed when consumeEventbusTopics returns
+	eventBus  *eventbus.Bus
+	eventSubs eventbus.Monitor
 
 	logf           logger.Logf
 	wgLogger       *wglog.Logger // a wireguard-go logging wrapper
@@ -354,11 +352,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		controlKnobs:   conf.ControlKnobs,
 		reconfigureVPN: conf.ReconfigureVPN,
 		health:         conf.HealthTracker,
-		subsDoneCh:     make(chan struct{}),
 	}
-	e.eventClient = e.eventBus.Client("userspaceEngine")
-	e.changeDeltaSub = eventbus.Subscribe[netmon.ChangeDelta](e.eventClient)
-	closePool.addFunc(e.eventClient.Close)
 
 	if e.birdClient != nil {
 		// Disable the protocol at start time.
@@ -545,8 +539,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 	}
 
-	go e.consumeEventbusTopics()
-
+	cli := e.eventBus.Client("userspaceEngine")
+	e.eventSubs = cli.Monitor(e.consumeEventbusTopics(cli))
 	e.logf("Engine created.")
 	return e, nil
 }
@@ -556,16 +550,17 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 // always handled in the order they are received, i.e. the next event is not
 // read until the previous event's handler has returned. It returns when the
 // [eventbus.Client] is closed.
-func (e *userspaceEngine) consumeEventbusTopics() {
-	defer close(e.subsDoneCh)
-
-	for {
-		select {
-		case <-e.eventClient.Done():
-			return
-		case changeDelta := <-e.changeDeltaSub.Events():
-			tshttpproxy.InvalidateCache()
-			e.linkChange(&changeDelta)
+func (e *userspaceEngine) consumeEventbusTopics(cli *eventbus.Client) func(*eventbus.Client) {
+	changeDeltaSub := eventbus.Subscribe[netmon.ChangeDelta](cli)
+	return func(cli *eventbus.Client) {
+		for {
+			select {
+			case <-cli.Done():
+				return
+			case changeDelta := <-changeDeltaSub.Events():
+				tshttpproxy.InvalidateCache()
+				e.linkChange(&changeDelta)
+			}
 		}
 	}
 }
@@ -1228,9 +1223,7 @@ func (e *userspaceEngine) RequestStatus() {
 }
 
 func (e *userspaceEngine) Close() {
-	e.eventClient.Close()
-	<-e.subsDoneCh
-
+	e.eventSubs.Close()
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
