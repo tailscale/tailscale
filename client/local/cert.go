@@ -43,15 +43,6 @@ func (lc *Client) SetDNS(ctx context.Context, name, value string) error {
 //
 // It returns a cached certificate from disk if it's still valid.
 //
-// Deprecated: use [Client.CertPair].
-func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
-	return defaultClient.CertPair(ctx, domain)
-}
-
-// CertPair returns a cert and private key for the provided DNS domain.
-//
-// It returns a cached certificate from disk if it's still valid.
-//
 // API maturity: this is considered a stable API.
 func (lc *Client) CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
 	return lc.CertPairWithValidity(ctx, domain, 0)
@@ -92,18 +83,6 @@ func (lc *Client) CertPairWithValidity(ctx context.Context, domain string, minVa
 // It's the right signature to use as the value of
 // [tls.Config.GetCertificate].
 //
-// Deprecated: use [Client.GetCertificate].
-func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	return defaultClient.GetCertificate(hi)
-}
-
-// GetCertificate fetches a TLS certificate for the TLS ClientHello in hi.
-//
-// It returns a cached certificate from disk if it's still valid.
-//
-// It's the right signature to use as the value of
-// [tls.Config.GetCertificate].
-//
 // API maturity: this is considered a stable API.
 func (lc *Client) GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	if hi == nil || hi.ServerName == "" {
@@ -127,13 +106,6 @@ func (lc *Client) GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, err
 		return nil, err
 	}
 	return &cert, nil
-}
-
-// ExpandSNIName expands bare label name into the most likely actual TLS cert name.
-//
-// Deprecated: use [Client.ExpandSNIName].
-func ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
-	return defaultClient.ExpandSNIName(ctx, name)
 }
 
 // ExpandSNIName expands bare label name into the most likely actual TLS cert name.
