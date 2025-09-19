@@ -136,7 +136,7 @@ func SendEvent(ctx context.Context, ap netip.AddrPort, event io.Reader, dial net
 	client := clientHTTP2(ctx, dial)
 
 	if !supportsEvent(ctx, client, ap) {
-		return fmt.Errorf("recorder at address %q does not support `/v2/event` endpoint", ap.String())
+		return fmt.Errorf(`recorder at address %q does not support "/v2/event" endpoint`, ap.String())
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s/v2/event", ap.String()), event)
