@@ -26,7 +26,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
@@ -296,7 +296,7 @@ func startNodesAndWaitForPeerStatus(t testing.TB, ctx context.Context, clusterTa
 	t.Helper()
 	ps := make([]*participant, nNodes)
 	keysToTag := make([]key.NodePublic, nNodes)
-	localClients := make([]*tailscale.LocalClient, nNodes)
+	localClients := make([]*local.Client, nNodes)
 	control, controlURL := startControl(t)
 	for i := 0; i < nNodes; i++ {
 		ts, key, _ := startNode(t, ctx, controlURL, fmt.Sprintf("node %d", i))

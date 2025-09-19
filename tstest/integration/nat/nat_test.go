@@ -24,7 +24,7 @@ import (
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/sync/errgroup"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -456,7 +456,7 @@ func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipn
 	anyPong := false
 	for n < 10 {
 		n++
-		pr, err := c.PingWithOpts(ctx, target, tailcfg.PingDisco, tailscale.PingOpts{})
+		pr, err := c.PingWithOpts(ctx, target, tailcfg.PingDisco, local.PingOpts{})
 		if err != nil {
 			if anyPong {
 				return res, nil

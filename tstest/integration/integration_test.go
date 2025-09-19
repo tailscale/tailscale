@@ -30,7 +30,6 @@ import (
 	"github.com/miekg/dns"
 	"go4.org/mem"
 	"tailscale.com/client/local"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/hostinfo"
@@ -800,7 +799,7 @@ func TestClientSideJailing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitPeerIsJailed := func(t *testing.T, b *tailscale.IPNBusWatcher, jailed bool) {
+	waitPeerIsJailed := func(t *testing.T, b *local.IPNBusWatcher, jailed bool) {
 		t.Helper()
 		for {
 			n, err := b.Next()

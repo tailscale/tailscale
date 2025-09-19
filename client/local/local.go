@@ -288,13 +288,6 @@ func (lc *Client) get200(ctx context.Context, path string) ([]byte, error) {
 	return lc.send(ctx, "GET", path, 200, nil)
 }
 
-// WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
-//
-// Deprecated: use [Client.WhoIs].
-func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
-	return defaultClient.WhoIs(ctx, remoteAddr)
-}
-
 func decodeJSON[T any](b []byte) (ret T, err error) {
 	if err := json.Unmarshal(b, &ret); err != nil {
 		var zero T

@@ -21,7 +21,7 @@ import (
 	"strings"
 
 	"github.com/coreos/go-systemd/activation"
-	"tailscale.com/client/tailscale"
+	"tailscale.com/client/local"
 )
 
 var (
@@ -49,7 +49,7 @@ func main() {
 			return
 		}
 
-		info, err := tailscale.WhoIs(r.Context(), remoteAddr.String())
+		info, err := new(local.Client).WhoIs(r.Context(), remoteAddr.String())
 		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			log.Printf("can't look up %s: %v", remoteAddr, err)
