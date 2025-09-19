@@ -570,7 +570,7 @@ func ensureRulesAdded(rulesPerSvc map[string][]rule, nfr linuxfw.NetfilterRunner
 }
 
 // ensureRulesDeleted ensures that the given rules are deleted from the firewall
-// configuration. For any rules that do not exist, calling this funcion is a
+// configuration. For any rules that do not exist, calling this function is a
 // no-op.
 func ensureRulesDeleted(rulesPerSvc map[string][]rule, nfr linuxfw.NetfilterRunner) error {
 	for svc, rules := range rulesPerSvc {
