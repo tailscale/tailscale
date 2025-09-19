@@ -120,7 +120,12 @@ func Expect(tw *Watcher, filters ...any) error {
 // [Expect]. Use [Expect] if other events are allowed.
 func ExpectExactly(tw *Watcher, filters ...any) error {
 	if len(filters) == 0 {
-		return errors.New("no event filters were provided")
+		select {
+		case event := <-tw.events:
+			return fmt.Errorf("saw event type %s, expected none", reflect.TypeOf(event))
+		case <-time.After(tw.TimeOut):
+			return nil
+		}
 	}
 	eventCount := 0
 	for pos, next := range filters {

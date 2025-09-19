@@ -4,6 +4,7 @@
 package health
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -159,15 +160,6 @@ func TestWatcher(t *testing.T) {
 		preFunc func(t *testing.T, ht *Tracker, bus *eventbus.Bus, fn func(Change))
 	}{
 		{
-			name: "with-callbacks",
-			preFunc: func(t *testing.T, tht *Tracker, _ *eventbus.Bus, fn func(c Change)) {
-				t.Cleanup(tht.RegisterWatcher(fn))
-				if len(tht.watchers) != 1 {
-					t.Fatalf("after RegisterWatcher, len(newTracker.watchers) = %d; want = 1", len(tht.watchers))
-				}
-			},
-		},
-		{
 			name: "with-eventbus",
 			preFunc: func(_ *testing.T, _ *Tracker, bus *eventbus.Bus, fn func(c Change)) {
 				client := bus.Client("healthwatchertestclient")
@@ -254,15 +246,6 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 		name    string
 		preFunc func(t *testing.T, ht *Tracker, bus *eventbus.Bus, fn func(Change))
 	}{
-		{
-			name: "with-callbacks",
-			preFunc: func(t *testing.T, tht *Tracker, _ *eventbus.Bus, fn func(c Change)) {
-				t.Cleanup(tht.RegisterWatcher(fn))
-				if len(tht.watchers) != 1 {
-					t.Fatalf("after RegisterWatcher, len(newTracker.watchers) = %d; want = 1", len(tht.watchers))
-				}
-			},
-		},
 		{
 			name: "with-eventbus",
 			preFunc: func(_ *testing.T, _ *Tracker, bus *eventbus.Bus, fn func(c Change)) {
@@ -668,7 +651,7 @@ func TestControlHealthNotifies(t *testing.T) {
 		name         string
 		initialState map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
 		newState     map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage
-		wantNotify   bool
+		wantEvents   []any
 	}
 	tests := []test{
 		{
@@ -679,7 +662,7 @@ func TestControlHealthNotifies(t *testing.T) {
 			newState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
 				"test": {},
 			},
-			wantNotify: false,
+			wantEvents: []any{},
 		},
 		{
 			name:         "on-set",
@@ -687,7 +670,9 @@ func TestControlHealthNotifies(t *testing.T) {
 			newState: map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
 				"test": {},
 			},
-			wantNotify: true,
+			wantEvents: []any{
+				eventbustest.Type[Change](),
+			},
 		},
 		{
 			name: "details-change",
@@ -701,7 +686,9 @@ func TestControlHealthNotifies(t *testing.T) {
 					Title: "Updated title",
 				},
 			},
-			wantNotify: true,
+			wantEvents: []any{
+				eventbustest.Type[Change](),
+			},
 		},
 		{
 			name: "action-changes",
@@ -721,41 +708,53 @@ func TestControlHealthNotifies(t *testing.T) {
 					},
 				},
 			},
-			wantNotify: true,
+			wantEvents: []any{
+				eventbustest.Type[Change](),
+			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ht := NewTracker(eventbustest.NewBus(t))
+			bus := eventbustest.NewBus(t)
+			tw := eventbustest.NewWatcher(t, bus)
+			tw.TimeOut = time.Second
+
+			ht := NewTracker(bus)
 			ht.SetIPNState("NeedsLogin", true)
 			ht.GotStreamedMapResponse()
 
-			if len(test.initialState) != 0 {
-				ht.SetControlHealth(test.initialState)
+			// Expect events at starup, before doing anything else
+			if err := eventbustest.ExpectExactly(tw,
+				eventbustest.Type[Change](), // warming-up
+				eventbustest.Type[Change](), // is-using-unstable-version
+				eventbustest.Type[Change](), // not-in-map-poll
+			); err != nil {
+				t.Errorf("startup error: %v", err)
 			}
 
-			gotNotified := false
-			ht.registerSyncWatcher(func(_ Change) {
-				gotNotified = true
-			})
+			// Only set initial state if we need to
+			if len(test.initialState) != 0 {
+				ht.SetControlHealth(test.initialState)
+				if err := eventbustest.ExpectExactly(tw, eventbustest.Type[Change]()); err != nil {
+					t.Errorf("initial state error: %v", err)
+				}
+			}
 
 			ht.SetControlHealth(test.newState)
 
-			if gotNotified != test.wantNotify {
-				t.Errorf("notified: got %v, want %v", gotNotified, test.wantNotify)
+			if err := eventbustest.ExpectExactly(tw, test.wantEvents...); err != nil {
+				t.Errorf("event error: %v", err)
 			}
 		})
 	}
 }
 
 func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
-	ht := NewTracker(eventbustest.NewBus(t))
+	bus := eventbustest.NewBus(t)
+	tw := eventbustest.NewWatcher(t, bus)
+	tw.TimeOut = 100 * time.Millisecond
+	ht := NewTracker(bus)
 	ht.SetIPNState("NeedsLogin", true)
-
-	gotNotified := false
-	ht.registerSyncWatcher(func(_ Change) {
-		gotNotified = true
-	})
 
 	ht.SetControlHealth(map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage{
 		"control-health": {},
@@ -768,8 +767,19 @@ func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
 		t.Error("got a warning with code 'control-health', want none")
 	}
 
-	if gotNotified {
-		t.Error("watcher got called, want it to not be called")
+	// An event is emitted when SetIPNState is run above,
+	// so only fail on the second event.
+	eventCounter := 0
+	expectOne := func(c *Change) error {
+		eventCounter++
+		if eventCounter == 1 {
+			return nil
+		}
+		return errors.New("saw more than 1 event")
+	}
+
+	if err := eventbustest.Expect(tw, expectOne); err == nil {
+		t.Error("event got emitted, want it to not be called")
 	}
 }
 

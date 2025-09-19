@@ -28,7 +28,6 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
-	"tailscale.com/util/set"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
@@ -65,6 +64,21 @@ var receiveNames = []string{
 // Tracker tracks the health of various Tailscale subsystems,
 // comparing each subsystems' state with each other to make sure
 // they're consistent based on the user's intended state.
+//
+// If a client [Warnable] becomes unhealthy or its unhealthy state is updated,
+// an event will be emitted with WarnableChanged set to true and the Warnable
+// and its UnhealthyState:
+//
+//	Change{WarnableChanged: true, Warnable: w, UnhealthyState: us}
+//
+// If a Warnable becomes healthy, an event will be emitted with
+// WarnableChanged set to true, the Warnable set, and UnhealthyState set to nil:
+//
+//	Change{WarnableChanged: true, Warnable: w, UnhealthyState: nil}
+//
+// If the health messages from the control-plane change, an event will be
+// emitted with ControlHealthChanged set to true. Recipients can fetch the set of
+// control-plane health messages by calling [Tracker.CurrentState]:
 type Tracker struct {
 	// MagicSockReceiveFuncs tracks the state of the three
 	// magicsock receive functions: IPv4, IPv6, and DERP.
@@ -91,9 +105,8 @@ type Tracker struct {
 
 	// sysErr maps subsystems to their current error (or nil if the subsystem is healthy)
 	// Deprecated: using Warnables should be preferred
-	sysErr   map[Subsystem]error
-	watchers set.HandleSet[func(Change)] // opt func to run if error state changes
-	timer    tstime.TimerController
+	sysErr map[Subsystem]error
+	timer  tstime.TimerController
 
 	latestVersion   *tailcfg.ClientVersion // or nil
 	checkForUpdates bool
@@ -131,10 +144,12 @@ func NewTracker(bus *eventbus.Bus) *Tracker {
 	}
 
 	cli := bus.Client("health.Tracker")
-	return &Tracker{
+	t := &Tracker{
 		eventClient: cli,
 		changePub:   eventbus.Publish[Change](cli),
 	}
+	t.timer = t.clock().AfterFunc(time.Minute, t.timerSelfCheck)
+	return t
 }
 
 func (t *Tracker) now() time.Time {
@@ -455,33 +470,6 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 			})
 			mak.Set(&t.pendingVisibleTimers, w, tc)
 		}
-
-		// Direct callbacks
-		// TODO(cmol): Remove once all watchers have been moved to events
-		for _, cb := range t.watchers {
-			// If the Warnable has been unhealthy for more than its TimeToVisible, the callback should be
-			// executed immediately. Otherwise, the callback should be enqueued to run once the Warnable
-			// becomes visible.
-			if w.IsVisible(ws, t.now) {
-				cb(change)
-				continue
-			}
-
-			// The time remaining until the Warnable will be visible to the user is the TimeToVisible
-			// minus the time that has already passed since the Warnable became unhealthy.
-			visibleIn := w.TimeToVisible - t.now().Sub(brokenSince)
-			var tc tstime.TimerController = t.clock().AfterFunc(visibleIn, func() {
-				t.mu.Lock()
-				defer t.mu.Unlock()
-				// Check if the Warnable is still unhealthy, as it could have become healthy between the time
-				// the timer was set for and the time it was executed.
-				if t.warnableVal[w] != nil {
-					cb(change)
-					delete(t.pendingVisibleTimers, w)
-				}
-			})
-			mak.Set(&t.pendingVisibleTimers, w, tc)
-		}
 	}
 }
 
@@ -514,10 +502,6 @@ func (t *Tracker) setHealthyLocked(w *Warnable) {
 		Warnable:        w,
 	}
 	t.changePub.Publish(change)
-	for _, cb := range t.watchers {
-		// TODO(cmol): Remove once all watchers have been moved to events
-		cb(change)
-	}
 }
 
 // notifyWatchersControlChangedLocked calls each watcher to signal that control
@@ -526,13 +510,7 @@ func (t *Tracker) notifyWatchersControlChangedLocked() {
 	change := Change{
 		ControlHealthChanged: true,
 	}
-	if t.changePub != nil {
-		t.changePub.Publish(change)
-	}
-	for _, cb := range t.watchers {
-		// TODO(cmol): Remove once all watchers have been moved to events
-		cb(change)
-	}
+	t.changePub.Publish(change)
 }
 
 // AppendWarnableDebugFlags appends to base any health items that are currently in failed
@@ -575,62 +553,6 @@ type Change struct {
 	// UnhealthyState is set if the changed Warnable is now unhealthy, or nil
 	// if Warnable is now healthy.
 	UnhealthyState *UnhealthyState
-}
-
-// RegisterWatcher adds a function that will be called its own goroutine
-// whenever the health state of any client [Warnable] or control-plane health
-// messages changes. The returned function can be used to unregister the
-// callback.
-//
-// If a client [Warnable] becomes unhealthy or its unhealthy state is updated,
-// the callback will be called with WarnableChanged set to true and the Warnable
-// and its UnhealthyState:
-//
-//	go cb(Change{WarnableChanged: true, Warnable: w, UnhealthyState: us})
-//
-// If a Warnable becomes healthy, the callback will be called with
-// WarnableChanged set to true, the Warnable set, and UnhealthyState set to nil:
-//
-//	go cb(Change{WarnableChanged: true, Warnable: w, UnhealthyState: nil})
-//
-// If the health messages from the control-plane change, the callback will be
-// called with ControlHealthChanged set to true. Recipients can fetch the set of
-// control-plane health messages by calling [Tracker.CurrentState]:
-//
-//	go cb(Change{ControlHealthChanged: true})
-func (t *Tracker) RegisterWatcher(cb func(Change)) (unregister func()) {
-	return t.registerSyncWatcher(func(c Change) {
-		go cb(c)
-	})
-}
-
-// registerSyncWatcher adds a function that will be called whenever the health
-// state changes. The provided callback function will be executed synchronously.
-// Call RegisterWatcher to register any callbacks that won't return from
-// execution immediately.
-func (t *Tracker) registerSyncWatcher(cb func(c Change)) (unregister func()) {
-	if t.nil() {
-		return func() {}
-	}
-	t.initOnce.Do(t.doOnceInit)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.watchers == nil {
-		t.watchers = set.HandleSet[func(Change)]{}
-	}
-	handle := t.watchers.Add(cb)
-	if t.timer == nil {
-		t.timer = t.clock().AfterFunc(time.Minute, t.timerSelfCheck)
-	}
-	return func() {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		delete(t.watchers, handle)
-		if len(t.watchers) == 0 && t.timer != nil {
-			t.timer.Stop()
-			t.timer = nil
-		}
-	}
 }
 
 // SetRouterHealth sets the state of the wgengine/router.Router.

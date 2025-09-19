@@ -250,7 +250,7 @@ func TestExpectEvents(t *testing.T) {
 			tw := eventbustest.NewWatcher(t, bus)
 			// TODO(cmol): When synctest is out of experimental, use that instead:
 			// https://go.dev/blog/synctest
-			tw.TimeOut = 10 * time.Millisecond
+			tw.TimeOut = 100 * time.Millisecond
 
 			client := bus.Client("testClient")
 			defer client.Close()
