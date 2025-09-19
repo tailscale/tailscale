@@ -43,9 +43,7 @@ type expiryManager struct {
 	logf  logger.Logf
 	clock tstime.Clock
 
-	eventClient    *eventbus.Client
-	controlTimeSub *eventbus.Subscriber[controlclient.ControlTime]
-	subsDoneCh     chan struct{} // closed when consumeEventbusTopics returns
+	eventSubs eventbus.Monitor
 }
 
 func newExpiryManager(logf logger.Logf, bus *eventbus.Bus) *expiryManager {
@@ -55,12 +53,8 @@ func newExpiryManager(logf logger.Logf, bus *eventbus.Bus) *expiryManager {
 		clock:             tstime.StdClock{},
 	}
 
-	em.eventClient = bus.Client("ipnlocal.expiryManager")
-	em.controlTimeSub = eventbus.Subscribe[controlclient.ControlTime](em.eventClient)
-
-	em.subsDoneCh = make(chan struct{})
-	go em.consumeEventbusTopics()
-
+	cli := bus.Client("ipnlocal.expiryManager")
+	em.eventSubs = cli.Monitor(em.consumeEventbusTopics(cli))
 	return em
 }
 
@@ -69,15 +63,16 @@ func newExpiryManager(logf logger.Logf, bus *eventbus.Bus) *expiryManager {
 // always handled in the order they are received, i.e. the next event is not
 // read until the previous event's handler has returned. It returns when the
 // [eventbus.Client] is closed.
-func (em *expiryManager) consumeEventbusTopics() {
-	defer close(em.subsDoneCh)
-
-	for {
-		select {
-		case <-em.eventClient.Done():
-			return
-		case time := <-em.controlTimeSub.Events():
-			em.onControlTime(time.Value)
+func (em *expiryManager) consumeEventbusTopics(cli *eventbus.Client) func(*eventbus.Client) {
+	controlTimeSub := eventbus.Subscribe[controlclient.ControlTime](cli)
+	return func(cli *eventbus.Client) {
+		for {
+			select {
+			case <-cli.Done():
+				return
+			case time := <-controlTimeSub.Events():
+				em.onControlTime(time.Value)
+			}
 		}
 	}
 }
@@ -250,10 +245,7 @@ func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Tim
 	return nextExpiry
 }
 
-func (em *expiryManager) close() {
-	em.eventClient.Close()
-	<-em.subsDoneCh
-}
+func (em *expiryManager) close() { em.eventSubs.Close() }
 
 // ControlNow estimates the current time on the control server, calculated as
 // localNow + the delta between local and control server clocks as recorded
