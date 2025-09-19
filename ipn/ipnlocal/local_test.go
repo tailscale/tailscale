@@ -2363,6 +2363,7 @@ func TestObserveDNSResponse(t *testing.T) {
 	for _, shouldStore := range []bool{false, true} {
 		b := newTestBackend(t)
 		bus := b.sys.Bus.Get()
+		w := eventbustest.NewWatcher(t, bus)
 
 		// ensure no error when no app connector is configured
 		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
@@ -2387,6 +2388,12 @@ func TestObserveDNSResponse(t *testing.T) {
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {
 			t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
+		}
+
+		if err := eventbustest.Expect(w,
+			eqUpdate(appc.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
