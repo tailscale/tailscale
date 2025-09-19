@@ -221,6 +221,79 @@ func TestClient_Done(t *testing.T) {
 	}
 }
 
+func TestMonitor(t *testing.T) {
+	t.Run("ZeroWait", func(t *testing.T) {
+		var zero eventbus.Monitor
+
+		ready := make(chan struct{})
+		go func() { zero.Wait(); close(ready) }()
+
+		select {
+		case <-ready:
+			// OK
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for Wait to return")
+		}
+	})
+
+	t.Run("ZeroClose", func(t *testing.T) {
+		var zero eventbus.Monitor
+
+		ready := make(chan struct{})
+		go func() { zero.Close(); close(ready) }()
+
+		select {
+		case <-ready:
+			// OK
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for Close to return")
+		}
+	})
+
+	testMon := func(t *testing.T, release func(*eventbus.Client, eventbus.Monitor)) func(t *testing.T) {
+		t.Helper()
+		return func(t *testing.T) {
+			bus := eventbus.New()
+			cli := bus.Client("test client")
+
+			// The monitored goroutine runs until the client or test subscription ends.
+			m := cli.Monitor(func(c *eventbus.Client) {
+				sub := eventbus.Subscribe[string](cli)
+				select {
+				case <-c.Done():
+					t.Log("client closed")
+				case <-sub.Done():
+					t.Log("subscription closed")
+				}
+			})
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				m.Wait()
+			}()
+
+			// While the goroutine is running, Wait does not complete.
+			select {
+			case <-done:
+				t.Error("monitor is ready before its goroutine is finished")
+			default:
+				// OK
+			}
+
+			release(cli, m)
+			select {
+			case <-done:
+				// OK
+			case <-time.After(time.Second):
+				t.Fatal("timeout waiting for monitor to complete")
+			}
+		}
+	}
+	t.Run("Close", testMon(t, func(_ *eventbus.Client, m eventbus.Monitor) { m.Close() }))
+	t.Run("Wait", testMon(t, func(c *eventbus.Client, m eventbus.Monitor) { c.Close(); m.Wait() }))
+}
+
 type queueChecker struct {
 	t    *testing.T
 	want []any
