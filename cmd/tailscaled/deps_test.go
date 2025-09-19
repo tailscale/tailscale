@@ -122,3 +122,16 @@ func TestOmitACME(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitOAuthKey(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_oauthkey,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.HasPrefix(dep, "golang.org/x/oauth2") {
+				t.Errorf("unexpected dep with ts_omit_oauthkey: %q", dep)
+			}
+		},
+	}.Check(t)
+}

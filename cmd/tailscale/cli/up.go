@@ -24,6 +24,7 @@ import (
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
+	_ "tailscale.com/feature/condregister/oauthkey"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
@@ -563,9 +564,13 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		if err != nil {
 			return err
 		}
-		authKey, err = tailscale.ResolveAuthKey(ctx, authKey, strings.Split(upArgs.advertiseTags, ","))
-		if err != nil {
-			return err
+		// Try to use an OAuth secret to generate an auth key if that functionality
+		// is available.
+		if f, ok := tailscale.HookResolveAuthKey.GetOk(); ok {
+			authKey, err = f(ctx, authKey, strings.Split(upArgs.advertiseTags, ","))
+			if err != nil {
+				return err
+			}
 		}
 		err = localClient.Start(ctx, ipn.Options{
 			AuthKey:     authKey,

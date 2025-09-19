@@ -29,6 +29,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	_ "tailscale.com/feature/condregister/oauthkey"
 	_ "tailscale.com/feature/condregister/portmapper"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -680,9 +681,14 @@ func (s *Server) start() (reterr error) {
 	prefs.ControlURL = s.ControlURL
 	prefs.RunWebClient = s.RunWebClient
 	prefs.AdvertiseTags = s.AdvertiseTags
-	authKey, err := tailscale.ResolveAuthKey(s.shutdownCtx, s.getAuthKey(), prefs.AdvertiseTags)
-	if err != nil {
-		return fmt.Errorf("resolving auth key: %w", err)
+	authKey := s.getAuthKey()
+	// Try to use an OAuth secret to generate an auth key if that functionality
+	// is available.
+	if f, ok := tailscale.HookResolveAuthKey.GetOk(); ok {
+		authKey, err = f(s.shutdownCtx, s.getAuthKey(), prefs.AdvertiseTags)
+		if err != nil {
+			return fmt.Errorf("resolving auth key: %w", err)
+		}
 	}
 	err = lb.Start(ipn.Options{
 		UpdatePrefs: prefs,

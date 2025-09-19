@@ -105,6 +105,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"desktop_sessions": {"DesktopSessions", "Desktop sessions support", nil},
 	"drive":            {"Drive", "Tailscale Drive (file server) support", nil},
 	"kube":             {"Kube", "Kubernetes integration", nil},
+	"oauthkey":         {"OAuthKey", "OAuth secret-to-authkey resolution support", nil},
 	"portmapper":       {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support", nil},
 	"relayserver":      {"RelayServer", "Relay server", nil},
 	"serve":            {"Serve", "Serve and Funnel support", nil},
