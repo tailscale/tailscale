@@ -22,6 +22,7 @@ import (
 	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 // maxAllowedNoiseVersion is the highest we expect the Tailscale
@@ -175,6 +176,7 @@ func (tt noiseClientTest) run(t *testing.T) {
 	serverPrivate := key.NewMachine()
 	clientPrivate := key.NewMachine()
 	chalPrivate := key.NewChallenge()
+	bus := eventbustest.NewBus(t)
 
 	const msg = "Hello, client"
 	h2 := &http2.Server{}
@@ -194,6 +196,7 @@ func (tt noiseClientTest) run(t *testing.T) {
 	defer hs.Close()
 
 	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
 	if nettest.PreferMemNetwork() {
 		dialer.SetSystemDialerForTest(nw.Dial)
 	}

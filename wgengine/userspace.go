@@ -312,6 +312,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	if conf.Dialer == nil {
 		conf.Dialer = &tsdial.Dialer{Logf: logf}
+		if conf.EventBus != nil {
+			conf.Dialer.SetBus(conf.EventBus)
+		}
 	}
 
 	var tsTUNDev *tstun.Wrapper
@@ -379,6 +382,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	tunName, _ := conf.Tun.Name()
 	conf.Dialer.SetTUNName(tunName)
 	conf.Dialer.SetNetMon(e.netMon)
+	conf.Dialer.SetBus(e.eventBus)
 	e.dns = dns.NewManager(logf, conf.DNS, e.health, conf.Dialer, fwdDNSLinkSelector{e, tunName}, conf.ControlKnobs, runtime.GOOS)
 
 	// TODO: there's probably a better place for this
@@ -1035,7 +1039,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		tid := cfg.NetworkLogging.DomainID
 		logExitFlowEnabled := cfg.NetworkLogging.LogExitFlowEnabled
 		e.logf("wgengine: Reconfig: starting up network logger (node:%s tailnet:%s)", nid.Public(), tid.Public())
-		if err := e.networkLogger.Startup(cfg.NodeID, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, logExitFlowEnabled); err != nil {
+		if err := e.networkLogger.Startup(cfg.NodeID, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
 			e.logf("wgengine: Reconfig: error starting up network logger: %v", err)
 		}
 		e.networkLogger.ReconfigRoutes(routerCfg)

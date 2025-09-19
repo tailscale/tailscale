@@ -223,6 +223,7 @@ func TestDirectProxyManual(t *testing.T) {
 
 	dialer := &tsdial.Dialer{}
 	dialer.SetNetMon(netmon.NewStatic())
+	dialer.SetBus(bus)
 
 	opts := Options{
 		Persist: persist.Persist{},
@@ -300,6 +301,7 @@ func testHTTPS(t *testing.T, withProxy bool) {
 
 	dialer := &tsdial.Dialer{}
 	dialer.SetNetMon(netmon.NewStatic())
+	dialer.SetBus(bus)
 	dialer.SetSystemDialerForTest(func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {

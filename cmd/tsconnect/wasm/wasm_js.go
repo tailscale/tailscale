@@ -104,6 +104,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 	sys := tsd.NewSystem()
 	sys.Set(store)
 	dialer := &tsdial.Dialer{Logf: logf}
+	dialer.SetBus(sys.Bus.Get())
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
@@ -463,7 +464,6 @@ func (s *jsSSHSession) Run() {
 		cols = s.pendingResizeCols
 	}
 	err = session.RequestPty("xterm", rows, cols, ssh.TerminalModes{})
-
 	if err != nil {
 		writeError("Pseudo Terminal", err)
 		return

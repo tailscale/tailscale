@@ -28,6 +28,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
@@ -86,6 +87,8 @@ type Dialer struct {
 	dnsCache         *dnscache.MessageCache // nil until first non-empty SetExitDNSDoH
 	nextSysConnID    int
 	activeSysConns   map[int]net.Conn // active connections not yet closed
+	eventClient      *eventbus.Client
+	eventBusSubs     eventbus.Monitor
 }
 
 // sysConn wraps a net.Conn that was created using d.SystemDial.
@@ -158,6 +161,9 @@ func (d *Dialer) SetRoutes(routes, localRoutes []netip.Prefix) {
 }
 
 func (d *Dialer) Close() error {
+	if d.eventClient != nil {
+		d.eventBusSubs.Close()
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.closed = true
@@ -186,6 +192,14 @@ func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
 		d.netMonUnregister = nil
 	}
 	d.netMon = netMon
+	// Having multiple watchers could lead to problems,
+	// so remove the eventClient if it exists.
+	// This should really not happen, but better checking for it than not.
+	// TODO(cmol): Should this just be a panic?
+	if d.eventClient != nil {
+		d.eventBusSubs.Close()
+		d.eventClient = nil
+	}
 	d.netMonUnregister = d.netMon.RegisterChangeCallback(d.linkChanged)
 }
 
@@ -195,6 +209,35 @@ func (d *Dialer) NetMon() *netmon.Monitor {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.netMon
+}
+
+func (d *Dialer) SetBus(bus *eventbus.Bus) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.eventClient != nil {
+		panic("eventbus has already been set")
+	}
+	// Having multiple watchers could lead to problems,
+	// so unregister the callback if it exists.
+	if d.netMonUnregister != nil {
+		d.netMonUnregister()
+	}
+	d.eventClient = bus.Client("tsdial.Dialer")
+	d.eventBusSubs = d.eventClient.Monitor(d.linkChangeWatcher(d.eventClient))
+}
+
+func (d *Dialer) linkChangeWatcher(ec *eventbus.Client) func(*eventbus.Client) {
+	linkChangeSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
+	return func(ec *eventbus.Client) {
+		for {
+			select {
+			case <-ec.Done():
+				return
+			case cd := <-linkChangeSub.Events():
+				d.linkChanged(&cd)
+			}
+		}
+	}
 }
 
 var (

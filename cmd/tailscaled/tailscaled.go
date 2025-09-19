@@ -433,7 +433,13 @@ func run() (err error) {
 
 	var publicLogID logid.PublicID
 	if buildfeatures.HasLogTail {
-		pol := logpolicy.New(logtail.CollectionNode, netMon, sys.HealthTracker.Get(), nil /* use log.Printf */)
+
+		pol := logpolicy.Options{
+			Collection: logtail.CollectionNode,
+			NetMon:     netMon,
+			Health:     sys.HealthTracker.Get(),
+			Bus:        sys.Bus.Get(),
+		}.New()
 		pol.SetVerbosityLevel(args.verbose)
 		publicLogID = pol.PublicID
 		logPol = pol
@@ -470,7 +476,7 @@ func run() (err error) {
 	// Always clean up, even if we're going to run the server. This covers cases
 	// such as when a system was rebooted without shutting down, or tailscaled
 	// crashed, and would for example restore system DNS configuration.
-	dns.CleanUp(logf, netMon, sys.HealthTracker.Get(), args.tunname)
+	dns.CleanUp(logf, netMon, sys.Bus.Get(), sys.HealthTracker.Get(), args.tunname)
 	router.CleanUp(logf, netMon, args.tunname)
 	// If the cleanUp flag was passed, then exit.
 	if args.cleanUp {
@@ -616,6 +622,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	}
 
 	dialer := &tsdial.Dialer{Logf: logf} // mutated below (before used)
+	dialer.SetBus(sys.Bus.Get())
 	sys.Set(dialer)
 
 	onlyNetstack, err := createEngine(logf, sys)

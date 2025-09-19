@@ -27,13 +27,15 @@ func TestNewDirect(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 
 	k := key.NewMachine()
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
 	opts := Options{
 		ServerURL: "https://example.com",
 		Hostinfo:  hi,
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
 			return k, nil
 		},
-		Dialer: tsdial.NewDialer(netmon.NewStatic()),
+		Dialer: dialer,
 		Bus:    bus,
 	}
 	c, err := NewDirect(opts)
@@ -105,13 +107,15 @@ func TestTsmpPing(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 
 	k := key.NewMachine()
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
 	opts := Options{
 		ServerURL: "https://example.com",
 		Hostinfo:  hi,
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
 			return k, nil
 		},
-		Dialer: tsdial.NewDialer(netmon.NewStatic()),
+		Dialer: dialer,
 		Bus:    bus,
 	}
 
