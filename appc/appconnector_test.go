@@ -765,9 +765,14 @@ func TestMetricBucketsAreSorted(t *testing.T) {
 // routeAdvertiser, calls to Advertise/UnadvertiseRoutes can end up calling
 // back into AppConnector via authReconfig. If everything is called
 // synchronously, this results in a deadlock on AppConnector.mu.
+//
+// TODO(creachadair, 2025-09-18): Remove this along with the advertiser
+// interface once the LocalBackend is switched to use the event bus and the
+// tests have been updated not to need it.
 func TestUpdateRoutesDeadlock(t *testing.T) {
 	ctx := t.Context()
 	bus := eventbustest.NewBus(t)
+	w := eventbustest.NewWatcher(t, bus)
 	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(Config{
 		Logf:            t.Logf,
@@ -818,6 +823,15 @@ func TestUpdateRoutesDeadlock(t *testing.T) {
 
 	if want := []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}; !slices.Equal(slices.Compact(rc.Routes()), want) {
 		t.Fatalf("got %v, want %v", rc.Routes(), want)
+	}
+
+	if err := eventbustest.ExpectExactly(w,
+		eqUpdate(RouteUpdate{Advertise: prefixes("127.0.0.1/32", "127.0.0.2/32")}),
+		eventbustest.Type[RouteInfo](),
+		eqUpdate(RouteUpdate{Advertise: prefixes("127.0.0.1/32"), Unadvertise: prefixes("127.0.0.2/32")}),
+		eventbustest.Type[RouteInfo](),
+	); err != nil {
+		t.Error(err)
 	}
 }
 
