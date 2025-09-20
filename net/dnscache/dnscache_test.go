@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -236,6 +237,63 @@ func TestShouldTryBootstrap(t *testing.T) {
 			got := d.shouldTryBootstrap(tt.ctx, tt.err, dc)
 			if got != tt.want {
 				t.Errorf("got %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSingleHostStaticResult(t *testing.T) {
+	v4 := netip.MustParseAddr("0.0.0.1")
+	v6 := netip.MustParseAddr("2001::a")
+
+	tests := []struct {
+		name    string
+		static  []netip.Addr
+		wantIP  netip.Addr
+		wantIP6 netip.Addr
+		wantAll []netip.Addr
+	}{
+		{
+			name:    "just-v6",
+			static:  []netip.Addr{v6},
+			wantIP:  v6,
+			wantIP6: v6,
+			wantAll: []netip.Addr{v6},
+		},
+		{
+			name:    "just-v4",
+			static:  []netip.Addr{v4},
+			wantIP:  v4,
+			wantIP6: netip.Addr{},
+			wantAll: []netip.Addr{v4},
+		},
+		{
+			name:    "v6-then-v4",
+			static:  []netip.Addr{v6, v4},
+			wantIP:  v4,
+			wantIP6: v6,
+			wantAll: []netip.Addr{v6, v4},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Resolver{
+				SingleHost:             "example.com",
+				SingleHostStaticResult: tt.static,
+			}
+			ip, ip6, all, err := r.LookupIP(context.Background(), "example.com")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ip != tt.wantIP {
+				t.Errorf("got ip %v; want %v", ip, tt.wantIP)
+			}
+			if ip6 != tt.wantIP6 {
+				t.Errorf("got ip6 %v; want %v", ip6, tt.wantIP6)
+			}
+			if !slices.Equal(all, tt.wantAll) {
+				t.Errorf("got all %v; want %v", all, tt.wantAll)
 			}
 		})
 	}
