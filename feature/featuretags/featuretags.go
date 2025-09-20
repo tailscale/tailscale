@@ -105,6 +105,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"desktop_sessions": {"DesktopSessions", "Desktop sessions support", nil},
 	"drive":            {"Drive", "Tailscale Drive (file server) support", nil},
 	"kube":             {"Kube", "Kubernetes integration", nil},
+	"linuxdnsfight":    {"LinuxDNSFight", "Linux support for detecting DNS fights (inotify watching of /etc/resolv.conf)", nil},
 	"oauthkey":         {"OAuthKey", "OAuth secret-to-authkey resolution support", nil},
 	"outboundproxy": {
 		Sym:  "OutboundProxy",
