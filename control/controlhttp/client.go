@@ -422,6 +422,10 @@ func (a *Dialer) dialHostOpt(ctx context.Context, optAddr netip.Addr, optACEHost
 					go try(u443)
 				} // else we lost the race and it started already which is what we want
 			case u443:
+				if u80 == nil {
+					// We never started a port 80 dial, so just return the port 443 error.
+					return nil, res.err
+				}
 				err443 = res.err
 			default:
 				panic("invalid")
