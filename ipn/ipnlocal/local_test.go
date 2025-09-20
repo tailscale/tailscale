@@ -74,8 +74,6 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-func fakeStoreRoutes(*appc.RouteInfo) error { return nil }
-
 func inRemove(ip netip.Addr) bool {
 	for _, pfx := range removeFromDefaultRoute {
 		if pfx.Contains(ip) {
@@ -2305,14 +2303,13 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 func TestOfferingAppConnector(t *testing.T) {
 	for _, shouldStore := range []bool{false, true} {
 		b := newTestBackend(t)
+		bus := b.sys.Bus.Get()
 		if b.OfferingAppConnector() {
 			t.Fatal("unexpected offering app connector")
 		}
-		if shouldStore {
-			b.appConnector = appc.NewAppConnector(t.Logf, nil, &appc.RouteInfo{}, fakeStoreRoutes)
-		} else {
-			b.appConnector = appc.NewAppConnector(t.Logf, nil, nil, nil)
-		}
+		b.appConnector = appc.NewAppConnector(appc.Config{
+			Logf: t.Logf, EventBus: bus, HasStoredRoutes: shouldStore,
+		})
 		if !b.OfferingAppConnector() {
 			t.Fatal("unexpected not offering app connector")
 		}
@@ -2362,6 +2359,8 @@ func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
 func TestObserveDNSResponse(t *testing.T) {
 	for _, shouldStore := range []bool{false, true} {
 		b := newTestBackend(t)
+		bus := b.sys.Bus.Get()
+		w := eventbustest.NewWatcher(t, bus)
 
 		// ensure no error when no app connector is configured
 		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
@@ -2369,21 +2368,29 @@ func TestObserveDNSResponse(t *testing.T) {
 		}
 
 		rc := &appctest.RouteCollector{}
-		if shouldStore {
-			b.appConnector = appc.NewAppConnector(t.Logf, rc, &appc.RouteInfo{}, fakeStoreRoutes)
-		} else {
-			b.appConnector = appc.NewAppConnector(t.Logf, rc, nil, nil)
-		}
-		b.appConnector.UpdateDomains([]string{"example.com"})
-		b.appConnector.Wait(context.Background())
+		a := appc.NewAppConnector(appc.Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		a.UpdateDomains([]string{"example.com"})
+		a.Wait(t.Context())
+		b.appConnector = a
 
 		if err := b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
 			t.Errorf("ObserveDNSResponse: %v", err)
 		}
-		b.appConnector.Wait(context.Background())
+		a.Wait(t.Context())
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {
 			t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
+		}
+
+		if err := eventbustest.Expect(w,
+			eqUpdate(appc.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
@@ -2535,7 +2542,7 @@ func TestBackfillAppConnectorRoutes(t *testing.T) {
 
 	// Store the test IP in profile data, but not in Prefs.AdvertiseRoutes.
 	b.ControlKnobs().AppCStoreRoutes.Store(true)
-	if err := b.storeRouteInfo(&appc.RouteInfo{
+	if err := b.storeRouteInfo(appc.RouteInfo{
 		Domains: map[string][]netip.Addr{
 			"example.com": {ip},
 		},
@@ -5486,10 +5493,10 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	b.pm.currentProfile = prof1.View()
 
 	// set up routeInfo
-	ri1 := &appc.RouteInfo{}
+	ri1 := appc.RouteInfo{}
 	ri1.Wildcards = []string{"1"}
 
-	ri2 := &appc.RouteInfo{}
+	ri2 := appc.RouteInfo{}
 	ri2.Wildcards = []string{"2"}
 
 	// read before write
@@ -7041,4 +7048,42 @@ func toStrings[T ~string](in []T) []string {
 		out[i] = string(v)
 	}
 	return out
+}
+
+type textUpdate struct {
+	Advertise   []string
+	Unadvertise []string
+}
+
+func routeUpdateToText(u appc.RouteUpdate) textUpdate {
+	var out textUpdate
+	for _, p := range u.Advertise {
+		out.Advertise = append(out.Advertise, p.String())
+	}
+	for _, p := range u.Unadvertise {
+		out.Unadvertise = append(out.Unadvertise, p.String())
+	}
+	return out
+}
+
+func mustPrefix(ss ...string) (out []netip.Prefix) {
+	for _, s := range ss {
+		out = append(out, netip.MustParsePrefix(s))
+	}
+	return
+}
+
+// eqUpdate generates an eventbus test filter that matches an appc.RouteUpdate
+// message equal to want, or reports an error giving a human-readable diff.
+//
+// TODO(creachadair): This is copied from the appc test package, but we can't
+// put it into the appctest package because the appc tests depend on it and
+// that makes a cycle. Clean up those tests and put this somewhere common.
+func eqUpdate(want appc.RouteUpdate) func(appc.RouteUpdate) error {
+	return func(got appc.RouteUpdate) error {
+		if diff := cmp.Diff(routeUpdateToText(got), routeUpdateToText(want)); diff != "" {
+			return fmt.Errorf("wrong update (-got, +want):\n%s", diff)
+		}
+		return nil
+	}
 }

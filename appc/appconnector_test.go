@@ -4,7 +4,7 @@
 package appc
 
 import (
-	"context"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -12,28 +12,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc/appctest"
 	"tailscale.com/tstest"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/slicesx"
 )
 
-func fakeStoreRoutes(*RouteInfo) error { return nil }
-
 func TestUpdateDomains(t *testing.T) {
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
-		ctx := context.Background()
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, &appctest.RouteCollector{}, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, &appctest.RouteCollector{}, nil, nil)
-		}
-		a.UpdateDomains([]string{"example.com"})
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
 
+		a.UpdateDomains([]string{"example.com"})
 		a.Wait(ctx)
 		if got, want := a.Domains().AsSlice(), []string{"example.com"}; !slices.Equal(got, want) {
 			t.Errorf("got %v; want %v", got, want)
@@ -58,15 +59,19 @@ func TestUpdateDomains(t *testing.T) {
 }
 
 func TestUpdateRoutes(t *testing.T) {
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
-		ctx := context.Background()
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
-		}
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
+
 		a.updateDomains([]string{"*.example.com"})
 
 		// This route should be collapsed into the range
@@ -103,19 +108,37 @@ func TestUpdateRoutes(t *testing.T) {
 		if !slices.EqualFunc(rc.RemovedRoutes(), wantRemoved, prefixEqual) {
 			t.Fatalf("unexpected removed routes: %v", rc.RemovedRoutes())
 		}
+
+		if err := eventbustest.Expect(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.2.1/32")}),
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.1/32")}),
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{
+				Advertise:   prefixes("192.0.0.1/32", "192.0.2.0/24"),
+				Unadvertise: prefixes("192.0.2.1/32"),
+			}),
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
 func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
-		}
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
+
 		mak.Set(&a.domains, "example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")})
 		rc.SetRoutes([]netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")})
 		routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
@@ -125,23 +148,36 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 		if !slices.EqualFunc(routes, rc.Routes(), prefixEqual) {
 			t.Fatalf("got %v, want %v", rc.Routes(), routes)
 		}
+
+		if err := eventbustest.ExpectExactly(w,
+			eqUpdate(RouteUpdate{
+				Advertise:   prefixes("192.0.2.0/24"),
+				Unadvertise: prefixes("192.0.2.1/32"),
+			}),
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
 func TestDomainRoutes(t *testing.T) {
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
-		}
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
 		a.updateDomains([]string{"example.com"})
 		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
 			t.Errorf("ObserveDNSResponse: %v", err)
 		}
-		a.Wait(context.Background())
+		a.Wait(t.Context())
 
 		want := map[string][]netip.Addr{
 			"example.com": {netip.MustParseAddr("192.0.0.8")},
@@ -150,19 +186,29 @@ func TestDomainRoutes(t *testing.T) {
 		if got := a.DomainRoutes(); !reflect.DeepEqual(got, want) {
 			t.Fatalf("DomainRoutes: got %v, want %v", got, want)
 		}
+
+		if err := eventbustest.ExpectExactly(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.8/32")}),
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
 func TestObserveDNSResponse(t *testing.T) {
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
-		ctx := context.Background()
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
-		}
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
 
 		// a has no domains configured, so it should not advertise any routes
 		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8")); err != nil {
@@ -239,19 +285,38 @@ func TestObserveDNSResponse(t *testing.T) {
 		if !slices.Contains(a.domains["example.com"], netip.MustParseAddr("192.0.2.1")) {
 			t.Errorf("missing %v from %v", "192.0.2.1", a.domains["exmaple.com"])
 		}
+
+		if err := eventbustest.ExpectExactly(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.8/32")}), // from initial DNS response, via example.com
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.9/32")}), // from CNAME response
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.10/32")}), // from CNAME response, mid-chain
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("2001:db8::1/128")}), // v6 DNS response
+			eventbustest.Type[RouteInfo](),
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.2.0/24")}), // additional prefix
+			eventbustest.Type[RouteInfo](),
+			// N.B. no update for 192.0.2.1 as it is already covered
+		); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
 func TestWildcardDomains(t *testing.T) {
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
-		ctx := context.Background()
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
-		}
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
 
 		a.updateDomains([]string{"*.example.com"})
 		if err := a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8")); err != nil {
@@ -277,6 +342,13 @@ func TestWildcardDomains(t *testing.T) {
 		a.updateDomains([]string{"*.example.com", "example.com"})
 		if len(a.wildcards) != 1 {
 			t.Errorf("expected only one wildcard domain, got %v", a.wildcards)
+		}
+
+		if err := eventbustest.ExpectExactly(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("192.0.0.8/32")}),
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
 		}
 	}
 }
@@ -393,8 +465,10 @@ func prefixes(in ...string) []netip.Prefix {
 }
 
 func TestUpdateRouteRouteRemoval(t *testing.T) {
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
-		ctx := context.Background()
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 
 		assertRoutes := func(prefix string, routes, removedRoutes []netip.Prefix) {
@@ -406,12 +480,14 @@ func TestUpdateRouteRouteRemoval(t *testing.T) {
 			}
 		}
 
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
-		}
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
+
 		// nothing has yet been advertised
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
 
@@ -434,12 +510,21 @@ func TestUpdateRouteRouteRemoval(t *testing.T) {
 			wantRemovedRoutes = prefixes("1.2.3.2/32")
 		}
 		assertRoutes("removal", wantRoutes, wantRemovedRoutes)
+
+		if err := eventbustest.Expect(w,
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.1/32", "1.2.3.2/32")}), // no duplicates here
+			eventbustest.Type[RouteInfo](),
+		); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
 func TestUpdateDomainRouteRemoval(t *testing.T) {
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
-		ctx := context.Background()
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 
 		assertRoutes := func(prefix string, routes, removedRoutes []netip.Prefix) {
@@ -451,12 +536,14 @@ func TestUpdateDomainRouteRemoval(t *testing.T) {
 			}
 		}
 
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
-		}
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
+
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
 
 		a.UpdateDomainsAndRoutes([]string{"a.example.com", "b.example.com"}, []netip.Prefix{})
@@ -489,12 +576,28 @@ func TestUpdateDomainRouteRemoval(t *testing.T) {
 			wantRemovedRoutes = prefixes("1.2.3.3/32", "1.2.3.4/32")
 		}
 		assertRoutes("removal", wantRoutes, wantRemovedRoutes)
+
+		wantEvents := []any{
+			// Each DNS record observed triggers an update.
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.1/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.2/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.3/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.4/32")}),
+		}
+		if shouldStore {
+			wantEvents = append(wantEvents, eqUpdate(RouteUpdate{Unadvertise: prefixes("1.2.3.3/32", "1.2.3.4/32")}))
+		}
+		if err := eventbustest.Expect(w, wantEvents...); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
 func TestUpdateWildcardRouteRemoval(t *testing.T) {
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
-		ctx := context.Background()
+		w := eventbustest.NewWatcher(t, bus)
 		rc := &appctest.RouteCollector{}
 
 		assertRoutes := func(prefix string, routes, removedRoutes []netip.Prefix) {
@@ -506,12 +609,14 @@ func TestUpdateWildcardRouteRemoval(t *testing.T) {
 			}
 		}
 
-		var a *AppConnector
-		if shouldStore {
-			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
-		} else {
-			a = NewAppConnector(t.Logf, rc, nil, nil)
-		}
+		a := NewAppConnector(Config{
+			Logf:            t.Logf,
+			EventBus:        bus,
+			RouteAdvertiser: rc,
+			HasStoredRoutes: shouldStore,
+		})
+		t.Cleanup(a.Close)
+
 		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
 
 		a.UpdateDomainsAndRoutes([]string{"a.example.com", "*.b.example.com"}, []netip.Prefix{})
@@ -544,6 +649,20 @@ func TestUpdateWildcardRouteRemoval(t *testing.T) {
 			wantRemovedRoutes = prefixes("1.2.3.3/32", "1.2.3.4/32")
 		}
 		assertRoutes("removal", wantRoutes, wantRemovedRoutes)
+
+		wantEvents := []any{
+			// Each DNS record observed triggers an update.
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.1/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.2/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.3/32")}),
+			eqUpdate(RouteUpdate{Advertise: prefixes("1.2.3.4/32")}),
+		}
+		if shouldStore {
+			wantEvents = append(wantEvents, eqUpdate(RouteUpdate{Unadvertise: prefixes("1.2.3.3/32", "1.2.3.4/32")}))
+		}
+		if err := eventbustest.Expect(w, wantEvents...); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
@@ -646,10 +765,22 @@ func TestMetricBucketsAreSorted(t *testing.T) {
 // routeAdvertiser, calls to Advertise/UnadvertiseRoutes can end up calling
 // back into AppConnector via authReconfig. If everything is called
 // synchronously, this results in a deadlock on AppConnector.mu.
+//
+// TODO(creachadair, 2025-09-18): Remove this along with the advertiser
+// interface once the LocalBackend is switched to use the event bus and the
+// tests have been updated not to need it.
 func TestUpdateRoutesDeadlock(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
+	bus := eventbustest.NewBus(t)
+	w := eventbustest.NewWatcher(t, bus)
 	rc := &appctest.RouteCollector{}
-	a := NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+	a := NewAppConnector(Config{
+		Logf:            t.Logf,
+		EventBus:        bus,
+		RouteAdvertiser: rc,
+		HasStoredRoutes: true,
+	})
+	t.Cleanup(a.Close)
 
 	advertiseCalled := new(atomic.Bool)
 	unadvertiseCalled := new(atomic.Bool)
@@ -692,5 +823,41 @@ func TestUpdateRoutesDeadlock(t *testing.T) {
 
 	if want := []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}; !slices.Equal(slices.Compact(rc.Routes()), want) {
 		t.Fatalf("got %v, want %v", rc.Routes(), want)
+	}
+
+	if err := eventbustest.ExpectExactly(w,
+		eqUpdate(RouteUpdate{Advertise: prefixes("127.0.0.1/32", "127.0.0.2/32")}),
+		eventbustest.Type[RouteInfo](),
+		eqUpdate(RouteUpdate{Advertise: prefixes("127.0.0.1/32"), Unadvertise: prefixes("127.0.0.2/32")}),
+		eventbustest.Type[RouteInfo](),
+	); err != nil {
+		t.Error(err)
+	}
+}
+
+type textUpdate struct {
+	Advertise   []string
+	Unadvertise []string
+}
+
+func routeUpdateToText(u RouteUpdate) textUpdate {
+	var out textUpdate
+	for _, p := range u.Advertise {
+		out.Advertise = append(out.Advertise, p.String())
+	}
+	for _, p := range u.Unadvertise {
+		out.Unadvertise = append(out.Unadvertise, p.String())
+	}
+	return out
+}
+
+// eqUpdate generates an eventbus test filter that matches a RouteUpdate
+// message equal to want, or reports an error giving a human-readable diff.
+func eqUpdate(want RouteUpdate) func(RouteUpdate) error {
+	return func(got RouteUpdate) error {
+		if diff := cmp.Diff(routeUpdateToText(got), routeUpdateToText(want)); diff != "" {
+			return fmt.Errorf("wrong update (-got, +want):\n%s", diff)
+		}
+		return nil
 	}
 }

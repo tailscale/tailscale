@@ -197,18 +197,21 @@ var (
 // state machine generates events back out to zero or more components.
 type LocalBackend struct {
 	// Elements that are thread-safe or constant after construction.
-	ctx                      context.Context         // canceled by [LocalBackend.Shutdown]
-	ctxCancel                context.CancelCauseFunc // cancels ctx
-	logf                     logger.Logf             // general logging
-	keyLogf                  logger.Logf             // for printing list of peers on change
-	statsLogf                logger.Logf             // for printing peers stats on change
-	sys                      *tsd.System
-	eventClient              *eventbus.Client
-	clientVersionSub         *eventbus.Subscriber[tailcfg.ClientVersion]
-	autoUpdateSub            *eventbus.Subscriber[controlclient.AutoUpdate]
-	healthChangeSub          *eventbus.Subscriber[health.Change]
-	changeDeltaSub           *eventbus.Subscriber[netmon.ChangeDelta]
-	subsDoneCh               chan struct{}       // closed when consumeEventbusTopics returns
+	ctx              context.Context         // canceled by [LocalBackend.Shutdown]
+	ctxCancel        context.CancelCauseFunc // cancels ctx
+	logf             logger.Logf             // general logging
+	keyLogf          logger.Logf             // for printing list of peers on change
+	statsLogf        logger.Logf             // for printing peers stats on change
+	sys              *tsd.System
+	eventClient      *eventbus.Client
+	clientVersionSub *eventbus.Subscriber[tailcfg.ClientVersion]
+	autoUpdateSub    *eventbus.Subscriber[controlclient.AutoUpdate]
+	healthChangeSub  *eventbus.Subscriber[health.Change]
+	changeDeltaSub   *eventbus.Subscriber[netmon.ChangeDelta]
+	routeUpdateSub   *eventbus.Subscriber[appc.RouteUpdate]
+	storeRoutesSub   *eventbus.Subscriber[appc.RouteInfo]
+	subsDoneCh       chan struct{} // closed when consumeEventbusTopics returns
+
 	health                   *health.Tracker     // always non-nil
 	polc                     policyclient.Client // always non-nil
 	metrics                  metrics
@@ -545,6 +548,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.autoUpdateSub = eventbus.Subscribe[controlclient.AutoUpdate](b.eventClient)
 	b.healthChangeSub = eventbus.Subscribe[health.Change](b.eventClient)
 	b.changeDeltaSub = eventbus.Subscribe[netmon.ChangeDelta](b.eventClient)
+	b.routeUpdateSub = eventbus.Subscribe[appc.RouteUpdate](b.eventClient)
+	b.storeRoutesSub = eventbus.Subscribe[appc.RouteInfo](b.eventClient)
 	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
@@ -635,6 +640,21 @@ func (b *LocalBackend) consumeEventbusTopics() {
 			b.onHealthChange(change)
 		case changeDelta := <-b.changeDeltaSub.Events():
 			b.linkChange(&changeDelta)
+		case ru := <-b.routeUpdateSub.Events():
+			if err := b.AdvertiseRoute(ru.Advertise...); err != nil {
+				b.logf("appc: failed to advertise routes: %v: %v", ru.Advertise, err)
+			}
+			if err := b.UnadvertiseRoute(ru.Unadvertise...); err != nil {
+				b.logf("appc: failed to unadvertise routes: %v: %v", ru.Unadvertise, err)
+			}
+		case ri := <-b.storeRoutesSub.Events():
+			// Whether or not routes should be stored can change over time.
+			shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
+			if shouldStoreRoutes {
+				if err := b.storeRouteInfo(ri); err != nil {
+					b.logf("appc: failed to store route info: %v", err)
+				}
+			}
 		}
 	}
 }
@@ -1152,6 +1172,7 @@ func (b *LocalBackend) Shutdown() {
 	}
 	extHost := b.extHost
 	b.extHost = nil
+	b.appConnector.Close()
 	b.mu.Unlock()
 	b.webClientShutdown()
 
@@ -5061,27 +5082,28 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		}
 	}()
 
+	// App connectors have been disabled.
 	if !prefs.AppConnector().Advertise {
+		b.appConnector.Close() // clean up a previous connector (safe on nil)
 		b.appConnector = nil
 		return
 	}
 
-	shouldAppCStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
-	if b.appConnector == nil || b.appConnector.ShouldStoreRoutes() != shouldAppCStoreRoutes {
-		var ri *appc.RouteInfo
-		var storeFunc func(*appc.RouteInfo) error
-		if shouldAppCStoreRoutes {
-			var err error
-			ri, err = b.readRouteInfoLocked()
-			if err != nil {
-				ri = &appc.RouteInfo{}
-				if err != ipn.ErrStateNotExist {
-					b.logf("Unsuccessful Read RouteInfo: ", err)
-				}
-			}
-			storeFunc = b.storeRouteInfo
+	// We don't (yet) have an app connector configured, or the configured
+	// connector has a different route persistence setting.
+	shouldStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
+	if b.appConnector == nil || (shouldStoreRoutes != b.appConnector.ShouldStoreRoutes()) {
+		ri, err := b.readRouteInfoLocked()
+		if err != nil && err != ipn.ErrStateNotExist {
+			b.logf("Unsuccessful Read RouteInfo: %v", err)
 		}
-		b.appConnector = appc.NewAppConnector(b.logf, b, ri, storeFunc)
+		b.appConnector.Close() // clean up a previous connector (safe on nil)
+		b.appConnector = appc.NewAppConnector(appc.Config{
+			Logf:            b.logf,
+			EventBus:        b.sys.Bus.Get(),
+			RouteInfo:       ri,
+			HasStoredRoutes: shouldStoreRoutes,
+		})
 	}
 	if nm == nil {
 		return
@@ -7410,7 +7432,7 @@ func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.Sta
 
 const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
 
-func (b *LocalBackend) storeRouteInfo(ri *appc.RouteInfo) error {
+func (b *LocalBackend) storeRouteInfo(ri appc.RouteInfo) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.pm.CurrentProfile().ID() == "" {
