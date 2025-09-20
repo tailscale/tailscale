@@ -257,8 +257,8 @@ func TestMonitor(t *testing.T) {
 			cli := bus.Client("test client")
 
 			// The monitored goroutine runs until the client or test subscription ends.
+			sub := eventbus.Subscribe[string](cli)
 			m := cli.Monitor(func(c *eventbus.Client) {
-				sub := eventbus.Subscribe[string](cli)
 				select {
 				case <-c.Done():
 					t.Log("client closed")
@@ -292,6 +292,43 @@ func TestMonitor(t *testing.T) {
 	}
 	t.Run("Close", testMon(t, func(_ *eventbus.Client, m eventbus.Monitor) { m.Close() }))
 	t.Run("Wait", testMon(t, func(c *eventbus.Client, m eventbus.Monitor) { c.Close(); m.Wait() }))
+}
+
+func TestRegression(t *testing.T) {
+	bus := eventbus.New()
+	t.Cleanup(bus.Close)
+
+	t.Run("SubscribeClosed", func(t *testing.T) {
+		c := bus.Client("test sub client")
+		c.Close()
+
+		var v any
+		func() {
+			defer func() { v = recover() }()
+			eventbus.Subscribe[string](c)
+		}()
+		if v == nil {
+			t.Fatal("Expected a panic from Subscribe on a closed client")
+		} else {
+			t.Logf("Got expected panic: %v", v)
+		}
+	})
+
+	t.Run("PublishClosed", func(t *testing.T) {
+		c := bus.Client("test pub client")
+		c.Close()
+
+		var v any
+		func() {
+			defer func() { v = recover() }()
+			eventbus.Publish[string](c)
+		}()
+		if v == nil {
+			t.Fatal("expected a panic from Publish on a closed client")
+		} else {
+			t.Logf("Got expected panic: %v", v)
+		}
+	})
 }
 
 type queueChecker struct {
