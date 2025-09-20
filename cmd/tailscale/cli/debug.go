@@ -287,6 +287,7 @@ func debugCmd() *ffcli.Command {
 					fs.StringVar(&ts2021Args.host, "host", "controlplane.tailscale.com", "hostname of control plane")
 					fs.IntVar(&ts2021Args.version, "version", int(tailcfg.CurrentCapabilityVersion), "protocol version")
 					fs.BoolVar(&ts2021Args.verbose, "verbose", false, "be extra verbose")
+					fs.StringVar(&ts2021Args.dialPlanJSONFile, "dial-plan", "", "if non-empty, use this JSON file to configure the dial plan")
 					return fs
 				})(),
 			},
@@ -975,9 +976,10 @@ func runVia(ctx context.Context, args []string) error {
 }
 
 var ts2021Args struct {
-	host    string // "controlplane.tailscale.com"
-	version int    // 27 or whatever
-	verbose bool
+	host             string // "controlplane.tailscale.com"
+	version          int    // 27 or whatever
+	verbose          bool
+	dialPlanJSONFile string // if non-empty, path to JSON file [tailcfg.ControlDialPlan] JSON
 }
 
 func runTS2021(ctx context.Context, args []string) error {
@@ -1055,6 +1057,18 @@ func runTS2021(ctx context.Context, args []string) error {
 		return fmt.Errorf("creating netmon: %w", err)
 	}
 
+	var dialPlan *tailcfg.ControlDialPlan
+	if ts2021Args.dialPlanJSONFile != "" {
+		b, err := os.ReadFile(ts2021Args.dialPlanJSONFile)
+		if err != nil {
+			return fmt.Errorf("reading dial plan JSON file: %w", err)
+		}
+		dialPlan = new(tailcfg.ControlDialPlan)
+		if err := json.Unmarshal(b, dialPlan); err != nil {
+			return fmt.Errorf("unmarshaling dial plan JSON file: %w", err)
+		}
+	}
+
 	noiseDialer := &controlhttp.Dialer{
 		Hostname:        ts2021Args.host,
 		HTTPPort:        "80",
@@ -1062,6 +1076,7 @@ func runTS2021(ctx context.Context, args []string) error {
 		MachineKey:      machinePrivate,
 		ControlKey:      keys.PublicKey,
 		ProtocolVersion: uint16(ts2021Args.version),
+		DialPlan:        dialPlan,
 		Dialer:          dialFunc,
 		Logf:            logf,
 		NetMon:          netMon,
