@@ -15,17 +15,19 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
-	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tailscale.com/control/controlbase"
 	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/control/controlhttp/controlhttpserver"
 	"tailscale.com/health"
+	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/socks5"
@@ -545,35 +547,13 @@ func brokenMITMHandler(clock tstime.Clock) http.HandlerFunc {
 }
 
 func TestDialPlan(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("only works on Linux due to multiple localhost addresses")
-	}
-
 	client, server := key.NewMachine(), key.NewMachine()
 
 	const (
 		testProtocolVersion = 1
 	)
 
-	getRandomPort := func() string {
-		ln, err := net.Listen("tcp", ":0")
-		if err != nil {
-			t.Fatalf("net.Listen: %v", err)
-		}
-		defer ln.Close()
-		_, port, err := net.SplitHostPort(ln.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return port
-	}
-
-	// We need consistent ports for each address; these are chosen
-	// randomly and we hope that they won't conflict during this test.
-	httpPort := getRandomPort()
-	httpsPort := getRandomPort()
-
-	makeHandler := func(t *testing.T, name string, host netip.Addr, wrap func(http.Handler) http.Handler) {
+	makeHandler := func(t *testing.T, memNet *memnet.Network, name string, host netip.Addr, wrap func(http.Handler) http.Handler) {
 		done := make(chan struct{})
 		t.Cleanup(func() {
 			close(done)
@@ -592,11 +572,11 @@ func TestDialPlan(t *testing.T) {
 			handler = wrap(handler)
 		}
 
-		httpLn, err := net.Listen("tcp", host.String()+":"+httpPort)
+		httpLn, err := memNet.Listen("tcp", host.String()+":80")
 		if err != nil {
 			t.Fatalf("HTTP listen: %v", err)
 		}
-		httpsLn, err := net.Listen("tcp", host.String()+":"+httpsPort)
+		httpsLn, err := memNet.Listen("tcp", host.String()+":443")
 		if err != nil {
 			t.Fatalf("HTTPS listen: %v", err)
 		}
@@ -616,7 +596,6 @@ func TestDialPlan(t *testing.T) {
 		t.Cleanup(func() {
 			httpsServer.Close()
 		})
-		return
 	}
 
 	fallbackAddr := netip.MustParseAddr("127.0.0.1")
@@ -686,74 +665,82 @@ func TestDialPlan(t *testing.T) {
 	}
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			// TODO(awly): replace this with tstest.NewClock and update the
-			// test to advance the clock correctly.
-			clock := tstime.StdClock{}
-			makeHandler(t, "fallback", fallbackAddr, nil)
-			makeHandler(t, "good", goodAddr, nil)
-			makeHandler(t, "other", otherAddr, nil)
-			makeHandler(t, "other2", other2Addr, nil)
-			makeHandler(t, "broken", brokenAddr, func(h http.Handler) http.Handler {
-				return brokenMITMHandler(clock)
+			synctest.Test(t, func(t *testing.T) {
+
+				// Get the synctest clock way out to 2025 at least so the
+				// net/http/httptest TLS client certs are valid?
+				// TODO(bradfitz): this might not be necessary. Still debugging.
+				time.Sleep(26 * 365 * 24 * time.Hour)
+
+				var memNet memnet.Network
+
+				clock := tstime.StdClock{}
+				makeHandler(t, &memNet, "fallback", fallbackAddr, nil)
+				makeHandler(t, &memNet, "good", goodAddr, nil)
+				makeHandler(t, &memNet, "other", otherAddr, nil)
+				makeHandler(t, &memNet, "other2", other2Addr, nil)
+				makeHandler(t, &memNet, "broken", brokenAddr, func(h http.Handler) http.Handler {
+					return brokenMITMHandler(clock)
+				})
+
+				dialer := closeTrackDialer{
+					t:     t,
+					inner: memNet.Dial,
+					conns: make(map[*closeTrackConn]bool),
+				}
+				defer dialer.Done()
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				// By default, we intentionally point to something that
+				// we know won't connect, since we want a fallback to
+				// DNS to be an error.
+				host := "example.com"
+				if tt.allowFallback {
+					host = "localhost"
+				}
+
+				a := &Dialer{
+					Hostname:             host,
+					MachineKey:           client,
+					ControlKey:           server.Public(),
+					ProtocolVersion:      testProtocolVersion,
+					Dialer:               dialer.Dial,
+					Logf:                 t.Logf,
+					DialPlan:             tt.plan,
+					proxyFunc:            func(*http.Request) (*url.URL, error) { return nil, nil },
+					omitCertErrorLogging: true,
+					testFallbackDelay:    50 * time.Millisecond,
+					Clock:                clock,
+					HealthTracker:        health.NewTracker(eventbustest.NewBus(t)),
+				}
+
+				conn, err := a.dial(ctx)
+				if err != nil {
+					t.Fatalf("dialing controlhttp: %v", err)
+				}
+				defer conn.Close()
+
+				raddrStr := conn.RemoteAddr().String()
+
+				raddrStr = strings.TrimSuffix(raddrStr, "|1") // memnet noise
+				raddrPort, err := netip.ParseAddrPort(raddrStr)
+				if err != nil {
+					t.Fatalf("parsing remote addr %q: %v", raddrStr, err)
+				}
+
+				got := raddrPort.Addr()
+				if got != tt.want {
+					t.Errorf("got connection from %q; want %q", got, tt.want)
+				} else {
+					t.Logf("successfully connected to %q", got)
+				}
+
+				// Wait until our dialer drains so we can verify that
+				// all connections are closed.
+				synctest.Wait()
 			})
-
-			dialer := closeTrackDialer{
-				t:     t,
-				inner: tsdial.NewDialer(netmon.NewStatic()).SystemDial,
-				conns: make(map[*closeTrackConn]bool),
-			}
-			defer dialer.Done()
-
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			// By default, we intentionally point to something that
-			// we know won't connect, since we want a fallback to
-			// DNS to be an error.
-			host := "example.com"
-			if tt.allowFallback {
-				host = "localhost"
-			}
-
-			drained := make(chan struct{})
-			a := &Dialer{
-				Hostname:             host,
-				HTTPPort:             httpPort,
-				HTTPSPort:            httpsPort,
-				MachineKey:           client,
-				ControlKey:           server.Public(),
-				ProtocolVersion:      testProtocolVersion,
-				Dialer:               dialer.Dial,
-				Logf:                 t.Logf,
-				DialPlan:             tt.plan,
-				proxyFunc:            func(*http.Request) (*url.URL, error) { return nil, nil },
-				drainFinished:        drained,
-				omitCertErrorLogging: true,
-				testFallbackDelay:    50 * time.Millisecond,
-				Clock:                clock,
-				HealthTracker:        health.NewTracker(eventbustest.NewBus(t)),
-			}
-
-			conn, err := a.dial(ctx)
-			if err != nil {
-				t.Fatalf("dialing controlhttp: %v", err)
-			}
-			defer conn.Close()
-
-			raddr := conn.RemoteAddr().(*net.TCPAddr)
-
-			got, ok := netip.AddrFromSlice(raddr.IP)
-			if !ok {
-				t.Errorf("invalid remote IP: %v", raddr.IP)
-			} else if got != tt.want {
-				t.Errorf("got connection from %q; want %q", got, tt.want)
-			} else {
-				t.Logf("successfully connected to %q", raddr.String())
-			}
-
-			// Wait until our dialer drains so we can verify that
-			// all connections are closed.
-			<-drained
 		})
 	}
 }
