@@ -26,14 +26,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/netip"
 	"net/url"
 	"runtime"
-	"sort"
 	"sync/atomic"
 	"time"
 
@@ -51,7 +49,6 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
-	"tailscale.com/util/multierr"
 )
 
 var stdDialer net.Dialer
@@ -108,158 +105,63 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 	}
 	candidates := a.DialPlan.Candidates
 
-	// Otherwise, we try dialing per the plan. Store the highest priority
-	// in the list, so that if we get a connection to one of those
-	// candidates we can return quickly.
-	var highestPriority int = math.MinInt
-	for _, c := range candidates {
-		if c.Priority > highestPriority {
-			highestPriority = c.Priority
-		}
-	}
-
-	// This context allows us to cancel in-flight connections if we get a
-	// highest-priority connection before we're all done.
+	// Create a context to be canceled as we return, so once we get a good connection,
+	// we can drop all the other ones.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// Now, for each candidate, kick off a dial in parallel.
 	type dialResult struct {
-		conn     *ClientConn
-		err      error
-		addr     netip.Addr
-		priority int
-	}
-	resultsCh := make(chan dialResult, len(candidates))
-
-	var pending atomic.Int32
-	pending.Store(int32(len(candidates)))
-	for _, c := range candidates {
-		go func(ctx context.Context, c tailcfg.ControlIPCandidate) {
-			var (
-				conn *ClientConn
-				err  error
-			)
-
-			// Always send results back to our channel.
-			defer func() {
-				resultsCh <- dialResult{conn, err, c.IP, c.Priority}
-				if pending.Add(-1) == 0 {
-					close(resultsCh)
-				}
-			}()
-
-			// If non-zero, wait the configured start timeout
-			// before we do anything.
-			if c.DialStartDelaySec > 0 {
-				a.logf("[v2] controlhttp: waiting %.2f seconds before dialing %q @ %v", c.DialStartDelaySec, a.Hostname, c.IP)
-				tmr, tmrChannel := a.clock().NewTimer(time.Duration(c.DialStartDelaySec * float64(time.Second)))
-				defer tmr.Stop()
-				select {
-				case <-ctx.Done():
-					err = ctx.Err()
-					return
-				case <-tmrChannel:
-				}
-			}
-
-			// Now, create a sub-context with the given timeout and
-			// try dialing the provided host.
-			ctx, cancel := context.WithTimeout(ctx, time.Duration(c.DialTimeoutSec*float64(time.Second)))
-			defer cancel()
-
-			// This will dial, and the defer above sends it back to our parent.
-			a.logf("[v2] controlhttp: trying to dial %q @ %v", a.Hostname, c.IP)
-			conn, err = a.dialHost(ctx, c.IP)
-		}(ctx, c)
-	}
-
-	var results []dialResult
-	for res := range resultsCh {
-		// If we get a response that has the highest priority, we don't
-		// need to wait for any of the other connections to finish; we
-		// can just return this connection.
-		//
-		// TODO(andrew): we could make this better by keeping track of
-		// the highest remaining priority dynamically, instead of just
-		// checking for the highest total
-		if res.priority == highestPriority && res.conn != nil {
-			a.logf("[v1] controlhttp: high-priority success dialing %q @ %v from dial plan", a.Hostname, res.addr)
-
-			// Drain the channel and any existing connections in
-			// the background.
-			go func() {
-				for _, res := range results {
-					if res.conn != nil {
-						res.conn.Close()
-					}
-				}
-				for res := range resultsCh {
-					if res.conn != nil {
-						res.conn.Close()
-					}
-				}
-				if a.drainFinished != nil {
-					close(a.drainFinished)
-				}
-			}()
-			return res.conn, nil
-		}
-
-		// This isn't a highest-priority result, so just store it until
-		// we're done.
-		results = append(results, res)
-	}
-
-	// After we finish this function, close any remaining open connections.
-	defer func() {
-		for _, result := range results {
-			// Note: below, we nil out the returned connection (if
-			// any) in the slice so we don't close it.
-			if result.conn != nil {
-				result.conn.Close()
-			}
-		}
-
-		// We don't drain asynchronously after this point, so notify our
-		// channel when we return.
-		if a.drainFinished != nil {
-			close(a.drainFinished)
-		}
-	}()
-
-	// Sort by priority, then take the first non-error response.
-	sort.Slice(results, func(i, j int) bool {
-		// NOTE: intentionally inverted so that the highest priority
-		// item comes first
-		return results[i].priority > results[j].priority
-	})
-
-	var (
 		conn *ClientConn
-		errs []error
-	)
-	for i, result := range results {
-		if result.err != nil {
-			errs = append(errs, result.err)
-			continue
+		err  error
+	}
+	resultsCh := make(chan dialResult) // unbuffered, never closed
+
+	dialCand := func(cand tailcfg.ControlIPCandidate) (*ClientConn, error) {
+		a.logf("[v2] controlhttp: waited %.2f seconds, dialing %q @ %s", cand.DialStartDelaySec, a.Hostname, cand.IP.String())
+
+		ctx, cancel := context.WithTimeout(ctx, time.Duration(cand.DialTimeoutSec*float64(time.Second)))
+		defer cancel()
+		return a.dialHost(ctx, cand.IP)
+	}
+
+	for _, cand := range candidates {
+		timer := time.AfterFunc(time.Duration(cand.DialStartDelaySec*float64(time.Second)), func() {
+			go func() {
+				conn, err := dialCand(cand)
+				select {
+				case resultsCh <- dialResult{conn, err}:
+					if err == nil {
+						a.logf("[v1] controlhttp: succeeded dialing %q @ %v from dial plan", a.Hostname, cand.IP.String())
+					}
+				case <-ctx.Done():
+					if conn != nil {
+						conn.Close()
+					}
+				}
+			}()
+		})
+		defer timer.Stop()
+	}
+
+	var errs []error
+	for {
+		select {
+		case res := <-resultsCh:
+			if res.err == nil {
+				return res.conn, nil
+			}
+			errs = append(errs, res.err)
+			if len(errs) == len(candidates) {
+				// If we get here, then we didn't get anywhere with our dial plan; fall back to just using DNS.
+				a.logf("controlhttp: failed dialing using DialPlan, falling back to DNS; errs=%s", errors.Join(errs...))
+				return a.dialHost(ctx, netip.Addr{})
+			}
+		case <-ctx.Done():
+			a.logf("controlhttp: context aborted dialing")
+			return nil, ctx.Err()
 		}
-
-		a.logf("[v1] controlhttp: succeeded dialing %q @ %v from dial plan", a.Hostname, result.addr)
-		conn = result.conn
-		results[i].conn = nil // so we don't close it in the defer
-		return conn, nil
 	}
-	if ctx.Err() != nil {
-		a.logf("controlhttp: context aborted dialing")
-		return nil, ctx.Err()
-	}
-
-	merr := multierr.New(errs...)
-
-	// If we get here, then we didn't get anywhere with our dial plan; fall back to just using DNS.
-	a.logf("controlhttp: failed dialing using DialPlan, falling back to DNS; errs=%s", merr.Error())
-	return a.dialHost(ctx, netip.Addr{})
 }
 
 // The TS_FORCE_NOISE_443 envknob forces the controlclient noise dialer to
@@ -388,6 +290,9 @@ func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn,
 	}
 
 	var err80, err443 error
+	if forceTLS {
+		err80 = errors.New("TLS forced: no port 80 dialed")
+	}
 	for {
 		select {
 		case <-ctx.Done():
