@@ -98,7 +98,6 @@ type Dialer struct {
 	logPort80Failure atomic.Bool
 
 	// For tests only
-	drainFinished        chan struct{}
 	omitCertErrorLogging bool
 	testFallbackDelay    time.Duration
 
