@@ -205,6 +205,9 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 netip.Addr
 			}
 			allIPs = append(allIPs, naIP)
 		}
+		if !ip.IsValid() && v6.IsValid() {
+			ip = v6
+		}
 		r.dlogf("returning %d static results", len(allIPs))
 		return
 	}
