@@ -64,7 +64,7 @@ type ConnIdentity struct {
 
 	// Fields used when NotWindows:
 	isUnixSock bool            // Conn is a *net.UnixConn
-	creds      *peercred.Creds // or nil
+	creds      *peercred.Creds // or nil if peercred.Get was not implemented on this OS
 
 	// Used on Windows:
 	// TODO(bradfitz): merge these into the peercreds package and
