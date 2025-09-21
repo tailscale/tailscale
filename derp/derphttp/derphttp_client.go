@@ -33,6 +33,7 @@ import (
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -89,19 +90,20 @@ type Client struct {
 	// Client.conn holds mu.
 	addrFamSelAtomic syncs.AtomicValue[AddressFamilySelector]
 
-	mu           sync.Mutex
-	atomicState  syncs.AtomicValue[ConnectedState] // hold mu to write
-	started      bool                              // true upon first connect, never transitions to false
-	preferred    bool
-	canAckPings  bool
-	closed       bool
-	netConn      io.Closer
-	client       *derp.Client
-	connGen      int // incremented once per new connection; valid values are >0
-	serverPubKey key.NodePublic
-	tlsState     *tls.ConnectionState
-	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
-	clock        tstime.Clock
+	mu                        sync.Mutex
+	atomicState               syncs.AtomicValue[ConnectedState] // hold mu to write
+	started                   bool                              // true upon first connect, never transitions to false
+	preferred                 bool
+	canAckPings               bool
+	closed                    bool
+	netConn                   io.Closer
+	client                    *derp.Client
+	connGen                   int // incremented once per new connection; valid values are >0
+	serverPubKey              key.NodePublic
+	tlsState                  *tls.ConnectionState
+	pingOut                   map[derp.PingMessage]chan<- bool // chan to send to on pong
+	clock                     tstime.Clock
+	attemptingIdealConnection bool
 }
 
 // ConnectedState describes the state of a derphttp Client.
@@ -327,6 +329,215 @@ func useWebsockets() bool {
 	return false
 }
 
+type tlsHandshakeData struct {
+	httpConn           net.Conn
+	tlsState           tls.ConnectionState
+	serverPub          key.NodePublic // zero if unknown (if not using TLS or TLS middlebox eats it)
+	serverProtoVersion int
+}
+
+// tlsHandshake forces a TLS handshake and returns tlsHandshakeData
+// containing the TLS connection, connection state, and server metadata
+// on success.
+func (c *Client) tlsHandshake(tcpConn net.Conn, node *tailcfg.DERPNode) (tlsHandshakeData, error) {
+	// Special case when using http for dev purposes.
+	if !c.useHTTPS() {
+		return tlsHandshakeData{
+			httpConn: tcpConn,
+		}, nil
+	}
+
+	tlsConn := c.tlsClient(tcpConn, node)
+
+	// Force a handshake now (instead of waiting for it to
+	// be done implicitly on read/write) so we can check
+	// the ConnectionState.
+	if err := tlsConn.Handshake(); err != nil {
+		return tlsHandshakeData{}, err
+	}
+
+	// We expect to be using TLS 1.3 to our own servers, and only
+	// starting at TLS 1.3 are the server's returned certificates
+	// encrypted, so only look for and use our "meta cert" if we're
+	// using TLS 1.3. If we're not using TLS 1.3, it might be a user
+	// running cmd/derper themselves with a different configuration,
+	// in which case we can avoid this fast-start optimization.
+	// (If a corporate proxy is MITM'ing TLS 1.3 connections with
+	// corp-mandated TLS root certs than all bets are off anyway.)
+	// Note that we're not specifically concerned about TLS downgrade
+	// attacks. TLS handles that fine:
+	// https://blog.gypsyengineer.com/en/security/how-does-tls-1-3-protect-against-downgrade-attacks.html
+	cs := tlsConn.ConnectionState()
+	var serverPub key.NodePublic
+	var serverProtoVersion int
+	if cs.Version >= tls.VersionTLS13 {
+		serverPub, serverProtoVersion = parseMetaCert(cs.PeerCertificates)
+	}
+
+	return tlsHandshakeData{
+		httpConn:           tlsConn,
+		tlsState:           cs,
+		serverPub:          serverPub,
+		serverProtoVersion: serverProtoVersion,
+	}, nil
+}
+
+// upgradeConnection upgrades the connection to the given DERPNode.
+func (c *Client) upgradeConnection(connData tlsHandshakeData, node *tailcfg.DERPNode, idealNodeHeaderValue *string) (*bufio.ReadWriter, error) {
+	brw := bufio.NewReadWriter(bufio.NewReader(connData.httpConn), bufio.NewWriter(connData.httpConn))
+
+	req, err := http.NewRequest("GET", c.urlString(node), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Upgrade", "DERP")
+	req.Header.Set("Connection", "Upgrade")
+	if idealNodeHeaderValue != nil {
+		// This is purely informative for now (2024-07-06) for stats:
+		req.Header.Set(derp.IdealNodeHeader, *idealNodeHeaderValue)
+	}
+
+	if !connData.serverPub.IsZero() && connData.serverProtoVersion != 0 {
+		// parseMetaCert found the server's public key (no TLS
+		// middlebox was in the way), so skip the HTTP upgrade
+		// exchange.  See https://github.com/tailscale/tailscale/issues/693
+		// for an overview. We still send the HTTP request
+		// just to get routed into the server's HTTP Handler so it
+		// can Hijack the request, but we signal with a special header
+		// that we don't want to deal with its HTTP response.
+		req.Header.Set(fastStartHeader, "1") // suppresses the server's HTTP response
+		if err := req.Write(brw); err != nil {
+			return nil, err
+		}
+		// No need to flush the HTTP request. the derp.Client's initial
+		// client auth frame will flush it.
+	} else {
+		if err := req.Write(brw); err != nil {
+			return nil, err
+		}
+		if err := brw.Flush(); err != nil {
+			return nil, err
+		}
+
+		resp, err := http.ReadResponse(brw.Reader, req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusSwitchingProtocols {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("GET failed: %v: %s", err, b)
+		}
+	}
+
+	return brw, nil
+}
+
+// attemptIdealConnection attempts to establish a connection to the passed
+// in primary DERPNode and updates the connection data on the client if
+// successful.
+//
+// A successful connection here means that we have both a TCP connection and
+// that a TLS handshake has succeeded, after which we close the existing connection
+// to the non-ideal DERP before proceeding with upgrading our ideal connection
+// and updating the connection data on the client using the ideal connection.
+//
+// This method should only be called if we have a non-ideal connection already from
+// the regular flow through connect.
+func (c *Client) attemptIdealConnection(ctx context.Context, node *tailcfg.DERPNode, caller string) (err error) {
+	// timeout is the fallback maximum time (if ctx doesn't limit
+	// it further) to do all of: DNS + TCP + TLS + HTTP Upgrade +
+	// DERP upgrade.
+	const timeout = 10 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Either timeout fired (handled below), or
+			// we're returning via the defer cancel()
+			// below.
+		case <-c.ctx.Done():
+			// Propagate a Client.Close call into
+			// cancelling this context.
+			cancel()
+		}
+	}()
+	defer cancel()
+
+	var tcpConn net.Conn
+
+	defer func() {
+		if err != nil {
+			if ctx.Err() != nil {
+				err = fmt.Errorf("%v: %v", ctx.Err(), err)
+			}
+			err = fmt.Errorf("%s connect to %v: %v", caller, node.HostName, err)
+			if tcpConn != nil {
+				go tcpConn.Close()
+			}
+		}
+	}()
+
+	tcpConn, err = c.dialNode(ctx, node)
+	if err != nil {
+		return err
+	}
+
+	connData, err := c.tlsHandshake(tcpConn, node)
+	if err != nil {
+		return err
+	}
+
+	// We've established a TCP connection and successfully performed
+	// a TLS handshake with our ideal home DERP, close the existing
+	// non-ideal connection so that we can upgrade our new ideal
+	// connection and swap the client over to using this ideal connection.
+	c.closeForReconnect(c.client)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	brw, err := c.upgradeConnection(connData, node, nil)
+	if err != nil {
+		return err
+	}
+
+	derpClient, err := derp.NewClient(c.privateKey, connData.httpConn, brw, c.logf,
+		derp.MeshKey(c.MeshKey),
+		derp.ServerPublicKey(connData.serverPub),
+		derp.CanAckPings(c.canAckPings),
+		derp.IsProber(c.IsProber),
+	)
+	if err != nil {
+		return err
+	}
+	if err := derpClient.NotePreferred(true); err != nil {
+		go connData.httpConn.Close()
+		return err
+	}
+
+	if c.WatchConnectionChanges {
+		if err := derpClient.WatchConnectionChanges(); err != nil {
+			go connData.httpConn.Close()
+			return err
+		}
+	}
+	c.preferred = true
+	c.serverPubKey = derpClient.ServerPublicKey()
+	c.client = derpClient
+	c.netConn = tcpConn
+	c.tlsState = &connData.tlsState
+	c.connGen++
+
+	localAddr, _ := c.client.LocalAddr()
+	c.atomicState.Store(ConnectedState{
+		Connected: true,
+		LocalAddr: localAddr,
+	})
+	return nil
+}
+
 func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, connGen int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -457,98 +668,23 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		}
 	}()
 
-	var httpConn net.Conn        // a TCP conn or a TLS conn; what we speak HTTP to
-	var serverPub key.NodePublic // or zero if unknown (if not using TLS or TLS middlebox eats it)
-	var serverProtoVersion int
-	var tlsState *tls.ConnectionState
-	if c.useHTTPS() {
-		tlsConn := c.tlsClient(tcpConn, node)
-		httpConn = tlsConn
-
-		// Force a handshake now (instead of waiting for it to
-		// be done implicitly on read/write) so we can check
-		// the ConnectionState.
-		if err := tlsConn.Handshake(); err != nil {
-			return nil, 0, err
-		}
-
-		// We expect to be using TLS 1.3 to our own servers, and only
-		// starting at TLS 1.3 are the server's returned certificates
-		// encrypted, so only look for and use our "meta cert" if we're
-		// using TLS 1.3. If we're not using TLS 1.3, it might be a user
-		// running cmd/derper themselves with a different configuration,
-		// in which case we can avoid this fast-start optimization.
-		// (If a corporate proxy is MITM'ing TLS 1.3 connections with
-		// corp-mandated TLS root certs than all bets are off anyway.)
-		// Note that we're not specifically concerned about TLS downgrade
-		// attacks. TLS handles that fine:
-		// https://blog.gypsyengineer.com/en/security/how-does-tls-1-3-protect-against-downgrade-attacks.html
-		cs := tlsConn.ConnectionState()
-		tlsState = &cs
-		if cs.Version >= tls.VersionTLS13 {
-			serverPub, serverProtoVersion = parseMetaCert(cs.PeerCertificates)
-		}
-	} else {
-		httpConn = tcpConn
-	}
-
-	brw := bufio.NewReadWriter(bufio.NewReader(httpConn), bufio.NewWriter(httpConn))
-	var derpClient *derp.Client
-
-	req, err := http.NewRequest("GET", c.urlString(node), nil)
+	connData, err := c.tlsHandshake(tcpConn, node)
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("Upgrade", "DERP")
-	req.Header.Set("Connection", "Upgrade")
+
+	var idealNodeHeaderValue *string
 	if !idealNodeInRegion && reg != nil {
-		// This is purely informative for now (2024-07-06) for stats:
-		req.Header.Set(derp.IdealNodeHeader, reg.Nodes[0].Name)
-		// TODO(bradfitz,raggi): start a time.AfterFunc for 30m-1h or so to
-		// dialNode(reg.Nodes[0]) and see if we can even TCP connect to it. If
-		// so, TLS handshake it as well (which is mixed up in this massive
-		// connect method) and then if it all appears good, grab the mutex, bump
-		// connGen, finish the Upgrade, close the old one, and set a new field
-		// on Client that's like "here's the connect result and connGen for the
-		// next connect that comes in"). Tracking bug for all this is:
-		// https://github.com/tailscale/tailscale/issues/12724
+		idealNodeHeaderValue = &reg.Nodes[0].Name
+	}
+	brw, err := c.upgradeConnection(connData, node, idealNodeHeaderValue)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	if !serverPub.IsZero() && serverProtoVersion != 0 {
-		// parseMetaCert found the server's public key (no TLS
-		// middlebox was in the way), so skip the HTTP upgrade
-		// exchange.  See https://github.com/tailscale/tailscale/issues/693
-		// for an overview. We still send the HTTP request
-		// just to get routed into the server's HTTP Handler so it
-		// can Hijack the request, but we signal with a special header
-		// that we don't want to deal with its HTTP response.
-		req.Header.Set(fastStartHeader, "1") // suppresses the server's HTTP response
-		if err := req.Write(brw); err != nil {
-			return nil, 0, err
-		}
-		// No need to flush the HTTP request. the derp.Client's initial
-		// client auth frame will flush it.
-	} else {
-		if err := req.Write(brw); err != nil {
-			return nil, 0, err
-		}
-		if err := brw.Flush(); err != nil {
-			return nil, 0, err
-		}
-
-		resp, err := http.ReadResponse(brw.Reader, req)
-		if err != nil {
-			return nil, 0, err
-		}
-		if resp.StatusCode != http.StatusSwitchingProtocols {
-			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
-		}
-	}
-	derpClient, err = derp.NewClient(c.privateKey, httpConn, brw, c.logf,
+	derpClient, err := derp.NewClient(c.privateKey, connData.httpConn, brw, c.logf,
 		derp.MeshKey(c.MeshKey),
-		derp.ServerPublicKey(serverPub),
+		derp.ServerPublicKey(connData.serverPub),
 		derp.CanAckPings(c.canAckPings),
 		derp.IsProber(c.IsProber),
 	)
@@ -557,14 +693,14 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	}
 	if c.preferred {
 		if err := derpClient.NotePreferred(true); err != nil {
-			go httpConn.Close()
+			go connData.httpConn.Close()
 			return nil, 0, err
 		}
 	}
 
 	if c.WatchConnectionChanges {
 		if err := derpClient.WatchConnectionChanges(); err != nil {
-			go httpConn.Close()
+			go connData.httpConn.Close()
 			return nil, 0, err
 		}
 	}
@@ -572,8 +708,30 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	c.serverPubKey = derpClient.ServerPublicKey()
 	c.client = derpClient
 	c.netConn = tcpConn
-	c.tlsState = tlsState
+	c.tlsState = &connData.tlsState
 	c.connGen++
+
+	if !idealNodeInRegion && !c.attemptingIdealConnection && reg != nil {
+		c.attemptingIdealConnection = true
+
+		go func() {
+			bo := backoff.NewBackoff("attempt-ideal-derp-connection", c.logf, 1*time.Hour)
+
+			for {
+				newCtx := c.newContext()
+
+				err := c.attemptIdealConnection(newCtx, reg.Nodes[0], "derphttp.Client.connect")
+				if err == nil {
+					break
+				}
+				bo.BackOff(newCtx, err)
+			}
+
+			c.mu.Lock()
+			c.attemptingIdealConnection = false
+			c.mu.Unlock()
+		}()
+	}
 
 	localAddr, _ := c.client.LocalAddr()
 	c.atomicState.Store(ConnectedState{
