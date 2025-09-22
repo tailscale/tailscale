@@ -339,9 +339,9 @@ func profileTitle(profile ipn.LoginProfile) string {
 	if profile.NetworkProfile.DomainName != "" {
 		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 			// windows and mac don't support multi-line menu
-			title += " (" + profile.NetworkProfile.DomainName + ")"
+			title += " (" + profile.NetworkProfile.DisplayNameOrDefault() + ")"
 		} else {
-			title += "\n" + profile.NetworkProfile.DomainName
+			title += "\n" + profile.NetworkProfile.DisplayNameOrDefault()
 		}
 	}
 	return title
