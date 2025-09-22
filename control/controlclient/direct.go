@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -221,6 +220,8 @@ type NetmapDeltaUpdater interface {
 	UpdateNetmapDelta([]netmap.NodeMutation) (ok bool)
 }
 
+var nextControlClientID atomic.Int64
+
 // NewDirect returns a new Direct client.
 func NewDirect(opts Options) (*Direct, error) {
 	if opts.ServerURL == "" {
@@ -314,7 +315,7 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
 
-	c.controlClientID = rand.Int64()
+	c.controlClientID = nextControlClientID.Add(1)
 
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -835,21 +836,21 @@ func (c *Direct) SendUpdate(ctx context.Context) error {
 	return c.sendMapRequest(ctx, false, nil)
 }
 
-// ClientID returns the ControlClientID of the controlClient
+// ClientID returns the controlClientID of the controlClient.
 func (c *Direct) ClientID() int64 {
 	return c.controlClientID
 }
 
-// AutoUpdate wraps a bool for naming on the eventbus
+// AutoUpdate is an eventbus value, reporting the value of tailcfg.MapResponse.DefaultAutoUpdate.
 type AutoUpdate struct {
-	ClientID int64 // The ID field is used for consumers to differentiate instances of Direct
-	Value    bool
+	ClientID int64 // The ID field is used for consumers to differentiate instances of Direct.
+	Value    bool  // The Value represents DefaultAutoUpdate from [tailcfg.MapResponse].
 }
 
-// ControlTime wraps a [time.Time] for naming on the eventbus
+// ControlTime is an eventbus value, reporting the value of tailcfg.MapResponse.ControlTime.
 type ControlTime struct {
-	ClientID int64 // The ID field is used for consumers to differentiate instances of Direct
-	Value    time.Time
+	ClientID int64     // The ID field is used for consumers to differentiate instances of Direct.
+	Value    time.Time // The Value represents ControlTime from [tailcfg.MapResponse].
 }
 
 // If we go more than watchdogTimeout without hearing from the server,
