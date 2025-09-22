@@ -978,9 +978,18 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		data.ClientVersion = cv
 	}
 
-	if st.CurrentTailnet != nil {
-		data.TailnetName = st.CurrentTailnet.MagicDNSSuffix
-		data.DomainName = st.CurrentTailnet.Name
+	profile, _, err := s.lc.ProfileStatus(r.Context())
+	if err != nil {
+		s.logf("error fetching profiles: %v", err)
+		// If for some reason we can't fetch profiles,
+		// continue to use st.CurrentTailnet if set.
+		if st.CurrentTailnet != nil {
+			data.TailnetName = st.CurrentTailnet.MagicDNSSuffix
+			data.DomainName = st.CurrentTailnet.Name
+		}
+	} else {
+		data.TailnetName = profile.NetworkProfile.MagicDNSName
+		data.DomainName = profile.NetworkProfile.DisplayNameOrDefault()
 	}
 	if st.Self.Tags != nil {
 		data.Tags = st.Self.Tags.AsSlice()
