@@ -439,12 +439,12 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, logger *z
 		}
 
 		if orig != nil && !apiequality.Semantic.DeepEqual(latest, orig) {
-			logger.Debugf("patching the existing proxy Secret with tailscaled config %s", sanitizeConfigBytes(latestConfig))
+			logger.With("config", sanitizeConfig(latestConfig)).Debugf("patching the existing proxy Secret")
 			if err = a.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
 				return nil, err
 			}
 		} else {
-			logger.Debugf("creating a new Secret for the proxy with tailscaled config %s", sanitizeConfigBytes(latestConfig))
+			logger.With("config", sanitizeConfig(latestConfig)).Debugf("creating a new Secret for the proxy")
 			if err = a.Create(ctx, secret); err != nil {
 				return nil, err
 			}
@@ -494,17 +494,16 @@ func (a *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, logger *z
 	return secretNames, nil
 }
 
-// sanitizeConfigBytes returns ipn.ConfigVAlpha in string form with redacted
-// auth key.
-func sanitizeConfigBytes(c ipn.ConfigVAlpha) string {
+// sanitizeConfig returns an ipn.ConfigVAlpha with sensitive fields redacted. Since we pump everything
+// into JSON-encoded logs it's easier to read this with a .With method than converting it to a string.
+func sanitizeConfig(c ipn.ConfigVAlpha) ipn.ConfigVAlpha {
+	// Explicitly redact AuthKey because we never want it appearing in logs. Never populate this with the
+	// actual auth key.
 	if c.AuthKey != nil {
 		c.AuthKey = ptr.To("**redacted**")
 	}
-	sanitizedBytes, err := json.Marshal(c)
-	if err != nil {
-		return "invalid config"
-	}
-	return string(sanitizedBytes)
+
+	return c
 }
 
 // DeviceInfo returns the device ID, hostname, IPs and capver for the Tailscale device that acts as an operator proxy.

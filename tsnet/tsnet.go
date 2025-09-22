@@ -495,14 +495,14 @@ func (s *Server) TailscaleIPs() (ip4, ip6 netip.Addr) {
 	return ip4, ip6
 }
 
-// Logtailf returns a [logger.Logf] that outputs to Tailscale's logging service and will be only visible to Tailscale's
+// LogtailWriter returns an [io.Writer] that writes to Tailscale's logging service and will be only visible to Tailscale's
 // support team. Logs written there cannot be retrieved by the user. This method always returns a non-nil value.
-func (s *Server) Logtailf() logger.Logf {
+func (s *Server) LogtailWriter() io.Writer {
 	if s.logtail == nil {
-		return logger.Discard
+		return io.Discard
 	}
 
-	return s.logtail.Logf
+	return s.logtail
 }
 
 func (s *Server) getAuthKey() string {
