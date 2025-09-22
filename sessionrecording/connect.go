@@ -133,12 +133,12 @@ func SendEvent(ctx context.Context, ap netip.AddrPort, event io.Reader, dial net
 	client := clientHTTP2(ctx, dial)
 
 	if !supportsEvent(ctx, client, ap) {
-		return fmt.Errorf("recorder at address %q does not support `/v2/event` endpoint", ap.String())
+		return fmt.Errorf(`recorder at address %q does not support "/v2/event" endpoint`, ap.String())
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s/v2/event", ap.String()), event)
 	if err != nil {
-		return fmt.Errorf("error creating request: %v", err)
+		return fmt.Errorf("error creating request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -150,7 +150,13 @@ func SendEvent(ctx context.Context, ap netip.AddrPort, event io.Reader, dial net
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned non-OK status: %s", resp.Status)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			// Handle the case where reading the body itself fails
+			return fmt.Errorf("server returned non-OK status: %s, and failed to read body: %w", resp.Status, err)
+		}
+
+		return fmt.Errorf("server returned non-OK status: %s: %s", resp.Status, string(body))
 	}
 
 	resp.Body.Close()

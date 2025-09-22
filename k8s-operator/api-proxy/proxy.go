@@ -37,7 +37,6 @@ import (
 	"tailscale.com/tsnet"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/ctxkey"
-	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
 )
 
@@ -204,8 +203,7 @@ func (ap *APIServerProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = ap.recordRequestAsEvent(r, who)
-	if err != nil {
+	if err = ap.recordRequestAsEvent(r, who); err != nil {
 		ap.log.Errorf("error recording Kubernetes API request: %v", err)
 		return
 	}
@@ -252,8 +250,7 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	err = ap.recordRequestAsEvent(r, who)
-	if err != nil {
+	if err = ap.recordRequestAsEvent(r, who); err != nil {
 		ap.log.Errorf("error recording Kubernetes API request: %v", err)
 		return
 	}
@@ -312,16 +309,14 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.WhoIsResponse) error {
 	failOpen, addrs, err := determineRecorderConfig(who)
 	if err != nil {
-		ap.log.Errorf("error trying to determine whether the kubernetes api request needs to be recorded: %v", err)
-		return err
+		return fmt.Errorf("error trying to determine whether the kubernetes api request needs to be recorded: %w", err)
 	}
 	if failOpen && len(addrs) == 0 {
 		return err
 	}
 
 	if !failOpen && len(addrs) == 0 {
-		ap.log.Errorf("forbidden: kubernetes api request must be recorded, but no recorders are available.")
-		return err
+		return fmt.Errorf("forbidden: kubernetes api request must be recorded, but no recorders are available")
 	}
 
 	factory := &request.RequestInfoFactory{
@@ -331,8 +326,7 @@ func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.W
 
 	reqInfo, err := factory.NewRequestInfo(req)
 	if err != nil {
-		ap.log.Errorf("Error parsing request %s %s: %v", req.Method, req.URL.Path, err)
-		return err
+		return fmt.Errorf("error parsing request %s %s: %w", req.Method, req.URL.Path, err)
 	}
 
 	kubeReqInfo := sessionrecording.KubernetesRequestInfo{
@@ -375,8 +369,7 @@ func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.W
 	if ct := req.Header.Get("Content-Type"); strings.Contains(ct, "application/json") {
 		bodyBytes, err := io.ReadAll(req.Body)
 		if err != nil {
-			ap.log.Errorf("Failed to read body: %v", err)
-			return err
+			return fmt.Errorf("failed to read body: %w", err)
 		}
 
 		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
@@ -388,19 +381,18 @@ func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.W
 	for _, ad := range addrs {
 		eventJSON, err := json.Marshal(event)
 		if err != nil {
-			ap.log.Errorf("Error marshaling request event: %v", err)
-			return err
+			return fmt.Errorf("error marshaling request event: %w", err)
 		}
 
 		data := bytes.NewBuffer(eventJSON)
 
 		if err := ap.sendEventFunc(req.Context(), ad, data, ap.ts.Dial); err != nil {
-			ap.log.Errorf("Error sending event to recorder with address %q: %v", ad.String(), err)
+			err := fmt.Errorf("error sending event to recorder with address %q: %v", ad.String(), err)
 			errs = append(errs, err)
 		}
 	}
 
-	return multierr.New(errs...)
+	return errors.Join(errs...)
 }
 
 func (ap *APIServerProxy) addImpersonationHeadersAsRequired(r *http.Request) {
