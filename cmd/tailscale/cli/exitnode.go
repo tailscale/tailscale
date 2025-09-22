@@ -173,11 +173,13 @@ func hasAnyExitNodeSuggestions(peers []*ipnstate.PeerStatus) bool {
 // a peer. If there is no notable state, a - is returned.
 func peerStatus(peer *ipnstate.PeerStatus) string {
 	if !peer.Active {
+		lastseen := lastSeenFmt(peer.LastSeen)
+
 		if peer.ExitNode {
-			return "selected but offline"
+			return "selected but offline" + lastseen
 		}
 		if !peer.Online {
-			return "offline"
+			return "offline" + lastseen
 		}
 	}
 
