@@ -123,6 +123,19 @@ func TestOmitACME(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitCaptivePortal(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_captiveportal,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "captive") {
+				t.Errorf("unexpected dep with ts_omit_captiveportal: %q", dep)
+			}
+		},
+	}.Check(t)
+}
+
 func TestOmitOAuthKey(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",

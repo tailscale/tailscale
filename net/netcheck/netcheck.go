@@ -26,8 +26,9 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/hostinfo"
-	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -786,6 +787,8 @@ func (c *Client) SetForcePreferredDERP(region int) {
 	c.ForcePreferredDERP = region
 }
 
+var hookStartCaptivePortalDetection feature.Hook[func(ctx context.Context, rs *reportState, dm *tailcfg.DERPMap, preferredDERP int) (<-chan struct{}, func())]
+
 // GetReport gets a report. The 'opts' argument is optional and can be nil.
 // Callers are discouraged from passing a ctx with an arbitrary deadline as this
 // may cause GetReport to return prematurely before all reporting methods have
@@ -910,38 +913,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	// it's unnecessary.
 	captivePortalDone := syncs.ClosedChan()
 	captivePortalStop := func() {}
-	if !rs.incremental && !onlySTUN {
-		// NOTE(andrew): we can't simply add this goroutine to the
-		// `NewWaitGroupChan` below, since we don't wait for that
-		// waitgroup to finish when exiting this function and thus get
-		// a data race.
-		ch := make(chan struct{})
-		captivePortalDone = ch
-
-		tmr := time.AfterFunc(c.captivePortalDelay(), func() {
-			defer close(ch)
-			d := captivedetection.NewDetector(c.logf)
-			found := d.Detect(ctx, c.NetMon, dm, preferredDERP)
-			rs.report.CaptivePortal.Set(found)
-		})
-
-		captivePortalStop = func() {
-			// Don't cancel our captive portal check if we're
-			// explicitly doing a verbose netcheck.
-			if c.Verbose {
-				return
-			}
-
-			if tmr.Stop() {
-				// Stopped successfully; need to close the
-				// signal channel ourselves.
-				close(ch)
-				return
-			}
-
-			// Did not stop; do nothing and it'll finish by itself
-			// and close the signal channel.
-		}
+	if buildfeatures.HasCaptivePortal && !rs.incremental && !onlySTUN {
+		start := hookStartCaptivePortalDetection.Get()
+		captivePortalDone, captivePortalStop = start(ctx, rs, dm, preferredDERP)
 	}
 
 	wg := syncs.NewWaitGroupChan()
