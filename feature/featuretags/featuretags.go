@@ -93,6 +93,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"acme":          {"ACME", "ACME TLS certificate management", nil},
 	"aws":           {"AWS", "AWS integration", nil},
 	"bird":          {"Bird", "Bird BGP integration", nil},
+	"captiveportal": {"CaptivePortal", "Captive portal detection", nil},
 	"capture":       {"Capture", "Packet capture", nil},
 	"cli":           {"CLI", "embed the CLI into the tailscaled binary", nil},
 	"completion":    {"Completion", "CLI shell completion", nil},
