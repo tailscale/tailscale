@@ -535,8 +535,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
 	}
-	ec := b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
-	b.eventSubs = ec.Monitor(b.consumeEventbusTopics(ec))
 
 	nb := newNodeBackend(ctx, b.sys.Bus.Get())
 	b.currentNodeAtomic.Store(nb)
@@ -604,6 +602,12 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			}
 		}
 	}
+
+	// Start the event bus late, once all the assignments above are done.
+	// (See previous race in tailscale/tailscale#17252)
+	ec := b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
+	b.eventSubs = ec.Monitor(b.consumeEventbusTopics(ec))
+
 	return b, nil
 }
 
