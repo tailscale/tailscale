@@ -1116,6 +1116,34 @@ func tryConnect(ctx context.Context, controlPublic key.MachinePublic, noiseDiale
 
 	log.Printf("final underlying conn: %v / %v", conn.LocalAddr(), conn.RemoteAddr())
 
+	log.Printf("Reading header...")
+	t0 := time.Now()
+	hdr := make([]byte, 9)
+	n, err := io.ReadFull(conn, hdr) // just to verify conn is usable
+	if err != nil {
+		log.Printf("Read error: %v", err)
+	}
+	//log.Fatalf("Read = %d %q, %v (after %v)", n, hdr[:n], err, time.Since(t0))
+
+	epLen := binary.BigEndian.Uint32(hdr[5:])
+	if epLen > 10<<20 {
+		log.Fatal("invalid early payload length")
+	}
+	payBuf := make([]byte, epLen)
+	if _, err := io.ReadFull(conn, payBuf); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("got %d-byte early payload: %s", len(payBuf), payBuf)
+
+	t0 = time.Now()
+	for {
+		n, err = io.ReadFull(conn, hdr) // just to verify conn is usable
+		log.Printf("Read = %d %q, %v (after %v)", n, hdr[:n], err, time.Since(t0))
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	h2Transport, err := http2.ConfigureTransports(&http.Transport{
 		IdleConnTimeout: time.Second,
 	})
