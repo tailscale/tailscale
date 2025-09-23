@@ -1015,6 +1015,7 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 func (c *Conn) SetStaticEndpoints(ep views.Slice[netip.AddrPort]) {
 	c.mu.Lock()
 	if reflect.DeepEqual(c.staticEndpoints.AsSlice(), ep.AsSlice()) {
+		c.mu.Unlock()
 		return
 	}
 	c.staticEndpoints = ep
