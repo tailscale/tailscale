@@ -97,6 +97,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"capture":       {"Capture", "Packet capture", nil},
 	"cli":           {"CLI", "embed the CLI into the tailscaled binary", nil},
 	"completion":    {"Completion", "CLI shell completion", nil},
+	"dbus":          {"DBus", "Linux DBus support", nil},
 	"debugeventbus": {"DebugEventBus", "eventbus debug support", nil},
 	"debugportmapper": {
 		Sym:  "DebugPortMapper",
@@ -113,9 +114,19 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Outbound localhost HTTP/SOCK5 proxy support",
 		Deps: []FeatureTag{"netstack"},
 	},
-	"portmapper":  {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support", nil},
-	"netstack":    {"Netstack", "gVisor netstack (userspace networking) support (TODO; not yet omittable)", nil},
+	"portmapper": {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support", nil},
+	"netstack":   {"Netstack", "gVisor netstack (userspace networking) support (TODO; not yet omittable)", nil},
+	"networkmanager": {
+		Sym:  "NetworkManager",
+		Desc: "Linux NetworkManager integration",
+		Deps: []FeatureTag{"dbus"},
+	},
 	"relayserver": {"RelayServer", "Relay server", nil},
+	"resolved": {
+		Sym:  "Resolved",
+		Desc: "Linux systemd-resolved integration",
+		Deps: []FeatureTag{"dbus"},
+	},
 	"serve": {
 		Sym:  "Serve",
 		Desc: "Serve and Funnel support",
@@ -124,10 +135,14 @@ var Features = map[FeatureTag]FeatureMeta{
 	"ssh": {
 		Sym:  "SSH",
 		Desc: "Tailscale SSH support",
-		Deps: []FeatureTag{"netstack"},
+		Deps: []FeatureTag{"dbus", "netstack"},
 	},
-	"syspolicy":   {"SystemPolicy", "System policy configuration (MDM) support", nil},
-	"systray":     {"SysTray", "Linux system tray", nil},
+	"syspolicy": {"SystemPolicy", "System policy configuration (MDM) support", nil},
+	"systray": {
+		Sym:  "SysTray",
+		Desc: "Linux system tray",
+		Deps: []FeatureTag{"dbus"},
+	},
 	"taildrop":    {"Taildrop", "Taildrop (file sending) support", nil},
 	"tailnetlock": {"TailnetLock", "Tailnet Lock support", nil},
 	"tap":         {"Tap", "Experimental Layer 2 (ethernet) support", nil},

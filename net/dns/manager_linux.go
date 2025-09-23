@@ -7,7 +7,6 @@ package dns
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -15,13 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/godbus/dbus/v5"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/cmpver"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/version/distro"
 )
@@ -36,6 +34,31 @@ func (kv kv) String() string {
 
 var publishOnce sync.Once
 
+// reconfigTimeout is the time interval within which Manager.{Up,Down} should complete.
+//
+// This is particularly useful because certain conditions can cause indefinite hangs
+// (such as improper dbus auth followed by contextless dbus.Object.Call).
+// Such operations should be wrapped in a timeout context.
+const reconfigTimeout = time.Second
+
+// Set unless ts_omit_networkmanager
+var (
+	optNewNMManager      feature.Hook[func(ifName string) (OSConfigurator, error)]
+	optNMIsUsingResolved feature.Hook[func() error]
+	optNMVersionBetween  feature.Hook[func(v1, v2 string) (bool, error)]
+)
+
+// Set unless ts_omit_resolved
+var (
+	optNewResolvedManager feature.Hook[func(logf logger.Logf, health *health.Tracker, interfaceName string) (OSConfigurator, error)]
+)
+
+// Set unless ts_omit_dbus
+var (
+	optDBusPing       feature.Hook[func(name, objectPath string) error]
+	optDBusReadString feature.Hook[func(name, objectPath, iface, member string) (string, error)]
+)
+
 // NewOSConfigurator created a new OS configurator.
 //
 // The health tracker may be nil; the knobs may be nil and are ignored on this platform.
@@ -45,13 +68,25 @@ func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ policyclient.
 	}
 
 	env := newOSConfigEnv{
-		fs:                directFS{},
-		dbusPing:          dbusPing,
-		dbusReadString:    dbusReadString,
-		nmIsUsingResolved: nmIsUsingResolved,
-		nmVersionBetween:  nmVersionBetween,
-		resolvconfStyle:   resolvconfStyle,
+		fs:              directFS{},
+		resolvconfStyle: resolvconfStyle,
 	}
+	if f, ok := optDBusPing.GetOk(); ok {
+		env.dbusPing = f
+	} else {
+		env.dbusPing = func(_, _ string) error { return errors.ErrUnsupported }
+	}
+	if f, ok := optDBusReadString.GetOk(); ok {
+		env.dbusReadString = f
+	} else {
+		env.dbusReadString = func(_, _, _, _ string) (string, error) { return "", errors.ErrUnsupported }
+	}
+	if f, ok := optNMIsUsingResolved.GetOk(); ok {
+		env.nmIsUsingResolved = f
+	} else {
+		env.nmIsUsingResolved = func() error { return errors.ErrUnsupported }
+	}
+	env.nmVersionBetween, _ = optNMVersionBetween.GetOk() // GetOk to not panic if nil; unused if optNMIsUsingResolved returns an error
 	mode, err := dnsMode(logf, health, env)
 	if err != nil {
 		return nil, err
@@ -66,17 +101,24 @@ func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ policyclient.
 	case "direct":
 		return newDirectManagerOnFS(logf, health, env.fs), nil
 	case "systemd-resolved":
-		return newResolvedManager(logf, health, interfaceName)
+		if f, ok := optNewResolvedManager.GetOk(); ok {
+			return f(logf, health, interfaceName)
+		}
+		return nil, fmt.Errorf("tailscaled was built without DNS %q support", mode)
 	case "network-manager":
-		return newNMManager(interfaceName)
+		if f, ok := optNewNMManager.GetOk(); ok {
+			return f(interfaceName)
+		}
+		return nil, fmt.Errorf("tailscaled was built without DNS %q support", mode)
 	case "debian-resolvconf":
 		return newDebianResolvconfManager(logf)
 	case "openresolv":
 		return newOpenresolvManager(logf)
 	default:
 		logf("[unexpected] detected unknown DNS mode %q, using direct manager as last resort", mode)
-		return newDirectManagerOnFS(logf, health, env.fs), nil
 	}
+
+	return newDirectManagerOnFS(logf, health, env.fs), nil
 }
 
 // newOSConfigEnv are the funcs newOSConfigurator needs, pulled out for testing.
@@ -292,50 +334,6 @@ func dnsMode(logf logger.Logf, health *health.Tracker, env newOSConfigEnv) (ret 
 	}
 }
 
-func nmVersionBetween(first, last string) (bool, error) {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// DBus probably not running.
-		return false, err
-	}
-
-	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager"))
-	v, err := nm.GetProperty("org.freedesktop.NetworkManager.Version")
-	if err != nil {
-		return false, err
-	}
-
-	version, ok := v.Value().(string)
-	if !ok {
-		return false, fmt.Errorf("unexpected type %T for NM version", v.Value())
-	}
-
-	outside := cmpver.Compare(version, first) < 0 || cmpver.Compare(version, last) > 0
-	return !outside, nil
-}
-
-func nmIsUsingResolved() error {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// DBus probably not running.
-		return err
-	}
-
-	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"))
-	v, err := nm.GetProperty("org.freedesktop.NetworkManager.DnsManager.Mode")
-	if err != nil {
-		return fmt.Errorf("getting NM mode: %w", err)
-	}
-	mode, ok := v.Value().(string)
-	if !ok {
-		return fmt.Errorf("unexpected type %T for NM DNS mode", v.Value())
-	}
-	if mode != "systemd-resolved" {
-		return errors.New("NetworkManager is not using systemd-resolved for DNS")
-	}
-	return nil
-}
-
 // resolvedIsActuallyResolver reports whether the system is using
 // systemd-resolved as the resolver. There are two different ways to
 // use systemd-resolved:
@@ -395,45 +393,4 @@ func isLibnssResolveUsed(env newOSConfigEnv) error {
 		}
 	}
 	return fmt.Errorf("libnss_resolve not used")
-}
-
-func dbusPing(name, objectPath string) error {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// DBus probably not running.
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	obj := conn.Object(name, dbus.ObjectPath(objectPath))
-	call := obj.CallWithContext(ctx, "org.freedesktop.DBus.Peer.Ping", 0)
-	return call.Err
-}
-
-// dbusReadString reads a string property from the provided name and object
-// path. property must be in "interface.member" notation.
-func dbusReadString(name, objectPath, iface, member string) (string, error) {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// DBus probably not running.
-		return "", err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	obj := conn.Object(name, dbus.ObjectPath(objectPath))
-
-	var result dbus.Variant
-	err = obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, iface, member).Store(&result)
-	if err != nil {
-		return "", err
-	}
-
-	if s, ok := result.Value().(string); ok {
-		return s, nil
-	}
-	return result.String(), nil
 }

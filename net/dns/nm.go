@@ -1,13 +1,14 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux && !android
+//go:build linux && !android && !ts_omit_networkmanager
 
 package dns
 
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/util/cmpver"
 	"tailscale.com/util/dnsname"
 )
 
@@ -25,13 +27,6 @@ const (
 	lowerPriority   = int32(200) // lower than all builtin auto priorities
 )
 
-// reconfigTimeout is the time interval within which Manager.{Up,Down} should complete.
-//
-// This is particularly useful because certain conditions can cause indefinite hangs
-// (such as improper dbus auth followed by contextless dbus.Object.Call).
-// Such operations should be wrapped in a timeout context.
-const reconfigTimeout = time.Second
-
 // nmManager uses the NetworkManager DBus API.
 type nmManager struct {
 	interfaceName string
@@ -39,7 +34,13 @@ type nmManager struct {
 	dnsManager    dbus.BusObject
 }
 
-func newNMManager(interfaceName string) (*nmManager, error) {
+func init() {
+	optNewNMManager.Set(newNMManager)
+	optNMIsUsingResolved.Set(nmIsUsingResolved)
+	optNMVersionBetween.Set(nmVersionBetween)
+}
+
+func newNMManager(interfaceName string) (OSConfigurator, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return nil, err
@@ -387,5 +388,49 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 func (m *nmManager) Close() error {
 	// No need to do anything on close, NetworkManager will delete our
 	// settings when the tailscale interface goes away.
+	return nil
+}
+
+func nmVersionBetween(first, last string) (bool, error) {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		// DBus probably not running.
+		return false, err
+	}
+
+	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager"))
+	v, err := nm.GetProperty("org.freedesktop.NetworkManager.Version")
+	if err != nil {
+		return false, err
+	}
+
+	version, ok := v.Value().(string)
+	if !ok {
+		return false, fmt.Errorf("unexpected type %T for NM version", v.Value())
+	}
+
+	outside := cmpver.Compare(version, first) < 0 || cmpver.Compare(version, last) > 0
+	return !outside, nil
+}
+
+func nmIsUsingResolved() error {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		// DBus probably not running.
+		return err
+	}
+
+	nm := conn.Object("org.freedesktop.NetworkManager", dbus.ObjectPath("/org/freedesktop/NetworkManager/DnsManager"))
+	v, err := nm.GetProperty("org.freedesktop.NetworkManager.DnsManager.Mode")
+	if err != nil {
+		return fmt.Errorf("getting NM mode: %w", err)
+	}
+	mode, ok := v.Value().(string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T for NM DNS mode", v.Value())
+	}
+	if mode != "systemd-resolved" {
+		return errors.New("NetworkManager is not using systemd-resolved for DNS")
+	}
 	return nil
 }

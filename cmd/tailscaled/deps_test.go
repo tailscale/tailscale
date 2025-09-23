@@ -161,3 +161,16 @@ func TestOmitOutboundProxy(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitDBus(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_networkmanager,ts_omit_dbus,ts_omit_resolved,ts_omit_systray,ts_omit_ssh,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "dbus") {
+				t.Errorf("unexpected DBus dep: %q", dep)
+			}
+		},
+	}.Check(t)
+}
