@@ -431,6 +431,11 @@ spec:
                                                 description: Tag defaults to unstable.
                                                 type: string
                                         type: object
+                                    replicas:
+                                        description: Replicas specifies how many Pods to create. Defaults to 1.
+                                        format: int32
+                                        minimum: 0
+                                        type: integer
                                     service:
                                         description: Service configuration.
                                         properties:
