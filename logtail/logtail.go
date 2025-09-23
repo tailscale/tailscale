@@ -708,11 +708,6 @@ func appendTruncatedString(dst, src []byte, n int) []byte {
 	return dst
 }
 
-func (l *Logger) AppendTextOrJSONLocked(dst, src []byte) []byte {
-	l.clock = tstime.StdClock{}
-	return l.appendTextOrJSONLocked(dst, src, 0)
-}
-
 // appendTextOrJSONLocked appends a raw text message or a raw JSON object
 // in the Tailscale JSON log format.
 func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
