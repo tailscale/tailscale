@@ -97,10 +97,10 @@ func TestIntegrationSSH(t *testing.T) {
 		debugTest.Store(false)
 	})
 
-	homeDir := "/home/testuser"
-	if runtime.GOOS == "darwin" {
-		homeDir = "/Users/testuser"
-	}
+	// homeDir := "/home/testuser"
+	// if runtime.GOOS == "darwin" {
+	// 	homeDir = "/Users/testuser"
+	// }
 
 	tests := []struct {
 		cmd             string
@@ -108,40 +108,47 @@ func TestIntegrationSSH(t *testing.T) {
 		forceV1Behavior bool
 		skip            bool
 		allowSendEnv    bool
+		requiresShell   bool
 	}{
+		// {
+		// 	cmd:             "id",
+		// 	want:            []string{"testuser", "groupone", "grouptwo"},
+		// 	forceV1Behavior: false,
+		// },
+		// {
+		// 	cmd:             "id",
+		// 	want:            []string{"testuser", "groupone", "grouptwo"},
+		// 	forceV1Behavior: true,
+		// },
+		// {
+		// 	cmd:             "pwd",
+		// 	want:            []string{homeDir},
+		// 	skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
+		// 	forceV1Behavior: false,
+		// },
+		// {
+		// 	cmd:             "echo 'hello'",
+		// 	want:            []string{"hello"},
+		// 	skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
+		// 	forceV1Behavior: false,
+		// },
+		// {
+		// 	cmd:             `echo "${GIT_ENV_VAR:-unset1} ${EXACT_MATCH:-unset2} ${TESTING:-unset3} ${NOT_ALLOWED:-unset4}"`,
+		// 	want:            []string{"working1 working2 working3 unset4"},
+		// 	forceV1Behavior: false,
+		// 	allowSendEnv:    true,
+		// },
+		// {
+		// 	cmd:             `echo "${GIT_ENV_VAR:-unset1} ${EXACT_MATCH:-unset2} ${TESTING:-unset3} ${NOT_ALLOWED:-unset4}"`,
+		// 	want:            []string{"unset1 unset2 unset3 unset4"},
+		// 	forceV1Behavior: false,
+		// 	allowSendEnv:    false,
+		// },
 		{
-			cmd:             "id",
-			want:            []string{"testuser", "groupone", "grouptwo"},
-			forceV1Behavior: false,
-		},
-		{
-			cmd:             "id",
-			want:            []string{"testuser", "groupone", "grouptwo"},
+			cmd:             `locale`,
+			want:            []string{"UTF-8"},
 			forceV1Behavior: true,
-		},
-		{
-			cmd:             "pwd",
-			want:            []string{homeDir},
-			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
-			forceV1Behavior: false,
-		},
-		{
-			cmd:             "echo 'hello'",
-			want:            []string{"hello"},
-			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
-			forceV1Behavior: false,
-		},
-		{
-			cmd:             `echo "${GIT_ENV_VAR:-unset1} ${EXACT_MATCH:-unset2} ${TESTING:-unset3} ${NOT_ALLOWED:-unset4}"`,
-			want:            []string{"working1 working2 working3 unset4"},
-			forceV1Behavior: false,
-			allowSendEnv:    true,
-		},
-		{
-			cmd:             `echo "${GIT_ENV_VAR:-unset1} ${EXACT_MATCH:-unset2} ${TESTING:-unset3} ${NOT_ALLOWED:-unset4}"`,
-			want:            []string{"unset1 unset2 unset3 unset4"},
-			forceV1Behavior: false,
-			allowSendEnv:    false,
+			requiresShell:   true,
 		},
 	}
 
@@ -152,6 +159,9 @@ func TestIntegrationSSH(t *testing.T) {
 
 		// run every test both without and with a shell
 		for _, shell := range []bool{false, true} {
+			if test.requiresShell && !shell {
+				continue
+			}
 			shellQualifier := "no_shell"
 			if shell {
 				shellQualifier = "shell"

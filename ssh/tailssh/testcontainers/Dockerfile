@@ -4,7 +4,7 @@ FROM ${BASE}
 ARG BASE
 
 RUN echo "Install openssh, needed for scp. Also install python3"
-RUN if echo "$BASE" | grep "ubuntu:"; then apt-get update -y && apt-get install -y openssh-client python3 python3-pip; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):"; then apt-get update -y && apt-get install -y openssh-client python3 python3-pip; fi
 RUN if echo "$BASE" | grep "alpine:"; then apk add openssh python3 py3-pip; fi
 
 RUN echo "Install paramiko"
@@ -12,11 +12,11 @@ RUN pip3 install paramiko==3.5.1 || pip3 install --break-system-packages paramik
 
 # Note - on Ubuntu, we do not create the user's home directory, pam_mkhomedir will do that
 # for us, and we want to test that PAM gets triggered by Tailscale SSH.
-RUN if echo "$BASE" | grep "ubuntu:"; then groupadd -g 10000 groupone && groupadd -g 10001 grouptwo && useradd -g 10000 -G 10001 -u 10002 testuser; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):";  then groupadd -g 10000 groupone && groupadd -g 10001 grouptwo && useradd -g 10000 -G 10001 -u 10002 testuser; fi
 # On Alpine, we can't configure pam_mkhomdir, so go ahead and create home directory.
 RUN if echo "$BASE" | grep "alpine:"; then addgroup -g 10000 groupone && addgroup -g 10001 grouptwo && adduser -u 10002 -D testuser && addgroup testuser groupone && addgroup testuser grouptwo; fi
 
-RUN if echo "$BASE" | grep "ubuntu:"; then \
+RUN if echo "$BASE" | egrep "(ubuntu|debian):";  then \
     echo "Set up pam_mkhomedir." && \
     sed -i -e 's/Default: no/Default: yes/g' /usr/share/pam-configs/mkhomedir && \
     cat /usr/share/pam-configs/mkhomedir && \
@@ -30,13 +30,13 @@ RUN chmod 755 tailscaled
 
 RUN echo "First run tests normally."
 RUN eval `ssh-agent -s` && TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestSSHAgentForwarding
-RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):";  then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSFTP
-RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):";  then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSCP
-RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):";  then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSSH
-RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationParamiko
 
 RUN echo "Then run tests as non-root user testuser and make sure tests still pass."
@@ -50,7 +50,7 @@ RUN TAILSCALED_PATH=`pwd`tailscaled SKIP_FILE_OPS=1 su -m testuser -c "./tailssh
 RUN chmod 0755 /home/testuser
 RUN chown root:root /tmp/tailscalessh.log
 
-RUN if echo "$BASE" | grep "ubuntu:"; then \
+RUN if echo "$BASE" | egrep "(ubuntu|debian):"; then \
     echo "Then run tests in a system that's pretending to be SELinux in enforcing mode" && \
     # Remove execute permissions for /usr/bin/login so that it fails.
     mv /usr/bin/login /tmp/login_orig && \
@@ -70,11 +70,11 @@ RUN if echo "$BASE" | grep "ubuntu:"; then \
 RUN echo "Then remove the login command and make sure tests still pass."
 RUN rm `which login`
 RUN eval `ssh-agent -s` && TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestSSHAgentForwarding
-RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSFTP
-RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSCP
-RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
+RUN if echo "$BASE" | egrep "(ubuntu|debian):"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSSH
 
 RUN echo "Then remove the su command and make sure tests still pass."
