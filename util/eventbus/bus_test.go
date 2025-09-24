@@ -236,6 +236,17 @@ func TestMonitor(t *testing.T) {
 		}
 	})
 
+	t.Run("ZeroDone", func(t *testing.T) {
+		var zero eventbus.Monitor
+
+		select {
+		case <-zero.Done():
+			// OK
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for zero monitor to be done")
+		}
+	})
+
 	t.Run("ZeroClose", func(t *testing.T) {
 		var zero eventbus.Monitor
 
@@ -276,7 +287,13 @@ func TestMonitor(t *testing.T) {
 			// While the goroutine is running, Wait does not complete.
 			select {
 			case <-done:
-				t.Error("monitor is ready before its goroutine is finished")
+				t.Error("monitor is ready before its goroutine is finished (Wait)")
+			default:
+				// OK
+			}
+			select {
+			case <-m.Done():
+				t.Error("monitor is ready before its goroutine is finished (Done)")
 			default:
 				// OK
 			}
@@ -286,7 +303,13 @@ func TestMonitor(t *testing.T) {
 			case <-done:
 				// OK
 			case <-time.After(time.Second):
-				t.Fatal("timeout waiting for monitor to complete")
+				t.Fatal("timeout waiting for monitor to complete (Wait)")
+			}
+			select {
+			case <-m.Done():
+				// OK
+			case <-time.After(time.Second):
+				t.Fatal("timeout waiting for monitor to complete (Done)")
 			}
 		}
 	}
