@@ -3,9 +3,12 @@
 
 package eventbus
 
+import "tailscale.com/syncs"
+
 // A Monitor monitors the execution of a goroutine processing events from a
 // [Client], allowing the caller to block until it is complete. The zero value
-// of m is valid and its Close and Wait methods return immediately.
+// of m is valid; its Close and Wait methods return immediately, and its Done
+// method returns an already-closed channel.
 type Monitor struct {
 	// These fields are immutable after initialization
 	cli  *Client
@@ -30,6 +33,15 @@ func (m Monitor) Wait() {
 		return
 	}
 	<-m.done
+}
+
+// Done returns a channel that is closed when the monitored goroutine has
+// finished executing.
+func (m Monitor) Done() <-chan struct{} {
+	if m.done == nil {
+		return syncs.ClosedChan()
+	}
+	return m.done
 }
 
 // Monitor executes f in a new goroutine attended by a [Monitor].  The caller
