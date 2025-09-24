@@ -2220,8 +2220,9 @@ func (v *SSHPrincipalView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (v SSHPrincipalView) Node() StableNodeID { return v.ж.Node }
-func (v SSHPrincipalView) NodeIP() string     { return v.ж.NodeIP }
+func (v SSHPrincipalView) Node() StableNodeID      { return v.ж.Node }
+func (v SSHPrincipalView) NodeIP() string          { return v.ж.NodeIP }
+func (v SSHPrincipalView) NodeCap() NodeCapability { return v.ж.NodeCap }
 
 // email-ish: foo@example.com, bar@github
 func (v SSHPrincipalView) UserLogin() string { return v.ж.UserLogin }
@@ -2243,6 +2244,7 @@ func (v SSHPrincipalView) UnusedPubKeys() views.Slice[string] {
 var _SSHPrincipalViewNeedsRegeneration = SSHPrincipal(struct {
 	Node          StableNodeID
 	NodeIP        string
+	NodeCap       NodeCapability
 	UserLogin     string
 	Any           bool
 	UnusedPubKeys []string

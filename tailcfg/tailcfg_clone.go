@@ -569,6 +569,7 @@ func (src *SSHPrincipal) Clone() *SSHPrincipal {
 var _SSHPrincipalCloneNeedsRegeneration = SSHPrincipal(struct {
 	Node          StableNodeID
 	NodeIP        string
+	NodeCap       NodeCapability
 	UserLogin     string
 	Any           bool
 	UnusedPubKeys []string

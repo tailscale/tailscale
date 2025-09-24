@@ -2841,13 +2841,14 @@ type SSHRule struct {
 
 // SSHPrincipal is either a particular node or a user on any node.
 type SSHPrincipal struct {
-	// Matching any one of the following four field causes a match.
+	// Matching any one of the following five field causes a match.
 	// It must also match Certs, if non-empty.
 
-	Node      StableNodeID `json:"node,omitempty"`
-	NodeIP    string       `json:"nodeIP,omitempty"`
-	UserLogin string       `json:"userLogin,omitempty"` // email-ish: foo@example.com, bar@github
-	Any       bool         `json:"any,omitempty"`       // if true, match any connection
+	Node      StableNodeID   `json:"node,omitempty"`
+	NodeIP    string         `json:"nodeIP,omitempty"`
+	NodeCap   NodeCapability `json:"nodeCap,omitempty"`
+	UserLogin string         `json:"userLogin,omitempty"` // email-ish: foo@example.com, bar@github
+	Any       bool           `json:"any,omitempty"`       // if true, match any connection
 	// TODO(bradfitz): add StableUserID, once that exists
 
 	// UnusedPubKeys was public key support. It never became an official product

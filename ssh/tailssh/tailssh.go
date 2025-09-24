@@ -1201,6 +1201,9 @@ func (c *conn) principalMatchesTailscaleIdentity(p *tailcfg.SSHPrincipal) bool {
 			return true
 		}
 	}
+	if p.NodeCap != "" && ci.node.Valid() && ci.node.HasCap(p.NodeCap) {
+		return true
+	}
 	if p.UserLogin != "" && ci.uprof.LoginName == p.UserLogin {
 		return true
 	}

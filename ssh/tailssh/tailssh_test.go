@@ -203,6 +203,16 @@ func TestMatchRule(t *testing.T) {
 			wantUser: "ubuntu",
 		},
 		{
+			name: "match-principal-node-cap",
+			rule: &tailcfg.SSHRule{
+				Action:     someAction,
+				Principals: []*tailcfg.SSHPrincipal{{NodeCap: "some-node-cap"}},
+				SSHUsers:   map[string]string{"*": "ubuntu"},
+			},
+			ci:       &sshConnInfo{node: (&tailcfg.Node{CapMap: tailcfg.NodeCapMap{"some-node-cap": nil}}).View()},
+			wantUser: "ubuntu",
+		},
+		{
 			name: "match-principal-userlogin",
 			rule: &tailcfg.SSHRule{
 				Action:     someAction,
