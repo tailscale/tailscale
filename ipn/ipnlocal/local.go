@@ -1026,6 +1026,9 @@ func (b *LocalBackend) onHealthChange(change health.Change) {
 // GetOrSetCaptureSink returns the current packet capture sink, creating it
 // with the provided newSink function if it does not already exist.
 func (b *LocalBackend) GetOrSetCaptureSink(newSink func() packet.CaptureSink) packet.CaptureSink {
+	if !buildfeatures.HasCapture {
+		return nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -1039,6 +1042,9 @@ func (b *LocalBackend) GetOrSetCaptureSink(newSink func() packet.CaptureSink) pa
 }
 
 func (b *LocalBackend) ClearCaptureSink() {
+	if !buildfeatures.HasCapture {
+		return
+	}
 	// Shut down & uninstall the sink if there are no longer
 	// any outputs on it.
 	b.mu.Lock()

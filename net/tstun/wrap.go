@@ -24,6 +24,7 @@ import (
 	"go4.org/mem"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
+	"tailscale.com/feature/buildfeatures"
 	tsmetrics "tailscale.com/metrics"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
@@ -1491,5 +1492,8 @@ var (
 )
 
 func (t *Wrapper) InstallCaptureHook(cb packet.CaptureCallback) {
+	if !buildfeatures.HasCapture {
+		return
+	}
 	t.captureHook.Store(cb)
 }

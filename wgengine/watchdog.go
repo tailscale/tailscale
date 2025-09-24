@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/packet"
@@ -163,6 +164,9 @@ func (e *watchdogEngine) Done() <-chan struct{} {
 }
 
 func (e *watchdogEngine) InstallCaptureHook(cb packet.CaptureCallback) {
+	if !buildfeatures.HasCapture {
+		return
+	}
 	e.wrap.InstallCaptureHook(cb)
 }
 
