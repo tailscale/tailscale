@@ -236,7 +236,7 @@ func (s *Server) Close() {
 func newUnstartedIPNServer(opts *options) *ipnserver.Server {
 	opts.TB().Helper()
 	lb := opts.Backend()
-	server := ipnserver.New(opts.Logf(), logid.PublicID{}, lb.NetMon())
+	server := ipnserver.New(opts.Logf(), logid.PublicID{}, lb.EventBus(), lb.NetMon())
 	server.SetLocalBackend(lb)
 	return server
 }

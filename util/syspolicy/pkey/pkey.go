@@ -47,6 +47,13 @@ const (
 	// An empty string or a zero duration disables automatic reconnection.
 	ReconnectAfter Key = "ReconnectAfter"
 
+	// AllowTailscaledRestart is a boolean key that controls whether users with write access
+	// to the LocalAPI are allowed to shutdown tailscaled with the intention of restarting it.
+	// On Windows, tailscaled will be restarted automatically by the service process
+	// (see babysitProc in cmd/tailscaled/tailscaled_windows.go).
+	// On other platforms, it is the client's responsibility to restart tailscaled.
+	AllowTailscaledRestart Key = "AllowTailscaledRestart"
+
 	// ExitNodeID is the exit node's node id. default ""; if blank, no exit node is forced.
 	// Exit node ID takes precedence over exit node IP.
 	// To find the node ID, go to /api.md#device.

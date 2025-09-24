@@ -1368,3 +1368,9 @@ func (lc *Client) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggesti
 	}
 	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
 }
+
+// ShutdownTailscaled requests a graceful shutdown of tailscaled.
+func (lc *Client) ShutdownTailscaled(ctx context.Context) error {
+	_, err := lc.send(ctx, "POST", "/localapi/v0/shutdown", 200, nil)
+	return err
+}
