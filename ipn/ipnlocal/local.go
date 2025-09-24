@@ -7124,6 +7124,15 @@ func (b *LocalBackend) readRouteInfoLocked() (*appc.RouteInfo, error) {
 	return ri, nil
 }
 
+// ReadRouteInfo returns the app connector route information that is
+// stored in prefs to be consistent across restarts. It should be up
+// to date with the RouteInfo in memory being used by appc.
+func (b *LocalBackend) ReadRouteInfo() (*appc.RouteInfo, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.readRouteInfoLocked()
+}
+
 // seamlessRenewalEnabled reports whether seamless key renewals are enabled.
 //
 // As of 2025-09-11, this is the default behaviour unless nodes receive

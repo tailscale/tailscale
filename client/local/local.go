@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
@@ -1373,4 +1374,12 @@ func (lc *Client) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggesti
 func (lc *Client) ShutdownTailscaled(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/shutdown", 200, nil)
 	return err
+}
+
+func (lc *Client) GetAppConnectorRouteInfo(ctx context.Context) (appc.RouteInfo, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/appc-route-info")
+	if err != nil {
+		return appc.RouteInfo{}, err
+	}
+	return decodeJSON[appc.RouteInfo](body)
 }
