@@ -23,6 +23,7 @@ import (
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
@@ -1652,6 +1653,9 @@ var (
 )
 
 func (e *userspaceEngine) InstallCaptureHook(cb packet.CaptureCallback) {
+	if !buildfeatures.HasCapture {
+		return
+	}
 	e.tundev.InstallCaptureHook(cb)
 	e.magicConn.InstallCaptureHook(cb)
 }

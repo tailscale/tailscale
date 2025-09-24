@@ -890,6 +890,9 @@ func deregisterMetrics(m *metrics) {
 // can be called with a nil argument to uninstall the capture
 // hook.
 func (c *Conn) InstallCaptureHook(cb packet.CaptureCallback) {
+	if !buildfeatures.HasCapture {
+		return
+	}
 	c.captureHook.Store(cb)
 }
 
