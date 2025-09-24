@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
-	"tailscale.com/metrics"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
@@ -133,7 +132,7 @@ type Tracker struct {
 	lastLoginErr                error
 	localLogConfigErr           error
 	tlsConnectionErrors         map[string]error // map[ServerName]error
-	metricHealthMessage         *metrics.MultiLabelMap[metricHealthMessageLabel]
+	metricHealthMessage         *usermetric.MultiLabelMap[metricHealthMessageLabel]
 }
 
 // NewTracker contructs a new [Tracker] and attaches the given eventbus.
