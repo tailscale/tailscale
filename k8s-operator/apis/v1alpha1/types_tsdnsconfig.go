@@ -6,6 +6,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -84,6 +85,9 @@ type Nameserver struct {
 	// Service configuration.
 	// +optional
 	Service *NameserverService `json:"service,omitempty"`
+	// Pod configuration.
+	// +optional
+	Pod *NameserverPod `json:"pod,omitempty"`
 	// Replicas specifies how many Pods to create. Defaults to 1.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
@@ -103,6 +107,12 @@ type NameserverService struct {
 	// ClusterIP sets the static IP of the service used by the nameserver.
 	// +optional
 	ClusterIP string `json:"clusterIP,omitempty"`
+}
+
+type NameserverPod struct {
+	// If specified, applies tolerations to the pods deployed by the DNSConfig resource.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
 type DNSConfigStatus struct {
