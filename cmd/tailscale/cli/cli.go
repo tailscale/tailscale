@@ -88,7 +88,7 @@ func CleanUpArgs(args []string) []string {
 	return out
 }
 
-var localClient = local.Client{
+var localClient = &local.Client{
 	Socket: paths.DefaultTailscaledSocket(),
 }
 
@@ -245,6 +245,7 @@ change in the future.
 			upCmd,
 			downCmd,
 			setCmd,
+			getCmd,
 			loginCmd,
 			logoutCmd,
 			switchCmd,
