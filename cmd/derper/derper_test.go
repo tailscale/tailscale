@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/tstest/deptest"
 )
 
@@ -78,20 +78,20 @@ func TestNoContent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req, _ := http.NewRequest("GET", "https://localhost/generate_204", nil)
 			if tt.input != "" {
-				req.Header.Set(derphttp.NoContentChallengeHeader, tt.input)
+				req.Header.Set(derpserver.NoContentChallengeHeader, tt.input)
 			}
 			w := httptest.NewRecorder()
-			derphttp.ServeNoContent(w, req)
+			derpserver.ServeNoContent(w, req)
 			resp := w.Result()
 
 			if tt.want == "" {
-				if h, found := resp.Header[derphttp.NoContentResponseHeader]; found {
+				if h, found := resp.Header[derpserver.NoContentResponseHeader]; found {
 					t.Errorf("got %+v; expected no response header", h)
 				}
 				return
 			}
 
-			if got := resp.Header.Get(derphttp.NoContentResponseHeader); got != tt.want {
+			if got := resp.Header.Get(derpserver.NoContentResponseHeader); got != tt.want {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
 		})

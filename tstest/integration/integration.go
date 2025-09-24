@@ -34,8 +34,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/client/local"
-	"tailscale.com/derp"
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
@@ -297,14 +296,14 @@ func exe() string {
 func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *tailcfg.DERPMap) {
 	t.Helper()
 
-	d := derp.NewServer(key.NewNode(), logf)
+	d := derpserver.NewServer(key.NewNode(), logf)
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(ipAddress, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
+	httpsrv := httptest.NewUnstartedServer(derpserver.Handler(d))
 	httpsrv.Listener.Close()
 	httpsrv.Listener = ln
 	httpsrv.Config.ErrorLog = logger.StdLogger(logf)

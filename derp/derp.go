@@ -27,15 +27,15 @@ import (
 // including its on-wire framing overhead)
 const MaxPacketSize = 64 << 10
 
-// magic is the DERP magic number, sent in the frameServerKey frame
+// Magic is the DERP Magic number, sent in the frameServerKey frame
 // upon initial connection.
-const magic = "DERP🔑" // 8 bytes: 0x44 45 52 50 f0 9f 94 91
+const Magic = "DERP🔑" // 8 bytes: 0x44 45 52 50 f0 9f 94 91
 
 const (
-	nonceLen       = 24
-	frameHeaderLen = 1 + 4 // frameType byte + 4 byte length
-	keyLen         = 32
-	maxInfoLen     = 1 << 20
+	NonceLen       = 24
+	FrameHeaderLen = 1 + 4 // frameType byte + 4 byte length
+	KeyLen         = 32
+	MaxInfoLen     = 1 << 20
 )
 
 // KeepAlive is the minimum frequency at which the DERP server sends
@@ -48,10 +48,10 @@ const KeepAlive = 60 * time.Second
 //   - version 2: received packets have src addrs in frameRecvPacket at beginning
 const ProtocolVersion = 2
 
-// frameType is the one byte frame type at the beginning of the frame
+// FrameType is the one byte frame type at the beginning of the frame
 // header.  The second field is a big-endian uint32 describing the
 // length of the remaining frame (not including the initial 5 bytes).
-type frameType byte
+type FrameType byte
 
 /*
 Protocol flow:
@@ -69,14 +69,14 @@ Steady state:
 * server then sends frameRecvPacket to recipient
 */
 const (
-	frameServerKey     = frameType(0x01) // 8B magic + 32B public key + (0+ bytes future use)
-	frameClientInfo    = frameType(0x02) // 32B pub key + 24B nonce + naclbox(json)
-	frameServerInfo    = frameType(0x03) // 24B nonce + naclbox(json)
-	frameSendPacket    = frameType(0x04) // 32B dest pub key + packet bytes
-	frameForwardPacket = frameType(0x0a) // 32B src pub key + 32B dst pub key + packet bytes
-	frameRecvPacket    = frameType(0x05) // v0/1: packet bytes, v2: 32B src pub key + packet bytes
-	frameKeepAlive     = frameType(0x06) // no payload, no-op (to be replaced with ping/pong)
-	frameNotePreferred = frameType(0x07) // 1 byte payload: 0x01 or 0x00 for whether this is client's home node
+	FrameServerKey     = FrameType(0x01) // 8B magic + 32B public key + (0+ bytes future use)
+	FrameClientInfo    = FrameType(0x02) // 32B pub key + 24B nonce + naclbox(json)
+	FrameServerInfo    = FrameType(0x03) // 24B nonce + naclbox(json)
+	FrameSendPacket    = FrameType(0x04) // 32B dest pub key + packet bytes
+	FrameForwardPacket = FrameType(0x0a) // 32B src pub key + 32B dst pub key + packet bytes
+	FrameRecvPacket    = FrameType(0x05) // v0/1: packet bytes, v2: 32B src pub key + packet bytes
+	FrameKeepAlive     = FrameType(0x06) // no payload, no-op (to be replaced with ping/pong)
+	FrameNotePreferred = FrameType(0x07) // 1 byte payload: 0x01 or 0x00 for whether this is client's home node
 
 	// framePeerGone is sent from server to client to signal that
 	// a previous sender is no longer connected. That is, if A
@@ -85,7 +85,7 @@ const (
 	// exists on that connection to get back to A. It is also sent
 	// if A tries to send a CallMeMaybe to B and the server has no
 	// record of B
-	framePeerGone = frameType(0x08) // 32B pub key of peer that's gone + 1 byte reason
+	FramePeerGone = FrameType(0x08) // 32B pub key of peer that's gone + 1 byte reason
 
 	// framePeerPresent is like framePeerGone, but for other members of the DERP
 	// region when they're meshed up together.
@@ -96,7 +96,7 @@ const (
 	// remaining after that, it's a PeerPresentFlags byte.
 	// While current servers send 41 bytes, old servers will send fewer, and newer
 	// servers might send more.
-	framePeerPresent = frameType(0x09)
+	FramePeerPresent = FrameType(0x09)
 
 	// frameWatchConns is how one DERP node in a regional mesh
 	// subscribes to the others in the region.
@@ -104,30 +104,30 @@ const (
 	// is closed. Otherwise, the client is initially flooded with
 	// framePeerPresent for all connected nodes, and then a stream of
 	// framePeerPresent & framePeerGone has peers connect and disconnect.
-	frameWatchConns = frameType(0x10)
+	FrameWatchConns = FrameType(0x10)
 
 	// frameClosePeer is a privileged frame type (requires the
 	// mesh key for now) that closes the provided peer's
 	// connection. (To be used for cluster load balancing
 	// purposes, when clients end up on a non-ideal node)
-	frameClosePeer = frameType(0x11) // 32B pub key of peer to close.
+	FrameClosePeer = FrameType(0x11) // 32B pub key of peer to close.
 
-	framePing = frameType(0x12) // 8 byte ping payload, to be echoed back in framePong
-	framePong = frameType(0x13) // 8 byte payload, the contents of the ping being replied to
+	FramePing = FrameType(0x12) // 8 byte ping payload, to be echoed back in framePong
+	FramePong = FrameType(0x13) // 8 byte payload, the contents of the ping being replied to
 
 	// frameHealth is sent from server to client to tell the client
 	// if their connection is unhealthy somehow. Currently the only unhealthy state
 	// is whether the connection is detected as a duplicate.
 	// The entire frame body is the text of the error message. An empty message
 	// clears the error state.
-	frameHealth = frameType(0x14)
+	FrameHealth = FrameType(0x14)
 
 	// frameRestarting is sent from server to client for the
 	// server to declare that it's restarting. Payload is two big
 	// endian uint32 durations in milliseconds: when to reconnect,
 	// and how long to try total. See ServerRestartingMessage docs for
 	// more details on how the client should interpret them.
-	frameRestarting = frameType(0x15)
+	FrameRestarting = FrameType(0x15)
 )
 
 // PeerGoneReasonType is a one byte reason code explaining why a
@@ -153,6 +153,18 @@ const (
 	PeerPresentIsProber   = 1 << 2
 	PeerPresentNotIdeal   = 1 << 3 // client said derp server is not its Region.Nodes[0] ideal node
 )
+
+// IdealNodeHeader is the HTTP request header sent on DERP HTTP client requests
+// to indicate that they're connecting to their ideal (Region.Nodes[0]) node.
+// The HTTP header value is the name of the node they wish they were connected
+// to. This is an optional header.
+const IdealNodeHeader = "Ideal-Node"
+
+// FastStartHeader is the header (with value "1") that signals to the HTTP
+// server that the DERP HTTP client does not want the HTTP 101 response
+// headers and it will begin writing & reading the DERP protocol immediately
+// following its HTTP request.
+const FastStartHeader = "Derp-Fast-Start"
 
 var bin = binary.BigEndian
 
@@ -186,15 +198,24 @@ func readUint32(br *bufio.Reader) (uint32, error) {
 	return bin.Uint32(b[:]), nil
 }
 
-func readFrameTypeHeader(br *bufio.Reader, wantType frameType) (frameLen uint32, err error) {
-	gotType, frameLen, err := readFrameHeader(br)
+// ReadFrameTypeHeader reads a frame header from br and
+// verifies that the frame type matches wantType.
+//
+// If it does, it returns the frame length (not including
+// the 5 byte header) and a nil error.
+//
+// If it doesn't, it returns an error and a zero length.
+func ReadFrameTypeHeader(br *bufio.Reader, wantType FrameType) (frameLen uint32, err error) {
+	gotType, frameLen, err := ReadFrameHeader(br)
 	if err == nil && wantType != gotType {
 		err = fmt.Errorf("bad frame type 0x%X, want 0x%X", gotType, wantType)
 	}
 	return frameLen, err
 }
 
-func readFrameHeader(br *bufio.Reader) (t frameType, frameLen uint32, err error) {
+// ReadFrameHeader reads the header of a DERP frame,
+// reading 5 bytes from br.
+func ReadFrameHeader(br *bufio.Reader) (t FrameType, frameLen uint32, err error) {
 	tb, err := br.ReadByte()
 	if err != nil {
 		return 0, 0, err
@@ -203,7 +224,7 @@ func readFrameHeader(br *bufio.Reader) (t frameType, frameLen uint32, err error)
 	if err != nil {
 		return 0, 0, err
 	}
-	return frameType(tb), frameLen, nil
+	return FrameType(tb), frameLen, nil
 }
 
 // readFrame reads a frame header and then reads its payload into
@@ -216,8 +237,8 @@ func readFrameHeader(br *bufio.Reader) (t frameType, frameLen uint32, err error)
 // bytes are read, err will be io.ErrShortBuffer, and frameLen and t
 // will both be set. That is, callers need to explicitly handle when
 // they get more data than expected.
-func readFrame(br *bufio.Reader, maxSize uint32, b []byte) (t frameType, frameLen uint32, err error) {
-	t, frameLen, err = readFrameHeader(br)
+func readFrame(br *bufio.Reader, maxSize uint32, b []byte) (t FrameType, frameLen uint32, err error) {
+	t, frameLen, err = ReadFrameHeader(br)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -239,19 +260,26 @@ func readFrame(br *bufio.Reader, maxSize uint32, b []byte) (t frameType, frameLe
 	return t, frameLen, err
 }
 
-func writeFrameHeader(bw *bufio.Writer, t frameType, frameLen uint32) error {
+// WriteFrameHeader writes a frame header to bw.
+//
+// The frame header is 5 bytes: a one byte frame type
+// followed by a big-endian uint32 length of the
+// remaining frame (not including the 5 byte header).
+//
+// It does not flush bw.
+func WriteFrameHeader(bw *bufio.Writer, t FrameType, frameLen uint32) error {
 	if err := bw.WriteByte(byte(t)); err != nil {
 		return err
 	}
 	return writeUint32(bw, frameLen)
 }
 
-// writeFrame writes a complete frame & flushes it.
-func writeFrame(bw *bufio.Writer, t frameType, b []byte) error {
+// WriteFrame writes a complete frame & flushes it.
+func WriteFrame(bw *bufio.Writer, t FrameType, b []byte) error {
 	if len(b) > 10<<20 {
 		return errors.New("unreasonably large frame write")
 	}
-	if err := writeFrameHeader(bw, t, uint32(len(b))); err != nil {
+	if err := WriteFrameHeader(bw, t, uint32(len(b))); err != nil {
 		return err
 	}
 	if _, err := bw.Write(b); err != nil {
@@ -269,4 +297,13 @@ type Conn interface {
 	SetDeadline(time.Time) error
 	SetReadDeadline(time.Time) error
 	SetWriteDeadline(time.Time) error
+}
+
+// ServerInfo is the message sent from the server to clients during
+// the connection setup.
+type ServerInfo struct {
+	Version int `json:"version,omitempty"`
+
+	TokenBucketBytesPerSecond int `json:",omitempty"`
+	TokenBucketBytesBurst     int `json:",omitempty"`
 }

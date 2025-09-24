@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -145,12 +146,12 @@ func TestDerpProber(t *testing.T) {
 func TestRunDerpProbeNodePair(t *testing.T) {
 	// os.Setenv("DERP_DEBUG_LOGS", "true")
 	serverPrivateKey := key.NewNode()
-	s := derp.NewServer(serverPrivateKey, t.Logf)
+	s := derpserver.NewServer(serverPrivateKey, t.Logf)
 	defer s.Close()
 
 	httpsrv := &http.Server{
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-		Handler:      derphttp.Handler(s),
+		Handler:      derpserver.Handler(s),
 	}
 	ln, err := net.Listen("tcp4", "localhost:0")
 	if err != nil {

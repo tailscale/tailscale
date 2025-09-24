@@ -3,7 +3,7 @@
 
 //go:build linux && !android
 
-package derp
+package derpserver
 
 import (
 	"context"

@@ -1,7 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package derp
+// Package derpserver implements a DERP server.
+package derpserver
 
 // TODO(crawshaw): with predefined serverKey in clients and HMAC on packets we could skip TLS
 
@@ -38,6 +39,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
+	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
@@ -55,19 +57,15 @@ import (
 	"tailscale.com/version"
 )
 
+type Conn = derp.Conn
+
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.NodePublic]bool{}
 
-// IdealNodeHeader is the HTTP request header sent on DERP HTTP client requests
-// to indicate that they're connecting to their ideal (Region.Nodes[0]) node.
-// The HTTP header value is the name of the node they wish they were connected
-// to. This is an optional header.
-const IdealNodeHeader = "Ideal-Node"
-
 // IdealNodeContextKey is the context key used to pass the IdealNodeHeader value
 // from the HTTP handler to the DERP server's Accept method.
-var IdealNodeContextKey = ctxkey.New[string]("ideal-node", "")
+var IdealNodeContextKey = ctxkey.New("ideal-node", "")
 
 func init() {
 	keys := envknob.String("TS_DEBUG_VERBOSE_DROPS")
@@ -620,7 +618,7 @@ func (s *Server) initMetacert() {
 		log.Fatal(err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(ProtocolVersion),
+		SerialNumber: big.NewInt(derp.ProtocolVersion),
 		Subject: pkix.Name{
 			CommonName: derpconst.MetaCertCommonNamePrefix + s.publicKey.UntypedHexString(),
 		},
@@ -724,7 +722,7 @@ func (s *Server) registerClient(c *sclient) {
 // presence changed.
 //
 // s.mu must be held.
-func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, ipPort netip.AddrPort, flags PeerPresentFlags, present bool) {
+func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags, present bool) {
 	for w := range s.watchers {
 		w.peerStateChange = append(w.peerStateChange, peerConnState{
 			peer:    peer,
@@ -868,7 +866,7 @@ func (s *Server) notePeerGoneFromRegionLocked(key key.NodePublic) {
 // requestPeerGoneWriteLimited sends a request to write a "peer gone"
 // frame, but only in reply to a disco packet, and only if we haven't
 // sent one recently.
-func (c *sclient) requestPeerGoneWriteLimited(peer key.NodePublic, contents []byte, reason PeerGoneReasonType) {
+func (c *sclient) requestPeerGoneWriteLimited(peer key.NodePublic, contents []byte, reason derp.PeerGoneReasonType) {
 	if disco.LooksLikeDiscoWrapper(contents) != true {
 		return
 	}
@@ -1010,7 +1008,7 @@ func (c *sclient) run(ctx context.Context) error {
 	c.startStatsLoop(sendCtx)
 
 	for {
-		ft, fl, err := readFrameHeader(c.br)
+		ft, fl, err := derp.ReadFrameHeader(c.br)
 		c.debugLogf("read frame type %d len %d err %v", ft, fl, err)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -1025,17 +1023,17 @@ func (c *sclient) run(ctx context.Context) error {
 		}
 		c.s.noteClientActivity(c)
 		switch ft {
-		case frameNotePreferred:
+		case derp.FrameNotePreferred:
 			err = c.handleFrameNotePreferred(ft, fl)
-		case frameSendPacket:
+		case derp.FrameSendPacket:
 			err = c.handleFrameSendPacket(ft, fl)
-		case frameForwardPacket:
+		case derp.FrameForwardPacket:
 			err = c.handleFrameForwardPacket(ft, fl)
-		case frameWatchConns:
+		case derp.FrameWatchConns:
 			err = c.handleFrameWatchConns(ft, fl)
-		case frameClosePeer:
+		case derp.FrameClosePeer:
 			err = c.handleFrameClosePeer(ft, fl)
-		case framePing:
+		case derp.FramePing:
 			err = c.handleFramePing(ft, fl)
 		default:
 			err = c.handleUnknownFrame(ft, fl)
@@ -1046,12 +1044,12 @@ func (c *sclient) run(ctx context.Context) error {
 	}
 }
 
-func (c *sclient) handleUnknownFrame(ft frameType, fl uint32) error {
+func (c *sclient) handleUnknownFrame(ft derp.FrameType, fl uint32) error {
 	_, err := io.CopyN(io.Discard, c.br, int64(fl))
 	return err
 }
 
-func (c *sclient) handleFrameNotePreferred(ft frameType, fl uint32) error {
+func (c *sclient) handleFrameNotePreferred(ft derp.FrameType, fl uint32) error {
 	if fl != 1 {
 		return fmt.Errorf("frameNotePreferred wrong size")
 	}
@@ -1063,7 +1061,7 @@ func (c *sclient) handleFrameNotePreferred(ft frameType, fl uint32) error {
 	return nil
 }
 
-func (c *sclient) handleFrameWatchConns(ft frameType, fl uint32) error {
+func (c *sclient) handleFrameWatchConns(ft derp.FrameType, fl uint32) error {
 	if fl != 0 {
 		return fmt.Errorf("handleFrameWatchConns wrong size")
 	}
@@ -1074,9 +1072,9 @@ func (c *sclient) handleFrameWatchConns(ft frameType, fl uint32) error {
 	return nil
 }
 
-func (c *sclient) handleFramePing(ft frameType, fl uint32) error {
+func (c *sclient) handleFramePing(ft derp.FrameType, fl uint32) error {
 	c.s.gotPing.Add(1)
-	var m PingMessage
+	var m derp.PingMessage
 	if fl < uint32(len(m)) {
 		return fmt.Errorf("short ping: %v", fl)
 	}
@@ -1101,8 +1099,8 @@ func (c *sclient) handleFramePing(ft frameType, fl uint32) error {
 	return err
 }
 
-func (c *sclient) handleFrameClosePeer(ft frameType, fl uint32) error {
-	if fl != keyLen {
+func (c *sclient) handleFrameClosePeer(ft derp.FrameType, fl uint32) error {
+	if fl != derp.KeyLen {
 		return fmt.Errorf("handleFrameClosePeer wrong size")
 	}
 	if !c.canMesh {
@@ -1135,7 +1133,7 @@ func (c *sclient) handleFrameClosePeer(ft frameType, fl uint32) error {
 
 // handleFrameForwardPacket reads a "forward packet" frame from the client
 // (which must be a trusted client, a peer in our mesh).
-func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
+func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
 	if !c.canMesh {
 		return fmt.Errorf("insufficient permissions")
 	}
@@ -1162,7 +1160,7 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 		if dstLen > 1 {
 			reason = dropReasonDupClient
 		} else {
-			c.requestPeerGoneWriteLimited(dstKey, contents, PeerGoneReasonNotHere)
+			c.requestPeerGoneWriteLimited(dstKey, contents, derp.PeerGoneReasonNotHere)
 		}
 		s.recordDrop(contents, srcKey, dstKey, reason)
 		return nil
@@ -1178,7 +1176,7 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 }
 
 // handleFrameSendPacket reads a "send packet" frame from the client.
-func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
+func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
 	s := c.s
 
 	dstKey, contents, err := s.recvPacket(c.br, fl)
@@ -1215,7 +1213,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 		if dstLen > 1 {
 			reason = dropReasonDupClient
 		} else {
-			c.requestPeerGoneWriteLimited(dstKey, contents, PeerGoneReasonNotHere)
+			c.requestPeerGoneWriteLimited(dstKey, contents, derp.PeerGoneReasonNotHere)
 		}
 		s.recordDrop(contents, c.key, dstKey, reason)
 		c.debugLogf("SendPacket for %s, dropping with reason=%s", dstKey.ShortString(), reason)
@@ -1325,13 +1323,13 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 // notified (in a new goroutine) whenever a peer has disconnected from all DERP
 // nodes in the current region.
 func (c *sclient) onPeerGoneFromRegion(peer key.NodePublic) {
-	c.requestPeerGoneWrite(peer, PeerGoneReasonDisconnected)
+	c.requestPeerGoneWrite(peer, derp.PeerGoneReasonDisconnected)
 }
 
 // requestPeerGoneWrite sends a request to write a "peer gone" frame
 // with an explanation of why it is gone. It blocks until either the
 // write request is scheduled, or the client has closed.
-func (c *sclient) requestPeerGoneWrite(peer key.NodePublic, reason PeerGoneReasonType) {
+func (c *sclient) requestPeerGoneWrite(peer key.NodePublic, reason derp.PeerGoneReasonType) {
 	select {
 	case c.peerGone <- peerGoneMsg{
 		peer:   peer,
@@ -1358,7 +1356,7 @@ func (c *sclient) requestMeshUpdate() {
 
 // isMeshPeer reports whether the client is a trusted mesh peer
 // node in the DERP region.
-func (s *Server) isMeshPeer(info *clientInfo) bool {
+func (s *Server) isMeshPeer(info *derp.ClientInfo) bool {
 	// Compare mesh keys in constant time to prevent timing attacks.
 	// Since mesh keys are a fixed length, we don’t need to be concerned
 	// about timing attacks on client mesh keys that are the wrong length.
@@ -1372,7 +1370,7 @@ func (s *Server) isMeshPeer(info *clientInfo) bool {
 
 // verifyClient checks whether the client is allowed to connect to the derper,
 // depending on how & whether the server's been configured to verify.
-func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, info *clientInfo, clientIP netip.Addr) error {
+func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, info *derp.ClientInfo, clientIP netip.Addr) error {
 	if s.isMeshPeer(info) {
 		// Trusted mesh peer. No need to verify further. In fact, verifying
 		// further wouldn't work: it's not part of the tailnet so tailscaled and
@@ -1436,10 +1434,10 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 }
 
 func (s *Server) sendServerKey(lw *lazyBufioWriter) error {
-	buf := make([]byte, 0, len(magic)+key.NodePublicRawLen)
-	buf = append(buf, magic...)
+	buf := make([]byte, 0, len(derp.Magic)+key.NodePublicRawLen)
+	buf = append(buf, derp.Magic...)
 	buf = s.publicKey.AppendTo(buf)
-	err := writeFrame(lw.bw(), frameServerKey, buf)
+	err := derp.WriteFrame(lw.bw(), derp.FrameServerKey, buf)
 	lw.Flush() // redundant (no-op) flush to release bufio.Writer
 	return err
 }
@@ -1504,21 +1502,16 @@ func (s *Server) noteClientActivity(c *sclient) {
 	dup.sendHistory = append(dup.sendHistory, c)
 }
 
-type serverInfo struct {
-	Version int `json:"version,omitempty"`
-
-	TokenBucketBytesPerSecond int `json:",omitempty"`
-	TokenBucketBytesBurst     int `json:",omitempty"`
-}
+type ServerInfo = derp.ServerInfo
 
 func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) error {
-	msg, err := json.Marshal(serverInfo{Version: ProtocolVersion})
+	msg, err := json.Marshal(ServerInfo{Version: derp.ProtocolVersion})
 	if err != nil {
 		return err
 	}
 
 	msgbox := s.privateKey.SealTo(clientKey, msg)
-	if err := writeFrameHeader(bw.bw(), frameServerInfo, uint32(len(msgbox))); err != nil {
+	if err := derp.WriteFrameHeader(bw.bw(), derp.FrameServerInfo, uint32(len(msgbox))); err != nil {
 		return err
 	}
 	if _, err := bw.Write(msgbox); err != nil {
@@ -1530,12 +1523,12 @@ func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) e
 // recvClientKey reads the frameClientInfo frame from the client (its
 // proof of identity) upon its initial connection. It should be
 // considered especially untrusted at this point.
-func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info *clientInfo, err error) {
-	fl, err := readFrameTypeHeader(br, frameClientInfo)
+func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info *derp.ClientInfo, err error) {
+	fl, err := derp.ReadFrameTypeHeader(br, derp.FrameClientInfo)
 	if err != nil {
 		return zpub, nil, err
 	}
-	const minLen = keyLen + nonceLen
+	const minLen = derp.KeyLen + derp.NonceLen
 	if fl < minLen {
 		return zpub, nil, errors.New("short client info")
 	}
@@ -1547,7 +1540,7 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info
 	if err := clientKey.ReadRawWithoutAllocating(br); err != nil {
 		return zpub, nil, err
 	}
-	msgLen := int(fl - keyLen)
+	msgLen := int(fl - derp.KeyLen)
 	msgbox := make([]byte, msgLen)
 	if _, err := io.ReadFull(br, msgbox); err != nil {
 		return zpub, nil, fmt.Errorf("msgbox: %v", err)
@@ -1556,7 +1549,7 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info
 	if !ok {
 		return zpub, nil, fmt.Errorf("msgbox: cannot open len=%d with client key %s", msgLen, clientKey)
 	}
-	info = new(clientInfo)
+	info = new(derp.ClientInfo)
 	if err := json.Unmarshal(msg, info); err != nil {
 		return zpub, nil, fmt.Errorf("msg: %v", err)
 	}
@@ -1564,15 +1557,15 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info
 }
 
 func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodePublic, contents []byte, err error) {
-	if frameLen < keyLen {
+	if frameLen < derp.KeyLen {
 		return zpub, nil, errors.New("short send packet frame")
 	}
 	if err := dstKey.ReadRawWithoutAllocating(br); err != nil {
 		return zpub, nil, err
 	}
-	packetLen := frameLen - keyLen
-	if packetLen > MaxPacketSize {
-		return zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, MaxPacketSize)
+	packetLen := frameLen - derp.KeyLen
+	if packetLen > derp.MaxPacketSize {
+		return zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, derp.MaxPacketSize)
 	}
 	contents = make([]byte, packetLen)
 	if _, err := io.ReadFull(br, contents); err != nil {
@@ -1592,7 +1585,7 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodeP
 var zpub key.NodePublic
 
 func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, dstKey key.NodePublic, contents []byte, err error) {
-	if frameLen < keyLen*2 {
+	if frameLen < derp.KeyLen*2 {
 		return zpub, zpub, nil, errors.New("short send packet frame")
 	}
 	if err := srcKey.ReadRawWithoutAllocating(br); err != nil {
@@ -1601,9 +1594,9 @@ func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, d
 	if err := dstKey.ReadRawWithoutAllocating(br); err != nil {
 		return zpub, zpub, nil, err
 	}
-	packetLen := frameLen - keyLen*2
-	if packetLen > MaxPacketSize {
-		return zpub, zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, MaxPacketSize)
+	packetLen := frameLen - derp.KeyLen*2
+	if packetLen > derp.MaxPacketSize {
+		return zpub, zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, derp.MaxPacketSize)
 	}
 	contents = make([]byte, packetLen)
 	if _, err := io.ReadFull(br, contents); err != nil {
@@ -1628,7 +1621,7 @@ type sclient struct {
 	s              *Server
 	nc             Conn
 	key            key.NodePublic
-	info           clientInfo
+	info           derp.ClientInfo
 	logf           logger.Logf
 	done           <-chan struct{}  // closed when connection closes
 	remoteIPPort   netip.AddrPort   // zero if remoteAddr is not ip:port.
@@ -1666,19 +1659,19 @@ type sclient struct {
 	peerGoneLim *rate.Limiter
 }
 
-func (c *sclient) presentFlags() PeerPresentFlags {
-	var f PeerPresentFlags
+func (c *sclient) presentFlags() derp.PeerPresentFlags {
+	var f derp.PeerPresentFlags
 	if c.info.IsProber {
-		f |= PeerPresentIsProber
+		f |= derp.PeerPresentIsProber
 	}
 	if c.canMesh {
-		f |= PeerPresentIsMeshPeer
+		f |= derp.PeerPresentIsMeshPeer
 	}
 	if c.isNotIdealConn {
-		f |= PeerPresentNotIdeal
+		f |= derp.PeerPresentNotIdeal
 	}
 	if f == 0 {
-		return PeerPresentIsRegular
+		return derp.PeerPresentIsRegular
 	}
 	return f
 }
@@ -1688,7 +1681,7 @@ func (c *sclient) presentFlags() PeerPresentFlags {
 type peerConnState struct {
 	ipPort  netip.AddrPort // if present, the peer's IP:port
 	peer    key.NodePublic
-	flags   PeerPresentFlags
+	flags   derp.PeerPresentFlags
 	present bool
 }
 
@@ -1709,7 +1702,7 @@ type pkt struct {
 // peerGoneMsg is a request to write a peerGone frame to an sclient
 type peerGoneMsg struct {
 	peer   key.NodePublic
-	reason PeerGoneReasonType
+	reason derp.PeerGoneReasonType
 }
 
 func (c *sclient) setPreferred(v bool) {
@@ -1788,7 +1781,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 	defer c.onSendLoopDone()
 
 	jitter := rand.N(5 * time.Second)
-	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(KeepAlive + jitter)
+	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(derp.KeepAlive + jitter)
 	defer keepAliveTick.Stop()
 
 	var werr error // last write error
@@ -1887,14 +1880,14 @@ func (c *sclient) setWriteDeadline() {
 // sendKeepAlive sends a keep-alive frame, without flushing.
 func (c *sclient) sendKeepAlive() error {
 	c.setWriteDeadline()
-	return writeFrameHeader(c.bw.bw(), frameKeepAlive, 0)
+	return derp.WriteFrameHeader(c.bw.bw(), derp.FrameKeepAlive, 0)
 }
 
 // sendPong sends a pong reply, without flushing.
 func (c *sclient) sendPong(data [8]byte) error {
 	c.s.sentPong.Add(1)
 	c.setWriteDeadline()
-	if err := writeFrameHeader(c.bw.bw(), framePong, uint32(len(data))); err != nil {
+	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePong, uint32(len(data))); err != nil {
 		return err
 	}
 	_, err := c.bw.Write(data[:])
@@ -1902,23 +1895,23 @@ func (c *sclient) sendPong(data [8]byte) error {
 }
 
 const (
-	peerGoneFrameLen    = keyLen + 1
-	peerPresentFrameLen = keyLen + 16 + 2 + 1 // 16 byte IP + 2 byte port + 1 byte flags
+	peerGoneFrameLen    = derp.KeyLen + 1
+	peerPresentFrameLen = derp.KeyLen + 16 + 2 + 1 // 16 byte IP + 2 byte port + 1 byte flags
 )
 
 // sendPeerGone sends a peerGone frame, without flushing.
-func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) error {
+func (c *sclient) sendPeerGone(peer key.NodePublic, reason derp.PeerGoneReasonType) error {
 	switch reason {
-	case PeerGoneReasonDisconnected:
+	case derp.PeerGoneReasonDisconnected:
 		c.s.peerGoneDisconnectedFrames.Add(1)
-	case PeerGoneReasonNotHere:
+	case derp.PeerGoneReasonNotHere:
 		c.s.peerGoneNotHereFrames.Add(1)
 	}
 	c.setWriteDeadline()
 	data := make([]byte, 0, peerGoneFrameLen)
 	data = peer.AppendTo(data)
 	data = append(data, byte(reason))
-	if err := writeFrameHeader(c.bw.bw(), framePeerGone, uint32(len(data))); err != nil {
+	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePeerGone, uint32(len(data))); err != nil {
 		return err
 	}
 
@@ -1927,17 +1920,17 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) e
 }
 
 // sendPeerPresent sends a peerPresent frame, without flushing.
-func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags PeerPresentFlags) error {
+func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags) error {
 	c.setWriteDeadline()
-	if err := writeFrameHeader(c.bw.bw(), framePeerPresent, peerPresentFrameLen); err != nil {
+	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePeerPresent, peerPresentFrameLen); err != nil {
 		return err
 	}
 	payload := make([]byte, peerPresentFrameLen)
 	_ = peer.AppendTo(payload[:0])
 	a16 := ipPort.Addr().As16()
-	copy(payload[keyLen:], a16[:])
-	binary.BigEndian.PutUint16(payload[keyLen+16:], ipPort.Port())
-	payload[keyLen+18] = byte(flags)
+	copy(payload[derp.KeyLen:], a16[:])
+	binary.BigEndian.PutUint16(payload[derp.KeyLen+16:], ipPort.Port())
+	payload[derp.KeyLen+18] = byte(flags)
 	_, err := c.bw.Write(payload)
 	return err
 }
@@ -1975,7 +1968,7 @@ func (c *sclient) sendMeshUpdates() error {
 			if pcs.present {
 				err = c.sendPeerPresent(pcs.peer, pcs.ipPort, pcs.flags)
 			} else {
-				err = c.sendPeerGone(pcs.peer, PeerGoneReasonDisconnected)
+				err = c.sendPeerGone(pcs.peer, derp.PeerGoneReasonDisconnected)
 			}
 			if err != nil {
 				return err
@@ -2010,7 +2003,7 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 		pktLen += key.NodePublicRawLen
 		c.noteSendFromSrc(srcKey)
 	}
-	if err = writeFrameHeader(c.bw.bw(), frameRecvPacket, uint32(pktLen)); err != nil {
+	if err = derp.WriteFrameHeader(c.bw.bw(), derp.FrameRecvPacket, uint32(pktLen)); err != nil {
 		return err
 	}
 	if withKey {
@@ -2286,7 +2279,7 @@ func (s *Server) checkVerifyClientsLocalTailscaled() error {
 	if err != nil {
 		return fmt.Errorf("localClient.Status: %w", err)
 	}
-	info := &clientInfo{
+	info := &derp.ClientInfo{
 		IsProber: true,
 	}
 	clientIP := netip.IPv6Loopback()

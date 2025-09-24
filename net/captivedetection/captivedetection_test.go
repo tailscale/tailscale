@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
 	"tailscale.com/tstest/nettest"
@@ -136,7 +136,7 @@ func TestAgainstDERPHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s := httptest.NewServer(http.HandlerFunc(derphttp.ServeNoContent))
+	s := httptest.NewServer(http.HandlerFunc(derpserver.ServeNoContent))
 	defer s.Close()
 	e := Endpoint{
 		URL:                        must.Get(url.Parse(s.URL + "/generate_204")),

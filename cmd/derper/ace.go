@@ -12,12 +12,12 @@ import (
 	"net/http"
 	"strings"
 
-	"tailscale.com/derp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/connectproxy"
 )
 
 // serveConnect handles a CONNECT request for ACE support.
-func serveConnect(s *derp.Server, w http.ResponseWriter, r *http.Request) {
+func serveConnect(s *derpserver.Server, w http.ResponseWriter, r *http.Request) {
 	if !*flagACEEnabled {
 		http.Error(w, "CONNECT not enabled", http.StatusForbidden)
 		return

@@ -51,8 +51,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/client/local"
-	"tailscale.com/derp"
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/stun"
@@ -601,7 +600,7 @@ func (n *node) String() string {
 }
 
 type derpServer struct {
-	srv       *derp.Server
+	srv       *derpserver.Server
 	handler   http.Handler
 	tlsConfig *tls.Config
 }
@@ -612,12 +611,12 @@ func newDERPServer() *derpServer {
 	ts.Close()
 
 	ds := &derpServer{
-		srv:       derp.NewServer(key.NewNode(), logger.Discard),
+		srv:       derpserver.NewServer(key.NewNode(), logger.Discard),
 		tlsConfig: ts.TLS, // self-signed; test client configure to not check
 	}
 	var mux http.ServeMux
-	mux.Handle("/derp", derphttp.Handler(ds.srv))
-	mux.HandleFunc("/generate_204", derphttp.ServeNoContent)
+	mux.Handle("/derp", derpserver.Handler(ds.srv))
+	mux.HandleFunc("/generate_204", derpserver.ServeNoContent)
 
 	ds.handler = &mux
 	return ds

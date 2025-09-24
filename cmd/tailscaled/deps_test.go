@@ -44,6 +44,17 @@ func TestOmitSyspolicy(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitLocalClient(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_webclient,ts_omit_relayserver,ts_omit_oauthkey,ts_omit_acme",
+		BadDeps: map[string]string{
+			"tailscale.com/client/local": "unexpected",
+		},
+	}.Check(t)
+}
+
 // Test that we can build a binary without reflect.MethodByName.
 // See https://github.com/tailscale/tailscale/issues/17063
 func TestOmitReflectThings(t *testing.T) {
