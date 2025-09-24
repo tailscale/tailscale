@@ -13,11 +13,12 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 )
 
-func startMesh(s *derp.Server) error {
+func startMesh(s *derpserver.Server) error {
 	if *meshWith == "" {
 		return nil
 	}
@@ -32,7 +33,7 @@ func startMesh(s *derp.Server) error {
 	return nil
 }
 
-func startMeshWithHost(s *derp.Server, hostTuple string) error {
+func startMeshWithHost(s *derpserver.Server, hostTuple string) error {
 	var host string
 	var dialHost string
 	hostParts := strings.Split(hostTuple, "/")

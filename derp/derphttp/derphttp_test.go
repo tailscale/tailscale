@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package derphttp
+package derphttp_test
 
 import (
 	"bytes"
@@ -21,9 +21,12 @@ import (
 	"time"
 
 	"tailscale.com/derp"
+	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 )
 
@@ -41,12 +44,12 @@ func TestSendRecv(t *testing.T) {
 		clientKeys = append(clientKeys, priv.Public())
 	}
 
-	s := derp.NewServer(serverPrivateKey, t.Logf)
+	s := derpserver.NewServer(serverPrivateKey, t.Logf)
 	defer s.Close()
 
 	httpsrv := &http.Server{
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-		Handler:      Handler(s),
+		Handler:      derpserver.Handler(s),
 	}
 
 	ln, err := net.Listen("tcp4", "localhost:0")
@@ -65,7 +68,7 @@ func TestSendRecv(t *testing.T) {
 		}
 	}()
 
-	var clients []*Client
+	var clients []*derphttp.Client
 	var recvChs []chan []byte
 	done := make(chan struct{})
 	var wg sync.WaitGroup
@@ -78,7 +81,7 @@ func TestSendRecv(t *testing.T) {
 	}()
 	for i := range numClients {
 		key := clientPrivateKeys[i]
-		c, err := NewClient(key, serverURL, t.Logf, netMon)
+		c, err := derphttp.NewClient(key, serverURL, t.Logf, netMon)
 		if err != nil {
 			t.Fatalf("client %d: %v", i, err)
 		}
@@ -158,7 +161,7 @@ func TestSendRecv(t *testing.T) {
 	recvNothing(1)
 }
 
-func waitConnect(t testing.TB, c *Client) {
+func waitConnect(t testing.TB, c *derphttp.Client) {
 	t.Helper()
 	if m, err := c.Recv(); err != nil {
 		t.Fatalf("client first Recv: %v", err)
@@ -169,12 +172,12 @@ func waitConnect(t testing.TB, c *Client) {
 
 func TestPing(t *testing.T) {
 	serverPrivateKey := key.NewNode()
-	s := derp.NewServer(serverPrivateKey, t.Logf)
+	s := derpserver.NewServer(serverPrivateKey, t.Logf)
 	defer s.Close()
 
 	httpsrv := &http.Server{
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-		Handler:      Handler(s),
+		Handler:      derpserver.Handler(s),
 	}
 
 	ln, err := net.Listen("tcp4", "localhost:0")
@@ -193,7 +196,7 @@ func TestPing(t *testing.T) {
 		}
 	}()
 
-	c, err := NewClient(key.NewNode(), serverURL, t.Logf, netmon.NewStatic())
+	c, err := derphttp.NewClient(key.NewNode(), serverURL, t.Logf, netmon.NewStatic())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -221,11 +224,11 @@ func TestPing(t *testing.T) {
 
 const testMeshKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.Server) {
-	s = derp.NewServer(k, t.Logf)
+func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derpserver.Server) {
+	s = derpserver.NewServer(k, t.Logf)
 	httpsrv := &http.Server{
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-		Handler:      Handler(s),
+		Handler:      derpserver.Handler(s),
 	}
 
 	ln, err := net.Listen("tcp4", "localhost:0")
@@ -247,8 +250,8 @@ func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.S
 	return
 }
 
-func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToWatchURL string) (c *Client) {
-	c, err := NewClient(watcherPrivateKey, serverToWatchURL, t.Logf, netmon.NewStatic())
+func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToWatchURL string) (c *derphttp.Client) {
+	c, err := derphttp.NewClient(watcherPrivateKey, serverToWatchURL, t.Logf, netmon.NewStatic())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,30 +263,16 @@ func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToW
 	return
 }
 
-// breakConnection breaks the connection, which should trigger a reconnect.
-func (c *Client) breakConnection(brokenClient *derp.Client) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.client != brokenClient {
-		return
-	}
-	if c.netConn != nil {
-		c.netConn.Close()
-		c.netConn = nil
-	}
-	c.client = nil
-}
-
 // Test that a watcher connection successfully reconnects and processes peer
 // updates after a different thread breaks and reconnects the connection, while
 // the watcher is waiting on recv().
 func TestBreakWatcherConnRecv(t *testing.T) {
+	// TODO(bradfitz): use synctest + memnet instead
+
 	// Set the wait time before a retry after connection failure to be much lower.
 	// This needs to be early in the test, for defer to run right at the end after
 	// the DERP client has finished.
-	origRetryInterval := retryInterval
-	retryInterval = 50 * time.Millisecond
-	defer func() { retryInterval = origRetryInterval }()
+	tstest.Replace(t, derphttp.RetryInterval, 50*time.Millisecond)
 
 	var wg sync.WaitGroup
 	// Make the watcher server
@@ -301,11 +290,11 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 	defer watcher.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	watcherChan := make(chan int, 1)
 	defer close(watcherChan)
 	errChan := make(chan error, 1)
-	defer close(errChan)
 
 	// Start the watcher thread (which connects to the watched server)
 	wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
@@ -320,7 +309,10 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 		}
 		remove := func(m derp.PeerGoneMessage) { t.Logf("remove: %v", m.Peer.ShortString()); peers-- }
 		notifyErr := func(err error) {
-			errChan <- err
+			select {
+			case errChan <- err:
+			case <-ctx.Done():
+			}
 		}
 
 		watcher.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove, notifyErr)
@@ -345,7 +337,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 			t.Fatalf("watcher did not process the peer update")
 		}
 		timer.Reset(5 * time.Second)
-		watcher.breakConnection(watcher.client)
+		watcher.BreakConnection(watcher)
 		// re-establish connection by sending a packet
 		watcher.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
 	}
@@ -357,12 +349,12 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 // updates after a different thread breaks and reconnects the connection, while
 // the watcher is not waiting on recv().
 func TestBreakWatcherConn(t *testing.T) {
+	// TODO(bradfitz): use synctest + memnet instead
+
 	// Set the wait time before a retry after connection failure to be much lower.
 	// This needs to be early in the test, for defer to run right at the end after
 	// the DERP client has finished.
-	origRetryInterval := retryInterval
-	retryInterval = 50 * time.Millisecond
-	defer func() { retryInterval = origRetryInterval }()
+	tstest.Replace(t, derphttp.RetryInterval, 50*time.Millisecond)
 
 	var wg sync.WaitGroup
 	// Make the watcher server
@@ -428,7 +420,7 @@ func TestBreakWatcherConn(t *testing.T) {
 		case <-timer.C:
 			t.Fatalf("watcher did not process the peer update")
 		}
-		watcher1.breakConnection(watcher1.client)
+		watcher1.BreakConnection(watcher1)
 		// re-establish connection by sending a packet
 		watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
 		// signal that the breaker is done
@@ -446,7 +438,7 @@ func noopRemove(derp.PeerGoneMessage) {}
 func noopNotifyError(error)           {}
 
 func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
-	defer func() { testHookWatchLookConnectResult = nil }()
+	defer derphttp.SetTestHookWatchLookConnectResult(nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -461,7 +453,7 @@ func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 	defer watcher.Close()
 
 	// Test connecting to ourselves, and that we get hung up on.
-	testHookWatchLookConnectResult = func(err error, wasSelfConnect bool) bool {
+	derphttp.SetTestHookWatchLookConnectResult(func(err error, wasSelfConnect bool) bool {
 		t.Helper()
 		if err != nil {
 			t.Fatalf("error connecting to server: %v", err)
@@ -470,12 +462,12 @@ func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 			t.Error("wanted self-connect; wasn't")
 		}
 		return false
-	}
+	})
 	watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove, noopNotifyError)
 
 	// Test connecting to the server with a zero value for ignoreServerKey,
 	// so we should always connect.
-	testHookWatchLookConnectResult = func(err error, wasSelfConnect bool) bool {
+	derphttp.SetTestHookWatchLookConnectResult(func(err error, wasSelfConnect bool) bool {
 		t.Helper()
 		if err != nil {
 			t.Fatalf("error connecting to server: %v", err)
@@ -484,16 +476,14 @@ func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 			t.Error("wanted normal connect; got self connect")
 		}
 		return false
-	}
+	})
 	watcher.RunWatchConnectionLoop(ctx, key.NodePublic{}, t.Logf, noopAdd, noopRemove, noopNotifyError)
 }
 
 // verify that the LocalAddr method doesn't acquire the mutex.
 // See https://github.com/tailscale/tailscale/issues/11519
 func TestLocalAddrNoMutex(t *testing.T) {
-	var c Client
-	c.mu.Lock()
-	defer c.mu.Unlock() // not needed in test but for symmetry
+	var c derphttp.Client
 
 	_, err := c.LocalAddr()
 	if got, want := fmt.Sprint(err), "client not connected"; got != want {
@@ -502,7 +492,7 @@ func TestLocalAddrNoMutex(t *testing.T) {
 }
 
 func TestProbe(t *testing.T) {
-	h := Handler(nil)
+	h := derpserver.Handler(nil)
 
 	tests := []struct {
 		path string
@@ -523,7 +513,7 @@ func TestProbe(t *testing.T) {
 }
 
 func TestNotifyError(t *testing.T) {
-	defer func() { testHookWatchLookConnectResult = nil }()
+	defer derphttp.SetTestHookWatchLookConnectResult(nil)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
@@ -541,7 +531,7 @@ func TestNotifyError(t *testing.T) {
 	}))
 	defer watcher.Close()
 
-	testHookWatchLookConnectResult = func(err error, wasSelfConnect bool) bool {
+	derphttp.SetTestHookWatchLookConnectResult(func(err error, wasSelfConnect bool) bool {
 		t.Helper()
 		if err == nil {
 			t.Fatal("expected error connecting to server, got nil")
@@ -550,7 +540,7 @@ func TestNotifyError(t *testing.T) {
 			t.Error("wanted normal connect; got self connect")
 		}
 		return false
-	}
+	})
 
 	errChan := make(chan error, 1)
 	notifyError := func(err error) {
@@ -587,7 +577,7 @@ func TestManualDial(t *testing.T) {
 	region := slices.Sorted(maps.Keys(dm.Regions))[0]
 
 	netMon := netmon.NewStatic()
-	rc := NewRegionClient(key.NewNode(), t.Logf, netMon, func() *tailcfg.DERPRegion {
+	rc := derphttp.NewRegionClient(key.NewNode(), t.Logf, netMon, func() *tailcfg.DERPRegion {
 		return dm.Regions[region]
 	})
 	defer rc.Close()
@@ -625,7 +615,7 @@ func TestURLDial(t *testing.T) {
 		}
 	}
 	netMon := netmon.NewStatic()
-	c, err := NewClient(key.NewNode(), "https://"+hostname+"/", t.Logf, netMon)
+	c, err := derphttp.NewClient(key.NewNode(), "https://"+hostname+"/", t.Logf, netMon)
 	defer c.Close()
 
 	if err := c.Connect(context.Background()); err != nil {

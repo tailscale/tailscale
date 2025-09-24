@@ -30,7 +30,6 @@ import (
 	"syscall"
 	"time"
 
-	"tailscale.com/client/local"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -685,15 +684,16 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
-	lb.ConfigureWebClient(&local.Client{
-		Socket:        args.socketpath,
-		UseSocketOnly: args.socketpath != paths.DefaultTailscaledSocket(),
-	})
+	if f, ok := hookConfigureWebClient.GetOk(); ok {
+		f(lb)
+	}
 	if err := ns.Start(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
 	return lb, nil
 }
+
+var hookConfigureWebClient feature.Hook[func(*ipnlocal.LocalBackend)]
 
 // createEngine tries to the wgengine.Engine based on the order of tunnels
 // specified in the command line flags.

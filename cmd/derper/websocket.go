@@ -11,14 +11,14 @@ import (
 	"strings"
 
 	"github.com/coder/websocket"
-	"tailscale.com/derp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/wsconn"
 )
 
 var counterWebSocketAccepts = expvar.NewInt("derp_websocket_accepts")
 
 // addWebSocketSupport returns a Handle wrapping base that adds WebSocket server support.
-func addWebSocketSupport(s *derp.Server, base http.Handler) http.Handler {
+func addWebSocketSupport(s *derpserver.Server, base http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		up := strings.ToLower(r.Header.Get("Upgrade"))
 

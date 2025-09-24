@@ -40,8 +40,7 @@ import (
 	"github.com/tailscale/setec/client/setec"
 	"golang.org/x/time/rate"
 	"tailscale.com/atomicfile"
-	"tailscale.com/derp"
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/metrics"
 	"tailscale.com/net/ktimeout"
 	"tailscale.com/net/stunserver"
@@ -90,7 +89,7 @@ var (
 	// tcpUserTimeout is intentionally short, so that hung connections are cleaned up promptly. DERPs should be nearby users.
 	tcpUserTimeout = flag.Duration("tcp-user-timeout", 15*time.Second, "TCP user timeout")
 	// tcpWriteTimeout is the timeout for writing to client TCP connections. It does not apply to mesh connections.
-	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derp.DefaultTCPWiteTimeout, "TCP write timeout; 0 results in no timeout being set on writes")
+	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derpserver.DefaultTCPWiteTimeout, "TCP write timeout; 0 results in no timeout being set on writes")
 
 	// ACE
 	flagACEEnabled = flag.Bool("ace", false, "whether to enable embedded ACE server [experimental + in-development as of 2025-09-12; not yet documented]")
@@ -189,7 +188,7 @@ func main() {
 
 	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
 
-	s := derp.NewServer(cfg.PrivateKey, log.Printf)
+	s := derpserver.NewServer(cfg.PrivateKey, log.Printf)
 	s.SetVerifyClient(*verifyClients)
 	s.SetTailscaledSocketPath(*socket)
 	s.SetVerifyClientURL(*verifyClientURL)
@@ -256,7 +255,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	if *runDERP {
-		derpHandler := derphttp.Handler(s)
+		derpHandler := derpserver.Handler(s)
 		derpHandler = addWebSocketSupport(s, derpHandler)
 		mux.Handle("/derp", derpHandler)
 	} else {
@@ -267,8 +266,8 @@ func main() {
 
 	// These two endpoints are the same. Different versions of the clients
 	// have assumes different paths over time so we support both.
-	mux.HandleFunc("/derp/probe", derphttp.ProbeHandler)
-	mux.HandleFunc("/derp/latency-check", derphttp.ProbeHandler)
+	mux.HandleFunc("/derp/probe", derpserver.ProbeHandler)
+	mux.HandleFunc("/derp/latency-check", derpserver.ProbeHandler)
 
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", tsweb.BrowserHeaderHandlerFunc(handleBootstrapDNS))
@@ -280,7 +279,7 @@ func main() {
 		tsweb.AddBrowserHeaders(w)
 		io.WriteString(w, "User-agent: *\nDisallow: /\n")
 	}))
-	mux.Handle("/generate_204", http.HandlerFunc(derphttp.ServeNoContent))
+	mux.Handle("/generate_204", http.HandlerFunc(derpserver.ServeNoContent))
 	debug := tsweb.Debugger(mux)
 	debug.KV("TLS hostname", *hostname)
 	debug.KV("Mesh key", s.HasMeshKey())
@@ -388,7 +387,7 @@ func main() {
 		if *httpPort > -1 {
 			go func() {
 				port80mux := http.NewServeMux()
-				port80mux.HandleFunc("/generate_204", derphttp.ServeNoContent)
+				port80mux.HandleFunc("/generate_204", derpserver.ServeNoContent)
 				port80mux.Handle("/", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 				port80srv := &http.Server{
 					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
