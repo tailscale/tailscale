@@ -1503,9 +1503,7 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 }
 
 func (b *LocalBackend) GetFilterForTest() *filter.Filter {
-	if !testenv.InTest() {
-		panic("GetFilterForTest called outside of test")
-	}
+	testenv.AssertInTest()
 	nb := b.currentNode()
 	return nb.filterAtomic.Load()
 }
@@ -2304,9 +2302,10 @@ func (b *LocalBackend) SetControlClientGetterForTesting(newControlClient func(co
 	b.ccGen = newControlClient
 }
 
-// DisablePortMapperForTest disables the portmapper for tests.
+// DisablePortPollerForTest disables the port list poller for tests.
 // It must be called before Start.
-func (b *LocalBackend) DisablePortMapperForTest() {
+func (b *LocalBackend) DisablePortPollerForTest() {
+	testenv.AssertInTest()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.portpoll = nil
@@ -2315,6 +2314,7 @@ func (b *LocalBackend) DisablePortMapperForTest() {
 // PeersForTest returns all the current peers, sorted by Node.ID,
 // for integration tests in another repo.
 func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
+	testenv.AssertInTest()
 	return b.currentNode().PeersForTest()
 }
 
@@ -4030,6 +4030,7 @@ func (b *LocalBackend) resolveBestProfileLocked() (_ ipn.LoginProfileView, isBac
 // It is used for testing only, and will be removed along with the rest of the
 // "current user" functionality as we progress on the multi-user improvements (tailscale/corp#18342).
 func (b *LocalBackend) CurrentUserForTest() (ipn.WindowsUserID, ipnauth.Actor) {
+	testenv.AssertInTest()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.pm.CurrentUserID(), b.currentUser
