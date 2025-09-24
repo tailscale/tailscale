@@ -385,7 +385,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	}
 
 	if env.upArgs.forceReauth && isSSHOverTailscale() {
-		if err := presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will result in your SSH session disconnecting.`, env.upArgs.acceptedRisks); err != nil {
+		if err := presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action may result in your SSH session disconnecting.`, env.upArgs.acceptedRisks); err != nil {
 			return false, nil, err
 		}
 	}
