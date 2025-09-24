@@ -185,3 +185,16 @@ func TestOmitDBus(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitPortlist(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_portlist,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "portlist") {
+				t.Errorf("unexpected dep: %q", dep)
+			}
+		},
+	}.Check(t)
+}

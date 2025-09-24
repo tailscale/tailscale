@@ -105,6 +105,7 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 	// TODO(nickkhyl): remove this after the profileManager refactoring.
 	// See tailscale/tailscale#15974.
+	// This same workaround appears in feature/portlist/portlist.go.
 	profile, prefs := h.Profiles().CurrentProfileState()
 	e.onChangeProfile(profile, prefs, false)
 	return nil

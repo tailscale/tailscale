@@ -43,6 +43,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
@@ -1301,4 +1302,16 @@ func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *local.Client) {
 		}
 	}
 	t.Error("magicsock did not find a direct path from lc1 to lc2")
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "portlist") {
+				t.Errorf("unexpected dep: %q", dep)
+			}
+		},
+	}.Check(t)
 }

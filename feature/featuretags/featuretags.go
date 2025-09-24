@@ -114,6 +114,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Outbound localhost HTTP/SOCK5 proxy support",
 		Deps: []FeatureTag{"netstack"},
 	},
+	"portlist":   {"PortList", "Optionally advertise listening service ports", nil},
 	"portmapper": {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support", nil},
 	"netstack":   {"Netstack", "gVisor netstack (userspace networking) support (TODO; not yet omittable)", nil},
 	"networkmanager": {

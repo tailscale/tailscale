@@ -5816,7 +5816,6 @@ func newLocalBackendWithSysAndTestControl(t *testing.T, enableLogging bool, sys 
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
 	t.Cleanup(b.Shutdown)
-	b.DisablePortPollerForTest()
 
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		return newControl(t, opts), nil
