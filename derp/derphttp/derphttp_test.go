@@ -44,7 +44,7 @@ func TestSendRecv(t *testing.T) {
 		clientKeys = append(clientKeys, priv.Public())
 	}
 
-	s := derpserver.NewServer(serverPrivateKey, t.Logf)
+	s := derpserver.New(serverPrivateKey, t.Logf)
 	defer s.Close()
 
 	httpsrv := &http.Server{
@@ -172,7 +172,7 @@ func waitConnect(t testing.TB, c *derphttp.Client) {
 
 func TestPing(t *testing.T) {
 	serverPrivateKey := key.NewNode()
-	s := derpserver.NewServer(serverPrivateKey, t.Logf)
+	s := derpserver.New(serverPrivateKey, t.Logf)
 	defer s.Close()
 
 	httpsrv := &http.Server{
@@ -225,7 +225,7 @@ func TestPing(t *testing.T) {
 const testMeshKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derpserver.Server) {
-	s = derpserver.NewServer(k, t.Logf)
+	s = derpserver.New(k, t.Logf)
 	httpsrv := &http.Server{
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		Handler:      derpserver.Handler(s),

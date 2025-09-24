@@ -131,7 +131,7 @@ func TestPinnedCertRawIP(t *testing.T) {
 	}
 	defer ln.Close()
 
-	ds := derpserver.NewServer(key.NewNode(), t.Logf)
+	ds := derpserver.New(key.NewNode(), t.Logf)
 
 	derpHandler := derpserver.Handler(ds)
 	mux := http.NewServeMux()

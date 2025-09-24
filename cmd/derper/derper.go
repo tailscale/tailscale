@@ -188,7 +188,7 @@ func main() {
 
 	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
 
-	s := derpserver.NewServer(cfg.PrivateKey, log.Printf)
+	s := derpserver.New(cfg.PrivateKey, log.Printf)
 	s.SetVerifyClient(*verifyClients)
 	s.SetTailscaledSocketPath(*socket)
 	s.SetVerifyClientURL(*verifyClientURL)

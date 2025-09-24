@@ -111,7 +111,7 @@ func (c *Conn) WaitReady(t testing.TB) {
 }
 
 func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, stunIP netip.Addr) (derpMap *tailcfg.DERPMap, cleanup func()) {
-	d := derpserver.NewServer(key.NewNode(), logf)
+	d := derpserver.New(key.NewNode(), logf)
 
 	httpsrv := httptest.NewUnstartedServer(derpserver.Handler(d))
 	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
