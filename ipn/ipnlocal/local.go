@@ -61,7 +61,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
@@ -77,7 +76,6 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
-	"tailscale.com/portlist"
 	"tailscale.com/posture"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -211,12 +209,10 @@ type LocalBackend struct {
 	pushDeviceToken          syncs.AtomicValue[string]
 	backendLogID             logid.PublicID
 	unregisterSysPolicyWatch func()
-	portpoll                 *portlist.Poller // may be nil
-	portpollOnce             sync.Once        // guards starting readPoller
-	varRoot                  string           // or empty if SetVarRoot never called
-	logFlushFunc             func()           // or nil if SetLogFlusher wasn't called
-	em                       *expiryManager   // non-nil; TODO(nickkhyl): move to nodeBackend
-	sshAtomicBool            atomic.Bool      // TODO(nickkhyl): move to nodeBackend
+	varRoot                  string         // or empty if SetVarRoot never called
+	logFlushFunc             func()         // or nil if SetLogFlusher wasn't called
+	em                       *expiryManager // non-nil; TODO(nickkhyl): move to nodeBackend
+	sshAtomicBool            atomic.Bool    // TODO(nickkhyl): move to nodeBackend
 	// webClientAtomicBool controls whether the web client is running. This should
 	// be true unless the disable-web-client node attribute has been set.
 	webClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeBackend
@@ -522,7 +518,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		pm:                    pm,
 		backendLogID:          logID,
 		state:                 ipn.NoState,
-		portpoll:              new(portlist.Poller),
 		em:                    newExpiryManager(logf, sys.Bus.Get()),
 		loginFlags:            loginFlags,
 		clock:                 clock,
@@ -619,6 +614,12 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 	healthChangeSub := eventbus.Subscribe[health.Change](ec)
 	changeDeltaSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
 
+	var portlist <-chan PortlistServices
+	if buildfeatures.HasPortList {
+		portlistSub := eventbus.Subscribe[PortlistServices](ec)
+		portlist = portlistSub.Events()
+	}
+
 	return func(ec *eventbus.Client) {
 		for {
 			select {
@@ -632,6 +633,10 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 				b.onHealthChange(change)
 			case changeDelta := <-changeDeltaSub.Events():
 				b.linkChange(&changeDelta)
+			case pl := <-portlist:
+				if buildfeatures.HasPortList { // redundant, but explicit for linker deadcode and humans
+					b.setPortlistServices(pl)
+				}
 			}
 		}
 	}
@@ -2300,15 +2305,6 @@ func (b *LocalBackend) SetControlClientGetterForTesting(newControlClient func(co
 	b.ccGen = newControlClient
 }
 
-// DisablePortPollerForTest disables the port list poller for tests.
-// It must be called before Start.
-func (b *LocalBackend) DisablePortPollerForTest() {
-	testenv.AssertInTest()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.portpoll = nil
-}
-
 // PeersForTest returns all the current peers, sorted by Node.ID,
 // for integration tests in another repo.
 func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
@@ -2455,12 +2451,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	persistv := prefs.Persist().AsStruct()
 	if persistv == nil {
 		persistv = new(persist.Persist)
-	}
-
-	if b.portpoll != nil {
-		b.portpollOnce.Do(func() {
-			b.goTracker.Go(b.readPoller)
-		})
 	}
 
 	discoPublic := b.MagicConn().DiscoPublicKey()
@@ -2904,57 +2894,6 @@ func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, 
 		b.RemovePrefix(pfx)
 	}
 	return b.IPSet()
-}
-
-// readPoller is a goroutine that receives service lists from
-// b.portpoll and propagates them into the controlclient's HostInfo.
-func (b *LocalBackend) readPoller() {
-	if !envknob.BoolDefaultTrue("TS_PORTLIST") {
-		return
-	}
-
-	ticker, tickerChannel := b.clock.NewTicker(portlist.PollInterval())
-	defer ticker.Stop()
-	for {
-		select {
-		case <-tickerChannel:
-		case <-b.ctx.Done():
-			return
-		}
-
-		if !b.shouldUploadServices() {
-			continue
-		}
-
-		ports, changed, err := b.portpoll.Poll()
-		if err != nil {
-			b.logf("error polling for open ports: %v", err)
-			return
-		}
-		if !changed {
-			continue
-		}
-		sl := []tailcfg.Service{}
-		for _, p := range ports {
-			s := tailcfg.Service{
-				Proto:       tailcfg.ServiceProto(p.Proto),
-				Port:        p.Port,
-				Description: p.Process,
-			}
-			if policy.IsInterestingService(s, version.OS()) {
-				sl = append(sl, s)
-			}
-		}
-
-		b.mu.Lock()
-		if b.hostinfo == nil {
-			b.hostinfo = new(tailcfg.Hostinfo)
-		}
-		b.hostinfo.Services = sl
-		b.mu.Unlock()
-
-		b.doSetHostinfoFilterServices()
-	}
 }
 
 // GetPushDeviceToken returns the push notification device token.
@@ -3851,23 +3790,6 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineSt
 		b.statsLogf("[v1] v%v peers: %v", version.Long(), strings.TrimSpace(peerStats.String()))
 	}
 	return ret
-}
-
-// shouldUploadServices reports whether this node should include services
-// in Hostinfo. When the user preferences currently request "shields up"
-// mode, all inbound connections are refused, so services are not reported.
-// Otherwise, shouldUploadServices respects NetMap.CollectServices.
-// TODO(nickkhyl): move this into [nodeBackend]?
-func (b *LocalBackend) shouldUploadServices() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	p := b.pm.CurrentPrefs()
-	nm := b.currentNode().NetMap()
-	if !p.Valid() || nm == nil {
-		return false // default to safest setting
-	}
-	return !p.ShieldsUp() && nm.CollectServices
 }
 
 // SetCurrentUser is used to implement support for multi-user systems (only
@@ -4812,6 +4734,25 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 	return ret
 }
 
+// PortlistServices is an eventbus topic for the portlist extension
+// to advertise the running services on the host.
+type PortlistServices []tailcfg.Service
+
+func (b *LocalBackend) setPortlistServices(sl []tailcfg.Service) {
+	if !buildfeatures.HasPortList { // redundant, but explicit for linker deadcode and humans
+		return
+	}
+
+	b.mu.Lock()
+	if b.hostinfo == nil {
+		b.hostinfo = new(tailcfg.Hostinfo)
+	}
+	b.hostinfo.Services = sl
+	b.mu.Unlock()
+
+	b.doSetHostinfoFilterServices()
+}
+
 // doSetHostinfoFilterServices calls SetHostinfo on the controlclient,
 // possibly after mangling the given hostinfo.
 //
@@ -4837,13 +4778,15 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 
 	// TODO(maisem,bradfitz): store hostinfo as a view, not as a mutable struct.
 	hi := *b.hostinfo // shallow copy
-	unlock.UnlockEarly()
 
 	// Make a shallow copy of hostinfo so we can mutate
 	// at the Service field.
-	if !b.shouldUploadServices() {
+	if f, ok := b.extHost.Hooks().ShouldUploadServices.GetOk(); !ok || !f() {
 		hi.Services = []tailcfg.Service{}
 	}
+
+	unlock.UnlockEarly()
+
 	// Don't mutate hi.Service's underlying array. Append to
 	// the slice with no free capacity.
 	c := len(hi.Services)

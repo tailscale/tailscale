@@ -358,7 +358,6 @@ func TestStateMachine(t *testing.T) {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
 	t.Cleanup(b.Shutdown)
-	b.DisablePortPollerForTest()
 
 	var cc, previousCC *mockControl
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {

@@ -372,6 +372,10 @@ type Hooks struct {
 	// SetPeerStatus is called to mutate PeerStatus.
 	// Callers must only use NodeBackend to read data.
 	SetPeerStatus feature.Hooks[func(*ipnstate.PeerStatus, tailcfg.NodeView, NodeBackend)]
+
+	// ShouldUploadServices reports whether this node should include services
+	// in Hostinfo from the portlist extension.
+	ShouldUploadServices feature.Hook[func() bool]
 }
 
 // NodeBackend is an interface to query the current node and its peers.
@@ -398,4 +402,9 @@ type NodeBackend interface {
 	// It effectively just reports whether PeerAPIBase(node) is non-empty, but
 	// potentially more efficiently.
 	PeerHasPeerAPI(tailcfg.NodeView) bool
+
+	// CollectServices reports whether the control plane is telling this
+	// node that the portlist service collection is desirable, should it
+	// choose to report them.
+	CollectServices() bool
 }

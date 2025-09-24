@@ -45,7 +45,6 @@ func newBackend(opts *options) *ipnlocal.LocalBackend {
 		tb.Fatalf("NewLocalBackend: %v", err)
 	}
 	tb.Cleanup(b.Shutdown)
-	b.DisablePortPollerForTest()
 	b.SetControlClientGetterForTesting(opts.MakeControlClient)
 	return b
 }
