@@ -5,6 +5,7 @@ package ipnserver_test
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strconv"
 	"sync"
@@ -14,7 +15,10 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/lapitest"
+	"tailscale.com/tsd"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policytest"
 )
 
 func TestUserConnectDisconnectNonWindows(t *testing.T) {
@@ -250,6 +254,62 @@ func TestBlockWhileIdentityInUse(t *testing.T) {
 		userB := server.MakeTestActor("UserB", "ClientB")
 		server.BlockWhileInUseByOther(ctx, userB)
 		<-userADone
+	}
+}
+
+func TestShutdownViaLocalAPI(t *testing.T) {
+	t.Parallel()
+
+	errAccessDeniedByPolicy := errors.New("Access denied: shutdown access denied by policy")
+
+	tests := []struct {
+		name                   string
+		allowTailscaledRestart *bool
+		wantErr                error
+	}{
+		{
+			name:                   "AllowTailscaledRestart/NotConfigured",
+			allowTailscaledRestart: nil,
+			wantErr:                errAccessDeniedByPolicy,
+		},
+		{
+			name:                   "AllowTailscaledRestart/False",
+			allowTailscaledRestart: ptr.To(false),
+			wantErr:                errAccessDeniedByPolicy,
+		},
+		{
+			name:                   "AllowTailscaledRestart/True",
+			allowTailscaledRestart: ptr.To(true),
+			wantErr:                nil, // shutdown should be allowed
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			sys := tsd.NewSystem()
+
+			var pol policytest.Config
+			if tt.allowTailscaledRestart != nil {
+				pol.Set(pkey.AllowTailscaledRestart, *tt.allowTailscaledRestart)
+			}
+			sys.Set(pol)
+
+			server := lapitest.NewServer(t, lapitest.WithSys(sys))
+			lc := server.ClientWithName("User")
+
+			err := lc.ShutdownTailscaled(t.Context())
+			checkError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func checkError(tb testing.TB, got, want error) {
+	tb.Helper()
+	if (want == nil) != (got == nil) ||
+		(want != nil && got != nil && want.Error() != got.Error() && !errors.Is(got, want)) {
+		tb.Fatalf("gotErr: %v; wantErr: %v", got, want)
 	}
 }
 

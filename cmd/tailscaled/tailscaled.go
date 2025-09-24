@@ -546,7 +546,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 		}
 	}()
 
-	srv := ipnserver.New(logf, logID, sys.NetMon.Get())
+	srv := ipnserver.New(logf, logID, sys.Bus.Get(), sys.NetMon.Get())
 	if debugMux != nil {
 		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
 	}

@@ -49,6 +49,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/osdiag"
 	"tailscale.com/util/rands"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -112,6 +113,7 @@ var handler = map[string]LocalAPIHandler{
 	"set-push-device-token":        (*Handler).serveSetPushDeviceToken,
 	"set-udp-gro-forwarding":       (*Handler).serveSetUDPGROForwarding,
 	"set-use-exit-node-enabled":    (*Handler).serveSetUseExitNodeEnabled,
+	"shutdown":                     (*Handler).serveShutdown,
 	"start":                        (*Handler).serveStart,
 	"status":                       (*Handler).serveStatus,
 	"suggest-exit-node":            (*Handler).serveSuggestExitNode,
@@ -2025,4 +2027,39 @@ func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
+}
+
+// Shutdown is an eventbus value published when tailscaled shutdown
+// is requested via LocalAPI. Its only consumer is [ipnserver.Server].
+type Shutdown struct{}
+
+// serveShutdown shuts down tailscaled. It requires write access
+// and the [pkey.AllowTailscaledRestart] policy to be enabled.
+// See tailscale/corp#32674.
+func (h *Handler) serveShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.POST {
+		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !h.PermitWrite {
+		http.Error(w, "shutdown access denied", http.StatusForbidden)
+		return
+	}
+
+	polc := h.b.Sys().PolicyClientOrDefault()
+	if permitShutdown, _ := polc.GetBoolean(pkey.AllowTailscaledRestart, false); !permitShutdown {
+		http.Error(w, "shutdown access denied by policy", http.StatusForbidden)
+		return
+	}
+
+	ec := h.eventBus.Client("localapi.Handler")
+	defer ec.Close()
+
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	eventbus.Publish[Shutdown](ec).Publish(Shutdown{})
 }

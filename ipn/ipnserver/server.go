@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
@@ -40,6 +41,7 @@ import (
 type Server struct {
 	lb           atomic.Pointer[ipnlocal.LocalBackend]
 	logf         logger.Logf
+	bus          *eventbus.Bus
 	netMon       *netmon.Monitor // must be non-nil
 	backendLogID logid.PublicID
 
@@ -446,13 +448,14 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (o
 //
 // At some point, either before or after Run, the Server's SetLocalBackend
 // method must also be called before Server can do anything useful.
-func New(logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) *Server {
+func New(logf logger.Logf, logID logid.PublicID, bus *eventbus.Bus, netMon *netmon.Monitor) *Server {
 	if netMon == nil {
 		panic("nil netMon")
 	}
 	return &Server{
 		backendLogID: logID,
 		logf:         logf,
+		bus:          bus,
 		netMon:       netMon,
 	}
 }
@@ -494,10 +497,16 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	runDone := make(chan struct{})
 	defer close(runDone)
 
-	// When the context is closed or when we return, whichever is first, close our listener
+	ec := s.bus.Client("ipnserver.Server")
+	defer ec.Close()
+	shutdownSub := eventbus.Subscribe[localapi.Shutdown](ec)
+
+	// When the context is closed, a [localapi.Shutdown] event is received,
+	// or when we return, whichever is first, close our listener
 	// and all open connections.
 	go func() {
 		select {
+		case <-shutdownSub.Events():
 		case <-ctx.Done():
 		case <-runDone:
 		}
