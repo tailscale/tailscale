@@ -57,8 +57,6 @@ import (
 	"tailscale.com/version"
 )
 
-type Conn = derp.Conn
-
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.NodePublic]bool{}
@@ -181,7 +179,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	closed   bool
-	netConns map[Conn]chan struct{} // chan is closed when conn closes
+	netConns map[derp.Conn]chan struct{} // chan is closed when conn closes
 	clients  map[key.NodePublic]*clientSet
 	watchers set.Set[*sclient] // mesh peers
 	// clientsMesh tracks all clients in the cluster, both locally
@@ -354,9 +352,9 @@ var bytesDropped = metrics.NewMultiLabelMap[dropReasonKindLabels](
 	"DERP bytes dropped by reason and by kind",
 )
 
-// NewServer returns a new DERP server. It doesn't listen on its own.
+// New returns a new DERP server. It doesn't listen on its own.
 // Connections are given to it via Server.Accept.
-func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
+func New(privateKey key.NodePrivate, logf logger.Logf) *Server {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 
@@ -369,7 +367,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		packetsRecvByKind:   metrics.LabelMap{Label: "kind"},
 		clients:             map[key.NodePublic]*clientSet{},
 		clientsMesh:         map[key.NodePublic]PacketForwarder{},
-		netConns:            map[Conn]chan struct{}{},
+		netConns:            map[derp.Conn]chan struct{}{},
 		memSys0:             ms.Sys,
 		watchers:            set.Set[*sclient]{},
 		peerGoneWatchers:    map[key.NodePublic]set.HandleSet[func(key.NodePublic)]{},
@@ -570,7 +568,7 @@ func (s *Server) IsClientConnectedForTest(k key.NodePublic) bool {
 // on its own.
 //
 // Accept closes nc.
-func (s *Server) Accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
+func (s *Server) Accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter, remoteAddr string) {
 	closed := make(chan struct{})
 
 	s.mu.Lock()
@@ -910,7 +908,7 @@ func (s *Server) addWatcher(c *sclient) {
 	go c.requestMeshUpdate()
 }
 
-func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
+func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
 	br := brw.Reader
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
 	bw := &lazyBufioWriter{w: nc, lbw: brw.Writer}
@@ -1619,7 +1617,7 @@ type sclient struct {
 	// Static after construction.
 	connNum        int64 // process-wide unique counter, incremented each Accept
 	s              *Server
-	nc             Conn
+	nc             derp.Conn
 	key            key.NodePublic
 	info           derp.ClientInfo
 	logf           logger.Logf

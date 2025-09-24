@@ -611,7 +611,7 @@ func newDERPServer() *derpServer {
 	ts.Close()
 
 	ds := &derpServer{
-		srv:       derpserver.NewServer(key.NewNode(), logger.Discard),
+		srv:       derpserver.New(key.NewNode(), logger.Discard),
 		tlsConfig: ts.TLS, // self-signed; test client configure to not check
 	}
 	var mux http.ServeMux

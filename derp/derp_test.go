@@ -83,7 +83,7 @@ func TestClientInfoUnmarshal(t *testing.T) {
 
 func TestSendRecv(t *testing.T) {
 	serverPrivateKey := key.NewNode()
-	s := derpserver.NewServer(serverPrivateKey, t.Logf)
+	s := derpserver.New(serverPrivateKey, t.Logf)
 	defer s.Close()
 
 	const numClients = 3
@@ -305,7 +305,7 @@ func TestSendRecv(t *testing.T) {
 
 func TestSendFreeze(t *testing.T) {
 	serverPrivateKey := key.NewNode()
-	s := derpserver.NewServer(serverPrivateKey, t.Logf)
+	s := derpserver.New(serverPrivateKey, t.Logf)
 	defer s.Close()
 	s.WriteTimeout = 100 * time.Millisecond
 
@@ -549,7 +549,7 @@ const testMeshKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789a
 func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	t.Helper()
 	logf := logger.WithPrefix(t.Logf, "derp-server: ")
-	s := derpserver.NewServer(key.NewNode(), logf)
+	s := derpserver.New(key.NewNode(), logf)
 	s.SetMeshKey(testMeshKey)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

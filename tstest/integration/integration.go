@@ -296,7 +296,7 @@ func exe() string {
 func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *tailcfg.DERPMap) {
 	t.Helper()
 
-	d := derpserver.NewServer(key.NewNode(), logf)
+	d := derpserver.New(key.NewNode(), logf)
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(ipAddress, "0"))
 	if err != nil {

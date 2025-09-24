@@ -146,7 +146,7 @@ func TestDerpProber(t *testing.T) {
 func TestRunDerpProbeNodePair(t *testing.T) {
 	// os.Setenv("DERP_DEBUG_LOGS", "true")
 	serverPrivateKey := key.NewNode()
-	s := derpserver.NewServer(serverPrivateKey, t.Logf)
+	s := derpserver.New(serverPrivateKey, t.Logf)
 	defer s.Close()
 
 	httpsrv := &http.Server{

@@ -330,7 +330,7 @@ func TestMultiForwarder(t *testing.T) {
 func TestMetaCert(t *testing.T) {
 	priv := key.NewNode()
 	pub := priv.Public()
-	s := NewServer(priv, t.Logf)
+	s := New(priv, t.Logf)
 
 	certBytes := s.MetaCert()
 	cert, err := x509.ParseCertificate(certBytes)
@@ -368,7 +368,7 @@ func TestServerDupClients(t *testing.T) {
 
 	// run starts a new test case and resets clients back to their zero values.
 	run := func(name string, dupPolicy dupPolicy, f func(t *testing.T)) {
-		s = NewServer(serverPriv, t.Logf)
+		s = New(serverPriv, t.Logf)
 		s.dupPolicy = dupPolicy
 		c1 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c1: ")}
 		c2 = &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, "c2: ")}
@@ -618,7 +618,7 @@ func TestLimiter(t *testing.T) {
 // single Server instance with multiple concurrent client flows.
 func BenchmarkConcurrentStreams(b *testing.B) {
 	serverPrivateKey := key.NewNode()
-	s := NewServer(serverPrivateKey, logger.Discard)
+	s := New(serverPrivateKey, logger.Discard)
 	defer s.Close()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -688,7 +688,7 @@ func BenchmarkSendRecv(b *testing.B) {
 
 func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	serverPrivateKey := key.NewNode()
-	s := NewServer(serverPrivateKey, logger.Discard)
+	s := New(serverPrivateKey, logger.Discard)
 	defer s.Close()
 
 	k := key.NewNode()
