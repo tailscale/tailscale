@@ -1118,8 +1118,6 @@ func (b *LocalBackend) Shutdown() {
 	if b.notifyCancel != nil {
 		b.notifyCancel()
 	}
-	extHost := b.extHost
-	b.extHost = nil
 	b.mu.Unlock()
 	b.webClientShutdown()
 
@@ -1136,7 +1134,7 @@ func (b *LocalBackend) Shutdown() {
 	}
 	b.ctxCancel(errShutdown)
 	b.currentNode().shutdown(errShutdown)
-	extHost.Shutdown()
+	b.extHost.Shutdown()
 	b.e.Close()
 	<-b.e.Done()
 	b.awaitNoGoroutinesInTest()
