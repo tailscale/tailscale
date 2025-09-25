@@ -392,6 +392,23 @@ type LocalBackend struct {
 	//
 	// See tailscale/corp#29969.
 	overrideExitNodePolicy bool
+
+	// hardwareAttested is whether backend should use a hardware-backed key to
+	// bind the node identity to this device.
+	hardwareAttested atomic.Bool
+}
+
+// SetHardwareAttested enables hardware attestation key signatures in map
+// requests, if supported on this platform. SetHardwareAttested should be called
+// before Start.
+func (b *LocalBackend) SetHardwareAttested() {
+	b.hardwareAttested.Store(true)
+}
+
+// HardwareAttested reports whether hardware-backed attestation keys should be
+// used to bind the node's identity to this device.
+func (b *LocalBackend) HardwareAttested() bool {
+	return b.hardwareAttested.Load()
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -2455,10 +2472,23 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if b.reconcilePrefsLocked(newPrefs) {
 		prefsChanged = true
 	}
+
+	// neither UpdatePrefs or reconciliation should change Persist
+	newPrefs.Persist = b.pm.CurrentPrefs().Persist().AsStruct()
+
+	if buildfeatures.HasTPM {
+		if genKey, ok := feature.HookGenerateAttestationKeyIfEmpty.GetOk(); ok {
+			newKey, err := genKey(newPrefs.Persist, b.logf)
+			if err != nil {
+				b.logf("failed to populate attestation key from TPM: %v", err)
+			}
+			if newKey {
+				prefsChanged = true
+			}
+		}
+	}
+
 	if prefsChanged {
-		// Neither opts.UpdatePrefs nor prefs reconciliation
-		// is allowed to modify Persist; retain the old value.
-		newPrefs.Persist = b.pm.CurrentPrefs().Persist().AsStruct()
 		if err := b.pm.SetPrefs(newPrefs.View(), cn.NetworkProfile()); err != nil {
 			b.logf("failed to save updated and reconciled prefs: %v", err)
 		}
@@ -2490,8 +2520,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	discoPublic := b.MagicConn().DiscoPublicKey()
-
-	var err error
 
 	isNetstack := b.sys.IsNetstackRouter()
 	debugFlags := controlDebugFlags

@@ -151,6 +151,7 @@ func TestProfileDupe(t *testing.T) {
 				ID:        tailcfg.UserID(user),
 				LoginName: fmt.Sprintf("user%d@example.com", user),
 			},
+			AttestationKey: nil,
 		}
 	}
 	user1Node1 := newPersist(1, 1)

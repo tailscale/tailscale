@@ -142,13 +142,18 @@ type attestationKeySerialized struct {
 	TPMPublic  []byte `json:"tpmPublic"`
 }
 
+// MarshalJSON implements json.Marshaler.
 func (ak *attestationKey) MarshalJSON() ([]byte, error) {
+	if ak == nil || ak.IsZero() {
+		return []byte("null"), nil
+	}
 	return json.Marshal(attestationKeySerialized{
 		TPMPublic:  ak.tpmPublic.Bytes(),
 		TPMPrivate: ak.tpmPrivate.Buffer,
 	})
 }
 
+// UnmarshalJSON implements json.Unmarshaler.
 func (ak *attestationKey) UnmarshalJSON(data []byte) (retErr error) {
 	var aks attestationKeySerialized
 	if err := json.Unmarshal(data, &aks); err != nil {
@@ -254,6 +259,9 @@ func (ak *attestationKey) Close() error {
 }
 
 func (ak *attestationKey) Clone() key.HardwareAttestationKey {
+	if ak == nil {
+		return nil
+	}
 	return &attestationKey{
 		tpm:        ak.tpm,
 		tpmPrivate: ak.tpmPrivate,
@@ -263,4 +271,9 @@ func (ak *attestationKey) Clone() key.HardwareAttestationKey {
 	}
 }
 
-func (ak *attestationKey) IsZero() bool { return !ak.loaded() }
+func (ak *attestationKey) IsZero() bool {
+	if ak == nil {
+		return true
+	}
+	return !ak.loaded()
+}
