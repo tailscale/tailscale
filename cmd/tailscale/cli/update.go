@@ -87,5 +87,5 @@ func confirmUpdate(ver string) bool {
 	}
 
 	msg := fmt.Sprintf("This will update Tailscale from %v to %v. Continue?", version.Short(), ver)
-	return prompt.YesNo(msg)
+	return prompt.YesNo(msg, true)
 }
