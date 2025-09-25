@@ -143,6 +143,9 @@ type attestationKeySerialized struct {
 }
 
 func (ak *attestationKey) MarshalJSON() ([]byte, error) {
+	if ak == nil || ak.IsZero() {
+		return []byte("null"), nil
+	}
 	return json.Marshal(attestationKeySerialized{
 		TPMPublic:  ak.tpmPublic.Bytes(),
 		TPMPrivate: ak.tpmPrivate.Buffer,
@@ -254,6 +257,9 @@ func (ak *attestationKey) Close() error {
 }
 
 func (ak *attestationKey) Clone() key.HardwareAttestationKey {
+	if ak == nil {
+		return nil
+	}
 	return &attestationKey{
 		tpm:        ak.tpm,
 		tpmPrivate: ak.tpmPrivate,

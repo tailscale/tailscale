@@ -151,6 +151,7 @@ func TestProfileDupe(t *testing.T) {
 				ID:        tailcfg.UserID(user),
 				LoginName: fmt.Sprintf("user%d@example.com", user),
 			},
+			AttestationKey: nil,
 		}
 	}
 	user1Node1 := newPersist(1, 1)
@@ -607,6 +608,7 @@ func TestDefaultPrefs(t *testing.T) {
 	p1 := ipn.NewPrefs()
 	p1.LoggedOut = true
 	p1.WantRunning = false
+	p1.Persist = nil
 	p2 := defaultPrefs
 	if !p1.View().Equals(p2) {
 		t.Errorf("defaultPrefs is %s, want %s; defaultPrefs should only modify WantRunning and LoggedOut, all other defaults should be in ipn.NewPrefs.", p2.Pretty(), p1.Pretty())
