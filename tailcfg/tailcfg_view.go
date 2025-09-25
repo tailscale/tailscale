@@ -21,7 +21,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,ExtraCapMapValue
 
 // View returns a read-only view of User.
 func (p *User) View() UserView {
@@ -302,6 +302,11 @@ func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.Slic
 func (v NodeView) CapMap() views.MapSlice[NodeCapability, RawMessage] {
 	return views.MapSliceOf(v.ж.CapMap)
 }
+func (v NodeView) ExtraCapMap() views.MapFn[NodeCapability, ExtraCapMapValue, ExtraCapMapValueView] {
+	return views.MapFnOf(v.ж.ExtraCapMap, func(t ExtraCapMapValue) ExtraCapMapValueView {
+		return t.View()
+	})
+}
 
 // UnsignedPeerAPIOnly means that this node is not signed nor subject to TKA
 // restrictions. However, in exchange for that privilege, it does not get
@@ -404,6 +409,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	MachineAuthorized             bool
 	Capabilities                  []NodeCapability
 	CapMap                        NodeCapMap
+	ExtraCapMap                   ExtraCapMap
 	UnsignedPeerAPIOnly           bool
 	ComputedName                  string
 	computedHostIfDifferent       string
@@ -2605,4 +2611,80 @@ var _VIPServiceViewNeedsRegeneration = VIPService(struct {
 	Name   ServiceName
 	Ports  []ProtoPortRange
 	Active bool
+}{})
+
+// View returns a read-only view of ExtraCapMapValue.
+func (p *ExtraCapMapValue) View() ExtraCapMapValueView {
+	return ExtraCapMapValueView{ж: p}
+}
+
+// ExtraCapMapValueView provides a read-only view over ExtraCapMapValue.
+//
+// Its methods should only be called if `Valid()` returns true.
+type ExtraCapMapValueView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *ExtraCapMapValue
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v ExtraCapMapValueView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v ExtraCapMapValueView) AsStruct() *ExtraCapMapValue {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v ExtraCapMapValueView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v ExtraCapMapValueView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *ExtraCapMapValueView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x ExtraCapMapValue
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *ExtraCapMapValueView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x ExtraCapMapValue
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v ExtraCapMapValueView) Expiry() time.Time              { return v.ж.Expiry }
+func (v ExtraCapMapValueView) Value() views.Slice[RawMessage] { return views.SliceOf(v.ж.Value) }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _ExtraCapMapValueViewNeedsRegeneration = ExtraCapMapValue(struct {
+	Expiry time.Time
+	Value  []RawMessage
 }{})

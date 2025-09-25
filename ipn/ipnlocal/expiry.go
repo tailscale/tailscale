@@ -153,6 +153,39 @@ func (em *expiryManager) flagExpiredPeers(netmap *netmap.NetworkMap, localNow ti
 	}
 }
 
+func (em *expiryManager) expireNodeCaps(netmap *netmap.NetworkMap, localNow time.Time) {
+	controlNow := localNow.Add(em.clockDelta.Load())
+	if controlNow.Before(flagExpiredPeersEpoch) {
+		em.logf("netmap: expireNodeCaps: [unexpected] delta-adjusted current time is before hardcoded epoch; skipping")
+		return
+	}
+	expireCaps := func(n *tailcfg.Node) (changed bool) {
+		if len(n.ExtraCapMap) == 0 {
+			return false
+		}
+		for capName, cap := range n.ExtraCapMap {
+			if !cap.Expiry.IsZero() && cap.Expiry.Before(controlNow) {
+				delete(n.ExtraCapMap, capName)
+				changed = true
+			}
+		}
+		return changed
+	}
+	if netmap.SelfNode.Valid() {
+		// TODO(anton): don't clone if there's nothing to change.
+		self := netmap.SelfNode.AsStruct()
+		if expireCaps(self) {
+			netmap.SelfNode = self.View()
+		}
+	}
+	for i, peer := range netmap.Peers {
+		p := peer.AsStruct()
+		if expireCaps(p) {
+			netmap.Peers[i] = p.View()
+		}
+	}
+}
+
 // nextPeerExpiry returns the time that the next node in the netmap expires
 // (including the self node), based on their KeyExpiry. It skips nodes that are
 // already marked as Expired. If there are no nodes expiring in the future,
@@ -174,43 +207,42 @@ func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Tim
 	}
 
 	var nextExpiry time.Time // zero if none
-	for _, peer := range nm.Peers {
-		if peer.KeyExpiry().IsZero() {
-			continue // tagged node
-		} else if peer.Expired() {
-			// Peer already expired; Expired is set by the
-			// flagExpiredPeers function, above.
-			continue
-		} else if peer.KeyExpiry().Before(controlNow) {
-			// This peer already expired, and peer.Expired
-			// isn't set for some reason. Skip this node.
-			continue
+	update := func(expiry time.Time) {
+		if expiry.IsZero() {
+			return
 		}
-
 		// nextExpiry being zero is a sentinel that we haven't yet set
 		// an expiry; otherwise, only update if this node's expiry is
 		// sooner than the currently-stored one (since we want the
 		// soonest-occurring expiry time).
-		if nextExpiry.IsZero() || peer.KeyExpiry().Before(nextExpiry) {
-			nextExpiry = peer.KeyExpiry()
+		if nextExpiry.IsZero() || expiry.Before(nextExpiry) {
+			nextExpiry = expiry
 		}
+	}
+	handleNode := func(n tailcfg.NodeView) {
+		if n.KeyExpiry().IsZero() {
+			// tagged node
+		} else if n.Expired() {
+			// Already expired; Expired is set by the
+			// flagExpiredPeers function, above.
+		} else if n.KeyExpiry().Before(controlNow) {
+			// Already expired, but Expired
+			// isn't set for some reason. Skip it.
+		} else {
+			update(n.KeyExpiry())
+		}
+		// Also handle expiring caps.
+		for _, c := range n.ExtraCapMap().All() {
+			update(c.Expiry())
+		}
+	}
+	for _, peer := range nm.Peers {
+		handleNode(peer)
 	}
 
 	// Ensure that we also fire this timer if our own node key expires.
 	if nm.SelfNode.Valid() {
-		selfExpiry := nm.SelfNode.KeyExpiry()
-
-		if selfExpiry.IsZero() {
-			// No expiry for self node
-		} else if selfExpiry.Before(controlNow) {
-			// Self node already expired; we don't want to return a
-			// time in the past, so skip this.
-		} else if nextExpiry.IsZero() || selfExpiry.Before(nextExpiry) {
-			// Self node expires after now, but before the soonest
-			// peer in the netmap; update our next expiry to this
-			// time.
-			nextExpiry = selfExpiry
-		}
+		handleNode(nm.SelfNode)
 	}
 
 	// As an additional defense in depth, never return a time that is

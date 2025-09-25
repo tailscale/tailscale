@@ -5,7 +5,7 @@
 // the node and the coordination server.
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,ExtraCapMapValue --clonefunc
 
 import (
 	"bytes"
@@ -442,6 +442,8 @@ type Node struct {
 	//    for a particular task vs other peers that could also be chosen.
 	CapMap NodeCapMap `json:",omitempty"`
 
+	ExtraCapMap ExtraCapMap `json:",omitempty"`
+
 	// UnsignedPeerAPIOnly means that this node is not signed nor subject to TKA
 	// restrictions. However, in exchange for that privilege, it does not get
 	// network access. It can only access this node's peerapi, which may not let
@@ -522,7 +524,16 @@ func (v NodeView) HasCap(cap NodeCapability) bool {
 // HasCap reports whether the node has the given capability.
 // It is safe to call on a nil Node.
 func (v *Node) HasCap(cap NodeCapability) bool {
-	return v != nil && v.CapMap.Contains(cap)
+	if v == nil {
+		return false
+	}
+	if v.CapMap.Contains(cap) {
+		return true
+	}
+	if v.ExtraCapMap.Contains(cap) {
+		return true
+	}
+	return false
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -1548,6 +1559,23 @@ const (
 	PeerCapabilityTsIDP PeerCapability = "tailscale.com/cap/tsidp"
 )
 
+type ExtraCapMap map[NodeCapability]ExtraCapMapValue
+
+type ExtraCapMapValue struct {
+	Expiry time.Time
+	Value  []RawMessage
+}
+
+func (c ExtraCapMap) Contains(cap NodeCapability) bool {
+	_, ok := c[cap]
+	return ok
+}
+func (c ExtraCapMap) Equal(c2 ExtraCapMap) bool {
+	return maps.EqualFunc(c, c2, func(v1, v2 ExtraCapMapValue) bool {
+		return v1.Expiry.Equal(v2.Expiry) && slices.Equal(v1.Value, v2.Value)
+	})
+}
+
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
 // a capability to have no values (nil slice); such capabilities can be tested
 // for by using the [NodeCapMap.Contains] method.
@@ -2348,6 +2376,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.MachineAuthorized == n2.MachineAuthorized &&
 		slices.Equal(n.Capabilities, n2.Capabilities) &&
 		n.CapMap.Equal(n2.CapMap) &&
+		n.ExtraCapMap.Equal(n2.ExtraCapMap) &&
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&

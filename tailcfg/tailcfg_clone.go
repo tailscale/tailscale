@@ -65,6 +65,12 @@ func (src *Node) Clone() *Node {
 			dst.CapMap[k] = append([]RawMessage{}, src.CapMap[k]...)
 		}
 	}
+	if dst.ExtraCapMap != nil {
+		dst.ExtraCapMap = map[NodeCapability]ExtraCapMapValue{}
+		for k, v := range src.ExtraCapMap {
+			dst.ExtraCapMap[k] = *(v.Clone())
+		}
+	}
 	if dst.SelfNodeV4MasqAddrForThisPeer != nil {
 		dst.SelfNodeV4MasqAddrForThisPeer = ptr.To(*src.SelfNodeV4MasqAddrForThisPeer)
 	}
@@ -111,6 +117,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	MachineAuthorized             bool
 	Capabilities                  []NodeCapability
 	CapMap                        NodeCapMap
+	ExtraCapMap                   ExtraCapMap
 	UnsignedPeerAPIOnly           bool
 	ComputedName                  string
 	computedHostIfDifferent       string
@@ -652,9 +659,27 @@ var _VIPServiceCloneNeedsRegeneration = VIPService(struct {
 	Active bool
 }{})
 
+// Clone makes a deep copy of ExtraCapMapValue.
+// The result aliases no memory with the original.
+func (src *ExtraCapMapValue) Clone() *ExtraCapMapValue {
+	if src == nil {
+		return nil
+	}
+	dst := new(ExtraCapMapValue)
+	*dst = *src
+	dst.Value = append(src.Value[:0:0], src.Value...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _ExtraCapMapValueCloneNeedsRegeneration = ExtraCapMapValue(struct {
+	Expiry time.Time
+	Value  []RawMessage
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile,VIPService,ExtraCapMapValue.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -834,6 +859,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **VIPService:
+			*dst = src.Clone()
+			return true
+		}
+	case *ExtraCapMapValue:
+		switch dst := dst.(type) {
+		case *ExtraCapMapValue:
+			*dst = *src.Clone()
+			return true
+		case **ExtraCapMapValue:
 			*dst = src.Clone()
 			return true
 		}

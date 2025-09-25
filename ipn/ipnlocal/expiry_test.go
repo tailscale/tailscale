@@ -15,6 +15,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/mak"
 )
 
 func TestFlagExpiredPeers(t *testing.T) {
@@ -237,6 +238,32 @@ func TestNextPeerExpiry(t *testing.T) {
 				SelfNode: n(2, "self", timeInPast).View(),
 			},
 			want: noExpiry,
+		},
+		{
+			name: "self_attribute",
+			netmap: &netmap.NetworkMap{
+				Peers: nodeViews([]*tailcfg.Node{
+					n(1, "foo", timeInMoreFuture, func(n *tailcfg.Node) {
+						mak.Set(&n.ExtraCapMap, "foo", tailcfg.ExtraCapMapValue{Expiry: timeInMoreFuture})
+					}),
+				}),
+				SelfNode: n(2, "self", noExpiry, func(n *tailcfg.Node) {
+					mak.Set(&n.ExtraCapMap, "foo", tailcfg.ExtraCapMapValue{Expiry: timeInFuture})
+				}).View(),
+			},
+			want: timeInFuture,
+		},
+		{
+			name: "peer_attribute",
+			netmap: &netmap.NetworkMap{
+				Peers: nodeViews([]*tailcfg.Node{
+					n(1, "foo", timeInMoreFuture, func(n *tailcfg.Node) {
+						mak.Set(&n.ExtraCapMap, "foo", tailcfg.ExtraCapMapValue{Expiry: timeInFuture})
+					}),
+				}),
+				SelfNode: n(2, "self", timeInMoreFuture).View(),
+			},
+			want: timeInFuture,
 		},
 	}
 

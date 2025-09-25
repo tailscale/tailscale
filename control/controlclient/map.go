@@ -173,6 +173,7 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 		if DevKnob.StripCaps() {
 			resp.Node.Capabilities = nil
 			resp.Node.CapMap = nil
+			resp.Node.ExtraCapMap = nil
 		}
 		// If the server is old and is still sending us Capabilities instead of
 		// CapMap, convert it to CapMap early so the rest of the client code can

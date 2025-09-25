@@ -1575,6 +1575,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if st.NetMap != nil {
 		now := b.clock.Now()
 		b.em.flagExpiredPeers(st.NetMap, now)
+		b.em.expireNodeCaps(st.NetMap, now)
 
 		// Always stop the existing netmap timer if we have a netmap;
 		// it's possible that we have no nodes expiring, so we should
