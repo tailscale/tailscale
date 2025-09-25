@@ -29,7 +29,7 @@ type Client struct {
 
 func (c *Client) Name() string { return c.name }
 
-// Close closes the client. Implicitly closes all publishers and
+// Close closes the client. It implicitly closes all publishers and
 // subscribers obtained from this client.
 func (c *Client) Close() {
 	var (

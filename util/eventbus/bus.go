@@ -77,7 +77,7 @@ func (b *Bus) Debugger() *Debugger {
 	return &Debugger{b}
 }
 
-// Close closes the bus. Implicitly closes all clients, publishers and
+// Close closes the bus. It implicitly closes all clients, publishers and
 // subscribers attached to the bus.
 //
 // Close blocks until the bus is fully shut down. The bus is
