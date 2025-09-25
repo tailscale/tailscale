@@ -40,10 +40,10 @@ const (
 // dnsRecordsReconciler knows how to update dnsrecords ConfigMap with DNS
 // records.
 // The records that it creates are:
-//   - For tailscale Ingress, a mapping of the Ingress's MagicDNSName to the IP address of
-//     the ingress proxy Pod.
+//   - For tailscale Ingress, a mapping of the Ingress's MagicDNSName to the IP addresses
+//     (both IPv4 and IPv6) of the ingress proxy Pod.
 //   - For egress proxies configured via tailscale.com/tailnet-fqdn annotation, a
-//     mapping of the tailnet FQDN to the IP address of the egress proxy Pod.
+//     mapping of the tailnet FQDN to the IP addresses (both IPv4 and IPv6) of the egress proxy Pod.
 //
 // Records will only be created if there is exactly one ready
 // tailscale.com/v1alpha1.DNSConfig instance in the cluster (so that we know
@@ -122,16 +122,16 @@ func (dnsRR *dnsRecordsReconciler) Reconcile(ctx context.Context, req reconcile.
 // For Ingress, the record is a mapping between the MagicDNSName of the Ingress, retrieved from
 // ingress.status.loadBalancer.ingress.hostname field and the proxy Pod IP addresses
 // retrieved from the EndpointSlice associated with this Service, i.e
-// Records{IP4: <MagicDNS name of the Ingress>: <[IPs of the ingress proxy Pods]>}
+// Records{IP4: {<MagicDNS name>: <[IPv4 addresses]>}, IP6: {<MagicDNS name>: <[IPv6 addresses]>}}
 //
 // For egress, the record is a mapping between tailscale.com/tailnet-fqdn
 // annotation and the proxy Pod IP addresses, retrieved from the EndpointSlice
 // associated with this Service, i.e
-// Records{IP4: {<tailscale.com/tailnet-fqdn>: <[IPs of the egress proxy Pods]>}
+// Records{IP4: {<tailnet-fqdn>: <[IPv4 addresses]>}, IP6: {<tailnet-fqdn>: <[IPv6 addresses]>}}
 //
 // For ProxyGroup egress, the record is a mapping between tailscale.com/magic-dnsname
-// annotation and the ClusterIP Service IP (which provides portmapping), i.e
-// Records{IP4: {<tailscale.com/magic-dnsname>: <[ClusterIP Service IP]>}
+// annotation and the ClusterIP Service IPs (which provides portmapping), i.e
+// Records{IP4: {<magic-dnsname>: <[IPv4 ClusterIPs]>}, IP6: {<magic-dnsname>: <[IPv6 ClusterIPs]>}}
 //
 // If records need to be created for this proxy, maybeProvision will also:
 // - update the Service with a tailscale.com/magic-dnsname annotation
@@ -178,17 +178,22 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, proxySvc 
 	}
 
 	// Get the IP addresses for the DNS record
-	ips, err := dnsRR.getTargetIPs(ctx, proxySvc, logger)
+	ip4s, ip6s, err := dnsRR.getTargetIPs(ctx, proxySvc, logger)
 	if err != nil {
 		return fmt.Errorf("error getting target IPs: %w", err)
 	}
-	if len(ips) == 0 {
+	if len(ip4s) == 0 && len(ip6s) == 0 {
 		logger.Debugf("No target IP addresses available yet. We will reconcile again once they are available.")
 		return nil
 	}
 
 	updateFunc := func(rec *operatorutils.Records) {
-		mak.Set(&rec.IP4, fqdn, ips)
+		if len(ip4s) > 0 {
+			mak.Set(&rec.IP4, fqdn, ip4s)
+		}
+		if len(ip6s) > 0 {
+			mak.Set(&rec.IP6, fqdn, ip6s)
+		}
 	}
 	if err = dnsRR.updateDNSConfig(ctx, updateFunc); err != nil {
 		return fmt.Errorf("error updating DNS records: %w", err)
@@ -212,42 +217,45 @@ func epIsReady(ep *discoveryv1.Endpoint) bool {
 // has been removed from the Service. If the record is not found in the
 // ConfigMap, the ConfigMap does not exist, or the Service does not have
 // tailscale.com/magic-dnsname annotation, just remove the finalizer.
-func (h *dnsRecordsReconciler) maybeCleanup(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) error {
+func (dnsRR *dnsRecordsReconciler) maybeCleanup(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) error {
 	ix := slices.Index(proxySvc.Finalizers, dnsRecordsRecocilerFinalizer)
 	if ix == -1 {
 		logger.Debugf("no finalizer, nothing to do")
 		return nil
 	}
 	cm := &corev1.ConfigMap{}
-	err := h.Client.Get(ctx, types.NamespacedName{Name: operatorutils.DNSRecordsCMName, Namespace: h.tsNamespace}, cm)
+	err := dnsRR.Client.Get(ctx, types.NamespacedName{Name: operatorutils.DNSRecordsCMName, Namespace: dnsRR.tsNamespace}, cm)
 	if apierrors.IsNotFound(err) {
 		logger.Debug("'dnsrecords' ConfigMap not found")
-		return h.removeProxySvcFinalizer(ctx, proxySvc)
+		return dnsRR.removeProxySvcFinalizer(ctx, proxySvc)
 	}
 	if err != nil {
 		return fmt.Errorf("error retrieving 'dnsrecords' ConfigMap: %w", err)
 	}
 	if cm.Data == nil {
 		logger.Debug("'dnsrecords' ConfigMap contains no records")
-		return h.removeProxySvcFinalizer(ctx, proxySvc)
+		return dnsRR.removeProxySvcFinalizer(ctx, proxySvc)
 	}
 	_, ok := cm.Data[operatorutils.DNSRecordsCMKey]
 	if !ok {
 		logger.Debug("'dnsrecords' ConfigMap contains no records")
-		return h.removeProxySvcFinalizer(ctx, proxySvc)
+		return dnsRR.removeProxySvcFinalizer(ctx, proxySvc)
 	}
-	fqdn, _ := proxySvc.GetAnnotations()[annotationTSMagicDNSName]
+	fqdn := proxySvc.GetAnnotations()[annotationTSMagicDNSName]
 	if fqdn == "" {
-		return h.removeProxySvcFinalizer(ctx, proxySvc)
+		return dnsRR.removeProxySvcFinalizer(ctx, proxySvc)
 	}
 	logger.Infof("removing DNS record for MagicDNS name %s", fqdn)
 	updateFunc := func(rec *operatorutils.Records) {
 		delete(rec.IP4, fqdn)
+		if rec.IP6 != nil {
+			delete(rec.IP6, fqdn)
+		}
 	}
-	if err = h.updateDNSConfig(ctx, updateFunc); err != nil {
+	if err = dnsRR.updateDNSConfig(ctx, updateFunc); err != nil {
 		return fmt.Errorf("error updating DNS config: %w", err)
 	}
-	return h.removeProxySvcFinalizer(ctx, proxySvc)
+	return dnsRR.removeProxySvcFinalizer(ctx, proxySvc)
 }
 
 func (dnsRR *dnsRecordsReconciler) removeProxySvcFinalizer(ctx context.Context, proxySvc *corev1.Service) error {
@@ -383,72 +391,106 @@ func (dnsRR *dnsRecordsReconciler) parentSvcTargetsFQDN(ctx context.Context, svc
 	return parentSvc.Annotations[AnnotationTailnetTargetFQDN] != ""
 }
 
-// getTargetIPs returns the IP addresses that should be used for DNS records
+// getTargetIPs returns the IPv4 and IPv6 addresses that should be used for DNS records
 // for the given proxy Service.
-func (dnsRR *dnsRecordsReconciler) getTargetIPs(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
+func (dnsRR *dnsRecordsReconciler) getTargetIPs(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, []string, error) {
 	if dnsRR.isProxyGroupEgressService(proxySvc) {
 		return dnsRR.getClusterIPServiceIPs(proxySvc, logger)
 	}
 	return dnsRR.getPodIPs(ctx, proxySvc, logger)
 }
 
-// getClusterIPServiceIPs returns the ClusterIP of a ProxyGroup egress Service.
-func (dnsRR *dnsRecordsReconciler) getClusterIPServiceIPs(proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
+// getClusterIPServiceIPs returns the ClusterIPs of a ProxyGroup egress Service.
+// It separates IPv4 and IPv6 addresses for dual-stack services.
+func (dnsRR *dnsRecordsReconciler) getClusterIPServiceIPs(proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, []string, error) {
+	// Handle services with no ClusterIP
 	if proxySvc.Spec.ClusterIP == "" || proxySvc.Spec.ClusterIP == "None" {
 		logger.Debugf("ProxyGroup egress ClusterIP Service does not have a ClusterIP yet.")
-		return nil, nil
+		return nil, nil, nil
 	}
-	// Validate that ClusterIP is a valid IPv4 address
-	if !net.IsIPv4String(proxySvc.Spec.ClusterIP) {
-		logger.Debugf("ClusterIP %s is not a valid IPv4 address", proxySvc.Spec.ClusterIP)
-		return nil, fmt.Errorf("ClusterIP %s is not a valid IPv4 address", proxySvc.Spec.ClusterIP)
+
+	var ip4s, ip6s []string
+
+	// Check all ClusterIPs for dual-stack support
+	clusterIPs := proxySvc.Spec.ClusterIPs
+	if len(clusterIPs) == 0 && proxySvc.Spec.ClusterIP != "" {
+		// Fallback to single ClusterIP for backward compatibility
+		clusterIPs = []string{proxySvc.Spec.ClusterIP}
 	}
-	logger.Debugf("Using ClusterIP Service IP %s for ProxyGroup egress DNS record", proxySvc.Spec.ClusterIP)
-	return []string{proxySvc.Spec.ClusterIP}, nil
+
+	for _, ip := range clusterIPs {
+		if net.IsIPv4String(ip) {
+			ip4s = append(ip4s, ip)
+			logger.Debugf("Using IPv4 ClusterIP %s for ProxyGroup egress DNS record", ip)
+		} else if net.IsIPv6String(ip) {
+			ip6s = append(ip6s, ip)
+			logger.Debugf("Using IPv6 ClusterIP %s for ProxyGroup egress DNS record", ip)
+		} else {
+			logger.Debugf("ClusterIP %s is not a valid IP address", ip)
+		}
+	}
+
+	if len(ip4s) == 0 && len(ip6s) == 0 {
+		return nil, nil, fmt.Errorf("no valid ClusterIPs found")
+	}
+
+	return ip4s, ip6s, nil
 }
 
-// getPodIPs returns Pod IP addresses from EndpointSlices for non-ProxyGroup Services.
-func (dnsRR *dnsRecordsReconciler) getPodIPs(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
+// getPodIPs returns Pod IPv4 and IPv6 addresses from EndpointSlices for non-ProxyGroup Services.
+func (dnsRR *dnsRecordsReconciler) getPodIPs(ctx context.Context, proxySvc *corev1.Service, logger *zap.SugaredLogger) ([]string, []string, error) {
 	// Get the Pod IP addresses for the proxy from the EndpointSlices for
 	// the headless Service. The Service can have multiple EndpointSlices
 	// associated with it, for example in dual-stack clusters.
 	labels := map[string]string{discoveryv1.LabelServiceName: proxySvc.Name} // https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
 	var eps = new(discoveryv1.EndpointSliceList)
 	if err := dnsRR.List(ctx, eps, client.InNamespace(dnsRR.tsNamespace), client.MatchingLabels(labels)); err != nil {
-		return nil, fmt.Errorf("error listing EndpointSlices for the proxy's Service: %w", err)
+		return nil, nil, fmt.Errorf("error listing EndpointSlices for the proxy's Service: %w", err)
 	}
 	if len(eps.Items) == 0 {
 		logger.Debugf("proxy's Service EndpointSlice does not yet exist.")
-		return nil, nil
+		return nil, nil, nil
 	}
 	// Each EndpointSlice for a Service can have a list of endpoints that each
 	// can have multiple addresses - these are the IP addresses of any Pods
-	// selected by that Service. Pick all the IPv4 addresses.
+	// selected by that Service. Separate IPv4 and IPv6 addresses.
 	// It is also possible that multiple EndpointSlices have overlapping addresses.
 	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#duplicate-endpoints
-	ips := make(set.Set[string], 0)
+	ip4s := make(set.Set[string], 0)
+	ip6s := make(set.Set[string], 0)
 	for _, slice := range eps.Items {
-		if slice.AddressType != discoveryv1.AddressTypeIPv4 {
-			logger.Infof("EndpointSlice is for AddressType %s, currently only IPv4 address type is supported", slice.AddressType)
-			continue
-		}
 		for _, ep := range slice.Endpoints {
 			if !epIsReady(&ep) {
 				logger.Debugf("Endpoint with addresses %v appears not ready to receive traffic %v", ep.Addresses, ep.Conditions.String())
 				continue
 			}
 			for _, ip := range ep.Addresses {
-				if !net.IsIPv4String(ip) {
-					logger.Infof("EndpointSlice contains IP address %q that is not IPv4, ignoring. Currently only IPv4 is supported", ip)
-				} else {
-					ips.Add(ip)
+				switch slice.AddressType {
+				case discoveryv1.AddressTypeIPv4:
+					if net.IsIPv4String(ip) {
+						ip4s.Add(ip)
+					} else {
+						logger.Debugf("EndpointSlice with AddressType IPv4 contains non-IPv4 address %q, ignoring", ip)
+					}
+				case discoveryv1.AddressTypeIPv6:
+					if net.IsIPv6String(ip) {
+						// Strip zone ID if present (e.g., fe80::1%eth0 -> fe80::1)
+						if idx := strings.IndexByte(ip, '%'); idx != -1 {
+							ip = ip[:idx]
+						}
+						ip6s.Add(ip)
+					} else {
+						logger.Debugf("EndpointSlice with AddressType IPv6 contains non-IPv6 address %q, ignoring", ip)
+					}
+				default:
+					logger.Debugf("EndpointSlice is for unsupported AddressType %s, skipping", slice.AddressType)
 				}
 			}
 		}
 	}
-	if ips.Len() == 0 {
-		logger.Debugf("EndpointSlice for the Service contains no IPv4 addresses.")
-		return nil, nil
+	if ip4s.Len() == 0 && ip6s.Len() == 0 {
+		logger.Debugf("EndpointSlice for the Service contains no IP addresses.")
+		return nil, nil, nil
 	}
-	return ips.Slice(), nil
+	return ip4s.Slice(), ip6s.Slice(), nil
 }

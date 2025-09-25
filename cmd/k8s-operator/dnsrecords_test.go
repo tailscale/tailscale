@@ -99,8 +99,9 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	mustCreate(t, fc, epv6)
 	expectReconciled(t, dnsRR, "tailscale", "egress-fqdn") // dns-records-reconciler reconcile the headless Service
 	// ConfigMap should now have a record for foo.bar.ts.net -> 10.8.8.7
-	wantHosts := map[string][]string{"foo.bar.ts.net": {"10.9.8.7"}} // IPv6 endpoint is currently ignored
-	expectHostsRecords(t, fc, wantHosts)
+	wantHosts := map[string][]string{"foo.bar.ts.net": {"10.9.8.7"}}
+	wantHostsIPv6 := map[string][]string{"foo.bar.ts.net": {"2600:1900:4011:161:0:d:0:d"}}
+	expectHostsRecordsWithIPv6(t, fc, wantHosts, wantHostsIPv6)
 
 	// 2. DNS record is updated if tailscale.com/tailnet-fqdn annotation's
 	// value changes
@@ -271,17 +272,148 @@ func TestDNSRecordsReconcilerErrorCases(t *testing.T) {
 
 	// Test invalid IP format
 	testSvc.Spec.ClusterIP = "invalid-ip"
-	_, err = dnsRR.getClusterIPServiceIPs(testSvc, zl.Sugar())
+	_, _, err = dnsRR.getClusterIPServiceIPs(testSvc, zl.Sugar())
 	if err == nil {
 		t.Error("expected error for invalid IP format")
 	}
 
 	// Test valid IP
 	testSvc.Spec.ClusterIP = "10.0.100.50"
-	_, err = dnsRR.getClusterIPServiceIPs(testSvc, zl.Sugar())
+	ip4s, ip6s, err := dnsRR.getClusterIPServiceIPs(testSvc, zl.Sugar())
 	if err != nil {
 		t.Errorf("unexpected error for valid IP: %v", err)
 	}
+	if len(ip4s) != 1 || ip4s[0] != "10.0.100.50" {
+		t.Errorf("expected IPv4 address 10.0.100.50, got %v", ip4s)
+	}
+	if len(ip6s) != 0 {
+		t.Errorf("expected no IPv6 addresses, got %v", ip6s)
+	}
+}
+
+func TestDNSRecordsReconcilerDualStack(t *testing.T) {
+	// Test dual-stack (IPv4 and IPv6) scenarios
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Preconfigure cluster with DNSConfig
+	dnsCfg := &tsapi.DNSConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		TypeMeta:   metav1.TypeMeta{Kind: "DNSConfig"},
+		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{}},
+	}
+	dnsCfg.Status.Conditions = append(dnsCfg.Status.Conditions, metav1.Condition{
+		Type:   string(tsapi.NameserverReady),
+		Status: metav1.ConditionTrue,
+	})
+
+	// Create dual-stack ingress
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dual-stack-ingress",
+			Namespace: "test",
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+		},
+		Status: networkingv1.IngressStatus{
+			LoadBalancer: networkingv1.IngressLoadBalancerStatus{
+				Ingress: []networkingv1.IngressLoadBalancerIngress{
+					{Hostname: "dual-stack.example.ts.net"},
+				},
+			},
+		},
+	}
+
+	headlessSvc := headlessSvcForParent(ing, "ingress")
+	headlessSvc.Name = "ts-dual-stack-ingress"
+	headlessSvc.SetLabels(map[string]string{
+		kubetypes.LabelManaged: "true",
+		LabelParentName:        "dual-stack-ingress",
+		LabelParentNamespace:   "test",
+		LabelParentType:        "ingress",
+	})
+
+	// Create both IPv4 and IPv6 endpoints
+	epv4 := endpointSliceForService(headlessSvc, "10.1.2.3", discoveryv1.AddressTypeIPv4)
+	epv6 := endpointSliceForService(headlessSvc, "2001:db8::1", discoveryv1.AddressTypeIPv6)
+
+	dnsRRDualStack := &dnsRecordsReconciler{
+		tsNamespace: "tailscale",
+		logger:      zl.Sugar(),
+	}
+
+	// Create the dnsrecords ConfigMap
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      operatorutils.DNSRecordsCMName,
+			Namespace: "tailscale",
+		},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(dnsCfg, ing, headlessSvc, epv4, epv6, cm).
+		WithStatusSubresource(dnsCfg).
+		Build()
+
+	dnsRRDualStack.Client = fc
+
+	// Test dual-stack service records
+	expectReconciled(t, dnsRRDualStack, "tailscale", "ts-dual-stack-ingress")
+
+	wantIPv4 := map[string][]string{"dual-stack.example.ts.net": {"10.1.2.3"}}
+	wantIPv6 := map[string][]string{"dual-stack.example.ts.net": {"2001:db8::1"}}
+	expectHostsRecordsWithIPv6(t, fc, wantIPv4, wantIPv6)
+
+	// Test ProxyGroup with dual-stack ClusterIPs
+	// First create parent service
+	parentEgressSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pg-service",
+			Namespace: "tailscale",
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "pg-service.example.ts.net",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: "unused",
+		},
+	}
+
+	proxyGroupSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ts-proxygroup-dualstack",
+			Namespace: "tailscale",
+			Labels: map[string]string{
+				kubetypes.LabelManaged: "true",
+				labelProxyGroup:        "test-pg",
+				labelSvcType:           typeEgress,
+				LabelParentName:        "pg-service",
+				LabelParentNamespace:   "tailscale",
+				LabelParentType:        "svc",
+			},
+			Annotations: map[string]string{
+				annotationTSMagicDNSName: "pg-service.example.ts.net",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:       corev1.ServiceTypeClusterIP,
+			ClusterIP:  "10.96.0.100",
+			ClusterIPs: []string{"10.96.0.100", "2001:db8::100"},
+		},
+	}
+
+	mustCreate(t, fc, parentEgressSvc)
+	mustCreate(t, fc, proxyGroupSvc)
+	expectReconciled(t, dnsRRDualStack, "tailscale", "ts-proxygroup-dualstack")
+
+	wantIPv4["pg-service.example.ts.net"] = []string{"10.96.0.100"}
+	wantIPv6["pg-service.example.ts.net"] = []string{"2001:db8::100"}
+	expectHostsRecordsWithIPv6(t, fc, wantIPv4, wantIPv6)
 }
 
 func headlessSvcForParent(o client.Object, typ string) *corev1.Service {
@@ -342,5 +474,30 @@ func expectHostsRecords(t *testing.T, cl client.Client, wantsHosts map[string][]
 	}
 	if diff := cmp.Diff(dnsConfig.IP4, wantsHosts); diff != "" {
 		t.Fatalf("unexpected dns config (-got +want):\n%s", diff)
+	}
+}
+
+func expectHostsRecordsWithIPv6(t *testing.T, cl client.Client, wantsHostsIPv4, wantsHostsIPv6 map[string][]string) {
+	t.Helper()
+	cm := new(corev1.ConfigMap)
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: "dnsrecords", Namespace: "tailscale"}, cm); err != nil {
+		t.Fatalf("getting dnsconfig ConfigMap: %v", err)
+	}
+	if cm.Data == nil {
+		t.Fatal("dnsconfig ConfigMap has no data")
+	}
+	dnsConfigString, ok := cm.Data[operatorutils.DNSRecordsCMKey]
+	if !ok {
+		t.Fatal("dnsconfig ConfigMap does not contain dnsconfig")
+	}
+	dnsConfig := &operatorutils.Records{}
+	if err := json.Unmarshal([]byte(dnsConfigString), dnsConfig); err != nil {
+		t.Fatalf("unmarshaling dnsconfig: %v", err)
+	}
+	if diff := cmp.Diff(dnsConfig.IP4, wantsHostsIPv4); diff != "" {
+		t.Fatalf("unexpected IPv4 dns config (-got +want):\n%s", diff)
+	}
+	if diff := cmp.Diff(dnsConfig.IP6, wantsHostsIPv6); diff != "" {
+		t.Fatalf("unexpected IPv6 dns config (-got +want):\n%s", diff)
 	}
 }
