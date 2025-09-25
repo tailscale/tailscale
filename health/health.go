@@ -1131,7 +1131,7 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 				ArgDuration:       d.Round(time.Second).String(),
 			})
 		}
-	} else if homeDERP != 0 {
+	} else if homeDERP != 0 && t.ipnWantRunning && !recentlyOn {
 		t.setUnhealthyLocked(noDERPConnectionWarnable, Args{
 			ArgDERPRegionID:   fmt.Sprint(homeDERP),
 			ArgDERPRegionName: t.derpRegionNameLocked(homeDERP),
