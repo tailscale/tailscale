@@ -27,6 +27,10 @@ func newPublisher[T any](c *Client) *Publisher[T] {
 // Close closes the publisher.
 //
 // Calls to Publish after Close silently do nothing.
+//
+// If the Bus or Client from which the Publisher was created is closed,
+// the Publisher is implicitly closed and does not need to be closed
+// separately.
 func (p *Publisher[T]) Close() {
 	// Just unblocks any active calls to Publish, no other
 	// synchronization needed.
