@@ -20,6 +20,7 @@
             <string id="SINCE_V1_82">Tailscale version 1.82.0 and later</string>
             <string id="SINCE_V1_84">Tailscale version 1.84.0 and later</string>
             <string id="SINCE_V1_86">Tailscale version 1.86.0 and later</string>
+            <string id="SINCE_V1_90">Tailscale version 1.90.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
@@ -121,6 +122,14 @@ If you enable this policy setting, you can specify how long Tailscale will wait 
 If you disable or don't configure this policy setting, Tailscale will only reconnect if a user chooses to or if required by a different policy setting.
 
 Refer to https://pkg.go.dev/time#ParseDuration for information about the supported duration strings.]]></string>
+            <string id="AllowTailscaledRestart">Allow users to restart tailscaled</string>
+            <string id="AllowTailscaledRestart_Help"><![CDATA[This policy setting controls whether users are allowed to fully reset the connection by restarting tailscaled. This can be useful for troubleshooting certain connectivity issues.
+
+If you enable this policy setting, the "Restart Connection" menu item will be shown in the Tailscale menu.
+
+If you disable this policy setting, the "Restart Connection" menu item is hidden and restarting tailscaled isn't allowed.
+
+If you do not configure this policy setting, the behavior may vary depending on the Tailscale version and other factors, such as user access rights on the device.]]></string>
             <string id="ExitNodeAllowLANAccess">Allow Local Network Access when an Exit Node is in use</string>
             <string id="ExitNodeAllowLANAccess_Help"><![CDATA[This policy can be used to require that the Allow Local Network Access setting is configured a certain way.
 

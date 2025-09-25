@@ -70,6 +70,10 @@
                   displayName="$(string.SINCE_V1_86)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_90"
+                  displayName="$(string.SINCE_V1_90)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -186,6 +190,16 @@
       <elements>
         <text id="ReconnectAfterDelay" valueName="ReconnectAfter" required="true" />
       </elements>
+    </policy>
+    <policy name="AllowTailscaledRestart" class="Machine" displayName="$(string.AllowTailscaledRestart)" explainText="$(string.AllowTailscaledRestart_Help)" key="Software\Policies\Tailscale" valueName="AllowTailscaledRestart">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="SINCE_V1_90" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
     </policy>
     <policy name="ExitNodeAllowLANAccess" class="Machine" displayName="$(string.ExitNodeAllowLANAccess)" explainText="$(string.ExitNodeAllowLANAccess_Help)" key="Software\Policies\Tailscale" valueName="ExitNodeAllowLANAccess">
       <parentCategory ref="Settings_Category" />
