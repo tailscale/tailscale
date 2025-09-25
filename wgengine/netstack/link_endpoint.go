@@ -10,6 +10,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/wgengine/netstack/gro"
@@ -133,7 +134,7 @@ func newLinkEndpoint(size int, mtu uint32, linkAddr tcpip.LinkAddress, supported
 // If gro allocates a *gro.GRO it will have l's stack.NetworkDispatcher set via
 // SetDispatcher().
 func (l *linkEndpoint) gro(p *packet.Parsed, g *gro.GRO) *gro.GRO {
-	if l.supportedGRO == groNotSupported || p.IPProto != ipproto.TCP {
+	if !buildfeatures.HasGRO || l.supportedGRO == groNotSupported || p.IPProto != ipproto.TCP {
 		// IPv6 may have extension headers preceding a TCP header, but we trade
 		// for a fast path and assume p cannot be coalesced in such a case.
 		l.injectInbound(p)
