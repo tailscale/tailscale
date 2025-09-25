@@ -128,12 +128,14 @@ func supportsEvent(ctx context.Context, hc *http.Client, ap netip.AddrPort) bool
 	return resp.StatusCode == http.StatusOK
 }
 
+const addressNotSupportEventv2 = `recorder at address %q does not support "/v2/event" endpoint`
+
 // SendEvent sends an event the tsrecorders /v2/event endpoint.
 func SendEvent(ctx context.Context, ap netip.AddrPort, event io.Reader, dial netx.DialFunc) error {
 	client := clientHTTP2(ctx, dial)
 
 	if !supportsEvent(ctx, client, ap) {
-		return fmt.Errorf(`recorder at address %q does not support "/v2/event" endpoint`, ap.String())
+		return fmt.Errorf(addressNotSupportEventv2, ap.String())
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s/v2/event", ap.String()), event)

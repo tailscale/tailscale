@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -248,7 +249,7 @@ func TestSendEvent(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected an error, got nil")
 		}
-		if !strings.Contains(err.Error(), "does not support `/v2/event` endpoint") {
+		if !strings.Contains(err.Error(), fmt.Sprintf(addressNotSupportEventv2, srv.Listener.Addr().String())) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
