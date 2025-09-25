@@ -31,6 +31,9 @@ const (
 	tsNetDomain = "ts.net"
 	// addr is the the address that the UDP and TCP listeners will listen on.
 	addr = ":1053"
+	// defaultTTL is the default TTL for DNS records in seconds.
+	// Set to 0 to disable caching. Can be increased when usage patterns are better understood.
+	defaultTTL = 0
 
 	// The following constants are specific to the nameserver configuration
 	// provided by a mounted Kubernetes Configmap. The Configmap mounted at
@@ -39,9 +42,9 @@ const (
 	kubeletMountedConfigLn = "..data"
 )
 
-// nameserver is a simple nameserver that responds to DNS queries for A records
+// nameserver is a simple nameserver that responds to DNS queries for A and AAAA records
 // for ts.net domain names over UDP or TCP. It serves DNS responses from
-// in-memory IPv4 host records. It is intended to be deployed on Kubernetes with
+// in-memory IPv4 and IPv6 host records. It is intended to be deployed on Kubernetes with
 // a ConfigMap mounted at /config that should contain the host records. It
 // dynamically reconfigures its in-memory mappings as the contents of the
 // mounted ConfigMap changes.
@@ -56,10 +59,13 @@ type nameserver struct {
 	// in-memory records.
 	configWatcher <-chan string
 
-	mu sync.Mutex // protects following
+	mu sync.RWMutex // protects following
 	// ip4 are the in-memory hostname -> IP4 mappings that the nameserver
 	// uses to respond to A record queries.
 	ip4 map[dnsname.FQDN][]net.IP
+	// ip6 are the in-memory hostname -> IP6 mappings that the nameserver
+	// uses to respond to AAAA record queries.
+	ip6 map[dnsname.FQDN][]net.IP
 }
 
 func main() {
@@ -98,16 +104,13 @@ func main() {
 	tcpSig <- s // stop the TCP listener
 }
 
-// handleFunc is a DNS query handler that can respond to A record queries from
+// handleFunc is a DNS query handler that can respond to A and AAAA record queries from
 // the nameserver's in-memory records.
-// - If an A record query is received and the
-// nameserver's in-memory records contain records for the queried domain name,
-// return a success response.
-// - If an A record query is received, but the
-// nameserver's in-memory records do not contain records for the queried domain name,
-// return NXDOMAIN.
-// - If an A record query is received, but the queried domain name is not valid, return Format Error.
-// - If a query is received for any other record type than A, return Not Implemented.
+//   - For A queries: returns IPv4 addresses if available, NXDOMAIN if the name doesn't exist
+//   - For AAAA queries: returns IPv6 addresses if available, NOERROR with no data if only
+//     IPv4 exists (per RFC 4074), or NXDOMAIN if the name doesn't exist at all
+//   - For invalid domain names: returns Format Error
+//   - For other record types: returns Not Implemented
 func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 	h := func(w dns.ResponseWriter, r *dns.Msg) {
 		m := new(dns.Msg)
@@ -135,35 +138,19 @@ func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 			m.RecursionAvailable = false
 
 			ips := n.lookupIP4(fqdn)
-			if ips == nil || len(ips) == 0 {
+			if len(ips) == 0 {
 				// As we are the authoritative nameserver for MagicDNS
 				// names, if we do not have a record for this MagicDNS
 				// name, it does not exist.
 				m = m.SetRcode(r, dns.RcodeNameError)
 				return
 			}
-			// TODO (irbekrm): TTL is currently set to 0, meaning
-			// that cluster workloads will not cache the DNS
-			// records. Revisit this in future when we understand
-			// the usage patterns better- is it putting too much
-			// load on kube DNS server or is this fine?
 			for _, ip := range ips {
-				rr := &dns.A{Hdr: dns.RR_Header{Name: q, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: ip}
+				rr := &dns.A{Hdr: dns.RR_Header{Name: q, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: defaultTTL}, A: ip}
 				m.SetRcode(r, dns.RcodeSuccess)
 				m.Answer = append(m.Answer, rr)
 			}
 		case dns.TypeAAAA:
-			// TODO (irbekrm): add IPv6 support.
-			// The nameserver currently does not support IPv6
-			// (records are not being created for IPv6 Pod addresses).
-			// However, we can expect that some callers will
-			// nevertheless send AAAA queries.
-			// We have to return NOERROR if a query is received for
-			// an AAAA record for a DNS name that we have an A
-			// record for- else the caller might not follow with an
-			// A record query.
-			// https://github.com/tailscale/tailscale/issues/12321
-			// https://datatracker.ietf.org/doc/html/rfc4074
 			q := r.Question[0].Name
 			fqdn, err := dnsname.ToFQDN(q)
 			if err != nil {
@@ -174,13 +161,26 @@ func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 			// single source of truth for MagicDNS names by
 			// non-tailnet Kubernetes workloads.
 			m.Authoritative = true
-			ips := n.lookupIP4(fqdn)
-			if len(ips) == 0 {
+			m.RecursionAvailable = false
+
+			ips := n.lookupIP6(fqdn)
+			// Also check if we have IPv4 records to determine correct response code.
+			// If the name exists (has A records) but no AAAA records, we return NOERROR
+			// per RFC 4074. If the name doesn't exist at all, we return NXDOMAIN.
+			ip4s := n.lookupIP4(fqdn)
+
+			if len(ips) == 0 && len(ip4s) == 0 {
 				// As we are the authoritative nameserver for MagicDNS
-				// names, if we do not have a record for this MagicDNS
+				// names, if we do not have any record for this MagicDNS
 				// name, it does not exist.
 				m = m.SetRcode(r, dns.RcodeNameError)
 				return
+			}
+
+			// Return IPv6 addresses if available
+			for _, ip := range ips {
+				rr := &dns.AAAA{Hdr: dns.RR_Header{Name: q, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: defaultTTL}, AAAA: ip}
+				m.Answer = append(m.Answer, rr)
 			}
 			m.SetRcode(r, dns.RcodeSuccess)
 		default:
@@ -231,10 +231,11 @@ func (n *nameserver) resetRecords() error {
 		log.Printf("error reading nameserver's configuration: %v", err)
 		return err
 	}
-	if dnsCfgBytes == nil || len(dnsCfgBytes) < 1 {
+	if len(dnsCfgBytes) == 0 {
 		log.Print("nameserver's configuration is empty, any in-memory records will be unset")
 		n.mu.Lock()
 		n.ip4 = make(map[dnsname.FQDN][]net.IP)
+		n.ip6 = make(map[dnsname.FQDN][]net.IP)
 		n.mu.Unlock()
 		return nil
 	}
@@ -249,30 +250,63 @@ func (n *nameserver) resetRecords() error {
 	}
 
 	ip4 := make(map[dnsname.FQDN][]net.IP)
+	ip6 := make(map[dnsname.FQDN][]net.IP)
 	defer func() {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		n.ip4 = ip4
+		n.ip6 = ip6
 	}()
 
-	if len(dnsCfg.IP4) == 0 {
+	if len(dnsCfg.IP4) == 0 && len(dnsCfg.IP6) == 0 {
 		log.Print("nameserver's configuration contains no records, any in-memory records will be unset")
 		return nil
 	}
 
+	// Process IPv4 records
 	for fqdn, ips := range dnsCfg.IP4 {
 		fqdn, err := dnsname.ToFQDN(fqdn)
 		if err != nil {
 			log.Printf("invalid nameserver's configuration: %s is not a valid FQDN: %v; skipping this record", fqdn, err)
 			continue // one invalid hostname should not break the whole nameserver
 		}
+		var validIPs []net.IP
 		for _, ipS := range ips {
 			ip := net.ParseIP(ipS).To4()
 			if ip == nil { // To4 returns nil if IP is not a IPv4 address
 				log.Printf("invalid nameserver's configuration: %v does not appear to be an IPv4 address; skipping this record", ipS)
 				continue // one invalid IP address should not break the whole nameserver
 			}
-			ip4[fqdn] = []net.IP{ip}
+			validIPs = append(validIPs, ip)
+		}
+		if len(validIPs) > 0 {
+			ip4[fqdn] = validIPs
+		}
+	}
+
+	// Process IPv6 records
+	for fqdn, ips := range dnsCfg.IP6 {
+		fqdn, err := dnsname.ToFQDN(fqdn)
+		if err != nil {
+			log.Printf("invalid nameserver's configuration: %s is not a valid FQDN: %v; skipping this record", fqdn, err)
+			continue // one invalid hostname should not break the whole nameserver
+		}
+		var validIPs []net.IP
+		for _, ipS := range ips {
+			ip := net.ParseIP(ipS)
+			if ip == nil {
+				log.Printf("invalid nameserver's configuration: %v does not appear to be a valid IP address; skipping this record", ipS)
+				continue
+			}
+			// Check if it's a valid IPv6 address
+			if ip.To4() != nil {
+				log.Printf("invalid nameserver's configuration: %v appears to be IPv4 but was in IPv6 records; skipping this record", ipS)
+				continue
+			}
+			validIPs = append(validIPs, ip.To16())
+		}
+		if len(validIPs) > 0 {
+			ip6[fqdn] = validIPs
 		}
 	}
 	return nil
@@ -372,8 +406,20 @@ func (n *nameserver) lookupIP4(fqdn dnsname.FQDN) []net.IP {
 	if n.ip4 == nil {
 		return nil
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	f := n.ip4[fqdn]
+	return f
+}
+
+// lookupIP6 returns any IPv6 addresses for the given FQDN from nameserver's
+// in-memory records.
+func (n *nameserver) lookupIP6(fqdn dnsname.FQDN) []net.IP {
+	if n.ip6 == nil {
+		return nil
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	f := n.ip6[fqdn]
 	return f
 }

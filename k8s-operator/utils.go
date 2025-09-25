@@ -27,6 +27,11 @@ type Records struct {
 	Version string `json:"version"`
 	// IP4 contains a mapping of DNS names to IPv4 address(es).
 	IP4 map[string][]string `json:"ip4"`
+	// IP6 contains a mapping of DNS names to IPv6 address(es).
+	// This field is optional and will be omitted from JSON if empty.
+	// It enables dual-stack DNS support in Kubernetes clusters.
+	// +optional
+	IP6 map[string][]string `json:"ip6,omitempty"`
 }
 
 // TailscaledConfigFileName returns a tailscaled config file name in
