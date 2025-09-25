@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
@@ -72,6 +73,7 @@ var handler = map[string]LocalAPIHandler{
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
 	"alpha-set-device-attrs":       (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
+	"appc-route-info":              (*Handler).serveGetAppcRouteInfo,
 	"bugreport":                    (*Handler).serveBugReport,
 	"check-ip-forwarding":          (*Handler).serveCheckIPForwarding,
 	"check-prefs":                  (*Handler).serveCheckPrefs,
@@ -2022,6 +2024,24 @@ func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		WriteErrorJSON(w, err)
 		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+}
+
+func (h *Handler) serveGetAppcRouteInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.GET {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := h.b.ReadRouteInfo()
+	if err != nil {
+		if errors.Is(err, ipn.ErrStateNotExist) {
+			res = &appc.RouteInfo{}
+		} else {
+			WriteErrorJSON(w, err)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)

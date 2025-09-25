@@ -275,6 +275,7 @@ change in the future.
 			idTokenCmd,
 			configureHostCmd(),
 			systrayCmd,
+			appcRoutesCmd,
 		),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
