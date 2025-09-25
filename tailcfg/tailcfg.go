@@ -1368,6 +1368,10 @@ type MapRequest struct {
 	// HardwareAttestationKeySignature is the signature of the NodeKey
 	// serialized using MarshalText using its hardware attestation key, if any.
 	HardwareAttestationKeySignature []byte `json:",omitempty"`
+	// HardwareAttestationKeySignatureTimestamp is the time at which the
+	// HardwareAttestationKeySignature was created, if any. This UNIX timestamp
+	// value is prepended to the node key when signing.
+	HardwareAttestationKeySignatureTimestamp *time.Time `json:",omitempty"`
 
 	// Stream is whether the client wants to receive multiple MapResponses over
 	// the same HTTP connection.

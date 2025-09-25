@@ -5,6 +5,7 @@
 package persist
 
 import (
+	"crypto"
 	"fmt"
 	"reflect"
 
@@ -26,6 +27,7 @@ type Persist struct {
 	UserProfile       tailcfg.UserProfile
 	NetworkLockKey    key.NLPrivate
 	NodeID            tailcfg.StableNodeID
+	AttestationKey    key.HardwareAttestationKey `json:",omitempty"`
 
 	// DisallowedTKAStateIDs stores the tka.State.StateID values which
 	// this node will not operate network lock on. This is used to
@@ -84,11 +86,20 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		return false
 	}
 
+	var pub, p2Pub crypto.PublicKey
+	if p.AttestationKey != nil {
+		pub = p.AttestationKey.Public()
+	}
+	if p2.AttestationKey != nil {
+		p2Pub = p2.AttestationKey.Public()
+	}
+
 	return p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.UserProfile.Equal(&p2.UserProfile) &&
 		p.NetworkLockKey.Equal(p2.NetworkLockKey) &&
 		p.NodeID == p2.NodeID &&
+		pub == p2Pub &&
 		reflect.DeepEqual(nilIfEmpty(p.DisallowedTKAStateIDs), nilIfEmpty(p2.DisallowedTKAStateIDs))
 }
 

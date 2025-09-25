@@ -2448,6 +2448,16 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		persistv = new(persist.Persist)
 	}
 
+	// attempt to generate a new hardware attestion key if none exists
+	if persistv.AttestationKey == nil {
+		if ak, err := key.NewHardwareAttestationKey(); err != nil {
+			b.logf("failed to create hardware attestation key: %v", err)
+		} else if ak != nil {
+			persistv.AttestationKey = ak
+			b.logf("using new hardware attestation key: %v", ak.Public())
+		}
+	}
+
 	discoPublic := b.MagicConn().DiscoPublicKey()
 
 	var err error
