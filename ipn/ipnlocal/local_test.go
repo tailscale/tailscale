@@ -7030,6 +7030,27 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 	}
 }
 
+func TestHardwareAttested(t *testing.T) {
+	b := new(LocalBackend)
+
+	// default false
+	if got := b.HardwareAttested(); got != false {
+		t.Errorf("HardwareAttested() = %v, want false", got)
+	}
+
+	// set true
+	b.SetHardwareAttested()
+	if got := b.HardwareAttested(); got != true {
+		t.Errorf("HardwareAttested() = %v, want true after SetHardwareAttested()", got)
+	}
+
+	// repeat calls are safe; still true
+	b.SetHardwareAttested()
+	if got := b.HardwareAttested(); got != true {
+		t.Errorf("HardwareAttested() = %v, want true after second SetHardwareAttested()", got)
+	}
+}
+
 func TestDeps(t *testing.T) {
 	deptest.DepChecker{
 		OnImport: func(pkg string) {

@@ -141,6 +141,10 @@ const (
 	// It's a noop on other platforms.
 	EncryptState Key = "EncryptState"
 
+	// HardwareAttestation is a boolean key that controls whether to use a
+	// hardware-backed key to bind the node identity to this device.
+	HardwareAttestation Key = "HardwareAttestation"
+
 	// PostureChecking indicates if posture checking is enabled and the client shall gather
 	// posture data.
 	// Key is a string value that specifies an option: "always", "never", "user-decides".
