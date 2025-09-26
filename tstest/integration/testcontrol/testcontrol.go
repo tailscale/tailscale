@@ -35,6 +35,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -68,6 +69,10 @@ type Server struct {
 
 	// DefaultNodeCapabilities overrides the capability map sent to each client.
 	DefaultNodeCapabilities *tailcfg.NodeCapMap
+
+	// CollectServices, if non-empty, sets whether the control server asks
+	// for service updates. If empty, the default is "true".
+	CollectServices opt.Bool
 
 	// ExplicitBaseURL or HTTPTestServer must be set.
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
@@ -1096,7 +1101,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		Node:            node,
 		DERPMap:         s.DERPMap,
 		Domain:          domain,
-		CollectServices: "true",
+		CollectServices: cmp.Or(s.CollectServices, "true"),
 		PacketFilter:    packetFilterWithIngress(s.PeerRelayGrants),
 		DNSConfig:       dns,
 		ControlTime:     &t,

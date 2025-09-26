@@ -1784,7 +1784,9 @@ func TestPeerRelayPing(t *testing.T) {
 func TestC2NDebugNetmap(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := NewTestEnv(t)
+	env := NewTestEnv(t, ConfigureControl(func(s *testcontrol.Server) {
+		s.CollectServices = "false"
+	}))
 
 	var testNodes []*TestNode
 	var nodes []*tailcfg.Node
