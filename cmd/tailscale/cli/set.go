@@ -15,8 +15,8 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
@@ -226,21 +226,14 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			return err
 		}
 	}
-	if maskedPrefs.AutoUpdateSet.ApplySet {
-		if !clientupdate.CanAutoUpdate() {
-			return errors.New("automatic updates are not supported on this platform")
+	if maskedPrefs.AutoUpdateSet.ApplySet && buildfeatures.HasClientUpdate && version.IsMacSysExt() {
+		apply := "0"
+		if maskedPrefs.AutoUpdate.Apply.EqualBool(true) {
+			apply = "1"
 		}
-		// On macsys, tailscaled will set the Sparkle auto-update setting. It
-		// does not use clientupdate.
-		if version.IsMacSysExt() {
-			apply := "0"
-			if maskedPrefs.AutoUpdate.Apply.EqualBool(true) {
-				apply = "1"
-			}
-			out, err := exec.Command("defaults", "write", "io.tailscale.ipn.macsys", "SUAutomaticallyUpdate", apply).CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("failed to enable automatic updates: %v, %q", err, out)
-			}
+		out, err := exec.Command("defaults", "write", "io.tailscale.ipn.macsys", "SUAutomaticallyUpdate", apply).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to enable automatic updates: %v, %q", err, out)
 		}
 	}
 

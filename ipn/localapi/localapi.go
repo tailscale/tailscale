@@ -27,8 +27,8 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
@@ -120,8 +120,6 @@ var handler = map[string]LocalAPIHandler{
 	"status":                       (*Handler).serveStatus,
 	"suggest-exit-node":            (*Handler).serveSuggestExitNode,
 	"update/check":                 (*Handler).serveUpdateCheck,
-	"update/install":               (*Handler).serveUpdateInstall,
-	"update/progress":              (*Handler).serveUpdateProgress,
 	"upload-client-metrics":        (*Handler).serveUploadClientMetrics,
 	"usermetrics":                  (*Handler).serveUserMetrics,
 	"watch-ipn-bus":                (*Handler).serveWatchIPNBus,
@@ -1897,7 +1895,7 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !clientupdate.CanAutoUpdate() {
+	if !feature.CanAutoUpdate() {
 		// if we don't support auto-update, just say that we're up to date
 		json.NewEncoder(w).Encode(tailcfg.ClientVersion{RunningLatest: true})
 		return
@@ -1913,37 +1911,6 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(cv)
-}
-
-// serveUpdateInstall sends a request to the LocalBackend to start a Tailscale
-// self-update. A successful response does not indicate whether the update
-// succeeded, only that the request was accepted. Clients should use
-// serveUpdateProgress after pinging this endpoint to check how the update is
-// going.
-func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
-	if r.Method != httpm.POST {
-		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.WriteHeader(http.StatusAccepted)
-
-	go h.b.DoSelfUpdate()
-}
-
-// serveUpdateProgress returns the status of an in-progress Tailscale self-update.
-// This is provided as a slice of ipnstate.UpdateProgress structs with various
-// log messages in order from oldest to newest. If an update is not in progress,
-// the returned slice will be empty.
-func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
-	if r.Method != httpm.GET {
-		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	ups := h.b.GetSelfUpdateProgress()
-
-	json.NewEncoder(w).Encode(ups)
 }
 
 // serveDNSOSConfig serves the current system DNS configuration as a JSON object, if
