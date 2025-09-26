@@ -105,6 +105,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Deps: []FeatureTag{"portmapper"},
 	},
 	"desktop_sessions": {"DesktopSessions", "Desktop sessions support", nil},
+	"doctor":           {"Doctor", "Diagnose possible issues with Tailscale and its host environment", nil},
 	"drive":            {"Drive", "Tailscale Drive (file server) support", nil},
 	"gro": {
 		Sym:  "GRO",

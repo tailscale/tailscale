@@ -33,11 +33,13 @@ type peerAPIHandler struct {
 	isSelf     bool             // whether peerNode is owned by same user as this node
 	selfNode   tailcfg.NodeView // this node; always non-nil
 	peerNode   tailcfg.NodeView // peerNode is who's making the request
+	canDebug   bool             // whether peerNode can debug this node (goroutines, metrics, magicsock internal state, etc)
 }
 
 func (h *peerAPIHandler) IsSelfUntagged() bool {
 	return !h.selfNode.IsTagged() && !h.peerNode.IsTagged() && h.isSelf
 }
+func (h *peerAPIHandler) CanDebug() bool                       { return h.canDebug }
 func (h *peerAPIHandler) Peer() tailcfg.NodeView               { return h.peerNode }
 func (h *peerAPIHandler) Self() tailcfg.NodeView               { return h.selfNode }
 func (h *peerAPIHandler) RemoteAddr() netip.AddrPort           { return h.remoteAddr }
