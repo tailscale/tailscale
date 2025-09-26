@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -40,10 +41,12 @@ func init() {
 		hi.TPM = infoOnce()
 	})
 	store.Register(store.TPMPrefix, newStore)
-	key.RegisterHardwareAttestationKeyFns(
-		func() key.HardwareAttestationKey { return &attestationKey{} },
-		func() (key.HardwareAttestationKey, error) { return newAttestationKey() },
-	)
+	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
+		key.RegisterHardwareAttestationKeyFns(
+			func() key.HardwareAttestationKey { return &attestationKey{} },
+			func() (key.HardwareAttestationKey, error) { return newAttestationKey() },
+		)
+	}
 }
 
 func info() *tailcfg.TPMInfo {
