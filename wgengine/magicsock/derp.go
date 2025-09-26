@@ -836,7 +836,6 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 			c.closeOrReconnectDERPLocked(regionID, "rebind-default-route-change")
 			continue
 		}
-		regionID := regionID
 		dc := ad.c
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

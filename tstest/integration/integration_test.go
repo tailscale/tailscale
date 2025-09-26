@@ -333,7 +333,6 @@ func TestOneNodeUpAuth(t *testing.T) {
 		tstest.Shard(t)
 
 		for _, useSeamlessKeyRenewal := range []bool{true, false} {
-			tt := tt // subtests are run in parallel, rebind tt
 			t.Run(fmt.Sprintf("%s-seamless-%t", tt.name, useSeamlessKeyRenewal), func(t *testing.T) {
 				tstest.Parallel(t)
 

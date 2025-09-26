@@ -33,7 +33,6 @@ func TestInQemu(t *testing.T) {
 	}
 	inCI := cibuild.On()
 	for _, arch := range arches {
-		arch := arch
 		t.Run(arch.Goarch, func(t *testing.T) {
 			t.Parallel()
 			qemuUser := "qemu-" + arch.Qarch
