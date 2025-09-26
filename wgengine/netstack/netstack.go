@@ -578,9 +578,16 @@ func (ns *Impl) decrementInFlightTCPForward(tei stack.TransportEndpointID, remot
 	}
 }
 
+// LocalBackend is a fake name for *ipnlocal.LocalBackend to avoid an import cycle.
+type LocalBackend = any
+
 // Start sets up all the handlers so netstack can start working. Implements
 // wgengine.FakeImpl.
-func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
+func (ns *Impl) Start(b LocalBackend) error {
+	if b == nil {
+		panic("nil LocalBackend interface")
+	}
+	lb := b.(*ipnlocal.LocalBackend)
 	if lb == nil {
 		panic("nil LocalBackend")
 	}

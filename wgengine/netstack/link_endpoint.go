@@ -187,7 +187,7 @@ func (l *linkEndpoint) injectInbound(p *packet.Parsed) {
 	l.mu.RLock()
 	d := l.dispatcher
 	l.mu.RUnlock()
-	if d == nil {
+	if d == nil || !buildfeatures.HasNetstack {
 		return
 	}
 	pkt := gro.RXChecksumOffload(p)

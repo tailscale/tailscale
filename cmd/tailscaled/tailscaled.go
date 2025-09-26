@@ -13,14 +13,12 @@ package main // import "tailscale.com/cmd/tailscaled"
 import (
 	"context"
 	"errors"
-	"expvar"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -34,6 +32,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/condregister"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -65,7 +64,6 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 )
 
@@ -598,6 +596,10 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 	return nil
 }
 
+var (
+	hookNewNetstack feature.Hook[func(_ logger.Logf, _ *tsd.System, onlyNetstack bool) (tsd.NetstackImpl, error)]
+)
+
 func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) (_ *ipnlocal.LocalBackend, retErr error) {
 	if logPol != nil {
 		logPol.Logtail.SetNetMon(sys.NetMon.Get())
@@ -615,6 +617,9 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if err != nil {
 		return nil, fmt.Errorf("createEngine: %w", err)
 	}
+	if onlyNetstack && !buildfeatures.HasNetstack {
+		return nil, errors.New("userspace-networking support is not compiled in to this binary")
+	}
 	if debugMux != nil {
 		if ms, ok := sys.MagicSock.GetOK(); ok {
 			debugMux.HandleFunc("/debug/magicsock", ms.ServeHTTPDebug)
@@ -622,41 +627,14 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		go runDebugServer(logf, debugMux, args.debug)
 	}
 
-	ns, err := newNetstack(logf, sys)
-	if err != nil {
-		return nil, fmt.Errorf("newNetstack: %w", err)
+	var ns tsd.NetstackImpl // or nil if not linked in
+	if newNetstack, ok := hookNewNetstack.GetOk(); ok {
+		ns, err = newNetstack(logf, sys, onlyNetstack)
+		if err != nil {
+			return nil, fmt.Errorf("newNetstack: %w", err)
+		}
 	}
-	sys.Set(ns)
-	ns.ProcessLocalIPs = onlyNetstack
-	ns.ProcessSubnets = onlyNetstack || handleSubnetsInNetstack()
 
-	if onlyNetstack {
-		e := sys.Engine.Get()
-		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-			_, ok := e.PeerForIP(ip)
-			return ok
-		}
-		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			// Note: don't just return ns.DialContextTCP or we'll return
-			// *gonet.TCPConn(nil) instead of a nil interface which trips up
-			// callers.
-			tcpConn, err := ns.DialContextTCP(ctx, dst)
-			if err != nil {
-				return nil, err
-			}
-			return tcpConn, nil
-		}
-		dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			// Note: don't just return ns.DialContextUDP or we'll return
-			// *gonet.UDPConn(nil) instead of a nil interface which trips up
-			// callers.
-			udpConn, err := ns.DialContextUDP(ctx, dst)
-			if err != nil {
-				return nil, err
-			}
-			return udpConn, nil
-		}
-	}
 	if startProxy != nil {
 		go startProxy(logf, dialer)
 	}
@@ -687,8 +665,11 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if f, ok := hookConfigureWebClient.GetOk(); ok {
 		f(lb)
 	}
-	if err := ns.Start(lb); err != nil {
-		log.Fatalf("failed to start netstack: %v", err)
+
+	if ns != nil {
+		if err := ns.Start(lb); err != nil {
+			log.Fatalf("failed to start netstack: %v", err)
+		}
 	}
 	return lb, nil
 }
@@ -866,25 +847,6 @@ func runDebugServer(logf logger.Logf, mux *http.ServeMux, addr string) {
 	if err := srv.Serve(ln); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	ret, err := netstack.Create(logf,
-		sys.Tun.Get(),
-		sys.Engine.Get(),
-		sys.MagicSock.Get(),
-		sys.Dialer.Get(),
-		sys.DNSManager.Get(),
-		sys.ProxyMapper(),
-	)
-	if err != nil {
-		return nil, err
-	}
-	// Only register debug info if we have a debug mux
-	if debugMux != nil {
-		expvar.Publish("netstack", ret.ExpVar())
-	}
-	return ret, nil
 }
 
 var beChildFunc = beChild
