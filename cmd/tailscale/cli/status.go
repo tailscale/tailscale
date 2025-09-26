@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -16,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
@@ -56,6 +56,7 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
+		fs.BoolVar(&statusArgs.header, "header", false, "show column headers in table format")
 		return fs
 	})(),
 }
@@ -68,6 +69,7 @@ var statusArgs struct {
 	active  bool   // in CLI mode, filter output to only peers with active sessions
 	self    bool   // in CLI mode, show status of local machine
 	peers   bool   // in CLI mode, show status of peer machines
+	header  bool   // in CLI mode, show column headers in table format
 }
 
 const mullvadTCD = "mullvad.ts.net."
@@ -151,10 +153,15 @@ func runStatus(ctx context.Context, args []string) error {
 		os.Exit(1)
 	}
 
-	var buf bytes.Buffer
-	f := func(format string, a ...any) { fmt.Fprintf(&buf, format, a...) }
+	w := tabwriter.NewWriter(Stdout, 0, 0, 2, ' ', 0)
+	f := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
+	if statusArgs.header {
+		fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\t")
+		fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t")
+	}
+
 	printPS := func(ps *ipnstate.PeerStatus) {
-		f("%-15s %-20s %-12s %-7s ",
+		f("%s\t%s\t%s\t%s\t",
 			firstIPString(ps.TailscaleIPs),
 			dnsOrQuoteHostname(st, ps),
 			ownerLogin(st, ps),
@@ -199,7 +206,7 @@ func runStatus(ctx context.Context, args []string) error {
 		if anyTraffic {
 			f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
 		}
-		f("\n")
+		f("\t\n")
 	}
 
 	if statusArgs.self && st.Self != nil {
@@ -229,7 +236,8 @@ func runStatus(ctx context.Context, args []string) error {
 			printPS(ps)
 		}
 	}
-	Stdout.Write(buf.Bytes())
+	w.Flush()
+
 	if locBasedExitNode {
 		outln()
 		printf("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
