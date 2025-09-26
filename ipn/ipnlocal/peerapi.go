@@ -217,6 +217,7 @@ type peerAPIHandler struct {
 type PeerAPIHandler interface {
 	Peer() tailcfg.NodeView
 	PeerCaps() tailcfg.PeerCapMap
+	CanDebug() bool // can remote node can debug this node (internal state, etc)
 	Self() tailcfg.NodeView
 	LocalBackend() *LocalBackend
 	IsSelfUntagged() bool // whether the peer is untagged and the same as this user
@@ -380,9 +381,6 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/interfaces":
 		h.handleServeInterfaces(w, r)
 		return
-	case "/v0/doctor":
-		h.handleServeDoctor(w, r)
-		return
 	case "/v0/sockstats":
 		h.handleServeSockStats(w, r)
 		return
@@ -453,24 +451,6 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		fmt.Fprint(w, "</tr>\n")
 	})
 	fmt.Fprintln(w, "</table>")
-}
-
-func (h *peerAPIHandler) handleServeDoctor(w http.ResponseWriter, r *http.Request) {
-	if !h.canDebug() {
-		http.Error(w, "denied; no debug access", http.StatusForbidden)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintln(w, "<h1>Doctor Output</h1>")
-
-	fmt.Fprintln(w, "<pre>")
-
-	h.ps.b.Doctor(r.Context(), func(format string, args ...any) {
-		line := fmt.Sprintf(format, args...)
-		fmt.Fprintln(w, html.EscapeString(line))
-	})
-
-	fmt.Fprintln(w, "</pre>")
 }
 
 func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Request) {
@@ -570,6 +550,8 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	fmt.Fprintln(w, html.EscapeString(sockstats.DebugInfo()))
 	fmt.Fprintln(w, "</pre>")
 }
+
+func (h *peerAPIHandler) CanDebug() bool { return h.canDebug() }
 
 // canDebug reports whether h can debug this node (goroutines, metrics,
 // magicsock internal state, etc).

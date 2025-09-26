@@ -402,7 +402,9 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if defBool(r.URL.Query().Get("diagnose"), false) {
-		h.b.Doctor(r.Context(), logger.WithPrefix(h.logf, "diag: "))
+		if f, ok := ipnlocal.HookDoctor.GetOk(); ok {
+			f(r.Context(), h.b, logger.WithPrefix(h.logf, "diag: "))
+		}
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprintln(w, startMarker)
