@@ -28,6 +28,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
@@ -86,6 +87,9 @@ type Dialer struct {
 	dnsCache         *dnscache.MessageCache // nil until first non-empty SetExitDNSDoH
 	nextSysConnID    int
 	activeSysConns   map[int]net.Conn // active connections not yet closed
+	eventClient      *eventbus.Client
+	netmonChangeSub  *eventbus.Subscriber[netmon.ChangeDelta]
+	subsDoneCh       chan struct{} // closed when consumeEventbusTopics returns
 }
 
 // sysConn wraps a net.Conn that was created using d.SystemDial.
@@ -158,6 +162,10 @@ func (d *Dialer) SetRoutes(routes, localRoutes []netip.Prefix) {
 }
 
 func (d *Dialer) Close() error {
+	if d.eventClient != nil {
+		d.eventClient.Close()
+		<-d.subsDoneCh
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.closed = true
@@ -186,6 +194,17 @@ func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
 		d.netMonUnregister = nil
 	}
 	d.netMon = netMon
+	// Having multiple watchers could lead to problems,
+	// so remove the eventClient if it exists.
+	// This should really not happen, but better checking for it than not.
+	// TODO(cmol): Should this just be a panic?
+	if d.eventClient != nil {
+		d.eventClient.Close()
+		<-d.subsDoneCh
+		d.eventClient = nil
+		d.subsDoneCh = nil
+		d.netmonChangeSub = nil
+	}
 	d.netMonUnregister = d.netMon.RegisterChangeCallback(d.linkChanged)
 }
 
@@ -195,6 +214,32 @@ func (d *Dialer) NetMon() *netmon.Monitor {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.netMon
+}
+
+func (d *Dialer) SetBus(bus *eventbus.Bus) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.eventClient != nil {
+		return
+	}
+	// Having multiple watchers could lead to problems,
+	// so unregister the callback if it exists.
+	if d.netMonUnregister != nil {
+		d.netMonUnregister()
+	}
+	d.eventClient = bus.Client("tsdial.Dialer")
+	d.netmonChangeSub = eventbus.Subscribe[netmon.ChangeDelta](d.eventClient)
+	d.subsDoneCh = make(chan struct{})
+	go func() {
+		defer close(d.subsDoneCh)
+
+		select {
+		case <-d.eventClient.Done():
+			return
+		case cd := <-d.netmonChangeSub.Events():
+			d.linkChanged(&cd)
+		}
+	}()
 }
 
 var (

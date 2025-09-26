@@ -1658,6 +1658,7 @@ func newLocalBackendWithMockEngineAndControl(t *testing.T, enableLogging bool) (
 	sys := tsd.NewSystemWithBus(bus)
 	sys.Set(dialer)
 	sys.Set(dialer.NetMon())
+	dialer.SetBus(bus)
 
 	magicConn, err := magicsock.NewConn(magicsock.Options{
 		Logf:              logf,

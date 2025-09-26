@@ -25,6 +25,7 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 )
 
@@ -96,7 +97,7 @@ func SockstatLogID(logID logid.PublicID) logid.PrivateID {
 //
 // The netMon parameter is optional. It should be specified in environments where
 // Tailscaled is manipulating the routing table.
-func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor, health *health.Tracker) (*Logger, error) {
+func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (*Logger, error) {
 	if !sockstats.IsAvailable {
 		return nil, nil
 	}
@@ -126,6 +127,7 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *ne
 		PrivateID:    SockstatLogID(logID),
 		Collection:   "sockstats.log.tailscale.io",
 		Buffer:       filch,
+		Bus:          bus,
 		CompressLogs: true,
 		FlushDelayFn: func() time.Duration {
 			// set flush delay to 100 years so it never flushes automatically

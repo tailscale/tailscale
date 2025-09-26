@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"tailscale.com/types/logger"
+	"tailscale.com/util/eventbus"
 )
 
 // LinkChangeLogLimiter returns a new [logger.Logf] that logs each unique
@@ -17,13 +18,12 @@ import (
 // done.
 func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) logger.Logf {
 	var formatSeen sync.Map // map[string]bool
-	unregister := nm.RegisterChangeCallback(func(cd *ChangeDelta) {
+	nm.changeDeltaWatcher(ctx, func(cd ChangeDelta) {
 		// If we're in a major change or a time jump, clear the seen map.
 		if cd.Major || cd.TimeJumped {
 			formatSeen.Clear()
 		}
 	})
-	context.AfterFunc(ctx, unregister)
 
 	return func(format string, args ...any) {
 		// We only store 'true' in the map, so if it's present then it
@@ -41,4 +41,17 @@ func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) lo
 
 		logf(format, args...)
 	}
+}
+
+func (nm *Monitor) changeDeltaWatcher(ctx context.Context, fn func(ChangeDelta)) {
+	sub := eventbus.Subscribe[ChangeDelta](nm.b)
+	go func() {
+		select {
+		case <-sub.Done():
+			return
+		case change := <-sub.Events():
+			fn(change)
+		}
+	}()
+	context.AfterFunc(ctx, sub.Close)
 }

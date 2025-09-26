@@ -149,6 +149,8 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 	proxy := param.proxy
 	client, server := key.NewMachine(), key.NewMachine()
 
+	bus := eventbustest.NewBus(t)
+
 	const testProtocolVersion = 1
 	const earlyWriteMsg = "Hello, world!"
 	sch := make(chan serverResult, 1)
@@ -218,6 +220,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 
 	netMon := netmon.NewStatic()
 	dialer := tsdial.NewDialer(netMon)
+	dialer.SetBus(bus)
 	a := &Dialer{
 		Hostname:             "localhost",
 		HTTPPort:             strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
@@ -775,7 +778,7 @@ func runDialPlanTest(t *testing.T, plan *tailcfg.ControlDialPlan, want []netip.A
 	if allowFallback {
 		host = fallbackAddr.String()
 	}
-
+	bus := eventbustest.NewBus(t)
 	a := &Dialer{
 		Hostname:             host,
 		HTTPPort:             httpPort,
@@ -790,7 +793,7 @@ func runDialPlanTest(t *testing.T, plan *tailcfg.ControlDialPlan, want []netip.A
 		omitCertErrorLogging: true,
 		testFallbackDelay:    50 * time.Millisecond,
 		Clock:                clock,
-		HealthTracker:        health.NewTracker(eventbustest.NewBus(t)),
+		HealthTracker:        health.NewTracker(bus),
 	}
 
 	start := time.Now()

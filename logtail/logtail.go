@@ -30,6 +30,7 @@ import (
 	"tailscale.com/tstime"
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
 	"tailscale.com/util/truncate"
 	"tailscale.com/util/zstdframe"
@@ -73,6 +74,7 @@ type Config struct {
 	LowMemory      bool            // if true, logtail minimizes memory use
 	Clock          tstime.Clock    // if set, Clock.Now substitutes uses of time.Now
 	Stderr         io.Writer       // if set, logs are sent here instead of os.Stderr
+	Bus            *eventbus.Bus   // if set, uses the eventbus for awaitInternetUp instead of callback
 	StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
 	Buffer         Buffer          // temp storage, if nil a MemoryBuffer
 	CompressLogs   bool            // whether to compress the log uploads
@@ -170,6 +172,10 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		shutdownStart: make(chan struct{}),
 		shutdownDone:  make(chan struct{}),
 	}
+
+	if cfg.Bus != nil {
+		l.eventClient = cfg.Bus.Client("logtail.Logger")
+	}
 	l.SetSockstatsLabel(sockstats.LabelLogtailLogger)
 	l.compressLogs = cfg.CompressLogs
 
@@ -206,6 +212,7 @@ type Logger struct {
 	privateID      logid.PrivateID
 	httpDoCalls    atomic.Int32
 	sockstatsLabel atomicSocktatsLabel
+	eventClient    *eventbus.Client
 
 	procID              uint32
 	includeProcSequence bool
@@ -271,6 +278,9 @@ func (l *Logger) Shutdown(ctx context.Context) error {
 		l.httpc.CloseIdleConnections()
 	}()
 
+	if l.eventClient != nil {
+		l.eventClient.Close()
+	}
 	l.shutdownStartMu.Lock()
 	select {
 	case <-l.shutdownStart:
@@ -467,6 +477,10 @@ func (l *Logger) internetUp() bool {
 }
 
 func (l *Logger) awaitInternetUp(ctx context.Context) {
+	if l.eventClient != nil {
+		l.awaitInternetUpBus(ctx)
+		return
+	}
 	upc := make(chan bool, 1)
 	defer l.netMonitor.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
 		if delta.New.AnyInterfaceUp() {
@@ -482,6 +496,23 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 	select {
 	case <-upc:
 		fmt.Fprintf(l.stderr, "logtail: internet back up\n")
+	case <-ctx.Done():
+	}
+}
+
+func (l *Logger) awaitInternetUpBus(ctx context.Context) {
+	sub := eventbus.Subscribe[netmon.ChangeDelta](l.eventClient)
+	defer sub.Close()
+	if l.internetUp() {
+		return
+	}
+	select {
+	case delta := <-sub.Events():
+		if delta.New.AnyInterfaceUp() {
+			fmt.Fprintf(l.stderr, "logtail: internet back up\n")
+			return
+		}
+		fmt.Fprintf(l.stderr, "logtail: network changed, but is not up")
 	case <-ctx.Done():
 	}
 }

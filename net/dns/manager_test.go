@@ -933,7 +933,10 @@ func TestManager(t *testing.T) {
 				goos = "linux"
 			}
 			knobs := &controlknobs.Knobs{}
-			m := NewManager(t.Logf, &f, health.NewTracker(eventbustest.NewBus(t)), tsdial.NewDialer(netmon.NewStatic()), nil, knobs, goos)
+			bus := eventbustest.NewBus(t)
+			dialer := tsdial.NewDialer(netmon.NewStatic())
+			dialer.SetBus(bus)
+			m := NewManager(t.Logf, &f, health.NewTracker(bus), dialer, nil, knobs, goos)
 			m.resolver.TestOnlySetHook(f.SetResolver)
 
 			if err := m.Set(test.in); err != nil {
@@ -1039,7 +1042,10 @@ func TestConfigRecompilation(t *testing.T) {
 		SearchDomains: fqdns("foo.ts.net"),
 	}
 
-	m := NewManager(t.Logf, f, health.NewTracker(eventbustest.NewBus(t)), tsdial.NewDialer(netmon.NewStatic()), nil, nil, "darwin")
+	bus := eventbustest.NewBus(t)
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
+	m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "darwin")
 
 	var managerConfig *resolver.Config
 	m.resolver.TestOnlySetHook(func(cfg resolver.Config) {

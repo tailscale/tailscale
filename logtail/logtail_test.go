@@ -17,6 +17,7 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
 )
 
@@ -30,6 +31,7 @@ func TestFastShutdown(t *testing.T) {
 
 	l := NewLogger(Config{
 		BaseURL: testServ.URL,
+		Bus:     eventbustest.NewBus(t),
 	}, t.Logf)
 	err := l.Shutdown(ctx)
 	if err != nil {
@@ -62,7 +64,10 @@ func NewLogtailTestHarness(t *testing.T) (*LogtailTestServer, *Logger) {
 
 	t.Cleanup(ts.srv.Close)
 
-	l := NewLogger(Config{BaseURL: ts.srv.URL}, t.Logf)
+	l := NewLogger(Config{
+		BaseURL: ts.srv.URL,
+		Bus:     eventbustest.NewBus(t),
+	}, t.Logf)
 
 	// There is always an initial "logtail started" message
 	body := <-ts.uploaded

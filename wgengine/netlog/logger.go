@@ -26,6 +26,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine/router"
 )
@@ -93,7 +94,7 @@ var testClient *http.Client
 // The IP protocol and source port are always zero.
 // The sock is used to populated the PhysicalTraffic field in Message.
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID logid.PrivateID, tun, sock Device, netMon *netmon.Monitor, health *health.Tracker, logExitFlowEnabledEnabled bool) error {
+func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID logid.PrivateID, tun, sock Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus, logExitFlowEnabledEnabled bool) error {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 	if nl.logger != nil {
@@ -110,6 +111,7 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 		Collection:    "tailtraffic.log.tailscale.io",
 		PrivateID:     nodeLogID,
 		CopyPrivateID: domainLogID,
+		Bus:           bus,
 		Stderr:        io.Discard,
 		CompressLogs:  true,
 		HTTPC:         httpc,

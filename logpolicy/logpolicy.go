@@ -49,6 +49,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/syspolicy/pkey"
@@ -487,6 +488,10 @@ type Options struct {
 	// If non-nil, it's used to construct the default HTTP client.
 	Health *health.Tracker
 
+	// Bus is an optional parameter for communication on the eventbus.
+	// If non-nil, it's passed to logtail for use in interface monitoring.
+	Bus *eventbus.Bus
+
 	// Logf is an optional logger to use.
 	// If nil, [log.Printf] will be used instead.
 	Logf logger.Logf
@@ -613,6 +618,7 @@ func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 		Stderr:        logWriter{console},
 		CompressLogs:  true,
 		MaxUploadSize: opts.MaxUploadSize,
+		Bus:           opts.Bus,
 	}
 	if opts.Collection == logtail.CollectionNode {
 		conf.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta

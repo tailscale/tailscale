@@ -11,6 +11,7 @@ import (
 	"testing/synctest"
 
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 )
 
 func TestLinkChangeLogLimiter(t *testing.T) { synctest.Test(t, syncTestLinkChangeLogLimiter) }
@@ -61,21 +62,15 @@ func syncTestLinkChangeLogLimiter(t *testing.T) {
 	// string cache and allow the next log to write to our log buffer.
 	//
 	// InjectEvent doesn't work because it's not a major event, so we
-	// instead reach into the netmon and grab the callback, and then call
-	// it ourselves.
-	mon.mu.Lock()
-	var cb func(*ChangeDelta)
-	for _, c := range mon.cbs {
-		cb = c
-		break
-	}
-	mon.mu.Unlock()
-
-	cb(&ChangeDelta{Major: true})
+	// instead inject the event ourselves.
+	injector := eventbustest.NewInjector(t, bus)
+	eventbustest.Inject(injector, ChangeDelta{Major: true})
+	synctest.Wait()
 
 	logf("hello %s", "world")
-	if got := logBuffer.String(); got != "hello world\nother message\nhello world\n" {
-		t.Errorf("unexpected log buffer contents: %q", got)
+	want := "hello world\nother message\nhello world\n"
+	if got := logBuffer.String(); got != want {
+		t.Errorf("unexpected log buffer contents, got: %q, want, %q", got, want)
 	}
 
 	// Canceling the context we passed to LinkChangeLogLimiter should

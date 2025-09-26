@@ -591,6 +591,7 @@ func (s *Server) start() (reterr error) {
 	closePool.add(s.netMon)
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
+	s.dialer.SetBus(sys.Bus.Get())
 	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
 		EventBus:      sys.Bus.Get(),
 		ListenPort:    s.Port,
@@ -766,6 +767,7 @@ func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker
 		Stderr:       io.Discard, // log everything to Buffer
 		Buffer:       s.logbuffer,
 		CompressLogs: true,
+		Bus:          s.sys.Bus.Get(),
 		HTTPC:        &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, health, tsLogf)},
 		MetricsDelta: clientmetric.EncodeLogTailMetricsDelta,
 	}

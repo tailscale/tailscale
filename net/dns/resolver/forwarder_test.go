@@ -124,7 +124,6 @@ func TestResolversWithDelays(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestGetRCode(t *testing.T) {
@@ -463,6 +462,7 @@ func runTestQuery(tb testing.TB, request []byte, modify func(*forwarder), ports 
 
 	var dialer tsdial.Dialer
 	dialer.SetNetMon(netMon)
+	dialer.SetBus(bus)
 
 	fwd := newForwarder(logf, netMon, nil, &dialer, health.NewTracker(bus), nil)
 	if modify != nil {

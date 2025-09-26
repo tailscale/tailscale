@@ -480,7 +480,9 @@ func newTestLocalBackendWithSys(t testing.TB, sys *tsd.System) *LocalBackend {
 		t.Log("Added fake userspace engine for testing")
 	}
 	if _, ok := sys.Dialer.GetOK(); !ok {
-		sys.Set(tsdial.NewDialer(netmon.NewStatic()))
+		dialer := tsdial.NewDialer(netmon.NewStatic())
+		dialer.SetBus(sys.Bus.Get())
+		sys.Set(dialer)
 		t.Log("Added static dialer for testing")
 	}
 	lb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
@@ -3101,12 +3103,14 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 	b.hostinfo = hi
 	k := key.NewMachine()
 	var cc *mockControl
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(sys.Bus.Get())
 	opts := controlclient.Options{
 		ServerURL: "https://example.com",
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
 			return k, nil
 		},
-		Dialer:       tsdial.NewDialer(netmon.NewStatic()),
+		Dialer:       dialer,
 		Logf:         b.logf,
 		PolicyClient: polc,
 	}
