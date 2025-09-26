@@ -12,7 +12,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"tailscale.com/clientupdate"
+	_ "tailscale.com/clientupdate" // for feature registration side effects
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -464,7 +465,7 @@ func TestProfileManagement(t *testing.T) {
 	wantCurProfile = "user@2.example.com"
 	checkProfiles(t)
 
-	if !clientupdate.CanAutoUpdate() {
+	if !feature.CanAutoUpdate() {
 		t.Logf("Save an invalid AutoUpdate pref value")
 		prefs := pm.CurrentPrefs().AsStruct()
 		prefs.AutoUpdate.Apply.Set(true)

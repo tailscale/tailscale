@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tailscale.com/feature"
 	"tailscale.com/hostinfo"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
@@ -252,9 +253,13 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 
 var canAutoUpdateCache lazy.SyncValue[bool]
 
-// CanAutoUpdate reports whether auto-updating via the clientupdate package
+func init() {
+	feature.HookCanAutoUpdate.Set(canAutoUpdate)
+}
+
+// canAutoUpdate reports whether auto-updating via the clientupdate package
 // is supported for the current os/distro.
-func CanAutoUpdate() bool { return canAutoUpdateCache.Get(canAutoUpdateUncached) }
+func canAutoUpdate() bool { return canAutoUpdateCache.Get(canAutoUpdateUncached) }
 
 func canAutoUpdateUncached() bool {
 	if version.IsMacSysExt() {

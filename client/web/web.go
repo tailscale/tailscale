@@ -24,9 +24,9 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/envknob/featureknob"
+	"tailscale.com/feature"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -1049,7 +1049,7 @@ func availableFeatures() map[string]bool {
 		"advertise-routes":    true, // available on all platforms
 		"use-exit-node":       featureknob.CanUseExitNode() == nil,
 		"ssh":                 featureknob.CanRunTailscaleSSH() == nil,
-		"auto-update":         version.IsUnstableBuild() && clientupdate.CanAutoUpdate(),
+		"auto-update":         version.IsUnstableBuild() && feature.CanAutoUpdate(),
 	}
 	return features
 }

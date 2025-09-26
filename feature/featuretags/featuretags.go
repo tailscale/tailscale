@@ -96,6 +96,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"captiveportal": {"CaptivePortal", "Captive portal detection", nil},
 	"capture":       {"Capture", "Packet capture", nil},
 	"cli":           {"CLI", "embed the CLI into the tailscaled binary", nil},
+	"clientupdate":  {"ClientUpdate", "Client auto-update support", nil},
 	"completion":    {"Completion", "CLI shell completion", nil},
 	"dbus":          {"DBus", "Linux DBus support", nil},
 	"debugeventbus": {"DebugEventBus", "eventbus debug support", nil},

@@ -30,10 +30,10 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
 	"tailscale.com/appc/appctest"
-	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
+	"tailscale.com/feature"
 	_ "tailscale.com/feature/condregister/portmapper"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -3710,7 +3710,7 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 			// On platforms that don't support auto-update we can never
 			// transition to auto-updates being enabled. The value should
 			// remain unchanged after onTailnetDefaultAutoUpdate.
-			if !clientupdate.CanAutoUpdate() {
+			if !feature.CanAutoUpdate() {
 				want = tt.before
 			}
 			if got := b.pm.CurrentPrefs().AutoUpdate().Apply; got != want {
@@ -5455,7 +5455,7 @@ func TestEnableAutoUpdates(t *testing.T) {
 	})
 	// Enabling may fail, depending on which environment we are running this
 	// test in.
-	wantErr := !clientupdate.CanAutoUpdate()
+	wantErr := !feature.CanAutoUpdate()
 	gotErr := err != nil
 	if gotErr != wantErr {
 		t.Fatalf("enabling auto-updates: got error: %v (%v); want error: %v", gotErr, err, wantErr)

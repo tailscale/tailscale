@@ -5,23 +5,16 @@ package ipnlocal
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
 	"path"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
-	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/posture"
@@ -34,7 +27,6 @@ import (
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/version"
-	"tailscale.com/version/distro"
 )
 
 // c2nHandlers maps an HTTP method and URI path (without query parameters) to
@@ -59,10 +51,6 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 
 	// SSH
 	req("/ssh/usernames"): handleC2NSSHUsernames,
-
-	// Auto-updates.
-	req("GET /update"):  handleC2NUpdateGet,
-	req("POST /update"): handleC2NUpdatePost,
 
 	// Device posture.
 	req("GET /posture/identity"): handleC2NPostureIdentityGet,
@@ -337,50 +325,6 @@ func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func handleC2NUpdateGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	b.logf("c2n: GET /update received")
-
-	res := b.newC2NUpdateResponse()
-	res.Started = b.c2nUpdateStarted()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
-func handleC2NUpdatePost(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
-	b.logf("c2n: POST /update received")
-	res := b.newC2NUpdateResponse()
-	defer func() {
-		if res.Err != "" {
-			b.logf("c2n: POST /update failed: %s", res.Err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
-	}()
-
-	if !res.Enabled {
-		res.Err = "not enabled"
-		return
-	}
-	if !res.Supported {
-		res.Err = "not supported"
-		return
-	}
-
-	// Do not update if we have active inbound SSH connections. Control can set
-	// force=true query parameter to override this.
-	if r.FormValue("force") != "true" && b.sshServer != nil && b.sshServer.NumActiveConns() > 0 {
-		res.Err = "not updating due to active SSH connections"
-		return
-	}
-
-	if err := b.startAutoUpdate("c2n"); err != nil {
-		res.Err = err.Error()
-		return
-	}
-	res.Started = true
-}
-
 func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
 	b.logf("c2n: GET /posture/identity received")
 
@@ -422,138 +366,4 @@ func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
-}
-
-func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
-	// If NewUpdater does not return an error, we can update the installation.
-	//
-	// Note that we create the Updater solely to check for errors; we do not
-	// invoke it here. For this purpose, it is ok to pass it a zero Arguments.
-	prefs := b.Prefs().AutoUpdate()
-	return tailcfg.C2NUpdateResponse{
-		Enabled:   envknob.AllowsRemoteUpdate() || prefs.Apply.EqualBool(true),
-		Supported: clientupdate.CanAutoUpdate() && !version.IsMacSysExt(),
-	}
-}
-
-func (b *LocalBackend) c2nUpdateStarted() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.c2nUpdateStatus.started
-}
-
-func (b *LocalBackend) setC2NUpdateStarted(v bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.c2nUpdateStatus.started = v
-}
-
-func (b *LocalBackend) trySetC2NUpdateStarted() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.c2nUpdateStatus.started {
-		return false
-	}
-	b.c2nUpdateStatus.started = true
-	return true
-}
-
-// findCmdTailscale looks for the cmd/tailscale that corresponds to the
-// currently running cmd/tailscaled. It's up to the caller to verify that the
-// two match, but this function does its best to find the right one. Notably, it
-// doesn't use $PATH for security reasons.
-func findCmdTailscale() (string, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	var ts string
-	switch runtime.GOOS {
-	case "linux":
-		if self == "/usr/sbin/tailscaled" || self == "/usr/bin/tailscaled" {
-			ts = "/usr/bin/tailscale"
-		}
-		if self == "/usr/local/sbin/tailscaled" || self == "/usr/local/bin/tailscaled" {
-			ts = "/usr/local/bin/tailscale"
-		}
-		switch distro.Get() {
-		case distro.QNAP:
-			// The volume under /share/ where qpkg are installed is not
-			// predictable. But the rest of the path is.
-			ok, err := filepath.Match("/share/*/.qpkg/Tailscale/tailscaled", self)
-			if err == nil && ok {
-				ts = filepath.Join(filepath.Dir(self), "tailscale")
-			}
-		case distro.Unraid:
-			if self == "/usr/local/emhttp/plugins/tailscale/bin/tailscaled" {
-				ts = "/usr/local/emhttp/plugins/tailscale/bin/tailscale"
-			}
-		}
-	case "windows":
-		ts = filepath.Join(filepath.Dir(self), "tailscale.exe")
-	case "freebsd", "openbsd":
-		if self == "/usr/local/bin/tailscaled" {
-			ts = "/usr/local/bin/tailscale"
-		}
-	default:
-		return "", fmt.Errorf("unsupported OS %v", runtime.GOOS)
-	}
-	if ts != "" && regularFileExists(ts) {
-		return ts, nil
-	}
-	return "", errors.New("tailscale executable not found in expected place")
-}
-
-func tailscaleUpdateCmd(cmdTS string) *exec.Cmd {
-	defaultCmd := exec.Command(cmdTS, "update", "--yes")
-	if runtime.GOOS != "linux" {
-		return defaultCmd
-	}
-	if _, err := exec.LookPath("systemd-run"); err != nil {
-		return defaultCmd
-	}
-
-	// When systemd-run is available, use it to run the update command. This
-	// creates a new temporary unit separate from the tailscaled unit. When
-	// tailscaled is restarted during the update, systemd won't kill this
-	// temporary update unit, which could cause unexpected breakage.
-	//
-	// We want to use a few optional flags:
-	//  * --wait, to block the update command until completion (added in systemd 232)
-	//  * --pipe, to collect stdout/stderr (added in systemd 235)
-	//  * --collect, to clean up failed runs from memory (added in systemd 236)
-	//
-	// We need to check the version of systemd to figure out if those flags are
-	// available.
-	//
-	// The output will look like:
-	//
-	//   systemd 255 (255.7-1-arch)
-	//   +PAM +AUDIT ... other feature flags ...
-	systemdVerOut, err := exec.Command("systemd-run", "--version").Output()
-	if err != nil {
-		return defaultCmd
-	}
-	parts := strings.Fields(string(systemdVerOut))
-	if len(parts) < 2 || parts[0] != "systemd" {
-		return defaultCmd
-	}
-	systemdVer, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return defaultCmd
-	}
-	if systemdVer >= 236 {
-		return exec.Command("systemd-run", "--wait", "--pipe", "--collect", cmdTS, "update", "--yes")
-	} else if systemdVer >= 235 {
-		return exec.Command("systemd-run", "--wait", "--pipe", cmdTS, "update", "--yes")
-	} else if systemdVer >= 232 {
-		return exec.Command("systemd-run", "--wait", cmdTS, "update", "--yes")
-	} else {
-		return exec.Command("systemd-run", cmdTS, "update", "--yes")
-	}
-}
-
-func regularFileExists(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.Mode().IsRegular()
 }

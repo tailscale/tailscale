@@ -6,7 +6,6 @@
 package ipnlocal
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -25,7 +24,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"reflect"
 	"runtime"
 	"slices"
@@ -40,7 +38,6 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
@@ -303,22 +300,11 @@ type LocalBackend struct {
 	notifyWatchers    map[string]*watchSession // by session ID
 	lastStatusTime    time.Time                // status.AsOf value of the last processed status update
 	componentLogUntil map[string]componentLogState
-	// c2nUpdateStatus is the status of c2n-triggered client update.
-	c2nUpdateStatus updateStatus
-	currentUser     ipnauth.Actor
+	currentUser       ipnauth.Actor
 
-	selfUpdateProgress  []ipnstate.UpdateProgress
-	lastSelfUpdateState ipnstate.SelfUpdateStatus
 	// capForcedNetfilter is the netfilter that control instructs Linux clients
 	// to use, unless overridden locally.
 	capForcedNetfilter string // TODO(nickkhyl): move to nodeBackend
-	// offlineAutoUpdateCancel stops offline auto-updates when called. It
-	// should be used via stopOfflineAutoUpdate and
-	// maybeStartOfflineAutoUpdate. It is nil when offline auto-updates are
-	// note running.
-	//
-	//lint:ignore U1000 only used in Linux and Windows builds in autoupdate.go
-	offlineAutoUpdateCancel func()
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON mem.RO                   // last JSON that was parsed into serveConfig
@@ -434,10 +420,6 @@ func (b *LocalBackend) NetMon() *netmon.Monitor {
 	return b.sys.NetMon.Get()
 }
 
-type updateStatus struct {
-	started bool
-}
-
 type metrics struct {
 	// advertisedRoutes is a metric that reports the number of network routes that are advertised by the local node.
 	// This informs the user of how many routes are being advertised by the local node, excluding exit routes.
@@ -516,8 +498,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		em:                    newExpiryManager(logf, sys.Bus.Get()),
 		loginFlags:            loginFlags,
 		clock:                 clock,
-		selfUpdateProgress:    make([]ipnstate.UpdateProgress, 0),
-		lastSelfUpdateState:   ipnstate.UpdateFinished,
 		captiveCtx:            captiveCtx,
 		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
 		needsCaptiveDetection: make(chan bool),
@@ -1126,7 +1106,6 @@ func (b *LocalBackend) Shutdown() {
 		defer cancel()
 		b.sockstatLogger.Shutdown(ctx)
 	}
-	b.stopOfflineAutoUpdate()
 
 	b.unregisterSysPolicyWatch()
 	if cc != nil {
@@ -3411,7 +3390,7 @@ func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
 		// can still manually enable auto-updates on this node.
 		return
 	}
-	if clientupdate.CanAutoUpdate() {
+	if buildfeatures.HasClientUpdate && feature.CanAutoUpdate() {
 		b.logf("using tailnet default auto-update setting: %v", au)
 		prefsClone := prefs.AsStruct()
 		prefsClone.AutoUpdate.Apply = opt.NewBool(au)
@@ -4099,7 +4078,7 @@ func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 }
 
 func (b *LocalBackend) checkAutoUpdatePrefsLocked(p *ipn.Prefs) error {
-	if p.AutoUpdate.Apply.EqualBool(true) && !clientupdate.CanAutoUpdate() {
+	if p.AutoUpdate.Apply.EqualBool(true) && !feature.CanAutoUpdate() {
 		return errors.New("Auto-updates are not supported on this platform.")
 	}
 	return nil
@@ -4549,14 +4528,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 		// such as when the user toggles the Connected switch in the GUI
 		// or runs `tailscale up`.
 		b.resetAlwaysOnOverrideLocked()
-	}
-
-	if newp.AutoUpdate.Apply.EqualBool(true) {
-		if b.state != ipn.Running {
-			b.maybeStartOfflineAutoUpdate(newp.View())
-		}
-	} else {
-		b.stopOfflineAutoUpdate()
 	}
 
 	unlock.UnlockEarly()
@@ -5465,12 +5436,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		}
 	}
 	b.pauseOrResumeControlClientLocked()
-
-	if newState == ipn.Running {
-		b.stopOfflineAutoUpdate()
-	} else {
-		b.maybeStartOfflineAutoUpdate(prefs)
-	}
 
 	unlock.UnlockEarly()
 
@@ -6610,6 +6575,15 @@ func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error)
 	return cc.DoNoiseRequest(req)
 }
 
+// ActiveSSHConns returns the number of active SSH connections,
+// or 0 if SSH is not linked into the binary or available on the platform.
+func (b *LocalBackend) ActiveSSHConns() int {
+	if b.sshServer == nil {
+		return 0
+	}
+	return b.sshServer.NumActiveConns()
+}
+
 func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -6938,54 +6912,6 @@ func (b *LocalBackend) DebugBreakTCPConns() error {
 
 func (b *LocalBackend) DebugBreakDERPConns() error {
 	return b.MagicConn().DebugBreakDERPConns()
-}
-
-func (b *LocalBackend) pushSelfUpdateProgress(up ipnstate.UpdateProgress) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.selfUpdateProgress = append(b.selfUpdateProgress, up)
-	b.lastSelfUpdateState = up.Status
-}
-
-func (b *LocalBackend) clearSelfUpdateProgress() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.selfUpdateProgress = make([]ipnstate.UpdateProgress, 0)
-	b.lastSelfUpdateState = ipnstate.UpdateFinished
-}
-
-func (b *LocalBackend) GetSelfUpdateProgress() []ipnstate.UpdateProgress {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	res := make([]ipnstate.UpdateProgress, len(b.selfUpdateProgress))
-	copy(res, b.selfUpdateProgress)
-	return res
-}
-
-func (b *LocalBackend) DoSelfUpdate() {
-	b.mu.Lock()
-	updateState := b.lastSelfUpdateState
-	b.mu.Unlock()
-	// don't start an update if one is already in progress
-	if updateState == ipnstate.UpdateInProgress {
-		return
-	}
-	b.clearSelfUpdateProgress()
-	b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, ""))
-	up, err := clientupdate.NewUpdater(clientupdate.Arguments{
-		Logf: func(format string, args ...any) {
-			b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, fmt.Sprintf(format, args...)))
-		},
-	})
-	if err != nil {
-		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
-	}
-	err = up.Update()
-	if err != nil {
-		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
-	} else {
-		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFinished, "tailscaled did not restart; please restart Tailscale manually."))
-	}
 }
 
 // ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
@@ -7591,58 +7517,6 @@ func isAllowedAutoExitNodeID(polc policyclient.Client, exitNodeID tailcfg.Stable
 		return slices.Contains(nodes, string(exitNodeID))
 	}
 	return true // no policy configured; allow all exit nodes
-}
-
-// startAutoUpdate triggers an auto-update attempt. The actual update happens
-// asynchronously. If another update is in progress, an error is returned.
-func (b *LocalBackend) startAutoUpdate(logPrefix string) (retErr error) {
-	// Check if update was already started, and mark as started.
-	if !b.trySetC2NUpdateStarted() {
-		return errors.New("update already started")
-	}
-	defer func() {
-		// Clear the started flag if something failed.
-		if retErr != nil {
-			b.setC2NUpdateStarted(false)
-		}
-	}()
-
-	cmdTS, err := findCmdTailscale()
-	if err != nil {
-		return fmt.Errorf("failed to find cmd/tailscale binary: %w", err)
-	}
-	var ver struct {
-		Long string `json:"long"`
-	}
-	out, err := exec.Command(cmdTS, "version", "--json").Output()
-	if err != nil {
-		return fmt.Errorf("failed to find cmd/tailscale binary: %w", err)
-	}
-	if err := json.Unmarshal(out, &ver); err != nil {
-		return fmt.Errorf("invalid JSON from cmd/tailscale version --json: %w", err)
-	}
-	if ver.Long != version.Long() {
-		return fmt.Errorf("cmd/tailscale version %q does not match tailscaled version %q", ver.Long, version.Long())
-	}
-
-	cmd := tailscaleUpdateCmd(cmdTS)
-	buf := new(bytes.Buffer)
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-	b.logf("%s: running %q", logPrefix, strings.Join(cmd.Args, " "))
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start cmd/tailscale update: %w", err)
-	}
-
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			b.logf("%s: update command failed: %v, output: %s", logPrefix, err, buf)
-		} else {
-			b.logf("%s: update attempt complete", logPrefix)
-		}
-		b.setC2NUpdateStarted(false)
-	}()
-	return nil
 }
 
 // srcIPHasCapForFilter is called by the packet filter when evaluating firewall
