@@ -18,6 +18,22 @@ import (
 // field without it being dropped.
 type Bool string
 
+const (
+	// True is the encoding of an explicit true.
+	True = Bool("true")
+
+	// False is the encoding of an explicit false.
+	False = Bool("false")
+
+	// ExplicitlyUnset is the encoding used by a null
+	// JSON value. It is a synonym for the empty string.
+	ExplicitlyUnset = Bool("unset")
+
+	// Empty means the Bool is unset and it's neither
+	// true nor false.
+	Empty = Bool("")
+)
+
 // NewBool constructs a new Bool value equal to b. The returned Bool is set,
 // unless Set("") or Clear() methods are called.
 func NewBool(b bool) Bool {
@@ -50,16 +66,16 @@ func (b *Bool) Scan(src any) error {
 	switch src := src.(type) {
 	case bool:
 		if src {
-			*b = "true"
+			*b = True
 		} else {
-			*b = "false"
+			*b = False
 		}
 		return nil
 	case int64:
 		if src == 0 {
-			*b = "false"
+			*b = False
 		} else {
-			*b = "true"
+			*b = True
 		}
 		return nil
 	default:
@@ -75,18 +91,18 @@ func (b Bool) EqualBool(v bool) bool {
 }
 
 var (
-	trueBytes  = []byte("true")
-	falseBytes = []byte("false")
+	trueBytes  = []byte(True)
+	falseBytes = []byte(False)
 	nullBytes  = []byte("null")
 )
 
 func (b Bool) MarshalJSON() ([]byte, error) {
 	switch b {
-	case "true":
+	case True:
 		return trueBytes, nil
-	case "false":
+	case False:
 		return falseBytes, nil
-	case "", "unset":
+	case Empty, ExplicitlyUnset:
 		return nullBytes, nil
 	}
 	return nil, fmt.Errorf("invalid opt.Bool value %q", string(b))
@@ -95,11 +111,11 @@ func (b Bool) MarshalJSON() ([]byte, error) {
 func (b *Bool) UnmarshalJSON(j []byte) error {
 	switch string(j) {
 	case "true":
-		*b = "true"
+		*b = True
 	case "false":
-		*b = "false"
+		*b = False
 	case "null":
-		*b = "unset"
+		*b = ExplicitlyUnset
 	default:
 		return fmt.Errorf("invalid opt.Bool value %q", j)
 	}
