@@ -10,6 +10,10 @@ import (
 	"testing"
 )
 
+func newFakeIPTablesRunner() *iptablesRunner {
+	return NewFakeIPTablesRunner().(*iptablesRunner)
+}
+
 func Test_iptablesRunner_EnsurePortMapRuleForSvc(t *testing.T) {
 	v4Addr := netip.MustParseAddr("10.0.0.4")
 	v6Addr := netip.MustParseAddr("fd7a:115c:a1e0::701:b62a")
@@ -45,7 +49,7 @@ func Test_iptablesRunner_EnsurePortMapRuleForSvc(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			iptr := NewFakeIPTablesRunner()
+			iptr := newFakeIPTablesRunner()
 			table := iptr.getIPTByAddr(tt.targetIP)
 			for _, ruleset := range tt.precreateSvcRules {
 				mustPrecreatePortMapRule(t, ruleset, table)
@@ -103,7 +107,7 @@ func Test_iptablesRunner_DeletePortMapRuleForSvc(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			iptr := NewFakeIPTablesRunner()
+			iptr := newFakeIPTablesRunner()
 			table := iptr.getIPTByAddr(tt.targetIP)
 			for _, ruleset := range tt.precreateSvcRules {
 				mustPrecreatePortMapRule(t, ruleset, table)
@@ -127,7 +131,7 @@ func Test_iptablesRunner_DeleteSvc(t *testing.T) {
 	v4Addr := netip.MustParseAddr("10.0.0.4")
 	v6Addr := netip.MustParseAddr("fd7a:115c:a1e0::701:b62a")
 	testPM := PortMap{Protocol: "tcp", MatchPort: 4003, TargetPort: 80}
-	iptr := NewFakeIPTablesRunner()
+	iptr := newFakeIPTablesRunner()
 
 	// create two rules that will consitute svc1
 	s1R1 := argsForPortMapRule("svc1", "tailscale0", v4Addr, testPM)
@@ -189,7 +193,7 @@ func Test_iptablesRunner_EnsureDNATRuleForSvc(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			iptr := NewFakeIPTablesRunner()
+			iptr := newFakeIPTablesRunner()
 			table := iptr.getIPTByAddr(tt.targetIP)
 			for _, ruleset := range tt.precreateSvcRules {
 				mustPrecreateDNATRule(t, ruleset, table)
@@ -248,7 +252,7 @@ func Test_iptablesRunner_DeleteDNATRuleForSvc(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			iptr := NewFakeIPTablesRunner()
+			iptr := newFakeIPTablesRunner()
 			table := iptr.getIPTByAddr(tt.targetIP)
 			for _, ruleset := range tt.precreateSvcRules {
 				mustPrecreateDNATRule(t, ruleset, table)

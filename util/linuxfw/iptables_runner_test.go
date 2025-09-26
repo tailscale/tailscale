@@ -20,7 +20,7 @@ func init() {
 }
 
 func TestAddAndDeleteChains(t *testing.T) {
-	iptr := NewFakeIPTablesRunner()
+	iptr := newFakeIPTablesRunner()
 	err := iptr.AddChains()
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestAddAndDeleteChains(t *testing.T) {
 }
 
 func TestAddAndDeleteHooks(t *testing.T) {
-	iptr := NewFakeIPTablesRunner()
+	iptr := newFakeIPTablesRunner()
 	// don't need to test what happens if the chains don't exist, because
 	// this is handled by fake iptables, in realife iptables would return error.
 	if err := iptr.AddChains(); err != nil {
@@ -113,7 +113,7 @@ func TestAddAndDeleteHooks(t *testing.T) {
 }
 
 func TestAddAndDeleteBase(t *testing.T) {
-	iptr := NewFakeIPTablesRunner()
+	iptr := newFakeIPTablesRunner()
 	tunname := "tun0"
 	if err := iptr.AddChains(); err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestAddAndDeleteBase(t *testing.T) {
 }
 
 func TestAddAndDelLoopbackRule(t *testing.T) {
-	iptr := NewFakeIPTablesRunner()
+	iptr := newFakeIPTablesRunner()
 	// We don't need to test for malformed addresses, AddLoopbackRule
 	// takes in a netip.Addr, which is already valid.
 	fakeAddrV4 := netip.MustParseAddr("192.168.0.2")
@@ -247,7 +247,7 @@ func TestAddAndDelLoopbackRule(t *testing.T) {
 }
 
 func TestAddAndDelSNATRule(t *testing.T) {
-	iptr := NewFakeIPTablesRunner()
+	iptr := newFakeIPTablesRunner()
 
 	if err := iptr.AddChains(); err != nil {
 		t.Fatal(err)
@@ -292,7 +292,7 @@ func TestAddAndDelSNATRule(t *testing.T) {
 
 func TestEnsureSNATForDst_ipt(t *testing.T) {
 	ip1, ip2, ip3 := netip.MustParseAddr("100.99.99.99"), netip.MustParseAddr("100.88.88.88"), netip.MustParseAddr("100.77.77.77")
-	iptr := NewFakeIPTablesRunner()
+	iptr := newFakeIPTablesRunner()
 
 	// 1. A new rule gets added
 	mustCreateSNATRule_ipt(t, iptr, ip1, ip2)

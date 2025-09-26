@@ -112,6 +112,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Generic Receive Offload support (performance)",
 		Deps: []FeatureTag{"netstack"},
 	},
+	"iptables":      {"IPTables", "Linux iptables support", nil},
 	"kube":          {"Kube", "Kubernetes integration", nil},
 	"linuxdnsfight": {"LinuxDNSFight", "Linux support for detecting DNS fights (inotify watching of /etc/resolv.conf)", nil},
 	"oauthkey":      {"OAuthKey", "OAuth secret-to-authkey resolution support", nil},
