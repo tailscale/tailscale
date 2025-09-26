@@ -264,6 +264,8 @@ type Prefs struct {
 
 	// NetfilterKind specifies what netfilter implementation to use.
 	//
+	// It can be "iptables", "nftables", or "" to auto-detect.
+	//
 	// Linux-only.
 	NetfilterKind string
 
