@@ -143,22 +143,20 @@ func NewTracker(bus *eventbus.Bus) *Tracker {
 		panic("no eventbus set")
 	}
 
-	cli := bus.Client("health.Tracker")
+	ec := bus.Client("health.Tracker")
 	t := &Tracker{
-		eventClient: cli,
-		changePub:   eventbus.Publish[Change](cli),
+		eventClient: ec,
+		changePub:   eventbus.Publish[Change](ec),
 	}
 	t.timer = t.clock().AfterFunc(time.Minute, t.timerSelfCheck)
 
-	cli.Monitor(func(cli *eventbus.Client) {
-		<-cli.Done()
-		t.close()
-	})
+	ec.Monitor(t.awaitEventClientDone)
 
 	return t
 }
 
-func (t *Tracker) close() error {
+func (t *Tracker) awaitEventClientDone(ec *eventbus.Client) {
+	<-ec.Done()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -166,8 +164,7 @@ func (t *Tracker) close() error {
 		timer.Stop()
 	}
 	t.timer.Stop()
-	t.pendingVisibleTimers = make(map[*Warnable]tstime.TimerController)
-	return nil
+	clear(t.pendingVisibleTimers)
 }
 
 func (t *Tracker) now() time.Time {
