@@ -876,7 +876,7 @@ type textUpdate struct {
 	Unadvertise []string
 }
 
-func routeUpdateToText(u RouteUpdate) textUpdate {
+func routeUpdateToText(u appctype.RouteUpdate) textUpdate {
 	var out textUpdate
 	for _, p := range u.Advertise {
 		out.Advertise = append(out.Advertise, p.String())
@@ -887,10 +887,10 @@ func routeUpdateToText(u RouteUpdate) textUpdate {
 	return out
 }
 
-// eqUpdate generates an eventbus test filter that matches a RouteUpdate
+// eqUpdate generates an eventbus test filter that matches a appctype.RouteUpdate
 // message equal to want, or reports an error giving a human-readable diff.
-func eqUpdate(want RouteUpdate) func(RouteUpdate) error {
-	return func(got RouteUpdate) error {
+func eqUpdate(want appctype.RouteUpdate) func(appctype.RouteUpdate) error {
+	return func(got appctype.RouteUpdate) error {
 		if diff := cmp.Diff(routeUpdateToText(got), routeUpdateToText(want),
 			cmpopts.SortSlices(stdcmp.Less[string]),
 		); diff != "" {
