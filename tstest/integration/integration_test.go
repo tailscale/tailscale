@@ -309,16 +309,12 @@ func TestOneNodeUpAuth(t *testing.T) {
 			alreadyLoggedIn: true,
 			needsNewAuthURL: false,
 		},
-		// TODO(alexc): This test is failing because of a bug in `tailscale up` where
-		// it waits for ipn to enter the "Running" state.  If we're already logged in
-		// and running, this completes immediately, before we've had a chance to show
-		// the user the auth URL.
-		// {
-		// 	name:              "up-with-force-reauth-after-login",
-		// 	args:              []string{"up", "--force-reauth"},
-		// 	alreadyLoggedIn:   true,
-		// 	needsNewAuthURL:   true,
-		// },
+		{
+			name:            "up-with-force-reauth-after-login",
+			args:            []string{"up", "--force-reauth"},
+			alreadyLoggedIn: true,
+			needsNewAuthURL: true,
+		},
 		{
 			name:            "up-with-auth-key-after-login",
 			args:            []string{"up", "--auth-key=opensesame"},
@@ -340,6 +336,14 @@ func TestOneNodeUpAuth(t *testing.T) {
 			tt := tt // subtests are run in parallel, rebind tt
 			t.Run(fmt.Sprintf("%s-seamless-%t", tt.name, useSeamlessKeyRenewal), func(t *testing.T) {
 				tstest.Parallel(t)
+
+				// TODO(alexc): This test is failing because of a bug in `tailscale up` where
+				// it waits for ipn to enter the "Running" state.  If we're already logged in
+				// and running, this completes immediately, before we've had a chance to show
+				// the user the auth URL.
+				if tt.name == "up-with-force-reauth-after-login" {
+					t.Skip()
+				}
 
 				env := NewTestEnv(t, ConfigureControl(
 					func(control *testcontrol.Server) {
