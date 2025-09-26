@@ -149,7 +149,25 @@ func NewTracker(bus *eventbus.Bus) *Tracker {
 		changePub:   eventbus.Publish[Change](cli),
 	}
 	t.timer = t.clock().AfterFunc(time.Minute, t.timerSelfCheck)
+
+	cli.Monitor(func(cli *eventbus.Client) {
+		<-cli.Done()
+		t.close()
+	})
+
 	return t
+}
+
+func (t *Tracker) close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for _, timer := range t.pendingVisibleTimers {
+		timer.Stop()
+	}
+	t.timer.Stop()
+	t.pendingVisibleTimers = make(map[*Warnable]tstime.TimerController)
+	return nil
 }
 
 func (t *Tracker) now() time.Time {
