@@ -8,8 +8,6 @@ import (
 	"encoding/binary"
 	"net/netip"
 
-	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )
@@ -88,13 +86,13 @@ func updateV4PacketChecksums(p *packet.Parsed, old, new netip.Addr) {
 	tr := p.Transport()
 	switch p.IPProto {
 	case ipproto.UDP, ipproto.DCCP:
-		if len(tr) < header.UDPMinimumSize {
+		if len(tr) < minUDPSize {
 			// Not enough space for a UDP header.
 			return
 		}
 		updateV4Checksum(tr[6:8], o4[:], n4[:])
 	case ipproto.TCP:
-		if len(tr) < header.TCPMinimumSize {
+		if len(tr) < minTCPSize {
 			// Not enough space for a TCP header.
 			return
 		}
@@ -112,34 +110,60 @@ func updateV4PacketChecksums(p *packet.Parsed, old, new netip.Addr) {
 	}
 }
 
+const (
+	minUDPSize    = 8
+	minTCPSize    = 20
+	minICMPv6Size = 8
+	minIPv6Header = 40
+
+	offsetICMPv6Checksum = 2
+	offsetUDPChecksum    = 6
+	offsetTCPChecksum    = 16
+)
+
 // updateV6PacketChecksums updates the checksums in the packet buffer.
 // p is modified in place.
 // If p.IPProto is unknown, no checksums are updated.
 func updateV6PacketChecksums(p *packet.Parsed, old, new netip.Addr) {
-	if len(p.Buffer()) < 40 {
+	if len(p.Buffer()) < minIPv6Header {
 		// Not enough space for an IPv6 header.
 		return
 	}
-	o6, n6 := tcpip.AddrFrom16Slice(old.AsSlice()), tcpip.AddrFrom16Slice(new.AsSlice())
+	o6, n6 := old.As16(), new.As16()
 
 	// Now update the transport layer checksums, where applicable.
 	tr := p.Transport()
 	switch p.IPProto {
 	case ipproto.ICMPv6:
-		if len(tr) < header.ICMPv6MinimumSize {
+		if len(tr) < minICMPv6Size {
 			return
 		}
-		header.ICMPv6(tr).UpdateChecksumPseudoHeaderAddress(o6, n6)
+
+		ss := tr[offsetICMPv6Checksum:]
+		xsum := binary.BigEndian.Uint16(ss)
+		binary.BigEndian.PutUint16(ss,
+			^checksumUpdate2ByteAlignedAddress(^xsum, o6, n6))
+
 	case ipproto.UDP, ipproto.DCCP:
-		if len(tr) < header.UDPMinimumSize {
+		if len(tr) < minUDPSize {
 			return
 		}
-		header.UDP(tr).UpdateChecksumPseudoHeaderAddress(o6, n6, true)
+		ss := tr[offsetUDPChecksum:]
+		xsum := binary.BigEndian.Uint16(ss)
+		xsum = ^xsum
+		xsum = checksumUpdate2ByteAlignedAddress(xsum, o6, n6)
+		xsum = ^xsum
+		binary.BigEndian.PutUint16(ss, xsum)
 	case ipproto.TCP:
-		if len(tr) < header.TCPMinimumSize {
+		if len(tr) < minTCPSize {
 			return
 		}
-		header.TCP(tr).UpdateChecksumPseudoHeaderAddress(o6, n6, true)
+		ss := tr[offsetTCPChecksum:]
+		xsum := binary.BigEndian.Uint16(ss)
+		xsum = ^xsum
+		xsum = checksumUpdate2ByteAlignedAddress(xsum, o6, n6)
+		xsum = ^xsum
+		binary.BigEndian.PutUint16(ss, xsum)
 	case ipproto.SCTP:
 		// No transport layer update required.
 	}
@@ -194,4 +218,78 @@ func updateV4Checksum(oldSum, old, new []byte) {
 	}
 	hcPrime := ^uint16(cPrime)
 	binary.BigEndian.PutUint16(oldSum, hcPrime)
+}
+
+// checksumUpdate2ByteAlignedAddress updates an address in a calculated
+// checksum.
+//
+// The addresses must have the same length and must contain an even number
+// of bytes. The address MUST begin at a 2-byte boundary in the original buffer.
+//
+// This implementation is copied from gVisor, but updated to use [16]byte.
+func checksumUpdate2ByteAlignedAddress(xsum uint16, old, new [16]byte) uint16 {
+	const uint16Bytes = 2
+
+	oldAddr := old[:]
+	newAddr := new[:]
+
+	// As per RFC 1071 page 4,
+	//	(4)  Incremental Update
+	//
+	//        ...
+	//
+	//        To update the checksum, simply add the differences of the
+	//        sixteen bit integers that have been changed.  To see why this
+	//        works, observe that every 16-bit integer has an additive inverse
+	//        and that addition is associative.  From this it follows that
+	//        given the original value m, the new value m', and the old
+	//        checksum C, the new checksum C' is:
+	//
+	//                C' = C + (-m) + m' = C + (m' - m)
+	for len(oldAddr) != 0 {
+		// Convert the 2 byte sequences to uint16 values then apply the increment
+		// update.
+		xsum = checksumUpdate2ByteAlignedUint16(xsum, (uint16(oldAddr[0])<<8)+uint16(oldAddr[1]), (uint16(newAddr[0])<<8)+uint16(newAddr[1]))
+		oldAddr = oldAddr[uint16Bytes:]
+		newAddr = newAddr[uint16Bytes:]
+	}
+
+	return xsum
+}
+
+// checksumUpdate2ByteAlignedUint16 updates a uint16 value in a calculated
+// checksum.
+//
+// The value MUST begin at a 2-byte boundary in the original buffer.
+//
+// This implementation is copied from gVisor.
+func checksumUpdate2ByteAlignedUint16(xsum, old, new uint16) uint16 {
+	// As per RFC 1071 page 4,
+	//	(4)  Incremental Update
+	//
+	//        ...
+	//
+	//        To update the checksum, simply add the differences of the
+	//        sixteen bit integers that have been changed.  To see why this
+	//        works, observe that every 16-bit integer has an additive inverse
+	//        and that addition is associative.  From this it follows that
+	//        given the original value m, the new value m', and the old
+	//        checksum C, the new checksum C' is:
+	//
+	//                C' = C + (-m) + m' = C + (m' - m)
+	if old == new {
+		return xsum
+	}
+	return checksumCombine(xsum, checksumCombine(new, ^old))
+}
+
+// checksumCombine combines the two uint16 to form their checksum. This is done
+// by adding them and the carry.
+//
+// Note that checksum a must have been computed on an even number of bytes.
+//
+// This implementation is copied from gVisor.
+func checksumCombine(a, b uint16) uint16 {
+	v := uint32(a) + uint32(b)
+	return uint16(v + v>>16)
 }
