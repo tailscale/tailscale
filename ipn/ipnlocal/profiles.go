@@ -13,8 +13,8 @@ import (
 	"slices"
 	"strings"
 
-	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
@@ -674,7 +674,7 @@ func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error
 	// cause any EditPrefs calls to fail (other than disabling auto-updates).
 	//
 	// Reset AutoUpdate.Apply if we detect such invalid prefs.
-	if savedPrefs.AutoUpdate.Apply.EqualBool(true) && !clientupdate.CanAutoUpdate() {
+	if savedPrefs.AutoUpdate.Apply.EqualBool(true) && !feature.CanAutoUpdate() {
 		savedPrefs.AutoUpdate.Apply.Clear()
 	}
 

@@ -33,8 +33,9 @@ import (
 	"go4.org/mem"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/feature"
+	_ "tailscale.com/feature/clientupdate"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
@@ -1125,7 +1126,7 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 }
 
 func TestAutoUpdateDefaults(t *testing.T) {
-	if !clientupdate.CanAutoUpdate() {
+	if !feature.CanAutoUpdate() {
 		t.Skip("auto-updates not supported on this platform")
 	}
 	tstest.Shard(t)
