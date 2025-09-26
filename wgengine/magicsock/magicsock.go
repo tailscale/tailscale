@@ -1565,6 +1565,7 @@ func (c *Conn) maybeRebindOnError(err error) {
 
 	if c.lastErrRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
 		c.logf("magicsock: performing rebind due to %q", reason)
+		c.lastErrRebind.Store(time.Now())
 		c.Rebind()
 		go c.ReSTUN(reason)
 	} else {

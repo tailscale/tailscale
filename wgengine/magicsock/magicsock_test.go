@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -3116,18 +3117,35 @@ func TestMaybeRebindOnError(t *testing.T) {
 	}
 
 	t.Run("no-frequent-rebind", func(t *testing.T) {
-		if runtime.GOOS != "plan9" {
-			err := fmt.Errorf("outer err: %w", syscall.EPERM)
-			conn := newTestConn(t)
-			defer conn.Close()
-			conn.lastErrRebind.Store(time.Now().Add(-1 * time.Second))
-			before := metricRebindCalls.Value()
-			conn.maybeRebindOnError(err)
-			after := metricRebindCalls.Value()
-			if before != after {
-				t.Errorf("should not rebind within 5 seconds of last")
+		synctest.Test(t, func(t *testing.T) {
+			if runtime.GOOS != "plan9" {
+				err := fmt.Errorf("outer err: %w", syscall.EPERM)
+				conn := newTestConn(t)
+				defer conn.Close()
+				lastRebindTime := time.Now().Add(-1 * time.Second)
+				conn.lastErrRebind.Store(lastRebindTime)
+				before := metricRebindCalls.Value()
+				conn.maybeRebindOnError(err)
+				after := metricRebindCalls.Value()
+				if before != after {
+					t.Errorf("should not rebind within 5 seconds of last")
+				}
+
+				// ensure that rebinds are performed and store an updated last
+				// rebind time.
+				time.Sleep(6 * time.Second)
+
+				conn.maybeRebindOnError(err)
+				newTime := conn.lastErrRebind.Load()
+				if newTime == lastRebindTime {
+					t.Errorf("expected a rebind to occur")
+				}
+				if newTime.Sub(lastRebindTime) < 5*time.Second {
+					t.Errorf("expected at least 5 seconds between %s and %s", lastRebindTime, newTime)
+				}
 			}
-		}
+
+		})
 	})
 }
 
