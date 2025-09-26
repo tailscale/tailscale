@@ -1785,7 +1785,7 @@ func TestC2NDebugNetmap(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t, ConfigureControl(func(s *testcontrol.Server) {
-		s.CollectServices = "false"
+		s.CollectServices = opt.False
 	}))
 
 	var testNodes []*TestNode
