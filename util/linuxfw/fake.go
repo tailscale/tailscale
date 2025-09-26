@@ -128,7 +128,7 @@ func (n *fakeIPTables) DeleteChain(table, chain string) error {
 	}
 }
 
-func NewFakeIPTablesRunner() *iptablesRunner {
+func NewFakeIPTablesRunner() NetfilterRunner {
 	ipt4 := newFakeIPTables()
 	v6Available := false
 	var ipt6 iptablesInterface

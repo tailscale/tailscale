@@ -94,7 +94,7 @@ type Config struct {
 	SNATSubnetRoutes  bool                   // SNAT traffic to local subnets
 	StatefulFiltering bool                   // Apply stateful filtering to inbound connections
 	NetfilterMode     preftype.NetfilterMode // how much to manage netfilter rules
-	NetfilterKind     string                 // what kind of netfilter to use (nftables, iptables)
+	NetfilterKind     string                 // what kind of netfilter to use ("nftables", "iptables", or "" to auto-detect)
 }
 
 func (a *Config) Equal(b *Config) bool {
