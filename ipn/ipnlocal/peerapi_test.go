@@ -23,6 +23,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus/eventbustest"
@@ -384,7 +385,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		}
 
 		if err := eventbustest.Expect(bw,
-			eqUpdate(appc.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
+			eqUpdate(appctype.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
 		); err != nil {
 			t.Error(err)
 		}
@@ -470,7 +471,7 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		}
 
 		if err := eventbustest.Expect(bw,
-			eqUpdate(appc.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
+			eqUpdate(appctype.RouteUpdate{Advertise: mustPrefix("192.0.0.8/32")}),
 		); err != nil {
 			t.Error(err)
 		}

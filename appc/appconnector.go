@@ -328,11 +328,13 @@ func (e *AppConnector) updateDomains(domains []string) {
 		}
 
 		if len(toRemove) != 0 {
-			e.queue.Add(func() {
-				if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-					e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
-				}
-			})
+			if ra := e.routeAdvertiser; ra != nil {
+				e.queue.Add(func() {
+					if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+						e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
+					}
+				})
+			}
 			e.updatePub.Publish(appctype.RouteUpdate{Unadvertise: toRemove})
 		}
 	}
@@ -375,14 +377,16 @@ nextRoute:
 		}
 	}
 
-	e.queue.Add(func() {
-		if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
-			e.logf("failed to advertise routes: %v: %v", routes, err)
-		}
-		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-			e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
-		}
-	})
+	if e.routeAdvertiser != nil {
+		e.queue.Add(func() {
+			if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
+				e.logf("failed to advertise routes: %v: %v", routes, err)
+			}
+			if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+				e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
+			}
+		})
+	}
 	e.updatePub.Publish(appctype.RouteUpdate{
 		Advertise:   routes,
 		Unadvertise: toRemove,
