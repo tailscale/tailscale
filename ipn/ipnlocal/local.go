@@ -586,6 +586,8 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 	autoUpdateSub := eventbus.Subscribe[controlclient.AutoUpdate](ec)
 	healthChangeSub := eventbus.Subscribe[health.Change](ec)
 	changeDeltaSub := eventbus.Subscribe[netmon.ChangeDelta](ec)
+	routeUpdateSub := eventbus.Subscribe[appctype.RouteUpdate](ec)
+	storeRoutesSub := eventbus.Subscribe[appctype.RouteInfo](ec)
 
 	var portlist <-chan PortlistServices
 	if buildfeatures.HasPortList {
@@ -606,10 +608,15 @@ func (b *LocalBackend) consumeEventbusTopics(ec *eventbus.Client) func(*eventbus
 				b.onHealthChange(change)
 			case changeDelta := <-changeDeltaSub.Events():
 				b.linkChange(&changeDelta)
+
 			case pl := <-portlist:
 				if buildfeatures.HasPortList { // redundant, but explicit for linker deadcode and humans
 					b.setPortlistServices(pl)
 				}
+			case ru := <-routeUpdateSub.Events():
+				b.logf("TODO: received route update: %+v", ru)
+			case ri := <-storeRoutesSub.Events():
+				b.logf("TODO: received store routes: %+v", ri)
 			}
 		}
 	}
@@ -6905,9 +6912,9 @@ func (b *LocalBackend) ObserveDNSResponse(res []byte) error {
 // ErrDisallowedAutoRoute is returned by AdvertiseRoute when a route that is not allowed is requested.
 var ErrDisallowedAutoRoute = errors.New("route is not allowed")
 
-// AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
-// route advertisement if one is not already present in the existing routes.
-// If the route is disallowed, ErrDisallowedAutoRoute is returned.
+// AdvertiseRoute implements the appctype.RouteAdvertiser interface. It sets a
+// new route advertisement if one is not already present in the existing
+// routes.  If the route is disallowed, ErrDisallowedAutoRoute is returned.
 func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
 	finalRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
 	var newRoutes []netip.Prefix
@@ -6963,8 +6970,8 @@ func coveredRouteRangeNoDefault(finalRoutes []netip.Prefix, ipp netip.Prefix) bo
 	return false
 }
 
-// UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
-// a route advertisement if one is present in the existing routes.
+// UnadvertiseRoute implements the appctype.RouteAdvertiser interface. It
+// removes a route advertisement if one is present in the existing routes.
 func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
 	finalRoutes := currentRoutes[:0]
