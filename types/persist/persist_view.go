@@ -89,10 +89,11 @@ func (v *PersistView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 func (v PersistView) PrivateNodeKey() key.NodePrivate { return v.ж.PrivateNodeKey }
 
 // needed to request key rotation
-func (v PersistView) OldPrivateNodeKey() key.NodePrivate { return v.ж.OldPrivateNodeKey }
-func (v PersistView) UserProfile() tailcfg.UserProfile   { return v.ж.UserProfile }
-func (v PersistView) NetworkLockKey() key.NLPrivate      { return v.ж.NetworkLockKey }
-func (v PersistView) NodeID() tailcfg.StableNodeID       { return v.ж.NodeID }
+func (v PersistView) OldPrivateNodeKey() key.NodePrivate   { return v.ж.OldPrivateNodeKey }
+func (v PersistView) UserProfile() tailcfg.UserProfile     { return v.ж.UserProfile }
+func (v PersistView) NetworkLockKey() key.NLPrivate        { return v.ж.NetworkLockKey }
+func (v PersistView) NodeID() tailcfg.StableNodeID         { return v.ж.NodeID }
+func (v PersistView) AttestationKey() tailcfg.StableNodeID { panic("unsupported") }
 
 // DisallowedTKAStateIDs stores the tka.State.StateID values which
 // this node will not operate network lock on. This is used to
@@ -110,5 +111,6 @@ var _PersistViewNeedsRegeneration = Persist(struct {
 	UserProfile           tailcfg.UserProfile
 	NetworkLockKey        key.NLPrivate
 	NodeID                tailcfg.StableNodeID
+	AttestationKey        key.HardwareAttestationKey
 	DisallowedTKAStateIDs []string
 }{})

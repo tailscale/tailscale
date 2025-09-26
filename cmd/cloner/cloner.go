@@ -121,7 +121,12 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				continue
 			}
 			if !hasBasicUnderlying(ft) {
-				writef("dst.%s = *src.%s.Clone()", fname, fname)
+				// don't dereference if the underlying type is an interface
+				if _, isInterface := ft.Underlying().(*types.Interface); isInterface {
+					writef("if src.%s != nil { dst.%s = src.%s.Clone() }", fname, fname, fname)
+				} else {
+					writef("dst.%s = *src.%s.Clone()", fname, fname)
+				}
 				continue
 			}
 		}
