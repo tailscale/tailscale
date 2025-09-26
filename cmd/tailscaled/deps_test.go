@@ -186,6 +186,19 @@ func TestOmitDBus(t *testing.T) {
 	}.Check(t)
 }
 
+func TestNetstack(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_gro,ts_omit_netstack,ts_omit_outboundproxy,ts_omit_serve,ts_omit_ssh,ts_omit_webclient,ts_omit_tap",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "gvisor") {
+				t.Errorf("unexpected gvisor dep: %q", dep)
+			}
+		},
+	}.Check(t)
+}
+
 func TestOmitPortlist(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",
