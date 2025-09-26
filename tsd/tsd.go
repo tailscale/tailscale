@@ -98,10 +98,14 @@ func NewSystemWithBus(bus *eventbus.Bus) *System {
 	return sys
 }
 
+// LocalBackend is a fake name for *ipnlocal.LocalBackend to avoid an import cycle.
+type LocalBackend = any
+
 // NetstackImpl is the interface that *netstack.Impl implements.
 // It's an interface for circular dependency reasons: netstack.Impl
 // references LocalBackend, and LocalBackend has a tsd.System.
 type NetstackImpl interface {
+	Start(LocalBackend) error
 	UpdateNetstackIPs(*netmap.NetworkMap)
 }
 

@@ -106,10 +106,14 @@ var Features = map[FeatureTag]FeatureMeta{
 	},
 	"desktop_sessions": {"DesktopSessions", "Desktop sessions support", nil},
 	"drive":            {"Drive", "Tailscale Drive (file server) support", nil},
-	"gro":              {"GRO", "Generic Receive Offload support (performance)", nil},
-	"kube":             {"Kube", "Kubernetes integration", nil},
-	"linuxdnsfight":    {"LinuxDNSFight", "Linux support for detecting DNS fights (inotify watching of /etc/resolv.conf)", nil},
-	"oauthkey":         {"OAuthKey", "OAuth secret-to-authkey resolution support", nil},
+	"gro": {
+		Sym:  "GRO",
+		Desc: "Generic Receive Offload support (performance)",
+		Deps: []FeatureTag{"netstack"},
+	},
+	"kube":          {"Kube", "Kubernetes integration", nil},
+	"linuxdnsfight": {"LinuxDNSFight", "Linux support for detecting DNS fights (inotify watching of /etc/resolv.conf)", nil},
+	"oauthkey":      {"OAuthKey", "OAuth secret-to-authkey resolution support", nil},
 	"outboundproxy": {
 		Sym:  "OutboundProxy",
 		Desc: "Outbound localhost HTTP/SOCK5 proxy support",
