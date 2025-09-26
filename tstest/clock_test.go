@@ -56,7 +56,6 @@ func TestClockWithDefinedStartTime(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			clock := NewClock(ClockOpts{
@@ -118,7 +117,6 @@ func TestClockWithDefaultStartTime(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			clock := NewClock(ClockOpts{
@@ -277,7 +275,6 @@ func TestClockSetStep(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			clock := NewClock(ClockOpts{
@@ -426,7 +423,6 @@ func TestClockAdvance(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			clock := NewClock(ClockOpts{
@@ -876,7 +872,6 @@ func TestSingleTicker(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var realTimeClockForTestClock tstime.Clock
@@ -1377,7 +1372,6 @@ func TestSingleTimer(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var realTimeClockForTestClock tstime.Clock
@@ -1911,7 +1905,6 @@ func TestClockFollowRealTime(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			realTimeClock := NewClock(tt.realTimeClockOpts)
@@ -2364,7 +2357,6 @@ func TestAfterFunc(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var realTimeClockForTestClock tstime.Clock
@@ -2468,7 +2460,6 @@ func TestSince(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			clock := NewClock(ClockOpts{

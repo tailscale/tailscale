@@ -1073,7 +1073,6 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 			continue
 		}
 		wg.Add(1)
-		rg := rg
 		go func() {
 			defer wg.Done()
 			node := rg.Nodes[0]
