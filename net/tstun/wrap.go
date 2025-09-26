@@ -22,7 +22,6 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
-	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
 	"tailscale.com/feature/buildfeatures"
 	tsmetrics "tailscale.com/metrics"
@@ -229,7 +228,7 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 type tunInjectedRead struct {
 	// Only one of packet or data should be set, and are read in that order of
 	// precedence.
-	packet *stack.PacketBuffer
+	packet *netstack_PacketBuffer
 	data   []byte
 }
 
@@ -999,7 +998,10 @@ const (
 	minTCPHeaderSize = 20
 )
 
-func stackGSOToTunGSO(pkt []byte, gso stack.GSO) (tun.GSOOptions, error) {
+func stackGSOToTunGSO(pkt []byte, gso netstack_GSO) (tun.GSOOptions, error) {
+	if !buildfeatures.HasNetstack {
+		panic("unreachable")
+	}
 	options := tun.GSOOptions{
 		CsumStart:  gso.L3HdrLen,
 		CsumOffset: gso.CsumOffset,
@@ -1007,12 +1009,12 @@ func stackGSOToTunGSO(pkt []byte, gso stack.GSO) (tun.GSOOptions, error) {
 		NeedsCsum:  gso.NeedsCsum,
 	}
 	switch gso.Type {
-	case stack.GSONone:
+	case netstack_GSONone:
 		options.GSOType = tun.GSONone
 		return options, nil
-	case stack.GSOTCPv4:
+	case netstack_GSOTCPv4:
 		options.GSOType = tun.GSOTCPv4
-	case stack.GSOTCPv6:
+	case netstack_GSOTCPv6:
 		options.GSOType = tun.GSOTCPv6
 	default:
 		return tun.GSOOptions{}, fmt.Errorf("unsupported gVisor GSOType: %v", gso.Type)
@@ -1035,7 +1037,10 @@ func stackGSOToTunGSO(pkt []byte, gso stack.GSO) (tun.GSOOptions, error) {
 // both before and after partial checksum updates where later checksum
 // offloading still expects a partial checksum.
 // TODO(jwhited): plumb partial checksum awareness into net/packet/checksum.
-func invertGSOChecksum(pkt []byte, gso stack.GSO) {
+func invertGSOChecksum(pkt []byte, gso netstack_GSO) {
+	if !buildfeatures.HasNetstack {
+		panic("unreachable")
+	}
 	if gso.NeedsCsum != true {
 		return
 	}
@@ -1049,10 +1054,13 @@ func invertGSOChecksum(pkt []byte, gso stack.GSO) {
 
 // injectedRead handles injected reads, which bypass filters.
 func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []int, offset int) (n int, err error) {
-	var gso stack.GSO
+	var gso netstack_GSO
 
 	pkt := outBuffs[0][offset:]
 	if res.packet != nil {
+		if !buildfeatures.HasNetstack {
+			panic("unreachable")
+		}
 		bufN := copy(pkt, res.packet.NetworkHeader().Slice())
 		bufN += copy(pkt[bufN:], res.packet.TransportHeader().Slice())
 		bufN += copy(pkt[bufN:], res.packet.Data().AsRange().ToSlice())
@@ -1298,7 +1306,10 @@ func (t *Wrapper) SetJailedFilter(filt *filter.Filter) {
 //
 // This path is typically used to deliver synthesized packets to the
 // host networking stack.
-func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer, buffs [][]byte, sizes []int) error {
+func (t *Wrapper) InjectInboundPacketBuffer(pkt *netstack_PacketBuffer, buffs [][]byte, sizes []int) error {
+	if !buildfeatures.HasNetstack {
+		panic("unreachable")
+	}
 	buf := buffs[0][PacketStartOffset:]
 
 	bufN := copy(buf, pkt.NetworkHeader().Slice())
@@ -1437,7 +1448,10 @@ func (t *Wrapper) InjectOutbound(pkt []byte) error {
 // InjectOutboundPacketBuffer logically behaves as InjectOutbound. It takes ownership of one
 // reference count on the packet, and the packet may be mutated. The packet refcount will be
 // decremented after the injected buffer has been read.
-func (t *Wrapper) InjectOutboundPacketBuffer(pkt *stack.PacketBuffer) error {
+func (t *Wrapper) InjectOutboundPacketBuffer(pkt *netstack_PacketBuffer) error {
+	if !buildfeatures.HasNetstack {
+		panic("unreachable")
+	}
 	size := pkt.Size()
 	if size > MaxPacketSize {
 		pkt.DecRef()
