@@ -84,6 +84,11 @@ type Nameserver struct {
 	// Service configuration.
 	// +optional
 	Service *NameserverService `json:"service,omitempty"`
+	// Replicas specifies how many devices to create. Set this to enable
+	// high availability for nameservers. Defaults to 1.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 type NameserverImage struct {

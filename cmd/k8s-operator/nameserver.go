@@ -30,6 +30,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
 )
@@ -130,7 +131,7 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			return setStatus(&dnsCfg, metav1.ConditionFalse, reasonNameserverCreationFailed, msg)
 		}
 	}
-	if err := a.maybeProvision(ctx, &dnsCfg, logger); err != nil {
+	if err = a.maybeProvision(ctx, &dnsCfg); err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
 			return reconcile.Result{}, nil
@@ -167,7 +168,7 @@ func nameserverResourceLabels(name, namespace string) map[string]string {
 	return labels
 }
 
-func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsapi.DNSConfig, logger *zap.SugaredLogger) error {
+func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsapi.DNSConfig) error {
 	labels := nameserverResourceLabels(tsDNSCfg.Name, a.tsNamespace)
 	dCfg := &deployConfig{
 		ownerRefs: []metav1.OwnerReference{*metav1.NewControllerRef(tsDNSCfg, tsapi.SchemeGroupVersion.WithKind("DNSConfig"))},
@@ -175,6 +176,11 @@ func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsa
 		labels:    labels,
 		imageRepo: defaultNameserverImageRepo,
 		imageTag:  defaultNameserverImageTag,
+		replicas:  1,
+	}
+
+	if tsDNSCfg.Spec.Nameserver.Replicas != nil {
+		dCfg.replicas = *tsDNSCfg.Spec.Nameserver.Replicas
 	}
 	if tsDNSCfg.Spec.Nameserver.Image != nil && tsDNSCfg.Spec.Nameserver.Image.Repo != "" {
 		dCfg.imageRepo = tsDNSCfg.Spec.Nameserver.Image.Repo
@@ -211,6 +217,7 @@ type deployable struct {
 }
 
 type deployConfig struct {
+	replicas  int32
 	imageRepo string
 	imageTag  string
 	labels    map[string]string
@@ -236,6 +243,7 @@ var (
 			if err := yaml.Unmarshal(deployYaml, &d); err != nil {
 				return fmt.Errorf("error unmarshalling Deployment yaml: %w", err)
 			}
+			d.Spec.Replicas = ptr.To(cfg.replicas)
 			d.Spec.Template.Spec.Containers[0].Image = fmt.Sprintf("%s:%s", cfg.imageRepo, cfg.imageTag)
 			d.ObjectMeta.Namespace = cfg.namespace
 			d.ObjectMeta.Labels = cfg.labels

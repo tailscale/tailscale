@@ -22,6 +22,7 @@ import (
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstest"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
 
@@ -33,6 +34,7 @@ func TestNameserverReconciler(t *testing.T) {
 		},
 		Spec: tsapi.DNSConfigSpec{
 			Nameserver: &tsapi.Nameserver{
+				Replicas: ptr.To[int32](3),
 				Image: &tsapi.NameserverImage{
 					Repo: "test",
 					Tag:  "v0.0.1",
@@ -74,6 +76,7 @@ func TestNameserverReconciler(t *testing.T) {
 		}
 		wantsDeploy.OwnerReferences = []metav1.OwnerReference{*ownerReference}
 		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "test:v0.0.1"
+		wantsDeploy.Spec.Replicas = ptr.To[int32](3)
 		wantsDeploy.Namespace = tsNamespace
 		wantsDeploy.ObjectMeta.Labels = nameserverLabels
 		expectEqual(t, fc, wantsDeploy)

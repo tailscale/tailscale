@@ -100,6 +100,13 @@ spec:
                         tag:
                           description: Tag defaults to unstable.
                           type: string
+                    replicas:
+                      description: |-
+                        Replicas specifies how many devices to create. Set this to enable
+                        high availability for nameservers. Defaults to 1.
+                      type: integer
+                      format: int32
+                      minimum: 0
                     service:
                       description: Service configuration.
                       type: object
