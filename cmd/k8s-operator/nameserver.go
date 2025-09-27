@@ -170,11 +170,12 @@ func nameserverResourceLabels(name, namespace string) map[string]string {
 func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsapi.DNSConfig, logger *zap.SugaredLogger) error {
 	labels := nameserverResourceLabels(tsDNSCfg.Name, a.tsNamespace)
 	dCfg := &deployConfig{
-		ownerRefs: []metav1.OwnerReference{*metav1.NewControllerRef(tsDNSCfg, tsapi.SchemeGroupVersion.WithKind("DNSConfig"))},
-		namespace: a.tsNamespace,
-		labels:    labels,
-		imageRepo: defaultNameserverImageRepo,
-		imageTag:  defaultNameserverImageTag,
+		ownerRefs:   []metav1.OwnerReference{*metav1.NewControllerRef(tsDNSCfg, tsapi.SchemeGroupVersion.WithKind("DNSConfig"))},
+		namespace:   a.tsNamespace,
+		labels:      labels,
+		imageRepo:   defaultNameserverImageRepo,
+		imageTag:    defaultNameserverImageTag,
+		tolerations: tsDNSCfg.Spec.Nameserver.PodTolerations,
 	}
 	if tsDNSCfg.Spec.Nameserver.Image != nil && tsDNSCfg.Spec.Nameserver.Image.Repo != "" {
 		dCfg.imageRepo = tsDNSCfg.Spec.Nameserver.Image.Repo
@@ -211,12 +212,13 @@ type deployable struct {
 }
 
 type deployConfig struct {
-	imageRepo string
-	imageTag  string
-	labels    map[string]string
-	ownerRefs []metav1.OwnerReference
-	namespace string
-	clusterIP string
+	imageRepo   string
+	imageTag    string
+	labels      map[string]string
+	ownerRefs   []metav1.OwnerReference
+	namespace   string
+	clusterIP   string
+	tolerations []corev1.Toleration
 }
 
 var (
@@ -240,6 +242,7 @@ var (
 			d.ObjectMeta.Namespace = cfg.namespace
 			d.ObjectMeta.Labels = cfg.labels
 			d.ObjectMeta.OwnerReferences = cfg.ownerRefs
+			d.Spec.Template.Spec.Tolerations = cfg.tolerations
 			updateF := func(oldD *appsv1.Deployment) {
 				oldD.Spec = d.Spec
 			}

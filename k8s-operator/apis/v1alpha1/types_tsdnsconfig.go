@@ -6,6 +6,7 @@
 package v1alpha1
 
 import (
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -84,6 +85,9 @@ type Nameserver struct {
 	// Service configuration.
 	// +optional
 	Service *NameserverService `json:"service,omitempty"`
+	// If specified, the nameserver Pod's tolerations.
+	// +optional
+	PodTolerations []v1.Toleration `json:"podTolerations,omitempty"`
 }
 
 type NameserverImage struct {

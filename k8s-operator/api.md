@@ -443,6 +443,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `image` _[NameserverImage](#nameserverimage)_ | Nameserver image. Defaults to tailscale/k8s-nameserver:unstable. |  |  |
 | `service` _[NameserverService](#nameserverservice)_ | Service configuration. |  |  |
+| `podTolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | If specified, the nameserver Pod's tolerations. |  |  |
 
 
 #### NameserverImage
