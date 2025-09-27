@@ -127,6 +127,11 @@ type Prefs struct {
 	// routed directly or via the exit node.
 	ExitNodeAllowLANAccess bool
 
+	// ExitNodeRouteLAN indicates whether LAN/private address ranges
+	// (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) should be routed locally
+	// when advertising default routes as an exit node.
+	ExitNodeRouteLAN bool
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
 	CorpDNS bool
@@ -348,6 +353,7 @@ type MaskedPrefs struct {
 	AutoExitNodeSet           bool                `json:",omitempty"`
 	InternalExitNodePriorSet  bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
 	ExitNodeAllowLANAccessSet bool                `json:",omitempty"`
+	ExitNodeRouteLANSet       bool                `json:",omitempty"`
 	CorpDNSSet                bool                `json:",omitempty"`
 	RunSSHSet                 bool                `json:",omitempty"`
 	RunWebClientSet           bool                `json:",omitempty"`
@@ -636,6 +642,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AutoExitNode == p2.AutoExitNode &&
 		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
+		p.ExitNodeRouteLAN == p2.ExitNodeRouteLAN &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
 		p.RunWebClient == p2.RunWebClient &&

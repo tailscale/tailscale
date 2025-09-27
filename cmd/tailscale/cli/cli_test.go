@@ -1057,6 +1057,7 @@ func TestUpdatePrefs(t *testing.T) {
 				ControlURLSet:             true,
 				CorpDNSSet:                true,
 				ExitNodeAllowLANAccessSet: true,
+				ExitNodeRouteLANSet:       true,
 				ExitNodeIDSet:             true,
 				ExitNodeIPSet:             true,
 				HostnameSet:               true,

@@ -102,6 +102,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.Var(notFalseVar{}, "host-routes", hidden+"install host routes to other Tailscale nodes (must be true as of Tailscale 1.67+)")
 	upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
 	upf.BoolVar(&upArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
+	upf.BoolVar(&upArgs.exitNodeRouteLAN, "exit-node-route-lan", false, "Route LAN/private address ranges locally when advertising default routes as an exit node")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.BoolVar(&upArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
@@ -170,6 +171,7 @@ type upArgsT struct {
 	acceptDNS              bool
 	exitNodeIP             string
 	exitNodeAllowLANAccess bool
+	exitNodeRouteLAN       bool
 	shieldsUp              bool
 	runSSH                 bool
 	runWebClient           bool
@@ -253,6 +255,9 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	if upArgs.exitNodeIP == "" && upArgs.exitNodeAllowLANAccess {
 		return nil, fmt.Errorf("--exit-node-allow-lan-access can only be used with --exit-node")
 	}
+	if upArgs.exitNodeIP == "" && upArgs.exitNodeRouteLAN {
+		return nil, fmt.Errorf("--exit-node-route-lan can only be used with --exit-node")
+	}
 
 	var tags []string
 	if upArgs.advertiseTags != "" {
@@ -291,6 +296,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	}
 
 	prefs.ExitNodeAllowLANAccess = upArgs.exitNodeAllowLANAccess
+	prefs.ExitNodeRouteLAN = upArgs.exitNodeRouteLAN
 	prefs.CorpDNS = upArgs.acceptDNS
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.RunSSH = upArgs.runSSH
@@ -808,6 +814,7 @@ func init() {
 	addPrefFlagMapping("snat-subnet-routes", "NoSNAT")
 	addPrefFlagMapping("stateful-filtering", "NoStatefulFiltering")
 	addPrefFlagMapping("exit-node-allow-lan-access", "ExitNodeAllowLANAccess")
+	addPrefFlagMapping("exit-node-route-lan", "ExitNodeRouteLAN")
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
 	addPrefFlagMapping("ssh", "RunSSH")
@@ -1059,6 +1066,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(exitNodeIPStr())
 		case "exit-node-allow-lan-access":
 			set(prefs.ExitNodeAllowLANAccess)
+		case "exit-node-route-lan":
+			set(prefs.ExitNodeRouteLAN)
 		case "advertise-tags":
 			set(strings.Join(prefs.AdvertiseTags, ","))
 		case "hostname":
