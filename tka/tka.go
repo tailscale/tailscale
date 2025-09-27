@@ -3,7 +3,7 @@
 
 //go:build !ts_omit_tailnetlock
 
-// Package tka (WIP) implements the Tailnet Key Authority.
+// Package tka implements the Tailnet Key Authority (TKA) for Tailnet Lock.
 package tka
 
 import (
