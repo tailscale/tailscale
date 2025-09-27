@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,11 +42,6 @@ var (
 	useVNC            = flag.Bool("use-vnc", false, "if set, display guest vms over VNC")
 	verboseLogcatcher = flag.Bool("verbose-logcatcher", true, "if set, print logcatcher to t.Logf")
 	verboseQemu       = flag.Bool("verbose-qemu", true, "if set, print qemu console to t.Logf")
-	distroRex         = func() *regexValue {
-		result := &regexValue{r: regexp.MustCompile(`.*`)}
-		flag.Var(result, "distro-regex", "The regex that matches what distros should be run")
-		return result
-	}()
 )
 
 func TestDownloadImages(t *testing.T) {
@@ -59,9 +53,6 @@ func TestDownloadImages(t *testing.T) {
 		distro := d
 		t.Run(distro.Name, func(t *testing.T) {
 			t.Parallel()
-			if !distroRex.Unwrap().MatchString(distro.Name) {
-				t.Skipf("distro name %q doesn't match regex: %s", distro.Name, distroRex)
-			}
 			if strings.HasPrefix(distro.Name, "nixos") {
 				t.Skip("NixOS is built on the fly, no need to download it")
 			}
@@ -175,10 +166,6 @@ func mkSeed(t *testing.T, d Distro, sshKey, hostURL, tdir string, port int) {
 		filepath.Join(dir, "user-data"),
 	}
 
-	if hackOpenSUSE151UserData(t, d, dir) {
-		args = append(args, filepath.Join(dir, "openstack"))
-	}
-
 	run(t, tdir, "genisoimage", args...)
 }
 
@@ -246,12 +233,6 @@ var ramsem struct {
 
 func testOneDistribution(t *testing.T, n int, distro Distro) {
 	setupTests(t)
-
-	if distroRex.Unwrap().MatchString(distro.Name) {
-		t.Logf("%s matches %s", distro.Name, distroRex.Unwrap())
-	} else {
-		t.Skip("regex not matched")
-	}
 
 	ctx, done := context.WithCancel(context.Background())
 	t.Cleanup(done)

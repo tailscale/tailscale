@@ -1,7 +1,6 @@
 # End-to-End VM-based Integration Testing
 
-This test spins up a bunch of common linux distributions and then tries to get
-them to connect to a
+These tests spin up a Tailscale client in a Linux VM and try to connect it to
 [`testcontrol`](https://pkg.go.dev/tailscale.com/tstest/integration/testcontrol)
 server.
 
@@ -54,26 +53,6 @@ This test's behavior is customized with command line flags.
 If you pass the `-no-s3` flag to `go test`, the S3 step will be skipped in favor
 of downloading the images directly from upstream sources, which may cause the
 test to fail in odd places.
-
-### Distribution Picking
-
-This test runs on a large number of distributions. By default it tries to run
-everything, which may or may not be ideal for you. If you only want to test a
-subset of distributions, you can use the `--distro-regex` flag to match a subset
-of distributions using a [regular expression](https://golang.org/pkg/regexp/)
-such as like this:
-
-```console
-$ go test -run-vm-tests -distro-regex centos
-```
-
-This would run all tests on all versions of CentOS.
-
-```console
-$ go test -run-vm-tests -distro-regex '(debian|ubuntu)'
-```
-
-This would run all tests on all versions of Debian and Ubuntu.
 
 ### Ram Limiting
 

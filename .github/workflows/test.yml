@@ -328,7 +328,7 @@ jobs:
         enableCrossOsArchive: true
     - name: Run VM tests
       working-directory: src
-      run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
+      run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2404
       env:
         HOME: "/var/lib/ghrunner/home"
         TMPDIR: "/tmp"

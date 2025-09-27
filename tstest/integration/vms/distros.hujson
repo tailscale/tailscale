@@ -12,24 +12,16 @@
 // /var/log/cloud-init-output.log for what you messed up.
 [
     {
-        "Name": "ubuntu-18-04",
-        "URL": "https://cloud-images.ubuntu.com/releases/bionic/release-20210817/ubuntu-18.04-server-cloudimg-amd64.img",
-        "SHA256Sum": "1ee1039f0b91c8367351413b5b5f56026aaf302fd5f66f17f8215132d6e946d2",
+        "Name": "ubuntu-24-04",
+        "URL": "https://cloud-images.ubuntu.com/noble/20250523/noble-server-cloudimg-amd64.img",
+        "SHA256Sum": "0e865619967706765cdc8179fb9929202417ab3a0719d77d8c8942d38aa9611b",
         "MemoryMegs": 512,
         "PackageManager": "apt",
         "InitSystem": "systemd"
     },
     {
-        "Name": "ubuntu-20-04",
-        "URL": "https://cloud-images.ubuntu.com/releases/focal/release-20210819/ubuntu-20.04-server-cloudimg-amd64.img",
-        "SHA256Sum": "99e25e6e344e3a50a081235e825937238a3d51b099969e107ef66f0d3a1f955e",
-        "MemoryMegs": 512,
-        "PackageManager": "apt",
-        "InitSystem": "systemd"
-    },
-    {
-        "Name": "nixos-21-11",
-        "URL": "channel:nixos-21.11",
+        "Name": "nixos-25-05",
+        "URL": "channel:nixos-25.05",
         "SHA256Sum": "lolfakesha",
         "MemoryMegs": 512,
         "PackageManager": "nix",

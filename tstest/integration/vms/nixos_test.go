@@ -97,7 +97,7 @@ let
 
       # Wrap tailscaled with the ip and iptables commands.
       wrapProgram $out/bin/tailscaled --prefix PATH : ${
-        lib.makeBinPath [ iproute iptables ]
+        lib.makeBinPath [ iproute2 iptables ]
       }
 
       # Install systemd unit.
@@ -126,6 +126,9 @@ in {
 
   # yolo, this vm can sudo freely.
   security.sudo.wheelNeedsPassword = false;
+
+  # nix considers squid insecure, but this is fine for a test.
+  nixpkgs.config.permittedInsecurePackages = [ "squid-7.0.1" ];
 
   # Enable cloud-init so we can set VM hostnames and the like the same as other
   # distros. This will also take care of SSH keys. It's pretty handy.
