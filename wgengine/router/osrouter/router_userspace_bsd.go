@@ -3,7 +3,7 @@
 
 //go:build darwin || freebsd
 
-package router
+package osrouter
 
 import (
 	"fmt"
@@ -19,7 +19,14 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/router"
 )
+
+func init() {
+	router.HookNewUserspaceRouter.Set(func(opts router.NewOpts) (router.Router, error) {
+		return newUserspaceBSDRouter(opts.Logf, opts.Tun, opts.NetMon, opts.Health)
+	})
+}
 
 type userspaceBSDRouter struct {
 	logf    logger.Logf
@@ -30,7 +37,7 @@ type userspaceBSDRouter struct {
 	routes  map[netip.Prefix]bool
 }
 
-func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (Router, error) {
+func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (router.Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err
@@ -99,7 +106,7 @@ func inet(p netip.Prefix) string {
 	return "inet"
 }
 
-func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
+func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}

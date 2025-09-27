@@ -3,7 +3,7 @@
  * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
  */
 
-package router
+package osrouter
 
 import (
 	"errors"
@@ -19,6 +19,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/util/multierr"
+	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/winnet"
 
 	ole "github.com/go-ole/go-ole"
@@ -246,7 +247,7 @@ var networkCategoryWarnable = health.Register(&health.Warnable{
 	MapDebugFlag: "warn-network-category-unhealthy",
 })
 
-func configureInterface(cfg *Config, tun *tun.NativeTun, ht *health.Tracker) (retErr error) {
+func configureInterface(cfg *router.Config, tun *tun.NativeTun, ht *health.Tracker) (retErr error) {
 	var mtu = tstun.DefaultTUNMTU()
 	luid := winipcfg.LUID(tun.LUID())
 	iface, err := interfaceFromLUID(luid,

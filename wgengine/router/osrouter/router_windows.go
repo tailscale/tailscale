@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package router
+package osrouter
 
 import (
 	"bufio"
@@ -28,7 +28,14 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/wgengine/router"
 )
+
+func init() {
+	router.HookNewUserspaceRouter.Set(func(opts router.NewOpts) (router.Router, error) {
+		return newUserspaceRouter(opts.Logf, opts.Tun, opts.NetMon, opts.Health, opts.Bus)
+	})
+}
 
 type winRouter struct {
 	logf                func(fmt string, args ...any)
@@ -39,7 +46,7 @@ type winRouter struct {
 	firewall            *firewallTweaker
 }
 
-func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
 	nativeTun := tundev.(*tun.NativeTun)
 	luid := winipcfg.LUID(nativeTun.LUID())
 	guid, err := luid.GUID()
@@ -73,7 +80,7 @@ func (r *winRouter) Up() error {
 	return nil
 }
 
-func (r *winRouter) Set(cfg *Config) error {
+func (r *winRouter) Set(cfg *router.Config) error {
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
@@ -122,10 +129,6 @@ func (r *winRouter) Close() error {
 	}
 
 	return nil
-}
-
-func cleanUp(logf logger.Logf, interfaceName string) {
-	// Nothing to do here.
 }
 
 // firewallTweaker changes the Windows firewall. Normally this wouldn't be so complicated,

@@ -6,10 +6,15 @@
 package router
 
 import (
+	"errors"
+	"fmt"
 	"net/netip"
 	"reflect"
+	"runtime"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
@@ -41,6 +46,22 @@ type Router interface {
 	Close() error
 }
 
+// NewOpts are the options passed to the NewUserspaceRouter hook.
+type NewOpts struct {
+	Logf   logger.Logf     // required
+	Tun    tun.Device      // required
+	NetMon *netmon.Monitor // optional
+	Health *health.Tracker // required (but TODO: support optional later)
+	Bus    *eventbus.Bus   // required
+}
+
+// HookNewUserspaceRouter is the registration point for router implementations
+// to register a constructor for userspace routers. It's meant for implementations
+// in wgengine/router/osrouter.
+//
+// If no implementation is registered, [New] will return an error.
+var HookNewUserspaceRouter feature.Hook[func(NewOpts) (Router, error)]
+
 // New returns a new Router for the current platform, using the
 // provided tun device.
 //
@@ -50,14 +71,33 @@ func New(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor,
 	health *health.Tracker, bus *eventbus.Bus,
 ) (Router, error) {
 	logf = logger.WithPrefix(logf, "router: ")
-	return newUserspaceRouter(logf, tundev, netMon, health, bus)
+	if f, ok := HookNewUserspaceRouter.GetOk(); ok {
+		return f(NewOpts{
+			Logf:   logf,
+			Tun:    tundev,
+			NetMon: netMon,
+			Health: health,
+			Bus:    bus,
+		})
+	}
+	if !buildfeatures.HasOSRouter {
+		return nil, errors.New("router: tailscaled was built without OSRouter support")
+	}
+	return nil, fmt.Errorf("unsupported OS %q", runtime.GOOS)
 }
+
+// HookCleanUp is the optional registration point for router implementations
+// to register a cleanup function for [CleanUp] to use. It's meant for
+// implementations in wgengine/router/osrouter.
+var HookCleanUp feature.Hook[func(_ logger.Logf, _ *netmon.Monitor, ifName string)]
 
 // CleanUp restores the system network configuration to its original state
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
 func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
-	cleanUp(logf, interfaceName)
+	if f, ok := HookCleanUp.GetOk(); ok {
+		f(logf, netMon, interfaceName)
+	}
 }
 
 // Config is the subset of Tailscale configuration that is relevant to
@@ -106,8 +146,3 @@ func (a *Config) Equal(b *Config) bool {
 	}
 	return reflect.DeepEqual(a, b)
 }
-
-// shutdownConfig is a routing configuration that removes all router
-// state from the OS. It's the config used when callers pass in a nil
-// Config.
-var shutdownConfig = Config{}
