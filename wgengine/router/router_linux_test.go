@@ -25,6 +25,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
@@ -572,8 +573,8 @@ func (n *fakeIPTablesRunner) addBase4(tunname string) error {
 	newRules := []struct{ chain, rule string }{
 		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j RETURN", tunname, tsaddr.ChromeOSVMRange().String())},
 		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
-		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, linuxfw.TailscaleSubnetRouteMark, linuxfw.TailscaleFwmarkMask)},
-		{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", linuxfw.TailscaleSubnetRouteMark, linuxfw.TailscaleFwmarkMask)},
+		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
+		{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
 		{"filter/ts-forward", fmt.Sprintf("-o %s -s %s -j DROP", tunname, tsaddr.CGNATRange().String())},
 		{"filter/ts-forward", fmt.Sprintf("-o %s -j ACCEPT", tunname)},
 	}
@@ -588,8 +589,8 @@ func (n *fakeIPTablesRunner) addBase4(tunname string) error {
 func (n *fakeIPTablesRunner) addBase6(tunname string) error {
 	curIPT := n.ipt6
 	newRules := []struct{ chain, rule string }{
-		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, linuxfw.TailscaleSubnetRouteMark, linuxfw.TailscaleFwmarkMask)},
-		{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", linuxfw.TailscaleSubnetRouteMark, linuxfw.TailscaleFwmarkMask)},
+		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
+		{"filter/ts-forward", fmt.Sprintf("-m mark --mark %s/%s -j ACCEPT", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)},
 		{"filter/ts-forward", fmt.Sprintf("-o %s -j ACCEPT", tunname)},
 	}
 	for _, rule := range newRules {
@@ -673,7 +674,7 @@ func (n *fakeIPTablesRunner) DelBase() error {
 }
 
 func (n *fakeIPTablesRunner) AddSNATRule() error {
-	newRule := fmt.Sprintf("-m mark --mark %s/%s -j MASQUERADE", linuxfw.TailscaleSubnetRouteMark, linuxfw.TailscaleFwmarkMask)
+	newRule := fmt.Sprintf("-m mark --mark %s/%s -j MASQUERADE", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
 		if err := appendRule(n, ipt, "nat/ts-postrouting", newRule); err != nil {
 			return err
@@ -683,7 +684,7 @@ func (n *fakeIPTablesRunner) AddSNATRule() error {
 }
 
 func (n *fakeIPTablesRunner) DelSNATRule() error {
-	delRule := fmt.Sprintf("-m mark --mark %s/%s -j MASQUERADE", linuxfw.TailscaleSubnetRouteMark, linuxfw.TailscaleFwmarkMask)
+	delRule := fmt.Sprintf("-m mark --mark %s/%s -j MASQUERADE", tsconst.LinuxSubnetRouteMark, tsconst.LinuxFwmarkMask)
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
 		if err := deleteRule(n, ipt, "nat/ts-postrouting", delRule); err != nil {
 			return err
