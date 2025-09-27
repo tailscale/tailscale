@@ -906,6 +906,12 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	ss.Spec.Template.Spec.Tolerations = wantsPod.Tolerations
 	ss.Spec.Template.Spec.PriorityClassName = wantsPod.PriorityClassName
 	ss.Spec.Template.Spec.TopologySpreadConstraints = wantsPod.TopologySpreadConstraints
+	if wantsPod.DNSPolicy != nil {
+		ss.Spec.Template.Spec.DNSPolicy = *wantsPod.DNSPolicy
+	}
+	if wantsPod.DNSConfig != nil {
+		ss.Spec.Template.Spec.DNSConfig = wantsPod.DNSConfig
+	}
 
 	// Update containers.
 	updateContainer := func(overlay *tsapi.Container, base corev1.Container) corev1.Container {
