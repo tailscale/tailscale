@@ -101,8 +101,8 @@ func Test_extension_profileStateChanged(t *testing.T) {
 			}
 			defer e.disconnectFromBusLocked()
 			e.profileStateChanged(ipn.LoginProfileView{}, tt.args.prefs, tt.args.sameNode)
-			if tt.wantBusRunning != (e.busDoneCh != nil) {
-				t.Errorf("wantBusRunning: %v != (e.busDoneCh != nil): %v", tt.wantBusRunning, e.busDoneCh != nil)
+			if tt.wantBusRunning != (e.eventSubs != nil) {
+				t.Errorf("wantBusRunning: %v != (e.eventSubs != nil): %v", tt.wantBusRunning, e.eventSubs != nil)
 			}
 			if (tt.wantPort == nil) != (e.port == nil) {
 				t.Errorf("(tt.wantPort == nil): %v != (e.port == nil): %v", tt.wantPort == nil, e.port == nil)
@@ -118,7 +118,7 @@ func Test_extension_handleBusLifetimeLocked(t *testing.T) {
 		name                          string
 		shutdown                      bool
 		port                          *int
-		busDoneCh                     chan struct{}
+		eventSubs                     *eventbus.Monitor
 		hasNodeAttrDisableRelayServer bool
 		wantBusRunning                bool
 	}{
@@ -157,13 +157,13 @@ func Test_extension_handleBusLifetimeLocked(t *testing.T) {
 				bus:                           eventbus.New(),
 				shutdown:                      tt.shutdown,
 				port:                          tt.port,
-				busDoneCh:                     tt.busDoneCh,
+				eventSubs:                     tt.eventSubs,
 				hasNodeAttrDisableRelayServer: tt.hasNodeAttrDisableRelayServer,
 			}
 			e.handleBusLifetimeLocked()
 			defer e.disconnectFromBusLocked()
-			if tt.wantBusRunning != (e.busDoneCh != nil) {
-				t.Errorf("wantBusRunning: %v != (e.busDoneCh != nil): %v", tt.wantBusRunning, e.busDoneCh != nil)
+			if tt.wantBusRunning != (e.eventSubs != nil) {
+				t.Errorf("wantBusRunning: %v != (e.eventSubs != nil): %v", tt.wantBusRunning, e.eventSubs != nil)
 			}
 		})
 	}
