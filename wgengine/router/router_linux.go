@@ -26,6 +26,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/preftype"
@@ -1238,14 +1239,14 @@ var baseIPRules = []netlink.Rule{
 	// main routing table.
 	{
 		Priority: 10,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
+		Mark:     tsconst.LinuxBypassMarkNum,
 		Table:    mainRouteTable.Num,
 	},
 	// ...and then we try the 'default' table, for correctness,
 	// even though it's been empty on every Linux system I've ever seen.
 	{
 		Priority: 30,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
+		Mark:     tsconst.LinuxBypassMarkNum,
 		Table:    defaultRouteTable.Num,
 	},
 	// If neither of those matched (no default route on this system?)
@@ -1253,7 +1254,7 @@ var baseIPRules = []netlink.Rule{
 	// to the tailscale routes, because that would create routing loops.
 	{
 		Priority: 50,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
+		Mark:     tsconst.LinuxBypassMarkNum,
 		Type:     unix.RTN_UNREACHABLE,
 	},
 	// If we get to this point, capture all packets and send them
@@ -1283,7 +1284,7 @@ var ubntIPRules = []netlink.Rule{
 	{
 		Priority: 70,
 		Invert:   true,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
+		Mark:     tsconst.LinuxBypassMarkNum,
 		Table:    tailscaleRouteTable.Num,
 	},
 }
@@ -1311,7 +1312,7 @@ func (r *linuxRouter) justAddIPRules() error {
 			// Note: r is a value type here; safe to mutate it.
 			ru.Family = family.netlinkInt()
 			if ru.Mark != 0 {
-				ru.Mask = linuxfw.TailscaleFwmarkMaskNum
+				ru.Mask = tsconst.LinuxFwmarkMaskNum
 			}
 			ru.Goto = -1
 			ru.SuppressIfgroup = -1
@@ -1344,7 +1345,7 @@ func (r *linuxRouter) addIPRulesWithIPCommand() error {
 			}
 			if rule.Mark != 0 {
 				if r.fwmaskWorks() {
-					args = append(args, "fwmark", fmt.Sprintf("0x%x/%s", rule.Mark, linuxfw.TailscaleFwmarkMask))
+					args = append(args, "fwmark", fmt.Sprintf("0x%x/%s", rule.Mark, tsconst.LinuxFwmarkMask))
 				} else {
 					args = append(args, "fwmark", fmt.Sprintf("0x%x", rule.Mark))
 				}

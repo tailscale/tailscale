@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tsconst"
 )
 
 var testIsNotExistErr = "exitcode:1"
@@ -132,8 +133,8 @@ func TestAddAndDeleteBase(t *testing.T) {
 
 	tsRulesCommon := []fakeRule{ // table/chain/rule
 		{"filter", "ts-input", []string{"-i", tunname, "-j", "ACCEPT"}},
-		{"filter", "ts-forward", []string{"-i", tunname, "-j", "MARK", "--set-mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask}},
-		{"filter", "ts-forward", []string{"-m", "mark", "--mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask, "-j", "ACCEPT"}},
+		{"filter", "ts-forward", []string{"-i", tunname, "-j", "MARK", "--set-mark", tsconst.LinuxSubnetRouteMark + "/" + tsconst.LinuxFwmarkMask}},
+		{"filter", "ts-forward", []string{"-m", "mark", "--mark", tsconst.LinuxSubnetRouteMark + "/" + tsconst.LinuxFwmarkMask, "-j", "ACCEPT"}},
 		{"filter", "ts-forward", []string{"-o", tunname, "-j", "ACCEPT"}},
 	}
 
@@ -254,7 +255,7 @@ func TestAddAndDelSNATRule(t *testing.T) {
 	}
 
 	rule := fakeRule{ // table/chain/rule
-		"nat", "ts-postrouting", []string{"-m", "mark", "--mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask, "-j", "MASQUERADE"},
+		"nat", "ts-postrouting", []string{"-m", "mark", "--mark", tsconst.LinuxSubnetRouteMark + "/" + tsconst.LinuxFwmarkMask, "-j", "MASQUERADE"},
 	}
 
 	// Add SNAT rule
