@@ -34,7 +34,7 @@ func TestLicenseHeaders(t *testing.T) {
 
 		// WireGuard copyright
 		"cmd/tailscale/cli/authenticode_windows.go",
-		"wgengine/router/ifconfig_windows.go",
+		"wgengine/router/osrouter/ifconfig_windows.go",
 
 		// noiseexplorer.com copyright
 		"control/controlbase/noiseexplorer_test.go",

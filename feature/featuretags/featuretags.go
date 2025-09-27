@@ -126,6 +126,16 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Outbound localhost HTTP/SOCK5 proxy support",
 		Deps: []FeatureTag{"netstack"},
 	},
+	"osrouter": {
+		Sym:  "OSRouter",
+		Desc: "Configure the operating system's network stack, IPs, and routing tables",
+		// TODO(bradfitz): if this is omitted, and netstack is too, then tailscaled needs
+		// external config to be useful. Some people may want that, and we should support it,
+		// but it's rare. Maybe there should be a way to declare here that this "Provides"
+		// another feature (and netstack can too), and then if those required features provided
+		// by some other feature are missing, then it's an error by default unless you accept
+		// that it's okay to proceed without that meta feature.
+	},
 	"portlist":   {"PortList", "Optionally advertise listening service ports", nil},
 	"portmapper": {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support", nil},
 	"netlog": {

@@ -1,23 +1,18 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package router
+package osrouter
 
 import (
-	"github.com/tailscale/wireguard-go/tun"
-	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/eventbus"
+	"tailscale.com/wgengine/router"
 )
 
-// For now this router only supports the userspace WireGuard implementations.
-//
-// Work is currently underway for an in-kernel FreeBSD implementation of wireguard
-// https://svnweb.freebsd.org/base?view=revision&revision=357986
-
-func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (Router, error) {
-	return newUserspaceBSDRouter(logf, tundev, netMon, health)
+func init() {
+	router.HookCleanUp.Set(func(logf logger.Logf, netMon *netmon.Monitor, ifName string) {
+		cleanUp(logf, ifName)
+	})
 }
 
 func cleanUp(logf logger.Logf, interfaceName string) {

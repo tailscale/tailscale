@@ -3,7 +3,7 @@
 
 //go:build !android
 
-package router
+package osrouter
 
 import (
 	"errors"
@@ -34,7 +34,17 @@ import (
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/util/multierr"
 	"tailscale.com/version/distro"
+	"tailscale.com/wgengine/router"
 )
+
+func init() {
+	router.HookNewUserspaceRouter.Set(func(opts router.NewOpts) (router.Router, error) {
+		return newUserspaceRouter(opts.Logf, opts.Tun, opts.NetMon, opts.Health, opts.Bus)
+	})
+	router.HookCleanUp.Set(func(logf logger.Logf, netMon *netmon.Monitor, ifName string) {
+		cleanUp(logf, ifName)
+	})
+}
 
 var getDistroFunc = distro.Get
 
@@ -81,7 +91,7 @@ type linuxRouter struct {
 	magicsockPortV6 uint16
 }
 
-func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
 	tunname, err := tunDev.Name()
 	if err != nil {
 		return nil, err
@@ -94,7 +104,7 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 	return newUserspaceRouterAdvanced(logf, tunname, netMon, cmd, health, bus)
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner, health *health.Tracker, bus *eventbus.Bus) (Router, error) {
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
 	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
@@ -401,7 +411,7 @@ func (r *linuxRouter) setupNetfilter(kind string) error {
 }
 
 // Set implements the Router interface.
-func (r *linuxRouter) Set(cfg *Config) error {
+func (r *linuxRouter) Set(cfg *router.Config) error {
 	var errs []error
 	if cfg == nil {
 		cfg = &shutdownConfig
@@ -488,7 +498,7 @@ var dockerStatefulFilteringWarnable = health.Register(&health.Warnable{
 	Text:     health.StaticMessage("Stateful filtering is enabled and Docker was detected; this may prevent Docker containers on this host from resolving DNS and connecting to Tailscale nodes. See https://tailscale.com/s/stateful-docker"),
 })
 
-func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *Config) {
+func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *router.Config) {
 	// If stateful filtering is disabled, clear the warning.
 	if !r.statefulFiltering {
 		r.health.SetHealthy(dockerStatefulFilteringWarnable)

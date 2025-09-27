@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package router
+package osrouter
 
 import (
 	"errors"
@@ -32,7 +32,10 @@ import (
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/version/distro"
+	"tailscale.com/wgengine/router"
 )
+
+type Config = router.Config
 
 func TestRouterStates(t *testing.T) {
 	basic := `

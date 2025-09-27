@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package router
+package osrouter
 
 import (
 	"bufio"
@@ -15,10 +15,19 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/eventbus"
+	"tailscale.com/wgengine/router"
 )
 
-func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (Router, error) {
+func init() {
+	router.HookCleanUp.Set(func(logf logger.Logf, netMon *netmon.Monitor, ifName string) {
+		cleanAllTailscaleRoutes(logf)
+	})
+	router.HookNewUserspaceRouter.Set(func(opts router.NewOpts) (router.Router, error) {
+		return newUserspaceRouter(opts.Logf, opts.Tun, opts.NetMon)
+	})
+}
+
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor) (router.Router, error) {
 	r := &plan9Router{
 		logf:   logf,
 		tundev: tundev,
@@ -39,7 +48,7 @@ func (r *plan9Router) Up() error {
 	return nil
 }
 
-func (r *plan9Router) Set(cfg *Config) error {
+func (r *plan9Router) Set(cfg *router.Config) error {
 	if cfg == nil {
 		cleanAllTailscaleRoutes(r.logf)
 		return nil
@@ -116,10 +125,6 @@ func (r *plan9Router) UpdateMagicsockPort(_ uint16, _ string) error {
 func (r *plan9Router) Close() error {
 	// TODO(bradfitz): unbind
 	return nil
-}
-
-func cleanUp(logf logger.Logf, _ string) {
-	cleanAllTailscaleRoutes(logf)
 }
 
 func cleanAllTailscaleRoutes(logf logger.Logf) {

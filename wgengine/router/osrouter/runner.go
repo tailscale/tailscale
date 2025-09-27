@@ -3,7 +3,7 @@
 
 //go:build linux
 
-package router
+package osrouter
 
 import (
 	"errors"
