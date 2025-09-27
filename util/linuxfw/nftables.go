@@ -103,6 +103,10 @@ func DebugNetfilter(logf logger.Logf) error {
 	return nil
 }
 
+func init() {
+	hookDetectNetfilter.Set(detectNetfilter)
+}
+
 // detectNetfilter returns the number of nftables rules present in the system.
 func detectNetfilter() (int, error) {
 	// Frist try creating a dummy postrouting chain. Emperically, we have

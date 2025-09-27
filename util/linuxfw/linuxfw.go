@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/tailscale/netlink"
+	"tailscale.com/feature"
 	"tailscale.com/types/logger"
 )
 
@@ -179,4 +180,14 @@ func CheckIPRuleSupportsV6(logf logger.Logf) error {
 	// And clean up on exit.
 	defer netlink.RuleDel(rule)
 	return netlink.RuleAdd(rule)
+}
+
+var hookIPTablesCleanup feature.Hook[func(logger.Logf)]
+
+// IPTablesCleanUp removes all Tailscale added iptables rules.
+// Any errors that occur are logged to the provided logf.
+func IPTablesCleanUp(logf logger.Logf) {
+	if f, ok := hookIPTablesCleanup.GetOk(); ok {
+		f(logf)
+	}
 }

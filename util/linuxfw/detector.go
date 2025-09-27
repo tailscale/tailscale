@@ -10,6 +10,8 @@ import (
 	"os/exec"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/hostinfo"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
@@ -42,10 +44,12 @@ func detectFirewallMode(logf logger.Logf, prefHint string) FirewallMode {
 	var det linuxFWDetector
 	if mode == "" {
 		// We have no preference, so check if `iptables` is even available.
-		_, err := det.iptDetect()
-		if err != nil && errors.Is(err, exec.ErrNotFound) {
-			logf("iptables not found: %v; falling back to nftables", err)
-			mode = "nftables"
+		if buildfeatures.HasIPTables {
+			_, err := det.iptDetect()
+			if err != nil && errors.Is(err, exec.ErrNotFound) {
+				logf("iptables not found: %v; falling back to nftables", err)
+				mode = "nftables"
+			}
 		}
 	}
 
@@ -59,11 +63,16 @@ func detectFirewallMode(logf logger.Logf, prefHint string) FirewallMode {
 		return FirewallModeNfTables
 	case "iptables":
 		hostinfo.SetFirewallMode("ipt-forced")
-	default:
+		return FirewallModeIPTables
+	}
+	if buildfeatures.HasIPTables {
 		logf("default choosing iptables")
 		hostinfo.SetFirewallMode("ipt-default")
+		return FirewallModeIPTables
 	}
-	return FirewallModeIPTables
+	logf("default choosing nftables")
+	hostinfo.SetFirewallMode("nft-default")
+	return FirewallModeNfTables
 }
 
 // tableDetector abstracts helpers to detect the firewall mode.
@@ -80,19 +89,33 @@ func (l linuxFWDetector) iptDetect() (int, error) {
 	return detectIptables()
 }
 
+var hookDetectNetfilter feature.Hook[func() (int, error)]
+
+// ErrUnsupported is the error returned from all functions on non-Linux
+// platforms.
+var ErrUnsupported = errors.New("linuxfw:unsupported")
+
 // nftDetect returns the number of nftables rules in the current namespace.
 func (l linuxFWDetector) nftDetect() (int, error) {
-	return detectNetfilter()
+	if f, ok := hookDetectNetfilter.GetOk(); ok {
+		return f()
+	}
+	return 0, ErrUnsupported
 }
 
 // pickFirewallModeFromInstalledRules returns the firewall mode to use based on
 // the environment and the system's capabilities.
 func pickFirewallModeFromInstalledRules(logf logger.Logf, det tableDetector) FirewallMode {
+	if !buildfeatures.HasIPTables {
+		hostinfo.SetFirewallMode("nft-noipt")
+		return FirewallModeNfTables
+	}
 	if distro.Get() == distro.Gokrazy {
 		// Reduce startup logging on gokrazy. There's no way to do iptables on
 		// gokrazy anyway.
 		return FirewallModeNfTables
 	}
+
 	iptAva, nftAva := true, true
 	iptRuleCount, err := det.iptDetect()
 	if err != nil {

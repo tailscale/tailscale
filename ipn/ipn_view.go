@@ -421,6 +421,8 @@ func (v PrefsView) PostureChecking() bool { return v.ж.PostureChecking }
 
 // NetfilterKind specifies what netfilter implementation to use.
 //
+// It can be "iptables", "nftables", or "" to auto-detect.
+//
 // Linux-only.
 func (v PrefsView) NetfilterKind() string { return v.ж.NetfilterKind }
 
