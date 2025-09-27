@@ -38,7 +38,6 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
-	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -1995,7 +1994,7 @@ func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
 	queryType := q.Get("type")
 	qt := dnsmessage.TypeA
 	if queryType != "" {
-		t, err := dnstype.DNSMessageTypeForString(queryType)
+		t, err := dnsMessageTypeForString(queryType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -2014,6 +2013,43 @@ func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
 		Bytes:     res,
 		Resolvers: rrs,
 	})
+}
+
+// dnsMessageTypeForString returns the dnsmessage.Type for the given string.
+// For example, DNSMessageTypeForString("A") returns dnsmessage.TypeA.
+func dnsMessageTypeForString(s string) (t dnsmessage.Type, err error) {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	switch s {
+	case "AAAA":
+		return dnsmessage.TypeAAAA, nil
+	case "ALL":
+		return dnsmessage.TypeALL, nil
+	case "A":
+		return dnsmessage.TypeA, nil
+	case "CNAME":
+		return dnsmessage.TypeCNAME, nil
+	case "HINFO":
+		return dnsmessage.TypeHINFO, nil
+	case "MINFO":
+		return dnsmessage.TypeMINFO, nil
+	case "MX":
+		return dnsmessage.TypeMX, nil
+	case "NS":
+		return dnsmessage.TypeNS, nil
+	case "OPT":
+		return dnsmessage.TypeOPT, nil
+	case "PTR":
+		return dnsmessage.TypePTR, nil
+	case "SOA":
+		return dnsmessage.TypeSOA, nil
+	case "SRV":
+		return dnsmessage.TypeSRV, nil
+	case "TXT":
+		return dnsmessage.TypeTXT, nil
+	case "WKS":
+		return dnsmessage.TypeWKS, nil
+	}
+	return 0, errors.New("unknown DNS message type: " + s)
 }
 
 // serveSuggestExitNode serves a POST endpoint for returning a suggested exit node.
