@@ -12,6 +12,7 @@ package appc
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -19,10 +20,12 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
@@ -115,19 +118,6 @@ func metricStoreRoutes(rate, nRoutes int64) {
 	recordMetric(nRoutes, metricStoreRoutesNBuckets, metricStoreRoutesN)
 }
 
-// RouteInfo is a data structure used to persist the in memory state of an AppConnector
-// so that we can know, even after a restart, which routes came from ACLs and which were
-// learned from domains.
-type RouteInfo struct {
-	// Control is the routes from the 'routes' section of an app connector acl.
-	Control []netip.Prefix `json:",omitempty"`
-	// Domains are the routes discovered by observing DNS lookups for configured domains.
-	Domains map[string][]netip.Addr `json:",omitempty"`
-	// Wildcards are the configured DNS lookup domains to observe. When a DNS query matches Wildcards,
-	// its result is added to Domains.
-	Wildcards []string `json:",omitempty"`
-}
-
 // AppConnector is an implementation of an AppConnector that performs
 // its function as a subsystem inside of a tailscale node. At the control plane
 // side App Connector routing is configured in terms of domains rather than IP
@@ -138,11 +128,17 @@ type RouteInfo struct {
 // routes not yet served by the AppConnector the local node configuration is
 // updated to advertise the new route.
 type AppConnector struct {
+	// These fields are immutable after initialization.
 	logf            logger.Logf
+	eventBus        *eventbus.Bus
 	routeAdvertiser RouteAdvertiser
+	pubClient       *eventbus.Client
+	updatePub       *eventbus.Publisher[appctype.RouteUpdate]
+	storePub        *eventbus.Publisher[appctype.RouteInfo]
 
-	// storeRoutesFunc will be called to persist routes if it is not nil.
-	storeRoutesFunc func(*RouteInfo) error
+	// hasStoredRoutes records whether the connector was initialized with
+	// persisted route information.
+	hasStoredRoutes bool
 
 	// mu guards the fields that follow
 	mu sync.Mutex
@@ -164,17 +160,50 @@ type AppConnector struct {
 	writeRateDay    *rateLogger
 }
 
+// Config carries the settings for an [AppConnector].
+type Config struct {
+	// Logf is the logger to which debug logs from the connector will be sent.
+	// It must be non-nil.
+	Logf logger.Logf
+
+	// EventBus receives events when the collection of routes maintained by the
+	// connector is updated. It must be non-nil.
+	EventBus *eventbus.Bus
+
+	// RouteAdvertiser allows the connector to update the set of advertised routes.
+	RouteAdvertiser RouteAdvertiser
+
+	// RouteInfo, if non-nil, use used as the initial set of routes for the
+	// connector.  If nil, the connector starts empty.
+	RouteInfo *appctype.RouteInfo
+
+	// HasStoredRoutes indicates that the connector should assume stored routes.
+	HasStoredRoutes bool
+}
+
 // NewAppConnector creates a new AppConnector.
-func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser, routeInfo *RouteInfo, storeRoutesFunc func(*RouteInfo) error) *AppConnector {
-	ac := &AppConnector{
-		logf:            logger.WithPrefix(logf, "appc: "),
-		routeAdvertiser: routeAdvertiser,
-		storeRoutesFunc: storeRoutesFunc,
+func NewAppConnector(c Config) *AppConnector {
+	switch {
+	case c.Logf == nil:
+		panic("missing logger")
+	case c.EventBus == nil:
+		panic("missing event bus")
 	}
-	if routeInfo != nil {
-		ac.domains = routeInfo.Domains
-		ac.wildcards = routeInfo.Wildcards
-		ac.controlRoutes = routeInfo.Control
+	ec := c.EventBus.Client("appc.AppConnector")
+
+	ac := &AppConnector{
+		logf:            logger.WithPrefix(c.Logf, "appc: "),
+		eventBus:        c.EventBus,
+		pubClient:       ec,
+		updatePub:       eventbus.Publish[appctype.RouteUpdate](ec),
+		storePub:        eventbus.Publish[appctype.RouteInfo](ec),
+		routeAdvertiser: c.RouteAdvertiser,
+		hasStoredRoutes: c.HasStoredRoutes,
+	}
+	if c.RouteInfo != nil {
+		ac.domains = c.RouteInfo.Domains
+		ac.wildcards = c.RouteInfo.Wildcards
+		ac.controlRoutes = c.RouteInfo.Control
 	}
 	ac.writeRateMinute = newRateLogger(time.Now, time.Minute, func(c int64, s time.Time, l int64) {
 		ac.logf("routeInfo write rate: %d in minute starting at %v (%d routes)", c, s, l)
@@ -188,29 +217,26 @@ func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser, routeInf
 
 // ShouldStoreRoutes returns true if the appconnector was created with the controlknob on
 // and is storing its discovered routes persistently.
-func (e *AppConnector) ShouldStoreRoutes() bool {
-	return e.storeRoutesFunc != nil
-}
+func (e *AppConnector) ShouldStoreRoutes() bool { return e.hasStoredRoutes }
 
 // storeRoutesLocked takes the current state of the AppConnector and persists it
-func (e *AppConnector) storeRoutesLocked() error {
-	if !e.ShouldStoreRoutes() {
-		return nil
-	}
+func (e *AppConnector) storeRoutesLocked() {
+	if e.storePub.ShouldPublish() {
+		// log write rate and write size
+		numRoutes := int64(len(e.controlRoutes))
+		for _, rs := range e.domains {
+			numRoutes += int64(len(rs))
+		}
+		e.writeRateMinute.update(numRoutes)
+		e.writeRateDay.update(numRoutes)
 
-	// log write rate and write size
-	numRoutes := int64(len(e.controlRoutes))
-	for _, rs := range e.domains {
-		numRoutes += int64(len(rs))
+		e.storePub.Publish(appctype.RouteInfo{
+			// Clone here, as the subscriber will handle these outside our lock.
+			Control:   slices.Clone(e.controlRoutes),
+			Domains:   maps.Clone(e.domains),
+			Wildcards: slices.Clone(e.wildcards),
+		})
 	}
-	e.writeRateMinute.update(numRoutes)
-	e.writeRateDay.update(numRoutes)
-
-	return e.storeRoutesFunc(&RouteInfo{
-		Control:   e.controlRoutes,
-		Domains:   e.domains,
-		Wildcards: e.wildcards,
-	})
 }
 
 // ClearRoutes removes all route state from the AppConnector.
@@ -220,7 +246,8 @@ func (e *AppConnector) ClearRoutes() error {
 	e.controlRoutes = nil
 	e.domains = nil
 	e.wildcards = nil
-	return e.storeRoutesLocked()
+	e.storeRoutesLocked()
+	return nil
 }
 
 // UpdateDomainsAndRoutes starts an asynchronous update of the configuration
@@ -247,6 +274,18 @@ func (e *AppConnector) UpdateDomains(domains []string) {
 // complete.
 func (e *AppConnector) Wait(ctx context.Context) {
 	e.queue.Wait(ctx)
+}
+
+// Close closes the connector and cleans up resources associated with it.
+// It is safe (and a noop) to call Close on nil.
+func (e *AppConnector) Close() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.queue.Shutdown() // TODO(creachadair): Should we wait for it too?
+	e.pubClient.Close()
 }
 
 func (e *AppConnector) updateDomains(domains []string) {
@@ -280,20 +319,26 @@ func (e *AppConnector) updateDomains(domains []string) {
 		}
 	}
 
-	// Everything left in oldDomains is a domain we're no longer tracking
-	// and if we are storing route info we can unadvertise the routes
-	if e.ShouldStoreRoutes() {
+	// Everything left in oldDomains is a domain we're no longer tracking and we
+	// can unadvertise the routes.
+	if e.hasStoredRoutes {
 		toRemove := []netip.Prefix{}
 		for _, addrs := range oldDomains {
 			for _, a := range addrs {
 				toRemove = append(toRemove, netip.PrefixFrom(a, a.BitLen()))
 			}
 		}
-		e.queue.Add(func() {
-			if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-				e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
+
+		if len(toRemove) != 0 {
+			if ra := e.routeAdvertiser; ra != nil {
+				e.queue.Add(func() {
+					if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+						e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", slicesx.MapKeys(oldDomains), toRemove, err)
+					}
+				})
 			}
-		})
+			e.updatePub.Publish(appctype.RouteUpdate{Unadvertise: toRemove})
+		}
 	}
 
 	e.logf("handling domains: %v and wildcards: %v", slicesx.MapKeys(e.domains), e.wildcards)
@@ -314,11 +359,10 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 
 	var toRemove []netip.Prefix
 
-	// If we're storing routes and know e.controlRoutes is a good
-	// representation of what should be in AdvertisedRoutes we can stop
-	// advertising routes that used to be in e.controlRoutes but are not
-	// in routes.
-	if e.ShouldStoreRoutes() {
+	// If we know e.controlRoutes is a good representation of what should be in
+	// AdvertisedRoutes we can stop advertising routes that used to be in
+	// e.controlRoutes but are not in routes.
+	if e.hasStoredRoutes {
 		toRemove = routesWithout(e.controlRoutes, routes)
 	}
 
@@ -335,19 +379,23 @@ nextRoute:
 		}
 	}
 
-	e.queue.Add(func() {
-		if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
-			e.logf("failed to advertise routes: %v: %v", routes, err)
-		}
-		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
-			e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
-		}
+	if e.routeAdvertiser != nil {
+		e.queue.Add(func() {
+			if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
+				e.logf("failed to advertise routes: %v: %v", routes, err)
+			}
+			if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+				e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
+			}
+		})
+	}
+	e.updatePub.Publish(appctype.RouteUpdate{
+		Advertise:   routes,
+		Unadvertise: toRemove,
 	})
 
 	e.controlRoutes = routes
-	if err := e.storeRoutesLocked(); err != nil {
-		e.logf("failed to store route info: %v", err)
-	}
+	e.storeRoutesLocked()
 }
 
 // Domains returns the currently configured domain list.
@@ -544,10 +592,13 @@ func (e *AppConnector) isAddrKnownLocked(domain string, addr netip.Addr) bool {
 // associated with the given domain.
 func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Prefix) {
 	e.queue.Add(func() {
-		if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
-			e.logf("failed to advertise routes for %s: %v: %v", domain, routes, err)
-			return
+		if e.routeAdvertiser != nil {
+			if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
+				e.logf("failed to advertise routes for %s: %v: %v", domain, routes, err)
+				return
+			}
 		}
+		e.updatePub.Publish(appctype.RouteUpdate{Advertise: routes})
 		e.mu.Lock()
 		defer e.mu.Unlock()
 
@@ -561,9 +612,7 @@ func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Pref
 				e.logf("[v2] advertised route for %v: %v", domain, addr)
 			}
 		}
-		if err := e.storeRoutesLocked(); err != nil {
-			e.logf("failed to store route info: %v", err)
-		}
+		e.storeRoutesLocked()
 	})
 }
 
