@@ -291,6 +291,7 @@ type LocalBackend struct {
 	engineStatus      ipn.EngineStatus
 	endpoints         []tailcfg.Endpoint
 	blocked           bool
+	authInProgress    bool
 	keyExpired        bool          // TODO(nickkhyl): move to nodeBackend
 	authURL           string        // non-empty if not Running; TODO(nickkhyl): move to nodeBackend
 	authURLTime       time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeBackend
@@ -1576,6 +1577,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	}
 
 	wasBlocked := b.blocked
+	authWasInProgress := b.authInProgress
 	keyExpiryExtended := false
 	if st.NetMap != nil {
 		wasExpired := b.keyExpired
@@ -1593,10 +1595,13 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.blockEngineUpdates(false)
 	}
 
-	if st.LoginFinished() && (wasBlocked || b.seamlessRenewalEnabled()) {
+	if st.LoginFinished() && (wasBlocked || authWasInProgress) {
 		if wasBlocked {
 			// Auth completed, unblock the engine
 			b.blockEngineUpdates(false)
+		}
+		if authWasInProgress {
+			b.setAuthInProgress(false)
 		}
 		b.authReconfig()
 		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
@@ -3313,13 +3318,12 @@ func (b *LocalBackend) setAuthURL(url string) {
 func (b *LocalBackend) popBrowserAuthNow(url string, keyExpired bool, recipient ipnauth.Actor) {
 	b.logf("popBrowserAuthNow(%q): url=%v, key-expired=%v, seamless-key-renewal=%v", maybeUsernameOf(recipient), url != "", keyExpired, b.seamlessRenewalEnabled())
 
-	// Deconfigure the local network data plane if:
-	// - seamless key renewal is not enabled;
-	// - key is expired (in which case tailnet connectivity is down anyway).
-	if !b.seamlessRenewalEnabled() || keyExpired {
+	// Deconfigure the local network data plane if seamless key renewal is not enabled;
+	if !b.seamlessRenewalEnabled() {
 		b.blockEngineUpdates(true)
 		b.stopEngineAndWait()
 	}
+	b.setAuthInProgress(true)
 	b.tellRecipientToBrowseToURL(url, toNotificationTarget(recipient))
 	if b.State() == ipn.Running {
 		b.enterState(ipn.Starting)
@@ -4776,6 +4780,17 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 
 	b.mu.Lock()
 	b.blocked = block
+	b.mu.Unlock()
+}
+
+// setAuthInProgress sets b.authInProgress to inProgress, while holding b.mu. It
+// has no effect on b.authReconfig(). It is used to determine when to fire the
+// LoginFinished notification.
+func (b *LocalBackend) setAuthInProgress(inProgress bool) {
+	b.logf("setAuthInProgress(%v)", inProgress)
+
+	b.mu.Lock()
+	b.authInProgress = inProgress
 	b.mu.Unlock()
 }
 
