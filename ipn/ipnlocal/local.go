@@ -102,7 +102,6 @@ import (
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/ptype"
-	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
@@ -5488,7 +5487,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 
 	switch newState {
 	case ipn.NeedsLogin:
-		systemd.Status("Needs login: %s", authURL)
+		feature.SystemdStatus("Needs login: %s", authURL)
 		// always block updates on NeedsLogin even if seamless renewal is enabled,
 		// to prevent calls to authReconfig from reconfiguring the engine when our
 		// key has expired and we're waiting to authenticate to use the new key.
@@ -5503,7 +5502,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		}
 
 		if newState == ipn.Stopped && authURL == "" {
-			systemd.Status("Stopped; run 'tailscale up' to log in")
+			feature.SystemdStatus("Stopped; run 'tailscale up' to log in")
 		}
 	case ipn.Starting, ipn.NeedsMachineAuth:
 		b.authReconfig()
@@ -5515,7 +5514,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		for _, p := range addrs.All() {
 			addrStrs = append(addrStrs, p.Addr().String())
 		}
-		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
+		feature.SystemdStatus("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
 	default:
 		b.logf("[unexpected] unknown newState %#v", newState)
 	}
