@@ -962,7 +962,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	netLogIDsWasValid := !oldLogIDs.NodeID.IsZero() && !oldLogIDs.DomainID.IsZero()
 	netLogIDsChanged := netLogIDsNowValid && netLogIDsWasValid && newLogIDs != oldLogIDs
 	netLogRunning := netLogIDsNowValid && !routerCfg.Equal(&router.Config{})
-	if envknob.NoLogsNoSupport() {
+	if !buildfeatures.HasNetLog || envknob.NoLogsNoSupport() {
 		netLogRunning = false
 	}
 
@@ -1017,7 +1017,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	// Shutdown the network logger because the IDs changed.
 	// Let it be started back up by subsequent logic.
-	if netLogIDsChanged && e.networkLogger.Running() {
+	if buildfeatures.HasNetLog && netLogIDsChanged && e.networkLogger.Running() {
 		e.logf("wgengine: Reconfig: shutting down network logger")
 		ctx, cancel := context.WithTimeout(context.Background(), networkLoggerUploadTimeout)
 		defer cancel()
@@ -1028,7 +1028,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	// Startup the network logger.
 	// Do this before configuring the router so that we capture initial packets.
-	if netLogRunning && !e.networkLogger.Running() {
+	if buildfeatures.HasNetLog && netLogRunning && !e.networkLogger.Running() {
 		nid := cfg.NetworkLogging.NodeID
 		tid := cfg.NetworkLogging.DomainID
 		logExitFlowEnabled := cfg.NetworkLogging.LogExitFlowEnabled

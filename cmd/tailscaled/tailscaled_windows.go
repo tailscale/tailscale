@@ -149,6 +149,8 @@ var syslogf logger.Logf = logger.Discard
 //
 // At this point we're still the parent process that
 // Windows started.
+//
+// pol may be nil.
 func runWindowsService(pol *logpolicy.Policy) error {
 	go func() {
 		logger.Logf(log.Printf).JSON(1, "SupportInfo", osdiag.SupportInfo(osdiag.LogSupportInfoReasonStartup))
@@ -169,7 +171,7 @@ func runWindowsService(pol *logpolicy.Policy) error {
 }
 
 type ipnService struct {
-	Policy *logpolicy.Policy
+	Policy *logpolicy.Policy // or nil if logging not in use
 }
 
 // Called by Windows to execute the windows service.
@@ -186,7 +188,11 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	doneCh := make(chan struct{})
 	go func() {
 		defer close(doneCh)
-		args := []string{"/subproc", service.Policy.PublicID.String()}
+		publicID := "none"
+		if service.Policy != nil {
+			publicID = service.Policy.PublicID.String()
+		}
+		args := []string{"/subproc", publicID}
 		// Make a logger without a date prefix, as filelogger
 		// and logtail both already add their own. All we really want
 		// from the log package is the automatic newline.

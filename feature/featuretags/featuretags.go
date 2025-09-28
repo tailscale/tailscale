@@ -115,7 +115,11 @@ var Features = map[FeatureTag]FeatureMeta{
 	"iptables":      {"IPTables", "Linux iptables support", nil},
 	"kube":          {"Kube", "Kubernetes integration", nil},
 	"linuxdnsfight": {"LinuxDNSFight", "Linux support for detecting DNS fights (inotify watching of /etc/resolv.conf)", nil},
-	"oauthkey":      {"OAuthKey", "OAuth secret-to-authkey resolution support", nil},
+	"logtail": {
+		Sym:  "LogTail",
+		Desc: "upload logs to log.tailscale.com (debug logs for bug reports and also by network flow logs if enabled)",
+	},
+	"oauthkey": {"OAuthKey", "OAuth secret-to-authkey resolution support", nil},
 	"outboundproxy": {
 		Sym:  "OutboundProxy",
 		Desc: "Outbound localhost HTTP/SOCK5 proxy support",
@@ -123,7 +127,12 @@ var Features = map[FeatureTag]FeatureMeta{
 	},
 	"portlist":   {"PortList", "Optionally advertise listening service ports", nil},
 	"portmapper": {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support", nil},
-	"netstack":   {"Netstack", "gVisor netstack (userspace networking) support", nil},
+	"netlog": {
+		Sym:  "NetLog",
+		Desc: "Network flow logging support",
+		Deps: []FeatureTag{"logtail"},
+	},
+	"netstack": {"Netstack", "gVisor netstack (userspace networking) support", nil},
 	"networkmanager": {
 		Sym:  "NetworkManager",
 		Desc: "Linux NetworkManager integration",

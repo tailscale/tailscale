@@ -402,7 +402,7 @@ func ipnServerOpts() (o serverOptions) {
 	return o
 }
 
-var logPol *logpolicy.Policy
+var logPol *logpolicy.Policy // or nil if not used
 var debugMux *http.ServeMux
 
 func run() (err error) {
@@ -432,15 +432,19 @@ func run() (err error) {
 		sys.Set(netMon)
 	}
 
-	pol := logpolicy.New(logtail.CollectionNode, netMon, sys.HealthTracker.Get(), nil /* use log.Printf */)
-	pol.SetVerbosityLevel(args.verbose)
-	logPol = pol
-	defer func() {
-		// Finish uploading logs after closing everything else.
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		pol.Shutdown(ctx)
-	}()
+	var publicLogID logid.PublicID
+	if buildfeatures.HasLogTail {
+		pol := logpolicy.New(logtail.CollectionNode, netMon, sys.HealthTracker.Get(), nil /* use log.Printf */)
+		pol.SetVerbosityLevel(args.verbose)
+		publicLogID = pol.PublicID
+		logPol = pol
+		defer func() {
+			// Finish uploading logs after closing everything else.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			pol.Shutdown(ctx)
+		}()
+	}
 
 	if err := envknob.ApplyDiskConfigError(); err != nil {
 		log.Printf("Error reading environment config: %v", err)
@@ -449,7 +453,7 @@ func run() (err error) {
 	if isWinSvc {
 		// Run the IPN server from the Windows service manager.
 		log.Printf("Running service...")
-		if err := runWindowsService(pol); err != nil {
+		if err := runWindowsService(logPol); err != nil {
 			log.Printf("runservice: %v", err)
 		}
 		log.Printf("Service ended.")
@@ -493,7 +497,7 @@ func run() (err error) {
 		hostinfo.SetApp(app)
 	}
 
-	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
+	return startIPNServer(context.Background(), logf, publicLogID, sys)
 }
 
 var (
@@ -503,6 +507,7 @@ var (
 
 var sigPipe os.Signal // set by sigpipe.go
 
+// logID may be the zero value if logging is not in use.
 func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) error {
 	ln, err := safesocket.Listen(args.socketpath)
 	if err != nil {
@@ -600,6 +605,7 @@ var (
 	hookNewNetstack feature.Hook[func(_ logger.Logf, _ *tsd.System, onlyNetstack bool) (tsd.NetstackImpl, error)]
 )
 
+// logID may be the zero value if logging is not in use.
 func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) (_ *ipnlocal.LocalBackend, retErr error) {
 	if logPol != nil {
 		logPol.Logtail.SetNetMon(sys.NetMon.Get())
