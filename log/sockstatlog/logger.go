@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
@@ -97,7 +98,7 @@ func SockstatLogID(logID logid.PublicID) logid.PrivateID {
 // The netMon parameter is optional. It should be specified in environments where
 // Tailscaled is manipulating the routing table.
 func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor, health *health.Tracker) (*Logger, error) {
-	if !sockstats.IsAvailable {
+	if !sockstats.IsAvailable || !buildfeatures.HasLogTail {
 		return nil, nil
 	}
 	if netMon == nil {

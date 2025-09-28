@@ -28,6 +28,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -574,6 +575,15 @@ func (h *Handler) serveGoroutines(w http.ResponseWriter, r *http.Request) {
 // it to the client.
 func (h *Handler) serveLogTap(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	if !buildfeatures.HasLogTail {
+		// TODO(bradfitz): separate out logtail tap functionality from upload
+		// functionality to make this possible? But seems unlikely people would
+		// want just this. They could "tail -f" or "journalctl -f" their logs
+		// themselves.
+		http.Error(w, "logtap not supported in this build", http.StatusNotImplemented)
+		return
+	}
 
 	// Require write access (~root) as the logs could contain something
 	// sensitive.

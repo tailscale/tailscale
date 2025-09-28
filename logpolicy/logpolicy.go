@@ -31,6 +31,7 @@ import (
 	"golang.org/x/term"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/log/filelogger"
@@ -106,6 +107,7 @@ type Policy struct {
 	// Logtail is the logger.
 	Logtail *logtail.Logger
 	// PublicID is the logger's instance identifier.
+	// It may be the zero value if logging is not in use.
 	PublicID logid.PublicID
 	// Logf is where to write informational messages about this Logger.
 	Logf logger.Logf
@@ -682,7 +684,7 @@ func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 
 // New returns a new log policy (a logger and its instance ID).
 func (opts Options) New() *Policy {
-	disableLogging := envknob.NoLogsNoSupport() || testenv.InTest() || runtime.GOOS == "plan9"
+	disableLogging := envknob.NoLogsNoSupport() || testenv.InTest() || runtime.GOOS == "plan9" || !buildfeatures.HasLogTail
 	_, policy := opts.init(disableLogging)
 	return policy
 }

@@ -202,7 +202,7 @@ type LocalBackend struct {
 	store                    ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
 	dialer                   *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
 	pushDeviceToken          syncs.AtomicValue[string]
-	backendLogID             logid.PublicID
+	backendLogID             logid.PublicID // or zero value if logging not in use
 	unregisterSysPolicyWatch func()
 	varRoot                  string         // or empty if SetVarRoot never called
 	logFlushFunc             func()         // or nil if SetLogFlusher wasn't called
@@ -456,6 +456,8 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 // but is not actually running.
 //
 // If dialer is nil, a new one is made.
+//
+// The logID may be the zero value if logging is not in use.
 func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, loginFlags controlclient.LoginFlags) (_ *LocalBackend, err error) {
 	e := sys.Engine.Get()
 	store := sys.StateStore.Get()
