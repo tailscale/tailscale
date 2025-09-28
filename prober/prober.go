@@ -317,7 +317,7 @@ func (p *Probe) loop() {
 			p.run()
 			// Wait and then retry if probe fails. We use the inverse of the
 			// configured negative interval as our sleep period.
-			// TODO(percy):implement exponential backoff, possibly using logtail/backoff.
+			// TODO(percy):implement exponential backoff, possibly using util/backoff.
 			select {
 			case <-time.After(-1 * p.interval):
 				p.run()

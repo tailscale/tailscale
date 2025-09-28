@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/logtail/backoff"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/set"
 )
 

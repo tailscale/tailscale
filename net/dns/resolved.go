@@ -15,8 +15,8 @@ import (
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
 	"tailscale.com/health"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/dnsname"
 )
 

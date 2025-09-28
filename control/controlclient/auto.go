@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"tailscale.com/health"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -22,6 +21,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/execqueue"
