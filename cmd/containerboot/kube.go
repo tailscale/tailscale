@@ -23,9 +23,9 @@ import (
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/set"
 )
 

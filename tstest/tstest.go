@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/cibuild"
 )
 

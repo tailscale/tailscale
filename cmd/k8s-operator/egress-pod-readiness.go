@@ -25,8 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/tstime"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/httpm"
 )
 

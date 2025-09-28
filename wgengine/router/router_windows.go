@@ -23,10 +23,10 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/health"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/eventbus"
 )
 
