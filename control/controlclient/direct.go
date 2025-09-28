@@ -29,6 +29,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
@@ -57,7 +58,6 @@ import (
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
-	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/zstdframe"
 )
@@ -543,7 +543,9 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	} else {
 		if expired {
 			c.logf("Old key expired -> regen=true")
-			systemd.Status("key expired; run 'tailscale up' to authenticate")
+			if f, ok := feature.HookSystemdStatus.GetOk(); ok {
+				f("key expired; run 'tailscale up' to authenticate")
+			}
 			regen = true
 		}
 		if (opt.Flags & LoginInteractive) != 0 {

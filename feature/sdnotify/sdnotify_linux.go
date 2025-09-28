@@ -3,7 +3,7 @@
 
 //go:build linux && !android
 
-package systemd
+package sdnotify
 
 import (
 	"errors"
@@ -12,7 +12,13 @@ import (
 	"sync"
 
 	"github.com/mdlayher/sdnotify"
+	"tailscale.com/feature"
 )
+
+func init() {
+	feature.HookSystemdReady.Set(ready)
+	feature.HookSystemdStatus.Set(status)
+}
 
 var getNotifyOnce struct {
 	sync.Once
@@ -46,15 +52,15 @@ func notifier() *sdnotify.Notifier {
 	return getNotifyOnce.v
 }
 
-// Ready signals readiness to systemd. This will unblock service dependents from starting.
-func Ready() {
+// ready signals readiness to systemd. This will unblock service dependents from starting.
+func ready() {
 	err := notifier().Notify(sdnotify.Ready)
 	if err != nil {
 		readyOnce.logf("systemd: error notifying: %v", err)
 	}
 }
 
-// Status sends a single line status update to systemd so that information shows up
+// status sends a single line status update to systemd so that information shows up
 // in systemctl output. For example:
 //
 //	$ systemctl status tailscale
@@ -69,7 +75,7 @@ func Ready() {
 //	CPU: 2min 38.469s
 //	CGroup: /system.slice/tailscale.service
 //	└─26741 /nix/store/sv6cj4mw2jajm9xkbwj07k29dj30lh0n-tailscale-date.20200727/bin/tailscaled --port 41641
-func Status(format string, args ...any) {
+func status(format string, args ...any) {
 	err := notifier().Notify(sdnotify.Statusf(format, args...))
 	if err != nil {
 		statusOnce.logf("systemd: error notifying: %v", err)

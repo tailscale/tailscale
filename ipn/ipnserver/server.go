@@ -23,6 +23,7 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
@@ -32,7 +33,6 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
-	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 )
 
@@ -513,7 +513,9 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		ln.Close()
 	}()
 
-	systemd.Ready()
+	if ready, ok := feature.HookSystemdReady.GetOk(); ok {
+		ready()
+	}
 
 	hs := &http.Server{
 		Handler:     http.HandlerFunc(s.serveHTTP),
