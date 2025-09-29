@@ -40,9 +40,6 @@ func Requires(ft FeatureTag) set.Set[FeatureTag] {
 	s := set.Set[FeatureTag]{}
 	var add func(FeatureTag)
 	add = func(ft FeatureTag) {
-		if !ft.IsOmittable() {
-			return
-		}
 		s.Add(ft)
 		for _, dep := range Features[ft].Deps {
 			add(dep)
