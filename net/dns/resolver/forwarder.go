@@ -217,11 +217,12 @@ type resolverAndDelay struct {
 
 // forwarder forwards DNS packets to a number of upstream nameservers.
 type forwarder struct {
-	logf    logger.Logf
-	netMon  *netmon.Monitor     // always non-nil
-	linkSel ForwardLinkSelector // TODO(bradfitz): remove this when tsdial.Dialer absorbs it
-	dialer  *tsdial.Dialer
-	health  *health.Tracker // always non-nil
+	logf       logger.Logf
+	netMon     *netmon.Monitor     // always non-nil
+	linkSel    ForwardLinkSelector // TODO(bradfitz): remove this when tsdial.Dialer absorbs it
+	dialer     *tsdial.Dialer
+	health     *health.Tracker // always non-nil
+	verboseFwd bool            // if true, log all DNS forwarding
 
 	controlKnobs *controlknobs.Knobs // or nil
 
@@ -258,6 +259,7 @@ func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkS
 		dialer:       dialer,
 		health:       health,
 		controlKnobs: knobs,
+		verboseFwd:   verboseDNSForward(),
 	}
 	f.ctx, f.ctxCancel = context.WithCancel(context.Background())
 	return f
@@ -515,7 +517,7 @@ var (
 //
 // send expects the reply to have the same txid as txidOut.
 func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
-	if verboseDNSForward() {
+	if f.verboseFwd {
 		id := forwarderCount.Add(1)
 		domain, typ, _ := nameFromQuery(fq.packet)
 		f.logf("forwarder.send(%q, %d, %v, %d) [%d] ...", rr.name.Addr, fq.txid, typ, len(domain), id)
@@ -978,7 +980,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	}
 	defer fq.closeOnCtxDone.Close()
 
-	if verboseDNSForward() {
+	if f.verboseFwd {
 		domainSha256 := sha256.Sum256([]byte(domain))
 		domainSig := base64.RawStdEncoding.EncodeToString(domainSha256[:3])
 		f.logf("request(%d, %v, %d, %s) %d...", fq.txid, typ, len(domain), domainSig, len(fq.packet))
@@ -1023,7 +1025,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 				metricDNSFwdErrorContext.Add(1)
 				return fmt.Errorf("waiting to send response: %w", ctx.Err())
 			case responseChan <- packet{v, query.family, query.addr}:
-				if verboseDNSForward() {
+				if f.verboseFwd {
 					f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
 				}
 				metricDNSFwdSuccess.Add(1)
@@ -1053,7 +1055,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 						}
 						f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
 					case responseChan <- res:
-						if verboseDNSForward() {
+						if f.verboseFwd {
 							f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
 						}
 						return nil
