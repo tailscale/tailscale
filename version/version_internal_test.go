@@ -25,3 +25,38 @@ func TestIsValidLongWithTwoRepos(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepExeNameForCmp(t *testing.T) {
+	cases := []struct {
+		exe  string
+		want string
+	}{
+		{
+			"tailscale-ipn.exe",
+			"tailscale-ipn",
+		},
+		{
+			"tailscale-gui-amd64.exe",
+			"tailscale-gui",
+		},
+		{
+			"tailscale-gui-amd64",
+			"tailscale-gui",
+		},
+		{
+			"tailscale-ipn",
+			"tailscale-ipn",
+		},
+		{
+			"TaIlScAlE-iPn.ExE",
+			"tailscale-ipn",
+		},
+	}
+
+	for _, c := range cases {
+		got := prepExeNameForCmp(c.exe, "amd64")
+		if got != c.want {
+			t.Errorf("prepExeNameForCmp(%q) = %q; want %q", c.exe, got, c.want)
+		}
+	}
+}
