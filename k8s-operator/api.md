@@ -443,6 +443,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `image` _[NameserverImage](#nameserverimage)_ | Nameserver image. Defaults to tailscale/k8s-nameserver:unstable. |  |  |
 | `service` _[NameserverService](#nameserverservice)_ | Service configuration. |  |  |
+| `replicas` _integer_ | Replicas specifies how many Pods to create. Defaults to 1. |  | Minimum: 0 <br /> |
 
 
 #### NameserverImage

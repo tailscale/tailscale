@@ -84,6 +84,10 @@ type Nameserver struct {
 	// Service configuration.
 	// +optional
 	Service *NameserverService `json:"service,omitempty"`
+	// Replicas specifies how many Pods to create. Defaults to 1.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 type NameserverImage struct {
