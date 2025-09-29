@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -23,7 +22,6 @@ import (
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
-	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -400,13 +398,6 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 	return
 }
 
-func enableDebug(tb testing.TB) {
-	const debugKnob = "TS_DEBUG_DNS_FORWARD_SEND"
-	oldVal := os.Getenv(debugKnob)
-	envknob.Setenv(debugKnob, "true")
-	tb.Cleanup(func() { envknob.Setenv(debugKnob, oldVal) })
-}
-
 func makeLargeResponse(tb testing.TB, domain string) (request, response []byte) {
 	name := dns.MustNewName(domain)
 
@@ -554,9 +545,11 @@ func mustRunTestQuery(tb testing.TB, request []byte, modify func(*forwarder), po
 	return resp
 }
 
-func TestForwarderTCPFallback(t *testing.T) {
-	enableDebug(t)
+func beVerbose(f *forwarder) {
+	f.verboseFwd = true
+}
 
+func TestForwarderTCPFallback(t *testing.T) {
 	const domain = "large-dns-response.tailscale.com."
 
 	// Make a response that's very large, containing a bunch of localhost addresses.
@@ -576,7 +569,7 @@ func TestForwarderTCPFallback(t *testing.T) {
 		}
 	})
 
-	resp := mustRunTestQuery(t, request, nil, port)
+	resp := mustRunTestQuery(t, request, beVerbose, port)
 	if !bytes.Equal(resp, largeResponse) {
 		t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, largeResponse)
 	}
@@ -592,8 +585,6 @@ func TestForwarderTCPFallback(t *testing.T) {
 // Test to ensure that if the UDP listener is unresponsive, we always make a
 // TCP request even if we never get a response.
 func TestForwarderTCPFallbackTimeout(t *testing.T) {
-	enableDebug(t)
-
 	const domain = "large-dns-response.tailscale.com."
 
 	// Make a response that's very large, containing a bunch of localhost addresses.
@@ -614,7 +605,7 @@ func TestForwarderTCPFallbackTimeout(t *testing.T) {
 		}
 	})
 
-	resp := mustRunTestQuery(t, request, nil, port)
+	resp := mustRunTestQuery(t, request, beVerbose, port)
 	if !bytes.Equal(resp, largeResponse) {
 		t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, largeResponse)
 	}
@@ -624,8 +615,6 @@ func TestForwarderTCPFallbackTimeout(t *testing.T) {
 }
 
 func TestForwarderTCPFallbackDisabled(t *testing.T) {
-	enableDebug(t)
-
 	const domain = "large-dns-response.tailscale.com."
 
 	// Make a response that's very large, containing a bunch of localhost addresses.
@@ -646,6 +635,7 @@ func TestForwarderTCPFallbackDisabled(t *testing.T) {
 	})
 
 	resp := mustRunTestQuery(t, request, func(fwd *forwarder) {
+		fwd.verboseFwd = true
 		// Disable retries for this test.
 		fwd.controlKnobs = &controlknobs.Knobs{}
 		fwd.controlKnobs.DisableDNSForwarderTCPRetries.Store(true)
@@ -668,8 +658,6 @@ func TestForwarderTCPFallbackDisabled(t *testing.T) {
 
 // Test to ensure that we propagate DNS errors
 func TestForwarderTCPFallbackError(t *testing.T) {
-	enableDebug(t)
-
 	const domain = "error-response.tailscale.com."
 
 	// Our response is a SERVFAIL
@@ -686,7 +674,7 @@ func TestForwarderTCPFallbackError(t *testing.T) {
 		}
 	})
 
-	resp, err := runTestQuery(t, request, nil, port)
+	resp, err := runTestQuery(t, request, beVerbose, port)
 	if !sawRequest.Load() {
 		t.Error("did not see DNS request")
 	}
@@ -706,8 +694,6 @@ func TestForwarderTCPFallbackError(t *testing.T) {
 // Test to ensure that if we have more than one resolver, and at least one of them
 // returns a successful response, we propagate it.
 func TestForwarderWithManyResolvers(t *testing.T) {
-	enableDebug(t)
-
 	const domain = "example.com."
 	request := makeTestRequest(t, domain)
 
@@ -810,7 +796,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			for i := range tt.responses {
 				ports[i] = runDNSServer(t, nil, tt.responses[i], func(isTCP bool, gotRequest []byte) {})
 			}
-			gotResponse, err := runTestQuery(t, request, nil, ports...)
+			gotResponse, err := runTestQuery(t, request, beVerbose, ports...)
 			if err != nil {
 				t.Fatalf("wanted nil, got %v", err)
 			}
@@ -869,7 +855,7 @@ func TestNXDOMAINIncludesQuestion(t *testing.T) {
 	port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
 	})
 
-	res, err := runTestQuery(t, request, nil, port)
+	res, err := runTestQuery(t, request, beVerbose, port)
 	if err != nil {
 		t.Fatal(err)
 	}
