@@ -11,6 +11,8 @@ import (
 	"net"
 	"runtime"
 	"time"
+
+	"tailscale.com/feature"
 )
 
 type closeable interface {
@@ -31,7 +33,8 @@ func ConnCloseWrite(c net.Conn) error {
 }
 
 var processStartTime = time.Now()
-var tailscaledProcExists = func() bool { return false } // set by safesocket_ps.go
+
+var tailscaledProcExists feature.Hook[func() bool]
 
 // tailscaledStillStarting reports whether tailscaled is probably
 // still starting up. That is, it reports whether the caller should
@@ -50,7 +53,8 @@ func tailscaledStillStarting() bool {
 	if d > 5*time.Second {
 		return false
 	}
-	return tailscaledProcExists()
+	f, ok := tailscaledProcExists.GetOk()
+	return ok && f()
 }
 
 // ConnectContext connects to tailscaled using a unix socket or named pipe.
