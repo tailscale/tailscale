@@ -68,7 +68,6 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
-	"tailscale.com/posture"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
@@ -344,12 +343,6 @@ type LocalBackend struct {
 	// notified about.
 	lastNotifiedDriveShares *views.SliceView[*drive.Share, drive.ShareView]
 
-	// lastKnownHardwareAddrs is a list of the previous known hardware addrs.
-	// Previously known hwaddrs are kept to work around an issue on Windows
-	// where all addresses might disappear.
-	// http://go/corp/25168
-	lastKnownHardwareAddrs syncs.AtomicValue[[]string]
-
 	// lastSuggestedExitNode stores the last suggested exit node suggestion to
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
@@ -418,6 +411,9 @@ func (b *LocalBackend) UserMetricsRegistry() *usermetric.Registry {
 func (b *LocalBackend) NetMon() *netmon.Monitor {
 	return b.sys.NetMon.Get()
 }
+
+// PolicyClient returns the policy client for the backend.
+func (b *LocalBackend) PolicyClient() policyclient.Client { return b.polc }
 
 type metrics struct {
 	// advertisedRoutes is a metric that reports the number of network routes that are advertised by the local node.
@@ -6755,25 +6751,6 @@ func (b *LocalBackend) resetDialPlan() {
 	if old != nil {
 		b.logf("resetDialPlan: did reset")
 	}
-}
-
-// getHardwareAddrs returns the hardware addresses for the machine. If the list
-// of hardware addresses is empty, it will return the previously known hardware
-// addresses. Both the current, and previously known hardware addresses might be
-// empty.
-func (b *LocalBackend) getHardwareAddrs() ([]string, error) {
-	addrs, err := posture.GetHardwareAddrs()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(addrs) == 0 {
-		b.logf("getHardwareAddrs: got empty list of hwaddrs, returning previous list")
-		return b.lastKnownHardwareAddrs.Load(), nil
-	}
-
-	b.lastKnownHardwareAddrs.Store(addrs)
-	return addrs, nil
 }
 
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
