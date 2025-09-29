@@ -37,6 +37,10 @@ func TestRequires(t *testing.T) {
 			want: setOf("drive"),
 		},
 		{
+			in:   "cli",
+			want: setOf("cli"),
+		},
+		{
 			in:   "serve",
 			want: setOf("serve", "netstack"),
 		},
