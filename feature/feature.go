@@ -7,6 +7,8 @@ package feature
 import (
 	"errors"
 	"reflect"
+
+	"tailscale.com/util/testenv"
 )
 
 var ErrUnavailable = errors.New("feature not included in this build")
@@ -53,6 +55,19 @@ func (h *Hook[Func]) Set(f Func) {
 	}
 	h.f = f
 	h.ok = true
+}
+
+// SetForTest sets the hook function for tests, blowing
+// away any previous value. It will panic if called from
+// non-test code.
+//
+// It returns a restore function that resets the hook
+// to its previous value.
+func (h *Hook[Func]) SetForTest(f Func) (restore func()) {
+	testenv.AssertInTest()
+	old := *h
+	h.f, h.ok = f, true
+	return func() { *h = old }
 }
 
 // Get returns the hook function, or panics if it hasn't been set.

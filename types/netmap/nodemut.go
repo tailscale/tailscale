@@ -177,5 +177,5 @@ func mapResponseContainsNonPatchFields(res *tailcfg.MapResponse) bool {
 		// function is called, so it should never be set anyway. But for
 		// completedness, and for tests, check it too:
 		res.PeersChanged != nil ||
-		res.DefaultAutoUpdate != ""
+		res.DeprecatedDefaultAutoUpdate != ""
 }

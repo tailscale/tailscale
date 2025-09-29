@@ -107,7 +107,7 @@ OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.ClientVersion
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.CollectServices
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.ControlDialPlan
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.Debug
-OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.DefaultAutoUpdate
+OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.DeprecatedDefaultAutoUpdate
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.DERPMap
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.DNSConfig
 OmitEmptyShouldBeOmitZero	tailscale.com/tailcfg.MapResponse.Node
