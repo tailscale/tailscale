@@ -54,6 +54,7 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
@@ -117,19 +118,20 @@ var args struct {
 	// or comma-separated list thereof.
 	tunname string
 
-	cleanUp        bool
-	confFile       string // empty, file path, or "vm:user-data"
-	debug          string
-	port           uint16
-	statepath      string
-	encryptState   bool
-	statedir       string
-	socketpath     string
-	birdSocketPath string
-	verbose        int
-	socksAddr      string // listen address for SOCKS5 server
-	httpProxyAddr  string // listen address for HTTP proxy server
-	disableLogs    bool
+	cleanUp             bool
+	confFile            string // empty, file path, or "vm:user-data"
+	debug               string
+	port                uint16
+	statepath           string
+	encryptState        bool
+	statedir            string
+	socketpath          string
+	birdSocketPath      string
+	verbose             int
+	socksAddr           string // listen address for SOCKS5 server
+	httpProxyAddr       string // listen address for HTTP proxy server
+	disableLogs         bool
+	hardwareAttestation bool
 }
 
 var (
@@ -205,6 +207,7 @@ func main() {
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
+	flag.BoolVar(&args.hardwareAttestation, "hardware-attestation", defaultHardwareAttestation(), "use hardware-backed keys to bind node identity to this device when supported by the OS and hardware. Uses TPM 2.0 on Linux and Windows; SecureEnclave on macOS and iOS; and Keystore on Android")
 	if f, ok := hookRegisterOutboundProxyFlags.GetOk(); ok {
 		f()
 	}
@@ -295,6 +298,13 @@ func main() {
 		if args.statepath != "" && store.HasKnownProviderPrefix(args.statepath) {
 			log.SetFlags(0)
 			log.Fatal("--encrypt-state can only be used with --state set to a local file path")
+		}
+	}
+
+	if args.hardwareAttestation {
+		if _, err := key.NewEmptyHardwareAttestationKey(); err == key.ErrUnsupported {
+			log.SetFlags(0)
+			log.Fatalf("--hardware-attestation is not supported on this platform or in this build of tailscaled")
 		}
 	}
 
@@ -671,6 +681,9 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			log.Fatalf("failed to start netstack: %v", err)
 		}
 	}
+	if args.hardwareAttestation {
+		lb.SetHardwareAttested()
+	}
 	return lb, nil
 }
 
@@ -904,5 +917,10 @@ func defaultEncryptState() bool {
 		return false
 	}
 	v, _ := policyclient.Get().GetBoolean(pkey.EncryptState, false)
+	return v
+}
+
+func defaultHardwareAttestation() bool {
+	v, _ := policyclient.Get().GetBoolean(pkey.HardwareAttestation, true)
 	return v
 }

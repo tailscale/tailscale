@@ -417,6 +417,21 @@ type LocalBackend struct {
 	//
 	// See tailscale/corp#29969.
 	overrideExitNodePolicy bool
+
+	// whether backend should use a hardware-backed key to bind the node
+	// identity to this device.
+	hardwareAttested bool
+}
+
+// SetHardwareAttested enables hardware attestation key signatures in map
+// requests, if supported on this platform. SetHardwareAttested should be called
+// before Start.
+func (b *LocalBackend) SetHardwareAttested() {
+	b.hardwareAttested = true
+}
+
+func (b *LocalBackend) HardwareAttested() bool {
+	return b.hardwareAttested
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -2449,7 +2464,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	// attempt to generate a new hardware attestion key if none exists
-	if persistv.AttestationKey == nil {
+	if persistv.AttestationKey == nil && b.HardwareAttested() {
 		if ak, err := key.NewHardwareAttestationKey(); err != nil {
 			b.logf("failed to create hardware attestation key: %v", err)
 		} else if ak != nil {
