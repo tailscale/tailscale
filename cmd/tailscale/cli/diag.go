@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux || windows || darwin
+//go:build (linux || windows || darwin) && !ts_omit_cliconndiag
 
 package cli
 
@@ -16,11 +16,15 @@ import (
 	"tailscale.com/version/distro"
 )
 
-// fixTailscaledConnectError is called when the local tailscaled has
+func init() {
+	hookFixTailscaledConnectError.Set(fixTailscaledConnectErrorImpl)
+}
+
+// fixTailscaledConnectErrorImpl is called when the local tailscaled has
 // been determined unreachable due to the provided origErr value. It
 // returns either the same error or a better one to help the user
 // understand why tailscaled isn't running for their platform.
-func fixTailscaledConnectError(origErr error) error {
+func fixTailscaledConnectErrorImpl(origErr error) error {
 	procs, err := ps.Processes()
 	if err != nil {
 		return fmt.Errorf("failed to connect to local Tailscaled process and failed to enumerate processes while looking for it")

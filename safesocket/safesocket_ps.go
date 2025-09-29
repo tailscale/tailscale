@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build (linux && !android) || windows || (darwin && !ios) || freebsd
+//go:build ((linux && !android) || windows || (darwin && !ios) || freebsd) && !ts_omit_cliconndiag
 
 package safesocket
 
@@ -12,7 +12,7 @@ import (
 )
 
 func init() {
-	tailscaledProcExists = func() bool {
+	tailscaledProcExists.Set(func() bool {
 		procs, err := ps.Processes()
 		if err != nil {
 			return false
@@ -30,5 +30,5 @@ func init() {
 			}
 		}
 		return false
-	}
+	})
 }
