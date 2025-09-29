@@ -37,7 +37,7 @@ not open source.
 
 ## Building
 
-We always require the latest Go release, currently Go 1.23. (While we build
+We always require the latest Go release, currently Go 1.25. (While we build
 releases with our [Go fork](https://github.com/tailscale/go/), its use is not
 required.)
 
