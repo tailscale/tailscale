@@ -61,6 +61,11 @@ func (m *Network) Listen(network, address string) (net.Listener, error) {
 		}
 		ln := Listen(key)
 		m.lns[key] = ln
+		ln.onClose = func() {
+			m.mu.Lock()
+			delete(m.lns, key)
+			m.mu.Unlock()
+		}
 		return ln, nil
 	}
 }
