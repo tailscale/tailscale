@@ -79,6 +79,10 @@ type Server struct {
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
 	HTTPTestServer  *httptest.Server // if non-nil, used to get BaseURL
 
+	// ModifyFirstMapResponse, if non-nil, is called exactly once per
+	// MapResponse stream to modify the first MapResponse sent in response to it.
+	ModifyFirstMapResponse func(*tailcfg.MapResponse, *tailcfg.MapRequest)
+
 	initMuxOnce sync.Once
 	mux         *http.ServeMux
 
@@ -993,6 +997,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 	// register an updatesCh to get updates.
 	streaming := req.Stream && !req.ReadOnly
 	compress := req.Compress != ""
+	first := true
 
 	w.WriteHeader(200)
 	for {
@@ -1024,6 +1029,10 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 			s.mu.Unlock()
 			if allExpired {
 				res.Node.KeyExpiry = time.Now().Add(-1 * time.Minute)
+			}
+			if f := s.ModifyFirstMapResponse; first && f != nil {
+				first = false
+				f(res, req)
 			}
 			// TODO: add minner if/when needed
 			resBytes, err := json.Marshal(res)

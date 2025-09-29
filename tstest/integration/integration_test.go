@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1412,13 +1413,26 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 	wantNode0PeerCount(expectedPeers) // all existing peers and the new node
 }
 
-func TestAutoUpdateDefaults(t *testing.T) {
-	if !feature.CanAutoUpdate() {
-		t.Skip("auto-updates not supported on this platform")
-	}
+func TestAutoUpdateDefaults(t *testing.T)     { testAutoUpdateDefaults(t, false) }
+func TestAutoUpdateDefaults_cap(t *testing.T) { testAutoUpdateDefaults(t, true) }
+
+// useCap is whether to use NodeAttrDefaultAutoUpdate (as opposed to the old
+// DeprecatedDefaultAutoUpdate top-level MapResponse field).
+func testAutoUpdateDefaults(t *testing.T, useCap bool) {
+	t.Cleanup(feature.HookCanAutoUpdate.SetForTest(func() bool { return true }))
+
 	tstest.Shard(t)
-	tstest.Parallel(t)
 	env := NewTestEnv(t)
+
+	var (
+		modifyMu               sync.Mutex
+		modifyFirstMapResponse = func(*tailcfg.MapResponse, *tailcfg.MapRequest) {}
+	)
+	env.Control.ModifyFirstMapResponse = func(mr *tailcfg.MapResponse, req *tailcfg.MapRequest) {
+		modifyMu.Lock()
+		defer modifyMu.Unlock()
+		modifyFirstMapResponse(mr, req)
+	}
 
 	checkDefault := func(n *TestNode, want bool) error {
 		enabled, ok := n.diskPrefs().AutoUpdate.Apply.Get()
@@ -1431,17 +1445,23 @@ func TestAutoUpdateDefaults(t *testing.T) {
 		return nil
 	}
 
-	sendAndCheckDefault := func(t *testing.T, n *TestNode, send, want bool) {
-		t.Helper()
-		if !env.Control.AddRawMapResponse(n.MustStatus().Self.PublicKey, &tailcfg.MapResponse{
-			DefaultAutoUpdate: opt.NewBool(send),
-		}) {
-			t.Fatal("failed to send MapResponse to node")
-		}
-		if err := tstest.WaitFor(2*time.Second, func() error {
-			return checkDefault(n, want)
-		}); err != nil {
-			t.Fatal(err)
+	setDefaultAutoUpdate := func(send bool) {
+		modifyMu.Lock()
+		defer modifyMu.Unlock()
+		modifyFirstMapResponse = func(mr *tailcfg.MapResponse, req *tailcfg.MapRequest) {
+			if mr.Node == nil {
+				mr.Node = &tailcfg.Node{}
+			}
+			if useCap {
+				if mr.Node.CapMap == nil {
+					mr.Node.CapMap = make(tailcfg.NodeCapMap)
+				}
+				mr.Node.CapMap[tailcfg.NodeAttrDefaultAutoUpdate] = []tailcfg.RawMessage{
+					tailcfg.RawMessage(fmt.Sprintf("%t", send)),
+				}
+			} else {
+				mr.DeprecatedDefaultAutoUpdate = opt.NewBool(send)
+			}
 		}
 	}
 
@@ -1452,29 +1472,54 @@ func TestAutoUpdateDefaults(t *testing.T) {
 		{
 			desc: "tailnet-default-false",
 			run: func(t *testing.T, n *TestNode) {
-				// First received default "false".
-				sendAndCheckDefault(t, n, false, false)
-				// Should not be changed even if sent "true" later.
-				sendAndCheckDefault(t, n, true, false)
+
+				// First the server sends "false", and client should remember that.
+				setDefaultAutoUpdate(false)
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, false)
+
+				// Now we disconnect and change the server to send "true", which
+				// the client should ignore, having previously remembered
+				// "false".
+				n.MustDown()
+				setDefaultAutoUpdate(true) // control sends default "true"
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, false) // still false
+
 				// But can be changed explicitly by the user.
 				if out, err := n.TailscaleForOutput("set", "--auto-update").CombinedOutput(); err != nil {
 					t.Fatalf("failed to enable auto-update on node: %v\noutput: %s", err, out)
 				}
-				sendAndCheckDefault(t, n, false, true)
+				checkDefault(n, true)
 			},
 		},
 		{
 			desc: "tailnet-default-true",
 			run: func(t *testing.T, n *TestNode) {
-				// First received default "true".
-				sendAndCheckDefault(t, n, true, true)
-				// Should not be changed even if sent "false" later.
-				sendAndCheckDefault(t, n, false, true)
+				// Same as above but starting with default "true".
+
+				// First the server sends "true", and client should remember that.
+				setDefaultAutoUpdate(true)
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, true)
+
+				// Now we disconnect and change the server to send "false", which
+				// the client should ignore, having previously remembered
+				// "true".
+				n.MustDown()
+				setDefaultAutoUpdate(false) // control sends default "false"
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, true) // still true
+
 				// But can be changed explicitly by the user.
 				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
-					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
+					t.Fatalf("failed to enable auto-update on node: %v\noutput: %s", err, out)
 				}
-				sendAndCheckDefault(t, n, true, false)
+				checkDefault(n, false)
 			},
 		},
 		{
@@ -1484,22 +1529,21 @@ func TestAutoUpdateDefaults(t *testing.T) {
 				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
 					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
 				}
-				// Defaults sent from control should be ignored.
-				sendAndCheckDefault(t, n, true, false)
-				sendAndCheckDefault(t, n, false, false)
+
+				setDefaultAutoUpdate(true)
+				n.MustUp()
+				n.AwaitRunning()
+				checkDefault(n, false)
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
 			n := NewTestNode(t, env)
+			n.allowUpdates = true
 			d := n.StartDaemon()
 			defer d.MustCleanShutdown(t)
-
 			n.AwaitResponding()
-			n.MustUp()
-			n.AwaitRunning()
-
 			tt.run(t, n)
 		})
 	}

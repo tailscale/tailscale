@@ -1184,7 +1184,19 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			metricMapResponseKeepAlives.Add(1)
 			continue
 		}
-		if au, ok := resp.DefaultAutoUpdate.Get(); ok {
+
+		// DefaultAutoUpdate in its CapMap and deprecated top-level field forms.
+		if self := resp.Node; self != nil {
+			for _, v := range self.CapMap[tailcfg.NodeAttrDefaultAutoUpdate] {
+				switch v {
+				case "true", "false":
+					c.autoUpdatePub.Publish(AutoUpdate{c.controlClientID, v == "true"})
+				default:
+					c.logf("netmap: [unexpected] unknown %s in CapMap: %q", tailcfg.NodeAttrDefaultAutoUpdate, v)
+				}
+			}
+		}
+		if au, ok := resp.DeprecatedDefaultAutoUpdate.Get(); ok {
 			c.autoUpdatePub.Publish(AutoUpdate{c.controlClientID, au})
 		}
 
