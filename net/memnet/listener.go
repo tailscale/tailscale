@@ -22,6 +22,7 @@ type Listener struct {
 	ch        chan Conn
 	closeOnce sync.Once
 	closed    chan struct{}
+	onClose   func() // or nil
 
 	// NewConn, if non-nil, is called to create a new pair of connections
 	// when dialing. If nil, NewConn is used.
@@ -44,9 +45,14 @@ func (l *Listener) Addr() net.Addr {
 
 // Close closes the pipe listener.
 func (l *Listener) Close() error {
+	var cleanup func()
 	l.closeOnce.Do(func() {
+		cleanup = l.onClose
 		close(l.closed)
 	})
+	if cleanup != nil {
+		cleanup()
+	}
 	return nil
 }
 
