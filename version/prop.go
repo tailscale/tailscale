@@ -159,7 +159,9 @@ func IsWindowsGUI() bool {
 		if err != nil {
 			return false
 		}
-		return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+		// It is okay to use GOARCH here because we're checking whether our
+		// _own_ process is the GUI.
+		return isGUIExeName(exe, runtime.GOARCH)
 	})
 }
 
