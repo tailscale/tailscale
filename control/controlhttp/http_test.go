@@ -36,7 +36,10 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+<<<<<<< HEAD
 	"tailscale.com/util/eventbus/eventbustest"
+=======
+>>>>>>> mac-app-store-version
 	"tailscale.com/util/must"
 )
 
@@ -790,7 +793,11 @@ func runDialPlanTest(t *testing.T, plan *tailcfg.ControlDialPlan, want []netip.A
 		omitCertErrorLogging: true,
 		testFallbackDelay:    50 * time.Millisecond,
 		Clock:                clock,
+<<<<<<< HEAD
 		HealthTracker:        health.NewTracker(eventbustest.NewBus(t)),
+=======
+		HealthTracker:        new(health.Tracker),
+>>>>>>> mac-app-store-version
 	}
 
 	start := time.Now()

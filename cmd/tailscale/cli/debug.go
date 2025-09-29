@@ -289,7 +289,10 @@ func debugCmd() *ffcli.Command {
 					fs.StringVar(&ts2021Args.host, "host", "controlplane.tailscale.com", "hostname of control plane")
 					fs.IntVar(&ts2021Args.version, "version", int(tailcfg.CurrentCapabilityVersion), "protocol version")
 					fs.BoolVar(&ts2021Args.verbose, "verbose", false, "be extra verbose")
+<<<<<<< HEAD
 					fs.StringVar(&ts2021Args.aceHost, "ace", "", "if non-empty, use this ACE server IP/hostname as a candidate path")
+=======
+>>>>>>> mac-app-store-version
 					fs.StringVar(&ts2021Args.dialPlanJSONFile, "dial-plan", "", "if non-empty, use this JSON file to configure the dial plan")
 					return fs
 				})(),
@@ -966,11 +969,17 @@ func runVia(ctx context.Context, args []string) error {
 }
 
 var ts2021Args struct {
+<<<<<<< HEAD
 	host    string // "controlplane.tailscale.com"
 	version int    // 27 or whatever
 	verbose bool
 	aceHost string // if non-empty, FQDN of https ACE server to use ("ace.example.com")
 
+=======
+	host             string // "controlplane.tailscale.com"
+	version          int    // 27 or whatever
+	verbose          bool
+>>>>>>> mac-app-store-version
 	dialPlanJSONFile string // if non-empty, path to JSON file [tailcfg.ControlDialPlan] JSON
 }
 

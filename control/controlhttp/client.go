@@ -120,6 +120,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 	resultsCh := make(chan dialResult) // unbuffered, never closed
 
 	dialCand := func(cand tailcfg.ControlIPCandidate) (*ClientConn, error) {
+<<<<<<< HEAD
 		if cand.ACEHost != "" {
 			a.logf("[v2] controlhttp: waited %.2f seconds, dialing %q via ACE %s (%s)", cand.DialStartDelaySec, a.Hostname, cand.ACEHost, cmp.Or(cand.IP.String(), "dns"))
 		} else {
@@ -167,6 +168,51 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 			a.logf("controlhttp: context aborted dialing")
 			return nil, ctx.Err()
 		}
+=======
+		a.logf("[v2] controlhttp: waited %.2f seconds, dialing %q @ %s", cand.DialStartDelaySec, a.Hostname, cand.IP.String())
+
+		ctx, cancel := context.WithTimeout(ctx, time.Duration(cand.DialTimeoutSec*float64(time.Second)))
+		defer cancel()
+		return a.dialHost(ctx, cand.IP)
+	}
+
+	for _, cand := range candidates {
+		timer := time.AfterFunc(time.Duration(cand.DialStartDelaySec*float64(time.Second)), func() {
+			go func() {
+				conn, err := dialCand(cand)
+				select {
+				case resultsCh <- dialResult{conn, err}:
+					if err == nil {
+						a.logf("[v1] controlhttp: succeeded dialing %q @ %v from dial plan", a.Hostname, cand.IP.String())
+					}
+				case <-ctx.Done():
+					if conn != nil {
+						conn.Close()
+					}
+				}
+			}()
+		})
+		defer timer.Stop()
+	}
+
+	var errs []error
+	for {
+		select {
+		case res := <-resultsCh:
+			if res.err == nil {
+				return res.conn, nil
+			}
+			errs = append(errs, res.err)
+			if len(errs) == len(candidates) {
+				// If we get here, then we didn't get anywhere with our dial plan; fall back to just using DNS.
+				a.logf("controlhttp: failed dialing using DialPlan, falling back to DNS; errs=%s", errors.Join(errs...))
+				return a.dialHost(ctx, netip.Addr{})
+			}
+		case <-ctx.Done():
+			a.logf("controlhttp: context aborted dialing")
+			return nil, ctx.Err()
+		}
+>>>>>>> mac-app-store-version
 	}
 }
 
