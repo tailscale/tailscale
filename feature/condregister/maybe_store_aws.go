@@ -3,16 +3,17 @@
 
 //go:build (ts_aws || (linux && (arm64 || amd64) && !android)) && !ts_omit_aws
 
-package store
+package condregister
 
 import (
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/awsstore"
 	"tailscale.com/types/logger"
 )
 
 func init() {
-	Register("arn:", func(logf logger.Logf, arg string) (ipn.StateStore, error) {
+	store.Register("arn:", func(logf logger.Logf, arg string) (ipn.StateStore, error) {
 		ssmARN, opts, err := awsstore.ParseARNAndOpts(arg)
 		if err != nil {
 			return nil, err
