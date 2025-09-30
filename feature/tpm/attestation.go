@@ -262,3 +262,5 @@ func (ak *attestationKey) Clone() key.HardwareAttestationKey {
 		pub:        ak.pub,
 	}
 }
+
+func (ak *attestationKey) IsZero() bool { return !ak.loaded() }
