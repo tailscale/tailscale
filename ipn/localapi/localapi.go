@@ -72,7 +72,6 @@ var handler = map[string]LocalAPIHandler{
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
 	"alpha-set-device-attrs":       (*Handler).serveSetDeviceAttrs, // see tailscale/corp#24690
-	"appc-route-info":              (*Handler).serveGetAppcRouteInfo,
 	"bugreport":                    (*Handler).serveBugReport,
 	"check-ip-forwarding":          (*Handler).serveCheckIPForwarding,
 	"check-prefs":                  (*Handler).serveCheckPrefs,
@@ -111,6 +110,12 @@ var handler = map[string]LocalAPIHandler{
 	"usermetrics":                  (*Handler).serveUserMetrics,
 	"watch-ipn-bus":                (*Handler).serveWatchIPNBus,
 	"whois":                        (*Handler).serveWhoIs,
+}
+
+func init() {
+	if buildfeatures.HasAppConnectors {
+		Register("appc-route-info", (*Handler).serveGetAppcRouteInfo)
+	}
 }
 
 // Register registers a new LocalAPI handler for the given name.
@@ -934,11 +939,13 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := h.b.MaybeClearAppConnector(mp); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
-			return
+		if buildfeatures.HasAppConnectors {
+			if err := h.b.MaybeClearAppConnector(mp); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
+				return
+			}
 		}
 		var err error
 		prefs, err = h.b.EditPrefsAs(mp, h.Actor)
@@ -1666,6 +1673,10 @@ func (h *Handler) serveShutdown(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveGetAppcRouteInfo(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasAppConnectors {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
 	if r.Method != httpm.GET {
 		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
 		return

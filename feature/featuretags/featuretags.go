@@ -88,6 +88,7 @@ type FeatureMeta struct {
 // excluded via build tags, and a description of each.
 var Features = map[FeatureTag]FeatureMeta{
 	"acme":          {"ACME", "ACME TLS certificate management", nil},
+	"appconnectors": {"AppConnectors", "App Connectors support", nil},
 	"aws":           {"AWS", "AWS integration", nil},
 	"bird":          {"Bird", "Bird BGP integration", nil},
 	"captiveportal": {"CaptivePortal", "Captive portal detection", nil},
