@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build go1.19
+//go:build !ts_omit_debug
 
 package main
 
@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptrace"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"time"
@@ -39,7 +40,23 @@ var debugArgs struct {
 	portmap   bool
 }
 
-var debugModeFunc = debugMode // so it can be addressable
+func init() {
+	debugModeFunc := debugMode // to be addressable
+	subCommands["debug"] = &debugModeFunc
+
+	hookNewDebugMux.Set(newDebugMux)
+}
+
+func newDebugMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/metrics", servePrometheusMetrics)
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
+}
 
 func debugMode(args []string) error {
 	fs := flag.NewFlagSet("debug", flag.ExitOnError)

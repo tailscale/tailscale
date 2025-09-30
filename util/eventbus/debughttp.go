@@ -29,7 +29,7 @@ type httpDebugger struct {
 	*Debugger
 }
 
-func registerHTTPDebugger(d *Debugger, td *tsweb.DebugHandler) {
+func (d *Debugger) RegisterHTTP(td *tsweb.DebugHandler) {
 	dh := httpDebugger{d}
 	td.Handle("bus", "Event bus", dh)
 	td.HandleSilent("bus/monitor", http.HandlerFunc(dh.serveMonitor))

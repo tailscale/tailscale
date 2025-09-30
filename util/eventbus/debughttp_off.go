@@ -5,14 +5,6 @@
 
 package eventbus
 
-func registerHTTPDebugger(d *Debugger, tsWebDebugHandler any) {
-	// The event bus debugging UI uses html/template, which uses
-	// reflection for method lookups. This forces the compiler to
-	// retain a lot more code and information to make dynamic method
-	// dispatch work, which is unacceptable bloat for the iOS build.
-	// We also disable it on Android while we're at it, as nobody
-	// is debugging Tailscale internals on Android.
-	//
-	// TODO: https://github.com/tailscale/tailscale/issues/15297 to
-	// bring the debug UI back to iOS somehow.
-}
+type tswebDebugHandler = any // actually *tsweb.DebugHandler; any to avoid import tsweb with ts_omit_debugeventbus
+
+func (*Debugger) RegisterHTTP(td tswebDebugHandler) {}
