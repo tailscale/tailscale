@@ -24,6 +24,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
@@ -896,7 +897,7 @@ func (de *endpoint) discoverUDPRelayPathsLocked(now mono.Time) {
 // wantUDPRelayPathDiscoveryLocked reports whether we should kick off UDP relay
 // path discovery.
 func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
-	if runtime.GOOS == "js" {
+	if runtime.GOOS == "js" || !buildfeatures.HasRelayServer {
 		return false
 	}
 	if !de.relayCapable {
@@ -2000,8 +2001,10 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	// path discovery can also trigger disco ping transmission, which *could*
 	// lead to an infinite loop of peer relay path discovery between two peers,
 	// absent intended triggers.
-	if de.wantUDPRelayPathDiscoveryLocked(monoNow) {
-		de.discoverUDPRelayPathsLocked(monoNow)
+	if buildfeatures.HasRelayServer {
+		if de.wantUDPRelayPathDiscoveryLocked(monoNow) {
+			de.discoverUDPRelayPathsLocked(monoNow)
+		}
 	}
 }
 
