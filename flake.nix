@@ -98,7 +98,6 @@
         subPackages = [
           "cmd/tailscale"
           "cmd/tailscaled"
-          "cmd/tsidp"
         ];
         doCheck = false;
 
@@ -137,7 +136,6 @@
 
     nixosModules = {
       tailscale = import ./nixos/tailscaled-module.nix self;
-      tsidp = import ./nixos/tsidp-module.nix self;
       default = self.nixosModules.tailscale;
     };
 
