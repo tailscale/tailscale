@@ -97,6 +97,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"clientupdate":  {"ClientUpdate", "Client auto-update support", nil},
 	"completion":    {"Completion", "CLI shell completion", nil},
 	"dbus":          {"DBus", "Linux DBus support", nil},
+	"debug":         {"Debug", "various debug support, for things that don't have or need their own more specific feature", nil},
 	"debugeventbus": {"DebugEventBus", "eventbus debug support", nil},
 	"debugportmapper": {
 		Sym:  "DebugPortMapper",

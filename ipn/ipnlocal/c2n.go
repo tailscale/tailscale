@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"tailscale.com/control/controlclient"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
@@ -130,6 +132,10 @@ func handleC2NLogtailFlush(b *LocalBackend, w http.ResponseWriter, r *http.Reque
 }
 
 func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
 	ctx := r.Context()
 	if r.Method != httpm.POST && r.Method != httpm.GET {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -190,20 +196,36 @@ func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Reques
 }
 
 func handleC2NDebugGoroutines(_ *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write(goroutines.ScrubbedGoroutineDump(true))
 }
 
 func handleC2NDebugPrefs(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
 	writeJSON(w, b.Prefs())
 }
 
 func handleC2NDebugMetrics(_ *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain")
 	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
 func handleC2NDebugComponentLogging(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
 	component := r.FormValue("component")
 	secs, _ := strconv.Atoi(r.FormValue("secs"))
 	if secs == 0 {

@@ -1193,7 +1193,7 @@ func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug) e
 		c.logf("exiting process with status %v per controlplane", *code)
 		os.Exit(*code)
 	}
-	if debug.DisableLogTail {
+	if buildfeatures.HasLogTail && debug.DisableLogTail {
 		logtail.Disable()
 		envknob.SetNoLogsNoSupport()
 	}

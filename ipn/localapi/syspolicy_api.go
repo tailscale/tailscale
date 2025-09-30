@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	handler["policy/"] = (*Handler).servePolicy
+	Register("policy/", (*Handler).servePolicy)
 }
 
 func (h *Handler) servePolicy(w http.ResponseWriter, r *http.Request) {
