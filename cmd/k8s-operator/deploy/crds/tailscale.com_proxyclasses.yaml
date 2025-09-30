@@ -1046,6 +1046,62 @@ spec:
                           type: object
                           additionalProperties:
                             type: string
+                        dnsConfig:
+                          description: |-
+                            DNSConfig defines DNS parameters for the proxy Pod in addition to those generated from DNSPolicy.
+                            When DNSPolicy is set to "None", DNSConfig must be specified.
+                            https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config
+                          type: object
+                          properties:
+                            nameservers:
+                              description: |-
+                                A list of DNS name server IP addresses.
+                                This will be appended to the base nameservers generated from DNSPolicy.
+                                Duplicated nameservers will be removed.
+                              type: array
+                              items:
+                                type: string
+                              x-kubernetes-list-type: atomic
+                            options:
+                              description: |-
+                                A list of DNS resolver options.
+                                This will be merged with the base options generated from DNSPolicy.
+                                Duplicated entries will be removed. Resolution options given in Options
+                                will override those that appear in the base DNSPolicy.
+                              type: array
+                              items:
+                                description: PodDNSConfigOption defines DNS resolver options of a pod.
+                                type: object
+                                properties:
+                                  name:
+                                    description: |-
+                                      Name is this DNS resolver option's name.
+                                      Required.
+                                    type: string
+                                  value:
+                                    description: Value is this DNS resolver option's value.
+                                    type: string
+                              x-kubernetes-list-type: atomic
+                            searches:
+                              description: |-
+                                A list of DNS search domains for host-name lookup.
+                                This will be appended to the base search paths generated from DNSPolicy.
+                                Duplicated search paths will be removed.
+                              type: array
+                              items:
+                                type: string
+                              x-kubernetes-list-type: atomic
+                        dnsPolicy:
+                          description: |-
+                            DNSPolicy defines how DNS will be configured for the proxy Pod.
+                            By default the Tailscale Kubernetes Operator does not set a DNS policy (uses cluster default).
+                            https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy
+                          type: string
+                          enum:
+                            - ClusterFirstWithHostNet
+                            - ClusterFirst
+                            - Default
+                            - None
                         imagePullSecrets:
                           description: |-
                             Proxy Pod's image pull Secrets.

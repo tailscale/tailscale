@@ -87,6 +87,15 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 							},
 						},
 					},
+					DNSPolicy: ptr.To(corev1.DNSClusterFirstWithHostNet),
+					DNSConfig: &corev1.PodDNSConfig{
+						Nameservers: []string{"1.1.1.1", "8.8.8.8"},
+						Searches:    []string{"example.com", "test.local"},
+						Options: []corev1.PodDNSConfigOption{
+							{Name: "ndots", Value: ptr.To("2")},
+							{Name: "edns0"},
+						},
+					},
 					TailscaleContainer: &tsapi.Container{
 						SecurityContext: &corev1.SecurityContext{
 							Privileged: ptr.To(true),
@@ -200,6 +209,8 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.InitContainers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
 	wantSS.Spec.Template.Spec.InitContainers[0].ImagePullPolicy = "IfNotPresent"
 	wantSS.Spec.Template.Spec.PriorityClassName = proxyClassAllOpts.Spec.StatefulSet.Pod.PriorityClassName
+	wantSS.Spec.Template.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
+	wantSS.Spec.Template.Spec.DNSConfig = proxyClassAllOpts.Spec.StatefulSet.Pod.DNSConfig
 
 	gotSS := applyProxyClassToStatefulSet(proxyClassAllOpts, nonUserspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
 	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
@@ -239,6 +250,8 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.Containers[0].ImagePullPolicy = "IfNotPresent"
 	wantSS.Spec.Template.Spec.Containers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
 	wantSS.Spec.Template.Spec.PriorityClassName = proxyClassAllOpts.Spec.StatefulSet.Pod.PriorityClassName
+	wantSS.Spec.Template.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
+	wantSS.Spec.Template.Spec.DNSConfig = proxyClassAllOpts.Spec.StatefulSet.Pod.DNSConfig
 	gotSS = applyProxyClassToStatefulSet(proxyClassAllOpts, userspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
 	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
 		t.Errorf("Unexpected result applying ProxyClass with all options to a StatefulSet for a userspace proxy (-got +want):\n%s", diff)

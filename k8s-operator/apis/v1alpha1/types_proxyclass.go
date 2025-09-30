@@ -303,6 +303,17 @@ type Pod struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
 	PriorityClassName string `json:"priorityClassName,omitempty"`
+	// DNSPolicy defines how DNS will be configured for the proxy Pod.
+	// By default the Tailscale Kubernetes Operator does not set a DNS policy (uses cluster default).
+	// https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy
+	// +kubebuilder:validation:Enum=ClusterFirstWithHostNet;ClusterFirst;Default;None
+	// +optional
+	DNSPolicy *corev1.DNSPolicy `json:"dnsPolicy,omitempty"`
+	// DNSConfig defines DNS parameters for the proxy Pod in addition to those generated from DNSPolicy.
+	// When DNSPolicy is set to "None", DNSConfig must be specified.
+	// https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config
+	// +optional
+	DNSConfig *corev1.PodDNSConfig `json:"dnsConfig,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)",message="ServiceMonitor can only be enabled if metrics are enabled"
