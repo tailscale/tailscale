@@ -175,7 +175,8 @@ type CapabilityVersion int
 //   - 127: 2025-09-19: can handle C2N /debug/netmap.
 //   - 128: 2025-10-02: can handle C2N /debug/health.
 //   - 129: 2025-10-04: Fixed sleep/wake deadlock in magicsock when using peer relay (PR #17449)
-const CurrentCapabilityVersion CapabilityVersion = 129
+//   - 130: 2025-10-06: Client will determine whether it can reach an exit node when [NodeAttrClientSideReachability] is set.
+const CurrentCapabilityVersion CapabilityVersion = 130
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.

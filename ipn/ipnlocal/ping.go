@@ -17,6 +17,12 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// Pinger is the [LocalBackend.Ping] method.
+type Pinger interface {
+	// Ping is a request to do a ping with the peer handling the given IP.
+	Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType, size int) (*ipnstate.PingResult, error)
+}
+
 func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType, size int) (*ipnstate.PingResult, error) {
 	if pingType == tailcfg.PingPeerAPI {
 		t0 := b.clock.Now()

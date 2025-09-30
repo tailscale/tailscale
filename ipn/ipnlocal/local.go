@@ -499,7 +499,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		needsCaptiveDetection: make(chan bool),
 	}
 
-	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get())
+	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get(), b)
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
@@ -629,7 +629,7 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
 	}
-	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.logf, b.sys.Bus.Get())
+	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.logf, b.sys.Bus.Get(), b)
 	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
 		v.ready()
 	}
@@ -6750,7 +6750,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 		// down, so no need to do any work.
 		return nil
 	}
-	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get())
+	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get(), b)
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
 		oldNode.shutdown(errNodeContextChanged)
 	}

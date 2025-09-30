@@ -6,8 +6,10 @@ package ipnlocal
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -70,6 +72,8 @@ type nodeBackend struct {
 	ctx       context.Context         // canceled by [nodeBackend.shutdown]
 	ctxCancel context.CancelCauseFunc // cancels ctx
 
+	pinger Pinger
+
 	// filterAtomic is a stateful packet filter. Immutable once created, but can be
 	// replaced with a new one.
 	filterAtomic atomic.Pointer[filter.Filter]
@@ -106,12 +110,13 @@ type nodeBackend struct {
 	nodeByAddr map[netip.Addr]tailcfg.NodeID
 }
 
-func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *nodeBackend {
+func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus, pinger Pinger) *nodeBackend {
 	ctx, ctxCancel := context.WithCancelCause(ctx)
 	nb := &nodeBackend{
 		logf:        logf,
 		ctx:         ctx,
 		ctxCancel:   ctxCancel,
+		pinger:      pinger,
 		eventClient: bus.Client("ipnlocal.nodeBackend"),
 		readyCh:     make(chan struct{}),
 	}
@@ -381,19 +386,68 @@ func (nb *nodeBackend) PeerIsReachable(ctx context.Context, p tailcfg.NodeView) 
 		// This node can always reach itself.
 		return true
 	}
-	return nb.peerIsReachable(ctx, p)
+	res, err := nb.peerIsReachable(ctx, p)
+	if err != nil {
+		nb.logf("peer reachability: %s", err)
+	}
+	return res
 }
 
-func (nb *nodeBackend) peerIsReachable(ctx context.Context, p tailcfg.NodeView) bool {
-	// TODO(sfllaw): The following does not actually test for client-side
-	// reachability. This would require a mechanism that tracks whether the
-	// current node can actually reach this peer, either because they are
-	// already communicating or because they can ping each other.
+// peerIsReachable will only return a [context.DeadlineExceeded] error if ctx
+// was cancelled by its deadline passing, not if an active probe times out.
+func (nb *nodeBackend) peerIsReachable(ctx context.Context, p tailcfg.NodeView) (bool, error) {
+	// When the [Pinger] is missing, fall back on the control plane.
+	if nb.pinger == nil {
+		online := p.Online().Get()
+		nb.logf("peer reachable: missing pinger")
+		return online, nil
+	}
+
+	var addr netip.Addr
+	for _, a := range p.Addresses().All() {
+		if !a.IsSingleIP() {
+			continue
+		}
+		addr = a.Addr()
+		break
+	}
+	if !addr.IsValid() {
+		return false, fmt.Errorf("peer %s (%v) has no IP addresses: %s", p.Name(), p.ID(), p.Addresses())
+	}
+
+	// Wireguard-only nodes cannot be disco-pinged, so we trust the control
+	// plane.
 	//
-	// Instead, it makes the client ignore p.Online completely.
-	//
+	// TODO(sfllaw): We could try to initiate a Wireguard session and see if
+	// a response comes back. ICMP ping is also an option, but there might
+	// be false negatives if ICMP is blocked.
+	if p.IsWireGuardOnly() {
+		return p.Online().Get(), nil
+	}
+
+	// Disco ping the peer node to determine if it is actually reachable.
 	// See tailscale/corp#32686.
-	return true
+	//
+	// TODO(sfllaw): If there is already an active Wireguard session to the
+	// peer, then we can avoid active probes and return early.
+	res, err := nb.pinger.Ping(ctx, addr, tailcfg.PingDisco, 0)
+	if err != nil {
+		// Encountered a non-ping error, ping failures would be reported
+		// in res.Err. This is likely to happen when ctx is cancelled.
+		return false, fmt.Errorf("aborted ping for peer %s (%v) at %s: %w", p.Name(), p.ID(), addr, err)
+	}
+	if res.Err != "" {
+		if res.IsLocalIP {
+			// Nodes can always reach themselves.
+			return true, nil
+		}
+		if strings.Contains(res.Err, context.DeadlineExceeded.Error()) {
+			// Ping has timed out: this is not an error.
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to ping peer %s (%v) at %s: %s", p.Name(), p.ID(), addr, err)
+	}
+	return true, nil
 }
 
 func nodeIP(n tailcfg.NodeView, pred func(netip.Addr) bool) netip.Addr {
