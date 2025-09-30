@@ -27,6 +27,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/envknob/featureknob"
 	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -496,6 +497,10 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 	// Client using system-specific auth.
 	switch distro.Get() {
 	case distro.Synology:
+		if !buildfeatures.HasSynology {
+			// Synology support not built in.
+			return false
+		}
 		authorized, _ := authorizeSynology(r)
 		return authorized
 	case distro.QNAP:

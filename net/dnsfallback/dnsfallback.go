@@ -26,11 +26,11 @@ import (
 	"time"
 
 	"tailscale.com/atomicfile"
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/slicesx"
@@ -135,7 +135,7 @@ func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr
 	dialer := netns.NewDialer(logf, netMon)
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = true // This transport is meant to be used once.
-	tr.Proxy = tshttpproxy.ProxyFromEnvironment
+	tr.Proxy = feature.HookProxyFromEnvironment.GetOrNil()
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(serverIP.String(), "443"))
 	}

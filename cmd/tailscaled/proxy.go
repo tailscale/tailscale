@@ -17,10 +17,10 @@ import (
 	"net/http/httputil"
 	"strings"
 
+	"tailscale.com/feature"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/types/logger"
 )
 
@@ -104,7 +104,9 @@ func mkProxyStartFunc(socksListener, httpListener net.Listener) proxyStartFunc {
 			}()
 			addrs = append(addrs, socksListener.Addr().String())
 		}
-		tshttpproxy.SetSelfProxy(addrs...)
+		if set, ok := feature.HookProxySetSelfProxy.GetOk(); ok {
+			set(addrs...)
+		}
 	}
 }
 

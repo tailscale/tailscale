@@ -121,7 +121,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"oauthkey": {"OAuthKey", "OAuth secret-to-authkey resolution support", nil},
 	"outboundproxy": {
 		Sym:  "OutboundProxy",
-		Desc: "Outbound localhost HTTP/SOCK5 proxy support",
+		Desc: "Support running an outbound localhost HTTP/SOCK5 proxy support that sends traffic over Tailscale",
 		Deps: []FeatureTag{"netstack"},
 	},
 	"osrouter": {
@@ -172,6 +172,10 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Tailscale SSH support",
 		Deps: []FeatureTag{"dbus", "netstack"},
 	},
+	"synology": {
+		Sym:  "Synology",
+		Desc: "Synology NAS integration (applies to Linux builds only)",
+	},
 	"syspolicy": {"SystemPolicy", "System policy configuration (MDM) support", nil},
 	"systray": {
 		Sym:  "SysTray",
@@ -182,7 +186,11 @@ var Features = map[FeatureTag]FeatureMeta{
 	"tailnetlock": {"TailnetLock", "Tailnet Lock support", nil},
 	"tap":         {"Tap", "Experimental Layer 2 (ethernet) support", nil},
 	"tpm":         {"TPM", "TPM support", nil},
-	"wakeonlan":   {"WakeOnLAN", "Wake-on-LAN support", nil},
+	"useproxy": {
+		Sym:  "UseProxy",
+		Desc: "Support using system proxies as specified by env vars or the system configuration to reach Tailscale servers.",
+	},
+	"wakeonlan": {"WakeOnLAN", "Wake-on-LAN support", nil},
 	"webclient": {
 		Sym: "WebClient", Desc: "Web client support",
 		Deps: []FeatureTag{"serve"},

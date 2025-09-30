@@ -39,6 +39,8 @@ import (
 	"tailscale.com/control/controlbase"
 	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/net/ace"
 	"tailscale.com/net/dnscache"
@@ -47,7 +49,6 @@ import (
 	"tailscale.com/net/netx"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -81,7 +82,7 @@ func (a *Dialer) getProxyFunc() func(*http.Request) (*url.URL, error) {
 	if a.proxyFunc != nil {
 		return a.proxyFunc
 	}
-	return tshttpproxy.ProxyFromEnvironment
+	return feature.HookProxyFromEnvironment.GetOrNil()
 }
 
 // httpsFallbackDelay is how long we'll wait for a.HTTPPort to work before
@@ -463,8 +464,12 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 		tr.Proxy = nil
 		tr.DialContext = dialer
 	} else {
-		tr.Proxy = a.getProxyFunc()
-		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
+		if buildfeatures.HasUseProxy {
+			tr.Proxy = a.getProxyFunc()
+			if set, ok := feature.HookProxySetTransportGetProxyConnectHeader.GetOk(); ok {
+				set(tr)
+			}
+		}
 		tr.DialContext = dnscache.Dialer(dialer, dns)
 	}
 	// Disable HTTP2, since h2 can't do protocol switching.

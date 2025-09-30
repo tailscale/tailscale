@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/version/distro"
 )
 
@@ -17,7 +18,7 @@ func init() {
 }
 
 func linuxSysProxyFromEnv(req *http.Request) (*url.URL, error) {
-	if distro.Get() == distro.Synology {
+	if buildfeatures.HasSynology && distro.Get() == distro.Synology {
 		return synologyProxyFromConfigCached(req)
 	}
 	return nil, nil

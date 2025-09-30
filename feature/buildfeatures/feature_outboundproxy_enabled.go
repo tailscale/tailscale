@@ -7,7 +7,7 @@
 
 package buildfeatures
 
-// HasOutboundProxy is whether the binary was built with support for modular feature "Outbound localhost HTTP/SOCK5 proxy support".
+// HasOutboundProxy is whether the binary was built with support for modular feature "Support running an outbound localhost HTTP/SOCK5 proxy support that sends traffic over Tailscale".
 // Specifically, it's whether the binary was NOT built with the "ts_omit_outboundproxy" build tag.
 // It's a const so it can be used for dead code elimination.
 const HasOutboundProxy = true

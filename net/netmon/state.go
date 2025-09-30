@@ -15,10 +15,11 @@ import (
 	"strings"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/util/mak"
 )
 
@@ -501,13 +502,15 @@ func getState(optTSInterfaceName string) (*State, error) {
 		}
 	}
 
-	if s.AnyInterfaceUp() {
+	if buildfeatures.HasUseProxy && s.AnyInterfaceUp() {
 		req, err := http.NewRequest("GET", LoginEndpointForProxyDetermination, nil)
 		if err != nil {
 			return nil, err
 		}
-		if u, err := tshttpproxy.ProxyFromEnvironment(req); err == nil && u != nil {
-			s.HTTPProxy = u.String()
+		if proxyFromEnv, ok := feature.HookProxyFromEnvironment.GetOk(); ok {
+			if u, err := proxyFromEnv(req); err == nil && u != nil {
+				s.HTTPProxy = u.String()
+			}
 		}
 		if getPAC != nil {
 			s.PAC = getPAC()

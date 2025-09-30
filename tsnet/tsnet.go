@@ -31,6 +31,7 @@ import (
 	"tailscale.com/envknob"
 	_ "tailscale.com/feature/condregister/oauthkey"
 	_ "tailscale.com/feature/condregister/portmapper"
+	_ "tailscale.com/feature/condregister/useproxy"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/internal/client/tailscale"

@@ -31,6 +31,7 @@ import (
 	"golang.org/x/term"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -44,7 +45,6 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
@@ -870,8 +870,12 @@ func (opts TransportOptions) New() http.RoundTripper {
 		tr.TLSClientConfig = opts.TLSClientConfig.Clone()
 	}
 
-	tr.Proxy = tshttpproxy.ProxyFromEnvironment
-	tshttpproxy.SetTransportGetProxyConnectHeader(tr)
+	if buildfeatures.HasUseProxy {
+		tr.Proxy = feature.HookProxyFromEnvironment.GetOrNil()
+		if set, ok := feature.HookProxySetTransportGetProxyConnectHeader.GetOk(); ok {
+			set(tr)
+		}
+	}
 
 	// We do our own zstd compression on uploads, and responses never contain any payload,
 	// so don't send "Accept-Encoding: gzip" to save a few bytes on the wire, since there
