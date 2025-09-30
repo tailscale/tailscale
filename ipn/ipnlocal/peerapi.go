@@ -42,10 +42,6 @@ import (
 
 var initListenConfig func(*net.ListenConfig, netip.Addr, *netmon.State, string) error
 
-// addH2C is non-nil on platforms where we want to add H2C
-// ("cleartext" HTTP/2) support to the peerAPI.
-var addH2C func(*http.Server)
-
 // peerDNSQueryHandler is implemented by tsdns.Resolver.
 type peerDNSQueryHandler interface {
 	HandlePeerDNSQuery(context.Context, []byte, netip.AddrPort, func(name string) bool) (res []byte, err error)
@@ -195,11 +191,11 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 		peerUser:   peerUser,
 	}
 	httpServer := &http.Server{
-		Handler: h,
+		Handler:   h,
+		Protocols: new(http.Protocols),
 	}
-	if addH2C != nil {
-		addH2C(httpServer)
-	}
+	httpServer.Protocols.SetHTTP1(true)
+	httpServer.Protocols.SetUnencryptedHTTP2(true) // over WireGuard; "unencrypted" means no TLS
 	go httpServer.Serve(netutil.NewOneConnListener(c, nil))
 }
 

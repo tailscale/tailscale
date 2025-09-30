@@ -7,7 +7,6 @@ package sessionrecording
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/net/http2"
 	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
@@ -312,14 +310,15 @@ func clientHTTP1(dialCtx context.Context, dial netx.DialFunc) *http.Client {
 // requests (HTTP/2 over plaintext). Unfortunately the same client does not
 // work for HTTP/1 so we need to split these up.
 func clientHTTP2(dialCtx context.Context, dial netx.DialFunc) *http.Client {
+	var p http.Protocols
+	p.SetUnencryptedHTTP2(true)
 	return &http.Client{
-		Transport: &http2.Transport{
-			// Allow "http://" scheme in URLs.
-			AllowHTTP: true,
+		Transport: &http.Transport{
+			Protocols: &p,
 			// Pretend like we're using TLS, but actually use the provided
 			// DialFunc underneath. This is necessary to convince the transport
 			// to actually dial.
-			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				perAttemptCtx, cancel := context.WithTimeout(ctx, perDialAttemptTimeout)
 				defer cancel()
 				go func() {
