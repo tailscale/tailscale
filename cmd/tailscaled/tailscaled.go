@@ -18,7 +18,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -145,7 +144,6 @@ var (
 var subCommands = map[string]*func([]string) error{
 	"install-system-daemon":   &installSystemDaemon,
 	"uninstall-system-daemon": &uninstallSystemDaemon,
-	"debug":                   &debugModeFunc,
 	"be-child":                &beChildFunc,
 }
 
@@ -194,7 +192,9 @@ func main() {
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", defaultVerbosity(), "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanUp, "cleanup", false, "clean up system state and exit")
-	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
+	if buildfeatures.HasDebug {
+		flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
+	}
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, defaultPort()), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", "", "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM; use 'mem:' to not store state and register as an ephemeral node. If empty and --statedir is provided, the default is <statedir>/tailscaled.state. Default: "+paths.DefaultTailscaledStateFile())
@@ -485,8 +485,8 @@ func run() (err error) {
 		log.Printf("error in synology migration: %v", err)
 	}
 
-	if args.debug != "" {
-		debugMux = newDebugMux()
+	if buildfeatures.HasDebug && args.debug != "" {
+		debugMux = hookNewDebugMux.Get()()
 	}
 
 	if f, ok := hookSetSysDrive.GetOk(); ok {
@@ -550,7 +550,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 	}()
 
 	srv := ipnserver.New(logf, logID, sys.Bus.Get(), sys.NetMon.Get())
-	if debugMux != nil {
+	if buildfeatures.HasDebug && debugMux != nil {
 		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
 	}
 	var lbErr syncs.AtomicValue[error]
@@ -626,7 +626,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if onlyNetstack && !buildfeatures.HasNetstack {
 		return nil, errors.New("userspace-networking support is not compiled in to this binary")
 	}
-	if debugMux != nil {
+	if buildfeatures.HasDebug && debugMux != nil {
 		if ms, ok := sys.MagicSock.GetOK(); ok {
 			debugMux.HandleFunc("/debug/magicsock", ms.ServeHTTPDebug)
 		}
@@ -820,16 +820,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 	return onlyNetstack, nil
 }
 
-func newDebugMux() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/debug/metrics", servePrometheusMetrics)
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	return mux
-}
+var hookNewDebugMux feature.Hook[func() *http.ServeMux]
 
 func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
@@ -838,6 +829,9 @@ func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func runDebugServer(logf logger.Logf, mux *http.ServeMux, addr string) {
+	if !buildfeatures.HasDebug {
+		return
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("debug server: %v", err)

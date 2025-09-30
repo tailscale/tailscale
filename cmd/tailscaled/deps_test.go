@@ -4,9 +4,12 @@
 package main
 
 import (
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
+	"tailscale.com/feature/featuretags"
 	"tailscale.com/tstest/deptest"
 )
 
@@ -85,19 +88,6 @@ func TestOmitDrive(t *testing.T) {
 			}
 			if strings.Contains(dep, "webdav") {
 				t.Errorf("unexpected dep with ts_omit_drive: %q", dep)
-			}
-		},
-	}.Check(t)
-}
-
-func TestOmitTailnetLock(t *testing.T) {
-	deptest.DepChecker{
-		GOOS:   "linux",
-		GOARCH: "amd64",
-		Tags:   "ts_omit_tailnetlock,ts_include_cli",
-		OnDep: func(dep string) {
-			if strings.Contains(dep, "cbor") {
-				t.Errorf("unexpected dep with ts_omit_tailnetlock: %q", dep)
 			}
 		},
 	}.Check(t)
@@ -230,6 +220,45 @@ func TestOmitUseProxy(t *testing.T) {
 		Tags:   "ts_omit_useproxy,ts_include_cli",
 		OnDep: func(dep string) {
 			if strings.Contains(dep, "tshttproxy") {
+				t.Errorf("unexpected dep: %q", dep)
+			}
+		},
+	}.Check(t)
+}
+
+func minTags() string {
+	var tags []string
+	for _, f := range slices.Sorted(maps.Keys(featuretags.Features)) {
+		if f.IsOmittable() {
+			tags = append(tags, f.OmitTag())
+		}
+	}
+	return strings.Join(tags, ",")
+}
+
+func TestMinTailscaledNoCLI(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   minTags(),
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "regexp") {
+				t.Errorf("unexpected dep: %q", dep)
+			}
+			if strings.Contains(dep, "cbor") {
+				t.Errorf("unexpected dep: %q", dep)
+			}
+		},
+	}.Check(t)
+}
+
+func TestMinTailscaledWithCLI(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   minTags() + ",ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "cbor") {
 				t.Errorf("unexpected dep: %q", dep)
 			}
 		},
