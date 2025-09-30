@@ -32,6 +32,7 @@ type HardwareAttestationKey interface {
 	json.Unmarshaler
 	io.Closer
 	Clone() HardwareAttestationKey
+	IsZero() bool
 }
 
 // HardwareAttestationPublicFromPlatformKey creates a HardwareAttestationPublic
