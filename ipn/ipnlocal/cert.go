@@ -35,6 +35,7 @@ import (
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -73,7 +74,7 @@ func (b *LocalBackend) certDir() (string, error) {
 	// As a workaround for Synology DSM6 not having a "var" directory, use the
 	// app's "etc" directory (on a small partition) to hold certs at least.
 	// See https://github.com/tailscale/tailscale/issues/4060#issuecomment-1186592251
-	if d == "" && runtime.GOOS == "linux" && distro.Get() == distro.Synology && distro.DSMVersion() == 6 {
+	if buildfeatures.HasSynology && d == "" && runtime.GOOS == "linux" && distro.Get() == distro.Synology && distro.DSMVersion() == 6 {
 		d = "/var/packages/Tailscale/etc" // base; we append "certs" below
 	}
 	if d == "" {

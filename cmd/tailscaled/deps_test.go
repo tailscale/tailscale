@@ -222,3 +222,16 @@ func TestOmitGRO(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitUseProxy(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_useproxy,ts_include_cli",
+		OnDep: func(dep string) {
+			if strings.Contains(dep, "tshttproxy") {
+				t.Errorf("unexpected dep: %q", dep)
+			}
+		},
+	}.Check(t)
+}

@@ -6,9 +6,13 @@
 // to ensure all conditional features are registered.
 package condregister
 
-// Portmapper is special in that the CLI also needs to link it in,
-// so it's pulled out into its own package, rather than using a maybe_*.go
-// file in condregister.
 import (
+	// Portmapper is special in that the CLI also needs to link it in,
+	// so it's pulled out into its own package, rather than using a maybe_*.go
+	// file in condregister.
 	_ "tailscale.com/feature/condregister/portmapper"
+
+	// HTTP proxy support is also needed by the CLI, and tsnet, so it's its
+	// own package too.
+	_ "tailscale.com/feature/condregister/useproxy"
 )

@@ -23,6 +23,7 @@ import (
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
@@ -35,7 +36,6 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -559,7 +559,9 @@ func (e *userspaceEngine) consumeEventbusTopics(cli *eventbus.Client) func(*even
 			case <-cli.Done():
 				return
 			case changeDelta := <-changeDeltaSub.Events():
-				tshttpproxy.InvalidateCache()
+				if f, ok := feature.HookProxyInvalidateCache.GetOk(); ok {
+					f()
+				}
 				e.linkChange(&changeDelta)
 			}
 		}

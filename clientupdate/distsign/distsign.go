@@ -55,7 +55,7 @@ import (
 
 	"github.com/hdevalence/ed25519consensus"
 	"golang.org/x/crypto/blake2s"
-	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/feature"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/must"
@@ -330,7 +330,7 @@ func fetch(url string, limit int64) ([]byte, error) {
 // limit bytes. On success, the returned value is a BLAKE2s hash of the file.
 func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]byte, int64, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = tshttpproxy.ProxyFromEnvironment
+	tr.Proxy = feature.HookProxyFromEnvironment.GetOrNil()
 	defer tr.CloseIdleConnections()
 	hc := &http.Client{Transport: tr}
 

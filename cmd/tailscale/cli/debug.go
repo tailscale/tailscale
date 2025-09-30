@@ -28,17 +28,17 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"golang.org/x/net/http/httpproxy"
 	"golang.org/x/net/http2"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlhttp"
+	"tailscale.com/feature"
+	_ "tailscale.com/feature/condregister/useproxy"
 	"tailscale.com/hostinfo"
 	"tailscale.com/internal/noiseconn"
 	"tailscale.com/ipn"
 	"tailscale.com/net/ace"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -992,14 +992,10 @@ func runTS2021(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		envConf := httpproxy.FromEnvironment()
-		if *envConf == (httpproxy.Config{}) {
-			log.Printf("HTTP proxy env: (none)")
-		} else {
-			log.Printf("HTTP proxy env: %+v", envConf)
+		if proxyFromEnv, ok := feature.HookProxyFromEnvironment.GetOk(); ok {
+			proxy, err := proxyFromEnv(&http.Request{URL: u})
+			log.Printf("tshttpproxy.ProxyFromEnvironment = (%v, %v)", proxy, err)
 		}
-		proxy, err := tshttpproxy.ProxyFromEnvironment(&http.Request{URL: u})
-		log.Printf("tshttpproxy.ProxyFromEnvironment = (%v, %v)", proxy, err)
 	}
 	machinePrivate := key.NewMachine()
 	var dialer net.Dialer

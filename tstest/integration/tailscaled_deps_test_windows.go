@@ -46,7 +46,6 @@ import (
 	_ "tailscale.com/net/proxymux"
 	_ "tailscale.com/net/socks5"
 	_ "tailscale.com/net/tsdial"
-	_ "tailscale.com/net/tshttpproxy"
 	_ "tailscale.com/net/tstun"
 	_ "tailscale.com/paths"
 	_ "tailscale.com/safesocket"

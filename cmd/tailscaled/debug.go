@@ -21,10 +21,11 @@ import (
 	"time"
 
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/util/eventbus"
@@ -124,9 +125,14 @@ func getURL(ctx context.Context, urlStr string) error {
 	if err != nil {
 		return fmt.Errorf("http.NewRequestWithContext: %v", err)
 	}
-	proxyURL, err := tshttpproxy.ProxyFromEnvironment(req)
-	if err != nil {
-		return fmt.Errorf("tshttpproxy.ProxyFromEnvironment: %v", err)
+	var proxyURL *url.URL
+	if buildfeatures.HasUseProxy {
+		if proxyFromEnv, ok := feature.HookProxyFromEnvironment.GetOk(); ok {
+			proxyURL, err = proxyFromEnv(req)
+			if err != nil {
+				return fmt.Errorf("tshttpproxy.ProxyFromEnvironment: %v", err)
+			}
+		}
 	}
 	log.Printf("proxy: %v", proxyURL)
 	tr := &http.Transport{
@@ -135,7 +141,10 @@ func getURL(ctx context.Context, urlStr string) error {
 		DisableKeepAlives:  true,
 	}
 	if proxyURL != nil {
-		auth, err := tshttpproxy.GetAuthHeader(proxyURL)
+		var auth string
+		if f, ok := feature.HookProxyGetAuthHeader.GetOk(); ok {
+			auth, err = f(proxyURL)
+		}
 		if err == nil && auth != "" {
 			tr.ProxyConnectHeader.Set("Proxy-Authorization", auth)
 		}
