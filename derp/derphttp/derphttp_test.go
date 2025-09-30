@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/derp/derpserver"
@@ -267,6 +268,7 @@ func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToW
 // updates after a different thread breaks and reconnects the connection, while
 // the watcher is waiting on recv().
 func TestBreakWatcherConnRecv(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17355")
 	// TODO(bradfitz): use synctest + memnet instead
 
 	// Set the wait time before a retry after connection failure to be much lower.
