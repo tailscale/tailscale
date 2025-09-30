@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"errors"
 	"net/http"
-	"regexp"
 	"strings"
 )
 
@@ -19,10 +18,6 @@ var (
 	DisallowShareAs     = false
 	ErrDriveNotEnabled  = errors.New("Taildrive not enabled")
 	ErrInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), or spaces")
-)
-
-var (
-	shareNameRegex = regexp.MustCompile(`^[a-z0-9_\(\) ]+$`)
 )
 
 // AllowShareAs reports whether sharing files as a specific user is allowed.
@@ -125,9 +120,26 @@ func NormalizeShareName(name string) (string, error) {
 	// Trim whitespace
 	name = strings.TrimSpace(name)
 
-	if !shareNameRegex.MatchString(name) {
+	if !validShareName(name) {
 		return "", ErrInvalidShareName
 	}
 
 	return name, nil
+}
+
+func validShareName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if 'a' <= r && r <= 'z' || '0' <= r && r <= '9' {
+			continue
+		}
+		switch r {
+		case '_', ' ', '(', ')':
+			continue
+		}
+		return false
+	}
+	return true
 }
