@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/logpolicy"
 )
 
@@ -23,6 +25,10 @@ import (
 // precludes that from working and instead the GUI fails to dial out.
 // So, go through tailscaled (with a CONNECT request) instead.
 func (s *Server) handleProxyConnectConn(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasOutboundProxy {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
 	ctx := r.Context()
 	if r.Method != "CONNECT" {
 		panic("[unexpected] miswired")

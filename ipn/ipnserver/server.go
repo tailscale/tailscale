@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os/user"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
@@ -120,6 +122,10 @@ func (s *Server) awaitBackend(ctx context.Context) (_ *ipnlocal.LocalBackend, ok
 // This is primarily for the Windows GUI, because wintun can take awhile to
 // come up. See https://github.com/tailscale/tailscale/issues/6522.
 func (s *Server) serveServerStatus(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug && runtime.GOOS != "windows" {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotFound)
+		return
+	}
 	ctx := r.Context()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -382,6 +388,9 @@ func isAllDigit(s string) bool {
 // connection. It's intended to give your non-root webserver access
 // (www-data, caddy, nginx, etc) to certs.
 func (a *actor) CanFetchCerts() bool {
+	if !buildfeatures.HasACME {
+		return false
+	}
 	if a.ci.IsUnixSock() && a.ci.Creds() != nil {
 		connUID, ok := a.ci.Creds().UserID()
 		if ok && connUID == userIDFromString(envknob.String("TS_PERMIT_CERT_UID")) {
@@ -398,6 +407,10 @@ func (a *actor) CanFetchCerts() bool {
 //
 // onDone must be called when the HTTP request is done.
 func (s *Server) addActiveHTTPRequest(req *http.Request, actor ipnauth.Actor) (onDone func(), err error) {
+	if runtime.GOOS != "windows" && !buildfeatures.HasUnixSocketIdentity {
+		return func() {}, nil
+	}
+
 	if actor == nil {
 		return nil, errors.New("internal error: nil actor")
 	}
@@ -538,6 +551,10 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 // Windows and via $DEBUG_LISTENER/debug/ipn when tailscaled's --debug flag
 // is used to run a debug server.
 func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotFound)
+		return
+	}
 	lb := s.lb.Load()
 	if lb == nil {
 		http.Error(w, "no LocalBackend", http.StatusServiceUnavailable)

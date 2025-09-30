@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/tailscale/peercred"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/safesocket"
@@ -63,8 +62,8 @@ type ConnIdentity struct {
 	notWindows bool // runtime.GOOS != "windows"
 
 	// Fields used when NotWindows:
-	isUnixSock bool            // Conn is a *net.UnixConn
-	creds      *peercred.Creds // or nil if peercred.Get was not implemented on this OS
+	isUnixSock bool      // Conn is a *net.UnixConn
+	creds      PeerCreds // or nil if peercred.Get was not implemented on this OS
 
 	// Used on Windows:
 	// TODO(bradfitz): merge these into the peercreds package and
@@ -97,9 +96,18 @@ func (ci *ConnIdentity) WindowsUserID() ipn.WindowsUserID {
 	return ""
 }
 
-func (ci *ConnIdentity) Pid() int               { return ci.pid }
-func (ci *ConnIdentity) IsUnixSock() bool       { return ci.isUnixSock }
-func (ci *ConnIdentity) Creds() *peercred.Creds { return ci.creds }
+func (ci *ConnIdentity) Pid() int         { return ci.pid }
+func (ci *ConnIdentity) IsUnixSock() bool { return ci.isUnixSock }
+func (ci *ConnIdentity) Creds() PeerCreds { return ci.creds }
+
+// PeerCreds is the interface for a github.com/tailscale/peercred.Creds,
+// if linked into the binary.
+//
+// (It's not used on some platforms, or if ts_omit_unixsocketidentity is set.)
+type PeerCreds interface {
+	UserID() (uid string, ok bool)
+	PID() (pid int, ok bool)
+}
 
 var metricIssue869Workaround = clientmetric.NewCounter("issue_869_workaround")
 

@@ -1442,7 +1442,7 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 
 	cn := b.currentNode()
 	nid, ok := cn.NodeByAddr(ipp.Addr())
-	if !ok {
+	if !ok && buildfeatures.HasNetstack {
 		var ip netip.Addr
 		if ipp.Port() != 0 {
 			var protos []string
@@ -5015,6 +5015,9 @@ func (b *LocalBackend) SetVarRoot(dir string) {
 //
 // It should only be called before the LocalBackend is used.
 func (b *LocalBackend) SetLogFlusher(flushFunc func()) {
+	if !buildfeatures.HasLogTail {
+		return
+	}
 	b.logFlushFunc = flushFunc
 }
 
@@ -5023,7 +5026,7 @@ func (b *LocalBackend) SetLogFlusher(flushFunc func()) {
 //
 // TryFlushLogs should not block.
 func (b *LocalBackend) TryFlushLogs() bool {
-	if b.logFlushFunc == nil {
+	if !buildfeatures.HasLogTail || b.logFlushFunc == nil {
 		return false
 	}
 	b.logFlushFunc()

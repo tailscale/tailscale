@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/types/logger"
@@ -237,6 +238,11 @@ func connIsLocalAdmin(logf logger.Logf, ci *ipnauth.ConnIdentity, operatorUID st
 		// Linux.
 		fallthrough
 	case "linux":
+		if !buildfeatures.HasUnixSocketIdentity {
+			// Everybody is an admin if support for unix socket identities
+			// is omitted for the build.
+			return true
+		}
 		uid, ok := ci.Creds().UserID()
 		if !ok {
 			return false
