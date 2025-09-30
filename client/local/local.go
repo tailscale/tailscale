@@ -31,6 +31,8 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
@@ -608,6 +610,9 @@ func (lc *Client) SetDevStoreKeyValue(ctx context.Context, key, value string) er
 // the provided duration. If the duration is in the past, the debug logging
 // is disabled.
 func (lc *Client) SetComponentDebugLogging(ctx context.Context, component string, d time.Duration) error {
+	if !buildfeatures.HasDebug {
+		return feature.ErrUnavailable
+	}
 	body, err := lc.send(ctx, "POST",
 		fmt.Sprintf("/localapi/v0/component-debug-logging?component=%s&secs=%d",
 			url.QueryEscape(component), int64(d.Seconds())), 200, nil)
@@ -862,6 +867,9 @@ func (lc *Client) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Pref
 // GetDNSOSConfig returns the system DNS configuration for the current device.
 // That is, it returns the DNS configuration that the system would use if Tailscale weren't being used.
 func (lc *Client) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, error) {
+	if !buildfeatures.HasDNS {
+		return nil, feature.ErrUnavailable
+	}
 	body, err := lc.get200(ctx, "/localapi/v0/dns-osconfig")
 	if err != nil {
 		return nil, err
@@ -877,6 +885,9 @@ func (lc *Client) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, err
 // It returns the raw DNS response bytes and the resolvers that were used to answer the query
 // (often just one, but can be more if we raced multiple resolvers).
 func (lc *Client) QueryDNS(ctx context.Context, name string, queryType string) (bytes []byte, resolvers []*dnstype.Resolver, err error) {
+	if !buildfeatures.HasDNS {
+		return nil, nil, feature.ErrUnavailable
+	}
 	body, err := lc.get200(ctx, fmt.Sprintf("/localapi/v0/dns-query?name=%s&type=%s", url.QueryEscape(name), queryType))
 	if err != nil {
 		return nil, nil, err

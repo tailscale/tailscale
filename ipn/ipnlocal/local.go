@@ -557,12 +557,14 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		b.logf("[unexpected] failed to wire up PeerAPI port for engine %T", e)
 	}
 
-	for _, component := range ipn.DebuggableComponents {
-		key := componentStateKey(component)
-		if ut, err := ipn.ReadStoreInt(pm.Store(), key); err == nil {
-			if until := time.Unix(ut, 0); until.After(b.clock.Now()) {
-				// conditional to avoid log spam at start when off
-				b.SetComponentDebugLogging(component, until)
+	if buildfeatures.HasDebug {
+		for _, component := range ipn.DebuggableComponents {
+			key := componentStateKey(component)
+			if ut, err := ipn.ReadStoreInt(pm.Store(), key); err == nil {
+				if until := time.Unix(ut, 0); until.After(b.clock.Now()) {
+					// conditional to avoid log spam at start when off
+					b.SetComponentDebugLogging(component, until)
+				}
 			}
 		}
 	}
@@ -666,6 +668,9 @@ func componentStateKey(component string) ipn.StateKey {
 //   - magicsock
 //   - sockstats
 func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Time) error {
+	if !buildfeatures.HasDebug {
+		return feature.ErrUnavailable
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -790,6 +795,9 @@ func (b *LocalBackend) QueryDNS(name string, queryType dnsmessage.Type) (res []b
 // enabled until, or the zero time if component's time is not currently
 // enabled.
 func (b *LocalBackend) GetComponentDebugLogging(component string) time.Time {
+	if !buildfeatures.HasDebug {
+		return time.Time{}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

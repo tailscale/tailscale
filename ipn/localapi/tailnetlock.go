@@ -18,19 +18,19 @@ import (
 )
 
 func init() {
-	handler["tka/affected-sigs"] = (*Handler).serveTKAAffectedSigs
-	handler["tka/cosign-recovery-aum"] = (*Handler).serveTKACosignRecoveryAUM
-	handler["tka/disable"] = (*Handler).serveTKADisable
-	handler["tka/force-local-disable"] = (*Handler).serveTKALocalDisable
-	handler["tka/generate-recovery-aum"] = (*Handler).serveTKAGenerateRecoveryAUM
-	handler["tka/init"] = (*Handler).serveTKAInit
-	handler["tka/log"] = (*Handler).serveTKALog
-	handler["tka/modify"] = (*Handler).serveTKAModify
-	handler["tka/sign"] = (*Handler).serveTKASign
-	handler["tka/status"] = (*Handler).serveTKAStatus
-	handler["tka/submit-recovery-aum"] = (*Handler).serveTKASubmitRecoveryAUM
-	handler["tka/verify-deeplink"] = (*Handler).serveTKAVerifySigningDeeplink
-	handler["tka/wrap-preauth-key"] = (*Handler).serveTKAWrapPreauthKey
+	Register("tka/affected-sigs", (*Handler).serveTKAAffectedSigs)
+	Register("tka/cosign-recovery-aum", (*Handler).serveTKACosignRecoveryAUM)
+	Register("tka/disable", (*Handler).serveTKADisable)
+	Register("tka/force-local-disable", (*Handler).serveTKALocalDisable)
+	Register("tka/generate-recovery-aum", (*Handler).serveTKAGenerateRecoveryAUM)
+	Register("tka/init", (*Handler).serveTKAInit)
+	Register("tka/log", (*Handler).serveTKALog)
+	Register("tka/modify", (*Handler).serveTKAModify)
+	Register("tka/sign", (*Handler).serveTKASign)
+	Register("tka/status", (*Handler).serveTKAStatus)
+	Register("tka/submit-recovery-aum", (*Handler).serveTKASubmitRecoveryAUM)
+	Register("tka/verify-deeplink", (*Handler).serveTKAVerifySigningDeeplink)
+	Register("tka/wrap-preauth-key", (*Handler).serveTKAWrapPreauthKey)
 }
 
 func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
