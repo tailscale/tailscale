@@ -34,7 +34,6 @@ import (
 	"unicode/utf8"
 
 	"go4.org/mem"
-	"golang.org/x/net/http2"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
@@ -761,8 +760,8 @@ type reverseProxy struct {
 	insecure      bool
 	backend       string
 	lb            *LocalBackend
-	httpTransport lazy.SyncValue[*http.Transport]  // transport for non-h2c backends
-	h2cTransport  lazy.SyncValue[*http2.Transport] // transport for h2c backends
+	httpTransport lazy.SyncValue[*http.Transport] // transport for non-h2c backends
+	h2cTransport  lazy.SyncValue[*http.Transport] // transport for h2c backends
 	// closed tracks whether proxy is closed/currently closing.
 	closed atomic.Bool
 }
@@ -770,9 +769,7 @@ type reverseProxy struct {
 // close ensures that any open backend connections get closed.
 func (rp *reverseProxy) close() {
 	rp.closed.Store(true)
-	if h2cT := rp.h2cTransport.Get(func() *http2.Transport {
-		return nil
-	}); h2cT != nil {
+	if h2cT := rp.h2cTransport.Get(func() *http.Transport { return nil }); h2cT != nil {
 		h2cT.CloseIdleConnections()
 	}
 	if httpTransport := rp.httpTransport.Get(func() *http.Transport {
@@ -843,14 +840,17 @@ func (rp *reverseProxy) getTransport() *http.Transport {
 
 // getH2CTransport returns the Transport used for GRPC requests to the backend.
 // The Transport gets created lazily, at most once.
-func (rp *reverseProxy) getH2CTransport() *http2.Transport {
-	return rp.h2cTransport.Get(func() *http2.Transport {
-		return &http2.Transport{
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network string, addr string, _ *tls.Config) (net.Conn, error) {
+func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
+	return rp.h2cTransport.Get(func() *http.Transport {
+		var p http.Protocols
+		p.SetUnencryptedHTTP2(true)
+		tr := &http.Transport{
+			Protocols: &p,
+			DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
 				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
 			},
 		}
+		return tr
 	})
 }
 
