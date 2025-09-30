@@ -253,13 +253,19 @@ func TestMinTailscaledNoCLI(t *testing.T) {
 }
 
 func TestMinTailscaledWithCLI(t *testing.T) {
+	badSubstrs := []string{
+		"cbor",
+		"hujson",
+	}
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
 		Tags:   minTags() + ",ts_include_cli",
 		OnDep: func(dep string) {
-			if strings.Contains(dep, "cbor") {
-				t.Errorf("unexpected dep: %q", dep)
+			for _, bad := range badSubstrs {
+				if strings.Contains(dep, bad) {
+					t.Errorf("unexpected dep: %q", dep)
+				}
 			}
 		},
 	}.Check(t)

@@ -8,11 +8,11 @@ package conffile
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 )
 
@@ -51,10 +51,6 @@ func Load(path string) (*Config, error) {
 		// compile-time for deadcode elimination
 		return nil, fmt.Errorf("config file loading not supported on %q", runtime.GOOS)
 	}
-	if hujsonStandardize == nil {
-		// Build tags are wrong in conffile_hujson.go
-		return nil, errors.New("[unexpected] config file loading not wired up")
-	}
 	var c Config
 	c.Path = path
 	var err error
@@ -68,14 +64,21 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Std, err = hujsonStandardize(c.Raw)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing config file %s HuJSON/JSON: %w", path, err)
+	if buildfeatures.HasHuJSONConf && hujsonStandardize != nil {
+		c.Std, err = hujsonStandardize(c.Raw)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing config file %s HuJSON/JSON: %w", path, err)
+		}
+	} else {
+		c.Std = c.Raw // config file must be valid JSON with ts_omit_hujsonconf
 	}
 	var ver struct {
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(c.Std, &ver); err != nil {
+		if !buildfeatures.HasHuJSONConf {
+			return nil, fmt.Errorf("error parsing config file %s, which must be valid standard JSON: %w", path, err)
+		}
 		return nil, fmt.Errorf("error parsing config file %s: %w", path, err)
 	}
 	switch ver.Version {
