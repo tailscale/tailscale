@@ -21,7 +21,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// CrateTAP is the hook set by feature/tap.
+// CreateTAP is the hook set by feature/tap.
 var CreateTAP feature.Hook[func(logf logger.Logf, tapName, bridgeName string) (tun.Device, error)]
 
 // modprobeTunHook is a Linux-specific hook to run "/sbin/modprobe tun".
