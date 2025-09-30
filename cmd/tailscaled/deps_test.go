@@ -256,6 +256,7 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 	badSubstrs := []string{
 		"cbor",
 		"hujson",
+		"pprof",
 	}
 	deptest.DepChecker{
 		GOOS:   "linux",
