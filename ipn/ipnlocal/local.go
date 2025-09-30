@@ -729,6 +729,9 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 
 // GetDNSOSConfig returns the base OS DNS configuration, as seen by the DNS manager.
 func (b *LocalBackend) GetDNSOSConfig() (dns.OSConfig, error) {
+	if !buildfeatures.HasDNS {
+		panic("unreachable")
+	}
 	manager, ok := b.sys.DNSManager.GetOK()
 	if !ok {
 		return dns.OSConfig{}, errors.New("DNS manager not available")
@@ -740,6 +743,9 @@ func (b *LocalBackend) GetDNSOSConfig() (dns.OSConfig, error) {
 // the raw DNS response and the resolvers that are were able to handle the query (the internal forwarder
 // may race multiple resolvers).
 func (b *LocalBackend) QueryDNS(name string, queryType dnsmessage.Type) (res []byte, resolvers []*dnstype.Resolver, err error) {
+	if !buildfeatures.HasDNS {
+		return nil, nil, feature.ErrUnavailable
+	}
 	manager, ok := b.sys.DNSManager.GetOK()
 	if !ok {
 		return nil, nil, errors.New("DNS manager not available")
@@ -6189,6 +6195,9 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 // This is the low-level interface. Other layers will provide more
 // friendly options to get HTTPS certs.
 func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
+	if !buildfeatures.HasACME {
+		return feature.ErrUnavailable
+	}
 	req := &tailcfg.SetDNSRequest{
 		Version: 1, // TODO(bradfitz,maisem): use tailcfg.CurrentCapabilityVersion when using the Noise transport
 		Type:    "TXT",

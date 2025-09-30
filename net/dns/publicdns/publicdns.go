@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"tailscale.com/feature/buildfeatures"
 )
 
 // dohOfIP maps from public DNS IPs to their DoH base URL.
@@ -163,6 +165,9 @@ const (
 
 // populate is called once to initialize the knownDoH and dohIPsOfBase maps.
 func populate() {
+	if !buildfeatures.HasDNS {
+		return
+	}
 	// Cloudflare
 	// https://developers.cloudflare.com/1.1.1.1/ip-addresses/
 	addDoH("1.1.1.1", "https://cloudflare-dns.com/dns-query")

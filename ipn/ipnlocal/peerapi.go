@@ -26,6 +26,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/http/httpguts"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/netaddr"
@@ -636,6 +637,10 @@ func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDNS {
+		http.NotFound(w, r)
+		return
+	}
 	if !h.canDebug() {
 		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
@@ -649,6 +654,9 @@ func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *peerAPIHandler) replyToDNSQueries() bool {
+	if !buildfeatures.HasDNS {
+		return false
+	}
 	if h.isSelf {
 		// If the peer is owned by the same user, just allow it
 		// without further checks.
@@ -700,7 +708,7 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 // handleDNSQuery implements a DoH server (RFC 8484) over the peerapi.
 // It's not over HTTPS as the spec dictates, but rather HTTP-over-WireGuard.
 func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) {
-	if h.ps.resolver == nil {
+	if !buildfeatures.HasDNS || h.ps.resolver == nil {
 		http.Error(w, "DNS not wired up", http.StatusNotImplemented)
 		return
 	}
