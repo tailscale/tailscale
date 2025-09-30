@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -158,6 +159,10 @@ func (a OSConfig) Equal(b OSConfig) bool {
 // Fixes https://github.com/tailscale/tailscale/issues/5669
 func (a OSConfig) Format(f fmt.State, verb rune) {
 	logger.ArgWriter(func(w *bufio.Writer) {
+		if !buildfeatures.HasDNS {
+			w.WriteString(`{DNS-unlinked}`)
+			return
+		}
 		w.WriteString(`{Nameservers:[`)
 		for i, ns := range a.Nameservers {
 			if i != 0 {

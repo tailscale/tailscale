@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"go4.org/netipx"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tsaddr"
@@ -629,6 +630,9 @@ func useWithExitNodeRoutes(routes map[string][]*dnstype.Resolver) map[string][]*
 func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
 	if nm == nil {
 		return nil
+	}
+	if !buildfeatures.HasDNS {
+		return &dns.Config{}
 	}
 
 	// If the current node's key is expired, then we don't program any DNS

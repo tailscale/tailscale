@@ -137,6 +137,10 @@ var Features = map[FeatureTag]FeatureMeta{
 	"portlist":   {"PortList", "Optionally advertise listening service ports", nil},
 	"portmapper": {"PortMapper", "NAT-PMP/PCP/UPnP port mapping support", nil},
 	"posture":    {"Posture", "Device posture checking support", nil},
+	"dns": {
+		Sym:  "DNS",
+		Desc: "MagicDNS and system DNS configuration support",
+	},
 	"netlog": {
 		Sym:  "NetLog",
 		Desc: "Network flow logging support",

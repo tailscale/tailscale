@@ -12,10 +12,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 )
 
 func init() {
+	if !buildfeatures.HasDNS {
+		return
+	}
 	health.RegisterDebugHandler("dnsfwd", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(r.FormValue("n"))
 		if n <= 0 {

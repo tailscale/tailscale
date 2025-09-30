@@ -1916,6 +1916,10 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 // serveDNSOSConfig serves the current system DNS configuration as a JSON object, if
 // supported by the OS.
 func (h *Handler) serveDNSOSConfig(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDNS {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method != httpm.GET {
 		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
 		return
@@ -1959,6 +1963,10 @@ func (h *Handler) serveDNSOSConfig(w http.ResponseWriter, r *http.Request) {
 //
 // The response if successful is a DNSQueryResponse JSON object.
 func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDNS {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method != httpm.GET {
 		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
 		return

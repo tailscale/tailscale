@@ -4,7 +4,12 @@
 // Package feature tracks which features are linked into the binary.
 package feature
 
-import "reflect"
+import (
+	"errors"
+	"reflect"
+)
+
+var ErrUnavailable = errors.New("feature not included in this build")
 
 var in = map[string]bool{}
 

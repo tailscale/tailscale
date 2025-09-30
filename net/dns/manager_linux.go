@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
@@ -63,7 +64,7 @@ var (
 //
 // The health tracker may be nil; the knobs may be nil and are ignored on this platform.
 func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ policyclient.Client, _ *controlknobs.Knobs, interfaceName string) (ret OSConfigurator, err error) {
-	if distro.Get() == distro.JetKVM {
+	if !buildfeatures.HasDNS || distro.Get() == distro.JetKVM {
 		return NewNoopManager()
 	}
 

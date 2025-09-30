@@ -27,6 +27,7 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dnscache"
@@ -249,6 +250,9 @@ type forwarder struct {
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, health *health.Tracker, knobs *controlknobs.Knobs) *forwarder {
+	if !buildfeatures.HasDNS {
+		return nil
+	}
 	if netMon == nil {
 		panic("nil netMon")
 	}
@@ -750,6 +754,9 @@ var optDNSForwardUseRoutes = envknob.RegisterOptBool("TS_DEBUG_DNS_FORWARD_USE_R
 //
 // See tailscale/tailscale#12027.
 func ShouldUseRoutes(knobs *controlknobs.Knobs) bool {
+	if !buildfeatures.HasDNS {
+		return false
+	}
 	switch runtime.GOOS {
 	case "android", "ios":
 		// On mobile platforms with lower memory limits (e.g., 50MB on iOS),
